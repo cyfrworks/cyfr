@@ -39,7 +39,7 @@ defmodule Arca.CrewStorageTest do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Test.Actor.athanor!()
     actor = Arca.Test.Actor.local()
-    {:ok, room} = Threads.create(actor)
+    {:ok, room} = Arca.Test.Days.thread(actor)
     {:ok, actor: actor, room: room}
   end
 
@@ -928,7 +928,7 @@ defmodule Arca.CrewStorageTest do
       assert Enum.map(Threads.children(actor, room.id), & &1.id) == [child.id, other, fresh.id]
       assert {:error, :not_crew} = Threads.archive(actor, room.id)
       assert {:error, :not_a_room} = Threads.crew_thread(actor, fresh.id, "web")
-      assert Enum.map(Threads.list(actor, kind: "own"), & &1.id) == [room.id]
+      assert Enum.map(Threads.list(actor, kind: "daily"), & &1.id) == [room.id]
     end
 
     test "forgetting the sessions of members forgets theirs alone, in the actor's athanor", %{
@@ -939,7 +939,7 @@ defmodule Arca.CrewStorageTest do
       {:ok, builder} = Threads.crew_thread(actor, room.id, "builder")
 
       elsewhere = Prima.Actor.in_athanor("ath_other")
-      {:ok, theirs} = Threads.create(elsewhere)
+      {:ok, theirs} = Arca.Test.Days.thread(elsewhere)
 
       # Another athanor's thread whose agent is planner as well.
       for {thread, agent, session} <- [

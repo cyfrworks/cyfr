@@ -46,7 +46,7 @@ defmodule Aqua.ProgramToolTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     ScriptedWorker.fresh_limits!(ctx, [@model, @http])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     {:ok,
      conn: conn,

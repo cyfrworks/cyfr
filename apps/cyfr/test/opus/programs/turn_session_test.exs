@@ -88,7 +88,7 @@ defmodule Opus.Programs.TurnSessionTest do
 
     thread =
       Keyword.get_lazy(opts, :thread, fn ->
-        {:ok, thread} = Threads.create(actor)
+        {:ok, thread} = Arca.Test.Days.thread(actor)
         thread
       end)
 
@@ -254,7 +254,7 @@ defmodule Opus.Programs.TurnSessionTest do
          %{ctx: ctx, row: row, lineage: lineage} do
       {other_person, _user} = person!("other-person")
       {_their_turn, theirs} = turn!(other_person)
-      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
       {_asked_by_another, asked_by_another} =
         turn!(ctx, thread: thread, requested_by: other_person.user_id)

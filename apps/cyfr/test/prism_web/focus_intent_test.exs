@@ -47,7 +47,7 @@ defmodule PrismWeb.FocusIntentTest do
     conn = log_in_user(conn, user)
     athanor = seated_athanor()
     ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     # A kept catalogue: the pane must not spawn a model-listing run whose
     # writes outlive this test and lock the next one's setup out of SQLite.

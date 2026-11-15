@@ -19,7 +19,7 @@ defmodule Aqua.Providers.ApprovalTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local(:prism)
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 

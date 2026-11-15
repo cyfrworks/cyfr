@@ -65,7 +65,7 @@ defmodule Aqua.LoopTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
@@ -1064,7 +1064,7 @@ defmodule Aqua.LoopTest do
 
   test "a steer names an open turn of its own thread", %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")
-    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     assert {:error, :turn_over} =
              Tape.accept(ctx, elsewhere.id, %{
@@ -1556,7 +1556,7 @@ defmodule Aqua.LoopTest do
     commit_soul!(ctx, ingress.tools -- ["native_search"])
 
     # A thread of its own, so nothing the first turn read is carried in.
-    {:ok, fresh} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, fresh} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     kept = accept!(ctx, fresh, "@aqua again")
     assert :completed = Task.await(run(ctx, kept), 30_000)
     assert chat_provider_tools() == [["web_search"], []]

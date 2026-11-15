@@ -662,7 +662,7 @@ defmodule Aqua.ScheduleTurnsTest do
       assert [%{thread_id: ^thread_id}] = waiting_cards(ctx)
       :ok = Runner.stop_turn(ctx, thread_id)
 
-      {:ok, plain} = Threads.create(actor(ctx))
+      {:ok, plain} = Arca.Test.Days.thread(actor(ctx))
       {:ok, %{turn_id: elsewhere}} = Runner.send_message(ctx, plain.id, "keep a plan")
       await_status(ctx, elsewhere, "paused")
       plain_id = plain.id
@@ -719,7 +719,7 @@ defmodule Aqua.ScheduleTurnsTest do
 
       # In a thread no schedule's line runs in, the same answer asked for by
       # hand is refused, and the card still waits.
-      {:ok, plain} = Threads.create(actor(ctx))
+      {:ok, plain} = Arca.Test.Days.thread(actor(ctx))
       {:ok, %{turn_id: elsewhere}} = Runner.send_message(ctx, plain.id, "keep a plan")
       await_status(ctx, elsewhere, "paused")
       [%{id: plain_card}] = waiting_cards(ctx)

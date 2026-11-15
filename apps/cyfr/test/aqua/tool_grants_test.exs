@@ -232,7 +232,7 @@ defmodule Aqua.ToolGrantsTest do
         %{effect: "allow", scope: "thread", tool: "component", action: "list"}
       ]
 
-      assert ToolGrants.allowed_keys(rows) == MapSet.new([{"component", "list", nil}])
+      assert ToolGrants.allowed_keys(rows) == MapSet.new([{"component", "list", nil, nil}])
     end
 
     test "no grants leaves the declared policy exactly as written" do
@@ -302,12 +302,12 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "is listed among the thread's standing answers, so it can be withdrawn" do
-      assert ToolGrants.allowed_keys([bounded(%{})]) == MapSet.new([{"files", "write", nil}])
+      assert ToolGrants.allowed_keys([bounded(%{})]) == MapSet.new([{"files", "write", nil, nil}])
 
       assert ToolGrants.allowed_keys([
                bounded(%{}),
                %{effect: "allow", scope: "thread", tool: "component", action: "list"}
-             ]) == MapSet.new([{"component", "list", nil}, {"files", "write", nil}])
+             ]) == MapSet.new([{"component", "list", nil, nil}, {"files", "write", nil, nil}])
 
       # Listed is not automatic: the guest still asks for it.
       assert ToolGrants.resolve(%{}, [bounded(%{})]) == %{"files.write" => "ask"}
@@ -613,7 +613,7 @@ defmodule Aqua.ToolGrantsTest do
 
       assert MapSet.equal?(
                keys,
-               MapSet.new([{"component", "pull", nil}, {"record", "list", nil}])
+               MapSet.new([{"component", "pull", nil, nil}, {"record", "list", nil, nil}])
              )
     end
 
@@ -653,7 +653,7 @@ defmodule Aqua.ToolGrantsTest do
         })
 
       listed = ctx |> rows("thread_1", ctx.athanor_id, "aqua") |> ToolGrants.allowed_keys()
-      assert listed == MapSet.new([{"files", "write", nil}])
+      assert listed == MapSet.new([{"files", "write", nil, nil}])
 
       assert :ok =
                ToolGrants.revoke(ctx, %{

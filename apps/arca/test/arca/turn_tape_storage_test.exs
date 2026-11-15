@@ -25,7 +25,7 @@ defmodule Arca.TurnTapeStorageTest do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Test.Actor.athanor!()
     actor = Arca.Test.Actor.local()
-    {:ok, thread} = Threads.create(actor)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
     {:ok, actor: actor, thread: thread}
   end
 

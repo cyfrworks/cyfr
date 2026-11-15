@@ -48,7 +48,7 @@ defmodule Aqua.CrewTest do
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
     member!(ctx, "planner")
 
-    {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, room} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(room.id, ctx.athanor_id)
     {:ok, ctx: ctx, room: room}
   end
@@ -1150,7 +1150,7 @@ defmodule Aqua.CrewTest do
   test "the admission rule refuses a member posting anywhere but the thread and request that asked it",
        %{ctx: ctx, room: room} do
     request = soul_request!(ctx, room, "planner", "go")
-    {:ok, elsewhere} = Threads.create(actor(ctx))
+    {:ok, elsewhere} = Arca.Test.Days.thread(actor(ctx))
 
     assert {:error, :not_addressable} =
              Runner.send_message(ctx, elsewhere.id, "posted elsewhere",

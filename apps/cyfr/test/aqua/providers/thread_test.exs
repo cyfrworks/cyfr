@@ -15,7 +15,7 @@ defmodule Aqua.Providers.ThreadTest do
     Cyfr.Test.Sandbox.setup!()
 
     ctx = Sanctum.TestContext.local(:prism)
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -413,8 +413,8 @@ defmodule Aqua.Providers.ThreadTest do
 
       # One turn holds a thread at a time — that is what the thread's claim
       # means — so each card is raised in a thread of its own.
-      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
-      {:ok, second} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      {:ok, second} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
       destructive =
         card!(ctx, thread, %{
@@ -508,7 +508,7 @@ defmodule Aqua.Providers.ThreadTest do
       {ctx, user} = Sanctum.TestContext.person!(ctx)
       ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
-      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
       {:ok, shared} = Sanctum.SharedThreads.create(ctx.user_id, "Trip")
       {:ok, ctx: ctx, thread: thread, shared: shared}
     end
@@ -646,7 +646,7 @@ defmodule Aqua.Providers.ThreadTest do
       ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
       Sanctum.TestContext.ready!(ctx.athanor_id)
       Cyfr.Test.Sandbox.stop_work_on_exit()
-      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
       {:ok, ctx: ctx, thread: thread}
     end
 

@@ -19,7 +19,7 @@ defmodule Aqua.TapeTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local(:prism)
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end

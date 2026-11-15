@@ -23,7 +23,7 @@ defmodule Aqua.Runner.RecoveryTableTest do
   end
 
   defp started!(ctx) do
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{

@@ -63,7 +63,7 @@ defmodule Aqua.LaunchTest do
     {:ok, %{revision_digest: revision, capability_digest: capability}} =
       Compendium.AgentIndex.snapshot(ctx, "aqua")
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     pins = %{
       profile_id: profile_id,

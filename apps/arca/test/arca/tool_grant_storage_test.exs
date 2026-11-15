@@ -251,7 +251,7 @@ defmodule Arca.ToolGrantStorageTest do
 
     test "an allow bound to a turn is answered while the turn is open", %{thread: row} do
       actor = Prima.Actor.in_athanor(row.athanor_id) |> Map.put(:user_id, "user_tg")
-      {:ok, thread} = Arca.ThreadStorage.create(actor)
+      {:ok, thread} = Arca.Test.Days.thread(actor)
 
       {:ok, %{turn: turn}} =
         Arca.TurnStorage.accept_message(actor, thread.id, %{

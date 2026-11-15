@@ -85,7 +85,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "A thread of `athanor_id`, with no turn holding it."
   @spec thread!(String.t(), String.t()) :: map()
   def thread!(athanor_id, title) do
-    {:ok, thread} = Arca.ThreadStorage.create(actor(athanor_id), %{title: title})
+    {:ok, thread} = Arca.Test.Days.thread(actor(athanor_id))
     %{id: thread.id, athanor_id: athanor_id}
   end
 

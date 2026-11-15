@@ -527,7 +527,7 @@ defmodule Sanctum.ToolGrantsTest do
   describe "admits?/2" do
     setup %{ctx: ctx} do
       actor = Sanctum.Context.actor(ctx) |> Map.put(:user_id, ctx.user_id)
-      {:ok, thread} = Arca.ThreadStorage.create(actor)
+      {:ok, thread} = Arca.Test.Days.thread(actor)
 
       {:ok, %{turn: turn}} =
         Arca.TurnStorage.accept_message(actor, thread.id, %{
@@ -862,7 +862,7 @@ defmodule Sanctum.ToolGrantsTest do
     end
 
     setup %{ctx: ctx} do
-      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
       {:ok, thread: thread.id, start: %{tool: "probe_program", action: "start"}}
     end
 

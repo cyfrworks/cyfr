@@ -77,7 +77,7 @@ defmodule Aqua.Loop.ModelWaitTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
@@ -514,7 +514,7 @@ defmodule Aqua.Loop.ModelWaitTest do
     # The athanor's next root is admitted and runs, in a thread of its own
     # beside the stopped turn's.
     ScriptedWorker.script([reply("hi")])
-    {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, other} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     next = accept!(ctx, other, "again")
     assert :completed = Task.await(run(ctx, next), 30_000)
   end

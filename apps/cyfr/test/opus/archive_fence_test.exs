@@ -560,7 +560,7 @@ defmodule Opus.ArchiveFenceTest do
   # A turn paused for an approval: its root attempt and root row paused,
   # its reservation still held.
   defp paused_turn!(ctx, grant) do
-    {:ok, thread} = Arca.ThreadStorage.create(actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(actor(ctx))
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor(ctx), thread.id, %{

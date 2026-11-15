@@ -19,7 +19,7 @@ defmodule Aqua.Runner.AdmissionTest do
     %{"name" => "builder", "title" => "Builder"}
   ]
 
-  @room %{id: "thread_room", kind: "own", parent_id: nil, agent: "aqua"}
+  @room %{id: "thread_room", kind: "daily", parent_id: nil, agent: "aqua"}
   @child %{id: "thread_child", kind: "crew", parent_id: "thread_room", agent: "planner"}
 
   test "the soul's turn in a room may ask any crew member, and nobody else asks" do

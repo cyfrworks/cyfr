@@ -290,9 +290,9 @@ defmodule PrismWeb.ToolSeamTest do
   # and no write of the thread's.
   @chat_verbs %{
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
-      ~w(thread/create thread/attach thread/send thread/discard thread/stop approval/resolve
+      ~w(thread/attach thread/send thread/discard thread/stop approval/resolve
          thread/revoke_grant thread/restart_for_consent),
-    "apps/cyfr/lib/prism_web/live/aqua_panel_live.ex" => ~w(thread/delete),
+    "apps/cyfr/lib/prism_web/live/aqua_panel_live.ex" => ~w(thread/today),
     "apps/cyfr/lib/prism_web/live/chat_overlay_live.ex" =>
       ~w(shared_thread/create shared_thread/add shared_thread/pair),
     "apps/cyfr/lib/prism_web/live/shared_thread_live.ex" =>
@@ -305,7 +305,7 @@ defmodule PrismWeb.ToolSeamTest do
   # writes, or a thread store's.
   @bypass [
     ~r/SharedThreads\.(create|pair|add|post|rename|archive|unarchive|leave|remove|withdraw)\(/,
-    ~r/(Threads|ThreadStorage|SharedThreadMembers|SharedMessages)\.(create|append|delete|seat|invite|leave|remove|withdraw)\(/
+    ~r/(Threads|ThreadStorage|SharedThreadMembers|SharedMessages)\.(create|daily|append|delete|seat|invite|leave|remove|withdraw)\(/
   ]
 
   test "the chat's turn writes go through the thread tool" do

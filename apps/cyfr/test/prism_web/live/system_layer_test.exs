@@ -2868,7 +2868,7 @@ defmodule PrismWeb.SystemLayerTest do
 
       athanor = seated_athanor()
       conn = log_in_user(conn, user, claim: false, athanor_id: athanor.id)
-      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(local))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(local))
       {panel, pane} = panel_pane(conn, thread.id)
 
       refused =
@@ -5578,7 +5578,7 @@ defmodule PrismWeb.SystemLayerTest do
         ])
 
       regrant_key!(local)
-      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(local))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(local))
       {panel, pane} = panel_pane(conn, thread.id)
 
       send(pane.pid, %Cyfr.Bus.ThreadEvent{

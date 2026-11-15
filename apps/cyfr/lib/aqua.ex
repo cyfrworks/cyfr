@@ -173,10 +173,6 @@ defmodule Aqua do
   @spec put_time_zone(String.t(), term()) :: :ok | {:error, term()}
   defdelegate put_time_zone(user_id, zone), to: Aqua.Day, as: :put_zone
 
-  @doc "The current daily thread of the context's athanor (`Aqua.Day.current/1`)."
-  @spec today(Context.t()) :: {:ok, map()} | {:error, term()}
-  defdelegate today(ctx), to: Aqua.Day, as: :current
-
   @doc """
   Move the person's read mark of `thread_id` to `seq`, forward only, while a
   view shows it, and announce the thread again to their list with its

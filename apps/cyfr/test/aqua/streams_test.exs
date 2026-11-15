@@ -140,7 +140,7 @@ defmodule Aqua.StreamsTest do
     end
 
     test "a card opened and decided moves whether the thread waits on its person", %{ada: ada} do
-      {:ok, room} = Threads.create(ada.actor)
+      {:ok, room} = Arca.Test.Days.thread(ada.actor)
       listen(ada)
 
       room_id = room.id
@@ -153,7 +153,7 @@ defmodule Aqua.StreamsTest do
     end
 
     test "a crew member's child thread is never on the list", %{ada: ada} do
-      {:ok, room} = Threads.create(ada.actor)
+      {:ok, room} = Arca.Test.Days.thread(ada.actor)
       {:ok, child} = Threads.crew_thread(ada.actor, room.id, "planner")
       listen(ada)
 
@@ -368,7 +368,7 @@ defmodule Aqua.StreamsTest do
 
   describe "the crew's activity" do
     setup %{ada: ada} do
-      {:ok, room} = Threads.create(ada.actor)
+      {:ok, room} = Arca.Test.Days.thread(ada.actor)
       {:ok, planner} = Threads.crew_thread(ada.actor, room.id, "planner")
       {:ok, scout} = Threads.crew_thread(ada.actor, room.id, "scout")
       actor = Sanctum.Context.actor(ada.ctx)
@@ -484,7 +484,7 @@ defmodule Aqua.StreamsTest do
     end
 
     test "the documented activity key preserves simultaneous jobs", %{ada: ada, planner: planner} do
-      {:ok, other_room} = Threads.create(ada.actor)
+      {:ok, other_room} = Arca.Test.Days.thread(ada.actor)
       {:ok, other_planner} = Threads.crew_thread(ada.actor, other_room.id, "planner")
       {:ok, %{turn: first}} = job!(ada, planner, "planner")
       {:ok, %{turn: second}} = job!(ada, other_planner, "planner")

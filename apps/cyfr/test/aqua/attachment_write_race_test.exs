@@ -96,7 +96,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
         |> Map.put(:session_token_hash, :crypto.hash(:sha256, session <> person.id))
       end
 
-    {:ok, thread} = Arca.ThreadStorage.create(Context.actor(a))
+    {:ok, thread} = Arca.Test.Days.thread(Context.actor(a))
     {:ok, a: a, b: b, thread: thread}
   end
 

@@ -143,7 +143,7 @@ defmodule PrismWeb.AquaSetupTest do
     # Aqua answers. The share is attach-only, so the brain never holds the
     # key: its request goes to the upstream with the key CYFR attaches.
     said = "Hello from your brain."
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     script = [
       %{

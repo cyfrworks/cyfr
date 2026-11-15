@@ -67,7 +67,7 @@ defmodule Aqua.ApprovalsTest do
     {:ok, %{revision_digest: revision, capability_digest: capability}} =
       Compendium.AgentIndex.snapshot(ctx, "aqua")
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
 
     pins = %{
@@ -629,7 +629,7 @@ defmodule Aqua.ApprovalsTest do
     assert {:ok, %{status: "error"}} = Tape.approval(ctx, approval.id)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, moved.id)
 
-    {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, other} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     changed = started!(ctx, other, %{pins | agent_capability_digest: "sha256:other"})
     %{approval: approval} = card!(ctx, changed, @keep)
 

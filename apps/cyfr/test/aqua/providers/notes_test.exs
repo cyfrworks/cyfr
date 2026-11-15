@@ -251,7 +251,7 @@ defmodule Aqua.Providers.NotesTest do
     vault = Prima.Source.new(:vault_disclosed)
 
     # A turn of the chain read a disclosed vault value, and nothing outside.
-    {:ok, thread} = Arca.ThreadStorage.create(actor)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
