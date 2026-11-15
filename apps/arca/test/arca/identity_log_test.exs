@@ -274,9 +274,11 @@ defmodule Arca.IdentityLogRaceTest do
   holds) and the second blocks on the usage row; on SQLite both queue
   behind a transaction holding the write lock and run one after the other.
 
-  Two administrators' accounts closed at once decide the same way: the
-  closure that waits counts the administrators after the other committed,
-  and the last one who can still act keeps their account.
+  Two administrators' accounts closed at once decide the same way, and so
+  do a closure and a clearing of another administrator's mark, in either
+  order: the change that waits counts the administrators after the other
+  committed, and the last one who can still act keeps their account and
+  their mark.
   """
 
   use ExUnit.Case, async: false
@@ -612,16 +614,11 @@ defmodule Arca.IdentityLogRaceTest do
         )
     end)
 
-    identifier
+    %{user_id: user_id, identifier: identifier}
   end
 
-  # The closure's own check, as the directory passes it.
-  defp close(identifier, verify \\ & &1) do
-    check = fn -> verify.(Arca.Users.closable(server(), identifier)) end
-    IdentityLog.tombstone(server(), identifier, verify: check)
-  end
-
-  test "two administrators' accounts closed at once: the one that waits is refused, one stands" do
+  # A marked person committed by another case would stand for every one.
+  defp no_other_admin! do
     assert [] ==
              unboxed(fn ->
                Arca.Repo.all(
@@ -631,39 +628,110 @@ defmodule Arca.IdentityLogRaceTest do
                  )
                )
              end),
-           "a marked person committed by another case would stand for both"
+           "a marked person committed by another case would stand"
+  end
 
+  # Holds the transaction it runs in, once its decision is made, until the
+  # test lets it go on.
+  defp holding(test) do
+    fn decided ->
+      send(test, :first_decided)
+      receive do: (:go -> decided)
+    end
+  end
+
+  # The second change, on a connection of its own, telling the test its
+  # backend so the test can watch it wait.
+  defp second(test, change) do
+    Task.async(fn ->
+      unboxed(fn ->
+        send(test, {:second, backend()})
+        change.()
+      end)
+    end)
+  end
+
+  defp waits!(second, fragments, opts \\ []) do
+    assert_receive {:second, waiting}, 5_000
+    if postgres?(), do: LockWait.await_lock_wait!(waiting, fragments, opts)
+    refute Task.yield(second, 300), "the second change decided while the first held its locks"
+  end
+
+  # An administrator taking their own mark away.
+  defp clear(user_id, opts \\ []),
+    do: Arca.Users.set_platform_admin(server(), user_id, false, [by: user_id] ++ opts)
+
+  # The closure's own check, as the directory passes it.
+  defp close(identifier, verify \\ & &1) do
+    check = fn -> verify.(Arca.Users.closable(server(), identifier)) end
+    IdentityLog.tombstone(server(), identifier, verify: check)
+  end
+
+  test "two administrators' accounts closed at once: the one that waits is refused, one stands" do
+    no_other_admin!()
     a = admin!()
     b = admin!()
     test = self()
 
-    # The first decides, then holds its transaction open before it writes.
-    hold = fn decided ->
-      send(test, :first_decided)
-      receive do: (:go -> decided)
-    end
-
-    first = Task.async(fn -> unboxed(fn -> close(a, hold) end) end)
+    first = Task.async(fn -> unboxed(fn -> close(a.identifier, holding(test)) end) end)
     assert_receive :first_decided, 5_000
 
-    second =
-      Task.async(fn ->
-        unboxed(fn ->
-          send(test, {:second, backend()})
-          close(b)
-        end)
-      end)
-
-    assert_receive {:second, waiting}, 5_000
-    if postgres?(), do: LockWait.await_lock_wait!(waiting, [~s("server_meta")])
-    refute Task.yield(second, 300), "the second closure decided while the first held the lock"
+    second = second(test, fn -> close(b.identifier) end)
+    waits!(second, [~s("server_meta")])
 
     send(first.pid, :go)
     assert :ok = Task.await(first, 25_000)
     assert {:error, :only_admin} = Task.await(second, 25_000)
 
     assert {{:error, :gone}, {:ok, %{seq: 0}}} =
-             unboxed(fn -> {IdentityLog.head(server(), a), IdentityLog.head(server(), b)} end)
+             unboxed(fn ->
+               {IdentityLog.head(server(), a.identifier),
+                IdentityLog.head(server(), b.identifier)}
+             end)
+  end
+
+  test "a mark cleared while another administrator's account closes: the clear that waits is refused" do
+    no_other_admin!()
+    a = admin!()
+    b = admin!()
+    test = self()
+
+    first = Task.async(fn -> unboxed(fn -> close(a.identifier, holding(test)) end) end)
+    assert_receive :first_decided, 5_000
+
+    second = second(test, fn -> clear(b.user_id) end)
+    waits!(second, ["pg_advisory_xact_lock"], event: "advisory")
+
+    send(first.pid, :go)
+    assert :ok = Task.await(first, 25_000)
+    assert {:error, :last_admin} = Task.await(second, 25_000)
+
+    assert {{:error, :gone}, %{platform_admin_at: %DateTime{}}} =
+             unboxed(fn ->
+               {IdentityLog.head(server(), a.identifier), Arca.Repo.get!(User, b.user_id)}
+             end)
+  end
+
+  test "an account closed while another administrator's mark is cleared: the closure that waits is refused" do
+    no_other_admin!()
+    a = admin!()
+    b = admin!()
+    test = self()
+    hold = holding(test)
+
+    first =
+      Task.async(fn -> unboxed(fn -> clear(b.user_id, also: fn _b -> hold.(:ok) end) end) end)
+
+    assert_receive :first_decided, 5_000
+
+    second = second(test, fn -> close(a.identifier) end)
+    waits!(second, ["pg_advisory_xact_lock"], event: "advisory")
+
+    send(first.pid, :go)
+    assert {:ok, %{platform_admin_at: nil}} = Task.await(first, 25_000)
+    assert {:error, :only_admin} = Task.await(second, 25_000)
+
+    assert {:ok, %{seq: 0}} = unboxed(fn -> IdentityLog.head(server(), a.identifier) end)
   end
 
   # A case whose lock wait times out dies with the gate closed; the gate's

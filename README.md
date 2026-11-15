@@ -735,13 +735,17 @@ writes an allow of their identifier, so they sign in later without the
 link; at a terminal, `cyfr login --join --invitation <code>` does the same
 with the command line. That allow is written only where no deny names them, a
 deny written later outranks it, and it shows in `cyfr admin list` and
-Settings' allowlist, where it is removed like any other. The issuer or the
+Settings' allowlist, where it is removed like any other, except a platform
+administrator's, which stays. The issuer or the
 administrator revokes a link; a link whose issuer has since left the thread
 or been denied, or whose issuer's standing has changed since it was made (a
 restore from backup changes everyone's), admits no one.
 
 The first person of a CYFR is made by its setup, and is its platform
-administrator; nothing else makes anyone an administrator. `cyfr init` and
+administrator. An administrator makes another person of this CYFR an
+administrator, or takes the mark away again, in Settings' allowlist, each
+with a fresh confirmation; marking also allows the person's account, and
+the last administrator's mark always stays. `cyfr init` and
 `cyfr setup` write the setup token `CYFR_SETUP_TOKEN` into `.env` and
 print the setup link, `<CYFR address>/setup#<token>`; the token travels
 only in the link's fragment, which no server log records. The setup page
