@@ -21,14 +21,16 @@ defmodule Emissary.External.Provider do
   (`Opus.Programs.Definition.validate_row/1`): its mark, its home
   (`scratch`, or `kept`: the row's own folder, which survives its
   sessions and is retired with the row), its memory bound, a kept home's
-  disk bound, the login command a sign-in runs and the hosts it may reach
+  disk bound and the hosts it may reach
   (none named: every public host). A program is refused when this server
   runs no programs controller (`Opus.Programs`) or runs as a cluster.
 
-  `sign_in` runs a kept program's login command on a pseudo-terminal in
-  the row's home and answers the token a console attaches to
-  (`Opus.Programs.sign_in/2`); `reset_home` empties a kept program's home
-  under the same uid. Both are a person's acts: interactive, admin.
+  `open` starts any program row's command,
+  followed by the words the person typed, on a terminal as a session the
+  server owns for the person (`Opus.Programs.start/3`), every later act on
+  which reaches `Opus.Programs` directly under the same person's
+  standing; `reset_home` empties a kept program's home under the same
+  uid. Each is a person's act: interactive, admin.
 
   Both carry the tool patterns the server is allowed to offer at all. Every
   action but `list` is `permission: :admin`, because it reads or changes
@@ -198,10 +200,6 @@ defmodule Emissary.External.Provider do
              description:
                "A kept home's disk bound in bytes (default: none beyond the homes volume)."
            ),
-           Arg.new("login_command", :string,
-             description:
-               "The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'."
-           ),
            Arg.new("hosts", {:array, Arg.new(nil, :string)},
              description:
                "A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host."
@@ -367,12 +365,20 @@ defmodule Emissary.External.Provider do
         ),
         Operation.new(
           "mcp_servers",
-          "sign_in",
-          "Sign in to a program",
+          "open",
+          "Open a program on a terminal",
           [
             Arg.new("name", :string,
               required: true,
-              description: "The program's server name; the sign-in runs in its kept home"
+              description: "The program's server name; its command runs in its own folder"
+            ),
+            Arg.new("terminal_args", {:array, Arg.new(nil, :string)},
+              description:
+                "Words to follow the program's command, as a person typed them (at most 64)"
+            ),
+            Arg.new("rows", :integer, description: "The terminal's rows, 1 to 1000 (default 24)"),
+            Arg.new("cols", :integer,
+              description: "The terminal's columns, 1 to 1000 (default 80)"
             )
           ],
           kind: :execute,
@@ -398,7 +404,7 @@ defmodule Emissary.External.Provider do
         )
       ],
       description:
-        "Manage programs and tool servers: tool servers elsewhere over HTTP (Notion, GitHub, custom servers) and programs CYFR runs on the backends service (npx packages), each marked mcp (CYFR offers its tools) or driven (a person or a brain runs it). Create, update, delete, enable/disable, restart and test them; sign in to a kept program and reset its home. A tool server's and an mcp program's tools appear in tools/list as server_name:tool_name.",
+        "Manage programs and tool servers: tool servers elsewhere over HTTP (Notion, GitHub, custom servers) and programs CYFR runs on the backends service (npx packages), each marked mcp (CYFR offers its tools) or driven (a person or a brain runs it). Create, update, delete, enable/disable, restart and test them; open a program on a terminal and reset its home. A tool server's and an mcp program's tools appear in tools/list as server_name:tool_name.",
       title: "Programs"
     )
   end
@@ -413,7 +419,7 @@ defmodule Emissary.External.Provider do
   defp dispatch("enable", ctx, args), do: handle_enable_disable(ctx, args, true)
   defp dispatch("disable", ctx, args), do: handle_enable_disable(ctx, args, false)
   defp dispatch("restart", ctx, args), do: handle_restart(ctx, args)
-  defp dispatch("sign_in", ctx, args), do: handle_sign_in(ctx, args)
+  defp dispatch("open", ctx, args), do: handle_open(ctx, args)
   defp dispatch("reset_home", ctx, args), do: handle_reset_home(ctx, args)
 
   # ============================================================================
@@ -614,7 +620,7 @@ defmodule Emissary.External.Provider do
       Enum.any?(Definition.program_keys(), &Map.has_key?(config, &1)) ->
         {:error,
          {:invalid_argument,
-          "An http server is no program: it has no mark, home, bounds, login command or hosts"}}
+          "An http server is no program: it has no mark, home, bounds or hosts"}}
 
       true ->
         with :ok <- validate_header_credentials(config["headers"]),
@@ -668,7 +674,6 @@ defmodule Emissary.External.Provider do
       home: "scratch",
       memory_bytes: nil,
       home_max_bytes: nil,
-      login_command: nil,
       hosts: nil
     }
 
@@ -1019,7 +1024,7 @@ defmodule Emissary.External.Provider do
   entry it names (`TOKEN=vault:personal`), a literal by its name alone,
   and its settings: the folder (a kept program's is the row's own,
   `"new"` until it is made; a scratch program's is `"scratch"`), the
-  hosts, the memory and disk bounds and the sign-in command; and beside
+  hosts, and the memory and disk bounds; and beside
   it the mark. A change to a stored row also names `grants`, the
   components whose grant stands on the row and asks again
   (`Sanctum.Mount.granted_to/2`), `nil` for an add of a new row. A
@@ -1054,7 +1059,6 @@ defmodule Emissary.External.Provider do
               else: "scratch folder"
             )
         }
-        |> put_present("sign_in_command", record["sign_in_command"])
         |> put_present("grants_asking_again", if(grants == [], do: "none", else: grants))
         |> Map.merge(becoming)
 
@@ -1151,17 +1155,64 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  # A sign-in runs a kept program's login command in the row's own home.
-  defp handle_sign_in(ctx, args) do
+  # A person's start of a program on a terminal: the session is the
+  # caller's athanor's and person's (`Opus.Programs.start/3`), which every
+  # later act on it reaches directly, under the same person's standing.
+  defp handle_open(ctx, args) do
     with {:ok, name} <- name_arg(args),
-         {:ok, server} <- program_row(ctx, name),
-         :ok <- signs_in(server) do
-      case Opus.Programs.sign_in(ctx, server) do
-        {:ok, token} -> {:ok, %{session: token, program: name}}
-        {:error, reason} -> {:error, programs_refusal(reason, "Sign-in to #{name}")}
+         {:ok, words} <- open_args(args),
+         {:ok, rows} <- open_size(args, "rows", 24),
+         {:ok, cols} <- open_size(args, "cols", 80),
+         {:ok, server} <- program_row(ctx, name) do
+      opts = %{rows: rows, cols: cols, args: words, by: :person}
+
+      case Opus.Programs.start(ctx, server.id, opts) do
+        {:ok, session} -> {:ok, %{session: session, program: name}}
+        {:error, reason} -> {:error, open_refusal(reason, name)}
       end
     end
   end
+
+  # The words are wrapped as they enter, so nothing that prints this
+  # process's state or a message of it prints them.
+  defp open_args(%{"terminal_args" => words}) when is_list(words) do
+    if Enum.all?(words, &is_binary/1),
+      do: {:ok, Opus.Programs.Words.new(words)},
+      else: {:error, {:invalid_argument, "terminal_args are words of text"}}
+  end
+
+  defp open_args(%{"terminal_args" => nil}), do: {:ok, Opus.Programs.Words.new([])}
+
+  defp open_args(%{"terminal_args" => _}),
+    do: {:error, {:invalid_argument, "terminal_args are words of text"}}
+
+  defp open_args(_args), do: {:ok, Opus.Programs.Words.new([])}
+
+  defp open_size(args, key, default) do
+    case Map.get(args, key) do
+      nil -> {:ok, default}
+      n when is_integer(n) -> {:ok, n}
+      _ -> {:error, {:invalid_argument, "#{key} is a whole number of characters"}}
+    end
+  end
+
+  defp open_refusal(:not_found, name), do: {:not_found, "Server", name}
+
+  defp open_refusal(:not_a_program, name),
+    do: {:invalid_argument, "'#{name}' is a tool server elsewhere; only a program opens here"}
+
+  defp open_refusal(:disabled, name), do: disabled(name)
+
+  defp open_refusal(:invalid_size, _name),
+    do: {:invalid_argument, "rows and cols are each 1 to 1000"}
+
+  defp open_refusal(:invalid_args, _name),
+    do:
+      {:invalid_argument,
+       "terminal_args are at most 64 words, each at most 4096 bytes of text with no NUL"}
+
+  defp open_refusal(:not_standing, _name), do: :not_standing
+  defp open_refusal(reason, name), do: programs_refusal(reason, "Opening #{name}")
 
   # Every session in the row's home ends and it is made again empty, under
   # the same uid.
@@ -1183,18 +1234,6 @@ defmodule Emissary.External.Provider do
       {:error, _reason} -> {:error, {:unavailable, "The server store"}}
     end
   end
-
-  defp signs_in(%{enabled: false, name: name}), do: {:error, disabled(name)}
-
-  defp signs_in(%{transport: "program", home: "kept", login_command: command})
-       when is_binary(command),
-       do: :ok
-
-  defp signs_in(%{name: name}),
-    do:
-      {:error,
-       {:invalid_argument,
-        "'#{name}' has no sign-in: a program with a kept home and a login command signs in"}}
 
   defp kept(%{transport: "program", home: "kept"}), do: :ok
 

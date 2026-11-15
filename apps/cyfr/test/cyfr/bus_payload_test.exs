@@ -34,6 +34,7 @@ defmodule Cyfr.BusPayloadTest do
     Notify,
     Ping,
     PolicyDecision,
+    Program,
     Progress,
     Request,
     RoomInView,
@@ -141,6 +142,16 @@ defmodule Cyfr.BusPayloadTest do
         name: "q3.csv",
         type: "text/csv",
         changed_at: ~U[2026-11-09 09:00:00Z]
+      ),
+      Program.new(@actor, :ended,
+        session: "trm_payload",
+        row_id: "mcp_payload",
+        name: "claude",
+        started_at: ~U[2026-11-15 09:00:00Z],
+        kept: false,
+        attached: false,
+        by: :person,
+        reason: :closed
       ),
       ThreadListed.new(@actor, :own,
         id: "thr_payload",
@@ -438,6 +449,7 @@ defmodule Cyfr.BusPayloadTest do
             :confirmations -> Bus.confirmations(other, "usr_1")
             :attention -> Bus.attention(other, "usr_1")
             :threads -> Bus.threads(other, "usr_1")
+            :programs -> Bus.programs(other, "usr_1")
             _ -> apply(Bus, key, [other])
           end
 

@@ -142,7 +142,8 @@ def scripted_controller(image):
 
         # ————— open and attach —————
         status, opened = c.open(OWNER, "cat", key=KEY, argv=ARGV, home_id=HOME)
-        expect(status == 200 and opened["resumed"] is False and opened["pty"] is False,
+        expect(status == 200 and opened == {"version": VERSION, "status": "running", "session": opened.get("session"),
+                                            "resumed": False},
                "an open in mode run starts the program for its key", opened)
         session = opened["session"]
         cat = one_cat(stack, "the row's command to run with the opener's argv")

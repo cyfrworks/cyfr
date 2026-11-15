@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/openai-codex/0.1.2/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.3/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
@@ -76,8 +76,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.2")
-REF = "catalyst:local.openai-codex:0.1.2"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.3")
+REF = "catalyst:local.openai-codex:0.1.3"
 NEED = "openai-codex"
 OWNER = owner_of("openai-codex")
 HOME = "mcp_openai-codex"
@@ -226,9 +226,8 @@ def main():
            and "model/chat@1" in manifest["contracts"],
            "the catalyst declares model/chat@1 and one need, a login for the program openai-codex", manifest["needs"])
     install = need.get("install", {})
-    expect(install.get("command", "").startswith("npx -y @openai/codex@")
-           and install.get("login_command") == install.get("command") + " login --device-auth",
-           "the need suggests fetching Codex with npx and signing in by device auth", install)
+    expect(install.get("command", "").startswith("npx -y @openai/codex@") and list(install) == ["command"],
+           "the need suggests fetching Codex with npx, and nothing about signing in", install)
 
     backends = Stack("locus-backends-openai-codex", image)
     plane = ControlPlane(secrets.token_bytes(32), runtime.SERVICE).serve()

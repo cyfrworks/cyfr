@@ -64,6 +64,7 @@ defmodule Cyfr.Bus do
     Notify,
     Ping,
     PolicyDecision,
+    Program,
     Progress,
     Request,
     RoomInView,
@@ -405,6 +406,19 @@ defmodule Cyfr.Bus do
       reason:
         "one person's list of threads moved, on that person's own topic: a shared thread is " <>
           "told to each of its people in their own athanor, never a message"
+    },
+    %{
+      key: :programs,
+      scope: :tenant,
+      struct: Program,
+      match: {:prefix, "bus:programs:"},
+      template: "tenant:<athanor_id>:bus:programs:<user_id>",
+      producers: ["Opus.Programs.Terminal", "Opus.Programs.Box"],
+      consumers: ["PrismWeb.ProgramsLive"],
+      reason:
+        "one person's running program sessions moved, on that person's own topic, so their " <>
+          "pages list them and no other member learns what they run; it carries what " <>
+          "`Opus.Programs.running/1` answers and nothing a program printed or was typed"
     },
     # --- global: unscoped on purpose ---
     %{
@@ -833,6 +847,14 @@ defmodule Cyfr.Bus do
   @spec threads(Actor.t(), String.t()) :: String.t()
   def threads(actor, user_id) when is_binary(user_id) and user_id != "",
     do: prefix(actor) <> "bus:threads:" <> user_id
+
+  @doc """
+  One person's running program sessions (`Cyfr.Bus.Program`): `user_id`
+  is that person, whose sessions they are, and only their surfaces hear it.
+  """
+  @spec programs(Actor.t(), String.t()) :: String.t()
+  def programs(actor, user_id) when is_binary(user_id) and user_id != "",
+    do: prefix(actor) <> "bus:programs:" <> user_id
 
   # ---------------------------------------------------------------------------
   # Global topics

@@ -6,8 +6,8 @@
 Run as docker-compose.yml's locus-backends service with a pool of three
 uids, and driven only by requests signed as CYFR signs them (harness.py):
 
-- The health probe answers version 2 alone; a control or session body at
-  version 1 is refused `version`.
+- The health probe answers version 3 alone; a control or session body at
+  version 2 is refused `version`.
 - A forged MAC and a timestamp outside the window are refused on both
   routes (`unauthorized`), answered before a large body is sent; a session
   message signed over another body, or under another owner's key, is
@@ -69,13 +69,13 @@ def main():
 
         # ————— the version —————
         status, answer = health(stack.base)
-        expect(status == 200 and answer["version"] == VERSION, "the health probe answers version 2", answer)
-        status, answer = health(stack.base, version=1)
-        expect((status, answer) == refusal("version"), "a version-1 health probe is refused version", answer)
-        status, answer, _ = c.renew([MAIN], version=1)
-        expect((status, answer) == refusal("version"), "a version-1 control body is refused version", answer)
-        status, answer, _, _ = c.session(MAIN, OPEN, version=1)
-        expect((status, answer) == refusal("version"), "a version-1 session body is refused version", answer)
+        expect(status == 200 and answer["version"] == VERSION, "the health probe answers version 3", answer)
+        status, answer = health(stack.base, version=2)
+        expect((status, answer) == refusal("version"), "a version-2 health probe is refused version", answer)
+        status, answer, _ = c.renew([MAIN], version=2)
+        expect((status, answer) == refusal("version"), "a version-2 control body is refused version", answer)
+        status, answer, _, _ = c.session(MAIN, OPEN, version=2)
+        expect((status, answer) == refusal("version"), "a version-2 session body is refused version", answer)
 
         # ————— unauthorized —————
         status, answer, _ = c.renew([MAIN], key=secrets.token_bytes(32))

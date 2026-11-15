@@ -709,10 +709,7 @@ defmodule PrismWeb.ComponentsLiveTest do
           "type" => "login",
           "program" => "claude",
           "reason" => "to run Claude Code on your own plan",
-          "install" => %{
-            "command" => "npx -y @anthropic-ai/claude-code",
-            "login_command" => "claude auth login"
-          }
+          "install" => %{"command" => "npx -y @anthropic-ai/claude-code"}
         }
       }
     }

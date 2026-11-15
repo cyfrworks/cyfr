@@ -41,6 +41,7 @@ defmodule Cyfr do
       Bus.Notify,
       Bus.Ping,
       Bus.PolicyDecision,
+      Bus.Program,
       Bus.Progress,
       Bus.Request,
       Bus.RoomInView,

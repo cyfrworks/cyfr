@@ -1,7 +1,7 @@
 {
   "name": "claude-code",
   "type": "catalyst",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "local",
   "description": "Claude Code as a brain of the model/chat@1 contract: the harness runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
   "contracts": [
@@ -14,8 +14,7 @@
       "reason": "to run Claude Code in its own folder, signed in to your own plan",
       "required": true,
       "install": {
-        "command": "npx -y @anthropic-ai/claude-code@2.1.318",
-        "login_command": "npx -y @anthropic-ai/claude-code@2.1.318 auth login"
+        "command": "npx -y @anthropic-ai/claude-code@2.1.318"
       }
     }
   },

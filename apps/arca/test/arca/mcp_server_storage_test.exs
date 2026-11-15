@@ -108,11 +108,11 @@ defmodule Arca.McpServerStorageTest do
                home: "scratch",
                memory_bytes: nil,
                home_max_bytes: nil,
-               login_command: nil,
                hosts: nil
              } = server
 
       refute Map.has_key?(server, :login_entry_id)
+      refute Map.has_key?(server, :login_command)
 
       assert {:ok, ^server} = McpServerStorage.get(actor, "plain")
     end
@@ -128,8 +128,7 @@ defmodule Arca.McpServerStorageTest do
                  url: nil,
                  home: "kept",
                  memory_bytes: 1_073_741_824,
-                 home_max_bytes: 2_147_483_648,
-                 login_command: "claude auth login"
+                 home_max_bytes: 2_147_483_648
                })
 
       assert %{transport: "program", mark: "driven", home: "kept"} = piped
@@ -142,8 +141,7 @@ defmodule Arca.McpServerStorageTest do
                  transport: "program",
                  mark: "mcp",
                  url: nil,
-                 home: "kept",
-                 login_command: "gh auth login"
+                 home: "kept"
                })
 
       assert {:ok, updated} =
@@ -153,8 +151,7 @@ defmodule Arca.McpServerStorageTest do
                  %{
                    home: "scratch",
                    memory_bytes: 268_435_456,
-                   home_max_bytes: nil,
-                   login_command: nil
+                   home_max_bytes: nil
                  },
                  %{id: gh, epoch: 1}
                )
@@ -162,8 +159,7 @@ defmodule Arca.McpServerStorageTest do
       assert %{
                epoch: 2,
                home: "scratch",
-               memory_bytes: 268_435_456,
-               login_command: nil
+               memory_bytes: 268_435_456
              } = updated
 
       # A store-level constraint still holds: a program has no url.

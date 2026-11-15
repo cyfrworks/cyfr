@@ -11,9 +11,12 @@ defmodule PrismWeb.ProgramsLiveTest do
   Restart for an mcp program only, replaces a program's whole definition
   keeping its folder, removes a program once its removal is confirmed,
   and shows a disabled program as stopped. It prefills the program form
-  from a component's login need, opens the sign-in in the row's folder
-  once the install is confirmed, and its sign-in terminal shows a
-  program's lines as text, bounded.
+  from a component's login need and opens the program's terminal in the
+  row's folder once the install is confirmed. A program opens on a
+  terminal the server owns for the person: the page attaches once the
+  frame's hook stands, hands each write to the hook and keeps none of it,
+  types and resizes, lists and closes the person's running sessions, and
+  leaving or reloading ends nothing.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -450,10 +453,7 @@ defmodule PrismWeb.ProgramsLiveTest do
           "type" => "login",
           "program" => "claude",
           "reason" => "to run Claude Code on your own plan",
-          "install" => %{
-            "command" => "npx -y @anthropic-ai/claude-code@2.1.316",
-            "login_command" => "claude auth login"
-          }
+          "install" => %{"command" => "npx -y @anthropic-ai/claude-code@2.1.316"}
         }
       }
     }
@@ -490,10 +490,7 @@ defmodule PrismWeb.ProgramsLiveTest do
              ~s(form#add-program input[name="command"][value="npx -y @anthropic-ai/claude-code@2.1.316"])
            )
 
-    assert has_element?(
-             view,
-             ~s(form#add-program input[name="login_command"][value="claude auth login"])
-           )
+    refute has_element?(view, ~s(form#add-program input[name="login_command"]))
 
     assert html =~ "Install"
   end
@@ -506,30 +503,6 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert flash(view, "error") == "#{ref} declares no login need named 'codex' to install from."
     refute has_element?(view, "form#add-program")
-  end
-
-  test "the terminal shows a program's lines as text, without its control sequences" do
-    alias PrismWeb.SignInTerminalComponent, as: Terminal
-
-    assert Terminal.text("\e[1;32mOpen this URL:\e[0m https://x.example/a\r") ==
-             "Open this URL: https://x.example/a"
-
-    assert Terminal.text("\e]0;title\aPaste code: ") == "Paste code: "
-    assert Terminal.text("\e[?25lplain\e(B") == "plain"
-  end
-
-  # What `gh auth login` wrote on the pty in the S1 hand check: a terminal
-  # query (OSC 11, ended by ST), then its first prompt between cursor saves.
-  test "the terminal strips OSC sequences as well as CSI, on gh's query and prompt" do
-    alias PrismWeb.SignInTerminalComponent, as: Terminal
-
-    assert Terminal.text("\e]11;?\e\\") == ""
-    assert Terminal.text("\e]11;?\a") == ""
-
-    assert Terminal.text(
-             "\e7\e8\e[0;1;92m?\e[0m \e[0;1;39mWhere do you use GitHub?\e[0m  " <>
-               "\e[0;36m[Use arrows to move, type to filter]\e[0m\r"
-           ) == "? Where do you use GitHub?  [Use arrows to move, type to filter]"
   end
 
   alias Cyfr.Test.ScriptedBackends, as: Scripted
@@ -568,7 +541,6 @@ defmodule PrismWeb.ProgramsLiveTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        login_command: "#{name} auth login",
         config_json: Jason.encode!(%{"command" => "npx -y @anthropic-ai/#{name}", "env" => %{}})
       })
 
@@ -627,145 +599,311 @@ defmodule PrismWeb.ProgramsLiveTest do
     end
   end
 
-  test "a kept program signs in through the terminal in its own folder: its lines in, the person's out, its end said",
-       %{conn: conn, athanor: athanor} do
+  # The session the page's last call opened, read from the address it
+  # patched to.
+  defp opened_session(view) do
+    path = assert_patch(view, @answered_ms)
+    assert %{"terminal" => session} = URI.decode_query(URI.parse(path).query || "")
+    session
+  end
+
+  defp open!(view, name, args \\ "") do
+    view |> element("tr[phx-value-name=#{name}]") |> render_click()
+    view |> form("form#open-#{name}", %{"terminal_args" => args}) |> render_submit()
+    answered(view)
+    opened_session(view)
+  end
+
+  # The frame's hook stands, at its fitted size: the page attaches and
+  # answers what was printed before, decoded.
+  defp ready!(view, session, rows \\ 30, cols \\ 100) do
+    render_hook(view, "terminal_ready", %{"session" => session, "rows" => rows, "cols" => cols})
+    assert_reply(view, %{data: data})
+    Base.decode64!(data)
+  end
+
+  # What the page hands the frame next, which the frame then says it drew,
+  # as its hook does once xterm has written it.
+  defp output!(view, session) do
+    assert_push_event(
+      view,
+      "terminal_output",
+      %{session: ^session, delivery: delivery, data: data},
+      2_000
+    )
+
+    render_hook(view, "terminal_written", %{"session" => session, "delivery" => delivery})
+    Base.decode64!(data)
+  end
+
+  test "Open runs a program on a terminal in its own folder with the words typed after its " <>
+         "command, and the page carries both ways what the program and the person write",
+       %{conn: conn, athanor: athanor, user: user} do
     fake = controller!()
     row = driven_row!(athanor)
     home = row.id
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude", "login --device-auth")
+
+    assert_receive {:session, "open",
+                    %{
+                      "mode" => "terminal",
+                      "key" => ^session,
+                      "home_id" => ^home,
+                      "argv" => ["login", "--device-auth"]
+                    }, _fields},
+                   2_000
+
+    # The chrome is CYFR's own: the program's name and Close, and nothing
+    # the program writes.
+    assert has_element?(view, ~s([data-test="terminal-name"]), "claude")
+    assert has_element?(view, ~s([data-test="terminal-close"]))
+
+    Scripted.write(fake, row.id, "Paste code here if prompted")
+
+    assert eventually(fn -> :sys.get_state(terminal_pid(session)).tail.bytes != "" end)
+
+    # Attached once the frame stands: what was printed before, and the
+    # frame's size given to the program.
+    assert ready!(view, session) == "Paste code here if prompted\r\n"
+    assert_receive {:session, "resize", %{"rows" => 30, "cols" => 100}, _fields}, 2_000
+
+    Scripted.write(fake, row.id, "second")
+    assert output!(view, session) == "second\r\n"
+
+    render_hook(view, "terminal_input", %{"session" => session, "terminal_input" => "code-1234\r"})
+
+    typed = Base.encode64("code-1234\r")
+    assert_receive {:session, "input", %{"bytes" => ^typed}, _fields}, 2_000
+
+    render_hook(view, "terminal_resize", %{"session" => session, "rows" => 40, "cols" => 120})
+    assert_receive {:session, "resize", %{"rows" => 40, "cols" => 120}, _fields}, 2_000
+
+    # Kept, a day unwatched does not end it.
+    view |> element(~s([data-test="terminal-keep"])) |> render_click()
+    assert {:ok, [%{kept: true}]} = Opus.Programs.running(person(user, athanor))
+
+    # The row lists it while it runs; Close ends it and the frame says so.
     view |> element("tr[phx-value-name=claude]") |> render_click()
-    assert has_element?(view, ~s([data-test="program-settings"]), "claude auth login")
-    assert has_element?(view, ~s([data-test="program-folder"]), "removed with the program")
-    view |> element(~s([data-test="sign-in"])) |> render_click()
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+    assert has_element?(view, ~s([data-test="running-session"]))
 
-    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^home}, _}, 2_000
-    assert has_element?(view, ~s([data-test="sign-in-terminal"]))
+    view |> element(~s([data-test="terminal-close"])) |> render_click()
+    assert_receive {:session, "close", _message, _fields}, 2_000
+    assert has_element?(view, ~s([data-test="terminal-ended"]), "The program was closed.")
+    assert {:ok, []} = Opus.Programs.running(person(user, athanor))
+  end
 
-    # The program's line, with the colour a terminal draws it in, shows as text.
-    Scripted.write(fake, row.id, "\e[1mPaste code here:\e[0m")
+  defp terminal_pid(session) do
+    [{pid, _person}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
+    pid
+  end
 
-    assert eventually(fn ->
-             has_element?(view, ~s([data-test="terminal-lines"]), "Paste code here:")
-           end)
+  # The browser behind the page names the delivery it drew by the token it
+  # was handed with it; the page forwards only the token it pushed last.
+  test "the page forwards only the token of the delivery it pushed last",
+       %{conn: conn, athanor: athanor} do
+    fake = controller!()
+    row = driven_row!(athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude")
+    ready!(view, session)
 
-    refute render(view) =~ "\e[1m"
+    Scripted.write(fake, row.id, "one")
 
-    view
-    |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-1234"})
-    |> render_submit()
+    assert_push_event(
+      view,
+      "terminal_output",
+      %{session: ^session, delivery: delivery, data: data},
+      2_000
+    )
 
-    assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
+    assert Base.decode64!(data) == "one\r\n"
+    Scripted.write(fake, row.id, "two")
+    Process.sleep(200)
+
+    for guess <- ["1", "2", delivery <> "x"],
+        do: render_hook(view, "terminal_written", %{"session" => session, "delivery" => guess})
+
+    refute_push_event(view, "terminal_output", %{session: ^session}, 300)
+
+    render_hook(view, "terminal_written", %{"session" => session, "delivery" => delivery})
+    assert output!(view, session) == "two\r\n"
+  end
+
+  test "a reload or a second tab attaches to the running screen, and leaving ends nothing",
+       %{conn: conn, athanor: athanor, user: user} do
+    fake = controller!()
+    row = driven_row!(athanor)
+
+    {first, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(first, "claude")
+    ready!(first, session)
+    Scripted.write(fake, row.id, "the running screen")
+    assert output!(first, session) == "the running screen\r\n"
+
+    {second, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    assert ready!(second, session) == "the running screen\r\n"
+
+    # Both draw what comes next.
+    Scripted.write(fake, row.id, "both")
+    assert output!(first, session) == "both\r\n"
+    assert output!(second, session) == "both\r\n"
+
+    # The first tab goes: the program runs on, and the second still draws it.
+    ref = Process.monitor(first.pid)
+    GenServer.stop(first.pid, :normal)
+    assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 2_000
+    refute_received {:session, "close", _message, _fields}
+
+    assert {:ok, [%{session: ^session, attached: true}]} =
+             Opus.Programs.running(person(user, athanor))
+
+    Scripted.write(fake, row.id, "still")
+    assert output!(second, session) == "still\r\n"
+  end
+
+  test "the frame says when its program ended, and that a session no longer running is gone",
+       %{conn: conn, athanor: athanor} do
+    fake = controller!()
+    row = driven_row!(athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude")
+    ready!(view, session)
 
     Scripted.end_sessions(fake, row.id, 0)
 
-    # Whether it signed in is the program's to say: the frame says its
-    # command ended.
     assert eventually(fn ->
-             has_element?(view, ~s([data-test="terminal-ended"]), "The sign-in command ended.")
+             has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
            end)
 
-    refute has_element?(view, ~s([data-test="terminal-input"]))
-  end
-
-  # One terminal, one session: selecting another target closes the session
-  # running, the new terminal sends to its own, and its heading names it.
-  test "selecting another program's sign-in closes the one running and sends to the new one",
-       %{conn: conn, athanor: athanor} do
-    fake = controller!()
-    claude = driven_row!(athanor)
-    codex = driven_row!(athanor, "codex")
-    {a, b} = {claude.id, codex.id}
-
+    # A session whose owner died outright is said to have ended too.
     {view, _html} = mount_athanor(conn, "/programs", athanor)
-    sign_in(view, "claude")
-    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
-    Scripted.write(fake, claude.id, "first")
-    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), "first") end)
-    assert_receive {:session, "recv", %{"session" => session_a}, _fields}, 2_000
+    killed = open!(view, "claude")
+    ready!(view, killed)
+    Process.exit(terminal_pid(killed), :kill)
 
-    sign_in(view, "codex")
-    assert_receive {:session, "close", %{"session" => ^session_a}, _fields}, 2_000
-    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
-    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
+           end)
 
-    assert length(Regex.scan(~r/data-test="sign-in-terminal"/, render(view))) == 1
-    assert has_element?(view, ~s([data-test="sign-in-terminal"]), "codex")
-    refute has_element?(view, ~s([data-test="terminal-lines"]), "first")
+    {gone, _html} = mount_athanor(conn, "/programs?terminal=trm_nobody", athanor)
+    render_hook(gone, "terminal_ready", %{"session" => "trm_nobody", "rows" => 24, "cols" => 80})
 
-    view
-    |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-b"})
-    |> render_submit()
+    assert has_element?(
+             gone,
+             ~s([data-test="terminal-ended"]),
+             "This program is not running any more."
+           )
 
-    assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
-    assert session_b != session_a
-
-    # After its session ended, selecting the same sign-in again starts afresh.
-    Scripted.end_sessions(fake, codex.id, 0)
-    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-ended"])) end)
-    sign_in(view, "codex")
-    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
-    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
-    refute has_element?(view, ~s([data-test="terminal-ended"]))
+    refute has_element?(gone, "#terminal-trm_nobody-screen")
   end
 
-  # A program that writes more than the terminal keeps: the person reads its
-  # last 500 lines, the earlier ones gone.
-  test "the terminal keeps a program's last 500 lines",
+  # The frame was dropped with its screen at the end, so a program that
+  # printed why it failed and exited left only "The program ended.".
+  test "at the end the screen stays as it was, read-only, beside the ending, until the " <>
+         "person closes the frame; a reload after has no screen",
        %{conn: conn, athanor: athanor} do
     fake = controller!()
     row = driven_row!(athanor)
-    home = row.id
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude")
+    ready!(view, session)
+    Scripted.write(fake, row.id, "why it failed")
+    assert output!(view, session) == "why it failed\r\n"
+
+    Scripted.end_sessions(fake, row.id, 3)
+    assert_push_event(view, "terminal_ended", %{session: ^session}, 3_000)
+    assert has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
+    assert has_element?(view, "#terminal-#{session}-screen[phx-hook=Terminal]")
+    refute has_element?(view, ~s([data-test="terminal-close"]))
+    refute has_element?(view, ~s([data-test="terminal-keep"]))
+
+    # An acknowledgement the browser sends after the end says nothing new.
+    render_hook(view, "terminal_written", %{"session" => session, "delivery" => "stale"})
+    assert has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
+
+    {reloaded, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    render_hook(reloaded, "terminal_ready", %{"session" => session, "rows" => 24, "cols" => 80})
+
+    assert has_element?(
+             reloaded,
+             ~s([data-test="terminal-ended"]),
+             "This program is not running any more."
+           )
+
+    refute has_element?(reloaded, "#terminal-#{session}-screen")
+
+    view |> element(~s([data-test="terminal-dismiss"])) |> render_click()
+    assert_patch(view)
+    refute has_element?(view, ~s([data-test="terminal"]))
+  end
+
+  # A page elsewhere can send a signed-in browser to any address, so no
+  # address starts anything: a start is the person's press.
+  test "an address naming a program to open starts nothing",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    driven_row!(athanor)
+
+    {view, _html} = mount_athanor(conn, "/programs?open=claude&from=aqua", athanor)
+    render(view)
+    assert running_calls(view) == []
+    refute_receive {:session, "open", _message, _fields}, 500
+    refute has_element?(view, ~s([data-test="terminal"]))
+    assert {:ok, []} = Opus.Programs.running(person(user, athanor))
+  end
+
+  test "shown from Aqua's card, the terminal offers the way back to Aqua",
+       %{conn: conn, athanor: athanor} do
+    controller!()
+    driven_row!(athanor)
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
-    sign_in(view, "claude")
-    assert_receive {:session, "open", %{"home_id" => ^home}, _fields}, 2_000
+    session = open!(view, "claude")
 
-    written = for n <- 1..510, do: "line-" <> String.pad_leading(Integer.to_string(n), 3, "0")
-    Enum.each(written, &Scripted.write(fake, row.id, &1))
+    {view, _html} =
+      mount_athanor(conn, "/programs?terminal=#{session}&from=aqua", athanor)
 
-    shown = fn ->
+    [back] =
       view
       |> render()
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query(~s([data-test="terminal-lines"]))
-      |> LazyHTML.text()
-      |> String.split("\n", trim: true)
-    end
+      |> LazyHTML.query(~s([data-test="back-to-aqua"]))
+      |> LazyHTML.attribute("href")
 
-    assert eventually(fn -> List.last(shown.()) == "line-510" end, 200)
-    assert shown.() == Enum.drop(written, 10)
-    assert hd(shown.()) == "line-011"
+    assert back =~ ~r{/aqua\?setup=1$}
   end
 
-  # A program's terminal text may be a credential: the page shows it, and
-  # its state, printed by a crash report or LiveView's termination log,
-  # carries only how many lines there are.
-  test "the terminal's text is in no crash report of the page, only its count",
+  # What a program writes may be a credential: the page hands it to the
+  # frame's hook and keeps none, so its state, printed by a crash report
+  # or LiveView's termination log, carries none of it.
+  test "no byte a program wrote is in the page's state or a crash report of it",
        %{conn: conn, athanor: athanor} do
     fake = controller!()
     row = driven_row!(athanor)
-    home = row.id
     canary = "sk-canary-" <> Base.encode16(:crypto.strong_rand_bytes(8))
 
     {view, _html} = mount_athanor(conn, "/programs", athanor)
-    sign_in(view, "claude")
-    assert_receive {:session, "open", %{"home_id" => ^home}, _fields}, 2_000
+    session = open!(view, "claude")
+    ready!(view, session)
     Scripted.write(fake, row.id, canary)
-    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-lines"]), canary) end)
+    assert output!(view, session) =~ canary
 
     # What LiveView's termination formatter hands a crash report: the
     # page's whole state, components included, before a logger cuts it.
     terminated =
       Phoenix.LiveView.Channel.format_status(:terminate, [%{}, :sys.get_state(view.pid)])
 
-    state = inspect(terminated, limit: :infinity, printable_limit: :infinity)
-    refute state =~ canary
-    assert state =~ "#PrismWeb.SignInTerminalComponent.Lines<1 lines>"
+    refute inspect(terminated, limit: :infinity, printable_limit: :infinity) =~ canary
+
+    # The chunk as the page receives it prints as its size.
+    message = {Opus.Programs, session, {:bytes, "token", Opus.Programs.Output.new(canary)}}
+    refute inspect(message, limit: :infinity, printable_limit: :infinity) =~ canary
 
     # A call the page does not take (it defines no handle_call) crashes it;
     # its termination report prints its state.
-    # The test's own process is linked to the page through its client.
     Process.flag(:trap_exit, true)
     ref = Process.monitor(view.pid)
 
@@ -778,64 +916,6 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert log =~ "terminating"
     refute log =~ canary
-  end
-
-  # Two sign-ins chosen before the first one's start was heard: the first
-  # session, whose terminal is gone, is closed when its start arrives, and
-  # the second is the one Send reaches.
-  test "a sign-in started for a terminal no longer open is closed",
-       %{conn: conn, athanor: athanor} do
-    controller!()
-    a = driven_row!(athanor).id
-    b = driven_row!(athanor, "codex").id
-
-    {view, _html} = mount_athanor(conn, "/programs", athanor)
-
-    # Both choices queue before the page handles either, as two quick clicks
-    # do: A's start, sent from its terminal's first update, lands after B's.
-    :sys.suspend(view.pid)
-
-    first =
-      Task.async(fn -> render_click(view, "sign_in", %{"name" => "claude"}) end)
-
-    Process.sleep(100)
-
-    second =
-      Task.async(fn -> render_click(view, "sign_in", %{"name" => "codex"}) end)
-
-    Process.sleep(100)
-    :sys.resume(view.pid)
-    Task.await(first)
-    Task.await(second)
-
-    assert_receive {:session, "open", %{"home_id" => ^a}, _fields}, 2_000
-    assert_receive {:session, "open", %{"home_id" => ^b}, _fields}, 2_000
-    assert_receive {:session, "recv", %{"session" => _}, _fields}, 2_000
-
-    session_a =
-      receive do
-        {:session, "close", %{"session" => session}, _fields} -> session
-      after
-        2_000 -> flunk("the first sign-in's session was never closed")
-      end
-
-    assert eventually(fn -> has_element?(view, ~s([data-test="terminal-input"])) end)
-    assert has_element?(view, ~s([data-test="sign-in-terminal"]), "codex")
-
-    view
-    |> form(~s([data-test="terminal-input"]), %{"sign_in_line" => "code-b"})
-    |> render_submit()
-
-    assert_receive {:session, "send", %{"session" => session_b, "lines" => ["code-b"]}, _}, 2_000
-    assert session_b != session_a
-  end
-
-  # Signs `name` in, its row expanded first unless it is.
-  defp sign_in(view, name) do
-    unless has_element?(view, ~s([data-test="sign-in"][phx-value-name="#{name}"])),
-      do: view |> element("tr[phx-value-name=#{name}]") |> render_click()
-
-    view |> element(~s([data-test="sign-in"][phx-value-name="#{name}"])) |> render_click()
   end
 
   test "Reset folder empties the program's own folder", %{conn: conn, athanor: athanor} do
@@ -855,7 +935,7 @@ defmodule PrismWeb.ProgramsLiveTest do
   end
 
   test "the program form adds a kept driven program with its bounds once its definition is " <>
-         "confirmed, and opens its sign-in in its folder",
+         "confirmed",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
     {view, _html} = mount_athanor(conn, "/programs", athanor)
@@ -870,7 +950,6 @@ defmodule PrismWeb.ProgramsLiveTest do
       "name" => "claude",
       "command" => "npx -y @anthropic-ai/claude-code",
       "mark" => "driven",
-      "login_command" => "claude auth login",
       "home" => "kept",
       "memory_mib" => "1024",
       "disk_mib" => "2048"
@@ -881,7 +960,6 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     # Nothing is made before the person confirms the whole definition.
     assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "claude")
-    refute has_element?(view, ~s([data-test="sign-in-terminal"]))
 
     assert %{
              "operation" => "mcp_servers.create",
@@ -893,7 +971,6 @@ defmodule PrismWeb.ProgramsLiveTest do
                "hosts" => "every public host",
                "memory_bytes" => "1073741824",
                "home_max_bytes" => "2147483648",
-               "sign_in_command" => "claude auth login",
                "environment" => "none"
              }
            } = asked(user, athanor, "mcp_servers.create")
@@ -906,17 +983,15 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert row.home == "kept"
     assert row.memory_bytes == 1024 * 1_048_576
     assert row.home_max_bytes == 2048 * 1_048_576
-    assert row.login_command == "claude auth login"
     assert {:ok, []} = Arca.VaultStorage.list(ctx(athanor))
 
-    # It was asked once, and its sign-in opens in the row's own folder.
+    # It was asked once; added from the form, it opens nothing by itself.
     assert open_confirmations(user, athanor) == []
-    home = row.id
-    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^home}, _fields}, 2_000
-    assert eventually(fn -> has_element?(view, ~s([data-test="sign-in-terminal"])) end)
+    refute_received {:session, "open", _message, _fields}
+    refute has_element?(view, ~s([data-test="terminal"]))
   end
 
-  test "an install from a component's need asks once, then opens the sign-in in the row's folder",
+  test "an install from a component's need asks once, then opens its terminal in the row's folder",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
     ref = harness!(athanor)
@@ -936,7 +1011,11 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:ok, %{id: home, mark: "driven", home: "kept"}} =
              Arca.McpServerStorage.get(ctx(athanor), "claude")
 
-    assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^home}, _fields}, 2_000
+    assert_receive {:session, "open", %{"mode" => "terminal", "home_id" => ^home}, _fields},
+                   2_000
+
+    opened_session(view)
+    assert has_element?(view, ~s([data-test="terminal-name"]), "claude")
     assert open_confirmations(user, athanor) == []
   end
 
@@ -991,7 +1070,6 @@ defmodule PrismWeb.ProgramsLiveTest do
       "command" => "npx -y @anthropic-ai/claude",
       "mark" => "driven",
       "home" => "kept",
-      "login_command" => "claude auth login",
       "hosts" => "api.anthropic.com"
     })
     |> render_submit()
@@ -1138,7 +1216,6 @@ defmodule PrismWeb.ProgramsLiveTest do
       "command" => "npx -y @anthropic-ai/claude-code@2.1.400",
       "mark" => "driven",
       "home" => "kept",
-      "login_command" => "claude auth login",
       "memory_mib" => "1024"
     })
     |> render_submit()
@@ -1271,7 +1348,6 @@ defmodule PrismWeb.ProgramsLiveTest do
         home: "kept",
         memory_bytes: 16_777_217,
         home_max_bytes: 2_147_483_648,
-        login_command: "gh auth login",
         hosts: Jason.encode!(["api.github.com", "github.com"]),
         config_json:
           Jason.encode!(%{
@@ -1329,7 +1405,6 @@ defmodule PrismWeb.ProgramsLiveTest do
              :home,
              :memory_bytes,
              :home_max_bytes,
-             :login_command,
              :hosts
            ]) ==
              Map.take(before, [
@@ -1337,7 +1412,6 @@ defmodule PrismWeb.ProgramsLiveTest do
                :home,
                :memory_bytes,
                :home_max_bytes,
-               :login_command,
                :hosts
              ])
 

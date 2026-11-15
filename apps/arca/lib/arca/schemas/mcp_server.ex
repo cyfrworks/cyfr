@@ -13,7 +13,7 @@ defmodule Arca.Schemas.McpServer do
   program's `home` is `"scratch"`, scrubbed at retirement, or `"kept"`,
   the row's own folder, named by the row's id and retired with the row;
   `memory_bytes` and `home_max_bytes` are its bounds (nil: the service's
-  own bound, the homes volume) and `login_command` what a sign-in runs.
+  own bound, the homes volume).
   `hosts` is a program's network list as JSON text, the
   only hosts it reaches (`Opus.Programs.Definition`), nil for every public
   host.
@@ -51,7 +51,6 @@ defmodule Arca.Schemas.McpServer do
     field :home, :string, default: "scratch"
     field :memory_bytes, :integer
     field :home_max_bytes, :integer
-    field :login_command, :string
     field :hosts, :string
     field :url, :string
     field :config_json, :string

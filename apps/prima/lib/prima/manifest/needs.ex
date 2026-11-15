@@ -73,23 +73,23 @@ defmodule Prima.Manifest.Needs do
   ## Mounting
 
   A need of `"type": "login"` is satisfied by mounting: the program it
-  names runs in its row's own kept folder, where its own sign-in is.
+  names runs in its row's own kept folder, where its own sign-in is, made
+  by the person in the program's terminal.
 
       "needs": {
         "claude": { "type": "login", "program": "claude",
                     "reason": "to run Claude Code on your own plan",
                     "required": true,
-                    "install": { "command": "npx -y @anthropic-ai/claude-code",
-                                 "login_command": "claude auth login" } }
+                    "install": { "command": "npx -y @anthropic-ai/claude-code" } }
       }
 
   `program` names the `mcp_servers` row the need runs, in
   `Prima.Destination.valid_program?/1`'s grammar; it binds to the
   athanor's own program row of that name (`fit/2`), never to a vault
   entry. `install`, when
-  present, is what the component suggests the row to be: `command` and
-  `login_command`, each optional and each held to
-  `Prima.LocusBackends.check_command/1` as a backend command is. A setup
+  present, is what the component suggests the row to be: its `command`,
+  optional and held to `Prima.LocusBackends.check_command/1` as a backend
+  command is. A setup
   plan shows it and the person decides. A login need declares no `hosts`,
   `paths`, `attach`, `disclose`, `fields` or `scopes`: each is refused
   `{:not_for_login, name, keys}`. Nothing is attached to its requests or
@@ -112,7 +112,7 @@ defmodule Prima.Manifest.Needs do
   @credential_only_keys ~w(attach hosts paths disclose)
   @entry_keys ~w(type reason fields scopes required) ++ @credential_only_keys
   @login_keys ~w(type reason required program install)
-  @install_keys ~w(command login_command)
+  @install_keys ~w(command)
 
   @attach_ins ~w(header query)
   @placeholder "{value}"
@@ -130,10 +130,10 @@ defmodule Prima.Manifest.Needs do
   @type attach :: %{in: String.t(), name: String.t(), template: String.t()}
 
   @typedoc """
-  A login need's suggested program row: its command and the command that
-  signs the program in, nil when the need suggests none.
+  A login need's suggested program row: its command, nil when the need
+  suggests none.
   """
-  @type install :: %{command: String.t() | nil, login_command: String.t() | nil}
+  @type install :: %{command: String.t() | nil}
 
   @type error :: {:invalid_needs, term()}
 
@@ -362,7 +362,7 @@ defmodule Prima.Manifest.Needs do
   defp install(nil), do: nil
 
   defp install(raw),
-    do: %{command: Map.get(raw, "command"), login_command: Map.get(raw, "login_command")}
+    do: %{command: Map.get(raw, "command")}
 
   defp validate_login(name, entry) do
     with :ok <- login_keys(name, entry),
@@ -399,8 +399,7 @@ defmodule Prima.Manifest.Needs do
 
   defp validate_install(name, install) when is_map(install) do
     with :ok <- install_keys(install),
-         :ok <- install_command(install, :command),
-         :ok <- install_command(install, :login_command) do
+         :ok <- install_command(install, :command) do
       :ok
     else
       {:error, reason} -> {:error, {:invalid_needs, {:invalid_install, name, reason}}}

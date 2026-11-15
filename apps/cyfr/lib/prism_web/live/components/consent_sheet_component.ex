@@ -2494,8 +2494,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp setting_lines(%{"folder" => _folder} = record) do
     ["Folder: #{folder_words(record["folder"])}", "Hosts: #{hosts_words(record["hosts"])}"] ++
       ["Memory bound: #{bound_words(record["memory_bytes"])}"] ++
-      ["Folder bound: #{bound_words(record["home_max_bytes"])}"] ++
-      for(command <- List.wrap(record["sign_in_command"]), do: "Sign-in command: #{command}")
+      ["Folder bound: #{bound_words(record["home_max_bytes"])}"]
   end
 
   defp setting_lines(_http), do: []
@@ -2551,8 +2550,7 @@ defmodule PrismWeb.ConsentSheetComponent do
           {"folder", "folder", &folder_words/1},
           {"hosts", "hosts", &hosts_words/1},
           {"memory_bytes", "memory bound", &bound_words/1},
-          {"home_max_bytes", "folder bound", &bound_words/1},
-          {"sign_in_command", "sign-in command", &(&1 || "none")}
+          {"home_max_bytes", "folder bound", &bound_words/1}
         ],
         held[key] != asked[key],
         do: "Its #{what} changed from #{words.(held[key])} to #{words.(asked[key])}."

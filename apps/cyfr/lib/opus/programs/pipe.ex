@@ -80,13 +80,13 @@ defmodule Opus.Programs.Pipe do
           program: Opus.Programs.Definition.program_name(),
           home_id: owner.server_id,
           key: state.key,
-          argv: argv
+          argv: Opus.Programs.Words.new(argv)
         }
 
         spawn_link(fn ->
           send(
             holder,
-            {:opened, ref, Opus.Programs.pipe_box_open(owner, holder, params, deadline)}
+            {:opened, ref, Opus.Programs.box_open(owner, holder, params, deadline)}
           )
         end)
 
@@ -163,7 +163,7 @@ defmodule Opus.Programs.Pipe do
   @impl true
   def terminate(_reason, state) do
     if state.grant do
-      _ = Opus.Programs.pipe_box_close(state.owner, state.owner.server_id, state.key)
+      _ = Opus.Programs.box_close(state.owner, state.owner.server_id, state.key)
       Opus.Programs.release(state.owner)
     end
 

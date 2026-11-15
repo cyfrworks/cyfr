@@ -2207,8 +2207,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :memory_bytes, :bigint
       # A kept home's size cap.
       add :home_max_bytes, :bigint
-      # The command a sign-in session runs on a pseudo-terminal.
-      add :login_command, :text
       # A program's network list (JSON).
       add :hosts, :text
       add :url, :string

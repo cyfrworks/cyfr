@@ -1,10 +1,10 @@
 # OpenAI Codex Catalyst
 
-OpenAI Codex as a brain of the `model/chat@1` contract. Codex, OpenAI's coding agent, runs as itself, with its own tools, its own prompt and the person's own sign-in, in the folder a login entry keeps for the program `openai-codex`. This catalyst drives Codex's app-server over the program's pipe (`cyfr:process/pipe`) and gives it CYFR's tools as the thread's dynamic tools: Codex asks this catalyst to run each one, so every action of CYFR's still passes CYFR's gate. The catalyst holds no credential, no route and nothing between runs; CYFR ships nothing of OpenAI's.
+OpenAI Codex as a brain of the `model/chat@1` contract. Codex, OpenAI's coding agent, runs as itself, with its own tools, its own prompt and the person's own sign-in, in the program row's own folder. This catalyst drives Codex's app-server over the program's pipe (`cyfr:process/pipe`) and gives it CYFR's tools as the thread's dynamic tools: Codex asks this catalyst to run each one, so every action of CYFR's still passes CYFR's gate. The catalyst holds no credential, no route and nothing between runs; CYFR ships nothing of OpenAI's.
 
 ## The program
 
-The manifest declares one need, `openai-codex`, of type `login` for the program `openai-codex`, and no other. Its `install` block suggests the row: command `npx -y @openai/codex@0.167.0`, sign-in `npx -y @openai/codex@0.167.0 login --device-auth`. Device auth prints a URL and a one-time code that the person opens in their own browser; plain `codex login` would start a callback server on the box's loopback, which that browser cannot reach. The person installs it from the setup plan or the crew entry on the AQUA page, which defines the row, makes the login entry and opens the sign-in terminal; or places a binary and writes the row by hand. Codex keeps its sign-in and its threads under `~/.codex` in the kept folder.
+The manifest declares one need, `openai-codex`, of type `login` for the program `openai-codex`, and no other. Its `install` block suggests the row's command, `npx -y @openai/codex@0.167.0`. The person signs it in at the row's terminal by giving the arguments `login --device-auth`: device auth prints a URL and a one-time code that the person opens in their own browser; plain `codex login` would start a callback server on the box's loopback, which that browser cannot reach. The person sets it up from the crew entry on the Aqua page, which defines the row once they confirm it and opens its terminal; or writes the row by hand. Codex keeps its sign-in and its threads under `~/.codex` in the kept folder.
 
 ## The protocol it depends on
 
@@ -54,7 +54,7 @@ Before a run sends anything, what the pipe answers maps to the contract's refusa
 - **effort**: an enum of the levels any listed model takes (`reasoningEffort`), in the listing's order.
 - **context_window**: on `describe` with a `model`, that model's window from the catalog Codex 0.167.0 ships (`codex-rs/models-manager/models.json`, each entry's `context_window`): 500,000 for `gpt-6.1-terra`, 372,000 for `gpt-daybreak-red-latest`, 272,000 for the other ten it holds. `default` is the model the listing marks its default. A model the catalog does not hold, such as one an account's own listing adds, is given 272,000, the smallest window the catalog gives any model. app-server lists no window, so the table is this catalyst's, and a version bump reads it again from that file. Codex manages and compacts its own context.
 
-`model/list` answers without a sign-in, from the catalog Codex ships. With no login entry granted yet (the pipe answers `denied`), `describe` answers deliberately with no options; any other failure to list keeps its contract error.
+`model/list` answers without a sign-in, from the catalog Codex ships. With no program row granted yet (the pipe answers `denied`), `describe` answers deliberately with no options; any other failure to list keeps its contract error.
 
 ## Verified against 0.167.0
 
@@ -69,4 +69,4 @@ Not verified without a Codex account: a real model's turn (its streaming, usage 
 
 ## Building
 
-`scripts/build-seed-guest.sh seed/components/catalysts/local/openai-codex/0.1.2` builds `catalyst.wasm` and writes `src/build.stamp`. `cargo test` in `src/` runs the contract and protocol tests on the host target, against a fake app-server scripted from the lines 0.167.0 wrote and against the shared vectors `tests/fixtures/model_chat.json`. `tests/locus-backends-image/openai_codex.py` drives the built catalyst against a fake Codex in the backends image.
+`scripts/build-seed-guest.sh seed/components/catalysts/local/openai-codex/0.1.3` builds `catalyst.wasm` and writes `src/build.stamp`. `cargo test` in `src/` runs the contract and protocol tests on the host target, against a fake app-server scripted from the lines 0.167.0 wrote and against the shared vectors `tests/fixtures/model_chat.json`. `tests/locus-backends-image/openai_codex.py` drives the built catalyst against a fake Codex in the backends image.

@@ -162,10 +162,10 @@ const (
 	McpServersEnable        = "enable"
 	McpServersGet           = "get"
 	McpServersList          = "list"
+	McpServersOpen          = "open"
 	McpServersRefresh       = "refresh"
 	McpServersResetHome     = "reset_home"
 	McpServersRestart       = "restart"
-	McpServersSignIn        = "sign_in"
 	McpServersTest          = "test"
 	McpServersUpdate        = "update"
 	NotesEndorse            = "endorse"
@@ -317,7 +317,7 @@ var Actions = map[string][]string{
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
-	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
+	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "open", "refresh", "reset_home", "restart", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"list", "renew", "revoke", "waiting"},
@@ -2171,8 +2171,6 @@ type McpServersCreateArgsConfig struct {
 	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
 	// A kept home's disk bound in bytes (default: none beyond the homes volume).
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
-	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
-	LoginCommand Field[string] `json:"login_command,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)
@@ -2263,6 +2261,27 @@ func (args McpServersListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: McpServersList, fields: fields(args)})
 }
 
+// McpServersOpenArgs carries arguments for mcp_servers.open.
+type McpServersOpenArgs struct {
+	// The program's server name; its command runs in its own folder
+	Name string `json:"name"`
+	// Words to follow the program's command, as a person typed them (at most 64)
+	TerminalArgs Field[[]string] `json:"terminal_args,omitzero"`
+	// The terminal's rows, 1 to 1000 (default 24)
+	Rows Field[int] `json:"rows,omitzero"`
+	// The terminal's columns, 1 to 1000 (default 80)
+	Cols Field[int] `json:"cols,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args McpServersOpenArgs) MarshalJSON() ([]byte, error) {
+	type fields McpServersOpenArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: McpServersOpen, fields: fields(args)})
+}
+
 // McpServersRefreshArgs carries arguments for mcp_servers.refresh.
 type McpServersRefreshArgs struct {
 	// Server name (required for every action but list; refresh without one refreshes every enabled server)
@@ -2306,21 +2325,6 @@ func (args McpServersRestartArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: McpServersRestart, fields: fields(args)})
-}
-
-// McpServersSignInArgs carries arguments for mcp_servers.sign_in.
-type McpServersSignInArgs struct {
-	// The program's server name; the sign-in runs in its kept home
-	Name string `json:"name"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args McpServersSignInArgs) MarshalJSON() ([]byte, error) {
-	type fields McpServersSignInArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: McpServersSignIn, fields: fields(args)})
 }
 
 // McpServersTestArgs carries arguments for mcp_servers.test.
@@ -2382,8 +2386,6 @@ type McpServersUpdateArgsConfig struct {
 	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
 	// A kept home's disk bound in bytes (default: none beyond the homes volume).
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
-	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
-	LoginCommand Field[string] `json:"login_command,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)

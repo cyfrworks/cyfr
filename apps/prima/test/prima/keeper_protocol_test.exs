@@ -35,6 +35,7 @@ defmodule Prima.KeeperProtocolTest do
   @request_types %{
     "spawn" => :spawn,
     "signal" => :signal,
+    "resize" => :resize,
     "release" => :release,
     "pool" => :pool,
     "home_make" => :home_make,
@@ -96,7 +97,19 @@ defmodule Prima.KeeperProtocolTest do
     "home uid of zero" => "home_uid",
     "home bound of zero" => "home_max_bytes",
     "home mode other than scratch or kept" => "home_mode",
-    "pty that is not a boolean" => "pty",
+    "pty that is not an object" => "pty",
+    "pty that is true" => "pty",
+    "pty that is false" => "pty",
+    "pty without cols" => "pty",
+    "pty with an extra member" => "pty",
+    "pty of zero rows" => "pty",
+    "pty of cols above the maximum" => "pty",
+    "pty of fractional rows" => "pty",
+    "resize without rows" => "rows",
+    "resize carrying an id" => "id",
+    "resize of zero rows" => "rows",
+    "resize of cols above the maximum" => "cols",
+    "resize of a malformed spawn id" => "spawn_id",
     "home mode that is empty" => "home_mode",
     "pty that is null" => "pty",
     "isolation that is empty" => "isolation",
@@ -126,9 +139,9 @@ defmodule Prima.KeeperProtocolTest do
   # atom `encode/1` takes: a closed table, so a vector names no atom it
   # makes.
   @members Map.new(
-             ~w(argv attach control core cpu_quota env extra fsize grace_ms home_max_bytes home_mode
-                home_path home_uid hosts id isolation memory_bytes nofile nproc path pool pty
-                rlimits sig spawn_id token type uid v)a,
+             ~w(argv attach cols control core cpu_quota env extra fsize grace_ms home_max_bytes
+                home_mode home_path home_uid hosts id isolation memory_bytes nofile nproc path pool
+                pty rlimits rows sig spawn_id token type uid v xpixel)a,
              &{Atom.to_string(&1), &1}
            )
 
@@ -148,6 +161,7 @@ defmodule Prima.KeeperProtocolTest do
       {"env", env} -> {:env, env}
       {"attach", %{} = attach} -> {:attach, atom_keys(attach)}
       {"rlimits", %{} = rlimits} -> {:rlimits, atom_keys(rlimits)}
+      {"pty", %{} = pty} -> {:pty, atom_keys(pty)}
       {name, value} -> {Map.fetch!(@members, name), value}
     end)
   end
@@ -354,13 +368,16 @@ defmodule Prima.KeeperProtocolTest do
 
       spawns = for %{"type" => "spawn"} = spawn <- @vectors["home_requests"], do: spawn
       assert Enum.any?(spawns, &(&1["home_mode"] == "kept" and &1["home_max_bytes"]))
-      assert Enum.any?(spawns, &(&1["pty"] == true))
+      assert Enum.any?(spawns, &(&1["pty"] == %{"rows" => 40, "cols" => 120}))
 
       # A spawn naming scratch and no pty is today's, among the valid ones.
       assert Enum.any?(
                @vectors["valid_requests"],
-               &(&1["home_mode"] == "scratch" and &1["pty"] == false)
+               &(&1["home_mode"] == "scratch" and not Map.has_key?(&1, "pty"))
              )
+
+      # A terminal's size is set again by a resize of its spawn.
+      assert Enum.any?(@vectors["valid_requests"], &(&1["type"] == "resize"))
     end
 
     test "every invalid request is refused, naming the member its why is about" do
@@ -639,7 +656,18 @@ defmodule Prima.KeeperProtocolTest do
       assert max == 1_125_899_906_842_624
       assert line(spawn_request(%{kept | home_uid: bounds.max_uid}))
       assert line(spawn_request(%{kept | home_path: "/" <> String.duplicate("a", 4094)}))
-      assert line(spawn_request(%{home_mode: "scratch", pty: false}))
+      assert line(spawn_request(%{home_mode: "scratch", pty: %{rows: 24, cols: 80}}))
+      max_pty = KeeperProtocol.max_pty_size()
+      assert line(spawn_request(%{pty: %{rows: max_pty, cols: max_pty}}))
+
+      for pty <- [true, false, %{rows: 24}, %{rows: max_pty + 1, cols: 1}, %{rows: 1, cols: 0}] do
+        assert refused(spawn_request(%{pty: pty})) =~ ~r/\Apty /
+      end
+
+      resize = %{type: :resize, spawn_id: @spawn_id, rows: 50, cols: 132}
+
+      assert line(resize) ==
+               ~s({"cols":132,"rows":50,"spawn_id":"#{@spawn_id}","type":"resize","v":1}\n)
 
       for {member, value} <- [
             home_max_bytes: bounds.max_home_bytes + 1,
@@ -672,7 +700,7 @@ defmodule Prima.KeeperProtocolTest do
       assert refused(Map.delete(home, :path)) =~ ~r/\Apath /
       assert refused(Map.put(home, :pool, "backends")) =~ ~r/\Apool /
       assert refused(Map.put(home, :home_mode, "kept")) =~ ~r/\Ahome_mode /
-      assert refused(%{type: :pool, id: "1", pool: "p", pty: false}) =~ ~r/\Apty /
+      assert refused(%{type: :pool, id: "1", pool: "p", pty: %{rows: 1, cols: 1}}) =~ ~r/\Apty /
     end
 
     test "are refused when argv and env together pass the keeper's bound" do

@@ -4,8 +4,9 @@
 defmodule Opus.Programs.Session do
   @moduledoc """
   The session routes of `Prima.LocusBackends`, as a holder speaks them under
-  the grant `Opus.Programs.hold/1` answered: `open/2`, `send/3`, `recv/4`
-  and `close/2`.
+  the grant `Opus.Programs.hold/1` answered: `open/2` and `close/2`, then
+  `send/3` and `recv/4` of a `run` session, or `input/3`, `output/4` and
+  `resize/4` of a `terminal` one.
 
   Each runs in the calling process, as one request of its own, apart from
   the box's serialized control channel: a `recv` that waits up to its
@@ -38,21 +39,23 @@ defmodule Opus.Programs.Session do
           | {:invalid, term()}
 
   @doc """
-  Open a session of `program` for `key`: mode `:run` attaches to the key's
-  running session or starts the program with `argv`; mode `:sign_in` runs
-  its login command on a pseudo-terminal in the kept home `home_id`.
-  `:timeout_ms` bounds the wait for the answer (default
-  #{@open_timeout_ms}).
+  Open a session of `program` for `key`, in the kept home `home_id` when
+  it has one: it attaches to the key's running session of its mode, or
+  starts the program with `argv`, mode `:run` on pipes and mode
+  `:terminal` on a pseudo-terminal of `rows` by `cols`. `:timeout_ms`
+  bounds the wait for the answer (default #{@open_timeout_ms}).
   """
   @spec open(grant(), %{
           required(:program) => String.t(),
           required(:key) => String.t(),
           optional(:home_id) => String.t() | nil,
-          optional(:mode) => :run | :sign_in,
-          optional(:argv) => [String.t()],
+          optional(:mode) => :run | :terminal,
+          optional(:argv) => Opus.Programs.Words.t(),
+          optional(:rows) => pos_integer(),
+          optional(:cols) => pos_integer(),
           optional(:timeout_ms) => pos_integer()
         }) ::
-          {:ok, %{session: String.t(), resumed: boolean(), pty: boolean()}}
+          {:ok, %{session: String.t(), resumed: boolean()}}
           | {:error, refusal()}
   def open(grant, params) do
     message =
@@ -61,11 +64,13 @@ defmodule Opus.Programs.Session do
         home_id: Map.get(params, :home_id),
         key: params.key,
         mode: Map.get(params, :mode, :run),
-        argv: Map.get(params, :argv, [])
+        argv: params |> Map.get(:argv, Opus.Programs.Words.new([])) |> Opus.Programs.Words.list(),
+        rows: Map.get(params, :rows),
+        cols: Map.get(params, :cols)
       })
 
     with {:ok, answer} <- post(grant, message, Map.get(params, :timeout_ms, @open_timeout_ms)) do
-      {:ok, Map.take(answer, [:session, :resumed, :pty])}
+      {:ok, Map.take(answer, [:session, :resumed])}
     end
   end
 
@@ -103,6 +108,55 @@ defmodule Opus.Programs.Session do
 
     message =
       Map.merge(base(:recv, grant), %{
+        session: session,
+        after: after_seq,
+        max_wait_ms: max_wait_ms
+      })
+
+    post(grant, message, max_wait_ms + slack_ms)
+  end
+
+  @doc """
+  Write `bytes` to a terminal session as they are; `:ended` once it no
+  longer runs. The answer is awaited `timeout_ms` (default #{@send_timeout_ms}).
+  """
+  @spec input(grant(), String.t(), binary(), pos_integer()) ::
+          {:ok, :running | :ended} | {:error, refusal()}
+  def input(grant, session, bytes, timeout_ms \\ @send_timeout_ms) when is_binary(bytes) do
+    message = Map.merge(base(:input, grant), %{session: session, bytes: bytes})
+
+    with {:ok, %{status: status}} <- post(grant, message, timeout_ms),
+         do: {:ok, status}
+  end
+
+  @doc "Set a terminal session's size; `:ended` once it no longer runs."
+  @spec resize(grant(), String.t(), pos_integer(), pos_integer(), pos_integer()) ::
+          {:ok, :running | :ended} | {:error, refusal()}
+  def resize(grant, session, rows, cols, timeout_ms \\ @send_timeout_ms) do
+    message = Map.merge(base(:resize, grant), %{session: session, rows: rows, cols: cols})
+
+    with {:ok, %{status: status}} <- post(grant, message, timeout_ms),
+         do: {:ok, status}
+  end
+
+  @doc """
+  A terminal session's chunks of bytes past `after`, masked, as `recv/5`
+  answers a run's lines.
+  """
+  @spec output(grant(), String.t(), non_neg_integer(), non_neg_integer(), pos_integer()) ::
+          {:ok,
+           %{
+             chunks: [LocusBackends.chunk()],
+             dropped: non_neg_integer(),
+             running: boolean(),
+             exit_code: 0..255 | nil
+           }}
+          | {:error, refusal()}
+  def output(grant, session, after_seq, max_wait_ms, slack_ms \\ @slack_ms) do
+    max_wait_ms = min(max_wait_ms, LocusBackends.max_recv_wait_ms())
+
+    message =
+      Map.merge(base(:output, grant), %{
         session: session,
         after: after_seq,
         max_wait_ms: max_wait_ms

@@ -302,8 +302,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
         "Folder: a folder kept between runs",
         "Hosts: #{Enum.join(record["hosts"], ", ")}",
         "Memory bound: #{div(record["memory_bytes"], 1_048_576)} MiB",
-        "Folder bound: #{div(record["home_max_bytes"], 1_048_576)} MiB",
-        "Sign-in command: #{record["sign_in_command"]}"
+        "Folder bound: #{div(record["home_max_bytes"], 1_048_576)} MiB"
       ]
   end
 

@@ -7,8 +7,9 @@
 //
 // Client to keeper:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":true,"hosts":[…]}
+//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":1,"type":"resize","spawn_id":…,"rows":…,"cols":…}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
 //	{"v":1,"type":"home_make","id":…,"path":…,"uid":…}
@@ -85,7 +86,8 @@
 // HomeScratch. A kept spawn names its home's clean absolute `home_path`
 // and the home's own `home_uid`, and may bound it by `home_max_bytes`;
 // those three are refused without HomeKept. A spawn's `pty` asks for a
-// pseudo-terminal; absent reads as false. The `home_make`, `home_measure`
+// pseudo-terminal of its `rows` and `cols`, exactly those two members, each
+// 1..MaxPtySize; absent, the spawn has none. The `home_make`, `home_measure`
 // and `home_retire` requests name a kept home by `path` and `uid`.
 //
 // The keeper runs a kept spawn under its home_uid in its home_path, both
@@ -93,7 +95,12 @@
 // root, a uid of the range), and takes no uid of the pool for it; a kept
 // spawn whose home already holds home_max_bytes is refused as
 // CodeHomeOverCap. A `pty` spawn's stdin, stdout and stderr are a
-// pseudo-terminal, which its stdout frames carry; its stderr ends at once.
+// pseudo-terminal of the size it names, which its stdout frames carry; its
+// stderr ends at once. A `resize` sets that terminal's size to its `rows`
+// and `cols`, bounded as a spawn's `pty`, and the kernel signals SIGWINCH to
+// the terminal's foreground process group; like `signal` it has no reply
+// but a refusal: CodeUnknownSpawn for a spawn the keeper does not hold and
+// CodeBadRequest for one without a pseudo-terminal.
 // The home requests act as helpers running as the home's uid: `home_make`
 // makes the home 0700, `home_measure` answers the bytes allocated under it,
 // and `home_retire` ends every process of the uid and removes the home.
@@ -161,6 +168,7 @@ const KeptHomesEnv = "KEEPER_KEPT_HOMES"
 const (
 	TypeSpawn        = "spawn"
 	TypeSignal       = "signal"
+	TypeResize       = "resize"
 	TypeRelease      = "release"
 	TypePool         = "pool"
 	TypeHomeMake     = "home_make"
@@ -240,6 +248,9 @@ const (
 	MaxHomeBytes = 1 << 50
 	// MaxHosts is the most hosts a spawn may name.
 	MaxHosts = 32
+	// MaxPtySize is the most rows, and the most columns, a pseudo-terminal
+	// may have.
+	MaxPtySize = 1000
 )
 
 // Signals a `signal` request may name.
@@ -382,6 +393,26 @@ func ValidateAttach(a Attach) error {
 	return nil
 }
 
+// PtySize is a pseudo-terminal's size; a spawn's `pty` carries both members.
+type PtySize struct {
+	Rows *uint64 `json:"rows"`
+	Cols *uint64 `json:"cols"`
+}
+
+// validatePtySize checks a pseudo-terminal's rows and columns: each present
+// and within 1..MaxPtySize.
+func validatePtySize(field string, rows, cols *uint64) error {
+	for _, f := range []struct {
+		name string
+		v    *uint64
+	}{{"rows", rows}, {"cols", cols}} {
+		if f.v == nil || *f.v < 1 || *f.v > MaxPtySize {
+			return fmt.Errorf("%s%s must be within 1..%d", field, f.name, MaxPtySize)
+		}
+	}
+	return nil
+}
+
 // Request is any client message; Type selects which fields apply.
 type Request struct {
 	V       int               `json:"v"`
@@ -409,10 +440,14 @@ type Request struct {
 	HomePath     string  `json:"home_path,omitempty"`
 	HomeUID      *uint64 `json:"home_uid,omitempty"`
 	HomeMaxBytes *uint64 `json:"home_max_bytes,omitempty"`
-	Pty          *bool   `json:"pty,omitempty"`
+	// Pty is the size of a spawn's pseudo-terminal; nil, it has none.
+	Pty *PtySize `json:"pty,omitempty"`
 	// Hosts are the only hosts a spawn may reach (beside the resolver and
 	// the private hosts); absent keeps the island's public-hosts rule.
 	Hosts []string `json:"hosts,omitempty"`
+	// Rows and Cols are a resize's new size.
+	Rows *uint64 `json:"rows,omitempty"`
+	Cols *uint64 `json:"cols,omitempty"`
 	// Path and UID name the kept home of a home request.
 	Path string  `json:"path,omitempty"`
 	UID  *uint64 `json:"uid,omitempty"`
@@ -496,6 +531,16 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 		if !contains(Signals, req.Sig) {
 			return nil, refuse("sig must be one of " + strings.Join(Signals, ", "))
 		}
+	case TypeResize:
+		if !req.only("spawn_id", "rows", "cols") {
+			return nil, refuse("resize carries only spawn_id, rows and cols")
+		}
+		if !spawnIDPattern.MatchString(req.SpawnID) {
+			return nil, refuse("spawn_id must be 32 lowercase hex digits")
+		}
+		if err := validatePtySize("", req.Rows, req.Cols); err != nil {
+			return nil, refuse(err.Error())
+		}
 	case TypeRelease:
 		if !req.only("spawn_id", "grace_ms") {
 			return nil, refuse("release carries only spawn_id and grace_ms")
@@ -574,6 +619,11 @@ func validateSpawn(req *Request) error {
 	}
 	if err := validateHosts(req); err != nil {
 		return err
+	}
+	if req.Pty != nil {
+		if err := validatePtySize("pty.", req.Pty.Rows, req.Pty.Cols); err != nil {
+			return err
+		}
 	}
 	return validateHome(req)
 }
@@ -759,7 +809,7 @@ func NewSpawned(id, spawnID string, uid, pid int) Spawned {
 }
 
 // ErrorReply refuses the request named by ID (spawn, pool, home) or SpawnID
-// (signal, release).
+// (signal, resize, release).
 type ErrorReply struct {
 	V       int    `json:"v"`
 	Type    string `json:"type"`

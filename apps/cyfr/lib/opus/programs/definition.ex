@@ -53,7 +53,7 @@ defmodule Opus.Programs.Definition do
   @max_literal_bytes 4096
   @program_name "program"
 
-  @program_keys ~w(mark home memory_bytes home_max_bytes login_command hosts)
+  @program_keys ~w(mark home memory_bytes home_max_bytes hosts)
   # What a program's config may hold: its definition, its settings, and
   # the keys every row's config shares.
   @config_keys ~w(command env transport timeout_ms tool_patterns console) ++ @program_keys
@@ -143,7 +143,6 @@ defmodule Opus.Programs.Definition do
           name: String.t(),
           command: String.t(),
           env: %{String.t() => String.t()},
-          login_command: String.t() | nil,
           home: :scratch | :kept,
           memory_bytes: pos_integer() | nil,
           home_max_bytes: pos_integer() | nil,
@@ -155,8 +154,7 @@ defmodule Opus.Programs.Definition do
   `transport` is `program` (an `http` row has none); its `mark` is `mcp`
   or `driven`; `home` is `"scratch"` or `"kept"`, a kept home being the
   row's own folder; `memory_bytes` lies in the keeper's range;
-  `home_max_bytes` is a kept home's alone, at least 1 MiB; `login_command` meets
-  `Prima.LocusBackends.check_command/1`; `hosts`, the only hosts the
+  `home_max_bytes` is a kept home's alone, at least 1 MiB; `hosts`, the only hosts the
   program reaches beside the resolver and the deployment's private hosts,
   is a list the keeper takes (`Prima.KeeperProtocol.valid_hosts?/1`: 1 to
   32 distinct exact hostnames, no wildcard, scheme, port or trailing dot),
@@ -173,7 +171,6 @@ defmodule Opus.Programs.Definition do
          :ok <- check_home(home),
          :ok <- check_memory(config["memory_bytes"]),
          :ok <- check_home_max(home, config["home_max_bytes"]),
-         :ok <- check_login_command(config["login_command"]),
          {:ok, hosts} <- check_hosts(config["hosts"]) do
       {:ok,
        %{
@@ -181,7 +178,6 @@ defmodule Opus.Programs.Definition do
          home: home,
          memory_bytes: config["memory_bytes"],
          home_max_bytes: config["home_max_bytes"],
-         login_command: config["login_command"],
          hosts: hosts
        }}
     end
@@ -235,16 +231,6 @@ defmodule Opus.Programs.Definition do
 
   defp check_home_max(_home, _bytes),
     do: invalid("config.home_max_bytes bounds a kept home: set config.home to kept")
-
-  defp check_login_command(nil), do: :ok
-
-  defp check_login_command(command) do
-    case LocusBackends.check_command(command) do
-      :ok -> :ok
-      {:error, :vault_reference} -> invalid("config.login_command names a vault entry")
-      {:error, _} -> invalid("config.login_command is not a command a program may run")
-    end
-  end
 
   defp check_hosts(nil), do: {:ok, nil}
 
@@ -320,7 +306,6 @@ defmodule Opus.Programs.Definition do
          name: @program_name,
          command: command,
          env: env,
-         login_command: Map.get(row, :login_command),
          home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
          memory_bytes: Map.get(row, :memory_bytes),
          home_max_bytes: Map.get(row, :home_max_bytes),
@@ -335,7 +320,6 @@ defmodule Opus.Programs.Definition do
     %{
       name: program.name,
       command: program.command,
-      login_command: program.login_command,
       env_names: program.env |> Map.keys() |> Enum.sort(),
       home: program.home,
       memory_bytes: program.memory_bytes,

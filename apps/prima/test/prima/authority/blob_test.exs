@@ -435,8 +435,7 @@ defmodule Prima.Authority.BlobTest do
         "folder" => "kept",
         "hosts" => ["api.github.com", "github.com"],
         "memory_bytes" => 268_435_456,
-        "home_max_bytes" => 1_073_741_824,
-        "sign_in_command" => "gh auth login"
+        "home_max_bytes" => 1_073_741_824
       }
 
       # Each setting but the folder is absent when unset; no host at all is
@@ -474,8 +473,7 @@ defmodule Prima.Authority.BlobTest do
             %{held | "memory_bytes" => nil},
             %{held | "memory_bytes" => 0},
             %{held | "home_max_bytes" => "1 GiB"},
-            %{held | "sign_in_command" => ""},
-            Map.put(held, "login_command", "gh auth login"),
+            Map.put(held, "sign_in_command", "gh auth login"),
             Map.put(http, "folder", "kept"),
             Map.put(http, "hosts", ["mcp.example"])
           ] do

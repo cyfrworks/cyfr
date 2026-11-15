@@ -768,7 +768,8 @@ defmodule Cyfr.Boundaries do
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -824,10 +825,11 @@ defmodule Cyfr.Boundaries do
           "root facade; an mcp program holds its row's owner and speaks MCP over its " <>
           "sessions through the programs controller (`Opus.Programs`, its session " <>
           "client and the row definition it syncs), and the provider asks it for a " <>
-          "row's status, a sign-in and a kept home's reset. " <>
+          "row's status, a person's start of it on a terminal and a kept home's reset. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -842,12 +844,14 @@ defmodule Cyfr.Boundaries do
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
-          "relays a sign-in's terminal through the programs controller's facade " <>
-          "(`Opus.Programs.sign_in_attach/3`, `sign_in_send/3`, `sign_in_close/2`) " <>
-          "under the context that started it, and names none of either's internals. " <>
+          "shows the person's program terminals through the programs controller's facade " <>
+          "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
+          "`close/2`, `running/1`) under the person's own context, and names none of " <>
+          "either's internals. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -1845,12 +1849,16 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
+    # `stands?/1`: a program's terminal session belongs to a person, not
+    # to a browser credential, and ends when that person no longer stands,
+    # read from the store and from no context (`Opus.Programs.Terminal`).
     "Sanctum.Caller" => [
       drop_memo: 1,
       establish: 2,
       establish_context: 1,
       fresh?: 1,
-      revalidate_session: 1
+      revalidate_session: 1,
+      stands?: 1
     ],
     # `authorize_stream/2`: a desktop's control with a pick reads the
     # picked stream's current state at the press, admitted as the
@@ -1896,7 +1904,11 @@ defmodule Cyfr.Boundaries do
     # while a program row is written by Emissary's provider through Arca,
     # so no Sanctum module decides it; `confirm_program_definition/2` asks
     # for and consumes that one action only.
+    # `authorize_interactive/1`: a program's terminal session is reached
+    # only by its person at a screen, as the gate reads an interactive
+    # caller (`Opus.Programs`).
     "Sanctum.Consent" => [
+      authorize_interactive: 1,
       binding_live: 4,
       confirm_program_definition: 2,
       head_consent: 2,
@@ -2429,6 +2441,11 @@ defmodule Cyfr.Boundaries do
     # pin's names never reach the network; only a test build reads it
     # (`Prima.TestSeam.value/2`), so a release's names resolve through `:inet`.
     egress_resolver: :seam,
+    # How long a program's terminal runs with nothing attached and nothing
+    # printed (`Opus.Programs.Terminal`), a day in every release; only a
+    # test build reads it (`Prima.TestSeam.value/2`), and a test sets it so
+    # the real timer ends a session in it.
+    program_idle_ms: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
     # a code exchange and a refresh both reach, never replacing a shipped

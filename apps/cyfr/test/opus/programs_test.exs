@@ -21,8 +21,8 @@ defmodule Opus.ProgramsTest do
   without the control plane; refusals are answered as their kind requires;
   a status names no more owners than the service answers for and is read
   no further than the answer bound; a driven program syncs with its program
-  settings; a kept mcp program runs in its row's own home; a sign-in is
-  relayed both ways and ends with its command; a kept home is reset, and a
+  settings; a kept mcp program runs in its row's own home; a terminal
+  opens under the service's current boot; a kept home is reset, and a
   retire is sent again until it lands; no key reaches a status or a crash
   report.
   """
@@ -1180,7 +1180,6 @@ defmodule Opus.ProgramsTest do
             home: "kept",
             memory_bytes: 1_073_741_824,
             home_max_bytes: 2_147_483_648,
-            login_command: "claude auth login",
             config_json:
               Jason.encode!(%{
                 "command" => "npx -y @anthropic-ai/claude-code",
@@ -1312,14 +1311,13 @@ defmodule Opus.ProgramsTest do
     end
 
     defp opened(grant, home_id, mode) do
+      size = if mode == :terminal, do: %{rows: 24, cols: 80}, else: %{}
+
       {:ok, answer} =
-        Opus.Programs.Session.open(grant, %{
-          program: "program",
-          home_id: home_id,
-          key: "k",
-          mode: mode,
-          argv: []
-        })
+        Opus.Programs.Session.open(
+          grant,
+          Map.merge(size, %{program: "program", home_id: home_id, key: "k", mode: mode})
+        )
 
       answer
     end
@@ -1330,9 +1328,9 @@ defmodule Opus.ProgramsTest do
       assert %{resumed: true, session: same} = opened(grant, "vlt_keyed", :run)
       assert same == run.session
 
-      assert %{resumed: false, session: sign_in} = opened(grant, "vlt_keyed", :sign_in)
+      assert %{resumed: false, session: terminal} = opened(grant, "vlt_keyed", :terminal)
       assert %{resumed: false, session: other_home} = opened(grant, "vlt_other", :run)
-      assert Enum.uniq([run.session, sign_in, other_home]) == [run.session, sign_in, other_home]
+      assert Enum.uniq([run.session, terminal, other_home]) == [run.session, terminal, other_home]
     end
 
     test "a reset of a home ends every session of that home", %{ctx: ctx, fake: fake} do
@@ -1421,7 +1419,6 @@ defmodule Opus.ProgramsTest do
                             "home" => "kept",
                             "memory_bytes" => 1_073_741_824,
                             "home_max_bytes" => 2_147_483_648,
-                            "login_command" => "claude auth login",
                             "env_names" => []
                           }
                         ]
@@ -1542,7 +1539,6 @@ defmodule Opus.ProgramsTest do
           mark: "mcp",
           url: nil,
           home: "kept",
-          login_command: "gh auth login",
           config_json:
             Jason.encode!(%{"command" => "gh mcp", "env" => %{"NODE_ENV" => "production"}})
         })
@@ -1553,7 +1549,7 @@ defmodule Opus.ProgramsTest do
     end
   end
 
-  describe "sign-in and homes" do
+  describe "definitions, terminals and homes" do
     setup %{ctx: ctx, fake: fake} do
       controller = start_controller(fake)
       row = driven_row(ctx, "claude")
@@ -1647,7 +1643,6 @@ defmodule Opus.ProgramsTest do
           "mark" => "driven",
           "home" => "kept",
           "command" => "npx -y coder",
-          "login_command" => "coder login",
           "hosts" => ["api.coder.test"],
           "memory_bytes" => 1_073_741_824,
           "env" => %{"TOKEN" => "vault:personal", "NODE_ENV" => "production"}
@@ -1669,7 +1664,6 @@ defmodule Opus.ProgramsTest do
                  "hosts" => ["api.coder.test"],
                  "memory_bytes" => "1073741824",
                  "home_max_bytes" => "the folders' volume",
-                 "sign_in_command" => "coder login",
                  "environment" => ["NODE_ENV (a literal, not shown)", "TOKEN=vault:personal"]
                }
              } = preview(person, id)
@@ -1759,7 +1753,6 @@ defmodule Opus.ProgramsTest do
         "mark" => "driven",
         "home" => "kept",
         "command" => "npx -y @anthropic-ai/claude-code",
-        "login_command" => "claude auth login",
         "hosts" => ["a.example", "b.example"],
         "memory_bytes" => 1_073_741_824,
         "home_max_bytes" => 2_147_483_648,
@@ -1797,8 +1790,6 @@ defmodule Opus.ProgramsTest do
             {"a literal's value changed", put_in(wide, ["env", "NODE_ENV"], "development")},
             {"a literal removed", Map.put(wide, "env", %{"TOKEN" => "vault:personal"})},
             {"another command", Map.put(wide, "command", "npx -y other")},
-            {"another sign-in command", Map.put(wide, "login_command", "claude login --other")},
-            {"no sign-in command", Map.delete(wide, "login_command")},
             {"a scratch folder",
              wide |> Map.put("home", "scratch") |> Map.delete("home_max_bytes")},
             {"another mark", Map.put(wide, "mark", "mcp")}
@@ -1829,7 +1820,6 @@ defmodule Opus.ProgramsTest do
             "mark" => "driven",
             "home" => "kept",
             "command" => ~s(sh -c "$DEBUG"),
-            "login_command" => "claude auth login",
             "memory_bytes" => 1_073_741_824,
             "home_max_bytes" => 2_147_483_648,
             "env" => %{"DEBUG" => debug}
@@ -2179,7 +2169,6 @@ defmodule Opus.ProgramsTest do
             "mark" => "driven",
             "home" => "kept",
             "command" => "npx -y @anthropic-ai/claude-code",
-            "login_command" => "claude auth login",
             "memory_bytes" => 1_073_741_824,
             "home_max_bytes" => 2_147_483_648,
             "hosts" => ["api.anthropic.com"],
@@ -2221,83 +2210,17 @@ defmodule Opus.ProgramsTest do
                Provider.handle("mcp_servers", person, %{"action" => "delete", "name" => "remote"})
     end
 
-    test "a sign-in runs the login command in the row's home and relays its lines both ways",
-         %{ctx: ctx, fake: fake, row: row, admin: admin} do
-      assert {:ok, %{session: token, program: "claude"} = started} =
-               Provider.handle("mcp_servers", admin, %{"action" => "sign_in", "name" => "claude"})
-
-      refute Map.has_key?(started, :entry)
-      home = row.id
-
-      assert_receive {:session, "open", %{"mode" => "sign_in", "home_id" => ^home, "argv" => []},
-                      _},
-                     2_000
-
-      # A line the program wrote before anyone attached is kept for them.
-      Scripted.write(fake, row.id, "Open https://claude.ai/oauth and paste the code:")
-      Process.sleep(100)
-
-      # Only the caller that started it attaches.
-      other = %{admin | user_id: "someone-else"}
-      assert {:error, :not_yours} = Programs.sign_in_attach(other, token, self())
-      assert :ok = Programs.sign_in_attach(admin, token, self())
-
-      assert_receive {Opus.Programs, ^token, {:lines, ["Open https://claude.ai/oauth" <> _]}},
-                     2_000
-
-      assert :ok = Programs.sign_in_send(admin, token, "code-1234")
-      assert_receive {:session, "send", %{"lines" => ["code-1234"]}, _fields}, 2_000
-
-      # The command ends by a signal: the subscriber is told, and the owner
-      # released.
-      Scripted.end_sessions(fake, row.id)
-      assert_receive {Opus.Programs, ^token, {:ended, {:exited, nil}}}, 3_000
-      assert_released(row, 1)
-      refute ctx == nil
-    end
-
-    test "a sign-in after a backends restart opens its session under the new boot",
+    test "a terminal after a backends restart opens its session under the new boot",
          %{fake: fake, row: row, admin: admin} do
-      # A live owner answers the sign-in's hold at once, with the grant of
+      # A live owner answers the terminal's hold at once, with the grant of
       # the boot it was synced under.
       assert {:ok, %{session: _}} = Programs.pipe_open(row, "pipe-k", [], "att_1", soon())
       Scripted.restart(fake, "bb_second")
 
-      assert {:ok, %{session: _token}} =
-               Provider.handle("mcp_servers", admin, %{"action" => "sign_in", "name" => "claude"})
+      assert {:ok, %{session: _session}} =
+               Provider.handle("mcp_servers", admin, %{"action" => "open", "name" => "claude"})
 
-      assert_receive {:session, "open", %{"mode" => "sign_in"}, %{boot: "bb_second"}}, 3_000
-    end
-
-    test "a sign-in's exit is reported as it is, whatever its status",
-         %{fake: fake, row: row, admin: admin} do
-      for code <- [1, 0] do
-        assert {:ok, %{session: token}} =
-                 Provider.handle("mcp_servers", admin, %{
-                   "action" => "sign_in",
-                   "name" => "claude"
-                 })
-
-        assert :ok = Programs.sign_in_attach(admin, token, self())
-        Scripted.end_sessions(fake, row.id, code)
-        assert_receive {Opus.Programs, ^token, {:ended, {:exited, ^code}}}, 3_000
-        assert_released(row, 1)
-      end
-    end
-
-    test "a sign-in refuses a scratch program and one with no login command",
-         %{ctx: ctx, admin: admin} do
-      driven_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
-      driven_row(ctx, "silent", %{login_command: nil})
-
-      for name <- ["scratchy", "silent"] do
-        assert {:error, {:invalid_argument, refusal}} =
-                 Provider.handle("mcp_servers", admin, %{"action" => "sign_in", "name" => name})
-
-        assert refusal =~ "no sign-in"
-      end
-
-      refute_received {:session, "open", _message, _fields}
+      assert_receive {:session, "open", %{"mode" => "terminal"}, %{boot: "bb_second"}}, 3_000
     end
 
     test "reset_home empties the row's kept home through the box",
@@ -2660,7 +2583,7 @@ defmodule Opus.ProgramsTest do
         fn ->
           state = :sys.get_state(controller)
 
-          state.pipe_opens == %{} and
+          state.opens == %{} and
             Enum.all?(state.closing, fn {_id, record} -> not record.inflight end)
         end,
         "the late open and its first close to settle"

@@ -316,6 +316,16 @@ defmodule Sanctum.Consent do
   defdelegate request_preview(ctx, operation, args, resource), to: Sanctum.Consent.Authz
 
   @doc """
+  Whether `ctx` is a person at a screen: the gate's own reading of an
+  action declared `consent: :interactive` (`Sanctum.Consent.Authz`), an
+  authenticated `:oidc` session or a paired device outside the guest
+  plane, and never a key.
+  """
+  @spec authorize_interactive(Sanctum.Context.t()) ::
+          {:ok, :interactive} | {:error, Sanctum.Consent.Authz.refusal()}
+  defdelegate authorize_interactive(ctx), to: Sanctum.Consent.Authz
+
+  @doc """
   Decide `change`, a change to a program row's definition
   (`program_definition`, `Sanctum.Pairing`): its operation, its exact
   arguments and its preview (`Sanctum.Consent.Authz.confirm/3`). Every
