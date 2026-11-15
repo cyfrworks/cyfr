@@ -248,6 +248,7 @@ defmodule Prism.Router do
             live "/schedules", SchedulesLive, :index, metadata: %{auth: :browser_authenticated}
             live "/settings", SettingsLive, :index, metadata: %{auth: :browser_authenticated}
             live "/programs", ProgramsLive, :index, metadata: %{auth: :browser_authenticated}
+            live "/tips", TipsLive, :index, metadata: %{auth: :browser_authenticated}
             live "/legal", LegalLive, :index, metadata: %{auth: :browser_authenticated}
           end
         end

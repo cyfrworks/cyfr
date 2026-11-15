@@ -1311,12 +1311,17 @@ defmodule PrismWeb.SettingsLive do
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Preferences</h3>
           <p id="mode-words" class="text-xs text-gray-500 mb-3">
-            <strong>lite</strong>
-            shows the pages for everyday work: AQUA, Files, Vault, Schedules, Webhooks,
-            Programs, Settings and Legal. <strong>dev</strong>
-            adds a side menu with the pages for building and looking closer: Executions, where
-            each run's failure says why, Components, Builds, API Keys, Reports and more. What
-            you may do is the same in both.
+            <span data-test="mode-lite">
+              <strong>lite</strong>
+              shows the pages for everyday work: AQUA, Files, Vault, Schedules, Webhooks,
+              API Keys, Programs, Settings, Tips and Legal.
+            </span>
+            <span data-test="mode-dev">
+              <strong>dev</strong>
+              adds a side menu with the pages for building and looking closer: Executions, where
+              each run's failure says why, Components, Builds, Reports and more.
+            </span>
+            What you may do is the same in both.
           </p>
           <div class="flex items-center gap-3">
             <span class="text-sm text-gray-300">Mode</span>
