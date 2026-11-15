@@ -500,6 +500,241 @@ defmodule Aqua.ApprovalsTest do
     end
   end
 
+  describe "an answer for a schedule" do
+    @aqua_line Arca.CronSchedule.aqua_line()
+
+    # A schedule of `user_id`'s in the actor's athanor holding a line for
+    # Aqua, written straight to its row as that person's own act.
+    defp aqua_line!(actor, user_id) do
+      {:ok, row} =
+        Arca.CronSchedule.create(actor, %{
+          user_id: user_id,
+          name: "line-#{System.unique_integer([:positive])}",
+          cron_expression: Cyfr.Test.Cron.hourly_away(),
+          reference: @aqua_line,
+          resolved_reference: @aqua_line,
+          input: Jason.encode!(%{"line" => "keep the plan"}),
+          next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+          cap: 0,
+          by_person: true
+        })
+
+      row
+    end
+
+    defp for_schedule(id),
+      do: %{decision: :approved, scope: :always, lifecycle: :schedule, schedule: id}
+
+    defp schedule_rows(id),
+      do: Arca.Repo.all(from(g in Arca.Schemas.ToolGrant, where: g.schedule_id == ^id))
+
+    # The thread's withdrawal is the person's in their own athanor.
+    test "is given on a daily thread's card by naming the person's schedule: one agent-wide row ending with it, listed and withdrawn by it" do
+      n = System.unique_integer([:positive])
+
+      {:ok, person} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|keeper#{n}",
+          provider: "github",
+          email: "keeper#{n}@example.com",
+          verified: true,
+          name: "Keeper"
+        })
+
+      ctx = %{
+        Sanctum.TestContext.local(:prism)
+        | user_id: person.id,
+          athanor_id: Sanctum.Test.People.athanor!(person).id
+      }
+
+      {thread, pins} = ready!(ctx)
+      actor = Sanctum.Context.actor(ctx)
+      keeper = aqua_line!(actor, ctx.user_id)
+      turn = started!(ctx, thread, pins)
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+
+      # The card offers the person's schedules that hold a line for Aqua.
+      assert Aqua.answer_schedules(ctx) == {:ok, [%{id: keeper.id, name: keeper.name}]}
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, for_schedule(keeper.id))
+
+      assert {:ok, [row]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert Map.drop(row, [:id, :granted_at]) == %{
+               athanor_id: ctx.athanor_id,
+               scope: "agent",
+               effect: "allow",
+               thread_id: nil,
+               agent_name: "aqua",
+               tool: "notes",
+               action: "keep",
+               granted_by: ctx.user_id,
+               lifecycle_kind: "schedule",
+               lifecycle_id: keeper.id,
+               expires_at: nil,
+               constraint: nil,
+               sources: [],
+               program_row: "",
+               schedule_id: keeper.id
+             }
+
+      assert %{"scope" => "always", "lifecycle" => "schedule", "schedule" => schedule} =
+               resolution(ctx, approval.id)
+
+      assert schedule == keeper.id
+
+      # Agent-wide: any day's thread holds it.
+      {:ok, other} = Arca.Test.Days.thread(actor)
+      assert {:ok, [^row]} = Aqua.ToolGrants.for_thread(ctx, other.id, "aqua")
+
+      # Listed by the schedule's name, and withdrawn by naming it: a
+      # withdrawal that names no schedule leaves it.
+      assert Aqua.ToolGrants.allowed_by_agent(ctx, thread.id) ==
+               {:ok,
+                MapSet.new([{"aqua", "notes", "keep", nil, %{id: keeper.id, name: keeper.name}}])}
+
+      assert :ok = Aqua.Runner.revoke_grant(ctx, thread.id, "aqua", "notes", "keep")
+      assert {:ok, [^row]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert :ok =
+               Aqua.Runner.revoke_grant(ctx, thread.id, "aqua", "notes", "keep", %{
+                 schedule: keeper.id
+               })
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+      assert schedule_rows(keeper.id) == []
+    end
+
+    test "names a live schedule of the person's in this athanor that holds a line for Aqua, or is refused and the card waits",
+         %{ctx: ctx, thread: thread, pins: pins} do
+      actor = Sanctum.Context.actor(ctx)
+      mine = aqua_line!(actor, ctx.user_id)
+      theirs = aqua_line!(actor, "someone-else")
+
+      elsewhere_id = "ath_sched_#{System.unique_integer([:positive])}"
+      Arca.Test.Actor.ensure_athanor_row(elsewhere_id)
+      elsewhere = aqua_line!(%{actor | athanor_id: elsewhere_id}, ctx.user_id)
+
+      deleted = aqua_line!(actor, ctx.user_id)
+      {:ok, _} = Arca.CronSchedule.soft_delete(actor, deleted.id)
+
+      {:ok, component} =
+        Arca.CronSchedule.create(actor, %{
+          user_id: ctx.user_id,
+          name: "comp-#{System.unique_integer([:positive])}",
+          cron_expression: Cyfr.Test.Cron.hourly_away(),
+          reference: "reagent:local.test:1.0.0",
+          resolved_reference: "reagent:local.test:1.0.0",
+          profile_id: "prof_test",
+          input: Jason.encode!(%{"n" => 1}),
+          cap: 0
+        })
+
+      assert Aqua.answer_schedules(ctx) == {:ok, [%{id: mine.id, name: mine.name}]}
+
+      turn = started!(ctx, thread, pins)
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+
+      for {named, id} <- [
+            another_person: theirs.id,
+            another_athanor: elsewhere.id,
+            deleted: deleted.id,
+            component: component.id,
+            nothing: "sched_nothing"
+          ] do
+        assert Approvals.resolve(ctx, approval.id, for_schedule(id)) ==
+                 {:error, {:scope_not_permitted, :no_schedule}},
+               "#{named}'s schedule was named"
+
+        assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+        assert schedule_rows(id) == []
+      end
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, for_schedule(mine.id))
+
+      assert [%{scope: "agent", lifecycle_id: lifecycle_id}] = schedule_rows(mine.id)
+      assert lifecycle_id == mine.id
+    end
+
+    test "an action that takes an answer for one thread only takes one for a schedule and still none agent-wide without it; one that never stands takes none",
+         %{ctx: ctx, thread: thread, pins: pins} do
+      keeper = aqua_line!(Sanctum.Context.actor(ctx), ctx.user_id)
+      turn = started!(ctx, thread, pins)
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+
+      for {choice, reason} <- [
+            {%{decision: :approved, scope: :always}, :thread_only},
+            {%{decision: :approved, scope: :always, lifecycle: :schedule}, :no_schedule},
+            {%{decision: :approved, scope: :thread, lifecycle: :schedule, schedule: keeper.id},
+             :invalid_lifecycle},
+            {%{decision: :approved, scope: :always, lifecycle: :turn, schedule: keeper.id},
+             :thread_only},
+            {%{decision: :approved, scope: :once, lifecycle: :schedule, schedule: keeper.id},
+             :bounds_without_standing},
+            {%{decision: :declined, scope: :never, lifecycle: :schedule, schedule: keeper.id},
+             :bounded_deny}
+          ] do
+        assert Approvals.resolve(ctx, approval.id, choice) ==
+                 {:error, {:scope_not_permitted, reason}},
+               "#{inspect(choice)} was not refused as #{reason}"
+
+        assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+      end
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      %{approval: pinned} = card!(ctx, turn, @keep, standing: false)
+
+      assert Approvals.resolve(ctx, pinned.id, for_schedule(keeper.id)) ==
+               {:error, {:scope_not_permitted, :never_standing}}
+
+      %{approval: destructive} = card!(ctx, turn, @wipe, kind: "destructive")
+
+      assert Approvals.resolve(ctx, destructive.id, for_schedule(keeper.id)) ==
+               {:error, {:scope_not_permitted, "destructive"}}
+
+      assert schedule_rows(keeper.id) == []
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, for_schedule(keeper.id))
+
+      assert [%{scope: "agent", tool: "notes", action: "keep"}] = schedule_rows(keeper.id)
+    end
+
+    test "a stale, a declined and an expired card write no row for it", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      keeper = aqua_line!(Sanctum.Context.actor(ctx), ctx.user_id)
+      turn = started!(ctx, thread, pins)
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      %{approval: stale} = card!(ctx, turn, @keep, standing: "thread", digest: "sha256:elsewhere")
+      %{approval: declined} = card!(ctx, turn, @keep, standing: "thread")
+      %{approval: expired} = card!(ctx, turn, @keep, standing: "thread", expires_at: past)
+
+      assert {:ok, %{decision: "error"}} =
+               Approvals.resolve(ctx, stale.id, for_schedule(keeper.id))
+
+      assert {:ok, %{decision: "declined"}} =
+               Approvals.resolve(ctx, declined.id, %{decision: :declined})
+
+      assert {:ok, %{decision: "declined", replayed: true}} =
+               Approvals.resolve(ctx, declined.id, for_schedule(keeper.id))
+
+      assert {:ok, %{decision: "expired"}} =
+               Approvals.resolve(ctx, expired.id, for_schedule(keeper.id))
+
+      assert schedule_rows(keeper.id) == []
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+    end
+  end
+
   test "declining closes the step denied with a tool result, and never records a deny", %{
     ctx: ctx,
     thread: thread,
@@ -814,6 +1049,33 @@ defmodule Aqua.ApprovalsTest do
                  "scope" => "once"
                })
 
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+    end
+
+    test "offers no answer for a schedule, and refuses one naming the person's schedule",
+         %{ctx: ctx, thread: thread, pins: pins} do
+      {:ok, call} = Binding.resolve("execution.run", @launch.args)
+      rule = Policy.standing_rule(call)
+
+      for scope <- [:schedule, :thread, :always] do
+        refute Aqua.standing_offered?(rule, scope), "a launch's card offers #{scope}"
+      end
+
+      keeper = aqua_line!(Sanctum.Context.actor(ctx), ctx.user_id)
+      turn = started!(ctx, thread, pins)
+
+      %{approval: approval} =
+        card!(ctx, turn, @launch,
+          kind: "execute",
+          step_kind: "launch",
+          standing: rule["standing"]
+        )
+
+      assert Approvals.resolve(ctx, approval.id, for_schedule(keeper.id)) ==
+               {:error, {:scope_not_permitted, :never_standing}}
+
+      assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+      assert schedule_rows(keeper.id) == []
       assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
     end
 

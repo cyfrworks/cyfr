@@ -209,6 +209,58 @@ defmodule Aqua.Loop.RequestTest do
            }
   end
 
+  describe "a schedule's fire" do
+    @line "[The schedule \"Morning\" (sched_1) fired with its line]\nsummarise what is unread"
+
+    defp fire_row(seq) do
+      struct(
+        row(seq, "text", @system, "summarise what is unread", %{
+          "schedule" => %{"id" => "sched_1", "name" => "Morning"}
+        }),
+        sent_by: "person",
+        addressee: "aqua"
+      )
+    end
+
+    test "reads to the model as the schedule's line, naming it by name and id" do
+      # Only the server's voice names a schedule: a person's line carrying
+      # the same payload, and a server's line with none, read as lines.
+      theirs =
+        struct(
+          row(2, "text", "usr_a", "and this", %{
+            "schedule" => %{"id" => "sched_1", "name" => "x"}
+          }),
+          sent_by: "person"
+        )
+
+      unnamed = struct(row(3, "text", @system, "a plain line"), sent_by: "person")
+
+      assert Request.messages([fire_row(1), theirs, unnamed],
+               me: "aqua",
+               multi_author?: true,
+               names: %{"usr_a" => "Ann"}
+             ) == [
+               %{
+                 "role" => "user",
+                 "content" => [
+                   %{"type" => "text", "text" => @line},
+                   %{"type" => "text", "text" => "Ann: and this"},
+                   %{"type" => "text", "text" => "#{@system}: a plain line"}
+                 ]
+               }
+             ]
+    end
+
+    # The thread's summary asks for the rows it folds with no reader named
+    # (`Aqua.Loop`'s compaction): the fire's line is still the schedule's,
+    # never the agent's own words.
+    test "reads as the schedule's line in a request that names no reader" do
+      assert Request.messages([fire_row(1)]) == [
+               %{"role" => "user", "content" => [%{"type" => "text", "text" => @line}]}
+             ]
+    end
+  end
+
   test "repeated call ids across steps stay distinct, and a dangling call is answered" do
     rows = [
       row(1, "text", "usr_a", "go"),

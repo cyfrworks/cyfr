@@ -10,8 +10,6 @@ defmodule Aqua.ProgramGrantTest do
   """
   use ExUnit.Case, async: false
 
-  alias Arca.ThreadStorage, as: Threads
-
   setup do
     Cyfr.Test.Sandbox.setup!()
 

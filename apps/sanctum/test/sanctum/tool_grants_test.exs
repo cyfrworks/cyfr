@@ -279,6 +279,61 @@ defmodule Sanctum.ToolGrantsTest do
     end
   end
 
+  describe "an answer for a schedule" do
+    # Each row of the caller's athanor, as `{schedule, deadline}`.
+    defp keyed(ctx) do
+      from(g in Arca.Schemas.ToolGrant,
+        where: g.athanor_id == ^ctx.athanor_id,
+        select: {g.schedule_id, g.expires_at}
+      )
+      |> Arca.Repo.all()
+      |> Enum.sort()
+    end
+
+    test "is one key per schedule: answers for A and for B stand beside an ordinary one, and a write replaces, a revoke removes, its own alone",
+         %{ctx: ctx} do
+      a = schedule!(ctx)
+      b = schedule!(ctx)
+      ordinary = decision(%{scope: "agent"})
+      for_a = Map.merge(ordinary, %{lifecycle_kind: "schedule", lifecycle_id: a.id})
+      for_b = Map.merge(ordinary, %{lifecycle_kind: "schedule", lifecycle_id: b.id})
+
+      for answer <- [for_a, for_b, ordinary], do: {:ok, _} = ToolGrants.put(ctx, answer)
+      assert keyed(ctx) == Enum.sort([{"", nil}, {a.id, nil}, {b.id, nil}])
+      assert {:ok, [_, _, _]} = ToolGrants.for_thread(ctx, "thread_1")
+
+      until = DateTime.truncate(soon(), :microsecond)
+      {:ok, _} = ToolGrants.put(ctx, Map.put(for_a, :expires_at, until))
+      assert keyed(ctx) == Enum.sort([{"", nil}, {a.id, until}, {b.id, nil}])
+
+      key = Map.delete(ordinary, :effect)
+      assert :ok = ToolGrants.revoke(ctx, Map.put(key, :schedule_id, b.id))
+      assert keyed(ctx) == Enum.sort([{"", nil}, {a.id, until}])
+
+      assert :ok = ToolGrants.revoke(ctx, key)
+      assert keyed(ctx) == [{a.id, until}]
+    end
+  end
+
+  # A schedule's row in the caller's athanor, live until the case deletes
+  # it.
+  defp schedule!(ctx) do
+    Arca.Test.Actor.ensure_athanor_row(ctx.athanor_id)
+
+    {:ok, row} =
+      Arca.CronSchedule.create(Sanctum.Context.actor(ctx), %{
+        user_id: ctx.user_id,
+        name: "sched-#{System.unique_integer([:positive])}",
+        cron_expression: "*/5 * * * *",
+        reference: "reagent:local.test:1.0.0",
+        resolved_reference: "reagent:local.test:1.0.0",
+        profile_id: "prof_test",
+        cap: 0
+      })
+
+    row
+  end
+
   describe "grant_row/2" do
     test "builds the row a write would store, without storing it", %{ctx: ctx} do
       assert {:ok, row} = ToolGrants.grant_row(ctx, decision(%{athanor_id: "ath_forged"}))
@@ -292,7 +347,8 @@ defmodule Sanctum.ToolGrantsTest do
                agent_name: "aqua",
                tool: "probe_component",
                action: "pull",
-               program_row: ""
+               program_row: "",
+               schedule_id: ""
              }
 
       assert {:ok, []} = ToolGrants.for_thread(ctx, "thread_1")
@@ -320,6 +376,36 @@ defmodule Sanctum.ToolGrantsTest do
 
       assert %{lifecycle_kind: "turn", lifecycle_id: "turn_1", expires_at: ^until} = row
       refute Map.has_key?(row, :constraint)
+    end
+
+    test "an answer for a schedule is agent-wide, names no thread, and carries its schedule in its key",
+         %{ctx: ctx} do
+      assert {:ok, row} =
+               ToolGrants.grant_row(
+                 ctx,
+                 decision(%{
+                   scope: "agent",
+                   tool: "probe_notes",
+                   action: "keep",
+                   lifecycle_kind: "schedule",
+                   lifecycle_id: "sched_1"
+                 })
+               )
+
+      assert row == %{
+               athanor_id: ctx.athanor_id,
+               granted_by: ctx.user_id,
+               scope: "agent",
+               effect: "allow",
+               thread_id: nil,
+               agent_name: "aqua",
+               tool: "probe_notes",
+               action: "keep",
+               program_row: "",
+               schedule_id: "sched_1",
+               lifecycle_kind: "schedule",
+               lifecycle_id: "sched_1"
+             }
     end
 
     test "refuses a context with no tenant, attributes that make no grant, and an answer that may not stand",
@@ -402,6 +488,42 @@ defmodule Sanctum.ToolGrantsTest do
         assert {:error, {:scope_not_permitted, :invalid_lifecycle}} =
                  ToolGrants.check_standing(decision(bad), now),
                "#{inspect(bad)} stood"
+      end
+    end
+
+    test "an action that takes an answer for one thread only takes one agent-wide that ends with a schedule, and no other agent-wide one",
+         %{now: now} do
+      keep = decision(%{scope: "agent", tool: "probe_notes", action: "keep"})
+      schedule = %{lifecycle_kind: "schedule", lifecycle_id: "sched_1"}
+
+      assert :ok = ToolGrants.check_standing(Map.merge(keep, schedule), now)
+
+      for bound <- [
+            %{},
+            %{lifecycle_kind: "turn", lifecycle_id: "turn_1"},
+            %{lifecycle_kind: "execution", lifecycle_id: "exec_1"},
+            %{lifecycle_kind: "schedule", lifecycle_id: ""},
+            %{lifecycle_kind: "schedule"},
+            %{expires_at: soon()}
+          ] do
+        assert {:error, {:scope_not_permitted, :thread_only}} =
+                 ToolGrants.check_standing(Map.merge(keep, bound), now),
+               "an agent-wide keep stood with #{inspect(bound)}"
+      end
+
+      # An action that never stands, a destructive one and an external one
+      # take none for a schedule either, at either scope.
+      for {pair, reason} <- [
+            {%{tool: "probe_notes", action: "pin"}, :never_standing},
+            {%{tool: "probe_notes", action: "forget"}, :destructive},
+            {%{tool: "srv:thing", action: "do"}, :external}
+          ],
+          scope <- ["agent", "thread"] do
+        assert {:error, {:scope_not_permitted, ^reason}} =
+                 ToolGrants.check_standing(
+                   decision(pair |> Map.merge(schedule) |> Map.put(:scope, scope)),
+                   now
+                 )
       end
     end
 
@@ -558,6 +680,16 @@ defmodule Sanctum.ToolGrantsTest do
       id
     end
 
+    # The schedule that started an execution, as its root's admission
+    # records it.
+    defp started_by!(execution_id, schedule_id) do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == ^execution_id),
+          set: [schedule_id: schedule_id]
+        )
+    end
+
     defp allow!(ctx, thread, bounds, pair \\ %{tool: "files", action: "write"}) do
       {:ok, _} =
         ToolGrants.put(ctx, Map.merge(decision(%{thread_id: thread}), Map.merge(pair, bounds)))
@@ -687,11 +819,46 @@ defmodule Sanctum.ToolGrantsTest do
       refute ToolGrants.admits?(ctx, call(thread, %{turn_id: "turn_other"}))
     end
 
-    test "an allow for a schedule covers only a call whose execution that schedule started",
-         %{ctx: ctx, thread: thread, a: a} do
-      allow!(ctx, thread, %{lifecycle_kind: "schedule", lifecycle_id: "sched_1"})
+    test "an allow for a schedule covers a call whose execution that schedule started, in any thread, and no other; it ends with the schedule",
+         %{ctx: ctx, other: other, thread: thread, a: a, b: b} do
+      one = schedule!(ctx)
+      two = schedule!(ctx)
+      started_by!(a, one.id)
+      started_by!(b, two.id)
+      plain = running!(ctx)
 
-      refute ToolGrants.admits?(ctx, call(thread, %{execution_id: a}))
+      # An action that takes an answer for one thread only, agent-wide for
+      # the schedule's runs.
+      {:ok, _} =
+        ToolGrants.put(
+          ctx,
+          decision(%{
+            scope: "agent",
+            tool: "probe_notes",
+            action: "keep",
+            lifecycle_kind: "schedule",
+            lifecycle_id: one.id
+          })
+        )
+
+      keep = fn thread, execution ->
+        call(thread, %{tool: "probe_notes", action: "keep", args: %{}, execution_id: execution})
+      end
+
+      actor = Sanctum.Context.actor(ctx) |> Map.put(:user_id, ctx.user_id)
+      {:ok, later} = Arca.Test.Days.thread(actor)
+
+      assert ToolGrants.admits?(ctx, keep.(thread, a))
+      assert ToolGrants.admits?(ctx, keep.(later.id, a))
+      refute ToolGrants.admits?(ctx, keep.(thread, b))
+      refute ToolGrants.admits?(ctx, keep.(thread, plain))
+      refute ToolGrants.admits?(ctx, keep.(thread, nil))
+      refute ToolGrants.admits?(ctx, %{keep.(thread, a) | agent_name: "planner"})
+      refute ToolGrants.admits?(other, keep.(thread, a))
+
+      {:ok, _} = Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), one.id)
+      refute ToolGrants.admits?(ctx, keep.(thread, a))
+      assert {:ok, []} = ToolGrants.for_thread(ctx, thread)
     end
 
     test "a call after the deadline asks", %{ctx: ctx, thread: thread, a: a} do

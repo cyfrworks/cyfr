@@ -5,7 +5,8 @@ defmodule Arca.ToolGrantStorageTest do
   # The grant store's two promises at the row level: one key is one row
   # whatever was said before, and a duplicate that slips past the delete
   # is a typed refusal on whichever adapter runs — never a raise past the
-  # db-error rescue, never a key left with no row.
+  # db-error rescue, never a key left with no row. The schedule an answer
+  # ends with is part of its key.
   use ExUnit.Case, async: true
 
   import Ecto.Query, only: [from: 2]
@@ -270,6 +271,78 @@ defmodule Arca.ToolGrantStorageTest do
         )
 
       assert listed(row) == []
+    end
+  end
+
+  describe "answers that end with a schedule" do
+    setup %{agent: row} do
+      Arca.Test.Actor.ensure_athanor_row(row.athanor_id)
+      actor = Prima.Actor.in_athanor(row.athanor_id)
+
+      {:ok,
+       actor: actor,
+       a: schedule!(actor).id,
+       b: schedule!(actor).id,
+       ordinary: %{row | tool: "files", action: "write"}}
+    end
+
+    # A live schedule of the actor's athanor.
+    defp schedule!(actor) do
+      {:ok, schedule} =
+        Arca.CronSchedule.create(actor, %{
+          user_id: "user_tg",
+          name: "sched-#{System.unique_integer([:positive])}",
+          cron_expression: "*/5 * * * *",
+          reference: "reagent:local.test:1.0.0",
+          resolved_reference: "reagent:local.test:1.0.0",
+          profile_id: "prof_test",
+          cap: 0
+        })
+
+      schedule
+    end
+
+    defp for_schedule(row, id),
+      do: Map.merge(row, %{lifecycle_kind: "schedule", lifecycle_id: id})
+
+    # The answers a thread of the athanor reads, as `{schedule, lifecycle
+    # row, deadline}`.
+    defp answered(actor, thread_id) do
+      {:ok, rows} = ToolGrantStorage.list_for_thread(actor, thread_id)
+      rows |> Enum.map(&{&1.schedule_id, &1.lifecycle_id, &1.expires_at}) |> Enum.sort()
+    end
+
+    test "one for A, one for B and an ordinary one stand side by side; a second for A replaces A's alone, withdrawing B's leaves the others, and deleting A ends A's alone",
+         %{actor: actor, thread: %{thread_id: thread_id}, a: a, b: b, ordinary: ordinary} do
+      for answer <- [for_schedule(ordinary, a), for_schedule(ordinary, b), ordinary] do
+        assert {:ok, %{scope: "agent", thread_id: nil}} = ToolGrantStorage.put(answer)
+      end
+
+      assert answered(actor, thread_id) == Enum.sort([{"", nil, nil}, {a, a, nil}, {b, b, nil}])
+
+      until = DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:microsecond)
+
+      assert {:ok, %{schedule_id: ^a, expires_at: ^until}} =
+               ToolGrantStorage.put(Map.put(for_schedule(ordinary, a), :expires_at, until))
+
+      assert answered(actor, thread_id) == Enum.sort([{"", nil, nil}, {a, a, until}, {b, b, nil}])
+
+      assert :ok = ToolGrantStorage.delete(Map.put(ordinary, :schedule_id, b))
+      assert answered(actor, thread_id) == Enum.sort([{"", nil, nil}, {a, a, until}])
+
+      assert {:ok, _} = Arca.CronSchedule.soft_delete(actor, a)
+      assert answered(actor, thread_id) == [{"", nil, nil}]
+    end
+
+    test "a second row of one schedule's key is refused on either adapter, at either scope; another schedule's is no duplicate",
+         %{thread: thread, a: a, b: b, ordinary: ordinary} do
+      for row <- [ordinary, %{thread | tool: "files", action: "write"}] do
+        assert {:ok, %{schedule_id: ^a}} = ToolGrantStorage.put(for_schedule(row, a))
+        assert {:error, %Ecto.Changeset{} = changeset} = duplicate(for_schedule(row, a))
+        assert unique_violation?(changeset)
+        assert {:ok, %{schedule_id: ^b}} = duplicate(for_schedule(row, b))
+        assert {:ok, %{schedule_id: ""}} = duplicate(row)
+      end
     end
   end
 

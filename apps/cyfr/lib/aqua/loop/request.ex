@@ -508,9 +508,12 @@ defmodule Aqua.Loop.Request do
       is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
       request?(row) and own?(row, me) -> acc
       request?(row) -> said(request_text(row, opts), row, acc)
+      # Before the reader's own speech: a schedule's line is in the
+      # server's voice, which a request that names no reader reads as its
+      # own.
+      schedule = scheduled(row) -> said(schedule_text(schedule, row), row, acc)
       own?(row, me) -> spoken(row, acc)
       agent?(row) -> said("[#{row.sent_by}]\n#{row.content}", row, acc)
-      schedule = scheduled(row) -> said(schedule_text(schedule, row), row, acc)
       true -> said(person_text(row, opts), row, acc)
     end
   end
