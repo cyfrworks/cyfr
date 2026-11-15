@@ -499,16 +499,24 @@ defmodule Opus.Schedules.ProviderTest do
   end
 
   describe "profile binding" do
-    # The declaration refuses an unbound schedule before any handler runs:
-    # the gate casts every call against it (`Prima.Operation.cast/2`).
-    test "create without a profile_id is refused by its declaration" do
-      assert {:error, {:invalid_argument, "Missing required field: profile_id"}} =
-               cast(%{
-                 "action" => "create",
-                 "name" => "unbound",
-                 "cron_expression" => "0 * * * *",
-                 "reference" => "reagent:local.test:1.0.0"
-               })
+    # A line for Aqua binds no profile, so the declaration leaves
+    # `profile_id` to the handler, which refuses a component's schedule
+    # without one before it resolves anything.
+    test "create of a component's schedule without a profile_id is refused", %{ctx: ctx} do
+      args = %{
+        "action" => "create",
+        "name" => "unbound",
+        "cron_expression" => "0 * * * *",
+        "reference" => "reagent:local.test:1.0.0"
+      }
+
+      assert {:ok, ^args} = cast(args)
+
+      assert Provider.handle("schedule", ctx, args) ==
+               {:error, {:invalid_argument, "Missing required field: profile_id"}}
+
+      assert {:error, :not_found} =
+               Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), "unbound")
     end
 
     test "update with an explicit nil profile_id (unbind) is refused by its declaration" do

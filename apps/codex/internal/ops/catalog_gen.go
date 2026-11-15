@@ -3870,11 +3870,11 @@ type ScheduleCreateArgs struct {
 	Name string `json:"name"`
 	// Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval.
 	CronExpression string `json:"cron_expression"`
-	// Component reference string (create/update)
+	// Component reference string, or agent:local.aqua for a line for Aqua (create/update)
 	Reference string `json:"reference"`
-	// Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
-	ProfileId string `json:"profile_id"`
-	// Input data to pass to the component (create/update)
+	// Profile the schedule fires under; its consent authorizes the binding (create, required for a component, refused for a line for Aqua; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
+	ProfileId Field[string] `json:"profile_id,omitzero"`
+	// Input data to pass to the component, or {"line": text} for a line for Aqua (reference agent:local.aqua) (create/update)
 	Input Field[map[string]any] `json:"input,omitzero"`
 	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[map[string]any] `json:"metadata,omitzero"`
@@ -3997,7 +3997,7 @@ type ScheduleUpdateArgs struct {
 	Reference Field[string] `json:"reference,omitzero"`
 	// Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
 	ProfileId Field[string] `json:"profile_id,omitzero"`
-	// Input data to pass to the component (create/update)
+	// Input data to pass to the component, or {"line": text} for a line for Aqua (reference agent:local.aqua) (create/update)
 	Input Field[*map[string]any] `json:"input,omitzero"`
 	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[*map[string]any] `json:"metadata,omitzero"`

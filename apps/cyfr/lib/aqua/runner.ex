@@ -252,6 +252,15 @@ defmodule Aqua.Runner do
   (`%{tools, options}` for the turn it opens), `:reply` (`%{request,
   outcome, answers}` for a member's reply), `:payload` (merged into the
   row's) and `:receipt` (its receipt, written in the acceptance).
+
+  A schedule's turn consumer (`Aqua.ScheduleTurns`) sends with
+  `:schedule` (`%{schedule_id, occurrence_id}`), as the schedule's person
+  under the `schedule` origin: the send is a turn of Aqua in the
+  schedule's own thread whatever its line names, it never steers a turn
+  already there, and the turn it opens carries the schedule and the
+  occurrence on its options, which its root's admission reads
+  (`Aqua.Loop`). No other caller passes it: the console and the thread
+  tool build their options by name.
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
@@ -538,7 +547,8 @@ defmodule Aqua.Runner do
       opened_before?(state, ctx, opts) ->
         accept_turn(state, ctx, name, text, opts)
 
-      steer?(state, ctx, name, opts) ->
+      # A schedule's fire is a turn of its own, never a steer of another.
+      not Keyword.has_key?(opts, :schedule) and steer?(state, ctx, name, opts) ->
         steer(state, ctx, name, text, opts)
 
       Sanctum.Provisioning.ready(ctx) != :ok ->
@@ -863,7 +873,8 @@ defmodule Aqua.Runner do
       "agent" => name,
       "room" => Keyword.get(opts, :room),
       "tools" => Map.get(crew, :tools),
-      "brain_options" => Map.get(crew, :options)
+      "brain_options" => Map.get(crew, :options),
+      "schedule" => Keyword.get(opts, :schedule)
     }
     |> Aqua.AgentConfig.stringify_deep()
     |> Map.reject(fn {_k, v} -> is_nil(v) or v == %{} end)

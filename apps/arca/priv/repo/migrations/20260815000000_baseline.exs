@@ -2329,6 +2329,16 @@ defmodule Arca.Repo.Migrations.Baseline do
           "AND (catch_up_left = 0 OR catch_up_until IS NOT NULL)"
     }
 
+    # A schedule fires a component under the profile it binds, or holds a
+    # line for Aqua (`agent:local.aqua`), whose turn runs under Aqua's own
+    # consent and binds none. A feed always binds one.
+    profile_bound = %{
+      name: "cron_schedules_profile_bound",
+      expr:
+        "(kind = 'schedule' AND reference = 'agent:local.aqua' AND profile_id IS NULL) OR " <>
+          "(reference <> 'agent:local.aqua' AND profile_id IS NOT NULL)"
+    }
+
     occurrence_state =
       known(
         "schedule_occurrences_state_known",
@@ -2365,7 +2375,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       # The pinned version a fire runs, resolved when the row is written.
       add :resolved_reference, :string, null: false
       add :athanor_id, :string, null: false
-      add :profile_id, :string, null: false
+      add :profile_id, :string, check: if(sqlite?, do: profile_bound)
+      # The thread an Aqua line's turns run in, made on its first fire
+      # (`Arca.CronSchedule.thread/3`). No foreign key: the thread is the
+      # person's, kept when the schedule is deleted, and a thread deleted
+      # since is made again on the next fire.
+      add :thread_id, :string
       # forbid | allow: whether a due occurrence may be claimed while another
       # of the same schedule is still open.
       add :concurrency, :string, null: false, default: "forbid"
@@ -2396,7 +2411,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       kind_spec,
       missed_runs_known,
       catch_up_limit_declared,
-      catch_up_episode
+      catch_up_episode,
+      profile_bound
     ])
 
     create unique_index(:cron_schedules, [:id, :athanor_id])

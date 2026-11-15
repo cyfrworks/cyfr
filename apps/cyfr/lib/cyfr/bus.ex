@@ -68,6 +68,7 @@ defmodule Cyfr.Bus do
     Request,
     RoomInView,
     ScheduleCompleted,
+    ScheduleTurnDue,
     ScheduleRun,
     Schedules,
     Session,
@@ -510,6 +511,18 @@ defmodule Cyfr.Bus do
           "subscriber acts, so a peer's delivery writes nothing twice"
     },
     %{
+      key: :schedule_turns,
+      scope: :global,
+      struct: ScheduleTurnDue,
+      match: {:exact, "aqua:schedule_turns"},
+      template: "aqua:schedule_turns",
+      producers: ["Opus.Schedules.Scheduler"],
+      consumers: ["Aqua.ScheduleTurns"],
+      reason:
+        "a committed claim of an Aqua line heard on every member; it only wakes the " <>
+          "consumer, which starts only the claims its own boot holds"
+    },
+    %{
       key: :crew_deliveries,
       scope: :global,
       struct: CrewPending,
@@ -862,6 +875,10 @@ defmodule Cyfr.Bus do
   @doc "A committed schedule completion (`Cyfr.Bus.ScheduleCompleted`)."
   @spec schedule_completions() :: String.t()
   def schedule_completions, do: "cyfr:schedule_completions"
+
+  @doc "A committed claim of a schedule's Aqua line (`Cyfr.Bus.ScheduleTurnDue`)."
+  @spec schedule_turns() :: String.t()
+  def schedule_turns, do: "aqua:schedule_turns"
 
   @doc "A committed crew record (`Cyfr.Bus.CrewPending`)."
   @spec crew_deliveries() :: String.t()

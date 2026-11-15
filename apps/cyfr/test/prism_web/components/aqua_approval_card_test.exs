@@ -6,7 +6,7 @@ defmodule PrismWeb.AquaApprovalCardTest do
   # would accept — the same rule the runner and the grant store enforce —
   # so a visible button is never a button that can only fail: once, for
   # this run, for this thread until a time, always, for this schedule only
-  # where the card's run has one, and a limit to the paths the call names
+  # in a schedule's own thread, and a limit to the paths the call names
   # only for an action that declares which argument names one.
   use ExUnit.Case, async: true
 
@@ -59,18 +59,9 @@ defmodule PrismWeb.AquaApprovalCardTest do
     end
   end
 
-  test "for this schedule is offered only where the card's run was started by one" do
-    assert %{schedule: false} = offers(card(%{"action_kind" => "write"}, scheduled: false))
-    assert %{schedule: true} = offers(card(%{"action_kind" => "write"}, scheduled: true))
-
-    # An action that stands in one thread only takes no agent-scope answer.
-    assert %{schedule: false, always: false, run: true} =
-             offers(card(%{"action_kind" => "write", "standing" => "thread"}, scheduled: true))
-  end
-
   test "an action declared standing: false offers no standing answer" do
     assert %{once: true, run: false, until: false, always: false, schedule: false} =
-             offers(card(%{"action_kind" => "write", "standing" => false}, scheduled: true))
+             offers(card(%{"action_kind" => "write", "standing" => false}))
   end
 
   test "an action declared standing: thread offers this thread's answers only" do
@@ -81,7 +72,7 @@ defmodule PrismWeb.AquaApprovalCardTest do
   test "a destructive or external action offers no standing answer, whatever it declares" do
     for kind <- ["destructive", "external"] do
       assert %{once: true, run: false, until: false, always: false, schedule: false} =
-               offers(card(%{"action_kind" => kind}, scheduled: true))
+               offers(card(%{"action_kind" => kind}))
     end
   end
 
@@ -241,22 +232,19 @@ defmodule PrismWeb.AquaApprovalCardTest do
     assert standing == false
 
     html =
-      card(
-        %{
-          "action_kind" => "write",
-          "standing" => standing,
-          "proposal" => %{
-            "tool" => "canvas",
-            "action" => "write",
-            "args" => %{
-              "name" => "markets",
-              "template" => "vanilla",
-              "files" => %{"index.html" => "<html></html>"}
-            }
+      card(%{
+        "action_kind" => "write",
+        "standing" => standing,
+        "proposal" => %{
+          "tool" => "canvas",
+          "action" => "write",
+          "args" => %{
+            "name" => "markets",
+            "template" => "vanilla",
+            "files" => %{"index.html" => "<html></html>"}
           }
-        },
-        scheduled: true
-      )
+        }
+      })
 
     assert %{once: true, run: false, until: false, always: false, schedule: false} = offers(html)
     refute html =~ ~s(phx-value-scope="always")

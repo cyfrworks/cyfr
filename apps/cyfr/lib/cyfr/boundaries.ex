@@ -1580,15 +1580,6 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: "PrismWeb.ThreadPaneLive",
-      into: "Arca.Execution",
-      functions: [:get_tenant],
-      reason:
-        "a pending card offers \"for this schedule\" only where its run was started " <>
-          "by one: the pane reads the run's execution row once, under the pane's actor, " <>
-          "for its schedule id alone."
-    },
-    %{
-      from: "PrismWeb.ThreadPaneLive",
       into: "Arca.ThreadStorage",
       functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
       reason:
@@ -2471,6 +2462,7 @@ defmodule Cyfr.Boundaries do
     # all of them whatever its configuration says.
     cron_scheduler_enabled: :seam,
     schedule_notes_enabled: :seam,
+    schedule_turns_enabled: :seam,
     crew_delivery_enabled: :seam,
     status_watch_enabled: :seam,
     execution_sweeper_enabled: :seam,

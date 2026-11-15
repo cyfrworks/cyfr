@@ -27,6 +27,10 @@ defmodule Aqua.Runner.Admission do
       that asked it: its reply lands on the request's thread, addressed
       to the request's sender, and opens the soul's turn when that sender
       is the soul, or is room content when it is the person.
+    * A schedule's line (`:schedule`) is a turn of the soul in the
+      person's own thread, sent as the person under the `schedule`
+      origin, whatever names its text holds: a line with nobody present
+      asks no crew member.
 
   Anything else is refused `:not_addressable`.
   """
@@ -65,7 +69,8 @@ defmodule Aqua.Runner.Admission do
   sender is told: `:empty`, `:message_too_long`, `:archived`,
   `:not_member`, `:no_agent`, `:not_addressable`. `opts`:
   `:attachments`, `:agents` (the sender's roster), `:agent` (an explicit
-  pick), `:last` (the agent of the thread's last turn), `:sent_by`
+  pick), `:last` (the agent of the thread's last turn), `:schedule` (a
+  schedule's line, admitted only under the `schedule` origin), `:sent_by`
   (`"person"` when absent), `:request` (the request row a delivery
   carries into a child thread) and `:reply` (`%{request: row, ...}`, the
   request a member's reply answers). Answers the decision and the
@@ -80,7 +85,7 @@ defmodule Aqua.Runner.Admission do
     cond do
       text == "" and attachments == [] -> {:error, :empty}
       byte_size(text) > @max_message_bytes -> {:error, :message_too_long}
-      true -> with :ok <- standing(ctx, athanor_id), do: address(thread, text, opts)
+      true -> with :ok <- standing(ctx, athanor_id), do: addressed(ctx, thread, text, opts)
     end
   end
 
@@ -129,10 +134,15 @@ defmodule Aqua.Runner.Admission do
 
   def member?(_roster, _name), do: false
 
-  defp address(thread, text, opts) do
+  defp addressed(ctx, thread, text, opts) do
     sent_by = Keyword.get(opts, :sent_by, @person)
 
-    case address(thread, sent_by, text, opts) do
+    decided =
+      if Keyword.has_key?(opts, :schedule),
+        do: scheduled(thread, sent_by, ctx.origin),
+        else: address(thread, sent_by, text, opts)
+
+    case decided do
       {:ok, decision} -> {:ok, decision, text}
       {:error, _} = refused -> refused
     end
@@ -146,6 +156,11 @@ defmodule Aqua.Runner.Admission do
       true -> {:error, :not_addressable}
     end
   end
+
+  defp scheduled(%{kind: "own"}, @person, :schedule),
+    do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
+
+  defp scheduled(_thread, _sent_by, _origin), do: {:error, :not_addressable}
 
   # A member's reply: on the thread of the request it answers, which was
   # addressed to it, to whoever sent that request.

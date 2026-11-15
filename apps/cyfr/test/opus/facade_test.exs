@@ -25,6 +25,7 @@ defmodule Opus.FacadeTest do
     cancel: 2,
     claim_turn_root: 3,
     count_by_request: 2,
+    end_schedule_turn: 4,
     events_since: 3,
     feeds: 1,
     get: 2,

@@ -3,7 +3,7 @@
 
 defmodule Aqua.Supervisor do
   @moduledoc """
-  The assistant's processes: the schedule notes, the crew's delivery,
+  The assistant's processes: the schedule notes, the schedules' turns, the crew's delivery,
   the loop worker with the task supervisor its steps run on, the thread runners with their
   recovery, and the status watch. `rest_for_one`, because the loops run their steps on
   `Aqua.TaskSupervisor`: a fresh worker tree restarts the runners whose
@@ -31,6 +31,11 @@ defmodule Aqua.Supervisor do
         # publication and receipt back together, and its claim lapses for
         # the next member.
         Supervisor.child_spec(Aqua.ScheduleNotes, shutdown: 5_000),
+        # Starts the turns of the Aqua lines this boot's scheduler claimed
+        # (`Aqua.ScheduleTurns`): woken by each claim, draining at boot and
+        # on a tick. 5 s: a send cut short leaves the claim for the next
+        # drain, and the occurrence's message id keeps it to one turn.
+        Supervisor.child_spec(Aqua.ScheduleTurns, shutdown: 5_000),
         # Delivers the crew's requests and replies from the outbox records
         # their transactions committed (`Aqua.Crew`): woken by each commit,
         # draining at boot and on a tick. 5 s for the same reason: a
