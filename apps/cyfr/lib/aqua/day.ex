@@ -20,6 +20,18 @@ defmodule Aqua.Day do
   never later: that one joins the daily thread of the date in the new
   zone, made or used again. No daily thread is renamed, moved or merged,
   and a turn that crosses midnight ends on the daily thread it began on.
+
+  ## The zone database
+
+  Elixir knows UTC alone, and a zone's date cannot be read without its
+  rules, which change with the clocks; a schedule fires while no browser is
+  open. So the day is read with the `tz` package's database (Apache-2.0),
+  handed to the calendar call as its argument. This module is its one
+  user: the node's own `:time_zone_database` is not set, so nothing else
+  in CYFR reads zones by accident. Its data is what the package compiled
+  in; none of its updaters is started, so nothing fetches zone data at run
+  time. A zone it does not know is refused where the shell writes it
+  (`put_zone/2`), and one stored that it cannot resolve reads as UTC.
   """
 
   alias Sanctum.Context
