@@ -4,15 +4,16 @@
 defmodule Arca.UsersMarkingRaceTest do
   @moduledoc """
   A person made an administrator while the door removes their allow or
-  denies them, on real connections outside the sandbox, in either order.
-  The door's change reads the mark with the person's row locked
-  (`Arca.Users.unless_admin/3`), the row a marking writes, so whichever
+  denies them, and administrators marked and cleared at once, on real
+  connections outside the sandbox, in every order. Each change takes the
+  administrators' lock first (`Arca.Users.lock_admins/0`), so whichever
   starts second waits for the first to commit and decides on what it
   wrote: a marking that committed first is seen and the removal or deny is
   refused; a removal that committed first is written over by the marking's
   allow; a deny that committed first refuses the marking's allow, and the
-  marking rolls back. On PostgreSQL the second waits on the person's row;
-  on SQLite on the write lock the first holds.
+  marking rolls back. However many such changes run at once, each is
+  answered and none fails on a deadlock. On PostgreSQL the second waits on
+  the advisory lock; on SQLite on the write lock the first holds.
   """
 
   use ExUnit.Case, async: false
@@ -130,21 +131,32 @@ defmodule Arca.UsersMarkingRaceTest do
   # The door's removal of the person's allow and its deny of them, as
   # `Sanctum.Door.Store` writes them; `hold` runs after the mark was read.
   defp remove(person, hold \\ fn -> :ok end) do
-    Users.unless_admin(server(), {"identifier", person.identifier}, fn ->
-      hold.()
-      {:ok, entry} = Doors.find(server(), "identifier", person.identifier)
-      :ok = Doors.delete(server(), entry.id)
-      {:ok, :removed}
+    Users.with_admins_locked(server(), fn marked? ->
+      if marked?.({"identifier", person.identifier}) do
+        {:error, :platform_admin}
+      else
+        hold.()
+        {:ok, entry} = Doors.find(server(), "identifier", person.identifier)
+        :ok = Doors.delete(server(), entry.id)
+        {:ok, :removed}
+      end
     end)
   end
 
   defp deny(person, hold \\ fn -> :ok end) do
-    Users.unless_admin(server(), {"identifier", person.identifier}, fn ->
-      hold.()
-      {:ok, entry} = Doors.find(server(), "identifier", person.identifier)
-      Doors.update(server(), entry.id, %{effect: "deny", added_by: "usr_ops"})
+    Users.with_admins_locked(server(), fn marked? ->
+      if marked?.({"identifier", person.identifier}) do
+        {:error, :platform_admin}
+      else
+        hold.()
+        {:ok, entry} = Doors.find(server(), "identifier", person.identifier)
+        Doors.update(server(), entry.id, %{effect: "deny", added_by: "usr_ops"})
+      end
     end)
   end
+
+  # The wait every change of the administrators makes behind another.
+  @admins_wait ["pg_advisory_xact_lock"]
 
   # Holds the first change's transaction once its decision is made, until
   # the test lets it go on.
@@ -171,7 +183,7 @@ defmodule Arca.UsersMarkingRaceTest do
       end)
 
     assert_receive {:second, waiting}, 5_000
-    if postgres?(), do: LockWait.await_lock_wait!(waiting, fragments)
+    if postgres?(), do: LockWait.await_lock_wait!(waiting, fragments, event: "advisory")
     refute Task.yield(task, 300), "the second change decided while the first held its lock"
     task
   end
@@ -188,13 +200,13 @@ defmodule Arca.UsersMarkingRaceTest do
     end)
   end
 
-  test "a marking that holds the person's row: the removal that waits is refused", %{
+  test "a marking that holds the administrators' lock: the removal that waits is refused", %{
     admin: admin,
     person: person
   } do
     test = self()
     marking = first(fn -> mark(person, admin, holding(test)) end)
-    removal = second(test, fn -> remove(person) end, [~s("users"), "FOR UPDATE"])
+    removal = second(test, fn -> remove(person) end, @admins_wait)
 
     send(marking.pid, :go)
     assert {:ok, %{platform_admin_at: %DateTime{}}} = Task.await(marking, 25_000)
@@ -202,13 +214,14 @@ defmodule Arca.UsersMarkingRaceTest do
     assert {%DateTime{}, [{"allow", "allowed"}]} = state(person)
   end
 
-  test "a removal that holds the person's row: the marking that waits writes the allow again", %{
-    admin: admin,
-    person: person
-  } do
+  test "a removal that holds the administrators' lock: the marking that waits writes the allow again",
+       %{
+         admin: admin,
+         person: person
+       } do
     test = self()
     removal = first(fn -> remove(person, holding(test)) end)
-    marking = second(test, fn -> mark(person, admin) end, [~s(UPDATE "users")])
+    marking = second(test, fn -> mark(person, admin) end, @admins_wait)
 
     send(removal.pid, :go)
     assert {:ok, :removed} = Task.await(removal, 25_000)
@@ -216,13 +229,13 @@ defmodule Arca.UsersMarkingRaceTest do
     assert {%DateTime{}, [{"allow", "allowed"}]} = state(person)
   end
 
-  test "a marking that holds the person's row: the deny that waits is refused", %{
+  test "a marking that holds the administrators' lock: the deny that waits is refused", %{
     admin: admin,
     person: person
   } do
     test = self()
     marking = first(fn -> mark(person, admin, holding(test)) end)
-    denial = second(test, fn -> deny(person) end, [~s("users"), "FOR UPDATE"])
+    denial = second(test, fn -> deny(person) end, @admins_wait)
 
     send(marking.pid, :go)
     assert {:ok, %{platform_admin_at: %DateTime{}}} = Task.await(marking, 25_000)
@@ -230,15 +243,85 @@ defmodule Arca.UsersMarkingRaceTest do
     assert {%DateTime{}, [{"allow", "allowed"}]} = state(person)
   end
 
-  test "a deny that holds the person's row: the marking that waits is refused and writes nothing",
+  test "a deny that holds the administrators' lock: the marking that waits is refused and writes nothing",
        %{admin: admin, person: person} do
     test = self()
     denial = first(fn -> deny(person, holding(test)) end)
-    marking = second(test, fn -> mark(person, admin) end, [~s(UPDATE "users")])
+    marking = second(test, fn -> mark(person, admin) end, @admins_wait)
 
     send(denial.pid, :go)
     assert {:ok, %{effect: "deny"}} = Task.await(denial, 25_000)
     assert {:error, :denied} = Task.await(marking, 25_000)
     assert {nil, [{"deny", "allowed"}]} = state(person)
+  end
+
+  # A clearing of `person`'s mark as `admin` asks it.
+  defp clear(person, admin),
+    do: Users.set_platform_admin(server(), person.user_id, false, by: admin.user_id)
+
+  test "a marking holds while a clearing and a later marking start: both wait, both are answered",
+       %{admin: admin, person: person} do
+    other = person!(false)
+    {:ok, _allow} = unboxed(fn -> allow(other.identifier) end)
+    test = self()
+
+    # The marking of `person` decides and holds; the clearing of `person`
+    # reads the administrators before it commits, and the marking of
+    # `other` after: neither locks a row the other holds.
+    marking = first(fn -> mark(person, admin, holding(test)) end)
+    clearing = second(test, fn -> clear(person, admin) end, @admins_wait)
+    later = second(test, fn -> mark(other, admin) end, @admins_wait)
+
+    send(marking.pid, :go)
+    assert {:ok, %{platform_admin_at: %DateTime{}}} = Task.await(marking, 25_000)
+    assert {:ok, %{platform_admin_at: nil}} = Task.await(clearing, 25_000)
+    assert {:ok, %{platform_admin_at: %DateTime{}}} = Task.await(later, 25_000)
+    assert {nil, [{"allow", "allowed"}]} = state(person)
+    assert {%DateTime{}, [{"allow", "allowed"}]} = state(other)
+  end
+
+  test "three changes of the administrators started at once, in every order, are each answered" do
+    acts = [:mark, :clear, :remove]
+
+    for order <- [acts, Enum.reverse(acts), [:clear, :mark, :remove], [:remove, :mark, :clear]],
+        _round <- 1..2 do
+      admin = person!(true)
+      person = person!(false)
+      {:ok, _allow} = unboxed(fn -> allow(person.identifier) end)
+
+      changes = %{
+        mark: fn -> mark(person, admin) end,
+        clear: fn -> clear(admin, admin) end,
+        remove: fn -> remove(person) end
+      }
+
+      answers =
+        order
+        |> Enum.map(&{&1, Task.async(fn -> unboxed(changes[&1]) end)})
+        |> Map.new(fn {act, task} -> {act, Task.await(task, 25_000)} end)
+
+      # Each is answered, none by a failed statement such as a deadlock:
+      # the marking is refused only when the clearing came first and took
+      # the asking administrator's mark, the clearing only while they stood
+      # alone, the removal only once the person was marked.
+      assert match?({:ok, %{platform_admin_at: %DateTime{}}}, answers.mark) or
+               answers.mark == {:error, :not_admin},
+             inspect(answers)
+
+      assert match?({:ok, %{platform_admin_at: nil}}, answers.clear) or
+               answers.clear == {:error, :last_admin},
+             inspect(answers)
+
+      assert answers.remove in [{:ok, :removed}, {:error, :platform_admin}], inspect(answers)
+
+      {person_mark, person_entries} = state(person)
+      {admin_mark, _entries} = state(admin)
+
+      # A marked person's allow stands whichever change came first.
+      assert person_mark != nil == match?({:ok, _}, answers.mark), inspect(answers)
+      if person_mark, do: assert(person_entries == [{"allow", "allowed"}])
+      if answers.remove == {:error, :platform_admin}, do: assert(person_mark)
+      assert answers.clear == {:error, :last_admin} == (admin_mark != nil), inspect(answers)
+    end
   end
 end

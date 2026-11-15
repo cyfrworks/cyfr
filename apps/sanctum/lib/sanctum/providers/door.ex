@@ -213,8 +213,7 @@ defmodule Sanctum.Providers.Door do
           end
 
         {:error, reason} ->
-          Logger.error("[Sanctum.Providers.Door] door.allow failed: #{inspect(reason)}")
-          {:error, {:unavailable, "The sign-in allowlist"}}
+          refusal("allow", value, reason)
       end
     end
   end
@@ -256,26 +255,16 @@ defmodule Sanctum.Providers.Door do
               )
           end
 
-        {:error, :platform_admin} ->
-          {:error,
-           {:invalid_argument,
-            "That is this server's platform administrator, who is never denied here"}}
-
-        # The deny is decided under this member's slot: a member whose slot
-        # a successor took writes no entry.
-        {:error, :not_owner} ->
-          {:error, Sanctum.Refusals.classify(:not_owner)}
-
         {:error, reason} ->
-          Logger.error("[Sanctum.Providers.Door] door.deny failed: #{inspect(reason)}")
-          {:error, {:unavailable, "The sign-in allowlist"}}
+          refusal("deny", value, reason)
       end
     end
   end
 
   def handle(%Context{}, %{"action" => "remove", "id" => id}) when is_binary(id) do
-    with {:ok, entry} <- Store.get(id),
-         :ok <- Store.remove(id) do
+    # What follows the removal is decided by the entry as it stood when it
+    # was removed, read in the removal's own transaction.
+    with {:ok, entry} <- Store.remove(id) do
       # Removing a deny is letting the person back through: undo what the
       # deny did to their account, exactly as `allow` does — otherwise they
       # stay `denied` with no entry left to explain why.
@@ -313,20 +302,7 @@ defmodule Sanctum.Providers.Door do
           )
       end
     else
-      {:error, :not_found} ->
-        {:error, {:not_found, "Allowlist entry", id}}
-
-      {:error, :platform_admin} ->
-        {:error,
-         {:invalid_argument,
-          "That allow lets this server's platform administrator sign in, so it is never removed"}}
-
-      {:error, :not_owner} ->
-        {:error, Sanctum.Refusals.classify(:not_owner)}
-
-      {:error, reason} ->
-        Logger.error("[Sanctum.Providers.Door] door.remove failed: #{inspect(reason)}")
-        {:error, {:unavailable, "The sign-in allowlist"}}
+      {:error, reason} -> refusal("remove", id, reason)
     end
   end
 
@@ -342,14 +318,8 @@ defmodule Sanctum.Providers.Door do
       :ok ->
         {:ok, %{id: id, rejected: true}}
 
-      {:error, :not_found} ->
-        {:error, {:not_found, "Request", id}}
-
-      {:error, :not_a_request} ->
-        {:error, {:invalid_argument, "That entry is not a pending request"}}
-
-      {:error, _} ->
-        {:error, {:unavailable, "The sign-in allowlist"}}
+      {:error, reason} ->
+        refusal("resolve", id, reason)
     end
   end
 
@@ -374,7 +344,7 @@ defmodule Sanctum.Providers.Door do
           {:ok, %{user_id: row.id, platform_admin: not is_nil(row.platform_admin_at)}}
 
         {:error, reason} ->
-          marking_refused(reason)
+          refusal(action, value, reason)
       end
     end
   end
@@ -546,32 +516,60 @@ defmodule Sanctum.Providers.Door do
     end
   end
 
-  defp marking_refused(:last_admin),
+  @marking ["mark_admin", "clear_admin"]
+
+  # A store's refusal as `action`'s answer, for every handler that writes:
+  # `subject` is what the call named (an entry's id, a value, a person).
+  # A change decided under this member's slot answers the ownership
+  # refusal when a successor took it, having written nothing.
+  defp refusal(_action, _subject, :not_owner), do: {:error, Sanctum.Refusals.classify(:not_owner)}
+
+  defp refusal("deny", _subject, :platform_admin),
+    do: invalid("That is this server's platform administrator, who is never denied here")
+
+  defp refusal(action, _subject, :platform_admin) when action in ["remove", "resolve"],
     do:
-      {:error,
-       {:invalid_argument,
+      invalid(
+        "That allow lets this server's platform administrator sign in, so it is never removed"
+      )
+
+  defp refusal("remove", id, :not_found), do: {:error, {:not_found, "Allowlist entry", id}}
+  defp refusal("resolve", id, :not_found), do: {:error, {:not_found, "Request", id}}
+
+  defp refusal(action, _subject, :not_found) when action in @marking,
+    do: {:error, {:not_found, "Person", nil}}
+
+  defp refusal("resolve", _id, :not_a_request),
+    do: invalid("That entry is not a pending request")
+
+  defp refusal(_action, _subject, :last_admin),
+    do:
+      invalid(
         "That is this CYFR's last platform administrator, whose mark stays; make another " <>
-          "person an administrator first"}}
+          "person an administrator first"
+      )
 
   # The administrator who asked was no longer one when the change was
   # decided, though their session still read them as one.
-  defp marking_refused(:not_admin), do: {:error, :platform_admin_required}
+  defp refusal(_action, _subject, :not_admin), do: {:error, :platform_admin_required}
 
-  defp marking_refused(:not_active),
-    do: {:error, {:invalid_argument, "That person is denied here; allow them first"}}
+  defp refusal(_action, _subject, :not_active),
+    do: invalid("That person is denied here; allow them first")
 
-  defp marking_refused({:door, :denied}),
-    do: {:error, {:invalid_argument, "A deny names that person's account; remove the deny first"}}
+  defp refusal(_action, _subject, {:door, :denied}),
+    do: invalid("A deny names that person's account; remove the deny first")
 
-  defp marking_refused(:no_account),
-    do: {:error, {:invalid_argument, "That person has no account here"}}
+  defp refusal(_action, _subject, :no_account), do: invalid("That person has no account here")
 
-  defp marking_refused(:not_found), do: {:error, {:not_found, "Person", nil}}
+  defp refusal(action, _subject, reason) do
+    Logger.error("[Sanctum.Providers.Door] door.#{action} failed: #{inspect(reason)}")
 
-  defp marking_refused(reason) do
-    Logger.error("[Sanctum.Providers.Door] an administrator's mark failed: #{inspect(reason)}")
-    {:error, {:unavailable, "Storage"}}
+    if action in @marking,
+      do: {:error, {:unavailable, "Storage"}},
+      else: {:error, {:unavailable, "The sign-in allowlist"}}
   end
+
+  defp invalid(message), do: {:error, {:invalid_argument, message}}
 
   # The label is a key only when the entry was made from a handle; a name
   # only when one is known.

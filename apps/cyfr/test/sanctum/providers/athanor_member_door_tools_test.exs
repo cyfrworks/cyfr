@@ -222,6 +222,39 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{status: "active"}} = Users.get(alice)
   end
 
+  test "door.resolve rejecting a request on a member whose slot a successor took answers the ownership refusal, and removes nothing",
+       %{ops: ops, ctx: ctx, n: n} do
+    identifier = "per_" <> Prima.Digest.sha256_hex("resolve-owner-#{n}")
+    {:ok, :created, request} = Sanctum.Door.Store.request("identifier", identifier, ops)
+
+    for key <- [:standing, :generation, :slot],
+        do: Prima.Test.Env.erase_persistent_term({Arca.ControlPlane, key})
+
+    Prima.Test.Env.put_app_env(:arca, :control_plane_claim_enabled, true)
+    node = "door-resolve-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+        set: [owner: node <> "#boot_b", generation: slot.generation + 1]
+      )
+
+    assert Arca.ControlPlane.held?()
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    assert {:error, %Prima.Refusal{class: :not_owner, reason: :not_owner, message: message}} =
+             call(admin, "door", %{
+               "action" => "resolve",
+               "id" => request.id,
+               "decision" => "reject"
+             })
+
+    assert message == "This server does not currently own its control plane — retry shortly"
+    assert {:ok, %{id: id, status: "requested"}} = Sanctum.Door.Store.get(request.id)
+    assert id == request.id
+  end
+
   # A session the door's verdict issued to `user_id`.
   defp session_for(user_id, email) do
     ctx =

@@ -173,8 +173,8 @@ defmodule Sanctum.Tenancy.Users do
     end
   end
 
-  # Inside the marking, after the person's row is written: a deny of the
-  # person by their id, written under that row's lock
+  # Inside the marking, under the administrators' lock it took first: a
+  # deny of the person by their id, written under that same lock
   # (`Sanctum.Door.Store.deny/4`), is read once it committed, and a deny
   # of their identifier is the row the allow will not overwrite.
   defp admin_allowed(%{id: user_id} = user, identifier, by) do

@@ -53,7 +53,8 @@ defmodule Arca.SecurityTransitions do
   ## Lock order
 
   Every transition, and every credential issuance, takes its row locks in
-  one order: people sorted by id, athanors sorted by id, then shared
+  one order: a denial first takes the administrators' lock
+  (`Arca.Users.lock_admins/0`), before any row; then people sorted by id, athanors sorted by id, then shared
   threads sorted by id
   (`Arca.SharedThreads`) and their people, then cached identity heads, then
   sessions, then API keys, then frame credentials, then paired clients,
@@ -214,10 +215,11 @@ defmodule Arca.SecurityTransitions do
   postconditions checked, so a retry finishes what a failure left.
 
   A person carrying the platform administrator's mark is refused
-  `:platform_admin` and nothing is written: the mark is read on their row
-  under the lock the denial takes first, the row a marking writes, so a
-  denial is never a way to take a mark away (`Arca.Users.set_platform_admin/4`
-  alone clears it, never the last).
+  `:platform_admin` and nothing is written: the denial takes the
+  administrators' lock first (`Arca.Users.lock_admins/0`), the one a
+  marking takes, and reads the mark under it, so a denial is never a way
+  to take a mark away (`Arca.Users.set_platform_admin/4` alone clears it,
+  never the last).
   """
   @spec deny_user(Prima.Actor.t(), String.t(), keyword()) :: {:ok, change()} | {:error, term()}
   def deny_user(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
@@ -287,6 +289,8 @@ defmodule Arca.SecurityTransitions do
   # ---- deny ------------------------------------------------------------------
 
   defp deny(user_id, verify) do
+    :ok = Arca.Users.lock_admins()
+
     result =
       with {:ok, user} <- lock_user(user_id),
            :ok <- unmarked(user),

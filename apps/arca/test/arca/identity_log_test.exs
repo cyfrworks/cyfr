@@ -651,9 +651,9 @@ defmodule Arca.IdentityLogRaceTest do
     end)
   end
 
-  defp waits!(second, fragments) do
+  defp waits!(second, fragments, opts \\ []) do
     assert_receive {:second, waiting}, 5_000
-    if postgres?(), do: LockWait.await_lock_wait!(waiting, fragments)
+    if postgres?(), do: LockWait.await_lock_wait!(waiting, fragments, opts)
     refute Task.yield(second, 300), "the second change decided while the first held its locks"
   end
 
@@ -700,7 +700,7 @@ defmodule Arca.IdentityLogRaceTest do
     assert_receive :first_decided, 5_000
 
     second = second(test, fn -> clear(b.user_id) end)
-    waits!(second, [~s("users"), "FOR UPDATE"])
+    waits!(second, ["pg_advisory_xact_lock"], event: "advisory")
 
     send(first.pid, :go)
     assert :ok = Task.await(first, 25_000)
@@ -725,7 +725,7 @@ defmodule Arca.IdentityLogRaceTest do
     assert_receive :first_decided, 5_000
 
     second = second(test, fn -> close(a.identifier) end)
-    waits!(second, [~s("users"), "FOR UPDATE"])
+    waits!(second, ["pg_advisory_xact_lock"], event: "advisory")
 
     send(first.pid, :go)
     assert {:ok, %{platform_admin_at: nil}} = Task.await(first, 25_000)

@@ -50,6 +50,7 @@ defmodule Arca.Doors do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Arca.QueryHelpers
   alias Arca.Schemas.ServerAllowlistEntry, as: Entry
 
   @columns [
@@ -127,6 +128,29 @@ defmodule Arca.Doors do
   end
 
   def get(%Prima.Actor{}, id) when is_binary(id), do: {:error, :not_platform}
+
+  @doc """
+  One entry by id, its row locked for the rest of the enclosing
+  transaction (`FOR UPDATE` on PostgreSQL; the write lock on SQLite), so
+  a change decided on what it reads is not written over by another
+  writer's change before it commits. Raises outside a transaction.
+  """
+  @spec lock(Prima.Actor.t(), String.t()) :: {:ok, entry()} | {:error, :not_found} | refusal()
+  # arca:db-raise-ok raises outside a transaction, as its doc says; its caller holds one
+  def lock(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
+    unless Arca.Repo.in_transaction?(),
+      do: raise("Arca.Doors.lock/2 called outside a transaction")
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Doors.lock", fn ->
+      case from(e in Entry, where: e.id == ^id) |> QueryHelpers.for_update() |> Arca.Repo.one() do
+        nil -> {:error, :not_found}
+        entry -> {:ok, row(entry)}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def lock(%Prima.Actor{}, id) when is_binary(id), do: {:error, :not_platform}
 
   @doc """
   The one entry for `kind` and `value`, the pair the unique index is on.

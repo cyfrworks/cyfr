@@ -14,10 +14,12 @@ defmodule Sanctum.Door.Store do
   it admits nobody until a platform admin resolves it. A `deny` entry
   cannot be written for a platform administrator, named by their person
   id or their identifier, nor their identifier's allow removed: an
-  administrator is never shut out. The mark is read and the entry written
-  in one transaction, with the person's row locked as a marking locks it
-  (`Arca.Users.unless_admin/3`), so a person made an administrator
-  meanwhile is either seen or waits for the write.
+  administrator is never shut out. A deny, a removal and the rejection of
+  a request each read their entry and the mark and write in one
+  transaction under the administrators' lock, the one a marking takes
+  (`Arca.Users.with_admins_locked/2`), so a person made an administrator
+  meanwhile is either seen or waits for the write, and nothing read before
+  that transaction decides it.
 
   The rows are `Arca.Doors`', asked as the server (`Prima.Actor.system/0`).
   The door is consulted **before** a session exists, so at admission time
@@ -130,53 +132,62 @@ defmodule Sanctum.Door.Store do
 
     # A deny answers whatever request produced the row: the member who
     # asked is no longer who this entry is about.
-    unless_admin(kind, value, fn ->
-      upsert(kind, value, %{
-        effect: "deny",
-        status: "allowed",
-        added_by: added_by,
-        note: opts[:note],
-        label: opts[:label],
-        requested_by: nil
-      })
+    admins_locked(fn marked? ->
+      if marked?.({kind, value}) do
+        {:error, :platform_admin}
+      else
+        upsert(kind, value, %{
+          effect: "deny",
+          status: "allowed",
+          added_by: added_by,
+          note: opts[:note],
+          label: opts[:label],
+          requested_by: nil
+        })
+      end
     end)
   end
 
   @doc """
-  Delete an entry by id. Refuses the allow of a platform administrator's
-  identifier (`:platform_admin`), as `deny/4` refuses a deny of them: the
-  door has no exception for the administrator, so removing it would shut
-  them out of their own CYFR. When the store cannot answer it removes
-  nothing (`:unavailable`).
+  Delete an entry by id, answering the entry as it stood when it was
+  removed. Refuses the allow of a platform administrator's identifier
+  (`:platform_admin`), as `deny/4` refuses a deny of them: the door has no
+  exception for the administrator, so removing it would shut them out of
+  their own CYFR. The entry and the mark are read inside the transaction
+  that removes it. When the store cannot answer it removes nothing
+  (`:unavailable`).
   """
   @spec remove(String.t()) ::
-          :ok
-          | {:error, :not_found | :platform_admin | :unavailable | :not_owner | :database_error}
-  def remove(id) when is_binary(id) do
-    with {:ok, entry} <- get(id), do: removed(entry)
+          {:ok, entry()}
+          | {:error, :not_found | :platform_admin | :unavailable | :not_owner}
+  def remove(id) when is_binary(id), do: deleted(id, :any)
+
+  # Reads the entry `id`, its row locked against a concurrent allow or
+  # approval, and whether the person it names carries the mark under the
+  # administrators' lock, decides, and deletes it, all in one transaction:
+  # `:request` deletes only a pending request (`:not_a_request`).
+  defp deleted(id, which) do
+    admins_locked(fn marked? ->
+      with {:ok, entry} <- Doors.lock(actor(), id),
+           :ok <- deletable(entry, which, marked?),
+           :ok <- Doors.delete(actor(), id),
+           do: {:ok, entry}
+    end)
   end
 
-  defp removed(%{effect: "allow", kind: "identifier", value: value, id: id}) do
-    case unless_admin("identifier", value, fn -> delete(id) end) do
-      {:ok, _removed} -> :ok
-      {:error, _} = refused -> refused
-    end
-  end
+  defp deletable(%{status: status}, :request, _marked?) when status != "requested",
+    do: {:error, :not_a_request}
 
-  defp removed(%{id: id}), do: Doors.delete(actor(), id)
+  defp deletable(%{effect: "allow", kind: "identifier", value: value}, _which, marked?),
+    do: if(marked?.({"identifier", value}), do: {:error, :platform_admin}, else: :ok)
 
-  defp delete(id) do
-    case Doors.delete(actor(), id) do
-      :ok -> {:ok, :removed}
-      {:error, _} = error -> error
-    end
-  end
+  defp deletable(_entry, _which, _marked?), do: :ok
 
-  # `write` unless the person `{kind, value}` names carries the platform
-  # administrator's mark, in one transaction with their row locked. A store
-  # that cannot answer refuses (`:unavailable`), never lets it through.
-  defp unless_admin(kind, value, write) do
-    case Arca.Users.unless_admin(actor(), {kind, value}, write) do
+  # `write` in one transaction under the administrators' lock, given
+  # whether a person carries the mark. A store that cannot answer refuses
+  # (`:unavailable`), never lets it through.
+  defp admins_locked(write) do
+    case Arca.Users.with_admins_locked(actor(), write) do
       {:error, :database_error} -> {:error, :unavailable}
       answer -> answer
     end
@@ -229,19 +240,28 @@ defmodule Sanctum.Door.Store do
     end
   end
 
-  @doc "Approve (`:allow`) or drop (`:reject`) a request."
+  @doc """
+  Approve (`:allow`) or drop (`:reject`) a request. A rejection is a
+  removal (`remove/1`), whose transaction reads the entry and finds it
+  still a request.
+  """
   @spec resolve(String.t(), :allow | :reject, String.t() | nil) ::
           {:ok, entry()} | :ok | {:error, term()}
-  def resolve(id, decision, admin_user_id) do
-    with {:ok, %{status: "requested"} = entry} <- get(id) do
-      case decision do
-        :allow -> update(entry, %{status: "allowed", added_by: admin_user_id})
-        :reject -> remove(id)
-      end
-    else
-      {:ok, _} -> {:error, :not_a_request}
-      {:error, _} = err -> err
+  def resolve(id, :allow, admin_user_id) do
+    case get(id) do
+      {:ok, %{status: "requested"} = entry} ->
+        update(entry, %{status: "allowed", added_by: admin_user_id})
+
+      {:ok, _entry} ->
+        {:error, :not_a_request}
+
+      {:error, _} = err ->
+        err
     end
+  end
+
+  def resolve(id, :reject, _admin_user_id) do
+    with {:ok, _entry} <- deleted(id, :request), do: :ok
   end
 
   # ---- what the door reads ---------------------------------------------------
