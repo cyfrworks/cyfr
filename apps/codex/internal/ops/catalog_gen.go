@@ -4007,6 +4007,8 @@ type ScheduleUpdateArgs struct {
 	MissedRuns Field[string] `json:"missed_runs,omitzero"`
 	// How many missed times one catch-up fires, 1 to 24 (create/update; required with catch_up, refused with skip)
 	CatchUpLimit Field[int] `json:"catch_up_limit,omitzero"`
+	// The schedule's definition as read (get/list answer it): the update is refused as changed when its name, time, reference, profile, input or missed-run policy moved since; a fire or a pause does not move it
+	Definition Field[string] `json:"definition,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

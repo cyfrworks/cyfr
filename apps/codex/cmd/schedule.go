@@ -20,8 +20,6 @@ func init() {
 
 	scheduleUpdateCmd.Flags().String("name", "", "New schedule name")
 	scheduleUpdateCmd.Flags().String("cron", "", "New cron expression")
-	scheduleUpdateCmd.Flags().String("ref", "", "New component reference")
-	scheduleUpdateCmd.Flags().String("profile", "", "Replacement consented execution profile ID")
 	scheduleUpdateCmd.Flags().String("input", "", "New JSON input")
 	addMissedRunsFlags(scheduleUpdateCmd)
 
@@ -76,7 +74,8 @@ var scheduleGetCmd = &cobra.Command{
 var scheduleUpdateCmd = &cobra.Command{
 	Use:   "update <id|name>",
 	Short: "Update a cron schedule",
-	Long:  "Update one or more fields of an existing schedule. Only explicitly set flags are sent.",
+	Long: "Update one or more fields of an existing schedule: its name, time, input and missed-run policy. Only explicitly set flags are sent. " +
+		"What a schedule runs and the profile it fires under change on CYFR's Schedules page, where a person binds them; no API key can.",
 	Example: `  cyfr schedule update my-schedule --cron "0 */2 * * *"
   cyfr schedule update my-schedule --name new-name
   cyfr schedule update my-schedule --input '{"key":"new-value"}'
@@ -87,11 +86,6 @@ var scheduleUpdateCmd = &cobra.Command{
 		client := newClient()
 
 		toolArgs := ops.ScheduleUpdateArgs{ScheduleId: args[0]}
-		if cmd.Flags().Changed("profile") {
-			profileID, _ := cmd.Flags().GetString("profile")
-			toolArgs.ProfileId = ops.Value(profileID)
-		}
-
 		if cmd.Flags().Changed("name") {
 			v, _ := cmd.Flags().GetString("name")
 			toolArgs.Name = ops.Value(v)
@@ -99,10 +93,6 @@ var scheduleUpdateCmd = &cobra.Command{
 		if cmd.Flags().Changed("cron") {
 			v, _ := cmd.Flags().GetString("cron")
 			toolArgs.CronExpression = ops.Value(v)
-		}
-		if cmd.Flags().Changed("ref") {
-			v, _ := cmd.Flags().GetString("ref")
-			toolArgs.Reference = ops.Value(v)
 		}
 		if cmd.Flags().Changed("input") {
 			inputStr, _ := cmd.Flags().GetString("input")

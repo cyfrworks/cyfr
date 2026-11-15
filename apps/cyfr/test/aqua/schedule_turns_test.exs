@@ -1181,6 +1181,71 @@ defmodule Aqua.ScheduleTurnsTest do
       assert {:ok, %{id: ^made}} = Threads.get(actor(ctx), made)
     end
 
+    # A for-this-schedule answer is held by the schedule's row, not by its
+    # line: it stands while the schedule does, whatever it holds.
+    test "a new line or kind keeps the thread and the schedule's answers, and an Aqua line again goes back to its thread",
+         %{ctx: ctx} do
+      id = schedule!(ctx, "Morning", "say something")
+      {:ok, thread_id} = CronSchedule.thread(actor(ctx), id, Prima.AgentRef.soul_name())
+
+      {:ok, _} =
+        Sanctum.ToolGrants.put(ctx, %{
+          scope: "thread",
+          effect: "allow",
+          thread_id: thread_id,
+          agent_name: "aqua",
+          tool: "threads",
+          action: "list",
+          lifecycle_kind: "schedule",
+          lifecycle_id: id
+        })
+
+      standing = fn ->
+        {:ok, rows} = Arca.ToolGrantStorage.list_for_thread(actor(ctx), thread_id)
+        Enum.filter(rows, &(&1.lifecycle_kind == "schedule" and &1.lifecycle_id == id))
+      end
+
+      assert [_allow] = standing.()
+
+      assert {:ok, _} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => id,
+                 "input" => %{"line" => "say something else"}
+               })
+
+      assert %{thread_id: ^thread_id} = row!(ctx, id)
+      assert [_allow] = standing.()
+
+      # Made a component's schedule, then Aqua's again.
+      {:ok, _} =
+        CronSchedule.update(
+          actor(ctx),
+          id,
+          %{
+            reference: "reagent:local.test:1.0.0",
+            resolved_reference: "reagent:local.test:1.0.0",
+            profile_id: "prof_test",
+            input: Jason.encode!(%{"n" => 1})
+          },
+          by_person: true
+        )
+
+      assert %{thread_id: ^thread_id, reference: "reagent:local.test:1.0.0"} = row!(ctx, id)
+      assert [_allow] = standing.()
+
+      assert {:ok, _} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => id,
+                 "reference" => @aqua,
+                 "input" => %{"line" => "a new line"}
+               })
+
+      assert {:ok, ^thread_id} = CronSchedule.thread(actor(ctx), id, Prima.AgentRef.soul_name())
+      assert [_allow] = standing.()
+    end
+
     test "a thread named but gone is made again at the fire", %{ctx: ctx} do
       script!([reply("Here.")])
       id = schedule!(ctx, "Morning", "say something")

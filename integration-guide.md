@@ -802,7 +802,7 @@ Each issue's `fix` object contains the MCP tool, action, and args to start the c
 
 ### Scheduling Recurring Executions
 
-CYFR supports cron-based scheduling for recurring component execution. A person makes a schedule on the Schedules page, or with the MCP `schedule` tool's `create`; the `cyfr schedule` CLI commands list, update, pause, resume and delete them. Each schedule is bound to a consented execution profile by `profile_id` (MCP) or `--profile` (`cyfr schedule update`); `cyfr profile list <ref>` shows that component's profile IDs.
+CYFR supports cron-based scheduling for recurring component execution. A person makes a schedule on the Schedules page, or with the MCP `schedule` tool's `create`; the page's **Edit** changes its name, time, input and what it runs, and the `cyfr schedule` CLI commands list, update, pause, resume and delete them. Each schedule is bound to a consented execution profile by `profile_id`, which `schedule.get` and `schedule.list` show; `cyfr profile list <ref>` shows that component's profile IDs. Pointing a schedule at another component or profile (`schedule.update`'s `reference` or `profile_id`) is the same act as binding it, which a person does on the page and no API key can, so `cyfr schedule update` changes only the name, the time, the input and the missed-run policy.
 
 **Creating a schedule via MCP:**
 

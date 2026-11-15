@@ -3,8 +3,18 @@
 
 defmodule PrismWeb.SchedulesLive do
   @moduledoc """
-  Cron schedules: list, create, pause, resume and delete through the
-  `schedule` tool.
+  Cron schedules: list, create, edit, pause, resume and delete through
+  the `schedule` tool.
+
+  New Schedule and a row's Edit open one form: Edit prefills it with the
+  schedule and saves through `schedule.update`, sending what it runs (the
+  reference) and the profile only when they changed, since naming them is
+  binding the schedule again, which the tool authorizes as at create. The
+  save names the definition the form was opened with: a schedule changed
+  since is refused, and the form shows it as it is now. A
+  change of kind, a component's schedule made a line for Aqua or back, is
+  the same form's Runs choice. A refusal shows in the form in the tool's
+  own words, and the form keeps what was typed.
 
   A schedule runs its component under the profile it names, standing on
   the person's grant: making it on this page is the person's decision that
@@ -89,6 +99,8 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:cron_preset, "")
       |> assign(:cron_custom, "")
       |> assign(:form, to_form(@empty_form))
+      |> assign(:editing, nil)
+      |> assign(:form_error, nil)
       |> assign(:focused_id, nil)
 
     {:ok, socket}
@@ -96,16 +108,20 @@ defmodule PrismWeb.SchedulesLive do
 
   @impl true
   def handle_event("toggle_create", _params, socket) do
-    show = !socket.assigns.show_create
+    if socket.assigns.show_create,
+      do: {:noreply, close_form(socket)},
+      else: {:noreply, socket |> fetch_components() |> assign(:show_create, true)}
+  end
 
-    socket =
-      if show do
-        socket |> fetch_components()
-      else
-        socket
-      end
+  # A row's Edit: the one form, prefilled with the schedule as listed.
+  def handle_event("edit", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.schedules, &(f(&1, :schedule_id) == id)) do
+      nil ->
+        {:noreply, socket}
 
-    {:noreply, assign(socket, :show_create, show)}
+      sched ->
+        {:noreply, socket |> fetch_components() |> open_edit(sched)}
+    end
   end
 
   def handle_event("cron_preset_change", %{"cron_preset" => preset}, socket) do
@@ -136,8 +152,7 @@ defmodule PrismWeb.SchedulesLive do
 
       {:noreply, create_schedule(socket, args)}
     else
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
+      {:error, reason} -> {:noreply, refuse(socket, reason)}
     end
   end
 
@@ -160,10 +175,26 @@ defmodule PrismWeb.SchedulesLive do
 
       {:noreply, create_schedule(socket, args)}
     else
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
+      {:error, reason} -> {:noreply, refuse(socket, reason)}
     end
   end
+
+  # The edited schedule saved through `schedule.update`; the schedule is
+  # the one the form was opened for, never one the submission names.
+  def handle_event("save", params, %{assigns: %{editing: %{} = sched}} = socket) do
+    socket = keep_form(socket, params)
+
+    with {:ok, args} <- update_args(sched, params, cron_of(socket, params)),
+         {:ok, _} <- call_tool(socket, "schedule", args) do
+      {:noreply,
+       socket |> close_form() |> fetch_schedules() |> put_flash(:info, "Schedule saved")}
+    else
+      {:error, :schedule_changed} -> {:noreply, reopen(socket, sched)}
+      {:error, reason} -> {:noreply, refuse(socket, reason)}
+    end
+  end
+
+  def handle_event("save", _params, socket), do: {:noreply, socket}
 
   # A schedule's missed-run policy, changed in its row. The tool decides
   # what a limit may be; the page only reads the number it was given.
@@ -282,17 +313,131 @@ defmodule PrismWeb.SchedulesLive do
     case call_tool(socket, "schedule", args) do
       {:ok, _} ->
         socket
-        |> assign(:show_create, false)
-        |> assign(:cron_preset, "")
-        |> assign(:cron_custom, "")
-        |> assign(:form, to_form(@empty_form))
+        |> close_form()
         |> fetch_schedules()
         |> put_flash(:info, "Schedule created")
 
       {:error, reason} ->
-        put_flash(socket, :error, "Failed: #{error_message(reason)}")
+        refuse(socket, reason)
     end
   end
+
+  defp close_form(socket) do
+    assign(socket,
+      show_create: false,
+      editing: nil,
+      form_error: nil,
+      cron_preset: "",
+      cron_custom: "",
+      form: to_form(@empty_form)
+    )
+  end
+
+  # The form opened for `sched` as listed, its time as a preset or custom.
+  defp open_edit(socket, sched) do
+    cron = f(sched, :cron_expression)
+    preset = if Enum.any?(@cron_presets, &(elem(&1, 1) == cron)), do: cron, else: "custom"
+
+    assign(socket,
+      show_create: true,
+      editing: sched,
+      form_error: nil,
+      cron_preset: preset,
+      cron_custom: cron,
+      form: to_form(edit_params(sched))
+    )
+  end
+
+  # The schedule changed after the form was opened: the form shows it as
+  # it is now, or, when it is gone, says so.
+  defp reopen(socket, sched) do
+    socket = fetch_schedules(socket)
+    id = f(sched, :schedule_id)
+
+    case Enum.find(socket.assigns.schedules, &(f(&1, :schedule_id) == id)) do
+      nil ->
+        refuse(socket, {:not_found, "Schedule", id})
+
+      now ->
+        socket
+        |> open_edit(now)
+        |> assign(
+          :form_error,
+          "This schedule changed since you opened it. The form now shows it as it is; make your change again."
+        )
+    end
+  end
+
+  # A refusal, the page's or the tool's, in the form's one line.
+  defp refuse(socket, reason), do: assign(socket, :form_error, error_message(reason))
+
+  # The form's fields for a schedule as `schedule.list` answers it.
+  defp edit_params(sched) do
+    aqua? = f(sched, :reference) == @aqua_line
+
+    Map.merge(@empty_form, %{
+      "name" => f(sched, :name),
+      "target" => if(aqua?, do: "aqua", else: "component"),
+      "line" => line_of(sched),
+      "reference" => if(aqua?, do: "", else: f(sched, :reference)),
+      "profile_id" => f(sched, :profile_id) || "",
+      "input" => if(aqua?, do: "", else: input_text(f(sched, :input))),
+      "missed_runs" => f(sched, :missed_runs) || "skip",
+      "catch_up_limit" => to_string(f(sched, :catch_up_limit) || "")
+    })
+  end
+
+  defp input_text(input) when is_map(input), do: Jason.encode!(input)
+  defp input_text(_none), do: ""
+
+  # `schedule.update`'s arguments for the form as submitted, against the
+  # definition the form was opened with, which the store compares under
+  # the row's lock. The name, the time, the missed-run policy and the input
+  # or line are always sent; the reference and the profile only when they
+  # changed, as naming them binds the schedule again (and resolves an
+  # unversioned reference anew). An emptied input clears the component's.
+  defp update_args(sched, %{"target" => "aqua"} = params, cron) do
+    with :ok <- if(cron == "", do: {:error, "Please select a schedule frequency"}, else: :ok),
+         {:ok, missed_args} <- missed_input(params) do
+      {:ok,
+       missed_args
+       |> Map.merge(update_base(sched, params, cron))
+       |> Map.put("input", %{"line" => params["line"] || ""})
+       |> changed("reference", @aqua_line, f(sched, :reference))}
+    end
+  end
+
+  defp update_args(sched, params, cron) do
+    with {:ok, input_args} <- create_input(params, cron),
+         {:ok, missed_args} <- missed_input(params) do
+      {:ok,
+       missed_args
+       |> Map.merge(update_base(sched, params, cron))
+       |> Map.put("input", input_args["input"])
+       |> changed("reference", params["reference"], f(sched, :reference))
+       |> changed("profile_id", params["profile_id"], f(sched, :profile_id))}
+    end
+  end
+
+  defp update_base(sched, params, cron) do
+    %{
+      "action" => "update",
+      "schedule_id" => f(sched, :schedule_id),
+      "definition" => f(sched, :definition),
+      "name" => params["name"],
+      "cron_expression" => cron
+    }
+  end
+
+  defp changed(args, _key, value, value), do: args
+  defp changed(args, key, value, _was), do: Map.put(args, key, value)
+
+  # The components the form offers, with the one an edited schedule runs
+  # though it is not listed (an unversioned or since-removed reference).
+  defp component_options(components, current) when is_binary(current) and current != "",
+    do: if(current in components, do: components, else: [current | components])
+
+  defp component_options(components, _current), do: components
 
   defp cron_of(socket, params) do
     case socket.assigns.cron_preset do
@@ -435,7 +580,15 @@ defmodule PrismWeb.SchedulesLive do
       <!-- Create form -->
       <div :if={@show_create}>
         <.card>
-          <.form for={@form} phx-submit="create" class="space-y-4 p-4">
+          <.form
+            for={@form}
+            id="schedule-form"
+            phx-submit={if @editing, do: "save", else: "create"}
+            class="space-y-4 p-4"
+          >
+            <h3 :if={@editing} class="text-sm font-medium text-white" data-test="schedule-editing">
+              Edit {f(@editing, :name)}
+            </h3>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1">Name</label>
@@ -515,7 +668,7 @@ defmodule PrismWeb.SchedulesLive do
                     <option value="" disabled selected={@form[:reference].value == ""}>
                       Select a component...
                     </option>
-                    <%= for ref <- @components do %>
+                    <%= for ref <- component_options(@components, @form[:reference].value) do %>
                       <option value={ref} selected={@form[:reference].value == ref}>{ref}</option>
                     <% end %>
                   </select>
@@ -581,9 +734,19 @@ defmodule PrismWeb.SchedulesLive do
                 </p>
               </div>
             </div>
+            <p
+              :if={@form_error}
+              role="alert"
+              data-test="schedule-form-error"
+              class="text-sm text-red-400"
+            >
+              {@form_error}
+            </p>
             <div class="flex justify-end gap-2">
               <.button variant="ghost" type="button" phx-click="toggle_create">Cancel</.button>
-              <.button variant="primary" type="submit">Create Schedule</.button>
+              <.button variant="primary" type="submit">
+                {if @editing, do: "Save", else: "Create Schedule"}
+              </.button>
             </div>
           </.form>
         </.card>
@@ -724,6 +887,15 @@ defmodule PrismWeb.SchedulesLive do
                   </td>
                   <td class="px-4 py-3 text-sm text-right">
                     <div class="flex items-center justify-end gap-1">
+                      <.button
+                        variant="ghost"
+                        class="text-xs px-2 py-1"
+                        phx-click="edit"
+                        phx-value-id={f(sched, :schedule_id)}
+                        data-test="schedule-edit"
+                      >
+                        Edit
+                      </.button>
                       <.button
                         :if={f(sched, :status) == "active"}
                         variant="ghost"
