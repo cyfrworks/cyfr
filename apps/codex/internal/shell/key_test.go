@@ -124,7 +124,7 @@ func TestAStaleShellNeverReplacesTheKeyThere(t *testing.T) {
 	other.Make([]byte(string(q)), []byte(string(q)))
 	now, _ := holder.Load(path)
 
-	stale.Saved(t.Context(), "")
+	savedNow(stale, t.Context(), "")
 	held, _ := holder.Load(path)
 	v := stale.View()
 	if !bytes.Equal(held.PublicKey, now.PublicKey) || held.Identifier != "" || home.accounts.Writes != 0 {
@@ -154,18 +154,18 @@ func TestOneAccountIsMadePerKey(t *testing.T) {
 		}
 	}
 	home.accounts.Down = true
-	first.Saved(t.Context(), "")
+	savedNow(first, t.Context(), "")
 	home.accounts.Down = false
-	second.Saved(t.Context(), "")
+	savedNow(second, t.Context(), "")
 	if v := second.View(); v.Page != PageResume || v.Name != "ada" || !strings.Contains(v.Notice, "began an account with this key first") {
 		t.Fatalf("the second shows %s for @%s: %q", v.Page, v.Name, v.Notice)
 	}
-	first.Saved(t.Context(), "")
+	savedNow(first, t.Context(), "")
 	rec, _ := holder.Load(path)
 	if rec.Identifier == "" || home.accounts.Holder("ada") != rec.Identifier {
 		t.Fatalf("the first account was not made: %s", first.View().Notice)
 	}
-	third.Saved(t.Context(), "")
+	savedNow(third, t.Context(), "")
 	if v := third.View(); v.Page != PageLocked || !strings.Contains(v.Notice, "on an account already") {
 		t.Fatalf("the third shows %s: %q", v.Page, v.Notice)
 	}

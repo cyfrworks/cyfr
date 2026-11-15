@@ -238,9 +238,9 @@ cyfr pull c:acme.supabase
 The grant sheet walks the consent flow: it shows what the component asks
 for, lets you pick a vault entry for each need, renders exactly what you
 are approving, and records it as an immutable consent revision. A grant
-covers every release of that component line. `cyfr profile list <ref>`
-shows what is granted, and `cyfr profile revoke <id>` takes it back,
-effective on the next run.
+covers every release of that component line. The component's grants
+are listed under it on Components, each with **Revoke**, which takes it
+back, effective on the next run; `cyfr profile list <ref>` shows them too.
 
 The **Vault** page stores each entry with the hosts, scheme, port, methods
 and paths it may be sent to. Entries are attach-only by default; disclose
@@ -1131,7 +1131,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 |---------|-------------|
 | `cyfr whoami` | Show who this command line calls CYFR as: the API key's name, its person's name and role (administrator or person), the address it called, their name at cyfr.run, or that it is not finished yet (Settings' **Finish your name**), their athanor, their publisher memberships and their id here (`usr_…`) |
 | `cyfr status` | Check system health (includes CLI version) |
-| `cyfr athanor get/settings` | Your athanor: show it (whether it is provisioned, its settings, and the step a failed provisioning stopped at, which the AQUA panel's **Retry** retries), show or merge its settings |
+| `cyfr athanor get` | Your athanor: show it (whether it is provisioned, its settings, which you change on the **Settings** page, and the step a failed provisioning stopped at, which the AQUA panel's **Retry** retries) |
 
 ### Components
 
@@ -1146,8 +1146,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr inspect <ref>` | Show component details, declared needs/caps, and dependency tree `[i]` |
 | `cyfr pull <ref>` | Fetch a component and its dependencies from the registry |
 | `cyfr register` | Scan and register all local components (auto-pulls dependencies) |
-| `cyfr profile list <ref>` | Show a component's profiles and consent revisions |
-| `cyfr profile revoke <id>` | Revoke a profile, effective on the next run |
+| `cyfr profile list <ref>` | Show a component's profiles and consent revisions; **Revoke** on a grant in **Components** takes one back |
 | `cyfr run <ref>` | Execute a component `[i]` |
 | `cyfr fork [type] <reference>` | Copy a published component into your local namespace for customization |
 | `cyfr remove <ref>` | Remove a component `[i]` |
@@ -1184,15 +1183,15 @@ Commands marked with `[i]` support interactive selection when run without argume
 | Command | Description |
 |---------|-------------|
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
-| `cyfr decision list/get/correlate` | View admission decisions, and cross-reference a request's decisions with its logs and executions |
+| `cyfr decision list/get/correlate` | View the athanor's admission decisions, and cross-reference a request's decisions with its logs and executions; a platform admin reads the host's own on the **Settings** page |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get/status/skills` | Read the AQUA soul, crew, guides and scrolls, and see which files are shipped, edited or yours; AQUA's restore puts the shipped files back `[i]` |
 | `file offer/offers/accept/decline/withdraw` (MCP) | Offer a snapshot of a file to someone you share a thread with, list the offers, and accept, decline or withdraw them |
 | `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |
-| `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace; issuing one needs a fresh confirmation given in Prism `[i]` |
-| `cyfr registry members list/add/update/remove <ns>` | Manage members of a publisher namespace `[i]` |
+| `cyfr registry tokens list <ns>` | List a namespace's push tokens; the **Registry** page issues and revokes them |
+| `cyfr registry members list <ns>` | List a publisher namespace's members; the **Registry** page adds, changes and removes them |
 | `cyfr registry discover <namespace>` | List a publisher's components on the registry |
 | `cyfr webhook get/list/update/revoke/rotate` | Manage inbound HMAC-signed webhooks that trigger a component, which the **Webhooks** page makes `[i]` |
 | `cyfr notify <event> <target>` | Send a webhook notification |

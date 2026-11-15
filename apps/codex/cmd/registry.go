@@ -3,23 +3,16 @@
 
 // Registry namespace and push-token management commands.
 // Each command delegates to the MCP registry tool, which resolves the push
-// tokens CYFR stores for the person. A request the registry needs signed by
-// the person (minting tokens, claiming and verifying a publisher) is signed
-// on the screen, on CYFR's Registry page, never here.
+// tokens CYFR stores for the person. They read; every change the registry
+// needs signed by the person (minting, issuing and revoking tokens,
+// claiming and verifying a publisher, a namespace's members) is made on
+// the screen, on CYFR's Registry page, never here.
 package cmd
 
 import (
-	"errors"
-	"fmt"
-
 	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
-)
-
-var (
-	flagTokenLabel string
-	flagMemberRole string
 )
 
 func init() {
@@ -29,22 +22,11 @@ func init() {
 
 	// tokens
 	registryCmd.AddCommand(registryTokensCmd)
-	registryTokensIssueCmd.Flags().StringVar(&flagTokenLabel, "label", "",
-		"Human-readable label for the issued push token (default: hostname)")
 	registryTokensCmd.AddCommand(registryTokensListCmd)
-	registryTokensCmd.AddCommand(registryTokensIssueCmd)
-	registryTokensCmd.AddCommand(registryTokensRevokeCmd)
 
 	// members
 	registryCmd.AddCommand(registryMembersCmd)
-	registryMembersAddCmd.Flags().StringVar(&flagMemberRole, "role", "member",
-		"Role for the member (admin or member)")
-	registryMembersUpdateCmd.Flags().StringVar(&flagMemberRole, "role", "",
-		"New role for the member (admin or member)")
 	registryMembersCmd.AddCommand(registryMembersListCmd)
-	registryMembersCmd.AddCommand(registryMembersAddCmd)
-	registryMembersCmd.AddCommand(registryMembersUpdateCmd)
-	registryMembersCmd.AddCommand(registryMembersRemoveCmd)
 }
 
 // ----------------------------------------------------------------------------
@@ -105,12 +87,12 @@ reserved) and its DNS verification status. Works without a push token.`,
 }
 
 // ----------------------------------------------------------------------------
-// registry tokens {list,issue,revoke}
+// registry tokens list
 // ----------------------------------------------------------------------------
 
 var registryTokensCmd = &cobra.Command{
 	Use:   "tokens",
-	Short: "Manage push tokens for a namespace",
+	Short: "List a namespace's push tokens; issue and revoke them on CYFR's Registry page",
 }
 
 var registryTokensListCmd = &cobra.Command{
@@ -135,77 +117,16 @@ var registryTokensListCmd = &cobra.Command{
 	},
 }
 
-var registryTokensIssueCmd = &cobra.Command{
-	Use:   "issue <namespace>",
-	Short: "Issue an additional push token for a namespace",
-	Long: `Mints a new push token scoped to the given namespace. Useful for
-per-device or per-CI tokens — each token can be revoked independently via
-` + "`tokens revoke`" + `. Rate limited to 10 tokens per hour per bearer.`,
-	Args:    cobra.ExactArgs(1),
-	Example: "  cyfr registry tokens issue acme.com --label laptop",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-
-		args2 := ops.RegistryTokensIssueArgs{Slug: slug}
-		if flagTokenLabel != "" {
-			args2.Label = ops.Value(flagTokenLabel)
-		}
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, args2)
-		if err != nil {
-			return handleToolError(err, "tokens issue failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		output.KeyValue(result)
-		return nil
-	},
-}
-
-var registryTokensRevokeCmd = &cobra.Command{
-	Use:   "revoke <namespace> <token_id>",
-	Short: "Revoke a push token by id",
-	Long: `Revocation is immediate on the server side — the next push request
-using the revoked token returns 401. Does not affect tokens held by other
-members of the namespace.`,
-	Args:    cobra.ExactArgs(2),
-	Example: "  cyfr registry tokens revoke acme.com 01H8K9XZ...",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-		tokenID := args[1]
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryTokensRevokeArgs{Slug: slug,
-			TokenId: tokenID})
-		if err != nil {
-			return handleToolError(err, "tokens revoke failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		fmt.Printf("Revoked token %s for namespace %s\n", tokenID, slug)
-		return nil
-	},
-}
-
 // ----------------------------------------------------------------------------
-// registry members {list,add,update,remove}
+// registry members list
 // ----------------------------------------------------------------------------
 
 var registryMembersCmd = &cobra.Command{
 	Use:   "members",
-	Short: "Manage members of a publisher namespace",
-	Long: `Publisher namespaces have members (admin / member). Personal
-namespaces do not — the server returns an error if you try to add members to
-a personal namespace.
-
-The target user's PERSONAL namespace slug is the identifier — e.g. to add
-Alice (whose personal namespace is 'alice') as a member of acme.com, run
-` + "`cyfr registry members add acme.com alice`" + `.`,
+	Short: "List a publisher namespace's members; change them on CYFR's Registry page",
+	Long: `Publisher namespaces have members (admin / member); personal
+namespaces do not. Members are added, changed and removed on CYFR's
+Registry page.`,
 }
 
 var registryMembersListCmd = &cobra.Command{
@@ -226,100 +147,6 @@ var registryMembersListCmd = &cobra.Command{
 			return nil
 		}
 		output.KeyValue(result)
-		return nil
-	},
-}
-
-var registryMembersAddCmd = &cobra.Command{
-	Use:     "add <namespace> <target-personal-slug>",
-	Short:   "Add a member to a publisher namespace (admin-only)",
-	Args:    cobra.ExactArgs(2),
-	Example: "  cyfr registry members add acme.com alice --role member",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-		target := args[1]
-		role := flagMemberRole
-		if role == "" {
-			role = "member"
-		}
-		if role != "admin" && role != "member" {
-			return fmt.Errorf("Invalid role %q — must be 'admin' or 'member'.", role)
-		}
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryMembersAddArgs{Slug: slug,
-			TargetPersonalSlug: target,
-			Role:               role})
-		if err != nil {
-			return handleToolError(err, "members add failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		fmt.Printf("Added %s to %s as %s\n", target, slug, role)
-		return nil
-	},
-}
-
-var registryMembersUpdateCmd = &cobra.Command{
-	Use:   "update <namespace> <target-personal-slug>",
-	Short: "Update a member's role (admin-only)",
-	Long: `Change an existing member's role. Sole-admin protection: demoting or
-removing the last admin returns 409 ` + "`sole_admin`" + ` — promote another
-member first.`,
-	Args:    cobra.ExactArgs(2),
-	Example: "  cyfr registry members update acme.com alice --role admin",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-		target := args[1]
-		role := flagMemberRole
-		if role == "" {
-			return errors.New("--role is required (admin or member)")
-		}
-		if role != "admin" && role != "member" {
-			return fmt.Errorf("Invalid role %q — must be 'admin' or 'member'.", role)
-		}
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryMembersUpdateArgs{Slug: slug,
-			TargetPersonalSlug: target,
-			Role:               role})
-		if err != nil {
-			return handleToolError(err, "members update failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		fmt.Printf("Updated %s in %s to %s\n", target, slug, role)
-		return nil
-	},
-}
-
-var registryMembersRemoveCmd = &cobra.Command{
-	Use:   "remove <namespace> <target-personal-slug>",
-	Short: "Remove a member from a publisher namespace (admin-only)",
-	Long: `Server atomically revokes the removed user's push tokens for this
-namespace — next-request effective. Sole-admin protection applies: removing
-the last admin returns 409 ` + "`sole_admin`" + `.`,
-	Args:    cobra.ExactArgs(2),
-	Example: "  cyfr registry members remove acme.com alice",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		slug := args[0]
-		target := args[1]
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryMembersRemoveArgs{Slug: slug,
-			TargetPersonalSlug: target})
-		if err != nil {
-			return handleToolError(err, "members remove failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		fmt.Printf("Removed %s from %s\n", target, slug)
 		return nil
 	},
 }

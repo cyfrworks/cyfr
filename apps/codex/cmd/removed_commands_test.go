@@ -9,8 +9,9 @@ import (
 )
 
 // The command line signs no one in, confirms nothing and attaches to no
-// program: people act on the screen. Each command that did is unknown
-// now, refused before any request reaches CYFR.
+// program: people act on the screen. Each command that did, and each one
+// no API key may run (a person's act, or the platform's), is unknown now,
+// refused before any request reaches CYFR.
 func TestRemovedCommandsAreUnknown(t *testing.T) {
 	for _, args := range [][]string{
 		{"login"}, {"logout"}, {"open"}, {"device", "approve", "k"},
@@ -20,6 +21,12 @@ func TestRemovedCommandsAreUnknown(t *testing.T) {
 		{"registry", "sync"}, {"registry", "publisher", "claim", "acme.com"}, {"registry", "publisher", "verify", "acme.com"},
 		{"push", "c:local.x:0.1.0"}, {"deprecate", "c:local.x:0.1.0"}, {"yank", "c:local.x:0.1.0"},
 		{"profile", "grant", "c:local.x"}, {"schedule", "create"}, {"webhook", "create"},
+		{"profile", "revoke", "prof_x"}, {"athanor", "settings", "--set", "aqua.answer_mode=all"},
+		{"registry", "tokens", "issue", "acme.com"}, {"registry", "tokens", "revoke", "acme.com", "tok_1"},
+		{"registry", "members", "add", "acme.com", "alice"}, {"registry", "members", "update", "acme.com", "alice", "--role", "admin"},
+		{"registry", "members", "remove", "acme.com", "alice"},
+		{"decision", "list", "--global"}, {"decision", "get", "--global", "call_1"},
+		{"webhook", "update", "hook", "--profile", "prof_x"},
 	} {
 		srv := newCLIServer(t, "")
 		_, err := runCLI(t, srv, args...)

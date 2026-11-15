@@ -136,11 +136,6 @@ func (c *Config) CurrentURL() string {
 	return ctx.URL
 }
 
-// DefaultForLocal returns a config with the default local context.
-func DefaultForLocal() *Config {
-	return defaultConfig()
-}
-
 func defaultConfig() *Config {
 	return &Config{
 		CurrentContext: "local",

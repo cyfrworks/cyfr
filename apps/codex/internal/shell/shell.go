@@ -917,17 +917,6 @@ func (s *Shell) begin(c account.Config, name, accepted string) {
 	s.making = &making{attempt: a, key: key, code: code}
 }
 
-// Saved says the recovery code is saved and submits the account (register,
-// append, then the name), or submits it again after an answer that did
-// not come; accepted is the policy version accepted again when the
-// registry asked for a newer one. Done, the key's record names the account,
-// and a key held from a setup opens this device's first connection.
-func (s *Shell) Saved(ctx context.Context, accepted string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.saved(ctx, accepted)
-}
-
 // asPage runs act for a page's request only when it carries the current
 // proof, compared under the shell's one lock, which act then runs under:
 // every page action that acts with what the shell holds for the page that
@@ -944,6 +933,12 @@ func (s *Shell) asPage(proof []byte, act func()) {
 	act()
 }
 
+// saved says the recovery code is saved and submits the account (register,
+// append, then the name), or submits it again after an answer that did
+// not come; accepted is the policy version accepted again when the
+// registry asked for a newer one. Done, the key's record names the account,
+// and a key held from a setup opens this device's first connection. The
+// page reaches it under the lock, through asPage.
 func (s *Shell) saved(ctx context.Context, accepted string) {
 	s.refresh()
 	m := s.making
@@ -1132,18 +1127,10 @@ func (s *Shell) firstConnection(ctx context.Context) {
 // pollEvery is how often an enrollment reads the account's log.
 var pollEvery = 2 * time.Second
 
-// Enroll adds this device to the account named name, once a device of the
-// person's approves it: the name is resolved at the registry the
+// enrollByPage adds this device to the account named name, once a device
+// of the person's approves it: the name is resolved at the registry the
 // directory names, and that account's log is read every pollEvery, for at
-// most wait, until it lists this key. Listed, the key's record names the
-// account.
-func (s *Shell) Enroll(ctx context.Context, name string, wait time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.enroll(ctx, name, wait, true)
-}
-
-// enrollByPage is Enroll for a page. Reading the account's public log and
+// most wait, until it lists this key. Reading the account's public log and
 // keeping which account lists this key needs no authority; opening the
 // first connection with a key held since a setup does, so only a request
 // carrying the current proof, compared under this lock, opens it, and any
@@ -1154,8 +1141,8 @@ func (s *Shell) enrollByPage(ctx context.Context, name string, wait time.Duratio
 	s.enroll(ctx, name, wait, s.holds(proof))
 }
 
-// enroll is Enroll; useHeld is whether the first connection may open with
-// a key held since a setup.
+// enroll is enrollByPage's, under the lock; useHeld is whether the first
+// connection may open with a key held since a setup.
 func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, useHeld bool) {
 	s.refresh()
 	if s.rec == nil || s.rec.Identifier != "" || s.making != nil || s.unfinished != nil {

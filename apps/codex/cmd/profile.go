@@ -12,19 +12,18 @@ import (
 )
 
 func init() {
-
 	profileCmd.AddCommand(profileListCmd)
-	profileCmd.AddCommand(profileRevokeCmd)
 	rootCmd.AddCommand(profileCmd)
 }
 
 var profileCmd = &cobra.Command{
 	Use:     "profile",
-	Short:   "List and revoke app profiles",
+	Short:   "List a component's profiles",
 	GroupID: "security",
 	Long: "A profile is a component you granted: which vault entries it may use, " +
 		"what it may reach, recorded as an immutable consent revision. You grant " +
-		"one in CYFR: on Components, open the component and choose Grant access.",
+		"one in CYFR, and take it back there: on Components, open the component " +
+		"and choose Grant access, or Revoke on one of its grants.",
 }
 
 var profileListCmd = &cobra.Command{
@@ -81,29 +80,6 @@ func headLine(p map[string]any) string {
 		return "consent unavailable — try again"
 	}
 	return "consent damaged"
-}
-
-var profileRevokeCmd = &cobra.Command{
-	Use:   "revoke <profile-id>",
-	Short: "Revoke a profile",
-	Long:  "Revocation takes effect on the next run. Executions already running complete.",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client := newClient()
-
-		result, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfileRevokeArgs{ProfileId: args[0]})
-		if err != nil {
-			return handleToolError(err)
-		}
-
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-
-		output.Success(fmt.Sprintf("Revoked %s. Takes effect on the next run.", args[0]))
-		return nil
-	},
 }
 
 // str is value as text, "" for none.

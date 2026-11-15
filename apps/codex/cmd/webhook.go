@@ -31,7 +31,6 @@ func init() {
 	webhookUpdateCmd.Flags().String("signature-header", "", "New signature header")
 	webhookUpdateCmd.Flags().String("rate-limit", "", "New rate limit")
 	webhookUpdateCmd.Flags().String("description", "", "New description")
-	webhookUpdateCmd.Flags().String("profile", "", "Replacement consented execution profile ID")
 	webhookUpdateCmd.Flags().String("input", "", "New input template (inline JSON object)")
 	webhookUpdateCmd.Flags().String("input-file", "", "Path to JSON file with new input template")
 }
@@ -96,7 +95,8 @@ var webhookUpdateCmd = &cobra.Command{
 	Short: "Update a webhook (no secret rotation)",
 	Long: `Update mutable fields on a webhook: target component, signature header,
 input template, description, or rate limit. The HMAC secret is unchanged —
-use 'cyfr webhook rotate' to replace it.`,
+use 'cyfr webhook rotate' to replace it. The grant a webhook runs under is
+changed on CYFR's Webhooks page.`,
 	Example: `  cyfr webhook update github-push --target f:local.new-handler
   cyfr webhook update slack-alerts --input '{"channel":"on-call"}'`,
 	Args: cobra.ExactArgs(1),
@@ -104,10 +104,6 @@ use 'cyfr webhook rotate' to replace it.`,
 		name := args[0]
 
 		toolArgs := ops.WebhookUpdateArgs{Name: name}
-		if cmd.Flags().Changed("profile") {
-			profileID, _ := cmd.Flags().GetString("profile")
-			toolArgs.ProfileId = ops.Value(profileID)
-		}
 
 		if target, _ := cmd.Flags().GetString("target"); cmd.Flags().Changed("target") {
 			toolArgs.TargetRef = ops.Value(target)
@@ -135,8 +131,8 @@ use 'cyfr webhook rotate' to replace it.`,
 		}
 
 		// Reject no-op updates client-side (server will too, but a clearer message helps).
-		if toolArgs.ProfileId.IsZero() && toolArgs.TargetRef.IsZero() && toolArgs.SignatureHeader.IsZero() && toolArgs.RateLimit.IsZero() && toolArgs.Description.IsZero() && toolArgs.InputTemplate.IsZero() {
-			return errors.New("No fields to update. Pass at least one of --profile, --target, --signature-header, --rate-limit, --description, --input, or --input-file.")
+		if toolArgs.TargetRef.IsZero() && toolArgs.SignatureHeader.IsZero() && toolArgs.RateLimit.IsZero() && toolArgs.Description.IsZero() && toolArgs.InputTemplate.IsZero() {
+			return errors.New("No fields to update. Pass at least one of --target, --signature-header, --rate-limit, --description, --input, or --input-file.")
 		}
 
 		client := newClient()

@@ -4,6 +4,7 @@
 package shell
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,21 @@ import (
 	"github.com/cyfr/codex/internal/disk"
 	"github.com/cyfr/codex/internal/holder"
 )
+
+// enrollNow and savedNow reach the shell's enrollment and its saved
+// recovery code as the page does once the page's proof is checked
+// (enrollByPage, asPage), with a key held since a setup allowed to open.
+func enrollNow(s *Shell, ctx context.Context, name string, wait time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enroll(ctx, name, wait, true)
+}
+
+func savedNow(s *Shell, ctx context.Context, accepted string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saved(ctx, accepted)
+}
 
 // memoryClients keeps a ClientRecord in memory, as a context does.
 type memoryClients struct {
@@ -91,7 +107,7 @@ func enrolled(t *testing.T, home *fakeHome, sh *Shell) []byte {
 	}
 	key, _ := account.UnB64(v.Key, 32, 32)
 	home.approve(t, identifier, dev, key)
-	sh.Enroll(t.Context(), "mira", time.Second)
+	enrollNow(sh, t.Context(), "mira", time.Second)
 	if v := sh.View(); v.Page != PageLocked {
 		t.Fatalf("an approved key shows page %s: %s", v.Page, v.Notice)
 	}
@@ -133,7 +149,7 @@ func TestEnroll_WaitsForTheApprovalThenSaysHello(t *testing.T) {
 		t.Fatalf("the enroll page: %+v", v)
 	}
 
-	sh.Enroll(t.Context(), "nobody", time.Second)
+	enrollNow(sh, t.Context(), "nobody", time.Second)
 	if v := sh.View(); v.Page != PageEnroll || !strings.Contains(v.Notice, "No account is called @nobody") {
 		t.Fatalf("an unknown name: %+v", v)
 	}
@@ -141,7 +157,7 @@ func TestEnroll_WaitsForTheApprovalThenSaysHello(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		home.approve(t, identifier, dev, rec.PublicKey)
 	}()
-	sh.Enroll(t.Context(), "@mira", 5*time.Second)
+	enrollNow(sh, t.Context(), "@mira", 5*time.Second)
 	if v := sh.View(); v.Page != PageLocked {
 		t.Fatalf("an approved key shows page %s: %s", v.Page, v.Notice)
 	}
@@ -181,7 +197,7 @@ func TestEnroll_AnUnapprovedKeyWaitsNoLonger(t *testing.T) {
 	sh := device(t, home, t.TempDir(), &memoryClients{}, "")
 	p := newSecret(t, sh)
 	sh.Make([]byte(string(p)), []byte(string(p)))
-	sh.Enroll(t.Context(), "mira", 50*time.Millisecond)
+	enrollNow(sh, t.Context(), "mira", 50*time.Millisecond)
 	if v := sh.View(); v.Page != PageEnroll || !strings.Contains(v.Notice, "not on @mira's account yet") {
 		t.Fatalf("an unapproved key: %+v", v)
 	}

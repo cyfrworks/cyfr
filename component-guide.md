@@ -1050,7 +1050,6 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr schedule resume` | `schedule` | `resume` | `schedule_id` |
 | `cyfr schedule delete` | `schedule` | `delete` | `schedule_id` |
 | `cyfr profile list` | `profile` | `list` | `ref` |
-| `cyfr profile revoke` | `profile` | `revoke` | `profile_id` |
 | — | `vault` | `list` / `create` / `rotate` / `rebind` / `authorize` / `revoke` / `delete` | `id`, `name`, `kind`, `fields`, `destination`, `disclose` |
 | — | `oauth` | `set_client` | `provider`, `client_id`, `client_secret` |
 | `cyfr log list` | `mcp_log` | `list` | `tool`, `status`, `limit`, `since` |
