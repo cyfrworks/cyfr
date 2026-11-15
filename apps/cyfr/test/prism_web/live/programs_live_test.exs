@@ -170,6 +170,25 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "github")
   end
 
+  # A terminal open adds TERM to a row's environment, which the keeper
+  # bounds: the form says how many a program may name.
+  test "a program naming more variables than a terminal leaves room for is refused in the form",
+       %{conn: conn, athanor: athanor} do
+    controller!()
+    max = Prima.LocusBackends.max_env_names()
+    env = Enum.map_join(1..(max + 1), "\n", &"V#{&1}=vault:x")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("button", "Add program") |> render_click()
+
+    view
+    |> form("form[phx-submit=add_program]", %{"name" => "many", "command" => "cat", "env" => env})
+    |> render_submit()
+
+    assert answered(view) =~ "config.env names at most #{max} variables besides TERM"
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "many")
+  end
+
   test "a header naming an entry that may not go to the server's URL is refused in the form",
        %{conn: conn, athanor: athanor, user: user} do
     entry!(user, athanor, "openai-key", %{"hosts" => ["api.openai.com"]})

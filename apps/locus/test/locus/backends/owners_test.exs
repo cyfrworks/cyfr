@@ -129,6 +129,37 @@ defmodule Locus.Backends.OwnersTest do
     defp root(agent), do: [kept_root: Agent.get(agent, & &1.kept_root)]
   end
 
+  defmodule KeeperEncoding do
+    @moduledoc false
+    # A launcher that starts nothing: it encodes the spawn a session asks
+    # for as the keeper's channel would (`Prima.KeeperProtocol.encode/1`)
+    # and tells the test whether the keeper would take it.
+    def adopt(_test, _ledger, _owner), do: {:ok, []}
+    def pool_stats(_test, "backends"), do: {:ok, %{size: 4, free: 4, quarantined: 0}}
+
+    def spawn(test, spec) do
+      request =
+        spec
+        |> Map.take([:argv, :env, :pool, :memory_bytes, :cpu_quota, :pty, :hosts])
+        |> Map.merge(%{
+          type: :spawn,
+          id: "encoded",
+          attach: %{path: "/tmp/not-opened.sock", token: String.duplicate("a", 64)}
+        })
+
+      encoded =
+        try do
+          _ = Prima.KeeperProtocol.encode(request)
+          :ok
+        rescue
+          error in ArgumentError -> {:error, Exception.message(error)}
+        end
+
+      send(test, {:spawn_encoded, map_size(spec.env), spec.env["TERM"], encoded})
+      {:error, {:refused, "capacity"}}
+    end
+  end
+
   setup do
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
     root = Path.join(System.tmp_dir!(), "locus_kept_#{Prima.Hex.short()}")
@@ -659,6 +690,26 @@ defmodule Locus.Backends.OwnersTest do
       pid = session_pid(owners, "a", {1, 1}, run)
       assert lines(pid, 1) == ["[none]"]
       :ok = Backend.stop(pid, 0)
+    end
+
+    # A row at the keeper's bound was given TERM past it: its terminal's
+    # spawn could not be encoded for the keeper, and never started.
+    test "a terminal on a row at its environment's bound asks for a spawn the keeper takes",
+         ctx do
+      owners =
+        start_owners(ctx,
+          session_opts: [
+            launcher: KeeperEncoding,
+            launcher_server: self(),
+            release_timeout_ms: 5_000
+          ]
+        )
+
+      env = Map.new(1..LocusBackends.max_env_names(), &{"V#{&1}", "value"})
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("full", "cat", env: env)])
+      _ = open(owners, "a", {1, 1}, "full", mode: :terminal, rows: 24, cols: 80)
+      max_env = Prima.KeeperProtocol.request_bounds().max_env
+      assert_receive {:spawn_encoded, ^max_env, "xterm-256color", :ok}, 5_000
     end
 
     test "a crash holds the next start back by its backoff, and the last crash fails the program until a new version",
