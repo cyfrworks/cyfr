@@ -1,20 +1,20 @@
 {
-  "name": "claude-code",
+  "name": "openai-codex",
   "type": "catalyst",
-  "version": "0.1.6",
+  "version": "0.1.5",
   "publisher": "local",
-  "description": "Claude Code as a brain of the model/chat@1 contract: the harness runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
+  "description": "OpenAI Codex as a brain of the model/chat@1 contract: it runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
   "contracts": [
     "model/chat@1"
   ],
   "needs": {
-    "claude": {
+    "openai-codex": {
       "type": "login",
-      "program": "claude",
-      "reason": "to run Claude Code in its own folder, signed in to your own plan",
+      "program": "openai-codex",
+      "reason": "to run OpenAI Codex in its own folder, signed in to your own plan",
       "required": true,
       "install": {
-        "command": "npx -y @anthropic-ai/claude-code@2.1.318"
+        "command": "npx -y @openai/codex@0.167.0"
       }
     }
   },
@@ -57,11 +57,11 @@
   "examples": [
     {
       "name": "Chat (model/chat@1)",
-      "description": "One turn: the newest message goes to the harness's session, its reply streams as contract events, and the response names the session the next turn continues",
+      "description": "One turn: the newest message starts a turn on OpenAI Codex's thread, after the thread's history when the thread is new, its reply streams as contract events, and the response names the session the next turn continues",
       "input": {
         "operation": "chat",
         "params": {
-          "model": "claude-opus-5-5",
+          "model": "default",
           "system": "You are a crew member of this athanor's Aqua.",
           "messages": [
             {
@@ -100,18 +100,19 @@
       },
       "output": {
         "data": {
-          "model": "claude-opus-5-5",
+          "model": "gpt-6.1-sol",
           "content": [
             {
               "type": "tool_call",
-              "id": "toolu_...",
+              "id": "call_...",
               "name": "files",
               "arguments": {
                 "action": "read",
                 "path": "notes/todo.md"
               },
               "provider_data": {
-                "request_id": "..."
+                "request_id": 0,
+                "turn_id": "..."
               }
             }
           ],
@@ -122,14 +123,14 @@
             "cache_read_tokens": 0,
             "cache_write_tokens": 0
           },
-          "session": "0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b"
+          "session": "0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b.01a1bb90-88fc-72c0-895e-976b439b7eb5.0-0-0-0"
         },
         "status": 200
       }
     },
     {
       "name": "Describe (model/chat@1)",
-      "description": "What this brain can do, and the options the harness lets a caller set",
+      "description": "What this brain can do, and the options OpenAI Codex lets a caller set",
       "input": {
         "operation": "describe",
         "params": {}
@@ -139,7 +140,7 @@
           "contracts": [
             "model/chat@1"
           ],
-          "provider": "claude-code",
+          "provider": "openai-codex",
           "tools": true,
           "provider_tools": [],
           "streaming": true,
@@ -149,9 +150,8 @@
               "kind": "enum",
               "values": [
                 "default",
-                "opus",
-                "sonnet",
-                "haiku"
+                "gpt-6.1-sol",
+                "gpt-5.5"
               ]
             },
             {
@@ -162,22 +162,9 @@
                 "medium",
                 "high",
                 "xhigh",
-                "max"
+                "max",
+                "ultra"
               ]
-            },
-            {
-              "name": "permission_mode",
-              "kind": "enum",
-              "values": [
-                "default",
-                "acceptEdits",
-                "plan"
-              ],
-              "default": "default"
-            },
-            {
-              "name": "tools",
-              "kind": "string"
             }
           ]
         },
@@ -186,7 +173,7 @@
     },
     {
       "name": "Models (model/chat@1)",
-      "description": "The models the harness lists for its sign-in",
+      "description": "The models OpenAI Codex lists for its sign-in, its default first",
       "input": {
         "operation": "models",
         "params": {}
@@ -195,8 +182,12 @@
         "data": {
           "models": [
             {
-              "id": "opus",
-              "name": "Opus 5.5"
+              "id": "default",
+              "name": "Default (GPT-6.1-Sol)"
+            },
+            {
+              "id": "gpt-6.1-sol",
+              "name": "GPT-6.1-Sol"
             }
           ]
         },

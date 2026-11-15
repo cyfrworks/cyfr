@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/openai-codex/0.1.4/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.5/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
@@ -77,8 +77,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.4")
-REF = "catalyst:local.openai-codex:0.1.4"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.5")
+REF = "catalyst:local.openai-codex:0.1.5"
 NEED = "openai-codex"
 OWNER = owner_of("openai-codex")
 HOME = "mcp_openai-codex"
