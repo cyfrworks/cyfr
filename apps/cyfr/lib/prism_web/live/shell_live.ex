@@ -97,6 +97,19 @@ defmodule PrismWeb.ShellLive do
   frame is let go and the canvas is decided again, as one with no frame
   held is.
 
+  ## Running programs
+
+  The shelf lists the person's own running program sessions (C8,
+  `Opus.Programs`): only ever what `running/1` answers, read when the
+  shell mounts and again at each `Cyfr.Bus.Program` on the person's own
+  `Cyfr.Bus.programs/2` topic, whose fields it never lists, so a program
+  whose tab was closed still stands there until it ends. A read that
+  fails keeps what is shown and is tried again shortly. `PrismWeb.CanvasLive` draws them; a chip opens the program's
+  terminal on the Programs page (`?terminal=<session>`), and its Close
+  asks `close/2`, after which the list is what `running/1` answers. The
+  shelf shows only while a canvas is shown; without one, the Programs
+  page lists them.
+
   ## The chooser of desktops
 
   The shell's key `desktops` opens the chooser over the canvas: from the
@@ -361,6 +374,7 @@ defmodule PrismWeb.ShellLive do
   alias Prism.CanvasValidation
   alias Prism.Frames
   alias Prism.Fallback
+  alias PrismWeb.TerminalComponent
   alias Sanctum.TinctureAuth
 
   # How long a canvas has, from the moment the glass shows it, to send
@@ -368,6 +382,12 @@ defmodule PrismWeb.ShellLive do
   # its frame's open, for one that opens shown, so a page that never
   # loads, and so never handshakes, falls back as one that loads
   # and dies.
+  # What the shelf shows of one of the person's running program sessions,
+  # as `Opus.Programs.running/1` and `Cyfr.Bus.Program` carry it.
+  @program_fields [:session, :row_id, :name, :started_at, :kept, :attached, :by]
+  # How soon a failed read of the running programs is tried again.
+  @programs_retry_ms 5_000
+
   @canvas_ready_ms 10_000
 
   # The stream a canvas reads a feed's results on (`Opus.Providers.Feed`).
@@ -433,6 +453,8 @@ defmodule PrismWeb.ShellLive do
       |> assign(:chat_overlay, nil)
       |> assign(:aqua_panel, nil)
       |> assign(:covered, false)
+      |> assign(:programs, [])
+      |> assign(:programs_retry, nil)
 
     socket =
       if connected?(socket) do
@@ -445,8 +467,10 @@ defmodule PrismWeb.ShellLive do
           actor = Sanctum.Context.actor(ctx)
           Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
 
-          if Prima.PersonId.person?(ctx.user_id),
-            do: Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
+          if Prima.PersonId.person?(ctx.user_id) do
+            Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
+            Cyfr.Bus.subscribe(actor, Cyfr.Bus.programs(actor, ctx.user_id))
+          end
         end
 
         params = get_connect_params(socket) || %{}
@@ -456,6 +480,7 @@ defmodule PrismWeb.ShellLive do
         |> assign(:appearance, Prism.Appearance.block(params))
         |> assign(:person, %{"name" => Prism.Appearance.person_name(ctx.user_id)})
         |> load_tinctures()
+        |> load_programs()
       else
         socket
       end
@@ -744,6 +769,27 @@ defmodule PrismWeb.ShellLive do
     do: {:noreply, choose_desktop(socket, ref)}
 
   def handle_event("close_chooser", _params, socket), do: {:noreply, close_chooser(socket)}
+
+  # Close on a running program's shelf chip. What the shelf lists next is
+  # what `Opus.Programs.running/1` answers, whatever close said.
+  def handle_event("close_program", %{"session" => session}, socket) when is_binary(session) do
+    socket =
+      case Opus.Programs.close(socket.assigns.context, session) do
+        {:ok, :closed} ->
+          socket
+
+        {:ok, :already_gone} ->
+          put_flash(socket, :info, TerminalComponent.ended_text(:not_found))
+
+        {:error, :unanswered} ->
+          put_flash(socket, :error, TerminalComponent.ended_text(:unanswered))
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Failed: #{error_message(reason)}")
+      end
+
+    {:noreply, load_programs(socket)}
+  end
 
   # The person's devices: the system layer's pairing prompt, one at a time.
   def handle_event("devices", _params, socket) do
@@ -3083,6 +3129,46 @@ defmodule PrismWeb.ShellLive do
 
   defp superseded?(_assigns, _prompt_id, _prompt), do: false
 
+  # The shelf's programs: what `Opus.Programs.running/1` answers of the
+  # person's own sessions, oldest first, and nothing else. A read that
+  # fails keeps what is shown and is tried again shortly, one retry
+  # pending at a time; the timer ends with the shell.
+  defp load_programs(socket) do
+    case Opus.Programs.running(socket.assigns.context) do
+      {:ok, running} ->
+        socket
+        |> cancel_programs_retry()
+        |> assign(
+          :programs,
+          running
+          |> Enum.map(&Map.take(&1, @program_fields))
+          |> Enum.sort_by(& &1.started_at, DateTime)
+        )
+
+      {:error, _not_answered} ->
+        retry_programs(socket)
+    end
+  end
+
+  defp retry_programs(%{assigns: %{programs_retry: ref}} = socket) when is_reference(ref),
+    do: socket
+
+  defp retry_programs(socket),
+    do:
+      assign(
+        socket,
+        :programs_retry,
+        Process.send_after(self(), :reload_programs, @programs_retry_ms)
+      )
+
+  defp cancel_programs_retry(%{assigns: %{programs_retry: ref}} = socket)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+    assign(socket, :programs_retry, nil)
+  end
+
+  defp cancel_programs_retry(socket), do: socket
+
   defp load_tinctures(socket), do: socket |> read_listing() |> follow_listing()
 
   # The listing read again for a decision. A read that changes what
@@ -3445,6 +3531,13 @@ defmodule PrismWeb.ShellLive do
   # Other tray traffic on the athanor's topic is for the topbar, not the shell.
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
+  # The person's own program sessions moved: whatever the message says,
+  # the shelf reads `running/1` again, and only its answer is listed.
+  def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, load_programs(socket)}
+
+  def handle_info(:reload_programs, socket),
+    do: {:noreply, socket |> assign(:programs_retry, nil) |> load_programs()}
+
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
@@ -3582,6 +3675,8 @@ defmodule PrismWeb.ShellLive do
         frames={@frames}
         tinctures={@tinctures}
         arrangement={@arrangement}
+        programs={@programs}
+        athanor_route={@athanor_route}
       />
 
       <%!-- The shell's own chrome: no frame draws it or reaches it. --%>
