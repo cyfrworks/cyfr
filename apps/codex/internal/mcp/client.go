@@ -27,6 +27,19 @@ const protocolVersion = "2026-07-28"
 // ErrAuthRequired is returned when the caller presented no usable credential.
 var ErrAuthRequired = fmt.Errorf("authentication required")
 
+// UnreachableError is a request that reached no CYFR at Address: nothing
+// answered there, so nothing was done.
+type UnreachableError struct {
+	Address string
+	Err     error
+}
+
+func (e *UnreachableError) Error() string {
+	return "CYFR could not be reached at " + e.Address + " (" + e.Err.Error() + ")"
+}
+
+func (e *UnreachableError) Unwrap() error { return e.Err }
+
 // ConfirmationIDKey is the request metadata key a tools/call repeats a
 // sensitive change under. Its value is the secret id the
 // confirmation_required signal answered: it rides `params._meta`, which no
@@ -343,13 +356,6 @@ func (c *Client) callTool(ctx context.Context, name string, encoded json.RawMess
 	return map[string]any{}, nil
 }
 
-func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse, error) {
-	// No retry-on-expiry: the credential authenticates each request on its own,
-	// so a rejected one will be rejected again. A revoked or expired token needs
-	// `cyfr login`, not a re-handshake.
-	return c.doRequestOnce(ctx, req, "", "", nil)
-}
-
 // ConsentError is a typed consent or confirmation refusal.
 // Its error.data contains {"tag": ..., "payload": {...}}. Commands recover
 // it with errors.As and render it via formatConsentError. A
@@ -442,7 +448,10 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &UnreachableError{Address: c.BaseURL, Err: err}
 	}
 	defer httpResp.Body.Close()
 

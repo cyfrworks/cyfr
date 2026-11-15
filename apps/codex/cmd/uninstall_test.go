@@ -64,7 +64,7 @@ func (d *uninstallDocker) Run(ctx context.Context, c access.Call) (access.Result
 // materialized compose file and an open Serve configuration: cyfr down runs
 // in one (down) and cyfr uninstall in the other (dir), each through the
 // real engine over a docker of its own in this process. A home holds the
-// program's settings and device key; this program sits at a path of the
+// program's settings; this program sits at a path of the
 // test's with its link onto PATH. root is the commands sudo was handed.
 type uninstallScenario struct {
 	t                        *testing.T
@@ -107,7 +107,6 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 	s.fill(s.down)
 	s.write(filepath.Join(s.home, ".cyfr", "config.json"), "{}")
 	s.write(filepath.Join(s.home, ".cyfr", "version-check.json"), "{}")
-	s.write(filepath.Join(s.home, ".cyfr", "device", "key.json"), "device key")
 	s.write(filepath.Join(s.home, ".cyfr", "other.json"), "not a settings file")
 	s.write(s.self, "program")
 	if err := os.MkdirAll(filepath.Dir(s.link), 0755); err != nil {
@@ -345,7 +344,6 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 			case "at the user folder", "at the user folder through a link":
 				s.both(".cyfr/config.json", "{}")
 				s.both(".cyfr/version-check.json", "{}")
-				s.both(".cyfr/device/key.json", "device key")
 				home = s.dir
 				if place == "at the user folder through a link" {
 					home = filepath.Join(t.TempDir(), "home-link")
@@ -426,9 +424,6 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 				settings = append(settings, path)
 			}
 			want += "  this program's settings, " + strings.Join(settings, ", ") + "\n"
-			if key := filepath.Join(home, ".cyfr", "device", "key.json"); exists(key) {
-				want += "  this machine's device key, " + key + "\n"
-			}
 			want += "  the stack's volumes, which this command removes:\n    docker volume rm 'cyfr_homes' 'cyfr_tailscale'\n"
 			if !strings.HasSuffix(out, want) {
 				t.Errorf("cyfr uninstall ended\n%s\nwant it to end\n%s", out, want)

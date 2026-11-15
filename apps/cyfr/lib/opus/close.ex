@@ -588,7 +588,6 @@ defmodule Opus.Close do
               "kind" => "setup_required",
               "component_ref" => remediation["component_ref"],
               "issues" => remediation["issues"],
-              "setup_command" => remediation["setup_command"],
               "message" => failure_message(typed)
             },
             close.ctx,

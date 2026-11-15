@@ -421,7 +421,8 @@ defmodule Prima.Refusal do
   defp row({:corrupt, :registry_credential}),
     do:
       {:corrupt,
-       "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
+       "The stored registry credential is damaged; sync your push tokens on the Registry " <>
+         "page to replace it."}
 
   defp row(:registry_unavailable),
     do: {:unavailable, "The registry could not be reached just now; try again shortly."}
@@ -432,8 +433,8 @@ defmodule Prima.Refusal do
   defp row(:registry_token_missing),
     do:
       {:unauthenticated,
-       "There is no valid push token for this namespace; run `cyfr registry sync`, then " <>
-         "push again."}
+       "There is no valid push token for this namespace; sync your push tokens on the " <>
+         "Registry page, then push again."}
 
   # The registry's own refusals of a signed request that CYFR passes on
   # (`Prima.RegistryRequest.refusals/0` names each one's code); the last

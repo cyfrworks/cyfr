@@ -34,7 +34,7 @@ var retentionCmd = &cobra.Command{
 	Use:     "retention",
 	Short:   "Manage data retention policies",
 	GroupID: "admin",
-	Long:    "Get or set data retention settings, or trigger a manual cleanup of expired data.",
+	Long:    "Show or set data retention settings, or trigger a manual cleanup of expired data.",
 }
 
 var retentionShowCmd = &cobra.Command{

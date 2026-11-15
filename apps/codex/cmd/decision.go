@@ -19,7 +19,6 @@ func init() {
 	decisionCmd.AddCommand(decisionCorrelateCmd)
 
 	addDecisionListFlags(decisionListCmd.Flags())
-	decisionGetCmd.Flags().Bool("global", false, "Read one of the host's own decisions, which name no athanor (platform admins only)")
 }
 
 // addDecisionListFlags declares `cyfr decision list`'s flags on flags.
@@ -30,7 +29,6 @@ func addDecisionListFlags(flags *pflag.FlagSet) {
 	flags.String("since", "", "ISO8601 timestamp — return decisions made at or after this time")
 	flags.String("request", "", "Filter by request ID — returns every call in that chain")
 	flags.Int("limit", 20, "Maximum number of results")
-	flags.Bool("global", false, "Read the host's own decisions, which name no athanor (platform admins only)")
 }
 
 // decisionHeaders are the columns of `cyfr decision list`.
@@ -48,12 +46,11 @@ var decisionListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List recent admission decisions",
 	Long: "List the athanor's recent admission decisions, newest first, with optional filters. " +
-		"With --global a platform admin reads the host's own decisions, the ones made before any " +
-		"athanor was resolved, and never an athanor's.",
+		"The host's own decisions, which name no athanor, are read by a platform admin on CYFR's " +
+		"Settings page.",
 	Example: `  cyfr decision list
   cyfr decision list --admission refused --refusal-class forbidden
-  cyfr decision list --request req_01H...   # every call in one request's chain
-  cyfr decision list --global   # the host's own decisions`,
+  cyfr decision list --request req_01H...   # every call in one request's chain`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		toolArgs, err := decisionListArgs(cmd.Flags())
 		if err != nil {
@@ -75,17 +72,14 @@ var decisionListCmd = &cobra.Command{
 }
 
 var decisionGetCmd = &cobra.Command{
-	Use:   "get <call_id>",
-	Short: "Show one admission decision",
-	Long: "Show every field of one admission decision by its call ID (call_…). " +
-		"With --global a platform admin reads one of the host's own decisions, which name no athanor.",
-	Example: `  cyfr decision get call_01abc123
-  cyfr decision get --global call_01abc123`,
-	Args: cobra.ExactArgs(1),
+	Use:     "get <call_id>",
+	Short:   "Show one admission decision",
+	Long:    "Show every field of one admission decision by its call ID (call_…).",
+	Example: `  cyfr decision get call_01abc123`,
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		global, _ := cmd.Flags().GetBool("global")
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Decision, decisionGetArgs(args[0], global))
+		result, err := client.CallTool(cmd.Context(), ops.Decision, ops.DecisionGetArgs{CallId: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -110,11 +104,8 @@ var decisionCorrelateCmd = &cobra.Command{
 	},
 }
 
-// decisionListArgs maps the list flags onto `decision.list`, or onto
-// `decision.list_global`, the host's own decisions, with --global.
+// decisionListArgs maps the list flags onto `decision.list`.
 func decisionListArgs(flags *pflag.FlagSet) (any, error) {
-	global, _ := flags.GetBool("global")
-
 	var filters ops.DecisionListArgs
 	if v, _ := flags.GetString("tool"); v != "" {
 		filters.Tool = ops.Value(v)
@@ -135,25 +126,7 @@ func decisionListArgs(flags *pflag.FlagSet) (any, error) {
 		filters.Limit = ops.Value(v)
 	}
 
-	if !global {
-		return filters, nil
-	}
-	return ops.DecisionListGlobalArgs{
-		RequestId:    filters.RequestId,
-		Tool:         filters.Tool,
-		Admission:    filters.Admission,
-		RefusalClass: filters.RefusalClass,
-		Since:        filters.Since,
-		Limit:        filters.Limit,
-	}, nil
-}
-
-// decisionGetArgs is `decision.get`, or `decision.get_global` with --global.
-func decisionGetArgs(callID string, global bool) any {
-	if global {
-		return ops.DecisionGetGlobalArgs{CallId: callID}
-	}
-	return ops.DecisionGetArgs{CallId: callID}
+	return filters, nil
 }
 
 // decisionRows renders a list answer's decisions as table rows. A field a

@@ -62,34 +62,11 @@ func TestDecisionListArgs_SendsOnlyTheActionByDefault(t *testing.T) {
 	}
 }
 
-func TestDecisionListArgs_GlobalReadsListGlobal(t *testing.T) {
-	args, err := decisionListArgs(listFlags(t, map[string]string{
-		"global":    "true",
-		"admission": "refused",
-	}))
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	want := `{"action":"list_global","admission":"refused"}`
-	if got := encode(t, args); got != want {
-		t.Errorf("want %s, got %s", want, got)
-	}
-}
-
 func TestDecisionListFlags_NameNoAthanor(t *testing.T) {
 	flags := pflag.NewFlagSet("list", pflag.ContinueOnError)
 	addDecisionListFlags(flags)
 	if flags.Lookup("athanor") != nil {
-		t.Errorf("the list takes an athanor to read; the global read is the host's own")
-	}
-}
-
-func TestDecisionGetArgs(t *testing.T) {
-	if got := encode(t, decisionGetArgs("call_1", false)); got != `{"action":"get","call_id":"call_1"}` {
-		t.Errorf("tenant get: got %s", got)
-	}
-	if got := encode(t, decisionGetArgs("call_1", true)); got != `{"action":"get_global","call_id":"call_1"}` {
-		t.Errorf("global get: got %s", got)
+		t.Errorf("the list reads the caller's athanor and takes none to name")
 	}
 }
 
@@ -110,14 +87,15 @@ func TestDecisionRows_BlankForAbsentFields(t *testing.T) {
 }
 
 // TestDecisionCommandTree pins the surface and the help's words: the id a
-// decision is read by is its call id, and the global forms are flags.
+// decision is read by is its call id, and the host's own decisions, which a
+// key never reads, are not offered here.
 func TestDecisionCommandTree(t *testing.T) {
 	for _, name := range []string{"list", "get", "correlate"} {
 		findCommand(t, "decision "+name)
 	}
-	if findCommand(t, "decision list").Flags().Lookup("global") == nil ||
-		findCommand(t, "decision get").Flags().Lookup("global") == nil {
-		t.Error("decision list and get take --global")
+	if findCommand(t, "decision list").Flags().Lookup("global") != nil ||
+		findCommand(t, "decision get").Flags().Lookup("global") != nil {
+		t.Error("decision list and get take no --global")
 	}
 	if get := findCommand(t, "decision get"); get.Use != "get <call_id>" || !strings.Contains(get.Long, "call_") {
 		t.Errorf("decision get reads a call id, got %q / %q", get.Use, get.Long)

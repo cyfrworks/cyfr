@@ -393,7 +393,10 @@ defmodule Opus.Host.ChildrenTest do
              } = admit(fixture, "#{missing}:1.0.0", %{})
 
       assert message =~ missing
-      assert remediation["setup_command"] =~ "profile grant"
+
+      assert Enum.sort(Map.keys(remediation)) ==
+               ["component_ref", "issues", "message", "profile_id"]
+
       assert children_of(fixture) == []
     end
   end
