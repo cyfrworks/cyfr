@@ -20,9 +20,11 @@ defmodule Opus.Browser do
   caller, a key, a frame, a component a turn started, or a turn that is
   paused or was superseded, reaches no window (`:not_owned`). The window
   is the one of the thread the proved turn runs in, named from the
-  lineage the gate stamped and from no argument. A request that waits
-  for the browser to start is proved again before it is sent, so a turn
-  superseded meanwhile sends nothing. Whether Aqua may use the browser
+  lineage the gate stamped and from no argument. A request is proved
+  again in the one place that decides whether it reaches the driver, its
+  writer, just before its first byte leaves: a turn cancelled or
+  superseded while its request waited, or a caller that died meanwhile,
+  sends nothing. Whether Aqua may use the browser
   at all is the person's browser setting, which the tool's provider
   reads before it calls here (`Aqua.BrowserSetting`).
 
@@ -306,7 +308,7 @@ defmodule Opus.Browser do
         {:reply, {:error, :too_many_windows}, state}
 
       state.phase == :ready ->
-        {:noreply, state |> dispatch(request) |> idle()}
+        {:noreply, state |> send_request(request) |> idle()}
 
       state.phase == :starting ->
         {:noreply, %{state | queued: state.queued ++ [request]}}
@@ -376,7 +378,21 @@ defmodule Opus.Browser do
 
   def handle_info(:hello_expired, state), do: {:noreply, state}
 
-  def handle_info({:write_failed, {:request, id}, _reason}, state) do
+  # The writer did not send a request whose caller had stopped waiting or
+  # whose turn no longer runs: nothing of it reached the driver.
+  def handle_info({:withdrawn, id, reason}, state) do
+    case Map.pop(state.pending, id) do
+      {nil, _pending} ->
+        {:noreply, state}
+
+      {request, pending} ->
+        Process.cancel_timer(request.timer)
+        if reason == :not_owned, do: GenServer.reply(request.from, {:error, :not_owned})
+        {:noreply, idle(%{state | pending: pending})}
+    end
+  end
+
+  def handle_info({:write_failed, {:request, id, _proof}, _reason}, state) do
     case Map.pop(state.pending, id) do
       {nil, _pending} ->
         {:noreply, state}
@@ -458,12 +474,16 @@ defmodule Opus.Browser do
   defp start_session(state) do
     %{athanor_id: athanor_id, browser: browser} = state
     Process.send_after(self(), :hello_expired, @start_ms)
+    holder = self()
 
+    # The session is held by this process from the moment it is asked for,
+    # not by the task that asks: it ends with this holder, however either
+    # ends.
     task =
       Task.async(fn ->
         with {:ok, row} <- row(athanor_id),
              :ok <- close_running(browser) do
-          Programs.start(browser, row.id, %{rows: @rows, cols: @cols, args: []})
+          Programs.start(browser, row.id, %{rows: @rows, cols: @cols, args: [], held_by: holder})
         end
       end)
 
@@ -509,34 +529,10 @@ defmodule Opus.Browser do
   defp hello(_hello, %{phase: :starting} = state) do
     state = %{state | phase: :ready}
 
-    Enum.reduce(state.queued, %{state | queued: []}, &dispatch(&2, &1))
+    Enum.reduce(state.queued, %{state | queued: []}, &send_request(&2, &1))
   end
 
   defp hello(_hello, state), do: state
-
-  # A request reaches the driver only while its caller waits for it and
-  # its turn still runs, proved again here, just before it is sent: one
-  # that waited in this holder's mailbox or for the browser's start is the
-  # turn's no more once that turn was cancelled, superseded or paused, or
-  # its caller died. Nothing is sent for it, so nothing of it runs.
-  defp dispatch(state, request) do
-    {caller_pid, _tag} = request.from
-
-    cond do
-      not Process.alive?(caller_pid) ->
-        state
-
-      not owned?(request) ->
-        GenServer.reply(request.from, {:error, :not_owned})
-        state
-
-      true ->
-        send_request(state, request)
-    end
-  end
-
-  defp owned?(%{caller: caller, turn_id: turn_id}),
-    do: match?({:ok, {_athanor_id, _user_id, ^turn_id}}, turn(caller))
 
   defp send_request(state, request) do
     id = state.next_id
@@ -563,7 +559,9 @@ defmodule Opus.Browser do
     else
       timer = Process.send_after(self(), {:expired, id}, @request_ms)
       request = Map.merge(request, %{timer: timer, parts: %{}, of: nil, size: 0})
-      write(state, frame, {:request, id})
+      {caller_pid, _tag} = request.from
+      proof = %{caller: request.caller, turn_id: request.turn_id, pid: caller_pid}
+      write(state, frame, {:request, id, proof})
       %{state | next_id: id + 1, pending: Map.put(state.pending, id, request)}
     end
   end
@@ -722,12 +720,25 @@ defmodule Opus.Browser do
   defp write(state, frame, tag),
     do: send(state.writer, {:write, state.session, Programs.Output.new(frame), tag})
 
+  # A request is proved here, the one place that decides whether it
+  # reaches the driver: just before its first byte is written, after every
+  # queue it waited in (the holder's mailbox, the browser's start, this
+  # writer's mailbox behind earlier writes). Its caller must still wait for
+  # it and its turn still run; otherwise nothing of it is written, so
+  # nothing of it runs. Acknowledgements and requests to send again carry
+  # no turn and are written as they come.
   defp write_loop(watch, owner, browser) do
     receive do
       {:write, session, %Programs.Output{bytes: frame}, tag} ->
-        case write_all(browser, session, frame) do
-          :ok -> :ok
-          {:error, reason} -> send(owner, {:write_failed, tag, reason})
+        case leaves(tag) do
+          :ok ->
+            case write_all(browser, session, frame) do
+              :ok -> :ok
+              {:error, reason} -> send(owner, {:write_failed, tag, reason})
+            end
+
+          {:withdrawn, id, reason} ->
+            send(owner, {:withdrawn, id, reason})
         end
 
         write_loop(watch, owner, browser)
@@ -736,6 +747,21 @@ defmodule Opus.Browser do
         :ok
     end
   end
+
+  defp leaves({:request, id, %{caller: caller, turn_id: turn_id, pid: pid}}) do
+    cond do
+      not Process.alive?(pid) ->
+        {:withdrawn, id, :caller_gone}
+
+      not match?({:ok, {_athanor_id, _user_id, ^turn_id}}, turn(caller)) ->
+        {:withdrawn, id, :not_owned}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp leaves(_ack_or_again), do: :ok
 
   defp write_all(_browser, _session, ""), do: :ok
 

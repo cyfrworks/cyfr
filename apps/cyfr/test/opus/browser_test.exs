@@ -386,7 +386,7 @@ defmodule Opus.BrowserTest do
       assert_receive {:held, "opened", held}, 5_000
 
       set_status(turn, "cancelled")
-      send(held, :release)
+      send(held, :go)
 
       assert refusal(Task.await(task, 10_000)) == "This turn no longer owns the work."
       refute_received {:driver, :req, _session, _request}
@@ -660,6 +660,65 @@ defmodule Opus.BrowserTest do
 
       assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^session, reason: :closed}, 5_000
       assert browser_sessions(ctx) == []
+    end
+  end
+
+  describe "review round two" do
+    # Finding 7: a request is decided where its first byte leaves for the
+    # driver, after the writer's queue too.
+    test "a request queued behind a held input, its turn cancelled meanwhile, sends nothing",
+         %{fake: fake, ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      {other_turn, other} = turn!(ctx)
+      holder = holder(ctx)
+
+      Scripted.hold(fake, "input", 30_000)
+      first = Task.async(fn -> call(ctx, lineage, "read") end)
+      assert_receive {:held, "input", held}, 5_000
+
+      click = Task.async(fn -> call(ctx, other, "click", %{"ref" => "12"}) end)
+
+      eventually(
+        fn -> map_size(:sys.get_state(holder).pending) == 2 end,
+        "the click to wait for the writer"
+      )
+
+      set_status(other_turn, "cancelled")
+      send(held, :go)
+
+      assert {:ok, _} = Task.await(first, 10_000)
+      assert refusal(Task.await(click, 10_000)) == "This turn no longer owns the work."
+
+      clicks = for {:driver, :req, _s, %{"op" => "click"} = request} <- drain(), do: request
+      assert clicks == []
+    end
+
+    # Finding 8: the session hangs on its holder from the moment its start
+    # is asked, not from its attachment.
+    test "a holder killed while its start waits leaves no session running",
+         %{fake: fake, ctx: ctx, lineage: lineage} do
+      Scripted.hold(fake, "opened", 30_000)
+      Task.start(fn -> call(ctx, lineage, "open", %{"url" => "https://example.com/"}) end)
+      assert_receive {:held, "opened", held}, 5_000
+
+      Process.exit(holder(ctx), :kill)
+      send(held, :go)
+
+      # The session ends with its holder: the box closes the late session,
+      # or releases the owner held for it alone, which ends what runs
+      # under it on the service, whichever comes first.
+      assert_receive {kind, type, _message, _fields}
+                     when {kind, type} in [{:session, "close"}, {:control, "release"}],
+                     10_000
+
+      eventually(
+        fn -> browser_sessions(ctx) == [] end,
+        "the started session to end with its holder"
+      )
+
+      assert Registry.select(Opus.Programs.Registry, [
+               {{{:terminal, :_}, :"$1", {ctx.athanor_id, ctx.user_id, :browser}}, [], [:"$1"]}
+             ]) == []
     end
   end
 

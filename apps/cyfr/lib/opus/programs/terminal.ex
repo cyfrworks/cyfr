@@ -75,9 +75,11 @@ defmodule Opus.Programs.Terminal do
   A session of the person's browser (`by: :browser`, `Opus.Browser`) is
   the person's in what it does: its holder attaches as a person's screen
   does and is handed acknowledged deliveries and the tail, and nothing of
-  a turn ends it. Its holder keeps its idle stop, so it lives as long as
-  that holder: it ends `:closed` once its last attached process is gone,
-  however that process ended, where a person's session only detaches. Every change of
+  a turn ends it. That holder, named at its start (`held_by`), keeps its
+  idle stop, so the session lives as long as it from the moment it is
+  asked for: starting or started, it ends `:closed` once that process is
+  gone, however it ended. A person's session is held by no process and
+  only detaches. Every change of
   what `Opus.Programs.running/1` reports is announced on the person's
   own `Cyfr.Bus.programs/2` topic (`Cyfr.Bus.Program`). Nothing that
   passes through is stored or logged: the output it keeps and hands on
@@ -129,6 +131,7 @@ defmodule Opus.Programs.Terminal do
        owner: Keyword.fetch!(args, :owner),
        argv: Keyword.fetch!(args, :argv),
        by: Keyword.fetch!(args, :by),
+       held_by: watch(Keyword.get(args, :held_by)),
        rows: Keyword.fetch!(args, :rows),
        cols: Keyword.fetch!(args, :cols),
        started_at: DateTime.utc_now(),
@@ -368,15 +371,17 @@ defmodule Opus.Programs.Terminal do
 
   def handle_info({:read_failed, _reason}, state), do: finish(state, :exited)
 
+  # The browser's session lives as long as the process that holds it,
+  # which keeps its idle stop: from its start on, opening or open, it ends
+  # once that process is gone, killed included, and a start still waiting
+  # is refused.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{held_by: {_pid_held, ref}} = state) do
+    if state.opening, do: GenServer.reply(state.opening, {:error, :closed})
+    finish(%{state | opening: nil}, :closed)
+  end
+
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     cond do
-      # The browser's session lives as long as its holder, its one attached
-      # process, which keeps its idle stop: when the holder dies, killed
-      # included, nothing keeps that stop, so the session ends.
-      match?(%{^pid => %{monitor: ^ref}}, state.subscribers) and state.by == :browser ->
-        state = unsubscribe(state, pid)
-        if state.subscribers == %{}, do: finish(state, :closed), else: {:noreply, state}
-
       match?(%{^pid => %{monitor: ^ref}}, state.subscribers) ->
         {:noreply, unsubscribe(state, pid)}
 
@@ -483,6 +488,9 @@ defmodule Opus.Programs.Terminal do
   def format_status(status), do: Opus.Programs.StatusRedaction.format_status(status)
 
   # ---------------------------------------------------------------------------
+
+  defp watch(nil), do: nil
+  defp watch(pid) when is_pid(pid), do: {pid, Process.monitor(pid)}
 
   defp opened(state, from, session) do
     GenServer.reply(from, {:ok, state.id})

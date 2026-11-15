@@ -715,7 +715,8 @@ defmodule Opus.Programs.TurnSessionTest do
                Programs.start(Programs.browser(ctx.athanor_id, ctx.user_id), browser.id, %{
                  rows: 50,
                  cols: 200,
-                 args: []
+                 args: [],
+                 held_by: self()
                })
 
       assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000

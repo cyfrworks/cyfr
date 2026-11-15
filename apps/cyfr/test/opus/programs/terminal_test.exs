@@ -1020,12 +1020,12 @@ defmodule Opus.Programs.TerminalTest do
         config_json: Jason.encode!(%{"command" => "cyfr-browser", "env" => %{}})
       })
 
-  defp browser_start(ctx, row_id),
+  defp browser_start(ctx, row_id, held_by \\ self()),
     do:
       Programs.start(
         Programs.browser(ctx.athanor_id, ctx.user_id),
         row_id,
-        Map.merge(@size, %{args: []})
+        Map.merge(@size, %{args: [], held_by: held_by})
       )
 
   describe "the person's browser, a third owner" do
@@ -1064,6 +1064,43 @@ defmodule Opus.Programs.TerminalTest do
                )
 
       refute_received {:session, "open", _message, _fields}
+    end
+
+    test "it is held by one process from its start: one that names none starts nothing, and the session ends when it is gone, a person's own detaching as before",
+         %{ctx: ctx, row: row} do
+      browser = browser_row(ctx)
+
+      assert {:error, :invalid_args} =
+               Programs.start(
+                 Programs.browser(ctx.athanor_id, ctx.user_id),
+                 browser.id,
+                 Map.merge(@size, %{args: []})
+               )
+
+      refute_received {:session, "open", _message, _fields}
+
+      holder = spawn(fn -> Process.sleep(:infinity) end)
+      {:ok, id} = browser_start(ctx, browser.id, holder)
+      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      Process.exit(holder, :kill)
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, by: :browser, reason: :closed},
+                     5_000
+
+      # A person's own session outlives a process that attached to it.
+      {mine, _session} = start!(ctx, row)
+      test = self()
+
+      watcher =
+        spawn(fn ->
+          send(test, {:attached, Programs.attach(ctx, mine)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:attached, {:ok, _tail}}, 2_000
+      Process.exit(watcher, :kill)
+      Process.sleep(100)
+      refute gone?(mine)
     end
 
     test "the person lists it as the browser's and closes it, and reaches nothing else of it",

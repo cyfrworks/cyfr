@@ -487,7 +487,11 @@ defmodule Opus.Programs do
   `by: :browser`. The row must be an enabled program, and the browser's
   the row of its own definition (`:not_browser` otherwise), one session
   at a time (`:already_running`), and that row starts for no other caller
-  (an `:invalid_argument` saying so); `args` are at most
+  (an `:invalid_argument` saying so). The browser's start names
+  `held_by`, the process that holds the session for the person
+  (`Opus.Browser`): the session lives as long as that process, from the
+  moment it is asked for, starting or started, and ends `:closed` when it
+  is gone (`:invalid_args` without one); `args` are at most
   #{Prima.LocusBackends.max_argv()} words, each readable text
   (`Opus.Programs.Words.readable?/1`) of at most 4096 bytes, as an `Opus.Programs.Words` (a plain list is
   wrapped here), which the session holds wrapped: a person's words are
@@ -512,7 +516,8 @@ defmodule Opus.Programs do
           required(:cols) => pos_integer(),
           required(:args) => Opus.Programs.Words.t() | [String.t()],
           optional(:epoch) => pos_integer() | nil,
-          optional(:deadline) => integer()
+          optional(:deadline) => integer(),
+          optional(:held_by) => pid()
         }) :: {:ok, String.t()} | {:error, term()}
   def start(caller, row_id, %{rows: rows, cols: cols, args: args} = opts)
       when is_binary(row_id) do
@@ -521,6 +526,7 @@ defmodule Opus.Programs do
     with {:ok, principal} <- who(caller) |> no_stranger(),
          :ok <- size(rows, cols),
          :ok <- args(args),
+         {:ok, held_by} <- held_by(principal, Map.get(opts, :held_by)),
          :ok <- room(principal),
          {:ok, row} <- program_row(caller_actor(caller), row_id),
          :ok <- browser_row(principal, row),
@@ -540,6 +546,7 @@ defmodule Opus.Programs do
         owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
         argv: args,
         by: by(principal),
+        held_by: held_by,
         rows: rows,
         cols: cols
       ]
@@ -904,6 +911,12 @@ defmodule Opus.Programs do
   defp parts({athanor_id, user_id}), do: {athanor_id, user_id, nil}
   defp parts({athanor_id, user_id, :browser}), do: {athanor_id, user_id, nil}
   defp parts({athanor_id, user_id, turn_id}), do: {athanor_id, user_id, turn_id}
+
+  # The browser's session is held by one process, named at its start; no
+  # other session is.
+  defp held_by({_athanor_id, _user_id, :browser}, pid) when is_pid(pid), do: {:ok, pid}
+  defp held_by({_athanor_id, _user_id, :browser}, _none), do: {:error, :invalid_args}
+  defp held_by(_principal, _pid), do: {:ok, nil}
 
   defp by({_athanor_id, _user_id}), do: :person
   defp by({_athanor_id, _user_id, :browser}), do: :browser
