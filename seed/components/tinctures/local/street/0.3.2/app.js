@@ -1058,8 +1058,10 @@ function offerOf(a) {
   const f = one('files.changes', text(destOf(a).ref) || text(a.id));
   return f && f.kind === 'offer' ? f : null;
 }
+// An item that carries a `day` (an approval in a daily thread) is named by that day; any
+// other by its label as given.
 function waitingWords(a) {
-  const label = text(a.label);
+  const label = typeof a.day === 'string' ? dayTitle(a.day) : text(a.label);
   switch (a.kind) {
     case 'failed_run': {
       const run = one('runs.changes', text(destOf(a).ref));
@@ -1067,8 +1069,7 @@ function waitingWords(a) {
       return { head: `${componentName(text(a.id))} failed`, tail: cause && cause !== 'failed' ? shortReason(cause) : 'its last run', fail: true };
     }
     case 'failed_schedule': return { head: `${label || 'A schedule'} failed`, tail: 'its last run', fail: true };
-    // An approval is labelled with its thread's title: a daily thread's is its day.
-    case 'approval': return { head: 'Approve in', tail: dayTitle(label) || 'a thread' };
+    case 'approval': return { head: 'Approve in', tail: label || 'a thread' };
     case 'confirmation': return { head: 'Confirm in CYFR', tail: label || 'a change' };
     case 'file_offer': { const from = offerOf(a) && text(offerOf(a).from); return { head: from ? `${from} offers` : 'A file offered', tail: label || 'a file' }; }
     default: return { head: 'Waiting', tail: label };
@@ -1090,10 +1091,10 @@ function isoDay(d) {
   catch (err) { return at.toISOString().slice(0, 10); }
   return `${p.year}-${p.month}-${p.day}`;
 }
-// A day as a daily thread's title and an approval's label in one carry it, an ISO date:
-// "Today" or "Yesterday", else the date. Any other text reads as it is.
+// A day by its ISO date, a daily thread's title or a waiting item's `day`: "Today" or
+// "Yesterday", else the date.
 function dayTitle(s) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) return s;
+  if (Number.isNaN(Date.parse(s))) return s;
   if (s === isoDay(0)) return 'Today';
   if (s === isoDay(-1)) return 'Yesterday';
   try { return new Date(Date.parse(s)).toLocaleDateString(LOCALE, { timeZone: 'UTC', day: 'numeric', month: 'short' }); } catch (err) { return s; }

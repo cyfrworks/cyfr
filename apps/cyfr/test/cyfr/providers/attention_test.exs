@@ -77,7 +77,7 @@ defmodule Cyfr.Providers.AttentionTest do
       assert Prima.Provider.Stream.valid?(stream)
       assert stream.name == @stream
       assert stream.topic == :attention
-      assert stream.projection == ~w(kind id label since destination outcome revision at)
+      assert stream.projection == ~w(kind id label day since destination outcome revision at)
 
       assert {stream.key, stream.removal, stream.reread, stream.stale_after} ==
                {"id", "removed", [], 300}
@@ -158,20 +158,22 @@ defmodule Cyfr.Providers.AttentionTest do
       assert [item] = refreshed(ctx)
       assert item["kind"] == "approval"
       assert item["id"] == waiting.id
-      # The day itself, which the surface that draws the item words.
-      assert item["label"] == Date.to_iso8601(thread.day)
+      # The thread's own name, and the day as a field of its own, which the
+      # surface that draws the item words.
+      assert item["label"] == thread.title
+      assert item["day"] == Date.to_iso8601(thread.day)
       assert item["destination"] == %{"kind" => "page", "page" => "aqua", "ref" => thread.id}
       refute item["id"] in [decided.id, expired.id]
     end
 
-    test "names an approval in a crew member's thread by that thread's title", %{
-      ctx: ctx,
-      actor: actor
-    } do
-      {:ok, crew} = Arca.ThreadStorage.crew_thread(actor, thread!(actor).id, "builder")
+    test "names an approval in a crew member's thread by that thread's title, and carries no day, whatever the title reads like",
+         %{ctx: ctx, actor: actor} do
+      # A crew member may be named like a date: its row is no day's.
+      {:ok, crew} = Arca.ThreadStorage.crew_thread(actor, thread!(actor).id, "2026-11-15")
       approval!(actor, crew)
 
-      assert [%{"label" => "builder", "destination" => %{"ref" => ref}}] = refreshed(ctx)
+      assert [item] = refreshed(ctx)
+      assert %{"label" => "2026-11-15", "day" => nil, "destination" => %{"ref" => ref}} = item
       assert ref == crew.id
     end
 
@@ -184,6 +186,7 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "confirmation",
                "id" => ^ref,
                "label" => "vault.create",
+               "day" => nil,
                "destination" => %{"kind" => "ref", "page" => nil, "ref" => ^ref}
              } = item
 
@@ -203,6 +206,7 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "grant_request",
                "id" => ^id,
                "label" => "schedule.create",
+               "day" => nil,
                "destination" => %{"kind" => "ref", "page" => nil, "ref" => ^id},
                "outcome" => nil
              } = item
@@ -256,6 +260,7 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "failed_run",
                "id" => "reagent:local.standing:1.0.0",
                "label" => "reagent:local.standing:1.0.0",
+               "day" => nil,
                "since" => DateTime.to_iso8601(DateTime.add(t, 120)),
                "destination" => %{"kind" => "page", "page" => "executions", "ref" => newest.id},
                "outcome" => nil
@@ -303,6 +308,7 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "failed_schedule",
                "id" => failing.id,
                "label" => "nightly report",
+               "day" => nil,
                "since" => DateTime.to_iso8601(DateTime.add(t, 60)),
                "destination" => %{"kind" => "page", "page" => "schedules", "ref" => failing.id},
                "outcome" => nil
@@ -326,6 +332,7 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "file_offer",
                "id" => ^offer,
                "label" => "alpha.csv",
+               "day" => nil,
                "destination" => %{"kind" => "page", "page" => "files", "ref" => ^offer}
              } = item
     end
@@ -718,6 +725,7 @@ defmodule Cyfr.Providers.AttentionTest do
       "kind" => "removed",
       "id" => id,
       "label" => nil,
+      "day" => nil,
       "since" => nil,
       "destination" => nil,
       "outcome" => outcome

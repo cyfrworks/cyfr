@@ -702,13 +702,23 @@ describe("the street desktop 0.3.2", () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     const named = ["Today", "Yesterday", date, "builder"]
     const p = await street({version: "0.3.2"})
-    picture(p.stream("attention.changes"), [[day(0), "th-0"], [day(-1), "th-1"], [day(-3), "th-3"], ["builder", "th-crew"]].map(([label, ref], i) =>
-      waiting(`ap-${i}`, "approval", {kind: "page", page: "aqua", ref}, {label, since: at(i * 10 - 60)})))
+    picture(p.stream("attention.changes"), [[day(0), day(0), "th-0"], [day(-1), day(-1), "th-1"], [day(-3), day(-3), "th-3"], ["builder", null, "th-crew"]].map(([label, d, ref], i) =>
+      waiting(`ap-${i}`, "approval", {kind: "page", page: "aqua", ref}, {label, day: d, since: at(i * 10 - 60)})))
     p.pump(5)
     const asks = p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Waiting on you: an approval"))
     assert.deepEqual(asks.map((l) => l.split(", ")[1]).sort(), named.map((n) => `Approve in ${n}`).sort())
     tap(p, "Waiting on you: an approval, Approve in Yesterday")
     assert.match(p.board().textContent, /Approve in Yesterday/)
     assert.ok([0, -1, -3].every((n) => !(asks.join(" ") + p.board().textContent).includes(day(n))), asks.join(" | "))
+  })
+
+  test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
+    const p = await street({version: "0.3.2"})
+    picture(p.stream("attention.changes"), [waiting("ap-crew", "approval", {kind: "page", page: "aqua", ref: "th-crew"}, {label: "2026-11-15", day: null, since: at(-30)})])
+    p.pump(5)
+    const asks = p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Waiting on you: an approval"))
+    assert.deepEqual(asks.map((l) => l.split(", ")[1]), ["Approve in 2026-11-15"])
+    tap(p, "Waiting on you: an approval, Approve in 2026-11-15")
+    assert.match(p.board().textContent, /Approve in 2026-11-15/)
   })
 })

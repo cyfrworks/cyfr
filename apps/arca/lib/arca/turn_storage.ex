@@ -2374,8 +2374,8 @@ defmodule Arca.TurnStorage do
   @doc """
   The athanor's approvals still waiting on a decision at `now`, oldest
   first: pending and not past an expiry, each as its id, the thread it
-  waits in, that thread's title and when it opened, and nothing of the
-  proposal. `approval_id:` narrows it to that one approval.
+  waits in, that thread's title and its day (a daily thread's date, nil
+  for any other) and when it opened, and nothing of the proposal. `approval_id:` narrows it to that one approval.
   """
   @spec waiting_approvals(Prima.Actor.t(), DateTime.t(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
@@ -2391,7 +2391,13 @@ defmodule Arca.TurnStorage do
           where: a.athanor_id == ^athanor_id and a.status == "pending",
           where: is_nil(a.expires_at) or a.expires_at > ^now,
           order_by: [asc: a.inserted_at, asc: a.id],
-          select: %{id: a.id, thread_id: a.thread_id, title: t.title, inserted_at: a.inserted_at}
+          select: %{
+            id: a.id,
+            thread_id: a.thread_id,
+            title: t.title,
+            day: t.day,
+            inserted_at: a.inserted_at
+          }
         )
 
       query =

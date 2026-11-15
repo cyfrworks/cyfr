@@ -671,11 +671,19 @@ describe("the line desktop 0.3.2", () => {
     const date = new Intl.DateTimeFormat("en-GB", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     const p = desk({version: V3, width: 1440})
     await flush()
-    p.picture("attention.changes", [[day(0), "th_0"], [day(-1), "th_1"], [day(-3), "th_3"], ["builder", "th_crew"]].map(([label, ref], i) =>
-      ({kind: "approval", id: `ap_${i}`, label, since: today(9, i), destination: {kind: "page", page: "aqua", ref}})))
+    p.picture("attention.changes", [[day(0), day(0), "th_0"], [day(-1), day(-1), "th_1"], [day(-3), day(-3), "th_3"], ["builder", null, "th_crew"]].map(([label, d, ref], i) =>
+      ({kind: "approval", id: `ap_${i}`, label, day: d, since: today(9, i), destination: {kind: "page", page: "aqua", ref}})))
     await flush()
     assert.deepEqual(p.buttons().filter((b) => b.dataset.page === "aqua").map((b) => b.label),
       ["Open in Aqua: Today", "Open in Aqua: Yesterday", `Open in Aqua: ${date}`, "Open in Aqua: builder"])
     assert.ok([0, -1, -3].every((n) => !p.seen().includes(day(n))), p.seen())
+  })
+
+  test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("attention.changes", [{kind: "approval", id: "ap_crew", label: "2026-11-15", day: null, since: today(9, 0), destination: {kind: "page", page: "aqua", ref: "th_crew"}}])
+    await flush()
+    assert.deepEqual(p.buttons().filter((b) => b.dataset.page === "aqua").map((b) => b.label), ["Open in Aqua: 2026-11-15"])
   })
 })

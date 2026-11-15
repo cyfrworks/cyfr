@@ -781,8 +781,8 @@ describe("the road desktop 0.3.2", () => {
     const named = ["Today", "Yesterday", date, "builder"]
     const p = page({version: "0.3.2"})
     await settle()
-    picture(p, "attention.changes", [[day(0), "t0"], [day(-1), "t1"], [day(-3), "t3"], ["builder", "tc"]].map(([label, ref], i) =>
-      ({kind: "approval", id: `a${i}`, label, since: iso(i - 20), destination: {kind: "page", page: "aqua", ref}})))
+    picture(p, "attention.changes", [[day(0), day(0), "t0"], [day(-1), day(-1), "t1"], [day(-3), day(-3), "t3"], ["builder", null, "tc"]].map(([label, d, ref], i) =>
+      ({kind: "approval", id: `a${i}`, label, day: d, since: iso(i - 20), destination: {kind: "page", page: "aqua", ref}})))
     // The visitors at the house, and the list of what waits.
     assert.deepEqual(labels(p).filter((l) => l.startsWith("Approval in ")).map((l) => l.split(", since")[0]).sort(), named.map((n) => `Approval in ${n}`).sort())
     tap(p, /^\d+ waiting at your house/)
@@ -791,5 +791,15 @@ describe("the road desktop 0.3.2", () => {
     const waiting = p.ids.lists.children.filter((c) => c.tagName === "SECTION").find((sec) => sec.children[0].textContent === "Waiting on you")
     assert.deepEqual(waiting.children[1].children.map((li) => li.textContent.split(" waits for your approval")[0]), named)
     assert.ok([0, -1, -3].every((n) => !labels(p).some((l) => l.includes(day(n)))), labels(p).join(" | "))
+  })
+
+  test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
+    const p = page({version: "0.3.2"})
+    await settle()
+    picture(p, "attention.changes", [{kind: "approval", id: "a_crew", label: "2026-11-15", day: null, since: iso(-20), destination: {kind: "page", page: "aqua", ref: "tc"}}])
+    assert.deepEqual(labels(p).filter((l) => l.startsWith("Approval in ")).map((l) => l.split(", since")[0]), ["Approval in 2026-11-15"])
+    p.win.RoadList.show()
+    const waiting = p.ids.lists.children.filter((c) => c.tagName === "SECTION").find((sec) => sec.children[0].textContent === "Waiting on you")
+    assert.deepEqual(waiting.children[1].children.map((li) => li.textContent.split(" waits for your approval")[0]), ["2026-11-15"])
   })
 })

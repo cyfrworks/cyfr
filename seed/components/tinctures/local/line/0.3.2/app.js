@@ -169,11 +169,10 @@
   // A daily thread (one a day) and a workspace thread are Aqua's; a shared
   // thread is people's.
   const isAqua = (t) => t.kind === "daily" || t.kind === "workspace";
-  // A day as a daily thread's title and an approval's label in one carry
-  // it, an ISO date: "Today" or "Yesterday" in the person's zone, else the
-  // date. Any other text reads as it is.
+  // A day by its ISO date, a daily thread's title or a waiting item's `day`:
+  // "Today" or "Yesterday" in the person's zone, else the date.
   function dayName(s) {
-    const day = /^\d{4}-\d{2}-\d{2}$/.test(s) ? Date.parse(s) : NaN;
+    const day = Date.parse(s);
     if (Number.isNaN(day)) return s;
     const ago = Math.round((Date.parse(parts(new Date()).day) - day) / 86400000);
     if (ago === 0) return "Today";
@@ -474,10 +473,11 @@
     return offer ? text(offer.from) : "";
   }
   const PAGE_ACT = { aqua: "Open in Aqua", chat: "Open chat", executions: "Open runs", schedules: "Open schedules", files: "Open files" };
-  // An approval is labelled with its thread's title: a daily thread's is its day.
+  // An item that carries a `day` (an approval in a daily thread) is named by
+  // that day; any other by its label as given.
   function about(a) {
     if (a.kind === "failed_run") return itemRun(a) ? runName(itemRun(a)) : refName(text(a.id));
-    return (a.kind === "approval" ? dayName(text(a.label)) : text(a.label)) || { approval: "An approval", confirmation: "A confirmation", file_offer: "A file", failed_schedule: "A schedule" }[a.kind] || "Something";
+    return (typeof a.day === "string" ? dayName(a.day) : text(a.label)) || { approval: "An approval", confirmation: "A confirmation", file_offer: "A file", failed_schedule: "A schedule" }[a.kind] || "Something";
   }
   function settledWhat(kind, outcome) {
     if (outcome === "expired") return "Its time ran out";

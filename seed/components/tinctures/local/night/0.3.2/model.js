@@ -213,11 +213,10 @@
     return {
       hm: (t) => hmF.format(new Date(t)),
       long: (t) => longF.format(new Date(t)),
-      // A day as a daily thread's title and an approval's label in one
-      // carry it, an ISO date: "Today" or "Yesterday" in the person's zone,
-      // else the date. Any other text reads as it is.
+      // A day by its ISO date, a daily thread's title or a waiting item's
+      // `day`: "Today" or "Yesterday" in the person's zone, else the date.
       day(iso, now) {
-        const d = /^\d{4}-\d{2}-\d{2}$/.test(text(iso)) ? time(iso) : null;
+        const d = time(iso);
         if (d === null) return text(iso);
         const ago = dayNo(now) - Math.round(d / 86400000);
         return ago === 0 ? 'Today' : ago === 1 ? 'Yesterday' : dateF.format(new Date(d));
@@ -296,9 +295,10 @@
       else if (a.kind === 'confirmation') target = 'cyfr';
       // An offer reads with its sender, from the locker's stream.
       const offer = a.kind === 'file_offer' ? s.files.get(text(a.id)) : null;
-      // An approval is labelled with its thread's title: a daily thread's is its day.
+      // An item that carries a `day` (an approval in a daily thread) is
+      // named by that day; any other by its label as given.
       const label = a.kind === 'failed_run' ? compName(a.label || a.id)
-        : a.kind === 'approval' ? (C || (C = clock(s))).day(a.label, Date.now())
+        : typeof a.day === 'string' ? (C || (C = clock(s))).day(a.day, Date.now())
           : text(a.label) + (offer && isStr(offer.from) ? ' from ' + offer.from : '');
       out.push({ id: 'a:' + text(a.id), kind: a.kind, target, label, since: time(a.since), page: d.kind === 'page' ? text(d.page) : null, item: a, word: k.word, hue: k.hue, light: k.light });
     }

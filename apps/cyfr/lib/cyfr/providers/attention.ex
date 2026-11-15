@@ -17,12 +17,18 @@ defmodule Cyfr.Providers.Attention do
 
   | kind | the record | `id` | `label` | `since` | enters, leaves |
   |---|---|---|---|---|---|
-  | `approval` | a pending approval in the athanor's threads | the approval | its thread's title: a daily thread's is its day, the ISO date, which the surface that draws it words | opened | opened; resolved or expired |
+  | `approval` | a pending approval in the athanor's threads | the approval | its thread's title, as the thread holds it | opened | opened; resolved or expired |
   | `grant_request` | a frame's request of the person, waiting in the shell that presents it (`Cyfr.Requests`) | the request | the operation it asks for, or the component a grant names | asked | asked; decided, expired, or withdrawn with its frame |
   | `confirmation` | the person's open confirmation of a sensitive change | its ref | its operation | opened | opened; consumed, cancelled, voided or expired |
   | `failed_run` | the newest failed top-level run of a reference the person ran, that no later run of it ended after | the reference | the reference | its end | failed; the reference's next top-level run's end |
   | `failed_schedule` | a schedule of the person whose latest ended occurrence failed or is uncertain | the schedule | its name | that occurrence's due time | failed; its next completed run or its deletion |
   | `file_offer` | an offer to the person, offered and unexpired | the offer | its first file's name | made | offered; accepted, declined, withdrawn or expired |
+
+  Every item carries `day`: for an approval that waits in a daily thread,
+  that thread's date (ISO 8601), which the surface that draws the item
+  words; nil for every other item, a crew thread's approval among them,
+  whatever its title reads like. A surface words a day from this field
+  alone, never from a label.
 
   A failed run is one item per reference, its `id` the exact reference the
   run's record keeps, so the next end of a run of that reference names
@@ -78,6 +84,7 @@ defmodule Cyfr.Providers.Attention do
           kind: Cyfr.Bus.Attention.kind(),
           id: String.t(),
           label: String.t() | nil,
+          day: String.t() | nil,
           since: DateTime.t() | nil,
           destination: map() | nil,
           outcome: nil
@@ -100,7 +107,7 @@ defmodule Cyfr.Providers.Attention do
         name: "attention.changes",
         topic: :attention,
         projection:
-          ["kind", "id", "label", "since", "destination", "outcome"] ++
+          ["kind", "id", "label", "day", "since", "destination", "outcome"] ++
             Prima.Provider.Stream.delivery_fields(),
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
@@ -212,6 +219,7 @@ defmodule Cyfr.Providers.Attention do
       kind: :confirmation,
       id: ref,
       label: operation,
+      day: nil,
       since: opened_at,
       destination: %{kind: "ref", page: nil, ref: ref},
       outcome: nil
@@ -224,7 +232,9 @@ defmodule Cyfr.Providers.Attention do
     with {:ok, rows} <- Arca.TurnStorage.waiting_approvals(actor, now, opts) do
       {:ok,
        for row <- rows do
-         item(:approval, row.id, row.title, row.inserted_at, page("aqua", row.thread_id))
+         :approval
+         |> item(row.id, row.title, row.inserted_at, page("aqua", row.thread_id))
+         |> Map.put(:day, row.day && Date.to_iso8601(row.day))
        end}
     end
   end
@@ -273,6 +283,7 @@ defmodule Cyfr.Providers.Attention do
       kind: kind,
       id: id,
       label: label,
+      day: nil,
       since: since,
       destination: destination,
       outcome: nil
@@ -290,6 +301,7 @@ defmodule Cyfr.Providers.Attention do
         },
         "id" => %{"type" => "string"},
         "label" => %{"type" => "string", "nullable" => true},
+        "day" => %{"type" => "string", "max" => 10, "nullable" => true},
         "since" => %{"type" => "time", "nullable" => true},
         "destination" => %{
           "type" => "object",
@@ -307,7 +319,7 @@ defmodule Cyfr.Providers.Attention do
           "nullable" => true
         }
       },
-      "required" => ["kind", "id", "label", "since", "destination", "outcome"]
+      "required" => ["kind", "id", "label", "day", "since", "destination", "outcome"]
     })
   end
 

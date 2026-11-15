@@ -865,11 +865,18 @@ describe("the switchboard 0.3.2", () => {
   test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
     const date = new Intl.DateTimeFormat("en-GB", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     const b = await started({version: V3}, {
-      "attention.changes": [[day(0), "th_0"], [day(-1), "th_1"], [day(-3), "th_3"], ["builder", "th_crew"]].map(([label, ref], i) =>
-        ({kind: "approval", id: `ap_${i}`, label, since: ago(40 - i), destination: {kind: "page", page: "aqua", ref}}))
+      "attention.changes": [[day(0), day(0), "th_0"], [day(-1), day(-1), "th_1"], [day(-3), day(-3), "th_3"], ["builder", null, "th_crew"]].map(([label, d, ref], i) =>
+        ({kind: "approval", id: `ap_${i}`, label, day: d, since: ago(40 - i), destination: {kind: "page", page: "aqua", ref}}))
     })
     // No thread line holds them, so each calls on a line of its own.
     assert.deepEqual(lines(b, "calls"), ["Today", "Yesterday", date, "builder"])
     assert.ok([0, -1, -3].every((n) => !b.$$(".line").some((el) => (el.getAttribute("aria-label") || "").includes(day(n)))))
+  })
+
+  test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
+    const b = await started({version: V3}, {
+      "attention.changes": [{kind: "approval", id: "ap_crew", label: "2026-11-15", day: null, since: ago(30), destination: {kind: "page", page: "aqua", ref: "th_crew"}}]
+    })
+    assert.deepEqual(lines(b, "calls"), ["2026-11-15"])
   })
 })
