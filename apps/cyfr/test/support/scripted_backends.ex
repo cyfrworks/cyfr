@@ -302,9 +302,15 @@ defmodule Cyfr.Test.ScriptedBackends do
   def tools(%{agent: agent}, server, names),
     do: Agent.update(agent, &put_in(&1, [:tools, server], names))
 
-  @doc "Hold the next message of `type` until the test sends `:go` to the pid it reports."
-  def hold(%{agent: agent}, type),
-    do: Agent.update(agent, &%{&1 | hold: MapSet.put(&1.hold, type)})
+  @doc """
+  Hold the next message of `type` until the test sends `:go` to the pid it
+  reports, or 5 s pass; `hold(fake, type, ms)` holds it up to `ms`, past a
+  caller's own timeout.
+  """
+  def hold(fake, type, ms \\ 5_000)
+
+  def hold(%{agent: agent}, type, ms),
+    do: Agent.update(agent, &%{&1 | hold: MapSet.put(&1.hold, {type, ms})})
 
   # ————— control —————
 
@@ -352,15 +358,19 @@ defmodule Cyfr.Test.ScriptedBackends do
   defp held(agent, type) do
     st = Agent.get(agent, & &1)
 
-    if MapSet.member?(st.hold, type) do
-      Agent.update(agent, &%{&1 | hold: MapSet.delete(&1.hold, type)})
-      send(st.test, {:held, type, self()})
+    case Enum.find(st.hold, &match?({^type, _ms}, &1)) do
+      nil ->
+        :ok
 
-      receive do
-        :go -> :ok
-      after
-        5_000 -> :ok
-      end
+      {^type, ms} = held ->
+        Agent.update(agent, &%{&1 | hold: MapSet.delete(&1.hold, held)})
+        send(st.test, {:held, type, self()})
+
+        receive do
+          :go -> :ok
+        after
+          ms -> :ok
+        end
     end
   end
 

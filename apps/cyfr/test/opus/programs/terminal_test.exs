@@ -505,6 +505,23 @@ defmodule Opus.Programs.TerminalTest do
       assert {:ok, []} = Programs.running(ctx)
     end
 
+    # The service holds the close past the box's close window: the
+    # transport times out, the close is unanswered and still owed, and the
+    # session has ended all the same.
+    @tag timeout: 60_000
+    test "a close the service does not answer in time is unanswered, and ends the session",
+         %{ctx: ctx, row: row, fake: fake, controller: controller} do
+      {id, session} = start!(ctx, row)
+      Scripted.hold(fake, "close", 40_000)
+      closing = Task.async(fn -> Programs.close(ctx, id) end)
+      assert_receive {:held, "close", backend}, 2_000
+
+      assert {:error, :unanswered} = Task.await(closing, 30_000)
+      eventually(fn -> gone?(id) end, "the session to end")
+      assert Map.has_key?(:sys.get_state(controller).closing, session)
+      send(backend, :go)
+    end
+
     test "a close answers closed, already gone, or that the service did not answer",
          %{ctx: ctx, row: row, fake: fake, controller: controller} do
       {closed, _session} = start!(ctx, row)
