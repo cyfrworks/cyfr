@@ -21,9 +21,9 @@ defmodule Aqua.Standing do
   sources it also follows (none unless chosen, so an allow asks again
   after any outside read it does not name). The lifecycle is
   named by its kind and read from the card's own turn — `:execution` the
-  turn's root execution, `:turn` the turn, `:schedule` the schedule that
-  root was started by, or, for this thread's answer only, the schedule
-  whose own thread the card's turn runs in (`Arca.CronSchedule.of_thread/2`:
+  turn's root execution, `:turn` the turn, and for this thread's answer
+  only `:schedule`, the schedule that root was started by or else the
+  schedule whose own thread the card's turn runs in (`Arca.CronSchedule.of_thread/2`:
   a schedule's line for Aqua runs every fire there), refused when there is
   none — so a person can bound an answer only by the run or the schedule
   the card belongs to. An answer for this thread ending with the schedule
@@ -148,13 +148,14 @@ defmodule Aqua.Standing do
   defp lifecycle(_ctx, %{id: id}, _row, :turn) when is_binary(id),
     do: {:ok, %{lifecycle_kind: "turn", lifecycle_id: id}}
 
-  # The schedule the turn's root was started by, read from its row in the
-  # caller's athanor; for this thread's answer, else the schedule whose
-  # own thread this is. An agent-wide answer ends only with the schedule
-  # its run was started by.
-  defp lifecycle(ctx, turn, {scope, _effect}, :schedule) do
+  # An answer for this thread may end with a schedule: the one the turn's
+  # root was started by, read from its row in the caller's athanor, else
+  # the one whose own thread this is. An agent-wide answer ends with none:
+  # a schedule's turn opens no card, so no agent-wide card has a schedule
+  # to end with.
+  defp lifecycle(ctx, turn, {"thread", _effect}, :schedule) do
     with :none <- started_by(ctx, turn),
-         :none <- if(scope == "thread", do: thread_of(ctx, turn), else: :none) do
+         :none <- thread_of(ctx, turn) do
       {:error, {:scope_not_permitted, :no_schedule}}
     end
   end

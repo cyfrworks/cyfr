@@ -363,18 +363,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # A card of its own in a thread of its own: deciding a card settles it.
   # A scheduled card's run row names the schedule it was started by.
-  defp offer!(conn, athanor, here, scheduled?) do
+  defp offer!(conn, athanor, here) do
     {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
     card = card!(here, thread, @write, %{"standing" => nil})
-
-    if scheduled? do
-      {1, _} =
-        Arca.Repo.update_all(
-          from(e in Arca.Schemas.Execution, where: e.id == ^card.execution_id),
-          set: [schedule_id: "sched_offer_#{System.unique_integer([:positive])}"]
-        )
-    end
-
     {open_pane(conn, athanor, thread), card}
   end
 
@@ -435,7 +426,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
             {~s(button[phx-value-lifecycle="execution"]), "thread", "execution"},
             {~s|button[phx-value-scope="always"]:not([phx-value-lifecycle])|, "always", nil}
           ] do
-        {pane, card} = offer!(conn, athanor, here, false)
+        {pane, card} = offer!(conn, athanor, here)
         click_offer(pane, card, selector)
         input = resolved(card)
 
@@ -450,7 +441,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     test "for this thread until ends 1, 8 or 24 hours from the click",
          %{conn: conn, athanor: athanor, here: here} do
       for hours <- [1, 8, 24] do
-        {pane, card} = offer!(conn, athanor, here, false)
+        {pane, card} = offer!(conn, athanor, here)
         before = DateTime.utc_now()
         click_offer(pane, card, ~s(button[phx-value-hours="#{hours}"]))
         later = DateTime.utc_now()
@@ -468,30 +459,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                "#{hours}h: #{input["until"]}"
       end
     end
-
-    test "for this schedule is offered only for a scheduled run, and ends with its schedule",
-         %{conn: conn, athanor: athanor, here: here} do
-      {unscheduled, plain} = offer!(conn, athanor, here, false)
-
-      refute has_element?(
-               unscheduled,
-               ~s([id$="-card-#{plain.id}"] [phx-value-lifecycle="schedule"])
-             )
-
-      {pane, card} = offer!(conn, athanor, here, true)
-      click_offer(pane, card, ~s(button[phx-value-lifecycle="schedule"]))
-      input = resolved(card)
-
-      assert input["scope"] == "always"
-      assert input["lifecycle"] == "schedule"
-      refute Map.has_key?(input, "until")
-    end
   end
 
   describe "a schedule's own thread" do
     test "its card offers for this schedule as this thread's answer ending with the schedule; no other thread's does",
          %{conn: conn, athanor: athanor, here: here} do
-      {plain_pane, plain} = offer!(conn, athanor, here, false)
+      {plain_pane, plain} = offer!(conn, athanor, here)
 
       refute has_element?(
                plain_pane,

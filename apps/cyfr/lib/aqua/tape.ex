@@ -301,7 +301,7 @@ defmodule Aqua.Tape do
   def schedule_of(_turn), do: nil
 
   # A schedule's turn that ended ends its occurrence, on the scheduler's
-  # one ending (`Opus.Schedules.Scheduler.end_turn/4`), from the turn's
+  # one ending (`Opus.end_schedule_turn/4`), from the turn's
   # root as its row now stands: here, after the turn's terminal write, is
   # the one place every end of a turn passes. An end that does not land
   # (the root still open, the slot lost) leaves the occurrence to the
@@ -320,7 +320,7 @@ defmodule Aqua.Tape do
 
   defp ended_fire(ctx, finished) do
     with %{occurrence_id: occurrence_id} <- schedule_of(finished) do
-      case Opus.Schedules.Scheduler.end_turn(
+      case Opus.end_schedule_turn(
              Sanctum.Context.actor(ctx),
              occurrence_id,
              finished.root_execution_id,

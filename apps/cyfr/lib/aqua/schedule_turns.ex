@@ -48,7 +48,7 @@ defmodule Aqua.ScheduleTurns do
   ## Its end
 
   A turn's end ends its occurrence through the scheduler's one ending
-  (`Opus.Schedules.Scheduler.end_turn/4`, called from `Aqua.Tape.finish/4`),
+  (`Opus.end_schedule_turn/4`, called from `Aqua.Tape.finish/4`),
   as the turn's root row says. Here, a claim whose turn will never start
   ends `failed` with the reason: the schedule paused or deleted since its
   claim, its person or athanor no longer standing, a line that does not
@@ -261,7 +261,7 @@ defmodule Aqua.ScheduleTurns do
   defp ended(claim, reason) when is_binary(reason) do
     actor = Prima.Actor.in_athanor(claim.athanor_id)
 
-    case Opus.Schedules.Scheduler.end_turn(actor, claim.id, nil, reason) do
+    case Opus.end_schedule_turn(actor, claim.id, nil, reason) do
       {:ok, _state} ->
         {:ended, reason}
 

@@ -759,16 +759,12 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Opus",
-      allow: ~w(Opus Opus.Schedules),
+      allow: ~w(Opus),
       reason:
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
           "model listing or a consent status derives an authority there; nothing of " <>
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
-          "One more name: a turn a schedule's line started ends its occurrence through " <>
-          "the scheduler's one public end of a turn (`Opus.Schedules.Scheduler.end_turn/4`), " <>
-          "and the assistant is the only boundary outside execution whose row names the " <>
-          "schedules' namespace, so no other caller reaches that end. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
@@ -1580,15 +1576,6 @@ defmodule Cyfr.Boundaries do
       reason:
         "the scan mark's key is the cache's own spelling for the actor's athanor, so " <>
           "the shell and the scan name one entry; it reads nothing."
-    },
-    %{
-      from: "PrismWeb.ThreadPaneLive",
-      into: "Arca.Execution",
-      functions: [:get_tenant],
-      reason:
-        "a pending card offers \"for this schedule\" only where its run was started " <>
-          "by one: the pane reads the run's execution row once, under the pane's actor, " <>
-          "for its schedule id alone."
     },
     %{
       from: "PrismWeb.ThreadPaneLive",

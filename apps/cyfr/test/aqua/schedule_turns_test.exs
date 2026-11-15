@@ -606,6 +606,34 @@ defmodule Aqua.ScheduleTurnsTest do
       :ok = Runner.stop_turn(ctx, plain.id)
     end
 
+    test "an agent-wide answer ending with the schedule is refused, even in the schedule's own thread, and the card waits",
+         %{ctx: ctx} do
+      script!([
+        reply("Here."),
+        call("w1", "files", %{"action" => "write", "path" => "data/plan.md", "content" => "x"})
+      ])
+
+      id = schedule!(ctx, "Writer", "say something")
+      first = fire!(ctx, id)
+      ScheduleTurns.drain()
+      await_status(ctx, turn_of(ctx, id, first).id, "completed")
+      %{thread_id: thread_id} = row!(ctx, id)
+
+      {:ok, %{turn_id: asked}} = Runner.send_message(ctx, thread_id, "write the plan")
+      await_status(ctx, asked, "paused")
+      [%{id: approval_id}] = waiting_cards(ctx)
+
+      assert Approvals.resolve(ctx, approval_id, %{
+               decision: :approved,
+               scope: :always,
+               lifecycle: :schedule
+             }) == {:error, {:scope_not_permitted, :invalid_lifecycle}}
+
+      assert [%{id: ^approval_id}] = waiting_cards(ctx)
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread_id, "aqua")
+      :ok = Runner.stop_turn(ctx, thread_id)
+    end
+
     test "a fire's turn that finds its claim another server's says so plainly, and ends nothing",
          %{ctx: ctx} do
       id = schedule!(ctx, "Morning", "summarise")

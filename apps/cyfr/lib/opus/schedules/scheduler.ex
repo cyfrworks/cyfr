@@ -166,8 +166,8 @@ defmodule Opus.Schedules.Scheduler do
   of such a row is woken again, never run here.
 
   Its end is `end_turn/4`, this module's one public end of an occurrence
-  besides `complete/4`, and Aqua its only caller outside it (the
-  boundary catalog's row from Aqua into Opus): the occurrence ends through
+  besides `complete/4`, which Aqua reaches through the execution domain's
+  facade alone (`Opus.end_schedule_turn/4`): the occurrence ends through
   the same one ending, as its turn's root execution row says, so the
   caller decides nothing recovery would not read from that row itself. A
   turn that never started ends only a claim this boot still holds. The
