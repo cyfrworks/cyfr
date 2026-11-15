@@ -4,8 +4,8 @@
 defmodule Opus.Programs.Pipe do
   @moduledoc """
   One pipe session's courier: a `run` session of a program row under one
-  key, in a login entry's kept home, carried between the attempts that
-  open it (`Opus.Programs.pipe_open/6`) and the box that owns it.
+  key, in the row's kept home, carried between the attempts that open it
+  (`Opus.Programs.pipe_open/5`) and the box that owns it.
 
   The box owns every pipe session (`Opus.Programs.Box`): it records an
   open before the backend is asked, makes it itself, gives the session it
@@ -21,16 +21,15 @@ defmodule Opus.Programs.Pipe do
   delays a send; the box's open is awaited by a process of the holder's
   own, so an open never delays them either.
 
-  The holder belongs to the row, the home and the key, never to an
-  attempt. It ends on `close`, when no attempt used it for the box's idle
-  period and a little more (by then the box has ended a session no line
-  used), when the box tells it to stand down or issues a new grant (the
-  row was disabled, deleted or changed, or the service the session ran on
-  is gone), and when its login entry is revoked, suspended or deleted
-  (`{:entry_ended, athanor_id, entry_id}`, `Opus.Programs.end_mounts/2`,
-  which a sweep also sends for an entry that no longer serves without a
-  signal having said so). However it ends, killed included, the box closes
-  its session; on its way out it asks so itself, which is the fast path.
+  The holder belongs to the row and the key, never to an attempt. It ends
+  on `close`, when no attempt used it for the box's idle period and a
+  little more (by then the box has ended a session no line used), when the
+  box tells it to stand down or issues a new grant (the row was disabled,
+  deleted or changed, or the service the session ran on is gone), and when
+  its row is deleted (`{:row_ended, athanor_id, row_id}`,
+  `Opus.Programs.end_mounts/2`). However it ends, killed included, the box
+  closes its session; on its way out it asks so itself, which is the fast
+  path.
   Nothing of what passes through is kept here.
   """
 
@@ -58,9 +57,6 @@ defmodule Opus.Programs.Pipe do
      %{
        owner: Keyword.fetch!(args, :owner),
        grant: nil,
-       program: Keyword.fetch!(args, :program),
-       row_name: Keyword.fetch!(args, :row_name),
-       home_id: Keyword.fetch!(args, :home_id),
        key: Keyword.fetch!(args, :key),
        session: nil,
        openers: %{},
@@ -79,7 +75,13 @@ defmodule Opus.Programs.Pipe do
         ref = make_ref()
         holder = self()
         owner = state.owner
-        params = %{program: state.program, home_id: state.home_id, key: state.key, argv: argv}
+
+        params = %{
+          program: Opus.Programs.Definition.program_name(),
+          home_id: owner.server_id,
+          key: state.key,
+          argv: argv
+        }
 
         spawn_link(fn ->
           send(
@@ -104,9 +106,6 @@ defmodule Opus.Programs.Pipe do
       else: {:reply, {:error, :denied}, state}
   end
 
-  def handle_call(:mount, _from, state),
-    do: {:reply, {state.owner.athanor_id, state.home_id, state.row_name}, state}
-
   def handle_call({:close, athanor_id, opener, session}, _from, state) do
     if yours?(state, athanor_id, opener, session),
       do: {:stop, :normal, :ok, state},
@@ -114,13 +113,11 @@ defmodule Opus.Programs.Pipe do
   end
 
   @impl true
-  def handle_cast({:entry_ended, athanor_id, entry_id}, %{home_id: entry_id} = state) do
-    if state.owner.athanor_id == athanor_id,
+  def handle_cast({:row_ended, athanor_id, row_id}, %{owner: owner} = state) do
+    if owner.athanor_id == athanor_id and owner.server_id == row_id,
       do: {:stop, :normal, state},
       else: {:noreply, state}
   end
-
-  def handle_cast({:entry_ended, _athanor_id, _entry_id}, state), do: {:noreply, state}
 
   # What the box gave, carried to the caller: the session it gave this
   # key, or why it gave none.
@@ -166,7 +163,7 @@ defmodule Opus.Programs.Pipe do
   @impl true
   def terminate(_reason, state) do
     if state.grant do
-      _ = Opus.Programs.pipe_box_close(state.owner, state.home_id, state.key)
+      _ = Opus.Programs.pipe_box_close(state.owner, state.owner.server_id, state.key)
       Opus.Programs.release(state.owner)
     end
 

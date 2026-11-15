@@ -62,7 +62,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
                 %{
                   "server_digest" => digest,
                   "server_name" => server,
-                  "tool_patterns" => ["issues.*"]
+                  "tool_patterns" => ["issues.*"],
+                  "record" => %{"address" => "https://127.0.0.1:1/mcp", "headers" => []}
                 }
               ]
             }
@@ -308,7 +309,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
         hosts: Jason.encode!(["api.example.com"]),
         config_json:
           Jason.encode!(%{
-            "backends" => [%{"name" => "fetch", "command" => "npx -y fetch", "env" => %{}}],
+            "command" => "npx -y fetch",
+            "env" => %{},
             "timeout_ms" => 1_000
           })
       })
@@ -327,7 +329,10 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # The whole definition replaced, the same command, every public host.
     {:ok, _} =
-      Arca.McpServerStorage.update(actor, "fetcher", %{hosts: nil}, program.epoch)
+      Arca.McpServerStorage.update(actor, "fetcher", %{hosts: nil}, %{
+        id: program.id,
+        epoch: program.epoch
+      })
 
     Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 

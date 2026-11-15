@@ -9,7 +9,9 @@ defmodule Cyfr.Bus.Execution do
   is a refusal's class and the cause it reads as (`causes/0`), never its
   sentence, which may carry a component's own words, nor an arbitrary
   term. `started_at` is when the row was admitted and `ended_at` when it
-  ended, nil while it runs.
+  ended, nil while it runs. `origin` is who started a root
+  (`Prima.Origin`), nil for a child, and `retryable` whether
+  `execution.retry` runs it again (`Opus.Record.retriable/1`).
   """
 
   alias Cyfr.Bus.Payload
@@ -24,7 +26,9 @@ defmodule Cyfr.Bus.Execution do
     :duration_ms,
     :started_at,
     :ended_at,
-    :error
+    :error,
+    :origin,
+    :retryable
   ]
 
   @enforce_keys [:athanor_id, :kind]
@@ -45,7 +49,9 @@ defmodule Cyfr.Bus.Execution do
           duration_ms: non_neg_integer() | nil,
           started_at: DateTime.t() | nil,
           ended_at: DateTime.t() | nil,
-          error: %{class: Prima.Refusal.class(), cause: atom()} | nil
+          error: %{class: Prima.Refusal.class(), cause: atom()} | nil,
+          origin: Prima.Origin.t() | nil,
+          retryable: boolean() | nil
         }
 
   # What each cause says of a run.

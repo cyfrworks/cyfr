@@ -12,7 +12,7 @@ defmodule Cyfr.RosterLiteralTest do
 
   The scan reads every app's `lib/` as code, not text: a `~w` sigil or a
   list of strings naming a roster's whole set, in any order, a string
-  naming its members in a row ("api_key | oauth | bundle | login"), and a
+  naming its members in a row ("api_key | oauth | bundle"), and a
   map keyed by every credential kind, whose policy per kind derives from
   the owner's list. Documentation and comments may name the members.
   """
@@ -22,8 +22,8 @@ defmodule Cyfr.RosterLiteralTest do
 
   # The rosters' ordered vocabularies; the first test holds the owners to
   # them.
-  @kinds ~w(api_key oauth bundle login)
-  @shareable_kinds ~w(api_key bundle login)
+  @kinds ~w(api_key oauth bundle)
+  @shareable_kinds ~w(api_key bundle)
 
   @rosters [
     {"credential kinds", @kinds},
@@ -67,15 +67,15 @@ defmodule Cyfr.RosterLiteralTest do
 
   test "every roster form is found" do
     planted = [
-      {~S'@k ~w(api_key oauth bundle login)', "credential kinds"},
-      {~S'@k ~w(bundle login api_key oauth)a', "credential kinds"},
-      {~S'def k, do: ["api_key", "oauth", "bundle", "login"]', "credential kinds"},
-      {~S'def k(x) when x in ~w(api_key bundle login), do: x', "shareable credential kinds"},
-      {~S'def k, do: Arg.new("kind", :string, enum: ["api_key", "bundle", "login"])',
+      {~S'@k ~w(api_key oauth bundle)', "credential kinds"},
+      {~S'@k ~w(bundle api_key oauth)a', "credential kinds"},
+      {~S'def k, do: ["api_key", "oauth", "bundle"]', "credential kinds"},
+      {~S'def k(x) when x in ~w(bundle api_key), do: x', "shareable credential kinds"},
+      {~S'def k, do: Arg.new("kind", :string, enum: ["api_key", "bundle"])',
        "shareable credential kinds"},
-      {~S'def m, do: {:error, "create requires name and kind (api_key | oauth | bundle | login)"}',
+      {~S'def m, do: {:error, "create requires name and kind (api_key | oauth | bundle)"}',
        "credential kinds"},
-      {~S'@m %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes, "login" => nil}',
+      {~S'@m %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes}',
        "credential kinds"}
     ]
 
@@ -88,17 +88,17 @@ defmodule Cyfr.RosterLiteralTest do
 
     for line <- [
           ~S'@k ~w(api_key oauth)',
-          ~S'@k ~w(api_key bundle)',
-          ~S'@doc "A kind: api_key | oauth | bundle | login."',
-          ~S'def m, do: "api_key oauth bundle login"'
+          ~S'@k ~w(oauth bundle)',
+          ~S'@doc "A kind: api_key | oauth | bundle."',
+          ~S'def m, do: "api_key oauth bundle"'
         ] do
       assert refused("lib/planted.ex", module_with(line)) == [], "#{line} is refused"
     end
 
     # The owner spells its rosters.
     owner = "apps/prima/lib/prima/credential_kinds.ex"
-    assert refused(owner, module_with(~S'@k ~w(api_key oauth bundle login)')) == []
-    assert refused(owner, module_with(~S'@s ~w(api_key bundle login)')) == []
+    assert refused(owner, module_with(~S'@k ~w(api_key oauth bundle)')) == []
+    assert refused(owner, module_with(~S'@s ~w(api_key bundle)')) == []
   end
 
   defp module_with(line), do: "defmodule Planted do\n  @moduledoc false\n  #{line}\nend\n"

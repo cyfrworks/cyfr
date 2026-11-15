@@ -109,10 +109,11 @@ defmodule Prima.TinctureWire do
   Messages over the frame's `MessagePort`, each `{"v", "verb", "frame",
   "args"}`, `frame` the frame id the shell minted:
 
-    * `open` — open a tincture: `args.ref`, a tincture reference, and
+    * `open` — open a tincture: `args.ref`, a tincture reference,
       optionally `args.subject`, exactly `kind` (one of
       `Prima.Manifest.Tincture.subject_kinds/0`) and `id` (`subject_id?/1`),
-      what the app is opened on;
+      what the app is opened on, and `args.call`, the number its answer,
+      `opened` (`opened/3`), carries back (`call?/1`);
     * `title` — set the frame's title: `args.title`;
     * `credential` — ask the person for a secret through the shell's own
       prompt: `args.name`, the vault entry name to store it under, a
@@ -171,6 +172,14 @@ defmodule Prima.TinctureWire do
 
   An app opened with a subject is answered it at its handshake beside its
   credential, `frame_handshake/2`: exactly `credential` and `subject`.
+
+  The shell answers every frame's `open` over its port under the call's
+  number: `opened` (`opened/3`), exactly `call` and `outcome`
+  (`open_outcomes/0`), with `reason` exactly when the outcome names one:
+  a refused open names a refusal's class (`Prima.Refusal.classes/0`); a
+  cancelled one may name `too_soon`, when the shell's end of the port
+  dropped it as a canvas's verb sent too soon after the last spend of the
+  person's activation (below).
 
   ## A canvas
 
@@ -268,6 +277,7 @@ defmodule Prima.TinctureWire do
   @max_person_name 128
   @max_press_value 256
   @max_call 2_147_483_647
+  @open_outcomes ~w(opened refused cancelled)
   @press_outcomes ~w(accepted refused cancelled)
   @prefs_outcomes ~w(saved stale refused cancelled)
   @cancel_reasons ~w(too_soon)
@@ -432,6 +442,18 @@ defmodule Prima.TinctureWire do
   @doc "The most code points a pressed value takes."
   @spec max_press_value() :: pos_integer()
   def max_press_value, do: @max_press_value
+
+  @doc """
+  What an `open` comes to, as `opened` tells the frame: the shell opened
+  the tincture (`opened`), refused it (`refused`, with the refusal's
+  class: a subject the tincture does not take is `invalid_argument` only
+  to a canvas whose `installed` names the tincture, and every other
+  refusal is `not_found`, so a frame learns nothing of what is installed
+  that it could not list), or did not act on it (`cancelled`), naming
+  `too_soon` when it came too soon after the last spend of the activation.
+  """
+  @spec open_outcomes() :: [String.t()]
+  def open_outcomes, do: @open_outcomes
 
   @doc """
   What a control's press comes to, as `pressed` tells the canvas: the gate
@@ -1029,6 +1051,17 @@ defmodule Prima.TinctureWire do
   end
 
   @doc """
+  The `opened` message's arguments: open `call` came to `outcome`, with the
+  refusal's class `reason` exactly when refused, or `too_soon` when
+  cancelled for it. A value outside the wire raises.
+  """
+  @spec opened(pos_integer(), String.t(), String.t() | nil) :: map()
+  def opened(call, outcome, reason \\ nil) do
+    unless call?(call), do: raise(ArgumentError, "opened names the open's call")
+    answered(%{"call" => call, "outcome" => outcome}, outcome, reason, @open_outcomes)
+  end
+
+  @doc """
   The `pressed` message's arguments: press `call` of control `control`
   came to `outcome`, with the refusal's class `reason` exactly when
   refused, or `too_soon` when cancelled for it. A value outside the wire
@@ -1236,12 +1269,16 @@ defmodule Prima.TinctureWire do
 
   defp frame(id), do: if(frame_id?(id), do: :ok, else: {:error, "frame must be a frame id"})
 
-  defp shell_args(:open, %{"ref" => ref} = args) when map_size(args) in [1, 2] do
+  defp shell_args(:open, %{"ref" => ref, "call" => call} = args)
+       when map_size(args) in [2, 3] do
     cond do
       not match?({:ok, %{type: "tincture"}}, Prima.ComponentRef.parse(ref)) ->
         {:error, "open names a tincture reference"}
 
-      map_size(args) == 1 ->
+      not call?(call) ->
+        {:error, "open names its call"}
+
+      map_size(args) == 2 ->
         {:ok, args}
 
       subject?(Map.get(args, "subject")) ->
@@ -1252,7 +1289,7 @@ defmodule Prima.TinctureWire do
     end
   end
 
-  defp shell_args(:open, _args), do: {:error, "open names a tincture reference"}
+  defp shell_args(:open, _args), do: {:error, "open names a tincture reference and its call"}
 
   defp shell_args(:title, %{"title" => title} = args)
        when map_size(args) == 1 and is_binary(title) and title != "" do

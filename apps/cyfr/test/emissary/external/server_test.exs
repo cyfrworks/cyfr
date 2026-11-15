@@ -695,7 +695,7 @@ defmodule Emissary.External.ServerTest do
 
   describe "vault revisions" do
     # A connect reads the revision token of every vault entry the server's
-    # header and backend env templates name before it resolves any of them,
+    # header and env templates name before it resolves any of them,
     # and refuses when the store cannot answer.
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
@@ -740,7 +740,7 @@ defmodule Emissary.External.ServerTest do
       assert state.headers == %{}
     end
 
-    test "a program connect records every backend env reference before the backends service resolves it",
+    test "a program connect records every env reference before the backends service resolves it",
          %{name: name, ctx: ctx} do
       vault!(ctx, "rev-env")
       vault!(ctx, "rev-env-other")
@@ -751,14 +751,12 @@ defmodule Emissary.External.ServerTest do
           mark: :mcp,
           id: "srv_rev_#{System.unique_integer([:positive])}",
           epoch: 1,
-          backends: [
-            %{"name" => "one", "command" => "npx -y one", "env" => %{"TOKEN" => "vault:rev-env"}},
-            %{
-              "name" => "two",
-              "command" => "npx -y two",
-              "env" => %{"KEY" => "vault:rev-env-other", "NODE_ENV" => "production"}
-            }
-          ]
+          command: "npx -y one",
+          env: %{
+            "TOKEN" => "vault:rev-env",
+            "KEY" => "Bearer vault:rev-env-other",
+            "NODE_ENV" => "production"
+          }
         )
 
       # No backends service runs here: the sync that would resolve the env is refused.

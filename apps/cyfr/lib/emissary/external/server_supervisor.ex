@@ -17,7 +17,7 @@ defmodule Emissary.External.ServerSupervisor do
   when its stored configuration has changed.
 
   Registers each server's configuration digest. A changed transport, URL,
-  header template, backend, epoch or timeout replaces the process before the
+  header template, command, env, epoch or timeout replaces the process before the
   next call.
 
   Returns `{:ok, pid}` if started, already running, or restarted. A
@@ -72,8 +72,9 @@ defmodule Emissary.External.ServerSupervisor do
 
   @doc """
   Digest over the config a server process serves — the row it serves, its
-  transport and epoch, the raw header TEMPLATE and backend definitions
-  (names and vault references, never resolved values), url and timeout.
+  transport and epoch, the raw header and env TEMPLATES (names and vault
+  references, never resolved values), a program's command and kept home,
+  url and timeout.
   Every write to a row raises its epoch, so any change to the row, a row
   deleted and recreated under the same name, or a program restarted
   changes the digest.
@@ -81,7 +82,7 @@ defmodule Emissary.External.ServerSupervisor do
   def config_digest(config) do
     :erlang.phash2(
       {config[:id], config[:transport], config[:epoch], config[:url], config[:headers] || %{},
-       config[:backends] || [], config[:timeout_ms], config[:login_entry_id]}
+       config[:command], config[:env] || %{}, config[:timeout_ms], config[:home_id]}
     )
   end
 

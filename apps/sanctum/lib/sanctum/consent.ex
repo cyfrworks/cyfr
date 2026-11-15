@@ -290,13 +290,15 @@ defmodule Sanctum.Consent do
   @doc """
   What one vault row of the head revision `consent` (from
   `head_consent/2`) binds now, read by its tag: the athanor's own entry,
-  a selection of another profile's key resolved as a run resolves it, a
+  the athanor's own program row a login need binds, read live, a
+  selection of another profile's key resolved as a run resolves it, a
   share read live as the context's person
   is offered it and held to the row's digest, or a row naming none
   (`Sanctum.Consent.Loader.row_binding/3`). Nothing is raised.
   """
   @spec row_binding(Sanctum.Context.t(), map(), map()) ::
           {:entry, String.t(), String.t()}
+          | {:program, String.t(), {:ok, map()} | {:error, term()}}
           | {:selection, String.t(), {:ok, map()} | {:error, term()}}
           | {:share, String.t(), {:ok, map()} | {:error, term()}}
           | :malformed
@@ -312,6 +314,24 @@ defmodule Sanctum.Consent do
   @spec request_preview(Sanctum.Context.t(), String.t(), map(), String.t() | nil) ::
           {:ok, Prima.Confirmation.Preview.t()} | {:error, term()}
   defdelegate request_preview(ctx, operation, args, resource), to: Sanctum.Consent.Authz
+
+  @doc """
+  Decide `change`, a change to a program row's definition
+  (`program_definition`, `Sanctum.Pairing`): its operation, its exact
+  arguments and its preview (`Sanctum.Consent.Authz.confirm/3`). Every
+  other confirmed change is decided inside the Sanctum module that owns
+  its data; a program row is written by `Emissary.External.Provider`
+  through Arca, so it asks for and consumes this one action here, for
+  the program operations alone (`mcp_servers.create`, `update` and
+  `delete`); any other operation is `{:error, :invalid_request}`.
+  """
+  @spec confirm_program_definition(Sanctum.Context.t(), Sanctum.Consent.Authz.change()) ::
+          :ok | {:error, term()}
+  def confirm_program_definition(%Sanctum.Context{} = ctx, %{operation: operation} = change)
+      when operation in ["mcp_servers.create", "mcp_servers.update", "mcp_servers.delete"],
+      do: Sanctum.Consent.Authz.confirm(ctx, :program_definition, change)
+
+  def confirm_program_definition(%Sanctum.Context{}, _change), do: {:error, :invalid_request}
 
   @doc """
   The context's own person's confirmations of sensitive changes still

@@ -66,6 +66,33 @@ defmodule Opus.RecordTest do
       assert :ok = Record.write_started(ctx, named)
       assert %{origin: "programmatic"} = Arca.Repo.get!(Arca.Schemas.Execution, named.id)
     end
+
+    test "a root reads its origin, and a child none, alike at admission and from its row",
+         %{ctx: ctx} do
+      root = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(ctx, root)
+
+      child = Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: root.id)
+      :ok = Record.write_started(ctx, child, grant: inherited!(ctx, root.id))
+
+      # The child's row stores its parent's origin; the record does not
+      # take it for the child's own.
+      child_row = Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+      assert child_row.origin == "programmatic"
+
+      assert {:ok, read_root} = Record.get(ctx, root.id)
+      assert {:ok, read_child} = Record.get(ctx, child.id)
+      {:ok, listed} = Record.list(ctx, limit: 10)
+
+      assert [root.admitted.origin, read_root.admitted.origin, Record.origin(root)] ==
+               [:programmatic, :programmatic, :programmatic]
+
+      assert [child.admitted.origin, read_child.admitted.origin, Record.origin(child_row)] ==
+               [nil, nil, nil]
+
+      assert Map.new(listed, &{&1.id, &1.admitted.origin}) ==
+               %{root.id => :programmatic, child.id => nil}
+    end
   end
 
   describe "new/4" do

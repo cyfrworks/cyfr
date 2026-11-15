@@ -39,32 +39,26 @@ defmodule Emissary.External.Server do
 
   ## A program
 
-  A program's backends are programs the backends service runs, and this
-  process is their MCP client. Connecting asks the programs controller for
-  the row's owner (`Opus.Programs.hold/1`), which answers a grant, then opens
-  one session per backend under the key `"mcp"` (`Opus.Programs.Session`):
-  the service attaches to a session still running for that key or starts the
-  backend's command. A backend started afresh (`resumed: false`) is
-  initialized at the legacy protocol revision
+  A program is one command the backends service runs, and this process is
+  its MCP client. Connecting asks the programs controller for the row's
+  owner (`Opus.Programs.hold/1`), which answers a grant, then opens the
+  program's session under the key `"mcp"` (`Opus.Programs.Session`), in
+  the row's own home when it keeps one: the service attaches to a session
+  still running for that key or starts the command. A program started
+  afresh (`resumed: false`) is initialized at the legacy protocol revision
   (`Prima.MCP.Protocol.legacy_version/0`) and told
-  `notifications/initialized`; then each is asked `tools/list`, every page
-  of it as an HTTP listing is, and its
-  tools are this server's as `<backend>__<tool>`. Every request is one
-  JSON-RPC line `send` writes; a reader process per session waits on `recv`
-  and hands this process the lines, each answer going to the call that
-  awaits its id. A backend's own request is answered `-32601`; its
+  `notifications/initialized`; then it is asked `tools/list`, every page
+  of it as an HTTP listing is, and its tools are this server's by the names
+  it lists, which the proxy offers as `<row name>:<tool>`. Every request is
+  one JSON-RPC line `send` writes; a reader process waits on `recv` and
+  hands this process the lines, each answer going to the call that awaits
+  its id. The program's own request is answered `-32601`; its
   `notifications/tools/list_changed` lists its tools again.
 
   A session whose process ended — idle past the owner's idle period, a
   crash, a restart of the service — reads `running: false`: every call
-  awaiting that backend fails, and the next call opens the session again,
-  initializing the backend afresh. The tools listed stay listed meanwhile.
-
-  A kept mcp program runs its backends in its login entry's home
-  (`login_entry_id`): a connect checks the entry first
-  (`Sanctum.Mount.login_entry/3`, active, of this athanor, naming this row)
-  and refuses with `{:login_entry, reason}` when it is not, before anything
-  is held or opened.
+  awaiting it fails, and the next call opens the session again,
+  initializing the program afresh. The tools listed stay listed meanwhile.
 
   One member of the cell runs an owner; a member that does not hold its
   claim refuses the connection (`:claimed_elsewhere`). A call the service
@@ -73,14 +67,14 @@ defmodule Emissary.External.Server do
   `stale_epoch` re-reads the row, and a row whose epoch moved leaves this
   process in error until it is replaced. The controller's
   `{Opus.Programs, :owner, grant}` replaces the grant and drops the
-  sessions, which the next call opens again; its
+  session, which the next call opens again; its
   `{Opus.Programs, :stand_down, _}` stops this process. Stopping the
   process releases its hold within 3 s.
 
   ## Vault revisions
 
   Before a connect resolves anything, the process reads the revision token
-  of every vault entry its header and backend env templates name
+  of every vault entry its header and env templates name
   (`Sanctum.VaultReader.revisions/2`: the payload revision and the binding
   digest) and keeps them for as long as it serves with what it resolved
   (`vault_revisions/1`). The reconciler's periodic pass compares them with
@@ -104,7 +98,7 @@ defmodule Emissary.External.Server do
 
   @initialize_timeout_ms 15_000
   # How long a caller waits for a connect, which for a program includes
-  # the service starting its backends.
+  # the service starting its program.
   @connect_call_timeout_ms 60_000
   @retried_refusals [:stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
   # A reader's wait on one recv; the service answers sooner on a line.
@@ -240,7 +234,7 @@ defmodule Emissary.External.Server do
   # revocation and an archived athanor stop it through
   # `Emissary.External.Reconciler`, a changed row through
   # `Emissary.External.ServerSupervisor.ensure_started/1`, and in a cell
-  # a backend whose claim moved through `Opus.Programs` — so a call
+  # a program whose claim moved through `Opus.Programs` — so a call
   # in flight when one of those lands sees its process go. The contract of
   # `get_tools/2`, `call_tool/3` and `reinitialize/2`, and of
   # `Emissary.External.Servers.ensure_started/2` above them, is a typed
@@ -283,10 +277,8 @@ defmodule Emissary.External.Server do
       :grant,
       # This process, which a call's task hands its reply back through.
       :server,
-      # A kept mcp program's login entry, whose home its sessions run in.
-      :login_entry_id,
-      # The backend a call's task sends to (a task's snapshot only).
-      :call_backend,
+      # A kept program's home: its row's id; nil for a scratch home.
+      :home_id,
       :server_info,
       :error,
       :last_init_attempt,
@@ -298,7 +290,7 @@ defmodule Emissary.External.Server do
       transport: :http,
       raw_headers: %{},
       headers: %{},
-      # Every vault entry the header and backend env templates name, and
+      # Every vault entry the header and env templates name, and
       # the revision token of each as read before the last connect
       # resolved them; nil until then.
       vault_names: [],
@@ -312,11 +304,10 @@ defmodule Emissary.External.Server do
       # What each running call asked, so a refused one can be sent again:
       # %{task_pid => {tool_name, arguments, attempt}}.
       calls: %{},
-      # A program's backends, the session each runs in and its reader:
-      # %{backend => %{session: id, reader: pid}}.
-      backends: [],
-      sessions: %{},
-      # The JSON-RPC ids a call's task awaits: %{id => {task_pid, backend}}.
+      # A program's session and its reader:
+      # %{session: id, reader: pid | nil, after: seq}, nil while none is open.
+      session: nil,
+      # The JSON-RPC ids a call's task awaits: %{id => task_pid}.
       pending: %{}
     ]
   end
@@ -333,8 +324,7 @@ defmodule Emissary.External.Server do
       name: config[:name],
       url: config[:url],
       server: self(),
-      login_entry_id: config[:login_entry_id],
-      backends: Enum.map(config[:backends] || [], & &1["name"]),
+      home_id: config[:home_id],
       transport: config[:transport] || :http,
       server_id: config[:id],
       epoch: config[:epoch],
@@ -406,7 +396,7 @@ defmodule Emissary.External.Server do
   @impl true
   def handle_call(:reinitialize, _from, state) do
     state = %{
-      drop_sessions(state, :reinitialized)
+      drop_session(state, :reinitialized)
       | status: :disconnected,
         tools: [],
         server_info: nil,
@@ -437,29 +427,23 @@ defmodule Emissary.External.Server do
          state}
 
       state.transport == :program ->
-        case program_route(state, tool_name) do
-          {:ok, backend, tool} ->
-            case ensure_session(state, backend) do
-              {:ok, state} ->
-                {request_id, state} = next_request_id(state)
+        case ensure_session(state) do
+          {:ok, state} ->
+            {request_id, state} = next_request_id(state)
 
-                body =
-                  Message.encode_request(request_id, "tools/call", %{
-                    "name" => tool,
-                    "arguments" => arguments || %{}
-                  })
+            body =
+              Message.encode_request(request_id, "tools/call", %{
+                "name" => tool_name,
+                "arguments" => arguments || %{}
+              })
 
-                case start_call(state, from, call, body, tool_name, backend, request_id) do
-                  {:noreply, state} -> {:noreply, start_reader(state, backend)}
-                  reply -> reply
-                end
-
-              {:error, reason, state} ->
-                {:reply, {:error, mask_credentials(failure_sentence(reason), state)}, state}
+            case start_call(state, from, call, body, tool_name, request_id) do
+              {:noreply, state} -> {:noreply, start_reader(state)}
+              reply -> reply
             end
 
-          :error ->
-            {:reply, {:error, {:not_found, "Tool", tool_name}}, state}
+          {:error, reason, state} ->
+            {:reply, {:error, mask_credentials(failure_sentence(reason), state)}, state}
         end
 
       true ->
@@ -471,14 +455,14 @@ defmodule Emissary.External.Server do
             "arguments" => arguments || %{}
           })
 
-        start_call(state, from, call, body, tool_name, nil, nil)
+        start_call(state, from, call, body, tool_name, nil)
     end
   end
 
   # Runs one call's upstream round trip in a detached task. A program call's
   # task awaits its answer by `request_id`, which this process hands it
-  # from the backend's session.
-  defp start_call(state, from, call, body, tool_name, backend, request_id) do
+  # from the program's session.
+  defp start_call(state, from, call, body, tool_name, request_id) do
     # The upstream HTTP round-trip runs OUTSIDE this process so one slow
     # server never head-of-line-blocks every other caller of the same
     # server for up to their full call timeout. The task gets a snapshot
@@ -487,14 +471,7 @@ defmodule Emissary.External.Server do
     # GenServer above. The tool catalogue is dropped from the snapshot —
     # the call doesn't read it, and it would otherwise be copied into
     # every task heap.
-    snapshot = %{
-      state
-      | tools: [],
-        in_flight: %{},
-        calls: %{},
-        pending: %{},
-        call_backend: backend
-    }
+    snapshot = %{state | tools: [], in_flight: %{}, calls: %{}, pending: %{}}
 
     server = self()
 
@@ -539,7 +516,7 @@ defmodule Emissary.External.Server do
 
         pending =
           if request_id,
-            do: Map.put(state.pending, request_id, {task_pid, backend}),
+            do: Map.put(state.pending, request_id, task_pid),
             else: state.pending
 
         {:noreply,
@@ -602,37 +579,36 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # Lines a backend's session wrote, from its reader, which waits to be told
-  # whether to read on.
-  def handle_info({:session_lines, session, lines, last, running, reader}, state) do
-    case session_backend(state, session) do
-      nil ->
-        send(reader, :stop)
-        {:noreply, state}
-
-      backend ->
-        {state, _awaited} = on_lines(state, backend, lines, nil)
-        {:noreply, after_read(state, backend, last, running, reader, false)}
-    end
+  # Lines the program's session wrote, from its reader, which waits to be
+  # told whether to read on.
+  def handle_info(
+        {:session_lines, session, lines, last, running, reader},
+        %State{session: %{session: session}} = state
+      ) do
+    {state, _awaited} = on_lines(state, lines, nil)
+    {:noreply, after_read(state, last, running, reader, false)}
   end
 
-  def handle_info({:relist, backend}, state), do: {:noreply, relist_tools(state, backend)}
-
-  def handle_info({:session_lost, session, reason}, state) do
-    case session_backend(state, session) do
-      nil -> {:noreply, state}
-      backend -> {:noreply, session_ended(state, backend, reason)}
-    end
+  def handle_info({:session_lines, _session, _lines, _last, _running, reader}, state) do
+    send(reader, :stop)
+    {:noreply, state}
   end
+
+  def handle_info(:relist, state), do: {:noreply, relist_tools(state)}
+
+  def handle_info({:session_lost, session, reason}, %State{session: %{session: session}} = state),
+    do: {:noreply, session_ended(state, reason)}
+
+  def handle_info({:session_lost, _session, _reason}, state), do: {:noreply, state}
 
   # A reader ends after its session does, and says so first.
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
-  # The controller synced this server's owner again: the sessions ran on a
-  # service, or under a version, the new grant does not name. They are
-  # opened again by the next call.
+  # The controller synced this server's owner again: the session ran on a
+  # service, or under a version, the new grant does not name. It is opened
+  # again by the next call.
   def handle_info({Opus.Programs, :owner, %{epoch: epoch} = grant}, %State{epoch: epoch} = state),
-    do: {:noreply, %{drop_sessions(state, :owner_moved) | grant: grant}}
+    do: {:noreply, %{drop_session(state, :owner_moved) | grant: grant}}
 
   def handle_info({Opus.Programs, :owner, _grant_for_another_epoch}, state),
     do: {:noreply, state}
@@ -651,7 +627,7 @@ defmodule Emissary.External.Server do
       state
       | in_flight: Map.delete(state.in_flight, task_pid),
         calls: Map.delete(state.calls, task_pid),
-        pending: Map.reject(state.pending, fn {_id, {pid, _backend}} -> pid == task_pid end)
+        pending: Map.reject(state.pending, fn {_id, pid} -> pid == task_pid end)
     }
   end
 
@@ -659,7 +635,7 @@ defmodule Emissary.External.Server do
   # and send the call once more.
   defp after_refusal(state, from, {tool, arguments, 0}, code) when code in @retried_refusals do
     state = %{
-      drop_sessions(state, :refused)
+      drop_session(state, :refused)
       | status: :disconnected,
         grant: nil,
         last_init_attempt: nil
@@ -678,15 +654,11 @@ defmodule Emissary.External.Server do
   # The service runs a newer version of this owner. A row whose epoch moved
   # has been changed since this process started: it stays in error until
   # `Emissary.External.ServerSupervisor.ensure_started/1` replaces it.
-  # The backend's session ended before the call reached it (idle, a crash):
-  # it is opened again, its backend initialized afresh, and the call sent
-  # once more.
+  # The program's session ended before the call reached it (idle, a
+  # crash): it is opened again, the program initialized afresh, and the
+  # call sent once more.
   defp after_refusal(state, from, {tool, arguments, 0}, :session_ended) do
-    state =
-      case program_route(state, tool) do
-        {:ok, backend, _tool} -> session_ended(state, backend, :ended)
-        :error -> state
-      end
+    state = drop_session(state, :ended)
 
     case dispatch_call(state, from, {tool, arguments, 1}) do
       {:reply, reply, state} ->
@@ -727,13 +699,11 @@ defmodule Emissary.External.Server do
     {:noreply, state}
   end
 
-  # A backend that said its tools changed is listed again; a refused or
+  # A program that said its tools changed is listed again; a refused or
   # failed listing leaves the catalogue as it was.
-  defp relist_tools(%State{transport: :program, status: :ready} = state, backend) do
-    case list_backend_tools(state, backend) do
-      {:ok, listed, state} ->
-        tools = replace_backend_tools(state.tools, backend, listed)
-
+  defp relist_tools(%State{transport: :program, status: :ready} = state) do
+    case list_program_tools(state) do
+      {:ok, tools, state} ->
         if tools != state.tools do
           Logger.info(
             "[Emissary.External.Server] #{state.name}: #{length(tools)} tools after a change"
@@ -749,7 +719,7 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp relist_tools(state, _backend), do: state
+  defp relist_tools(state), do: state
 
   defp tools_changed(athanor_id) do
     Emissary.External.Proxy.invalidate_external_tools_cache(
@@ -850,7 +820,7 @@ defmodule Emissary.External.Server do
     end
 
     if state.transport == :program do
-      drop_sessions(state, :stopped)
+      drop_session(state, :stopped)
       Opus.Programs.release(owner(state))
     end
 
@@ -864,9 +834,8 @@ defmodule Emissary.External.Server do
   # MCP Handshake
   # ============================================================================
 
-  # A program connects through the programs controller: its login
-  # entry checked when it keeps a home, its owner held, then a session per
-  # backend opened and its tools listed.
+  # A program connects through the programs controller: its owner held,
+  # then its session opened and its tools listed.
   defp do_initialize(%State{transport: :program} = state) do
     Logger.info(
       "[Emissary.External.Server] Connecting to #{state.name} through the backends service"
@@ -910,7 +879,7 @@ defmodule Emissary.External.Server do
         _ -> []
       end
 
-    Enum.uniq(headers ++ Opus.Programs.Definition.entry_names(config[:backends]))
+    Enum.uniq(headers ++ Opus.Programs.Definition.entry_names(%{"env" => config[:env] || %{}}))
   end
 
   defp http_initialize(state) do
@@ -965,9 +934,8 @@ defmodule Emissary.External.Server do
   end
 
   defp program_connect(state, attempt) do
-    with :ok <- login_entry(state),
-         {:ok, grant} <- Opus.Programs.hold(owner(state)),
-         {:ok, tools, listed} <- list_all_tools(%{state | grant: grant}) do
+    with {:ok, grant} <- Opus.Programs.hold(owner(state)),
+         {:ok, tools, listed} <- list_program_tools(%{state | grant: grant}) do
       Logger.info(
         "[Emissary.External.Server] Connected to #{listed.name}: #{length(tools)} tools discovered"
       )
@@ -975,87 +943,50 @@ defmodule Emissary.External.Server do
       {:ok, %{listed | status: :ready, tools: tools, error: nil}}
     else
       {:error, {:refused, code, _boot}, state} when code in @retried_refusals and attempt == 0 ->
-        program_connect(drop_sessions(%{state | grant: nil}, :refused), 1)
+        program_connect(drop_session(%{state | grant: nil}, :refused), 1)
 
       {:error, reason, state} ->
-        fail_initialize(drop_sessions(%{state | grant: nil}, :failed), backends_reason(reason))
+        fail_initialize(drop_session(%{state | grant: nil}, :failed), backends_reason(reason))
 
       {:error, reason} ->
-        fail_initialize(drop_sessions(%{state | grant: nil}, :failed), backends_reason(reason))
+        fail_initialize(drop_session(%{state | grant: nil}, :failed), backends_reason(reason))
     end
   end
 
-  # A kept mcp program's sessions run in its login entry's home, so the entry
-  # must be an active login entry of this athanor that names this row; a
-  # scratch row names none.
-  defp login_entry(%State{login_entry_id: nil}), do: :ok
-
-  defp login_entry(%State{login_entry_id: entry} = state) do
-    ctx = Sanctum.Context.internal(athanor_id: state.athanor_id, scope: :athanor)
-
-    case Sanctum.Mount.login_entry(ctx, entry, state.name) do
-      {:ok, _entry} -> :ok
-      {:error, reason} -> {:error, {:login_entry, reason}}
-    end
-  end
-
-  # A backend's session ended under a call: the call fails with that
+  # The program's session ended under a call: the call fails with that
   # sentence, and the session is dropped so the next call opens it again.
-  defp backend_ended(state, backend),
-    do: {:error, "#{backend} ended", session_ended(state, backend, :ended)}
-
-  defp list_all_tools(state) do
-    Enum.reduce_while(state.backends, {:ok, [], state}, fn backend, {:ok, acc, state} ->
-      with {:ok, state} <- ensure_session(state, backend),
-           {:ok, listed, state} <- list_backend_tools(state, backend) do
-        {:cont, {:ok, acc ++ prefixed(backend, listed), state}}
-      else
-        {:error, reason, state} -> {:halt, {:error, reason, state}}
-      end
-    end)
-  end
+  defp program_ended(state),
+    do: {:error, "#{state.name} ended", session_ended(state, :ended)}
 
   # ============================================================================
-  # A program's sessions
+  # A program's session
   # ============================================================================
 
-  # A backend's session, opened when it has none: the service attaches to
-  # the one still running for this row's key, or starts the backend afresh,
+  # The program's session, opened when it has none: the service attaches to
+  # the one still running for this row's key, or starts the program afresh,
   # which is initialized before anything else is sent to it.
-  defp ensure_session(%State{sessions: sessions} = state, backend)
-       when is_map_key(sessions, backend),
-       do: {:ok, state}
+  defp ensure_session(%State{session: %{}} = state), do: {:ok, state}
 
-  defp ensure_session(%State{grant: nil} = state, backend) do
+  defp ensure_session(%State{grant: nil} = state) do
     case Opus.Programs.hold(owner(state)) do
-      {:ok, grant} -> ensure_session(%{state | grant: grant}, backend)
+      {:ok, grant} -> ensure_session(%{state | grant: grant})
       {:error, reason} -> {:error, reason, state}
     end
   end
 
-  defp ensure_session(state, backend) do
-    # A kept row's entry is checked at every open, not only at connect: an
-    # entry revoked since then mounts nothing more.
-    case login_entry(state) do
-      :ok -> open_session(state, backend)
-      {:error, reason} -> {:error, backends_reason(reason), state}
-    end
-  end
-
-  defp open_session(state, backend) do
+  defp ensure_session(state) do
     params = %{
-      program: backend,
+      program: Opus.Programs.Definition.program_name(),
       key: @session_key,
-      home_id: state.login_entry_id,
+      home_id: state.home_id,
       mode: :run,
       argv: []
     }
 
     case Opus.Programs.Session.open(state.grant, params) do
       {:ok, %{session: session, resumed: resumed}} ->
-        entry = %{session: session, reader: nil, after: 0}
-        state = %{state | sessions: Map.put(state.sessions, backend, entry)}
-        if resumed, do: {:ok, state}, else: initialize_backend(state, backend)
+        state = %{state | session: %{session: session, reader: nil, after: 0}}
+        if resumed, do: {:ok, state}, else: initialize_program(state)
 
       {:error, {:refused, code, boot} = refused} ->
         if code == :stale_boot and is_binary(boot), do: Opus.Programs.boot_seen(boot)
@@ -1066,71 +997,73 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp initialize_backend(state, backend) do
+  defp initialize_program(state) do
     params = %{
       "protocolVersion" => Protocol.legacy_version(),
       "capabilities" => %{},
       "clientInfo" => %{"name" => "cyfr", "version" => Prima.Version.current()}
     }
 
-    with {:ok, _result, state} <- request(state, backend, "initialize", params),
-         {:ok, state} <- notify(state, backend, "notifications/initialized") do
+    with {:ok, _result, state} <- request(state, "initialize", params),
+         {:ok, state} <- notify(state, "notifications/initialized") do
       {:ok, state}
     end
   end
 
-  defp list_backend_tools(state, backend) do
-    case list_pages(state, backend, &request(&1, backend, "tools/list", &2)) do
-      {:ok, tools, state} -> {:ok, mask_credentials(tools, state), state}
-      {:error, reason, state} -> {:error, reason, state}
+  defp list_program_tools(state) do
+    with {:ok, state} <- ensure_session(state) do
+      case list_pages(state, state.name, &request(&1, "tools/list", &2)) do
+        {:ok, tools, state} -> {:ok, mask_credentials(tools, state), state}
+        {:error, reason, state} -> {:error, reason, state}
+      end
     end
   end
 
-  # One request to a backend, made from this process: its line sent, its
+  # One request to the program, made from this process: its line sent, its
   # session read while the answer is outstanding, and this process's own
   # mailbox read for the reader's lines until the answer with its id
   # arrives, the session ends or the bound passes. Every other line read
   # meanwhile is handled as it would be outside. A session the service ended
-  # meanwhile (idle, a crash) is opened again once, its backend initialized
+  # meanwhile (idle, a crash) is opened again once, its program initialized
   # afresh.
-  defp request(state, backend, method, params, retried? \\ false) do
+  defp request(state, method, params, retried? \\ false) do
     {id, state} = next_request_id(state)
-    %{session: session} = Map.fetch!(state.sessions, backend)
+    %{session: session} = state.session
     line = Jason.encode!(Message.encode_request(id, method, params))
     deadline = System.monotonic_time(:millisecond) + min(state.timeout_ms, @initialize_timeout_ms)
 
     case Opus.Programs.Session.send(state.grant, session, [line]) do
       {:ok, :running} ->
-        await(start_reader(state, backend), backend, session, id, deadline)
+        await(start_reader(state), session, id, deadline)
 
       {:ok, :ended} when not retried? ->
-        reopen(state, backend, &request(&1, backend, method, params, true))
+        reopen(state, &request(&1, method, params, true))
 
       {:error, {:refused, :unknown_session, _boot}} when not retried? ->
-        reopen(state, backend, &request(&1, backend, method, params, true))
+        reopen(state, &request(&1, method, params, true))
 
       {:ok, :ended} ->
-        backend_ended(state, backend)
+        program_ended(state)
 
       {:error, reason} ->
-        {:error, reason, session_ended(state, backend, :refused)}
+        {:error, reason, session_ended(state, :refused)}
     end
   end
 
-  defp reopen(state, backend, again) do
-    case ensure_session(session_ended(state, backend, :ended), backend) do
+  defp reopen(state, again) do
+    case ensure_session(session_ended(state, :ended)) do
       {:ok, state} -> again.(state)
       {:error, reason, state} -> {:error, reason, state}
     end
   end
 
-  defp await(state, backend, session, id, deadline) do
+  defp await(state, session, id, deadline) do
     wait = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
       {:session_lines, ^session, lines, last, running, reader} ->
-        {state, found} = on_lines(state, backend, lines, id)
-        state = after_read(state, backend, last, running, reader, found == nil)
+        {state, found} = on_lines(state, lines, id)
+        state = after_read(state, last, running, reader, found == nil)
 
         case found do
           {:ok, %Message{type: :response, result: result}} ->
@@ -1140,35 +1073,35 @@ defmodule Emissary.External.Server do
             {:error, upstream_message(error), state}
 
           nil when running ->
-            await(state, backend, session, id, deadline)
+            await(state, session, id, deadline)
 
           nil ->
-            {:error, "#{backend} ended before it answered", state}
+            {:error, "#{state.name} ended before it answered", state}
         end
 
       {:session_lost, ^session, reason} ->
-        {:error, reason, session_ended(state, backend, reason)}
+        {:error, reason, session_ended(state, reason)}
     after
-      wait -> {:error, "timeout: #{backend} did not answer", stop_reader(state, backend)}
+      wait -> {:error, "timeout: #{state.name} did not answer", stop_reader(state)}
     end
   end
 
-  defp notify(state, backend, method) do
-    %{session: session} = Map.fetch!(state.sessions, backend)
+  defp notify(state, method) do
+    %{session: session} = state.session
     line = Jason.encode!(Message.encode_notification(method))
 
     case Opus.Programs.Session.send(state.grant, session, [line]) do
       {:ok, :running} -> {:ok, state}
-      {:ok, :ended} -> backend_ended(state, backend)
-      {:error, reason} -> {:error, reason, session_ended(state, backend, :refused)}
+      {:ok, :ended} -> program_ended(state)
+      {:error, reason} -> {:error, reason, session_ended(state, :refused)}
     end
   end
 
-  # What a backend wrote: an answer a call's task awaits goes to it, the one
-  # `awaited` id is answered back, a backend's own request is answered
-  # `-32601`, a tools-changed notification lists its tools again, and
-  # anything else is dropped.
-  defp on_lines(state, backend, lines, awaited) do
+  # What the program wrote: an answer a call's task awaits goes to it, the
+  # one `awaited` id is answered back, the program's own request is
+  # answered `-32601`, a tools-changed notification lists its tools again,
+  # and anything else is dropped.
+  defp on_lines(state, lines, awaited) do
     Enum.reduce(lines, {state, nil}, fn line, {state, found} ->
       case Message.decode_json(line) do
         {:ok, %Message{type: type, id: ^awaited} = message}
@@ -1177,7 +1110,7 @@ defmodule Emissary.External.Server do
 
         {:ok, %Message{type: type, id: id} = message} when type in [:response, :error] ->
           case Map.pop(state.pending, id) do
-            {{task, ^backend}, pending} ->
+            {task, pending} when is_pid(task) ->
               send(task, {:rpc_reply, id, message})
               {%{state | pending: pending}, found}
 
@@ -1186,11 +1119,11 @@ defmodule Emissary.External.Server do
           end
 
         {:ok, %Message{type: :notification, method: "notifications/tools/list_changed"}} ->
-          send(self(), {:relist, backend})
+          send(self(), :relist)
           {state, found}
 
         {:ok, %Message{type: :request, id: id, method: method}} ->
-          refuse_backend_request(state, backend, id, method)
+          refuse_program_request(state, id, method)
           {state, found}
 
         _ ->
@@ -1199,8 +1132,8 @@ defmodule Emissary.External.Server do
     end)
   end
 
-  defp refuse_backend_request(state, backend, id, method) do
-    with %{session: session} <- state.sessions[backend] do
+  defp refuse_program_request(state, id, method) do
+    with %{session: session} <- state.session do
       error = %{
         "jsonrpc" => "2.0",
         "id" => id,
@@ -1213,65 +1146,49 @@ defmodule Emissary.External.Server do
     :ok
   end
 
-  # A backend's session ended: every call awaiting it fails, and the next
+  # The program's session ended: every call awaiting it fails, and the next
   # call opens it again.
-  defp session_ended(state, backend, reason) do
-    {failed, pending} =
-      Enum.split_with(state.pending, fn {_id, {_task, b}} -> b == backend end)
+  defp session_ended(state, reason) do
+    for {id, task} <- state.pending, do: send(task, {:rpc_failed, id, reason})
 
-    for {id, {task, _b}} <- failed, do: send(task, {:rpc_failed, id, reason})
+    case state.session do
+      %{reader: reader} when is_pid(reader) ->
+        Process.unlink(reader)
+        Process.exit(reader, :kill)
 
-    case Map.pop(state.sessions, backend) do
-      {nil, _sessions} ->
-        %{state | pending: Map.new(pending)}
-
-      {%{reader: reader}, sessions} ->
-        if is_pid(reader) do
-          Process.unlink(reader)
-          Process.exit(reader, :kill)
-        end
-
-        %{state | sessions: sessions, pending: Map.new(pending)}
+      _none_or_unread ->
+        :ok
     end
+
+    %{state | session: nil, pending: %{}}
   end
 
-  defp drop_sessions(state, reason),
-    do: Enum.reduce(Map.keys(state.sessions), state, &session_ended(&2, &1, reason))
-
-  defp session_backend(state, session) do
-    Enum.find_value(state.sessions, fn {backend, entry} ->
-      if entry.session == session, do: backend
-    end)
-  end
+  defp drop_session(%State{session: nil} = state, _reason), do: state
+  defp drop_session(state, reason), do: session_ended(state, reason)
 
   # The session is read only while an answer is outstanding on it: a recv
   # is activity to the service, which ends a session with none within its
   # idle period, so a reader polling an idle session would keep it running
-  # for ever. Lines a backend writes while no one reads wait in the
+  # for ever. Lines the program writes while no one reads wait in the
   # service's buffer and are read by the next reader, from `after`.
-  defp after_read(state, backend, last, running, reader, awaiting?) do
-    case state.sessions[backend] do
-      %{reader: ^reader} = entry ->
-        entry = %{entry | after: max(entry.after, last)}
+  defp after_read(state, last, running, reader, awaiting?) do
+    case state.session do
+      %{reader: ^reader} = session ->
+        session = %{session | after: max(session.after, last)}
 
         cond do
           not running ->
             send(reader, :stop)
+            session_ended(%{state | session: session}, :ended)
 
-            session_ended(
-              %{state | sessions: Map.put(state.sessions, backend, entry)},
-              backend,
-              :ended
-            )
-
-          awaiting? or outstanding?(state, backend) ->
-            send(reader, {:continue, entry.after})
-            %{state | sessions: Map.put(state.sessions, backend, entry)}
+          awaiting? or state.pending != %{} ->
+            send(reader, {:continue, session.after})
+            %{state | session: session}
 
           true ->
             send(reader, :stop)
             Process.unlink(reader)
-            %{state | sessions: Map.put(state.sessions, backend, %{entry | reader: nil})}
+            %{state | session: %{session | reader: nil}}
         end
 
       _other ->
@@ -1280,32 +1197,25 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp outstanding?(state, backend),
-    do: Enum.any?(state.pending, fn {_id, {_task, b}} -> b == backend end)
-
-  defp start_reader(state, backend) do
-    case state.sessions[backend] do
+  defp start_reader(state) do
+    case state.session do
       %{reader: nil, session: session, after: after_seq} = entry ->
         server = self()
         grant = state.grant
         reader = spawn_link(fn -> read(server, grant, session, after_seq) end)
-        %{state | sessions: Map.put(state.sessions, backend, %{entry | reader: reader})}
+        %{state | session: %{entry | reader: reader}}
 
       _running_or_gone ->
         state
     end
   end
 
-  defp stop_reader(state, backend) do
-    case state.sessions[backend] do
-      %{reader: reader} = entry when is_pid(reader) ->
-        if not outstanding?(state, backend) do
-          Process.unlink(reader)
-          Process.exit(reader, :kill)
-          %{state | sessions: Map.put(state.sessions, backend, %{entry | reader: nil})}
-        else
-          state
-        end
+  defp stop_reader(state) do
+    case state.session do
+      %{reader: reader} = entry when is_pid(reader) and state.pending == %{} ->
+        Process.unlink(reader)
+        Process.exit(reader, :kill)
+        %{state | session: %{entry | reader: nil}}
 
       _ ->
         state
@@ -1330,42 +1240,10 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # A tool name as this server lists it, `<backend>__<tool>`, split.
-  defp program_route(state, name) do
-    case String.split(name, "__", parts: 2) do
-      [backend, tool] when tool != "" ->
-        if backend in state.backends, do: {:ok, backend, tool}, else: :error
-
-      _ ->
-        :error
-    end
-  end
-
-  defp prefixed(backend, tools) do
-    for tool <- tools do
-      description =
-        case tool["description"] do
-          text when is_binary(text) and text != "" -> "[#{backend}] #{text}"
-          _ -> "[#{backend}]"
-        end
-
-      %{
-        "name" => "#{backend}__#{tool["name"]}",
-        "description" => description,
-        "inputSchema" => tool["inputSchema"] || %{"type" => "object"}
-      }
-    end
-  end
-
-  defp replace_backend_tools(tools, backend, listed) do
-    Enum.reject(tools, &String.starts_with?(&1["name"], backend <> "__")) ++
-      prefixed(backend, listed)
-  end
-
-  # A call's round trip, from its task: its line sent on the backend's
+  # A call's round trip, from its task: its line sent on the program's
   # session, then the answer this server hands back by its id.
   defp upstream(%State{transport: :program} = state, body) do
-    %{session: session} = Map.fetch!(state.sessions, state.call_backend)
+    %{session: session} = state.session
     id = body["id"]
 
     case Opus.Programs.Session.send(state.grant, session, [Jason.encode!(body)]) do
@@ -1375,7 +1253,7 @@ defmodule Emissary.External.Server do
             {:ok, message}
 
           {:rpc_failed, ^id, _reason} ->
-            {:error, "#{state.call_backend} ended before it answered"}
+            {:error, "#{state.name} ended before it answered"}
         after
           state.timeout_ms -> {:error, {:uncertain, "timeout: tools/call"}}
         end
@@ -1399,11 +1277,6 @@ defmodule Emissary.External.Server do
   defp backends_reason({:refused, code, _boot}),
     do: "the backends service refused (#{code})"
 
-  defp backends_reason({:login_entry, _reason}),
-    do:
-      "this server keeps its home in a login entry that is missing, not active or names " <>
-        "another program"
-
   defp backends_reason({:unreadable, _error}),
     do: "the backends service answered something unreadable"
 
@@ -1414,22 +1287,22 @@ defmodule Emissary.External.Server do
     do: "the backends service speaks another protocol version"
 
   defp backends_reason(:control_plane_lost), do: "this server does not own its control plane"
-  defp backends_reason(:capacity), do: "the backends service has no free backend slots"
+  defp backends_reason(:capacity), do: "the backends service has no free program slots"
 
   defp backends_reason(:claimed_elsewhere),
-    do: "another server of the cluster holds this server's backends"
+    do: "another server of the cluster holds this server's program"
 
   defp backends_reason(:claim_unavailable),
-    do: "which server holds this server's backends could not be read"
+    do: "which server holds this server's program could not be read"
 
   defp backends_reason({:pool_share, limit}),
-    do: "this athanor already runs its share of the backends service (#{limit} backends)"
+    do: "this athanor already runs its share of the backends service (#{limit} programs)"
 
   defp backends_reason({:control_too_large, limit}),
-    do: "this server's backends and their env exceed what one sync may carry (#{limit} bytes)"
+    do: "this server's program and its env exceed what one sync may carry (#{limit} bytes)"
 
-  defp backends_reason({:env_unresolved, backend, name}),
-    do: "backend '#{backend}' env #{name} does not resolve to a single-field vault entry"
+  defp backends_reason({:env_unresolved, name}),
+    do: "env #{name} does not resolve to a single-field vault entry"
 
   defp backends_reason(reason), do: reason
 

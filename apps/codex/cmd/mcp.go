@@ -244,8 +244,8 @@ var mcpRefreshCmd = &cobra.Command{
 
 var mcpRestartCmd = &cobra.Command{
 	Use:     "restart <name>",
-	Short:   "Restart a program's backends",
-	Long:    "Release a program's backends on the backends service and start them again at the server's next epoch.",
+	Short:   "Restart a program",
+	Long:    "Release a program on the backends service and start it again at the server's next epoch.",
 	Example: "  cyfr mcp restart gh",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {

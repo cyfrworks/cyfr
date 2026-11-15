@@ -196,8 +196,9 @@ main.stacked {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 15%, transparent);
 }
 
-/* Needs attention: each cause once. */
+/* Needs attention: each cause once. A first step reads as one too. */
 .issue,
+.step,
 .schedule {
   display: flex;
   gap: 12px;
@@ -205,10 +206,12 @@ main.stacked {
 }
 
 .issue + .issue,
+.step + .step,
 .schedule + .schedule {
   box-shadow: 0 -1px 0 color-mix(in srgb, var(--line) 70%, transparent);
 }
 
+.step > .chip,
 .schedule > .chip {
   align-self: center;
   flex-shrink: 0;
@@ -248,6 +251,10 @@ main.stacked {
 .chip b {
   font-weight: 500;
   color: var(--t1);
+}
+
+button.chip {
+  cursor: pointer;
 }
 
 /* The one accent: what the person can do here. */
@@ -340,6 +347,25 @@ main.stacked {
   font-weight: 500;
 }
 
+/* A failed run's name, which opens its run's page. */
+.run .name .link {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--t3);
+  text-underline-offset: 3px;
+}
+
+.run .name .link:hover,
+.run .name .link:focus-visible {
+  text-decoration-color: var(--t1);
+  outline: none;
+}
+
 .reason {
   color: var(--t2);
 }
@@ -399,6 +425,13 @@ main.stacked {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* What a tap on the tile was answered, for a moment. */
+.app .said {
+  font-size: 11px;
+  max-width: 84px;
+  color: var(--warn);
 }
 
 .app:hover .label,

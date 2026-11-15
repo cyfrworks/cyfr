@@ -230,7 +230,9 @@ defmodule Opus.Providers.Feed do
           "duration_ms",
           "started_at",
           "ended_at",
-          "error" | Prima.Provider.Stream.delivery_fields()
+          "error",
+          "origin",
+          "retryable" | Prima.Provider.Stream.delivery_fields()
         ],
         deadline_bound: @deadline_bound,
         shape: Prima.Provider.Stream.delivered(runs_changes_shape()),
@@ -249,8 +251,10 @@ defmodule Opus.Providers.Feed do
   stored sentence under the class its record keeps it with
   (`Opus.Record.fail/3`), read as its cause as a live failure's is, a
   cancel's as `cancelled`, and the sentence itself is never handed on; its
-  `started_at` and `ended_at` are the record's. A running or paused run
-  reads as `started`. The subject is none.
+  `started_at` and `ended_at` are the record's, and so are who started it
+  (`origin`) and whether retry's rule runs it again (`retryable`,
+  `Opus.Record.retryable?/1`). A running or paused run reads as `started`.
+  The subject is none.
   """
   @spec recent_runs(Context.t(), nil) :: {:ok, [Cyfr.Bus.Execution.t()]} | {:error, term()}
   def recent_runs(%Context{athanor_id: athanor_id} = ctx, _subject)
@@ -298,7 +302,9 @@ defmodule Opus.Providers.Feed do
       duration_ms: record.duration_ms,
       started_at: record.started_at,
       ended_at: record.completed_at,
-      error: run_error(record)
+      error: run_error(record),
+      origin: record.admitted.origin,
+      retryable: Opus.Record.retryable?(record)
     )
   end
 
@@ -363,7 +369,9 @@ defmodule Opus.Providers.Feed do
             "cause" => cause_shape(Cyfr.Bus.Execution.causes())
           },
           "required" => ["class", "cause"]
-        }
+        },
+        "origin" => %{"type" => "enum", "values" => Prima.Origin.spellings(), "nullable" => true},
+        "retryable" => %{"type" => "boolean"}
       },
       "required" => [
         "kind",
@@ -374,7 +382,9 @@ defmodule Opus.Providers.Feed do
         "duration_ms",
         "started_at",
         "ended_at",
-        "error"
+        "error",
+        "origin",
+        "retryable"
       ]
     })
   end

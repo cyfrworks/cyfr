@@ -1000,9 +1000,6 @@ defmodule PrismWeb.VaultLive do
 
   # Where an entry's material may go, in one line: scheme and hosts, the
   # port, and the methods and paths it is held to when it names them.
-  defp destination_line(%{"program" => program}) when is_binary(program),
-    do: "program #{program}"
-
   defp destination_line(%{} = destination) do
     hosts = Enum.join(Map.get(destination, "hosts", []), ", ")
 
@@ -1032,9 +1029,6 @@ defmodule PrismWeb.VaultLive do
   defp used_today(count) when is_integer(count), do: "#{count} requests today"
   defp used_today(_unread), do: "-"
 
-  # A login entry has no authorization to renew: one that waits on its
-  # program's sign-in reads so.
-  defp status_label(%{kind: "login", status: "needs_reauth"}), do: "not signed in"
   defp status_label(entry), do: entry.status
 
   defp status_class("active"), do: "text-emerald-500"
@@ -1324,15 +1318,6 @@ defmodule PrismWeb.VaultLive do
               {destination_line(entry.destination)}
             </div>
             <div
-              :if={entry.kind == "login"}
-              class="text-xs text-gray-500"
-              data-test="entry-disclosure"
-            >
-              login: holds nothing secret; it mounts the program's kept folder, where the
-              program keeps its own sign-in. Sign in and reset it on the Programs page.
-            </div>
-            <div
-              :if={entry.kind != "login"}
               class="text-xs text-gray-500"
               data-test="entry-disclosure"
             >
@@ -1388,7 +1373,6 @@ defmodule PrismWeb.VaultLive do
                 Rename
               </.button>
               <.button
-                :if={entry.kind != "login"}
                 variant="ghost"
                 phx-click="show_rebind"
                 phx-value-id={entry.id}

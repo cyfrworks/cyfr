@@ -12,7 +12,8 @@
 // and its credential, an app's subject, and to a canvas its open
 // (`canvas`), what the shell tells it (`posture`, `covered`, `installed`,
 // `state`) and its answers (`pressed`, `prefs`), and to any frame the
-// answers to its request (`requested`, `decided`). They pass only between
+// answers to its open (`opened`) and its request (`requested`, `decided`).
+// They pass only between
 // the shell's bridge and the SDK, so they are defined here, once; the
 // frame's are pinned by the fixture's `canvas` section, whose `handshake`
 // rows are the server's reply the bridge reads them from.
@@ -53,10 +54,12 @@ export const PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "a
 // The kinds of subject an app is opened on (`Prima.Manifest.Tincture`).
 export const SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"])
 
+// What an open comes to: opened, refused (a refusal's class) or cancelled.
+export const OPEN_OUTCOMES = Object.freeze(["opened", "refused", "cancelled"])
 // What a control's press, and a write of the preferences, come to.
 export const PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"])
 export const PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"])
-// Why a press or a write was cancelled, when the answer says: `too_soon`,
+// Why an open, a press or a write was cancelled, when the answer says: `too_soon`,
 // sent while the activation its input gave was spent already.
 export const CANCEL_REASONS = Object.freeze(["too_soon"])
 // What a request comes to, as `decided` says: approved and run, refused
@@ -398,8 +401,9 @@ function argsError(verb, args) {
   switch (verb) {
     case "open":
       if (!isTinctureRef(args.ref)) return "open names a tincture reference"
-      if (keys.length === 1) return null
-      return keys.length === 2 && isSubject(args.subject)
+      if (!isCall(args.call)) return "open names its call"
+      if (keys.length === 2) return null
+      return keys.length === 3 && isSubject(args.subject)
         ? null
         : "open's subject is exactly a kind the apps accept and an id"
     case "title":
@@ -488,6 +492,7 @@ export const TO_FRAME_VERBS = Object.freeze([
   "covered",
   "installed",
   "state",
+  "opened",
   "pressed",
   "prefs",
   "requested",
@@ -500,17 +505,22 @@ export const TO_FRAME_VERBS = Object.freeze([
 export const TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"])
 
 // The shell's answers, each posted once under the call it answers, by the
-// verb each answers: a request is answered `requested` once the person is
-// asked, then `decided`, or `decided` alone when it ended before; a
-// canvas's write `prefs`; and its press of a control `pressed`, or as a
-// request is when the person approves the control's operation first. Only
-// a request's answers reach a frame that is no canvas.
+// verb each answers: any frame's open `opened`; a request is answered
+// `requested` once the person is asked, then `decided`, or `decided` alone
+// when it ended before; a canvas's write `prefs`; and its press of a
+// control `pressed`, or as a request is when the person approves the
+// control's operation first.
 export const ANSWER_OF = Object.freeze({
+  open: Object.freeze(["opened"]),
   press: Object.freeze(["pressed", "requested", "decided"]),
   prefs: Object.freeze(["prefs"]),
   request: Object.freeze(["requested", "decided"])
 })
 export const ANSWER_VERBS = Object.freeze([...new Set(Object.values(ANSWER_OF).flat())])
+
+// The answers a frame that is no canvas hears: its open's and its
+// request's. Every other answer reaches a canvas frame alone.
+export const APP_ANSWERS = Object.freeze([...new Set([...ANSWER_OF.open, ...ANSWER_OF.request])])
 
 // What a page hears through `cyfr.on`: on a canvas what the shell tells
 // it and `desktop`, its preferences, appearance and person; on an app,
@@ -672,6 +682,12 @@ function toFrameArgsError(verb, args, frame) {
         : `installed names at most ${MAX_TINCTURES} tinctures of ref, name, icon and open`
     case "state":
       return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen"
+    case "opened":
+      return sameKeys(args, withReason(args, ["call", "outcome"])) &&
+        isCall(args.call) &&
+        isOutcome(args, OPEN_OUTCOMES)
+        ? null
+        : "opened is exactly a call and its outcome, with a reason when refused or cancelled too soon"
     case "pressed":
       return pressedError(args)
     case "prefs":

@@ -6,15 +6,15 @@ defmodule Arca.Schemas.McpServer do
   Ecto schema for the `mcp_servers` table (backs `Arca.McpServerStorage`).
 
   `transport` is `"http"`, a tool server elsewhere reached at `url`, or
-  `"program"`, a program CYFR runs on the backends service, its backends
-  in `config_json` and `url` nil. A program's `mark` says how it is
+  `"program"`, a program CYFR runs on the backends service, its command
+  and env in `config_json` and `url` nil. A program's `mark` says how it is
   spoken to: `"mcp"`, Emissary speaking MCP on its input and output, or
   `"driven"`, run by a person or a brain; an http row has none. A
-  program's `home` is `"scratch"`, scrubbed at retirement, or `"kept"`, a
-  home per login entry that survives it; `memory_bytes` and
-  `home_max_bytes` are its bounds (nil: the service's own bound, the homes
-  volume), `login_command` what a sign-in runs, and `login_entry_id` the
-  login entry a kept `mcp` program's sessions run in. `hosts` is a program's network list as JSON text, the
+  program's `home` is `"scratch"`, scrubbed at retirement, or `"kept"`,
+  the row's own folder, named by the row's id and retired with the row;
+  `memory_bytes` and `home_max_bytes` are its bounds (nil: the service's
+  own bound, the homes volume) and `login_command` what a sign-in runs.
+  `hosts` is a program's network list as JSON text, the
   only hosts it reaches (`Opus.Programs.Definition`), nil for every public
   host.
   `epoch` rises with every change to the row, and so does `revision`, the
@@ -52,7 +52,6 @@ defmodule Arca.Schemas.McpServer do
     field :memory_bytes, :integer
     field :home_max_bytes, :integer
     field :login_command, :string
-    field :login_entry_id, :string
     field :hosts, :string
     field :url, :string
     field :config_json, :string

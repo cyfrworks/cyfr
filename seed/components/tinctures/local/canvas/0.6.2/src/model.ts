@@ -13,7 +13,8 @@ export interface Sdk {
   // Besides each change, the handler hears the delivery contract's
   // `snapshot`, `resync`, `stale`, `unavailable` and `denied`.
   stream(name: string, subject: string | null, onEvent: (event: StreamEvent) => void): Promise<StreamHandle>;
-  open(ref: string): void;
+  // Answers the shell's answer to the open.
+  open(ref: string, on?: { kind: string; id: string } | null): Promise<Opened>;
   grant(ref: string): void;
   // One of CYFR's own pages by its key, or `aqua` or `chat`, at the
   // record `ref` names where the page has one.
@@ -22,8 +23,9 @@ export interface Sdk {
   request(operation: string, args?: Record<string, unknown>): Promise<Decided> & { requested: Promise<string | null> };
   // A control the canvas declares, with the value its pick takes.
   press(control: string, value: string | null): Promise<Pressed>;
-  // Each widget the document names replaces that widget's whole entry.
-  prefs(document: { widgets: Record<string, { on: boolean }> }): Promise<Written>;
+  // Each widget the document names replaces that widget's whole entry, and
+  // a `desktop` it names replaces the stored one whole.
+  prefs(document: { widgets?: Record<string, { on: boolean }>; desktop?: Record<string, unknown> }): Promise<Written>;
   // `prefs` is the person's preferences document for this canvas, null
   // until the canvas's open arrives.
   readonly desktop: { prefs: { document: unknown; revision: number } } | null;
@@ -51,6 +53,13 @@ export interface StreamHandle {
 
 export interface Pressed {
   outcome: "accepted" | "refused" | "cancelled";
+  reason?: string;
+}
+
+// An open's answer: `cancelled` with `too_soon` when the tap came within a
+// few seconds of the last spend of the person's activation.
+export interface Opened {
+  outcome: "opened" | "refused" | "cancelled";
   reason?: string;
 }
 
@@ -206,8 +215,21 @@ export function start(sdk: Sdk, onChange: (state: State) => void): () => void {
   };
 }
 
-export function openApp(sdk: Sdk, app: InstalledApp): void {
-  sdk.open(app.ref);
+// What a tap the shell dropped for coming too soon after the last one says
+// where the person tapped.
+export const TOO_SOON = "Tap again in a moment";
+
+// Opens an app, for the person's tap on its tile. Answers what the tile
+// says, or null: an app the shell opened shows as its window.
+export async function openApp(sdk: Sdk, app: InstalledApp): Promise<string | null> {
+  const answer = await sdk.open(app.ref);
+  return answer.outcome === "cancelled" && answer.reason === "too_soon" ? TOO_SOON : null;
+}
+
+// Opens a run's page, the Dashboard's Executions page at that run, where
+// its sentence is.
+export function showRun(sdk: Sdk, row: RunRow): void {
+  sdk.settings("executions", row.id);
 }
 
 export function grantComponent(sdk: Sdk, ref: string): void {
@@ -241,6 +263,67 @@ export function isShown(document: unknown, widget: string): boolean {
 
 export function hidden(state: State): string[] {
   return WIDGETS.filter((widget) => !isShown(state.prefs, widget));
+}
+
+// A first step the desktop offers: one of CYFR's own pages, and the field
+// of the preferences' `desktop` that hides it.
+export interface Step {
+  page: string;
+  field: string;
+  title: string;
+  text: string;
+}
+
+// The first steps, in the order they are offered.
+export const STEPS: Step[] = [
+  {
+    page: "aqua_setup",
+    field: "hide_aqua_setup",
+    title: "Set up AQUA",
+    text: "AQUA makes apps for you and runs them.",
+  },
+  {
+    page: "desktops",
+    field: "hide_desktops",
+    title: "Choose a desktop",
+    text: "Pick the desktop you want to see here.",
+  },
+];
+
+// The first steps: each offered, in order, until the person hides it, and
+// the hidden ones, which "Getting started" offers again. Opening a step's
+// page hides nothing: one tap carries one verb to the shell, so the tap
+// that opens the page cannot also write the preferences.
+export function firstSteps(state: State): { offered: Step[]; hidden: Step[] } {
+  const kept = deskFields(state.prefs);
+  return {
+    offered: STEPS.filter((step) => kept[step.field] !== true),
+    hidden: STEPS.filter((step) => kept[step.field] === true),
+  };
+}
+
+// Opens a step's page, for the person's tap.
+export function takeStep(sdk: Sdk, step: Step): void {
+  sdk.settings(step.page);
+}
+
+// Hides a step, for the person's tap: one tap, one write, of the whole
+// `desktop` the canvas holds with the step's field set, since a written
+// `desktop` replaces the stored one whole.
+export async function hideStep(sdk: Sdk, state: State, step: Step): Promise<Written> {
+  return sdk.prefs({ desktop: { ...deskFields(state.prefs), [step.field]: true } });
+}
+
+// Offers every hidden step again, for the person's tap on "Getting
+// started": the held `desktop` without the steps' fields.
+export async function showSteps(sdk: Sdk, state: State): Promise<Written> {
+  const kept = { ...deskFields(state.prefs) };
+  for (const step of STEPS) delete kept[step.field];
+  return sdk.prefs({ desktop: kept });
+}
+
+function deskFields(document: unknown): Item {
+  return isItem(document) && isItem(document.desktop) ? document.desktop : {};
 }
 
 export function installed(state: State, list: unknown): State {
@@ -400,56 +483,53 @@ export interface Component {
 }
 
 export interface Cause {
-  key: string;
-  class: string;
   cause: string;
-  // What the page shows for the cause: its class.
-  shown: string;
+  // What the page shows for the cause: the canvas's few words for it.
   short: string;
+  // Whether a grant fixes it: a missing or lapsed grant.
   grantable: boolean;
   // How many of the held runs failed for it.
   count: number;
   components: Component[];
 }
 
-// The held runs that failed, grouped by their cause (the refusal's class
-// and the cause it reads as), each with the components it hit, most often
-// first; the causes most often first. A failure with no error is its own
-// cause.
+// The held runs that failed, grouped by the cause they read as, each with
+// the components it hit, most often first; the causes most often first. A
+// failure with no error, or with a cause the canvas has no words for,
+// reads as `failed`. Every class reads as exactly one cause
+// (Cyfr.Bus.Payload), so a cause a grant fixes is fixed by one for each of
+// its runs.
 export function causes(state: State): Cause[] {
   const groups = new Map<string, Cause>();
   for (const run of state.runs) {
     if (run.kind !== "failed") continue;
     const error = isItem(run.error) ? run.error : {};
-    const cls = text(error.class) || "internal";
-    const why = text(error.cause);
-    const key = `${cls}\u0000${why}`;
-    const cause = groups.get(key) ?? {
-      key,
-      class: cls,
+    const why = SHORT_REASONS.has(text(error.cause)) ? text(error.cause) : "failed";
+    const cause = groups.get(why) ?? {
       cause: why,
-      shown: cls,
       short: shortReason(why),
-      grantable: grantable(cls, why),
+      grantable: false,
       count: 0,
       components: [],
     };
+    cause.grantable ||= grantable(text(error.class), why);
     cause.count += 1;
     const ref = componentRef(text(run.reference));
     const component = cause.components.find((c) => c.ref === ref);
     if (component) component.count += 1;
     else cause.components.push({ ref, name: componentName(ref), count: 1 });
-    groups.set(key, cause);
+    groups.set(why, cause);
   }
   const ordered = [...groups.values()];
   for (const cause of ordered) cause.components.sort(byCount);
-  return ordered.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+  return ordered.sort((a, b) => b.count - a.count || a.cause.localeCompare(b.cause));
 }
 
 // A few words for a failure, by its cause: the canvas's own, since the
 // readable sentence each cause has in the stream's shape reaches the
-// catalog and not the page.
+// catalog and not the page. A class is never shown.
 const SHORT_REASONS = new Map([
+  ["failed", "Failed"],
   ["needs_setup", "Needs setup"],
   ["unavailable", "Unavailable"],
   ["timed_out", "Timed out"],
@@ -459,6 +539,7 @@ const SHORT_REASONS = new Map([
   ["bad_input", "Bad input"],
   ["not_found", "Not found"],
   ["waits_for_you", "Waits for you"],
+  ["uncertain", "Outcome uncertain"],
 ]);
 
 export function shortReason(cause: string): string {
@@ -512,8 +593,24 @@ export interface RunRow {
   detail: string;
   reason: string;
   duration: string;
-  // Whether Retry is offered: a failed run that no other run started.
+  // Who started a failed run, in the canvas's words, or null.
+  starter: string | null;
+  // Whether Retry is offered: the run's change says a retry runs it (a
+  // failed run a schedule or a feed started, known to have failed).
   retry: boolean;
+}
+
+// Who started a run, by its change's `origin`. Any other origin, or none
+// (a run another run started), names no one.
+const STARTERS = new Map([
+  ["interactive", "by you"],
+  ["programmatic", "by an agent or script"],
+  ["schedule", "by a schedule"],
+  ["webhook", "by a webhook"],
+]);
+
+export function starter(origin: unknown): string | null {
+  return STARTERS.get(text(origin)) ?? null;
 }
 
 // The first `limit` runs as rows, newest first, and how many more there are.
@@ -535,15 +632,17 @@ export function recentRows(state: State, limit: number): { rows: RunRow[]; more:
               ? "Cancelled"
               : "Finished",
       duration: duration(run.duration_ms),
-      retry: run.kind === "failed" && run.parent_execution_id == null && text(run.execution_id) !== "",
+      starter: run.kind === "failed" ? starter(run.origin) : null,
+      retry: run.kind === "failed" && run.retryable === true && text(run.execution_id) !== "",
     };
   });
   return { rows, more: Math.max(0, state.runs.length - limit) };
 }
 
 // What Retry's answer says, in the canvas's words, by the refusal's class.
+// Retry is offered only on a run its change says a retry runs, so no
+// conflict over which runs may run again comes back.
 const RETRY_REFUSED = new Map([
-  ["conflict", "This run cannot run again: only a run a schedule or a feed started, known to have failed, does"],
   ["invalid_argument", "This run is no longer among the latest runs"],
   ["not_found", "This run is gone"],
   ["forbidden", "This run is not yours to run again"],
@@ -559,7 +658,7 @@ const RETRY_REFUSED = new Map([
 export async function retryRun(sdk: Sdk, row: RunRow): Promise<string> {
   const answer = await sdk.press(RETRY, row.id);
   if (answer.outcome === "accepted") return "Running again";
-  if (answer.outcome === "cancelled") return answer.reason === "too_soon" ? "Tap again in a moment" : "Nothing ran";
+  if (answer.outcome === "cancelled") return answer.reason === "too_soon" ? TOO_SOON : "Nothing ran";
   return RETRY_REFUSED.get(text(answer.reason)) ?? "It could not run again";
 }
 

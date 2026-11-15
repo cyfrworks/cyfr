@@ -4918,6 +4918,27 @@ defmodule PrismWeb.SystemLayerTest do
   describe "a confirmation another client of the person asked for" do
     setup :signed_in
 
+    test "a program's definition is titled by what it does to the program, never its operation",
+         %{view: view, ctx: ctx} do
+      other = other_session!(ctx)
+      name = "titled-#{System.unique_integer([:positive])}"
+
+      change = %{
+        operation: "mcp_servers.create",
+        arguments: %{name: name, transport: "program", command: "npx -y some-program"},
+        resource: name
+      }
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Sanctum.Consent.confirm_program_definition(other, change)
+
+      prompt_id = Prompt.confirmation_id(Prima.Confirmation.ref(id))
+      wait_until(fn -> open_prompt(view) == prompt_id end, 2_000, "the opened fact")
+
+      assert has_element?(view, "#system-layer-title", "Add a program")
+      refute render(view) =~ "Confirm mcp_servers.create"
+    end
+
     test "opens on every client from the stream, shows the preview and the asker before the proof, and is confirmed by its ref",
          %{view: view, ctx: ctx, user: user} do
       authenticator = Sanctum.TestContext.passkey!(user.user_id)

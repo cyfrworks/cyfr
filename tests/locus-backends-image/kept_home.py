@@ -7,11 +7,11 @@ Run as docker-compose.yml's locus-backends service, its kept homes on the
 shipped `homes` volume under the keeper's `--kept-homes`, and driven only by
 requests signed as CYFR signs them (harness.py):
 
-- A kept program's process runs with its home, one folder per login entry
+- A kept program's process runs with its home, one folder per program row
   under the kept homes' root, 0700, as its HOME, under a uid of the home's
   own: in the kept range, never a pool uid, and no uid of the pool is taken
   while only kept sessions run. Two homes never share a uid.
-- Two sessions of one entry share its home and its uid, each a process of
+- Two sessions of one row share its home and its uid, each a process of
   its own, and closing one leaves the other running.
 - A kept home survives retirement: what one session wrote is there for the
   next, once every process of its uid is gone.
@@ -20,7 +20,7 @@ requests signed as CYFR signs them (harness.py):
 - A home past its row's `home_max_bytes` has its sessions ended within the
   measuring period, is reported over its cap, and refuses an open
   `home_over_cap` until a reset, which leaves it empty under its uid.
-- Retiring a home (its login entry deleted) ends its sessions and every
+- Retiring a home (its program row deleted) ends its sessions and every
   process of its uid and removes its folder.
 - A sign-in runs the program's login command on a pseudo-terminal in its
   kept home: its prompt arrives as a line before any newline, the person's
@@ -45,7 +45,7 @@ from harness import (  # noqa: E402
 import imagesuite  # noqa: E402
 
 OWNER, NEIGHBOUR = owner_of("kept"), owner_of("neighbour")
-SHARED, CAPPED, SIGNED, RETIRED = (f"vlt_kept-{name}" for name in ("shared", "capped", "signed", "retired"))
+SHARED, CAPPED, SIGNED, RETIRED = (f"mcp_kept-{name}" for name in ("shared", "capped", "signed", "retired"))
 CAP = 8 * 1024 * 1024
 # What the measure may let through past the cap: what ten seconds write.
 MEASURE_S = 10
@@ -103,7 +103,7 @@ def main():
         # ————— a home of its own, under a uid of its own —————
         a = whoami(c, OWNER, key="a", home_id=SHARED)
         expect(a["home"] == f"{KEPT_ROOT}/{SHARED}" and a["home_mode"] == "700" and a["cwd"] == a["home"]
-               and a["tmpdir"] == f"{a['home']}/tmp", "a kept program runs in its entry's home, 0700, as HOME", a)
+               and a["tmpdir"] == f"{a['home']}/tmp", "a kept program runs in its row's home, 0700, as HOME", a)
         expect(KEPT_FIRST <= a["uid"] <= KEPT_LAST and not POOL_FIRST <= a["uid"] <= POOL_LAST
                and a["gid"] == a["uid"], "it runs under a uid of the kept range, never a pool uid", a)
         expect(c.hello()[1]["pool"]["free"] == pool["free"], "a kept session takes no uid of the pool")
@@ -147,7 +147,7 @@ def main():
         # ————— the disk bound —————
         capped = whoami(c, OWNER, "capped", home_id=CAPPED)
         expect(capped["uid"] != a["uid"] and KEPT_FIRST <= capped["uid"] <= KEPT_LAST,
-               "another entry's home has a uid of its own", [a["uid"], capped["uid"]])
+               "another row's home has a uid of its own", [a["uid"], capped["uid"]])
         # The keeper measures every MEASURE_S and ends an over-cap home's sessions, so the write past the cap either
         # answers first or, on a slower machine, has its session ended at the cap while it writes. Either way what
         # follows holds: the home is over its cap, its sessions are ended, opens are refused until a reset.
@@ -215,7 +215,7 @@ def main():
         status, answer = c.recv(OWNER, client.session, client.after, 0)
         expect(status == 200 and answer["running"] is False, "the retired home's session answers running: false",
                answer)
-        expect(not home_gone(stack, a["home"]), "retiring one entry's home leaves another's")
+        expect(not home_gone(stack, a["home"]), "retiring one row's home leaves another's")
     finally:
         stack.down()
 

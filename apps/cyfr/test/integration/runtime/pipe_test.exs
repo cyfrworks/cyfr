@@ -9,14 +9,14 @@ defmodule Locus.Runtime.PipeTest do
   through CYFR's host (`Opus.Host.Pipe`) and its programs controller
   (`Opus.Programs`) to a real backends service of Locus on a loopback port,
   which runs a `pipe` row's program, `cat`, through the test environment's
-  launcher (`Locus.DirectLauncher`) in a login entry's kept home.
+  launcher (`Locus.DirectLauncher`) in the row's own kept home.
 
   The probe opens its login need `coder`, sends a line, reads the lines
-  past 0 and closes. Bound by its consent to a login entry for the row, the
-  line comes back from `cat`; a component that declares no such need, or
-  whose need's binding mounts another program, is refused `denied` and
-  opens nothing; once the entry is revoked, the open is refused
-  `setup_required` and opens nothing; on a box whose memory budget holds
+  past 0 and closes. Bound by its consent to the row, the line comes back
+  from `cat`; a component that declares no such need, or whose need's
+  binding mounts another program, is refused `denied` and opens nothing;
+  once the row is disabled, the open is refused `setup_required` and
+  opens nothing; on a box whose memory budget holds
   no session at the program's bound, the open is refused `busy` and opens
   nothing.
   """
@@ -125,21 +125,20 @@ defmodule Locus.Runtime.PipeTest do
         home: "kept",
         config_json:
           Jason.encode!(%{
-            "backends" => [%{"name" => "cat", "command" => @command, "env" => %{}}]
+            "command" => @command,
+            "env" => %{}
           })
       })
 
     row
   end
 
-  defp login!(ctx) do
-    {:ok, entry} =
-      Sanctum.TestContext.create_signed_in_login(ctx, %{
-        name: "cat-login-#{System.unique_integer([:positive])}",
-        program: @program
-      })
-
-    entry
+  # The pipe holders running on this member.
+  defp pipe_holders do
+    for {_id, pid, _type, [Opus.Programs.Pipe]} <-
+          DynamicSupervisor.which_children(Opus.Programs.Relays),
+        is_pid(pid),
+        do: pid
   end
 
   # The probe, published as a component of the person's own with `needs`.
@@ -196,12 +195,11 @@ defmodule Locus.Runtime.PipeTest do
   # Cases
   # ---------------------------------------------------------------------------
 
-  test "a catalyst bound to a login entry round-trips a line through cat in the entry's home",
+  test "a catalyst bound to the program row round-trips a line through cat in the row's home",
        %{ctx: ctx, kept: kept} do
-    row!(ctx)
-    entry = login!(ctx)
+    row = row!(ctx)
     ref = publish_probe!(ctx, %{"coder" => login_need(@program)})
-    consent!(ctx, ref, [%{need: "coder", entry_id: entry.id}])
+    consent!(ctx, ref, [%{need: "coder", entry_id: row.id}])
 
     assert %{
              "open" => "ok",
@@ -217,10 +215,10 @@ defmodule Locus.Runtime.PipeTest do
            } = run!(ctx, ref, "hello through the pipe")
 
     assert is_binary(session)
-    assert File.dir?(Path.join(kept, entry.id)), "the program ran in the entry's kept home"
+    assert File.dir?(Path.join(kept, row.id)), "the program ran in the row's kept home"
 
     # Closed by the guest: nothing of it is held, and its owner let go.
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
 
     # The next run opens its key afresh.
     assert %{"open" => "ok", "resumed" => false, "line" => "again"} = run!(ctx, ref, "again")
@@ -231,14 +229,13 @@ defmodule Locus.Runtime.PipeTest do
   @tag memory_budget: 536_870_912
   test "an open on a box whose budget holds no session at the program's bound is refused busy",
        %{ctx: ctx} do
-    row!(ctx)
-    entry = login!(ctx)
+    row = row!(ctx)
     ref = publish_probe!(ctx, %{"coder" => login_need(@program)})
-    consent!(ctx, ref, [%{need: "coder", entry_id: entry.id}])
+    consent!(ctx, ref, [%{need: "coder", entry_id: row.id}])
 
     assert %{"open" => "busy"} = data = run!(ctx, ref, "hello")
     refute Map.has_key?(data, "send")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 
   test "a catalyst declaring no login need is refused denied, and opens nothing", %{ctx: ctx} do
@@ -248,32 +245,30 @@ defmodule Locus.Runtime.PipeTest do
 
     assert %{"open" => "denied"} = data = run!(ctx, ref, "hello")
     refute Map.has_key?(data, "send")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 
   test "a need whose binding mounts another program is refused denied", %{ctx: ctx} do
-    row!(ctx)
-    entry = login!(ctx)
+    row = row!(ctx)
 
-    # `coder` names a program of its own; the consent binds the other need,
-    # whose entry mounts the row.
+    # `coder` names a program of its own; the consent binds the other need
+    # to the row.
     ref =
       publish_probe!(ctx, %{
         "coder" => login_need("elsewhere"),
         "aux" => login_need(@program)
       })
 
-    consent!(ctx, ref, [%{need: "aux", entry_id: entry.id}])
+    consent!(ctx, ref, [%{need: "aux", entry_id: row.id}])
 
     assert %{"open" => "denied"} = run!(ctx, ref, "hello")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 
   test "an open that does not read consumes no once binding", %{ctx: ctx} do
-    row!(ctx)
-    entry = login!(ctx)
+    row = row!(ctx)
     ref = publish_probe!(ctx, %{"coder" => login_need(@program)})
-    consent!(ctx, ref, [%{need: "coder", entry_id: entry.id, lifetime: %{kind: "once"}}])
+    consent!(ctx, ref, [%{need: "coder", entry_id: row.id, lifetime: %{kind: "once"}}])
 
     # The probe is held at its own open; meanwhile its attempt asks again
     # with a key past the bound.
@@ -300,7 +295,7 @@ defmodule Locus.Runtime.PipeTest do
     assert {:error, {:guest_error, "invalid_request", _}} =
              Opus.Host.Pipe.open(caller, "coder", long, [])
 
-    assert %{consumed_by_root: nil, lifetime_kind: "once"} = binding_row!(entry)
+    assert %{consumed_by_root: nil, lifetime_kind: "once"} = binding_row!(row)
 
     # The binding stands: the probe's own open, let go, mounts it.
     TwoServices.release!(conn)
@@ -310,31 +305,31 @@ defmodule Locus.Runtime.PipeTest do
     assert [%{args: %{"outcome" => %{"output" => %{"data" => %{"open" => "ok"}}}}}] =
              TwoServices.calls(:complete, id)
 
-    assert %{consumed_by_root: root} = binding_row!(entry)
+    assert %{consumed_by_root: root} = binding_row!(row)
     assert is_binary(root)
   end
 
-  # The consent's binding row of `entry`.
-  defp binding_row!(entry) do
+  # The consent's binding row of the program row `program`.
+  defp binding_row!(program) do
     import Ecto.Query
 
     [row] =
-      Arca.Repo.all(from r in Arca.Schemas.ConsentVaultRef, where: r.vault_entry_id == ^entry.id)
+      Arca.Repo.all(from r in Arca.Schemas.ConsentVaultRef, where: r.mcp_server_id == ^program.id)
 
     row
   end
 
-  test "once the login entry is revoked, an open is refused setup_required and opens nothing",
+  test "once the program row is disabled, an open is refused setup_required and opens nothing",
        %{ctx: ctx} do
-    row!(ctx)
-    entry = login!(ctx)
+    row = row!(ctx)
     ref = publish_probe!(ctx, %{"coder" => login_need(@program)})
-    consent!(ctx, ref, [%{need: "coder", entry_id: entry.id}])
+    consent!(ctx, ref, [%{need: "coder", entry_id: row.id}])
     assert %{"open" => "ok"} = run!(ctx, ref, "before")
 
-    assert {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
+    assert {:ok, _} =
+             Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), row.name, %{enabled: false})
 
     assert %{"open" => "setup_required"} = run!(ctx, ref, "after")
-    assert Opus.Programs.mounts() == []
+    assert pipe_holders() == []
   end
 end

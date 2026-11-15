@@ -302,7 +302,7 @@ const window = { from: "2026-10-31T10:00:00.000000Z", to: "2026-10-31T10:00:05.0
 const inside = "2026-10-31T10:00:01.123456Z";
 const binding = {
   consent_id: id("cons", 4), athanor_id: "ath_recipient", share_id: "shr_1", binding_key: "tincture:local.grant-probe|@ingress|default",
-  vault_entry_id: null, via_label: null, binding_digest: digest("5"), lifetime_kind: "standing", expires_at: null,
+  vault_entry_id: null, mcp_server_id: null, via_label: null, binding_digest: digest("5"), lifetime_kind: "standing", expires_at: null,
   consumed_by_root: null,
 };
 const share = {

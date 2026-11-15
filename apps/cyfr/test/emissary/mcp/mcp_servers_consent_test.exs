@@ -54,13 +54,8 @@ defmodule Emissary.MCP.McpServersConsentTest do
     %{
       "transport" => "program",
       "mark" => "mcp",
-      "backends" => [
-        %{
-          "name" => "relay",
-          "command" => "node relay.js",
-          "env" => %{"TOKEN" => "vault:#{entry}"}
-        }
-      ]
+      "command" => "node relay.js",
+      "env" => %{"TOKEN" => "vault:#{entry}"}
     }
   end
 
