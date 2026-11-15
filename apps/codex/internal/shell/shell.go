@@ -5,9 +5,8 @@
 // key, make the account or add the key to one, unlock it with the person's
 // PIN (or passphrase) and lock it again, confirm a sensitive change
 // freshly and add a passkey a browser asks for to the account, served on
-// literal loopback to a box's screen; the same states
-// drive cyfr login in a terminal. Through the device channel the device
-// proves the person to a CYFR.
+// literal loopback to a box's screen. Through the device channel the
+// device proves the person to a CYFR.
 //
 // The PIN opens the device's key (internal/holder) and goes nowhere else:
 // a CYFR receives only signatures, never a PIN, a passphrase or anything
@@ -78,11 +77,8 @@ type Config struct {
 	// added to one, since the installation's first person binds it
 	// whoever they are; on a CYFR someone is set up on it brings none, and
 	// the CYFR's door decides. Unset, a first hello brings whatever token
-	// Tokens reads (cyfr login --setup).
+	// Tokens reads.
 	SetupOpen func(context.Context) bool
-	// Invitation is the invitation's code a first hello brings, when
-	// there is one.
-	Invitation string
 	// Restart starts the browser again on the lock page, after a lock.
 	Restart func()
 	// DisplayName is the name the CYFR lists this device by.
@@ -95,9 +91,6 @@ type Config struct {
 	// holder.ChipPresent unless a test replaces it, so no test reaches the
 	// machine's own TPM.
 	Chip func() bool
-	// Noun is what the person calls this device in a sentence: "screen"
-	// for a box's own screen (the default), "command line" for cyfr login.
-	Noun string
 }
 
 // ClientRecord is the client a CYFR admitted this device's key as and the
@@ -283,9 +276,6 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Tokens == nil {
 		cfg.Tokens = func() string { return "" }
 	}
-	if cfg.Noun == "" {
-		cfg.Noun = "screen"
-	}
 	if cfg.Directory == "" {
 		cfg.Directory = account.DefaultDirectory
 	}
@@ -298,13 +288,13 @@ func New(cfg Config) (*Shell, error) {
 	case err == nil:
 		s.rec = rec
 	case !errors.Is(err, fs.ErrNotExist):
-		return nil, fmt.Errorf("this %s's key record %s cannot be read (%v)", cfg.Noun, cfg.Record, err)
+		return nil, fmt.Errorf("this screen's key record %s cannot be read (%v)", cfg.Record, err)
 	}
 	if s.here, err = cfg.Clients.Load(); err != nil {
-		return nil, fmt.Errorf("this %s's standing at %s cannot be read (%v)", cfg.Noun, cfg.Address, err)
+		return nil, fmt.Errorf("this screen's standing at %s cannot be read (%v)", cfg.Address, err)
 	}
 	if s.unfinished, err = s.readAttempt(); err != nil {
-		return nil, fmt.Errorf("the account this %s was making cannot be read (%v)", cfg.Noun, err)
+		return nil, fmt.Errorf("the account this screen was making cannot be read (%v)", err)
 	}
 	return s, nil
 }
@@ -327,7 +317,7 @@ func (s *Shell) readAttempt() (*account.Attempt, error) {
 
 // refresh reads the key record and the account being made again before a
 // first-use action, so a shell acts on what this machine keeps now:
-// another first use (a second cyfr login, a restarted screen) may have
+// another first use (a restarted screen) may have
 // made the key, listed it in an account or begun an account since this
 // shell read them. A key it did not make is the one it uses from here,
 // and what it held for another key (a key held open, an account it was
@@ -360,7 +350,7 @@ func (s *Shell) refresh() {
 
 // madeElsewhere says this shell uses the key another first use made.
 func (s *Shell) madeElsewhere() {
-	s.say("Another %s on this machine made its key first, and this one uses that key: unlock it with that one's PIN or passphrase.", s.cfg.Noun)
+	s.say("Another screen on this machine made its key first, and this one uses that key: unlock it with that one's PIN or passphrase.")
 }
 
 func (s *Shell) attemptPath() string {
@@ -483,7 +473,7 @@ type View struct {
 	Passkey *PendingPasskey
 	// Code is the key's short code while no account lists it, AddURL the
 	// account page that adds it (a QR code's text), and Key its public
-	// half as cyfr device approve takes it.
+	// half, which that page's address carries.
 	Code   string
 	AddURL string
 	Key    string
@@ -491,8 +481,8 @@ type View struct {
 
 // View is the page the device shows now, and the notice of the last
 // action or lock, which stays until the next action. A setup without a
-// chip draws its passphrase at the first View, which cyfr login prints in
-// its own terminal; the pages read pageView, which draws nothing.
+// chip draws its passphrase at the first View; the pages read pageView,
+// which draws nothing.
 func (s *Shell) View() View {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -641,30 +631,28 @@ func (s *Shell) say(format string, args ...any) { s.notice = fmt.Sprintf(format,
 
 // sentence is what the person reads for a failure, naming this device as
 // the shell's Config does.
-func (s *Shell) sentence(err error) string { return sentence(err, s.cfg.Noun) }
+func (s *Shell) sentence(err error) string { return sentence(err) }
 
-// sentence is what the person reads for a failure of the device noun
-// names ("screen", "command line").
-func sentence(err error, noun string) string {
+// sentence is what the person reads for a failure of this screen.
+func sentence(err error) string {
 	var intent *IntentError
-	var home *HomeError
 	var dir *account.DirectoryRefusal
 	var refused *RefusedError
 	switch {
 	case errors.As(err, &refused):
 		return refused.Message
 	case errors.Is(err, holder.ErrWrongSecret), errors.Is(err, holder.ErrSecretShape):
-		return "That is not this " + noun + "'s PIN or passphrase. Nothing was sent anywhere."
+		return "That is not this screen's PIN or passphrase. Nothing was sent anywhere."
 	case errors.Is(err, holder.ErrLockedOut):
-		return "Too many wrong PINs: this " + noun + "'s chip takes one more try every ten minutes."
+		return "Too many wrong PINs: this screen's chip takes one more try every ten minutes."
 	case errors.Is(err, ErrRevoked):
-		return "CYFR does not take this " + noun + " now: it was removed, CYFR does not admit your account, or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
+		return "CYFR does not take this screen now: it was removed, CYFR does not admit your account, or CYFR was restored from a backup, which suspends every device. Unlocking it again asks CYFR again."
 	case errors.Is(err, ErrUnavailable):
 		return "CYFR could not be reached. Check that it is running, then try again."
 	case errors.Is(err, ErrRefused), errors.Is(err, ErrRefusedChallenge):
-		return "CYFR did not accept this " + noun + "'s proof. Nothing was signed for anything else."
+		return "CYFR did not accept this screen's proof. Nothing was signed for anything else."
 	case errors.Is(err, ErrRenew):
-		return "This " + noun + "'s certificate expired, and with it its session: unlock it again to renew it."
+		return "This screen's certificate expired, and with it its session: unlock it again to renew it."
 	case errors.Is(err, account.ErrUnreachable):
 		return "Your account could not be reached just now. Try again; nothing is lost."
 	case errors.As(err, &dir) && dir.Code == "gone":
@@ -673,12 +661,6 @@ func sentence(err error, noun string) string {
 		return "No account is listed by that name."
 	case errors.As(err, &intent):
 		return intent.Error() + "."
-	case errors.As(err, &home) && home.Code == "rate_limited":
-		return fmt.Sprintf("CYFR is taking too many requests from here. Try again in %d seconds.", max(home.RetryAfter, 1))
-	case errors.As(err, &home) && home.Code == "unavailable":
-		return fmt.Sprintf("CYFR could not answer just now. Try again in %d seconds.", max(home.RetryAfter, 1))
-	case errors.As(err, &home):
-		return home.Error() + "."
 	}
 	return err.Error()
 }
@@ -699,7 +681,7 @@ func (s *Shell) checkSecret(secret, again []byte) (bool, error) {
 		return true, nil
 	}
 	if err := holder.CheckPassphrase(secret); err != nil {
-		s.say("Without a chip, this %s needs the six-word passphrase shown, not a short PIN.", s.cfg.Noun)
+		s.say("Without a chip, this screen needs the six-word passphrase shown, not a short PIN.")
 		return false, err
 	}
 	if string(secret) != s.passphrase {
@@ -757,7 +739,7 @@ func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 		rec, err = holder.NewSoftware(secret)
 	}
 	if err != nil {
-		s.say("This %s could not make its key: %v.", s.cfg.Noun, err)
+		s.say("This screen could not make its key: %v.", err)
 		return nil, err
 	}
 	err = rec.Create(s.cfg.Record)
@@ -767,7 +749,7 @@ func (s *Shell) newRecord(secret, again []byte) (*holder.Record, error) {
 		return nil, err
 	}
 	if err != nil {
-		s.say("This %s could not save its key (%v). Nothing was sent anywhere.", s.cfg.Noun, err)
+		s.say("This screen could not save its key (%v). Nothing was sent anywhere.", err)
 		return nil, err
 	}
 	s.passphrase = ""
@@ -956,7 +938,7 @@ func (s *Shell) asPage(proof []byte, act func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.holds(proof) {
-		s.say("Only the page this %s's PIN or passphrase was typed on can do that. Nothing was sent.", s.cfg.Noun)
+		s.say("Only the page this screen's PIN or passphrase was typed on can do that. Nothing was sent.")
 		return
 	}
 	act()
@@ -974,11 +956,11 @@ func (s *Shell) saved(ctx context.Context, accepted string) {
 			clear(m.key)
 			s.making = nil
 			s.refresh()
-			s.say("Another %s on this machine began an account with this key first: finish it with its recovery code. Nothing was sent for the one shown here.", s.cfg.Noun)
+			s.say("Another screen on this machine began an account with this key first: finish it with its recovery code. Nothing was sent for the one shown here.")
 			return
 		}
 		if err != nil {
-			s.say("This %s could not keep the account it is making (%v). Nothing was sent.", s.cfg.Noun, err)
+			s.say("This screen could not keep the account it is making (%v). Nothing was sent.", err)
 			return
 		}
 		m.saved, m.code = true, ""
@@ -1093,7 +1075,7 @@ func (s *Shell) listedElsewhere(m *making) bool {
 	}
 	clear(m.key)
 	s.making = nil
-	s.say("This machine's key is on an account already, made or added by another %s here: unlock it with its PIN or passphrase.", s.cfg.Noun)
+	s.say("This machine's key is on an account already, made or added by another screen here: unlock it with its PIN or passphrase.")
 	return true
 }
 
@@ -1125,7 +1107,7 @@ func (s *Shell) submit(ctx context.Context) {
 	}
 	s.rec.Identifier, s.rec.Directory = m.attempt.Identifier, m.attempt.Directory
 	if err := s.rec.Save(s.cfg.Record); err != nil {
-		s.say("This %s could not save its account (%v). Try again.", s.cfg.Noun, err)
+		s.say("This screen could not save its account (%v). Try again.", err)
 		return
 	}
 	clear(m.key)
@@ -1217,7 +1199,7 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 		}
 		select {
 		case <-waiting.Done():
-			s.say("This %s is not on @%s's account yet. Approve it on a device of yours, then try again.", s.cfg.Noun, name)
+			s.say("This screen is not on @%s's account yet. Approve it on a device of yours, then try again.", name)
 			return
 		case <-time.After(pollEvery):
 		}
@@ -1233,12 +1215,12 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 		}
 		return
 	case s.rec.Identifier != "":
-		s.say("This machine's key is on another account already, added by another %s here.", s.cfg.Noun)
+		s.say("This machine's key is on another account already, added by another screen here.")
 		return
 	}
 	s.rec.Identifier, s.rec.Directory = found.Identifier, found.Directory
 	if err := s.rec.Save(s.cfg.Record); err != nil {
-		s.say("This %s could not save its account (%v). Try again.", s.cfg.Noun, err)
+		s.say("This screen could not save its account (%v). Try again.", err)
 		return
 	}
 	if useHeld {
@@ -1275,14 +1257,14 @@ func (s *Shell) CheckListed(ctx context.Context) {
 	unlisted := *s.rec
 	unlisted.Identifier, unlisted.Directory = "", ""
 	if err := unlisted.Save(s.cfg.Record); err != nil {
-		s.say("Your account no longer lists this %s's key, and this %s could not keep that (%v). Try again.", s.cfg.Noun, s.cfg.Noun, err)
+		s.say("Your account no longer lists this screen's key, and this screen could not keep that (%v). Try again.", err)
 		return
 	}
 	s.rec = &unlisted
 	if len(s.here.Certificate) > 0 {
 		s.forget()
 	}
-	s.say("Your account no longer lists this %s's key. Add the same key to your account again to go on.", s.cfg.Noun)
+	s.say("Your account no longer lists this screen's key. Add the same key to your account again to go on.")
 }
 
 // Unlock opens the key with the PIN (or passphrase) and opens the channel.
@@ -1349,17 +1331,13 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 
 // admission is the capability a first hello brings: none once this CYFR
 // admitted this device (the door decides), else the setup token (for a
-// device with SetupOpen, only while no one is set up), else the
-// invitation's code.
+// device with SetupOpen, only while no one is set up).
 func (s *Shell) admission(ctx context.Context) map[string]any {
 	if s.here.ClientID != "" {
 		return nil
 	}
 	if t := s.cfg.Tokens(); t != "" && (s.cfg.SetupOpen == nil || s.cfg.SetupOpen(ctx)) {
 		return map[string]any{"setup": t}
-	}
-	if s.cfg.Invitation != "" {
-		return map[string]any{"invitation": s.cfg.Invitation}
 	}
 	return nil
 }
@@ -1447,30 +1425,6 @@ func (s *Shell) Ticket(ctx context.Context, proof []byte) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(s.cfg.Address, "/") + "/auth/device/complete#" + ticket, nil
-}
-
-// Session reserves one session at the CYFR for this device's own
-// requests (reserve) and spends its ticket for the session's bearer
-// token (POST /device/session), which only the device channel that
-// reserved it keeps alive and whose lock this shell holds. The token is
-// held by the caller in memory alone.
-func (s *Shell) Session(ctx context.Context) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ticket, err := s.reserve(ctx)
-	if err != nil {
-		return "", err
-	}
-	var got struct {
-		SessionToken string `json:"session_token"`
-	}
-	if err := post(ctx, s.cfg.Client, s.cfg.Address, "/device/session", nil, map[string]any{"ticket": ticket}, &got); err != nil {
-		return "", err
-	}
-	if got.SessionToken == "" {
-		return "", ErrRefused
-	}
-	return got.SessionToken, nil
 }
 
 // reserve asks the CYFR for one session (session.unlock), signs that
@@ -1581,7 +1535,7 @@ func (s *Shell) Draw(ctx context.Context, ref string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ch == nil {
-		s.say("Unlock this %s first, then confirm the change again from the page that asked.", s.cfg.Noun)
+		s.say("Unlock this screen first, then confirm the change again from the page that asked.")
 		return
 	}
 	p, err := s.pending(ctx, ref)
@@ -1690,50 +1644,7 @@ func (s *Shell) Decide(ctx context.Context, ref string, confirm bool, secret []b
 		s.say("CYFR did not take the confirmation: %s", s.sentence(err))
 		return
 	}
-	s.say("Confirmed on this %s. The page that asked finishes the change and shows its result.", s.cfg.Noun)
-}
-
-// ConfirmDrawn confirms the change drawn, read from the CYFR through
-// another credential of this device's (the command line's session) and
-// shown before the secret was asked: the secret, asked after it, opens
-// the key afresh, which proves this device on a channel of its own; the
-// CYFR's confirm request for that ref is read there, and only when the
-// record behind it is still the one drawn (its operation and preview) is
-// that request answered (confirmation.confirm). The channel is closed and
-// the key erased whatever the outcome; the notice says it.
-func (s *Shell) ConfirmDrawn(ctx context.Context, drawn PendingConfirm, secret []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer erase(secret)
-	if s.rec == nil || s.rec.Identifier == "" || s.ch != nil {
-		return
-	}
-	key, err := s.rec.Open(secret)
-	if err != nil {
-		s.say("%s Nothing was signed.", s.sentence(err))
-		return
-	}
-	if err := s.connect(ctx, key); err != nil {
-		key.Erase()
-		s.say("%s Nothing was signed.", s.sentence(err))
-		return
-	}
-	notice := ""
-	defer func() { s.lock(""); s.notice = notice }()
-	now, err := s.pending(ctx, drawn.Ref)
-	if err != nil {
-		notice = s.sentence(err) + " Nothing was signed."
-		return
-	}
-	if !same(now, &drawn) {
-		notice = "The change CYFR holds is not the one shown, so nothing was signed."
-		return
-	}
-	if err := s.answer(ctx, drawn.Ref, s.key); err != nil {
-		notice = "CYFR did not take the confirmation: " + s.sentence(err)
-		return
-	}
-	notice = "Confirmed on this " + s.cfg.Noun + "."
+	s.say("Confirmed on this screen. The page that asked finishes the change and shows its result.")
 }
 
 // errNotWaiting is a passkey request the CYFR does not hold: none by that
@@ -1750,7 +1661,7 @@ func (s *Shell) DrawPasskey(ctx context.Context, ref string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ch == nil {
-		s.say("Unlock this %s first, then approve the passkey again from Your devices.", s.cfg.Noun)
+		s.say("Unlock this screen first, then approve the passkey again from Your devices.")
 		return
 	}
 	p, err := s.waiting(ctx, ref)
@@ -1822,7 +1733,7 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve b
 	defer s.mu.Unlock()
 	defer erase(secret)
 	if s.ch == nil {
-		s.say("Unlock this %s first, then approve the passkey again from Your devices.", s.cfg.Noun)
+		s.say("Unlock this screen first, then approve the passkey again from Your devices.")
 		return false
 	}
 	drawn := s.passkey
@@ -1870,10 +1781,10 @@ func (s *Shell) DecidePasskey(ctx context.Context, ref, digest string, approve b
 		s.say("Your account lists that passkey already.")
 		return true
 	case errors.Is(err, account.ErrNotListed):
-		s.say("Your account does not list this %s any more, so it cannot add a passkey.", s.cfg.Noun)
+		s.say("Your account does not list this screen any more, so it cannot add a passkey.")
 	case errors.Is(err, account.ErrUnanswered):
-		s.say("Your account's answer did not arrive, so this %s does not know whether the passkey was added. "+
-			"Sign in with it in the browser that asked, or look at your account's devices page, which lists every key.", s.cfg.Noun)
+		s.say("Your account's answer did not arrive, so this screen does not know whether the passkey was added. " +
+			"Sign in with it in the browser that asked, or look at your account's devices page, which lists every key.")
 	case errors.Is(err, account.ErrUnreachable):
 		s.say("Your account could not be reached just now. Nothing was added; approve it again from Your devices.")
 	default:

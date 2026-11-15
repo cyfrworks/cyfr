@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -59,8 +62,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagContext, "context", "", "Use specific context")
 	rootCmd.PersistentFlags().BoolVar(&flagNoInteractive, "no-interactive", false, "Disable interactive prompts")
 	rootCmd.PersistentFlags().StringVar(&flagToken, "token", "",
-		"Bearer credential for this invocation, a cyfr_ API key; "+
-			"overrides the session of the shell cyfr login started. CYFR_TOKEN works too — the non-interactive path for CI.")
+		"The API key this invocation uses (cyfr_sk_…), made on CYFR's API Keys page; CYFR_TOKEN works too.")
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "server", Title: "Server:"},
@@ -144,6 +146,7 @@ func Run(ctx context.Context) int {
 // of an updated cyfr that printed its own — and returns it for main to map
 // to an exit code.
 func Execute(ctx context.Context) error {
+	refuseUnknownSubcommands.Do(func() { refuseUnknown(rootCmd) })
 	err := rootCmd.ExecuteContext(ctx)
 	if i := (interruption{}); errors.As(err, &i) {
 		fmt.Fprintln(os.Stderr, i)
@@ -180,11 +183,9 @@ func newClient() *mcp.Client {
 	return clientAt(serverURL(cfg))
 }
 
-// clientAt is the client for the home at address, holding the credential
-// --token names, else CYFR_TOKEN (an API key, the unattended path), else
-// the session of the shell cyfr login holds for that address
-// (shellSession). Nothing stored sends a credential: the command line
-// proves the person with its device, whose session lives in memory.
+// clientAt is the client for the home at address, holding the API key
+// --token names, else CYFR_TOKEN. Nothing stored sends a credential, and
+// the command line signs no one in: a person acts on the screen.
 func clientAt(address string) *mcp.Client {
 	client := mcp.NewClient(address)
 	// A change answered confirmation_required waits here and repeats, for
@@ -194,17 +195,12 @@ func clientAt(address string) *mcp.Client {
 		interactive: confirmationTerminal,
 		lines:       confirmationInput,
 		now:         time.Now,
-		address:     address,
-		device:      confirmOnDevice,
 	}).wait
 
-	switch {
-	case flagToken != "":
+	if flagToken != "" {
 		client.SessionID = flagToken
-	case os.Getenv("CYFR_TOKEN") != "":
+	} else {
 		client.SessionID = os.Getenv("CYFR_TOKEN")
-	default:
-		client.SessionID, _ = shellSession(address)
 	}
 
 	return client
@@ -220,16 +216,10 @@ func contextName(cfg *config.Config) string {
 }
 
 // serverURL is the home's address a command talks to: --url, else the
-// --context's address, else the home of the shell cyfr login started,
-// else the current context's.
+// --context's address, else the current context's.
 func serverURL(cfg *config.Config) string {
 	if flagURL != "" {
 		return flagURL
-	}
-	if flagContext == "" {
-		if home := os.Getenv(sessionHomeEnv); home != "" {
-			return home
-		}
 	}
 	if stored := cfg.Contexts[contextName(cfg)]; stored != nil {
 		return stored.URL
@@ -250,8 +240,11 @@ func handleToolError(err error, prefix ...string) error {
 	// Capitalized, punctuated messages are deliberate here (staticcheck
 	// ST1005 would object): these errors ARE the CLI's user-facing output —
 	// Execute prints them verbatim as the command's final line.
+	if unreachable := (*mcp.UnreachableError)(nil); errors.As(err, &unreachable) {
+		return fmt.Errorf("CYFR could not be reached at %s. Check that it is running there, or name the CYFR this command line uses: cyfr context add <name> <address> (or --url for one command).", unreachable.Address)
+	}
 	if errors.Is(err, mcp.ErrAuthRequired) {
-		return errors.New("Not signed in. Run 'cyfr login': it unlocks this command line in a shell of its own. Unattended work uses an API key (--token or CYFR_TOKEN).")
+		return errors.New("This command needs an API key: make one on CYFR's API Keys page and pass it with --token or CYFR_TOKEN.")
 	}
 	if msg, ok := explainConsentError(err); ok {
 		return errors.New(msg)
@@ -289,9 +282,9 @@ func formatConsentError(tag string, payload map[string]any) string {
 		ref, _ := payload["node_ref"].(string)
 		need, _ := payload["need"].(string)
 		if need != "" {
-			return fmt.Sprintf("Setup required: %s needs a vault entry for %q.\n  Run: cyfr profile grant %s", ref, need, ref)
+			return fmt.Sprintf("Setup required: %s needs a vault entry for %q.\n  %s", ref, need, grantHint(ref))
 		}
-		return fmt.Sprintf("Setup required: %s is not ready.\n  Run: cyfr profile grant %s", ref, ref)
+		return fmt.Sprintf("Setup required: %s is not ready.\n  %s", ref, grantHint(ref))
 
 	case "consent_required":
 		// The payload names its cause and the component (Sanctum.Consent's
@@ -299,12 +292,12 @@ func formatConsentError(tag string, payload map[string]any) string {
 		ref, _ := payload["ref"].(string)
 		switch cause, _ := payload["cause"].(string); cause {
 		case "no_grant":
-			return fmt.Sprintf("%s has not been granted.\n  Grant it in CYFR, or run: cyfr profile grant %s", ref, ref)
+			return fmt.Sprintf("%s has not been granted.\n  %s", ref, grantHint(ref))
 		case "revoked":
-			return fmt.Sprintf("Your grant for %s was revoked.\n  Grant it again in CYFR, or run: cyfr profile grant %s", ref, ref)
+			return fmt.Sprintf("Your grant for %s was revoked.\n  %s", ref, grantHint(ref))
 		default:
 			rev, _ := payload["current_revision"].(float64)
-			return fmt.Sprintf("%s asks for more than your grant holds (consent rev %.0f).\n  Review and grant it again in CYFR, or run: cyfr profile grant %s", ref, rev, ref)
+			return fmt.Sprintf("%s asks for more than your grant holds (consent rev %.0f).\n  %s", ref, rev, grantHint(ref))
 		}
 
 	case "consent_conflict":
@@ -330,10 +323,16 @@ func formatConsentError(tag string, payload map[string]any) string {
 		if expiresAt, _ := payload["expires_at"].(string); expiresAt != "" {
 			expiry = fmt.Sprintf(" before %s", expiresAt)
 		}
-		return fmt.Sprintf("Confirmation required: %s needs a fresh confirmation; nothing was changed.\n  Confirm %s on a device of yours%s (a passkey in Prism, a CYFR screen, or a command line paired by cyfr login), where this key or client is named as the one asking.", operation, record, expiry)
+		return fmt.Sprintf("Confirmation required: %s needs a fresh confirmation; nothing was changed.\n  Confirm %s in Prism or on the box%s, where this key or client is named as the one asking.", operation, record, expiry)
 	}
 
 	return ""
+}
+
+// grantHint is the next step for a component the person has not granted:
+// the grant sheet, on the screen, since the command line grants nothing.
+func grantHint(ref string) string {
+	return "Grant it in CYFR: on Components, open " + ref + " and choose Grant access."
 }
 
 // The terminal a wait for a fresh confirmation talks to: whether there is
@@ -346,13 +345,10 @@ var (
 
 // confirmationWait is how a command meets a change answered
 // confirmation_required (mcp.Client.Confirm). On a terminal it prints the
-// sentence, which names the record by its ref, and waits: each Enter repeats
-// the call once, a repeat answered with the same id waits again, and the
-// wait ends at the record's expiry. Where this command line holds a
-// paired device for the home (device), it first offers to confirm the
-// change here: the home's preview is drawn, then the PIN or passphrase
-// typed after it confirms it (confirmOnDevice) and the call is repeated,
-// or Enter alone repeats it once confirmed elsewhere. Off a terminal, or
+// sentence, which names the record by its ref, and waits for it to be
+// confirmed in Prism or on the box: each Enter repeats the call once, a
+// repeat answered with the same id waits again, and the wait ends at the
+// record's expiry. Off a terminal, or
 // past the expiry, it ends at once with the signal itself, which the
 // command prints before exiting 1: nothing was changed, and the id is
 // dropped with the process. Ctrl-C leaves it (exit 130).
@@ -361,8 +357,6 @@ type confirmationWait struct {
 	interactive func() bool
 	lines       func() <-chan []byte
 	now         func() time.Time
-	address     string
-	device      func(address string) deviceConfirmer
 }
 
 func (w *confirmationWait) wait(ctx context.Context, pending *mcp.ConsentError, again bool) error {
@@ -384,41 +378,6 @@ func (w *confirmationWait) wait(ctx context.Context, pending *mcp.ConsentError, 
 		expired = timer.C
 	}
 
-	if w.device != nil && id != "" {
-		if here := w.device(w.address); here != nil {
-			// The record's expiry ends the offer as it ends the wait.
-			dctx, cancel := context.WithCancel(ctx)
-			lapsed := make(chan bool, 1)
-			go func() {
-				select {
-				case <-expired:
-					lapsed <- true
-					cancel()
-				case <-dctx.Done():
-					lapsed <- false
-				}
-			}()
-			outcome, err := here(dctx, confirmation.Ref(id), &console{out: w.out, lines: w.lines, quiet: echoOff})
-			cancel()
-			switch {
-			case <-lapsed:
-				return pending
-			case ctx.Err() != nil:
-				return prompt.ErrAborted
-			case errors.Is(err, errInputEnded):
-				return pending
-			case outcome == failedHere:
-				fmt.Fprintln(w.out, err)
-				return nil
-			case outcome == notHere:
-				if err != nil && err.Error() != "" {
-					fmt.Fprintln(w.out, err)
-				}
-			default:
-				return nil
-			}
-		}
-	}
 	fmt.Fprintln(w.out, "  Press Enter once confirmed, Ctrl-C to leave it.")
 
 	select {
@@ -445,3 +404,47 @@ func confirmationExpiry(payload map[string]any) (time.Time, bool) {
 	}
 	return expiresAt, true
 }
+
+// stdinLines is the person's lines on standard input, each its own byte
+// slice that its reader may erase, read by one reader for the whole
+// process: a read cannot be cancelled, so a second reader would race the
+// first for the next line. The channel closes at end of input.
+var stdinLines = sync.OnceValue(func() <-chan []byte {
+	lines := make(chan []byte)
+	go func() {
+		defer close(lines)
+		r := bufio.NewReaderSize(os.Stdin, 64<<10)
+		for {
+			line, err := r.ReadSlice('\n')
+			if len(line) > 0 || err == nil {
+				// A copy of the line alone, so the reader's buffer keeps
+				// no secret once it is read.
+				out := bytes.Clone(bytes.TrimRight(line, "\r\n"))
+				clear(line)
+				lines <- out
+			}
+			if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
+				return
+			}
+		}
+	}()
+	return lines
+})
+
+// refuseUnknown makes each command under c that only groups others refuse
+// an argument naming none of them, as the root does, rather than print its
+// help and exit 0: a command that is not there is unknown, a removed one
+// included. Alone, such a command still prints its help.
+func refuseUnknown(c *cobra.Command) {
+	if c.HasParent() && c.HasSubCommands() && !c.Runnable() && c.Args == nil {
+		c.Args = cobra.NoArgs
+		c.RunE = func(cmd *cobra.Command, args []string) error { return cmd.Help() }
+	}
+	for _, sub := range c.Commands() {
+		refuseUnknown(sub)
+	}
+}
+
+// refuseUnknownSubcommands walks the tree once, after every command has
+// registered.
+var refuseUnknownSubcommands sync.Once

@@ -116,7 +116,7 @@ func TestDeviceVectors_ARefusalIsReadAsItsSentence(t *testing.T) {
 		raw, _ := json.Marshal(m.Message)
 		got, ok := readRefused(raw)
 		want := m.Message["error"].(map[string]any)
-		if !ok || got.Class != want["class"] || got.Message != want["message"] || sentence(got, "command line") != want["message"] {
+		if !ok || got.Class != want["class"] || got.Message != want["message"] || sentence(got) != want["message"] {
 			t.Errorf("%s: read %+v, %v", m.Name, got, ok)
 		}
 		read++

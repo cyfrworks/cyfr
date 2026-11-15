@@ -35,11 +35,11 @@ var setupCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a new CYFR in the current directory from pages shown on this device's own screen, for a device with a touch screen and no keyboard; 'cyfr init' sets one up at a terminal. The pages ask nothing, as 'cyfr init' asks nothing: their one button, Set up CYFR, runs what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs, then shows the setup link. The CYFR they set up is reached from this device, at http://localhost:<CYFR_PORT>; 'cyfr access' changes how it is reached.
 
-cyfr setup serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url. A Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display, and there cyfr setup without --no-open refuses before it serves anything. Nothing off this machine reaches the pages: the address carries a token of this run, and every request must come from the pages themselves.
+cyfr setup serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url. A Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display, and there cyfr setup without --no-open refuses before it serves anything. Nothing off this machine reaches the pages: the address carries a token of this run, and every request must come from the pages themselves.
 
 CYFR runs on Docker, which 'cyfr init' installs at a terminal and the pages do not: when Docker does not answer this account, cyfr setup writes nothing, not even its lock or .cyfr/setup.url, and the pages' start says to run 'cyfr init', then 'cyfr up', at a terminal. When Docker refuses this account in a terminal older than the account's docker group, cyfr setup runs itself again with the group through sg before it serves anything, as 'cyfr up' does. A step that fails shows why, in the command line's own sentence; a start that fails offers to try it again. Once CYFR is up, the pages show its setup link, <CYFR address>/setup#<token>, the token being CYFR_SETUP_TOKEN from .env, with a Copy button, and move the browser there: the link sets up CYFR's first person, who administers it, with a passkey. The program stops serving the pages once they have read that, or a minute after. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
 
-Run in a project whose .env exists, cyfr setup serves no pages and says the next step instead: with no one set up, the setup link, as 'cyfr up' says it; once its first person is set up, 'cyfr open'; when it cannot tell, the setup link alone. The link opens in the default browser on a machine with a display unless --no-open is given or CYFR has tailnet access. While CYFR is stopped, 'cyfr up' comes first.
+Run in a project whose .env exists, cyfr setup serves no pages and says the next step instead: with no one set up, the setup link, as 'cyfr up' says it; once its first person is set up, its address; when it cannot tell, the setup link alone. The link opens in the default browser on a machine with a display unless --no-open is given or CYFR has tailnet access. While CYFR is stopped, 'cyfr up' comes first.
 
 Exit status 1: CYFR was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
@@ -200,9 +200,9 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 // setupNextHere is cyfr setup in a project whose .env exists: the next
 // step of the CYFR set up here, read from cyfr's log under the stack's
 // lock (readSetUp). With no one set up, setupNext's step; its first
-// person set up, cyfr open; a log that cannot be read, the setup link
+// person set up, its address; a log that cannot be read, the setup link
 // alone. The link opens in the default browser on a machine with a
-// display unless noOpen, as cyfr open opens Prism; a tailnet address
+// display unless noOpen; a tailnet address
 // opens on the person's devices with Tailscale on, not here. While cyfr
 // is stopped, cyfr up first, then the setup link when cyfr never booted.
 func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
@@ -238,7 +238,7 @@ func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
 		setupNext(out, head)
 		opened()
 	case read == setUpDone:
-		fmt.Fprintln(out, "CYFR is set up and has its first person. cyfr open opens it.")
+		fmt.Fprintf(out, "CYFR is set up and has its first person. Open %s.\n", hyperlink(out, access.Describe(head).Address))
 	case read == setUpUnknown:
 		fmt.Fprintf(out, "Open %s.\n", hyperlink(out, link))
 		opened()

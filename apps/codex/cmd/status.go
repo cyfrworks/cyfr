@@ -47,7 +47,7 @@ var statusCmd = &cobra.Command{
 			// Hint if registry is not reachable
 			if services, ok := result["services"].(map[string]any); ok {
 				if regStatus, ok := services["registry"].(string); ok && regStatus != "ok" {
-					fmt.Fprintf(os.Stderr, "\nRegistry is %s. Run 'cyfr login' to authenticate or check your connection.\n", regStatus)
+					fmt.Fprintf(os.Stderr, "\nRegistry is %s: check this server's connection to it.\n", regStatus)
 				}
 			}
 
@@ -63,7 +63,13 @@ var notifyCmd = &cobra.Command{
 	Use:     "notify <event> <target>",
 	Short:   "Send a webhook notification",
 	GroupID: "admin",
-	Long:    "Dispatch a webhook event to the given target URL. Useful for integrating CYFR events into external systems like Slack or PagerDuty.",
+	Long: `Has CYFR POST one JSON body to the target URL, to tell an outside system
+such as Slack or PagerDuty that something happened. The body is
+{"event": <event>, "payload": {}, "source": "cyfr", "user_id": <your
+person's id>, "timestamp": <now, ISO 8601>}, so the target learns your
+person's id. The target must be a public address: CYFR refuses a private
+one, follows no redirect and reads only the answer's status. It needs the
+admin permission and no grant.`,
 	Example: `  cyfr notify deployment.complete https://hooks.slack.com/T0/B0/xxx
   cyfr notify audit.export https://example.com/webhook`,
 	Args: cobra.ExactArgs(2),

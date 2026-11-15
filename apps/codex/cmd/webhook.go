@@ -21,21 +21,11 @@ import (
 
 func init() {
 	rootCmd.AddCommand(webhookCmd)
-	webhookCmd.AddCommand(webhookCreateCmd)
 	webhookCmd.AddCommand(webhookGetCmd)
 	webhookCmd.AddCommand(webhookListCmd)
 	webhookCmd.AddCommand(webhookUpdateCmd)
 	webhookCmd.AddCommand(webhookRevokeCmd)
 	webhookCmd.AddCommand(webhookRotateCmd)
-
-	webhookCreateCmd.Flags().String("name", "", "Webhook name (required in non-interactive mode)")
-	webhookCreateCmd.Flags().String("profile", "", "Consented execution profile ID")
-	webhookCreateCmd.Flags().String("target", "", "Target component reference (e.g. f:local.handle-github-push)")
-	webhookCreateCmd.Flags().String("signature-header", "", "HTTP header carrying the signature (default x-cyfr-signature)")
-	webhookCreateCmd.Flags().String("rate-limit", "", "Rate limit override (e.g. 100/1m)")
-	webhookCreateCmd.Flags().String("description", "", "Optional description")
-	webhookCreateCmd.Flags().String("input", "", `Static input template as inline JSON object (e.g. '{"channel":"alerts"}')`)
-	webhookCreateCmd.Flags().String("input-file", "", "Path to a JSON file containing the input template")
 
 	webhookUpdateCmd.Flags().String("target", "", "New target component reference")
 	webhookUpdateCmd.Flags().String("signature-header", "", "New signature header")
@@ -58,104 +48,6 @@ delivery, and then runs a target component: the answer does not say how
 the run ends. The webhook can carry a static "input_template" (JSON object)
 that gets merged into the invocation payload alongside the request envelope
 (headers, body, metadata) under the reserved key '_webhook'.`,
-}
-
-var webhookCreateCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new webhook",
-	Long: `Create a new webhook bound to a target component. Returns a stable URL and
-an HMAC secret. The secret is shown exactly once — copy it now.
-
-Run without --name for an interactive form.`,
-	Example: `  cyfr webhook create --profile <profile-id> --name github-push --target f:local.handle-github-push
-  cyfr webhook create --profile <profile-id> --name slack-alerts --target f:local.notify --input '{"channel":"alerts"}'
-  cyfr webhook create --profile <profile-id> --name stripe --target f:local.handle-stripe --signature-header stripe-signature`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name, _ := cmd.Flags().GetString("name")
-		target, _ := cmd.Flags().GetString("target")
-		sigHeader, _ := cmd.Flags().GetString("signature-header")
-		rateLimit, _ := cmd.Flags().GetString("rate-limit")
-		description, _ := cmd.Flags().GetString("description")
-		inputJSON, _ := cmd.Flags().GetString("input")
-		inputFile, _ := cmd.Flags().GetString("input-file")
-
-		var inputTemplate map[string]any
-
-		if name == "" {
-			if !prompt.IsInteractive(flagNoInteractive) {
-				return errors.New("--name is required. Usage: cyfr webhook create --profile <profile-id> --name <name> --target <ref>")
-			}
-
-			form, err := prompt.RunWebhookCreateForm(cmd.Context())
-			if err != nil {
-				if prompt.IsAborted(err) {
-					return prompt.ErrAborted
-				}
-				return fmt.Errorf("Prompt failed: %w", err)
-			}
-			name = form.Name
-			target = form.TargetRef
-
-			if form.SignatureHeader != "" {
-				sigHeader = form.SignatureHeader
-			}
-			if form.RateLimit != "" {
-				rateLimit = form.RateLimit
-			}
-			if form.Description != "" {
-				description = form.Description
-			}
-
-			parsed, err := parseInputTemplate(form.InputTemplate, "")
-			if err != nil {
-				return fmt.Errorf("Invalid input_template: %w", err)
-			}
-			inputTemplate = parsed
-		} else {
-			if target == "" {
-				return errors.New("--target is required when --name is set. Usage: cyfr webhook create --profile <profile-id> --name <name> --target <ref>")
-			}
-
-			parsed, err := parseInputTemplate(inputJSON, inputFile)
-			if err != nil {
-				return fmt.Errorf("Invalid input_template: %w", err)
-			}
-			inputTemplate = parsed
-		}
-
-		profileID, _ := cmd.Flags().GetString("profile")
-		profileID, err := requireExecutionProfile(cmd.Context(), profileID)
-		if err != nil {
-			return err
-		}
-		toolArgs := ops.WebhookCreateArgs{Name: name, ProfileId: profileID,
-			TargetRef: target}
-		if inputTemplate != nil {
-			toolArgs.InputTemplate = ops.Value(inputTemplate)
-		}
-		if sigHeader != "" {
-			toolArgs.SignatureHeader = ops.Value(sigHeader)
-		}
-		if rateLimit != "" {
-			toolArgs.RateLimit = ops.Value(rateLimit)
-		}
-		if description != "" {
-			toolArgs.Description = ops.Value(description)
-		}
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Webhook, toolArgs)
-		if err != nil {
-			return handleToolError(err)
-		}
-
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			renderWebhookCreated(result)
-		}
-		return nil
-	},
 }
 
 var webhookGetCmd = &cobra.Command{
@@ -367,28 +259,12 @@ func selectWebhookName(ctx context.Context, args []string, promptTitle, confirmT
 	return pickTarget(ctx, args, selector{
 		Title:   promptTitle,
 		Confirm: confirmTemplate,
-		Empty:   "No webhooks found. Create one with 'cyfr webhook create'.",
+		Empty:   "No webhooks found. Make one on CYFR's Webhooks page.",
 		Usage:   "Usage: provide <name> or run interactively",
 		Fetch: func(ctx context.Context) ([]prompt.Option, error) {
 			return prompt.FetchWebhooks(ctx, newClient())
 		},
 	})
-}
-
-// renderWebhookCreated prints the human-readable result for `webhook create`,
-// surfacing the URL, name, target, and one-time secret prominently. The URL
-// is constructed server-side using `CYFR_PUBLIC_URL` so it's correct
-// regardless of whether the CLI is talking to a local or remote server.
-func renderWebhookCreated(result map[string]any) {
-	name, _ := result["name"].(string)
-	target, _ := result["target_ref"].(string)
-
-	fmt.Printf("Webhook '%s' created.\n\n", name)
-	renderWebhookEndpoint(result)
-	if target != "" {
-		fmt.Printf("  Target: %s\n", target)
-	}
-	renderWebhookSecret(result, "Secret")
 }
 
 // renderWebhookRotated prints the result of a successful rotation.
@@ -470,7 +346,7 @@ func renderWebhookDetail(result map[string]any) {
 func renderWebhookList(result map[string]any) {
 	hooksAny, _ := result["webhooks"].([]any)
 	if len(hooksAny) == 0 {
-		fmt.Println("No webhooks. Create one with `cyfr webhook create`.")
+		fmt.Println("No webhooks. Make one on CYFR's Webhooks page.")
 		return
 	}
 

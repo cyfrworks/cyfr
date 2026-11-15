@@ -16,11 +16,11 @@ import (
 )
 
 // firstUse is a shell over the machine's key at path that has read no
-// record yet, as a first cyfr login does.
+// record yet, as a device's first use does.
 func firstUse(t *testing.T, home *fakeHome, path string) *Shell {
 	t.Helper()
 	cfg := Config{Address: "https://one.example", Record: path, DataDir: filepath.Dir(path), Clients: &memoryClients{},
-		Chip: func() bool { return false }, Detect: func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }, Noun: "command line"}
+		Chip: func() bool { return false }, Detect: func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }}
 	if home != nil {
 		cfg.Address, cfg.Client, cfg.Directory = home.address(), home.srv.Client(), home.accounts.URL()
 	}

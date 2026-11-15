@@ -9,6 +9,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"github.com/cyfr/codex/internal/account"
 	"io"
 	"net/http"
 	"net/url"
@@ -553,3 +554,20 @@ func screenReachable(client *http.Client, address string) bool {
 	resp.Body.Close()
 	return true
 }
+
+// directoryURL is the directory a new account is made at and a name is
+// looked up through: CYFR_DIRECTORY_URL from the environment or from the
+// .env here, as the server reads it, else cyfr.run.
+func directoryURL() string {
+	if v := strings.TrimSpace(os.Getenv(directoryVar)); v != "" {
+		return v
+	}
+	if values, err := access.ReadEnvValues(".env"); err == nil {
+		if v := strings.TrimSpace(values[directoryVar]); v != "" {
+			return v
+		}
+	}
+	return account.DefaultDirectory
+}
+
+const directoryVar = "CYFR_DIRECTORY_URL"

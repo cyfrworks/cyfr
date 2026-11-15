@@ -12,6 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	rootCmd.AddCommand(whoamiCmd)
+}
+
 // whoamiCmd displays local session identity and registry namespace memberships.
 // Registry failures produce a warning while preserving the local identity output.
 var whoamiCmd = &cobra.Command{
@@ -94,8 +98,8 @@ func renderWhoami(composed map[string]any, registryErr error) {
 
 	// Signed out (no local identity at all).
 	if userID == "" {
-		fmt.Println("Not signed in.")
-		fmt.Fprintln(os.Stderr, "Run `cyfr login` to authenticate.")
+		fmt.Println("No API key.")
+		fmt.Fprintln(os.Stderr, "Make one on CYFR's API Keys page and pass it with --token or CYFR_TOKEN.")
 		return
 	}
 
@@ -113,7 +117,7 @@ func renderWhoami(composed map[string]any, registryErr error) {
 		hint = "Your name is not finished yet: finish it in Settings."
 	case hasRegistry:
 		cyfrUser = "(no cyfr.run push tokens)"
-		hint = "Finish your name in Settings if it is not finished, then run `cyfr registry sync` to provision push tokens."
+		hint = "Finish your name in Settings if it is not finished, then make your push tokens on CYFR's Registry page."
 	default:
 		cyfrUser = "(registry.cyfr.run unreachable)"
 	}

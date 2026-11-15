@@ -137,7 +137,7 @@ func TestRenderWhoami_RegistryUnauthenticated(t *testing.T) {
 	if !strings.Contains(out, "CYFR User: (no cyfr.run push tokens)") {
 		t.Errorf("expected registry-unauthenticated status, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Finish your name in Settings") || !strings.Contains(out, "`cyfr registry sync`") {
+	if !strings.Contains(out, "Finish your name in Settings") || !strings.Contains(out, "Registry page") {
 		t.Errorf("expected the name and sync hint on stderr, got:\n%s", out)
 	}
 }
@@ -166,7 +166,7 @@ func TestRenderWhoami_SignedOut(t *testing.T) {
 
 	out := captureStdout(t, func() { renderWhoami(composed, nil) })
 
-	if !strings.Contains(out, "Not signed in.") {
+	if !strings.Contains(out, "No API key.") {
 		t.Errorf("expected signed-out render, got:\n%s", out)
 	}
 }
