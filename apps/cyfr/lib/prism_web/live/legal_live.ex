@@ -9,9 +9,11 @@ defmodule PrismWeb.LegalLive do
   Each tab triggers a fresh fetch (cached server-side at 5min by the
   upstream Cache-Control); markdown is rendered by the
   `MarkdownContent` JS hook. The pages are the registry's this deployment
-  names (cyfr.run unless configured); `registry/legal_page` answers its
-  host with each page and makes the page's links absolute against it, and
-  the page names its source by that host once one has loaded.
+  names (cyfr.run unless configured); `registry/legal_page` answers each
+  page as fetched with its host and that host's address, and the page names
+  its source by that host once one has loaded. The element the page renders
+  into names that address as `data-link-base`, against which the hook
+  resolves the page's relative links.
 
   The Privacy tab opens with a paragraph of this CYFR's own, saying who
   can read what is kept here, before cyfr.run's policy.
@@ -46,6 +48,7 @@ defmodule PrismWeb.LegalLive do
       |> assign(:loading, true)
       |> assign(:error, nil)
       |> assign(:publisher, nil)
+      |> assign(:link_base, nil)
 
     if connected?(socket) do
       send(self(), {:load, initial})
@@ -75,6 +78,7 @@ defmodule PrismWeb.LegalLive do
          |> assign(:title, title)
          |> assign(:markdown, md)
          |> assign(:publisher, page["registry"])
+         |> assign(:link_base, page["base_url"])
          |> assign(:loading, false)
          |> assign(:error, nil)}
 
@@ -142,8 +146,9 @@ defmodule PrismWeb.LegalLive do
           Whoever runs the machine this CYFR runs on can read what it keeps there: your files,
           your vault's values and your messages among them. The people of a thread see its
           messages, and leaving a thread does not take yours out of it. A key someone shares
-          with you is used for you and never shown to you. What you ask AQUA goes to the model
-          provider whose key AQUA uses. The policy below is {@publisher || "the registry"}'s, for your account
+          with you is used for you and never shown to you. Your questions and the context AQUA
+          uses to answer them, including other people's words it reads in shared threads, go to
+          the model provider whose key AQUA uses. The policy below is {@publisher || "the registry"}'s, for your account
           and the components you publish there.
         </p>
       </section>
@@ -155,6 +160,7 @@ defmodule PrismWeb.LegalLive do
           phx-hook="MarkdownContent"
           phx-update="ignore"
           data-raw-content={@markdown}
+          data-link-base={@link_base}
           class="text-gray-300 prose prose-invert max-w-none"
         >
         </div>

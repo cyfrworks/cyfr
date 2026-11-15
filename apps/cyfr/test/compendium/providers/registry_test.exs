@@ -21,29 +21,33 @@ defmodule Compendium.Providers.RegistryTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  test "a legal page answers the registry it came from, its links that name a path alone made absolute",
+  test "a legal page answers as fetched, with the registry it came from and its address",
        %{ctx: ctx} do
     page =
-      "Report it [here](/legal/ncii/report), <a href=\"/legal/dmca\">or here</a>, " <>
-        "or [elsewhere](https://example.com/x)."
+      "Report it [here][r], <a href='/legal/dmca'>or here</a>, `[code](/legal/x)` " <>
+        "or [elsewhere](https://example.com/x).\n\n[r]: /legal/ncii/report"
 
+    # A page that names a registry or an address of its own names neither.
     RegistryStub.start!(fn %{method: "GET", path: "/v1/legal/terms"} ->
       {200,
-       RegistryStub.answer(%{"name" => "terms", "title" => "Terms", "content_markdown" => page})}
+       RegistryStub.answer(%{
+         "name" => "terms",
+         "title" => "Terms",
+         "content_markdown" => page,
+         "registry" => "elsewhere.example",
+         "base_url" => "https://elsewhere.example"
+       })}
     end)
 
     host = Compendium.RegistryHost.canonical_rest_host()
-    base = Compendium.RegistryHost.base_url(host)
 
     assert {:ok,
             %{
               "name" => "terms",
               "title" => "Terms",
+              "content_markdown" => page,
               "registry" => host,
-              "content_markdown" =>
-                "Report it [here](#{base}/legal/ncii/report), " <>
-                  "<a href=\"#{base}/legal/dmca\">or here</a>, " <>
-                  "or [elsewhere](https://example.com/x)."
+              "base_url" => Compendium.RegistryHost.base_url(host)
             }} == RegistryProvider.handle(ctx, %{"action" => "legal_page", "name" => "terms"})
   end
 

@@ -519,19 +519,13 @@ defmodule Compendium.Providers.Registry do
   # ============================================================================
 
   # A legal page as the registry publishes it, with the registry it came
-  # from (`registry`, its host) and its links that name a path alone made
-  # absolute against that registry's address: on this CYFR such a path
-  # names nothing.
+  # from: `registry`, its host, and `base_url`, the address the page's
+  # links that name a path alone are read against (on this CYFR such a
+  # path names nothing). Both come from this deployment's configuration,
+  # never from the page.
   defp legal_page(%{"content_markdown" => markdown} = body) when is_binary(markdown) do
     host = Compendium.RegistryHost.canonical_rest_host()
-    base = Compendium.RegistryHost.base_url(host)
-
-    absolute =
-      markdown
-      |> String.replace(~r{\]\((/[^/)\s][^)\s]*)}, "](" <> base <> "\\1")
-      |> String.replace(~r{href="(/[^/"][^"]*)"}, ~s(href=") <> base <> ~s(\\1"))
-
-    Map.merge(body, %{"content_markdown" => absolute, "registry" => host})
+    Map.merge(body, %{"registry" => host, "base_url" => Compendium.RegistryHost.base_url(host)})
   end
 
   defp legal_page(body), do: body
