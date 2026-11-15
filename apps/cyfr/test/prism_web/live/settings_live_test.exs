@@ -13,6 +13,7 @@ defmodule PrismWeb.SettingsLiveTest do
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   alias Sanctum.Test.RegistryStub
 
@@ -751,6 +752,234 @@ defmodule PrismWeb.SettingsLiveTest do
       view |> element(~s([data-test="session-end"][phx-value-id="#{own_id}"])) |> render_click()
       assert_redirect(view, "/login")
       assert {:error, :invalid_session} = Sanctum.Session.load(own)
+    end
+  end
+
+  describe "the administrator's setup" do
+    @market %{
+      "hosts" => ["api.market.example"],
+      "methods" => ["GET"],
+      "paths" => ["/v1/quotes"]
+    }
+
+    # A person signed in to their own athanor, an administrator or not.
+    defp person!(admin?) do
+      user = test_user()
+      if admin?, do: {:ok, _} = Sanctum.TestContext.ensure_platform(user.user_id)
+      {:ok, own} = Sanctum.Tenancy.Athanors.get_by_owner(user.user_id)
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.user_id,
+          athanor_id: own.id,
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      %{
+        user: user,
+        conn: log_in_user(build_conn(), user),
+        own: own,
+        ctx: Sanctum.TestContext.via(ctx, :prism)
+      }
+    end
+
+    defp key!(%{ctx: ctx}, name, destination) do
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Gate.call_external("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "fields" => %{"MARKET_KEY" => "mk-sentinel-#{name}"},
+            "destination" => destination,
+            "disclose" => false
+          })
+        )
+
+      entry
+    end
+
+    defp seen(%{user: user}) do
+      {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+      Sanctum.Tenancy.Users.prefs(row)["admin_setup_seen"]
+    end
+
+    defp texts(view, selector) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(selector)
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+    end
+
+    test "opens for an administrator at ?setup=1, writes that it was seen, says each step, " <>
+           "and is offered again from Settings once closed" do
+      admin = person!(true)
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+
+      assert has_element?(view, ~s([data-test="setup"]))
+      refute has_element?(view, ~s([data-test="setup-open"]))
+      assert seen(admin) == true
+
+      assert texts(view, ~s([data-test="setup"] ol > li > span)) == [
+               "Share a key with everyone.",
+               "Let people in.",
+               "How this CYFR is reached.",
+               "What only administrators can do."
+             ]
+
+      [share, let_in, reach, administrators] =
+        texts(view, ~s([data-test="setup"] ol > li > p:first-of-type))
+
+      assert share =~ "what each new person's AQUA uses when it fits"
+      assert share =~ "daily cap per person filled in"
+      assert let_in =~ "invitation link"
+      assert let_in =~ "allowlist"
+      assert reach =~ "cyfr access"
+      assert reach =~ "opens only on this computer"
+      assert administrators =~ "second administrator"
+      assert administrators =~ "cyfr backup"
+      assert has_element?(view, ~s([data-test="setup"] a[href="#admins"]))
+      assert has_element?(view, ~s([data-test="setup"] a[href="#invite-cyfr"]))
+      assert has_element?(view, ~s([data-test="setup"] a[href="#allowlist"]))
+      PrismWeb.Vocabulary.refute_vocabulary(view |> element(~s([data-test="setup"])) |> render())
+
+      # No key yet: the first step says where one is connected.
+      assert has_element?(view, ~s([data-test="setup-no-key"]), "Connect one on your AQUA page.")
+
+      view |> element(~s([data-test="setup-close"])) |> render_click()
+      refute has_element?(view, ~s([data-test="setup"]))
+      view |> element(~s([data-test="setup-open"])) |> render_click()
+      assert has_element?(view, ~s([data-test="setup"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "opens for nobody but an administrator, read from their row as it is now" do
+      person = person!(false)
+      {view, _html} = mount_athanor(person.conn, "/settings?setup=1", person.own)
+      refute has_element?(view, ~s([data-test="setup"]))
+      refute has_element?(view, ~s([data-test="setup-open"]))
+      assert seen(person) == nil
+
+      # An administrator whose mark was taken away while signed in: the
+      # session still remembers the capability, the row does not.
+      admin = person!(true)
+      {view, _html} = mount_athanor(admin.conn, "/settings", admin.own)
+      assert has_element?(view, ~s([data-test="setup-open"]))
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(u in Arca.Schemas.User, where: u.id == ^admin.user.user_id),
+          set: [platform_admin_at: nil]
+        )
+
+      view |> element(~s([data-test="setup-open"])) |> render_click()
+      refute has_element?(view, ~s([data-test="setup"]))
+      assert seen(admin) == nil
+
+      # Nor does the first step's event open a sheet outside the setup.
+      market = key!(admin, "market key", @market)
+      render_click(view, "setup_share", %{"id" => market.id})
+      refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the first step lists the administrator's shareable keys, the newest first, and " <>
+           "opens the sharing sheet at everyone with the daily cap per person; what is made " <>
+           "is what the sheet shows when confirmed" do
+      admin = person!(true)
+      older = key!(admin, "older key", @market)
+      newer = key!(admin, "newer key", @market)
+      _not_shareable = key!(admin, "open key", %{"hosts" => ["api.market.example"]})
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.VaultEntry, where: e.id == ^older.id),
+          set: [inserted_at: ~U[2026-01-01 00:00:00.000000Z]]
+        )
+
+      {view, _html} = mount_athanor(admin.conn, "/settings?setup=1", admin.own)
+
+      assert texts(view, ~s([data-test="setup-key"] > span:first-child)) ==
+               ["newer key", "older key"]
+
+      view
+      |> element(~s([data-test="setup-key-share"][phx-value-id="#{newer.id}"]))
+      |> render_click()
+
+      sheet = "#system-layer-dialog form#system-layer-share"
+      assert has_element?(view, sheet <> ~s( input[name="audience"][value="everyone"][checked]))
+      assert has_element?(view, sheet <> ~s( input[name="person_daily"][value="50"]))
+      refute view |> element(sheet <> ~s( input[name="total_daily"])) |> render() =~ ~s(value="5)
+
+      assert texts(view, ~s([data-test="share-everyone"])) == [
+               "You administer this CYFR, so a key you share with everyone is also what each " <>
+                 "new person's AQUA uses when it fits."
+             ]
+
+      # The preset is not submitted by itself: a submit naming no audience
+      # makes nothing, whatever the sheet started from.
+      view |> element(sheet) |> render_submit(%{"audience" => ""})
+
+      assert has_element?(
+               view,
+               "#system-layer-dialog [role=alert]",
+               "Choose who it is shared with"
+             )
+
+      # The administrator changes the cap before confirming: what is made is
+      # what the sheet shows then.
+      typed = %{"audience" => "everyone", "person_daily" => "20", "total_daily" => ""}
+      view |> form(sheet, typed) |> render_change()
+      view |> form(sheet, typed) |> render_submit()
+
+      assert {:ok, [%{ref: ref, operation: "share.create"}]} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(admin.ctx),
+                 admin.user.user_id
+               )
+
+      Sanctum.TestContext.prove!(admin.ctx, ref)
+
+      shares = fn ->
+        {:ok, %{shares: shares}} =
+          Sanctum.Gate.call_external("share", admin.ctx, %{"action" => "list"})
+
+        shares
+      end
+
+      wait_until(fn -> shares.() != [] end, 2_000, "the share made once confirmed")
+
+      assert [%{entry_id: entry_id, audience: "everyone", person_daily: 20, total_daily: nil}] =
+               shares.()
+
+      assert entry_id == newer.id
+
+      wait_until(
+        fn ->
+          has_element?(
+            view,
+            ~s([data-test="setup-key"]:first-child),
+            "Shared with everyone"
+          )
+        end,
+        2_000,
+        "the step reads the key shared"
+      )
+
+      refute has_element?(
+               view,
+               ~s([data-test="setup-key-share"][phx-value-id="#{newer.id}"])
+             )
+
+      # A key already shared with everyone opens no second sheet.
+      render_click(view, "setup_share", %{"id" => newer.id})
+      refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+      Cyfr.Test.Sandbox.end_views()
     end
   end
 

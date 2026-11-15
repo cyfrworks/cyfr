@@ -46,6 +46,17 @@ defmodule PrismWeb.SettingsLive do
       (`door.mark_admin`) and a mark taken away (`door.clear_admin`), never
       the last one, each asking a fresh confirmation through the system
       layer.
+    * **Setting up this CYFR** — at `?setup=1`, where Aqua's setup sends
+      an administrator who has not seen it, a guided order over controls
+      that exist, for a person whose row carries the mark when it opens
+      (never the session's remembered capability); opening it writes
+      `admin_setup_seen` in their `users.prefs`. Its first step lists the
+      person's own keys the store would share, the newest first
+      (`vault.list`, `share.list`), and opens the system layer's sharing
+      sheet for one at the setup's preset (`PrismWeb.SystemLayer.Share`);
+      the others link to the invitations, the allowlist and the
+      administrators and say what `cyfr access` and `cyfr backup` do. It
+      is closed and opened again from the page.
 
   The refusals each change can meet are shown as the refusal's own
   sentence.
@@ -53,7 +64,9 @@ defmodule PrismWeb.SettingsLive do
   The identity card's controls carry its own `data-test` names, and this
   page's `keys`, `keys-scope`, `keys-account`, `key` (with `data-kid`),
   `session` (with `data-id`), `session-end`; `invite-cyfr`, `invitation-create`, `invitation-new`,
-  `invitation-local`, `invitation-link`, `invitation-copy`, `invitation-name` and `invitation-revoke`.
+  `invitation-local`, `invitation-link`, `invitation-copy`, `invitation-name` and `invitation-revoke`;
+  `setup`, `setup-open`, `setup-close`, `setup-key`, `setup-key-share`, `setup-no-key`,
+  `setup-not-own` and `setup-unread`.
   """
 
   use PrismWeb, :live_view
@@ -65,6 +78,7 @@ defmodule PrismWeb.SettingsLive do
 
   alias Phoenix.LiveView.JS
   alias PrismWeb.{IdentityCard, SystemLayer}
+  alias PrismWeb.SystemLayer.Share
 
   @impl true
   def mount(_params, _session, socket) do
@@ -107,18 +121,62 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:keys, nil)
       |> assign(:account_page, nil)
       |> assign(:keys_error, nil)
+      |> assign(:setup, false)
+      |> assign(:setup_keys, [])
 
     {:ok, socket}
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, _uri, socket) do
+    socket = assign(socket, :setup, params["setup"] == "1" and setup_open?(socket))
+
     # Paint first — the system-status load probes the registry.
     if connected?(socket), do: send(self(), :load)
     {:noreply, socket}
   end
 
+  # The administrator's setup opens for a person who carries the mark as
+  # their row reads now (`Sanctum.Tenancy.revalidate/1`), never by the
+  # session's remembered capability, and opening it once is what Aqua's
+  # setup stops offering it on (`users.prefs`' `admin_setup_seen`).
+  defp setup_open?(%{assigns: %{context: %Sanctum.Context{user_id: user_id} = ctx}} = socket)
+       when is_binary(user_id) do
+    with {:ok, %Sanctum.Context{platform_admin: true}} <- Sanctum.Tenancy.revalidate(ctx),
+         {:ok, user} <- Sanctum.Tenancy.Users.get(user_id) do
+      if connected?(socket), do: setup_seen(user)
+      true
+    else
+      _not_an_administrator -> false
+    end
+  end
+
+  defp setup_open?(_socket), do: false
+
+  defp setup_seen(user) do
+    case Sanctum.Tenancy.Users.put_prefs(user, %{"admin_setup_seen" => true}) do
+      {:ok, _user} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[SettingsLive] admin_setup_seen was not written: #{inspect(reason)}")
+    end
+  end
+
   @impl true
+  def handle_event("setup_share", %{"id" => id}, %{assigns: %{setup: true}} = socket) do
+    case Enum.find(socket.assigns.setup_keys, &(&1.id == id and not &1.shared)) do
+      %{} = key ->
+        SystemLayer.show(SystemLayer.layer_id(), Share.prompt(key, Share.threads(socket), :setup))
+        {:noreply, socket}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("setup_share", _params, socket), do: {:noreply, socket}
+
   def handle_event("door_form_changed", params, socket) do
     {:noreply,
      socket
@@ -306,6 +364,14 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # A share the setup's sheet made: the setup's keys are read again.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report("share-" <> _entry_id, :confirmed, socket),
+    do: {:noreply, socket |> load_setup_keys() |> put_flash(:info, "Shared.")}
+
+  def system_layer_report("share-" <> _entry_id, _outcome, socket), do: {:noreply, socket}
+  def system_layer_report(_prompt_id, _outcome, _socket), do: :pass
+
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_repeat({:tombstone, identifier}, _tool, _args, socket),
     do: tombstone(socket, identifier)
@@ -327,6 +393,7 @@ defmodule PrismWeb.SettingsLive do
      |> load_prefs()
      |> load_identifier()
      |> load_keys()
+     |> load_setup_keys()
      |> assign(:loading, false)}
   end
 
@@ -505,6 +572,37 @@ defmodule PrismWeb.SettingsLive do
   end
 
   # The platform settings are the operator's, like the door.
+  # The setup's first step: the person's own keys the store would share,
+  # the newest first, each saying whether it is shared with everyone
+  # already. Keys are shared from the person's own athanor alone.
+  defp load_setup_keys(%{assigns: %{setup: true, context: ctx}} = socket) do
+    with true <- PrismWeb.Athanors.own?(%{id: ctx.athanor_id}, ctx),
+         {:ok, entries} <- fetch_list(socket, "vault/list", :entries),
+         {:ok, shares} <- fetch_list(socket, "share/list", :shares) do
+      everyone =
+        for %{status: "active", audience: "everyone", entry_id: id} <- shares,
+            into: MapSet.new(),
+            do: id
+
+      keys =
+        entries
+        |> Enum.filter(&Share.shareable?/1)
+        |> Enum.sort_by(&(&1[:created_at] || ""), :desc)
+        |> Enum.map(&%{id: &1.id, name: &1.name, shared: MapSet.member?(everyone, &1.id)})
+
+      assign(socket, :setup_keys, keys)
+    else
+      false ->
+        assign(socket, :setup_keys, :not_own)
+
+      {:error, message} ->
+        Logger.warning("[SettingsLive] the setup's keys were not read: #{message}")
+        assign(socket, :setup_keys, :unread)
+    end
+  end
+
+  defp load_setup_keys(socket), do: socket
+
   defp load_settings(%{assigns: %{context: %{platform_admin: true}}} = socket) do
     case call_tool(socket, "settings/list", %{}) do
       {:ok, %{settings: settings} = listing} ->
@@ -707,6 +805,18 @@ defmodule PrismWeb.SettingsLive do
       <div :if={@loading} class="text-center text-gray-500 py-12">Loading...</div>
 
       <div :if={!@loading} class="space-y-6">
+        <.setup_panel :if={@setup} keys={@setup_keys} athanor_route={assigns[:athanor_route]} />
+
+        <p :if={@context.platform_admin and not @setup} class="text-sm">
+          <.link
+            patch={PrismWeb.Focus.path(assigns[:athanor_route], "/settings?setup=1")}
+            data-test="setup-open"
+            class="text-blue-400 hover:underline"
+          >
+            Set up this CYFR for the people you let in
+          </.link>
+        </p>
+
         <.card>
           <IdentityCard.card name={@name} identifier={@identifier} error={@name_error} />
         </.card>
@@ -1226,6 +1336,108 @@ defmodule PrismWeb.SettingsLive do
 
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
+    """
+  end
+
+  attr :keys, :any, required: true
+  attr :athanor_route, :any, default: nil
+
+  # The administrator's setup: a guided order over controls that exist,
+  # each step saying what it does and opening its control.
+  defp setup_panel(assigns) do
+    ~H"""
+    <.card>
+      <section id="setup" data-test="setup" class="space-y-4">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-sm font-medium text-white">Set up this CYFR for the people you let in</h3>
+            <p class="text-xs text-gray-400 mt-1">
+              Each step opens a control this CYFR already has. Close this whenever you like;
+              Settings offers it again.
+            </p>
+          </div>
+          <.link
+            patch={PrismWeb.Focus.path(@athanor_route, "/settings")}
+            data-test="setup-close"
+            class="text-sm text-gray-400 hover:text-white"
+          >
+            Close
+          </.link>
+        </div>
+
+        <ol class="space-y-4 text-sm list-decimal list-inside">
+          <li data-test="setup-share">
+            <span class="font-medium">Share a key with everyone.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              A key you share with everyone is what each new person's AQUA uses when it fits,
+              so they can start without a key of their own. They never see it. The sheet opens
+              with a daily cap per person filled in; change it before you confirm.
+            </p>
+            <ul :if={is_list(@keys) and @keys != []} class="mt-2 space-y-1">
+              <li :for={key <- @keys} class="flex items-center gap-3" data-test="setup-key">
+                <span>{key.name}</span>
+                <span :if={key.shared} class="text-xs text-gray-400">Shared with everyone</span>
+                <.button
+                  :if={!key.shared}
+                  variant="ghost"
+                  phx-click="setup_share"
+                  phx-value-id={key.id}
+                  data-test="setup-key-share"
+                >
+                  Share with everyone
+                </.button>
+              </li>
+            </ul>
+            <p :if={@keys == []} class="text-xs text-gray-400 mt-2" data-test="setup-no-key">
+              You have no key that can be shared.
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/aqua?setup=1")}
+                class="text-blue-400 hover:underline"
+              >
+                Connect one on your AQUA page.
+              </.link>
+            </p>
+            <p :if={@keys == :not_own} class="text-xs text-gray-400 mt-2" data-test="setup-not-own">
+              Keys are shared from your own athanor. Open Settings there to share one.
+            </p>
+            <p :if={@keys == :unread} class="text-xs text-gray-400 mt-2" data-test="setup-unread">
+              Your keys could not be read just now. Open this again shortly.
+            </p>
+          </li>
+
+          <li data-test="setup-let-in">
+            <span class="font-medium">Let people in.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              Make an <a href="#invite-cyfr" class="text-blue-400 hover:underline">invitation link</a>
+              and send it: it lets one new person in, once. The
+              <a href="#allowlist" class="text-blue-400 hover:underline">allowlist</a>
+              decides who may sign in at all: allow an account, or * for anyone with a CYFR
+              account; a deny keeps one out.
+            </p>
+          </li>
+
+          <li data-test="setup-reach">
+            <span class="font-medium">How this CYFR is reached.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              A link works only where this CYFR's address does: one that opens only on this
+              computer is no use to anyone else. On the machine that runs CYFR,
+              <code>cyfr access</code>
+              changes how it is reached.
+            </p>
+          </li>
+
+          <li data-test="setup-administrators">
+            <span class="font-medium">What only administrators can do.</span>
+            <p class="text-xs text-gray-400 mt-1">
+              Administrators change the allowlist, invite people and change this CYFR's
+              settings. <a href="#admins" class="text-blue-400 hover:underline">Make a second
+              administrator</a> so this CYFR is never left without one. To keep a copy of
+              everything, run <code>cyfr backup</code> on the machine that runs CYFR.
+            </p>
+          </li>
+        </ol>
+      </section>
+    </.card>
     """
   end
 
