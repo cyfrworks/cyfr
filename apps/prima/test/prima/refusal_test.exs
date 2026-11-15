@@ -242,6 +242,7 @@ defmodule Prima.RefusalTest do
     {{:child_awaits_card, "planner"}, :conflict},
     {:not_addressable, :forbidden},
     {:not_in_a_turn, :forbidden},
+    {:aqua_line_by_person, :forbidden},
     {:no_agent, :setup_required},
     {:execution_unavailable, :unavailable},
     {:message_too_long, :invalid_argument},

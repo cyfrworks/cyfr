@@ -117,7 +117,7 @@ var scheduleCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		toolArgs := ops.ScheduleCreateArgs{Name: name, ProfileId: profileID,
+		toolArgs := ops.ScheduleCreateArgs{Name: name, ProfileId: ops.Value(profileID),
 			CronExpression: cron,
 			Reference:      refStr}
 

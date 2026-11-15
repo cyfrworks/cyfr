@@ -11,6 +11,11 @@ defmodule PrismWeb.SchedulesLive do
   it runs, so no grant asks again who may start it. A run a schedule
   starts records the `schedule` origin.
 
+  A schedule may instead hold a line for Aqua: each time it runs, Aqua is
+  sent the line in a thread of the person's named after the schedule, and
+  does only what it may without asking (`Aqua.ScheduleTurns`). Only the
+  person, signed in, makes one; this page is where they do.
+
   Below the schedules, the athanor's feeds (`feed.list`): each feed's name,
   binding id, component, operation, interval, the time of its last
   accepted result and its actions' labels, removed through `feed.remove`.
@@ -29,8 +34,12 @@ defmodule PrismWeb.SchedulesLive do
 
   require Logger
 
+  @aqua_line Arca.CronSchedule.aqua_line()
+
   @empty_form %{
     "name" => "",
+    "target" => "component",
+    "line" => "",
     "reference" => "",
     "profile_id" => "",
     "input" => "",
@@ -103,18 +112,38 @@ defmodule PrismWeb.SchedulesLive do
     {:noreply, assign(socket, :cron_preset, preset)}
   end
 
-  def handle_event("create", %{"name" => name, "reference" => ref} = params, socket) do
-    cron =
-      case socket.assigns.cron_preset do
-        "custom" -> params["cron_custom"] || ""
-        "" -> ""
-        preset -> preset
-      end
+  # What the schedule runs: a component, or a line for Aqua.
+  def handle_event("target_change", %{"target" => target}, socket)
+      when target in ["component", "aqua"] do
+    form = Map.merge(socket.assigns.form.params, %{"target" => target})
+    {:noreply, assign(socket, :form, to_form(form))}
+  end
 
-    socket =
-      socket
-      |> assign(:form, to_form(Map.merge(@empty_form, Map.take(params, Map.keys(@empty_form)))))
-      |> assign(:cron_custom, params["cron_custom"] || socket.assigns.cron_custom)
+  def handle_event("create", %{"name" => name, "target" => "aqua"} = params, socket) do
+    cron = cron_of(socket, params)
+    socket = keep_form(socket, params)
+
+    with :ok <- if(cron == "", do: {:error, "Please select a schedule frequency"}, else: :ok),
+         {:ok, missed_args} <- missed_input(params) do
+      args =
+        Map.merge(missed_args, %{
+          "action" => "create",
+          "name" => name,
+          "cron_expression" => cron,
+          "reference" => @aqua_line,
+          "input" => %{"line" => params["line"] || ""}
+        })
+
+      {:noreply, create_schedule(socket, args)}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("create", %{"name" => name, "reference" => ref} = params, socket) do
+    cron = cron_of(socket, params)
+    socket = keep_form(socket, params)
 
     with {:ok, input_args} <- create_input(params, cron),
          {:ok, missed_args} <- missed_input(params) do
@@ -265,6 +294,20 @@ defmodule PrismWeb.SchedulesLive do
     end
   end
 
+  defp cron_of(socket, params) do
+    case socket.assigns.cron_preset do
+      "custom" -> params["cron_custom"] || ""
+      "" -> ""
+      preset -> preset
+    end
+  end
+
+  defp keep_form(socket, params) do
+    socket
+    |> assign(:form, to_form(Map.merge(@empty_form, Map.take(params, Map.keys(@empty_form)))))
+    |> assign(:cron_custom, params["cron_custom"] || socket.assigns.cron_custom)
+  end
+
   defp create_input(params, cron) do
     cond do
       cron == "" ->
@@ -356,6 +399,13 @@ defmodule PrismWeb.SchedulesLive do
     assign(socket, :components, Enum.map(all, & &1.component_ref))
   end
 
+  defp line_of(sched) do
+    case f(sched, :input) do
+      %{"line" => line} when is_binary(line) -> line
+      _none -> ""
+    end
+  end
+
   defp status_badge_color("active"), do: "green"
   defp status_badge_color("paused"), do: "yellow"
   defp status_badge_color(_), do: "gray"
@@ -369,7 +419,7 @@ defmodule PrismWeb.SchedulesLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :cron_presets, @cron_presets)
+    assigns = assign(assigns, cron_presets: @cron_presets, aqua_line: @aqua_line)
 
     ~H"""
     <div class="space-y-6">
@@ -425,6 +475,36 @@ defmodule PrismWeb.SchedulesLive do
                 </p>
               </div>
               <div>
+                <label class="block text-xs font-medium text-gray-400 mb-1">Runs</label>
+                <select
+                  name="target"
+                  phx-change="target_change"
+                  data-test="schedule-target"
+                  class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="component" selected={@form[:target].value != "aqua"}>
+                    A component
+                  </option>
+                  <option value="aqua" selected={@form[:target].value == "aqua"}>
+                    A line for Aqua
+                  </option>
+                </select>
+              </div>
+              <div :if={@form[:target].value == "aqua"} class="md:col-span-2">
+                <label class="block text-xs font-medium text-gray-400 mb-1">Line for Aqua</label>
+                <textarea
+                  name="line"
+                  required
+                  rows="3"
+                  data-test="schedule-line"
+                  placeholder="Summarise what is unread"
+                  class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >{@form[:line].value}</textarea>
+                <p class="mt-1 text-xs text-gray-500">
+                  Each time it runs, Aqua is sent this line in a thread of yours named after the schedule. It does only what it may do without asking you, and stops at the first thing that needs your approval.
+                </p>
+              </div>
+              <div :if={@form[:target].value != "aqua"}>
                 <label class="block text-xs font-medium text-gray-400 mb-1">Component</label>
                 <%= if @components != [] do %>
                   <select
@@ -452,7 +532,7 @@ defmodule PrismWeb.SchedulesLive do
                   </p>
                 <% end %>
               </div>
-              <div>
+              <div :if={@form[:target].value != "aqua"}>
                 <label class="block text-xs font-medium text-gray-400 mb-1">Profile</label>
                 <.input
                   name="profile_id"
@@ -464,7 +544,7 @@ defmodule PrismWeb.SchedulesLive do
                   Enter a consented profile for this component. Its consent authorizes each run.
                 </p>
               </div>
-              <div>
+              <div :if={@form[:target].value != "aqua"}>
                 <label class="block text-xs font-medium text-gray-400 mb-1">
                   Input (JSON, optional)
                 </label>
@@ -556,7 +636,19 @@ defmodule PrismWeb.SchedulesLive do
                 ]}>
                   <td class="px-4 py-3 text-sm text-white font-medium truncate">{f(sched, :name)}</td>
                   <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
-                    <span class="font-mono text-xs text-blue-400">{f(sched, :reference)}</span>
+                    <span
+                      :if={f(sched, :reference) == @aqua_line}
+                      class="text-xs text-blue-400"
+                      title={line_of(sched)}
+                    >
+                      Aqua: {line_of(sched)}
+                    </span>
+                    <span
+                      :if={f(sched, :reference) != @aqua_line}
+                      class="font-mono text-xs text-blue-400"
+                    >
+                      {f(sched, :reference)}
+                    </span>
                   </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <span class="text-gray-300" title={f(sched, :cron_expression)}>

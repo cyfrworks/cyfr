@@ -24,6 +24,20 @@ defmodule Aqua.Loop do
   Every write goes through `Aqua.Tape` under the actor's guest-planed
   context; the loop process never runs a child on itself.
 
+  ## A turn with nobody present
+
+  A turn a schedule's line started (origin `schedule`, `Aqua.ScheduleTurns`)
+  does only what needs no asking: a call its agent's policy runs `auto`,
+  or one a standing allow already covers, as in any turn (a thread allow
+  the person gave in the schedule's own thread among them, since every
+  fire of the schedule runs there). It opens no card. At the first call
+  that would ask, that call is closed refused, nothing after it in the
+  response starts, what was decided before it runs and what already ran
+  stays, and the turn ends failed with one sentence: what it needed, and
+  how to allow it next time. Its root ends failed with that sentence, so
+  the schedule's last error reads it. It never pauses for an answer and is
+  never resumed for one.
+
   ## The turn's sources
 
   Every way a turn reads joins its sources (`Prima.Source`,
@@ -457,10 +471,11 @@ defmodule Aqua.Loop do
 
   defp claim_and_start(ctx, turn) do
     with {:ok, claim} <-
-           Opus.claim_turn_root(ctx, source_ref(turn),
-             turn_id: turn.id,
-             thread_id: turn.thread_id,
-             envelope: %{"turn" => turn.id}
+           Opus.claim_turn_root(
+             ctx,
+             source_ref(turn),
+             [turn_id: turn.id, thread_id: turn.thread_id, envelope: %{"turn" => turn.id}] ++
+               fire_of(turn)
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
            :ok <- consented_release(claim.authority, turn, snapshot),
@@ -490,6 +505,18 @@ defmodule Aqua.Loop do
       else
         {:error, reason} -> {:error, {:after_claim, claim, turn, reason}}
       end
+    end
+  end
+
+  # A schedule's turn admits its root as that schedule's fire, which starts
+  # its occurrence (`Opus.TurnRoot`).
+  defp fire_of(turn) do
+    case Tape.schedule_of(turn) do
+      %{schedule_id: schedule_id, occurrence_id: occurrence_id} ->
+        [schedule_id: schedule_id, occurrence_id: occurrence_id]
+
+      nil ->
+        []
     end
   end
 
@@ -1153,9 +1180,11 @@ defmodule Aqua.Loop do
     {runnable, cards, setup} = Enum.reduce(items, {[], 0, nil}, &decide(state, &1, &2))
     runnable = Enum.reverse(runnable)
 
-    if setup,
-      do: end_for_account(state, setup),
-      else: run_dispatched(state, runnable, cards)
+    case setup do
+      nil -> run_dispatched(state, runnable, cards)
+      {:unasked, call} -> end_unasked(state, runnable, call)
+      setup -> end_for_account(state, setup)
+    end
   end
 
   defp run_dispatched(%State{} = state, runnable, cards) do
@@ -1177,8 +1206,9 @@ defmodule Aqua.Loop do
     end
   end
 
-  # A launch the turn ends on decides nothing after it: what is left of the
-  # response is skipped with the turn.
+  # A launch the turn ends on, or a call a turn with nobody present would
+  # have to ask, decides nothing after it: what is left of the response is
+  # skipped with the turn.
   defp decide(_state, _item, {_runnable, _cards, setup} = acc) when setup != nil, do: acc
 
   # A restricted turn runs replay-safe reads and nothing else — before a
@@ -1262,7 +1292,14 @@ defmodule Aqua.Loop do
     end
   end
 
-  # A call that asks opens its card.
+  # A call that asks opens its card, unless nobody is present to answer
+  # it: a schedule's turn closes it refused and ends there.
+  defp ask(%State{turn: %{origin: "schedule"}} = state, step, %Call{} = call, _opts, acc) do
+    {runnable, cards, _setup} = acc
+    close(state, step, call, {:error, {:denied, unasked(call)}})
+    {runnable, cards, {:unasked, call}}
+  end
+
   defp ask(%State{} = state, step, %Call{} = call, card_opts, {runnable, cards, setup}) do
     case open_card(state, step, call, card_opts) do
       :ok ->
@@ -1331,6 +1368,28 @@ defmodule Aqua.Loop do
     })
 
     {:halt, {:failed, {:setup_required, setup}}, state}
+  end
+
+  # A schedule's turn stopped at a call it would have to ask for: what was
+  # decided before that call runs, nothing after it starts, and the turn
+  # ends failed saying what it needed and how to allow it next time.
+  defp end_unasked(%State{} = state, runnable, %Call{} = call) do
+    case run_groups(state, Policy.group(runnable)) do
+      {:halt, result, state} ->
+        {:halt, result, state}
+
+      {:ok, state} ->
+        _ = Tape.skip_steps(guest(state), state.turn, "the turn stopped: nobody was asked")
+        {:halt, {:failed, {:unasked, unasked(call)}}, state}
+    end
+  end
+
+  # The one sentence a stopped schedule turn leaves: what it needed, and
+  # the way a person allows it in this thread from then on.
+  defp unasked(%Call{} = call) do
+    "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
+      "was here to give it. To allow it next time, ask Aqua for it once in this thread " <>
+      "and choose \"for this thread\" when it asks."
   end
 
   # A launch's card binds the turn's sources it shows and what they let
@@ -2615,6 +2674,7 @@ defmodule Aqua.Loop do
 
   defp describe({:unknown_model, model}), do: "#{model} is not a model its catalyst knows"
   defp describe(:no_model), do: "The agent names no model"
+  defp describe({:unasked, sentence}), do: sentence
 
   defp describe(:sources_unrecorded),
     do: "What the model read could not be recorded on the turn, so its answer was not used"

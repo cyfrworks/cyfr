@@ -31,7 +31,8 @@ defmodule Aqua do
     brain options and whether each agent's brain is ready; `Aqua.ConsentStatus` — whether what the
     athanor consented to still covers its sources.
   - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
-    schedule asked for it.
+    schedule asked for it; `Aqua.ScheduleTurns` — a schedule's line for
+    Aqua, each fire a turn in the schedule's own thread.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into a
     shared thread you sit in.
   - `Aqua.Notes` — what somebody chose to keep out of a thread: the

@@ -123,6 +123,56 @@ defmodule PrismWeb.SchedulesLiveTest do
     assert_form(view, submitted)
   end
 
+  describe "a line for Aqua" do
+    test "the form takes a line in place of a component, a profile and input, and the schedule holds it",
+         %{view: view, ctx: ctx, params: params} do
+      render_change(view, "target_change", %{"target" => "aqua"})
+
+      assert has_element?(view, "textarea[name=line][required]")
+      refute has_element?(view, "input[name=profile_id]")
+      refute has_element?(view, "input[name=input]")
+
+      render_submit(view, "create", %{
+        "name" => params["name"],
+        "target" => "aqua",
+        "line" => "summarise what is unread",
+        "cron_custom" => "0 0 1 1 *",
+        "missed_runs" => "skip"
+      })
+
+      assert {:ok, schedule} = schedule(ctx, params)
+
+      assert %{
+               reference: "agent:local.aqua",
+               resolved_reference: "agent:local.aqua",
+               profile_id: nil
+             } =
+               schedule
+
+      assert Jason.decode!(schedule.input) == %{"line" => "summarise what is unread"}
+      assert render(view) =~ "Aqua: summarise what is unread"
+    end
+
+    test "an empty line makes no schedule and keeps the form", %{
+      view: view,
+      ctx: ctx,
+      params: params
+    } do
+      render_change(view, "target_change", %{"target" => "aqua"})
+
+      render_submit(view, "create", %{
+        "name" => params["name"],
+        "target" => "aqua",
+        "line" => "   ",
+        "cron_custom" => "0 0 1 1 *"
+      })
+
+      assert render(view) =~ "A line for Aqua must say something"
+      assert {:error, :not_found} = schedule(ctx, params)
+      assert has_element?(view, "textarea[name=line]")
+    end
+  end
+
   # `ui.schedule.focus` names a schedule by its id: that one row is marked,
   # and a page opened without one marks none.
   test "the schedule a focus link names is the one row marked", %{

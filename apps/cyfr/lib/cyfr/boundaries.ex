@@ -759,12 +759,16 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Opus",
-      allow: ~w(Opus),
+      allow: ~w(Opus Opus.Schedules),
       reason:
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
           "model listing or a consent status derives an authority there; nothing of " <>
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
+          "One more name: a turn a schedule's line started ends its occurrence through " <>
+          "the scheduler's one public end of a turn (`Opus.Schedules.Scheduler.end_turn/4`), " <>
+          "and the assistant is the only boundary outside execution whose row names the " <>
+          "schedules' namespace, so no other caller reaches that end. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
@@ -2470,6 +2474,7 @@ defmodule Cyfr.Boundaries do
     # all of them whatever its configuration says.
     cron_scheduler_enabled: :seam,
     schedule_notes_enabled: :seam,
+    schedule_turns_enabled: :seam,
     crew_delivery_enabled: :seam,
     status_watch_enabled: :seam,
     execution_sweeper_enabled: :seam,
