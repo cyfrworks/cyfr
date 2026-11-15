@@ -2054,6 +2054,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # `Prima.Source`): a turn that read an outside source the list does
       # not name asks again. Empty covers none; a deny names none.
       add :sources, :text, null: false, default: "[]"
+      # The program row an allow's `program_row` constraint names, empty
+      # for every other kind: part of the answer's identity, so each
+      # program's standing answer stands on its own (`Arca.Schemas.ToolGrant`).
+      add :program_row, :string, null: false, default: ""
     end
 
     # Each partial key is named for its scope, the name Postgres reports a
@@ -2061,14 +2065,14 @@ defmodule Arca.Repo.Migrations.Baseline do
     # `Arca.ToolGrantStorage` declares each constraint under both spellings.
     create unique_index(
              :tool_grants,
-             [:thread_id, :agent_name, :tool, :action],
+             [:thread_id, :agent_name, :tool, :action, :program_row],
              where: "scope = 'thread'",
              name: :tool_grants_thread_scope_index
            )
 
     create unique_index(
              :tool_grants,
-             [:athanor_id, :agent_name, :tool, :action],
+             [:athanor_id, :agent_name, :tool, :action, :program_row],
              where: "scope = 'agent'",
              name: :tool_grants_agent_scope_index
            )

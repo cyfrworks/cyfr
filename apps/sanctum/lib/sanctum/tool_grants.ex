@@ -191,15 +191,32 @@ defmodule Sanctum.ToolGrants do
     end
   end
 
-  @doc "Withdraw a decision in the caller's athanor. Idempotent."
+  @doc """
+  Withdraw a decision in the caller's athanor, by its key. Idempotent. An
+  answer to an action whose resource is a program row is one program's
+  (`program_row`): a revoke of that action names the program, and one
+  that names none is refused, so no program's answer is removed, or kept,
+  by a key that names no program.
+  """
   @spec revoke(Context.t(), map()) ::
           :ok | {:error, :unavailable | :no_athanor | {:invalid, field_errors()}}
   def revoke(%Context{} = ctx, attrs) when is_map(attrs) do
-    with {:ok, key} <- build(ctx, attrs, :key) do
+    with {:ok, key} <- build(ctx, attrs, :key),
+         :ok <- names_its_program(key) do
       case Arca.ToolGrantStorage.delete(key) do
         :ok -> :ok
         {:error, _unreadable} -> {:error, :unavailable}
       end
+    end
+  end
+
+  defp names_its_program(%{tool: tool, action: action, program_row: row}) do
+    case declaration(tool, action) do
+      {:ok, %{resource: {_argument, :program_row}}} when row == "" ->
+        {:error, {:invalid, %{program_row: ["names the program whose answer is withdrawn"]}}}
+
+      _named_or_another ->
+        :ok
     end
   end
 
@@ -544,7 +561,11 @@ defmodule Sanctum.ToolGrants do
         agent_name: Map.fetch!(attrs, :agent_name),
         tool: Map.fetch!(attrs, :tool),
         action: Map.fetch!(attrs, :action),
-        thread_id: if(scope == "thread", do: Map.fetch!(attrs, :thread_id))
+        thread_id: if(scope == "thread", do: Map.fetch!(attrs, :thread_id)),
+        # The program row the answer is one program's, `""` for any other
+        # (`Arca.Schemas.ToolGrant.key_row/1`): a decision's from its
+        # constraint, a key's as it names it.
+        program_row: Arca.ToolGrantStorage.key_row(attrs)
       }
 
       case kind do

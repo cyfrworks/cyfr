@@ -157,6 +157,120 @@ defmodule Aqua.ProgramGrantTest do
              Arca.McpServerStorage.update(actor, "nobody", %{config_json: changed})
   end
 
+  describe "one answer per program" do
+    defp start_call(turn, row),
+      do: %{
+        agent_name: "aqua",
+        thread_id: turn.thread_id,
+        tool: "program",
+        action: "start",
+        args: %{"program" => row.id, "epoch" => row.epoch},
+        sources: []
+      }
+
+    defp allow_until!(ctx, turn, row, until) do
+      {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start(row.id), :always, %{until: until})
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, grant)
+    end
+
+    defp stored(ctx) do
+      import Ecto.Query
+
+      Arca.Repo.all(
+        from(g in Arca.Schemas.ToolGrant,
+          where: g.athanor_id == ^ctx.athanor_id and g.tool == "program",
+          order_by: g.program_row
+        )
+      )
+      |> Map.new(&{&1.program_row, &1.expires_at})
+    end
+
+    test "gh's answer and jq's stand side by side, each with its own bounds",
+         %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
+      soon = DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:microsecond)
+      allow_until!(ctx, turn, gh, soon)
+      allow!(ctx, turn, jq)
+
+      assert stored(ctx) == %{gh.id => soon, jq.id => nil}
+      assert Sanctum.ToolGrants.admits?(ctx, start_call(turn, gh))
+      assert Sanctum.ToolGrants.admits?(ctx, start_call(turn, jq))
+
+      # The chat lists each by its program's name, its row behind it.
+      assert {:ok, listed} = Aqua.ToolGrants.allowed_by_agent(ctx, turn.thread_id)
+
+      assert listed ==
+               MapSet.new([
+                 {"aqua", "program", "start", %{id: gh.id, name: "gh"}},
+                 {"aqua", "program", "start", %{id: jq.id, name: "jq"}}
+               ])
+
+      # A renamed row's answer reads as the program it covers.
+      import Ecto.Query
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in Arca.Schemas.McpServer, where: s.id == ^gh.id),
+          set: [name: "github"]
+        )
+
+      assert {:ok, renamed} = Aqua.ToolGrants.allowed_by_agent(ctx, turn.thread_id)
+      assert {"aqua", "program", "start", %{id: gh.id, name: "github"}} in renamed
+    end
+
+    test "a second answer for gh replaces gh's alone", %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
+      soon = DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:microsecond)
+      allow!(ctx, turn, gh)
+      allow_until!(ctx, turn, jq, soon)
+      allow_until!(ctx, turn, gh, soon)
+
+      assert stored(ctx) == %{gh.id => soon, jq.id => soon}
+    end
+
+    test "revoking one program's answer leaves the other's; a revoke that names no program is refused",
+         %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
+      allow!(ctx, turn, gh)
+      allow!(ctx, turn, jq)
+      key = %{scope: "agent", agent_name: "aqua", tool: "program", action: "start"}
+
+      assert {:error, {:invalid, %{program_row: ["names the program whose answer is withdrawn"]}}} =
+               Sanctum.ToolGrants.revoke(ctx, key)
+
+      assert Map.keys(stored(ctx)) == Enum.sort([gh.id, jq.id])
+
+      assert :ok = Sanctum.ToolGrants.revoke(ctx, Map.put(key, :program_row, gh.id))
+      assert Map.keys(stored(ctx)) == [jq.id]
+      refute Sanctum.ToolGrants.admits?(ctx, start_call(turn, gh))
+      assert Sanctum.ToolGrants.admits?(ctx, start_call(turn, jq))
+    end
+
+    test "the thread's revoke names the program, and refuses one that names none",
+         %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
+      allow!(ctx, turn, gh, :thread)
+      allow!(ctx, turn, jq, :thread)
+
+      assert {:error, _named_none} =
+               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start")
+
+      assert Map.keys(stored(ctx)) == Enum.sort([gh.id, jq.id])
+
+      assert :ok =
+               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start", jq.id)
+
+      assert Map.keys(stored(ctx)) == [gh.id]
+    end
+
+    test "a never stays the one answer for every start, and beats each program's allow",
+         %{ctx: ctx, turn: turn, gh: gh} do
+      allow!(ctx, turn, gh)
+      {:ok, [deny]} = Aqua.Standing.rows(ctx, turn, start(gh.id), :never)
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, deny)
+
+      assert Map.keys(stored(ctx)) == ["", gh.id]
+      refute Sanctum.ToolGrants.admits?(ctx, start_call(turn, gh))
+      assert {:ok, listed} = Aqua.ToolGrants.allowed_by_agent(ctx, turn.thread_id)
+      assert listed == MapSet.new()
+    end
+  end
+
   test "the soul's policy asks for a start and a send, and never makes a start automatic" do
     refute Aqua.Kinds.auto_permitted?("program", "start")
     assert Aqua.Kinds.auto_permitted?("program", "list")

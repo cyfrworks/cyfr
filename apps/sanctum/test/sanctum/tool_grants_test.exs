@@ -291,7 +291,8 @@ defmodule Sanctum.ToolGrantsTest do
                thread_id: "thread_1",
                agent_name: "aqua",
                tool: "probe_component",
-               action: "pull"
+               action: "pull",
+               program_row: ""
              }
 
       assert {:ok, []} = ToolGrants.for_thread(ctx, "thread_1")

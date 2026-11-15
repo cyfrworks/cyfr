@@ -30,6 +30,11 @@ defmodule Arca.Schemas.ToolGrant do
   spells. A deny carries none of the four, so a standing deny never
   lapses; one written with any is refused.
 
+  An allow constrained to a program row carries that row in
+  `program_row`, part of its identity with the scope, agent, tool and
+  action (`key_row/1`), so one program's answer never replaces another's;
+  every other answer carries `""`.
+
   An allow also names the outside sources it covers (`sources`, a JSON
   list of named outside `Prima.Source`s, empty by default): a turn that
   read an outside source the list does not name asks again. A deny names
@@ -64,6 +69,7 @@ defmodule Arca.Schemas.ToolGrant do
     field :expires_at, :utc_datetime_usec
     field :constraint, :string
     field :sources, :string, default: "[]"
+    field :program_row, :string, default: ""
   end
 
   @doc "The lifecycles a bounded allow may end with."
@@ -131,10 +137,26 @@ defmodule Arca.Schemas.ToolGrant do
     |> validate_inclusion(:effect, @effects)
     |> validate_thread()
     |> put_constraint(constraint)
+    |> put_change(:program_row, key_row(%{constraint: constraint}))
     |> put_sources(sources)
     |> validate_lifecycle()
     |> validate_bounds()
   end
+
+  @doc """
+  The program row an answer's identity carries: the one row a
+  `program_row` constraint names, or the `program_row` a key names, and
+  `""` for every other answer. With the scope, thread or athanor, agent,
+  tool and action, it is the key a write replaces and a revoke removes,
+  so each program's standing answer stands, and goes, on its own.
+  """
+  @spec key_row(map()) :: String.t()
+  def key_row(%{constraint: %{kind: kind, patterns: [row]}})
+      when kind in ["program_row", :program_row] and is_binary(row),
+      do: row
+
+  def key_row(%{program_row: row}) when is_binary(row), do: row
+  def key_row(_attrs), do: ""
 
   @doc """
   A stored constraint read back: `%{kind: kind, patterns: [pattern]}`, or
