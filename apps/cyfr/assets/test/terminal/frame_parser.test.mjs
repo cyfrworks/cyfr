@@ -28,11 +28,17 @@ beforeEach(() => {
 })
 afterEach(() => delete globalThis.window)
 
+let focused
+
+beforeEach(() => {
+  focused = true
+})
+
 function mount(tail = "") {
   const pushed = []
   const handlers = {}
   const hook = Object.create(
-    TerminalHook({Terminal, FitAddon: Addon, WebLinksAddon: Addon, open: () => {}})
+    TerminalHook({Terminal, FitAddon: Addon, WebLinksAddon: Addon, open: () => {}, focused: () => focused})
   )
   Object.assign(hook, {
     el: {dataset: {session: "trm_1"}, querySelector: () => ({})},
@@ -116,6 +122,15 @@ test("a replayed screen sends no answer to the queries in it, and a live query i
   } finally {
     hook.destroyed()
   }
+})
+
+// Two screens attached to one session each parse what the program writes:
+// both answered a query, and the second answer landed in the program as
+// stray input. Only the screen the person is at answers.
+test("a focused screen answers a live query, and one without focus sends nothing", async () => {
+  assert.equal((await answers("\x1b[6n\x1b[c")).length, 2)
+  focused = false
+  assert.deepEqual(await answers("\x1b[6n\x1b[c"), [])
 })
 
 test("an answerback request (ENQ) sends nothing", async () => {
