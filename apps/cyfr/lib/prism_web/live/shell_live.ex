@@ -1681,13 +1681,13 @@ defmodule PrismWeb.ShellLive do
     with :ok <- arranging(socket),
          %{} = card <- listed(socket, ref),
          :ok <- accepts(card, subject),
-         {:ok, socket} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
-      socket =
+         {:ok, arranged} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
+      arranged =
         if subject,
-          do: give_subject(socket, {:app, canvas_id, Frames.ref_of(card)}, subject),
-          else: socket
+          do: give_subject(arranged, {:app, canvas_id, Frames.ref_of(card)}, subject),
+          else: arranged
 
-      opened(socket, frame, args["call"], "opened")
+      opened(arranged, frame, args["call"], "opened")
     else
       refused ->
         socket
