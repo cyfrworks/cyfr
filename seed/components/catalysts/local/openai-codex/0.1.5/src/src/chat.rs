@@ -7,7 +7,8 @@
 //! thread started with CYFR's tools as its dynamic tools, or resumed from
 //! the kept home; a thread Codex holds nothing to resume from is refused
 //! `unknown_session`, before a turn starts. The newest user message
-//! starts a turn; a request that answers the tool calls Codex holds
+//! starts a turn, after the thread's history when the thread is new
+//! (`context`); a request that answers the tool calls Codex holds
 //! answers them. The reply's text streams, and the turn answers on the
 //! first of: calls of CYFR's tools (`tool_call`s the host runs through its
 //! gate; Codex holds each `item/tool/call` until the next `chat` answers
@@ -26,6 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+use crate::context::{self, Part, Takes};
 use crate::server::{self, Counts, Event};
 use crate::stream::{self, Deltas, Sink};
 
@@ -64,6 +66,9 @@ const DEFAULT_MODEL: &str = "default";
 
 /// The images Codex takes as input (`UserInput::Image` by data URL).
 const MEDIA_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+/// The attachments a new thread's history carries as input items.
+const TAKES: Takes = Takes { kinds: &["image"], media_types: MEDIA_TYPES };
 
 /// How long one read of the pipe waits for a line.
 const RECV_WAIT_MS: u32 = 20_000;
@@ -304,6 +309,10 @@ pub struct Request {
     /// The model and effort the turn runs with; `None` is Codex's own.
     pub run_model: Option<String>,
     pub effort: Option<String>,
+    /// What a new thread is handed before the input: the history as input
+    /// items (`context::fresh`), none for a session the request names,
+    /// whose thread holds it.
+    pub context: Vec<Value>,
     pub input: Input,
 }
 
@@ -346,6 +355,10 @@ pub fn parse_request(params: &Value) -> Result<Request, String> {
     };
     let options = params.get("options").and_then(Value::as_object);
     let option = |name: &str| options.and_then(|o| o.get(name)).and_then(Value::as_str).map(str::to_string);
+    let context = match session {
+        Some(_) => Vec::new(),
+        None => context::fresh(messages, &TAKES, MAX_LINE_BYTES).into_iter().map(item).collect(),
+    };
     Ok(Request {
         run_model: option("model").or_else(|| Some(model.clone())).filter(|m| m != DEFAULT_MODEL),
         effort: option("effort"),
@@ -353,6 +366,7 @@ pub fn parse_request(params: &Value) -> Result<Request, String> {
         system,
         tools,
         session,
+        context,
         input: input(messages)?,
     })
 }
@@ -451,6 +465,14 @@ fn input(messages: &[Value]) -> Result<Input, String> {
             Ok(Input::Answers(answers))
         }
         _ => Err("the last message must be the user's or tool results".into()),
+    }
+}
+
+/// A part of a new thread's history as Codex's input item.
+fn item(part: Part) -> Value {
+    match part {
+        Part::Text(text) => json!({"type": "text", "text": text, "textElements": []}),
+        Part::Media { media_type, data, .. } => json!({"type": "image", "url": format!("data:{media_type};base64,{data}")}),
     }
 }
 
@@ -1106,9 +1128,12 @@ fn converse<P: Pipe, S: Sink>(
                 Input::Message { items, .. } => items.clone(),
                 // The program that held the calls ended; its resumed thread
                 // records them cancelled, and CYFR's answers come as a
-                // message.
+                // message. A new thread holds no call either: its history
+                // ends on the calls, and the answers come the same way,
+                // never as answers to request ids an earlier thread gave.
                 Input::Answers(answers) => vec![json!({"type": "text", "text": restarted(answers), "textElements": []})],
             };
+            let items = [request.context.clone(), items].concat();
             let id = ids.of("turn");
             send(pipe, server::turn_start(&id, &thread, &items, request.run_model.as_deref(), request.effort.as_deref()))?;
             let (started, others) = reader.answer(pipe, &id, deadline).map_err(|r| closing(pipe, r))?;
@@ -1607,6 +1632,105 @@ mod tests {
 
     fn calls_of(answer: &Value) -> Vec<Value> {
         answer["content"].as_array().unwrap().iter().filter(|b| b["type"] == "tool_call").cloned().collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // What a thread is handed (`context`)
+    // -----------------------------------------------------------------------
+
+    /// A thread's history: the person's ask, the agent's call and its
+    /// outcome, its reply, and the person's next message.
+    fn history() -> Value {
+        json!([
+            {"role": "user", "content": "Read a.txt"},
+            {"role": "assistant", "content": [{"type": "tool_call", "id": "call_1", "name": "files",
+              "arguments": {"path": "a.txt"}, "provider_data": {"request_id": "req-old", "turn_id": "turn-old"}}]},
+            {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": "call_1", "name": "files", "content": "hi"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It says hi."}]},
+            {"role": "user", "content": "Now say it back."}
+        ])
+    }
+
+    /// The input of the one turn a run started.
+    fn handed(pipe: &BoxPipe) -> Vec<Value> {
+        let starts: Vec<Value> = pipe
+            .sent
+            .iter()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|v| v["method"] == "turn/start")
+            .collect();
+        assert_eq!(starts.len(), 1, "{:?}", pipe.sent);
+        starts[0]["params"]["input"].as_array().unwrap().clone()
+    }
+
+    fn texts(input: &[Value]) -> Vec<&str> {
+        input.iter().map(|i| i["text"].as_str().unwrap_or("")).collect()
+    }
+
+    #[test]
+    fn a_new_thread_is_handed_the_history_as_context_then_the_current_ask() {
+        let mut pipe = BoxPipe::new(Codex::new(vec![vec![vec![message("m0", "hi"), done()]]]));
+        let req = request(json!({"model": "default", "messages": history()}));
+        run(&mut pipe, &req, far()).0.unwrap();
+        assert!(pipe.sent_since(0).contains(&"thread/start".to_string()), "{:?}", pipe.sent_since(0));
+        let input = handed(&pipe);
+        let [history, current] = &texts(&input)[..] else { panic!("{input:?}") };
+        assert!(history.starts_with(context::OPENING), "{history}");
+        assert!(history.ends_with(context::CLOSING), "{history}");
+        let order = ["[user]\nRead a.txt", "[you called files with {\"path\":\"a.txt\"}]", "[files answered]\nhi", "[you]\nIt says hi."];
+        let at: Vec<usize> = order.iter().map(|o| history.find(o).unwrap_or_else(|| panic!("{o} in {history}"))).collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{history}");
+        assert!(!history.contains("Now say it back."), "the current ask is not history");
+        assert_eq!(*current, "Now say it back.");
+        assert_eq!(input[0]["textElements"], json!([]));
+        assert!(pipe.answers().is_empty(), "{:?}", pipe.sent);
+    }
+
+    #[test]
+    fn a_continued_thread_is_handed_only_the_current_ask_running_or_restarted() {
+        let req = request(json!({"model": "default", "session": session(), "messages": history()}));
+        for running in [true, false] {
+            let mut pipe = BoxPipe::new(Codex::new(vec![vec![vec![message("m0", "hi"), done()]]]));
+            pipe.running = running;
+            run(&mut pipe, &req, far()).0.unwrap();
+            let sent = pipe.sent_since(0);
+            assert_eq!(sent.contains(&"thread/resume".to_string()), !running, "{sent:?}");
+            assert!(!sent.contains(&"thread/start".to_string()), "{sent:?}");
+            assert_eq!(handed(&pipe), [json!({"type": "text", "text": "Now say it back.", "textElements": []})], "running: {running}");
+        }
+    }
+
+    #[test]
+    fn a_thread_lost_after_a_completed_call_is_rebuilt_with_its_outcome_as_context_and_answers_no_old_call() {
+        // The request ends in the call's result: the thread that held the
+        // call is gone, so the host asks again with no session.
+        let mut messages = history().as_array().unwrap()[..3].to_vec();
+        messages[0] = json!({"role": "user", "content": "Read a.txt and b.txt"});
+        let mut pipe = BoxPipe::new(Codex::new(vec![vec![vec![message("m0", "hi"), done()]]]));
+        let req = request(json!({"model": "default", "messages": messages}));
+        run(&mut pipe, &req, far()).0.unwrap();
+        assert!(pipe.sent_since(0).contains(&"thread/start".to_string()));
+        let input = handed(&pipe);
+        let [history, answer] = &texts(&input)[..] else { panic!("{input:?}") };
+        assert!(history.contains("[user]\nRead a.txt and b.txt"), "{history}");
+        assert!(history.contains("[you called files with {\"path\":\"a.txt\"}]"), "{history}");
+        assert!(answer.contains("files: CYFR ran it and answered:\nhi"), "{answer}");
+        assert!(pipe.answers().is_empty(), "no old call is answered: {:?}", pipe.sent);
+        assert!(!pipe.sent.iter().any(|l| l.contains("req-old")), "{:?}", pipe.sent);
+    }
+
+    #[test]
+    fn a_new_thread_s_history_carries_the_images_codex_takes() {
+        let messages = json!([
+            {"role": "user", "content": [{"type": "text", "text": "Look"}, {"type": "image", "media_type": "image/png", "data": "iVBO"}]},
+            {"role": "assistant", "content": "A capybara."},
+            {"role": "user", "content": "Again?"}
+        ]);
+        let mut pipe = BoxPipe::new(Codex::new(vec![vec![vec![message("m0", "hi"), done()]]]));
+        run(&mut pipe, &request(json!({"model": "default", "messages": messages})), far()).0.unwrap();
+        let input = handed(&pipe);
+        assert_eq!(input[1], json!({"type": "image", "url": "data:image/png;base64,iVBO"}));
+        assert_eq!(input.last().unwrap(), &json!({"type": "text", "text": "Again?", "textElements": []}));
     }
 
     #[test]
