@@ -1865,15 +1865,24 @@ defmodule PrismWeb.ThreadPaneLive do
                     role={role_of(msg)}
                     content={msg.content}
                     author={"#{speaker(msg, @members, @context)} asked #{msg.addressee} · #{msg.status}"}
+                    attachments={Threads.payload(msg)["attachments"] || []}
+                    attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
+                    links={Threads.payload(msg)["links"] || []}
                   />
                   <.reply
                     :for={reply <- msg.replies}
                     id={@dom <> "-reply-" <> reply.id}
                     dom={@dom}
                     reply={reply}
+                    athanor_route={@athanor_route}
                   />
                 <% crew(msg) == :reply -> %>
-                  <.reply id={@dom <> "-reply-" <> msg.id} dom={@dom} reply={msg} />
+                  <.reply
+                    id={@dom <> "-reply-" <> msg.id}
+                    dom={@dom}
+                    reply={msg}
+                    athanor_route={@athanor_route}
+                  />
                 <% crew(msg) == :decided_notice -> %>
                 <% crew(msg) == :notice -> %>
                   <div class="flex flex-col items-start">
@@ -1919,6 +1928,7 @@ defmodule PrismWeb.ThreadPaneLive do
                       author={author_label(msg, @members, @context)}
                       attachments={Threads.payload(msg)["attachments"] || []}
                       attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
+                      links={Threads.payload(msg)["links"] || []}
                     />
                     <%!-- A line you may paste onto the shared thread beside
                         the pane: yours, or your assistant's in your own
@@ -2192,11 +2202,29 @@ defmodule PrismWeb.ThreadPaneLive do
   attr :author, :any, default: nil
   attr :attachments, :list, default: []
   attr :attachment_href, :any, default: nil
+  attr :links, :list, default: []
 
+  # A post draws what it holds, whoever wrote it: a picture in place, which
+  # opens large over the page; any other file a chip that downloads; a link
+  # a link, never fetched.
   defp message_bubble(assigns) do
     # The model's surrounding whitespace would inflate the bubble.
     display = String.trim(assigns.content || "")
-    assigns = assign(assigns, :display_content, display)
+
+    {pictures, files} =
+      assigns.attachments
+      |> Enum.with_index()
+      |> Enum.split_with(fn {a, _} -> picture?(a, assigns.attachment_href) end)
+
+    pictures = for {a, n} <- pictures, do: {a, "#{assigns.id}-picture-#{n}"}
+
+    assigns =
+      assign(assigns,
+        display_content: display,
+        pictures: pictures,
+        files: Enum.map(files, &elem(&1, 0)),
+        shown_links: shown_links(assigns.links)
+      )
 
     ~H"""
     <div class={["flex flex-col", role_align(@role)]}>
@@ -2217,8 +2245,52 @@ defmodule PrismWeb.ThreadPaneLive do
         <% else %>
           <span class="whitespace-pre-wrap">{@display_content}</span>
         <% end %>
-        <div :if={@attachments != []} class="mt-1 flex flex-wrap gap-1">
-          <%= for a <- @attachments do %>
+        <div :if={@pictures != []} class="mt-1 flex flex-wrap gap-1">
+          <%= for {a, large} <- @pictures do %>
+            <button
+              type="button"
+              phx-click={open_large(large)}
+              aria-label={"Open #{a["filename"]} large"}
+              class="block min-h-6 rounded hover:opacity-90"
+            >
+              <img
+                src={@attachment_href.(a["stored_name"])}
+                alt={a["filename"]}
+                loading="lazy"
+                class="max-h-48 max-w-full rounded"
+              />
+            </button>
+            <div id={large} class="hidden">
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label={a["filename"]}
+                phx-click={close_large(large)}
+                class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-black/85 p-4"
+              >
+                <img
+                  src={@attachment_href.(a["stored_name"])}
+                  alt={a["filename"]}
+                  class="max-h-[90%] max-w-full object-contain"
+                />
+                <%!-- Escape is bound here, where opening puts the focus:
+                      LiveView reads a key binding from the key's own
+                      target, never from an ancestor. --%>
+                <button
+                  id={"#{large}-close"}
+                  type="button"
+                  phx-keydown={close_large(large)}
+                  phx-key="Escape"
+                  class="min-h-6 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          <% end %>
+        </div>
+        <div :if={@files != []} class="mt-1 flex flex-wrap gap-1">
+          <%= for a <- @files do %>
             <a
               :if={@attachment_href && a["stored_name"]}
               href={@attachment_href.(a["stored_name"])}
@@ -2235,14 +2307,59 @@ defmodule PrismWeb.ThreadPaneLive do
             </span>
           <% end %>
         </div>
+        <div :if={@shown_links != []} class="mt-1 flex flex-col items-start gap-0.5">
+          <a
+            :for={link <- @shown_links}
+            href={link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex min-h-6 items-center text-xs text-blue-300 underline hover:text-blue-200 break-all"
+          >
+            {link.title}
+          </a>
+        </div>
       </div>
     </div>
     """
   end
 
+  # The picture types the attachment address serves as themselves
+  # (`PrismWeb.AttachmentController`); an SVG is never one, since it runs
+  # script. A file that is not stored, or another type, is a chip.
+  @picture_types ~w(image/png image/jpeg image/gif image/webp)
+
+  # The large view opens over the page with the focus on its Close, and
+  # gives the focus back to the picture when it closes.
+  defp open_large(large) do
+    JS.push_focus()
+    |> JS.remove_class("hidden", to: "##{large}")
+    |> JS.focus(to: "##{large}-close")
+  end
+
+  defp close_large(large), do: JS.add_class("hidden", to: "##{large}") |> JS.pop_focus()
+
+  defp picture?(a, href),
+    do: href != nil and is_binary(a["stored_name"]) and a["media_type"] in @picture_types
+
+  # A link is drawn only as an http or https address with a host: anything
+  # else (`javascript:`, `data:`) is not a link a post may carry. Its title
+  # is the author's, or the address itself.
+  defp shown_links(links) when is_list(links) do
+    for %{"url" => url} = link <- links,
+        is_binary(url),
+        %URI{scheme: scheme, host: host} <- [URI.parse(url)],
+        scheme in ["http", "https"] and is_binary(host) and host != "" do
+      title = link["title"]
+      %{url: url, title: if(is_binary(title) and String.trim(title) != "", do: title, else: url)}
+    end
+  end
+
+  defp shown_links(_), do: []
+
   attr :id, :string, required: true
   attr :dom, :string, required: true
   attr :reply, :map, required: true
+  attr :athanor_route, :any, required: true
 
   # A crew member's reply, by its member and outcome. A reply cut short
   # says where the whole of it is: the member's thread.
@@ -2256,6 +2373,9 @@ defmodule PrismWeb.ThreadPaneLive do
         role="assistant"
         content={@reply.content}
         author={"#{agent_name(@reply.sent_by)} · #{@reply.outcome}"}
+        attachments={@payload["attachments"] || []}
+        attachment_href={&attachment_path(@athanor_route, @reply.id, &1)}
+        links={@payload["links"] || []}
       />
       <button
         :if={@payload["truncated"] == true and is_binary(@payload["from_thread"])}

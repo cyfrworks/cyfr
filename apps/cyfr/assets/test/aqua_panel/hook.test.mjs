@@ -162,6 +162,19 @@ describe("Escape", () => {
     assert.deepEqual(p.pushed, [{event: "close", payload: {}}])
   })
 
+  test("in a dialog the panel holds, is that dialog's alone: the panel stays open", () => {
+    const p = panel()
+    const large = {}
+    const inLarge = {closest: (selector) => (selector === '[role="dialog"]' ? large : null)}
+    const inPanel = {closest: (selector) => (selector === '[role="dialog"]' ? p.el : null)}
+    let prevented = false
+    p.fire("keydown", {key: "Escape", target: inLarge, preventDefault: () => (prevented = true)})
+    assert.equal(prevented, false, "the dialog's own binding still hears it")
+    assert.deepEqual(p.pushed, [])
+    p.fire("keydown", {key: "Escape", target: inPanel})
+    assert.deepEqual(p.pushed, [{event: "close", payload: {}}])
+  })
+
   test("with the thread's menu open, closes the menu alone and gives focus to its toggle", () => {
     const p = panel()
     p.fire("click", {target: TOGGLE})
