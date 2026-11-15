@@ -729,6 +729,56 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "review round three" do
+    # Finding 10: a request already answered, its time run out, is wanted
+    # no more, and the writer does not write it.
+    test "a request whose time ran out while it waited for the writer sends nothing",
+         %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      holder = holder(ctx)
+      writer = :sys.get_state(holder).writer
+
+      # Suspended only once it waits for its next write: suspended in the
+      # middle of one, it would hold the test's one database connection.
+      eventually(
+        fn ->
+          Process.info(writer, [:status, :current_function]) ==
+            [status: :waiting, current_function: {Opus.Browser, :write_loop, 3}]
+        end,
+        "the writer to wait for its next write"
+      )
+
+      true = :erlang.suspend_process(writer)
+
+      # A caller that stays alive once it is answered.
+      test = self()
+
+      {:ok, _caller} =
+        Task.start(fn ->
+          send(test, {:answered, call(ctx, lineage, "click", %{"ref" => "12"})})
+          Process.sleep(:infinity)
+        end)
+
+      id =
+        eventually(
+          fn -> Enum.find(Map.keys(:sys.get_state(holder).pending), & &1) end,
+          "the click to wait for the writer"
+        )
+
+      # Its time runs out, as its timer would say.
+      send(holder, {:expired, id})
+      assert_receive {:answered, answered}, 5_000
+      assert refusal(answered) == "The browser's response is unavailable."
+      assert :sys.get_state(holder).pending == %{}
+
+      true = :erlang.resume_process(writer)
+      assert {:ok, _} = call(ctx, lineage, "read")
+
+      clicks = for {:driver, :req, _s, %{"op" => "click"} = request} <- drain(), do: request
+      assert clicks == []
+    end
+  end
+
   describe "the browser's row" do
     test "with none, the browser was not found", %{ctx: ctx, row: row, lineage: lineage} do
       {:ok, _} =
