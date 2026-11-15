@@ -165,15 +165,14 @@ defmodule Sanctum.ProviderTest do
         set: [display_name: "Mira Okafor"]
       )
 
-      {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(issuer, %{name: "nightly"})
-
-      whoami = fn ->
+      whoami = fn key_name ->
+        {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(issuer, %{name: key_name})
         {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
         {:ok, result} = Provider.handle("session", key_ctx, %{"action" => "whoami"})
         Map.take(result, [:user_id, :key_name, :name, :role, :platform_admin])
       end
 
-      assert whoami.() == %{
+      assert whoami.("nightly") == %{
                user_id: issuer.user_id,
                key_name: "nightly",
                name: "Mira Okafor",
@@ -181,9 +180,11 @@ defmodule Sanctum.ProviderTest do
                platform_admin: false
              }
 
+      # The mark, written onto the row, is read by a key established after it.
       {:ok, _row} = Sanctum.TestContext.ensure_platform(issuer.user_id)
 
-      assert %{key_name: "nightly", role: "administrator", platform_admin: true} = whoami.()
+      assert %{key_name: "weekly", role: "administrator", platform_admin: true} =
+               whoami.("weekly")
     end
 
     test "whoami returns error when not authenticated" do
