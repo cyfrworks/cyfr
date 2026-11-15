@@ -25,9 +25,9 @@ POST /mcp  ──────────────────>  Authenticate
   <──── JSON-RPC response ─────
 ```
 
-Every CLI command that talks to a server (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
+Every CLI command that talks to a server (`cyfr run`, `cyfr call`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
-The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, canvas pages under `/_c`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`), inbound webhooks (`/hooks`), a device's channel and session (`/device`), and the account service's routes, `/directory/v1`, `/v1/handles`, `/v1/identities/:identifier/handle`, `/v1/namespaces/personal/claim` and `/account`, which answer where this CYFR serves its own account service; and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
+The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, canvas pages under `/_c`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`), inbound webhooks (`/hooks`), a device's channel (`/device`), and the account service's routes, `/directory/v1`, `/v1/handles`, `/v1/identities/:identifier/handle`, `/v1/namespaces/personal/claim` and `/account`, which answer where this CYFR serves its own account service; and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
 
 ---
 
@@ -37,8 +37,8 @@ CYFR supports two authentication methods. Choose the one that fits your use case
 
 | Method | When to Use | How It Works |
 |--------|-------------|--------------|
-| **API Keys** | Scripts, backends and CI/CD acting as you | `Authorization: Bearer cyfr_sk_...` header |
-| **Session Tokens** | Human devs using the CLI (`cyfr login`) | The command line is a protected device: its shell unlocks its key and holds the session in memory while it runs |
+| **API Keys** | The CLI, scripts, backends, CI/CD and agents acting as you | `Authorization: Bearer cyfr_sk_...` header |
+| **Browser Sessions** | People acting on CYFR's screen: a browser signed in with a passkey, or the CYFR box unlocked with its PIN | A session cookie set by the sign-in |
 
 ### API Keys
 
@@ -48,21 +48,16 @@ A key carries out what you approved and never approves anything itself. A person
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
-### Session Tokens
+### Browser Sessions
 
-Session tokens are for human developers using the CLI. `cyfr login` makes the command line a device of its person's account, as the box's own screen is ([devices-guide.md](devices-guide.md)):
-
-1. The first time, it makes the device's key, protected by a PIN in the machine's chip or a generated passphrase, and the person adds the key to their account at the account pages or with `cyfr device approve` on another terminal of theirs, or makes their account with it (`--setup`, `--join`); its first connection to each CYFR introduces it on the device channel (`/device`), admitted under setup, an invitation or that CYFR's allowlist
-2. Each time, it unlocks the key and proves it on its device channel (`session.unlock`), and spends the one-time ticket it is answered at `POST /device/session` (`{ticket}` → `{session_token, expires_at}`) for a session bound to that device
-3. It starts the person's shell with the session, which it holds in memory and never writes to disk; the session lives while the shell's device channel keeps it, ends within a minute of the channel's end, and ends at once on `session.lock` or the device's revocation
-
-No CYFR approves a command line, and no provider signs one in. `CYFR_SESSION_TTL_HOURS` (30 days by default) bounds a browser's sessions, never a device's. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
+People act on CYFR's screen. A browser signs in with the person's passkey, and the CYFR box's own screen unlocks with its PIN ([devices-guide.md](devices-guide.md)); either way the browser holds the session as a cookie, and a person's interactive acts (above) are made there. The command line signs no one in: it calls with an API key, passed as `--token <key>` or `CYFR_TOKEN`.
 
 ```bash
-cyfr login                    # Unlock this command line's key and start a shell
-cyfr whoami                   # Check current session
-exit                          # Leave the shell: its session ends
+export CYFR_TOKEN=cyfr_sk_...   # a key made on CYFR's API Keys page
+cyfr whoami                     # who the key acts as
 ```
+
+`CYFR_SESSION_TTL_HOURS` (30 days by default) bounds a browser's sessions, never the box's, which only the box's own channel extends. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
 
 ### Service-to-service
 
@@ -194,7 +189,7 @@ Two different credential types serve two different purposes: API keys authentica
 | **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack grants |
 | **Who uses it** | Your app (in the `Authorization` header) | WASM components (the host attaches the entry, or the component reads it when its need discloses it) | WASM components (via `cyfr:oauth/token`) |
 | **Stored where** | Your app's environment | CYFR's vault (sealed, encrypted at rest) | CYFR's vault (sealed, encrypted at rest) |
-| **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Vault page; bound via `cyfr profile grant` | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound via `cyfr profile grant` |
+| **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Vault page; bound on the Components page's **Grant access** | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound on the Components page's **Grant access** |
 | **Lifecycle** | Static — set once | Static — rotate without re-consent | Dynamic — host auto-refreshes |
 
 **Example flow:**
@@ -303,7 +298,7 @@ finished.
 | `MCP-Protocol-Version` | `2026-07-28` | Always — must equal the `_meta` version |
 | `Mcp-Method` | the request's `method` | Always |
 | `Mcp-Name` | `params.name`, or `params.uri` for `resources/read` | Methods that name a subject |
-| `Authorization` | `Bearer cyfr_sk_...` or a session token | Always, unless calling a public action |
+| `Authorization` | `Bearer cyfr_sk_...` | Always, unless calling a public action |
 
 A value that is not plain visible ASCII travels Base64-encoded in the
 specification's sentinel form, `=?base64?<encoded>?=`, and the server decodes it
@@ -418,7 +413,7 @@ A CYFR may require every person there to sign in with their company's
 account (`CYFR_COMPANY_LOGIN`, [README.md](README.md#requiring-a-company-sign-in)).
 While a person's company sign-in is missing, past its days, or given under
 another company configuration, CYFR refuses every request made with their
-credentials: an API key they made, their session token and their paired
+credentials: an API key they made, their browser sessions and their paired
 devices alike. The refusal, `company_login_required`, answers HTTP `403`
 with this message:
 
@@ -433,7 +428,7 @@ its next revalidation.
 Retrying does not help, and no key or session needs to be made again. The
 person opens the CYFR in a browser, signs in, and chooses **Sign in with
 your company** on the page it sends them to. After that, the same API key
-and session token are admitted again.
+and session are admitted again.
 
 ### Public Tools (No Auth Required)
 
@@ -798,16 +793,16 @@ When a formula invokes a sub-component whose consent isn't satisfiable — a nee
 ```
 id: 1.5
 event: emit
-data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","message":"...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a vault entry for \"api_key\""}
+data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","message":"...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"message":"This app needs a vault entry for \"api_key\""}
 ```
 
-Each issue's `fix` object contains the MCP tool, action, and args to start the consent walk. Frontends can use these to render one-click fix buttons; `setup_command` provides the CLI alternative. A run with no grant to stand on surfaces the same way with issue type `consent_required`, its message saying why: never granted, revoked, or asking for more than the grant holds. The formula still fails — the event is informational so consumers can act on it.
+Each issue's `fix` object contains the MCP tool, action, and args to start the consent walk. Frontends can use these to render one-click fix buttons. A run with no grant to stand on surfaces the same way with issue type `consent_required`, its message saying why: never granted, revoked, or asking for more than the grant holds. The formula still fails — the event is informational so consumers can act on it.
 
 **Checking readiness up front** — `component.setup_plan` answers "can this run?" from the consent. Its `consent` section carries the profile (`profile_id`, `revision`, `scope`) and one row per need — `satisfied` plus a human-readable `detail` ("bound to my-anthropic-key", "no vault entry bound for 'api_key' — grant one to continue", "was rebound since this consent — re-approve to continue"). Top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching vault entry.
 
 ### Scheduling Recurring Executions
 
-CYFR supports cron-based scheduling for recurring component execution. Create schedules via the MCP `schedule` tool or the `cyfr schedule` CLI commands. Bind each schedule to a consented execution profile using `profile_id` (MCP) or `--profile` (CLI); `cyfr profile list <ref>` shows that component's profile IDs.
+CYFR supports cron-based scheduling for recurring component execution. A person makes a schedule on the Schedules page, or with the MCP `schedule` tool's `create`; the `cyfr schedule` CLI commands list, update, pause, resume and delete them. Each schedule is bound to a consented execution profile by `profile_id` (MCP) or `--profile` (`cyfr schedule update`); `cyfr profile list <ref>` shows that component's profile IDs.
 
 **Creating a schedule via MCP:**
 
@@ -844,17 +839,16 @@ CYFR supports cron-based scheduling for recurring component execution. Create sc
 **Managing schedules:**
 
 ```bash
-cyfr schedule create --profile <profile_id> --name daily-report --cron "0 9 * * *" --ref "formula:local.report:1.0.0"
 cyfr schedule list
 cyfr schedule pause <schedule_id>
 cyfr schedule resume <schedule_id>
 cyfr schedule delete <schedule_id>
 ```
 
-`--missed-runs` and `--catch-up-limit` declare the same policy on `cyfr schedule create` and `cyfr schedule update`:
+`--missed-runs` and `--catch-up-limit` declare the same policy on `cyfr schedule update`, as the Schedules page does for a new schedule:
 
 ```bash
-cyfr schedule create --profile <profile_id> --name nightly --cron "0 2 * * *" --ref "formula:local.report:1.0.0" --missed-runs catch_up --catch-up-limit 3
+cyfr schedule update <schedule_id> --missed-runs catch_up --catch-up-limit 3
 cyfr schedule update <schedule_id> --missed-runs skip
 ```
 
@@ -895,10 +889,9 @@ Handles all database operations via Supabase's REST API.
 ```bash
 # Create the catalyst project (if starting fresh)
 cyfr new catalyst supabase --version 0.2.0
-
-# Grant it: pick a vault entry for each need, approve the capability ask
-cyfr profile grant c:local.supabase
 ```
+
+Grant it on the Components page: open `c:local.supabase` and choose **Grant access**, then pick a vault entry for each need and approve the capability ask.
 
 Create the vault entry first (console Vault page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`, a `destination` naming your project's host, and `disclose: true`, since the catalyst reads the fields itself). If you own the Supabase project, you can skip the vault entry entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
 
@@ -926,11 +919,7 @@ Orchestrates the validator and database catalyst.
 
 **Setup:**
 
-```bash
-# The formula declares "caps": {"tools": ["execution.run"]} in its manifest;
-# granting it approves that ask
-cyfr profile grant f:local.users-api
-```
+The formula declares `"caps": {"tools": ["execution.run"]}` in its manifest; granting it on the Components page (open `f:local.users-api` and choose **Grant access**) approves that ask.
 
 **Pseudocode flow:**
 
@@ -995,7 +984,7 @@ An offer ends once: accepted, declined, withdrawn or expired, whichever lands fi
 
 ## Granting Components: Vault Entries & Consent
 
-Before a component can run, an operator grants it: which **vault entries** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive paths are `cyfr profile grant <ref>` and the console's Vault page; everything below is the same flow over MCP.
+Before a component can run, an operator grants it: which **vault entries** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive path is the Components page: open the component and choose **Grant access**; everything below is the same flow over MCP.
 
 `cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Grant each component afterwards — a catalyst with nothing granted is rejected with a `consent_required` or `setup_required` error. Every root run needs a granted profile.
 
@@ -1129,7 +1118,7 @@ Four typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative 
 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
-| `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan` / `cyfr profile grant <ref>`) |
+| `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan`, or the component's **Grant access** on the Components page) |
 | `consent_required` | `{cause, ref}` | The run has no grant to stand on, and `cause` says why, for the component `ref` names: `no_grant` when nobody has granted it, `revoked` when its grant was revoked, `shape_moved` when its ask changed since approval. A `shape_moved` payload also carries the head's `profile_id`, `current_revision` and `shape_diff`, which shows each component's changes, naming its `node` and marking new or dropped dependencies with `new` or `dropped`. Grant it, or review and grant again. A reference that names no component is `not_found` instead |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation.pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
@@ -1277,9 +1266,8 @@ to run the operator verbs (`door.*`).
 The capability is over the instance: an operator works inside their
 own athanor like everyone else and enters no other — opening another person's is
 refused like anyone's — and there is no cross-athanor reach. They hold no seat in
-a shared thread by the capability, and read one only where they sit. The **server allowlist** (`cyfr admin allow
-<@name|identifier|*>`, `cyfr admin deny <person|identifier|@name>`, or the Settings
-page, which takes a name or `*`) judges accounts: one its setup or an invitation
+a shared thread by the capability, and read one only where they sit. The **server allowlist** (Settings → Server allowlist,
+whose Allow and Deny take a name or `*`) judges accounts: one its setup or an invitation
 admitted signs in by the allow of its identifier (`per_…`) that admission wrote, and
 any other when `*` or an allow naming its identifier admits it, unless a deny names it.
 An entry given a name keeps the identifier the registry answers for it, with the name
@@ -1494,21 +1482,22 @@ of memory.
 This assumes you've completed the Quick Start in the [README](README.md) (install, init, server running).
 
 ```bash
-# 1. Start CYFR and authenticate
+# 1. Start CYFR, open the setup link it prints in a browser and set up your account,
+#    then make an API key on CYFR's API Keys page for the command line
 cyfr up
-cyfr login
+export CYFR_TOKEN=cyfr_sk_...
 
 # 2a. Use existing components (e.g., the shipped Claude catalyst)
 cyfr register
-cyfr profile grant c:local.claude
+#     Grant it: on Components, open c:local.claude and choose Grant access
 
 # 2b. Or create a new component from scratch
 cyfr new catalyst my-api
 #     Edit data/athanors/{athanor_id}/components/catalysts/local/my-api/0.1.0/src/src/lib.rs
 cyfr build compile catalyst:local.my-api:0.1.0
-cyfr profile grant catalyst:local.my-api
+#     Grant it: on Components, open catalyst:local.my-api and choose Grant access
 
-# 3. Create an API key for your app
+# 3. Create an API key for your app (confirm it in Prism or on the box)
 cyfr key create --name "my-app"
 
 # 4. Use the returned key in your app's Authorization header

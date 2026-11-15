@@ -5,15 +5,12 @@
 # The pairing proof (README.md): `cyfr` releases started as the browser
 # harness starts homes (tests/browser/harness.sh), each a SQLite cell on a
 # `.test` name behind the harness's HTTPS front: the directory dir.test,
-# which serves the account pages, and three CYFRs, x.test, y.test and
-# z.test, which reach it through the identity proof's front
-# (tests/identity-proof/front.sh and cells.sh). proof.mjs drives Chromium,
-# test devices and the real `cyfr` binary, built here into the output
-# directory, through devices added to the person's account by the page and
-# by `cyfr device approve`, a confirmation from a device, a device's key
-# removed and added again, a declared restore of x.test, and z.test set up
-# from the terminal; this
-# script answers its asks for the CYFRs' part (`ask-N.json`, answered
+# which serves the account pages, and two CYFRs, x.test and y.test, which
+# reach it through the identity proof's front (tests/identity-proof/front.sh
+# and cells.sh). proof.mjs drives Chromium and test devices through a
+# device added to the person's account by the page, a confirmation from a
+# device, a device's key removed and added again and a declared restore of
+# x.test; this script answers its asks for the CYFRs' part (`ask-N.json`, answered
 # `answer-N.json`).
 #
 # Usage: tests/pairing-proof/run.sh
@@ -25,8 +22,7 @@
 #
 # Everything it starts is removed when it ends, whether it succeeds or
 # fails: the cells' servers, the directory's front container, the
-# Playwright container, the command line built into the output directory,
-# and the scratch directory with the run's authority key and the setup
+# Playwright container, and the scratch directory with the run's authority key and the setup
 # tokens.
 set -euo pipefail
 
@@ -48,7 +44,7 @@ mkdir -p -m 700 "$SECRETS"
 
 # The scratch directory holds the run's authority key and the setup
 # tokens, so it goes even when a stop fails; the asks and answers that held
-# a token go from PROOF_OUT too, and so does the command line. `server_stop`
+# a token go from PROOF_OUT too. `server_stop`
 # ends in `fail`, an `exit`, when a listener outlives its stop, so it runs
 # in a subshell: the exit ends that subshell, never this trap, and the
 # stop's failure still fails the run.
@@ -59,7 +55,6 @@ cleanup() {
   identity_front_stop
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   rm -f "$OUT"/ask-* "$OUT"/answer-* 2>/dev/null || true
-  rm -rf "$OUT/bin"
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
@@ -76,15 +71,13 @@ browser_authority
 DIR="$WORK/dir"
 X="$WORK/x"
 Y="$WORK/y"
-Z="$WORK/z"
 browser_home "$DIR" dir.test
 browser_home "$X" x.test
 browser_home "$Y" y.test
-browser_home "$Z" z.test
 
 identity_directory dir.test
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
-for cell in "$X" "$Y" "$Z"; do
+for cell in "$X" "$Y"; do
   openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-$(basename "$cell")"
   identity_reaches_directory "$cell" dir.test "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH"
   identity_env "$cell" CYFR_REGISTRY_URL dir.test
@@ -94,7 +87,7 @@ done
 step "starting the directory, its front, and the CYFRs"
 server_start "$DIR"
 identity_front_start "$DIR"
-for cell in "$X" "$Y" "$Z"; do identity_start "$cell"; done
+for cell in "$X" "$Y"; do identity_start "$cell"; done
 
 # Each step the proof asks for (harness.sh `answer_asks`, which removes
 # each ask before its answer appears).
@@ -104,12 +97,12 @@ answer_ask() {
   case "$op" in
     setup_token)
       cell="$(asked "$ask" cell)"
-      [[ "$cell" =~ ^[xyz]$ ]] || fail "no CYFR named '$cell'"
+      [[ "$cell" =~ ^[xy]$ ]] || fail "no CYFR named '$cell'"
       ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$SECRETS/setup-$cell")"
       ;;
     people)
       cell="$(asked "$ask" cell)"
-      [[ "$cell" =~ ^[xyz]$ ]] || fail "no CYFR named '$cell'"
+      [[ "$cell" =~ ^[xy]$ ]] || fail "no CYFR named '$cell'"
       ANSWER="$(identity_fixture "$WORK/$cell" people)"
       ;;
     bound)
@@ -120,7 +113,7 @@ answer_ask() {
       # one (tests/fixtures/restore_barrier.json), and started again, which
       # runs the restore's transition before anything is served.
       cell="$(asked "$ask" cell)"
-      [[ "$cell" =~ ^[xyz]$ ]] || fail "no CYFR named '$cell'"
+      [[ "$cell" =~ ^[xy]$ ]] || fail "no CYFR named '$cell'"
       barrier() { python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$ROOT/tests/fixtures/restore_barrier.json" "$1"; }
       server_stop "$WORK/$cell"
       declared="$(cell_cyfr "$WORK/$cell" eval "$(barrier declare_expr)" | sed -n "s/^$(barrier declared_prefix)//p" | tail -1)"
@@ -130,11 +123,6 @@ answer_ask() {
     *) fail "the proof asked for '$op', which this script does not do" ;;
   esac
 }
-
-step "the command line the proof runs"
-mkdir -p "$OUT/bin"
-( cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -trimpath -o "$OUT/bin/cyfr" . ) ||
-  fail "the cyfr command line did not build"
 
 step "the pairing proof in Chromium, in $PLAYWRIGHT_IMAGE"
 rm -f "$OUT"/ask-* "$OUT"/answer-*

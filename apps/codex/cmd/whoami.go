@@ -16,14 +16,16 @@ func init() {
 	rootCmd.AddCommand(whoamiCmd)
 }
 
-// whoamiCmd displays local session identity and registry namespace memberships.
-// Registry failures produce a warning while preserving the local identity output.
+// whoamiCmd displays who the command line calls CYFR as, and their registry
+// namespace memberships. Registry failures produce a warning while preserving
+// the local identity output.
 var whoamiCmd = &cobra.Command{
 	Use:     "whoami",
-	Short:   "Show current identity",
+	Short:   "Show who this command line calls CYFR as",
 	GroupID: "identity",
-	Long: `Display the user, email, provider, and cyfr.run registry identity
-associated with the current session.
+	Long: `Display who this command line calls CYFR as: the API key's name, its
+person's name and role (administrator or person), the address it called,
+their name at cyfr.run, their athanor and their publisher memberships.
 
 Composes the local identity (` + "`session.whoami`" + `) with the registry
 identity (` + "`registry.whoami`" + `). The two actions are split so the
@@ -43,7 +45,7 @@ preserves the local identity and adds a warning.`,
 		registry, registryErr := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryWhoamiArgs{})
 		// Don't abort on registry errors — the local identity is still useful.
 
-		composed := composeWhoami(session, registry, registryErr)
+		composed := composeWhoami(client.BaseURL, session, registry, registryErr)
 
 		if flagJSON {
 			output.JSON(composed)
@@ -57,8 +59,10 @@ preserves the local identity and adds a warning.`,
 
 // composeWhoami merges the two-action responses into a single shape so the
 // JSON output is stable and --json consumers see both halves in one payload.
-func composeWhoami(session, registry map[string]any, registryErr error) map[string]any {
+// The address is the one this command line called: the server answers none.
+func composeWhoami(address string, session, registry map[string]any, registryErr error) map[string]any {
 	out := map[string]any{
+		"address": address,
 		"session": session,
 	}
 
@@ -73,14 +77,15 @@ func composeWhoami(session, registry map[string]any, registryErr error) map[stri
 	return out
 }
 
-// renderWhoami prints a flat, labelled property list. The CYFR user line is
-// the primary handle — the cyfr.run personal-namespace slug when claimed, or
-// a parenthetical status when not. Provider / Email / User ID follow,
-// memberships render as a single line when present.
+// renderWhoami prints a flat, labelled property list: the key, its person's
+// name and role and the address called first, then the cyfr.run line — the
+// personal-namespace slug when claimed, or a parenthetical status when not.
+// Provider / Email / Athanor follow, memberships render as a single line
+// when present.
 //
-// Five states drive the `CYFR User:` line:
+// Five states drive the `cyfr.run name:` line:
 //
-//   - claimed:       `moonmoon`
+//   - claimed:       `alice`
 //   - unclaimed:     `(no personal namespace claimed)`
 //   - no tokens:     `(no cyfr.run push tokens)`
 //   - reg. offline:  `(registry.cyfr.run unreachable)`
@@ -103,6 +108,20 @@ func renderWhoami(composed map[string]any, registryErr error) {
 		return
 	}
 
+	address, _ := composed["address"].(string)
+	if keyName, _ := session["key_name"].(string); keyName != "" {
+		fmt.Printf("Key: %s\n", keyName)
+	}
+	if name, _ := session["name"].(string); name != "" {
+		fmt.Printf("Name: %s\n", name)
+	}
+	if role, _ := session["role"].(string); role != "" {
+		fmt.Printf("Role: %s\n", role)
+	}
+	if address != "" {
+		fmt.Printf("Address: %s\n", address)
+	}
+
 	authenticated, _ := registry["authenticated"].(bool)
 	personal := personalSlug(registry)
 
@@ -122,7 +141,7 @@ func renderWhoami(composed map[string]any, registryErr error) {
 		cyfrUser = "(registry.cyfr.run unreachable)"
 	}
 
-	fmt.Printf("CYFR User: %s\n", cyfrUser)
+	fmt.Printf("cyfr.run name: %s\n", cyfrUser)
 	if provider != "" {
 		fmt.Printf("Provider: %s\n", prettyProvider(provider))
 	}
@@ -131,9 +150,6 @@ func renderWhoami(composed map[string]any, registryErr error) {
 	}
 	if athanor, _ := session["athanor_id"].(string); athanor != "" {
 		fmt.Printf("Athanor: %s\n", athanor)
-	}
-	if admin, _ := session["platform_admin"].(bool); admin {
-		fmt.Println("Platform admin: yes")
 	}
 
 	if hasRegistry {

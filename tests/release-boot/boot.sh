@@ -5,7 +5,7 @@
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
 # booted against a FRESH database of that adapter with auto-migration on
-# (tests/release-boot/release.sh). Seven cases, in order:
+# (tests/release-boot/release.sh). Six cases, in order:
 #
 #   boots    the deployment file `cyfr init` writes, a local home — the
 #            stack's keys, the empty CORS allowlist, authentication
@@ -14,6 +14,8 @@
 #            schema before it starts) and answers /api/health/ready, the
 #            readiness check the image's HEALTHCHECK runs. A boot that
 #            raises, exits or never answers fails here, with its whole log.
+#            `cyfr init` printed the setup link with its token, and the boot
+#            says no one is set up and names the setup link, never the token.
 #            `Cyfr.Release.live_slots/0`, the offline read `cyfr update`
 #            makes before it snapshots a cell, run as the update runs it
 #            (`bin/cyfr eval`, which starts no application), answers the
@@ -23,8 +25,8 @@
 #            fingerprint the database records, over `bin/cyfr rpc` while the
 #            cell runs and offline through `bin/cyfr eval` once it stopped.
 #            The fresh cell serves its sign-in page at /login, which says
-#            no one is set up yet. The running release reads none of Arca's, Sanctum's or the
-#            host's test seams, with each seam's key the probe reads and
+#            no one is set up yet. The running release reads none of Arca's,
+#            Sanctum's or the host's test seams, with each seam's key the probe reads and
 #            the test permission set at runtime: it still holds its slot,
 #            writes on its own pool and takes write turns, and starts every
 #            switched process as it ships (tests/release-boot/test_seams.exs).
@@ -32,29 +34,6 @@
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.origin()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
-#
-#   terminal a cell whose deployment file `cyfr init` wrote, its setup
-#            token among it, and whose registry and directory are the
-#            cyfr.run stand-in (tests/registry-stand-in/standin.py) on
-#            127.78.0.1, at a port it picks: the boot says no one is set
-#            up and names the setup link, never the token; `cyfr login
-#            --setup --name
-#            proof`, the command line built from this tree, makes the
-#            account at the terminal, its terms accepted and its recovery
-#            code shown and saved before anything is sent, with this
-#            command line its first device: the stand-in holds its genesis
-#            and the device's add_key, its acceptance and the name; the
-#            command line's hello brings the setup token, the cell admits
-#            the account as its first person, the platform administrator,
-#            and the command line as their device, and a command-line
-#            session that `cyfr whoami` answers under ends with its shell;
-#            the person's namespace is cached for its shipped lifetime with
-#            the test seam's key set to 0 in the running release;
-#            run again it unlocks the same device with no code, no other
-#            person made. A second cell, whose registry and directory are
-#            `.invalid` names, meets an account service that does not
-#            answer: the command exits 1 saying so, and nothing is made at
-#            the cell or anywhere.
 #
 #   refuses  the same environment with the wildcard CORS allowlist, which a
 #            release with authentication configured must refuse at boot.
@@ -90,7 +69,9 @@
 #            fingerprint its boot checks, and serve the tincture and the
 #            thread to the person's session, which the copy still honours:
 #            an undeclared restore keeps the backup's authority, the stated
-#            limit.
+#            limit. Before the stop, the person's namespace, once recorded,
+#            is cached for its shipped lifetime with the test seam's key set
+#            to 0 in the running release.
 #
 #   marked restore  the same copy, stopped and declared restored as
 #            `cyfr restore` declares one (`bin/cyfr eval` of
@@ -133,11 +114,10 @@
 #
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
 # schema in it, as a role that may create databases: the boots case's public
-# home, the terminal case's two cells and the restores case create five
-# databases beside it, named for this run (`pg_run_database`), and drop them
+# home and the restores case create three databases beside it, named for this run (`pg_run_database`), and drop them
 # when it ends; it drops no database it did not create, so runs that share
 # one server and one URL leave each other's alone. A run killed before its
-# cleanup leaves its five behind, under its own names. The dump and the
+# cleanup leaves its three behind, under its own names. The dump and the
 # restore run in the postgres:18.6 image, with this host's network. The
 # cells' deployment files come from the `cyfr` command line, built from
 # apps/codex with this host's go, whose access switch asks Docker for the
@@ -283,51 +263,6 @@ access_vector_boot() {
   cell_env "$cell" ${words[@]+"${words[@]}"} timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$release/bin/cyfr" start
 }
 
-# The cyfr.run stand-in (tests/registry-stand-in/standin.py) the terminal
-# case registers its first person at: on STAND_IN_ADDRESS, a loopback
-# address no other proof uses, at the port it picks free (STAND_IN_PORT),
-# serving the registry and, at its own address, the directory. Its
-# process is STAND_IN_PID, which the run's cleanup stops.
-STAND_IN_ADDRESS=127.78.0.1
-STAND_IN_PID=""
-STAND_IN_PORT=""
-
-# Start the stand-in with its state file, ready file and log in the
-# directory `$1`. A stand-in that ends, or names no port within 30 s,
-# fails the run.
-stand_in_start() {
-  local dir="$1" closes=$((SECONDS + 30))
-  mkdir -p "$dir"
-  python3 -I "$ROOT/tests/registry-stand-in/standin.py" --address "$STAND_IN_ADDRESS" --port 0 \
-    --state "$dir/state.json" --ready-file "$dir/ready" </dev/null >"$dir/log" 2>&1 &
-  STAND_IN_PID=$!
-  until [ -s "$dir/ready" ]; do
-    if ! kill -0 "$STAND_IN_PID" 2>/dev/null; then
-      tail -n 20 "$dir/log" >&2 || true
-      fail "the cyfr.run stand-in ended before it served on $STAND_IN_ADDRESS"
-    fi
-    [ "$SECONDS" -lt "$closes" ] || fail "the cyfr.run stand-in named no port within 30 s"
-    sleep 0.1
-  done
-  STAND_IN_PORT="$(tr -d '\n' <"$dir/ready")"
-  [[ "$STAND_IN_PORT" =~ ^[0-9]+$ ]] || fail "the cyfr.run stand-in named no port: '$STAND_IN_PORT'"
-}
-
-# Stop the stand-in by SIGTERM, which it takes, killing it after five
-# seconds, and wait for it.
-stand_in_stop() {
-  [ -n "$STAND_IN_PID" ] || return 0
-  local _
-  kill "$STAND_IN_PID" 2>/dev/null || true
-  for _ in $(seq 1 50); do
-    kill -0 "$STAND_IN_PID" 2>/dev/null || break
-    sleep 0.1
-  done
-  kill -9 "$STAND_IN_PID" 2>/dev/null || true
-  wait "$STAND_IN_PID" 2>/dev/null || true
-  STAND_IN_PID=""
-}
-
 # Sourced (tests/release-boot/names-test.sh, access-test.sh), the script
 # defines the functions above and runs nothing.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
@@ -360,7 +295,7 @@ cleanup() {
   # The cell started last is the one a failed step was asking.
   if [ "$code" -ne 0 ]; then
     local cell
-    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$SILENT" "$TERMINAL" "$ADDRESS" "$CELL"; do
+    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$ADDRESS" "$CELL"; do
       if [ -n "$cell" ] && [ -f "$cell/boot.log" ]; then
         log_tail "$cell"
         break
@@ -368,9 +303,8 @@ cleanup() {
     done
   fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
-  # The stand-in after the server that calls it, and the reserve case's
-  # directory, which a SQLite cell in its container starts apart.
-  stand_in_stop
+  # The reserve case's directory, which a SQLite cell in its container
+  # starts apart.
   [ -z "$RESERVE" ] || cell_directory_stop "$RESERVE"
   # The reserve case's filesystem goes with the container that holds it,
   # and the access case's namespace with its own.
@@ -386,7 +320,7 @@ cleanup() {
 }
 # The cells whose log a failed run prints, named before the trap reads
 # them.
-CELL="" ADDRESS="" TERMINAL="" SILENT="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER="" NS_HOLDER=""
+CELL="" ADDRESS="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER="" NS_HOLDER=""
 trap cleanup EXIT
 
 # How many of a server's last log lines a failed run prints.
@@ -423,6 +357,15 @@ echo "pending migrations before the boot: $before"
 step "booting the release against a fresh $ADAPTER database with auto-migration on"
 server_start "$CELL"
 echo "GET /api/health/ready -> 200 $(cat "$CELL/ready.json")"
+
+step "the boot names the setup link cyfr init printed, never its token"
+token="$(cell_value "$CELL" CYFR_SETUP_TOKEN)"
+[[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail "cyfr init wrote no setup token of 64 lowercase hexadecimal characters"
+grep -q '/setup#'"$token" "$CELL/cli.log" || fail "cyfr init printed no setup link"
+grep -q '\[Cyfr\] Not set up:.*/setup#…' "$CELL/boot.log" ||
+  fail "the boot did not name the setup link"
+! grep -qF "$token" "$CELL/boot.log" || fail "the boot log records the setup token"
+echo "the boot: $(grep -o '\[Cyfr\] Not set up:.*' "$CELL/boot.log" | head -1)"
 
 step "the boot migrated the schema itself"
 if ! grep -q "== Migrated" "$CELL/boot.log"; then
@@ -548,313 +491,7 @@ echo "its proxy listener on 127.0.0.1:$(cell_proxy_port "$ADDRESS"): GET /api/he
 server_stop "$ADDRESS"
 
 # ---------------------------------------------------------------------------
-# Case 2: a CYFR set up from the command line
-# ---------------------------------------------------------------------------
-
-# What cell `$1`'s release holds of its people, as one JSON object: each
-# person's id, admission and whether they are the platform administrator;
-# the number of sessions; each paired client (its id, person, holder kind,
-# standing and kid); each device certificate (its client, kid and state);
-# and each identity row (its person and identifier).
-terminal_state() {
-  cell_cyfr "$1" rpc '
-    people = Arca.Repo.all(Arca.Schemas.User)
-    IO.puts("CYFR_PEOPLE=" <> JSON.encode!(%{
-      people: Enum.map(people, &%{id: &1.id, admission: &1.admission,
-        admin: Sanctum.Tenancy.platform_admin?(&1.id)}),
-      sessions: length(Arca.Repo.all(Arca.Schemas.Session)),
-      devices: Enum.map(Arca.Repo.all(Arca.Schemas.PairedClient),
-        &%{id: &1.id, user_id: &1.user_id, holder_kind: &1.holder_kind, standing: &1.standing, kid: &1.kid}),
-      certificates: Enum.map(Arca.Repo.all(Arca.Schemas.DeviceCertificate),
-        &%{client_id: &1.paired_client_id, kid: &1.kid, state: &1.state}),
-      identities: Enum.map(Arca.Repo.all(Arca.Schemas.PersonIdentity),
-        &%{user_id: &1.user_id, identifier: &1.identifier})
-    }))' |
-    sed -n 's/^CYFR_PEOPLE=//p' | tail -1
-}
-
-# `cyfr $3...` for cell `$1` as `cell_cli` runs it (release.sh), from a
-# directory of its own holding the cell's deployment file, with HOME the
-# cell's and nothing else of the caller's environment but PATH and how
-# Docker is reached; but on a terminal of its own (a pseudo-terminal), as
-# a person at an ssh session runs it, answered as that person answers:
-# the passphrase it draws and shows once, typed back each time it is
-# asked, and Enter once the recovery code is shown. Its shell (SHELL) is
-# the program `$2`, which runs in the session cyfr login opened. Its exit
-# status is left in CLI_STATUS rather than failing the run; what the
-# terminal showed is `$1/login.log`, written over (with no carriage
-# returns), and appended to the cell's cli.log; the passphrase is kept in
-# `$1/passphrase` for the next run and among the log's secrets.
-CLI_STATUS=0
-terminal_cli() {
-  local cell="$1" shell="$2" dir
-  shift 2
-  cell_cli_build
-  dir="$WORK/cyfr-cell-$(basename "$cell")-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
-  mkdir -p "$dir" "$cell/home"
-  cp "$ROOT/.env.example" "$dir/.env.example"
-  cp "$cell/.env" "$dir/.env"
-  CLI_STATUS=0
-  (
-    cd "$dir" || exit 1
-    env -i HOME="$cell/home" PATH="$PATH" LANG="${LANG:-en_US.UTF-8}" TERM=dumb SHELL="$shell" \
-      DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
-      ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-      python3 -I "$ROOT/tests/release-boot/terminal.py" "$cell/passphrase" "$cell/login.log" "$CELL_CLI" "$@"
-  ) || CLI_STATUS=$?
-  if [ -s "$cell/passphrase" ]; then
-    LOG_SECRETS+=("$(cat "$cell/passphrase")")
-  fi
-  { printf '\n$ cyfr %s\n' "$*"; cat "$cell/login.log"; } >>"$cell/cli.log"
-  rm -rf "$dir"
-}
-
-# terminal_shell CELL: the shell cyfr login starts for cell CELL, a program
-# that, in the session the unlock opened, records `cyfr whoami` and its
-# status in CELL/shell.log, then exits 0, which locks the command line.
-terminal_shell() {
-  local cell="$1"
-  cell_cli_build
-  printf '#!/bin/sh\n"%s" --context terminal whoami >"%s/shell.log" 2>&1\necho "whoami exit $?" >>"%s/shell.log"\nexit 0\n' \
-    "$CELL_CLI" "$cell" "$cell" >"$cell/shell"
-  chmod 700 "$cell/shell"
-  rm -f "$cell/shell.log"
-}
-
-# Fail the run with `$2`, after cell `$1`'s last command-line output
-# (`terminal_cli`), redacted.
-terminal_failed() {
-  echo "----- the command line's output for cell $1 -----" >&2
-  redact_log "$1" <"$1/login.log" >&2 || echo "(the output could not be redacted, so it is not printed)" >&2
-  fail "$2"
-}
-
-# What `cyfr login --setup` shows: the account and its recovery code,
-# before the person presses Enter; the unlock, once the session is held in
-# its shell; the lock, once that shell exits; and the end of a run the
-# account service did not answer.
-SAY_NAME="Your account is @proof."
-SAY_CODE="Your recovery code:"
-SAY_SAVE="If you ever lose your devices, this is the one thing that brings your account back. Save it off this machine: scan it, or put it in your password manager. Nothing is sent until you do."
-SAY_ENTER="Press Enter once you saved it."
-SAY_UNLOCKED="Unlocked. This shell holds your CYFR session: exit it, or run cyfr logout, to lock."
-SAY_LOCKED="Locked: this command line's CYFR session ended."
-SAY_SILENT="The account service could not be reached"
-SAY_NOTHING="Nothing was made; run cyfr login --setup again."
-CODE_SHAPE='CYFR(-[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{8}){14}'
-
-step "terminal: a CYFR with no person names its setup link; cyfr login --setup on a terminal makes the account at the cyfr.run stand-in with this command line its first device, shows the recovery code and, once it is saved, says hello with the setup token, is admitted as the first person and unlocks into a shell whose session acts as them and ends with it; then unlocks again"
-# cyfr login keeps its key in this machine's TPM chip where it can open
-# one, and the chip's holder then sets the chip's wrong-PIN limits and
-# lockout for good: the case runs only where this user cannot open it, so
-# the key is kept under a passphrase and no chip is changed.
-if python3 -I -c 'import os, sys; fd = os.open("/dev/tpmrm0", os.O_RDWR); os.close(fd)' 2>/dev/null; then
-  fail "this user can open /dev/tpmrm0: cyfr login would keep the proof's key in this machine's chip and set its lockout; run the boot where the chip is not open to it"
-fi
-TERMINAL="$WORK/terminal"
-TERMINAL_URL=""
-if [ "$ADAPTER" = postgres ]; then
-  TERMINAL_DB="$(pg_run_database terminal)"
-  pg_fresh_database "$TERMINAL_DB"
-  TERMINAL_URL="$(pg_url "$TERMINAL_DB")"
-fi
-cell_new "$TERMINAL" "$TERMINAL_URL"
-token="$(cell_value "$TERMINAL" CYFR_SETUP_TOKEN)"
-[[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail "cyfr init wrote no setup token of 64 lowercase hexadecimal characters"
-grep -q '/setup#'"$token" "$TERMINAL/cli.log" || fail "cyfr init printed no setup link"
-
-# The stand-in is the cell's registry and its directory, over plain HTTP
-# on loopback, its address a private egress target as an operator names
-# one, and its OCI host is a loopback address its egress refuses: nothing
-# reaches cyfr.run.
-stand_in_start "$WORK/cyfr-run"
-STAND_IN_URL="http://$STAND_IN_ADDRESS:$STAND_IN_PORT"
-cell_set "$TERMINAL" CYFR_REGISTRY_URL "$STAND_IN_ADDRESS:$STAND_IN_PORT"
-cell_set "$TERMINAL" CYFR_DIRECTORY_URL "$STAND_IN_URL"
-cell_set "$TERMINAL" CYFR_OCI_REGISTRY_URL 127.0.0.1:9
-targets="$(cell_value "$TERMINAL" CYFR_PRIVATE_EGRESS_TARGETS)"
-cell_set "$TERMINAL" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$STAND_IN_ADDRESS"
-echo "the cyfr.run stand-in answers at $STAND_IN_URL"
-
-server_start "$TERMINAL"
-grep -q '\[Cyfr\] Not set up:.*/setup#…' "$TERMINAL/boot.log" ||
-  fail "the boot did not name the setup link"
-! grep -qF "$token" "$TERMINAL/boot.log" || fail "the boot log records the setup token"
-echo "the boot: $(grep -o '\[Cyfr\] Not set up:.*' "$TERMINAL/boot.log" | head -1)"
-
-cell_cli "$TERMINAL" context add terminal "http://127.0.0.1:$PORT"
-terminal_shell "$TERMINAL"
-terminal_cli "$TERMINAL" "$TERMINAL/shell" --context terminal login --setup --name proof
-CODE="$(grep -oE "$CODE_SHAPE" "$TERMINAL/login.log" | head -n 1)" || CODE=""
-[ -z "$CODE" ] || LOG_SECRETS+=("$CODE")
-[ "$CLI_STATUS" = 0 ] || terminal_failed "$TERMINAL" "cyfr login --setup --name proof exited $CLI_STATUS"
-for line in "$SAY_NAME" "$SAY_CODE" "$SAY_SAVE" "$SAY_ENTER" "$SAY_UNLOCKED" "$SAY_LOCKED"; do
-  grep -qF "$line" "$TERMINAL/login.log" || terminal_failed "$TERMINAL" "cyfr login --setup did not say '$line'"
-done
-[ -n "$CODE" ] || terminal_failed "$TERMINAL" "cyfr login --setup showed no recovery code under '$SAY_CODE'"
-[ -s "$TERMINAL/passphrase" ] || terminal_failed "$TERMINAL" "cyfr login --setup showed no passphrase to keep the key under"
-# The passphrase is shown once, where it is drawn, and echoed nowhere: not
-# at either prompt that asks for it, nor after the unlock.
-[ "$(grep -oF "$(cat "$TERMINAL/passphrase")" "$TERMINAL/login.log" | wc -l)" -eq 1 ] ||
-  terminal_failed "$TERMINAL" "the terminal showed the passphrase other than once, where it was drawn"
-
-# CYFR holds one person, made by setup, the platform administrator, their
-# identity the account's identifier, this command line their one active
-# device with one active certificate for the key the account lists, and no
-# session once the shell has ended; the stand-in holds the account's
-# genesis, naming its directory, and the device's add_key, its acceptance
-# of the policy and the name, and answers the name with the identifier and
-# its directory; and the code printed is the canonical recovery code
-# (Prima.RecoveryCode) of that identifier.
-handle="$(curl -sS -m 10 "$STAND_IN_URL/v1/handles/proof")" || handle=""
-first="$(CODE="$CODE" python3 -I - "$(terminal_state "$TERMINAL")" "$WORK/cyfr-run/state.json" "$handle" \
-  "$STAND_IN_URL" "$STAND_IN_ADDRESS" 2>&1 <<'PY'
-import hashlib, json, os, re, sys
-
-state = json.loads(sys.argv[1] or "null")
-stand_in = json.load(open(sys.argv[2]))
-handle = json.loads(sys.argv[3] or "null")
-url, address, code = sys.argv[4], sys.argv[5], os.environ["CODE"]
-if not state or len(state["people"]) != 1 or len(state["identities"]) != 1 or len(state["devices"]) != 1:
-    sys.exit("CYFR holds %s, not one person, their identity and their device" % json.dumps(state))
-person, identifier = state["people"][0]["id"], state["identities"][0]["identifier"]
-client, kid = state["devices"][0]["id"], state["devices"][0]["kid"]
-want = {
-    "people": [{"id": person, "admission": "setup", "admin": True}],
-    "sessions": 0,
-    "devices": [{"id": client, "user_id": person, "holder_kind": "software", "standing": "active", "kid": kid}],
-    "certificates": [{"client_id": client, "kid": kid, "state": "active"}],
-    "identities": [{"user_id": person, "identifier": identifier}],
-}
-if state != want:
-    sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
-if not re.fullmatch(r"per_[0-9a-f]{64}", identifier) or not re.fullmatch(r"sha256:[0-9a-f]{64}", kid or ""):
-    sys.exit("the person's identifier is %r and their device's kid %r" % (identifier, kid))
-held = {key: stand_in.get(key) for key in ("directory", "accepted", "names")}
-logs = stand_in.get("logs") or {}
-want_held = {"directory": url, "accepted": {identifier: "stand-in-1"}, "names": {"proof": identifier}}
-if held != want_held or list(logs) != [identifier]:
-    sys.exit("the stand-in holds %s and the logs of %s, not %s and the log of %s"
-             % (json.dumps(held), json.dumps(list(logs)), json.dumps(want_held), identifier))
-entries = [json.loads(entry) for entry in logs[identifier]["entries"]]
-genesis_hash = "sha256:" + hashlib.sha256(logs[identifier]["entries"][0].encode()).hexdigest()
-if [e.get("kind") for e in entries] != ["genesis", "add_key"] or genesis_hash != "sha256:" + identifier[4:] \
-        or entries[0].get("directory") != url or entries[1].get("key", {}).get("kid") != kid \
-        or entries[1]["key"].get("kind") != "device" or logs[identifier].get("kids") != [kid]:
-    sys.exit("the stand-in's log of %s is %s, not its genesis at %s and the add_key of the device %s"
-             % (identifier, json.dumps(entries), url, kid))
-want_handle = {"directory": url, "handle": "proof", "identifier": identifier, "protocol": "cyfr-handle/v1",
-               "registry": address}
-if handle != want_handle:
-    sys.exit("the stand-in answers proof with %s, not %s" % (json.dumps(handle), json.dumps(want_handle)))
-alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-if not re.fullmatch(r"CYFR(-[%s]{8}){14}" % alphabet, code):
-    sys.exit("the recovery code printed is not CYFR- and 14 groups of 8 Crockford symbols")
-raw = int("".join(format(alphabet.index(c), "05b") for c in code[5:].replace("-", "")), 2).to_bytes(70, "big")
-digest, secret, check = raw[:32], raw[32:64], raw[64:]
-if "per_" + digest.hex() != identifier:
-    sys.exit("the recovery code printed names another account than the person's")
-if hashlib.sha256(b"cyfr-recovery-code/v1\0" + digest + secret).digest()[:6] != check:
-    sys.exit("the recovery code printed does not check")
-print(person, identifier, client, kid)
-PY
-)" || fail "after cyfr login --setup --name proof: $first"
-read -r person identifier client kid <<<"$first"
-echo "cyfr login --setup --name proof: the account $identifier made at the stand-in as @proof, this command line its device $kid; $person admitted by setup, the platform administrator, the recovery code shown and saved"
-
-# In the shell the unlock started, cyfr whoami acted as them; once that
-# shell exited, the lock left no session at CYFR (sessions 0 above).
-grep -qF "User ID: $person" "$TERMINAL/shell.log" || fail "cyfr whoami in cyfr login's shell did not name $person"
-grep -qx "Platform admin: yes" "$TERMINAL/shell.log" || fail "the first person set up from the command line is not the platform administrator"
-grep -qx "whoami exit 0" "$TERMINAL/shell.log" || fail "cyfr whoami in cyfr login's shell failed"
-
-# The namespace cache keeps the person's slug for its shipped lifetime
-# with `:namespace_cache_ttl_ms` set to 0 in the running release, which
-# compiles that test seam out (tests/release-boot/test_seams.exs holds the
-# others): a build that read the key would cache nothing.
-cached="$(cell_cyfr "$TERMINAL" rpc '
-  key = {:namespace_slug, "'"$person"'"}
-  Application.put_env(:sanctum, :namespace_cache_ttl_ms, 0)
-  :ok = Arca.Cache.invalidate(key)
-  {:ok, slug} = Sanctum.Namespace.lookup_status("'"$person"'")
-  IO.puts("CYFR_NAMESPACE_CACHED=" <> to_string(Arca.Cache.get(key) == {:ok, slug}))
-  Application.delete_env(:sanctum, :namespace_cache_ttl_ms)' |
-  sed -n 's/^CYFR_NAMESPACE_CACHED=//p' | tail -1)"
-[ "$cached" = true ] ||
-  fail "the release did not cache $person's namespace for its shipped lifetime with the seam's key set to 0 (answered '$cached')"
-echo "the namespace cache keeps its shipped lifetime whatever :namespace_cache_ttl_ms says"
-
-# Run again, the same person unlocks again with the passphrase: their code
-# is saved, so none is shown, nothing waits for Enter, and no person or
-# device is made.
-terminal_shell "$TERMINAL"
-terminal_cli "$TERMINAL" "$TERMINAL/shell" --context terminal login --setup --name proof
-[ "$CLI_STATUS" = 0 ] || terminal_failed "$TERMINAL" "the second cyfr login --setup --name proof exited $CLI_STATUS"
-grep -qF "$SAY_UNLOCKED" "$TERMINAL/login.log" || terminal_failed "$TERMINAL" "the second cyfr login --setup did not say '$SAY_UNLOCKED'"
-! grep -qF "$SAY_CODE" "$TERMINAL/login.log" && ! grep -qF "$CODE" "$TERMINAL/login.log" ||
-  terminal_failed "$TERMINAL" "the second cyfr login --setup showed a recovery code that is saved"
-grep -qF "User ID: $person" "$TERMINAL/shell.log" || fail "cyfr whoami in the second shell did not name $person"
-! grep -qF "$(cat "$TERMINAL/passphrase")" "$TERMINAL/login.log" ||
-  terminal_failed "$TERMINAL" "the second unlock's terminal showed the passphrase typed at it"
-again="$(python3 -I - "$(terminal_state "$TERMINAL")" "$person" "$identifier" "$client" "$kid" 2>&1 <<'PY'
-import json, sys
-state = json.loads(sys.argv[1] or "null")
-person, identifier, client, kid = sys.argv[2:6]
-want = {
-    "people": [{"id": person, "admission": "setup", "admin": True}],
-    "sessions": 0,
-    "devices": [{"id": client, "user_id": person, "holder_kind": "software", "standing": "active", "kid": kid}],
-    "certificates": [{"client_id": client, "kid": kid, "state": "active"}],
-    "identities": [{"user_id": person, "identifier": identifier}],
-}
-if state != want:
-    sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
-PY
-)" || fail "after the second cyfr login --setup: $again"
-echo "cyfr login --setup again: $person unlocked a second time with the passphrase, no code shown, no other person or device made"
-server_stop "$TERMINAL"
-stand_in_stop
-
-step "terminal: with the account service silent, cyfr login --setup says so, makes nothing at the cell or anywhere, starts no shell, and exits 1"
-SILENT="$WORK/silent"
-SILENT_URL=""
-if [ "$ADAPTER" = postgres ]; then
-  SILENT_DB="$(pg_run_database silent)"
-  pg_fresh_database "$SILENT_DB"
-  SILENT_URL="$(pg_url "$SILENT_DB")"
-fi
-cell_new "$SILENT" "$SILENT_URL"
-# Names that resolve nowhere: the registry and the directory never answer.
-cell_set "$SILENT" CYFR_REGISTRY_URL registry.invalid
-cell_set "$SILENT" CYFR_DIRECTORY_URL https://directory.invalid
-cell_set "$SILENT" CYFR_OCI_REGISTRY_URL registry.invalid
-server_start "$SILENT"
-cell_cli "$SILENT" context add silent "http://127.0.0.1:$PORT"
-terminal_shell "$SILENT"
-terminal_cli "$SILENT" "$SILENT/shell" --context silent login --setup --name proof
-[ "$CLI_STATUS" = 1 ] || terminal_failed "$SILENT" "cyfr login --setup with the account service silent exited $CLI_STATUS, not 1"
-for line in "$SAY_SILENT" "$SAY_NOTHING"; do
-  grep -qF "$line" "$SILENT/login.log" || terminal_failed "$SILENT" "cyfr login --setup with the account service silent did not say '$line'"
-done
-! grep -qF "$SAY_CODE" "$SILENT/login.log" || terminal_failed "$SILENT" "cyfr login --setup showed a recovery code while the account service was silent"
-! grep -qF "$SAY_UNLOCKED" "$SILENT/login.log" && [ ! -e "$SILENT/shell.log" ] ||
-  terminal_failed "$SILENT" "cyfr login --setup started its shell while the account service was silent"
-silent="$(python3 -I - "$(terminal_state "$SILENT")" 2>&1 <<'PY'
-import json, sys
-state = json.loads(sys.argv[1] or "null")
-# The account is made at the account service before anything reaches the
-# cell, so a silent one leaves the cell as it booted: no person, device,
-# certificate, identity or session.
-want = {"people": [], "sessions": 0, "devices": [], "certificates": [], "identities": []}
-if state != want:
-    sys.exit("CYFR holds %s, not %s" % (json.dumps(state), json.dumps(want)))
-PY
-)" || fail "after cyfr login --setup with the account service silent: $silent"
-echo "cyfr login --setup with the account service silent: exit 1, nothing made at the cell"
-server_stop "$SILENT"
-
-# ---------------------------------------------------------------------------
-# Case 3: a boot that raises is loud
+# Case 2: a boot that raises is loud
 # ---------------------------------------------------------------------------
 
 step "a boot that raises exits non-zero and says why (the wildcard CORS allowlist)"
@@ -880,7 +517,7 @@ echo "the boot exited $status, naming the wildcard:"
 grep -o "FATAL: CORS wildcard.*" "$REFUSAL_LOG" | head -1
 
 # ---------------------------------------------------------------------------
-# Case 4: every boot refusal of the access vectors, and the bind a namespace
+# Case 3: every boot refusal of the access vectors, and the bind a namespace
 # shows the release refusing
 # ---------------------------------------------------------------------------
 
@@ -1000,7 +637,7 @@ docker rm -f "$NS_HOLDER" >/dev/null
 NS_HOLDER=""
 
 # ---------------------------------------------------------------------------
-# Case 5: a backup of the four parts, restored and booted elsewhere
+# Case 4: a backup of the four parts, restored and booted elsewhere
 # ---------------------------------------------------------------------------
 
 step "a cell of its own, with its keyring kept apart from its deployment file"
@@ -1085,6 +722,25 @@ sys.exit(0 if not result["isError"] and events["thread"] == sys.argv[1]
 }
 serves "the cell"
 
+step "the namespace cache keeps its shipped lifetime whatever :namespace_cache_ttl_ms says"
+# The person's namespace recorded, as a registry answer records it, then
+# looked up with `:namespace_cache_ttl_ms` set to 0 in the running release,
+# which compiles that test seam out (tests/release-boot/test_seams.exs holds
+# the others): a build that read the key would cache nothing.
+cached="$(cell_cyfr "$ORIGIN" rpc '
+  {:ok, user} = Sanctum.Tenancy.Users.get("'"$user_id"'")
+  {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "release-boot-backup")
+  key = {:namespace_slug, "'"$user_id"'"}
+  Application.put_env(:sanctum, :namespace_cache_ttl_ms, 0)
+  :ok = Arca.Cache.invalidate(key)
+  {:ok, slug} = Sanctum.Namespace.lookup_status("'"$user_id"'")
+  IO.puts("CYFR_NAMESPACE_CACHED=" <> to_string(Arca.Cache.get(key) == {:ok, slug}))
+  Application.delete_env(:sanctum, :namespace_cache_ttl_ms)' |
+  sed -n 's/^CYFR_NAMESPACE_CACHED=//p' | tail -1)"
+[ "$cached" = true ] ||
+  fail "the release did not cache $user_id's namespace for its shipped lifetime with the seam's key set to 0 (answered '$cached')"
+echo "the namespace cache keeps its shipped lifetime whatever :namespace_cache_ttl_ms says"
+
 step "the cell stopped, its four parts copied to a fresh location"
 server_stop
 COPY="$WORK/copy"
@@ -1131,7 +787,7 @@ serves "the copy"
 server_stop
 
 # ---------------------------------------------------------------------------
-# Case 6: the same backup, declared restored
+# Case 5: the same backup, declared restored
 # ---------------------------------------------------------------------------
 
 # What `$1` answers to the person's pre-backup session over /mcp: the HTTP
@@ -1242,7 +898,7 @@ refused_with_suite_switch "$COPY" "$WORK/permission-refused.log" \
   "ERROR! the application " "ERL_AFLAGS=-prima test_seams_permitted true"
 
 # ---------------------------------------------------------------------------
-# Case 6b: the same copy, its database built from another version of the
+# Case 5b: the same copy, its database built from another version of the
 # schema
 # ---------------------------------------------------------------------------
 
@@ -1275,7 +931,7 @@ if grep -q "pins could not be read" "$STALE_LOG"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Case 7: the storage reserve, on a filesystem that fills
+# Case 6: the storage reserve, on a filesystem that fills
 # ---------------------------------------------------------------------------
 
 # The reserve's size and the limited filesystem's: room for the schema, a
@@ -1509,4 +1165,4 @@ reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""
 
-step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, serves its sign-in page, sets up a CYFR from the command line, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore, refuses a database another schema built before reading it and keeps its storage reserve"
+step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, serves its sign-in page, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore, refuses a database another schema built before reading it and keeps its storage reserve"
