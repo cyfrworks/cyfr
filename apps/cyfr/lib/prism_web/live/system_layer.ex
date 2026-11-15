@@ -3282,16 +3282,26 @@ defmodule PrismWeb.SystemLayer do
   defp detail(value), do: value
 
   # What a program's change does beyond its row, said before it is
-  # confirmed: a removal ends its sessions and its folder; and every
+  # confirmed: a removal, by a delete or by making the row a tool server
+  # elsewhere (`becomes`), ends its sessions and its folder; and every
   # change to a stored row makes the grants that stand on it, which its
   # confirmation names, ask again.
   defp consequence(%{
          action: "program_definition",
          preview: %{"operation" => operation, "details" => details}
        }) do
+    becomes =
+      case details["becomes"] do
+        address when is_binary(address) ->
+          ["It stops being a program and becomes a tool server elsewhere at #{address}."]
+
+        _stays ->
+          []
+      end
+
     ends =
       cond do
-        operation != "mcp_servers.delete" ->
+        operation != "mcp_servers.delete" and becomes == [] ->
           []
 
         details["folder"] == "scratch" ->
@@ -3308,7 +3318,7 @@ defmodule PrismWeb.SystemLayer do
         _no_stored_row -> []
       end
 
-    case ends ++ grants do
+    case becomes ++ ends ++ grants do
       [] -> nil
       said -> Enum.join(said, " ")
     end

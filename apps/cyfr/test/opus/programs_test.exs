@@ -1894,10 +1894,12 @@ defmodule Opus.ProgramsTest do
       assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "claude")
 
       assert %{
-               "operation" => "mcp_servers.delete",
+               "operation" => "mcp_servers.update",
                "resource" => "claude",
                "details" => %{
                  "folder" => folder,
+                 "becomes" => "https://example.com/mcp",
+                 "becomes_headers" => "none",
                  "grants_asking_again" => [
                    "agent:local.harness",
                    "catalyst:local.harnessbrain"
@@ -1931,6 +1933,105 @@ defmodule Opus.ProgramsTest do
       Sanctum.TestContext.prove!(person, id)
       assert {:ok, _} = update.(%{person | confirmation_id: id}, 2, program)
       assert {:ok, %{transport: "program", epoch: 3}} = Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # A program made a tool server elsewhere is confirmed for that outcome
+    # alone: the program that goes and the row it becomes. Its approval
+    # admits neither the program's delete nor another address.
+    test "a conversion's confirmation admits neither a delete nor another address",
+         %{ctx: ctx, admin: admin, row: row} do
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+
+      convert = fn ctx, url ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => row.epoch,
+          "config" => %{"transport" => "http", "url" => url}
+        })
+      end
+
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "claude"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               convert.(person, "https://example.com/a")
+
+      assert %{
+               "operation" => "mcp_servers.update",
+               "details" => %{
+                 "command" => "npx -y @anthropic-ai/claude-code",
+                 "folder" => folder,
+                 "becomes" => "https://example.com/a",
+                 "becomes_headers" => "none",
+                 "grants_asking_again" => "none"
+               }
+             } = preview(person, id)
+
+      assert folder == row.id
+      Sanctum.TestContext.prove!(person, id)
+      confirmed = %{person | confirmation_id: id}
+
+      for {why, replay} <- [
+            {"the program's delete", fn -> delete.(confirmed) end},
+            {"another address", fn -> convert.(confirmed, "https://example.com/b") end}
+          ] do
+        assert {:error, {:confirmation_required, %{id: other}}} = replay.(), why
+        refute other == id, why
+        assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "claude"), why
+      end
+
+      assert {:ok, _} = convert.(confirmed, "https://example.com/a")
+
+      assert {:ok, %{transport: "http", url: "https://example.com/a", epoch: 2}} =
+               Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # Enabling and disabling are the stated exception to "a moved digest
+    # asks": disabling only stops, and enabling brings back the definition
+    # last confirmed, since every change made while disabled was confirmed.
+    test "a change made while a program is disabled asks, and enabling it afterwards asks " <>
+           "nothing and runs the confirmed definition",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx)
+      mcp_row(ctx, "gh")
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+      toggle = &Provider.handle("mcp_servers", person, %{"action" => &1, "name" => "gh"})
+
+      assert {:ok, %{enabled: false, epoch: 2}} = toggle.("disable")
+
+      update =
+        &Provider.handle("mcp_servers", &1, %{
+          "action" => "update",
+          "name" => "gh",
+          "epoch" => 2,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "mcp",
+            "command" => "npx -y @modelcontextprotocol/server-github --read-only",
+            "env" => %{"GITHUB_TOKEN" => "vault:gh-token"}
+          }
+        })
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person)
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, _} = update.(%{person | confirmation_id: id})
+
+      assert {:ok, %{enabled: true, epoch: 4}} = toggle.("enable")
+      assert [_the_change] = confirmations(person, "mcp_servers.update")
+      assert confirmations(person, "mcp_servers.enable") == []
+
+      {:ok, enabled} = Arca.McpServerStorage.get(actor, "gh")
+      assert {:ok, [%{"name" => "search"}]} = Servers.ensure_started(enabled, ctx)
+
+      assert_receive {:control, "sync",
+                      %{
+                        "programs" => [
+                          %{"command" => "npx -y @modelcontextprotocol/server-github --read-only"}
+                        ]
+                      }, _fields},
+                     2_000
     end
 
     # An approval is given for one row: another row made under its name

@@ -2874,6 +2874,28 @@ defmodule Sanctum.Consent.Commit do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+    |> then(fn
+      :ok -> verify_tool_servers(ctx, Map.get(prep, :tool_servers, []))
+      refused -> refused
+    end)
+  end
+
+  # Each row whose tools the revision grants, read again under the lock the
+  # revision holds on it (`Arca.ConsentStorage`), at the digest the grant
+  # pins: a row deleted, made again under its name, or changed since the
+  # preview refuses the revision rather than shipping a grant that is
+  # stale on arrival.
+  defp verify_tool_servers(ctx, grants) do
+    Enum.reduce_while(grants, :ok, fn %{server_name: name, server_digest: pinned}, :ok ->
+      with {:ok, row} <- Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name),
+           {:ok, digest} <- Sanctum.ToolServerDigest.from_server(row),
+           true <- Plug.Crypto.secure_compare(digest, pinned) do
+        {:cont, :ok}
+      else
+        {:error, :not_found} -> {:halt, {:error, {:tool_server_not_found, name}}}
+        _moved_or_unread -> {:halt, {:error, {:tool_server_unavailable, name}}}
+      end
+    end)
   end
 
   defp live_digest(ctx, %{scope: "share", entry_id: id} = binding) do

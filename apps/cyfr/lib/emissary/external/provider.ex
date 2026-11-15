@@ -468,12 +468,12 @@ defmodule Emissary.External.Provider do
            ) do
         {:ok, %{enabled: true} = server} ->
           stop_process(ctx, name)
-          left_programs(ctx, stored, server)
+          after_change(ctx, stored, server)
           {:ok, ctx |> connect(server) |> with_warnings(server)}
 
         {:ok, server} ->
           stop_process(ctx, name)
-          left_programs(ctx, stored, server)
+          after_change(ctx, stored, server)
           changed(ctx)
           {:ok, server |> summary(%{status: "disabled"}) |> with_warnings(server)}
 
@@ -496,11 +496,19 @@ defmodule Emissary.External.Provider do
   end
 
   # A program made a tool server elsewhere is removed as a program: its
-  # sessions end and its folder is retired, as its delete does.
-  defp left_programs(ctx, %{transport: "program"} = stored, %{transport: "http"}),
+  # sessions end and its folder is retired, as its delete does. A program
+  # whose confirmed definition moved ends its sessions the same way and
+  # keeps its folder, so no session runs on under the old definition.
+  defp after_change(ctx, %{transport: "program"} = stored, %{transport: "http"}),
     do: Emissary.External.Reconciler.row_deleted(ctx.athanor_id, stored)
 
-  defp left_programs(_ctx, _stored, _server), do: :ok
+  defp after_change(ctx, %{transport: "program"} = stored, %{transport: "program"} = server) do
+    if same_definition?(stored, server),
+      do: :ok,
+      else: Opus.Programs.end_mounts(ctx.athanor_id, stored.id)
+  end
+
+  defp after_change(_ctx, _stored, _server), do: :ok
 
   defp kept_headers(_ctx, %{"keep_headers" => []} = args, _epoch), do: {:ok, args}
 
@@ -920,7 +928,8 @@ defmodule Emissary.External.Provider do
   # and a program that stops being one is its removal. Whether a program's
   # definition moved is the one rule its grants are held to: its
   # definition's digest (`Sanctum.ToolServerDigest.definition/1`), every
-  # value of its record and each literal's value with it.
+  # value of its record and each literal's value with it. Enabling and
+  # disabling are the one exception (`handle_enable_disable/3`).
   # A confirmed change to a stored row names the grants that stand on it
   # (`Sanctum.Mount.granted_to/2`): its digest moves, so each asks again.
   defp confirm_change(ctx, name, nil, %{transport: "program"} = attrs) do
@@ -938,20 +947,36 @@ defmodule Emissary.External.Provider do
 
     if same_definition?(stored, row),
       do: :ok,
-      else: confirm_with_grants(ctx, "mcp_servers.update", name, stored, row)
+      else: confirm_with_grants(ctx, "mcp_servers.update", name, stored, row, nil)
   end
 
-  defp confirm_change(ctx, name, %{transport: "program"} = stored, _http_or_nothing),
-    do: confirm_with_grants(ctx, "mcp_servers.delete", name, stored, stored)
+  # A program made a tool server elsewhere is bound to both halves: the
+  # program that goes and the whole definition the row becomes, so the
+  # confirmation admits that outcome alone, never a delete or another
+  # address.
+  defp confirm_change(ctx, name, %{transport: "program"} = stored, %{transport: "http"} = attrs),
+    do:
+      confirm_with_grants(
+        ctx,
+        "mcp_servers.update",
+        name,
+        stored,
+        stored,
+        Map.merge(stored, attrs)
+      )
+
+  defp confirm_change(ctx, name, %{transport: "program"} = stored, nil),
+    do: confirm_with_grants(ctx, "mcp_servers.delete", name, stored, stored, nil)
 
   defp confirm_change(ctx, name, stored, %{transport: "program"} = attrs),
-    do: confirm_with_grants(ctx, "mcp_servers.create", name, stored, Map.merge(stored, attrs))
+    do:
+      confirm_with_grants(ctx, "mcp_servers.create", name, stored, Map.merge(stored, attrs), nil)
 
   defp confirm_change(_ctx, _name, _tool_server, _tool_server_or_nothing), do: :ok
 
-  defp confirm_with_grants(ctx, operation, name, stored, row) do
+  defp confirm_with_grants(ctx, operation, name, stored, row, becomes) do
     case Sanctum.Mount.granted_to(ctx.athanor_id, stored) do
-      {:ok, grants} -> confirmed(ctx, definition_change(operation, name, row, grants))
+      {:ok, grants} -> confirmed(ctx, definition_change(operation, name, row, grants, becomes))
       {:error, :unavailable} -> {:error, grants_unavailable(name)}
     end
   end
@@ -997,17 +1022,22 @@ defmodule Emissary.External.Provider do
   hosts, the memory and disk bounds and the sign-in command; and beside
   it the mark. A change to a stored row also names `grants`, the
   components whose grant stands on the row and asks again
-  (`Sanctum.Mount.granted_to/2`), `nil` for an add of a new row. The
+  (`Sanctum.Mount.granted_to/2`), `nil` for an add of a new row. A
+  program made a tool server elsewhere names `becomes`, the row it
+  becomes: its address and each header by its name with the entry it
+  names (`becomes`, `becomes_headers`), and its definition's digest
+  among the arguments, so the confirmation admits that outcome alone. The
   arguments are the same definition with the row's stored config beside
   it, so a literal's value is bound without being shown, and the row's
   id and epoch, so an approval given for one row admits no other row
   made under its name. `{:error, _}` for a row that is no program or
   whose record does not read.
   """
-  @spec definition_change(String.t(), String.t(), map(), [String.t()] | nil) ::
+  @spec definition_change(String.t(), String.t(), map(), [String.t()] | nil, map() | nil) ::
           {:ok, map()} | {:error, term()}
-  def definition_change(operation, name, row, grants) do
-    with {:ok, record} <- Sanctum.ToolServerDigest.recorded(row) do
+  def definition_change(operation, name, row, grants, becomes \\ nil) do
+    with {:ok, record} <- Sanctum.ToolServerDigest.recorded(row),
+         {:ok, becoming, becomes_digest} <- becoming(becomes) do
       kept? = record["folder"] == "kept"
 
       shown =
@@ -1026,6 +1056,7 @@ defmodule Emissary.External.Provider do
         }
         |> put_present("sign_in_command", record["sign_in_command"])
         |> put_present("grants_asking_again", if(grants == [], do: "none", else: grants))
+        |> Map.merge(becoming)
 
       {:ok,
        %{
@@ -1033,10 +1064,26 @@ defmodule Emissary.External.Provider do
          arguments:
            shown
            |> Map.merge(%{"name" => name, "config" => row.config_json, "row" => row.id})
-           |> put_present("epoch", Map.get(row, :epoch)),
+           |> put_present("epoch", Map.get(row, :epoch))
+           |> put_present("becomes_digest", becomes_digest),
          resource: name,
          details: shown
        }}
+    end
+  end
+
+  # What a program made a tool server elsewhere becomes, as shown: its
+  # address and each header by its name with the entry it names, a
+  # literal by its name alone; and its definition's digest, which binds
+  # every value, a literal's included.
+  defp becoming(nil), do: {:ok, %{}, nil}
+
+  defp becoming(row) do
+    with {:ok, record} <- Sanctum.ToolServerDigest.recorded(row),
+         {:ok, digest} <- Sanctum.ToolServerDigest.definition(row) do
+      {:ok,
+       %{"becomes" => record["address"], "becomes_headers" => environment(record["headers"])},
+       digest}
     end
   end
 
@@ -1395,6 +1442,12 @@ defmodule Emissary.External.Provider do
   defp disabled(name),
     do: {:invalid_argument, "Server '#{name}' is disabled — enable it first"}
 
+  # Enabling and disabling ask no confirmation, though `enabled` is in the
+  # definition's digest: the one stated exception to the rule that a moved
+  # digest asks (`confirm_change/4`). Disabling only stops the program;
+  # enabling brings back exactly the definition last confirmed, since
+  # every change made while it was disabled was confirmed itself. A grant
+  # made at the enabled definition stands again once it is enabled.
   defp handle_enable_disable(ctx, args, enabled) do
     action_name = if enabled, do: "enable", else: "disable"
 

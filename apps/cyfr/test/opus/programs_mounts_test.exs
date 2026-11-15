@@ -199,6 +199,37 @@ defmodule Opus.ProgramsMountsTest do
       assert retire["athanor"] == ctx.athanor_id
     end
 
+    # A confirmed change to a program's definition ends what runs under
+    # the old one at once, as a removal does, and keeps its folder.
+    test "a confirmed change ends its running sign-in at once and keeps its home",
+         %{ctx: ctx} do
+      start_reconciler()
+      row = driven_row(ctx)
+      token = sign_in!(ctx, row)
+      :ok = Programs.sign_in_attach(admin(ctx), token, self())
+
+      assert {:ok, %{epoch: 2}} =
+               Sanctum.TestContext.confirming(admin(ctx), fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "update",
+                   "name" => "claude",
+                   "epoch" => row.epoch,
+                   "config" => %{
+                     "transport" => "program",
+                     "mark" => "driven",
+                     "home" => "kept",
+                     "command" => "npx -y @anthropic-ai/claude-code --another",
+                     "login_command" => row.login_command,
+                     "env" => %{}
+                   }
+                 })
+               end)
+
+      assert_receive {Opus.Programs, ^token, {:ended, :row_ended}}, 3_000
+      home_id = row.id
+      refute_receive {:control, "home", %{"op" => "retire", "home_id" => ^home_id}, _}, 300
+    end
+
     test "with a scratch home retires nothing", %{ctx: ctx} do
       start_reconciler()
       driven_row(ctx, "scratchy", "scratch")

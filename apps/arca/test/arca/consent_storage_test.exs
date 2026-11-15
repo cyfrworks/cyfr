@@ -427,6 +427,7 @@ defmodule Arca.ConsentStorageTest do
          %{athanor: athanor} do
       actor = Prima.Actor.in_athanor(athanor)
       row = program!(athanor, "github")
+      program!(athanor, "another")
 
       [granting, bound, elsewhere] =
         for label <- ["granted", "bound", "elsewhere"] do
