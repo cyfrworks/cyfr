@@ -1906,9 +1906,12 @@ defmodule Cyfr.Boundaries do
     # for and consumes that one action only.
     # `authorize_interactive/1`: a program's terminal session is reached
     # only by its person at a screen, as the gate reads an interactive
-    # caller (`Opus.Programs`).
+    # caller (`Opus.Programs`); `authorize_interactive_in_chain/1`: or by
+    # the turn that started it, whose chain the gate reads as a person's
+    # own there.
     "Sanctum.Consent" => [
       authorize_interactive: 1,
+      authorize_interactive_in_chain: 1,
       binding_live: 4,
       confirm_program_definition: 2,
       head_consent: 2,

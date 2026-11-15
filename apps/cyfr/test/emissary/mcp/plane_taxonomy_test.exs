@@ -147,9 +147,12 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
               do: "#{tool}.#{verb}"
         )
 
+      # `program`: Aqua's own runs of a program, a turn's alone.
       assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
                                             source.write source.edit source.delete
-                                            crew.ask crew.list threads.list threads.read))
+                                            crew.ask crew.list threads.list threads.read
+                                            program.list program.start program.send
+                                            program.read program.wait program.stop))
 
       external =
         MapSet.new(

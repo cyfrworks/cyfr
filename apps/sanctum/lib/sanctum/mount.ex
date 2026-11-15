@@ -209,13 +209,16 @@ defmodule Sanctum.Mount do
   end
 
   @doc """
-  The components whose grant stands on the row `row` (`%{id, name}`) of
-  `athanor_id`: the source of each profile there, not revoked, whose head
-  binds the row to a login need or grants its tools
+  The grants that stand on the row `row` (`%{id, name}`) of `athanor_id`:
+  the source of each profile there, not revoked, whose head binds the
+  row to a login need or grants its tools
   (`Arca.ConsentStorage.head_profiles_on_row/2`, the same answer the
-  row's delete blocks), sorted, each once. They are the grants a removal
-  of the row asks again, which its confirmation names before it is
-  given. `{:error, :unavailable}` when the store cannot answer.
+  row's delete blocks), and each agent with a standing answer to start
+  that program (`Arca.ToolGrantStorage.on_program_row/2`, which the
+  row's delete ends), as `"<agent>: every start of <row>"`; sorted, each
+  once. They are the grants a change or removal of the row asks again,
+  which its confirmation names before it is given.
+  `{:error, :unavailable}` when the store cannot answer.
   """
   @spec granted_to(String.t(), %{
           required(:id) => String.t(),
@@ -228,15 +231,14 @@ defmodule Sanctum.Mount do
     actor = Prima.Actor.in_athanor(athanor_id)
 
     with {:ok, ids} <- Arca.ConsentStorage.head_profiles_on_row(actor, row),
-         {:ok, profiles} <- profiles(actor, ids) do
-      {:ok,
-       for(
-         %{status: status, source_ref: source} <- profiles,
-         status != "revoked",
-         uniq: true,
-         do: source
-       )
-       |> Enum.sort()}
+         {:ok, profiles} <- profiles(actor, ids),
+         {:ok, answers} <- Arca.ToolGrantStorage.on_program_row(actor, id) do
+      sources =
+        for %{status: status, source_ref: source} <- profiles, status != "revoked", do: source
+
+      starts = for %{agent_name: agent} <- answers, do: "#{agent}: every start of #{name}"
+
+      {:ok, Enum.sort(Enum.uniq(sources ++ starts))}
     else
       {:error, _unanswered} -> {:error, :unavailable}
     end

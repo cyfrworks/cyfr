@@ -16,6 +16,10 @@ defmodule Aqua.Standing do
   decided here, on what the intent carries, and again where the row is
   built.
 
+  A standing allow for an action that names a program row covers that
+  row alone: its constraint is the row the call names, never one the card
+  chose, so no answer covers every program.
+
   A standing allow may carry the bounds the person chose: the lifecycle
   it ends with, a deadline, the resources it covers and the outside
   sources it also follows (none unless chosen, so an allow asks again
@@ -94,7 +98,13 @@ defmodule Aqua.Standing do
 
   def rows(_ctx, _turn, _proposal, :once, bounds), do: unbounded(bounds)
 
-  def rows(%Context{} = ctx, turn, %{"tool" => tool, "action" => action}, scope, bounds)
+  def rows(
+        %Context{} = ctx,
+        turn,
+        %{"tool" => tool, "action" => action} = proposal,
+        scope,
+        bounds
+      )
       when scope in [:thread, :always, :never] and is_binary(tool) and is_binary(action) do
     {grant_scope, effect} =
       case scope do
@@ -115,13 +125,40 @@ defmodule Aqua.Standing do
     # The rule is identity's, and so are the row, its tenant and who
     # decided: built from the context and written by the turn store in the
     # decision's own transaction.
-    with {:ok, bound} <- bound(ctx, turn, {grant_scope, effect}, bounds),
+    with {:ok, bounds} <- own_row(proposal, effect, bounds),
+         {:ok, bound} <- bound(ctx, turn, {grant_scope, effect}, bounds),
          {:ok, row} <- Sanctum.ToolGrants.grant_row(ctx, Map.merge(attrs, bound)) do
       {:ok, [row]}
     end
   end
 
   def rows(_ctx, _turn, _proposal, _scope, bounds), do: unbounded(bounds)
+
+  # An allow for an action that names a program row stands for the row
+  # the call names and no other (`Sanctum.ToolGrants`): its constraint is
+  # that row, whatever the card sent, written only while the row is the
+  # one the card showed (`program_epoch`, the call's own epoch); a call
+  # that names none takes no standing answer.
+  defp own_row(%{"tool" => tool, "action" => action} = proposal, "allow", bounds) do
+    case Sanctum.Catalog.action_declaration("#{tool}.#{action}") do
+      {:ok, %{resource: {argument, :program_row}}} ->
+        case get_in(proposal, ["args", argument]) do
+          row_id when is_binary(row_id) ->
+            {:ok,
+             bounds
+             |> Map.put(:constraint, %{kind: "program_row", patterns: [row_id]})
+             |> Map.put(:program_epoch, get_in(proposal, ["args", "epoch"]))}
+
+          _none ->
+            {:error, {:scope_not_permitted, :unconstrained_program}}
+        end
+
+      _other ->
+        {:ok, bounds}
+    end
+  end
+
+  defp own_row(_proposal, _effect, bounds), do: {:ok, bounds}
 
   # An answer that writes no row takes no bound.
   defp unbounded(bounds) do
@@ -139,7 +176,8 @@ defmodule Aqua.Standing do
        Map.merge(lifecycle, %{
          expires_at: Map.get(bounds, :until),
          constraint: Map.get(bounds, :constraint),
-         sources: Map.get(bounds, :sources)
+         sources: Map.get(bounds, :sources),
+         program_epoch: Map.get(bounds, :program_epoch)
        })}
     end
   end

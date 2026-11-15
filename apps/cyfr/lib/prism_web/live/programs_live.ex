@@ -1570,6 +1570,8 @@ defmodule PrismWeb.ProgramsLive do
 
   # A program's terminal: Open with the words to follow its command, and
   # each of the person's running sessions of it, to show again or close.
+  # One Aqua started is listed and closed here, never shown: its screen is
+  # its turn's alone.
   defp terminal_actions(assigns) do
     ~H"""
     <div class="space-y-2 pt-2 border-t border-gray-800" data-test="terminal-actions">
@@ -1602,6 +1604,7 @@ defmodule PrismWeb.ProgramsLive do
             do: ", started by Aqua"}{if session.kept, do: ", kept"}
         </span>
         <button
+          :if={session.by != :aqua}
           type="button"
           phx-click="show_terminal"
           phx-value-session={session.session}

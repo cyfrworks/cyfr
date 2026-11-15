@@ -34,7 +34,8 @@ defmodule Sanctum.ToolGrants do
       execution, a turn or a schedule, and that row's id), a deadline
       still to come, and a constraint, a resource kind and its patterns,
       only for an action that declares an argument naming a resource of
-      that kind (`Prima.Operation`'s `resource:`);
+      that kind (`Prima.Operation`'s `resource:`), and always, naming
+      one row, for an action whose resource is a program row;
     * an allow names the outside sources it covers (`Prima.Source`s,
       each a named outside source; none by default);
     * a deny carries none of them and always stands, so a standing deny
@@ -85,6 +86,10 @@ defmodule Sanctum.ToolGrants do
           | :no_resource
           | :resource_kind
           | :invalid_constraint
+          | :unconstrained_program
+          | :no_program
+          | :program_changed
+          | :program_unavailable
           | :invalid_sources
 
   @typedoc "An answer the rule refuses to let stand."
@@ -161,12 +166,14 @@ defmodule Sanctum.ToolGrants do
           {:ok, map()} | {:error, :invalid_argument | :forbidden | refusal()}
   def grant_row(%Context{} = ctx, attrs) when is_map(attrs) do
     with {:ok, row} <- build(ctx, attrs, :decision),
-         :ok <- check_standing(row, DateTime.utc_now()) do
+         :ok <- check_standing(row, DateTime.utc_now()),
+         :ok <- program_shown(ctx, row) do
       {:ok, row}
     else
       {:error, :no_athanor} -> {:error, :forbidden}
       {:error, {:invalid, _field_errors}} -> {:error, :invalid_argument}
       {:error, {:scope_not_permitted, _reason}} = refusal -> refusal
+      {:error, :unavailable} -> refuse(:program_unavailable)
     end
   end
 
@@ -180,24 +187,75 @@ defmodule Sanctum.ToolGrants do
           | {:error, :unavailable | :no_athanor | {:invalid, field_errors()} | refusal()}
   def put(%Context{} = ctx, attrs) when is_map(attrs) do
     with {:ok, row} <- build(ctx, attrs, :decision),
-         :ok <- check_standing(row, DateTime.utc_now()) do
+         :ok <- check_standing(row, DateTime.utc_now()),
+         :ok <- program_shown(ctx, row) |> available() do
       case Arca.ToolGrantStorage.put(row) do
         {:ok, grant} -> {:ok, grant}
+        {:error, reason} when reason in [:no_program, :program_changed] -> refuse(reason)
         {:error, {:invalid, _field_errors} = invalid} -> {:error, invalid}
         {:error, _unreadable} -> {:error, :unavailable}
       end
     end
   end
 
-  @doc "Withdraw a decision in the caller's athanor. Idempotent."
+  @doc """
+  Withdraw a decision in the caller's athanor, by its key. Idempotent. An
+  answer to an action whose resource is a program row is one program's
+  (`program_row`): a revoke of that action names the program, and one
+  that names none is refused, so no program's answer is removed, or kept,
+  by a key that names no program.
+  """
   @spec revoke(Context.t(), map()) ::
           :ok | {:error, :unavailable | :no_athanor | {:invalid, field_errors()}}
   def revoke(%Context{} = ctx, attrs) when is_map(attrs) do
-    with {:ok, key} <- build(ctx, attrs, :key) do
+    with {:ok, key} <- build(ctx, attrs, :key),
+         :ok <- names_its_program(key) do
       case Arca.ToolGrantStorage.delete(key) do
         :ok -> :ok
         {:error, _unreadable} -> {:error, :unavailable}
       end
+    end
+  end
+
+  # An answer that is one program's is given only for a program of the
+  # caller's athanor that stands, at the epoch the card showed when it
+  # names one: read here so a decision says why, and again under the row's
+  # lock where it is written (`Arca.ToolGrantStorage.put/1`), which the
+  # row's change and removal take too.
+  # A store that cannot say whether the program stands is no answer that
+  # it does: the standing answer is refused, in words, and nothing written.
+  defp available({:error, :unavailable}), do: refuse(:program_unavailable)
+  defp available(answer), do: answer
+
+  defp program_shown(_ctx, %{program_row: ""}), do: :ok
+
+  defp program_shown(%Context{} = ctx, %{program_row: row_id} = row) do
+    case Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id) do
+      {:ok, %{transport: "program", epoch: epoch}} ->
+        if Map.get(row, :program_epoch) in [nil, epoch],
+          do: :ok,
+          else: refuse(:program_changed)
+
+      {:ok, _not_a_program} ->
+        refuse(:no_program)
+
+      {:error, :not_found} ->
+        refuse(:no_program)
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp program_shown(_ctx, _row), do: :ok
+
+  defp names_its_program(%{tool: tool, action: action, program_row: row}) do
+    case declaration(tool, action) do
+      {:ok, %{resource: {_argument, :program_row}}} when row == "" ->
+        {:error, {:invalid, %{program_row: ["names the program whose answer is withdrawn"]}}}
+
+      _named_or_another ->
+        :ok
     end
   end
 
@@ -213,8 +271,10 @@ defmodule Sanctum.ToolGrants do
   together, a deadline is after `now`, a constraint is a resource kind
   the action declares with patterns in the store's one grammar for it
   (`Arca.ToolGrantStorage.constraint_errors/2`): a storage path names one
-  path or a folder ending in `/`, never a wildcard, and the sources it
-  names are named outside sources. Both writes apply it, and a reader
+  path or a folder ending in `/`, never a wildcard, a program row one
+  row's id, and an action whose resource is a program row takes an allow
+  only constrained to exactly one row; and the sources it names are
+  named outside sources. Both writes apply it, and a reader
   applies it to every row it reads back.
   """
   @spec check_standing(map(), DateTime.t()) :: :ok | {:error, refusal()}
@@ -233,8 +293,8 @@ defmodule Sanctum.ToolGrants do
   execution, turn or the schedule its execution was started by, the
   call's resource argument lies inside its constraint (a path read as the
   storage door reads it, refused when absolute or unsafe, then matched as
-  the call spells it by `Prima.ComponentPath.path_granted?/2`, or a host
-  as the egress policy matches it), and every outside source the call's
+  the call spells it by `Prima.ComponentPath.path_granted?/2`, a host
+  as the egress policy matches it, or a program row's id whole), and every outside source the call's
   turn has read is one the allow names (`Prima.Source.uncovered/2`).
 
   A store that cannot be read, a call that names no thread or agent, a
@@ -348,9 +408,14 @@ defmodule Sanctum.ToolGrants do
   # resource's kind, with patterns in the one grammar the store holds a
   # row to (`Arca.ToolGrantStorage.constraint_errors/2`), so no answer this
   # rule lets stand is refused by the write. A stored constraint that does
-  # not decode (`:corrupt`) is none of these.
+  # not decode (`:corrupt`) is none of these. An action whose resource is
+  # a program row stands only constrained to one row: an allow covering
+  # every program, or several, is no answer a person can give.
   defp constraint(attrs, resource) do
     case {Map.get(attrs, :constraint), resource} do
+      {nil, {_argument, :program_row}} ->
+        refuse(:unconstrained_program)
+
       {nil, _resource} ->
         :ok
 
@@ -362,9 +427,16 @@ defmodule Sanctum.ToolGrants do
 
         case constraint_parts(constraint) do
           {:ok, ^declared, patterns} ->
-            if Arca.ToolGrantStorage.constraint_errors(declared, patterns) == [],
-              do: :ok,
-              else: refuse(:invalid_constraint)
+            cond do
+              Arca.ToolGrantStorage.constraint_errors(declared, patterns) != [] ->
+                refuse(:invalid_constraint)
+
+              kind == :program_row and length(patterns) != 1 ->
+                refuse(:unconstrained_program)
+
+              true ->
+                :ok
+            end
 
           {:ok, _other, _patterns} ->
             refuse(:resource_kind)
@@ -375,8 +447,12 @@ defmodule Sanctum.ToolGrants do
     end
   end
 
-  defp constraint_parts(%{kind: kind, patterns: patterns}) when is_binary(kind),
-    do: {:ok, kind, patterns}
+  defp constraint_parts(%{} = constraint) do
+    case Arca.ToolGrantStorage.read_constraint(constraint) do
+      {kind, patterns} when is_binary(kind) -> {:ok, kind, patterns}
+      _unread -> :error
+    end
+  end
 
   defp constraint_parts(_constraint), do: :error
 
@@ -503,6 +579,9 @@ defmodule Sanctum.ToolGrants do
       Prima.Network.domain_allowed?(value, patterns)
   end
 
+  # A program row is named by its id, whole.
+  defp inside?("program_row", value, patterns) when is_binary(value), do: value in patterns
+
   defp inside?(_kind, _value, _patterns), do: false
 
   # ---------------------------------------------------------------------------
@@ -525,7 +604,11 @@ defmodule Sanctum.ToolGrants do
         agent_name: Map.fetch!(attrs, :agent_name),
         tool: Map.fetch!(attrs, :tool),
         action: Map.fetch!(attrs, :action),
-        thread_id: if(scope == "thread", do: Map.fetch!(attrs, :thread_id))
+        thread_id: if(scope == "thread", do: Map.fetch!(attrs, :thread_id)),
+        # The program row the answer is one program's, `""` for any other
+        # (`Arca.Schemas.ToolGrant.key_row/1`): a decision's from its
+        # constraint, a key's as it names it.
+        program_row: Arca.ToolGrantStorage.key_row(attrs)
       }
 
       case kind do
@@ -541,7 +624,8 @@ defmodule Sanctum.ToolGrants do
           {:ok,
            key
            |> Map.merge(%{effect: attrs.effect, granted_by: ctx.user_id})
-           |> Map.merge(bounds)}
+           |> Map.merge(bounds)
+           |> Prima.MapUtil.put_present(:program_epoch, Map.get(attrs, :program_epoch))}
       end
     end
   end

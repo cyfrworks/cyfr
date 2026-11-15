@@ -490,7 +490,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       athanor_id: thread.athanor_id,
       thread_id: thread.id,
       kind: :grants,
-      data: MapSet.new([{"aqua", "files", "write"}])
+      data: MapSet.new([{"aqua", "files", "write", nil}])
     })
 
     render(pane)
@@ -500,6 +500,69 @@ defmodule PrismWeb.ThreadPaneLiveTest do
              pane,
              ~s([data-test="standing-answers"] button[phx-click="revoke_grant"][phx-value-tool="files"][phx-value-action="write"])
            )
+  end
+
+  test "a program's standing answer is listed by the program's name, and withdrawing it withdraws that program's alone",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    rows =
+      for name <- ["gh", "jq"] do
+        {:ok, row} =
+          Arca.McpServerStorage.insert(actor, %{
+            cap: 0,
+            name: name,
+            transport: "program",
+            mark: "driven",
+            url: nil,
+            config_json: Jason.encode!(%{"command" => name, "env" => %{}})
+          })
+
+        {:ok, _} =
+          Sanctum.ToolGrants.put(here, %{
+            scope: "thread",
+            effect: "allow",
+            thread_id: thread.id,
+            agent_name: "aqua",
+            tool: "program",
+            action: "start",
+            constraint: %{kind: "program_row", patterns: [row.id]}
+          })
+
+        row
+      end
+
+    [gh, jq] = rows
+    {:ok, grants} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)
+    pane = open_pane(conn, athanor, thread)
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :grants,
+      data: grants
+    })
+
+    render(pane)
+    assert has_element?(pane, ~s([data-test="standing-answer"]), "every start of gh")
+    assert has_element?(pane, ~s([data-test="standing-answer"]), "every start of jq")
+
+    pane
+    |> element(~s([data-test="standing-answer"] button[phx-value-program="#{gh.id}"]))
+    |> render_click()
+
+    withdrawn = fn ->
+      match?(
+        {:ok, left} when is_struct(left, MapSet),
+        Aqua.ToolGrants.allowed_by_agent(here, thread.id)
+      ) and
+        MapSet.size(elem(Aqua.ToolGrants.allowed_by_agent(here, thread.id), 1)) == 1
+    end
+
+    assert Enum.any?(1..300, fn _ -> withdrawn.() or (Process.sleep(10) && false) end)
+
+    assert {:ok, left} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)
+    assert left == MapSet.new([{"aqua", "program", "start", %{id: jq.id, name: "jq"}}])
   end
 
   test "what the pane pushes names the pane it is for, and a page it points at is a link, never pushed",
@@ -698,7 +761,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     event.(:turn_starting, user.user_id)
     event.(:queued, 2)
     event.(:tool_activity, [%{tool: "files.read", status: :running, preview: "notes.md"}])
-    event.(:grants, MapSet.new([{"aqua", "files", "read"}, {"aqua", "notes", "write"}]))
+    event.(:grants, MapSet.new([{"aqua", "files", "read", nil}, {"aqua", "notes", "write", nil}]))
     event.(:restart_prompt, %{text: "two files", user_id: user.user_id})
 
     # A file on its way up.

@@ -1164,7 +1164,7 @@ defmodule Emissary.External.Provider do
          {:ok, rows} <- open_size(args, "rows", 24),
          {:ok, cols} <- open_size(args, "cols", 80),
          {:ok, server} <- program_row(ctx, name) do
-      opts = %{rows: rows, cols: cols, args: words, by: :person}
+      opts = %{rows: rows, cols: cols, args: words}
 
       case Opus.Programs.start(ctx, server.id, opts) do
         {:ok, session} -> {:ok, %{session: session, program: name}}

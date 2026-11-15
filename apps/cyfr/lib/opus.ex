@@ -614,6 +614,20 @@ defmodule Opus do
   defdelegate release_turn_root(ctx, execution_id, opts), to: TurnRoot, as: :release
 
   @doc """
+  What a program's start shows on its card, read from the row now
+  (`Opus.Programs.card/4`).
+  """
+  @spec program_card(Context.t(), String.t(), term(), term()) :: {:ok, map()} | {:error, term()}
+  defdelegate program_card(ctx, row_id, epoch, words), to: Opus.Programs, as: :card
+
+  @doc """
+  End every program session the turn `turn_id` of the athanor started, as
+  its turn ended (`Opus.Programs.end_turn/2`). Answers at once.
+  """
+  @spec end_turn_programs(String.t(), String.t()) :: :ok
+  defdelegate end_turn_programs(athanor_id, turn_id), to: Opus.Programs, as: :end_turn
+
+  @doc """
   Aqua's one way to end the occurrence a turn of a schedule's line ran:
   through the scheduler's one ending, as the turn's root execution row
   says (`execution_id`), or, for a turn that never started, as a claim

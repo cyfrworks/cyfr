@@ -185,6 +185,161 @@ defmodule PrismWeb.AquaApprovalCardTest do
   # A canvas write's card names the streams the version reads, from the
   # proposal the approval binds, each feed by its name; another call's
   # card says nothing of streams.
+  describe "a program's start" do
+    defp program_card do
+      card(%{
+        "action_kind" => "execute",
+        "program" => %{
+          "row" => "mcp_gh",
+          "name" => "gh",
+          "command" => "gh --hostname github.com",
+          "epoch" => 3,
+          "folder" => "its own folder",
+          "hosts" => "api.github.com"
+        },
+        "proposal" => %{
+          "tool" => "program",
+          "action" => "start",
+          "args" => %{
+            "program" => "mcp_gh",
+            "epoch" => 3,
+            "terminal_args" => ["repo", "view", "a b", "it's", "x\ey"]
+          }
+        }
+      })
+    end
+
+    test "shows the program, its folder and hosts, its pinned command and every word, quoted, unfolded" do
+      html = program_card()
+      doc = LazyHTML.from_fragment(html)
+      shown = LazyHTML.query(doc, ~s([data-test="approval-program"]))
+      text = shown |> LazyHTML.text() |> String.replace(~r/\s+/, " ")
+
+      assert text =~ "runs gh"
+      assert text =~ "in its own folder, reaching api.github.com"
+
+      command = LazyHTML.query(doc, ~s([data-test="approval-program-command"]))
+
+      assert LazyHTML.text(command) ==
+               ~S(gh --hostname github.com "repo" "view" "a b" "it's" "x\u{1B}y")
+
+      assert doc |> LazyHTML.query(~s([data-test="approval-program-word"])) |> Enum.count() == 5
+
+      # Not inside the folded details: shown as the card opens.
+      assert doc |> LazyHTML.query(~s(details [data-test="approval-program"])) |> Enum.count() ==
+               0
+    end
+
+    test "draws every word whole, however long, quoted and escaped, with nothing cut" do
+      # 32 words of 256 characters each, multi-byte, with quotes and
+      # backslashes: the most a start's bounds let through.
+      words =
+        for i <- 1..32 do
+          word = String.slice(String.duplicate(~s(é"\\#{i}), 100), 0, 256)
+          assert String.length(word) == 256
+          word
+        end
+
+      html =
+        card(%{
+          "action_kind" => "execute",
+          "program" => %{
+            "row" => "mcp_gh",
+            "name" => "gh",
+            "command" => "gh",
+            "epoch" => 3,
+            "folder" => "its own folder",
+            "hosts" => "every public host"
+          },
+          "proposal" => %{
+            "tool" => "program",
+            "action" => "start",
+            "args" => %{"program" => "mcp_gh", "epoch" => 3, "terminal_args" => words}
+          }
+        })
+
+      shown =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-test="approval-program-word"]))
+        |> Enum.map(&LazyHTML.text/1)
+
+      expected =
+        for word <- words,
+            do:
+              ~s(") <>
+                (word |> String.replace("\\", "\\\\") |> String.replace(~s("), ~s(\\"))) <>
+                ~s(")
+
+      assert shown == expected
+    end
+
+    test "a character a reader could not see is drawn as its code point" do
+      for {char, spelled} <- [
+            {<<0x202E::utf8>>, ~S(\u{202E})},
+            {<<0x200B::utf8>>, ~S(\u{200B})},
+            {<<0x2028::utf8>>, ~S(\u{2028})},
+            {<<1>>, ~S(\u{1})}
+          ] do
+        html =
+          card(%{
+            "action_kind" => "execute",
+            "program" => %{
+              "row" => "mcp_gh",
+              "name" => "gh",
+              "command" => "gh",
+              "epoch" => 3,
+              "folder" => "its own folder",
+              "hosts" => "every public host"
+            },
+            "proposal" => %{
+              "tool" => "program",
+              "action" => "start",
+              "args" => %{
+                "program" => "mcp_gh",
+                "epoch" => 3,
+                "terminal_args" => ["first" <> char <> "last"]
+              }
+            }
+          })
+
+        [word] =
+          html
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.query(~s([data-test="approval-program-word"]))
+          |> Enum.map(&LazyHTML.text/1)
+
+        assert word == ~s("first) <> spelled <> ~s(last")
+        refute String.contains?(word, char)
+      end
+    end
+
+    test "one that does not carry what it runs is shown, never approved" do
+      html =
+        card(%{
+          "action_kind" => "execute",
+          "proposal" => %{
+            "tool" => "program",
+            "action" => "start",
+            "args" => %{"program" => "mcp_gh", "epoch" => 3, "terminal_args" => []}
+          }
+        })
+
+      assert html =~ "This card cannot show what the program would run, so it cannot be approved."
+      assert %{once: false, run: false, until: false, always: false} = offers(html)
+    end
+
+    test "says what every start widens in plain words, and chooses nothing until pressed" do
+      html = program_card()
+
+      assert html =~ "also approve every start of gh, whatever follows its"
+      assert html =~ "command, in its own folder, reaching api.github.com:"
+      refute html =~ "also approve:"
+      assert %{once: true, run: true, until: true, always: true, limit: false} = offers(html)
+      refute html =~ ~r/<input[^>]*checked/
+    end
+  end
+
   test "a canvas write's card names the streams the version reads" do
     streams_of = fn html ->
       case Regex.run(~r/data-test="approval-canvas-streams"[^>]*>(.*?)<\/div>/s, html,

@@ -1305,6 +1305,11 @@ defmodule Aqua.Loop do
       :ok ->
         {runnable, cards + 1, setup}
 
+      # Refused before it asks: a card that cannot show what it would run.
+      {:refuse, message} ->
+        close(state, step, call, {:error, {:denied, message}})
+        {runnable, cards, setup}
+
       {:error, reason} ->
         close(state, step, call, {:error, describe(reason)})
         {runnable, cards, setup}
@@ -1402,7 +1407,7 @@ defmodule Aqua.Loop do
       "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
         "was here to give it."
 
-    if Aqua.Standing.offered?(Policy.card(call), :thread),
+    if Aqua.Standing.offered?(Policy.standing_rule(call), :thread),
       do:
         needed <>
           " To allow it next time, ask Aqua for it once in this thread and choose " <>
@@ -1411,8 +1416,16 @@ defmodule Aqua.Loop do
   end
 
   # A launch's card binds the turn's sources it shows and what they let
-  # flow to the launched grant (`Policy.launch_flow/3`), read now.
+  # flow to the launched grant (`Policy.launch_flow/3`), read now. A
+  # program's start shows what will run, read now, or opens no card and is
+  # refused: no details, no card.
   defp open_card(%State{} = state, step, %Call{} = call, card_opts) do
+    with {:ok, program} <- card_program(state, call) do
+      open_card(state, step, call, card_opts, program)
+    end
+  end
+
+  defp open_card(%State{} = state, step, %Call{} = call, card_opts, program) do
     sources = shown_sources(state)
 
     launch =
@@ -1423,7 +1436,7 @@ defmodule Aqua.Loop do
     intent =
       Policy.card(
         call,
-        [id: Prima.UUID7.generate_id("apr"), sources: sources] ++ launch ++ card_opts
+        [id: Prima.UUID7.generate_id("apr"), sources: sources] ++ launch ++ program ++ card_opts
       )
       |> Map.put("tool_call_id", call.tool_call_id)
 
@@ -1437,6 +1450,19 @@ defmodule Aqua.Loop do
       {:error, _} = error -> error
     end
   end
+
+  defp card_program(
+         %State{} = state,
+         %Call{kind: :catalog, tool: "program", action: "start"} = call
+       ) do
+    case Policy.program_shown(state.spec.ctx, call) do
+      {:ok, %{} = shown} -> {:ok, [program: shown]}
+      {:refuse, message} -> {:refuse, message}
+      {:ok, nil} -> {:refuse, "program.start: what it would run could not be read"}
+    end
+  end
+
+  defp card_program(%State{}, %Call{}), do: {:ok, []}
 
   # Every group's outcome rides out: a group that stopped the turn on an
   # unknown outcome halts the dispatch with the pause it established.

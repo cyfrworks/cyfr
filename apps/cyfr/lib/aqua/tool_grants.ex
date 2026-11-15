@@ -64,6 +64,13 @@ defmodule Aqua.ToolGrants do
 
   @type key :: {tool :: String.t(), action :: String.t()}
 
+  @typedoc """
+  One standing answer as the chat lists it: its tool, its action and, for
+  an answer that is one program's, that program's row id (nil for any
+  other answer).
+  """
+  @type answer :: {tool :: String.t(), action :: String.t(), program_row :: String.t() | nil}
+
   @typedoc "One stored grant, as the plain map `Sanctum.ToolGrants` answers."
   @type grant :: %{required(:scope) => String.t(), optional(atom()) => term()}
 
@@ -278,51 +285,85 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  Every `{agent_name, tool, action}` a thread has a standing allow for,
-  for every agent that has rows in it: what the thread pane lists as the
-  thread's standing answers, each revocable, keyed by the agent the
-  answer was given for. Standing-checked and deny-subtracted per agent
-  exactly as `allowed_keys/1`. Fails closed like the reads.
+  Every `{agent_name, tool, action, program}` a thread has a standing
+  allow for, for every agent that has rows in it: what the thread pane
+  lists as the thread's standing answers, each revocable, keyed by the
+  agent the answer was given for. `program` is nil, or for an answer
+  that is one program's, `%{id, name}`: its row's id and its name as the
+  row holds it now, so a renamed program's answer reads as the program
+  it covers. Standing-checked and deny-subtracted per agent exactly as
+  `allowed_keys/1`. Fails closed like the reads.
   """
   @spec allowed_by_agent(Context.t(), String.t()) ::
-          {:ok, MapSet.t({String.t(), String.t(), String.t()})} | {:error, unavailable()}
+          {:ok,
+           MapSet.t(
+             {String.t(), String.t(), String.t(), %{id: String.t(), name: String.t()} | nil}
+           )}
+          | {:error, unavailable()}
   def allowed_by_agent(%Context{} = ctx, thread_id) do
-    case Sanctum.ToolGrants.for_thread(ctx, thread_id) do
-      {:ok, rows} ->
-        {:ok,
-         rows
-         |> Enum.group_by(& &1.agent_name)
-         |> Enum.flat_map(fn {name, agent_rows} ->
-           agent_rows |> allowed_keys() |> Enum.map(fn {tool, action} -> {name, tool, action} end)
-         end)
-         |> MapSet.new()}
-
-      {:error, _reason} ->
-        {:error, @unavailable}
+    with {:ok, rows} <- Sanctum.ToolGrants.for_thread(ctx, thread_id),
+         answers =
+           rows
+           |> Enum.group_by(& &1.agent_name)
+           |> Enum.flat_map(fn {name, agent_rows} ->
+             agent_rows
+             |> allowed_keys()
+             |> Enum.map(fn {tool, action, row} -> {name, tool, action, row} end)
+           end),
+         {:ok, programs} <- program_names(ctx, answers) do
+      {:ok,
+       MapSet.new(answers, fn {name, tool, action, row} ->
+         {name, tool, action, row && Map.fetch!(programs, row)}
+       end)}
+    else
+      {:error, _reason} -> {:error, @unavailable}
     end
   end
 
+  # The names the answers' programs hold now, by row id. A row gone since
+  # (its removal ends its answers in the same transaction) reads by its
+  # id.
+  defp program_names(ctx, answers) do
+    answers
+    |> Enum.flat_map(fn {_name, _tool, _action, row} -> if row, do: [row], else: [] end)
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, %{}}, fn row, {:ok, names} ->
+      case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row) do
+        {:ok, %{name: name}} -> {:cont, {:ok, Map.put(names, row, %{id: row, name: name})}}
+        {:error, :not_found} -> {:cont, {:ok, Map.put(names, row, %{id: row, name: row})}}
+        {:error, _unanswered} = error -> {:halt, error}
+      end
+    end)
+  end
+
   @doc """
-  The `{tool, action}` pairs a person answered with a standing allow that
-  still stands — what the chat shows as its standing answers, each
+  The answers a person gave with a standing allow that still stands, each
+  `{tool, action, program_row}` (`t:answer/0`), one per program for an
+  action whose answer is one program's — what the chat shows as its
+  standing answers, each
   revocable there. An allow covers only the calls its bounds admit (each
   decided as it is made, `effective/2`), and every one is listed, so
   every standing answer a person gave can be seen and withdrawn. An
   authored `auto` never mints a card, so it is never here; an allow the
   action's current declaration would refuse no longer stands and is not
-  here; a deny for the same pair subtracts, since the pair asks no more.
-  Nothing decides a call from this list.
+  here; a deny for the same pair subtracts every one of them, since the
+  pair asks no more. Nothing decides a call from this list.
   """
-  @spec allowed_keys([grant()]) :: MapSet.t(key())
+  @spec allowed_keys([grant()]) :: MapSet.t(answer())
   def allowed_keys(grants) when is_list(grants) do
     denied = grants |> Enum.filter(&(&1.effect == "deny")) |> MapSet.new(&{&1.tool, &1.action})
 
     grants
     |> Enum.filter(&(&1.effect == "allow"))
     |> standing_allows()
-    |> MapSet.new(fn %{tool: tool, action: action} -> {tool, action} end)
-    |> MapSet.difference(denied)
+    |> Enum.reject(&MapSet.member?(denied, {&1.tool, &1.action}))
+    |> MapSet.new(fn %{tool: tool, action: action} = grant ->
+      {tool, action, program_row(grant)}
+    end)
   end
+
+  defp program_row(%{program_row: row}) when is_binary(row) and row != "", do: row
+  defp program_row(_grant), do: nil
 
   @doc "The grant scopes, as the rows spell them."
   @spec scopes() :: [String.t()]
@@ -378,6 +419,21 @@ defmodule Aqua.ToolGrants do
 
   def refusal_message({:scope_not_permitted, :invalid_constraint}),
     do: "The paths or domains the answer is limited to are not valid ones."
+
+  def refusal_message({:scope_not_permitted, :unconstrained_program}),
+    do: "A standing answer to start a program covers that one program, never every one."
+
+  def refusal_message({:scope_not_permitted, :no_program}),
+    do:
+      "That program is no longer on the Programs page, so no standing answer can be given for it."
+
+  def refusal_message({:scope_not_permitted, :program_unavailable}),
+    do:
+      "The program could not be read just now, so no standing answer can be given for it " <>
+        "yet; nothing was approved. Try again, or approve it once."
+
+  def refusal_message({:scope_not_permitted, :program_changed}),
+    do: "That program changed since the card showed it; ask again to see what it runs now."
 
   def refusal_message({:scope_not_permitted, :invalid_sources}),
     do: "An answer can follow only the outside sources this card names."

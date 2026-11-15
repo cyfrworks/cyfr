@@ -4855,6 +4855,8 @@ type ThreadRevokeGrantArgs struct {
 	Tool string `json:"tool"`
 	// revoke_grant: the action
 	ToolAction string `json:"tool_action"`
+	// revoke_grant: for an answer that is one program's, the program's row id; required for program.start
+	Program Field[string] `json:"program,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

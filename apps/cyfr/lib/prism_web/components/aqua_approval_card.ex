@@ -57,6 +57,15 @@ defmodule PrismWeb.AquaApprovalCard do
   some exit (`proposal["lets_flow"]`): the approval lets them flow to
   every exit of that grant, and binds them.
 
+  A program's start shows what will run (`intent["program"]`, read from
+  the row as the card opened, `Aqua.Loop.Policy.program_shown/2`): the
+  program by its name, the folder it runs in, the hosts it may reach, and
+  its pinned command followed by every word the call names, each whole
+  and quoted. Its standing answers say what they widen in plain words,
+  every start of that program whatever follows its command, and none is
+  chosen until the person presses one; the answer stands for that one
+  program (`Aqua.Standing`).
+
   A canvas write's card names the streams the version it writes reads,
   from the proposal's own `data` and `feeds` (`canvas_streams/1`), which
   the approval binds: what the page will read is on the card, not only in
@@ -86,6 +95,7 @@ defmodule PrismWeb.AquaApprovalCard do
       |> Map.put(:kind, action_kind(assigns.payload))
       |> Map.put(:proposal, assigns.payload["proposal"])
       |> Map.put(:read, read_sources(assigns.payload))
+      |> Map.put(:unshowable, unshowable?(assigns.payload))
 
     ~H"""
     <div
@@ -154,6 +164,18 @@ defmodule PrismWeb.AquaApprovalCard do
         <% end %>
       </div>
       <div
+        :if={@payload["program"]}
+        class="text-[12px] text-gray-400 mb-2"
+        data-test="approval-program"
+      >
+        runs <span class="font-medium text-gray-100">{@payload["program"]["name"]}</span>
+        in {@payload["program"]["folder"]}, reaching {@payload["program"]["hosts"]}: <div
+          class="mt-1 px-2 py-1.5 bg-gray-950 border border-gray-800 rounded font-mono text-gray-100 break-all whitespace-pre-wrap"
+          data-test="approval-program-command"
+          phx-no-format
+        >{@payload["program"]["command"]}<span :for={word <- program_words(@proposal)}> <span data-test="approval-program-word">{quoted(word)}</span></span></div>
+      </div>
+      <div
         :if={lets_flow(@proposal) != []}
         class="text-[12px] text-gray-400 mb-2"
         data-test="approval-lets-flow"
@@ -189,6 +211,10 @@ defmodule PrismWeb.AquaApprovalCard do
       <% end %>
 
       <%= cond do %>
+        <% @unshowable and status(@status) in [:pending, :running] -> %>
+          <div class="mt-2 text-[12px] text-amber-300" data-test="approval-unshowable">
+            This card cannot show what the program would run, so it cannot be approved.
+          </div>
         <% status(@status) in [:pending, :running] -> %>
           <%= if @decline_reason_open do %>
             <form
@@ -261,7 +287,11 @@ defmodule PrismWeb.AquaApprovalCard do
               class="flex flex-wrap gap-2 items-center justify-end mt-1.5 text-[11px] text-gray-500"
               data-test="approval-standing"
             >
-              <span>also approve:</span>
+              <span :if={!@payload["program"]}>also approve:</span>
+              <span :if={@payload["program"]} data-test="approval-program-standing">
+                also approve every start of {@payload["program"]["name"]}, whatever follows its
+                command, in {@payload["program"]["folder"]}, reaching {@payload["program"]["hosts"]}:
+              </span>
               <button
                 type="button"
                 phx-click="approval:approve"
@@ -395,6 +425,58 @@ defmodule PrismWeb.AquaApprovalCard do
     {:ok, assign_new(socket, :limit, fn -> limit(socket.assigns.payload) end)}
   end
 
+  # A program's start whose card does not carry what it would run is
+  # shown, never approved: no details, no card.
+  defp unshowable?(%{"proposal" => %{"tool" => "program", "action" => "start"}} = payload) do
+    not match?(
+      %{"name" => n, "command" => c, "folder" => f, "hosts" => h}
+      when is_binary(n) and is_binary(c) and is_binary(f) and is_binary(h),
+      payload["program"]
+    )
+  end
+
+  defp unshowable?(_payload), do: false
+
+  # The words a program's start runs after its command, as the call names
+  # them; each is shown whole and quoted, so a space, a quote or a control
+  # character in one is seen as it will run.
+  defp program_words(%{"args" => %{"terminal_args" => words}}) when is_list(words), do: words
+  defp program_words(_proposal), do: []
+
+  # A word, whole, in double quotes: a quote and a backslash escaped, and
+  # every character a reader could not see or that would move the text
+  # around it (controls, format and bidirectional controls, line and
+  # paragraph separators) spelled as its code point. Nothing is cut: the
+  # word is drawn as long as it is. Bytes that are not text are spelled in
+  # hex, all of them.
+  defp quoted(word) when is_binary(word) do
+    if String.valid?(word),
+      do: ~s(") <> (word |> String.codepoints() |> Enum.map_join(&escaped/1)) <> ~s("),
+      else: "0x" <> Base.encode16(word)
+  end
+
+  defp quoted(word), do: quoted(to_string(word))
+
+  defp escaped("\\"), do: "\\\\"
+  defp escaped(~s(")), do: ~s(\\")
+
+  defp escaped(<<cp::utf8>> = char) do
+    if unseen?(cp),
+      do: "\\u{" <> Integer.to_string(cp, 16) <> "}",
+      else: char
+  end
+
+  defp escaped(other), do: other
+
+  defp unseen?(cp)
+       when cp in 0x00..0x1F or cp in 0x7F..0x9F or cp == 0xAD or cp == 0x061C or
+              cp == 0x180E or cp in 0x200B..0x200F or cp in 0x2028..0x202E or
+              cp in 0x2060..0x2064 or cp in 0x2066..0x206F or cp == 0xFEFF or
+              cp in 0xFFF9..0xFFFB or cp in 0xE0000..0xE007F,
+       do: true
+
+  defp unseen?(_cp), do: false
+
   # What a standing answer may be limited to: the path the call names, in
   # the storage door's spelling, when the action declares which of its
   # arguments names a storage path. Nil otherwise: no constraint is offered.
@@ -417,8 +499,10 @@ defmodule PrismWeb.AquaApprovalCard do
 
   @impl true
   def handle_event("approval:approve", %{"scope" => scope} = params, socket) do
-    case choice(scope, params, socket.assigns) do
+    case unshowable?(socket.assigns.payload) || choice(scope, params, socket.assigns) do
       {:ok, choice} -> send(self(), {:approval_approve, socket.assigns.approval_id, choice})
+      # Nothing to approve: the card does not show what would run.
+      true -> :ok
       :error -> :ok
     end
 

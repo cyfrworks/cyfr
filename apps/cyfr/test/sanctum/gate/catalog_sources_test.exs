@@ -83,12 +83,15 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
           aqua.skill_update build.compile build.status build.toolchains build.validate
           canvas.catalog canvas.versions canvas.write component.categories component.create
           component.fork component.status execution.cancel layout.edit layout.get
-          schedule.get schedule.list system.status tincture_visibility.get webhook.get
-          webhook.list)
+          program.list program.send program.stop schedule.get schedule.list system.status
+          tincture_visibility.get webhook.get webhook.list)
 
   # Answers that describe installed components or list tools, read by
   # their providers' readers.
   @read_by_answer ~w(component.inspect component.list component.setup_plan tools.list)
+
+  # What a program printed: outside, named by the program it came from.
+  @program_output ~w(program.start program.read program.wait)
 
   test "every in-chain action of every configured provider declares the sources its answers carry" do
     undeclared =
@@ -115,6 +118,14 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
         do:
           assert(
             %Prima.Operation{sources: {:answer, {_, :answer_sources}}} = operation(name),
+            name
+          )
+
+    for name <- @program_output,
+        do:
+          assert(
+            %Prima.Operation{sources: {:answer, {Opus.Programs.Provider, :answer_sources}}} =
+              operation(name),
             name
           )
   end

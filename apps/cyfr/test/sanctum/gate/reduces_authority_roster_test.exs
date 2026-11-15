@@ -27,6 +27,7 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     key.revoke
     pairing.revoke
     profile.revoke
+    program.stop
     session.end
     session.lock
     session.logout

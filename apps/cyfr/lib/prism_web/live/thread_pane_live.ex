@@ -487,9 +487,11 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, assign(socket, :model_override, if(model == "", do: nil, else: model))}
   end
 
+  # A program's answer is withdrawn by its row: the entry names the
+  # program, and its row is what the revoke names.
   def handle_event(
         "revoke_grant",
-        %{"agent" => agent, "tool" => tool, "action" => action},
+        %{"agent" => agent, "tool" => tool, "action" => action} = params,
         socket
       ) do
     case socket.assigns.thread do
@@ -497,16 +499,16 @@ defmodule PrismWeb.ThreadPaneLive do
         {:noreply, socket}
 
       thread ->
-        {:noreply,
-         run(
-           socket,
-           &PrismWeb.Ops.call_tool(&1, "thread/revoke_grant", %{
-             "thread" => thread.id,
-             "agent_name" => agent,
-             "tool" => tool,
-             "tool_action" => action
-           })
-         )}
+        args =
+          %{
+            "thread" => thread.id,
+            "agent_name" => agent,
+            "tool" => tool,
+            "tool_action" => action
+          }
+          |> Prima.MapUtil.put_present("program", params["program"])
+
+        {:noreply, run(socket, &PrismWeb.Ops.call_tool(&1, "thread/revoke_grant", args))}
     end
   end
 
@@ -1802,17 +1804,19 @@ defmodule PrismWeb.ThreadPaneLive do
         >
           <span>standing answers in this chat:</span>
           <span
-            :for={{agent, tool, action} <- Enum.sort(@grants)}
+            :for={{agent, tool, action, program} <- Enum.sort(@grants)}
             class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
             title={"answered for #{agent}"}
+            data-test="standing-answer"
           >
-            <span class="text-gray-500">{agent}:</span>{tool}.{action}
+            <span class="text-gray-500">{agent}:</span>{tool}.{action}<span :if={program}>, every start of {program.name}</span>
             <button
               type="button"
               phx-click="revoke_grant"
               phx-value-agent={agent}
               phx-value-tool={tool}
               phx-value-action={action}
+              phx-value-program={program && program.id}
               class="inline-flex min-h-6 min-w-6 items-center justify-center text-gray-500 hover:text-gray-200"
               title="withdraw this standing answer"
             >

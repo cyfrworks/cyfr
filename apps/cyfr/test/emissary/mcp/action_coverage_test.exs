@@ -94,7 +94,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
     if :external in operation.planes do
       Sanctum.Gate.call_external(operation.tool, external_context(operation), args)
     else
-      ctx = chain_context()
+      ctx = chain_context(operation)
 
       Sanctum.Gate.call_in_chain(operation.tool, ctx, args, granting(operation),
         lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
@@ -114,7 +114,12 @@ defmodule Emissary.MCP.ActionCoverageTest do
   defp external_context(_operation),
     do: %{Sanctum.TestContext.local(:api) | permissions: MapSet.new([:*])}
 
-  defp chain_context do
+  # A chain's call, a person's own sign-in's chain when the action is
+  # interactive, the only chain the gate admits it in.
+  defp chain_context(%Prima.Operation{consent: :interactive}),
+    do: %{chain_context(nil) | auth_method: :oidc}
+
+  defp chain_context(_operation) do
     Context.enter_guest(%Context{
       origin: :programmatic,
       user_id: "action_coverage_user",
