@@ -819,14 +819,20 @@ defmodule Opus.Programs.TerminalTest do
       refute_receive {Opus.Programs, ^id, {_kind, _delivery, _output}}, 300
     end
 
-    test "the end of a program reaches a process that owes its acknowledgement",
+    # The end used to be sent at once, and what was held for a process
+    # that owed its acknowledgement was dropped with it.
+    test "a process that owes its acknowledgement is handed the last output, then the end",
          %{ctx: ctx, row: row, fake: fake} do
       {id, _session} = start!(ctx, row)
       {:ok, _} = Programs.attach(ctx, id)
       Scripted.write(fake, row.id, "first")
-      assert_receive {Opus.Programs, ^id, {:bytes, _delivery, _output}}, 2_000
-      Scripted.write(fake, row.id, "kept for it")
+      assert_receive {Opus.Programs, ^id, {:bytes, 1, %{bytes: "first\r\n"}}}, 2_000
+      Scripted.write(fake, row.id, "the last line")
       Scripted.end_sessions(fake, row.id, 0)
+
+      assert_receive {Opus.Programs, ^id, {kind, 2, %{bytes: last}}}, 3_000
+      assert kind == :bytes
+      assert last == "the last line\r\n"
       assert_receive {Opus.Programs, ^id, {:ended, :exited}}, 3_000
     end
 

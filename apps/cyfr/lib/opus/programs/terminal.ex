@@ -35,8 +35,8 @@ defmodule Opus.Programs.Terminal do
   unacknowledged for it, whatever it sends; what comes meanwhile is kept
   for it, at most the last #{div(256 * 1024, 1024)} KiB, and handed whole
   as `{Opus.Programs, id, {:tail, delivery, output}}` when more than that
-  came, which replaces what it shows. Its end reaches it whatever it
-  owes.
+  came, which replaces what it shows. At the end it is handed what is
+  kept for it and then the end, whatever it owes.
 
   It ends, and only then:
 
@@ -528,9 +528,13 @@ defmodule Opus.Programs.Terminal do
     state
   end
 
+  # Each attached process is handed what is held for it, whatever it
+  # owes, and then the end: the last thing a program printed is shown.
   defp ended(state, reason) do
-    for pid <- Map.keys(state.subscribers),
-        do: send(pid, {Opus.Programs, state.id, {:ended, reason}})
+    for {pid, subscriber} <- state.subscribers do
+      if subscriber.pending, do: hand(state, pid, subscriber)
+      send(pid, {Opus.Programs, state.id, {:ended, reason}})
+    end
 
     if state.session != nil, do: announce(state, :ended, reason: reason)
 
