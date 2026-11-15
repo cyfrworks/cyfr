@@ -613,6 +613,19 @@ defmodule Opus do
   defdelegate release_turn_root(ctx, execution_id, opts), to: TurnRoot, as: :release
 
   @doc """
+  Aqua's one way to end the occurrence a turn of a schedule's line ran:
+  through the scheduler's one ending, as the turn's root execution row
+  says (`execution_id`), or, for a turn that never started, as a claim
+  this boot holds that did not start (`reason`). It decides nothing the
+  caller says: see `Opus.Schedules.Scheduler.end_turn/4`.
+  """
+  @spec end_schedule_turn(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, String.t()} | {:error, term()}
+  defdelegate end_schedule_turn(actor, occurrence_id, execution_id, reason),
+    to: Opus.Schedules.Scheduler,
+    as: :end_turn
+
+  @doc """
   Cancel a running execution of the context's athanor; only a running
   execution can be cancelled. See `Opus.Dispatch.cancel/2`.
   """

@@ -209,6 +209,13 @@ defmodule PrismWeb.SettingsLiveTest do
     {view, _html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
 
     assert has_element?(view, "#mode-words", "Executions, where each run's failure says why")
+
+    # The lite words name every page lite's menu lists, and the dev words none of them.
+    for %{label: label} <- PrismWeb.Nav.items("lite") do
+      assert has_element?(view, ~s(#mode-words [data-test="mode-lite"]), label)
+      refute has_element?(view, ~s(#mode-words [data-test="mode-dev"]), label)
+    end
+
     assert has_element?(view, "#request-stats h3", "Your requests, last hour")
     assert has_element?(view, "#request-stats", "Nobody's athanor but yours is counted here.")
     assert has_element?(view, ~s([data-test="auth-method"]), "your account, in this browser")

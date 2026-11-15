@@ -23,9 +23,11 @@ defmodule PrismWeb.AquaApprovalCard do
       the click (`:thread`, `until` computed here in UTC);
     - always — a standing allow for the agent wherever it works (an
       agent-scope row in its home athanor);
-    - for this schedule — the same, ending with the schedule the card's
-      run was started by (`:always`, lifecycle `:schedule`), offered only
-      when that run's row names one (`scheduled`);
+    - for this schedule, in a schedule's own thread — a standing allow
+      for the same `tool.action` in this thread, ending with the schedule
+      whose thread it is (`:thread`, lifecycle `:schedule`), offered only
+      there (`schedule_thread`); that schedule's next fires run in this
+      thread and are allowed it, nothing else is;
     - limit to these paths — for an action that declares which argument
       names a storage path (`Sanctum.Catalog.action_declaration/1`), a
       standing choice may carry the path the call names, in the storage
@@ -42,8 +44,9 @@ defmodule PrismWeb.AquaApprovalCard do
   declaration, the same one the runner and the grant store enforce: none
   for a `:destructive` / `:external` action, none for an action declared
   `standing: false`, only this thread's for one declared
-  `standing: :thread`. The refusal the runner would post is the
-  backstop for a race, not the outcome of a visible button.
+  `standing: :thread` — decided by `Aqua.standing_offered?/2`, the rule a
+  decision is held to (`Aqua.Standing`). The refusal the runner would post
+  is the backstop for a race, not the outcome of a visible button.
 
   A launch's card (an `execution.run` of an app) takes no standing
   answer: one approval is for that one launch. When the launch names an
@@ -81,7 +84,6 @@ defmodule PrismWeb.AquaApprovalCard do
     assigns =
       assigns
       |> Map.put(:kind, action_kind(assigns.payload))
-      |> Map.put(:standing, standing(assigns.payload))
       |> Map.put(:proposal, assigns.payload["proposal"])
       |> Map.put(:read, read_sources(assigns.payload))
 
@@ -254,7 +256,7 @@ defmodule PrismWeb.AquaApprovalCard do
             <div
               :if={
                 @proposal && status(@status) == :pending &&
-                  standing_offered?(@kind, @standing, :thread)
+                  Aqua.standing_offered?(@payload, :thread)
               }
               class="flex flex-wrap gap-2 items-center justify-end mt-1.5 text-[11px] text-gray-500"
               data-test="approval-standing"
@@ -285,18 +287,19 @@ defmodule PrismWeb.AquaApprovalCard do
                 </button>
               </span>
               <button
-                :if={@scheduled && standing_offered?(@kind, @standing, :always)}
+                :if={@schedule_thread}
                 type="button"
                 phx-click="approval:approve"
-                phx-value-scope="always"
+                phx-value-scope="thread"
                 phx-value-lifecycle="schedule"
                 phx-target={@myself}
+                data-test="approval-for-schedule"
                 class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
               >
                 for this schedule
               </button>
               <button
-                :if={standing_offered?(@kind, @standing, :always)}
+                :if={Aqua.standing_offered?(@payload, :always)}
                 type="button"
                 phx-click="approval:approve"
                 phx-value-scope="always"
@@ -384,7 +387,7 @@ defmodule PrismWeb.AquaApprovalCard do
       |> assign_new(:bounds, fn -> %{} end)
       |> assign_new(:resolved_by, fn -> nil end)
       |> assign_new(:decided_at, fn -> nil end)
-      |> assign_new(:scheduled, fn -> false end)
+      |> assign_new(:schedule_thread, fn -> false end)
       |> assign_new(:limited, fn -> false end)
       |> assign_new(:follows, fn -> false end)
       |> assign(:deadlines, @deadlines)
@@ -453,14 +456,18 @@ defmodule PrismWeb.AquaApprovalCard do
   end
 
   # The choice an offer stands for: once; this thread, ending with the
-  # card's own run or at a deadline computed here, in UTC; or the agent
-  # everywhere, ending with the run's schedule or not at all. A standing
+  # card's own run, at a deadline computed here, in UTC, or with the
+  # schedule whose thread it is; or the agent
+  # everywhere. A standing
   # choice carries the paths it is limited to when the person ticked it.
   # An offer the card does not make chooses nothing.
   defp choice("once", _params, _assigns), do: {:ok, %{scope: :once}}
 
   defp choice("thread", %{"lifecycle" => "execution"}, assigns),
     do: {:ok, limited(%{scope: :thread, lifecycle: :execution}, assigns)}
+
+  defp choice("thread", %{"lifecycle" => "schedule"}, %{schedule_thread: true} = assigns),
+    do: {:ok, limited(%{scope: :thread, lifecycle: :schedule}, assigns)}
 
   defp choice("thread", %{"hours" => hours}, assigns) do
     case List.keyfind(@deadlines, hours, 0) do
@@ -472,9 +479,6 @@ defmodule PrismWeb.AquaApprovalCard do
         :error
     end
   end
-
-  defp choice("always", %{"lifecycle" => "schedule"}, %{scheduled: true} = assigns),
-    do: {:ok, limited(%{scope: :always, lifecycle: :schedule}, assigns)}
 
   defp choice("always", params, assigns) when not is_map_key(params, "lifecycle"),
     do: {:ok, limited(%{scope: :always}, assigns)}
@@ -603,21 +607,6 @@ defmodule PrismWeb.AquaApprovalCard do
   # entirely from kind; the allowlist value (ask/auto) is orthogonal.
   defp action_kind(%{"action_kind" => k}) when is_binary(k), do: safe_atom(k)
   defp action_kind(_), do: nil
-
-  # The action's standing rule as the intent carries it: `false` (never),
-  # `"thread"` (this thread only) or absent (either scope).
-  defp standing(%{"standing" => standing}), do: standing
-  defp standing(_), do: nil
-
-  defp standing_offered?(kind, _standing, _scope) when kind in [:destructive, :external],
-    do: false
-
-  defp standing_offered?(kind, standing, scope),
-    do: standing_offered(kind, Sanctum.Annotations.standing(standing), scope)
-
-  defp standing_offered(_kind, false, _scope), do: false
-  defp standing_offered(_kind, :thread, :always), do: false
-  defp standing_offered(_kind, _standing, _scope), do: true
 
   defp safe_atom(s), do: PrismWeb.AquaLive.Catalog.existing_atom(s)
 

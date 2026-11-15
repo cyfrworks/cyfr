@@ -104,6 +104,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     {Aqua.Supervisor,
      [
        Aqua.ScheduleNotes,
+       Aqua.ScheduleTurns,
        Aqua.Crew,
        {Aqua.WorkerTree, [Aqua.Loop.Worker, Aqua.TaskSupervisor]},
        {Aqua.RunnerTree, [Aqua.RunnerRegistry, Aqua.RunnerSupervisor, Aqua.RunnerRecovery]},
@@ -174,6 +175,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Aqua.TaskSupervisor,
     Aqua.Loop.Worker,
     Aqua.Crew,
+    Aqua.ScheduleTurns,
     Aqua.ScheduleNotes,
     {Opus.Programs.Box, "local"},
     Opus.Programs.Relays,

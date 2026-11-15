@@ -31,6 +31,8 @@ defmodule Aqua.Tape do
   member, and `claim_holder/2` reads it. An approval pause keeps it.
   """
 
+  require Logger
+
   alias Aqua.Crew.Activity
   alias Aqua.ThreadList
   alias Arca.ThreadStorage, as: Threads
@@ -275,7 +277,64 @@ defmodule Aqua.Tape do
       announce_lists(ctx, turn.thread_id, {:ended, finished})
       broadcast(ctx, turn.thread_id, :turn_finished, nil)
       if finished.asking_thread_id, do: wake_crew(ctx)
+      end_fire(ctx, finished)
       {:ok, finished}
+    end
+  end
+
+  @doc """
+  The schedule and occurrence a turn a schedule's line started carries on
+  its options (`Aqua.Runner`'s `:schedule`), or nil for any other turn.
+  """
+  @spec schedule_of(map()) :: %{schedule_id: String.t(), occurrence_id: String.t()} | nil
+  def schedule_of(%{options: json}) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{"schedule" => %{"schedule_id" => schedule_id, "occurrence_id" => occurrence_id}}}
+      when is_binary(schedule_id) and is_binary(occurrence_id) ->
+        %{schedule_id: schedule_id, occurrence_id: occurrence_id}
+
+      _none ->
+        nil
+    end
+  end
+
+  def schedule_of(_turn), do: nil
+
+  # A schedule's turn that ended ends its occurrence, on the scheduler's
+  # one ending (`Opus.end_schedule_turn/4`), from the turn's
+  # root as its row now stands: here, after the turn's terminal write, is
+  # the one place every end of a turn passes. An end that does not land
+  # (the root still open, the slot lost) leaves the occurrence to the
+  # scheduler's recovery, which ends it from the same row.
+  # Whatever it meets, it never fails the turn's own end, which has
+  # committed.
+  defp end_fire(ctx, finished) do
+    ended_fire(ctx, finished)
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[Aqua.Tape] the occurrence of turn #{finished.id} not ended: " <>
+          Prima.LogFilter.format_exception(kind, reason)
+      )
+  end
+
+  defp ended_fire(ctx, finished) do
+    with %{occurrence_id: occurrence_id} <- schedule_of(finished) do
+      case Opus.end_schedule_turn(
+             Sanctum.Context.actor(ctx),
+             occurrence_id,
+             finished.root_execution_id,
+             finished.error
+           ) do
+        {:ok, _state} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Aqua.Tape] occurrence #{occurrence_id} of turn #{finished.id} not ended: " <>
+              inspect(reason)
+          )
+      end
     end
   end
 
@@ -628,10 +687,28 @@ defmodule Aqua.Tape do
 
     with {:ok, %{cancelled: cancelled}} = deleted <-
            Threads.delete(actor, thread_id, standing(%{}, :retiring)) do
+      forget_schedules(actor, thread_id)
       ThreadList.removed(ctx, thread_id)
       Activity.cancelled(ctx, open, cancelled)
       withdrawn(ctx, waiting)
       deleted
+    end
+  end
+
+  # A schedule holding a line for Aqua that ran in the deleted thread
+  # names it no longer, so its next fire makes a new one. A schedule this
+  # misses (a lost slot, an unreadable store) finds the thread gone at its
+  # next fire all the same (`Arca.CronSchedule.thread/3`).
+  defp forget_schedules(actor, thread_id) do
+    case Arca.CronSchedule.forget_thread(actor, thread_id) do
+      {:ok, _count} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Aqua.Tape] the schedules of deleted thread #{thread_id} were not told: " <>
+            inspect(reason)
+        )
     end
   end
 

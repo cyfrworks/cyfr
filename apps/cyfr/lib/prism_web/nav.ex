@@ -11,7 +11,7 @@ defmodule PrismWeb.Nav do
   mode (`shown?/2`).
 
   `lite` is AQUA, files, the Vault, schedules, webhooks, API keys,
-  programs, settings and legal. `dev` adds the ops surfaces, sectioned. Keys are the
+  programs, settings, tips and legal. `dev` adds the ops surfaces, sectioned. Keys are the
   pages' `active_nav` values; the DOM id a surface renders is
   `<prefix>-<key>` with underscores as hyphens. Every page lives under
   `/a/<athanor>`, and `href/2` is the one place a path becomes a link.
@@ -137,6 +137,14 @@ defmodule PrismWeb.Nav do
       modes: @both
     },
     %{
+      key: "tips",
+      label: "Tips",
+      path: "/tips",
+      icon: "document",
+      section: :other,
+      modes: @both
+    },
+    %{
       key: "reports",
       label: "Reports",
       path: "/reports",
@@ -154,7 +162,7 @@ defmodule PrismWeb.Nav do
     }
   ]
 
-  @lite_order ~w(aqua files vault schedules webhooks api_keys programs settings legal)
+  @lite_order ~w(aqua files vault schedules webhooks api_keys programs settings tips legal)
 
   @sections [
     {:top, nil},

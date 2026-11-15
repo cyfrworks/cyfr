@@ -67,6 +67,7 @@ switched = [
   retention_scheduler_enabled: Cyfr.RetentionScheduler,
   external_server_reconciler_enabled: Emissary.External.Reconciler,
   schedule_notes_enabled: Aqua.ScheduleNotes,
+  schedule_turns_enabled: Aqua.ScheduleTurns,
   crew_delivery_enabled: Aqua.Crew,
   execution_sweeper_enabled: Opus.Sweeper,
   execution_archive_watch_enabled: Opus.ArchiveWatch,

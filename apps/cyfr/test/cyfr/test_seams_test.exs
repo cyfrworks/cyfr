@@ -66,6 +66,7 @@ defmodule Cyfr.TestSeamsTest do
       :registry_health_probe,
       :retention_scheduler_enabled,
       :schedule_notes_enabled,
+      :schedule_turns_enabled,
       :status_watch_enabled,
       :thread_recovery,
       :tincture_rate_limit_max,

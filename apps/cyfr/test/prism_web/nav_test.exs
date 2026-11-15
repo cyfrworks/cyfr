@@ -10,7 +10,7 @@ defmodule PrismWeb.NavTest do
     keys = Enum.map(Nav.items("lite"), & &1.key)
 
     assert keys ==
-             ~w(aqua files vault schedules webhooks api_keys programs settings legal)
+             ~w(aqua files vault schedules webhooks api_keys programs settings tips legal)
 
     refute "executions" in keys
     assert [{nil, items}] = Nav.sections("lite")

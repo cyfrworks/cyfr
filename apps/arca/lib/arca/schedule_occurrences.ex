@@ -469,8 +469,11 @@ defmodule Arca.ScheduleOccurrences do
             Prima.LoggerContext.shape(other)
   end
 
-  # The revision of the profile's head consent, or nil where it has none.
+  # The revision of the profile's head consent, or nil where it has none,
+  # as a schedule holding a line for Aqua binds no profile.
   # arca:db-raise-ok inside the caller's transaction
+  defp consent_revision(_athanor_id, nil), do: nil
+
   defp consent_revision(athanor_id, profile_id) do
     Arca.Repo.one(
       from(p in Arca.Schemas.Profile,

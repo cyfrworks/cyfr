@@ -249,7 +249,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:children, [])
       |> assign(:parent, nil)
       |> assign(:pending_approvals, [])
-      |> assign(:run_schedules, %{})
+      |> assign(:schedule_thread?, false)
       |> assign(:any_messages, false)
       |> reset_live()
 
@@ -257,6 +257,13 @@ defmodule PrismWeb.ThreadPaneLive do
       {true, %{} = thread} ->
         follow_thread(thread.id, thread.athanor_id)
         live = Aqua.thread_state(thread.id, thread.athanor_id)
+
+        socket =
+          assign(
+            socket,
+            :schedule_thread?,
+            Aqua.schedule_thread?(socket.assigns.context, thread.id)
+          )
 
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived thread into every viewer's socket. The runner's
@@ -278,7 +285,6 @@ defmodule PrismWeb.ThreadPaneLive do
         |> assign(:decided_notices, decided_notices(rows))
         |> assign(:requests, requests)
         |> assign(:pending_approvals, pending_in(rows))
-        |> note_schedules(pending_in(rows))
         |> assign(:any_messages, rows != [])
         |> apply_live(live)
         |> relatives(thread)
@@ -1000,7 +1006,6 @@ defmodule PrismWeb.ThreadPaneLive do
     socket
     |> stream_insert(:messages, row)
     |> assign(:pending_approvals, pending)
-    |> note_schedules(pending_in([row]))
     |> assign(:any_messages, true)
   end
 
@@ -1020,28 +1025,6 @@ defmodule PrismWeb.ThreadPaneLive do
     if request.id == reply.reply_to,
       do: %{request | replies: Enum.reject(request.replies, &(&1.id == reply.id)) ++ [reply]},
       else: request
-  end
-
-  # Whether each pending card's run was started by a schedule, read once
-  # per run from its execution row in the pane's athanor: a card offers
-  # "for this schedule" only where there is one to end with.
-  defp note_schedules(socket, cards) do
-    actor = Sanctum.Context.actor(socket.assigns.context)
-
-    Enum.reduce(cards, socket, fn card, acc ->
-      known = acc.assigns.run_schedules
-
-      case card.execution_id do
-        id when is_binary(id) and not is_map_key(known, id) ->
-          scheduled? =
-            match?(%{schedule_id: s} when is_binary(s), Arca.Execution.get_tenant(actor, id))
-
-          assign(acc, :run_schedules, Map.put(known, id, scheduled?))
-
-        _known_or_none ->
-          acc
-      end
-    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -1912,7 +1895,7 @@ defmodule PrismWeb.ThreadPaneLive do
                     id={@dom <> "-card-" <> msg.id}
                     message_id={msg.id}
                     approval_id={msg.approval_id}
-                    scheduled={Map.get(@run_schedules, msg.execution_id, false)}
+                    schedule_thread={@schedule_thread?}
                     bounds={Map.take(resolution, ~w(lifecycle until constraint sources))}
                     payload={intent}
                     status={msg.status}

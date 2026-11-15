@@ -607,6 +607,12 @@ defmodule Prima.Refusal do
   defp row(:thread_archived),
     do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
 
+  # A schedule's line for Aqua runs as its person with nobody present, so
+  # only the person, signed in, makes or changes one
+  # (`Opus.Schedules.Provider`).
+  defp row(:aqua_line_by_person),
+    do: {:forbidden, "Only you, signed in, can give a schedule a line for Aqua or change it"}
+
   # A crew member whose brain cannot take a job yet (`Aqua.Crew.ready/2`):
   # the sentence says what the person does about it.
   defp row({:crew_unready, member, :no_brain}) when is_binary(member),
