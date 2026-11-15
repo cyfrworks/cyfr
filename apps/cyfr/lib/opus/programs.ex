@@ -689,13 +689,15 @@ defmodule Opus.Programs do
   end
 
   @doc false
-  # Whether the turn `turn_id` of the athanor is still open, read from the
-  # store; `{:error, :unavailable}` when it cannot answer.
-  @spec turn_open?(String.t(), String.t()) :: {:ok, boolean()} | {:error, :unavailable}
-  def turn_open?(athanor_id, turn_id) do
+  # The status of the turn `turn_id` of the athanor, read from the store:
+  # nil for a turn it does not hold, `{:error, :unavailable}` when it
+  # cannot answer. A turn keeps its sessions while it is open and uses
+  # them only while it is running.
+  @spec turn_status(String.t(), String.t()) :: {:ok, String.t() | nil} | {:error, :unavailable}
+  def turn_status(athanor_id, turn_id) do
     case Arca.TurnStorage.get(Prima.Actor.in_athanor(athanor_id), turn_id) do
-      {:ok, %{status: status}} -> {:ok, status in Prima.TurnState.open_statuses()}
-      {:error, :not_found} -> {:ok, false}
+      {:ok, %{status: status}} -> {:ok, status}
+      {:error, :not_found} -> {:ok, nil}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
@@ -742,11 +744,13 @@ defmodule Opus.Programs do
   # (`Sanctum.Consent.authorize_interactive_in_chain/1`, a person's own
   # sign-in; a key's chain is not); the call is the turn's own, not a
   # component's it started (the lineage's parent is its root); its person
-  # stands; and the store holds an open turn of the lineage's thread, in
+  # stands; and the store holds a running turn of the lineage's thread, in
   # the context's athanor, whose root is the lineage's root and which that
-  # person asked for. The lineage is the gate's (`Sanctum.Dispatch` drops
-  # what a guest sends under its names and stamps its own). Anything else
-  # is a stranger.
+  # person asked for. A turn that is paused (on a card), ending or not yet
+  # running again is a stranger to its own sessions: they stay and go on
+  # printing, and it uses them once it runs. The lineage is the gate's
+  # (`Sanctum.Dispatch` drops what a guest sends under its names and stamps
+  # its own). Anything else is a stranger.
   defp turn_of(%Sanctum.Context{plane: :guest, authenticated: true} = ctx, %{
          "thread_id" => thread_id,
          "root_execution_id" => root,
@@ -759,7 +763,11 @@ defmodule Opus.Programs do
     with {:ok, :interactive} <- Sanctum.Consent.authorize_interactive_in_chain(ctx),
          {:ok, true} <- stands(athanor_id, user_id),
          {:ok, turns} <- Arca.TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread_id) do
-      case Enum.find(turns, &(&1.root_execution_id == root and &1.requested_by == user_id)) do
+      case Enum.find(
+             turns,
+             &(&1.status == "running" and &1.root_execution_id == root and
+                 &1.requested_by == user_id)
+           ) do
         %{id: turn_id} -> {:ok, {athanor_id, user_id, turn_id}}
         nil -> {:ok, :stranger}
       end

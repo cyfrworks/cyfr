@@ -81,7 +81,7 @@ defmodule Opus.Programs.TurnSessionTest do
     row
   end
 
-  # An open turn of a thread of the person's, its root execution set as
+  # A running turn of a thread of the person's, its root execution set as
   # its start sets it, and the lineage the gate stamps on its own calls.
   defp turn!(ctx, opts \\ []) do
     actor = Sanctum.Context.actor(ctx)
@@ -106,7 +106,7 @@ defmodule Opus.Programs.TurnSessionTest do
 
     {1, _} =
       Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [root_execution_id: root]
+        set: [root_execution_id: root, status: "running"]
       )
 
     lineage = %{
@@ -115,7 +115,55 @@ defmodule Opus.Programs.TurnSessionTest do
       "parent_execution_id" => root
     }
 
-    {%{turn | root_execution_id: root}, lineage}
+    {%{turn | root_execution_id: root, status: "running"}, lineage}
+  end
+
+  defp set_status(turn, status) do
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [status: status]
+      )
+  end
+
+  # A root authority whose ingress edge grants exactly `program.<action>`.
+  defp granting(action) do
+    node = "formula:local.program-gate"
+
+    graph = %{
+      "canonical" => "jcs-1",
+      "nodes" => %{
+        node => %{
+          "limits" => %{
+            "timeout" => "1m",
+            "max_memory_bytes" => 67_108_864,
+            "max_request_size" => 1_048_576,
+            "max_response_size" => 5_242_880,
+            "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+            "max_concurrent_tasks" => 10,
+            "batch_timeout" => "1m"
+          },
+          "edges" => %{"@ingress" => %{"tools" => ["program.#{action}"]}}
+        }
+      }
+    }
+
+    {:ok, blob} = Prima.Authority.Blob.parse(graph)
+
+    {:ok, authority} =
+      Prima.Authority.root(
+        %{
+          profile_id: "prof-program-gate",
+          consent_id: "consent-program-gate",
+          source_ref: node,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: %{node => "sha256:program-gate"}
+        },
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+      )
+
+    authority
   end
 
   defp guest(ctx), do: Sanctum.Context.enter_guest(ctx)
@@ -164,6 +212,10 @@ defmodule Opus.Programs.TurnSessionTest do
         truthy
     end
   end
+
+  # A gate answer's body, keyed by strings as a wire reader reads it.
+  defp jsonish({:ok, answer}), do: {:ok, answer |> Jason.encode!() |> Jason.decode!()}
+  defp jsonish(other), do: other
 
   defp written(id, bytes),
     do: eventually(fn -> :sys.get_state(terminal(id)).written >= bytes end, "#{bytes} bytes")
@@ -283,6 +335,67 @@ defmodule Opus.Programs.TurnSessionTest do
 
       assert {:ok, %{programs: [listed]}} = call(ctx, lineage, "list", %{})
       assert listed == %{id: row.id, name: "gh", command: "gh", epoch: row.epoch}
+    end
+  end
+
+  describe "a turn that is not running" do
+    test "keeps its sessions, printing, and neither reads nor types on them until it runs again",
+         %{ctx: ctx, row: row, turn: turn, fake: fake} do
+      ctx = %{ctx | origin: :interactive}
+      lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx, %{thread_id: turn.thread_id})
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [root_execution_id: lineage.root_execution_id, attempt: lineage.attempt]
+        )
+
+      stamped = Map.new(lineage, fn {key, value} -> {Atom.to_string(key), value} end)
+      {id, _open, _answer} = start!(ctx, stamped, row)
+
+      {:ok, _paused} =
+        TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{
+          fence: turn.fence,
+          reason: "approval"
+        })
+
+      gate = fn action, args ->
+        Sanctum.Gate.call_in_chain(
+          "program",
+          guest(ctx),
+          Map.merge(%{"action" => action, "session" => id}, args),
+          granting(action),
+          lineage: lineage
+        )
+      end
+
+      assert {:error, _} = gate.("read", %{})
+      assert {:error, _} = gate.("send", %{"terminal_input" => "execute\r"})
+      # A stop is answered as a stranger's, and ends nothing.
+      assert {:ok, %{stopped: :already_gone}} = gate.("stop", %{})
+      assert {:error, _} = gate.("list", %{})
+      refute_received {:session, "input", _message, _fields}
+
+      # It goes on printing meanwhile, and its session stays.
+      Scripted.write(fake, row.id, "while paused")
+      written(id, 1)
+      assert {:ok, [%{session: ^id}]} = Programs.running(ctx)
+
+      set_status(turn, "running")
+      assert {:ok, %{"output" => "while paused\n"}} = jsonish(gate.("read", %{}))
+    end
+
+    test "an accepted, paused or ended turn reaches nothing of its sessions",
+         %{ctx: ctx, row: row, turn: turn, lineage: lineage} do
+      {id, _open, _answer} = start!(ctx, lineage, row)
+
+      for status <- ~w(accepted paused completed failed cancelled uncertain) do
+        set_status(turn, status)
+
+        assert {:error, {:not_found, _, _}} = call(ctx, lineage, "read", %{"session" => id}),
+               status
+
+        assert {:error, :not_found} = Programs.rows(turn_caller(ctx, lineage)), status
+      end
     end
   end
 

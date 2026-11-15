@@ -696,7 +696,11 @@ defmodule Opus.Programs.Terminal do
   end
 
   defp turn_open(%{turn_id: nil}), do: {:ok, true}
-  defp turn_open(state), do: Opus.Programs.turn_open?(state.athanor_id, state.turn_id)
+
+  defp turn_open(state) do
+    with {:ok, status} <- Opus.Programs.turn_status(state.athanor_id, state.turn_id),
+         do: {:ok, status in Prima.TurnState.open_statuses()}
+  end
 
   defp summary(state) do
     %{
