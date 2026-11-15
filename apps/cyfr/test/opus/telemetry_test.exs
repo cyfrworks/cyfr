@@ -262,7 +262,9 @@ defmodule Opus.TelemetryTest do
       child = Map.merge(row("reagent"), %{origin: "schedule", parent_execution_id: "exec_p"})
 
       Telemetry.row_failed(root, failure("Execution terminated", 0))
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _, %{origin: root_origin}}
+
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _,
+                      %{origin: root_origin}}
 
       Telemetry.row_failed(child, failure("Parent execution (exec_p) terminated", 0))
 

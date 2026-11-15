@@ -237,6 +237,7 @@
     request: Object.freeze(["requested", "decided"])
   });
   var ANSWER_VERBS = Object.freeze([...new Set(Object.values(ANSWER_OF).flat())]);
+  var APP_ANSWERS = Object.freeze([.../* @__PURE__ */ new Set([...ANSWER_OF.open, ...ANSWER_OF.request])]);
   var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"]);
   var POSTURES = ["desk", "hand"];
   var SHELL_STATES = ["live", "frozen"];
@@ -936,12 +937,13 @@
        * open (`cyfr.subject`); opening it does nothing more. From a canvas
        * the shell acts on it only for an input of the person's, never from a
        * script on its own. Answers what came of it: `{outcome: "opened"}`,
-       * `{outcome: "refused", reason}` with the refusal's class (`not_found`
-       * for a tincture the shell does not list, `invalid_argument` for a
-       * subject the app does not take), or `{outcome: "cancelled"}` when the
-       * shell did not act on it, with `reason: "too_soon"` when it came within
-       * a few seconds of the last spend of the activation, for the person to
-       * tap again.
+       * `{outcome: "refused", reason}` with the refusal's class
+       * (`invalid_argument`, on a canvas, for a subject the app does not take
+       * when `installed` lists the app; `not_found` for every other refusal,
+       * so an app learns nothing of what is installed), or
+       * `{outcome: "cancelled"}` when the shell did not act on it, with
+       * `reason: "too_soon"` when it came within a few seconds of the last
+       * spend of the activation, for the person to tap again.
        * @returns {Promise<{outcome: string, reason?: string}>}
        */
       open(ref, on = null) {

@@ -1045,7 +1045,8 @@ defmodule Opus.Record do
     %__MODULE__{
       id: result.id,
       request_id: result.request_id,
-      admitted: admitted(result[:call_id], stored_origin(result[:origin]), result[:parent_execution_id]),
+      admitted:
+        admitted(result[:call_id], stored_origin(result[:origin]), result[:parent_execution_id]),
       user_id: result.user_id,
       athanor_id: result[:athanor_id],
       reference: result.reference,
@@ -1256,8 +1257,11 @@ defmodule Opus.Record do
   @spec origin(t() | map()) :: Prima.Origin.t() | nil
   def origin(%__MODULE__{admitted: %{origin: origin}}), do: origin
 
-  def origin(row) when is_map(row),
-    do: admitted(nil, stored_origin(Map.get(row, :origin)), Map.get(row, :parent_execution_id)).origin
+  def origin(row) when is_map(row) do
+    spelling = Map.get(row, :origin)
+    %{origin: origin} = admitted(nil, stored_origin(spelling), Map.get(row, :parent_execution_id))
+    origin
+  end
 
   # A row's origin is one of `Prima.Origin`'s spellings, checked as it is
   # written; one the read does not select is nil.
