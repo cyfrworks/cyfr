@@ -365,8 +365,8 @@ defmodule Arca.ThreadStorage do
   @doc """
   The child thread `member` works in under the room `room_id`: the one
   that stands (not archived), made when there is none, titled by the
-  member and counted against the athanor's thread ceiling as `create/2`
-  counts. One locking transaction takes the athanor's row before it
+  member and counted against the athanor's thread ceiling as a new day is
+  (`daily/2`). One locking transaction takes the athanor's row before it
   looks, so two callers never make two. `{:error, :not_found}` when the
   room is not a thread of the athanor, `{:error, :not_a_room}` when it is
   itself a child thread: a room is a daily or a workspace thread of the

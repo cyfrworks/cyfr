@@ -1764,6 +1764,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
       <div
         id={@dom <> "-thread"}
+        data-thread={@thread && @thread.id}
         phx-hook="ScrollBottom"
         class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
       >

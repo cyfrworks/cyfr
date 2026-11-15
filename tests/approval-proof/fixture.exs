@@ -631,7 +631,7 @@ fn args ->
 
     ["thread", token] ->
       {:ok, ctx} = Sanctum.Caller.establish({:session, token})
-      {:ok, thread} = PrismWeb.Ops.call_tool(ctx, "thread", %{"action" => "create"})
+      {:ok, thread} = PrismWeb.Ops.call_tool(ctx, "thread", %{"action" => "today"})
       answer.(%{thread_id: Map.get(thread, :id) || Map.get(thread, "id")})
 
     ["say", token, thread_id, text] ->

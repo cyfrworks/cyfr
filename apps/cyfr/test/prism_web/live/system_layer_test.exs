@@ -670,14 +670,14 @@ defmodule PrismWeb.SystemLayerTest do
   defp view_context(view), do: :sys.get_state(view.pid).socket.assigns.context
 
   # A thread pane in its host, Aqua's panel on the desktop, opened and
-  # turned to `thread_id`: answers the panel and the pane once the pane is
-  # on the thread.
+  # turned to `thread_id` as an approval's destination turns it: answers
+  # the panel and the pane once the pane is on the thread.
   defp panel_pane(conn, thread_id) do
     {desktop, _html} = mount_desktop(conn)
     wait_until(fn -> find_live_child(desktop, "aqua-panel") end, 5_000, "the desktop's panel")
     panel = find_live_child(desktop, "aqua-panel")
     panel |> element("#aqua-panel-button") |> render_click()
-    panel |> form("#aqua-panel-thread-form", %{"id" => thread_id}) |> render_change()
+    send(panel.pid, {:open, thread_id})
 
     wait_until(
       fn ->

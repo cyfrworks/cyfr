@@ -683,10 +683,16 @@ defmodule Aqua.Providers.Thread do
   end
 
   # A send joins the daily thread current when it is accepted: one that
-  # names no thread, or names a daily thread, of today or another day.
+  # names no thread, or names a daily thread, of today or another day. Its
+  # files are stored under the thread they were attached to, so a send
+  # that carries files names that thread and joins it, or is refused with
+  # nothing written when the day turned since: a message never names
+  # files another thread holds.
   defp dispatch(ctx, %{"action" => "send"} = args) do
-    case sends_to(ctx, args["thread"]) do
-      {:ok, id} -> act("send", ctx, id, args)
+    with {:ok, id} <- sends_to(ctx, args["thread"]),
+         :ok <- files_under(args, id) do
+      act("send", ctx, id, args)
+    else
       {:error, reason} -> {:error, refusal(reason, args["thread"])}
     end
   end
@@ -708,6 +714,11 @@ defmodule Aqua.Providers.Thread do
   end
 
   defp sends_to(ctx, _none), do: today_id(ctx)
+
+  defp files_under(%{"attachments" => [_ | _]} = args, id),
+    do: if(args["thread"] == id, do: :ok, else: {:error, :files_elsewhere})
+
+  defp files_under(_args, _id), do: :ok
 
   defp today_id(ctx) do
     with {:ok, thread} <- Aqua.Day.current(ctx), do: {:ok, thread.id}
@@ -1065,6 +1076,12 @@ defmodule Aqua.Providers.Thread do
   defp translate(:not_found, id), do: {:not_found, "thread", id}
 
   defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
+
+  defp translate(:files_elsewhere, _id),
+    do:
+      {:conflict,
+       "These files were attached to another thread or an earlier day's; " <>
+         "attach them again to today's thread (thread.today) and send."}
 
   defp translate(:unavailable, _id), do: {:unavailable, "Threads"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}
