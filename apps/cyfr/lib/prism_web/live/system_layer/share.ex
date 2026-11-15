@@ -23,9 +23,17 @@ defmodule PrismWeb.SystemLayer.Share do
   Vault page's audience and caps changes read too; which entry may be
   shared, and to whom, is the operation's to decide. The sheet holds no
   value of the entry and asks for none.
+
+  A page opens the sheet with `prompt/3` for an entry `shareable?/1`
+  admits, offering the threads `threads/1` reads. The administrator's
+  setup opens it with the one preset there is (`:setup`): everyone, with a daily cap per person filled in. A preset only starts the sheet's
+  choice, held to the form like any change (`choice/2`), and what is made
+  is what the sheet shows when it is confirmed (`args/2`).
   """
 
   use Phoenix.Component
+
+  require Logger
 
   @everyone "everyone"
   # A cap is a count: no longer text is one, so none is kept.
@@ -34,6 +42,8 @@ defmodule PrismWeb.SystemLayer.Share do
   @newcomers "You administer this CYFR, so a key you share with everyone is also what each " <>
                "new person's AQUA uses when it fits"
   @thread "shared_thread:"
+  # The administrator's setup's daily cap per person, until it is decided.
+  @setup_person_daily 50
 
   attr :id, :string, required: true
   attr :prompt, :map, required: true
@@ -245,4 +255,85 @@ defmodule PrismWeb.SystemLayer.Share do
   end
 
   defp everyone_words(_administrator, _choice), do: nil
+
+  @doc """
+  Whether the store would share `entry`, as `vault.list` answers it: the
+  rule of `Arca.Shares.eligible/1`. The operation decides again.
+  """
+  @spec shareable?(map()) :: boolean()
+  def shareable?(%{status: "active", attach_only: true, kind: kind, destination: %{} = to}),
+    do:
+      kind in Prima.CredentialKinds.shareable() and Map.get(to, "methods", []) != [] and
+        Map.get(to, "paths", []) != []
+
+  def shareable?(_entry), do: false
+
+  @doc """
+  The person's active shared threads as the sheet offers them, each
+  `%{id, name}`, a pair under the other person's name. A read that fails
+  offers none, said in the log.
+  """
+  @spec threads(Phoenix.LiveView.Socket.t()) :: [%{id: String.t(), name: String.t()}]
+  def threads(socket) do
+    case PrismWeb.Ops.fetch_list(socket, "shared_thread/list", :threads) do
+      {:ok, threads} ->
+        for %{status: "active"} = thread <- threads,
+            do: %{id: thread.id, name: thread_name(thread)}
+
+      {:error, message} ->
+        Logger.warning("[PrismWeb.SystemLayer.Share] shared_thread/list failed: #{message}")
+        []
+    end
+  end
+
+  defp thread_name(%{kind: "pair", with: %{name: name}}), do: name
+  defp thread_name(%{title: title}), do: title
+
+  @doc """
+  The system layer's prompt for sharing `entry` (its `id` and `name`)
+  with everyone or one of `threads`; `preset` `:setup` starts the sheet
+  at the administrator's setup's choice.
+  """
+  @spec prompt(
+          %{:id => String.t(), :name => String.t(), optional(atom()) => term()},
+          [map()],
+          :setup | nil
+        ) :: map()
+  def prompt(%{id: id, name: name}, threads, preset \\ nil) do
+    subject = %{entry_id: id, name: name, threads: threads}
+
+    %{
+      id: "share-" <> id,
+      kind: :share,
+      action: :credential_sharing,
+      subject: if(preset, do: Map.put(subject, :preset, preset), else: subject)
+    }
+  end
+
+  @doc "The presets a share prompt may carry: the administrator's setup's alone."
+  @spec presets() :: [:setup]
+  def presets, do: [:setup]
+
+  @doc """
+  The choice the sheet of the shown `prompt` draws: the form's last change
+  the layer kept, else the prompt's preset held to the form, else none.
+  """
+  @spec drawn(map()) :: map()
+  def drawn(%{choice: %{} = choice}), do: choice
+
+  def drawn(%{subject: %{preset: :setup, threads: threads}}) do
+    {:ok, choice} =
+      choice(
+        %{
+          "audience" => @everyone,
+          "person_daily" => Integer.to_string(@setup_person_daily),
+          "total_daily" => ""
+        },
+        %{threads: threads}
+      )
+
+    choice
+  end
+
+  def drawn(_prompt), do: %{}
 end

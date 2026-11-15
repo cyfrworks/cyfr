@@ -94,6 +94,7 @@ defmodule Sanctum.Vault do
           attach_only: boolean(),
           payload_rev: non_neg_integer(),
           last_used_at: DateTime.t() | nil,
+          created_at: DateTime.t(),
           used_by: [use_view()] | nil
         }
 
@@ -108,7 +109,8 @@ defmodule Sanctum.Vault do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Living entries in the caller's athanor, metadata only. Each entry's
+  Living entries in the caller's athanor, metadata only, each with when
+  it was made (`created_at`, as `status/1` answers it too). Each entry's
   `used_by` names the grants that bind it now: every active profile whose
   head revision binds the entry (`Arca.ConsentStorage.entry_uses/1`), by
   source and label, `[]` when none does. When those grants cannot be read
@@ -734,6 +736,7 @@ defmodule Sanctum.Vault do
       attach_only: entry.attach_only,
       payload_rev: entry.payload_rev,
       last_used_at: entry.last_used_at,
+      created_at: entry.inserted_at,
       used_by: used_by
     }
   end

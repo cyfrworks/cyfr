@@ -61,13 +61,3 @@ func TestScheduleMissedRunsFlags_UnsetSendsNothing(t *testing.T) {
 		}
 	}
 }
-
-func TestScheduleMissedRunsFlags_OnCreateAndUpdate(t *testing.T) {
-	for _, cmd := range []*cobra.Command{scheduleCreateCmd, scheduleUpdateCmd} {
-		for _, flag := range []string{"missed-runs", "catch-up-limit"} {
-			if cmd.Flags().Lookup(flag) == nil {
-				t.Errorf("schedule %s has no --%s", cmd.Name(), flag)
-			}
-		}
-	}
-}

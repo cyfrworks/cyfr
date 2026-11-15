@@ -1415,7 +1415,7 @@ defmodule Cyfr.DocsDriftTest do
       assert row =~ "| `#{entry.group}` | #{entry.scope} | #{entry.stale} | #{entry.doc} |"
     end
 
-    [_, recovery] = String.split(text, "## Headless recovery\n", parts: 2)
+    [_, recovery] = String.split(text, "## Recovery without the console\n", parts: 2)
     assert recovery =~ "bin/cyfr rpc" and recovery =~ "bin/cyfr eval"
   end
 

@@ -398,7 +398,7 @@ func TestSetup_AnAccountOfYoursAddsThisBox(t *testing.T) {
 	kid := account.Kid(rec.PublicKey)
 	page := b.page()
 	addURL := home.accounts.URL() + "/account/add#key=" + b64(rec.PublicKey) + "&alg=ed25519&kind=device&code=" + kid[7:23]
-	if !strings.Contains(page, kid[7:23]) || !strings.Contains(page, addURL) || !strings.Contains(page, "cyfr device approve "+b64(rec.PublicKey)) || !strings.Contains(page, "<svg") {
+	if !strings.Contains(page, kid[7:23]) || !strings.Contains(page, addURL) || strings.Contains(page, "cyfr device approve") || !strings.Contains(page, "<svg") {
 		t.Fatalf("the enroll page:\n%s", page)
 	}
 	old := enrollWait
@@ -508,7 +508,7 @@ func TestCheckListed_ARemovedKeyIsAddedAgainAndSaysHello(t *testing.T) {
 	code := account.ShortCode(account.Kid(rec.PublicKey))
 	page := b.page()
 	if !strings.Contains(page, "Your account no longer lists this screen's key.") || !strings.Contains(page, code) ||
-		!strings.Contains(page, "cyfr device approve "+b64(rec.PublicKey)) || !strings.Contains(page, "<svg") {
+		strings.Contains(page, "cyfr device approve") || !strings.Contains(page, "<svg") {
 		t.Fatalf("the removed key's page:\n%s", page)
 	}
 	if after, _ := holder.Load(b.record); after.Identifier != "" || after.Directory != "" || !bytes.Equal(after.PublicKey, rec.PublicKey) {

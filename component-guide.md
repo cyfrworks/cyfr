@@ -505,7 +505,7 @@ See the bundled `seed/components/formulas/local/list-models` formula for a produ
 
 ## Manifest (`cyfr-manifest.json`)
 
-The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Vault page). A name-level `<ref>` grants what the newest installed version asks for; one pinned to an installed version, what that version asks for.
+The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (on the Components page, open it and choose **Grant access**). A name-level `<ref>` grants what the newest installed version asks for; one pinned to an installed version, what that version asks for.
 
 ### Field Reference
 
@@ -1045,14 +1045,11 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr list` | `component` | `list` | `type` |
 | — | `component` | `setup_plan` | `reference` (shows the component's needs and whether each is bound + live) |
 | — | `tools` | `list` | `component_ref` (optional — filters to the component's consented tool allowlist) |
-| `cyfr schedule create` | `schedule` | `create` | `name`, `cron_expression`, `reference`, `profile_id` (`--profile`), `input` |
 | `cyfr schedule list` | `schedule` | `list` | `limit` |
 | `cyfr schedule pause` | `schedule` | `pause` | `schedule_id` |
 | `cyfr schedule resume` | `schedule` | `resume` | `schedule_id` |
 | `cyfr schedule delete` | `schedule` | `delete` | `schedule_id` |
-| `cyfr profile grant` | `profile` | `plan` / `preview` / `commit` | `ref`; then `decisions`, `plan_token`, `proof`, `commit_digest` |
 | `cyfr profile list` | `profile` | `list` | `ref` |
-| `cyfr profile revoke` | `profile` | `revoke` | `profile_id` |
 | — | `vault` | `list` / `create` / `rotate` / `rebind` / `authorize` / `revoke` / `delete` | `id`, `name`, `kind`, `fields`, `destination`, `disclose` |
 | — | `oauth` | `set_client` | `provider`, `client_id`, `client_secret` |
 | `cyfr log list` | `mcp_log` | `list` | `tool`, `status`, `limit`, `since` |
@@ -1192,7 +1189,7 @@ To ship a model catalyst of your own: declare the contract, answer the three ope
 
 ## Needs & the Vault
 
-A **vault entry** is a credential the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest and bound to a destination. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The operator creates entries on the Vault page and binds them on the system layer's grant sheet or with `cyfr profile grant <ref>`. A component never writes or learns a vault entry name. Reagents cannot read credentials.
+A **vault entry** is a credential the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest and bound to a destination. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The operator creates entries on the Vault page and binds them in the component's grant sheet (on the Components page, open it and choose **Grant access**). A component never writes or learns a vault entry name. Reagents cannot read credentials.
 
 For attachment, declare `attach` and the destination `hosts` (and optionally `paths`). An API key or bundle names the one field to attach in `fields`; an OAuth need names its token's `scopes`. Name the need as `"connection": "<need>"` on the `cyfr:http` request with no credential header of your own. CYFR pins the request once under the component's egress, attaches the value in the host within the entry's destination, and masks it from the answer. The component, runner and worker service receive no attached credential. The need's hosts must also fit its egress ask; the entry's destination and the granted egress are independent bounds.
 
@@ -1366,7 +1363,7 @@ be delivered and asks the sender to send it again.
 1. Scaffold    cyfr new <type> <name>                  (once — creates project structure)
 2. Edit        Edit src/src/lib.rs
 3. Compile     cyfr build compile <type>:local.<name>:<version>   (versioned — targets specific version)
-4. Grant       cyfr profile grant <type>:local.<name>  (versionless — first time only, covers later versions)
+4. Grant       on Components, open <type>:local.<name> and choose Grant access  (versionless — first time only, covers later versions)
 5. Run         cyfr run <type>:local.<name> --input '{...}'       (versionless — uses latest version)
 6. Iterate     Edit → compile → run (a versionless consent persists across version bumps)
 ```
@@ -1421,7 +1418,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `core_module` | The binary is a core WebAssembly module, not a component | Build a component: target `wasm32-wasip2` with `cargo component build` |
 | `malformed` (`invalid_wasm`) | Not valid WebAssembly, or uses a refused feature | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` with the refused features off (**Refused features** under [Limits](#limits-capslimits)) |
 | `too_large` | Binary over 50 MiB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
-| `consent_required` | The component has no granted capabilities | Grant it: `cyfr profile grant <type>:<ref>` |
+| `consent_required` | The component has no granted capabilities | Grant it: on Components, open the component and choose **Grant access** |
 | `domain_blocked` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
 | `rate_limited` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |
 | `secret_denied` | Name outside the vault-entry projection (its field map) | Declare the name in the need's `fields`; operator re-grants |
@@ -1453,7 +1450,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `uncertain` | The call may have taken effect and no result says whether it did: its handler stopped once it may have acted ("Tool <name> crashed; its outcome is unknown", or exited, timed out or was cancelled), a component it ran was stopped with its work possibly still running ("Execution timeout after Nms", or cancelled before it completed), or the host call's answer was lost. Check before repeating it |
 | `unknown` | The host produced a result in an unexpected shape |
 
-`setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.
+`setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan`). Formulas can surface this to users via `emit`.
 
 ---
 
@@ -1463,7 +1460,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
 - [ ] For an attached key or bundle, `needs.fields` names exactly one field and requests name the need as `connection`; for a disclosed need, the fields match the names the binary passes to `cyfr:vault/read.get`. The person's entry may name its fields otherwise; the grant maps them
 - [ ] Tested with `cyfr run` using representative input
-- [ ] Catalysts: every egress domain declared in `caps.egress.domains`, component granted (`cyfr profile grant c:<ref>`)
+- [ ] Catalysts: every egress domain declared in `caps.egress.domains`, component granted (on Components, open `c:<ref>` and choose **Grant access**)
 - [ ] OAuth catalysts: need of type `oauth:<provider>` declares every scope your operations use
 - [ ] `cargo clean` run (`target/` is ~500MB+ per component)
 - [ ] All errors return `json!({"error": "..."}).to_string()` — never panic

@@ -151,7 +151,7 @@ func TestSetupOffersTheStartAgain(t *testing.T) {
 // stack's lock as cyfr up reads it, and exits 0. While cyfr runs with no
 // one set up (the boot's not-set-up line and no set-up line after it),
 // the setup link, opened on a machine with a display; with its first
-// person, cyfr open; with a log that cannot be read, the link alone;
+// person, its address; with a log that cannot be read, the link alone;
 // while it is stopped, cyfr up first, then the setup link when it never
 // booted. A .env that says nothing of how
 // CYFR is reached is refused with its sentence.
@@ -169,12 +169,12 @@ func TestSetupInASetUpProjectSaysTheNextStep(t *testing.T) {
 		opened               []string
 	}{
 		{name: "running, no one set up", container: "c0ffee", log: "booting\n" + marker,
-			want:   "Open " + link + " to set up its first person, or run cyfr login --setup here.\nOpened it in your browser.\n",
+			want:   "Open " + link + " to set up its first person.\nOpened it in your browser.\n",
 			opened: []string{link}},
 		{name: "running, its first person set up", container: "c0ffee", log: "booting\n",
-			want: "CYFR is set up and has its first person. cyfr open opens it.\n"},
+			want: "CYFR is set up and has its first person. Open https://cyfr.example.com.\n"},
 		{name: "running, its first person set up since the boot", container: "c0ffee", log: "booting\n" + marker + setUp,
-			want: "CYFR is set up and has its first person. cyfr open opens it.\n"},
+			want: "CYFR is set up and has its first person. Open https://cyfr.example.com.\n"},
 		{name: "running, its log unread", container: "c0ffee", log: marker, exit: "1",
 			want:   "Open " + link + ".\nOpened it in your browser.\n",
 			opened: []string{link}},

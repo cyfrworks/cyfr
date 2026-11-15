@@ -184,6 +184,29 @@ defmodule PrismWeb.AquaLiveTest do
     render(view)
   end
 
+  test "Aqua's setup offers an administrator this CYFR's setup next until Settings has " <>
+         "opened it, and offers it to nobody else",
+       %{conn: conn} do
+    admin = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(admin.user_id)
+    next = ~s([data-test="setup-admin-next"] a[href$="/settings?setup=1"])
+
+    {view, _html} = mount_athanor(log_in_user(conn, admin), "/aqua?setup=1")
+    assert has_element?(view, next, "Next: set up this CYFR for the people you let in")
+
+    # Settings opens the administrator's setup and writes that it was seen.
+    {settings, _html} = mount_athanor(log_in_user(build_conn(), admin), "/settings?setup=1")
+    assert has_element?(settings, ~s([data-test="setup"]))
+
+    {view, _html} = mount_athanor(log_in_user(build_conn(), admin), "/aqua?setup=1")
+    refute has_element?(view, ~s([data-test="setup-admin-next"]))
+
+    person = test_user()
+    {view, _html} = mount_athanor(log_in_user(build_conn(), person), "/aqua?setup=1")
+    refute has_element?(view, ~s([data-test="setup-admin-next"]))
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   describe "the athanor's page" do
     setup %{conn: conn} do
       user = test_user()

@@ -15,14 +15,11 @@ import (
 )
 
 func init() {
-	aquaResetCmd.Flags().Bool("all", false,
-		"Also delete the crew members and scrolls the athanor made, so exactly the shipped set remains")
 
 	rootCmd.AddCommand(aquaCmd)
 	aquaCmd.AddCommand(aquaListCmd)
 	aquaCmd.AddCommand(aquaGetCmd)
 	aquaCmd.AddCommand(aquaStatusCmd)
-	aquaCmd.AddCommand(aquaResetCmd)
 	aquaCmd.AddCommand(aquaSkillsCmd)
 	aquaSkillsCmd.AddCommand(aquaSkillsListCmd)
 	aquaSkillsCmd.AddCommand(aquaSkillsGetCmd)
@@ -40,9 +37,8 @@ var aquaCmd = &cobra.Command{
   the guides    the read-only documentation guides
 
 "list" shows all of it; "get" reads the soul, a crew member or a guide; "skills" reads
-the scrolls; "status" says which files are shipped, edited or yours; "reset"
-reverts edited copies of shipped files (and, with --all, deletes what the athanor
-made so only the shipped set remains).`,
+the scrolls; "status" says which files are shipped, edited or yours. AQUA's page
+in CYFR restores the shipped set.`,
 }
 
 var aquaListCmd = &cobra.Command{
@@ -111,8 +107,10 @@ var aquaStatusCmd = &cobra.Command{
 	Long: `Show every file in the athanor's aqua tree and where it comes from:
 
   bundled   as shipped with the server
-  edited    a shipped file the athanor changed — "reset" reverts it
-  yours     a crew member or scroll the athanor made — "reset --all" deletes it`,
+  edited    a shipped file the athanor changed
+  yours     a crew member or scroll the athanor made
+
+AQUA's page in CYFR restores the shipped set.`,
 	Example: `  cyfr aqua status
   cyfr aqua status --json`,
 	Args: cobra.NoArgs,
@@ -126,52 +124,6 @@ var aquaStatusCmd = &cobra.Command{
 			return nil
 		}
 		renderAquaStatus(result)
-		return nil
-	},
-}
-
-var aquaResetCmd = &cobra.Command{
-	Use:   "reset",
-	Short: "Revert edited copies of shipped files",
-	Long: "Revert every shipped file the athanor edited — the soul, shipped crew members and shipped scrolls — to as shipped. " +
-		"Crew members and scrolls the athanor made are kept unless --all, which deletes them too so exactly the shipped set remains.",
-	Example: `  cyfr aqua reset
-  cyfr aqua reset --all`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		all, _ := cmd.Flags().GetBool("all")
-
-		// Deleting what the athanor made is the irreversible half: it asks
-		// when there is someone to ask. A plain reset only reverts to
-		// shipped and runs straight through.
-		if all && prompt.IsInteractive(flagNoInteractive) {
-			confirmed, err := prompt.Confirm(cmd.Context(),
-				"Revert every edited file AND delete the crew members and scrolls the athanor made? This cannot be undone.")
-			if err != nil {
-				if prompt.IsAborted(err) {
-					return prompt.ErrAborted
-				}
-				return fmt.Errorf("Prompt failed: %w", err)
-			}
-			if !confirmed {
-				fmt.Println("Cancelled.")
-				return nil
-			}
-		}
-
-		toolArgs := ops.AquaResetArgs{}
-		if all {
-			toolArgs.All = ops.Value(true)
-		}
-		result, err := newClient().CallTool(cmd.Context(), ops.Aqua, toolArgs)
-		if err != nil {
-			return handleToolError(err, "Reset failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return nil
-		}
-		renderAquaReset(result, all)
 		return nil
 	},
 }
@@ -354,34 +306,6 @@ func renderAquaStatus(result map[string]any) {
 		})
 	}
 	output.Table([]string{"PATH", "STATE"}, rows)
-}
-
-// renderAquaReset prints what a reset reverted and what it kept. With
-// --all the server folds the crew members and scrolls it deleted into the same
-// "reverted" list, so the heading says so.
-func renderAquaReset(result map[string]any, all bool) {
-	reverted := stringsOf(result["reverted"])
-	kept := stringsOf(result["kept"])
-
-	switch {
-	case len(reverted) == 0 && all:
-		fmt.Println("Nothing to revert or delete — exactly the shipped set is here, as shipped.")
-	case len(reverted) == 0:
-		fmt.Println("Nothing to revert — every shipped file is as shipped.")
-	case all:
-		fmt.Println("Reverted or deleted:")
-	default:
-		fmt.Println("Reverted to shipped:")
-	}
-	for _, p := range reverted {
-		fmt.Println("  " + p)
-	}
-	if len(kept) > 0 {
-		fmt.Println("Kept (yours — `cyfr aqua reset --all` deletes them too):")
-		for _, p := range kept {
-			fmt.Println("  " + p)
-		}
-	}
 }
 
 // renderScrollList prints the scroll index: name and the one line each

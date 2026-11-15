@@ -931,8 +931,8 @@ defmodule Compendium.OCI.Client do
 
         :not_claimed ->
           {:error,
-           "You haven't claimed a personal namespace yet. Claim your handle with " <>
-             "`cyfr registry claim <handle>` before publishing to #{registry}."}
+           "You have no name recorded here yet. Record the name your account holds under " <>
+             "Your name in Settings before publishing to #{registry}."}
 
         {:error, _reason} ->
           {:error,

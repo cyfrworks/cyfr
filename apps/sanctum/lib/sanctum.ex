@@ -23,7 +23,7 @@ defmodule Sanctum do
   - a sign-in's answer (`Sanctum.SignIn`), which asks the door about the
     person (`Sanctum.Door`) or admits a new one;
   - a protected device's unlock (`Sanctum.DeviceUnlock`), redeemed by its
-    browser or its command line.
+    browser.
 
   A CYFR may also require a company sign-in of every person here
   (`Sanctum.CompanyLogin`): a standing condition, never a sign-in method,

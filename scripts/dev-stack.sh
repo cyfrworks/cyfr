@@ -814,7 +814,7 @@ discard() {
 
 check() {
   [ -n "${CYFR_TOKEN:-}" ] ||
-    die "CYFR_TOKEN is not set: the check runs a component as a signed-in person. Create an API key on Prism's API Keys page, or sign the dev CLI in with \`cyfr login\`, and pass the key or the session token as CYFR_TOKEN."
+    die "CYFR_TOKEN is not set: the check runs a component as a signed-in person. Create an API key on Prism's API Keys page and pass it as CYFR_TOKEN."
   local out port nonce path failure
   private
   [ -f "$REMEMBERED" ] && slot_ok "$(cat "$REMEMBERED")" ||

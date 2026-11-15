@@ -2933,7 +2933,7 @@ defmodule PrismWeb.SystemLayer do
       prompt={@prompt}
       administrator={match?(%Context{platform_admin: true}, @context)}
       myself={@myself}
-      choice={Map.get(@prompt, :choice, %{})}
+      choice={Share.drawn(@prompt)}
     />
     """
   end

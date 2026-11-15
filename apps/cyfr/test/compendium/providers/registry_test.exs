@@ -165,7 +165,7 @@ defmodule Compendium.Providers.RegistryTest do
                RegistryProvider.handle(ctx, %{"action" => "list_my_reports"})
 
       assert %Prima.Refusal{class: :corrupt} = Refusals.classify(reason)
-      assert Refusals.render(reason) =~ "cyfr registry sync"
+      assert Refusals.render(reason) =~ "push tokens on the Registry page"
     end
 
     @tag :capture_log

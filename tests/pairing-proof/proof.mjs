@@ -3,14 +3,12 @@
 //
 // The pairing proof, run in the official Playwright image by run.sh
 // against `cyfr` releases behind the harness's HTTPS front (README.md):
-// the directory dir.test, which serves the account pages, two CYFRs,
-// x.test and y.test, both set up by the person in the browser, and z.test,
-// set up from the terminal. Chromium alone, since a
-// passkey is made and used by its virtual authenticator
+// the directory dir.test, which serves the account pages, and two CYFRs,
+// x.test and y.test, both set up by the person in the browser. Chromium
+// alone, since a passkey is made and used by its virtual authenticator
 // (../browser/account.mjs). The devices are test devices
 // (../browser/device.mjs), clients of the CYFRs' device channel this
-// process drives frame by frame, and the real `cyfr` binary run.sh builds,
-// run on a pseudo-terminal of its own (`script`) as a person runs it.
+// process drives frame by frame.
 // Each step is one row of the record; the proof fails when a row does not
 // hold, and stops at the first row a later one rests on.
 //
@@ -21,16 +19,14 @@
 //
 // Usage: node proof.mjs HOMES_FILE OUT_DIR
 
-import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  addDevice, createAccount, decodeCode, devicesPage, passkeys, readLog, setUp, signIn,
+  addDevice, createAccount, devicesPage, passkeys, readLog, setUp, signIn,
 } from "../browser/account.mjs";
 import { answer, connectDevice, helloDevice, newDevice } from "../browser/device.mjs";
 import {
-  ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, sleep, startProxy, waitFor,
+  ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, sleep, startProxy,
 } from "../browser/lib.mjs";
 
 const [homesFile, outDir] = process.argv.slice(2);
@@ -45,7 +41,6 @@ const homeNamed = (name) => homes.find((home) => home.name === name) || (() => {
 const DIR = homeNamed("dir");
 const X = homeNamed("x");
 const Y = homeNamed("y");
-const Z = homeNamed("z");
 const NAME = "pair-a";
 const layer = "#system-layer-dialog";
 // How far past the bound a close may fall: the device asks every two
@@ -53,8 +48,8 @@ const layer = "#system-layer-dialog";
 const SLACK_S = 6;
 const rows = [];
 const record = {};
-// Every recovery code, its secret, the setup tokens and the command
-// line's passphrase, so no record is shown to hold one.
+// Every recovery code, its secret and the setup tokens, so no record is
+// shown to hold one.
 const secrets = [];
 
 function row(step, held, what, detail) {
@@ -104,51 +99,6 @@ async function setUpAt(page, keys, home) {
   return setUp(page, keys, home, token);
 }
 
-// The command line run.sh built, on a terminal of its own under
-// script(1)'s pseudo-terminal, its shell /bin/sh, its home `cliHome`,
-// reaching the CYFRs and the directory through the run's proxy and
-// trusting the run's authority as the container's certificate bundle.
-// `type` sends a line to whatever reads the terminal; `until` waits for
-// output matching a pattern after `from`.
-function terminal(args, cliHome, cwd = cliHome) {
-  const command = [join(outDir, "bin", "cyfr"), ...args].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
-  const child = spawn("script", ["-qfec", command, "/dev/null"], { env: cliEnv(cliHome), cwd });
-  const t = { out: "", exit: null };
-  child.stdout.on("data", (chunk) => { t.out += chunk; });
-  child.stderr.on("data", (chunk) => { t.out += chunk; });
-  t.exited = new Promise((resolve) => child.on("close", (code) => { t.exit = code; resolve(code); }));
-  t.type = (line) => child.stdin.write(`${line}\n`);
-  // The excerpt is the terminal's at the timeout, not at the call.
-  t.until = (pattern, from = 0, timeoutMs = 120_000) => waitFor(() => t.out.slice(from).match(pattern), {
-    timeoutMs, what: () => `the terminal to show ${pattern} (${JSON.stringify(redact(t.out.slice(from).slice(-600)))})`,
-  });
-  t.kill = () => child.kill("SIGKILL");
-  return t;
-}
-
-function cliEnv(cliHome) {
-  return {
-    ...process.env,
-    HOME: cliHome,
-    SHELL: "/bin/sh",
-    PS1: "$ ",
-    PATH: `${join(outDir, "bin")}:${process.env.PATH}`,
-    HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-    CYFR_DIRECTORY_URL: DIR.origin,
-    CYFR_NO_UPDATE_CHECK: "1",
-  };
-}
-
-function cyfrRun(args, cliHome) {
-  return new Promise((resolve) => {
-    const child = spawn(join(outDir, "bin", "cyfr"), args, { env: cliEnv(cliHome) });
-    let out = "";
-    child.stdout.on("data", (chunk) => { out += chunk; });
-    child.stderr.on("data", (chunk) => { out += chunk; });
-    child.on("close", (code) => resolve({ code, out }));
-  });
-}
-
 // ---------------------------------------------------------------------------
 // The steps
 // ---------------------------------------------------------------------------
@@ -186,75 +136,7 @@ async function main(browser) {
       "hello alone: each answers its sign-in request against the log and stands its channel",
     record.page)) return;
 
-  // command_line, approve
-  const cliHome = mkdtempSync(join(tmpdir(), "cyfr-pairing-command-line-"));
-  let login = null;
-  try {
-    const added = await cyfrRun(["context", "add", "x", X.origin], cliHome);
-    const context = added.code === 0 ? await cyfrRun(["context", "set", "x"], cliHome) : added;
-    login = terminal(["login"], cliHome);
-    const drawn = await login.until(/Write it down:\s+([a-z]+(?: [a-z]+){5})\s/);
-    const passphrase = drawn[1];
-    secrets.push(passphrase);
-    await login.until(/The passphrase: /);
-    login.type(passphrase);
-    await login.until(/The passphrase again: /);
-    login.type(passphrase);
-    const code = (await login.until(/Its code is ([0-9a-f]{16})\./))[1];
-    const addUrl = (await login.until(/(https:\/\/dir\.test\/account\/add#\S+)\s/))[1];
-    const approveKey = (await login.until(/cyfr device approve (\S+)\s/))[1];
-    await login.until(/Your name: @/);
-    login.type(NAME);
-    const params = new URLSearchParams(new URL(addUrl).hash.slice(1));
-    const cliAdded = await addDevice(laptop, keys, { directory: DIR, device: { pub: params.get("key") }, code: params.get("code") });
-    await login.until(/Unlocked\. This shell holds your CYFR session/, 0, 180_000);
-    const mark = login.out.length;
-    login.type("cyfr whoami; echo \"WHOAMI=$?\"");
-    const whoami = await login.until(/WHOAMI=(\d+)/, mark, 180_000).catch(() => null);
-    const cliListed = await readLog(DIR, identifier);
-    record.command_line = {
-      context: context.code, code, key_matches: params.get("key") === approveKey, code_matches: params.get("code") === code,
-      added: { section: cliAdded.section, shown: cliAdded.shown }, listed: cliListed.keys.length,
-      whoami: whoami ? Number(whoami[1]) : null, output: redact(login.out.slice(mark)).slice(-800),
-    };
-    if (!row("command_line",
-      context.code === 0 && record.command_line.key_matches && record.command_line.code_matches && cliAdded.section === "added" &&
-        cliAdded.shown === code && whoami && Number(whoami[1]) === 0,
-      "cyfr login on a machine without a chip shows a passphrase, then the key's code, the address that adds it and the command " +
-        "that approves it; added at that address with the passkey, it goes on by itself, says hello at x.test and starts a shell " +
-        "whose cyfr whoami acts there",
-      record.command_line)) return;
-
-    const second = newDevice({ name: "approved device" });
-    const before = login.out.length;
-    login.type(`cyfr device approve ${second.pub}; echo "APPROVE=$?"`);
-    const shownCode = (await login.until(/whose code is ([0-9a-f]{16})/, before))[1];
-    await login.until(/Unlock this command line with its passphrase to add it: /, before);
-    login.type(passphrase);
-    const approved = await login.until(/APPROVE=(\d+)/, before);
-    const approvedLog = await readLog(DIR, identifier);
-    const secondHello = await hello(second, X, identifier);
-    secondHello.channel?.close();
-    record.approve = {
-      shown: shownCode, expected: second.kid.slice(7, 23), exit: Number(approved[1]),
-      listed: approvedLog.keys.some((k) => k.kid === second.kid), hello: secondHello.channel ? "standing" : secondHello.code,
-      output: redact(login.out.slice(before)).slice(-600),
-    };
-    if (!row("approve",
-      shownCode === second.kid.slice(7, 23) && Number(approved[1]) === 0 && record.approve.listed && !!secondHello.channel,
-      "in that shell, cyfr device approve with a new device's key shows its code, asks the passphrase once and adds it to the " +
-        "account; the new device's hello at x.test stands",
-      record.approve)) return;
-  } finally {
-    if (login) {
-      login.type("exit");
-      await Promise.race([login.exited, sleep(15_000)]);
-      login.kill();
-    }
-    rmSync(cliHome, { recursive: true, force: true });
-  }
-
-  // terminal_confirm: an API key the browser asks for at X, confirmed by
+  // device_confirm: an API key the browser asks for at X, confirmed by
   // the test device over its own channel, which reads the CYFR's record,
   // asks its request and signs it.
   const segment = (await peopleAt(X)).find((p) => p.identifier === identifier)?.segment;
@@ -275,16 +157,16 @@ async function main(browser) {
   }
   const keyShown = await laptop.waitForFunction(() => document.body.innerText.includes("It will not be shown again"), null,
     { timeout: 30_000 }).then(() => true).catch(() => false);
-  record.terminal_confirm = {
+  record.device_confirm = {
     pending: waiting ? { operation: waiting.operation, methods: waiting.methods } : null,
     requested: { ok: requested.ok, purpose: requested.result?.request?.purpose, error: requested.error },
     confirmed: { ok: confirmedByDevice.ok, error: confirmedByDevice.error }, key_shown: keyShown,
   };
-  if (!row("terminal_confirm",
+  if (!row("device_confirm",
     !!waiting && requested.result?.request?.purpose === "confirm" && confirmedByDevice.ok && keyShown,
     "an API key the browser asks for at x.test waits on a fresh confirmation; the device reads the record over its channel, " +
       "signs the confirm request with its key, and the browser's page makes the key",
-    record.terminal_confirm)) return;
+    record.device_confirm)) return;
 
   // renewal: the device renews its certificate on its open channel at X
   // and goes on working there under the replacement.
@@ -394,65 +276,6 @@ async function main(browser) {
     record.restore);
 }
 
-// setup_terminal: `cyfr login --setup` in the directory that holds z.test's
-// setup token in .env, as `cyfr init` leaves it, makes the account at the
-// terminal with this command line its first device, and z.test admits it
-// by its hello under that token.
-async function setupTerminal() {
-  const cliHome = mkdtempSync(join(tmpdir(), "cyfr-pairing-setup-"));
-  const project = join(cliHome, "project");
-  mkdirSync(project);
-  let login = null;
-  try {
-    const { token } = await ask({ op: "setup_token", cell: "z" }, { secret: true });
-    secrets.push(token);
-    writeFileSync(join(project, ".env"), `CYFR_SETUP_TOKEN=${token}\nCYFR_DIRECTORY_URL=${DIR.origin}\n`, { mode: 0o600 });
-    const added = await cyfrRun(["context", "add", "z", Z.origin], cliHome);
-    const context = added.code === 0 ? await cyfrRun(["context", "set", "z"], cliHome) : added;
-    login = terminal(["login", "--setup", "--name", "pair-z"], cliHome, project);
-    const drawn = await login.until(/Write it down:\s+([a-z]+(?: [a-z]+){5})\s/);
-    secrets.push(drawn[1]);
-    await login.until(/The passphrase: /);
-    login.type(drawn[1]);
-    await login.until(/The passphrase again: /);
-    login.type(drawn[1]);
-    const shown = await login.until(/Your recovery code:[\s\S]*?(CYFR-[0-9A-Z]{8}(?:-[0-9A-Z]{8}){13})/);
-    const code = await decodeCode(shown[1], secrets, "the terminal");
-    const beforeSaved = await readLog(DIR, code.identifier);
-    await login.until(/Press Enter once you saved it\. /);
-    login.type("");
-    await login.until(/Unlocked\. This shell holds your CYFR session/, 0, 180_000);
-    const mark = login.out.length;
-    login.type("cyfr whoami; echo \"WHOAMI=$?\"");
-    const whoami = await login.until(/WHOAMI=(\d+)/, mark, 120_000).catch(() => null);
-    const people = await peopleAt(Z);
-    const first = people[0] || null;
-    const log = first?.identifier ? await readLog(DIR, first.identifier) : null;
-    record.setup_terminal = {
-      context: context.code, before_saved: beforeSaved.status, identifier_matches: first?.identifier === code.identifier,
-      whoami: whoami ? Number(whoami[1]) : null,
-      people: people.length, admission: first?.admission, clients: first?.clients, log,
-    };
-    return row("setup_terminal",
-      context.code === 0 && beforeSaved.status === 404 && record.setup_terminal.identifier_matches && people.length === 1 &&
-        first.admission === "setup" && log?.kinds.join() === "genesis,add_key" &&
-        log.keys.length === 1 && log.keys[0].kind === "device" &&
-        first.clients.some((c) => c.kid === log.keys[0].kid && c.kind === "device_cert" && c.standing === "active") &&
-        whoami && Number(whoami[1]) === 0,
-      "cyfr login --setup beside z.test's setup token makes the account @pair-z at the terminal, its recovery code shown and saved " +
-        "before anything is sent and this command line its only key; its hello brings the token, z.test admits the account as its " +
-        "first person and the command line as its device, and the shell it starts acts there",
-      record.setup_terminal);
-  } finally {
-    if (login) {
-      login.type("exit");
-      await Promise.race([login.exited, sleep(15_000)]);
-      login.kill();
-    }
-    rmSync(cliHome, { recursive: true, force: true });
-  }
-}
-
 // ---------------------------------------------------------------------------
 
 let proxy;
@@ -469,7 +292,6 @@ console.log(`== chromium ${version}`);
 let failure = null;
 try {
   await main(browser);
-  await setupTerminal();
 } catch (error) {
   failure = redact(error.stack || String(error));
   console.error(`FAIL: ${failure}`);
@@ -484,10 +306,7 @@ try {
   proxy.close();
 }
 
-const STEPS = [
-  "account", "page", "command_line", "approve", "terminal_confirm", "renewal", "remove_key", "readd", "restore",
-  "setup_terminal",
-];
+const STEPS = ["account", "page", "device_confirm", "renewal", "remove_key", "readd", "restore"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";

@@ -105,7 +105,7 @@ func TestPreviewShowsBothHeadsAndTheAddressChange(t *testing.T) {
 	if p.OldWords.Who != "only this computer" || p.NewWords.Ports != "80 and 443" || p.NewWords.Address != "https://home.example.com" {
 		t.Errorf("words %+v → %+v", p.OldWords, p.NewWords)
 	}
-	if len(p.AddressChanges) != 4 || p.AddressChanges[0] != "Every browser signs in again at the new address, with the same passkey." {
+	if len(p.AddressChanges) != 3 || p.AddressChanges[0] != "Every browser signs in again at the new address, with the same passkey." {
 		t.Errorf("address changes %v", p.AddressChanges)
 	}
 	for _, change := range p.AddressChanges {

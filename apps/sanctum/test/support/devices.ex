@@ -21,7 +21,7 @@ defmodule Sanctum.Test.Devices do
 
   @doc """
   The hello of `device` (a key pair of `account`'s) under `admission`
-  (`{:setup, token}`, `{:invitation, code}` or nil), reporting `holder`
+  (`{:setup, token}` or nil), reporting `holder`
   (`holder/0` by default).
   """
   def hello(account, {pub, _priv}, admission \\ nil, holder \\ @holder) do

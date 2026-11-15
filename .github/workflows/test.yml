@@ -1879,8 +1879,8 @@ jobs:
           PROOF_OUT: ${{ runner.temp }}/proofs/identity
         run: tests/identity-proof/run.sh
       # People joining a CYFR someone else runs: its operator's setup, an
-      # invitation redeemed by an account in the browser and by a device's
-      # hello, and a change confirmed by passkey (tests/join-proof/README.md).
+      # invitation redeemed by an account in the browser, and a change
+      # confirmed by passkey (tests/join-proof/README.md).
       - name: The join proof (Chromium alone, with its virtual WebAuthn authenticator)
         if: contains(matrix.proofs, 'join')
         env:

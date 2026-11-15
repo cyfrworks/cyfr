@@ -4,25 +4,16 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
-	"github.com/cyfr/codex/internal/prompt"
 
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	scheduleCreateCmd.Flags().String("name", "", "Schedule name")
-	scheduleCreateCmd.Flags().String("cron", "", "Cron expression (e.g. '*/5 * * * *')")
-	scheduleCreateCmd.Flags().String("ref", "", "Component reference")
-	scheduleCreateCmd.Flags().String("profile", "", "Consented execution profile ID")
-	scheduleCreateCmd.Flags().String("input", "", "JSON input for execution")
-	addMissedRunsFlags(scheduleCreateCmd)
 
 	scheduleGetCmd.Flags().Bool("json", false, "") // inherits from root but explicit for clarity
 	scheduleGetCmd.Flags().MarkHidden("json")
@@ -34,7 +25,6 @@ func init() {
 	scheduleUpdateCmd.Flags().String("input", "", "New JSON input")
 	addMissedRunsFlags(scheduleUpdateCmd)
 
-	scheduleCmd.AddCommand(scheduleCreateCmd)
 	scheduleCmd.AddCommand(scheduleListCmd)
 	scheduleCmd.AddCommand(scheduleGetCmd)
 	scheduleCmd.AddCommand(scheduleUpdateCmd)
@@ -49,100 +39,7 @@ var scheduleCmd = &cobra.Command{
 	Use:     "schedule",
 	Short:   "Manage recurring component schedules",
 	GroupID: "component",
-	Long:    `Create, list, pause, resume, and delete recurring cron schedules for WASM component execution.`,
-}
-
-var scheduleCreateCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new cron schedule [interactive]",
-	Example: `  cyfr schedule create --profile <profile-id> --name daily-report --cron "0 9 * * *" --ref "catalyst:local.reporter"
-  cyfr schedule create --profile <profile-id> --name processor --cron "*/5 * * * *" --ref "reagent:local.proc" --input '{"key":"value"}'
-  cyfr schedule create --profile <profile-id> --name pinned --cron "0 * * * *" --ref "catalyst:local.reporter:1.0.0"
-  cyfr schedule create --profile <profile-id> --name nightly --cron "0 2 * * *" --ref "catalyst:local.reporter" --missed-runs catch_up --catch-up-limit 3
-  cyfr schedule create  # interactive mode`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client := newClient()
-
-		name, _ := cmd.Flags().GetString("name")
-		cron, _ := cmd.Flags().GetString("cron")
-		refStr, _ := cmd.Flags().GetString("ref")
-		inputStr, _ := cmd.Flags().GetString("input")
-
-		// Interactive mode if flags not provided
-		if name == "" || cron == "" || refStr == "" {
-			if !prompt.IsInteractive(flagNoInteractive) {
-				return errors.New("Usage: cyfr schedule create --profile <profile-id> --name <name> --cron '<expr>' --ref <reference>")
-			}
-
-			if name == "" {
-				var err error
-				name, err = prompt.InputText(cmd.Context(), "Schedule name", "my-schedule")
-				if err != nil {
-					if prompt.IsAborted(err) {
-						return prompt.ErrAborted
-					}
-					return fmt.Errorf("Prompt failed: %w", err)
-				}
-			}
-
-			if cron == "" {
-				var err error
-				cron, err = prompt.InputText(cmd.Context(), "Cron expression", "*/5 * * * *")
-				if err != nil {
-					if prompt.IsAborted(err) {
-						return prompt.ErrAborted
-					}
-					return fmt.Errorf("Prompt failed: %w", err)
-				}
-			}
-
-			if refStr == "" {
-				var err error
-				refStr, err = pickTarget(cmd.Context(), nil, selector{
-					Title: "Select a component",
-					Empty: "No components found. Register one first.",
-					Usage: "Usage: cyfr schedule create --profile <profile-id> --name <name> --cron '<expr>' --ref <reference>",
-					Fetch: func(ctx context.Context) ([]prompt.Option, error) {
-						return prompt.FetchComponents(ctx, client)
-					},
-				})
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		profileID, _ := cmd.Flags().GetString("profile")
-		profileID, err := requireExecutionProfile(cmd.Context(), profileID)
-		if err != nil {
-			return err
-		}
-		toolArgs := ops.ScheduleCreateArgs{Name: name, ProfileId: profileID,
-			CronExpression: cron,
-			Reference:      refStr}
-
-		if inputStr != "" {
-			var inputMap map[string]any
-			if err := json.Unmarshal([]byte(inputStr), &inputMap); err != nil {
-				return fmt.Errorf("Invalid JSON input: %w", err)
-			}
-			toolArgs.Input = ops.Value(inputMap)
-		}
-		toolArgs.MissedRuns, toolArgs.CatchUpLimit = missedRunsFlags(cmd)
-
-		result, err := client.CallTool(cmd.Context(), ops.Schedule, toolArgs)
-		if err != nil {
-			return handleToolError(err)
-		}
-
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			fmt.Println("Schedule created.")
-			output.KeyValue(result)
-		}
-		return nil
-	},
+	Long:    `List, update, pause, resume and delete recurring cron schedules for WASM component execution. Make one on CYFR's Schedules page.`,
 }
 
 var scheduleListCmd = &cobra.Command{
