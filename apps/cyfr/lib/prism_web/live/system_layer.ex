@@ -1498,6 +1498,21 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
+  # The sharing sheet's choice as it changes, so the sheet says what the
+  # share being made means (`PrismWeb.SystemLayer.Share`). It is kept on
+  # the shown prompt itself, so it ends with that prompt, however it ends,
+  # and a prompt arriving under the same id starts from none
+  # (`Prompt.validate/1` keeps no choice). A change the sheet's form could
+  # not have sent is not kept (`Share.choice/2`).
+  def handle_event("share_change", %{"prompt_id" => id} = params, socket) do
+    with {:ok, prompt} <- open(socket, id, [:share]),
+         {:ok, choice} <- Share.choice(params, prompt.subject) do
+      {:noreply, assign(socket, :current, Map.put(prompt, :choice, choice))}
+    else
+      _unkept -> {:noreply, socket}
+    end
+  end
+
   def handle_event("pairing_revoke", %{"id" => id, "client" => client_id}, socket)
       when is_binary(client_id) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -2890,6 +2905,7 @@ defmodule PrismWeb.SystemLayer do
       prompt={@prompt}
       administrator={match?(%Context{platform_admin: true}, @context)}
       myself={@myself}
+      choice={Map.get(@prompt, :choice, %{})}
     />
     """
   end

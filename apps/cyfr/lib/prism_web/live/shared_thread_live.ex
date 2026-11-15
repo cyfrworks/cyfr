@@ -427,8 +427,9 @@ defmodule PrismWeb.SharedThreadLive do
               phx-click="leave"
               data-confirm={
                 if pair?(@thread),
-                  do: "Leave? The thread of you two ends.",
-                  else: "Leave this thread?"
+                  do:
+                    "Leave? The thread of you two ends, and your messages stay with the other person.",
+                  else: "Leave this thread? Your messages stay in it for the people who remain."
               }
               class="rounded px-2 py-1 text-xs text-gray-400 hover:bg-gray-800 hover:text-red-300"
             >

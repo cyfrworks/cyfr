@@ -212,6 +212,11 @@ defmodule PrismWeb.SharedThreadLiveTest do
     {:ok, people} = SharedThreads.people(alice.user_id, thread.id)
     refute Enum.any?(people, &(&1[:identifier] == waiting))
 
+    assert has_element?(
+             pane,
+             ~s(#shared-leave[data-confirm="Leave this thread? Your messages stay in it for the people who remain."])
+           )
+
     pane |> element("#shared-rename") |> render_click()
     pane |> form("#shared-rename-form", %{"title" => "Renamed"}) |> render_submit()
     assert has_element?(pane, "#shared-title", "Renamed")
@@ -243,7 +248,11 @@ defmodule PrismWeb.SharedThreadLiveTest do
     {overlay, pane} = overlay!(conn, alice, pair.id)
 
     assert has_element?(pane, "#shared-title", Sanctum.Tenancy.Users.display_name(bob.user_id))
-    assert has_element?(pane, "#shared-leave")
+
+    assert has_element?(
+             pane,
+             ~s(#shared-leave[data-confirm="Leave? The thread of you two ends, and your messages stay with the other person."])
+           )
 
     for control <- ~w(#shared-rename #shared-invite #shared-archive #shared-add),
         do: refute(has_element?(pane, control), "a pair shows #{control}")

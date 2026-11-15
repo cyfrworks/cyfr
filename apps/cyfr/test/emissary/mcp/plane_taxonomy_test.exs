@@ -149,7 +149,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
                                             source.write source.edit source.delete
-                                            crew.ask crew.list))
+                                            crew.ask crew.list threads.list threads.read))
 
       external =
         MapSet.new(

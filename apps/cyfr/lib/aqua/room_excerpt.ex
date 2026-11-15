@@ -18,6 +18,15 @@ defmodule Aqua.RoomExcerpt do
   Bounded: the newest lines that fit `max_bytes/0`, oldest first, headed
   by one line naming the thread, so the excerpt and the person's own
   message together stay inside the runner's message cap.
+
+  The same text answers `threads.read` (`Aqua.Providers.Thread`), the
+  person's AQUA reading a thread they sit in when a question needs it
+  (`read_marked/2`): there each message the person has not seen is marked,
+  a message of files alone is named as one, and the answer counts them.
+  The mark, the count and the lines come from one read
+  (`Sanctum.SharedThreads.tail/3`): what someone else wrote past the
+  person's read mark is unread, and their own messages never are.
+  Reading moves no read mark.
   """
 
   alias Sanctum.Context
@@ -40,20 +49,51 @@ defmodule Aqua.RoomExcerpt do
   def read(%Context{user_id: user_id}, %{shared_thread_id: thread_id} = room)
       when is_binary(user_id) and is_binary(thread_id) do
     with {:ok, thread} <- SharedThreads.get(user_id, thread_id),
-         {:ok, messages} <- SharedThreads.tail(user_id, thread_id, @rows) do
-      case lines(messages) do
+         {:ok, %{messages: messages}} <- SharedThreads.tail(user_id, thread_id, @rows) do
+      case lines(messages, user_id, nil) do
         [] -> {:error, :nothing_said}
-        lines -> {:ok, header(room, thread) <> "\n" <> fit(lines)}
+        lines -> {:ok, header(room, thread, 0) <> "\n" <> fit(lines)}
       end
     end
   end
 
   def read(%Context{}, _room), do: {:error, :no_seat}
 
-  defp header(room, thread) do
+  @doc """
+  The thread's newest lines with those the person has not seen marked
+  `(unread)`, and how many of the thread's messages are unread to them,
+  those older than the lines included: `%{text, unread}`, the text empty
+  when nobody has said anything there. `{:error, reason}` when the person
+  holds no seat in the thread.
+  """
+  @spec read_marked(Context.t(), room()) ::
+          {:ok, %{text: String.t(), unread: non_neg_integer()}} | {:error, term()}
+  def read_marked(%Context{user_id: user_id}, %{shared_thread_id: thread_id} = room)
+      when is_binary(user_id) and is_binary(thread_id) do
+    with {:ok, thread} <- SharedThreads.get(user_id, thread_id),
+         {:ok, %{read_seq: mark, unread: unread, messages: messages}} <-
+           SharedThreads.tail(user_id, thread_id, @rows) do
+      case lines(messages, user_id, mark) do
+        [] ->
+          {:ok, %{text: "", unread: unread}}
+
+        lines ->
+          {:ok, %{text: header(room, thread, unread) <> "\n" <> fit(lines), unread: unread}}
+      end
+    end
+  end
+
+  def read_marked(%Context{}, _room), do: {:error, :no_seat}
+
+  defp header(room, thread, unread) do
     title = present(room[:title]) || present(thread.title) || pair_name(thread) || "a thread"
 
-    ~s(Read from the shared thread "#{title}" — for context only; nobody in this thread said it:)
+    said =
+      ~s(Read from the shared thread "#{title}" — for context only; nobody in this thread said it)
+
+    if unread > 0,
+      do: said <> "; the lines marked (unread) the person has not seen yet:",
+      else: said <> ":"
   end
 
   defp present(text) when is_binary(text) and text != "", do: text
@@ -62,17 +102,25 @@ defmodule Aqua.RoomExcerpt do
   defp pair_name(%{with: %{name: name}}), do: present(name)
   defp pair_name(_thread), do: nil
 
-  # What people said, each named once per author; a message with no words
-  # (files alone) says nothing to read.
-  defp lines(messages) do
+  defp unread?(%{author: author, seq: seq}, user_id, mark),
+    do: is_integer(mark) and seq > mark and author != user_id
+
+  # What people said, each named once per author. With a read mark (`mark`
+  # an integer) each message past it that someone else wrote is marked
+  # unread, and a message of files alone is named as one; without, a
+  # message with no words says nothing to read.
+  defp lines(messages, user_id, mark) do
     {lines, _names} =
       Enum.flat_map_reduce(messages, %{}, fn
-        %{content: content}, names when content in [nil, ""] ->
-          {[], names}
+        %{author: author} = message, names when is_binary(author) ->
+          case said(message, mark) do
+            nil ->
+              {[], names}
 
-        %{author: author, content: content}, names when is_binary(author) ->
-          {name, names} = name_of(names, author)
-          {[name <> ": " <> String.trim(content)], names}
+            said ->
+              {name, names} = name_of(names, author)
+              {[mark(message, user_id, mark) <> name <> ": " <> said], names}
+          end
 
         _message, names ->
           {[], names}
@@ -80,6 +128,14 @@ defmodule Aqua.RoomExcerpt do
 
     lines
   end
+
+  defp said(%{content: content}, mark) when content in [nil, ""],
+    do: if(is_integer(mark), do: "(sent files, with no words)")
+
+  defp said(%{content: content}, _mark), do: String.trim(content)
+
+  defp mark(message, user_id, mark),
+    do: if(unread?(message, user_id, mark), do: "(unread) ", else: "")
 
   defp name_of(names, user_id) do
     case names do

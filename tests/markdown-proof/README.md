@@ -22,6 +22,12 @@ element's `innerHTML` with the expected markup exactly:
 - task items, tight, loose and nested, whose checkbox inputs the sanitizer
   removes;
 - a link, which opens apart (`target="_blank"`, `rel="noopener noreferrer"`);
+- on an element that names `data-link-base`, as Legal's does, a link on a
+  path resolved against that base in each form a page may write it
+  (inline, reference, angle-bracket, single-quoted HTML), a link with an
+  address of its own and code that shows a link left as they are, and a
+  base the content names itself never read; with no base named, a link on
+  a path left as it was;
 - a script element, an event handler attribute, a `javascript:` link, a
   form with its controls and an iframe, each removed, a removed element's
   text kept.

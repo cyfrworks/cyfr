@@ -120,7 +120,7 @@ cyfr -h
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is one screen: `/` lands on your desktop, and everything else opens over it without leaving it. Your athanor is your own place, and nobody else sits in it: in your own thread with AQUA every message addresses AQUA and you decide its approvals — the same thread on your phone and your laptop. People talk in shared threads: a title, its people, each equal, and their messages with attachments. Nothing runs in a shared thread — no AQUA answers there and no approval card appears. A pair is a shared thread of two, made by clicking a person in the chat (anyone you share a thread with is there); it ends when either person leaves, and clicking again starts a new, empty one. Your own AQUA opens from the shelf in a panel over whatever you are looking at — a private thread in your own athanor that reads the shared thread the chat has open — and a line from it reaches a shared thread only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is one screen: `/` lands on your desktop, and everything else opens over it without leaving it. Your athanor is your own place, and nobody else sits in it, though whoever runs the machine CYFR runs on can read what it keeps there (Legal → Privacy says who can read what): in your own thread with AQUA every message addresses AQUA and you decide its approvals — the same thread on your phone and your laptop. People talk in shared threads: a title, its people, each equal, and their messages with attachments. Nothing runs in a shared thread — no AQUA answers there and no approval card appears. A pair is a shared thread of two, made by clicking a person in the chat (anyone you share a thread with is there); it ends when either person leaves, and clicking again starts a new, empty one. Your own AQUA opens from the shelf in a panel over whatever you are looking at — a private thread in your own athanor that reads your shared threads when you ask about them, or the one the chat has open with each message when you tick it; what it reads there, other people's words included, goes to your model provider — and a line from it reaches a shared thread only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the desktop:
 
@@ -734,13 +734,17 @@ writes an allow of their identifier, so they sign in later without the
 link; at a terminal, `cyfr login --join --invitation <code>` does the same
 with the command line. That allow is written only where no deny names them, a
 deny written later outranks it, and it shows in `cyfr admin list` and
-Settings' allowlist, where it is removed like any other. The issuer or the
+Settings' allowlist, where it is removed like any other, except a platform
+administrator's, which stays. The issuer or the
 administrator revokes a link; a link whose issuer has since left the thread
 or been denied, or whose issuer's standing has changed since it was made (a
 restore from backup changes everyone's), admits no one.
 
 The first person of a CYFR is made by its setup, and is its platform
-administrator; nothing else makes anyone an administrator. `cyfr init` and
+administrator. An administrator makes another person of this CYFR an
+administrator, or takes the mark away again, in Settings' allowlist, each
+with a fresh confirmation; marking also allows the person's account, and
+the last administrator's mark always stays. `cyfr init` and
 `cyfr setup` write the setup token `CYFR_SETUP_TOKEN` into `.env` and
 print the setup link, `<CYFR address>/setup#<token>`; the token travels
 only in the link's fragment, which no server log records. The setup page

@@ -1168,7 +1168,8 @@ defmodule PrismWeb.VaultLiveTest do
                ["Everyone on this CYFR", "Traders"]
 
       # The caps start empty, and the sheet says what empty, 0 and a number
-      # mean, and what an uncapped share to everyone does.
+      # mean; what a share to everyone means it says once everyone is chosen,
+      # and that it has no limit only while both caps stay empty.
       refute view |> element(sheet <> ~s( input[name="person_daily"])) |> render() =~ "value="
       refute view |> element(sheet <> ~s( input[name="total_daily"])) |> render() =~ "value="
 
@@ -1178,11 +1179,24 @@ defmodule PrismWeb.VaultLiveTest do
                "An empty cap is no limit. 0 admits no use. A number is the most requests that day"
              )
 
-      assert has_element?(
-               view,
-               ~s([data-test="share-uncapped"]),
+      everyone = ~s([data-test="share-everyone"])
+      refute has_element?(view, everyone)
+
+      typed = %{"audience" => "everyone", "person_daily" => "", "total_daily" => ""}
+      view |> form(sheet, typed) |> render_change()
+
+      assert texts(view, everyone) == [
                "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
-             )
+             ]
+
+      view |> form(sheet, %{typed | "total_daily" => "10"}) |> render_change()
+      refute has_element?(view, everyone)
+
+      view
+      |> form(sheet, %{typed | "audience" => "shared_thread:#{traders.id}"})
+      |> render_change()
+
+      refute has_element?(view, everyone)
 
       # No value of the key is asked for, and no component policy offered.
       refute has_element?(view, sheet <> ~s( input[type="password"]))
@@ -1257,6 +1271,88 @@ defmodule PrismWeb.VaultLiveTest do
                )
 
       assert shares_of(terry) == []
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the sheet's choice ends with its prompt: dismissed or confirmed, the same entry's " <>
+           "sheet opens again with nothing chosen" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      {view, _html} = vault!(terry)
+      sheet = "#system-layer-dialog form#system-layer-share"
+      chosen = %{"audience" => "everyone", "person_daily" => "7", "total_daily" => ""}
+
+      fresh? = fn ->
+        has_element?(view, sheet) and
+          not has_element?(view, sheet <> " input[checked]") and
+          not (view |> element(sheet <> ~s( input[name="person_daily"])) |> render() =~ "value=")
+      end
+
+      view |> element(share_button(market)) |> render_click()
+      assert fresh?.()
+      view |> form(sheet, chosen) |> render_change()
+      assert has_element?(view, sheet <> ~s( input[name="audience"][value="everyone"][checked]))
+      assert has_element?(view, sheet <> ~s( input[name="person_daily"][value="7"]))
+
+      # Dismissed, then opened again: nothing of the dismissed choice.
+      view |> element(~s(#system-layer-dialog [data-test="prompt-dismiss"])) |> render_click()
+      refute has_element?(view, sheet)
+      view |> element(share_button(market)) |> render_click()
+      assert fresh?.()
+
+      # Confirmed, then opened again: nothing of the confirmed choice.
+      view |> form(sheet, chosen) |> render_change()
+      view |> form(sheet, chosen) |> render_submit()
+
+      assert {:ok, [%{ref: ref, operation: "share.create"}]} =
+               Arca.PendingConfirmations.list_open(
+                 Sanctum.Context.actor(terry.ctx),
+                 terry.user.user_id
+               )
+
+      Sanctum.TestContext.prove!(terry.ctx, ref)
+      wait_until(fn -> shares_of(terry) != [] end, 2_000, "the share made once confirmed")
+      wait_until(fn -> not has_element?(view, sheet) end, 2_000, "the sheet closed")
+
+      view |> element(share_button(market)) |> render_click()
+      assert fresh?.()
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a change the sheet's form could not have sent is not kept, and the page stays up " <>
+           "drawing what it drew" do
+      %{terry: terry} = traders!()
+      market = key!(terry, "market key", @market)
+      {view, _html} = vault!(terry)
+      sheet = "#system-layer-dialog form#system-layer-share"
+      everyone = ~s([data-test="share-everyone"])
+
+      view |> element(share_button(market)) |> render_click()
+
+      view
+      |> form(sheet, %{"audience" => "everyone", "person_daily" => "", "total_daily" => ""})
+      |> render_change()
+
+      drawn = view |> element(sheet) |> render()
+
+      assert texts(view, everyone) == [
+               "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
+             ]
+
+      prompt_id = "share-" <> market.id
+
+      for change <- [
+            %{"audience" => "everyone", "person_daily" => %{"x" => "bad"}},
+            %{"audience" => "everyone", "total_daily" => ["1", "2"]},
+            %{"audience" => "everyone", "person_daily" => String.duplicate("9", 10_000)},
+            %{"audience" => "shared_thread:sth_elsewhere", "person_daily" => "3"},
+            %{"audience" => %{"x" => "bad"}}
+          ] do
+        view |> element(sheet) |> render_change(Map.put(change, "prompt_id", prompt_id))
+        assert Process.alive?(view.pid), inspect(change)
+        assert view |> element(sheet) |> render() == drawn, inspect(change)
+      end
+
       Cyfr.Test.Sandbox.end_views()
     end
 

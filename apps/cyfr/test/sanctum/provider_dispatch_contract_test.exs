@@ -48,7 +48,16 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "attach"
     ],
     "invitation" => ["create", "revoke", "list"],
-    "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],
+    "door" => [
+      "list",
+      "requests",
+      "allow",
+      "deny",
+      "remove",
+      "resolve",
+      "mark_admin",
+      "clear_admin"
+    ],
     "directory" => ["tombstone"],
     "oauth" => ["set_client", "list", "delete_client"],
     "key" => ["create", "get", "list", "revoke", "rotate", "reenable"],
