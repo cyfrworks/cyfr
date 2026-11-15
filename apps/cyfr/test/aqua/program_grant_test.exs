@@ -98,6 +98,65 @@ defmodule Aqua.ProgramGrantTest do
     assert {:ok, ["aqua: every start of jq"]} = Sanctum.Mount.granted_to(ctx.athanor_id, jq)
   end
 
+  test "a change of the row's definition ends its every-start answer; enabling and disabling keep it",
+       %{ctx: ctx, turn: turn, gh: gh} do
+    actor = Sanctum.Context.actor(ctx)
+    allow!(ctx, turn, gh)
+
+    start = %{
+      agent_name: "aqua",
+      thread_id: turn.thread_id,
+      tool: "program",
+      action: "start",
+      args: %{"program" => gh.id, "epoch" => gh.epoch},
+      sources: []
+    }
+
+    assert Sanctum.ToolGrants.admits?(ctx, start)
+
+    # The change's confirmation names it among the grants that end.
+    assert {:ok, ["aqua: every start of gh"]} = Sanctum.Mount.granted_to(ctx.athanor_id, gh)
+
+    {:ok, off} = Arca.McpServerStorage.update(actor, "gh", %{enabled: false})
+    {:ok, on} = Arca.McpServerStorage.update(actor, "gh", %{enabled: true})
+    assert on.epoch == off.epoch + 1
+    assert Sanctum.ToolGrants.admits?(ctx, start)
+
+    # The same definition written again moves nothing.
+    {:ok, same} = Arca.McpServerStorage.update(actor, "gh", %{config_json: gh.config_json})
+    assert Sanctum.ToolGrants.admits?(ctx, start)
+
+    changed = Jason.encode!(%{"command" => "gh --hostname evil.example", "env" => %{}})
+
+    assert {:ok, _moved} =
+             Arca.McpServerStorage.update(actor, "gh", %{config_json: changed}, %{
+               id: gh.id,
+               epoch: same.epoch
+             })
+
+    refute Sanctum.ToolGrants.admits?(ctx, start)
+    assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(actor, gh.id)
+    assert {:ok, []} = Sanctum.Mount.granted_to(ctx.athanor_id, gh)
+  end
+
+  test "an update that finds its row moved writes nothing and ends nothing",
+       %{ctx: ctx, turn: turn, gh: gh} do
+    actor = Sanctum.Context.actor(ctx)
+    allow!(ctx, turn, gh)
+    changed = Jason.encode!(%{"command" => "gh2", "env" => %{}})
+
+    assert {:error, :stale_epoch} =
+             Arca.McpServerStorage.update(actor, "gh", %{config_json: changed}, %{
+               id: gh.id,
+               epoch: gh.epoch + 1
+             })
+
+    assert {:ok, [_still]} = Arca.ToolGrantStorage.on_program_row(actor, gh.id)
+
+    assert {:error, :not_found} =
+             Arca.McpServerStorage.update(actor, "nobody", %{config_json: changed})
+  end
+
   test "the soul's policy asks for a start and a send, and never makes a start automatic" do
     refute Aqua.Kinds.auto_permitted?("program", "start")
     assert Aqua.Kinds.auto_permitted?("program", "list")
