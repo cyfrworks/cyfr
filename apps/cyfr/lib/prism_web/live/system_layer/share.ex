@@ -294,7 +294,11 @@ defmodule PrismWeb.SystemLayer.Share do
   with everyone or one of `threads`; `preset` `:setup` starts the sheet
   at the administrator's setup's choice.
   """
-  @spec prompt(%{id: String.t(), name: String.t()}, [map()], :setup | nil) :: map()
+  @spec prompt(
+          %{:id => String.t(), :name => String.t(), optional(atom()) => term()},
+          [map()],
+          :setup | nil
+        ) :: map()
   def prompt(%{id: id, name: name}, threads, preset \\ nil) do
     subject = %{entry_id: id, name: name, threads: threads}
 
