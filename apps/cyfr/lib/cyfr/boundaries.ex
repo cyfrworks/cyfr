@@ -1471,17 +1471,19 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Cache",
       functions: [:get],
       reason:
-        "the panel's open state, thread and placement are kept per browser session " <>
+        "the panel's open state and placement are kept per browser session " <>
           "under a hash of its token; a read answers them or a miss, and drops an expired entry as " <>
           "it finds it, which is the cache's own housekeeping."
     },
     %{
       from: "PrismWeb.AquaPanelLive",
       into: "Arca.ThreadStorage",
-      functions: [:list, :pending_requests],
+      functions: [:adjacent_day, :day, :day_name, :get, :pending_requests, :unread],
       reason:
-        "the panel lists the caller's athanor's threads and the crew requests still " <>
-          "waiting under the caller's actor; the assistant owns every thread write."
+        "the panel reads today's daily thread without making it, the day a step either " <>
+          "way, the thread a destination names, today's unread count and the crew requests " <>
+          "still waiting, all under the caller's actor, and names a day with the store's own " <>
+          "spelling, which reads no row; the assistant owns every thread write."
     },
     %{
       from: "PrismWeb.AttachmentController",
@@ -1585,11 +1587,20 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.ThreadPaneLive",
       into: "Arca.ThreadStorage",
-      functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
+      functions: [
+        :children,
+        :day_name,
+        :get,
+        :get_message,
+        :latest_messages,
+        :payload,
+        :resolution
+      ],
       reason:
         "the pane opens a thread, its latest messages and a room's crew threads under the " <>
-          "pane's actor, and decodes a message's stored payload and resolution with the " <>
-          "store's own projections, which read no row; the assistant owns every thread write."
+          "pane's actor, decodes a message's stored payload and resolution with the store's " <>
+          "own projections and names a day with its spelling, which read no row; the " <>
+          "assistant owns every thread write."
     },
     # --- the MCP surface's web adapters ---
     %{
@@ -1695,7 +1706,7 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Cache",
       functions: [:put],
       reason:
-        "the panel keeps its open state, thread and placement per browser session, under " <>
+        "the panel keeps its open state and placement per browser session, under " <>
           "a hash of its token, for a bounded time: server-local memory, never a row."
     },
     %{
