@@ -2010,6 +2010,18 @@ defmodule Cyfr.StackShapeTest do
     assert parsed["services"]["caddy"]["profiles"] == ["public"]
   end
 
+  # The backends service refuses a health probe at any other version of
+  # its wire, so a probe left at an older one keeps the service unhealthy
+  # and the stack from starting.
+  test "the backends service's healthcheck posts the wire's own health body" do
+    backends = LocusRoles.role!(:backends)
+    [_shell, probe] = compose!()["services"][backends.service]["healthcheck"]["test"]
+
+    assert probe =~
+             "-d '#{Prima.LocusBackends.health_body()}' " <>
+               "http://localhost:#{backends.port}/locus/v1/backends/health"
+  end
+
   # A probe that runs the binary (`caddy version`) passes in a container
   # whose server has stopped; the admin API answers only from a running
   # caddy, with the config it loaded.
