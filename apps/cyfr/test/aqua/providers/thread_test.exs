@@ -716,17 +716,21 @@ defmodule Aqua.Providers.ThreadTest do
 
     test "a send whose files were attached before the day turned is refused and leaves nothing",
          %{ctx: ctx, thread: thread} do
+      # The person's own session, which remembers what it stored.
+      mine = %{ctx | session_token_hash: :crypto.hash(:sha256, "mine")}
       actor = Sanctum.Context.actor(ctx)
       {:ok, past} = Arca.Test.Days.thread(actor)
       message_id = Prima.UUID7.generate_id("msg")
-      {:ok, %{attachments: [ref]}} = attach(ctx, past, message_id, "past bytes")
+      {:ok, %{attachments: [ref]}} = attach(mine, past, message_id, "past bytes")
+      {:ok, blob} = Aqua.attachment_blob_path(past.id, message_id, ref)
+      assert {:ok, "past bytes"} = Arca.get(actor, blob)
       threads = Threads.list(actor)
       turns = Arca.TurnStorage.open_turns(actor, thread.id)
 
       assert {:error,
               {:conflict,
                "The day has turned since these files were attached. Attach them again and send."}} =
-               call(ctx, %{
+               call(mine, %{
                  "action" => "send",
                  "thread" => past.id,
                  "message" => "with a file",
@@ -743,10 +747,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert Threads.messages(actor, thread.id) == []
       assert Arca.TurnStorage.open_turns(actor, thread.id) == turns
 
-      assert Arca.list_typed(actor, Threads.blob_root(past.id) ++ [message_id]) in [
-               {:ok, []},
-               {:error, :not_found}
-             ]
+      refute Arca.exists?(actor, blob)
     end
 
     test "a send with files that names no thread is refused and leaves nothing", %{
