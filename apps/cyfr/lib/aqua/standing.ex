@@ -136,14 +136,18 @@ defmodule Aqua.Standing do
 
   # An allow for an action that names a program row stands for the row
   # the call names and no other (`Sanctum.ToolGrants`): its constraint is
-  # that row, whatever the card sent; a call that names none takes no
-  # standing answer.
+  # that row, whatever the card sent, written only while the row is the
+  # one the card showed (`program_epoch`, the call's own epoch); a call
+  # that names none takes no standing answer.
   defp own_row(%{"tool" => tool, "action" => action} = proposal, "allow", bounds) do
     case Sanctum.Catalog.action_declaration("#{tool}.#{action}") do
       {:ok, %{resource: {argument, :program_row}}} ->
         case get_in(proposal, ["args", argument]) do
           row_id when is_binary(row_id) ->
-            {:ok, Map.put(bounds, :constraint, %{kind: "program_row", patterns: [row_id]})}
+            {:ok,
+             bounds
+             |> Map.put(:constraint, %{kind: "program_row", patterns: [row_id]})
+             |> Map.put(:program_epoch, get_in(proposal, ["args", "epoch"]))}
 
           _none ->
             {:error, {:scope_not_permitted, :unconstrained_program}}
@@ -172,7 +176,8 @@ defmodule Aqua.Standing do
        Map.merge(lifecycle, %{
          expires_at: Map.get(bounds, :until),
          constraint: Map.get(bounds, :constraint),
-         sources: Map.get(bounds, :sources)
+         sources: Map.get(bounds, :sources),
+         program_epoch: Map.get(bounds, :program_epoch)
        })}
     end
   end

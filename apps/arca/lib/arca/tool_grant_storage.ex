@@ -39,6 +39,11 @@ defmodule Arca.ToolGrantStorage do
   @doc """
   Record a decision, replacing whatever the same key already said.
 
+  An answer that is one program's is written only while that program's
+  row stands, at the epoch the decision names (`:program_epoch`), read
+  under the row's lock: `{:error, :no_program}` or
+  `{:error, :program_changed}` otherwise.
+
   Upsert rather than insert: a person flipping "always" to "never" is
   answering the same question again, not stacking a contradiction. The
   key holds the program row an answer is constrained to
@@ -64,7 +69,8 @@ defmodule Arca.ToolGrantStorage do
       # decision that stood before has to stand until the new one is
       # written. A concurrent writer landing between the two is a typed
       # refusal through the constraint below, never a raise.
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        :ok = program_stands(row)
         :ok = delete_matching(row)
 
         case Arca.Repo.insert(changeset(row)) do
@@ -74,6 +80,34 @@ defmodule Arca.ToolGrantStorage do
       end)
     end)
     |> Arca.Data.project()
+  end
+
+  # An answer that is one program's is written only while that program's
+  # row stands in the writer's athanor, at the epoch the decision names
+  # when it names one, read under the lock the row's change and removal
+  # take (`Arca.McpServerStorage.update/4`, `delete/3`): an answer lands
+  # before either and goes with it, or is refused after, never left
+  # pointing at a row that is gone or moved.
+  defp program_stands(row) do
+    case ToolGrant.key_row(row) do
+      "" ->
+        :ok
+
+      row_id ->
+        server =
+          from(s in Arca.Schemas.McpServer,
+            where:
+              s.athanor_id == ^row.athanor_id and s.id == ^row_id and s.transport == "program"
+          )
+          |> Arca.QueryHelpers.for_update()
+          |> Arca.Repo.one()
+
+        cond do
+          server == nil -> Arca.Repo.rollback(:no_program)
+          Map.get(row, :program_epoch) in [nil, server.epoch] -> :ok
+          true -> Arca.Repo.rollback(:program_changed)
+        end
+    end
   end
 
   @doc false

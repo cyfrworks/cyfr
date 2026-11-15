@@ -87,6 +87,8 @@ defmodule Sanctum.ToolGrants do
           | :resource_kind
           | :invalid_constraint
           | :unconstrained_program
+          | :no_program
+          | :program_changed
           | :invalid_sources
 
   @typedoc "An answer the rule refuses to let stand."
@@ -163,7 +165,8 @@ defmodule Sanctum.ToolGrants do
           {:ok, map()} | {:error, :invalid_argument | :forbidden | refusal()}
   def grant_row(%Context{} = ctx, attrs) when is_map(attrs) do
     with {:ok, row} <- build(ctx, attrs, :decision),
-         :ok <- check_standing(row, DateTime.utc_now()) do
+         :ok <- check_standing(row, DateTime.utc_now()),
+         :ok <- program_shown(ctx, row) do
       {:ok, row}
     else
       {:error, :no_athanor} -> {:error, :forbidden}
@@ -182,9 +185,11 @@ defmodule Sanctum.ToolGrants do
           | {:error, :unavailable | :no_athanor | {:invalid, field_errors()} | refusal()}
   def put(%Context{} = ctx, attrs) when is_map(attrs) do
     with {:ok, row} <- build(ctx, attrs, :decision),
-         :ok <- check_standing(row, DateTime.utc_now()) do
+         :ok <- check_standing(row, DateTime.utc_now()),
+         :ok <- program_shown(ctx, row) do
       case Arca.ToolGrantStorage.put(row) do
         {:ok, grant} -> {:ok, grant}
+        {:error, reason} when reason in [:no_program, :program_changed] -> refuse(reason)
         {:error, {:invalid, _field_errors} = invalid} -> {:error, invalid}
         {:error, _unreadable} -> {:error, :unavailable}
       end
@@ -209,6 +214,33 @@ defmodule Sanctum.ToolGrants do
       end
     end
   end
+
+  # An answer that is one program's is given only for a program of the
+  # caller's athanor that stands, at the epoch the card showed when it
+  # names one: read here so a decision says why, and again under the row's
+  # lock where it is written (`Arca.ToolGrantStorage.put/1`), which the
+  # row's change and removal take too.
+  defp program_shown(_ctx, %{program_row: ""}), do: :ok
+
+  defp program_shown(%Context{} = ctx, %{program_row: row_id} = row) do
+    case Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id) do
+      {:ok, %{transport: "program", epoch: epoch}} ->
+        if Map.get(row, :program_epoch) in [nil, epoch],
+          do: :ok,
+          else: refuse(:program_changed)
+
+      {:ok, _not_a_program} ->
+        refuse(:no_program)
+
+      {:error, :not_found} ->
+        refuse(:no_program)
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp program_shown(_ctx, _row), do: :ok
 
   defp names_its_program(%{tool: tool, action: action, program_row: row}) do
     case declaration(tool, action) do
@@ -581,7 +613,8 @@ defmodule Sanctum.ToolGrants do
           {:ok,
            key
            |> Map.merge(%{effect: attrs.effect, granted_by: ctx.user_id})
-           |> Map.merge(bounds)}
+           |> Map.merge(bounds)
+           |> Prima.MapUtil.put_present(:program_epoch, Map.get(attrs, :program_epoch))}
       end
     end
   end

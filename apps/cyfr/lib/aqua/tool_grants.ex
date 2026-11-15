@@ -423,6 +423,13 @@ defmodule Aqua.ToolGrants do
   def refusal_message({:scope_not_permitted, :unconstrained_program}),
     do: "A standing answer to start a program covers that one program, never every one."
 
+  def refusal_message({:scope_not_permitted, :no_program}),
+    do:
+      "That program is no longer on the Programs page, so no standing answer can be given for it."
+
+  def refusal_message({:scope_not_permitted, :program_changed}),
+    do: "That program changed since the card showed it; ask again to see what it runs now."
+
   def refusal_message({:scope_not_permitted, :invalid_sources}),
     do: "An answer can follow only the outside sources this card names."
 

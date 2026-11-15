@@ -271,6 +271,103 @@ defmodule Aqua.ProgramGrantTest do
     end
   end
 
+  describe "an answer is written only for a program that stands as it was shown" do
+    defp start_at(row, epoch),
+      do: %{
+        "tool" => "program",
+        "action" => "start",
+        "args" => %{"program" => row.id, "epoch" => epoch}
+      }
+
+    test "a program that does not exist, or is another athanor's, takes no answer",
+         %{ctx: ctx, turn: turn} do
+      missing = %{
+        "tool" => "program",
+        "action" => "start",
+        "args" => %{"program" => "no_such_program"}
+      }
+
+      assert {:error, {:scope_not_permitted, :no_program}} =
+               Aqua.Standing.rows(ctx, turn, missing, :always)
+
+      {:ok, other} =
+        Sanctum.Test.People.linked(%{id: "grant-other", provider: "local", verified: true})
+
+      other_athanor = Sanctum.Test.People.athanor!(other)
+      theirs_ctx = %{ctx | user_id: other.id, athanor_id: other_athanor.id}
+      theirs = row!(theirs_ctx, "theirs")
+
+      assert {:error, {:scope_not_permitted, :no_program}} =
+               Aqua.Standing.rows(ctx, turn, start(theirs.id), :always)
+
+      # The store refuses it too, whoever built the row.
+      row = %{
+        id: "grant_forged",
+        athanor_id: ctx.athanor_id,
+        scope: "agent",
+        effect: "allow",
+        agent_name: "aqua",
+        tool: "program",
+        action: "start",
+        granted_at: DateTime.utc_now(),
+        constraint: %{kind: "program_row", patterns: [theirs.id]}
+      }
+
+      assert {:error, :no_program} = Arca.ToolGrantStorage.put(row)
+
+      assert {:ok, []} =
+               Arca.ToolGrantStorage.on_program_row(Sanctum.Context.actor(ctx), theirs.id)
+    end
+
+    test "a decision racing the row's removal lands before it and goes with it, or is refused",
+         %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
+      actor = Sanctum.Context.actor(ctx)
+
+      # Written first: the removal ends it.
+      allow!(ctx, turn, jq)
+      {:ok, _} = Arca.McpServerStorage.delete(actor, "jq")
+      assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(actor, jq.id)
+
+      # Decided before the removal, written after it: refused, nothing kept.
+      {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_at(gh, gh.epoch), :always)
+      {:ok, _} = Arca.McpServerStorage.delete(actor, "gh")
+      assert {:error, :no_program} = Arca.ToolGrantStorage.put(grant)
+
+      assert {:error, {:scope_not_permitted, :no_program}} =
+               Sanctum.ToolGrants.put(ctx, grant)
+
+      assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(actor, gh.id)
+    end
+
+    test "a decision racing the row's change lands before it and goes with it, or is refused",
+         %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
+      actor = Sanctum.Context.actor(ctx)
+      changed = fn name -> Jason.encode!(%{"command" => "#{name} --other", "env" => %{}}) end
+
+      # Written first: the change ends it.
+      {:ok, [first]} = Aqua.Standing.rows(ctx, turn, start_at(jq, jq.epoch), :always)
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, first)
+      {:ok, _} = Arca.McpServerStorage.update(actor, "jq", %{config_json: changed.("jq")})
+      assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(actor, jq.id)
+
+      # Decided on the card's epoch, written after the change: refused.
+      {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_at(gh, gh.epoch), :always)
+      {:ok, moved} = Arca.McpServerStorage.update(actor, "gh", %{config_json: changed.("gh")})
+      assert {:error, :program_changed} = Arca.ToolGrantStorage.put(grant)
+
+      assert {:error, {:scope_not_permitted, :program_changed}} =
+               Sanctum.ToolGrants.put(ctx, grant)
+
+      # Decided on the old epoch after the change: refused before anything.
+      assert {:error, {:scope_not_permitted, :program_changed}} =
+               Aqua.Standing.rows(ctx, turn, start_at(gh, gh.epoch), :always)
+
+      # On the epoch it holds now, it stands.
+      assert {:ok, [now]} = Aqua.Standing.rows(ctx, turn, start_at(gh, moved.epoch), :always)
+      assert {:ok, _} = Sanctum.ToolGrants.put(ctx, now)
+    end
+  end
+
   test "the soul's policy asks for a start and a send, and never makes a start automatic" do
     refute Aqua.Kinds.auto_permitted?("program", "start")
     assert Aqua.Kinds.auto_permitted?("program", "list")

@@ -831,6 +831,29 @@ defmodule Sanctum.ToolGrantsTest do
   end
 
   describe "an action whose resource is a program row" do
+    # A program row of the context's athanor, as the store holds one.
+    defp program!(ctx, id) do
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.McpServer, [
+          %{
+            id: id,
+            athanor_id: ctx.athanor_id,
+            name: id,
+            transport: "program",
+            mark: "driven",
+            config_json: ~s({"command":"gh","env":{}}),
+            enabled: true,
+            epoch: 1,
+            revision: 0,
+            created_by: ctx.user_id,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+    end
+
     setup %{ctx: ctx} do
       {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
       {:ok, thread: thread.id, start: %{tool: "probe_program", action: "start"}}
@@ -873,6 +896,9 @@ defmodule Sanctum.ToolGrantsTest do
       thread: thread,
       start: start
     } do
+      program!(ctx, "mcp_gh")
+      program!(ctx, "mcp_other")
+
       {:ok, _} =
         ToolGrants.put(
           ctx,
@@ -897,6 +923,30 @@ defmodule Sanctum.ToolGrantsTest do
       refute ToolGrants.admits?(ctx, call.("mcp_other"))
       refute ToolGrants.admits?(ctx, call.("mcp_g"))
       refute ToolGrants.admits?(ctx, Map.put(call.("mcp_gh"), :args, %{}))
+    end
+
+    test "names a program of the writer's athanor that stands, or is refused", %{
+      ctx: ctx,
+      other: other,
+      thread: thread,
+      start: start
+    } do
+      program!(other, "mcp_theirs")
+
+      for row <- ["mcp_theirs", "mcp_nowhere"] do
+        attrs =
+          decision(
+            Map.merge(start, %{
+              thread_id: thread,
+              constraint: %{kind: "program_row", patterns: [row]}
+            })
+          )
+
+        assert {:error, {:scope_not_permitted, :no_program}} = ToolGrants.put(ctx, attrs)
+        assert {:error, {:scope_not_permitted, :no_program}} = ToolGrants.grant_row(ctx, attrs)
+      end
+
+      assert {:ok, []} = ToolGrants.for_thread(ctx, thread)
     end
 
     test "is never an authored auto: an auto is a standing answer for every program" do
