@@ -606,6 +606,11 @@ defmodule Prima.Refusal do
       {:forbidden,
        "That cannot be addressed from here — a crew member answers only the thread that asked it"}
 
+  # A person's shared threads are read by their own AQUA, from a turn of
+  # its own (`Aqua.Tape.calling_turn/2`), and by no other chain.
+  defp row(:not_in_a_turn),
+    do: {:forbidden, "Only Aqua reads your shared threads, in a turn of its own"}
+
   defp row(:thread_archived),
     do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
 

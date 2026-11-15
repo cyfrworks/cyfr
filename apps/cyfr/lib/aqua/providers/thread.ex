@@ -10,7 +10,15 @@ defmodule Aqua.Providers.Thread do
 
   `crew` is the second tool this provider serves: `ask` and `list`, the
   soul's hand-off to a crew member from inside its turn (`Aqua.Crew`).
-  The provider's `service/0` is `"aqua"` for both, so `system.status`
+  `threads` is the third: `list` and `read`, the person's shared threads
+  as their own AQUA reads them when a question needs it, under the
+  person's own seat (`Sanctum.SharedThreads.listed/1`,
+  `Aqua.RoomExcerpt`), and only from an open turn of that person's AQUA
+  (`Aqua.Tape.calling_turn/2`, the rule `crew` keeps too): a component's
+  run that holds the grant reads nothing, refused `:not_in_a_turn`. Both
+  are in a chain only, and neither writes: a line reaches a shared thread
+  only when the person says it aloud. The
+  provider's `service/0` is `"aqua"` for all three, so `system.status`
   and the request log's `routed_to` read one label.
 
   Every turn-shaped action here **wraps `Aqua.Runner`** — there
@@ -82,13 +90,13 @@ defmodule Aqua.Providers.Thread do
   @impl true
   def service, do: "aqua"
 
-  # Two tools, one service. The service label is the provider's, so
+  # Three tools, one service. The service label is the provider's, so
   # `system.status` and the request log's `routed_to` read one label for
   # both; a tool name and a service name are already different things
   # (`Opus.Provider` answers `"opus"`, `Emissary.External.Provider`
   # answers `"emissary"`).
   @impl true
-  def tools, do: [definition(), crew_definition()]
+  def tools, do: [definition(), crew_definition(), threads_definition()]
 
   # A day: the longest a grant on either stream lives.
   @deadline_bound 86_400
@@ -576,6 +584,42 @@ defmodule Aqua.Providers.Thread do
     )
   end
 
+  @doc false
+  def threads_definition do
+    alias Prima.{Arg, Operation}
+    # In a chain only, and read only. What other people said there is
+    # theirs, not the athanor's own records, so it carries an outside
+    # source into the turn that reads it.
+    Operation.tool(
+      [
+        Operation.new("threads", "list", "List threads", [],
+          kind: :read,
+          sources: [:outside],
+          planes: [:in_chain],
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "threads",
+          "read",
+          "Read thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "read: the thread's id, as threads.list names it"
+            )
+          ],
+          kind: :read,
+          sources: [:outside],
+          planes: [:in_chain],
+          recovery: :replay_safe
+        )
+      ],
+      description:
+        "Read the person's shared threads, the ones they sit in with other people: list names each with its people, when it last moved and how many of its messages the person has not seen; read gives a thread's newest lines, each by who said it, with those the person has not seen marked (unread). Reading marks nothing read and writes nothing. Read a thread only when the person's question needs it.",
+      title: "Shared threads"
+    )
+  end
+
   @impl true
   def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle("crew", %Context{} = ctx, %{"action" => "ask"} = args), do: Aqua.Crew.ask(ctx, args)
@@ -585,6 +629,16 @@ defmodule Aqua.Providers.Thread do
 
   def handle("crew", _ctx, _args),
     do: {:error, {:invalid_argument, "crew takes the action ask or list"}}
+
+  def handle("threads", %Context{} = ctx, %{"action" => "list"} = args),
+    do: shared_threads(ctx, args)
+
+  def handle("threads", %Context{} = ctx, %{"action" => "read", "thread" => id} = args)
+      when is_binary(id),
+      do: shared_thread(ctx, id, args)
+
+  def handle("threads", _ctx, _args),
+    do: {:error, {:invalid_argument, "threads takes the action list, or read with a thread"}}
 
   # ---------------------------------------------------------------------------
   # Actions
@@ -1003,6 +1057,53 @@ defmodule Aqua.Providers.Thread do
   # generically, which is the visible cue that a new refusal needs a row
   # above.
   defp translate(other, _id), do: other
+
+  # ---------------------------------------------------------------------------
+  # Shared threads, read for the person
+  # ---------------------------------------------------------------------------
+
+  # From a turn of the person's own AQUA, and under their own seat: the
+  # threads they sit in, and only those. A chain with no open turn behind
+  # it, such as a component's run started by a key, a webhook or a
+  # schedule, reads none; the turn's person is the caller's.
+  defp shared_threads(ctx, args) do
+    with {:ok, user_id} <- reader(ctx, args),
+         {:ok, listed} <- Sanctum.SharedThreads.listed(user_id) do
+      threads =
+        for entry <- listed do
+          %{
+            id: entry.id,
+            title: entry.title,
+            people: entry.people,
+            last_activity: entry.last_activity,
+            unread: entry.unread
+          }
+        end
+
+      {:ok, %{threads: threads, count: length(threads)}}
+    end
+  end
+
+  # A thread the person's list of threads does not name, one they hold no
+  # seat in or one archived, answers as a missing one does.
+  defp shared_thread(ctx, id, args) do
+    with {:ok, _user_id} <- reader(ctx, args),
+         {:ok, %{text: text, unread: unread}} <-
+           Aqua.RoomExcerpt.read_marked(ctx, %{shared_thread_id: id}) do
+      {:ok, %{thread: id, unread: unread, text: text}}
+    end
+  end
+
+  defp reader(%Context{user_id: user_id} = ctx, args) when is_binary(user_id) do
+    case Aqua.Tape.calling_turn(ctx, args) do
+      {:ok, %{requested_by: ^user_id}} -> {:ok, user_id}
+      {:ok, _someone_else} -> {:error, :not_in_a_turn}
+      {:error, :not_addressable} -> {:error, :not_in_a_turn}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp reader(_ctx, _args), do: {:error, :not_in_a_turn}
 
   defp render_thread(thread) do
     %{
