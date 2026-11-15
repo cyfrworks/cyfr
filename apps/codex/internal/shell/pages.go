@@ -55,8 +55,6 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <p>On a device of yours, scan this code or open the address below, and check that it shows <b>{{.Code}}</b>.</p>
 <div class="qr">{{.QR}}</div>
 <p class="code">{{.AddURL}}</p>
-<p>Or run this on a terminal of yours that is unlocked:</p>
-<p class="code">cyfr device approve {{.Key}}</p>
 <form method="post" action="/enroll">{{template "proof"}}<label>Your name: @<input name="name" autocomplete="off" required></label><button>I approved it</button></form>
 <h1>No account yet?</h1>
 <form method="post" action="/create">{{template "proof"}}

@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map, and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools, limits and exits can be narrowed. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server one per name; an exit one per node and exit. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names its fields as a map from each field the component reads to the entry field that answers it, the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, share or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A controls row is one per desktop that offers any control: its controls in the order of their ids, each its label (at most 32 code points), its operation as tool.action and, for a control with a pick, the pick's stream, the feed's name as its subject for a feed's results, and the RFC 6901 pointer field into that stream's shape; at most 32. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. An exits row names one exit of its node (an egress domain or connect origin as declared, need:<name> or server:<name>) and flows, the source classes (pinned, filed, files_by_grant, vault_disclosed, outside; never unsettled) its flows let reach it, each once, empty for an exit no flow names; one node's several exits are several rows. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, share_id and via (the lender's label), and the entry's name and source (own or share), each absent when the entry cannot be read.",
+  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map, and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools, limits and exits can be narrowed. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server one per name, with its record: its address and each header (or a program's environment variable) by name with the vault entry it names, a literal by its name alone and marked literal, never its value, and a program's folder (kept or scratch) and, each absent when unset and never null, its hosts (sorted, each once; absent is every public host, [] none), its memory and folder bounds in bytes (home_max_bytes, positive whole numbers) and its sign-in command; an http server's record holds no setting; an exit one per node and exit. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names its fields as a map from each field the component reads to the entry field that answers it, the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, share or provided; a login need's program row is own, its destination naming the program), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A controls row is one per desktop that offers any control: its controls in the order of their ids, each its label (at most 32 code points), its operation as tool.action and, for a control with a pick, the pick's stream, the feed's name as its subject for a feed's results, and the RFC 6901 pointer field into that stream's shape; at most 32. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. An exits row names one exit of its node (an egress domain or connect origin as declared, need:<name> or server:<name>) and flows, the source classes (pinned, filed, files_by_grant, vault_disclosed, outside; never unsettled) its flows let reach it, each once, empty for an exit no flow names; one node's several exits are several rows. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, share_id and via (the lender's label), and the entry's name and source (own or share), each absent when the entry cannot be read.",
   "kinds": [
     "credential",
     "egress",
@@ -259,7 +259,7 @@
             "kind": "standing",
             "until": null
           },
-          "name": "claude-login",
+          "name": "claude",
           "scopes": [],
           "source": "own",
           "suggested": true
@@ -316,7 +316,53 @@
           "name": "forecasts",
           "tool_patterns": [
             "forecast_*"
-          ]
+          ],
+          "record": {
+            "address": "https://forecasts.example/mcp",
+            "headers": [
+              {
+                "entry": "forecasts-token",
+                "name": "authorization",
+                "scheme": "Bearer"
+              },
+              {
+                "literal": true,
+                "name": "x-region"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "kind": "tool_servers",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+          "name": "github",
+          "tool_patterns": [
+            "issues.*"
+          ],
+          "record": {
+            "address": "npx -y @modelcontextprotocol/server-github",
+            "env": [
+              {
+                "entry": "github-token",
+                "name": "GITHUB_TOKEN"
+              },
+              {
+                "literal": true,
+                "name": "NODE_ENV"
+              }
+            ],
+            "folder": "kept",
+            "hosts": [
+              "api.github.com",
+              "github.com"
+            ],
+            "memory_bytes": 268435456,
+            "home_max_bytes": 1073741824
+          }
         }
       },
       {
@@ -830,7 +876,7 @@
                 "kind": "standing",
                 "until": null
               },
-              "name": "claude-login",
+              "name": "claude",
               "scopes": [],
               "source": "own",
               "suggested": true
@@ -887,7 +933,53 @@
               "name": "forecasts",
               "tool_patterns": [
                 "forecast_*"
-              ]
+              ],
+              "record": {
+                "address": "https://forecasts.example/mcp",
+                "headers": [
+                  {
+                    "entry": "forecasts-token",
+                    "name": "authorization",
+                    "scheme": "Bearer"
+                  },
+                  {
+                    "literal": true,
+                    "name": "x-region"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824
+              }
             }
           },
           {
@@ -3476,6 +3568,645 @@
                   "operation": "schedule.pause"
                 }
               ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a tool server naming no record",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:e0cc26f8514695ce7696d7660aac368a3f9a7b99dd1056650518b3c8296c28b6",
+              "name": "forecasts",
+              "tool_patterns": [
+                "forecast_*"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a tool server record carrying a literal's value",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:e0cc26f8514695ce7696d7660aac368a3f9a7b99dd1056650518b3c8296c28b6",
+              "name": "forecasts",
+              "tool_patterns": [
+                "forecast_*"
+              ],
+              "record": {
+                "address": "https://forecasts.example/mcp",
+                "headers": [
+                  {
+                    "entry": "forecasts-token",
+                    "name": "authorization",
+                    "scheme": "Bearer"
+                  },
+                  {
+                    "literal": true,
+                    "name": "x-region",
+                    "value": "eu-west"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a tool server record naming both headers and env",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:e0cc26f8514695ce7696d7660aac368a3f9a7b99dd1056650518b3c8296c28b6",
+              "name": "forecasts",
+              "tool_patterns": [
+                "forecast_*"
+              ],
+              "record": {
+                "address": "https://forecasts.example/mcp",
+                "headers": [
+                  {
+                    "entry": "forecasts-token",
+                    "name": "authorization",
+                    "scheme": "Bearer"
+                  },
+                  {
+                    "literal": true,
+                    "name": "x-region"
+                  }
+                ],
+                "env": []
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a tool server record naming a header twice",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:e0cc26f8514695ce7696d7660aac368a3f9a7b99dd1056650518b3c8296c28b6",
+              "name": "forecasts",
+              "tool_patterns": [
+                "forecast_*"
+              ],
+              "record": {
+                "address": "https://forecasts.example/mcp",
+                "headers": [
+                  {
+                    "entry": "forecasts-token",
+                    "name": "authorization",
+                    "scheme": "Bearer"
+                  },
+                  {
+                    "literal": true,
+                    "name": "x-region"
+                  },
+                  {
+                    "entry": "other",
+                    "name": "x-region"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a tool server record naming a header both by entry and as a literal",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:e0cc26f8514695ce7696d7660aac368a3f9a7b99dd1056650518b3c8296c28b6",
+              "name": "forecasts",
+              "tool_patterns": [
+                "forecast_*"
+              ],
+              "record": {
+                "address": "https://forecasts.example/mcp",
+                "headers": [
+                  {
+                    "entry": "forecasts-token",
+                    "name": "authorization",
+                    "scheme": "Bearer",
+                    "literal": true
+                  },
+                  {
+                    "literal": true,
+                    "name": "x-region"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming its hosts as null",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": null,
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming its hosts out of order",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "github.com",
+                  "api.github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming a host twice",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "api.github.com",
+                  "github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming an empty host",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming no folder",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming another kind of folder",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "shared",
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming its memory bound as null",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": null,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming a bound of no bytes",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 0
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming a bound that is no whole number",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 1.5,
+                "home_max_bytes": 1073741824
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a program record naming a setting no record holds",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "npx -y @modelcontextprotocol/server-github",
+                "env": [
+                  {
+                    "entry": "github-token",
+                    "name": "GITHUB_TOKEN"
+                  },
+                  {
+                    "literal": true,
+                    "name": "NODE_ENV"
+                  }
+                ],
+                "folder": "kept",
+                "hosts": [
+                  "api.github.com",
+                  "github.com"
+                ],
+                "memory_bytes": 268435456,
+                "home_max_bytes": 1073741824,
+                "start_command": "gh auth login"
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "an http record naming a program's folder",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "removed": [],
+        "rows": [
+          {
+            "kind": "tool_servers",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+              "name": "github",
+              "tool_patterns": [
+                "issues.*"
+              ],
+              "record": {
+                "address": "https://forecasts.example/mcp",
+                "headers": [
+                  {
+                    "literal": true,
+                    "name": "x-region"
+                  }
+                ],
+                "folder": "kept"
+              }
             }
           }
         ],

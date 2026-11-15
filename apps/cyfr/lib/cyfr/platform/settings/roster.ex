@@ -170,8 +170,6 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_DB_SSL", "TLS to the PostgreSQL server (default off)."},
     {"CYFR_DIRECTORY_URL",
      "The account service this deployment's people sign in through, whose account pages a browser is sent to and whose accounts this CYFR reads: an `https` URL, or an `http` one on this machine's loopback (`localhost`, `127.0.0.0/8` or `::1`), since loopback has no network path for TLS to protect and an account service is trusted only to order signed entries; the address is still reached only when `CYFR_PRIVATE_EGRESS_TARGETS` lists it, and accounts made there sign in at no CYFR on another machine. Default `https://cyfr.run` in every build, the account service cyfr.run hosts, whose registry takes requests only from the accounts it keeps. Choosing another is a choice about how long an account lasts. A malformed value, `http` on any other host, or one longer than 1,024 bytes refuses the boot."},
-    {"CYFR_HEADLESS",
-     "CYFR with Codex access only (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_OIDC_ISSUER`."},
     {"CYFR_HOST",
      "CYFR's hostname, which `cyfr access` writes with the mode: `localhost` with local access, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) with tailnet access, and the domain Caddy's certificate names with public access. The boot refuses a host the mode does not allow."},
     {"CYFR_HOST_API_BIND",
@@ -245,7 +243,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_SESSION_SALT",
      "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_SETUP_TOKEN",
-     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and `cyfr setup` write into `.env` and nothing removes. It admits the installation's first person, its administrator, with their account, through the setup link (`/setup#<token>`), `cyfr login --setup` or the box's own screen, binding the installation to that account, and from then on it opens nothing; unset, setup opens nothing. A malformed value refuses the boot, which never prints it."},
+     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and `cyfr setup` write into `.env` and nothing removes. It admits the installation's first person, its administrator, with their account, through the setup link (`/setup#<token>`) or the box's own screen, binding the installation to that account, and from then on it opens nothing; unset, setup opens nothing. A malformed value refuses the boot, which never prints it."},
     {"CYFR_STORAGE",
      "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
     {"CYFR_STORAGE_RESERVE_BYTES",
@@ -263,7 +261,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_WORKOS_API_KEY",
      "The WorkOS API key, set in `.env` alone and never in a tracked file: the secret CYFR's server sends with a company sign-in's code to WorkOS's token endpoint. With `CYFR_WORKOS_CLIENT_ID` and `CYFR_WORKOS_ORGANIZATION`, all three or none."},
     {"CYFR_WORKOS_CLIENT_ID",
-     "The WorkOS client ID, with `CYFR_WORKOS_API_KEY` and `CYFR_WORKOS_ORGANIZATION`: set together, WorkOS's single sign-on is the company issuer `CYFR_COMPANY_LOGIN` requires, and an OIDC issuer configured beside it goes unused. WorkOS lists `<origin>/auth/company/callback` as its redirect URI. Set while `CYFR_COMPANY_LOGIN` is `off`, set in part, or on a headless CYFR, it refuses the boot."},
+     "The WorkOS client ID, with `CYFR_WORKOS_API_KEY` and `CYFR_WORKOS_ORGANIZATION`: set together, WorkOS's single sign-on is the company issuer `CYFR_COMPANY_LOGIN` requires, and an OIDC issuer configured beside it goes unused. WorkOS lists `<origin>/auth/company/callback` as its redirect URI. Set while `CYFR_COMPANY_LOGIN` is `off` or set in part, it refuses the boot."},
     {"CYFR_WORKOS_ORGANIZATION",
      "The WorkOS organization ID (`org_…`) every company sign-in must come from, with `CYFR_WORKOS_CLIENT_ID` and `CYFR_WORKOS_API_KEY`; a sign-in WorkOS answers for another organization is refused. Changing it makes every person sign in with their company again."},
     {"OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -293,7 +291,7 @@ defmodule Cyfr.Platform.Settings.Roster do
   # `tests/fixtures/restore_barrier.json`, which the roster's test holds
   # this row to.
   @foreign [
-    {"CYFR_TOKEN", "the Codex CLI: the session token its non-interactive path signs in with"},
+    {"CYFR_TOKEN", "the Codex CLI: the API key it calls with"},
     {"CYFR_NO_UPDATE_CHECK",
      "the Codex CLI and the server: any value turns off both release checks, the terminal's and the one the server makes for a desktop's update notice"},
     {"CYFR_NO_INTERACTIVE", "the Codex CLI: turns off its prompts, as `--no-interactive` does"},

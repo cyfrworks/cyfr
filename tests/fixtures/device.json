@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's, and sign-in requests and device answers tests/fixtures/sign_in.json's. A device's first connection is hello, sign_in_request, sign_in_answer and admitted: the hello names device_1's kid and the certificate's account, the request is sign_in.json's sign_in request, the answer is device_1's Ed25519 signature over that request's digest, which every side re-signs from keys.device_1's seed, and admitted carries the certificate issued for that kid and the standing message's fields. A hello's admission is {\"setup\": the setup token, 64 lowercase hexadecimal characters} or {\"invitation\": an invitation's code, unpadded base64url of 32 bytes}, or absent; its holder_kind is chip or software, and its display_name non-empty UTF-8 of at most 64 bytes with no control character. A hello or a sign_in_answer the home refuses is answered refused right before the close: its error is exactly class and message, the refusal's class and its sentence (Prima.Refusal), as an answer's error carries one; the vector is a hello refused for an invitation that admits no one. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. A refusal that names a field carries it as field, as each side's typed result does; an unknown type and a type the other side sends name the message's type. Certificates, challenges and proofs are tests/fixtures/device_cert.json's, and sign-in requests and device answers tests/fixtures/sign_in.json's. A device's first connection is hello, sign_in_request, sign_in_answer and admitted: the hello names device_1's kid and the certificate's account, the request is sign_in.json's sign_in request, the answer is device_1's Ed25519 signature over that request's digest, which every side re-signs from keys.device_1's seed, and admitted carries the certificate issued for that kid and the standing message's fields. A hello's admission is {\"setup\": the setup token, 64 lowercase hexadecimal characters}, or absent; its holder_kind is chip or software, and its display_name non-empty UTF-8 of at most 64 bytes with no control character. A hello or a sign_in_answer the home refuses is answered refused right before the close: its error is exactly class and message, the refusal's class and its sentence (Prima.Refusal), as an answer's error carries one; the vector is a hello refused for a setup token that is not this CYFR's. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
   "continuous_fields": [
     "stream",
     "frames",
@@ -314,21 +314,6 @@
     },
     {
       "message": {
-        "admission": {
-          "invitation": "kWv9JM-SnFKinXOrSQ1Vln_O2Arkef-2GgvR8NdiTd4"
-        },
-        "display_name": "laptop",
-        "holder_kind": "software",
-        "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
-        "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
-        "protocol": "cyfr-device/v1",
-        "type": "hello"
-      },
-      "name": "a first hello under an invitation's code",
-      "sender": "glass"
-    },
-    {
-      "message": {
         "display_name": "laptop",
         "holder_kind": "software",
         "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
@@ -398,12 +383,12 @@
       "message": {
         "error": {
           "class": "unauthenticated",
-          "message": "This invitation can no longer be used. Ask whoever invited you for a new one."
+          "message": "This CYFR is set up. Sign in with your passkey, a device you connected, or a sign-in method you linked."
         },
         "protocol": "cyfr-device/v1",
         "type": "refused"
       },
-      "name": "a hello refused for an invitation that admits no one, told its refusal before the close",
+      "name": "a hello refused for a setup token that is not this CYFR's, told its refusal before the close",
       "sender": "home"
     }
   ],
@@ -921,7 +906,7 @@
         "protocol": "cyfr-device/v1",
         "type": "hello"
       },
-      "name": "an admission naming the setup token and an invitation",
+      "name": "an admission naming the setup token and another capability",
       "sender": "glass"
     },
     {
@@ -993,16 +978,16 @@
       "field": "admission",
       "message": {
         "admission": {
-          "invitation": "kWv9JM-SnFKinXOrSQ1Vlg"
+          "invitation": "kWv9JM-SnFKinXOrSQ1Vln_O2Arkef-2GgvR8NdiTd4"
         },
-        "display_name": "CYFR screen",
-        "holder_kind": "chip",
+        "display_name": "laptop",
+        "holder_kind": "software",
         "identifier": "per_4ee91ba73aee72e286aefcf58355ac22f64778aadfb55108293a65a9593fabb5",
         "kid": "sha256:b2fe501dbcb6a282eb0562ecfc93ab8e4f20a118b0616aeb0836c4d91ba2134a",
         "protocol": "cyfr-device/v1",
         "type": "hello"
       },
-      "name": "an invitation code of 16 bytes",
+      "name": "an admission naming an invitation's code, which no hello brings",
       "sender": "glass"
     },
     {
@@ -1196,7 +1181,7 @@
       "message": {
         "error": {
           "class": "unauthenticated",
-          "message": "This invitation can no longer be used. Ask whoever invited you for a new one."
+          "message": "This CYFR is set up. Sign in with your passkey, a device you connected, or a sign-in method you linked."
         },
         "protocol": "cyfr-device/v1",
         "type": "refused"
@@ -1218,7 +1203,7 @@
       "error": "invalid_field",
       "field": "error",
       "message": {
-        "error": "This invitation can no longer be used. Ask whoever invited you for a new one.",
+        "error": "This CYFR is set up. Sign in with your passkey, a device you connected, or a sign-in method you linked.",
         "protocol": "cyfr-device/v1",
         "type": "refused"
       },
@@ -1245,7 +1230,7 @@
         "code": 4401,
         "error": {
           "class": "unauthenticated",
-          "message": "This invitation can no longer be used. Ask whoever invited you for a new one."
+          "message": "This CYFR is set up. Sign in with your passkey, a device you connected, or a sign-in method you linked."
         },
         "protocol": "cyfr-device/v1",
         "type": "refused"

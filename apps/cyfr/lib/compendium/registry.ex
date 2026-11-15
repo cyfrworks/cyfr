@@ -1639,7 +1639,7 @@ defmodule Compendium.Registry do
       {:ok, dep_manifest} ->
         declared =
           for need <- Prima.Manifest.Needs.from_manifest(dep_manifest) || [],
-              need.kind in Prima.CredentialKinds.all(),
+              need.kind in Prima.Manifest.Needs.binding_kinds(),
               into: %{},
               do: {need.name, need}
 

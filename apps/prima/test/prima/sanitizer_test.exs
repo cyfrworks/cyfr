@@ -339,18 +339,6 @@ defmodule Prima.SanitizerTest do
       refute Prima.Sanitizer.sensitive_key?("invitation_url_label")
     end
 
-    # A protected device's enrollment under an invitation carries the
-    # invitation's bearer code in its own header.
-    test "the invitation header a device's enrollment sends is redacted, and longer names are not" do
-      code = "q2mTb0yU7aKpXv1ZcR4n8wq2mTb0yU7aKpXv1ZcR4n8w"
-
-      assert Prima.Sanitizer.sanitize([{"x-cyfr-invitation", code}]) ==
-               [{"x-cyfr-invitation", "[REDACTED]"}]
-
-      assert Prima.Sanitizer.sensitive_key?("x_cyfr_invitation")
-      refute Prima.Sanitizer.sensitive_key?("x-cyfr-invitation-label")
-    end
-
     # A sign-in carry's fragment, as a page hands it to its LiveView
     # (`cyfr_carry`, `cyfr_assertion`, `carry_challenge`, `carry_return`) and
     # as the sign-in page posts an assertion to its callback.
@@ -406,14 +394,29 @@ defmodule Prima.SanitizerTest do
     end
   end
 
-  # What a person types into a program's sign-in terminal: a pasted code or
-  # a password.
-  describe "a sign-in terminal's line" do
+  # What a person types into a program's terminal: a pasted code or a
+  # password.
+  describe "what is typed on a program's terminal" do
     test "is redacted, and Phoenix's event log filters it" do
-      assert Prima.Sanitizer.sanitize(%{"sign_in_line" => "code-1234", "_target" => ["x"]}) ==
-               %{"sign_in_line" => "[REDACTED]", "_target" => ["x"]}
+      assert Prima.Sanitizer.sanitize(%{"terminal_input" => "code-1234", "_target" => ["x"]}) ==
+               %{"terminal_input" => "[REDACTED]", "_target" => ["x"]}
 
-      assert "sign_in_line" in Prima.Sanitizer.filter_parameters()
+      assert "terminal_input" in Prima.Sanitizer.filter_parameters()
+    end
+
+    test "the words typed after a program's command are redacted, and any other args are kept" do
+      assert Prima.Sanitizer.sanitize(%{
+               "terminal_args" => ["login", "--password", "hunter2"],
+               "args" => ["--version"],
+               "call" => %{"args" => %{"symbol" => "ACME"}}
+             }) ==
+               %{
+                 "terminal_args" => "[REDACTED]",
+                 "args" => ["--version"],
+                 "call" => %{"args" => %{"symbol" => "ACME"}}
+               }
+
+      assert "terminal_args" in Prima.Sanitizer.filter_parameters()
     end
   end
 

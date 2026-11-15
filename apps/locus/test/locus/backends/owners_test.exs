@@ -129,6 +129,37 @@ defmodule Locus.Backends.OwnersTest do
     defp root(agent), do: [kept_root: Agent.get(agent, & &1.kept_root)]
   end
 
+  defmodule KeeperEncoding do
+    @moduledoc false
+    # A launcher that starts nothing: it encodes the spawn a session asks
+    # for as the keeper's channel would (`Prima.KeeperProtocol.encode/1`)
+    # and tells the test whether the keeper would take it.
+    def adopt(_test, _ledger, _owner), do: {:ok, []}
+    def pool_stats(_test, "backends"), do: {:ok, %{size: 4, free: 4, quarantined: 0}}
+
+    def spawn(test, spec) do
+      request =
+        spec
+        |> Map.take([:argv, :env, :pool, :memory_bytes, :cpu_quota, :pty, :hosts])
+        |> Map.merge(%{
+          type: :spawn,
+          id: "encoded",
+          attach: %{path: "/tmp/not-opened.sock", token: String.duplicate("a", 64)}
+        })
+
+      encoded =
+        try do
+          _ = Prima.KeeperProtocol.encode(request)
+          :ok
+        rescue
+          error in ArgumentError -> {:error, Exception.message(error)}
+        end
+
+      send(test, {:spawn_encoded, map_size(spec.env), spec.env["TERM"], encoded})
+      {:error, {:refused, "capacity"}}
+    end
+  end
+
   setup do
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
     root = Path.join(System.tmp_dir!(), "locus_kept_#{Prima.Hex.short()}")
@@ -193,7 +224,6 @@ defmodule Locus.Backends.OwnersTest do
       %{
         name: name,
         command: command,
-        login_command: nil,
         env: %{},
         home: :scratch,
         memory_bytes: nil,
@@ -242,14 +272,16 @@ defmodule Locus.Backends.OwnersTest do
       home_id: Keyword.get(opts, :home_id),
       key: Keyword.get(opts, :key, "k"),
       mode: Keyword.get(opts, :mode, :run),
-      argv: Keyword.get(opts, :argv, [])
+      argv: Keyword.get(opts, :argv, []),
+      rows: Keyword.get(opts, :rows),
+      cols: Keyword.get(opts, :cols)
     }
 
     Owners.open(owners, invoke(server, version, athanor), message)
   end
 
   defp session_pid(owners, server, version, id) do
-    {:ok, pid, _secrets} = Owners.session(owners, invoke(server, version), id)
+    {:ok, pid, _mode} = Owners.session(owners, invoke(server, version), id)
     pid
   end
 
@@ -260,6 +292,18 @@ defmodule Locus.Backends.OwnersTest do
     )
 
     Enum.map(Backend.recv(pid, after_seq, 0).lines, & &1.text)
+  end
+
+  # A terminal's chunks past `after`, read until `done?` holds of all of
+  # them together: those bytes and the last chunk's number.
+  defp output(pid, after_seq, done?, seen \\ "") do
+    if done?.(seen) do
+      {seen, after_seq}
+    else
+      %{chunks: chunks} = Backend.recv(pid, after_seq, 5_000)
+      assert chunks != [], "no output came after #{inspect(seen)}"
+      output(pid, List.last(chunks).seq, done?, seen <> Enum.map_join(chunks, & &1.bytes))
+    end
   end
 
   defp held(owners), do: :sys.get_state(owners).owners
@@ -529,8 +573,10 @@ defmodule Locus.Backends.OwnersTest do
       owners = start_owners(ctx)
       assert {:ok, _} = sync(owners, "a", {1, 1}, [program("cat", "exec cat")])
 
-      assert {:ok, %{status: :running, session: first, resumed: false, pty: false}} =
+      assert {:ok, %{status: :running, session: first, resumed: false} = opened} =
                open(owners, "a", {1, 1}, "cat")
+
+      assert opened == %{status: :running, session: first, resumed: false}
 
       assert {:ok, %{session: ^first, resumed: true}} = open(owners, "a", {1, 1}, "cat")
       assert {:ok, %{session: other, resumed: false}} = open(owners, "a", {1, 1}, "cat", key: "b")
@@ -544,7 +590,7 @@ defmodule Locus.Backends.OwnersTest do
       assert again != first
 
       # The ended session is still answered, as ended.
-      assert {:ok, ^pid, _} = Owners.session(owners, invoke("a", {1, 1}), first)
+      assert {:ok, ^pid, :run} = Owners.session(owners, invoke("a", {1, 1}), first)
 
       assert {:error, :unknown_session} =
                Owners.session(owners, invoke("a", {1, 1}), "ss_" <> String.duplicate("f", 32))
@@ -564,28 +610,106 @@ defmodule Locus.Backends.OwnersTest do
 
     test "an open must have its program's shape", ctx do
       owners = start_owners(ctx)
-
-      programs = [
-        program("scratch", @idle, login_command: "echo login"),
-        program("kept", @idle, home: :kept),
-        program("signs", @idle, home: :kept, login_command: "echo login")
-      ]
-
+      programs = [program("scratch", @idle), program("kept", @idle, home: :kept)]
       assert {:ok, _} = sync(owners, "a", {1, 1}, programs)
       v = {1, 1}
 
       for {name, opts} <- [
             {"kept", []},
+            {"kept", [mode: :terminal, rows: 24, cols: 80]},
             {"scratch", [home_id: @home]},
-            {"scratch", [mode: :sign_in]},
-            {"kept", [home_id: @home, mode: :sign_in]},
-            {"signs", [home_id: @home, mode: :sign_in, argv: ["--x"]]}
+            {"scratch", [home_id: @home, mode: :terminal, rows: 24, cols: 80]}
           ] do
         assert {:error, :bad_request} = open(owners, "a", v, name, opts), inspect({name, opts})
       end
 
-      assert {:ok, %{pty: true, resumed: false}} =
-               open(owners, "a", v, "signs", home_id: @home, mode: :sign_in)
+      # A terminal is a session of its own beside a run of the same key,
+      # in a kept home or a scratch one.
+      for {name, opts} <- [{"kept", [home_id: @home]}, {"scratch", []}] do
+        assert {:ok, %{session: run}} = open(owners, "a", v, name, opts)
+        terminal = [mode: :terminal, rows: 24, cols: 80] ++ opts
+        assert {:ok, %{session: id} = opened} = open(owners, "a", v, name, terminal)
+        assert opened == %{status: :running, session: id, resumed: false}
+        assert id != run
+        assert {:ok, pid, :terminal} = Owners.session(owners, invoke("a", v), id)
+        assert {:ok, %{session: ^id, resumed: true}} = open(owners, "a", v, name, terminal)
+
+        # Gone before the test ends, so nothing of them outlives it.
+        for session <- [pid, session_pid(owners, "a", v, run)],
+            do: :ok = Backend.stop(session, 0)
+      end
+    end
+
+    test "a terminal opens at the open's size, and a resize reaches it", ctx do
+      owners = start_owners(ctx)
+
+      assert {:ok, _} =
+               sync(owners, "a", {1, 1}, [program("size", "stty size; read x; stty size")])
+
+      assert {:ok, %{session: id}} =
+               open(owners, "a", {1, 1}, "size", mode: :terminal, rows: 24, cols: 80)
+
+      pid = session_pid(owners, "a", {1, 1}, id)
+      {first, seq} = output(pid, 0, &String.contains?(&1, "\n"))
+      assert first == "24 80\r\n"
+
+      assert :running = Backend.resize(pid, 50, 132)
+      assert :running = Backend.input(pid, "\r")
+      {rest, _seq} = output(pid, seq, &String.contains?(&1, "50 132\r\n"))
+      assert rest == "\r\n50 132\r\n"
+      :ok = Backend.stop(pid, 0)
+    end
+
+    # A terminal session's process was told no terminal type, so `clear`
+    # and a full-screen program could not draw on it.
+    test "a terminal is told the terminal type, a run is told none, and a program's own " <>
+           "TERM is kept",
+         ctx do
+      owners = start_owners(ctx)
+      say = ~s(printf '[%s]\\n' "${TERM-none}"; read x)
+
+      assert {:ok, _} =
+               sync(owners, "a", {1, 1}, [
+                 program("plain", say),
+                 program("own", say, env: %{"TERM" => "vt100"})
+               ])
+
+      terminal = [mode: :terminal, rows: 24, cols: 80]
+
+      for {name, opts, seen} <- [
+            {"plain", terminal, "[xterm-256color]\r\n"},
+            {"own", terminal, "[vt100]\r\n"}
+          ] do
+        assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, name, opts)
+        pid = session_pid(owners, "a", {1, 1}, id)
+        assert {^seen, _seq} = output(pid, 0, &String.contains?(&1, "\n"))
+        :ok = Backend.stop(pid, 0)
+      end
+
+      assert {:ok, %{session: run}} = open(owners, "a", {1, 1}, "plain")
+      pid = session_pid(owners, "a", {1, 1}, run)
+      assert lines(pid, 1) == ["[none]"]
+      :ok = Backend.stop(pid, 0)
+    end
+
+    # A row at the keeper's bound was given TERM past it: its terminal's
+    # spawn could not be encoded for the keeper, and never started.
+    test "a terminal on a row at its environment's bound asks for a spawn the keeper takes",
+         ctx do
+      owners =
+        start_owners(ctx,
+          session_opts: [
+            launcher: KeeperEncoding,
+            launcher_server: self(),
+            release_timeout_ms: 5_000
+          ]
+        )
+
+      env = Map.new(1..LocusBackends.max_env_names(), &{"V#{&1}", "value"})
+      assert {:ok, _} = sync(owners, "a", {1, 1}, [program("full", "cat", env: env)])
+      _ = open(owners, "a", {1, 1}, "full", mode: :terminal, rows: 24, cols: 80)
+      max_env = Prima.KeeperProtocol.request_bounds().max_env
+      assert_receive {:spawn_encoded, ^max_env, "xterm-256color", :ok}, 5_000
     end
 
     test "a crash holds the next start back by its backoff, and the last crash fails the program until a new version",

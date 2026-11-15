@@ -506,48 +506,13 @@ defmodule Sanctum.VaultTest do
       assert {:error, {:invalid_kind, _}} = Vault.create(ctx, %{name: "x", kind: "wand"})
     end
 
-    test "a login entry names its program, holds no material, is attach-only and starts " <>
-           "waiting on its program's sign-in",
-         %{ctx: ctx} do
-      assert {:ok, view} = create(ctx, %{name: "claude", kind: "login", program: "claude"})
+    test "has no login kind, and no entry names a program's destination", %{ctx: ctx} do
+      assert {:error, {:invalid_kind, kinds}} =
+               create(ctx, %{name: "claude", kind: "login", program: "claude"})
 
-      assert view.kind == "login"
-      assert view.status == "needs_reauth"
-      assert view.destination == %{"program" => "claude"}
-      assert view.attach_only == true
-      assert view.field_names == []
+      refute "login" in kinds
 
-      row = row!(ctx, view.id)
-      assert row.destination == ~s({"program":"claude"})
-      assert row.status == "needs_reauth"
-      assert payload!(ctx, view.id)["fields"] == %{}
-
-      # Every other kind holds its material from the start.
-      assert create!(ctx).status == "active"
-    end
-
-    test "a login entry takes nothing beside its program", %{ctx: ctx} do
-      assert {:error, :program_required} = create(ctx, %{name: "c1", kind: "login"})
-
-      for extra <- [
-            %{fields: %{"K" => "v"}},
-            %{destination: %{"program" => "claude"}},
-            %{destination: @destination},
-            %{disclose: true},
-            %{oauth_scopes: ["x"]}
-          ] do
-        params = Map.merge(%{name: "c2", kind: "login", program: "claude"}, extra)
-        assert {:error, :login_binding_fixed} = create(ctx, params), inspect(extra)
-      end
-
-      assert {:error, {:invalid_destination, _}} =
-               create(ctx, %{name: "c3", kind: "login", program: "Not A Program"})
-
-      assert {:ok, []} = Vault.list(ctx)
-    end
-
-    test "a program's destination is a login entry's alone", %{ctx: ctx} do
-      assert {:error, :program_destination_login_only} =
+      assert {:error, {:invalid_destination, :hosts_required}} =
                Vault.create(ctx, %{
                  name: "claude",
                  kind: "api_key",
@@ -555,74 +520,13 @@ defmodule Sanctum.VaultTest do
                  destination: %{program: "claude"}
                })
 
-      assert {:error, :program_destination_login_only} =
-               Vault.create(ctx, %{
-                 name: "claude",
-                 kind: "api_key",
-                 fields: %{"K" => "v"},
-                 destination: @destination,
-                 program: "claude"
-               })
-
       view = create!(ctx)
 
-      assert {:error, :program_destination_login_only} =
+      assert {:error, {:invalid_destination, :hosts_required}} =
                Vault.rebind(ctx, %{id: view.id, destination: %{"program" => "claude"}})
 
       assert row!(ctx, view.id).destination == @destination_text
       assert {:ok, [_only]} = Vault.list(ctx)
-    end
-
-    test "a login entry has nothing to rotate or rebind, and renames, revokes and deletes like any",
-         %{ctx: ctx} do
-      {:ok, view} = create(ctx, %{name: "claude", kind: "login", program: "claude"})
-
-      assert {:error, :login_binding_fixed} =
-               Vault.rotate(ctx, %{id: view.id, fields: %{}, expected_payload_rev: 1})
-
-      assert {:error, :login_binding_fixed} = Vault.rebind(ctx, %{id: view.id, disclose: true})
-
-      assert :ok = Vault.rename(ctx, view.id, "claude-work")
-      assert {:ok, _} = Vault.revoke(ctx, view.id)
-      assert row!(ctx, view.id).status == "revoked"
-      assert :ok = Vault.delete(ctx, view.id)
-      assert row!(ctx, view.id).status == "tombstoned"
-    end
-
-    test "a login entry is never dispensed, disclosed or attached", %{ctx: ctx} do
-      {:ok, view} = create(ctx, %{name: "claude", kind: "login", program: "claude"})
-      # Signed in, so its status refuses nothing and its kind is what does.
-      :ok = Sanctum.Mount.signed_in(ctx, view.id)
-      row = row!(ctx, view.id)
-      resource = %{entry_id: view.id, binding_digest: row.binding_digest}
-
-      assert {:error, :disclosure_refused} =
-               VaultReader.unseal_disclosed(ctx.athanor_id, "claude")
-
-      assert {:error, :connection_not_granted} = VaultReader.load_and_unseal(ctx, resource)
-
-      # Even a row edited to disclose stays mounted: its kind and its
-      # program destination each refuse a read.
-      {1, _} =
-        Arca.Repo.update_all(from(v in Arca.Schemas.VaultEntry, where: v.id == ^view.id),
-          set: [attach_only: false]
-        )
-
-      assert {:error, :disclosure_refused} =
-               VaultReader.unseal_disclosed(ctx.athanor_id, "claude")
-
-      {:ok, digest} = VaultReader.binding_digest(row!(ctx, view.id))
-
-      fetch = %{
-        entry_id: view.id,
-        binding_digest: digest,
-        projection: %{fields: %{"k" => "k"}, scopes: []}
-      }
-
-      assert {:error, :disclosure_refused} = VaultReader.fetch(ctx, fetch, @dispense)
-
-      assert VaultReader.mounted?(%{kind: "api_key", destination: ~s({"program":"claude"})})
-      refute VaultReader.mounted?(%{kind: "api_key", destination: @destination_text})
     end
   end
 

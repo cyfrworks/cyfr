@@ -39,8 +39,16 @@ defmodule Arca.ToolGrantStorage do
   @doc """
   Record a decision, replacing whatever the same key already said.
 
+  An answer that is one program's is written only while that program's
+  row stands, at the epoch the decision names (`:program_epoch`), read
+  under the row's lock: `{:error, :no_program}` or
+  `{:error, :program_changed}` otherwise.
+
   Upsert rather than insert: a person flipping "always" to "never" is
   answering the same question again, not stacking a contradiction. The
+  key holds the program row an answer is constrained to
+  (`Arca.Schemas.ToolGrant.key_row/1`), so an answer for one program
+  replaces that program's alone. The
   conflict target is the scope's own partial index — an agent-scope row
   carries no thread, and a nullable column in a composite unique
   index constrains nothing.
@@ -61,7 +69,8 @@ defmodule Arca.ToolGrantStorage do
       # decision that stood before has to stand until the new one is
       # written. A concurrent writer landing between the two is a typed
       # refusal through the constraint below, never a raise.
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        :ok = program_stands(row)
         :ok = delete_matching(row)
 
         case Arca.Repo.insert(changeset(row)) do
@@ -71,6 +80,34 @@ defmodule Arca.ToolGrantStorage do
       end)
     end)
     |> Arca.Data.project()
+  end
+
+  # An answer that is one program's is written only while that program's
+  # row stands in the writer's athanor, at the epoch the decision names
+  # when it names one, read under the lock the row's change and removal
+  # take (`Arca.McpServerStorage.update/4`, `delete/3`): an answer lands
+  # before either and goes with it, or is refused after, never left
+  # pointing at a row that is gone or moved.
+  defp program_stands(row) do
+    case ToolGrant.key_row(row) do
+      "" ->
+        :ok
+
+      row_id ->
+        server =
+          from(s in Arca.Schemas.McpServer,
+            where:
+              s.athanor_id == ^row.athanor_id and s.id == ^row_id and s.transport == "program"
+          )
+          |> Arca.QueryHelpers.for_update()
+          |> Arca.Repo.one()
+
+        cond do
+          server == nil -> Arca.Repo.rollback(:no_program)
+          Map.get(row, :program_epoch) in [nil, server.epoch] -> :ok
+          true -> Arca.Repo.rollback(:program_changed)
+        end
+    end
   end
 
   @doc false
@@ -87,6 +124,15 @@ defmodule Arca.ToolGrantStorage do
     |> Ecto.Changeset.unique_constraint(columns, name: conflict_index(scope))
     |> Ecto.Changeset.unique_constraint(columns, name: column_index_name(columns))
   end
+
+  @doc "A constraint read one way whatever its keys (`Arca.Schemas.ToolGrant.read_constraint/1`)."
+  @spec read_constraint(map()) :: {term(), term()}
+  def read_constraint(constraint) when is_map(constraint),
+    do: ToolGrant.read_constraint(constraint)
+
+  @doc "The program row an answer's key carries (`Arca.Schemas.ToolGrant.key_row/1`)."
+  @spec key_row(map()) :: String.t()
+  def key_row(attrs) when is_map(attrs), do: ToolGrant.key_row(attrs)
 
   @doc "Drop one decision, by its identifying key. Idempotent."
   @spec delete(map()) :: :ok | {:error, term()}
@@ -162,6 +208,61 @@ defmodule Arca.ToolGrantStorage do
 
   def list_for_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
+  @doc """
+  The allows of the actor's athanor constrained to the program row
+  `row_id` (a `program_row` constraint naming it), decoded: the standing
+  answers that stand on that row, which its change and removal name and
+  end with the grants of its profiles (`Sanctum.Mount.granted_to/2`,
+  `Arca.McpServerStorage.update/4` and `delete/3`).
+  """
+  @spec on_program_row(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def on_program_row(%Prima.Actor{athanor_id: athanor_id}, row_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.on_program_row", fn ->
+      {:ok, athanor_id |> program_row_grants(row_id) |> Enum.map(&decoded/1)}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def on_program_row(%Prima.Actor{}, _row_id), do: {:error, :no_athanor}
+
+  @doc """
+  Delete the allows `on_program_row/2` answers, inside the caller's
+  transaction (the row's delete, or an update that moves its
+  definition), and answer how many went.
+  """
+  @spec delete_on_program_row(Prima.Actor.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  # arca:db-raise-ok a transaction step: the row's delete and update rescue around their transaction.
+  def delete_on_program_row(%Prima.Actor{athanor_id: athanor_id}, row_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
+    ids = athanor_id |> program_row_grants(row_id) |> Enum.map(& &1.id)
+
+    {count, _} =
+      from(g in ToolGrant, where: g.athanor_id == ^athanor_id and g.id in ^ids)
+      |> Arca.Repo.delete_all()
+
+    {:ok, count}
+  end
+
+  def delete_on_program_row(%Prima.Actor{}, _row_id), do: {:error, :no_athanor}
+
+  # The athanor's constrained allows, read whole and decoded in memory: a
+  # constraint is JSON, and only a decoded one is compared, by the one
+  # grammar that wrote it.
+  defp program_row_grants(athanor_id, row_id) do
+    from(g in ToolGrant,
+      where: g.athanor_id == ^athanor_id and g.effect == "allow" and not is_nil(g.constraint)
+    )
+    |> Arca.Repo.all()
+    |> Enum.filter(fn grant ->
+      case ToolGrant.decode_constraint(grant.constraint) do
+        %{kind: "program_row", patterns: patterns} -> row_id in patterns
+        _other -> false
+      end
+    end)
+  end
+
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
@@ -177,8 +278,8 @@ defmodule Arca.ToolGrantStorage do
       |> Map.put(:constraint, ToolGrant.decode_constraint(constraint))
       |> Map.put(:sources, ToolGrant.decode_sources(sources))
 
-  defp conflict_columns("thread"), do: [:thread_id, :agent_name, :tool, :action]
-  defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action]
+  defp conflict_columns("thread"), do: [:thread_id, :agent_name, :tool, :action, :program_row]
+  defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action, :program_row]
 
   defp conflict_index("thread"), do: :tool_grants_thread_scope_index
   defp conflict_index("agent"), do: :tool_grants_agent_scope_index
@@ -198,7 +299,8 @@ defmodule Arca.ToolGrantStorage do
         g.athanor_id == ^attrs.athanor_id and
           g.scope == ^ToolGrant.agent_scope() and
           g.agent_name == ^attrs.agent_name and
-          g.tool == ^attrs.tool and g.action == ^attrs.action
+          g.tool == ^attrs.tool and g.action == ^attrs.action and
+          g.program_row == ^ToolGrant.key_row(attrs)
     )
     |> Arca.Repo.delete_all()
 
@@ -212,7 +314,8 @@ defmodule Arca.ToolGrantStorage do
           g.scope == ^ToolGrant.thread_scope() and
           g.thread_id == ^attrs.thread_id and
           g.agent_name == ^attrs.agent_name and
-          g.tool == ^attrs.tool and g.action == ^attrs.action
+          g.tool == ^attrs.tool and g.action == ^attrs.action and
+          g.program_row == ^ToolGrant.key_row(attrs)
     )
     |> Arca.Repo.delete_all()
 

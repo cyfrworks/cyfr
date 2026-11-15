@@ -21,12 +21,10 @@
 #            another browser offers the same, and the command exited 0,
 #            its address gone. An account made at the pages and admitted
 #            under a setup token is the identity proof's
-#            (tests/identity-proof/), and one made at the terminal and
-#            admitted by its hello the pairing proof's
-#            (tests/pairing-proof/).
+#            (tests/identity-proof/).
 #   again    `cyfr setup` again in that project: exit 0 with the next
-#            step of a CYFR nobody is set up at yet, its setup link or
-#            `cyfr login --setup`, nothing written and nothing served at
+#            step of a CYFR nobody is set up at yet, its setup link,
+#            nothing written and nothing served at
 #            the port asked for.
 #
 # Usage: tests/setup-proof/run.sh
@@ -204,7 +202,7 @@ setup_start "$LOCAL" --port "$port"
 setup_wait 30
 [ "$SETUP_STATUS" = 0 ] || fail "cyfr setup over an existing .env exited $SETUP_STATUS: $(cat "$WORK/$LOCAL.setup.log")"
 first="$(head -n 1 "$WORK/$LOCAL.setup.log")"
-[ "$first" = "Open http://localhost:$LOCAL_PORT/setup#$token to set up its first person, or run cyfr login --setup here." ] ||
+[ "$first" = "Open http://localhost:$LOCAL_PORT/setup#$token to set up its first person." ] ||
   fail "cyfr setup over an existing .env said: ${first//$token/[token]}"
 cmp -s "$WORK/$LOCAL/.env" "$WORK/$LOCAL.env.before" || fail "cyfr setup over an existing .env changed .env"
 [ ! -e "$WORK/$LOCAL/.cyfr/setup.url" ] || fail "cyfr setup over an existing .env wrote an address"

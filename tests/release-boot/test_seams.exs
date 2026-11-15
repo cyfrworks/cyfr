@@ -27,7 +27,7 @@
 #     `Sanctum.Tenancy`'s compiled code names no resolver override.
 #
 # Seams with no cheap door are held elsewhere: the namespace cache's
-# lifetime needs a person's row, so the headless case of
+# lifetime needs a person's row, so the restores case of
 # tests/release-boot/boot.sh holds it; the boot's own reads (the gate, the
 # database checks, the recovery and the status watch) are read before
 # anything can be set here, so its restores case boots a release handed
@@ -67,6 +67,7 @@ switched = [
   retention_scheduler_enabled: Cyfr.RetentionScheduler,
   external_server_reconciler_enabled: Emissary.External.Reconciler,
   schedule_notes_enabled: Aqua.ScheduleNotes,
+  schedule_turns_enabled: Aqua.ScheduleTurns,
   crew_delivery_enabled: Aqua.Crew,
   execution_sweeper_enabled: Opus.Sweeper,
   execution_archive_watch_enabled: Opus.ArchiveWatch,

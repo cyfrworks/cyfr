@@ -97,9 +97,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.HandleController, :name_of} => :handle_name_of_unserved,
     {Emissary.Web.HandleController, :claim} => :handle_claim_unserved,
     {PrismWeb.DeviceUnlockController, :redeem} => :device_unlock_ticket_unknown,
-    {Emissary.Web.DeviceSessionController, :create} => :device_session_ticket_unknown,
     {Emissary.Web.OAuthCallbackController, :callback} => :oauth_callback_unknown_state,
-    {CyfrWeb.Plugs.AuthRateLimit, :call} => :device_session_rate_limited,
+    {CyfrWeb.Plugs.AuthRateLimit, :call} => :device_unlock_rate_limited,
     {PrismWeb.AuthController, :company_start} => :company_start_no_session,
     {PrismWeb.AuthController, :company_callback} => :company_callback_no_session,
     {PrismWeb.PasskeyController, :complete} => :sign_in_passkey_ticket_unknown,
@@ -531,16 +530,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused("invalid_argument", :none)}
   end
 
-  def device_session_ticket_unknown(_conn, _ctx) do
-    conn =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post("/device/session", Jason.encode!(%{"ticket" => "nope"}))
-
-    assert json_response(conn, 403) == %{"error" => "ticket_refused"}
-    {request_id_of(conn), refused("forbidden", :none)}
-  end
-
   def device_unlock_ticket_unknown(_conn, _ctx) do
     conn = build_conn() |> post("/auth/device/complete", %{"ticket" => "nope"})
 
@@ -548,18 +537,14 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused("forbidden", :none)}
   end
 
-  # A command line's session spend is metered thirty requests a minute
+  # A protected device's unlock page is metered thirty requests a minute
   # an address.
-  def device_session_rate_limited(_conn, _ctx) do
+  def device_unlock_rate_limited(_conn, _ctx) do
     Prima.Test.RateLimiter.reset!()
 
-    spend = fn ->
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post("/device/session", Jason.encode!(%{"ticket" => "nope"}))
-    end
+    spend = fn -> get(build_conn(), "/auth/device/complete") end
 
-    for _ <- 1..30, do: assert(spend.().status == 403)
+    for _ <- 1..30, do: assert(spend.().status == 200)
 
     conn = spend.()
     assert conn.status == 429

@@ -507,7 +507,10 @@ defmodule PrismWeb.CanvasLiveTest do
       "input" => System.unique_integer([:positive, :monotonic]),
       "frame" => canvas.id,
       "message" =>
-        Prima.TinctureWire.shell_message(:open, canvas.id, %{"ref" => "tincture:local.icon-dash"})
+        Prima.TinctureWire.shell_message(:open, canvas.id, %{
+          "ref" => "tincture:local.icon-dash",
+          "call" => 1
+        })
     })
 
     assert %{placement: :full, visible: true} =

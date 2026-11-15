@@ -222,7 +222,7 @@ defmodule Sanctum.Consent.Normalize do
   defp credential_hosts(type, nil, tag) do
     kind = hd(String.split(type, ":", parts: 2))
 
-    if kind in Prima.CredentialKinds.all() and kind != "login",
+    if kind in Prima.CredentialKinds.all(),
       do: {:error, {tag, :hosts, "a credential need names the hosts it calls"}},
       else: :ok
   end
@@ -230,8 +230,8 @@ defmodule Sanctum.Consent.Normalize do
   defp credential_hosts(_type, _hosts, _tag), do: :ok
 
   # A login need names the program it mounts into, and only a login need
-  # names one: which program a login entry signs in to is what the person
-  # consents to.
+  # names one: which program's row it binds is what the person consents
+  # to.
   defp program(type, need, tag) do
     login? = hd(String.split(type, ":", parts: 2)) == "login"
 
@@ -248,8 +248,7 @@ defmodule Sanctum.Consent.Normalize do
   end
 
   # The program row a login need suggests (`Prima.Manifest.Needs`), when it
-  # suggests one: its command and its login command, each a string where
-  # named.
+  # suggests one: its command, a string where named.
   defp install(need, tag) do
     case Map.get(need, :install) do
       nil ->
@@ -258,15 +257,15 @@ defmodule Sanctum.Consent.Normalize do
       %{} = install ->
         install = Map.new(install, fn {key, value} -> {to_string(key), value} end)
 
-        if Map.keys(install) -- ~w(command login_command) == [] and
+        if Map.keys(install) -- ~w(command) == [] and
              Enum.all?(Map.values(install), &(is_nil(&1) or is_binary(&1))) do
           {:ok, install |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()}
         else
-          {:error, {tag, :install, "names a command and a login command as strings"}}
+          {:error, {tag, :install, "names a command as a string"}}
         end
 
       _other ->
-        {:error, {tag, :install, "names a command and a login command as strings"}}
+        {:error, {tag, :install, "names a command as a string"}}
     end
   end
 

@@ -754,7 +754,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp credential_needs(manifest) do
     case Prima.Manifest.Needs.from_manifest(manifest) do
       needs when is_list(needs) ->
-        for need <- needs, need.kind in Prima.CredentialKinds.all(), do: need.name
+        for need <- needs, need.kind in Prima.Manifest.Needs.binding_kinds(), do: need.name
 
       _ ->
         []

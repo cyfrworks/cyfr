@@ -24,8 +24,7 @@ defmodule Prima.Device do
       `software`; `display_name`, the name it shows, text of at most 64
       bytes; and, when it brings one, `admission`, what admits a person
       new here: `{"setup": token}`, the installation's setup token (64
-      lowercase hexadecimal characters), or `{"invitation": code}`, an
-      invitation's code (unpadded base64url of 32 bytes).
+      lowercase hexadecimal characters).
     * `sign_in_answer` — `answer`, the device's answer to the request
       (`Prima.SignIn.DeviceAnswer`).
     * `connect` — `client_id` and the `certificate` (`Prima.DeviceCert`)
@@ -87,7 +86,6 @@ defmodule Prima.Device do
   @holder_kinds ~w(chip software)
   @max_display_name 64
   @setup_token ~r/\A[0-9a-f]{64}\z/
-  @invitation_code_bytes 32
   @standing [client_id: :id, athanor: :id, expires_at: :ms]
 
   # type => {sender, required fields, optional fields}, each field with its codec
@@ -183,11 +181,6 @@ defmodule Prima.Device do
   @spec setup_token?(term()) :: boolean()
   def setup_token?(value), do: is_binary(value) and Regex.match?(@setup_token, value)
 
-  @doc "Whether `value` is spelled as an invitation's code is: unpadded base64url of 32 bytes."
-  @spec invitation_code?(term()) :: boolean()
-  def invitation_code?(value),
-    do: match?({:ok, _bytes}, Encoding.unb64(value, @invitation_code_bytes))
-
   @doc "The fields that mark an intent as carrying continuous data."
   @spec continuous_fields() :: [String.t()]
   def continuous_fields, do: @continuous
@@ -195,8 +188,8 @@ defmodule Prima.Device do
   @doc """
   Read a message `sender` sent: `{type, body}`, the body's fields as atoms
   and its values decoded (a certificate, challenge, proof, request or
-  device answer as its struct, an admission as `{:setup, token}` or
-  `{:invitation, code}`, and a standing as its fields).
+  device answer as its struct, an admission as `{:setup, token}`, and a
+  standing as its fields).
   """
   @spec decode(term(), sender()) :: {:ok, message()} | {:error, reason()}
   def decode(map, sender) when is_map(map) and not is_struct(map) and sender in [:glass, :home] do
@@ -291,12 +284,9 @@ defmodule Prima.Device do
   defp get(:holder_kind, value), do: ok_if(value in @holder_kinds, value)
   defp get(:display_name, value), do: ok_if(display_name?(value), value)
 
-  # Exactly one capability: the setup token or an invitation's code.
+  # Exactly one capability: the setup token.
   defp get(:admission, %{"setup" => token} = admission) when map_size(admission) == 1,
     do: ok_if(setup_token?(token), {:setup, token})
-
-  defp get(:admission, %{"invitation" => code} = admission) when map_size(admission) == 1,
-    do: ok_if(invitation_code?(code), {:invitation, code})
 
   defp get(:admission, _value), do: :error
 
@@ -350,7 +340,7 @@ defmodule Prima.Device do
   defp ok_if(true, value), do: {:ok, value}
   defp ok_if(false, _value), do: :error
 
-  defp put(:admission, {kind, value}), do: %{Atom.to_string(kind) => value}
+  defp put(:admission, {:setup, token}), do: %{"setup" => token}
   defp put(:request, request), do: SignIn.encode(request)
   defp put(:device_answer, answer), do: DeviceAnswer.encode(answer)
 

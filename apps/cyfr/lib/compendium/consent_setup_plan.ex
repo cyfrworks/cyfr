@@ -16,7 +16,8 @@ defmodule Compendium.ConsentSetupPlan do
 
   Each row of the head revision is read by what it names
   (`Sanctum.Consent.row_binding/3`): the athanor's own entry, held
-  to the digest the person approved; a selection of another profile's
+  to the digest the person approved; the program row a login need binds,
+  standing at the digest approved; a selection of another profile's
   key, resolved as a run resolves it and its lender's entry held to the
   same check, or reported not ready with the reason it resolves to
   nothing; and a share, read as the person is offered it, its owner
@@ -320,8 +321,8 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   # The bindings the component reads itself: the bound entries whose edge
-  # carries no attach rule, apart from a login entry, which is mounted into
-  # its program and read by nobody (`Sanctum.Mount`). An unreadable policy
+  # carries no attach rule, apart from a login need's program row, which is
+  # mounted and read by nobody (`Sanctum.Mount`). An unreadable policy
   # names none, which leaves every row to its own check.
   defp read_itself_keys(consent) do
     case Prima.Authority.Blob.parse(consent.resolved_policy) do
@@ -417,6 +418,19 @@ defmodule Compendium.ConsentSetupPlan do
   # a key this person cannot use.
   defp check_ref(_ctx, {:share, id, {:error, _unread}}),
     do: {id, false, "the shared key cannot be read right now — try again"}
+
+  # A login need's program row, standing at the digest approved.
+  defp check_ref(_ctx, {:program, id, {:ok, row}}),
+    do: {id, true, "bound to the program #{row.name}"}
+
+  defp check_ref(_ctx, {:program, id, {:error, :binding_went_stale}}),
+    do: {id, false, "the bound program changed since this consent — re-approve to continue"}
+
+  defp check_ref(_ctx, {:program, id, {:error, :not_found}}),
+    do: {id, false, "the bound program no longer exists"}
+
+  defp check_ref(_ctx, {:program, id, {:error, _unread}}),
+    do: {id, false, "the bound program cannot be read right now — try again"}
 
   defp check_ref(_ctx, :malformed), do: {nil, false, "the binding names no entry"}
 

@@ -421,6 +421,10 @@ defmodule Aqua.Providers.Thread do
             Arg.new("tool_action", :string,
               required: true,
               description: "revoke_grant: the action"
+            ),
+            Arg.new("program", :string,
+              description:
+                "revoke_grant: for an answer that is one program's, the program's row id; required for program.start"
             )
           ],
           kind: :write,
@@ -761,13 +765,14 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp act("revoke_grant", ctx, id, %{
-         "agent_name" => agent,
-         "tool" => tool,
-         "tool_action" => action
-       })
+  defp act(
+         "revoke_grant",
+         ctx,
+         id,
+         %{"agent_name" => agent, "tool" => tool, "tool_action" => action} = args
+       )
        when is_binary(agent) and is_binary(tool) and is_binary(action) do
-    case Runner.revoke_grant(ctx, id, agent, tool, action) do
+    case Runner.revoke_grant(ctx, id, agent, tool, action, args["program"]) do
       :ok -> {:ok, %{revoked: true, agent: agent, tool: tool, action: action}}
       {:error, reason} -> {:error, refusal(reason, id)}
     end

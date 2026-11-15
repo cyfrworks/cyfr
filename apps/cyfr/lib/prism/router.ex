@@ -77,8 +77,6 @@ defmodule Prism.Router do
       # a PDF, not html), the session cookie for who, the URL's athanor for
       # where — the controller focuses it exactly as a LiveView mount does.
       pipeline :attachment do
-        # A headless node serves no page surface, and a chat attachment is one.
-        plug CyfrWeb.Plugs.Headless
         # Before the session: a frame's request reaches none.
         plug CyfrWeb.Plugs.FrameRequest
         plug :fetch_session
@@ -250,6 +248,7 @@ defmodule Prism.Router do
             live "/schedules", SchedulesLive, :index, metadata: %{auth: :browser_authenticated}
             live "/settings", SettingsLive, :index, metadata: %{auth: :browser_authenticated}
             live "/programs", ProgramsLive, :index, metadata: %{auth: :browser_authenticated}
+            live "/tips", TipsLive, :index, metadata: %{auth: :browser_authenticated}
             live "/legal", LegalLive, :index, metadata: %{auth: :browser_authenticated}
           end
         end

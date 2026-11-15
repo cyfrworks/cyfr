@@ -3,14 +3,15 @@
 
 defmodule Opus.ProgramsMountsTest do
   @moduledoc """
-  What a login entry's life does to the programs mounted on it, against a
-  scripted backends service (`Cyfr.Test.ScriptedBackends`): a revoked or
-  deleted entry stops the kept mcp programs that name it and ends its
-  sign-ins at once; a renewal releases the owner of a row whose entry no
-  longer stands (a restore's `needs_reauth` among them); every open of a
-  kept row asks the entry again; a sign-in shows none of its text in its
-  status; and the periodic sweep retires every kept home the box holds
-  whose entry is gone, while a store that cannot answer retires nothing.
+  A kept program's folder is its row's, against a scripted backends
+  service (`Cyfr.Test.ScriptedBackends`): its sessions and terminals run in
+  the home named by the row's id, with no login entry anywhere; a reset
+  names the row; a deleted row ends its terminals at once and then retires
+  its home; an archived athanor retires every kept row's home; a terminal
+  ends with its program and shows none of its output in its status; and
+  the periodic sweep retires every kept home the box holds that no kept
+  row of a live athanor holds, while a store that cannot answer retires
+  nothing.
   """
   use ExUnit.Case, async: false
 
@@ -62,16 +63,8 @@ defmodule Opus.ProgramsMountsTest do
     end
   end
 
-  defp login_entry(ctx, name, program) do
-    {:ok, entry} =
-      Sanctum.TestContext.create_signed_in_login(ctx, %{name: name, program: program})
-
-    entry.id
-  end
-
-  # A kept mcp program naming `entry`, with no vault reference in its env:
-  # only its mount ties it to the vault.
-  defp kept_mcp_row(ctx, entry) do
+  # A kept mcp program, with no vault reference in its env.
+  defp kept_mcp_row(ctx) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
@@ -80,45 +73,27 @@ defmodule Opus.ProgramsMountsTest do
         mark: "mcp",
         url: nil,
         home: "kept",
-        login_entry_id: entry,
-        login_command: "gh auth login",
         config_json:
-          Jason.encode!(%{
-            "backends" => [
-              %{"name" => "github", "command" => "gh mcp", "env" => %{"NODE_ENV" => "production"}}
-            ]
-          })
+          Jason.encode!(%{"command" => "gh mcp", "env" => %{"NODE_ENV" => "production"}})
       })
 
     row
   end
 
-  defp driven_row(ctx) do
+  defp driven_row(ctx, name \\ "claude", home \\ "kept") do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
-        name: "claude",
+        name: name,
         transport: "program",
         mark: "driven",
         url: nil,
-        home: "kept",
-        login_command: "claude auth login",
+        home: home,
         config_json:
-          Jason.encode!(%{
-            "backends" => [
-              %{"name" => "claude", "command" => "npx -y @anthropic-ai/claude-code", "env" => %{}}
-            ]
-          })
+          Jason.encode!(%{"command" => "npx -y @anthropic-ai/claude-code", "env" => %{}})
       })
 
     row
-  end
-
-  defp server_pid(ctx, row) do
-    [{pid, _digest}] =
-      Registry.lookup(Emissary.External.ServerRegistry, {row.name, ctx.athanor_id})
-
-    pid
   end
 
   defp start_reconciler do
@@ -126,202 +101,169 @@ defmodule Opus.ProgramsMountsTest do
     start_supervised!(Emissary.External.Reconciler)
   end
 
-  # Suspends the server registry's partitions, which remove a process's
-  # entries when it exits, until the test ends; resumed by the on_exit
-  # registered before the first suspend.
-  defp hold_registry_cleanup do
-    partitions =
-      for {_id, pid, _type, _modules} <-
-            Supervisor.which_children(Emissary.External.ServerRegistry),
-          do: pid
+  defp admin(ctx), do: %{ctx | permissions: MapSet.new([:*])}
 
-    on_exit(fn -> Enum.each(partitions, &:sys.resume/1) end)
-    Enum.each(partitions, &:sys.suspend/1)
+  # The row's terminal, opened as a person opens it, and attached to here.
+  defp open!(ctx, row) do
+    assert {:ok, %{session: session, program: name}} =
+             Provider.handle("mcp_servers", admin(ctx), %{"action" => "open", "name" => row.name})
+
+    assert name == row.name
+    assert {:ok, _attached} = Programs.attach(admin(ctx), session)
+    session
   end
 
-  defp revoked(ctx, entry, name) do
-    {:ok, _} = Sanctum.Vault.revoke(ctx, entry)
-
-    # The signal a revoke sends, delivered as the bridge delivers it.
-    Cyfr.Bus.broadcast_global(Cyfr.Bus.vault_changed_global(), %Cyfr.Bus.VaultEntryChanged{
-      athanor_id: ctx.athanor_id,
-      entry_id: entry,
-      name: name,
-      kind: :revoke
-    })
-  end
-
-  describe "a login entry's end" do
-    test "a revoked entry stops the kept mcp program that mounts it, and the next call is refused",
+  describe "a kept row's folder" do
+    test "an mcp program's session runs in the home its row's id names, and its tools are " <>
+           "the program's own names",
          %{ctx: ctx} do
-      # Signed in before the reconciler starts: the sign-in's own change
-      # signal would raise the row's epoch under the start below.
-      entry = login_entry(ctx, "gh-login", "gh")
-      start_reconciler()
-      row = kept_mcp_row(ctx, entry)
-      assert {:ok, [%{"name" => "github__search"}]} = Servers.ensure_started(row, ctx)
-      pid = server_pid(ctx, row)
-      ref = Process.monitor(pid)
+      row = kept_mcp_row(ctx)
+      assert {:ok, [%{"name" => "search"}]} = Servers.ensure_started(row, ctx)
 
-      revoked(ctx, entry, "gh-login")
+      home_id = row.id
 
-      # Stopped, its owner released and its row's epoch raised, though no
-      # template of its names the entry.
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 3_000
-      assert_receive {:control, "release", %{"owners" => [%{"server" => server}]}, _}, 3_000
-      assert server == row.id
+      assert_receive {:session, "open", %{"home_id" => ^home_id, "mode" => "run"} = open, _},
+                     2_000
 
-      {:ok, row} = Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row.id)
-      assert {:error, sentence} = Servers.ensure_started(row, ctx)
-      assert sentence =~ "login entry"
+      assert open["program"] == Opus.Programs.Definition.program_name()
     end
 
-    test "a call that finds the stopped row's process still registered is refused with the entry's sentence",
-         %{ctx: ctx} do
-      entry = login_entry(ctx, "gh-login", "gh")
-      start_reconciler()
-      row = kept_mcp_row(ctx, entry)
-      assert {:ok, _tools} = Servers.ensure_started(row, ctx)
-      pid = server_pid(ctx, row)
-      ref = Process.monitor(pid)
+    test "a terminal runs in the row's home, and ends with its program", %{
+      ctx: ctx,
+      fake: fake
+    } do
+      row = driven_row(ctx)
+      session = open!(ctx, row)
 
-      # The race the test above can lose under load, held open: the
-      # registry drops a stopped process's entry only when its partition
-      # handles the exit, after the stopper and a monitor already saw it
-      # go, and the reconciler raises the row's epoch only after the stop.
-      # A call in that window, with the row read before the raise, finds
-      # the dead process under the row's own digest; it must open a new
-      # one, which refuses for the entry, rather than answer the dead
-      # one's exit (`{:server_exited, {:noproc, _}}`) or, once the entry
-      # is dropped between the two lookups, `:not_running`.
-      hold_registry_cleanup()
-      revoked(ctx, entry, "gh-login")
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 3_000
-      assert_receive {:control, "release", %{"owners" => [%{"server" => server}]}, _}, 3_000
-      assert server == row.id
+      home_id = row.id
 
-      assert [{^pid, _digest}] =
-               Registry.lookup(Emissary.External.ServerRegistry, {row.name, ctx.athanor_id})
+      assert_receive {:session, "open", %{"home_id" => ^home_id, "mode" => "terminal"}, _fields},
+                     2_000
 
-      assert {:error, sentence} = Servers.ensure_started(row, ctx)
-      assert sentence =~ "login entry"
-    end
-
-    test "a revoked entry ends its running sign-in at once", %{ctx: ctx} do
-      # Signed in before the reconciler starts, as above.
-      entry = login_entry(ctx, "claude-login", "claude")
-      start_reconciler()
-      driven_row(ctx)
-      admin = %{ctx | permissions: MapSet.new([:*])}
-
-      assert {:ok, %{session: token}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "sign_in",
-                 "name" => "claude",
-                 "entry" => entry
-               })
-
-      assert :ok = Programs.sign_in_attach(admin, token, self())
-
-      revoked(ctx, entry, "claude-login")
-
-      assert_receive {Opus.Programs, ^token, {:ended, :entry_ended}}, 3_000
-      assert_receive {:session, "close", _message, _fields}, 3_000
-    end
-
-    test "a renewal releases the owner of a row whose entry no longer stands, a restore's needs_reauth included",
-         %{ctx: ctx, controller: controller} do
-      entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_mcp_row(ctx, entry)
-      assert {:ok, _tools} = Servers.ensure_started(row, ctx)
-      pid = server_pid(ctx, row)
-      ref = Process.monitor(pid)
-
-      # No signal: a restore marks entries needs_reauth in the store alone.
-      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry, "needs_reauth")
-      tick(controller)
-
-      assert_receive {:control, "release", %{"owners" => [%{"server" => server}]}, _}, 3_000
-      assert server == row.id
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 3_000
-    end
-
-    test "every open of a kept row asks its entry again", %{ctx: ctx, fake: fake} do
-      entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_mcp_row(ctx, entry)
-      assert {:ok, _tools} = Servers.ensure_started(row, ctx)
-      pid = server_pid(ctx, row)
-
-      # The entry is revoked with no signal and its session ended: the next
-      # call must open again, and the open is refused before it is sent.
-      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry, "revoked")
-      Scripted.end_sessions(fake, row.id)
-      flush_opens()
-
-      # The call that finds its session ended fails; the next opens again,
-      # and that open is refused before anything is sent.
-      _ = Emissary.External.Server.call_tool(pid, "github__search", %{})
-
-      assert {:error, message} = Emissary.External.Server.call_tool(pid, "github__search", %{})
-      assert message =~ "login entry"
-      refute_received {:session, "open", _message, _fields}
-    end
-  end
-
-  defp flush_opens do
-    receive do
-      {:session, "open", _message, _fields} -> flush_opens()
-    after
-      0 -> :ok
-    end
-  end
-
-  describe "a sign-in recovering a needs_reauth entry" do
-    test "renewal keeps the owner for the sign-in alone, which completes, while the row's MCP session stands down",
-         %{ctx: ctx, fake: fake, controller: controller} do
-      entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_mcp_row(ctx, entry)
-      assert {:ok, _tools} = Servers.ensure_started(row, ctx)
-      server = server_pid(ctx, row)
-      server_ref = Process.monitor(server)
-
-      # A restore leaves the entry needs_reauth; the person signs the row in
-      # again, as #561 rules.
-      {:ok, _} = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry, "needs_reauth")
-      admin = %{ctx | permissions: MapSet.new([:*])}
-
-      assert {:ok, %{session: token}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "sign_in",
-                 "name" => row.name,
-                 "entry" => entry
-               })
-
-      :ok = Programs.sign_in_attach(admin, token, self())
-      [{relay, _}] = Registry.lookup(Opus.Programs.Registry, {:sign_in, token})
-      relay_ref = Process.monitor(relay)
-
-      # A tick while the sign-in runs: the MCP holder of the row stands down,
-      # the sign-in's owner is kept, renewed and never released.
-      tick(controller)
-      assert_receive {:DOWN, ^server_ref, :process, ^server, _reason}, 3_000
-      refute_receive {:control, "release", %{"owners" => [%{"server" => _}]}, _}, 300
-      refute_received {:DOWN, ^relay_ref, :process, _, _}
-      refute_received {Programs, ^token, {:ended, _}}
-
-      # Its command exits 0: the sign-in completes and the entry is active.
       Scripted.end_sessions(fake, row.id, 0)
-      assert_receive {Programs, ^token, {:ended, :signed_in}}, 5_000
-
-      assert {:ok, %{status: "active"}} =
-               Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry)
+      assert_receive {Programs, ^session, {:ended, :exited}}, 5_000
     end
+
+    test "a reset names the program, and empties its row's home", %{ctx: ctx} do
+      row = driven_row(ctx)
+
+      assert {:ok, %{reset: "claude"}} =
+               Provider.handle("mcp_servers", admin(ctx), %{
+                 "action" => "reset_home",
+                 "name" => "claude"
+               })
+
+      home_id = row.id
+      assert_receive {:control, "home", %{"op" => "reset", "home_id" => ^home_id}, _fields}, 2_000
+    end
+
+    test "a renewal keeps a kept row's owner: nothing outside the row decides its folder", %{
+      ctx: ctx,
+      controller: controller
+    } do
+      row = kept_mcp_row(ctx)
+      assert {:ok, _tools} = Servers.ensure_started(row, ctx)
+
+      tick(controller)
+      assert_receive {:control, "renew", %{"owners" => [%{"server" => server}]}, _fields}, 3_000
+      assert server == row.id
+      refute_receive {:control, "release", _message, _fields}, 300
+    end
+  end
+
+  describe "a deleted row" do
+    test "ends its running terminal at once, then retires its home", %{ctx: ctx} do
+      start_reconciler()
+      row = driven_row(ctx)
+      session = open!(ctx, row)
+
+      assert {:ok, %{deleted: "claude"}} =
+               Sanctum.TestContext.confirming(admin(ctx), fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "delete",
+                   "name" => "claude"
+                 })
+               end)
+
+      assert_receive {Opus.Programs, ^session, {:ended, :row_changed}}, 3_000
+      home_id = row.id
+
+      assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^home_id} = retire, _},
+                     3_000
+
+      assert retire["athanor"] == ctx.athanor_id
+    end
+
+    # A confirmed change to a program's definition ends what runs under
+    # the old one at once, as a removal does, and keeps its folder.
+    test "a confirmed change ends its running terminal at once and keeps its home",
+         %{ctx: ctx} do
+      start_reconciler()
+      row = driven_row(ctx)
+      session = open!(ctx, row)
+
+      assert {:ok, %{epoch: 2}} =
+               Sanctum.TestContext.confirming(admin(ctx), fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "update",
+                   "name" => "claude",
+                   "epoch" => row.epoch,
+                   "config" => %{
+                     "transport" => "program",
+                     "mark" => "driven",
+                     "home" => "kept",
+                     "command" => "npx -y @anthropic-ai/claude-code --another",
+                     "env" => %{}
+                   }
+                 })
+               end)
+
+      assert_receive {Opus.Programs, ^session, {:ended, :row_changed}}, 3_000
+      home_id = row.id
+      refute_receive {:control, "home", %{"op" => "retire", "home_id" => ^home_id}, _}, 300
+    end
+
+    test "with a scratch home retires nothing", %{ctx: ctx} do
+      start_reconciler()
+      driven_row(ctx, "scratchy", "scratch")
+
+      assert {:ok, _deleted} =
+               Sanctum.TestContext.confirming(admin(ctx), fn person ->
+                 Provider.handle("mcp_servers", person, %{
+                   "action" => "delete",
+                   "name" => "scratchy"
+                 })
+               end)
+
+      :sys.get_state(Emissary.External.Reconciler)
+      refute_receive {:control, "home", _message, _fields}, 300
+    end
+  end
+
+  test "an archived athanor retires every kept row's home, and no scratch row's", %{ctx: ctx} do
+    start_reconciler()
+    kept = driven_row(ctx)
+    mcp = kept_mcp_row(ctx)
+    _scratch = driven_row(ctx, "scratchy", "scratch")
+
+    Cyfr.Bus.broadcast_global(
+      Cyfr.Bus.athanor_archived_global(),
+      Cyfr.Bus.AthanorArchived.new(ctx.athanor_id)
+    )
+
+    retired =
+      for _ <- 1..2 do
+        assert_receive {:control, "home", %{"op" => "retire", "home_id" => id}, _fields}, 3_000
+        id
+      end
+
+    assert Enum.sort(retired) == Enum.sort([kept.id, mcp.id])
+    refute_receive {:control, "home", _message, _fields}, 300
   end
 
   describe "a kept row's status" do
     test "names its stderr's length and never its text", %{ctx: ctx, fake: fake} do
-      entry = login_entry(ctx, "gh-login", "gh")
-      row = kept_mcp_row(ctx, entry)
+      row = kept_mcp_row(ctx)
       assert {:ok, _tools} = Servers.ensure_started(row, ctx)
       Scripted.set(fake, :stderr_bytes, 12)
 
@@ -331,30 +273,30 @@ defmodule Opus.ProgramsMountsTest do
     end
   end
 
-  describe "a sign-in's status" do
-    test "shows none of the lines it holds or the text sent to it", %{ctx: ctx, fake: fake} do
+  describe "a terminal's status" do
+    test "shows none of the output it holds or the words its program was started with",
+         %{ctx: ctx, fake: fake} do
       row = driven_row(ctx)
-      entry = login_entry(ctx, "claude-login", "claude")
-      admin = %{ctx | permissions: MapSet.new([:*])}
 
-      assert {:ok, %{session: token}} =
-               Provider.handle("mcp_servers", admin, %{
-                 "action" => "sign_in",
-                 "name" => "claude",
-                 "entry" => entry
+      assert {:ok, session} =
+               Programs.start(admin(ctx), row.id, %{
+                 rows: 24,
+                 cols: 80,
+                 args: ["--token-word-canary"]
                })
 
-      # Held for a subscriber that has not attached yet.
+      # Held for whatever attaches later.
       Scripted.write(fake, row.id, "token sk-signin-canary-0123456789")
 
-      [{relay, _}] = Registry.lookup(Opus.Programs.Registry, {:sign_in, token})
+      [{terminal, _}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
 
-      eventually(fn -> match?([_ | _], :sys.get_state(relay).kept) end)
-      status = inspect(:sys.get_status(relay), limit: :infinity, printable_limit: :infinity)
+      eventually(fn -> :sys.get_state(terminal).tail.bytes != "" end)
+      status = inspect(:sys.get_status(terminal), limit: :infinity, printable_limit: :infinity)
 
       refute status =~ "sk-signin-canary"
-      assert status =~ "redacted"
-      Programs.sign_in_close(admin, token)
+      refute status =~ "token-word-canary"
+      assert status =~ "#Opus.Programs.Output<"
+      assert {:ok, :closed} = Programs.close(admin(ctx), session)
     end
   end
 
@@ -367,12 +309,14 @@ defmodule Opus.ProgramsMountsTest do
   end
 
   describe "the sweep of kept homes" do
-    test "retires every home the box holds whose entry is gone, and keeps the rest",
+    test "retires every home the box holds that no kept row of a live athanor holds, and " <>
+           "keeps the rest",
          %{ctx: ctx, fake: fake} do
-      kept = login_entry(ctx, "kept-login", "claude")
-      gone = login_entry(ctx, "gone-login", "claude")
-      :ok = Sanctum.Vault.delete(ctx, gone)
-      Scripted.set(fake, :homes, MapSet.new([kept, gone, "vlt_no-row-left"]))
+      kept = driven_row(ctx)
+      scratch = driven_row(ctx, "scratchy", "scratch")
+      gone = driven_row(ctx, "gone")
+      {:ok, _} = Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), "gone")
+      Scripted.set(fake, :homes, MapSet.new([kept.id, scratch.id, gone.id]))
 
       assert :ok = Emissary.External.Reconciler.sweep_homes()
 
@@ -384,18 +328,17 @@ defmodule Opus.ProgramsMountsTest do
           {id, message["athanor"]}
         end
 
-      assert Enum.sort(retired) == Enum.sort([{gone, ctx.athanor_id}, {"vlt_no-row-left", "-"}])
-      refute_receive {:control, "home", %{"home_id" => ^kept}, _fields}, 200
+      assert Enum.sort(retired) == Enum.sort([{scratch.id, ctx.athanor_id}, {gone.id, "-"}])
+      kept_id = kept.id
+      refute_receive {:control, "home", %{"home_id" => ^kept_id}, _fields}, 200
     end
 
-    test "a store that cannot answer retires nothing", %{ctx: ctx, fake: fake} do
-      gone = login_entry(ctx, "gone-login", "claude")
-      :ok = Sanctum.Vault.delete(ctx, gone)
-      Scripted.set(fake, :homes, MapSet.new([gone]))
+    test "a store that cannot answer retires nothing", %{fake: fake} do
+      Scripted.set(fake, :homes, MapSet.new(["mcp_no-row-left"]))
 
-      # The vault's table cannot be read: renamed inside the sandbox's
+      # The programs' table cannot be read: renamed inside the sandbox's
       # transaction, which rolls it back.
-      Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unavailable")
+      Arca.Repo.query!("ALTER TABLE mcp_servers RENAME TO mcp_servers_unavailable")
       assert :ok = Emissary.External.Reconciler.sweep_homes()
 
       refute_receive {:control, "home", _message, _fields}, 300

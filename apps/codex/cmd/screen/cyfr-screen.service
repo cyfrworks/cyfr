@@ -11,7 +11,7 @@ PAMName=login
 TTYPath=/dev/tty1
 StandardInput=tty
 WorkingDirectory=@DIR@
-ExecStart=/usr/bin/dbus-run-session /usr/bin/labwc -C @DIR@/.cyfr/screen -s @DIR@/.cyfr/screen/launcher.sh
+ExecStart=@DIR@/.cyfr/screen/session.sh
 Restart=always
 RestartSec=2
 

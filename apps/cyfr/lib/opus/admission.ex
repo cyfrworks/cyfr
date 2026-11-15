@@ -903,7 +903,7 @@ defmodule Opus.Admission do
       Attempt.open(
         execution_id: record.id,
         attempt: record.attempt,
-        call_id: record.call_id,
+        call_id: record.admitted.call_id,
         ctx: run.ctx,
         authority: run.opts[:authority],
         component_ref: run.component_ref,

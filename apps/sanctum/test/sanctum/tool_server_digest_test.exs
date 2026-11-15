@@ -13,7 +13,8 @@ defmodule Sanctum.ToolServerDigestTest do
     url: "https://mcp.example/sse",
     enabled: true,
     headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
-    backends: [],
+    command: nil,
+    env: nil,
     program: nil
   }
 
@@ -24,20 +25,13 @@ defmodule Sanctum.ToolServerDigestTest do
       program: %{
         "hosts" => ["api.github.com", "github.com"],
         "home" => "kept",
-        "login_entry" => "ent_1",
         "memory_bytes" => 268_435_456,
-        "home_max_bytes" => 1_073_741_824,
-        "login_command" => "gh auth login"
+        "home_max_bytes" => 1_073_741_824
       },
       url: nil,
       headers: %{},
-      backends: [
-        %{
-          "name" => "github",
-          "command" => "npx -y @modelcontextprotocol/server-github",
-          "env" => %{"GITHUB_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
-        }
-      ]
+      command: "npx -y @modelcontextprotocol/server-github",
+      env: %{"GITHUB_TOKEN" => "vault:gh", "NODE_ENV" => "production"}
   }
 
   describe "compute/1" do
@@ -66,7 +60,15 @@ defmodule Sanctum.ToolServerDigestTest do
         %{@base | headers: %{"authorization" => "vault:OTHER_TOKEN", "user-agent" => "cyfr"}},
         %{@base | headers: %{"user-agent" => "cyfr"}},
         %{@base | headers: Map.put(@base.headers, "x-extra", "Bearer vault:EXTRA")},
-        %{@base | transport: "program", mark: "mcp", url: nil, program: %{}}
+        %{
+          @base
+          | transport: "program",
+            mark: "mcp",
+            url: nil,
+            command: "npx server",
+            env: %{},
+            program: %{"home" => "scratch"}
+        }
       ]
 
       for variant <- variants do
@@ -105,32 +107,31 @@ defmodule Sanctum.ToolServerDigestTest do
       assert {:ok, ^base} = ToolServerDigest.from_server(row.(["issues.*"]))
     end
 
-    test "every backend axis of an mcp program moves the digest, and its env order does not" do
+    test "an mcp program's command and every env name and template move the digest, a " <>
+           "literal by its value, and its env order does not" do
       {:ok, base} = ToolServerDigest.compute(@program)
-      [backend] = @program.backends
 
       variants = [
-        [%{backend | "command" => "npx -y @modelcontextprotocol/server-github@2"}],
-        [%{backend | "name" => "gh"}],
-        [put_in(backend, ["env", "GITHUB_TOKEN"], "vault:other")],
-        [backend, %{"name" => "fs", "command" => "npx -y fs", "env" => %{}}]
+        %{@program | command: "npx -y @modelcontextprotocol/server-github@2"},
+        put_in(@program, [:env, "GITHUB_TOKEN"], "vault:other"),
+        put_in(@program, [:env, "GITHUB_TOKEN"], "Bearer vault:gh"),
+        put_in(@program, [:env, "NODE_ENV"], "development"),
+        put_in(@program, [:env, "GH_HOST"], "vault:gh"),
+        %{@program | env: Map.delete(@program.env, "NODE_ENV")}
       ]
 
-      for backends <- variants do
-        {:ok, digest} = ToolServerDigest.compute(%{@program | backends: backends})
-        refute digest == base, inspect(backends)
+      for variant <- variants do
+        {:ok, digest} = ToolServerDigest.compute(variant)
+        refute digest == base, inspect({variant.command, variant.env})
       end
 
-      reordered = %{
-        backend
-        | "env" => %{"NODE_ENV" => "production", "GITHUB_TOKEN" => "vault:gh"}
-      }
-
-      assert {:ok, ^base} = ToolServerDigest.compute(%{@program | backends: [reordered]})
+      reordered = %{"NODE_ENV" => "production", "GITHUB_TOKEN" => "vault:gh"}
+      assert {:ok, ^base} = ToolServerDigest.compute(%{@program | env: reordered})
     end
 
-    test "everything that decides what a program is and reaches moves its digest" do
+    test "everything that decides what a program is and reaches moves its digest and its record" do
       {:ok, base} = ToolServerDigest.compute(@program)
+      {:ok, record, _} = record_and_digest(@program)
 
       for {key, value} <- [
             {"hosts", nil},
@@ -138,13 +139,67 @@ defmodule Sanctum.ToolServerDigestTest do
             {"hosts", ["api.github.com"]},
             {"hosts", []},
             {"home", "scratch"},
-            {"login_entry", "ent_2"},
             {"memory_bytes", nil},
-            {"home_max_bytes", 2_147_483_648},
-            {"login_command", "gh auth login --web"}
+            {"memory_bytes", 536_870_912},
+            {"home_max_bytes", 2_147_483_648}
           ] do
-        {:ok, digest} = ToolServerDigest.compute(put_in(@program, [:program, key], value))
+        variant = put_in(@program, [:program, key], value)
+        {:ok, digest} = ToolServerDigest.compute(variant)
         refute digest == base, "#{key} -> #{inspect(value)} kept the digest"
+
+        {:ok, moved, ^digest} = record_and_digest(variant)
+        refute moved == record, "#{key} -> #{inspect(value)} kept the record"
+      end
+    end
+
+    # Nothing the digest covers is outside the record but a literal's value
+    # and the row's identity: a program whose record and literals are the
+    # same has the same digest, whatever else its map holds.
+    test "a program's digest is its record and its literals' values" do
+      {:ok, record, digest} = record_and_digest(@program)
+
+      assert record == %{
+               "address" => "npx -y @modelcontextprotocol/server-github",
+               "env" => [
+                 %{"name" => "GITHUB_TOKEN", "entry" => "gh"},
+                 %{"name" => "NODE_ENV", "literal" => true}
+               ],
+               "folder" => "kept",
+               "hosts" => ["api.github.com", "github.com"],
+               "memory_bytes" => 268_435_456,
+               "home_max_bytes" => 1_073_741_824
+             }
+
+      assert {:ok, ^digest} =
+               Prima.JCS.hash(%{
+                 "id" => "mcp_row_1",
+                 "transport" => "program",
+                 "enabled" => true,
+                 "mark" => "mcp",
+                 "record" => record,
+                 "literals" => %{"NODE_ENV" => "production"}
+               })
+
+      # Hosts and a literal both moved: the record tells the hosts alone,
+      # and the digest moves for both.
+      hosts_only = put_in(@program, [:program, "hosts"], ["api.github.com"])
+      both = put_in(hosts_only, [:env, "NODE_ENV"], "development")
+      {:ok, hosts_record, hosts_digest} = record_and_digest(hosts_only)
+      assert {:ok, ^hosts_record, both_digest} = record_and_digest(both)
+      refute both_digest == hosts_digest
+    end
+
+    test "a program setting that does not read leaves it without a record or a digest" do
+      for {key, value} <- [
+            {"home", nil},
+            {"home", "shared"},
+            {"hosts", "github.com"},
+            {"hosts", [""]},
+            {"memory_bytes", 0},
+            {"home_max_bytes", "1 GiB"}
+          ] do
+        row = put_in(@program, [:program, key], value)
+        assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
       end
     end
 
@@ -175,11 +230,9 @@ defmodule Sanctum.ToolServerDigestTest do
           enabled: true,
           hosts: hosts,
           home: "kept",
-          login_entry_id: "ent_1",
           memory_bytes: 268_435_456,
           home_max_bytes: 1_073_741_824,
-          login_command: "gh auth login",
-          config_json: Jason.encode!(%{"backends" => @program.backends})
+          config_json: Jason.encode!(%{"command" => @program.command, "env" => @program.env})
         }
       end
 
@@ -195,15 +248,46 @@ defmodule Sanctum.ToolServerDigestTest do
                ToolServerDigest.from_server(row.(~s({"a":1})))
     end
 
-    test "only a tool server has a digest: a driven program and an old kind have none" do
+    # Every row's definition has a digest, a driven program's too, which
+    # its login grants are bound at; only a tool server's is pinned by a
+    # grant of its tools.
+    test "a driven program's definition has a digest, which it is no tool server's" do
+      driven = %{@program | mark: "driven"}
+      {:ok, mcp} = ToolServerDigest.compute(@program)
+      assert {:ok, digest} = ToolServerDigest.compute(driven)
+      refute digest == mcp
+
+      {:ok, moved} = ToolServerDigest.compute(%{driven | env: %{"NODE_ENV" => "development"}})
+      refute moved == digest
+
+      row = fn mark ->
+        %{
+          id: "srv_driven",
+          transport: "program",
+          mark: mark,
+          url: nil,
+          enabled: true,
+          home: "kept",
+          config_json: ~s({"command":"claude","env":{}})
+        }
+      end
+
+      assert {:ok, _} = ToolServerDigest.definition(row.("driven"))
+      assert {:error, {:invalid_server_config, _}} = ToolServerDigest.from_server(row.("driven"))
+      assert ToolServerDigest.from_server(row.("mcp")) == ToolServerDigest.definition(row.("mcp"))
+    end
+
+    test "an old kind or a broken row has no digest" do
       for row <- [
-            %{@program | mark: "driven"},
             %{@program | mark: nil},
             %{@base | mark: "mcp"},
             %{@program | transport: "stdio", mark: nil},
             %{@program | transport: "pipe", mark: nil},
             %{@program | program: nil},
-            %{@base | program: %{}}
+            %{@program | command: nil},
+            %{@program | env: nil},
+            %{@base | program: %{}},
+            %{@base | command: "npx server", env: %{}}
           ] do
         assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
       end
@@ -213,6 +297,129 @@ defmodule Sanctum.ToolServerDigestTest do
       {:ok, a} = ToolServerDigest.compute(@base)
       {:ok, b} = ToolServerDigest.compute(%{@base | url: "https://other.example/sse"})
       refute a == b
+    end
+  end
+
+  # The record and digest of a server as `compute/1` reads it: the record
+  # through a stored row of the same definition.
+  defp record_and_digest(server) do
+    row = %{
+      id: server.id,
+      transport: server.transport,
+      mark: server.mark,
+      url: server.url,
+      enabled: server.enabled,
+      hosts: server.program["hosts"] && Jason.encode!(server.program["hosts"]),
+      home: server.program["home"],
+      memory_bytes: server.program["memory_bytes"],
+      home_max_bytes: server.program["home_max_bytes"],
+      config_json: Jason.encode!(%{"command" => server.command, "env" => server.env})
+    }
+
+    with {:ok, record} <- ToolServerDigest.recorded(row),
+         {:ok, digest} <- ToolServerDigest.from_server(row) do
+      {:ok, ^digest} = ToolServerDigest.compute(server)
+      {:ok, record, digest}
+    end
+  end
+
+  describe "recorded/1" do
+    # A stored row as the row store holds one, its config JSON beside its
+    # program columns.
+    defp stored(over) do
+      Map.merge(
+        %{
+          id: "mcp_row_1",
+          transport: "http",
+          mark: nil,
+          url: "https://mcp.example/sse",
+          enabled: true,
+          hosts: nil,
+          home: "scratch",
+          memory_bytes: nil,
+          home_max_bytes: nil,
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{
+                "authorization" => "Bearer vault:GH_TOKEN",
+                "x-api-key" => "vault:other",
+                "user-agent" => "cyfr-literal-secret"
+              }
+            })
+        },
+        over
+      )
+    end
+
+    test "an http row records its url and each header by name with the entry it names" do
+      assert ToolServerDigest.recorded(stored(%{})) ==
+               {:ok,
+                %{
+                  "address" => "https://mcp.example/sse",
+                  "headers" => [
+                    %{"name" => "authorization", "entry" => "GH_TOKEN", "scheme" => "Bearer"},
+                    %{"name" => "user-agent", "literal" => true},
+                    %{"name" => "x-api-key", "entry" => "other"}
+                  ]
+                }}
+    end
+
+    test "a program records its command, each environment variable, a literal by name " <>
+           "alone, and its settings, each unset one absent" do
+      row =
+        stored(%{
+          transport: "program",
+          mark: "mcp",
+          url: nil,
+          config_json: Jason.encode!(%{"command" => @program.command, "env" => @program.env})
+        })
+
+      assert ToolServerDigest.recorded(row) ==
+               {:ok,
+                %{
+                  "address" => "npx -y @modelcontextprotocol/server-github",
+                  "env" => [
+                    %{"name" => "GITHUB_TOKEN", "entry" => "gh"},
+                    %{"name" => "NODE_ENV", "literal" => true}
+                  ],
+                  "folder" => "scratch"
+                }}
+
+      # A stored host list is a set; an empty one is a list of its own.
+      assert {:ok, %{"hosts" => ["api.github.com", "github.com"]}} =
+               ToolServerDigest.recorded(%{
+                 row
+                 | hosts: ~s(["github.com","api.github.com","github.com"])
+               })
+
+      assert {:ok, %{"hosts" => []}} = ToolServerDigest.recorded(%{row | hosts: "[]"})
+
+      # A driven program offers no tools and has no digest, but is recorded
+      # as a program of either mark is: its install confirmation shows it.
+      assert ToolServerDigest.recorded(%{row | mark: "driven"}) == ToolServerDigest.recorded(row)
+
+      assert {:error, {:invalid_server_config, _}} =
+               ToolServerDigest.from_server(%{row | mark: "driven"})
+    end
+
+    test "never carries a literal's value, which the digest still covers" do
+      {:ok, record} = ToolServerDigest.recorded(stored(%{}))
+      refute inspect(record) =~ "cyfr-literal-secret"
+
+      moved =
+        stored(%{
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{
+                "authorization" => "Bearer vault:GH_TOKEN",
+                "x-api-key" => "vault:other",
+                "user-agent" => "another-literal"
+              }
+            })
+        })
+
+      assert ToolServerDigest.recorded(moved) == {:ok, record}
+      refute ToolServerDigest.from_server(moved) == ToolServerDigest.from_server(stored(%{}))
     end
   end
 

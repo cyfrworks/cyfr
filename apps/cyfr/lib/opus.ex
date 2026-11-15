@@ -50,6 +50,7 @@ defmodule Opus do
       Programs.Definition,
       Programs.Session,
       Programs.StatusRedaction,
+      Programs.Words,
       Schedules.Scheduler,
       Supervisor
     ],
@@ -611,6 +612,33 @@ defmodule Opus do
   @doc "Local cleanup after the turn's terminal write: keeper stopped, slot released (`:claim`)."
   @spec release_turn_root(Context.t(), String.t(), keyword()) :: :ok
   defdelegate release_turn_root(ctx, execution_id, opts), to: TurnRoot, as: :release
+
+  @doc """
+  What a program's start shows on its card, read from the row now
+  (`Opus.Programs.card/4`).
+  """
+  @spec program_card(Context.t(), String.t(), term(), term()) :: {:ok, map()} | {:error, term()}
+  defdelegate program_card(ctx, row_id, epoch, words), to: Opus.Programs, as: :card
+
+  @doc """
+  End every program session the turn `turn_id` of the athanor started, as
+  its turn ended (`Opus.Programs.end_turn/2`). Answers at once.
+  """
+  @spec end_turn_programs(String.t(), String.t()) :: :ok
+  defdelegate end_turn_programs(athanor_id, turn_id), to: Opus.Programs, as: :end_turn
+
+  @doc """
+  Aqua's one way to end the occurrence a turn of a schedule's line ran:
+  through the scheduler's one ending, as the turn's root execution row
+  says (`execution_id`), or, for a turn that never started, as a claim
+  this boot holds that did not start (`reason`). It decides nothing the
+  caller says: see `Opus.Schedules.Scheduler.end_turn/4`.
+  """
+  @spec end_schedule_turn(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, String.t()} | {:error, term()}
+  defdelegate end_schedule_turn(actor, occurrence_id, execution_id, reason),
+    to: Opus.Schedules.Scheduler,
+    as: :end_turn
 
   @doc """
   Cancel a running execution of the context's athanor; only a running

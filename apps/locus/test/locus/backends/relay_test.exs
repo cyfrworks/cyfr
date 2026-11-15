@@ -6,7 +6,8 @@ defmodule Locus.Backends.RelayTest do
   A session's buffer as data: stdout split into numbered lines whatever
   the chunks, a trailing carriage return dropped and bytes that are not
   UTF-8 replaced; a line past its bound refused; a partial line flushed as
-  a line of its own; lines let go only once a take names an `after` at or
+  a line of its own; a terminal's output buffered as chunks of its bytes
+  as they are, cut at the chunk bound; lines let go only once a take names an `after` at or
   above them, so a take repeated answers the same lines; the buffer's
   bound dropping the oldest lines and a take counting them; a take's byte
   budget; the stderr tail masked and cut.
@@ -19,7 +20,7 @@ defmodule Locus.Backends.RelayTest do
 
   test "stdout becomes numbered lines, whatever its chunks" do
     {:ok, relay} = Relay.stdout(Relay.new(), "one\ntw")
-    assert Relay.partial?(relay)
+    refute Relay.past?(relay, 1)
     {:ok, relay} = Relay.stdout(relay, "o\r\nthree\n")
 
     {lines, 0, _relay} = Relay.take(relay, 0, 1_000_000)
@@ -44,9 +45,28 @@ defmodule Locus.Backends.RelayTest do
     {:ok, relay} = Relay.stdout(Relay.new(), "Paste the code: ")
     refute Relay.past?(relay, 0)
     relay = Relay.flush(relay)
-    refute Relay.partial?(relay)
     assert {[%{seq: 1, text: "Paste the code: "}], 0, _relay} = Relay.take(relay, 0, 1_000)
     assert Relay.flush(relay) == relay
+  end
+
+  test "a terminal's output is chunks of its bytes as they are, none past the chunk bound" do
+    max = Prima.LocusBackends.max_chunk_bytes()
+    raw = <<0xFF, 0xFE, "\e[1mbold\e[0m\r\n", 0x03>>
+    long = :binary.copy("x", max + 1)
+
+    relay =
+      Relay.new(mode: :terminal)
+      |> Relay.output(raw)
+      |> Relay.output("")
+      |> Relay.output(long)
+
+    assert {chunks, 0, _relay} = Relay.take(relay, 0, 1_000_000)
+
+    assert chunks == [
+             %{seq: 1, bytes: raw},
+             %{seq: 2, bytes: binary_part(long, 0, max)},
+             %{seq: 3, bytes: "x"}
+           ]
   end
 
   test "a take lets go of what its after names, and answers the same lines when repeated" do

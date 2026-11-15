@@ -46,6 +46,7 @@
   var CANVAS_VERBS = Object.freeze(["press", "failed", "grant", "prefs", "ask", "settings"]);
   var PERSON_VERBS = Object.freeze(["open", "press", "grant", "prefs", "ask", "settings", "request"]);
   var SUBJECT_KINDS = Object.freeze(["run", "thread", "schedule", "component", "file"]);
+  var OPEN_OUTCOMES = Object.freeze(["opened", "refused", "cancelled"]);
   var PRESS_OUTCOMES = Object.freeze(["accepted", "refused", "cancelled"]);
   var PREFS_OUTCOMES = Object.freeze(["saved", "stale", "refused", "cancelled"]);
   var CANCEL_REASONS = Object.freeze(["too_soon"]);
@@ -221,6 +222,7 @@
     "covered",
     "installed",
     "state",
+    "opened",
     "pressed",
     "prefs",
     "requested",
@@ -229,11 +231,13 @@
   ]);
   var TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "state"]);
   var ANSWER_OF = Object.freeze({
+    open: Object.freeze(["opened"]),
     press: Object.freeze(["pressed", "requested", "decided"]),
     prefs: Object.freeze(["prefs"]),
     request: Object.freeze(["requested", "decided"])
   });
   var ANSWER_VERBS = Object.freeze([...new Set(Object.values(ANSWER_OF).flat())]);
+  var APP_ANSWERS = Object.freeze([.../* @__PURE__ */ new Set([...ANSWER_OF.open, ...ANSWER_OF.request])]);
   var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state", "desktop", "subject"]);
   var POSTURES = ["desk", "hand"];
   var SHELL_STATES = ["live", "frozen"];
@@ -304,6 +308,8 @@
         return sameKeys(args, ["tinctures"]) && bounded(args.tinctures, MAX_TINCTURES, isInstalled) ? null : `installed names at most ${MAX_TINCTURES} tinctures of ref, name, icon and open`;
       case "state":
         return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen";
+      case "opened":
+        return sameKeys(args, withReason(args, ["call", "outcome"])) && isCall(args.call) && isOutcome(args, OPEN_OUTCOMES) ? null : "opened is exactly a call and its outcome, with a reason when refused or cancelled too soon";
       case "pressed":
         return pressedError(args);
       case "prefs":
@@ -442,7 +448,7 @@
         return tellDesktop();
       }
       if (told2 === "requested") return asked(args.call, args.request);
-      if (told2 === "decided") return answered(told2, args.call, answerOf(args));
+      if (told2 === "decided" || told2 === "opened") return answered(told2, args.call, answerOf(args));
       if (kind !== "canvas") return;
       if (told2 === "pressed") return answered(told2, args.call, answerOf(args));
       if (told2 === "prefs") {
@@ -930,11 +936,20 @@
        * schedule, component or file). The app is handed the subject at its
        * open (`cyfr.subject`); opening it does nothing more. From a canvas
        * the shell acts on it only for an input of the person's, never from a
-       * script on its own.
+       * script on its own. Answers what came of it: `{outcome: "opened"}`,
+       * `{outcome: "refused", reason}` with the refusal's class
+       * (`invalid_argument`, on a canvas, for a subject the app does not take
+       * when `installed` lists the app; `not_found` for every other refusal,
+       * so an app learns nothing of what is installed), or
+       * `{outcome: "cancelled"}` when the shell did not act on it, with
+       * `reason: "too_soon"` when it came within a few seconds of the last
+       * spend of the activation, for the person to tap again.
+       * @returns {Promise<{outcome: string, reason?: string}>}
        */
       open(ref, on = null) {
-        if (on !== null && !isSubject(on)) return;
-        verb("open", on === null ? { ref } : { ref, subject: on });
+        if (on !== null && !isSubject(on)) return invalid("a subject is exactly a kind and an id");
+        if (!framed) return Promise.resolve(CANCELLED);
+        return awaitAnswer("open", on === null ? { ref } : { ref, subject: on });
       },
       /**
        * On a canvas, press a control it declares: the control's id, and for

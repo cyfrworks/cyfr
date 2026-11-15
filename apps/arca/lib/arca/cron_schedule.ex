@@ -88,6 +88,11 @@ defmodule Arca.CronSchedule do
   # the seq (`Arca.Repo.owned/3`).
 
   @kinds Row.kinds()
+  @aqua_line Row.aqua_line()
+
+  @doc "The reference of a schedule that holds a line for Aqua rather than a component."
+  @spec aqua_line() :: String.t()
+  def aqua_line, do: @aqua_line
 
   @doc "The status vocabulary this table's rows may hold."
   @spec statuses() :: [String.t()]
@@ -106,7 +111,9 @@ defmodule Arca.CronSchedule do
   One locking transaction checks the member's slot, locks the athanor's
   row, counts its schedules and inserts, so creates racing for the last
   place leave one row in it. Refused with `:schedule_cap` at `cap`,
-  `:conflict` when a live or paused schedule of the athanor holds the name,
+  `:aqua_line_by_person` for a line for Aqua unless `attrs` say
+  `by_person: true` (`update/4`), `:conflict` when a live or paused
+  schedule of the athanor holds the name,
   `:not_owner` on a member that no longer owns its slot, `:not_found` when
   the athanor has no row, `:no_athanor` for an actor that names none,
   `{:validation, errors}` for a malformed field or cap, and
@@ -136,24 +143,83 @@ defmodule Arca.CronSchedule do
   `:not_found`, decided in the write's own locked read, so a write that
   raced a delete changes nothing. Every row, whatever its kind, is
   written only under the member's live slot (`:not_owner` otherwise).
+
+  A write that touches a row's target (`reference`, `resolved_reference`
+  or `input`) where the row as it stands under its lock holds a line for
+  Aqua, or would after the write, is refused `:aqua_line_by_person`
+  unless `by_person: true` says the caller is the schedule's person in a
+  signed-in session of their own (`aqua_target/3`): who may write is
+  decided against the row being written, never one read before.
+
+  With `definition:` (the row's `definition/1` as the caller read it), the
+  write is refused `:schedule_changed` unless the row under its lock still
+  has that definition: a change made since the caller read it is never
+  overwritten by one made against what it replaced.
   """
-  @spec update(Prima.Actor.t(), String.t(), map()) ::
+  @spec update(Prima.Actor.t(), String.t(), map(), keyword()) ::
           {:ok, map()}
           | {:error,
-             :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
+             :not_found
+             | :not_owner
+             | :aqua_line_by_person
+             | :schedule_changed
+             | {:validation, %{atom() => [String.t()]}}
+             | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
-  def update(%Prima.Actor{} = actor, id, attrs) do
+  def update(%Prima.Actor{} = actor, id, attrs, opts \\ []) do
+    by_person = Keyword.get(opts, :by_person, false) == true
+    read = Keyword.get(opts, :definition)
+
     Errors.with_db_rescue("CronSchedule.update", fn ->
       guarded(actor, id, :live, fn schedule ->
-        attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
+        with :ok <- as_read(schedule, read),
+             :ok <- aqua_target(schedule, attrs, by_person) do
+          attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
 
-        schedule
-        |> Row.update_changeset(attrs)
-        |> Arca.Repo.update()
-        |> mapped_validation()
+          schedule
+          |> Row.update_changeset(attrs)
+          |> Arca.Repo.update()
+          |> mapped_validation()
+        end
       end)
     end)
     |> Arca.Data.project()
+  end
+
+  @doc """
+  A digest of what a schedule is defined to do: its name, time,
+  reference, profile, input and missed-run policy. What the scheduler
+  records of its fires (the run times and counts, the last error), its
+  status and its thread are not part of it, so a fire or a pause between
+  a read and a write does not change it.
+  """
+  @spec definition(map()) :: String.t()
+  def definition(%{} = row) do
+    [
+      row.name,
+      row.cron_expression,
+      row.reference,
+      row.profile_id,
+      row.input,
+      row.missed_runs,
+      row.catch_up_limit
+    ]
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
+
+  @doc """
+  Whether `row` still has the definition a caller read (`definition/1`),
+  `:ok` with none given, else `{:error, :schedule_changed}`. `update/4`
+  asks it under the row's lock, which decides; a caller may ask it of a
+  row it read first to refuse sooner.
+  """
+  @spec as_read(map(), String.t() | nil) :: :ok | {:error, :schedule_changed}
+  def as_read(_row, nil), do: :ok
+
+  def as_read(%{} = row, read) when is_binary(read) do
+    if definition(row) == read, do: :ok, else: {:error, :schedule_changed}
   end
 
   @doc "Gets a schedule by ID with tenant-scoped lookup."
@@ -380,6 +446,151 @@ defmodule Arca.CronSchedule do
     |> Arca.Data.project()
   end
 
+  # ---- Aqua lines -------------------------------------------------------------
+
+  @doc """
+  The occurrences `claimed_by` (a boot) holds still `claimed` of every
+  schedule that holds a line for Aqua (`Row.aqua_line/0`), whatever the
+  schedule's status, oldest due first: what that boot's turn consumer
+  (`Aqua.ScheduleTurns`) has to start or end. Each is the occurrence's
+  `id`, `athanor_id`, `schedule_id`, `scheduled_for` and `claimed_by`,
+  with its schedule's `user_id`, `name`, `input` (the line) and `status`.
+
+  The claimed row is the record of the fire, written in the claim's own
+  transaction (`Arca.ScheduleOccurrences.claim/3`); nothing else records
+  it, and only a turn's admission moves it on (to `started`).
+  """
+  @spec aqua_claims(String.t()) :: {:ok, [map()]} | {:error, :database_error}
+  # arca:unscoped-ok a boot's consumer reads its own claims across every
+  # athanor, and acts on each under the actor its own row names.
+  def aqua_claims(claimed_by) when is_binary(claimed_by) and claimed_by != "" do
+    Errors.with_db_rescue("CronSchedule.aqua_claims", fn ->
+      rows =
+        from(o in Arca.Schemas.ScheduleOccurrence,
+          join: s in Row,
+          on: s.id == o.schedule_id and s.athanor_id == o.athanor_id,
+          where: o.state == "claimed" and o.claimed_by == ^claimed_by,
+          where: s.kind == "schedule" and s.reference == ^Row.aqua_line(),
+          order_by: [asc: o.scheduled_for, asc: o.id],
+          select: %{
+            id: o.id,
+            athanor_id: o.athanor_id,
+            schedule_id: o.schedule_id,
+            scheduled_for: o.scheduled_for,
+            claimed_by: o.claimed_by,
+            user_id: s.user_id,
+            name: s.name,
+            input: s.input,
+            status: s.status
+          }
+        )
+        |> Arca.Repo.all()
+
+      {:ok, rows}
+    end)
+  end
+
+  @doc """
+  The thread an Aqua line's turns run in: the one its row names while
+  that thread still stands in the athanor, else a new one of the
+  schedule's person (`kind` `own`, Aqua its agent, titled with the
+  schedule's name), named on the row in the same transaction, under the
+  row's lock and this member's slot. `actor` is the schedule's athanor
+  and person. A schedule deleted, or one that holds no Aqua line, is
+  `:not_found`; a thread the athanor's ceiling refuses answers as
+  `Arca.ThreadStorage.create/2` does. Answers the thread's id.
+  """
+  @spec thread(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def thread(%Prima.Actor{athanor_id: athanor_id, user_id: user_id} = actor, id, agent)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             is_binary(agent) do
+    Errors.with_db_rescue("CronSchedule.thread", fn ->
+      guarded(actor, id, :live, fn
+        %Row{kind: "schedule", reference: @aqua_line, user_id: ^user_id} = schedule ->
+          case standing_thread(actor, schedule.thread_id) do
+            {:ok, thread_id} -> {:ok, thread_id}
+            :none -> new_thread(actor, schedule, agent)
+          end
+
+        _not_an_aqua_line ->
+          {:error, :not_found}
+      end)
+    end)
+  end
+
+  def thread(%Prima.Actor{}, _id, _agent), do: {:error, :no_athanor}
+
+  @doc """
+  The live schedule of the actor's athanor whose Aqua line runs in
+  `thread_id`, or `:not_found` when no one does (or, against the one
+  writer's rule, more than one would).
+  """
+  @spec of_thread(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
+  def of_thread(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
+    Errors.with_db_rescue("CronSchedule.of_thread", fn ->
+      from(s in Row,
+        where: s.thread_id == ^thread_id and s.kind == "schedule" and s.status != "deleted",
+        where: s.reference == ^@aqua_line
+      )
+      |> QueryHelpers.where_tenant(actor)
+      |> Arca.Repo.all()
+      |> case do
+        [row] -> {:ok, row}
+        _none_or_more -> {:error, :not_found}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def of_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
+
+  @doc """
+  Forget `thread_id` on every schedule of the actor's athanor that names
+  it, once the thread is deleted: the next fire makes a new one. Under
+  this member's slot. Answers how many rows let it go.
+  """
+  @spec forget_thread(Prima.Actor.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :not_owner | :no_athanor | :database_error}
+  def forget_thread(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
+    Arca.Repo.owned("CronSchedule.forget_thread", fn ->
+      {count, _} =
+        from(s in Row, where: s.thread_id == ^thread_id)
+        |> QueryHelpers.where_tenant(actor)
+        |> Arca.Repo.update_all(set: [thread_id: nil])
+
+      {:ok, count}
+    end)
+  end
+
+  def forget_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
+
+  # The thread a row names, while it stands in the actor's athanor.
+  defp standing_thread(_actor, nil), do: :none
+
+  defp standing_thread(actor, thread_id) do
+    case Arca.ThreadStorage.get(actor, thread_id) do
+      {:ok, %{kind: "own"}} -> {:ok, thread_id}
+      {:error, :not_found} -> :none
+      {:ok, _not_own} -> :none
+      {:error, _} = unread -> unread
+    end
+  end
+
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
+  defp new_thread(actor, schedule, agent) do
+    with {:ok, thread} <-
+           Arca.ThreadStorage.create(actor, %{kind: "own", agent: agent, title: schedule.name}) do
+      from(s in Row, where: s.id == ^schedule.id)
+      |> Arca.Repo.update_all(set: [thread_id: thread.id])
+
+      {:ok, thread.id}
+    end
+  end
+
   # ---- feeds ------------------------------------------------------------------
 
   @doc """
@@ -604,16 +815,34 @@ defmodule Arca.CronSchedule do
 
   # ---- schedule internals -----------------------------------------------------
 
+  @targets [:reference, :resolved_reference, :input]
+
+  # A line for Aqua runs as its person with nobody present: a write that
+  # touches the target of a row that holds one, before or after the write,
+  # is that person's own act or nothing. `row` is the row as the write's
+  # transaction holds it (none for a create).
+  defp aqua_target(row, attrs, by_person) do
+    touches? = Enum.any?(@targets, &Map.has_key?(attrs, &1))
+
+    aqua? =
+      Enum.any?([row && row.reference, attrs[:reference], attrs[:resolved_reference]], fn ref ->
+        ref == @aqua_line
+      end)
+
+    if touches? and aqua? and not by_person, do: {:error, :aqua_line_by_person}, else: :ok
+  end
+
   # The row a create writes, checked before any lock is taken, so a
   # malformed create waits on nothing. The athanor is the actor's, whatever
   # `attrs` names.
   defp schedule_row(actor, attrs) do
-    with {:ok, cap} <- schedule_cap(Map.fetch(attrs, :cap)) do
+    with {:ok, cap} <- schedule_cap(Map.fetch(attrs, :cap)),
+         :ok <- aqua_target(nil, Map.delete(attrs, :by_person), attrs[:by_person] == true) do
       now = DateTime.utc_now()
 
       row =
         attrs
-        |> Map.delete(:cap)
+        |> Map.drop([:cap, :by_person])
         |> Map.put_new(:id, Prima.UUID7.generate_id("sched"))
         |> Map.put_new(:created_at, now)
         |> Map.put_new(:updated_at, now)

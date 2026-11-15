@@ -249,7 +249,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:children, [])
       |> assign(:parent, nil)
       |> assign(:pending_approvals, [])
-      |> assign(:run_schedules, %{})
+      |> assign(:schedule_thread?, false)
       |> assign(:any_messages, false)
       |> reset_live()
 
@@ -257,6 +257,13 @@ defmodule PrismWeb.ThreadPaneLive do
       {true, %{} = thread} ->
         follow_thread(thread.id, thread.athanor_id)
         live = Aqua.thread_state(thread.id, thread.athanor_id)
+
+        socket =
+          assign(
+            socket,
+            :schedule_thread?,
+            Aqua.schedule_thread?(socket.assigns.context, thread.id)
+          )
 
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived thread into every viewer's socket. The runner's
@@ -278,7 +285,6 @@ defmodule PrismWeb.ThreadPaneLive do
         |> assign(:decided_notices, decided_notices(rows))
         |> assign(:requests, requests)
         |> assign(:pending_approvals, pending_in(rows))
-        |> note_schedules(pending_in(rows))
         |> assign(:any_messages, rows != [])
         |> apply_live(live)
         |> relatives(thread)
@@ -481,9 +487,11 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, assign(socket, :model_override, if(model == "", do: nil, else: model))}
   end
 
+  # A program's answer is withdrawn by its row: the entry names the
+  # program, and its row is what the revoke names.
   def handle_event(
         "revoke_grant",
-        %{"agent" => agent, "tool" => tool, "action" => action},
+        %{"agent" => agent, "tool" => tool, "action" => action} = params,
         socket
       ) do
     case socket.assigns.thread do
@@ -491,16 +499,16 @@ defmodule PrismWeb.ThreadPaneLive do
         {:noreply, socket}
 
       thread ->
-        {:noreply,
-         run(
-           socket,
-           &PrismWeb.Ops.call_tool(&1, "thread/revoke_grant", %{
-             "thread" => thread.id,
-             "agent_name" => agent,
-             "tool" => tool,
-             "tool_action" => action
-           })
-         )}
+        args =
+          %{
+            "thread" => thread.id,
+            "agent_name" => agent,
+            "tool" => tool,
+            "tool_action" => action
+          }
+          |> Prima.MapUtil.put_present("program", params["program"])
+
+        {:noreply, run(socket, &PrismWeb.Ops.call_tool(&1, "thread/revoke_grant", args))}
     end
   end
 
@@ -1000,7 +1008,6 @@ defmodule PrismWeb.ThreadPaneLive do
     socket
     |> stream_insert(:messages, row)
     |> assign(:pending_approvals, pending)
-    |> note_schedules(pending_in([row]))
     |> assign(:any_messages, true)
   end
 
@@ -1020,28 +1027,6 @@ defmodule PrismWeb.ThreadPaneLive do
     if request.id == reply.reply_to,
       do: %{request | replies: Enum.reject(request.replies, &(&1.id == reply.id)) ++ [reply]},
       else: request
-  end
-
-  # Whether each pending card's run was started by a schedule, read once
-  # per run from its execution row in the pane's athanor: a card offers
-  # "for this schedule" only where there is one to end with.
-  defp note_schedules(socket, cards) do
-    actor = Sanctum.Context.actor(socket.assigns.context)
-
-    Enum.reduce(cards, socket, fn card, acc ->
-      known = acc.assigns.run_schedules
-
-      case card.execution_id do
-        id when is_binary(id) and not is_map_key(known, id) ->
-          scheduled? =
-            match?(%{schedule_id: s} when is_binary(s), Arca.Execution.get_tenant(actor, id))
-
-          assign(acc, :run_schedules, Map.put(known, id, scheduled?))
-
-        _known_or_none ->
-          acc
-      end
-    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -1426,7 +1411,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # state is where someone finds that out. A model whose consent
   # exists but is damaged, could not be read, or no longer covers what the
   # soul runs on, is said as such: no model is offered to connect over a
-  # consent that exists.
+  # consent that exists. One that waits on the person's grant alone says
+  # so.
   # An agents list that could not be read is not a room with no model.
   defp model_ready(_ctx, :unread), do: :agents_unavailable
 
@@ -1465,6 +1451,7 @@ defmodule PrismWeb.ThreadPaneLive do
       Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
       Enum.any?(statuses, &match?({:model_unavailable, _}, &1)) -> :model_unavailable
+      Enum.any?(statuses, &match?({:needs_grant, _}, &1)) -> :needs_grant
       true -> :no_key
     end
   end
@@ -1756,6 +1743,18 @@ defmodule PrismWeb.ThreadPaneLive do
                 >
                   Connect one on your AQUA page.
                 </.link>
+              <% @model_ready == :needs_grant -> %>
+                <%!-- A model with nothing left to set up waits on the
+                     person's grant alone, given in AQUA's setup. --%>
+                <span data-test="model-grant">
+                  {athanor_label(@athanor, @context)}'s model needs only your grant.
+                </span>
+                <.link
+                  navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
+                  class="text-blue-400 hover:underline"
+                >
+                  Grant it on your AQUA page.
+                </.link>
               <% @model_ready == :consent_stale -> %>
                 <%!-- The soul's shape moved since its consent: consenting
                      again is all it needs, never a model to connect. --%>
@@ -1805,17 +1804,19 @@ defmodule PrismWeb.ThreadPaneLive do
         >
           <span>standing answers in this chat:</span>
           <span
-            :for={{agent, tool, action} <- Enum.sort(@grants)}
+            :for={{agent, tool, action, program} <- Enum.sort(@grants)}
             class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
             title={"answered for #{agent}"}
+            data-test="standing-answer"
           >
-            <span class="text-gray-500">{agent}:</span>{tool}.{action}
+            <span class="text-gray-500">{agent}:</span>{tool}.{action}<span :if={program}>, every start of {program.name}</span>
             <button
               type="button"
               phx-click="revoke_grant"
               phx-value-agent={agent}
               phx-value-tool={tool}
               phx-value-action={action}
+              phx-value-program={program && program.id}
               class="inline-flex min-h-6 min-w-6 items-center justify-center text-gray-500 hover:text-gray-200"
               title="withdraw this standing answer"
             >
@@ -1898,7 +1899,7 @@ defmodule PrismWeb.ThreadPaneLive do
                     id={@dom <> "-card-" <> msg.id}
                     message_id={msg.id}
                     approval_id={msg.approval_id}
-                    scheduled={Map.get(@run_schedules, msg.execution_id, false)}
+                    schedule_thread={@schedule_thread?}
                     bounds={Map.take(resolution, ~w(lifecycle until constraint sources))}
                     payload={intent}
                     status={msg.status}

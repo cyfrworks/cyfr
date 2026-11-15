@@ -31,8 +31,6 @@ defmodule CyfrWeb.WireDialectTest do
     "cyfr_web/metrics_plug.ex" => "the Prometheus scrape surface speaks text/plain",
     # 204 empty preflight body.
     "cyfr_web/plugs/cors.ex" => "204 empty preflight body",
-    # A browser hitting a headless node reads a sentence, not JSON.
-    "cyfr_web/plugs/headless.ex" => "browser surface: plain-text explainer on a headless node",
     # The duplicate-delivery answer is a 200 SUCCESS body (JSON), not an
     # error — a renderer would mislabel it.
     "cyfr_web/plugs/webhook_idempotency.ex" => "duplicate answer is a 200 success body",

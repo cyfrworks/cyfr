@@ -156,13 +156,8 @@ defmodule Emissary.External.ReconcilerTest do
         url: nil,
         config_json:
           Jason.encode!(%{
-            "backends" => [
-              %{
-                "name" => "gh",
-                "command" => "npx -y gh",
-                "env" => %{"TOKEN" => "vault:env-token"}
-              }
-            ]
+            "command" => "npx -y gh",
+            "env" => %{"TOKEN" => "vault:env-token"}
           })
       })
 

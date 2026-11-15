@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -63,7 +64,7 @@ func (d *uninstallDocker) Run(ctx context.Context, c access.Call) (access.Result
 // materialized compose file and an open Serve configuration: cyfr down runs
 // in one (down) and cyfr uninstall in the other (dir), each through the
 // real engine over a docker of its own in this process. A home holds the
-// program's settings and device key; this program sits at a path of the
+// program's settings; this program sits at a path of the
 // test's with its link onto PATH. root is the commands sudo was handed.
 type uninstallScenario struct {
 	t                        *testing.T
@@ -72,7 +73,19 @@ type uninstallScenario struct {
 	docker, downDocker       *uninstallDocker
 	root                     []string
 	refuseRoot               string
-	compose                  []byte
+	// notAdministrator is the account outside the sudo and admin groups;
+	// asks is sudo asking a password, whose prompt authErr refuses;
+	// authenticated counts the prompts.
+	notAdministrator, asks bool
+	// notUbuntu is a machine other than Ubuntu 26.04, a Mac among them;
+	// noTerminal is no terminal for sudo to ask at.
+	notUbuntu, noTerminal bool
+	// adminGroup is the administrators\' group the account is in, sudo
+	// unless a test names admin, a Mac\'s.
+	adminGroup    string
+	authErr       error
+	authenticated int
+	compose       []byte
 }
 
 // newUninstallScenario builds the scenario. It fails at once unless no sh,
@@ -94,7 +107,6 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 	s.fill(s.down)
 	s.write(filepath.Join(s.home, ".cyfr", "config.json"), "{}")
 	s.write(filepath.Join(s.home, ".cyfr", "version-check.json"), "{}")
-	s.write(filepath.Join(s.home, ".cyfr", "device", "key.json"), "device key")
 	s.write(filepath.Join(s.home, ".cyfr", "other.json"), "not a settings file")
 	s.write(s.self, "program")
 	if err := os.MkdirAll(filepath.Dir(s.link), 0755); err != nil {
@@ -108,13 +120,26 @@ func newUninstallScenario(t *testing.T) *uninstallScenario {
 	s.downDocker = &uninstallDocker{dir: s.down}
 
 	savedSelf, savedCask, savedLink, savedScreen := selfExecutable, caskInstalled, usrLocalLink, screenInstalled
-	savedApply, savedForget := machine.apply, machine.forget
+	savedMachine := machine
 	savedOpen, savedTerminal, savedInput := openEngine, askTerminal, askInput
 	t.Cleanup(func() {
 		selfExecutable, caskInstalled, usrLocalLink, screenInstalled = savedSelf, savedCask, savedLink, savedScreen
-		machine.apply, machine.forget = savedApply, savedForget
+		machine = savedMachine
 		openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput
 	})
+	machine.groups = func(string) []string {
+		if s.notAdministrator {
+			return []string{"users"}
+		}
+		return []string{"users", cmp.Or(s.adminGroup, "sudo")}
+	}
+	machine.passwordless = func() bool { return !s.asks }
+	machine.supported = func() bool { return !s.notUbuntu }
+	machine.terminal = func() bool { return !s.noTerminal }
+	machine.authenticate = func() error {
+		s.authenticated++
+		return s.authErr
+	}
 	selfExecutable = func() (string, error) { return s.self, nil }
 	caskInstalled = func() bool { return false }
 	usrLocalLink = s.link
@@ -319,7 +344,6 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 			case "at the user folder", "at the user folder through a link":
 				s.both(".cyfr/config.json", "{}")
 				s.both(".cyfr/version-check.json", "{}")
-				s.both(".cyfr/device/key.json", "device key")
 				home = s.dir
 				if place == "at the user folder through a link" {
 					home = filepath.Join(t.TempDir(), "home-link")
@@ -400,9 +424,6 @@ func TestUninstallStopsAsDownDoesAndRemovesNothingElseFromTheFolder(t *testing.T
 				settings = append(settings, path)
 			}
 			want += "  this program's settings, " + strings.Join(settings, ", ") + "\n"
-			if key := filepath.Join(home, ".cyfr", "device", "key.json"); exists(key) {
-				want += "  this machine's device key, " + key + "\n"
-			}
 			want += "  the stack's volumes, which this command removes:\n    docker volume rm 'cyfr_homes' 'cyfr_tailscale'\n"
 			if !strings.HasSuffix(out, want) {
 				t.Errorf("cyfr uninstall ended\n%s\nwant it to end\n%s", out, want)
@@ -462,6 +483,113 @@ func TestUninstallSaysWhatIsGoneWhenAStepFails(t *testing.T) {
 	}
 }
 
+// Its root steps take the machine's one order. An account outside the sudo
+// and admin groups is refused before anything is shown or asked, with the
+// screen's and the link's commands as one sudo line for whoever
+// administers the machine; a refused password, asked after the question
+// and before the stack stops, changes nothing; an accepted one comes after
+// the sentence, once, before every root command. The sentence names Ubuntu
+// on Ubuntu 26.04 alone, and with no terminal for sudo nothing is
+// announced.
+func TestUninstallChecksTheAccountAndThePasswordFirst(t *testing.T) {
+	t.Run("outside the groups", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		screenInstalled = func() bool { return true }
+		s.notAdministrator = true
+		before := listing(t, s.dir)
+		out, err := s.run(true)
+		if err == nil || err.Error() != "Nothing was changed. Run `cyfr uninstall` again once they have" {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		want := "Your account, " + currentAccount(t) + ", is not in the sudo or admin group, so CYFR does not run commands as root for it. Whoever administers this machine can run this for you:\n" +
+			"  sudo sh -c " + shellQuote([]string{strings.Join(append(slices.Clone(screenOffCommands), linkRemoval()), " &&\n    ")}) + "\n"
+		if out != want {
+			t.Errorf("cyfr uninstall printed:\n%s\nwant:\n%s", out, want)
+		}
+		s.nothingRemoved(before)
+		if s.authenticated != 0 {
+			t.Errorf("sudo asked %d times", s.authenticated)
+		}
+	})
+	t.Run("the password refused", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks, s.authErr = true, errors.New("exit status 1")
+		plan, _ := s.plan()
+		before := listing(t, s.dir)
+		out, err := s.run(true)
+		if err == nil || err.Error() != "The password was not accepted, so nothing was changed. Run `cyfr uninstall` again to try again" {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		if want := plan + passwordSentence; out != want || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, want)
+		}
+		s.nothingRemoved(before)
+	})
+	t.Run("the password accepted", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks = true
+		plan, removed := s.plan()
+		out, err := s.run(true)
+		if err != nil {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		if want := plan + passwordSentence + removed; out != want || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, want)
+		}
+		if !slices.Equal(s.root, []string{linkRemoval()}) {
+			t.Errorf("sudo ran %q", s.root)
+		}
+	})
+	// An install.sh install on a Mac has the link onto PATH: sudo's
+	// sentence names no system there.
+	t.Run("a Mac", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks, s.notUbuntu, s.adminGroup = true, true, "admin"
+		plan, removed := s.plan()
+		out, err := s.run(true)
+		if err != nil {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		want := plan + "This machine will now ask for your password: the one you log in to it with. Nothing shows while you type.\n" + removed
+		if out != want || s.authenticated != 1 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, want)
+		}
+	})
+	// With --yes, no terminal and sudo needing a password, nothing is
+	// announced and nothing removed: the uninstall is to run at a terminal.
+	t.Run("no terminal", func(t *testing.T) {
+		s := newUninstallScenario(t)
+		s.asks, s.noTerminal = true, true
+		plan, _ := s.plan()
+		before := listing(t, s.dir)
+		out, err := s.run(true)
+		if err == nil || err.Error() != "sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `cyfr uninstall` at a terminal" {
+			t.Fatalf("cyfr uninstall answered %v\n%s", err, out)
+		}
+		if out != plan || s.authenticated != 0 {
+			t.Errorf("sudo asked %d times; printed:\n%s\nwant:\n%s", s.authenticated, out, plan)
+		}
+		s.nothingRemoved(before)
+	})
+}
+
+// plan is what the uninstall shows before it asks, and what a whole run
+// of the scenario as made prints after it: each removal, then what is
+// left.
+func (s *uninstallScenario) plan() (shown, removed string) {
+	s.t.Helper()
+	s.t.Chdir(s.dir)
+	p, err := readUninstallPlan()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var b strings.Builder
+	p.show(&b)
+	removed = "Removed the stack's containers.\nRemoved the link " + s.link + ".\nRemoved the stack's networks.\nRemoved the stack's images.\nRemoved this program.\n" +
+		p.left([]string{"cyfr_homes", "cyfr_tailscale"})
+	return b.String(), removed
+}
+
 // Only a CYFR cyfr init made is uninstalled: a directory with an unrelated
 // compose project is refused with nothing stopped or removed.
 func TestUninstallRefusesWhatIsNotACYFR(t *testing.T) {
@@ -479,6 +607,17 @@ func TestUninstallRefusesWhatIsNotACYFR(t *testing.T) {
 // The screen service is given back, one root command at a time; a Homebrew
 // install keeps its program for brew; an image another container uses
 // stays and is said, and one that is not on the machine is no failure.
+// screenGivenBack is how `cyfr screen off` and `cyfr uninstall` give the
+// screen back, in order: the unit's stop first, the one path that ends the
+// screen's session and every process in it (session.sh), then its files,
+// and tty1's login prompt last.
+var screenGivenBack = []string{
+	"{ systemctl disable --now cyfr-screen || true; }",
+	"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
+	"systemctl daemon-reload",
+	"systemctl enable --now getty@tty1",
+}
+
 func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T) {
 	s := newUninstallScenario(t)
 	screenInstalled = func() bool { return true }
@@ -499,7 +638,7 @@ func TestUninstallGivesTheScreenBackLeavesBrewAndKeepsAnImageInUse(t *testing.T)
 			t.Errorf("the output lacks %q:\n%s", line, out)
 		}
 	}
-	if !slices.Equal(s.root, screenOffCommands) {
+	if !slices.Equal(s.root, screenGivenBack) {
 		t.Errorf("sudo ran %q, want the screen's commands one by one", s.root)
 	}
 	if !exists(s.self) {

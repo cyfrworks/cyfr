@@ -573,13 +573,8 @@ defmodule Emissary.External.ProviderTest do
     @program_config %{
       "transport" => "program",
       "mark" => "mcp",
-      "backends" => [
-        %{
-          "name" => "github",
-          "command" => "npx -y @modelcontextprotocol/server-github",
-          "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}
-        }
-      ]
+      "command" => "npx -y @modelcontextprotocol/server-github",
+      "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}
     }
 
     test "are refused while no backends service is configured", %{ctx: ctx} do
@@ -596,11 +591,12 @@ defmodule Emissary.External.ProviderTest do
       assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
     end
 
-    test "carry no url or headers, and their backends are validated", %{ctx: ctx} do
+    test "carry no url or headers, and an http server no command or env", %{ctx: ctx} do
       for {config, fragment} <- [
             {Map.put(@program_config, "url", "https://x/mcp"), "no url"},
             {Map.put(@program_config, "headers", %{}), "no headers"},
-            {%{"url" => "https://x/mcp", "backends" => []}, "no backends"}
+            {%{"url" => "https://x/mcp", "command" => "npx server"}, "no command or env"},
+            {%{"url" => "https://x/mcp", "env" => %{}}, "no command or env"}
           ] do
         assert {:error, {:invalid_argument, message}} =
                  Provider.handle("mcp_servers", ctx, %{
@@ -624,6 +620,46 @@ defmodule Emissary.External.ProviderTest do
 
       assert message =~ "config.transport"
       assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
+    end
+
+    test "an open and a reset name the program, never a vault entry, and only a kept " <>
+           "program's home resets",
+         %{ctx: ctx} do
+      for action <- ["open", "reset_home"] do
+        assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, message}}} =
+                 Sanctum.Gate.call_external("mcp_servers", Sanctum.TestContext.local(:api), %{
+                   "action" => action,
+                   "name" => "claude",
+                   "entry" => "vlt_01"
+                 })
+
+        assert message =~ "entry", action
+      end
+
+      actor = Sanctum.Context.actor(ctx)
+
+      {:ok, _} =
+        Arca.McpServerStorage.insert(actor, %{cap: 0, name: "webby", url: "https://x/mcp"})
+
+      {:ok, _} =
+        Arca.McpServerStorage.insert(actor, %{
+          cap: 0,
+          name: "scratchy",
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          config_json: Jason.encode!(@program_config)
+        })
+
+      for name <- ["webby", "scratchy"] do
+        assert {:error, {:invalid_argument, "'" <> _ = message}} =
+                 Provider.handle("mcp_servers", ctx, %{"action" => "reset_home", "name" => name})
+
+        assert message =~ "keeps no home"
+      end
+
+      assert {:error, {:not_found, "Server", "nobody"}} =
+               Provider.handle("mcp_servers", ctx, %{"action" => "reset_home", "name" => "nobody"})
     end
 
     test "restart is for an enabled program only", %{ctx: ctx} do
@@ -687,12 +723,8 @@ defmodule Emissary.External.ProviderTest do
 
     test "get shows the warnings a stored definition carries, and none when it carries none",
          %{ctx: ctx} do
-      [backend] = @program_config["backends"]
-
       expanding =
-        Map.put(@program_config, "backends", [
-          %{backend | "command" => "npx server --token ${GITHUB_PERSONAL_ACCESS_TOKEN}"}
-        ])
+        Map.put(@program_config, "command", "npx server --token ${GITHUB_PERSONAL_ACCESS_TOKEN}")
 
       for {name, config} <- [{"warned", expanding}, {"quiet", @program_config}] do
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -710,9 +742,9 @@ defmodule Emissary.External.ProviderTest do
                Provider.handle("mcp_servers", ctx, %{"action" => "get", "name" => "warned"})
 
       assert warning ==
-               "Backend 'github' expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env name, " <>
-                 "in its command: the value is placed on the command line, where every process " <>
-                 "on the backends service, other athanors' backends included, can read it; the " <>
+               "The command expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env name: " <>
+                 "the value is placed on the command line, where every process " <>
+                 "on the backends service, other athanors' programs included, can read it; the " <>
                  "safe route is to let the program read it from its environment."
 
       assert {:ok, %{warnings: []}} =

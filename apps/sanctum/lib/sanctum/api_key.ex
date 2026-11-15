@@ -272,6 +272,23 @@ defmodule Sanctum.ApiKey do
   end
 
   @doc """
+  The name of the key that authenticated `ctx`, read as its maker's own
+  key: `{:ok, nil}` for a call that is not by a key, `{:error, :not_found}`
+  when the key's row is gone.
+  """
+  @spec name_of(Context.t()) ::
+          {:ok, String.t() | nil} | {:error, :not_found | :no_athanor | :database_error}
+  def name_of(%Context{api_key_id: nil}), do: {:ok, nil}
+
+  def name_of(%Context{api_key_id: id, user_id: user_id} = ctx)
+      when is_binary(id) and is_binary(user_id) do
+    case Arca.ApiKeyStorage.get_created_key(Context.actor(ctx), user_id, id) do
+      {:ok, row} -> {:ok, row.name}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do

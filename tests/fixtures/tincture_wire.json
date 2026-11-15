@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given; one refusal, the projection of a Prima.Refusal a frame may read; the stream connection's messages (`connection`): what a frame sends over it and what the endpoint answers, how the page's handler hears each answer, and the messages the endpoint refuses; how the SDK rejects a subscription that opens no stream, for each answer it can get (`stream_rejections`: no connection, or a refusal of a class in `no_answer_classes`, is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press`, `failed` and `grant` among them, which the shell takes from a canvas alone, and `request`, which it takes from any frame), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' `no_answer_classes`, exactly the classes answered with a server error; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, every connection message the frame sends is the one its encoder writes and every answer is heard as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built. `stream_events` holds stream payloads as a canvas reads them, by stream: `runs.changes` a run still running (no `ended_at`, no `error`) and one that ended (its `ended_at` and its error's `class` and `cause`), each time ISO 8601 UTC; the runs stream's owner's test (apps/cyfr/test/opus/providers/feed_test.exs) builds each from a run's payload and finds it in the stream's shape and projection, and the shipped canvas's test folds them as it folds a run; `threads.changes` a shared thread (its `unread` a count of the messages someone else posted after the person last had it open) and an own thread (its `unread` null: no read mark), each `last_activity` ISO 8601 UTC; the threads stream's owner's test (apps/cyfr/test/aqua/streams_test.exs) builds each from a listing's payload and reads it back as a canvas reads it, in the stream's shape and projection, and the switchboard desktop's test (apps/cyfr/assets/test/canvas/switchboard_desktop.test.mjs) folds them whole as it folds a thread.",
+  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given; one refusal, the projection of a Prima.Refusal a frame may read; the stream connection's messages (`connection`): what a frame sends over it and what the endpoint answers, how the page's handler hears each answer, and the messages the endpoint refuses; how the SDK rejects a subscription that opens no stream, for each answer it can get (`stream_rejections`: no connection, or a refusal of a class in `no_answer_classes`, is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press`, `failed` and `grant` among them, which the shell takes from a canvas alone, and `request`, which it takes from any frame), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' `no_answer_classes`, exactly the classes answered with a server error; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, every connection message the frame sends is the one its encoder writes and every answer is heard as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built. `stream_events` holds stream payloads as a canvas reads them, by stream: `runs.changes` a run a person started still running (no `ended_at`, no `error`, `origin` `interactive`, not `retryable`) and one a schedule started that ended failed (its `ended_at`, its error's `class` and `cause`, `origin` `schedule`, `retryable`), each time ISO 8601 UTC; the runs stream's owner's test (apps/cyfr/test/opus/providers/feed_test.exs) builds each from a run's payload and finds it in the stream's shape and projection, and the shipped canvas's test folds them as it folds a run; `threads.changes` a shared thread (its `unread` a count of the messages someone else posted after the person last had it open) and an own thread (its `unread` null: no read mark), each `last_activity` ISO 8601 UTC; the threads stream's owner's test (apps/cyfr/test/aqua/streams_test.exs) builds each from a listing's payload and reads it back as a canvas reads it, in the stream's shape and projection, and the switchboard desktop's test (apps/cyfr/assets/test/canvas/switchboard_desktop.test.mjs) folds them whole as it folds a thread.",
   "version": 1,
   "bearer_header": "authorization",
   "routes": {
@@ -562,7 +562,7 @@
   "stream_events": {
     "runs.changes": [
       {
-        "why": "a run still running: when it started, no end and no error; its revision and at, when the change was told",
+        "why": "a run a person started, still running: when it started, no end and no error, who started it, and no Retry; its revision and at, when the change was told",
         "event": {
           "kind": "started",
           "execution_id": "exec_vector_running",
@@ -573,12 +573,14 @@
           "started_at": "2026-11-09T10:00:00.000001Z",
           "ended_at": null,
           "error": null,
+          "origin": "interactive",
+          "retryable": false,
           "revision": 1794218400000002,
           "at": "2026-11-09T10:00:00.000002Z"
         }
       },
       {
-        "why": "a run that ended failed: when it started and ended, and its error's class and cause, never its sentence; its revision and at, when the change was told",
+        "why": "a run a schedule started that ended failed, known to have failed: when it started and ended, its error's class and cause, never its sentence, who started it, and that Retry runs it again; its revision and at, when the change was told",
         "event": {
           "kind": "failed",
           "execution_id": "exec_vector_failed",
@@ -592,6 +594,8 @@
             "class": "timeout",
             "cause": "timed_out"
           },
+          "origin": "schedule",
+          "retryable": true,
           "revision": 1794218401500002,
           "at": "2026-11-09T10:00:01.500002Z"
         }
@@ -636,7 +640,8 @@
         "verb": "open",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "ref": "t:local.weather-lookup"
+          "ref": "t:local.weather-lookup",
+          "call": 31
         }
       }
     },
@@ -721,7 +726,7 @@
         "verb": "grant",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "ref": "catalyst:local.openai:1.4.2"
+          "ref": "catalyst:local.openai:1.4.3"
         }
       }
     },
@@ -812,7 +817,8 @@
           "subject": {
             "kind": "run",
             "id": "exec_0190f3a2-7b1c-7d2e-8f3a-1b2c3d4e5f60"
-          }
+          },
+          "call": 32
         }
       }
     },
@@ -827,7 +833,8 @@
           "subject": {
             "kind": "file",
             "id": "notes/today.md"
-          }
+          },
+          "call": 33
         }
       }
     },
@@ -924,7 +931,8 @@
         "verb": "open",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "ref": "catalyst:local.markets"
+          "ref": "catalyst:local.markets",
+          "call": 34
         }
       }
     },
@@ -935,7 +943,8 @@
         "verb": "open",
         "frame": "frm_01a09fee2e4f",
         "args": {
-          "ref": "https://example.com/"
+          "ref": "https://example.com/",
+          "call": 35
         }
       }
     },
@@ -947,7 +956,19 @@
         "frame": "frm_01a09fee2e4f",
         "args": {
           "ref": "tincture:local.vault",
-          "label": "Vault"
+          "label": "Vault",
+          "call": 36
+        }
+      }
+    },
+    {
+      "why": "open names its call",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "t:local.weather-lookup"
         }
       }
     },
@@ -1219,7 +1240,8 @@
           "subject": {
             "kind": "url",
             "id": "https"
-          }
+          },
+          "call": 37
         }
       }
     },
@@ -1234,7 +1256,8 @@
           "subject": {
             "kind": "run",
             "id": "<script>"
-          }
+          },
+          "call": 38
         }
       }
     },
@@ -1250,7 +1273,8 @@
             "kind": "run",
             "id": "exec_1",
             "label": "x"
-          }
+          },
+          "call": 39
         }
       }
     },
@@ -4804,6 +4828,52 @@
               "outcome": "approved"
             }
           }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 21,
+              "outcome": "opened"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 22,
+              "outcome": "refused",
+              "reason": "not_found"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 23,
+              "outcome": "cancelled"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 24,
+              "outcome": "cancelled",
+              "reason": "too_soon"
+            }
+          }
         }
       ],
       "invalid": [
@@ -6616,6 +6686,67 @@
             "frame": "frm_8f3c2a1b9d",
             "args": {
               "outcome": "approved"
+            }
+          }
+        },
+        {
+          "why": "an opened without its call",
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "outcome": "opened"
+            }
+          }
+        },
+        {
+          "why": "a refused open without its reason",
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "refused"
+            }
+          }
+        },
+        {
+          "why": "an open's outcome is opened, refused or cancelled",
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "accepted"
+            }
+          }
+        },
+        {
+          "why": "a cancelled open names no refusal's class",
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "cancelled",
+              "reason": "not_found"
+            }
+          }
+        },
+        {
+          "why": "an opened open names no reason",
+          "message": {
+            "v": 1,
+            "verb": "opened",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "call": 9,
+              "outcome": "opened",
+              "reason": "too_soon"
             }
           }
         }

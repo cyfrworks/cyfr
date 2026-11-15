@@ -31,6 +31,16 @@ defmodule Opus.TurnRoot do
   stop, gives them straight back and is refused. A cancel that finds the
   holder kills it; nothing native runs in it, so the kill is not counted
   against the athanor as an unreaped one.
+
+  A turn a schedule's line started (`:schedule_id` and `:occurrence_id`)
+  is that schedule's fire: its root names the schedule, its admission
+  moves the claimed occurrence to `started` in the admitting transaction
+  (`Arca.Execution.admit/2`, only for the boot that holds the claim), and
+  the fire's one admission decision (tool `schedule`, action `fire`, its
+  input naming the schedule and the occurrence) is opened before the root
+  is written, under the call id the root's row then names, and closed with
+  the admission's answer. So the record of why a turn with nobody present
+  started is one line from its root back to the fire.
   """
 
   alias Opus.{Admission, LeaseWatch, Record}
@@ -62,8 +72,9 @@ defmodule Opus.TurnRoot do
   Claim the root for `agent_ref` under its default profile: load the
   authority, admit the row with its attempt and reservation, take the
   `:root` slot on the calling process, start the keeper. `opts`:
-  `:turn_id`, `:envelope` (the input the row's envelope describes) and
-  `:tick_ms` (the keeper's period). A refused slot
+  `:turn_id`, `:envelope` (the input the row's envelope describes),
+  `:tick_ms` (the keeper's period), and for a schedule's turn both
+  `:schedule_id` and `:occurrence_id` (the moduledoc's last paragraph). A refused slot
   answers `{:error, {:slot_refused, sentence}}` and fails the row; a row
   that ended while the claim waited for its slot answers
   `{:error, :not_running}`, and one that could not be read then
@@ -71,14 +82,70 @@ defmodule Opus.TurnRoot do
   """
   @spec claim(Context.t(), String.t(), keyword()) :: {:ok, claim()} | {:error, term()}
   def claim(%Context{} = ctx, agent_ref, opts \\ []) do
+    case Keyword.take(opts, [:schedule_id, :occurrence_id]) do
+      [schedule_id: schedule_id, occurrence_id: occurrence_id]
+      when is_binary(schedule_id) and is_binary(occurrence_id) ->
+        fired(ctx, agent_ref, schedule_id, occurrence_id, opts)
+
+      [] ->
+        admit(ctx, agent_ref, opts)
+    end
+  end
+
+  # A schedule's fire, admitted under its own decision.
+  defp fired(ctx, agent_ref, schedule_id, occurrence_id, opts) do
+    request_id = ctx.request_id || Prima.UUID7.request_id()
+    call_id = Prima.UUID7.generate_id("call")
+    ctx = %{ctx | request_id: request_id, call_id: call_id}
+
+    decision =
+      Prima.Decision.new(
+        call_id: call_id,
+        request_id: request_id,
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        plane: :external,
+        tool: "schedule",
+        action: "fire",
+        inserted_at: DateTime.utc_now(),
+        admission: :admitted
+      )
+
+    Sanctum.Decisions.open(ctx, decision, %{
+      method: "cron/fire",
+      input: %{schedule_id: schedule_id, occurrence_id: occurrence_id, reference: agent_ref}
+    })
+
+    started = System.monotonic_time()
+    answer = admit(ctx, agent_ref, opts)
+
+    Sanctum.Decisions.close(ctx, call_id, %{
+      result:
+        case answer do
+          {:ok, claim} -> {:ok, %{execution_id: claim.execution_id}}
+          {:error, _} = refused -> refused
+        end,
+      duration_ms:
+        System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond),
+      routed_to: Opus.service()
+    })
+
+    answer
+  end
+
+  defp admit(ctx, agent_ref, opts) do
     with {:ok, %{authority: authority, stamp: stamp}} <-
            Admission.authority_and_stamp_for(ctx, :default, agent_ref),
          record = build_record(ctx, agent_ref, authority, stamp, opts),
          :ok <-
-           Record.write_started(ctx, record,
-             retention_class: "chat_step",
-             reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap},
-             consent_id: authority.consent_id
+           Record.write_started(
+             ctx,
+             record,
+             [
+               retention_class: "chat_step",
+               reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap},
+               consent_id: authority.consent_id
+             ] ++ Keyword.take(opts, [:occurrence_id])
            ),
          {:ok, token} <- claim_slot(ctx, record) do
       {:ok, keeper} =
@@ -260,7 +327,8 @@ defmodule Opus.TurnRoot do
         component_type: :agent,
         kind: "turn",
         turn_id: Keyword.get(opts, :turn_id),
-        profile_id: authority.profile_id
+        profile_id: authority.profile_id,
+        schedule_id: Keyword.get(opts, :schedule_id)
       )
 
     case stamp do

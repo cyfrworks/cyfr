@@ -568,8 +568,7 @@ defmodule Locus.Runtime.Engine do
   defp denied_line("secret_denied", name, component_ref),
     do:
       "[Locus.Runtime.Engine] Field '#{name}' is outside the consent's projection for " <>
-        "'#{component_ref}'. Re-grant via the consent walk: " <>
-        "cyfr profile grant #{component_ref}"
+        "'#{component_ref}'. Grant it again in its grant sheet on the Components page."
 
   # ===========================================================================
   # Private Functions

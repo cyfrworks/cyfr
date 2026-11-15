@@ -57,6 +57,7 @@ defmodule PrismWeb do
       SetupLive,
       SharedAttachmentController,
       ShellLive,
+      TipsLive,
       VaultLive,
       WebhooksLive
     ],

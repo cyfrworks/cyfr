@@ -16,7 +16,7 @@ import {
 } from "./signals.js"
 import {wear} from "./chrome.js"
 import {WindowGestures} from "./windows.js"
-import {ANSWER_OF, ANSWER_VERBS} from "../sdk/wire.js"
+import {ANSWER_VERBS, APP_ANSWERS} from "../sdk/wire.js"
 
 const SHELF = "#canvas-shelf"
 
@@ -268,11 +268,11 @@ const Canvas = {
     }
   },
 
-  // An answer to the frame it names, as its bridge posts it once: one to a
-  // request to any frame, any other to a canvas frame alone.
+  // An answer to the frame it names, as its bridge posts it once: an
+  // open's and a request's to any frame, any other to a canvas frame alone.
   _answer(payload) {
     if (payload === null || typeof payload !== "object" || !ANSWER_VERBS.includes(payload.verb)) return
-    const frames = ANSWER_OF.request.includes(payload.verb) ? this._frames() : this._canvasFrames()
+    const frames = APP_ANSWERS.includes(payload.verb) ? this._frames() : this._canvasFrames()
     const frame = frames.find((el) => el.dataset.frameId === payload.frame)
     if (frame) {
       frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: payload.verb, args: payload.args}}))

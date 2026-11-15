@@ -72,7 +72,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     "reagent:local.maps uses maps public key, provided by local, the app's public " <>
       "configuration, from reagent:local.weather for its geocode need: sent only to " <>
       "https://geo.maps.example, paths /geocode. The component reads the value itself.",
-    "catalyst:local.coder uses claude-login, an entry of this athanor, from " <>
+    "catalyst:local.coder uses claude, a program of this athanor, from " <>
       "reagent:local.weather for its claude need: mounted into claude's kept folder. " <>
       "Nothing is attached and the component never holds it."
   ]
@@ -176,8 +176,8 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
     # An attach-only credential's sentence says CYFR attaches the value and
     # the component never holds it; a disclosed one's never says so, and
-    # neither does a login entry's, which is mounted into its program's
-    # kept folder and attaches nothing.
+    # neither does a login need's program row, which is mounted, its kept
+    # folder named by its program, and attaches nothing.
     attached = "CYFR attaches the value and the component never holds it."
     credentials = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
 
@@ -212,7 +212,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     refute text =~ "://no host"
   end
 
-  # A login entry's binding: its destination names the program it mounts into.
+  # A login need's binding of a program row: its destination names the program.
   defp mounted?(row), do: is_binary(row["values"]["destination"]["program"])
 
   # How a value reads in a row: as the row holds it, or in the renderer's
@@ -259,7 +259,11 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "lifetime", %{"kind" => "standing"}), do: ["until revoked"]
   defp expected(_row, "lifetime", %{"kind" => "until", "until" => until}), do: ["until #{until}"]
   defp expected(_row, "lifetime", %{"kind" => "once"}), do: ["one run"]
-  defp expected(_row, "source", "own"), do: ["an entry of this athanor"]
+
+  defp expected(row, "source", "own") do
+    if mounted?(row), do: ["a program of this athanor"], else: ["an entry of this athanor"]
+  end
+
   defp expected(_row, "source", "share"), do: ["a key shared with you"]
 
   defp expected(row, "source", "provided") do
@@ -282,6 +286,25 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, field, false) when field in ["suggested", "choice_required"], do: []
   defp expected(_row, "connection", connection), do: ["as the account '#{connection}'"]
   defp expected(_row, "binding_key", key), do: ["Binding: #{key}"]
+
+  # What a grant records of a tool server: its address, and each header
+  # with the vault entry it names, a literal by its name alone.
+  defp expected(_row, "record", %{"address" => address, "headers" => headers}) do
+    ["Address: #{address}" | named_lines("Header", headers)]
+  end
+
+  # A program's record: its command as its address, each variable as a
+  # header is, and its settings in the person's words (the vectors'
+  # program keeps its folder and has whole-MiB bounds).
+  defp expected(_row, "record", %{"address" => address, "env" => env} = record) do
+    ["Address: #{address}" | named_lines("Variable", env)] ++
+      [
+        "Folder: a folder kept between runs",
+        "Hosts: #{Enum.join(record["hosts"], ", ")}",
+        "Memory bound: #{div(record["memory_bytes"], 1_048_576)} MiB",
+        "Folder bound: #{div(record["home_max_bytes"], 1_048_576)} MiB"
+      ]
+  end
 
   # A credential's field map: each field the component reads, from the
   # entry field that answers it, sorted by the component's field.
@@ -384,5 +407,18 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     dialog = html |> LazyHTML.from_fragment() |> LazyHTML.query("#system-layer-dialog")
     assert Enum.count(dialog) == 1
     assert_every_row(LazyHTML.to_html(dialog), preview)
+  end
+
+  defp named_lines(word, values) do
+    Enum.map(values, fn
+      %{"literal" => true, "name" => name} ->
+        "#{word} #{name}: a literal, its value not shown"
+
+      %{"entry" => entry, "scheme" => scheme, "name" => name} ->
+        "#{word} #{name}: vault entry #{entry} (#{scheme})"
+
+      %{"entry" => entry, "name" => name} ->
+        "#{word} #{name}: vault entry #{entry}"
+    end)
   end
 end

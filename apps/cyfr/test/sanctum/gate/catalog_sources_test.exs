@@ -83,12 +83,15 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
           aqua.skill_update build.compile build.status build.toolchains build.validate
           canvas.catalog canvas.versions canvas.write component.categories component.create
           component.fork component.status execution.cancel layout.edit layout.get
-          schedule.get schedule.list system.status tincture_visibility.get webhook.get
-          webhook.list)
+          program.list program.send program.stop schedule.get schedule.list system.status
+          tincture_visibility.get webhook.get webhook.list)
 
   # Answers that describe installed components or list tools, read by
   # their providers' readers.
   @read_by_answer ~w(component.inspect component.list component.setup_plan tools.list)
+
+  # What a program printed: outside, named by the program it came from.
+  @program_output ~w(program.start program.read program.wait)
 
   test "every in-chain action of every configured provider declares the sources its answers carry" do
     undeclared =
@@ -117,6 +120,14 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
             %Prima.Operation{sources: {:answer, {_, :answer_sources}}} = operation(name),
             name
           )
+
+    for name <- @program_output,
+        do:
+          assert(
+            %Prima.Operation{sources: {:answer, {Opus.Programs.Provider, :answer_sources}}} =
+              operation(name),
+            name
+          )
   end
 
   describe "an answer describing installed components" do
@@ -124,13 +135,13 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
       read = &Compendium.Providers.Component.answer_sources(nil, &1)
       pulled = Prima.Source.outside("catalyst:acme.weather")
 
-      assert read.(%{"component_ref" => "catalyst:local.claude:1.4.2"}) == []
+      assert read.(%{"component_ref" => "catalyst:local.claude:1.4.3"}) == []
       assert read.(%{"component_ref" => "catalyst:acme.weather:0.2.0"}) == [pulled]
       assert read.(%{component_ref: "catalyst:acme.weather:0.2.0", needs: []}) == [pulled]
 
       listing = %{
         components: [
-          %{component_ref: "catalyst:local.claude:1.4.2", description: "shipped"},
+          %{component_ref: "catalyst:local.claude:1.4.3", description: "shipped"},
           %{component_ref: "catalyst:acme.weather:0.2.0", description: "theirs"},
           %{component_ref: "catalyst:acme.weather:0.3.0", description: "theirs again"}
         ],

@@ -73,11 +73,12 @@ defmodule Locus.DirectLauncher do
   and `"unavailable"` for a launcher with no kept root; a reset or a
   retirement of a home not made answers `:ok` and leaves it absent. It
   measures a home by its files' sizes where the keeper counts their
-  allocated blocks. A spawn with `pty: true` runs
-  under util-linux `script -qfec`, which gives the command a
-  pseudo-terminal as its stdin, stdout and stderr and copies it to the
-  port, so its owner hears what it writes to the terminal as stdout and
-  no stderr.
+  allocated blocks. A spawn with `pty: %{rows, cols}` runs under
+  util-linux `script -qfec`, which gives the command a pseudo-terminal of
+  that size as its stdin, stdout and stderr and copies it to the port, so
+  its owner hears what it writes to the terminal as stdout and no stderr;
+  `resize/3` sets the size of that terminal (`stty -F`), which signals its
+  foreground processes as the keeper's does.
 
   A spec with `control: true` is a runner's: its standard input and
   output are its control channel (`RUNTIME_CONTROL_FD=0`), since a port
@@ -247,7 +248,7 @@ defmodule Locus.DirectLauncher do
     mode = if Map.get(spec, :control) == true, do: :control, else: :stdio
     janitor = if Keyword.keyword?(opts), do: Keyword.get(opts, :janitor)
     strand? = Keyword.keyword?(opts) and Keyword.get(opts, :strand_reader, false) == true
-    argv = if Map.get(spec, :pty) == true, do: pty(argv), else: argv
+    argv = if pty = Map.get(spec, :pty), do: pty(argv, pty), else: argv
 
     with {:ok, home} <- kept_home(opts, spec) do
       start_child(
@@ -295,6 +296,10 @@ defmodule Locus.DirectLauncher do
   def signal(%{server: child}, sig) when is_binary(sig) do
     if signal?(sig), do: call(child, {:signal, sig}), else: {:error, :unencodable}
   end
+
+  @impl Locus.Launcher
+  def resize(%{server: child}, rows, cols) when is_integer(rows) and is_integer(cols),
+    do: call(child, {:resize, rows, cols})
 
   @impl Locus.Launcher
   def release(_opts, %{server: child}, grace_ms) when is_integer(grace_ms) and grace_ms >= 0,
@@ -473,10 +478,31 @@ defmodule Locus.DirectLauncher do
     end
   end
 
-  # A command on a pseudo-terminal: util-linux `script` runs it as one
-  # shell word each, flushing what it writes and answering its status.
-  defp pty(argv),
-    do: ["/usr/bin/script", "-qfec", Enum.map_join(argv, " ", &shell_word/1), "/dev/null"]
+  # A command on a pseudo-terminal of its size: util-linux `script` runs it
+  # as one shell word each, flushing what it writes and answering its
+  # status.
+  defp pty(argv, %{rows: rows, cols: cols}) do
+    command = "stty rows #{rows} cols #{cols}; exec " <> Enum.map_join(argv, " ", &shell_word/1)
+    ["/usr/bin/script", "-qfec", command, "/dev/null"]
+  end
+
+  @doc false
+  # The terminal `script` gave its command, found from that command's
+  # input, and set to a size: the kernel signals its foreground processes.
+  def resize_pty(os_pid, rows, cols) do
+    with {:ok, children} <- File.read("/proc/#{os_pid}/task/#{os_pid}/children"),
+         [child | _] <- String.split(children),
+         {:ok, "/dev/pts/" <> _ = tty} <- File.read_link("/proc/#{child}/fd/0"),
+         {_, 0} <-
+           System.cmd("/usr/bin/stty", ["-F", tty, "rows", "#{rows}", "cols", "#{cols}"],
+             stderr_to_stdout: true,
+             env: Locus.Test.ProcessFamily.no_env()
+           ) do
+      :ok
+    else
+      _ -> {:error, :unknown_spawn}
+    end
+  end
 
   defp shell_word(word), do: "'" <> String.replace(word, "'", "'\\''") <> "'"
 
@@ -909,6 +935,12 @@ defmodule Locus.DirectLauncher.Child do
     unless state.exited, do: DirectLauncher.signal_group(state.os_pid, trim_sig(sig))
     {:reply, :ok, state}
   end
+
+  def handle_call({:resize, _rows, _cols}, _from, %{exited: true} = state),
+    do: {:reply, {:error, :unknown_spawn}, state}
+
+  def handle_call({:resize, rows, cols}, _from, state),
+    do: {:reply, DirectLauncher.resize_pty(state.os_pid, rows, cols), state}
 
   @impl true
   def handle_cast({:release, _grace_ms}, %{exited: true} = state), do: {:noreply, state}

@@ -111,28 +111,35 @@ defmodule Locus.Runtime.ModelsCatalogueTest do
     refute catalogue["errors"]["openai"] == Prima.Refusal.message(:connection_not_granted)
   end
 
-  # A login bound to a program not signed in yet is no grant to make: the
-  # catalyst is still not run, and its row says what waits.
-  test "a bound login waiting on sign-in keeps the actual state", %{ctx: ctx} do
+  # A brain whose program is not set up is not run: its row says its grant
+  # waits, as an unbound key's does. Bound to the program's row, it is run,
+  # and whether the program is signed in is the catalyst's to say.
+  test "a brain whose program row is not bound is not run, and one bound is", %{ctx: ctx} do
     install!(ctx)
     ctx = %{ctx | origin: :interactive}
     ref = "catalyst:local.claude-code"
 
-    {:ok, entry} =
-      Sanctum.TestContext.create_vault(ctx, %{
-        name: "claude-login",
-        kind: "login",
-        program: "claude"
-      })
-
-    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry.id}]})
-
     assert {:ok, catalogue} = Aqua.models(ctx)
     assert executions(ctx) == []
+    assert catalogue["errors"]["claude-code"] == Prima.Refusal.message(:connection_not_granted)
 
-    assert catalogue["errors"]["claude-code"] ==
-             "The login entry bound to claude is not signed in; sign it in on the Programs page."
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "claude", "env" => %{}})
+      })
 
+    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: row.id}]})
+
+    assert {:ok, catalogue} = Aqua.models(ctx)
+    assert [reference] = Enum.map(executions(ctx), & &1.reference)
+    assert reference =~ ref
+    refute catalogue["errors"]["claude-code"] == Prima.Refusal.message(:connection_not_granted)
     assert catalogue["errors"]["openai-codex"] == Prima.Refusal.message(:connection_not_granted)
   end
 

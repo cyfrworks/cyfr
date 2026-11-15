@@ -30,21 +30,20 @@ defmodule Opus.Host.Pipe do
        `login` need, and no other login need of it names the same program,
        since the edge records no need name for its binding to be told by;
        anything else is `denied`;
-    2. `Sanctum.Mount.resolve/4` mounts the run's binding of the need: the
-       binding live, the entry active at the consented digest and a login
-       entry, its destination naming a program row of the athanor that
-       stands, enabled, with a kept home, and only then a `once` binding
-       used; a binding that is no login entry's, or none, is `denied`, and
-       one that no longer serves (`setup_required`) names why;
-    3. the row is the program the need names (`denied` otherwise: the
-       binding mounts another program).
+    2. `Sanctum.Mount.resolve/5` mounts the run's binding of the need: the
+       binding live and the athanor's own, naming a program row of the
+       athanor that stands, enabled, a `driven` program with a kept home,
+       named as the need names its program, and only then a `once` binding
+       used; no binding, a shared one, or one that mounts another program
+       is `denied`, and one that no longer serves (`setup_required`) names
+       why.
 
-  The session's key on the box is derived from the catalyst's key, the
-  need and the node's name-level reference, so two components bound to
-  one program never share a session. Then `Opus.Programs.pipe_open/6`
-  opens the session for the attempt: a session belongs to the row, the
-  home and the key, so a later attempt opening the key attaches to it
-  while its program runs.
+  The session runs in the row's own kept home, and its key on the box is
+  derived from the catalyst's key, the need and the node's name-level
+  reference, so two components bound to one program never share a
+  session. Then `Opus.Programs.pipe_open/5` opens the session for the
+  attempt: a session belongs to the row and the key, so a later attempt
+  opening the key attaches to it while its program runs.
 
   ## One deadline
 
@@ -72,7 +71,7 @@ defmodule Opus.Host.Pipe do
   the same lines. A close ends the session and its
   program; one of a session CYFR no longer holds answers `:ok`.
 
-  A refusal of the open's first three steps is recorded as a denial of
+  A refusal of the open's steps 1 and 2 is recorded as a denial of
   the attempt's component (`Sanctum.Policy.Enforcement.record/1`), its
   reason led by `pipe:`. Nothing that passes through a pipe is logged.
   """
@@ -96,10 +95,9 @@ defmodule Opus.Host.Pipe do
     with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain),
          :ok <- readable(key, argv),
          {:ok, program} <- login_need(caller, chain, need),
-         {:ok, home_id, row} <- mount(chain, need),
-         :ok <- same_program(chain, need, program, row),
+         {:ok, row} <- mount(chain, need, program),
          {:ok, key} <- session_key(chain, need, key) do
-      case Programs.pipe_open(row, home_id, key, argv, caller.attempt, deadline(caller)) do
+      case Programs.pipe_open(row, key, argv, caller.attempt, deadline(caller)) do
         {:ok, opened} -> {:ok, opened}
         {:error, reason} -> programs_refusal(reason)
       end
@@ -194,14 +192,17 @@ defmodule Opus.Host.Pipe do
     end
   end
 
-  # 2. The vault mounts the run's binding of the need.
-  defp mount(chain, need) do
-    case Sanctum.Mount.resolve(chain.ctx, chain.authority, need, chain.root_execution_id) do
-      {:ok, {:mount, home_id, row}} ->
-        {:ok, home_id, row}
+  # 2. The run's binding of the need mounts the program row it names.
+  defp mount(chain, need, program) do
+    case Sanctum.Mount.resolve(chain.ctx, chain.authority, need, program, chain.root_execution_id) do
+      {:ok, row} ->
+        {:ok, row}
 
       {:error, reason} when reason in [:anonymous_denied, :connection_not_granted] ->
-        denied(chain, "the run binds no login entry for #{need}")
+        denied(chain, "the run binds no program of its own for #{need}")
+
+      {:error, {:another_program, _name}} ->
+        denied(chain, "the binding of #{need} mounts another program than #{program}")
 
       {:error, reason} when reason in [:unavailable, :database_error] ->
         {:error, :unavailable}
@@ -214,14 +215,7 @@ defmodule Opus.Host.Pipe do
     end
   end
 
-  # 3. The binding mounts the program the need names.
-  defp same_program(chain, need, program, row) do
-    if row.name == program,
-      do: :ok,
-      else: denied(chain, "the binding of #{need} mounts another program than #{program}")
-  end
-
-  # 4. A key of the node's own: two components bound to one program never
+  # 3. A key of the node's own: two components bound to one program never
   # reach each other's session.
   defp session_key(chain, need, key) do
     case Prima.ComponentRef.to_name_ref(chain.component_ref) do
@@ -234,9 +228,6 @@ defmodule Opus.Host.Pipe do
     end
   end
 
-  defp mount_sentence(need, {:not_built, :shared_login}),
-    do: "The login entry bound to #{need} is shared with you, and a shared one cannot run yet."
-
   defp mount_sentence(need, {:program_unavailable, program}),
     do:
       "The program #{program} that #{need} runs is not an enabled program with a kept " <>
@@ -244,11 +235,8 @@ defmodule Opus.Host.Pipe do
 
   defp mount_sentence(need, :grant_expired), do: "The grant of #{need} has expired."
 
-  defp mount_sentence(need, {:entry_unavailable, _name, status}),
-    do: "The login entry bound to #{need} is #{status}."
-
   defp mount_sentence(need, _reason),
-    do: "The login entry bound to #{need} no longer serves it; grant it again."
+    do: "The program bound to #{need} no longer serves it; grant it again."
 
   # ---------------------------------------------------------------------------
   # Answers

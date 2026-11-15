@@ -805,7 +805,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.1" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.2" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -1001,8 +1001,8 @@ async function stepAppOverCanvas(page, name) {
 const canvasSocket = (url) => /\/_f\/v1\/o\/[^/]+\/socket$/.test(url.pathname);
 
 const ATTENTION_RUNS = [
-  ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.2", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
-  { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.2", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
+  ...[0, 1, 2].map((i) => ({ kind: "failed", execution_id: `attention_${i}`, reference: "catalyst:local.claude:1.4.3", duration_ms: 100, error: { class: "setup_required", cause: "needs_setup" } })),
+  { kind: "failed", execution_id: "attention_other", reference: "catalyst:local.openai:1.4.3", duration_ms: 100, error: { class: "unavailable", cause: "unavailable" } },
 ];
 
 function attentionFailures(ws) {

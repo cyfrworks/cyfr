@@ -11,8 +11,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
   never a decision, and each passkey of their account that signed in here
   as **Passkey**. This CYFR owns only its own bindings, so the list says
   that signing one out leaves its key on the account, and that removing
-  the key from the account ends it everywhere. A command line is a
-  protected device like any other.
+  the key from the account ends it everywhere.
 
   A device comes here by its first connection (`Sanctum.DeviceUnlock`),
   once it is a key of the person's account; nothing is paired from this

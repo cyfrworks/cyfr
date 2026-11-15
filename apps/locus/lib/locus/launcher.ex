@@ -13,9 +13,10 @@ defmodule Locus.Launcher do
   time in every 100000), and answers
   the process's `t:handle/0`. A spec naming a kept `home` runs the process
   in that home, under the home's own uid, and takes no uid of the pool;
-  `pty: true` gives the process a pseudo-terminal as its stdin, stdout and
-  stderr, so its stdout carries what it writes to the terminal and no
-  stderr is heard.
+  `pty: %{rows: r, cols: c}` gives the process a pseudo-terminal of that
+  size as its stdin, stdout and stderr, so its stdout carries what it
+  writes to the terminal and no stderr is heard, and `c:resize/3` sets the
+  terminal's size later.
 
   ## Kept homes
 
@@ -49,6 +50,7 @@ defmodule Locus.Launcher do
   answers their tags: an heir that restarts takes back what it followed.
 
   `c:send/2` writes to the process's stdin; `c:signal/2` signals it;
+  `c:resize/3` sets its terminal's size;
   `c:release/3` ends it, a term signal first and the kill of everything it
   started once `grace_ms` pass, and answers at once, the `:released` event
   following once nothing of it is left. `c:pool_stats/2` answers the
@@ -85,7 +87,7 @@ defmodule Locus.Launcher do
           optional(:isolation) => String.t(),
           optional(:home) => String.t(),
           optional(:home_max_bytes) => pos_integer(),
-          optional(:pty) => boolean(),
+          optional(:pty) => %{rows: pos_integer(), cols: pos_integer()},
           optional(:hosts) => [String.t(), ...],
           optional(:heir) => {pid(), term()}
         }
@@ -168,6 +170,9 @@ defmodule Locus.Launcher do
 
   @doc "Send the process the signal `sig` (`SIGTERM`, `SIGKILL`, …)."
   @callback signal(handle(), String.t()) :: :ok | {:error, error()}
+
+  @doc "Set the size of the process's pseudo-terminal, which signals it `SIGWINCH`."
+  @callback resize(handle(), pos_integer(), pos_integer()) :: :ok | {:error, error()}
 
   @doc "End the process: a term signal, `grace_ms`, then the kill; `:released` follows."
   @callback release(GenServer.server() | keyword(), handle(), non_neg_integer()) :: :ok

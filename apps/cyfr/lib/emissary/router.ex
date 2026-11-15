@@ -166,22 +166,6 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.WebhookIdempotency
       end
 
-      # A protected command line's session (`Emissary.Web.DeviceSessionController`):
-      # JSON, no session fetched and no CSRF token, since no cookie is read
-      # or set; the one-time ticket the device's channel was answered is the
-      # whole credential. An entry path, metered per address.
-      pipeline :device_session do
-        plug CyfrWeb.Plugs.CallIdentity, tool: "device"
-        plug :accepts, ["json"]
-        plug CyfrWeb.Plugs.ApiSecurityHeaders
-        plug CyfrWeb.Plugs.FrameRequest
-
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :device_session,
-          max_requests: 30,
-          window_ms: 60_000
-      end
-
       # The identity directory's routes (`Sanctum.Directory`), which decide
       # every request and record their own refusals: a directory request is
       # admitted by the identifier's own chain, never by a person of this
@@ -362,14 +346,6 @@ defmodule Emissary.Router do
       # `config.json`, with their own headers, no session and no cookie.
       scope "/account", Emissary.Web do
         get "/:name", AccountController, :show, metadata: %{auth: :public_directory}, log: false
-      end
-
-      # A protected command line spends its unlock's ticket for its session.
-      scope "/device", Emissary.Web do
-        pipe_through :device_session
-
-        post "/session", DeviceSessionController, :create,
-          metadata: %{auth: :device_unlock_ticket}
       end
     end
   end

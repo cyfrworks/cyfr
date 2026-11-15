@@ -11,7 +11,9 @@ The session client signs every session message as the wire's vectors do,
 writes an absent optional member as absent, and its MCP client, against a
 service stood in for here, initializes once, opens the session again and
 initializes afresh when a send finds it ended, and fails a request whose
-session ends before it is answered without sending it again.
+session ends before it is answered without sending it again. A terminal
+open names its size, typed bytes go as padded base64, and the bytes read
+back are decoded in order.
 
 Usage: python3 -I tests/locus-backends-image/harness_test.py
 """
@@ -231,10 +233,12 @@ class ImageUserName(unittest.TestCase):
 
 
 OWNER = {"athanor": "ath_unit", "server": "mcp_unit", "e": 3}
+VERSION = harness.VERSION
 
 
 class Service:
-    """A backends service's session route as data: one program per session that answers MCP's lines."""
+    """A backends service's session route as data: a run session's program answers MCP's lines, and a terminal
+    session's echoes the bytes typed into it."""
 
     def __init__(self):
         self.sessions = {}
@@ -249,12 +253,19 @@ class Service:
         if kind == "open":
             self.opened += 1
             session = "ss_" + f"{self.opened:032x}"
-            self.sessions[session] = {"lines": [], "seq": 0, "running": True}
-            return 200, {"version": 2, "status": "running", "session": session, "resumed": False, "pty": False}, "bb"
+            self.sessions[session] = {"lines": [], "chunks": [], "seq": 0, "running": True}
+            return 200, {"version": VERSION, "status": "running", "session": session, "resumed": False}, "bb"
         state = self.sessions[message["session"]]
+        if kind == "input":
+            state["seq"] += 1
+            state["chunks"].append({"seq": state["seq"], "bytes": message["bytes"]})
+            return 200, {"version": VERSION, "status": "running"}, "bb"
+        if kind == "output":
+            chunks = [x for x in state["chunks"] if x["seq"] > message["after"]]
+            return 200, {"version": VERSION, "chunks": chunks, "dropped": 0, "running": state["running"]}, "bb"
         if kind == "send":
             if not state["running"]:
-                return 200, {"version": 2, "status": "ended"}, "bb"
+                return 200, {"version": VERSION, "status": "ended"}, "bb"
             for line in message["lines"]:
                 request = json.loads(line)
                 if self.end_on and request.get("params", {}).get("name") == self.end_on:
@@ -264,11 +275,11 @@ class Service:
                     state["seq"] += 1
                     state["lines"].append({"seq": state["seq"], "text": json.dumps(
                         {"jsonrpc": "2.0", "id": request["id"], "result": {"method": request["method"]}})})
-            return 200, {"version": 2, "status": "running"}, "bb"
+            return 200, {"version": VERSION, "status": "running"}, "bb"
         if kind == "recv":
             lines = [x for x in state["lines"] if x["seq"] > message["after"]]
-            return 200, {"version": 2, "lines": lines, "dropped": 0, "running": state["running"]}, "bb"
-        return 200, {"version": 2, "status": "closed"}, "bb"
+            return 200, {"version": VERSION, "lines": lines, "dropped": 0, "running": state["running"]}, "bb"
+        return 200, {"version": VERSION, "status": "closed"}, "bb"
 
 
 class Sessions(unittest.TestCase):
@@ -296,9 +307,24 @@ class Sessions(unittest.TestCase):
     def test_a_program_names_only_the_members_it_has(self):
         self.assertEqual(harness.program_wire(harness.probe()),
                          {"name": "probe", "command": harness.PROBE, "env_names": [], "home": "scratch"})
-        kept = harness.program_wire(harness.probe(home="kept", home_max_bytes=7, login_command="login"))
-        self.assertEqual((kept["home"], kept["home_max_bytes"], kept["login_command"]), ("kept", 7, "login"))
+        kept = harness.program_wire(harness.probe(home="kept", home_max_bytes=7))
+        self.assertEqual((kept["home"], kept["home_max_bytes"]), ("kept", 7))
         self.assertNotIn("memory_bytes", kept)
+
+    def test_a_terminal_names_its_size_and_carries_its_bytes_in_padded_base64(self):
+        status, opened = self.c.open(OWNER, "probe", key="person", mode="terminal", argv=["login"], rows=24, cols=80)
+        self.assertEqual(status, 200)
+        self.c.input(OWNER, opened["session"], b"y\r")
+        self.c.input(OWNER, opened["session"], b"\xff\xfe")
+        read, after, running = self.c.output_until(OWNER, opened["session"], lambda read: len(read) >= 4)
+        self.assertEqual((read, after, running), (b"y\r\xff\xfe", 2, True))
+        sent = [m for m in self.service.received if m["type"] != "output"]
+        self.assertEqual([(m["mode"], m["argv"], m["rows"], m["cols"]) for m in sent[:1]],
+                         [("terminal", ["login"], 24, 80)])
+        self.assertEqual([m["bytes"] for m in sent[1:]], ["eQ0=", "//4="])
+        self.c.open(OWNER, "probe")
+        run_open = self.service.received[-1]
+        self.assertEqual((run_open["mode"], "rows" in run_open, "cols" in run_open), ("run", False, False))
 
     def test_the_mcp_client_initializes_once_and_answers_a_call(self):
         status, answer = self.c.call(OWNER, "probe__whoami", {})

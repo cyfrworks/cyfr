@@ -127,7 +127,7 @@ defmodule Aqua.LoopTest do
     {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
-    versioned = @model <> ":1.4.2"
+    versioned = @model <> ":1.4.3"
     {:ok, name_ref} = Prima.ComponentRef.to_name_ref(versioned)
 
     # The graph is keyed the way `Opus.Admission` steps: by name. Asking with
@@ -158,6 +158,27 @@ defmodule Aqua.LoopTest do
     # fires, which from outside looks like a request that fits.
     assert String.starts_with?(spec.catalyst, @model <> ":")
     assert is_integer(spec.request_cap) and spec.request_cap > 0
+  end
+
+  test "the spec a turn runs on names its root run's admission as the parent call of its calls",
+       %{ctx: ctx, thread: thread} do
+    # The gate names the admission a run starts under in its context; the
+    # turn's root row takes it from there.
+    ctx = %{ctx | call_id: "call_turn_root_admission"}
+    turn = accept!(ctx, thread, "hello")
+    script!([reply("hi")])
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    {:ok, pinned} = Tape.turn(ctx, turn.id)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
+    {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
+
+    root =
+      Arca.Repo.one!(
+        from(e in "executions", where: e.id == ^pinned.root_execution_id, select: e.call_id)
+      )
+
+    assert {root, spec.call_id} == {"call_turn_root_admission", "call_turn_root_admission"}
   end
 
   test "a turn lasts at least one answer of its brain, at the time the brain's node is consented",
@@ -270,7 +291,7 @@ defmodule Aqua.LoopTest do
 
   test "request_setup.open opens the setup form for its component and the turn goes on",
        %{ctx: ctx, thread: thread} do
-    ref = "catalyst:local.claude:1.4.2"
+    ref = "catalyst:local.claude:1.4.3"
 
     script!([
       calls([{"c1", "request_setup", %{"action" => "open", "component_ref" => ref}}]),
@@ -649,7 +670,7 @@ defmodule Aqua.LoopTest do
              Arca.TurnStorage.pin_catalyst(
                Sanctum.Context.actor(ctx),
                turn.id,
-               "catalyst:local.openai:1.4.2",
+               "catalyst:local.openai:1.4.3",
                %{
                  fence: paused.fence
                }

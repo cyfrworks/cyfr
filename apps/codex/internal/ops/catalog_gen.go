@@ -162,10 +162,10 @@ const (
 	McpServersEnable        = "enable"
 	McpServersGet           = "get"
 	McpServersList          = "list"
+	McpServersOpen          = "open"
 	McpServersRefresh       = "refresh"
 	McpServersResetHome     = "reset_home"
 	McpServersRestart       = "restart"
-	McpServersSignIn        = "sign_in"
 	McpServersTest          = "test"
 	McpServersUpdate        = "update"
 	NotesEndorse            = "endorse"
@@ -317,7 +317,7 @@ var Actions = map[string][]string{
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
-	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
+	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "open", "refresh", "reset_home", "restart", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"list", "renew", "revoke", "waiting"},
@@ -341,8 +341,8 @@ var Actions = map[string][]string{
 	"webhook":             {"create", "get", "list", "reenable", "revoke", "rotate", "update"},
 }
 
-// CredentialKinds lists every credential kind a manifest need may name.
-var CredentialKinds = []string{"api_key", "oauth", "bundle", "login"}
+// BindingKinds lists every need kind a consent binds: the credential kinds, and login, which binds a program.
+var BindingKinds = []string{"api_key", "oauth", "bundle", "login"}
 
 // ApprovalListArgs carries arguments for approval.list.
 type ApprovalListArgs struct {
@@ -2149,8 +2149,10 @@ func (args McpServersCreateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersCreateArgsConfig struct {
-	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
-	Backends Field[[]McpServersCreateArgsConfigBackendsItem] `json:"backends,omitzero"`
+	// A program's command, run by a shell on the backends service. It never names a vault entry.
+	Command Field[string] `json:"command,omitzero"`
+	// A program's environment. Every value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	Env Field[map[string]string] `json:"env,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
 	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry whose destination covers this server's URL.
@@ -2161,18 +2163,14 @@ type McpServersCreateArgsConfig struct {
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
 	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
-	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it.
 	Mark Field[string] `json:"mark,omitzero"`
-	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
+	// A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
 	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
 	// A kept home's disk bound in bytes (default: none beyond the homes volume).
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
-	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
-	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
-	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)
@@ -2187,23 +2185,6 @@ func (args *McpServersCreateArgsConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = McpServersCreateArgsConfig(value)
-	return nil
-}
-
-type McpServersCreateArgsConfigBackendsItem struct {
-	Command string                   `json:"command"`
-	Env     Field[map[string]string] `json:"env,omitzero"`
-	Name    string                   `json:"name"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *McpServersCreateArgsConfigBackendsItem) UnmarshalJSON(data []byte) error {
-	type fields McpServersCreateArgsConfigBackendsItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = McpServersCreateArgsConfigBackendsItem(value)
 	return nil
 }
 
@@ -2280,6 +2261,27 @@ func (args McpServersListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: McpServersList, fields: fields(args)})
 }
 
+// McpServersOpenArgs carries arguments for mcp_servers.open.
+type McpServersOpenArgs struct {
+	// The program's server name; its command runs in its own folder
+	Name string `json:"name"`
+	// Words to follow the program's command, as a person typed them (at most 64)
+	TerminalArgs Field[[]string] `json:"terminal_args,omitzero"`
+	// The terminal's rows, 1 to 1000 (default 24)
+	Rows Field[int] `json:"rows,omitzero"`
+	// The terminal's columns, 1 to 1000 (default 80)
+	Cols Field[int] `json:"cols,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args McpServersOpenArgs) MarshalJSON() ([]byte, error) {
+	type fields McpServersOpenArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: McpServersOpen, fields: fields(args)})
+}
+
 // McpServersRefreshArgs carries arguments for mcp_servers.refresh.
 type McpServersRefreshArgs struct {
 	// Server name (required for every action but list; refresh without one refreshes every enabled server)
@@ -2297,8 +2299,8 @@ func (args McpServersRefreshArgs) MarshalJSON() ([]byte, error) {
 
 // McpServersResetHomeArgs carries arguments for mcp_servers.reset_home.
 type McpServersResetHomeArgs struct {
-	// The id of the login entry whose kept home is emptied, under the same uid
-	Entry string `json:"entry"`
+	// The program's server name; its kept home is emptied, under the same uid
+	Name string `json:"name"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2323,23 +2325,6 @@ func (args McpServersRestartArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: McpServersRestart, fields: fields(args)})
-}
-
-// McpServersSignInArgs carries arguments for mcp_servers.sign_in.
-type McpServersSignInArgs struct {
-	// The program's server name
-	Name string `json:"name"`
-	// The id of the login entry whose kept home the sign-in runs in; a kept mcp program's own entry
-	Entry string `json:"entry"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args McpServersSignInArgs) MarshalJSON() ([]byte, error) {
-	type fields McpServersSignInArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: McpServersSignIn, fields: fields(args)})
 }
 
 // McpServersTestArgs carries arguments for mcp_servers.test.
@@ -2379,8 +2364,10 @@ func (args McpServersUpdateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersUpdateArgsConfig struct {
-	// A program's backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
-	Backends Field[[]McpServersUpdateArgsConfigBackendsItem] `json:"backends,omitzero"`
+	// A program's command, run by a shell on the backends service. It never names a vault entry.
+	Command Field[string] `json:"command,omitzero"`
+	// A program's environment. Every value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	Env Field[map[string]string] `json:"env,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
 	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry whose destination covers this server's URL.
@@ -2391,18 +2378,14 @@ type McpServersUpdateArgsConfig struct {
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
 	// http (default): a tool server elsewhere, at a URL. program: a program CYFR runs on the backends service.
 	Transport Field[string] `json:"transport,omitzero"`
-	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it (one backend).
+	// How a program is spoken to: mcp, CYFR speaks MCP to it and offers its tools; driven, a person or a brain runs it.
 	Mark Field[string] `json:"mark,omitzero"`
-	// A program's home: scratch (default), scrubbed at retirement, or kept, one home per login entry that survives it.
+	// A program's home: scratch (default), scrubbed at retirement, or kept, the program's own folder, kept until the program is deleted.
 	Home Field[string] `json:"home,omitzero"`
 	// A program's memory bound in bytes (default: the backends service's own bound).
 	MemoryBytes Field[int] `json:"memory_bytes,omitzero"`
 	// A kept home's disk bound in bytes (default: none beyond the homes volume).
 	HomeMaxBytes Field[int] `json:"home_max_bytes,omitzero"`
-	// The command a sign-in runs on a pseudo-terminal in a kept home, such as 'claude auth login'.
-	LoginCommand Field[string] `json:"login_command,omitzero"`
-	// A kept mcp program's login entry, whose home its backends run in (a driven program's catalyst names its own).
-	LoginEntryId Field[string] `json:"login_entry_id,omitzero"`
 	// A program's network list: the only hosts it reaches beside the deployment's private hosts, at most 32 exact hostnames (no wildcard, scheme or port), resolved each time it starts. A name sharing an address with another admits that other. Default: every public host.
 	Hosts Field[[]string] `json:"hosts,omitzero"`
 	// MCP server endpoint URL (http)
@@ -2417,23 +2400,6 @@ func (args *McpServersUpdateArgsConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = McpServersUpdateArgsConfig(value)
-	return nil
-}
-
-type McpServersUpdateArgsConfigBackendsItem struct {
-	Command string                   `json:"command"`
-	Env     Field[map[string]string] `json:"env,omitzero"`
-	Name    string                   `json:"name"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *McpServersUpdateArgsConfigBackendsItem) UnmarshalJSON(data []byte) error {
-	type fields McpServersUpdateArgsConfigBackendsItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = McpServersUpdateArgsConfigBackendsItem(value)
 	return nil
 }
 
@@ -3906,11 +3872,11 @@ type ScheduleCreateArgs struct {
 	Name string `json:"name"`
 	// Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval.
 	CronExpression string `json:"cron_expression"`
-	// Component reference string (create/update)
+	// Component reference string, or agent:local.aqua for a line for Aqua (create/update)
 	Reference string `json:"reference"`
-	// Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
-	ProfileId string `json:"profile_id"`
-	// Input data to pass to the component (create/update)
+	// Profile the schedule fires under; its consent authorizes the binding (create, required for a component, refused for a line for Aqua; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
+	ProfileId Field[string] `json:"profile_id,omitzero"`
+	// Input data to pass to the component, or {"line": text} for a line for Aqua (reference agent:local.aqua) (create/update)
 	Input Field[map[string]any] `json:"input,omitzero"`
 	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[map[string]any] `json:"metadata,omitzero"`
@@ -4033,7 +3999,7 @@ type ScheduleUpdateArgs struct {
 	Reference Field[string] `json:"reference,omitzero"`
 	// Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
 	ProfileId Field[string] `json:"profile_id,omitzero"`
-	// Input data to pass to the component (create/update)
+	// Input data to pass to the component, or {"line": text} for a line for Aqua (reference agent:local.aqua) (create/update)
 	Input Field[*map[string]any] `json:"input,omitzero"`
 	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[*map[string]any] `json:"metadata,omitzero"`
@@ -4043,6 +4009,8 @@ type ScheduleUpdateArgs struct {
 	MissedRuns Field[string] `json:"missed_runs,omitzero"`
 	// How many missed times one catch-up fires, 1 to 24 (create/update; required with catch_up, refused with skip)
 	CatchUpLimit Field[int] `json:"catch_up_limit,omitzero"`
+	// The schedule's definition as read (get/list answer it): the update is refused as changed when its name, time, reference, profile, input or missed-run policy moved since; a fire or a pause does not move it
+	Definition Field[string] `json:"definition,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4887,6 +4855,8 @@ type ThreadRevokeGrantArgs struct {
 	Tool string `json:"tool"`
 	// revoke_grant: the action
 	ToolAction string `json:"tool_action"`
+	// revoke_grant: for an answer that is one program's, the program's row id; required for program.start
+	Program Field[string] `json:"program,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -5135,12 +5105,10 @@ type VaultCreateArgs struct {
 	// Binding field: scopes this credential was authorized for
 	OauthScopes    Field[[]string]                      `json:"oauth_scopes,omitzero"`
 	OauthEndpoints Field[VaultCreateArgsOauthEndpoints] `json:"oauth_endpoints,omitzero"`
-	// Binding field: where the material may go — required of every kind but login, never defaulted
+	// Binding field: where the material may go — required, never defaulted
 	Destination Field[VaultCreateArgsDestination] `json:"destination,omitzero"`
 	// Binding field: true lets a component read the fields; otherwise they are never handed to a component
 	Disclose Field[bool] `json:"disclose,omitzero"`
-	// A login entry's program: the program row (mcp_servers name) whose own sign-in the entry points at; its kept home is mounted into that program alone
-	Program Field[string] `json:"program,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

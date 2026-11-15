@@ -181,7 +181,7 @@ func TestRunList_RunningOnlyAsATable(t *testing.T) {
 		t.Fatalf("asked %s %v, want execution {action: list, status: running}", name, args)
 	}
 	want := "execution_id  reference                 status   started_at\n" +
-		"-             -                         -        -  \n" +
+		"------------  ---------                 ------   ----------\n" +
 		"exec_1        reagent:local.math:0.1.0  running  2026-11-14T08:00:00Z\n"
 	if out != want {
 		t.Fatalf("printed\n%s\nwant\n%s", out, want)

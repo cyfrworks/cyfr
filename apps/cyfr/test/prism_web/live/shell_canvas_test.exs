@@ -297,6 +297,14 @@ defmodule PrismWeb.ShellCanvasTest do
   defp canvas(view, id \\ "main"), do: Frames.get(frames(view), {:canvas, id})
   defp validation(view, id \\ "main"), do: Frames.get(frames(view), {:validation, id})
   defp opened(view), do: Frames.list(frames(view))
+
+  # The answer the shell tells a frame over its port, as the canvas hook
+  # hands it on.
+  defp answer!(view, frame_id, verb) do
+    assert_push_event(view, "canvas_answer", %{frame: ^frame_id, verb: ^verb, args: args}, 5_000)
+    args
+  end
+
   defp dropped(view), do: Frames.dropped(frames(view))
 
   defp row(frame_id) do
@@ -394,8 +402,14 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "frame_verb", %{
         "input" => System.unique_integer([:positive, :monotonic]),
         "frame" => frame_id,
-        "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
+        "message" => Prima.TinctureWire.shell_message(verb, frame_id, with_call(verb, args))
       })
+
+  # An open carries the call number its answer comes back under.
+  defp with_call(:open, args),
+    do: Map.put_new(args, "call", System.unique_integer([:positive, :monotonic]))
+
+  defp with_call(_verb, args), do: args
 
   # `#shell`'s children in document order, each by its id, or by its tag
   # when it has none.
@@ -2688,6 +2702,38 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert dropped(view) == 4
       refute Enum.any?(opened(view), &match?(%{key: {:app, _, "tincture:local.loose-dash"}}, &1))
+    end
+
+    test "every open is answered under its call: opened, refused for a tincture not listed, cancelled for an input already honoured",
+         %{conn: conn} do
+      view = shell!(conn)
+      main = canvas(view).id
+
+      canvas_verb!(view, main, :open, %{"ref" => "tincture:local.loose-dash", "call" => 41})
+      assert answer!(view, main, "opened") == %{"call" => 41, "outcome" => "opened"}
+
+      canvas_verb!(view, main, :open, %{"ref" => "tincture:local.nobody", "call" => 42})
+
+      assert answer!(view, main, "opened") ==
+               %{"call" => 42, "outcome" => "refused", "reason" => "not_found"}
+
+      # One input carries one verb: a second open under the input the
+      # first came with does not run, and is told so.
+      input = System.unique_integer([:positive, :monotonic])
+
+      open = fn ref, call ->
+        render_hook(view, "frame_verb", %{
+          "input" => input,
+          "frame" => main,
+          "message" =>
+            Prima.TinctureWire.shell_message(:open, main, %{"ref" => ref, "call" => call})
+        })
+      end
+
+      open.("tincture:local.column-dash", 43)
+      assert answer!(view, main, "opened") == %{"call" => 43, "outcome" => "opened"}
+      open.("tincture:local.full-dash", 44)
+      assert answer!(view, main, "opened") == %{"call" => 44, "outcome" => "cancelled"}
     end
 
     test "a canvas's title, close and credential are dropped: it acts only on ready, failed, open and press",

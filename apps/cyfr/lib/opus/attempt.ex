@@ -1168,8 +1168,8 @@ defmodule Opus.Attempt do
   # An anonymous caller is refused at attach on either, as the vault
   # reader refuses it on a field read. A scope this list does not name
   # discloses nothing and closes the run: it is never read as the
-  # athanor's own entry. A login entry, bound to a program's destination,
-  # holds no material: it is mounted into its program when the guest opens
+  # athanor's own entry. A program row a login need binds holds no
+  # material: its folder is mounted into its program when the guest opens
   # a pipe on its need (`Opus.Host.Pipe`), and nothing is handed over here.
   defp disclosed(_state, %{provided: %{values: values}}), do: {:ok, values}
   defp disclosed(_state, %{scope: "share"}), do: {:ok, %{}}

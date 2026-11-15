@@ -270,7 +270,11 @@ defmodule PrismWeb.ShellPromptsTest do
         render_hook(view, "frame_verb", %{
           "input" => System.unique_integer([:positive, :monotonic]),
           "frame" => canvas.id,
-          "message" => Prima.TinctureWire.shell_message(:open, canvas.id, %{"ref" => ref})
+          "message" =>
+            Prima.TinctureWire.shell_message(:open, canvas.id, %{
+              "ref" => ref,
+              "call" => System.unique_integer([:positive, :monotonic])
+            })
         })
     end
   end

@@ -534,9 +534,37 @@ defmodule PrismWeb.SystemLayer do
           | {:error, term(), Phoenix.LiveView.Socket.t()}
           | {:asked, Phoenix.LiveView.Socket.t()}
   def call(socket, tag, tool, args, opts \\ []) do
+    result = Ops.call_tool(socket, tool, args, repeating(socket, tag))
+    answer(socket, tag, tool, args, result, opts)
+  end
+
+  @doc """
+  The options a dispatch of the change `tag` names carries
+  (`PrismWeb.Ops.call_tool/4`): the secret of the ask the page holds under
+  `tag`, which makes the dispatch its repeat, or none. For a page that
+  dispatches off its own process, a change whose answer can take longer
+  than the browser waits for an event, and hands the answer back to
+  `answer/6` on its process; `call/5` is the two in one.
+  """
+  @spec repeating(Phoenix.LiveView.Socket.t(), term()) :: keyword()
+  def repeating(socket, tag) do
+    case held_for(socket, tag) do
+      nil -> []
+      held -> [confirmation_id: held.id]
+    end
+  end
+
+  @doc """
+  What `call/5` answers for `result`, the answer of `tool` dispatched with
+  `args` as the change `tag` names, under the options `repeating/2` gave
+  it: the held ask settled by it, and a new ask held and shown.
+  """
+  @spec answer(Phoenix.LiveView.Socket.t(), term(), String.t(), map(), term(), keyword()) ::
+          {:ok, term(), Phoenix.LiveView.Socket.t()}
+          | {:error, term(), Phoenix.LiveView.Socket.t()}
+          | {:asked, Phoenix.LiveView.Socket.t()}
+  def answer(socket, tag, tool, args, result, opts \\ []) do
     held = held_for(socket, tag)
-    repeat = if held, do: [confirmation_id: held.id], else: []
-    result = Ops.call_tool(socket, tool, args, repeat)
     socket = if held, do: settle_held(socket, held, result), else: socket
 
     case result do
@@ -2905,7 +2933,7 @@ defmodule PrismWeb.SystemLayer do
       prompt={@prompt}
       administrator={match?(%Context{platform_admin: true}, @context)}
       myself={@myself}
-      choice={Map.get(@prompt, :choice, %{})}
+      choice={Share.drawn(@prompt)}
     />
     """
   end
@@ -2976,7 +3004,8 @@ defmodule PrismWeb.SystemLayer do
       assign(assigns,
         entry: assigns.panel.entry,
         methods: (assigns.panel.entry && assigns.panel.entry[:methods]) || [],
-        open: assigns.panel.status in [:pending, :waiting]
+        open: assigns.panel.status in [:pending, :waiting],
+        consequence: consequence(assigns.panel.entry)
       )
 
     ~H"""
@@ -2996,6 +3025,10 @@ defmodule PrismWeb.SystemLayer do
         preview={@entry.preview}
         test="confirmation-preview"
       />
+
+      <p :if={@consequence} class="text-sm" data-test="confirmation-consequence">
+        {@consequence}
+      </p>
 
       <p
         :if={is_nil(@entry) or is_nil(@entry[:preview])}
@@ -3163,6 +3196,13 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :share, subject: %{name: name}}), do: "Share #{name}"
   defp title(%{kind: :pairing}), do: "Your devices"
 
+  defp title(%{
+         kind: :confirmation,
+         action: :program_definition,
+         subject: %{operation: operation}
+       }),
+       do: program_title(operation)
+
   defp title(%{kind: :confirmation, subject: %{operation: operation}}),
     do: operation_title(operation)
 
@@ -3200,6 +3240,12 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp operation_title(_operation), do: "Confirm a change"
+
+  # A program's definition, by what its confirmation does to it.
+  defp program_title("mcp_servers.create"), do: "Add a program"
+  defp program_title("mcp_servers.update"), do: "Change a program"
+  defp program_title("mcp_servers.delete"), do: "Remove a program"
+  defp program_title(_operation), do: "Confirm a program"
 
   defp description(%{kind: :grant}),
     do:
@@ -3250,6 +3296,64 @@ defmodule PrismWeb.SystemLayer do
 
   defp detail(value) when is_list(value), do: Enum.join(value, ", ")
   defp detail(value), do: value
+
+  # What a program's change does beyond its row, said before it is
+  # confirmed: a removal, by a delete or by making the row a tool server
+  # elsewhere (`becomes`), ends its sessions and its folder; and every
+  # change to a stored row makes the grants that stand on it, which its
+  # confirmation names, ask again.
+  defp consequence(%{
+         action: "program_definition",
+         preview: %{"operation" => operation, "details" => details}
+       }) do
+    becomes =
+      case details["becomes"] do
+        address when is_binary(address) ->
+          ["It stops being a program and becomes a tool server elsewhere at #{address}."]
+
+        _stays ->
+          []
+      end
+
+    ends =
+      cond do
+        operation != "mcp_servers.delete" and becomes == [] ->
+          []
+
+        details["folder"] == "scratch" ->
+          ["Removing it ends its sessions."]
+
+        true ->
+          ["Removing it ends its sessions and removes its folder with everything kept there."]
+      end
+
+    grants =
+      case details["grants_asking_again"] do
+        "none" -> [grants_asking_again([])]
+        [_ | _] = all -> [grants_asking_again(all)]
+        _no_stored_row -> []
+      end
+
+    case becomes ++ ends ++ grants do
+      [] -> nil
+      said -> Enum.join(said, " ")
+    end
+  end
+
+  defp consequence(_entry), do: nil
+
+  @doc """
+  The sentence that names the grants, by their components, that a change
+  to a program row or tool server makes ask again
+  (`Sanctum.Mount.granted_to/2`): what a confirmation of the change and
+  a tool server's delete say alike.
+  """
+  @spec grants_asking_again([String.t()]) :: String.t()
+  def grants_asking_again([]), do: "No grant uses it."
+  def grants_asking_again([one]), do: "The one grant that uses it will ask again: #{one}."
+
+  def grants_asking_again(all) when is_list(all),
+    do: "The #{length(all)} grants that use it will ask again: #{Enum.join(all, ", ")}."
 
   # The client that asked, as the home named it: a hint, never a proof.
   defp asker(%{"kind" => "client"} = asker), do: "a paired device#{named(asker)}"

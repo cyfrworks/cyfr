@@ -185,13 +185,13 @@ defmodule Aqua.ModelsTest do
     assert {:consent_unavailable, ^resolved} = status.()
   end
 
-  # A brain that mounts a program's own sign-in reads ready once its login
-  # entry is bound on the catalyst's own consent and on the crew member's
-  # edge into it, and its program has signed in. Before the binding, and
-  # bound but before the sign-in, it waits on that sign-in, and the
-  # readiness every hand-off applies refuses the member.
-  test "a crew member whose brain mounts a login reads ready once its login entry is bound " <>
-         "and its program signed in" do
+  # A brain that runs a program on its own sign-in reads ready once the
+  # program's row is bound on the catalyst's own consent and on the crew
+  # member's edge into it: the program is signed in when it says so.
+  # Before the row is set up it waits on its program; once it is, on the
+  # person's grant alone, as Aqua's setup reads it; and the readiness
+  # every hand-off applies refuses the member with each.
+  test "a crew member whose brain runs a program reads ready once the program's row is bound" do
     ctx = storage_root!("models_login")
     ref = "catalyst:local.loginbrain"
 
@@ -233,28 +233,36 @@ defmodule Aqua.ModelsTest do
 
     # A brain whose one need is a program's own sign-in asks for that, not
     # for a key.
-    assert %{"harness" => {:needs_sign_in, resolved}} = Aqua.model_status(ctx, member)
+    assert %{"harness" => {:needs_program, resolved}} = Aqua.model_status(ctx, member)
     assert resolved =~ ref
+    assert Aqua.Crew.ready(ctx, "harness") == {:error, {:crew_unready, "harness", :no_program}}
 
-    {:ok, entry} =
-      Sanctum.TestContext.create_vault(ctx, %{
-        name: "login-claude",
-        kind: "login",
-        program: "claude"
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "claude",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
       })
 
-    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: entry.id}]})
+    # Set up and not bound: the grant is all it waits on, the brain's and
+    # then the member's own.
+    assert Aqua.model_status(ctx, member) == %{"harness" => {:needs_grant, resolved}}
+
+    assert {:error, {:crew_unready, "harness", :no_grant} = refusal} =
+             Aqua.Crew.ready(ctx, "harness")
+
+    assert Aqua.Ops.render_refusal(refusal) =~ "harness's brain needs only your grant"
+
+    commit!(ctx, ref, %{bindings: [%{need: "claude", entry_id: row.id}]})
+    assert Aqua.model_status(ctx, member) == %{"harness" => {:needs_grant, resolved}}
 
     commit!(ctx, Prima.AgentRef.ref("harness"), %{
-      selections: [%{dep: ref, need: "claude", entry_id: entry.id}]
+      selections: [%{dep: ref, need: "claude", entry_id: row.id}]
     })
-
-    # Bound, its program not signed in yet: it still waits on the sign-in.
-    assert Aqua.model_status(ctx, member) == %{"harness" => {:needs_sign_in, resolved}}
-    assert Aqua.Crew.ready(ctx, "harness") == {:error, {:crew_unready, "harness", :not_signed_in}}
-
-    # The sign-in whose command exited 0.
-    :ok = Sanctum.Mount.signed_in(ctx, entry.id)
 
     assert Aqua.model_status(ctx, member) == %{"harness" => {:ready, resolved}}
     assert Aqua.Crew.ready(ctx, "harness") == :ok
@@ -310,6 +318,30 @@ defmodule Aqua.ModelsTest do
     assert states(ctx) == %{"keyed" => :needs_key}
   end
 
+  # The removal at a test's end: a root it cannot remove fails the test with
+  # what the root held. A folder whose entries cannot be removed stands in
+  # for one written to while it is removed.
+  test "a storage root that cannot be removed fails with what it held, and when" do
+    root =
+      Path.join(System.tmp_dir!(), "models_unremovable_#{System.unique_integer([:positive])}")
+
+    locked = Path.join(root, "locked")
+    File.mkdir_p!(locked)
+    File.write!(Path.join(locked, "late.bin"), "12345")
+    File.chmod!(locked, 0o500)
+
+    on_exit(fn ->
+      File.chmod(locked, 0o700)
+      File.rm_rf(root)
+    end)
+
+    error = assert_raise ExUnit.AssertionError, fn -> remove_root!(root) end
+
+    assert error.message =~ ~r/^#{Regex.escape(root)} was not removed at \d{4}-\d\d-\d\dT[^ ]+: /
+    assert error.message =~ "  locked: directory, "
+    assert error.message =~ ~r/  locked\/late\.bin: regular, 5 bytes, modified \d{4}-/
+  end
+
   # A catalyst that speaks `model/chat@1` with `needs`, published under
   # the test's storage root.
   defp chat_brain!(ctx, name, needs) do
@@ -357,9 +389,59 @@ defmodule Aqua.ModelsTest do
   # A context whose storage root is the test's own, removed when it ends.
   defp storage_root!(prefix) do
     test_path = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(test_path) end)
+    on_exit(fn -> remove_root!(test_path) end)
     Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
+    fills_end_first!()
     %{Sanctum.TestContext.local() | origin: :interactive}
+  end
+
+  # The test's athanor is not filled, so a read of it starts its fill in
+  # the background, which lays the athanor's folders under whatever root
+  # `:arca, :base_path` names as it runs. Registered last, this runs first
+  # at the test's end: the fills end while the root is still the test's,
+  # before the root is restored and removed.
+  defp fills_end_first! do
+    test = self()
+    on_exit(fn -> Cyfr.Test.Fill.ended!(test) end)
+  end
+
+  # A root that is not removed fails the test, naming what it held at that
+  # moment and when. `File.rm_rf/1` passes over a child it cannot remove and
+  # reports only the root's own removal, so "file already exists" means
+  # something was left or written while the root was removed; the listing
+  # says what, so the run that meets it names the writer.
+  defp remove_root!(root) do
+    case File.rm_rf(root) do
+      {:ok, _removed} ->
+        :ok
+
+      {:error, reason, path} ->
+        at = DateTime.utc_now()
+
+        flunk("""
+        #{root} was not removed at #{DateTime.to_iso8601(at)}: #{:file.format_error(reason)} at #{path}. It held:
+        #{held(root)}
+        """)
+    end
+  end
+
+  # Each path under the root, with its type, size and modification time.
+  defp held(root) do
+    root
+    |> Path.join("**")
+    |> Path.wildcard(match_dot: true)
+    |> Enum.sort()
+    |> Enum.map_join("\n", fn path ->
+      name = Path.relative_to(path, root)
+
+      case File.lstat(path, time: :posix) do
+        {:ok, %File.Stat{type: type, size: size, mtime: mtime}} ->
+          "  #{name}: #{type}, #{size} bytes, modified #{DateTime.to_iso8601(DateTime.from_unix!(mtime))}"
+
+        {:error, reason} ->
+          "  #{name}: #{:file.format_error(reason)}"
+      end
+    end)
   end
 
   # A model catalyst whose one need is a key, published under a storage
@@ -379,6 +461,8 @@ defmodule Aqua.ModelsTest do
         do: Application.put_env(:arca, :base_path, original),
         else: Application.delete_env(:arca, :base_path)
     end)
+
+    fills_end_first!()
 
     ctx = Sanctum.TestContext.local()
     ref = "catalyst:local.statusmodel"

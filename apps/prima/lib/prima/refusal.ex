@@ -387,20 +387,12 @@ defmodule Prima.Refusal do
   defp row({:invalid_argument, message}) when is_binary(message),
     do: {:invalid_argument, message}
 
-  # A part this release declares and does not run yet (a recipient's use
-  # of a shared login entry): refused before anything is read or written.
-  defp row({:not_built, what}) when is_atom(what),
-    do: {:invalid_argument, "This is not built yet."}
-
-  # A login need's mount (`Sanctum.Mount`): the program its entry names is
-  # not set up as a program with a kept home, or the bound entry is no
-  # login entry.
+  # A login need's mount (`Sanctum.Mount`): the program row its binding
+  # names is not set up as a program with a kept home.
   defp row({:program_unavailable, name}) when is_binary(name),
     do:
       {:setup_required,
        "The program #{name} is not set up with a kept home; set it up on Programs."}
-
-  defp row(:not_mountable), do: {:invalid_argument, "This entry is not a login entry."}
 
   # An OAuth grant or refresh for a provider this athanor holds no OAuth
   # client for (`Sanctum.ProviderCredentials`): the client is set on the
@@ -421,7 +413,8 @@ defmodule Prima.Refusal do
   defp row({:corrupt, :registry_credential}),
     do:
       {:corrupt,
-       "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
+       "The stored registry credential is damaged; sync your push tokens on the Registry " <>
+         "page to replace it."}
 
   defp row(:registry_unavailable),
     do: {:unavailable, "The registry could not be reached just now; try again shortly."}
@@ -432,8 +425,8 @@ defmodule Prima.Refusal do
   defp row(:registry_token_missing),
     do:
       {:unauthenticated,
-       "There is no valid push token for this namespace; run `cyfr registry sync`, then " <>
-         "push again."}
+       "There is no valid push token for this namespace; sync your push tokens on the " <>
+         "Registry page, then push again."}
 
   # The registry's own refusals of a signed request that CYFR passes on
   # (`Prima.RegistryRequest.refusals/0` names each one's code); the last
@@ -614,6 +607,19 @@ defmodule Prima.Refusal do
   defp row(:thread_archived),
     do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
 
+  # A schedule's line for Aqua runs as its person with nobody present, so
+  # only the person, signed in, makes or changes one
+  # (`Opus.Schedules.Provider`).
+  defp row(:aqua_line_by_person),
+    do: {:forbidden, "Only you, signed in, can give a schedule a line for Aqua or change it"}
+
+  # A schedule's update made against a definition the schedule no longer
+  # has (`Arca.CronSchedule.update/4`'s `definition:`).
+  defp row(:schedule_changed),
+    do:
+      {:conflict,
+       "This schedule changed since it was read; read it again and make the change there"}
+
   # A crew member whose brain cannot take a job yet (`Aqua.Crew.ready/2`):
   # the sentence says what the person does about it.
   defp row({:crew_unready, member, :no_brain}) when is_binary(member),
@@ -629,10 +635,15 @@ defmodule Prima.Refusal do
       {:setup_required,
        "#{member}'s brain has no key bound yet — connect one from its card on the AQUA page"}
 
-  defp row({:crew_unready, member, :not_signed_in}) when is_binary(member),
+  defp row({:crew_unready, member, :no_grant}) when is_binary(member),
     do:
       {:setup_required,
-       "#{member}'s program is not signed in — sign it in on the Programs page, then connect " <>
+       "#{member}'s brain needs only your grant — connect it from its card on the AQUA page"}
+
+  defp row({:crew_unready, member, :no_program}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s program is not set up — set it up on the Programs page, then connect " <>
          "it from its card on the AQUA page"}
 
   defp row({:crew_unready, member, :consent_stale}) when is_binary(member),
