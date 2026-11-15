@@ -931,6 +931,39 @@ defmodule Arca.CrewStorageTest do
       assert Enum.map(Threads.list(actor, kind: "daily"), & &1.id) == [room.id]
     end
 
+    test "a workspace thread is a room as a daily one is, and another athanor's room is none", %{
+      actor: actor,
+      room: room
+    } do
+      workspace =
+        %Arca.Schemas.Thread{}
+        |> Arca.Schemas.Thread.changeset(%{
+          id: Prima.UUID7.generate_id("thread"),
+          athanor_id: actor.athanor_id,
+          kind: "workspace",
+          workspace_state: "open",
+          title: "Book the trip",
+          created_by: "system"
+        })
+        |> Arca.Repo.insert!()
+
+      {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
+      assert %{kind: "crew", agent: "planner", parent_id: parent} = child
+      assert parent == workspace.id
+      assert {:error, :not_a_room} = Threads.crew_thread(actor, child.id, "builder")
+
+      elsewhere = Prima.Actor.in_athanor("ath_other")
+
+      for theirs <- [room.id, workspace.id] do
+        assert {:error, :not_found} = Threads.crew_thread(elsewhere, theirs, "planner")
+        assert Threads.children(elsewhere, theirs) == []
+      end
+
+      # The workspace's member thread goes with it.
+      assert {:ok, %{cancelled: []}} = Threads.delete(actor, workspace.id)
+      assert {:error, :not_found} = Threads.get(actor, child.id)
+    end
+
     test "forgetting the sessions of members forgets theirs alone, in the actor's athanor", %{
       actor: actor,
       room: room
