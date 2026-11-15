@@ -92,7 +92,7 @@ defmodule Opus.Programs.Terminal do
        deadline: nil,
        reader: nil,
        subscribers: %{},
-       tail: "",
+       tail: Output.new(""),
        idle: nil,
        standing: Process.send_after(self(), :standing, @standing_ms)
      }}
@@ -133,9 +133,7 @@ defmodule Opus.Programs.Terminal do
 
       state = state |> Map.put(:subscribers, subscribers) |> idle() |> changed()
 
-      {:reply,
-       {:ok,
-        %{tail: Output.new(state.tail), rows: state.rows, cols: state.cols, kept: state.kept}},
+      {:reply, {:ok, %{tail: state.tail, rows: state.rows, cols: state.cols, kept: state.kept}},
        state}
     else
       {:reply, {:error, :not_found}, state}
@@ -232,8 +230,8 @@ defmodule Opus.Programs.Terminal do
     {:stop, :normal, %{state | opening: nil}}
   end
 
-  def handle_info({:read, bytes, running}, state) do
-    state = output(state, bytes)
+  def handle_info({:read, %Output{} = output, running}, state) do
+    state = output(state, output)
 
     if running,
       do: {:noreply, state},
@@ -309,12 +307,16 @@ defmodule Opus.Programs.Terminal do
     :ok
   end
 
+  # What the program wrote is an `Output` from the moment it enters this
+  # process (the reader hands nothing else), in its state and in every
+  # message it handles, so no status, debug log or crash report has a
+  # byte of it to print. The words the program was started with are the
+  # person's, and are left out too.
   @impl true
   def format_status(status) do
     status
     |> Map.new(fn
-      {:state, %{} = state} -> {:state, %{state | tail: Output.new(state.tail), argv: :redacted}}
-      {:message, {:read, bytes, running}} -> {:message, {:read, Output.new(bytes), running}}
+      {:state, %{} = state} -> {:state, %{state | argv: :redacted}}
       other -> other
     end)
     |> Opus.Programs.StatusRedaction.format_status()
@@ -359,19 +361,19 @@ defmodule Opus.Programs.Terminal do
     %{state | reader: nil}
   end
 
-  defp output(state, ""), do: state
+  defp output(state, %Output{bytes: ""}), do: state
 
-  defp output(state, bytes) do
-    tail = state.tail <> bytes
+  defp output(state, %Output{bytes: bytes} = output) do
+    tail = state.tail.bytes <> bytes
     size = byte_size(tail)
 
     tail =
       if size > @tail_bytes, do: binary_part(tail, size - @tail_bytes, @tail_bytes), else: tail
 
     for pid <- Map.keys(state.subscribers),
-        do: send(pid, {Opus.Programs, state.id, {:bytes, Output.new(bytes)}})
+        do: send(pid, {Opus.Programs, state.id, {:bytes, output}})
 
-    idle(%{state | tail: tail})
+    idle(%{state | tail: Output.new(tail)})
   end
 
   defp unsubscribe(state, pid) do
@@ -456,9 +458,9 @@ defmodule Opus.Programs.Terminal do
   defp read(terminal, grant, session, after_seq, failures) do
     case Session.output(grant, session, after_seq, @recv_wait_ms) do
       {:ok, %{chunks: chunks, running: running}} ->
-        bytes = IO.iodata_to_binary(Enum.map(chunks, & &1.bytes))
+        output = Output.new(IO.iodata_to_binary(Enum.map(chunks, & &1.bytes)))
         last = if chunks == [], do: after_seq, else: List.last(chunks).seq
-        send(terminal, {:read, bytes, running})
+        send(terminal, {:read, output, running})
         if running, do: read(terminal, grant, session, last, 0)
 
       {:error, {:refused, _code, _boot} = refused} ->

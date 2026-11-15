@@ -217,7 +217,11 @@ defmodule Opus.Programs.TerminalTest do
          %{ctx: ctx, row: row, fake: fake} do
       {id, session} = start!(ctx, row)
       Scripted.write(fake, row.id, "Paste code here if prompted")
-      eventually(fn -> :sys.get_state(terminal(id)).tail != "" end, "the first write to be read")
+
+      eventually(
+        fn -> :sys.get_state(terminal(id)).tail.bytes != "" end,
+        "the first write to be read"
+      )
 
       assert {:ok, %{tail: %Opus.Programs.Output{bytes: tail}, rows: 24, cols: 80, kept: false}} =
                Programs.attach(ctx, id)
@@ -623,7 +627,7 @@ defmodule Opus.Programs.TerminalTest do
       {id, _session} = start!(ctx, row)
       secret = "sk-ant-oat01-terminal-secret"
       Scripted.write(fake, row.id, secret)
-      eventually(fn -> :sys.get_state(terminal(id)).tail != "" end, "the write to be read")
+      eventually(fn -> :sys.get_state(terminal(id)).tail.bytes != "" end, "the write to be read")
 
       status =
         inspect(:sys.get_status(terminal(id)), limit: :infinity, printable_limit: :infinity)
@@ -634,6 +638,66 @@ defmodule Opus.Programs.TerminalTest do
       assert {:ok, %{tail: tail}} = Programs.attach(ctx, id)
       assert inspect(tail) == "#Opus.Programs.Output<#{byte_size(secret) + 2} bytes>"
       assert inspect({Opus.Programs, id, {:bytes, tail}}) =~ "#Opus.Programs.Output<"
+    end
+
+    # The debug log keeps every message the process handled and the state
+    # after it; status wrapped only the state's tail and the message in
+    # hand, so earlier states and messages printed the program's bytes.
+    test "a debug log of its messages and states prints none of the output",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      pid = terminal(id)
+      :ok = :sys.log(pid, true)
+      secret = "sk-ant-oat01-logged-secret"
+
+      Scripted.write(fake, row.id, secret)
+      eventually(fn -> :sys.get_state(pid).tail.bytes =~ secret end, "the write to be read")
+      assert {:ok, _attached} = Programs.attach(ctx, id)
+      Scripted.write(fake, row.id, secret <> "-again")
+      assert_receive {Opus.Programs, ^id, {:bytes, _output}}, 2_000
+
+      {:ok, events} = :sys.log(pid, :get)
+      assert events != []
+      refute inspect(events, limit: :infinity, printable_limit: :infinity) =~ secret
+
+      status = inspect(:sys.get_status(pid), limit: :infinity, printable_limit: :infinity)
+      refute status =~ secret
+      assert status =~ "#Opus.Programs.Output<"
+    end
+
+    # A process that dies prints its state, its last message and its log;
+    # a callback that raises prints its arguments. Every one of them holds
+    # output only as an `Output`.
+    test "a crash of the process, or of a callback holding output, prints none of it",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      pid = terminal(id)
+      :ok = :sys.log(pid, true)
+      secret = "sk-ant-oat01-crashed-secret"
+      Scripted.write(fake, row.id, secret)
+      eventually(fn -> :sys.get_state(pid).tail.bytes =~ secret end, "the write to be read")
+      ref = Process.monitor(pid)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :error], fn ->
+          send(pid, {:EXIT, self(), :boom})
+          assert_receive {:DOWN, ^ref, :process, _pid, :boom}, 5_000
+          Process.sleep(200)
+        end)
+
+      assert log =~ "terminating"
+      refute log =~ secret
+
+      output = Opus.Programs.Output.new(secret)
+
+      {_kind, _reason, stack} =
+        try do
+          Opus.Programs.Terminal.handle_info({:read, output, true}, %{tail: output})
+        catch
+          kind, reason -> {kind, reason, __STACKTRACE__}
+        end
+
+      refute inspect(stack, limit: :infinity, printable_limit: :infinity) =~ secret
     end
   end
 end

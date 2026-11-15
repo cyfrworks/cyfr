@@ -291,7 +291,7 @@ defmodule Opus.ProgramsMountsTest do
 
       [{terminal, _}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
 
-      eventually(fn -> :sys.get_state(terminal).tail != "" end)
+      eventually(fn -> :sys.get_state(terminal).tail.bytes != "" end)
       status = inspect(:sys.get_status(terminal), limit: :infinity, printable_limit: :infinity)
 
       refute status =~ "sk-signin-canary"

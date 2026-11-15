@@ -653,7 +653,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     Scripted.write(fake, row.id, "Paste code here if prompted")
 
-    assert eventually(fn -> :sys.get_state(terminal_pid(session)).tail != "" end)
+    assert eventually(fn -> :sys.get_state(terminal_pid(session)).tail.bytes != "" end)
 
     # Attached once the frame stands: what was printed before, and the
     # frame's size given to the program.
