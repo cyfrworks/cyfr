@@ -230,14 +230,14 @@
       const t = state.threads.get(id) || {};
       const last = N.time(t.last_activity);
       const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
-      out.title = N.text(t.title) || (lit ? lit.label : 'Thread');
-      out.lines.push(t.kind === 'own' ? 'Your thread with Aqua' : Array.isArray(t.people) ? t.people.length + (t.people.length === 1 ? ' person' : ' people') : '', [last ? 'last activity ' + C.when(last, Date.now()) : '', unread ? unread + ' unread' : ''].filter(Boolean).join(' · '));
+      out.title = (t.kind === 'daily' ? C.day(t.title, Date.now()) : N.text(t.title)) || (lit ? lit.label : 'Thread');
+      out.lines.push(N.isAqua(t) ? 'Your thread with Aqua' : Array.isArray(t.people) ? t.people.length + (t.people.length === 1 ? ' person' : ' people') : '', [last ? 'last activity ' + C.when(last, Date.now()) : '', unread ? unread + ' unread' : ''].filter(Boolean).join(' · '));
       if (lit) out.lines.push('An approval waits for you in Aqua.');
-      // An approval opens where it waits, a shared thread the chat and an
-      // own thread Aqua's panel, each at the thread.
+      // An approval opens where it waits, a shared thread the chat and a
+      // thread of Aqua's its panel, each at the thread.
       if (lit) page('Open the approval', dest || 'aqua', true, destRef);
       else if (t.kind === 'shared') page('Open in chat', 'chat', true, id);
-      else if (t.kind === 'own') page('Open in Aqua', 'aqua', true, id);
+      else if (N.isAqua(t)) page('Open in Aqua', 'aqua', true, id);
       ask('threads');
     } else if (kind === 'schedule') {
       const x = state.schedules.get(id);

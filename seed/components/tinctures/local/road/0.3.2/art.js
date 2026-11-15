@@ -171,12 +171,12 @@
     roofTiles(g, x + 2, y + 1, 42, 4, 1);
     (st.threads || []).slice(0, 5).forEach((t, i) => {
       const bx = x + 4 + i * 8, by = y + 11;
-      const c = t.kind === 'own' ? P.aqua : P.ochre, cd = t.kind === 'own' ? P.aquaD : P.ochreS;
+      const c = t.kind === 'aqua' ? P.aqua : P.ochre, cd = t.kind === 'aqua' ? P.aquaD : P.ochreS;
       fill(g, bx, by, 7, 9, c); fill(g, bx, by, 7, 1, cd); fill(g, bx, by + 8, 7, 1, cd);
       fill(g, bx + 1, by + 3, 5, 1, P.ink);
       for (let u = 0; u < Math.min(t.unread, 3); u++) fill(g, bx + 1 + u * 2, by + 1 - u, 2, 3, P.white);
       if (t.waits_on_you) { fill(g, bx + 6, by - 6, 1, 7, P.iron); fill(g, bx + 7, by - 6, 3, 3, P.red); }
-      for (let p = 0; p < Math.min(t.people, 5); p++) fill(g, bx + 1 + p, by + 11, 1, 1, t.kind === 'own' ? P.aquaD : P.wood);
+      for (let p = 0; p < Math.min(t.people, 5); p++) fill(g, bx + 1 + p, by + 11, 1, 1, t.kind === 'aqua' ? P.aquaD : P.wood);
       fill(g, bx + 3, by + 9, 1, 10, P.woodD);
     });
   } };

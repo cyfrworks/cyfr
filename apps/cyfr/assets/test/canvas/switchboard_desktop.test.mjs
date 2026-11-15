@@ -806,12 +806,16 @@ describe("the switchboard desktop 0.2.0", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 0.3.1: a meter with no reading names its feed and how to bind one.
+// 0.3.2: a meter with no reading names its feed and how to bind one, and
+// the threads are Aqua's daily and workspace threads and shared ones.
 // ---------------------------------------------------------------------------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.1/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.2/", import.meta.url)
+// A daily thread's title: the ISO date `n` days from today, in UTC, the
+// board's time zone here.
+const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the switchboard 0.3.1", () => {
+describe("the switchboard 0.3.2", () => {
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the weather and VPN meters with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
@@ -825,5 +829,36 @@ describe("the switchboard 0.3.1", () => {
     assert.equal(b.$(".wx-at").textContent, "")
     assert.equal(b.$(".weather h2").textContent, "Lisbon")
     assert.equal(b.$(".vpn-at").textContent, sentence("vpn"))
+  })
+
+  test("today's daily thread is a line read Today that patches to Aqua, an earlier day's has none, a workspace thread patches to Aqua and a shared one to the chat", async () => {
+    const b = await started({version: V3}, {
+      "threads.changes": [
+        {kind: "daily", id: "th_today", title: day(0), people: ["Noor"], last_activity: ago(10), waits_on_you: false, unread: 2},
+        {kind: "daily", id: "th_before", title: day(-1), people: ["Noor"], last_activity: ago(20), waits_on_you: false, unread: 1},
+        {kind: "workspace", id: "th_work", title: "Ferry tracker", people: ["Noor"], last_activity: ago(30), waits_on_you: false, unread: 0},
+        {kind: "shared", id: "sth_fam", title: "Family", people: ["Ada", "Bob", "Cy"], last_activity: ago(40), waits_on_you: false, unread: 0}
+      ]
+    })
+    assert.deepEqual(lines(b, "threads"), ["Today", "Ferry tracker", "Family"])
+    assert.equal(line(b, "threads", "Today").querySelector(".meta-a").textContent, "2 unread")
+    assert.equal(line(b, "threads", "Ferry tracker").querySelector(".meta-a").textContent, "With Aqua")
+    for (const [name, dest] of [["Today", "aqua"], ["Ferry tracker", "aqua"], ["Family", "chat"]]) {
+      line(b, "threads", name).click()
+      b.pump()
+      assert.equal(b.$(`.pos[data-dest="${dest}"]`).getAttribute("data-target"), "primary", name)
+      b.$(`.pos[data-dest="${dest}"]`).click()
+      b.pump()
+    }
+    assert.deepEqual(b.shell.settings, [["aqua", "th_today"], ["aqua", "th_work"], ["chat", "sth_fam"]])
+    assert.deepEqual(b.shell.ask, [])
+  })
+
+  test("the newest daily thread's line reads Yesterday a day back, and its date further back", async () => {
+    const date = new Intl.DateTimeFormat("en-GB", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
+      const b = await started({version: V3}, {"threads.changes": [{kind: "daily", id: "th_1", title: day(n), people: ["Noor"], last_activity: ago(10), waits_on_you: false, unread: 0}]})
+      assert.deepEqual(lines(b, "threads"), [words])
+    }
   })
 })

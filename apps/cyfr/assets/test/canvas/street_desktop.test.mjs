@@ -627,11 +627,14 @@ describe("the street desktop 0.2.0", () => {
   })
 })
 
-describe("the street desktop 0.3.1", () => {
+// A daily thread's title: the ISO date `n` days from today, in UTC, the stand-in's person's zone.
+const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
+
+describe("the street desktop 0.3.2", () => {
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the sky and the ferry with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
-    const p = await street({version: "0.3.1"})
+    const p = await street({version: "0.3.2"})
     assert.ok(labelled(p, sentence("weather")), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
     assert.ok(labelled(p, sentence("vpn")))
     // Their plates say it where the sun and the ferry stand, and their board when tapped.
@@ -650,9 +653,48 @@ describe("the street desktop 0.3.1", () => {
   })
 
   test("on a phone the board's cards say the same of a feed with no reading", async () => {
-    const p = await street({version: "0.3.1", width: 390, height: 844})
+    const p = await street({version: "0.3.2", width: 390, height: 844})
     assert.equal(p.plain(), false)
     assert.match(p.board().textContent, /No reading from the weather feed yet ?To bind one, ask Aqua for a feed named weather/)
     assert.match(p.board().textContent, /No reading from the vpn feed yet ?To bind one, ask Aqua for a feed named vpn/)
+  })
+
+  test("today's daily thread is a house read Today that opens Aqua, an earlier day's stands nowhere, a workspace thread opens Aqua and a shared one the chat", async () => {
+    const p = await street({version: "0.3.2"})
+    picture(p.stream("runs.changes"), [])
+    picture(p.stream("threads.changes"), [
+      {kind: "daily", id: "th-today", title: day(0), people: ["Noor"], last_activity: at(-30), waits_on_you: false, unread: 2},
+      {kind: "daily", id: "th-before", title: day(-1), people: ["Noor"], last_activity: at(-40), waits_on_you: false, unread: 1},
+      {kind: "workspace", id: "th-work", title: "Ferry tracker", people: ["Noor"], last_activity: at(-50), waits_on_you: false, unread: 0},
+      {kind: "shared", id: "th-family", title: "Family", people: ["Noor", "Sam", "Ana"], last_activity: at(-60), waits_on_you: false, unread: 0},
+    ])
+    p.pump(5)
+    const houses = p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Thread "))
+    assert.deepEqual(houses.map((l) => l.split(", ").slice(0, 2).join(", ")).sort(), ["Thread Family, shared", "Thread Ferry tracker, with Aqua", "Thread Today, with Aqua"])
+    assert.match(hit(p, "Thread Today").textContent, /2 unread · with Aqua$/)
+    for (const [target, label, page] of [
+      ["Thread Today", "Open Aqua", ["aqua", "th-today"]],
+      ["Thread Ferry tracker", "Open Aqua", ["aqua", "th-work"]],
+      ["Thread Family", "Open the chat", ["chat", "th-family"]],
+    ]) {
+      tap(p, target)
+      await press(p, label)
+      assert.deepEqual(p.pages.at(-1), page, target)
+      button(p, "Close").dispatch("click")
+      p.pump()
+    }
+    tap(p, "Thread Today")
+    assert.match(p.board().textContent, /with Aqua/)
+    assert.doesNotMatch(p.board().textContent, /shared|1 person/)
+  })
+
+  test("the newest daily thread's house reads Yesterday a day back, and its date further back", async () => {
+    const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
+      const p = await street({version: "0.3.2"})
+      picture(p.stream("threads.changes"), [{kind: "daily", id: "th-1", title: day(n), people: ["Noor"], last_activity: at(-30), waits_on_you: false, unread: 0}])
+      p.pump(5)
+      assert.ok(labelled(p, `Thread ${words}, with Aqua`), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
+    }
   })
 })

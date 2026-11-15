@@ -613,11 +613,14 @@ describe("the night desktop 0.2.0", () => {
   })
 })
 
-// ---------- 0.3.1: a feed's sign with no reading names its feed ----------
+// ---------- 0.3.2: a feed's sign with no reading names its feed; Aqua's threads and shared ones ----------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.1/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.2/", import.meta.url)
+// A daily thread's title: the ISO date `n` days from today, in UTC, the
+// stand-in's person's zone.
+const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the night desktop 0.3.1", () => {
+describe("the night desktop 0.3.2", () => {
   test("a feed sign with no reading names its feed and says to ask Aqua for one, from the moment it opens", async () => {
     const p = night2({version: V3, widgets: {vpn: {on: true}}})
     await settle()
@@ -631,5 +634,42 @@ describe("the night desktop 0.3.1", () => {
     assert.ok(!says("weather"), "a reading replaces the words")
     assert.match(p.street(), /Lisbon/)
     assert.ok(says("vpn"), "a feed whose picture holds no reading still says so")
+  })
+
+  test("today's daily thread hangs as Today and opens Aqua, an earlier day's does not hang, a workspace thread opens Aqua and a shared one the chat", async () => {
+    const p = await lit({version: V3})
+    const now = Date.now()
+    picture(p.line("threads.changes"), [
+      {kind: "daily", id: "t_today", title: day(0), people: ["Noor"], last_activity: new Date(now - 60000).toISOString(), unread: 2},
+      {kind: "daily", id: "t_before", title: day(-1), people: ["Noor"], last_activity: new Date(now - 120000).toISOString(), unread: 1},
+      {kind: "workspace", id: "t_work", title: "Ferry tracker", people: ["Noor"], last_activity: new Date(now - 180000).toISOString(), unread: 0},
+      {kind: "shared", id: "t_family", title: "Family", people: ["a", "b", "c"], last_activity: new Date(now - 240000).toISOString(), unread: 0},
+    ])
+    p.draw()
+    const wall = p.html("wall")
+    assert.deepEqual([...wall.matchAll(/plaque--(\w+)" data-target="thread:(\w+)"/g)].map(([, look, id]) => [id, look]), [["t_today", "aqua"], ["t_work", "aqua"], ["t_family", "shared"]])
+    assert.match(wall, /<span class="tube">Today<\/span>/)
+    assert.ok(!wall.includes(day(0)) && !wall.includes(day(-1)), wall)
+    for (const [target, label, opened] of [
+      ["thread:t_today", "Open in Aqua", ["aqua", "t_today"]],
+      ["thread:t_work", "Open in Aqua", ["aqua", "t_work"]],
+      ["thread:t_family", "Open in chat", ["chat", "t_family"]],
+    ]) {
+      p.tap({"data-target": target})
+      press(p, label)
+      assert.deepEqual(p.pages.at(-1), opened, `${target} opened ${p.pages.at(-1)}`)
+    }
+    p.tap({"data-target": "thread:t_today"})
+    assert.match(p.plate.innerHTML, /<h2 id="plate-title">Today<\/h2><p class="meta">Your thread with Aqua<\/p><p class="meta">last activity [^<]* · 2 unread<\/p>/)
+  })
+
+  test("the newest daily thread hangs as Yesterday a day back, and as its date further back", async () => {
+    const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
+      const p = await lit({version: V3})
+      picture(p.line("threads.changes"), [{kind: "daily", id: "t1", title: day(n), people: ["Noor"], last_activity: AT, unread: 0}])
+      p.draw()
+      assert.ok(p.html("wall").includes(`<span class="tube">${words}</span>`), p.html("wall"))
+    }
   })
 })

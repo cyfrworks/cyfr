@@ -10,7 +10,7 @@
 (function () {
   'use strict';
 
-  const { state, PAUSE, RESUME, RETRY, text, isItem, componentRef, componentName } = window.SB;
+  const { state, PAUSE, RESUME, RETRY, text, isItem, componentRef, componentName, isAqua, threadTitle } = window.SB;
   const html = document.documentElement;
 
   /* ---------- time, in the person's own zone and words ---------- */
@@ -244,21 +244,21 @@
     }
     for (const t of threads.sort((a, b) => text(b.last_activity).localeCompare(text(a.last_activity)))) {
       const call = onThread.get(t.id) || null;
-      const own = t.kind === 'own';
+      const aqua = isAqua(t);
       const people = Array.isArray(t.people) ? t.people.length : 0;
-      const who = own ? 'Own' : people > 0 ? `${people} ${people === 1 ? 'person' : 'people'}` : 'Shared';
+      const who = aqua ? 'With Aqua' : people > 0 ? `${people} ${people === 1 ? 'person' : 'people'}` : 'Shared';
       const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       const waits = call || t.waits_on_you === true;
-      // A shared thread opens the chat at it; an own thread Aqua's panel at
-      // it, where its approvals wait.
-      const targets = own ? ['aqua'] : ['chat', 'aqua'];
+      // A shared thread opens the chat at it; a thread of Aqua's its panel
+      // at it, where its approvals wait.
+      const targets = aqua ? ['aqua'] : ['chat', 'aqua'];
       const jack = call && targets.includes(jackOf(call)) ? jackOf(call) : null;
       out.threads.push({
-        id: `thread:${t.id}`, widget: 'threads', kind: 'thread', name: text(t.title) || 'Untitled', call,
+        id: `thread:${t.id}`, widget: 'threads', kind: 'thread', name: threadTitle(t) || 'Untitled', call,
         lamp: waits ? 'amber' : 'off', strong: unread > 0,
         meta: call ? [KIND[call.kind], rel(call.since)] : waits ? ['Waits on you', rel(t.last_activity)]
           : unread ? [`${unread} unread`, rel(t.last_activity)] : [who, rel(t.last_activity)],
-        targets, primary: jack || (own ? 'aqua' : 'chat'), at: text(t.id) || null, aqua: own || jack === 'aqua' ? 'open' : 'ask',
+        targets, primary: jack || (aqua ? 'aqua' : 'chat'), at: text(t.id) || null, aqua: aqua || jack === 'aqua' ? 'open' : 'ask',
       });
     }
     for (const app of state.installed) {

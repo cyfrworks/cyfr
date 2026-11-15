@@ -209,9 +209,18 @@
       for (const part of dayF.formatToParts(new Date(t))) p[part.type] = Number(part.value);
       return Math.round(Date.UTC(p.year, p.month - 1, p.day) / 86400000);
     };
+    const dateF = opts({ timeZone: 'UTC', day: 'numeric', month: 'short' });
     return {
       hm: (t) => hmF.format(new Date(t)),
       long: (t) => longF.format(new Date(t)),
+      // A daily thread's title, its date: "Today" or "Yesterday" in the
+      // person's zone, else the date.
+      day(iso, now) {
+        const d = time(iso);
+        if (d === null) return text(iso);
+        const ago = dayNo(now) - Math.round(d / 86400000);
+        return ago === 0 ? 'Today' : ago === 1 ? 'Yesterday' : dateF.format(new Date(d));
+      },
       when(t, now) {
         const dd = dayNo(t) - dayNo(now);
         if (dd === 0) return hmF.format(new Date(t));
@@ -328,19 +337,32 @@
     return say ? '<span class="refused refused--' + L.state + '">' + esc(say) + '</span>' : '';
   }
 
+  // ---------- threads ----------
+  // A daily thread (one a day) and a workspace thread are Aqua's; a shared
+  // thread is people's.
+  const isAqua = (t) => t.kind === 'daily' || t.kind === 'workspace';
+  // The threads listed: the newest daily thread stands for Aqua's days, the
+  // earlier ones a step back in Aqua's panel.
+  function listedThreads(s) {
+    const all = [...s.threads.values()];
+    const newest = all.reduce((n, t) => (t.kind === 'daily' && (!n || text(t.title) > text(n.title)) ? t : n), null);
+    return all.filter((t) => t.kind !== 'daily' || t === newest);
+  }
+  const threadTitle = (t, C, now) => (t.kind === 'daily' ? C.day(t.title, now) : text(t.title)) || 'Untitled';
+
   // ---------- parts ----------
   function renderThreads(s, lit, ui, C) {
-    const list = [...s.threads.values()].sort((a, b) => (time(b.last_activity) || 0) - (time(a.last_activity) || 0)).slice(0, 6);
+    const list = listedThreads(s).sort((a, b) => (time(b.last_activity) || 0) - (time(a.last_activity) || 0)).slice(0, 6);
     const rows = list.map((t, i) => {
       const L = lit.get('thread:' + text(t.id));
       const people = Array.isArray(t.people) ? t.people.length : 0;
-      const who = t.kind === 'own' ? 'with Aqua' : people === 2 ? 'pair' : people + (people === 1 ? ' person' : ' people');
+      const who = isAqua(t) ? 'with Aqua' : people === 2 ? 'pair' : people + (people === 1 ? ' person' : ' people');
       const last = time(t.last_activity);
       const unread = Number.isInteger(t.unread) && t.unread > 0 ? t.unread : 0;
       const news = unread ? '<span class="news">' + '<i></i>'.repeat(Math.min(unread, 3)) + unread + ' new</span>' : '';
       return '<li class="hang" style="--tilt:' + ([-1.2, 0.9, -0.6, 1.3, -0.9, 0.7][i % 6]) + 'deg">' +
-        '<button class="sign plaque plaque--' + (t.kind === 'own' ? 'own' : 'shared') + '" data-target="thread:' + esc(t.id) + '"' + lightAttrs(L) + '>' +
-        '<span class="plaque__title">' + tube(text(t.title) || 'Untitled', L && L.light) + '</span>' +
+        '<button class="sign plaque plaque--' + (isAqua(t) ? 'aqua' : 'shared') + '" data-target="thread:' + esc(t.id) + '"' + lightAttrs(L) + '>' +
+        '<span class="plaque__title">' + tube(threadTitle(t, C, ui.now), L && L.light) + '</span>' +
         '<span class="meta">' + esc(who) + (last ? ' · ' + esc(C.when(last, ui.now)) : '') + news + (t.waits_on_you && !L ? ' · waits on you' : '') + tag(L) + '</span></button></li>';
     }).join('');
     const empty = !list.length && !isDark(s, PARTS.threads.streams) ? '<li class="hang"><span class="sign plaque plaque--shared plaque--empty"><span class="plaque__title tube">No threads yet</span><span class="meta">a chat with Aqua hangs here</span></span></li>' : '';
@@ -596,5 +618,5 @@
     return { header: renderHeader(s, list, ui, C), wall: zone('wall'), level: zone('level'), puddle: renderPuddle(s, list, ui, C), list, lit, C };
   }
 
-  root.Night = { PARTS, ORDER, KINDS, HOLD, OPEN, EMPTY, hear, opening, refused, isOn, order, flipDoc, moveDoc, waiting, litTable, renderStreet, renderFusebox, clock, compName, versionless, time, text, words, isItem, esc, weatherOf, feedOf, noReading, sysOf, storage, systemLines, chase };
+  root.Night = { PARTS, ORDER, KINDS, HOLD, OPEN, EMPTY, hear, opening, refused, isOn, order, flipDoc, moveDoc, waiting, litTable, renderStreet, renderFusebox, clock, isAqua, compName, versionless, time, text, words, isItem, esc, weatherOf, feedOf, noReading, sysOf, storage, systemLines, chase };
 })(this);

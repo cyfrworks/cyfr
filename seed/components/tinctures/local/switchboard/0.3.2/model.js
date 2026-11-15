@@ -304,6 +304,32 @@
       .sort((a, b) => startOf(b).localeCompare(startOf(a)) || (b.revision || 0) - (a.revision || 0))
       .map((h) => h.item);
   }
+  // A daily thread (one a day) and a workspace thread are Aqua's; a shared
+  // thread is people's.
+  const isAqua = (t) => t.kind === 'daily' || t.kind === 'workspace';
+  // The threads listed: the newest daily thread stands for Aqua's days, the
+  // earlier ones a step back in Aqua's panel.
+  function threads() {
+    const all = items('threads.changes');
+    const newest = all.reduce((n, t) => (t.kind === 'daily' && (!n || text(t.title) > text(n.title)) ? t : n), null);
+    return all.filter((t) => t.kind !== 'daily' || t === newest);
+  }
+  // A thread's title; a daily thread's is its date: "Today" or "Yesterday"
+  // in the person's zone, else the date.
+  function threadTitle(t) {
+    const title = text(t.title);
+    const day = t.kind === 'daily' ? Date.parse(title) : NaN;
+    if (Number.isNaN(day)) return title;
+    const { locale, time_zone: zone } = state.appearance;
+    try {
+      const p = {};
+      for (const x of new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date())) p[x.type] = +x.value;
+      const ago = Math.round((Date.UTC(p.year, p.month - 1, p.day) - day) / 864e5);
+      if (ago === 0) return 'Today';
+      if (ago === 1) return 'Yesterday';
+      return new Intl.DateTimeFormat(locale, { timeZone: 'UTC', day: 'numeric', month: 'short' }).format(day);
+    } catch (_) { return title; }
+  }
   // A feed's latest result: the one heard last on its subscription.
   function feed(name) {
     let best = null;
@@ -323,13 +349,13 @@
     // The calls a live removal cleared since the last look, once.
     takeCleared() { const out = [...cleared]; cleared.clear(); return out; },
     attention: () => items('attention.changes'),
-    threads: () => items('threads.changes'),
+    threads,
     schedules: () => items('schedules.changes'),
     vault: () => items('vault.changes'),
     activity: () => items('activity.changes'),
     files: () => items('files.changes'),
     system: () => items('system.changes')[0] || null,
     runs, feed, components,
-    componentRef, componentName, text, isItem,
+    componentRef, componentName, text, isItem, isAqua, threadTitle,
   };
 })();

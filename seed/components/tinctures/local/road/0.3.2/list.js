@@ -47,7 +47,7 @@ window.RoadList = (function () {
         ...(r.kind === 'failed' && R.retryable(r.eid) ? [retry(r.eid)] : [])]), 'Nothing has fired lately.'),
       section('Runs', 'schedules', runs.slice(0, 10).map((r) => [r.name + ' ' + ({ failed: 'failed', completed: 'ran', started: 'is running' }[r.kind] || 'was cancelled') + ', started ' + at(r.started) + (r.ended != null ? ', ended ' + at(r.ended) : '') + cause(r.cause), r.kind === 'failed',
         ...(R.retryable(r.id) ? [retry(r.id)] : [])]), 'No runs lately.'),
-      section('Threads', 'threads', v(S.threads).map((t) => [t.title + (t.waits ? ', waits on you' : '') + (t.unread ? ', ' + t.unread + ' unread' : '') + ', ' + at(t.last), t.waits]), 'No threads.'),
+      section('Threads', 'threads', R.threads().map((t) => [t.title + (t.waits ? ', waits on you' : '') + (t.unread ? ', ' + t.unread + ' unread' : '') + ', ' + at(t.last), t.waits]), 'No threads.'),
       section('Crew at work', 'activity', v(S.activity).map((j) => [j.member + (j.title ? ': ' + j.title : '') + ' since ' + at(j.since) + (j.status ? ' (' + j.status + ')' : ''), false]), 'Nobody is at work.'),
       section('Apps', 'components', S.installed.map((a) => [a.name + (a.open ? ' (open)' : '') + ((R.component(a.ref) || {}).update ? ', update ready' : ''), false, button('Open', () => R.open(a.ref))]), 'No apps installed.'),
       section('Vault', 'vault', v(S.vault).map((e) => [e.name + ': ' + (e.fine ? 'fine' : 'needs re-authorisation'), !e.fine]), 'No vault entries.'),

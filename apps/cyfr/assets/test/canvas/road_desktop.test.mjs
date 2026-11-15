@@ -717,13 +717,16 @@ describe("the road desktop 0.2.0 draws", () => {
   })
 })
 
-// ---- 0.3.1 -------------------------------------------------------------------------------------
+// ---- 0.3.2 -------------------------------------------------------------------------------------
 
-describe("the road desktop 0.3.1", () => {
+// A daily thread's title: the ISO date `n` days from today, in UTC, the stand-in's person's zone.
+const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
+
+describe("the road desktop 0.3.2", () => {
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the windmill and the tram line with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
-    const p = page({version: "0.3.1"})
+    const p = page({version: "0.3.2"})
     await settle()
     p.pump()
     assert.equal(label(p, "Windmill"), `Windmill: ${sentence("weather")}`)
@@ -738,5 +741,38 @@ describe("the road desktop 0.3.1", () => {
     assert.ok(label(p, "Weather in Lisbon"), labels(p).join(" | "))
     assert.equal(label(p, "Windmill"), "")
     assert.equal(label(p, "Tram line"), `Tram line: ${sentence("vpn")}`)
+  })
+
+  test("today's daily thread is a post box read Today that opens Aqua, an earlier day's is none, a workspace thread opens Aqua and a shared one the chat", async () => {
+    const p = page({version: "0.3.2"})
+    await settle()
+    picture(p, "threads.changes", [
+      {kind: "daily", id: "t_today", title: day(0), people: ["Noor"], last_activity: iso(-5), waits_on_you: false, unread: 2},
+      {kind: "daily", id: "t_before", title: day(-1), people: ["Noor"], last_activity: iso(-6), waits_on_you: false, unread: 1},
+      {kind: "workspace", id: "t_work", title: "Ferry tracker", people: ["Noor"], last_activity: iso(-7), waits_on_you: false, unread: 0},
+      {kind: "shared", id: "t_family", title: "Family", people: ["a", "b", "c"], last_activity: iso(-8), waits_on_you: false, unread: 0},
+    ])
+    assert.equal(label(p, "Post boxes"), "Post boxes: 3 threads, 0 waiting on you, 2 unread")
+    tap(p, "Post boxes")
+    assert.ok(!labels(p).some((l) => l.includes(day(0)) || l.includes(day(-1))), labels(p).join(" | "))
+    tap(p, "Today, 2 unread, with Aqua")
+    tap(p, "Ferry tracker, with Aqua")
+    tap(p, "Family, 3 people")
+    assert.deepEqual(p.calls.settings, [["aqua", "t_today"], ["aqua", "t_work"], ["chat", "t_family"]])
+    // The plain page lists the same.
+    p.win.RoadList.show()
+    const threads = p.ids.lists.children.filter((c) => c.tagName === "SECTION").find((sec) => sec.children[0].textContent === "Threads")
+    assert.deepEqual(threads.children[1].children.map((li) => li.textContent.split(",")[0]), ["Today", "Ferry tracker", "Family"])
+  })
+
+  test("the newest daily thread's post box reads Yesterday a day back, and its date further back", async () => {
+    const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
+      const p = page({version: "0.3.2"})
+      await settle()
+      picture(p, "threads.changes", [{kind: "daily", id: "t1", title: day(n), people: ["Noor"], last_activity: iso(-5), waits_on_you: false, unread: 0}])
+      tap(p, "Post boxes")
+      assert.ok(label(p, `${words}, with Aqua`), labels(p).join(" | "))
+    }
   })
 })
