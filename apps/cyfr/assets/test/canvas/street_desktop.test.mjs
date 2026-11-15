@@ -246,7 +246,7 @@ const hit = (p, start) => {
 }
 const labelled = (p, start) => p.hits().some((h) => (h.getAttribute("aria-label") || "").startsWith(start))
 const tap = (p, start) => (hit(p, start).dispatch("click"), p.pump())
-const button = (p, label) => p.board().querySelectorAll("button").find((b) => b.textContent === label)
+const button = (p, label) => p.board().querySelectorAll("button").find((b) => (label instanceof RegExp ? label.test(b.textContent) : b.textContent === label))
 const press = async (p, label) => {
   const b = button(p, label)
   assert.ok(b, `no "${label}" on the board: ${p.board().textContent}`)
@@ -463,7 +463,7 @@ describe("the street desktop 0.2.0", () => {
     assert.equal(p.opened.filter((s) => s.name === "files.changes").length, 2)
   })
 
-  test("an approval opens AQUA, a shared thread the chat and an own thread AQUA, and each page destination its page", async () => {
+  test("an approval opens Aqua, a shared thread the chat and an own thread Aqua, and each page destination its page", async () => {
     const p = await street()
     picture(p.stream("runs.changes"), [])
     picture(p.stream("attention.changes"), [
@@ -477,13 +477,14 @@ describe("the street desktop 0.2.0", () => {
       {kind: "own", id: "th-3", title: "Tax notes", people: ["Noor"], last_activity: at(-130), waits_on_you: false, unread: null},
     ])
     p.pump()
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
     for (const [target, label, page] of [
-      ["Waiting on you: an approval", "Open AQUA", ["aqua", "th-1"]],
+      ["Waiting on you: an approval", /^Open Aqua$/i, ["aqua", "th-1"]],
       ["Waiting on you: a failed run", "Open runs", ["executions", "ex-9"]],
       ["Waiting on you: a failed schedule", "Open schedules", ["schedules", "sch-1"]],
       ["Waiting on you: a file offered", "Open files", ["files", "of-1"]],
       ["Thread Family", "Open the chat", ["chat", "th-2"]],
-      ["Thread Tax notes", "Open AQUA", ["aqua", "th-3"]],
+      ["Thread Tax notes", /^Open Aqua$/i, ["aqua", "th-3"]],
     ]) {
       tap(p, target)
       await press(p, label)
@@ -494,7 +495,7 @@ describe("the street desktop 0.2.0", () => {
     assert.equal(button(p, "Retry"), undefined)
   })
 
-  test("a waiting item opens its destination at its ref, and a thread house opens AQUA or the chat at its thread", async () => {
+  test("a waiting item opens its destination at its ref, and a thread house opens Aqua or the chat at its thread", async () => {
     const p = await street()
     picture(p.stream("runs.changes"), [])
     picture(p.stream("attention.changes"), [
@@ -507,12 +508,13 @@ describe("the street desktop 0.2.0", () => {
       {kind: "own", id: "th-3", title: "Tax notes", people: ["Noor"], last_activity: at(-130), waits_on_you: false, unread: null},
     ])
     p.pump()
+    // The 0.2.0 desktop cannot change and wrote the name in capitals, so it is matched without regard to case.
     for (const [target, label] of [
-      ["Waiting on you: an approval, Approve in Trip planning", "Open AQUA"],
-      ["Waiting on you: an approval, Approve in Book club", "Open AQUA"],
+      ["Waiting on you: an approval, Approve in Trip planning", /^Open Aqua$/i],
+      ["Waiting on you: an approval, Approve in Book club", /^Open Aqua$/i],
       ["Waiting on you: a failed run", "Open runs"],
       ["Thread Family", "Open the chat"],
-      ["Thread Tax notes", "Open AQUA"],
+      ["Thread Tax notes", /^Open Aqua$/i],
     ]) {
       tap(p, target)
       await press(p, label)
@@ -625,20 +627,20 @@ describe("the street desktop 0.2.0", () => {
   })
 })
 
-describe("the street desktop 0.3.0", () => {
-  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`
+describe("the street desktop 0.3.1", () => {
+  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
-  test("the sky and the ferry with no reading name their feed and say to ask AQUA for one, until a reading comes", async () => {
-    const p = await street({version: "0.3.0"})
+  test("the sky and the ferry with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
+    const p = await street({version: "0.3.1"})
     assert.ok(labelled(p, sentence("weather")), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
     assert.ok(labelled(p, sentence("vpn")))
     // Their plates say it where the sun and the ferry stand, and their board when tapped.
     const plates = p.hits().map((h) => h.textContent).join(" | ")
-    assert.match(plates, /No reading from the weather feed yet ?To bind one, ask AQUA for a feed named weather/)
-    assert.match(plates, /No reading from the vpn feed yet ?To bind one, ask AQUA for a feed named vpn/)
+    assert.match(plates, /No reading from the weather feed yet ?To bind one, ask Aqua for a feed named weather/)
+    assert.match(plates, /No reading from the vpn feed yet ?To bind one, ask Aqua for a feed named vpn/)
     tap(p, sentence("vpn"))
     assert.match(p.board().textContent, /No reading from the vpn feed yet/)
-    assert.match(p.board().textContent, /To bind one, ask AQUA for a feed named vpn/)
+    assert.match(p.board().textContent, /To bind one, ask Aqua for a feed named vpn/)
 
     picture(p.stream("feed:weather"), [weather])
     p.pump()
@@ -648,9 +650,9 @@ describe("the street desktop 0.3.0", () => {
   })
 
   test("on a phone the board's cards say the same of a feed with no reading", async () => {
-    const p = await street({version: "0.3.0", width: 390, height: 844})
+    const p = await street({version: "0.3.1", width: 390, height: 844})
     assert.equal(p.plain(), false)
-    assert.match(p.board().textContent, /No reading from the weather feed yet ?To bind one, ask AQUA for a feed named weather/)
-    assert.match(p.board().textContent, /No reading from the vpn feed yet ?To bind one, ask AQUA for a feed named vpn/)
+    assert.match(p.board().textContent, /No reading from the weather feed yet ?To bind one, ask Aqua for a feed named weather/)
+    assert.match(p.board().textContent, /No reading from the vpn feed yet ?To bind one, ask Aqua for a feed named vpn/)
   })
 })

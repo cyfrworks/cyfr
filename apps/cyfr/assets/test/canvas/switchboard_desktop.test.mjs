@@ -559,7 +559,7 @@ describe("the switchboard desktop 0.2.0", () => {
     assert.doesNotMatch(gone.readout(), /Retry/)
   })
 
-  test("an approval patched through opens AQUA's panel, and a shared thread the chat", async () => {
+  test("an approval patched through opens Aqua's panel, and a shared thread the chat", async () => {
     const b = await started({}, {
       "threads.changes": [
         {kind: "own", id: "th_trip", title: "Trip planning", people: ["Noor"], last_activity: ago(60), waits_on_you: true, unread: null},
@@ -622,7 +622,7 @@ describe("the switchboard desktop 0.2.0", () => {
     patch(b, line(b, "threads", "Notes"), "aqua")
     patch(b, line(b, "components", "digest"), "settings")
     assert.deepEqual(b.shell.settings, [["aqua", "th_trip"], ["chat", "sth_fam"], ["aqua", "th_notes"], ["executions", "ex_digest"]])
-    // The AQUA jack of a shared thread still asks AQUA about the part.
+    // The Aqua jack of a shared thread still asks Aqua about the part.
     patch(b, line(b, "threads", "Family"), "aqua")
     assert.deepEqual(b.shell.ask, ["threads"])
     assert.equal(b.shell.settings.length, 4)
@@ -806,15 +806,15 @@ describe("the switchboard desktop 0.2.0", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 0.3.0: a meter with no reading names its feed and how to bind one.
+// 0.3.1: a meter with no reading names its feed and how to bind one.
 // ---------------------------------------------------------------------------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.0/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.1/", import.meta.url)
 
-describe("the switchboard 0.3.0", () => {
-  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`
+describe("the switchboard 0.3.1", () => {
+  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
-  test("the weather and VPN meters with no reading name their feed and say to ask AQUA for one, until a reading comes", async () => {
+  test("the weather and VPN meters with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
     const b = board({version: V3})
     await settle()
     b.pump()

@@ -3,9 +3,9 @@
 
 defmodule PrismWeb.ThreadPaneLive do
   @moduledoc """
-  One thread of the person's own AQUA on screen: the tape, the composer,
+  One thread of the person's own Aqua on screen: the tape, the composer,
   the approval cards and the uploads — a window onto `Aqua.Runner` for
-  one thread, under one focused context. Its host is AQUA's panel
+  one thread, under one focused context. Its host is Aqua's panel
   (`PrismWeb.AquaPanelLive`), which mounts one pane (`id:
   "aqua-panel-pane"`) focused on the person's own athanor.
 
@@ -39,7 +39,7 @@ defmodule PrismWeb.ThreadPaneLive do
   the turn ended when it has no such message to offer.
 
   Every line is named by who sent it (`sent_by`): a person as the console
-  names them, the soul as AQUA, a crew member by its name. A request to a
+  names them, the soul as Aqua, a crew member by its name. A request to a
   crew member says who asked whom and whether it is answered, with the
   replies to it beneath it; a reply whose request is not on screen stands
   on its own, and a notice says the member needs the person. A room lists
@@ -52,10 +52,10 @@ defmodule PrismWeb.ThreadPaneLive do
   shows one (`PrismWeb.RoomFeed`, the session's `room_feed` and `room`):
   ticked, its box reads that thread into each send as the turn's context
   (`Aqua.RoomExcerpt` — under the person's own seat, never kept); it
-  starts unticked, since AQUA reads a shared thread itself when a
+  starts unticked, since Aqua reads a shared thread itself when a
   question needs it (`threads.read`). It offers to paste a line onto the
   thread (`thread.aloud`). Until the person dismisses it, a line says
-  that what AQUA reads in a shared thread, other people's words
+  that what Aqua reads in a shared thread, other people's words
   included, goes to their model provider; dismissing it writes
   `users.prefs`' `aqua_reads_threads_seen`, so it is said once.
 
@@ -64,7 +64,7 @@ defmodule PrismWeb.ThreadPaneLive do
   (`<dom>-links`), never followed, so the page the person is reading
   stays; every other intent is pushed as `aqua:intents` naming this pane.
 
-  The panel's own header names AQUA and the thread, so the pane draws no
+  The panel's own header names Aqua and the thread, so the pane draws no
   name or thread label of its own, and its model override, soul or crew
   member and token counts sit in a menu (`<dom>-menu`, which the panel's
   header opens). Its status line appears only while it has something to
@@ -874,7 +874,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # A turn may start for a message queued earlier — the sender's draft of
   # a newer message stays where it is (`send_message/3` clears on send).
   defp handle_thread_event(socket, :turn_starting, user_id) do
-    socket = assign(socket, :announcement, "AQUA is thinking.")
+    socket = assign(socket, :announcement, "Aqua is thinking.")
 
     socket
     |> assign(:turn_replied, false)
@@ -902,7 +902,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, :turn_paused, %{reason: reason}) do
     socket =
       if reason == :uncertain,
-        do: assign(socket, :announcement, "AQUA stopped: a tool's outcome is unknown."),
+        do: assign(socket, :announcement, "Aqua stopped: a tool's outcome is unknown."),
         else: socket
 
     socket
@@ -916,7 +916,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp handle_thread_event(socket, :turn_finished, _data) do
     said =
-      if socket.assigns.turn_replied, do: "AQUA replied.", else: "AQUA stopped without a reply."
+      if socket.assigns.turn_replied, do: "Aqua replied.", else: "Aqua stopped without a reply."
 
     socket = assign(socket, :announcement, said)
 
@@ -1226,7 +1226,7 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(socket, :error, "Only this thread's crew member can be addressed here.")
 
       :no_agent ->
-        put_flash(socket, :error, "This athanor has no assistant — see AQUA.")
+        put_flash(socket, :error, "This athanor has no assistant — see Aqua.")
 
       :storage_full ->
         put_flash(socket, :error, "This athanor's storage is full.")
@@ -1406,7 +1406,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp tell_host(_socket, _message), do: :ok
 
-  # Whether this athanor's AQUA can answer at all: a soul, and a model
+  # Whether this athanor's Aqua can answer at all: a soul, and a model
   # with a key behind it. A fresh furnace has neither, and the pane's empty
   # state is where someone finds that out. A model whose consent
   # exists but is damaged, could not be read, or no longer covers what the
@@ -1424,9 +1424,9 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # The athanor's soul with its model, read through the `aqua` tool's list
-  # with detail, as the AQUA page's agents panel reads it: the roster names
+  # with detail, as the Aqua page's agents panel reads it: the roster names
   # who can be addressed and carries no model, so a model's status read
-  # from it would always be none. Whether AQUA can answer is the soul's to
+  # from it would always be none. Whether Aqua can answer is the soul's to
   # say, so the crew is left out. The soul is put in the roster's
   # string-keyed projection, which `Aqua.model_status/2` reads. A list
   # that cannot be read is `:unread`, never no agents.
@@ -1456,11 +1456,11 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # What to call the athanor: the person's own is "your AQUA" — the one
+  # What to call the athanor: the person's own is "your Aqua" — the one
   # their row names as theirs.
   defp athanor_label(%{} = athanor, ctx) do
     if PrismWeb.Athanors.own?(athanor, ctx),
-      do: "your AQUA",
+      do: "your Aqua",
       else: PrismWeb.Athanors.label(athanor, ctx)
   end
 
@@ -1481,7 +1481,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp current_assistant(%{} = assistant, _roster), do: assistant
 
   defp assistant_label(%{} = o), do: o["title"] || o["name"]
-  defp assistant_label(_), do: "your AQUA"
+  defp assistant_label(_), do: "your Aqua"
 
   # Every message addresses the agent, so the placeholder names it.
   defp composer_placeholder({_handle, label}),
@@ -1582,7 +1582,7 @@ defmodule PrismWeb.ThreadPaneLive do
           <span
             :if={@queued > 0}
             class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-300"
-            title="Messages waiting for AQUA"
+            title="Messages waiting for Aqua"
           >
             {@queued} queued
           </span>
@@ -1667,7 +1667,7 @@ defmodule PrismWeb.ThreadPaneLive do
         {Phoenix.Flash.get(@flash, kind)}
       </div>
 
-      <%!-- What a screen reader hears: a coherent update — AQUA started, AQUA
+      <%!-- What a screen reader hears: a coherent update — Aqua started, Aqua
             replied — never the stream, which would announce every word. --%>
       <div id={@dom <> "-announcer"} class="sr-only" aria-live="polite" aria-atomic="true">
         {@announcement}
@@ -1741,11 +1741,11 @@ defmodule PrismWeb.ThreadPaneLive do
                   data-test="model-connect"
                   class="text-blue-400 hover:underline"
                 >
-                  Connect one on your AQUA page.
+                  Connect one on your Aqua page.
                 </.link>
               <% @model_ready == :needs_grant -> %>
                 <%!-- A model with nothing left to set up waits on the
-                     person's grant alone, given in AQUA's setup. --%>
+                     person's grant alone, given in Aqua's setup. --%>
                 <span data-test="model-grant">
                   {athanor_label(@athanor, @context)}'s model needs only your grant.
                 </span>
@@ -1753,19 +1753,19 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
                   class="text-blue-400 hover:underline"
                 >
-                  Grant it on your AQUA page.
+                  Grant it on your Aqua page.
                 </.link>
               <% @model_ready == :consent_stale -> %>
                 <%!-- The soul's shape moved since its consent: consenting
                      again is all it needs, never a model to connect. --%>
                 <span data-test="model-consent">
-                  What AQUA runs on changed since it was consented.
+                  What Aqua runs on changed since it was consented.
                 </span>
                 <.link
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
                   class="text-blue-400 hover:underline"
                 >
-                  Consent again on your AQUA page.
+                  Consent again on your Aqua page.
                 </.link>
               <% @model_ready == :consent_damaged -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,
@@ -1865,15 +1865,24 @@ defmodule PrismWeb.ThreadPaneLive do
                     role={role_of(msg)}
                     content={msg.content}
                     author={"#{speaker(msg, @members, @context)} asked #{msg.addressee} · #{msg.status}"}
+                    attachments={Threads.payload(msg)["attachments"] || []}
+                    attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
+                    links={Threads.payload(msg)["links"] || []}
                   />
                   <.reply
                     :for={reply <- msg.replies}
                     id={@dom <> "-reply-" <> reply.id}
                     dom={@dom}
                     reply={reply}
+                    athanor_route={@athanor_route}
                   />
                 <% crew(msg) == :reply -> %>
-                  <.reply id={@dom <> "-reply-" <> msg.id} dom={@dom} reply={msg} />
+                  <.reply
+                    id={@dom <> "-reply-" <> msg.id}
+                    dom={@dom}
+                    reply={msg}
+                    athanor_route={@athanor_route}
+                  />
                 <% crew(msg) == :decided_notice -> %>
                 <% crew(msg) == :notice -> %>
                   <div class="flex flex-col items-start">
@@ -1919,6 +1928,7 @@ defmodule PrismWeb.ThreadPaneLive do
                       author={author_label(msg, @members, @context)}
                       attachments={Threads.payload(msg)["attachments"] || []}
                       attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
+                      links={Threads.payload(msg)["links"] || []}
                     />
                     <%!-- A line you may paste onto the shared thread beside
                         the pane: yours, or your assistant's in your own
@@ -2036,7 +2046,7 @@ defmodule PrismWeb.ThreadPaneLive do
         class="flex flex-col gap-1 border-t border-gray-800 px-3 py-1.5 text-xs text-gray-500"
       >
         <div :for={to <- @links} class="flex min-w-0 items-center gap-2">
-          <span class="shrink-0">AQUA points to</span>
+          <span class="shrink-0">Aqua points to</span>
           <.link navigate={to} class="truncate leading-6 text-blue-400 hover:text-blue-300">
             {to}
           </.link>
@@ -2192,11 +2202,29 @@ defmodule PrismWeb.ThreadPaneLive do
   attr :author, :any, default: nil
   attr :attachments, :list, default: []
   attr :attachment_href, :any, default: nil
+  attr :links, :list, default: []
 
+  # A post draws what it holds, whoever wrote it: a picture in place, which
+  # opens large over the page; any other file a chip that downloads; a link
+  # a link, never fetched.
   defp message_bubble(assigns) do
     # The model's surrounding whitespace would inflate the bubble.
     display = String.trim(assigns.content || "")
-    assigns = assign(assigns, :display_content, display)
+
+    {pictures, files} =
+      assigns.attachments
+      |> Enum.with_index()
+      |> Enum.split_with(fn {a, _} -> picture?(a, assigns.attachment_href) end)
+
+    pictures = for {a, n} <- pictures, do: {a, "#{assigns.id}-picture-#{n}"}
+
+    assigns =
+      assign(assigns,
+        display_content: display,
+        pictures: pictures,
+        files: Enum.map(files, &elem(&1, 0)),
+        shown_links: shown_links(assigns.links)
+      )
 
     ~H"""
     <div class={["flex flex-col", role_align(@role)]}>
@@ -2217,8 +2245,52 @@ defmodule PrismWeb.ThreadPaneLive do
         <% else %>
           <span class="whitespace-pre-wrap">{@display_content}</span>
         <% end %>
-        <div :if={@attachments != []} class="mt-1 flex flex-wrap gap-1">
-          <%= for a <- @attachments do %>
+        <div :if={@pictures != []} class="mt-1 flex flex-wrap gap-1">
+          <%= for {a, large} <- @pictures do %>
+            <button
+              type="button"
+              phx-click={open_large(large)}
+              aria-label={"Open #{a["filename"]} large"}
+              class="block min-h-6 rounded hover:opacity-90"
+            >
+              <img
+                src={@attachment_href.(a["stored_name"])}
+                alt={a["filename"]}
+                loading="lazy"
+                class="max-h-48 max-w-full rounded"
+              />
+            </button>
+            <div id={large} class="hidden">
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label={a["filename"]}
+                phx-click={close_large(large)}
+                class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-black/85 p-4"
+              >
+                <img
+                  src={@attachment_href.(a["stored_name"])}
+                  alt={a["filename"]}
+                  class="max-h-[90%] max-w-full object-contain"
+                />
+                <%!-- Escape is bound here, where opening puts the focus:
+                      LiveView reads a key binding from the key's own
+                      target, never from an ancestor. --%>
+                <button
+                  id={"#{large}-close"}
+                  type="button"
+                  phx-keydown={close_large(large)}
+                  phx-key="Escape"
+                  class="min-h-6 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          <% end %>
+        </div>
+        <div :if={@files != []} class="mt-1 flex flex-wrap gap-1">
+          <%= for a <- @files do %>
             <a
               :if={@attachment_href && a["stored_name"]}
               href={@attachment_href.(a["stored_name"])}
@@ -2235,14 +2307,59 @@ defmodule PrismWeb.ThreadPaneLive do
             </span>
           <% end %>
         </div>
+        <div :if={@shown_links != []} class="mt-1 flex flex-col items-start gap-0.5">
+          <a
+            :for={link <- @shown_links}
+            href={link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex min-h-6 items-center text-xs text-blue-300 underline hover:text-blue-200 break-all"
+          >
+            {link.title}
+          </a>
+        </div>
       </div>
     </div>
     """
   end
 
+  # The picture types the attachment address serves as themselves
+  # (`PrismWeb.AttachmentController`); an SVG is never one, since it runs
+  # script. A file that is not stored, or another type, is a chip.
+  @picture_types ~w(image/png image/jpeg image/gif image/webp)
+
+  # The large view opens over the page with the focus on its Close, and
+  # gives the focus back to the picture when it closes.
+  defp open_large(large) do
+    JS.push_focus()
+    |> JS.remove_class("hidden", to: "##{large}")
+    |> JS.focus(to: "##{large}-close")
+  end
+
+  defp close_large(large), do: JS.add_class("hidden", to: "##{large}") |> JS.pop_focus()
+
+  defp picture?(a, href),
+    do: href != nil and is_binary(a["stored_name"]) and a["media_type"] in @picture_types
+
+  # A link is drawn only as an http or https address with a host: anything
+  # else (`javascript:`, `data:`) is not a link a post may carry. Its title
+  # is the author's, or the address itself.
+  defp shown_links(links) when is_list(links) do
+    for %{"url" => url} = link <- links,
+        is_binary(url),
+        %URI{scheme: scheme, host: host} <- [URI.parse(url)],
+        scheme in ["http", "https"] and is_binary(host) and host != "" do
+      title = link["title"]
+      %{url: url, title: if(is_binary(title) and String.trim(title) != "", do: title, else: url)}
+    end
+  end
+
+  defp shown_links(_), do: []
+
   attr :id, :string, required: true
   attr :dom, :string, required: true
   attr :reply, :map, required: true
+  attr :athanor_route, :any, required: true
 
   # A crew member's reply, by its member and outcome. A reply cut short
   # says where the whole of it is: the member's thread.
@@ -2256,6 +2373,9 @@ defmodule PrismWeb.ThreadPaneLive do
         role="assistant"
         content={@reply.content}
         author={"#{agent_name(@reply.sent_by)} · #{@reply.outcome}"}
+        attachments={@payload["attachments"] || []}
+        attachment_href={&attachment_path(@athanor_route, @reply.id, &1)}
+        links={@payload["links"] || []}
       />
       <button
         :if={@payload["truncated"] == true and is_binary(@payload["from_thread"])}
@@ -2302,7 +2422,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp speaker(%{sent_by: agent}, _members, _ctx), do: agent_name(agent)
 
   defp agent_name(name) do
-    if Prima.AgentRef.soul?(name), do: "AQUA", else: name
+    if Prima.AgentRef.soul?(name), do: "Aqua", else: name
   end
 
   # A line the person may say aloud: their own, or their assistant's in
@@ -2333,7 +2453,7 @@ defmodule PrismWeb.ThreadPaneLive do
     label = speaker(msg, members, ctx)
 
     if Threads.payload(msg)["shared_agent"] == true,
-      do: "shared from AQUA by #{label}",
+      do: "shared from Aqua by #{label}",
       else: label
   end
 

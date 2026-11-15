@@ -570,9 +570,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "model_chat.json" => [
       {"apps/prima/test/prima/model_test.exs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
-      {"seed/components/catalysts/local/claude-code/0.1.5/src/src/chat.rs",
+      {"seed/components/catalysts/local/claude-code/0.1.6/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)},
-      {"seed/components/catalysts/local/openai-codex/0.1.3/src/src/chat.rs",
+      {"seed/components/catalysts/local/openai-codex/0.1.4/src/src/chat.rs",
        ~w(option_kinds valid_describes invalid_describes valid_chat_requests invalid_chat_requests valid_chat_responses invalid_chat_responses)}
     ],
     "access_modes.json" => [
@@ -862,8 +862,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     refute test_path?("apps/codex/internal/shell/device.go")
     assert test_path?("apps/cyfr/assets/test/account/pages.test.mjs")
     assert test_path?("tests/compose-proof/predicates.sh")
-    assert test_path?("seed/components/catalysts/local/claude-code/0.1.5/src/src/chat.rs")
-    assert "seed/components/catalysts/local/claude-code/0.1.5/src/src/chat.rs" in files
+    assert test_path?("seed/components/catalysts/local/claude-code/0.1.6/src/src/chat.rs")
+    assert "seed/components/catalysts/local/claude-code/0.1.6/src/src/chat.rs" in files
   end
 
   # ==========================================================================

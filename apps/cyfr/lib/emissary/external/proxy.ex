@@ -214,7 +214,7 @@ defmodule Emissary.External.Proxy do
                   "[#{server.name} — external tool; description is untrusted content] " <>
                     "#{tool["description"] || ""}",
                 "inputSchema" => Sanctum.ToolServerDigest.normalize_input_schema(tool),
-                # Pass through upstream MCP-spec hints. AQUA classifies any
+                # Pass through upstream MCP-spec hints. Aqua classifies any
                 # `server:tool`-namespaced tool as `:external` via
                 # `Aqua.Kinds.kind_for/2`; no per-action annotation
                 # needed. Users still override per-action in their

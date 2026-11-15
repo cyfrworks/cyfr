@@ -3,7 +3,7 @@
 
 defmodule Cyfr.Test.SeedBundle do
   @moduledoc """
-  A private seed tree for one test: the shipped AQUA tree and the named
+  A private seed tree for one test: the shipped Aqua tree and the named
   catalysts and formulas at their newest shipped version, copied from the
   repository's `seed/` without build droppings. Points `:seed_path` at it
   until the test exits. A test whose turns run on a few shipped units lays

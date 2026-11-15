@@ -114,7 +114,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
              "action" => "create",
              "name" => name,
              "title" => name,
-             "content" => "# #{name}\n\nYou are #{name}, a crew member of this athanor's AQUA."
+             "content" => "# #{name}\n\nYou are #{name}, a crew member of this athanor's Aqua."
            }) do
         {:ok, _created} ->
           send(self(), {:refresh, :agents})

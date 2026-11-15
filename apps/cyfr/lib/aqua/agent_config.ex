@@ -21,13 +21,13 @@ defmodule Aqua.AgentConfig do
 
   alias Sanctum.Context
 
-  # The authored tool_policy is edited on the AQUA page. Chat approvals are
+  # The authored tool_policy is edited on the Aqua page. Chat approvals are
   # stored separately in Aqua.ToolGrants and composed with it at use time.
 
   # What a storage fault reads as on the tape: the adapter's term is for
   # the log, the person gets the one sentence every storage-backed answer
   # gives.
-  @unavailable {:unavailable, "The athanor's AQUA tree"}
+  @unavailable {:unavailable, "The athanor's Aqua tree"}
 
   @doc """
   The athanor's agents, read once: the soul first, then the crew by name,

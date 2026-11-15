@@ -190,9 +190,9 @@ for published in \
 done
 
 # The shipped canvas is installed by the seed; its page reads three bus
-# streams, so the person grants it (version 0.6.2) before the proof shows
+# streams, so the person grants it (version 0.6.3) before the proof shows
 # it, as they grant every canvas.
-server_fixture "$CELL" grant "$TOKEN" canvas 0.6.2 >/dev/null
+server_fixture "$CELL" grant "$TOKEN" canvas 0.6.3 >/dev/null
 
 source_answer="$(canvas_fixture source "$TOKEN" candles)"
 [ -n "$source_answer" ] || fail "the feed's source was not published"

@@ -5,7 +5,7 @@ defmodule PrismWeb.ChatRedirectLive do
   @moduledoc """
   `/chat`, the retired chat page's address, forwards to the person's
   desktop (`PrismWeb.DesktopLive`), where the chat is CYFR's own overlay
-  beside AQUA's (`PrismWeb.ChatOverlayLive`, its control on the shelf).
+  beside Aqua's (`PrismWeb.ChatOverlayLive`, its control on the shelf).
   Its query is dropped: the overlay opens from the shelf, never from an
   address.
   """

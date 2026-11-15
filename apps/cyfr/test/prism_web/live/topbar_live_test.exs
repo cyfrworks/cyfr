@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.TopbarLiveTest do
   @moduledoc """
-  The topbar: the AQUA link to the person's own athanor, standing alone;
+  The topbar: the Aqua link to the person's own athanor, standing alone;
   the operator's door chip; the live indicators; and the count of files
   offered to the person, from their own topic.
   """
@@ -33,13 +33,13 @@ defmodule PrismWeb.TopbarLiveTest do
     state.socket.assigns.refresh_pending
   end
 
-  test "the AQUA link stands alone: it opens the person's own AQUA, and no athanor list opens",
+  test "the Aqua link stands alone: it opens the person's own Aqua, and no athanor list opens",
        %{conn: conn} do
     conn = log_in_user(conn, test_user())
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)
 
-    assert has_element?(bar, ~s(#aqua-link[href="/a/@#{seated_athanor().slug}/aqua"]), "AQUA")
+    assert has_element?(bar, ~s(#aqua-link[href="/a/@#{seated_athanor().slug}/aqua"]), "Aqua")
     refute has_element?(bar, ~s([phx-value-name="athanors"]))
   end
 

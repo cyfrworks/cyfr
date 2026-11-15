@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The AQUA panel's pure placement: where it opens, how a drag moves it and
+// The Aqua panel's pure placement: where it opens, how a drag moves it and
 // a resize sizes it inside the area it may cover, where it sits docked to
 // the right edge, and how high it stands as a sheet in the hand. Every
 // rectangle is `{x, y, w, h}` in CSS pixels of the viewport. Nothing here

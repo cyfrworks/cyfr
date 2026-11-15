@@ -100,11 +100,11 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.6.2 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.6.3 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.6.2"
+    assert canvas.version == "0.6.3"
 
     # The seed ships it beside the versions before it, which stay as they
     # shipped.
@@ -247,12 +247,12 @@ defmodule Cyfr.Test.SeedBundleTest do
   # Each shipped desktop: the versions it shipped before, oldest first,
   # and its newest.
   @desktops [
-    {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.2"},
-    {"line", ~w(0.1.0 0.2.0), "0.3.0"},
-    {"night", ~w(0.1.0 0.2.0), "0.3.0"},
-    {"road", ~w(0.1.0 0.2.0), "0.3.0"},
-    {"street", ~w(0.1.0 0.2.0), "0.3.0"},
-    {"switchboard", ~w(0.1.0 0.2.0), "0.3.0"}
+    {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.3"},
+    {"line", ~w(0.1.0 0.2.0), "0.3.1"},
+    {"night", ~w(0.1.0 0.2.0), "0.3.1"},
+    {"road", ~w(0.1.0 0.2.0), "0.3.1"},
+    {"street", ~w(0.1.0 0.2.0), "0.3.1"},
+    {"switchboard", ~w(0.1.0 0.2.0), "0.3.1"}
   ]
   # The earlier versions that shipped before Retry did.
   @before_retry ~w(0.1.0 0.4.0 0.5.0)
@@ -304,10 +304,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     end
   end
 
-  test "the line desktop is 0.3.0 on the vanilla template, and the publish check accepts it" do
+  test "the line desktop is 0.3.1 on the vanilla template, and the publish check accepts it" do
     line = SeedBundle.local_unit!("tinctures", "line")
     assert line.ref == "tincture:local.line"
-    assert line.version == "0.3.0"
+    assert line.version == "0.3.1"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), line.rel)
 
     assert Prima.Manifest.validate(line.manifest, fn _ -> true end) == :ok
@@ -382,7 +382,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     # It reads what waits, the threads, runs, schedules, crew, components,
     # vault, files and how CYFR stands, and two feeds by name; it pauses and
     # resumes the schedules it reads and runs a failed run again.
-    assert night.version == "0.3.0"
+    assert night.version == "0.3.1"
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_desktop(declaration, Sanctum.Catalog.streams()) == :ok
     assert declaration.desktop.feeds == ["weather", "vpn"]
@@ -437,10 +437,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute Map.has_key?(night.manifest, "dependencies")
   end
 
-  test "the road desktop is 0.3.0 on the vanilla template, and the publish check accepts it" do
+  test "the road desktop is 0.3.1 on the vanilla template, and the publish check accepts it" do
     road = SeedBundle.local_unit!("tinctures", "road")
     assert road.ref == "tincture:local.road"
-    assert road.version == "0.3.0"
+    assert road.version == "0.3.1"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), road.rel)
 
     assert Prima.Manifest.validate(road.manifest, fn _ -> true end) == :ok
@@ -518,10 +518,10 @@ defmodule Cyfr.Test.SeedBundleTest do
                 index.html list.js model.js public/media/preview-1.svg road-pixel.woff2 scene.js)
   end
 
-  test "the switchboard desktop is 0.3.0 on the vanilla template, reads what it declares and passes the publish check" do
+  test "the switchboard desktop is 0.3.1 on the vanilla template, reads what it declares and passes the publish check" do
     board = SeedBundle.local_unit!("tinctures", "switchboard")
     assert board.ref == "tincture:local.switchboard"
-    assert board.version == "0.3.0"
+    assert board.version == "0.3.1"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), board.rel)
 
     assert Prima.Manifest.validate(board.manifest, fn _ -> true end) == :ok
@@ -597,10 +597,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute Map.has_key?(board.manifest, "dependencies")
   end
 
-  test "the street desktop is 0.3.0 on the vanilla template, and the publish check accepts it" do
+  test "the street desktop is 0.3.1 on the vanilla template, and the publish check accepts it" do
     street = SeedBundle.local_unit!("tinctures", "street")
     assert street.ref == "tincture:local.street"
-    assert street.version == "0.3.0"
+    assert street.version == "0.3.1"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), street.rel)
 
     assert Prima.Manifest.validate(street.manifest, fn _ -> true end) == :ok

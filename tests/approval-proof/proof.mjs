@@ -89,7 +89,7 @@ const keys = passkeys();
 let cookie = null;
 let segment = null;
 const codes = [];
-// The system layer the prompt under test is drawn in: a page's, or AQUA's
+// The system layer the prompt under test is drawn in: a page's, or Aqua's
 // panel's own for a grant its pane's turn needs (named_prompt).
 let layer = "#system-layer-dialog";
 const rows = [];
@@ -1219,7 +1219,7 @@ async function main() {
     // named_prompt
     // -----------------------------------------------------------------------
     const thread = await ask({ op: "thread" });
-    // The desktop, and AQUA's panel on the shelf turned to the thread: the
+    // The desktop, and Aqua's panel on the shelf turned to the thread: the
     // pane is the panel's, and a grant its turn needs is asked in the
     // panel's own layer. The panel draws the thread chosen once it has
     // kept it, and the desktop opened again finds the panel open on it.

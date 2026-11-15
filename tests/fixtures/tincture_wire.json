@@ -617,7 +617,7 @@
         }
       },
       {
-        "why": "an own thread, the person's with their AQUA: it keeps no read mark, so its unread is null",
+        "why": "an own thread, the person's with their Aqua: it keeps no read mark, so its unread is null",
         "event": {
           "kind": "own",
           "id": "thread_vector_own",

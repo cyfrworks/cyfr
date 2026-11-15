@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.Providers.ThreadsTest do
-  # The `threads` tool: a person's own AQUA reading the shared threads they
+  # The `threads` tool: a person's own Aqua reading the shared threads they
   # sit in, from a turn of its own, under the person's own seat, in a chain
   # only, marking nothing read and writing nothing.
   use ExUnit.Case, async: false
@@ -46,7 +46,7 @@ defmodule Aqua.Providers.ThreadsTest do
   # thread and root over whatever the model wrote.
   defp threads(ctx, args, lineage), do: Tool.handle("threads", ctx, Map.merge(args, lineage))
 
-  # An open turn of the person's AQUA in a thread of their own, with its
+  # An open turn of the person's Aqua in a thread of their own, with its
   # root execution: the lineage a call from it carries, as the handler reads
   # it, and as the host stamps a call its own run makes.
   defp open_turn!(ctx) do

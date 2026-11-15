@@ -3,7 +3,7 @@
 
 defmodule Compendium.AquaTemplate do
   @moduledoc """
-  The shipped AQUA tree — seed media under the reserved `seed/aqua` root
+  The shipped Aqua tree — seed media under the reserved `seed/aqua` root
   (`Arca.Storage.seed_roots/0`), read in place from the seed tree: the
   repo's `seed/aqua/` on a checkout, the operator-editable `/app/seed/aqua`
   mount in Docker.

@@ -27,7 +27,7 @@ defmodule PrismWeb.DisplayHelpersTest do
       assert principal_label("_system_scan") == "System (scan)"
       assert principal_label("_tincture") == "Public tincture"
       assert principal_label("webhook:orders") == "Webhook orders"
-      assert principal_label("aqua") == "AQUA"
+      assert principal_label("aqua") == "Aqua"
       assert principal_label(nil) == "-"
     end
 

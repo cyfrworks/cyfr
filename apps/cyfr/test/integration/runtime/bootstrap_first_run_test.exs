@@ -8,7 +8,7 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
   their consents from the caps blocks, and a needs-declaring component
   reads not-ready until a vault entry is bound through the walk.
 
-  Shipped `model/chat@1` catalysts come from the seed tree, so AQUA and
+  Shipped `model/chat@1` catalysts come from the seed tree, so Aqua and
   list-models bootstrap with their whole closure present, and a
   catalyst's need reads not-ready until a key is bound through the walk:
   CYFR attaches a shipped catalyst's key, so an attach-only entry meets

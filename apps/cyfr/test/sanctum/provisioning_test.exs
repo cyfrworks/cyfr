@@ -40,7 +40,7 @@ defmodule Sanctum.ProvisioningTest do
     seed_dir = Path.join(test_dir, "seed")
     bundle_dir = Path.join(seed_dir, "components")
     File.mkdir_p!(bundle_dir)
-    # Provisioning also copies the AQUA template out of the seed tree.
+    # Provisioning also copies the Aqua template out of the seed tree.
     File.cp_r!(Path.expand("../../../../seed/aqua", __DIR__), Path.join(seed_dir, "aqua"))
     prev_base = Application.get_env(:arca, :base_path)
     prev_seed = Application.get_env(:arca, :seed_path)
@@ -1182,7 +1182,7 @@ defmodule Sanctum.ProvisioningTest do
         send(test, {:successor_failed, failed, Athanors.provisioning_failure(row)})
       end)
 
-      # The late attempt fails at its next step, its AQUA copy refused under
+      # The late attempt fails at its next step, its Aqua copy refused under
       # the lost claim, and writes nothing over the successor's record.
       assert {:error, :provisioning_busy} = Filler.provision(athanor, in_athanor)
       assert_received {:overtaken, _stale, successor}
@@ -1408,7 +1408,7 @@ defmodule Sanctum.ProvisioningTest do
       assert {:error, :provisioning_busy} = Filler.provision(athanor, in_athanor)
       assert_received {:slot_lost, ^slot, true}
 
-      # Nothing published after it: no AQUA unit, no agent, no consent, no
+      # Nothing published after it: no Aqua unit, no agent, no consent, no
       # mark and no failure recorded over the athanor.
       actor = Prima.Actor.in_athanor(athanor.id)
       assert {:ok, %{}} == Arca.Overlay.unit_statuses(actor, "aqua") |> own_units()

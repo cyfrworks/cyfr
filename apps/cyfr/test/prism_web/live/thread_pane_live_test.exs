@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# A store that cannot give the AQUA crew listing; every other read is the
+# A store that cannot give the Aqua crew listing; every other read is the
 # local adapter's.
 defmodule PrismWeb.ThreadPaneLiveTest.UnreadableCrew do
   @moduledoc false
@@ -17,7 +17,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # The pane on its own: what it says when the session is gone, that a
   # refusal reaches the person as a sentence, that what it pushes names
   # the pane it is for and a page it points at is a link, and that a kept
-  # model catalogue is read without a run; and in its host, AQUA's panel on
+  # model catalogue is read without a run; and in its host, Aqua's panel on
   # the desktop, where a grant is asked and a crew thread opens. On the
   # person's own athanor.
   use PrismWeb.ConnCase, async: false
@@ -37,8 +37,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   @under_12px ~r/text-\[(?:\d|1[01])(?:\.\d+)?px\]/
   @inline_style ~r/\sstyle=/
 
-  # The empty state's way to a model: the AQUA page, named.
-  @connect "Connect one on your AQUA page."
+  # The empty state's way to a model: the Aqua page, named.
+  @connect "Connect one on your Aqua page."
 
   setup %{conn: conn} do
     test_path = Path.join(System.tmp_dir!(), "pane_#{:rand.uniform(1_000_000)}")
@@ -195,7 +195,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
-  # The pane in its host: AQUA's panel on the desktop, opened (a panel the
+  # The pane in its host: Aqua's panel on the desktop, opened (a panel the
   # session left open opens so) and turned to `thread`. Answers the panel
   # and its pane.
   defp panel_pane(conn, thread) do
@@ -797,6 +797,166 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
   end
 
+  describe "a post draws what it holds" do
+    setup %{here: here, thread: thread, user: user} do
+      pictures = fn n ->
+        [
+          %{
+            "filename" => "shot #{n}.png",
+            "stored_name" => "0-shot_#{n}.png",
+            "media_type" => "image/png"
+          },
+          %{
+            "filename" => "logo.svg",
+            "stored_name" => "1-logo.svg",
+            "media_type" => "image/svg+xml"
+          },
+          %{
+            "filename" => "report.pdf",
+            "stored_name" => "2-report.pdf",
+            "media_type" => "application/pdf"
+          },
+          %{"filename" => "gone.png", "media_type" => "image/png"}
+        ]
+      end
+
+      links = [
+        %{"url" => "https://example.com/plan", "title" => "The plan"},
+        %{"url" => "http://example.org/raw"},
+        %{"url" => "javascript:alert(1)", "title" => "a script"},
+        %{"url" => "data:text/html,<p>x</p>", "title" => "a data address"},
+        %{"url" => "https://", "title" => "no host"},
+        %{"title" => "no address"}
+      ]
+
+      {:ok, mine} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: user.user_id,
+          sent_by: "person",
+          content: "my screenshot",
+          payload: %{"attachments" => pictures.(1), "links" => links}
+        })
+
+      {:ok, aquas} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          # A post may hold no text at all.
+          content: "",
+          payload: %{"attachments" => pictures.(2), "links" => links}
+        })
+
+      {:ok, posts: [mine, aquas]}
+    end
+
+    test "a picture is shown in place and opens large, any other file is a chip that downloads, " <>
+           "and a link is a link, whoever wrote the post",
+         %{conn: conn, athanor: athanor, thread: thread, posts: posts} do
+      pane = open_pane(conn, athanor, thread)
+
+      for {post, n} <- Enum.zip(posts, [1, 2]) do
+        href = &PrismWeb.Focus.path(route(athanor), "/attachments/#{post.id}/#{&1}")
+        large = ~s([id$="-msg-#{post.id}-picture-0"])
+
+        # The PNG: drawn in place, at the attachment address, and drawn
+        # large in a dialog that starts hidden.
+        picture = href.("0-shot_#{n}.png")
+
+        assert has_element?(
+                 pane,
+                 ~s(button[aria-label="Open shot #{n}.png large"] img[src="#{picture}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{large}.hidden [role=dialog][aria-label="shot #{n}.png"] img[src="#{picture}"])
+               )
+
+        assert has_element?(pane, ~s(#{large} button[id$="-picture-0-close"].min-h-6), "Close")
+        refute has_element?(pane, ~s(a[download="shot #{n}.png"]))
+
+        # An SVG runs script and a PDF is no picture: each is a chip that
+        # downloads.
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="#{href.("1-logo.svg")}"][download="logo.svg"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="#{href.("2-report.pdf")}"][download="report.pdf"])
+               )
+
+        refute has_element?(pane, ~s(img[src="#{href.("1-logo.svg")}"]))
+        refute has_element?(pane, ~s(img[alt="gone.png"]))
+
+        # Links: an http or https address with a host, under its title or
+        # itself, opened apart from the page; nothing else is a link.
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="https://example.com/plan"][target=_blank][rel="noopener noreferrer"]),
+                 "The plan"
+               )
+
+        assert has_element?(pane, ~s(a[href="http://example.org/raw"]), "http://example.org/raw")
+      end
+
+      # A file not stored is a chip with no address.
+      assert has_element?(pane, "span.text-xs", "gone.png")
+      refute has_element?(pane, ~s(a[download="gone.png"]))
+
+      html = render(pane)
+
+      for gone <- [
+            "javascript:",
+            "data:text/html",
+            "a script",
+            "a data address",
+            "no host",
+            "no address"
+          ],
+          do: refute(html =~ gone, "#{gone} is drawn")
+
+      refute html =~ @under_12px
+      refute html =~ @inline_style
+    end
+
+    test "Escape closes a picture opened large from where opening it put the focus, " <>
+           "and gives the focus back to the picture",
+         %{conn: conn, athanor: athanor, thread: thread} do
+      doc = conn |> open_pane(athanor, thread) |> render() |> LazyHTML.from_fragment()
+
+      opens =
+        doc |> LazyHTML.query(~s(button[aria-label$=" large"])) |> LazyHTML.attribute("phx-click")
+
+      # One picture in each of the two posts.
+      assert length(opens) == 2
+
+      for open <- opens do
+        ops = Jason.decode!(open)
+        [large] = for ["remove_class", %{"names" => ["hidden"], "to" => to}] <- ops, do: to
+        [focused] = for ["focus", %{"to" => to}] <- ops, do: to
+        assert ["push_focus", _] = hd(ops)
+
+        # LiveView reads a key binding from the key's own target alone, never
+        # an ancestor's: the element opening puts the focus on carries it.
+        held = LazyHTML.query(doc, focused)
+        assert LazyHTML.attribute(held, "phx-key") == ["Escape"]
+        assert [escape] = LazyHTML.attribute(held, "phx-keydown")
+        escape = Jason.decode!(escape)
+
+        assert ["add_class", %{"names" => ["hidden"], "to" => ^large}] =
+                 Enum.find(escape, &(hd(&1) == "add_class"))
+
+        assert Enum.any?(escape, &(hd(&1) == "pop_focus"))
+
+        # It sits inside the large view's own dialog, whose Escape the panel
+        # leaves to it (`aqua_panel/index.js`).
+        assert doc |> LazyHTML.query(~s(#{large} [role=dialog] #{focused})) |> Enum.count() == 1
+      end
+    end
+  end
+
   test "a turn stopped on an unknown outcome shows so until it goes on", %{
     conn: conn,
     athanor: athanor,
@@ -876,7 +1036,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     # announced as one.
     turn.(:turn_starting, user.user_id)
     turn.(:turn_finished, nil)
-    assert announced.() == "AQUA stopped without a reply."
+    assert announced.() == "Aqua stopped without a reply."
 
     {:ok, reply} =
       Threads.append(Sanctum.Context.actor(here), thread.id, %{
@@ -889,7 +1049,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     turn.(:turn_started, "trn_replied")
     turn.(:message, reply)
     turn.(:turn_finished, nil)
-    assert announced.() == "AQUA replied."
+    assert announced.() == "Aqua replied."
   end
 
   # A component in `ctx`'s athanor a turn can ask a grant for.
@@ -1330,7 +1490,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       :ok
     end
 
-    test "with its program's row set up, it says it needs only the grant, given on the AQUA page",
+    test "with its program's row set up, it says it needs only the grant, given on the Aqua page",
          %{conn: conn, athanor: athanor, here: here} do
       pane = empty_pane(conn, athanor)
       assert render(pane) =~ "has no model yet"
@@ -1353,13 +1513,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(
                pane,
                ~s([data-test="model-grant"]),
-               "your AQUA's model needs only your grant."
+               "your Aqua's model needs only your grant."
              )
 
       assert has_element?(
                pane,
                ~s(a[href="#{athanor_path("/aqua?setup=1", athanor)}"]),
-               "Grant it on your AQUA page."
+               "Grant it on your Aqua page."
              )
 
       refute render(pane) =~ "has no model yet"
@@ -1370,8 +1530,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # The athanor as a fill leaves it, its soul's model connected
-  # (`ready_athanor!/2`): the shipped AQUA tree and the components the
-  # soul depends on (the suite's own seed tree ships the AQUA template
+  # (`ready_athanor!/2`): the shipped Aqua tree and the components the
+  # soul depends on (the suite's own seed tree ships the Aqua template
   # alone), the soul's consent selecting its model's default
   # profile, and a key bound to that profile. The seed path it moves is
   # restored only once the work the test's views started has stopped.
@@ -1429,7 +1589,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
              "revoke the damaged profile and grant it again."
   @unanswered "A consent this model runs under cannot be read right now — try again."
 
-  # What the pane's empty state and the AQUA page's agents panel each say
+  # What the pane's empty state and the Aqua page's agents panel each say
   # of the athanor's model: `sentence`, with no model to connect and no key
   # to change over a consent that exists.
   defp model_consent_reads!(conn, athanor, sentence) do
@@ -1572,7 +1732,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute render(pane) =~ @connect
   end
 
-  # The AQUA page's agents panel over the same: no model to install, no
+  # The Aqua page's agents panel over the same: no model to install, no
   # key to connect or change, on the soul's card.
   defp panel_reads_unread!(conn, athanor) do
     {panel, _html} = mount_athanor(conn, "/aqua", athanor)
@@ -1829,6 +1989,86 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(pane, asked, "Build the site")
       assert has_element?(pane, ~s(#{asked} [id$="-reply-#{reply.id}"]), "explorer · done")
       refute has_element?(pane, ~s([id$="-m-#{reply.id}"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a request and the reply under it each draw what they hold, at their own message's address",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+
+      held = fn name ->
+        %{
+          "attachments" => [
+            %{
+              "filename" => "#{name}.png",
+              "stored_name" => "0-#{name}.png",
+              "media_type" => "image/png"
+            },
+            %{
+              "filename" => "#{name}.pdf",
+              "stored_name" => "1-#{name}.pdf",
+              "media_type" => "application/pdf"
+            }
+          ],
+          "links" => [%{"url" => "https://example.com/#{name}", "title" => "The #{name}"}]
+        }
+      end
+
+      {:ok, %{message: request}} =
+        Aqua.Tape.accept(here, room.id, %{
+          message: %{
+            author: here.user_id,
+            sent_by: "person",
+            addressee: "explorer",
+            status: "pending",
+            content: "Build the site",
+            payload: held.("brief")
+          }
+        })
+
+      {:ok, %{message: reply}} =
+        Aqua.Tape.accept(here, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "explorer",
+            addressee: "person",
+            reply_to: request.id,
+            outcome: "done",
+            content: "Built it",
+            payload:
+              Map.merge(held.("result"), %{"from_thread" => child.id, "answers" => [request.id]})
+          },
+          answers: [request.id]
+        })
+
+      pane = open_pane(conn, athanor, room)
+      href = &PrismWeb.Focus.path(route(athanor), "/attachments/#{&1}/#{&2}")
+      asked = ~s([id$="-m-#{request.id}"])
+      answered = ~s(#{asked} [id$="-reply-#{reply.id}"])
+
+      for {scope, row, name} <- [{asked, request, "brief"}, {answered, reply, "result"}] do
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} button img[src="#{href.(row.id, "0-#{name}.png")}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} [id$="-msg-#{row.id}-picture-0"].hidden img[src="#{href.(row.id, "0-#{name}.png")}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} a[href="#{href.(row.id, "1-#{name}.pdf")}"][download="#{name}.pdf"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} a[href="https://example.com/#{name}"]),
+                 "The #{name}"
+               )
+      end
 
       Cyfr.Test.Sandbox.end_views()
     end

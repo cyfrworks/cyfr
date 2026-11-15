@@ -220,7 +220,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   end
 
   # ============================================================================
-  # Arm 2: AQUA virtual tools
+  # Arm 2: Aqua virtual tools
   # ============================================================================
 
   describe "agent virtual tools" do

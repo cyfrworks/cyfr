@@ -5,4 +5,4 @@
 # stage installs this channel as the default toolchain (Dockerfile.locus),
 # and Dependabot's rust-toolchain updates propose the next one.
 [toolchain]
-channel = "1.99.1"
+channel = "1.100.0"

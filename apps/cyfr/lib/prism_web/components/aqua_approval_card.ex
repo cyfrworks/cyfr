@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaApprovalCard do
   @moduledoc """
-  Inline approval card rendered in the AQUA chat thread.
+  Inline approval card rendered in the Aqua chat thread.
 
   The agent ends a reply with a `ui.request_approval` block carrying a
   `proposal: {tool, action, args}` payload. `Aqua.Approvals`
@@ -113,7 +113,7 @@ defmodule PrismWeb.AquaApprovalCard do
           {kind_label(@kind)}
         </span>
         <span class="text-[11px] text-gray-500">
-          {@agent_label || "AQUA"} wants to
+          {@agent_label || "Aqua"} wants to
         </span>
         <%= if status(@status) == :pending do %>
           <span class="text-[10px] text-gray-600 ml-auto">awaiting confirmation</span>
@@ -252,7 +252,7 @@ defmodule PrismWeb.AquaApprovalCard do
                 phx-click="approval:decline_never"
                 phx-target={@myself}
                 class="rounded px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-800 hover:text-gray-300"
-                title="Decline and remove this action from AQUA's allowlist"
+                title="Decline and remove this action from Aqua's allowlist"
               >
                 decline &amp; remove
               </button>
@@ -335,7 +335,7 @@ defmodule PrismWeb.AquaApprovalCard do
                 phx-value-scope="always"
                 phx-target={@myself}
                 class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
-                title="Stop asking — adds this action to AQUA's allowlist as auto-approved"
+                title="Stop asking — adds this action to Aqua's allowlist as auto-approved"
               >
                 always
               </button>

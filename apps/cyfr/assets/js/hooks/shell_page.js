@@ -9,7 +9,7 @@
 // The shell's `navigate` (a desktop's `settings` verb) moves the page's
 // LiveView to the Dashboard page named, which opens as the overlay over
 // the desktop, the desktop and its frames untouched. And the desktop's own
-// address with `?publisher=&tincture_name=` (the palette's and AQUA's focus
+// address with `?publisher=&tincture_name=` (the palette's and Aqua's focus
 // on a tincture, PrismWeb.DesktopLive) is handed to the shell as
 // `focus_named`, and with `?shell=desktops` (the palette's desktops) as the
 // shell's key `shell_key`, each read when the hook mounts and after each
@@ -26,7 +26,7 @@
 // the button's, never also the picker's launch), with a modifier held, or
 // anywhere inside what stands over the
 // desktop (the page's layer: a Dashboard page, the top bar, the palette;
-// the chat's and AQUA's panels; the chooser of desktops; an open dialog)
+// the chat's and Aqua's panels; the chooser of desktops; an open dialog)
 // stays there, so no key typed in a form launches or closes an app.
 
 const KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Enter", "Escape"])
