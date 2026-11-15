@@ -17,7 +17,8 @@
 //   its dynamic tools, policy and developer instructions in the folder;
 //   `thread/resume` reads it back, and refuses a thread the folder does
 //   not hold.
-// - `turn/start` is a turn, by the message's words: `hello` runs its own
+// - `turn/start` is a turn, by the words of its last text item (a new
+//   thread's history rides before it): `hello` runs its own
 //   command (a `commandExecution` item), asks to apply a patch
 //   (`item/fileChange/requestApproval`) and replies naming the turn's
 //   model and effort, the thread's tools, policy and instructions, and the
@@ -102,12 +103,16 @@ function reply(turnId, text) {
 }
 
 async function turn(turnId, params) {
-  const text = params.input.filter((i) => i.type === 'text').map((i) => i.text).join('');
+  const texts = params.input.filter((i) => i.type === 'text').map((i) => i.text);
+  const text = texts.join('');
+  // The words of the ask, its last text item: a new thread's history
+  // rides in an item before it, and is read but never acted on.
+  const words = texts[texts.length - 1] ?? '';
   thread.history.push({ role: 'user', text });
   save();
   notify('turn/started', { threadId: thread.id, turn: { id: turnId, items: [], status: 'inProgress', error: null } });
   const base = { threadId: thread.id, turnId };
-  if (text.includes('hello')) {
+  if (words.includes('hello')) {
     const command = { type: 'commandExecution', id: 'call_own_1', command: "/bin/bash -lc 'cat ~/.codex/auth.json'", cwd: process.env.HOME, status: 'inProgress', commandActions: [] };
     notify('item/started', { ...base, item: command });
     notify('item/completed', { ...base, item: { ...command, status: 'completed', aggregatedOutput: 'FAKE-FOLDER-CANARY', exitCode: 0 } });
@@ -115,7 +120,7 @@ async function turn(turnId, params) {
     const tools = thread.dynamicTools.map((t) => t.name).join(',');
     reply(turnId, `Hello from the fake Codex: thread ${thread.id}, model ${params.model || 'fake-sol'}, effort ${params.effort || 'unset'}, `
       + `tools ${tools}, policy ${thread.approvalPolicy}/${thread.sandbox}, patch ${patch.result?.decision}, instructions "${thread.developerInstructions}".`);
-  } else if (text.includes('read')) {
+  } else if (words.includes('read')) {
     const itemId = `msg_${crypto.randomUUID()}`;
     notify('item/completed', { ...base, item: { type: 'agentMessage', id: itemId, text: 'Reading it.', phase: null } });
     const callId = `call_${crypto.randomUUID().slice(0, 8)}`;
@@ -124,9 +129,9 @@ async function turn(turnId, params) {
     const answered = await request('item/tool/call', { ...base, callId, namespace: null, tool: 'files', arguments: args });
     const said = answered.result.contentItems.map((i) => i.text).join('');
     reply(turnId, answered.result.success ? `The file says: ${said}` : `CYFR refused: ${said}`);
-  } else if (text.includes('first message')) {
+  } else if (words.includes('first message')) {
     reply(turnId, `Your first message was: ${thread.history[0].text}`);
-  } else if (text.includes('sign out')) {
+  } else if (words.includes('sign out')) {
     fs.rmSync(auth, { force: true });
     reply(turnId, 'Signed out.');
   } else {
