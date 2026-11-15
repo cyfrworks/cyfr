@@ -90,12 +90,12 @@ test("once the stopped opens have their answers, the parts turned on open theirs
 })
 
 // The canvas wire's vectors: `stream_events["threads.changes"]`, a shared
-// thread with its unread count and an own thread with none.
+// thread and a daily thread, each with its unread count.
 const WIRE = JSON.parse(
   readFileSync(new URL("../../../../../tests/fixtures/tincture_wire.json", import.meta.url), "utf8")
 )
 
-test("folds the wire's thread events, a shared thread's unread count and an own thread's null, whole", async () => {
+test("folds the wire's thread events, a shared thread's and a daily thread's unread counts, whole", async () => {
   const events = WIRE.stream_events["threads.changes"].map(({event}) => event)
   assert.equal(events.length, 2)
 
