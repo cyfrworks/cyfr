@@ -24,9 +24,11 @@ defmodule PrismWeb.AquaPanelLive do
   (`Aqua.today/1`, `Arca.ThreadStorage.day/2`), and kept current from
   their list's announcements (`Cyfr.Bus.ThreadListed`, on their
   `Cyfr.Bus.threads/2` topic); the pane moves the read mark while it shows
-  a thread. A daily thread announced of today's date or a later one is
-  today's: made since by a send or a fire, or the day turned while the
-  page stayed.
+  a thread. The panel follows the person's day: at each announcement of a
+  daily thread it reads again the date now in their stored zone, so today
+  moves forwards past midnight and backwards after a change of zone, and
+  the thread of that date, made since by a send or a fire, is today's.
+  Following it makes no thread.
 
   Opened beside a shared thread (the chat overlay, `PrismWeb.ChatOverlayLive`,
   tells it what it has open through `PrismWeb.RoomFeed`), a send from here
@@ -477,29 +479,12 @@ defmodule PrismWeb.AquaPanelLive do
   def handle_info({:open, _thread_id}, socket), do: {:noreply, socket}
 
   # Today's count as the person's list announces it, a read mark moved
-  # among the changes. A daily thread of today's date or a later one is
-  # today's now: made since, or the day turned.
+  # among the changes, with the day read again (`follow_day/3`).
   def handle_info(
-        %ThreadListed{kind: :daily, id: id, unread: unread} = listed,
-        %{assigns: %{phase: :ready, today: today, day: day}} = socket
-      ) do
-    cond do
-      match?(%{id: ^id}, today) ->
-        {:noreply, assign(socket, :unread, unread || 0)}
-
-      not before_day?(listed, day) ->
-        case own_thread(socket, id) do
-          %{kind: "daily"} = thread ->
-            {:noreply, assign(socket, day: thread.day, today: thread, unread: unread || 0)}
-
-          _gone ->
-            {:noreply, socket}
-        end
-
-      true ->
-        {:noreply, socket}
-    end
-  end
+        %ThreadListed{kind: :daily, id: id, unread: unread},
+        %{assigns: %{phase: :ready}} = socket
+      ),
+      do: {:noreply, follow_day(socket, id, unread)}
 
   # Today's thread deleted: the next open makes it again.
   def handle_info(
@@ -534,16 +519,32 @@ defmodule PrismWeb.AquaPanelLive do
 
   defp pass_asked(socket), do: socket
 
-  # Whether an announced daily thread is of a day before the one held as
-  # today; its title is its date. One that does not read as a date is.
-  defp before_day?(%{title: title}, %Date{} = held) do
-    case Date.from_iso8601(to_string(title)) do
-      {:ok, day} -> Date.before?(day, held)
-      {:error, _unreadable} -> true
+  # The person's day, read again: the date now in their stored zone, and
+  # the thread of that date. An announced daily thread of that date is
+  # today's, with the count it carries; when the date moved and the
+  # announced thread is another day's, today's is read as it stands. A
+  # zone changed elsewhere, or midnight passed while the page stayed, moves
+  # today either way. Nothing here makes a thread.
+  defp follow_day(socket, id, unread) do
+    day = Aqua.today(socket.assigns.context)
+
+    case socket.assigns do
+      %{today: %{id: ^id}, day: ^day} ->
+        assign(socket, :unread, unread || 0)
+
+      %{day: held} ->
+        case own_thread(socket, id) do
+          %{kind: "daily", day: ^day} = thread ->
+            assign(socket, day: day, today: thread, unread: unread || 0)
+
+          _another_day when held == day ->
+            socket
+
+          _another_day ->
+            count_today(socket)
+        end
     end
   end
-
-  defp before_day?(_listed, nil), do: true
 
   # ============================================================================
   # Render

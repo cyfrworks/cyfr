@@ -158,7 +158,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
   # The panel's header names the daily thread shown by its day's date in
   # words, and nowhere by the ISO date its row's title holds.
   defp named!(panel, thread) do
-    assert has_element?(panel, "#aqua-panel-day-name", PrismWeb.DisplayHelpers.day_name(thread.day))
+    assert has_element?(
+             panel,
+             "#aqua-panel-day-name",
+             PrismWeb.DisplayHelpers.day_name(thread.day)
+           )
 
     refute panel |> element("#aqua-panel-sheet > header") |> render() =~
              Date.to_iso8601(thread.day)
@@ -1388,8 +1392,15 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a daily thread made after the desktop loaded, today's or a later day's, is counted on the button",
+  # At any instant these two zones are on different dates, the eastern
+  # one a day or two ahead: a change between them moves the person's day
+  # as midnight would, with no clock to wind.
+  @west "Etc/GMT+12"
+  @east "Pacific/Kiritimati"
+
+  test "the button follows the person's day forwards: a thread made after the load is counted, and after midnight the new day's",
        %{conn: conn, me: me} do
+    :ok = Aqua.put_time_zone(me.user_id, @west)
     panel = child!(desktop!(conn), "aqua-panel")
     _ = render(panel)
 
@@ -1403,8 +1414,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
       "the post on today's thread counted"
     )
 
-    # The day turned while the page stayed: the next day's thread is today's.
-    {:ok, next} = Threads.daily(Sanctum.Context.actor(me), Date.add(today.day, 1))
+    # Midnight, as the person's day reads it: the next day's thread is
+    # today's, and the day before's count leaves the button.
+    :ok = Aqua.put_time_zone(me.user_id, @east)
+    next = today!(me)
+    assert Date.after?(next.day, today.day)
     fire!(me, next, "Morning brief")
     fire!(me, next, "Evening brief")
 
@@ -1413,6 +1427,45 @@ defmodule PrismWeb.AquaPanelLiveTest do
       5_000,
       "the next day's posts counted"
     )
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the button follows the person's day backwards: after a change of zone to an earlier date it counts that day's thread",
+       %{conn: conn, me: me} do
+    :ok = Aqua.put_time_zone(me.user_id, @east)
+    view = desktop!(conn)
+    panel = child!(view, "aqua-panel")
+    _ = render(panel)
+
+    # Two posts left unread on the eastern day.
+    east = today!(me)
+    fire!(me, east, "Morning brief")
+    fire!(me, east, "Evening brief")
+
+    wait_until(
+      fn -> has_element?(panel, "#aqua-panel-unread", "2") end,
+      5_000,
+      "the eastern day's two posts counted"
+    )
+
+    # The zone moves west, to an earlier date, and one post is delivered
+    # to the day that is now current.
+    :ok = Aqua.put_time_zone(me.user_id, @west)
+    west = today!(me)
+    assert Date.before?(west.day, east.day)
+    fire!(me, west, "Weekly")
+
+    wait_until(
+      fn -> has_element?(panel, "#aqua-panel-unread", "1") end,
+      5_000,
+      "the western day's one post counted, not the eastern day's two"
+    )
+
+    # Opened, the panel shows the day that is current now.
+    {panel, _html} = open_panel(view)
+    on_thread!(child!(panel, "aqua-panel-pane"), west.id)
+    named!(panel, west)
 
     Cyfr.Test.Sandbox.end_views()
   end
