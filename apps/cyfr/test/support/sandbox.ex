@@ -96,6 +96,9 @@ defmodule Cyfr.Test.Sandbox do
     Opus.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.External.ServerSupervisor,
+    # Each browser holder closes the program session it holds as it stops,
+    # so the holders go before the sessions.
+    Opus.Browser.Holders,
     Opus.Programs.Relays,
     Opus.Attempt.Supervisor,
     Locus.Runtime.RunnerPool.Runners,
