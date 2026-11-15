@@ -979,6 +979,17 @@ defmodule PrismWeb.SettingsLiveTest do
       # A key already shared with everyone opens no second sheet.
       render_click(view, "setup_share", %{"id" => newer.id})
       refute has_element?(view, "#system-layer-dialog [data-kind=share]")
+
+      # The share stands under the Vault page's Shared by you with the cap
+      # that was confirmed.
+      [share] = shares.()
+      {vault, _html} = mount_athanor(admin.conn, "/vault", admin.own)
+
+      assert texts(
+               vault,
+               ~s([data-test="shared-by-you-row"][data-id="#{share.id}"] [data-test="share-line"])
+             ) == ["newer key, shared with everyone, 0 today, at most 20 a person a day"]
+
       Cyfr.Test.Sandbox.end_views()
     end
   end
