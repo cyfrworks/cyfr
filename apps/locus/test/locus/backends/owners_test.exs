@@ -629,6 +629,38 @@ defmodule Locus.Backends.OwnersTest do
       :ok = Backend.stop(pid, 0)
     end
 
+    # A terminal session's process was told no terminal type, so `clear`
+    # and a full-screen program could not draw on it.
+    test "a terminal is told the terminal type, a run is told none, and a program's own " <>
+           "TERM is kept",
+         ctx do
+      owners = start_owners(ctx)
+      say = ~s(printf '[%s]\\n' "${TERM-none}"; read x)
+
+      assert {:ok, _} =
+               sync(owners, "a", {1, 1}, [
+                 program("plain", say),
+                 program("own", say, env: %{"TERM" => "vt100"})
+               ])
+
+      terminal = [mode: :terminal, rows: 24, cols: 80]
+
+      for {name, opts, seen} <- [
+            {"plain", terminal, "[xterm-256color]\r\n"},
+            {"own", terminal, "[vt100]\r\n"}
+          ] do
+        assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, name, opts)
+        pid = session_pid(owners, "a", {1, 1}, id)
+        assert {^seen, _seq} = output(pid, 0, &String.contains?(&1, "\n"))
+        :ok = Backend.stop(pid, 0)
+      end
+
+      assert {:ok, %{session: run}} = open(owners, "a", {1, 1}, "plain")
+      pid = session_pid(owners, "a", {1, 1}, run)
+      assert lines(pid, 1) == ["[none]"]
+      :ok = Backend.stop(pid, 0)
+    end
+
     test "a crash holds the next start back by its backoff, and the last crash fails the program until a new version",
          ctx do
       owners = start_owners(ctx)

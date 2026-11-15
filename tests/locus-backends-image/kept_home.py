@@ -23,8 +23,9 @@ requests signed as CYFR signs them (harness.py):
 - Retiring a home (its program row deleted) ends its sessions and every
   process of its uid and removes its folder.
 - A terminal runs the program's command with the open's argv (a sign-in's
-  words, `login`) on a pseudo-terminal of the open's size in its kept home:
-  a run message to it is refused, its prompt arrives before any newline, a
+  words, `login`) on a pseudo-terminal of the open's size in its kept home,
+  told the wire's terminal type in `TERM`: a run message to it is refused,
+  its prompt arrives before any newline, a
   resize reaches the process, the person's typed line (ending in a carriage
   return) reaches the command, and the session ends with it.
 
@@ -40,8 +41,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE_USER, STATUSES, VERSION, Stack, eventually,
-    expect, owner_of, probe, require_docker, unb64,
+    KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE_USER, STATUSES, VERSION, WIRE, Stack,
+    eventually, expect, owner_of, probe, require_docker, unb64,
 )
 import imagesuite  # noqa: E402
 
@@ -51,11 +52,12 @@ CAP = 8 * 1024 * 1024
 # What the measure may let through past the cap: what ten seconds write.
 MEASURE_S = 10
 # A program whose command signs in when its arguments are the sign-in's
-# words: it prints its terminal's size, prompts, reads the code typed, and
-# prints the size again, which a resize while it waits has changed.
+# words: it prints its terminal's type and size, prompts, reads the code
+# typed, and prints the size again, which a resize while it waits has changed.
 SIGN_IN_ARGV = ["login"]
-SIGN_IN = ("sh -c 'test \"$*\" = login || exit 64; stty size; printf \"Paste code: \"; read code; "
-           "echo \"signed in with $code\"; stty size' sh")
+SIGN_IN = ("sh -c 'test \"$*\" = login || exit 64; echo \"term=$TERM\"; stty size; printf \"Paste code: \"; "
+           "read code; echo \"signed in with $code\"; stty size' sh")
+TERMINAL_TYPE = WIRE["terminal_type"].encode()
 PROGRAMS = [
     probe(home="kept"),
     probe("capped", home="kept", home_max_bytes=CAP),
@@ -198,6 +200,7 @@ def main():
         read, after_seq, running = c.output_until(OWNER, session, lambda read: b"Paste code: " in read)
         expect(running and b"24 80\r\nPaste code: " in read,
                "the command runs on a terminal of the open's size, its prompt arriving before any newline", read)
+        expect(b"term=" + TERMINAL_TYPE + b"\r\n" in read, "the command is told the wire's terminal type", read)
         expect(c.resize(OWNER, session, 30, 100) == (200, {"version": VERSION, "status": "running"}),
                "the terminal is resized")
         expect(c.input(OWNER, session, b"abc123\r") == (200, {"version": VERSION, "status": "running"}),
