@@ -49,18 +49,28 @@ defmodule Arca.ThreadStorage do
   # The two reserved row authors, spelled once in the schema.
   @agent_author Message.agent_author()
   @system_author Message.system_author()
+  @room_kinds Thread.room_kinds()
 
-  @default_title "New thread"
-  @title_max 80
+  # The rows a person reads as posts: what a turn writes for itself
+  # (`tool_call`, `tool_result`, `compaction`, `turn_aborted`) is none.
+  @post_kinds ~w(text approval error system)
 
   # ---------------------------------------------------------------------------
   # Threads
   # ---------------------------------------------------------------------------
 
   @doc """
+  The kinds of a person's rooms, the threads a crew member's child thread
+  works under and their list holds: daily and workspace threads
+  (`Arca.Schemas.Thread.room_kinds/0`).
+  """
+  @spec room_kinds() :: [String.t()]
+  def room_kinds, do: @room_kinds
+
+  @doc """
   The athanor's threads, most recently active first. `opts`: `:limit`
-  (200 by default) and `:kind` (`"own"` or `"crew"`; every kind when
-  absent).
+  (200 by default) and `:kind` (one of `Arca.Schemas.Thread.kinds/0`, or a
+  list of them; every kind when absent).
   """
   @spec list(Prima.Actor.t(), keyword()) :: [map()] | {:error, :no_athanor | :database_error}
   def list(actor, opts \\ [])
@@ -79,6 +89,7 @@ defmodule Arca.ThreadStorage do
       query =
         case Keyword.get(opts, :kind) do
           nil -> query
+          kinds when is_list(kinds) -> from(c in query, where: c.kind in ^kinds)
           kind -> from(c in query, where: c.kind == ^kind)
         end
 
@@ -116,21 +127,23 @@ defmodule Arca.ThreadStorage do
   end
 
   @doc """
-  Open a new thread in the context's athanor, attributed to its user.
+  The daily thread of `day` in the context's athanor, made when there is
+  none: one per date, titled with the date, attributed to the context's
+  user. Nothing else about the day is stored; which date is today is the
+  caller's (`Aqua.Day`).
 
-  A thread is a row a client can mint from the wire, so the
-  athanor's count is held to the operator's `max_threads_per_athanor`
-  ceiling, asked through `Prima.Caps`. One locking transaction locks the
-  athanor's row, counts every thread the athanor holds, asks the cap and
-  inserts, so creates racing for the last place leave one row in it. An
-  athanor with no row of its own has nothing to lock: its create counts
-  and inserts in the same transaction, unlocked on PostgreSQL. A refusal
-  rolls back and is the port's answer unchanged:
-  `{:limit_reached, :max_threads_per_athanor, cap}` at the ceiling,
-  `{:cap_unverifiable, :max_threads_per_athanor}` when the cap or the
-  count cannot be read.
+  A thread is a row a client's send can mint, so a new day is counted
+  against the operator's `max_threads_per_athanor` ceiling, asked through
+  `Prima.Caps`. One locking transaction takes the athanor's row, looks for
+  the day, counts and inserts, so two callers making the same day at once
+  leave one row and both answer it; an athanor with no row of its own is
+  held to one row per day by the unique index on `(athanor_id, day)`, and
+  the caller that loses that race reads the winner's. A refusal is the
+  port's answer unchanged: `{:limit_reached, :max_threads_per_athanor,
+  cap}` at the ceiling, `{:cap_unverifiable, :max_threads_per_athanor}`
+  when the cap or the count cannot be read.
   """
-  @spec create(Prima.Actor.t(), map()) ::
+  @spec daily(Prima.Actor.t(), Date.t()) ::
           {:ok, map()}
           | {:error,
              :no_athanor
@@ -138,20 +151,150 @@ defmodule Arca.ThreadStorage do
              | {:limit_reached, :max_threads_per_athanor, pos_integer()}
              | {:cap_unverifiable, :max_threads_per_athanor}
              | :database_error}
-  def create(actor, attrs \\ %{})
-
-  def create(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
+  def daily(%Prima.Actor{athanor_id: athanor_id} = actor, %Date{} = day)
       when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("ThreadStorage.create", fn ->
-      Repo.locking_transaction(fn -> insert_thread(actor, attrs) end)
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.daily", fn ->
+      case Repo.locking_transaction(fn -> day_or_new(actor, day) end) do
+        {:error, %Ecto.Changeset{errors: errors}} = refused ->
+          if unique_day?(errors), do: day_row(actor, day), else: refused
+
+        answer ->
+          answer
+      end
     end)
     |> Arca.Data.project()
   end
 
-  def create(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
+  def daily(%Prima.Actor{}, _day), do: {:error, :no_athanor}
 
-  # In the create's transaction: the athanor's row is locked before the
-  # count, so creates into one athanor count and insert one at a time.
+  defp day_or_new(actor, day) do
+    lock_athanor(actor)
+
+    case day_row(actor, day) do
+      {:ok, thread} ->
+        thread
+
+      {:error, :not_found} ->
+        insert_thread(actor, %{kind: "daily", day: day, title: Date.to_iso8601(day)})
+    end
+  end
+
+  # arca:db-raise-ok inside the caller's rescue or transaction.
+  defp day_row(actor, day) do
+    from(c in Thread, where: c.kind == "daily" and c.day == ^day)
+    |> QueryHelpers.where_tenant(actor)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      thread -> {:ok, thread}
+    end
+  end
+
+  # The `(athanor_id, day)` index, by the field each adapter reports it on.
+  defp unique_day?(errors) do
+    Enum.any?(errors, fn
+      {field, {_msg, meta}} when field in [:athanor_id, :day] ->
+        Keyword.get(meta, :constraint) == :unique
+
+      _other ->
+        false
+    end)
+  end
+
+  @doc """
+  The daily thread of the context's athanor nearest `day` on one side of
+  it: the latest one before it (`:before`) or the earliest one after it
+  (`:after`). `{:error, :not_found}` when there is none that way.
+  """
+  @spec adjacent_day(Prima.Actor.t(), Date.t(), :before | :after) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def adjacent_day(%Prima.Actor{athanor_id: athanor_id} = actor, %Date{} = day, side)
+      when is_binary(athanor_id) and athanor_id != "" and side in [:before, :after] do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.adjacent_day", fn ->
+      query =
+        case side do
+          :before ->
+            from(c in Thread, where: c.kind == "daily" and c.day < ^day, order_by: [desc: c.day])
+
+          :after ->
+            from(c in Thread, where: c.kind == "daily" and c.day > ^day, order_by: [asc: c.day])
+        end
+
+      from(c in query, limit: 1)
+      |> QueryHelpers.where_tenant(actor)
+      |> Repo.one()
+      |> case do
+        nil -> {:error, :not_found}
+        thread -> {:ok, thread}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def adjacent_day(%Prima.Actor{}, _day, _side), do: {:error, :no_athanor}
+
+  @doc """
+  Move the thread's read mark to `seq`, forward only: one statement that
+  lands only on a mark below it, so of two devices marking at once the
+  further one stands, and a mark never moves back. A `seq` past the
+  thread's last message marks that message. Answers the mark as it
+  stands after the statement.
+  """
+  @spec mark_read(Prima.Actor.t(), String.t(), non_neg_integer()) ::
+          {:ok, non_neg_integer()} | {:error, :no_athanor | :not_found | :database_error}
+  def mark_read(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, seq)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_integer(seq) and seq >= 0 do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.mark_read", fn ->
+      last =
+        from(m in Message,
+          where: m.thread_id == ^thread_id and m.athanor_id == ^athanor_id,
+          select: coalesce(max(m.seq), 0)
+        )
+        |> Repo.one()
+
+      mark = min(seq, last)
+
+      {_count, _} =
+        from(c in Thread, where: c.id == ^thread_id and c.read_seq < ^mark)
+        |> QueryHelpers.where_tenant(actor)
+        |> Repo.update_all(set: [read_seq: mark])
+
+      with {:ok, thread} <- thread_row(actor, thread_id), do: {:ok, thread.read_seq}
+    end)
+  end
+
+  def mark_read(%Prima.Actor{}, _thread_id, _seq), do: {:error, :no_athanor}
+
+  @doc """
+  How many posts of the thread the person has not seen: the messages past
+  its read mark that the person did not send, a schedule's line among
+  them, since it is written in the server's voice. A turn's own rows are
+  no posts.
+  """
+  @spec unread(Prima.Actor.t(), map()) ::
+          {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
+  def unread(%Prima.Actor{athanor_id: athanor_id} = actor, %{id: thread_id, read_seq: mark})
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_integer(mark) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.unread", fn ->
+      count =
+        from(m in Message,
+          where: m.thread_id == ^thread_id and m.seq > ^mark and m.kind in ^@post_kinds,
+          where: m.sent_by != "person" or m.author in ^[@agent_author, @system_author]
+        )
+        |> QueryHelpers.where_tenant(actor)
+        |> Repo.aggregate(:count)
+
+      {:ok, count}
+    end)
+  end
+
+  def unread(%Prima.Actor{}, _thread), do: {:error, :no_athanor}
+
+  # In the caller's locking transaction, which has taken the athanor's row
+  # before the count, so creates into one athanor count and insert one at
+  # a time.
   defp insert_thread(actor, attrs) do
     lock_athanor(actor)
 
@@ -164,10 +307,11 @@ defmodule Arca.ThreadStorage do
            |> Thread.changeset(%{
              id: attrs[:id] || Prima.UUID7.generate_id("thread"),
              athanor_id: actor.athanor_id,
-             kind: attrs[:kind] || "own",
+             kind: attrs.kind,
              parent_id: attrs[:parent_id],
+             day: attrs[:day],
              agent: attrs[:agent],
-             title: attrs[:title] || @default_title,
+             title: attrs.title,
              created_by: actor.user_id || @system_author
            })
            |> Repo.insert() do
@@ -225,7 +369,8 @@ defmodule Arca.ThreadStorage do
   counts. One locking transaction takes the athanor's row before it
   looks, so two callers never make two. `{:error, :not_found}` when the
   room is not a thread of the athanor, `{:error, :not_a_room}` when it is
-  itself a child thread.
+  itself a child thread: a room is a daily or a workspace thread of the
+  same athanor (`Arca.Schemas.Thread.room_kinds/0`).
   """
   @spec crew_thread(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, map()}
@@ -243,7 +388,8 @@ defmodule Arca.ThreadStorage do
       Repo.locking_transaction(fn ->
         lock_athanor(actor)
 
-        with {:ok, %Thread{kind: "own"} = room} <- thread_row(actor, room_id),
+        with {:ok, %Thread{kind: kind} = room} when kind in @room_kinds <-
+               thread_row(actor, room_id),
              nil <- standing_child(actor, room.id, member) do
           insert_thread(actor, %{
             kind: "crew",
@@ -697,7 +843,7 @@ defmodule Arca.ThreadStorage do
     end
   end
 
-  defp child_ids(actor, %Thread{kind: "own", id: room_id}) do
+  defp child_ids(actor, %Thread{kind: kind, id: room_id}) when kind in @room_kinds do
     from(c in Thread, where: c.kind == "crew" and c.parent_id == ^room_id, select: c.id)
     |> QueryHelpers.where_tenant(actor)
     |> Repo.all()
@@ -917,8 +1063,7 @@ defmodule Arca.ThreadStorage do
   `"text"`), `:content`, `:payload` (a map, stored as JSON), `:status`,
   `:execution_id`. The next
   `seq` is taken inside a transaction; a concurrent appender losing the race
-  on the unique index retries. The first user text message titles a
-  thread that still carries the default title.
+  on the unique index retries.
   """
   @spec append(Prima.Actor.t(), String.t(), map()) ::
           {:ok, map()}
@@ -946,8 +1091,8 @@ defmodule Arca.ThreadStorage do
   # `(thread_id, seq)` race surfaces as `Ecto.InvalidChangesetError`
   # carrying a `:unique` constraint on `:thread_id`; a caller that owns the
   # transaction retries the whole transaction on it
-  # (`Arca.TurnStorage.with_seq_retry/1`). Titles the thread from its first
-  # user text and bumps `last_message_at` as `append/3` does. An
+  # (`Arca.TurnStorage.with_seq_retry/1`). Bumps `last_message_at` as
+  # `append/3` does. An
   # in-transaction helper: it answers the schema row to Arca's own
   # transactions, never across the boundary.
   @spec insert_message!(Prima.Actor.t(), Thread.t(), map()) :: Message.t()
@@ -967,7 +1112,7 @@ defmodule Arca.ThreadStorage do
     msg = Repo.insert!(Message.changeset(%Message{}, row(actor, thread, attrs, seq, now)))
 
     thread
-    |> Thread.changeset(%{last_message_at: now, title: title_after(thread, msg)})
+    |> Thread.changeset(%{last_message_at: now})
     |> Repo.update!()
 
     msg
@@ -975,6 +1120,35 @@ defmodule Arca.ThreadStorage do
 
   def insert_message!(%Prima.Actor{}, _thread, _attrs),
     do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.insert_message!/3")
+
+  @doc """
+  The message a sender accepted under `client_id` in any daily thread of
+  the context's athanor, if any: where a retry that crossed midnight was
+  first accepted (`Aqua.ScheduleTurns`). A client id names one message
+  per thread, so two daily threads holding it is no answer either.
+  """
+  @spec daily_message(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def daily_message(%Prima.Actor{athanor_id: athanor_id} = actor, client_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.daily_message", fn ->
+      from(m in Message,
+        join: c in Thread,
+        on: c.id == m.thread_id and c.athanor_id == m.athanor_id,
+        where: m.client_id == ^client_id and c.kind == "daily",
+        limit: 2
+      )
+      |> QueryHelpers.where_tenant(actor)
+      |> Repo.all()
+      |> case do
+        [msg] -> {:ok, msg}
+        _none_or_two -> {:error, :not_found}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def daily_message(%Prima.Actor{}, _client_id), do: {:error, :no_athanor}
 
   @doc "The message a sender accepted under `client_id` in this thread, if any."
   @spec get_by_client_id(Prima.Actor.t(), String.t(), String.t()) ::
@@ -1018,10 +1192,7 @@ defmodule Arca.ThreadStorage do
         case Repo.insert(changeset) do
           {:ok, msg} ->
             thread
-            |> Thread.changeset(%{
-              last_message_at: now,
-              title: title_after(thread, msg)
-            })
+            |> Thread.changeset(%{last_message_at: now})
             |> Repo.update!()
 
             msg
@@ -1074,26 +1245,6 @@ defmodule Arca.ThreadStorage do
       inserted_at: now
     }
   end
-
-  # A thread is named by its first user text; later renames are the
-  # user's own (`update/3`).
-  defp title_after(%Thread{title: @default_title}, %Message{
-         kind: "text",
-         author: author,
-         content: content
-       })
-       when author not in [@agent_author, @system_author] and is_binary(content) do
-    # The row keeps the text as typed; the title drops a leading `@aqua`.
-    first_line = content |> String.trim() |> String.split("\n", parts: 2) |> List.first()
-
-    case first_line && Regex.replace(~r/^@\S+\s*/, first_line, "") do
-      "" -> @default_title
-      nil -> @default_title
-      line -> String.slice(line, 0, @title_max)
-    end
-  end
-
-  defp title_after(%Thread{title: title}, _msg), do: title
 
   @doc "Replace a message's content/payload (the runner finalising a streamed turn)."
   @spec update_message(Prima.Actor.t(), String.t(), map()) ::

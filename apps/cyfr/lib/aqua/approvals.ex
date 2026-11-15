@@ -36,6 +36,7 @@ defmodule Aqua.Approvals do
           optional(:scope) => Standing.scope(),
           optional(:reason) => String.t() | nil,
           optional(:lifecycle) => Standing.lifecycle() | nil,
+          optional(:schedule) => String.t() | nil,
           optional(:until) => DateTime.t() | nil,
           optional(:constraint) => %{kind: String.t(), patterns: [String.t()]} | nil,
           optional(:sources) => [Prima.Source.t()] | nil
@@ -56,8 +57,9 @@ defmodule Aqua.Approvals do
   Decide a pending approval as the calling person. `choice`: `:decision`
   (`:approved` | `:declined`), `:scope` (`:once` by default; `:thread`
   or `:always` with an approval, `:never` with a decline), `:reason`,
-  and a standing approval's bounds: `:lifecycle` (`:execution`, `:turn`
-  or `:schedule`, the card's own), `:until` (a `DateTime`),
+  and a standing approval's bounds: `:lifecycle` (`:execution` or `:turn`,
+  the card's own, or with `:always` `:schedule` and `:schedule`, the id of
+  the person's schedule it ends with), `:until` (a `DateTime`),
   `:constraint` (`%{kind, patterns}`) and `:sources` (the outside sources,
   among those the card named, the answer also follows), carried with the
   scope into the standing row (`Aqua.Standing.rows/5`). A source the card
@@ -74,7 +76,7 @@ defmodule Aqua.Approvals do
   def resolve(%Context{} = ctx, approval_id, %{decision: decision} = choice)
       when decision in [:approved, :declined] do
     scope = Map.get(choice, :scope) || :once
-    bounds = Map.take(choice, [:lifecycle, :until, :constraint, :sources])
+    bounds = Map.take(choice, [:lifecycle, :schedule, :until, :constraint, :sources])
 
     with {:ok, approval} <- fetch_approval(ctx, approval_id),
          {:ok, turn} <- Tape.turn(ctx, approval.turn_id),
@@ -185,7 +187,7 @@ defmodule Aqua.Approvals do
   defp approve(ctx, turn, approval, step, intent, scope, bounds) do
     proposal = intent["proposal"] || %{}
 
-    with :ok <- Standing.check(intent, scope),
+    with :ok <- Standing.check(intent, scope, bounds),
          :ok <- shows_what_runs(intent),
          :ok <- named_on_card(intent, Map.get(bounds, :sources)),
          :ok <- authorize_card(ctx, turn, proposal),
@@ -450,6 +452,7 @@ defmodule Aqua.Approvals do
   defp resolution_bounds(bounds) do
     %{}
     |> put_bound("lifecycle", Map.get(bounds, :lifecycle), &Atom.to_string/1)
+    |> put_bound("schedule", Map.get(bounds, :schedule), & &1)
     |> put_bound("until", Map.get(bounds, :until), &DateTime.to_iso8601/1)
     |> put_bound("constraint", Map.get(bounds, :constraint), &constraint_wire/1)
     |> put_bound("sources", Map.get(bounds, :sources), &Prima.Source.to_json_list/1)

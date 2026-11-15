@@ -253,7 +253,9 @@ defmodule Aqua.ProgramGrantTest do
       assert Map.keys(stored(ctx)) == Enum.sort([gh.id, jq.id])
 
       assert :ok =
-               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start", jq.id)
+               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start", %{
+                 program: jq.id
+               })
 
       assert Map.keys(stored(ctx)) == [gh.id]
     end

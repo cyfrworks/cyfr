@@ -32,7 +32,8 @@ defmodule Aqua do
     athanor consented to still covers its sources.
   - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
     schedule asked for it; `Aqua.ScheduleTurns` — a schedule's line for
-    Aqua, each fire a turn in the schedule's own thread.
+    Aqua, each fire a turn of the daily thread current when it fires.
+  - `Aqua.Day` — the person's day, and the daily thread that holds it.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into a
     shared thread you sit in.
   - `Aqua.Notes` — what somebody chose to keep out of a thread: the
@@ -153,17 +154,36 @@ defmodule Aqua do
   defdelegate thread_state(thread_id, athanor_id), to: Aqua.Runner, as: :state
 
   @doc "Whether a card offers an answer of `scope` for its intent. See `Aqua.Standing.offered?/2`."
-  @spec standing_offered?(map(), :thread | :always) :: boolean()
+  @spec standing_offered?(map(), :thread | :always | :schedule) :: boolean()
   defdelegate standing_offered?(intent, scope), to: Aqua.Standing, as: :offered?
 
   @doc """
-  Whether `thread_id` is the thread a schedule's line for Aqua runs in, in
-  the context's athanor: where a card offers an answer for this thread
-  ending with that schedule (`Aqua.Standing`).
+  The person's schedules that hold a line for Aqua, live, in the
+  context's athanor, oldest first, each `%{id, name}`: what a card offers
+  an answer "for a schedule" for (`Aqua.Standing`).
   """
-  @spec schedule_thread?(Context.t(), String.t()) :: boolean()
-  def schedule_thread?(%Context{} = ctx, thread_id) when is_binary(thread_id),
-    do: match?({:ok, _}, Arca.CronSchedule.of_thread(Context.actor(ctx), thread_id))
+  @spec answer_schedules(Context.t()) :: {:ok, [%{id: String.t(), name: String.t()}]}
+  defdelegate answer_schedules(ctx), to: Aqua.Standing, as: :schedules
+
+  @doc """
+  Keep `zone`, the time zone the person's browser reported, as theirs when
+  the day can be read in it and it differs from the stored one
+  (`Aqua.Day.put_zone/2`).
+  """
+  @spec put_time_zone(String.t(), term()) :: :ok | {:error, term()}
+  defdelegate put_time_zone(user_id, zone), to: Aqua.Day, as: :put_zone
+
+  @doc "The current daily thread of the context's athanor (`Aqua.Day.current/1`)."
+  @spec today(Context.t()) :: {:ok, map()} | {:error, term()}
+  defdelegate today(ctx), to: Aqua.Day, as: :current
+
+  @doc """
+  Move the person's read mark of `thread_id` to `seq`, forward only, while a
+  view shows it, and announce the thread again to their list with its
+  count (`Aqua.ThreadList`).
+  """
+  @spec mark_read(Context.t(), String.t(), non_neg_integer()) :: :ok | {:error, term()}
+  defdelegate mark_read(ctx, thread_id, seq), to: Aqua.ThreadList
 
   @doc "An empty stream of a running turn's answers (`Aqua.Loop.Stream.new/0`)."
   @spec stream_new() :: Aqua.Loop.Stream.t()

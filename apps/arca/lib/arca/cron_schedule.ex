@@ -189,8 +189,8 @@ defmodule Arca.CronSchedule do
   @doc """
   A digest of what a schedule is defined to do: its name, time,
   reference, profile, input and missed-run policy. What the scheduler
-  records of its fires (the run times and counts, the last error), its
-  status and its thread are not part of it, so a fire or a pause between
+  records of its fires (the run times and counts, the last error) and its
+  status are not part of it, so a fire or a pause between
   a read and a write does not change it.
   """
   @spec definition(map()) :: String.t()
@@ -488,107 +488,6 @@ defmodule Arca.CronSchedule do
 
       {:ok, rows}
     end)
-  end
-
-  @doc """
-  The thread an Aqua line's turns run in: the one its row names while
-  that thread still stands in the athanor, else a new one of the
-  schedule's person (`kind` `own`, Aqua its agent, titled with the
-  schedule's name), named on the row in the same transaction, under the
-  row's lock and this member's slot. `actor` is the schedule's athanor
-  and person. A schedule deleted, or one that holds no Aqua line, is
-  `:not_found`; a thread the athanor's ceiling refuses answers as
-  `Arca.ThreadStorage.create/2` does. Answers the thread's id.
-  """
-  @spec thread(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, String.t()} | {:error, term()}
-  def thread(%Prima.Actor{athanor_id: athanor_id, user_id: user_id} = actor, id, agent)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
-             is_binary(agent) do
-    Errors.with_db_rescue("CronSchedule.thread", fn ->
-      guarded(actor, id, :live, fn
-        %Row{kind: "schedule", reference: @aqua_line, user_id: ^user_id} = schedule ->
-          case standing_thread(actor, schedule.thread_id) do
-            {:ok, thread_id} -> {:ok, thread_id}
-            :none -> new_thread(actor, schedule, agent)
-          end
-
-        _not_an_aqua_line ->
-          {:error, :not_found}
-      end)
-    end)
-  end
-
-  def thread(%Prima.Actor{}, _id, _agent), do: {:error, :no_athanor}
-
-  @doc """
-  The live schedule of the actor's athanor whose Aqua line runs in
-  `thread_id`, or `:not_found` when no one does (or, against the one
-  writer's rule, more than one would).
-  """
-  @spec of_thread(Prima.Actor.t(), String.t()) ::
-          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
-  def of_thread(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
-    Errors.with_db_rescue("CronSchedule.of_thread", fn ->
-      from(s in Row,
-        where: s.thread_id == ^thread_id and s.kind == "schedule" and s.status != "deleted",
-        where: s.reference == ^@aqua_line
-      )
-      |> QueryHelpers.where_tenant(actor)
-      |> Arca.Repo.all()
-      |> case do
-        [row] -> {:ok, row}
-        _none_or_more -> {:error, :not_found}
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  def of_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
-
-  @doc """
-  Forget `thread_id` on every schedule of the actor's athanor that names
-  it, once the thread is deleted: the next fire makes a new one. Under
-  this member's slot. Answers how many rows let it go.
-  """
-  @spec forget_thread(Prima.Actor.t(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, :not_owner | :no_athanor | :database_error}
-  def forget_thread(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
-    Arca.Repo.owned("CronSchedule.forget_thread", fn ->
-      {count, _} =
-        from(s in Row, where: s.thread_id == ^thread_id)
-        |> QueryHelpers.where_tenant(actor)
-        |> Arca.Repo.update_all(set: [thread_id: nil])
-
-      {:ok, count}
-    end)
-  end
-
-  def forget_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
-
-  # The thread a row names, while it stands in the actor's athanor.
-  defp standing_thread(_actor, nil), do: :none
-
-  defp standing_thread(actor, thread_id) do
-    case Arca.ThreadStorage.get(actor, thread_id) do
-      {:ok, %{kind: "own"}} -> {:ok, thread_id}
-      {:error, :not_found} -> :none
-      {:ok, _not_own} -> :none
-      {:error, _} = unread -> unread
-    end
-  end
-
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
-  defp new_thread(actor, schedule, agent) do
-    with {:ok, thread} <-
-           Arca.ThreadStorage.create(actor, %{kind: "own", agent: agent, title: schedule.name}) do
-      from(s in Row, where: s.id == ^schedule.id)
-      |> Arca.Repo.update_all(set: [thread_id: thread.id])
-
-      {:ok, thread.id}
-    end
   end
 
   # ---- feeds ------------------------------------------------------------------

@@ -68,6 +68,9 @@ defmodule Cyfr.App.MixProject do
       {:arca, in_umbrella: true},
       {:sanctum, in_umbrella: true},
       {:jason, "~> 1.4"},
+      # The IANA zones, which the person's day is read in (`Aqua.Day`):
+      # Elixir itself knows UTC alone.
+      {:tz, "~> 0.28.4"},
       # Aqua agent/skill frontmatter (Compendium.AquaAgent)
       {:yaml_elixir, "~> 2.12"},
       {:plug, "~> 1.14"},

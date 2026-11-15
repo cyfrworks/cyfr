@@ -11,6 +11,7 @@ defmodule Aqua.FacadeTest do
   use ExUnit.Case, async: true
 
   @roster [
+    answer_schedules: 1,
     approval_scope_string: 1,
     attachment_blob_path: 3,
     attachment_limits: 0,
@@ -19,6 +20,7 @@ defmodule Aqua.FacadeTest do
     brain_options: 2,
     brain_signs_in?: 1,
     describe_note_result: 1,
+    mark_read: 3,
     model_status: 2,
     models: 1,
     models: 2,
@@ -27,9 +29,9 @@ defmodule Aqua.FacadeTest do
     pin_max_bytes: 0,
     pinned_note_page: 1,
     providers: 1,
+    put_time_zone: 2,
     room_excerpt: 2,
     roster: 1,
-    schedule_thread?: 2,
     stale_consent_refs: 1,
     standing_offered?: 2,
     stream_abandoned: 2,
@@ -40,6 +42,7 @@ defmodule Aqua.FacadeTest do
     stream_texts: 1,
     strip_attachment_name: 1,
     thread_state: 2,
+    today: 1,
     tool_kind: 2,
     virtual_tool_catalog: 0
   ]

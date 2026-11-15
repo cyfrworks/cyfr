@@ -33,6 +33,8 @@ defmodule Aqua.Loop.Turn do
   alias Sanctum.Context
 
   @default_deadline_ms 15 * 60 * 1000
+  # A person's rooms, which hold a crew's waiting requests.
+  @rooms Arca.ThreadStorage.room_kinds()
   @probe_timeout_ms 60_000
 
   @type t :: %__MODULE__{}
@@ -203,8 +205,9 @@ defmodule Aqua.Loop.Turn do
   defp crew(_ctx, _roster, _policy, false = _soul?), do: []
 
   # The room's requests still waiting on a reply, which the prompt lists
-  # with their age; a child thread holds none.
-  defp requests(ctx, %{kind: "own", id: thread_id}) do
+  # with their age: a daily or a workspace thread's; a child thread holds
+  # none.
+  defp requests(ctx, %{kind: kind, id: thread_id}) when kind in @rooms do
     case Tape.pending_requests(ctx, thread_id) do
       rows when is_list(rows) -> rows
       {:error, _} -> []

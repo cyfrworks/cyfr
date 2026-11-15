@@ -65,11 +65,14 @@ defmodule Aqua.ToolGrants do
   @type key :: {tool :: String.t(), action :: String.t()}
 
   @typedoc """
-  One standing answer as the chat lists it: its tool, its action and, for
-  an answer that is one program's, that program's row id (nil for any
-  other answer).
+  One standing answer as the chat lists it: its tool, its action, for an
+  answer that is one program's that program's row id, and for an answer
+  that ends with a schedule that schedule's id (each nil for any other
+  answer).
   """
-  @type answer :: {tool :: String.t(), action :: String.t(), program_row :: String.t() | nil}
+  @type answer ::
+          {tool :: String.t(), action :: String.t(), program_row :: String.t() | nil,
+           schedule_id :: String.t() | nil}
 
   @typedoc "One stored grant, as the plain map `Sanctum.ToolGrants` answers."
   @type grant :: %{required(:scope) => String.t(), optional(atom()) => term()}
@@ -285,19 +288,22 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  Every `{agent_name, tool, action, program}` a thread has a standing
-  allow for, for every agent that has rows in it: what the thread pane
-  lists as the thread's standing answers, each revocable, keyed by the
-  agent the answer was given for. `program` is nil, or for an answer
+  Every `{agent_name, tool, action, program, schedule}` a thread has a
+  standing allow for, for every agent that has rows in it: what the thread
+  pane lists as the thread's standing answers, each revocable, keyed by
+  the agent the answer was given for. `program` is nil, or for an answer
   that is one program's, `%{id, name}`: its row's id and its name as the
   row holds it now, so a renamed program's answer reads as the program
-  it covers. Standing-checked and deny-subtracted per agent exactly as
-  `allowed_keys/1`. Fails closed like the reads.
+  it covers. `schedule` is nil, or for an answer that ends with a
+  schedule, `%{id, name}` the same way. Standing-checked and
+  deny-subtracted per agent exactly as `allowed_keys/1`. Fails closed like
+  the reads.
   """
   @spec allowed_by_agent(Context.t(), String.t()) ::
           {:ok,
            MapSet.t(
-             {String.t(), String.t(), String.t(), %{id: String.t(), name: String.t()} | nil}
+             {String.t(), String.t(), String.t(), %{id: String.t(), name: String.t()} | nil,
+              %{id: String.t(), name: String.t()} | nil}
            )}
           | {:error, unavailable()}
   def allowed_by_agent(%Context{} = ctx, thread_id) do
@@ -308,12 +314,14 @@ defmodule Aqua.ToolGrants do
            |> Enum.flat_map(fn {name, agent_rows} ->
              agent_rows
              |> allowed_keys()
-             |> Enum.map(fn {tool, action, row} -> {name, tool, action, row} end)
+             |> Enum.map(fn {tool, action, row, schedule} -> {name, tool, action, row, schedule} end)
            end),
-         {:ok, programs} <- program_names(ctx, answers) do
+         {:ok, programs} <- program_names(ctx, answers),
+         {:ok, schedules} <- schedule_names(ctx, answers) do
       {:ok,
-       MapSet.new(answers, fn {name, tool, action, row} ->
-         {name, tool, action, row && Map.fetch!(programs, row)}
+       MapSet.new(answers, fn {name, tool, action, row, schedule} ->
+         {name, tool, action, row && Map.fetch!(programs, row),
+          schedule && Map.fetch!(schedules, schedule)}
        end)}
     else
       {:error, _reason} -> {:error, @unavailable}
@@ -325,7 +333,7 @@ defmodule Aqua.ToolGrants do
   # id.
   defp program_names(ctx, answers) do
     answers
-    |> Enum.flat_map(fn {_name, _tool, _action, row} -> if row, do: [row], else: [] end)
+    |> Enum.flat_map(fn {_name, _tool, _action, row, _schedule} -> if row, do: [row], else: [] end)
     |> Enum.uniq()
     |> Enum.reduce_while({:ok, %{}}, fn row, {:ok, names} ->
       case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row) do
@@ -336,10 +344,27 @@ defmodule Aqua.ToolGrants do
     end)
   end
 
+  # The names the answers' schedules hold now, by id, read in the caller's
+  # athanor. An answer is listed only while its schedule stands, so a
+  # schedule not found reads by its id.
+  defp schedule_names(ctx, answers) do
+    answers
+    |> Enum.flat_map(fn {_name, _tool, _action, _row, id} -> if id, do: [id], else: [] end)
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, %{}}, fn id, {:ok, names} ->
+      case Arca.CronSchedule.get(Sanctum.Context.actor(ctx), id) do
+        {:ok, %{name: name}} -> {:cont, {:ok, Map.put(names, id, %{id: id, name: name})}}
+        {:error, :not_found} -> {:cont, {:ok, Map.put(names, id, %{id: id, name: id})}}
+        {:error, _unanswered} = error -> {:halt, error}
+      end
+    end)
+  end
+
   @doc """
   The answers a person gave with a standing allow that still stands, each
-  `{tool, action, program_row}` (`t:answer/0`), one per program for an
-  action whose answer is one program's — what the chat shows as its
+  `{tool, action, program_row, schedule_id}` (`t:answer/0`), one per
+  program for an action whose answer is one program's and one per
+  schedule for answers that end with one — what the chat shows as its
   standing answers, each
   revocable there. An allow covers only the calls its bounds admit (each
   decided as it is made, `effective/2`), and every one is listed, so
@@ -358,12 +383,15 @@ defmodule Aqua.ToolGrants do
     |> standing_allows()
     |> Enum.reject(&MapSet.member?(denied, {&1.tool, &1.action}))
     |> MapSet.new(fn %{tool: tool, action: action} = grant ->
-      {tool, action, program_row(grant)}
+      {tool, action, program_row(grant), schedule_of(grant)}
     end)
   end
 
   defp program_row(%{program_row: row}) when is_binary(row) and row != "", do: row
   defp program_row(_grant), do: nil
+
+  defp schedule_of(%{schedule_id: id}) when is_binary(id) and id != "", do: id
+  defp schedule_of(_grant), do: nil
 
   @doc "The grant scopes, as the rows spell them."
   @spec scopes() :: [String.t()]
@@ -403,7 +431,7 @@ defmodule Aqua.ToolGrants do
     do: "That run is not one this card belongs to, so no answer can end with it."
 
   def refusal_message({:scope_not_permitted, :no_schedule}),
-    do: "This run was not started by a schedule, so no answer can end with one."
+    do: "That is not one of your schedules for Aqua, so no answer can end with it."
 
   def refusal_message({:scope_not_permitted, :invalid_deadline}),
     do: "The time a standing answer ends at must be a date and time."
