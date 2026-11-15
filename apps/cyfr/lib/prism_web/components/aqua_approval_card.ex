@@ -23,9 +23,15 @@ defmodule PrismWeb.AquaApprovalCard do
       the click (`:thread`, `until` computed here in UTC);
     - always — a standing allow for the agent wherever it works (an
       agent-scope row in its home athanor);
-    - for this schedule — the same, ending with the schedule the card's
-      run was started by (`:always`, lifecycle `:schedule`), offered only
-      when that run's row names one (`scheduled`);
+    - for this schedule, in a schedule's own thread — a standing allow
+      for the same `tool.action` in this thread, ending with the schedule
+      whose thread it is (`:thread`, lifecycle `:schedule`), offered only
+      there (`schedule_thread`); that schedule's next fires run in this
+      thread and are allowed it, nothing else is;
+    - for this schedule, agent-wide — the same at agent scope, ending with
+      the schedule the card's run was started by (`:always`, lifecycle
+      `:schedule`), offered only when that run's row names one
+      (`scheduled`);
     - limit to these paths — for an action that declares which argument
       names a storage path (`Sanctum.Catalog.action_declaration/1`), a
       standing choice may carry the path the call names, in the storage
@@ -285,6 +291,18 @@ defmodule PrismWeb.AquaApprovalCard do
                 </button>
               </span>
               <button
+                :if={@schedule_thread}
+                type="button"
+                phx-click="approval:approve"
+                phx-value-scope="thread"
+                phx-value-lifecycle="schedule"
+                phx-target={@myself}
+                data-test="approval-for-schedule"
+                class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
+              >
+                for this schedule
+              </button>
+              <button
                 :if={@scheduled && standing_offered?(@kind, @standing, :always)}
                 type="button"
                 phx-click="approval:approve"
@@ -385,6 +403,7 @@ defmodule PrismWeb.AquaApprovalCard do
       |> assign_new(:resolved_by, fn -> nil end)
       |> assign_new(:decided_at, fn -> nil end)
       |> assign_new(:scheduled, fn -> false end)
+      |> assign_new(:schedule_thread, fn -> false end)
       |> assign_new(:limited, fn -> false end)
       |> assign_new(:follows, fn -> false end)
       |> assign(:deadlines, @deadlines)
@@ -453,7 +472,8 @@ defmodule PrismWeb.AquaApprovalCard do
   end
 
   # The choice an offer stands for: once; this thread, ending with the
-  # card's own run or at a deadline computed here, in UTC; or the agent
+  # card's own run, at a deadline computed here, in UTC, or with the
+  # schedule whose thread it is; or the agent
   # everywhere, ending with the run's schedule or not at all. A standing
   # choice carries the paths it is limited to when the person ticked it.
   # An offer the card does not make chooses nothing.
@@ -461,6 +481,9 @@ defmodule PrismWeb.AquaApprovalCard do
 
   defp choice("thread", %{"lifecycle" => "execution"}, assigns),
     do: {:ok, limited(%{scope: :thread, lifecycle: :execution}, assigns)}
+
+  defp choice("thread", %{"lifecycle" => "schedule"}, %{schedule_thread: true} = assigns),
+    do: {:ok, limited(%{scope: :thread, lifecycle: :schedule}, assigns)}
 
   defp choice("thread", %{"hours" => hours}, assigns) do
     case List.keyfind(@deadlines, hours, 0) do

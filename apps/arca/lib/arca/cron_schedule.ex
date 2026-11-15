@@ -461,6 +461,32 @@ defmodule Arca.CronSchedule do
   def thread(%Prima.Actor{}, _id, _agent), do: {:error, :no_athanor}
 
   @doc """
+  The live schedule of the actor's athanor whose Aqua line runs in
+  `thread_id`, or `:not_found` when no one does (or, against the one
+  writer's rule, more than one would).
+  """
+  @spec of_thread(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
+  def of_thread(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
+    Errors.with_db_rescue("CronSchedule.of_thread", fn ->
+      from(s in Row,
+        where: s.thread_id == ^thread_id and s.kind == "schedule" and s.status != "deleted",
+        where: s.reference == ^@aqua_line
+      )
+      |> QueryHelpers.where_tenant(actor)
+      |> Arca.Repo.all()
+      |> case do
+        [row] -> {:ok, row}
+        _none_or_more -> {:error, :not_found}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def of_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
+
+  @doc """
   Forget `thread_id` on every schedule of the actor's athanor that names
   it, once the thread is deleted: the next fire makes a new one. Under
   this member's slot. Answers how many rows let it go.

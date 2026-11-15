@@ -378,6 +378,32 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     {open_pane(conn, athanor, thread), card}
   end
 
+  # A card in the thread a schedule's line for Aqua runs in.
+  defp offer_in_schedule_thread!(conn, athanor, here) do
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
+    card = card!(here, thread, @write, %{"standing" => nil})
+
+    {:ok, schedule} =
+      Arca.CronSchedule.create(Sanctum.Context.actor(here), %{
+        user_id: here.user_id,
+        name: "line-#{System.unique_integer([:positive])}",
+        cron_expression: "0 0 1 1 *",
+        reference: Arca.CronSchedule.aqua_line(),
+        resolved_reference: Arca.CronSchedule.aqua_line(),
+        input: Jason.encode!(%{"line" => "summarise"}),
+        cap: 0
+      })
+
+    # The schedule's thread, as its first fire names it.
+    {1, _} =
+      Arca.Repo.update_all(
+        from(s in Arca.Schemas.CronSchedule, where: s.id == ^schedule.id),
+        set: [thread_id: thread.id]
+      )
+
+    {open_pane(conn, athanor, thread), card}
+  end
+
   # The grant that reached `approval.resolve` for `card`, as it was asked.
   defp resolved(card) do
     inputs =
@@ -457,6 +483,26 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       input = resolved(card)
 
       assert input["scope"] == "always"
+      assert input["lifecycle"] == "schedule"
+      refute Map.has_key?(input, "until")
+    end
+  end
+
+  describe "a schedule's own thread" do
+    test "its card offers for this schedule as this thread's answer ending with the schedule; no other thread's does",
+         %{conn: conn, athanor: athanor, here: here} do
+      {plain_pane, plain} = offer!(conn, athanor, here, false)
+
+      refute has_element?(
+               plain_pane,
+               ~s([id$="-card-#{plain.id}"] [data-test="approval-for-schedule"])
+             )
+
+      {pane, card} = offer_in_schedule_thread!(conn, athanor, here)
+      click_offer(pane, card, ~s(button[data-test="approval-for-schedule"]))
+      input = resolved(card)
+
+      assert input["scope"] == "thread"
       assert input["lifecycle"] == "schedule"
       refute Map.has_key?(input, "until")
     end

@@ -196,7 +196,7 @@ defmodule Aqua.ScheduleTurnsTest do
     do:
       "This scheduled run needed your approval to use #{tool_action}, and nobody was here " <>
         "to give it. To allow it next time, ask Aqua for it once in this thread and choose " <>
-        "\"for this thread\" when it asks."
+        "\"for this schedule\" when it asks."
 
   # ---------------------------------------------------------------------------
 
@@ -465,7 +465,7 @@ defmodule Aqua.ScheduleTurnsTest do
       assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
     end
 
-    test "an allow the person gives for the schedule's thread is honoured by its next fire there, and by no other thread or schedule",
+    test "for this schedule, given in its thread, is honoured by its fire a week later, and by no other thread, schedule or interactive turn",
          %{ctx: ctx} do
       script!([
         reply("Nothing yet."),
@@ -473,6 +473,8 @@ defmodule Aqua.ScheduleTurnsTest do
         reply("Kept."),
         keep("k2", "plan2"),
         reply("Kept again."),
+        keep("k4", "plan4"),
+        keep("k5", "plan5"),
         keep("k3", "plan3")
       ])
 
@@ -483,30 +485,60 @@ defmodule Aqua.ScheduleTurnsTest do
       ended!(ctx, first, "completed")
       %{thread_id: thread_id} = row!(ctx, id)
 
-      # The person, in the schedule's thread, asks once and allows it there.
-      :ok = Runner.subscribe(thread_id, ctx.athanor_id)
+      # The person, in the schedule's thread, asks once and answers "for
+      # this schedule".
       {:ok, %{turn_id: asked}} = Runner.send_message(ctx, thread_id, "keep the plan")
       await_status(ctx, asked, "paused")
       [%{id: approval_id, thread_id: ^thread_id}] = waiting_cards(ctx)
-
-      until = DateTime.add(DateTime.utc_now(), 24 * 3600, :second) |> DateTime.truncate(:second)
 
       assert {:ok, %{decision: "approved"}} =
                Approvals.resolve(ctx, approval_id, %{
                  decision: :approved,
                  scope: :thread,
-                 until: until
+                 lifecycle: :schedule
                })
 
       await_status(ctx, asked, "completed")
 
-      # The next fire keeps its note with nobody there.
+      assert {:ok,
+              [
+                %{
+                  tool: "notes",
+                  action: "keep",
+                  effect: "allow",
+                  scope: "thread",
+                  lifecycle_kind: "schedule",
+                  lifecycle_id: ^id,
+                  expires_at: nil
+                }
+              ]} = Aqua.ToolGrants.for_thread(ctx, thread_id, "aqua")
+
+      # A week of clock later, the next fire keeps its note with nobody there.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(g in Arca.Schemas.ToolGrant, where: g.thread_id == ^thread_id),
+          set: [granted_at: DateTime.add(DateTime.utc_now(), -8 * 86_400, :second)]
+        )
+
       second = fire!(ctx, id)
       assert ScheduleTurns.drain() == %{second.id => :sent}
       turn = await_status(ctx, turn_of(ctx, id, second).id, "completed")
       assert [%{tool: "notes", action: "keep", outcome: "ok"}] = steps(ctx, turn)
       assert %{state: "completed"} = ended!(ctx, second, "completed")
       assert waiting_cards(ctx) == []
+
+      # The person's own turns ask again, in that thread and in another.
+      {:ok, %{turn_id: again}} = Runner.send_message(ctx, thread_id, "keep another")
+      await_status(ctx, again, "paused")
+      assert [%{thread_id: ^thread_id}] = waiting_cards(ctx)
+      :ok = Runner.stop_turn(ctx, thread_id)
+
+      {:ok, plain} = Threads.create(actor(ctx))
+      {:ok, %{turn_id: elsewhere}} = Runner.send_message(ctx, plain.id, "keep a plan")
+      await_status(ctx, elsewhere, "paused")
+      plain_id = plain.id
+      assert [%{thread_id: ^plain_id}] = waiting_cards(ctx)
+      :ok = Runner.stop_turn(ctx, plain.id)
 
       # Another schedule, in a thread of its own, is not allowed by it.
       other = schedule!(ctx, "Other", "keep the plan")
@@ -516,7 +548,93 @@ defmodule Aqua.ScheduleTurnsTest do
       turn = await_status(ctx, turn_of(ctx, other, third).id, "failed")
       assert turn.error == sentence("notes.keep")
       assert %{state: "failed"} = ended!(ctx, third, "failed")
-      assert waiting_cards(ctx) == []
+
+      # Deleted, the schedule takes its answer with it.
+      assert {:ok, %{deleted: true}} =
+               Provider.handle("schedule", ctx, %{"action" => "delete", "schedule_id" => id})
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread_id, "aqua")
+    end
+
+    test "for this schedule ends with the schedule's thread, and is refused in a thread that is no schedule's",
+         %{ctx: ctx} do
+      script!([reply("Here."), keep("k1", "plan"), reply("Kept."), keep("k2", "plan2")])
+
+      id = schedule!(ctx, "Keeper", "say something")
+      first = fire!(ctx, id)
+      ScheduleTurns.drain()
+      await_status(ctx, turn_of(ctx, id, first).id, "completed")
+      %{thread_id: thread_id} = row!(ctx, id)
+
+      {:ok, %{turn_id: asked}} = Runner.send_message(ctx, thread_id, "keep the plan")
+      await_status(ctx, asked, "paused")
+      [%{id: approval_id}] = waiting_cards(ctx)
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval_id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :schedule
+               })
+
+      await_status(ctx, asked, "completed")
+
+      assert {:ok, [%{lifecycle_kind: "schedule"}]} =
+               Aqua.ToolGrants.for_thread(ctx, thread_id, "aqua")
+
+      assert Aqua.schedule_thread?(ctx, thread_id)
+      assert {:ok, _} = Tape.delete_thread(ctx, thread_id)
+
+      assert Arca.Repo.all(from(g in Arca.Schemas.ToolGrant, where: g.thread_id == ^thread_id)) ==
+               []
+
+      # In a thread no schedule's line runs in, the same answer asked for by
+      # hand is refused, and the card still waits.
+      {:ok, plain} = Threads.create(actor(ctx))
+      {:ok, %{turn_id: elsewhere}} = Runner.send_message(ctx, plain.id, "keep a plan")
+      await_status(ctx, elsewhere, "paused")
+      [%{id: plain_card}] = waiting_cards(ctx)
+
+      assert Approvals.resolve(ctx, plain_card, %{
+               decision: :approved,
+               scope: :thread,
+               lifecycle: :schedule
+             }) == {:error, {:scope_not_permitted, :no_schedule}}
+
+      assert [%{id: ^plain_card}] = waiting_cards(ctx)
+      refute Aqua.schedule_thread?(ctx, plain.id)
+      :ok = Runner.stop_turn(ctx, plain.id)
+    end
+
+    test "a fire's turn that finds its claim another server's says so plainly, and ends nothing",
+         %{ctx: ctx} do
+      id = schedule!(ctx, "Morning", "summarise")
+      occurrence = fire!(ctx, id)
+      {:ok, thread_id} = CronSchedule.thread(actor(ctx), id, "aqua")
+
+      # Another server's recovery took the claim over after this boot's
+      # turn was sent.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(o in Arca.Schemas.ScheduleOccurrence, where: o.id == ^occurrence.id),
+          set: [claimed_by: "boot-elsewhere"]
+        )
+
+      {:ok, person} = Sanctum.Tenancy.continuation(ctx.user_id, ctx.athanor_id, "schedule")
+
+      {:ok, %{turn_id: refused}} =
+        Runner.send_message(person, thread_id, "summarise",
+          client_id: "#{occurrence.id}:#{Prima.Boot.id()}",
+          schedule: %{schedule_id: id, occurrence_id: occurrence.id}
+        )
+
+      turn = await_status(ctx, refused, "failed")
+
+      assert turn.error ==
+               "This scheduled run was already taken up by another turn, so this one did not start."
+
+      assert %{state: "claimed", claimed_by: "boot-elsewhere"} = occurrence(ctx, occurrence.id)
+      assert row!(ctx, id).last_error == nil
     end
   end
 

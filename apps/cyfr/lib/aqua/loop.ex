@@ -28,9 +28,10 @@ defmodule Aqua.Loop do
 
   A turn a schedule's line started (origin `schedule`, `Aqua.ScheduleTurns`)
   does only what needs no asking: a call its agent's policy runs `auto`,
-  or one a standing allow already covers, as in any turn (a thread allow
-  the person gave in the schedule's own thread among them, since every
-  fire of the schedule runs there). It opens no card. At the first call
+  or one a standing allow already covers, as in any turn (an answer "for
+  this schedule" the person gave in the schedule's own thread among them,
+  since every fire of the schedule runs there, `Aqua.Standing`). It opens
+  no card. At the first call
   that would ask, that call is closed refused, nothing after it in the
   response starts, what was decided before it runs and what already ran
   stays, and the turn ends failed with one sentence: what it needed, and
@@ -1389,7 +1390,7 @@ defmodule Aqua.Loop do
   defp unasked(%Call{} = call) do
     "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
       "was here to give it. To allow it next time, ask Aqua for it once in this thread " <>
-      "and choose \"for this thread\" when it asks."
+      "and choose \"for this schedule\" when it asks."
   end
 
   # A launch's card binds the turn's sources it shows and what they let
@@ -2674,6 +2675,12 @@ defmodule Aqua.Loop do
 
   defp describe({:unknown_model, model}), do: "#{model} is not a model its catalyst knows"
   defp describe(:no_model), do: "The agent names no model"
+
+  # A schedule's turn whose fire another turn already took up: on another
+  # server after a takeover, or by the turn that started it first.
+  defp describe(:occurrence_not_claimed),
+    do: "This scheduled run was already taken up by another turn, so this one did not start."
+
   defp describe({:unasked, sentence}), do: sentence
 
   defp describe(:sources_unrecorded),

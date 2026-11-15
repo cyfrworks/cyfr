@@ -152,6 +152,15 @@ defmodule Aqua do
   @spec thread_state(String.t(), String.t()) :: map() | {:error, term()}
   defdelegate thread_state(thread_id, athanor_id), to: Aqua.Runner, as: :state
 
+  @doc """
+  Whether `thread_id` is the thread a schedule's line for Aqua runs in, in
+  the context's athanor: where a card offers an answer for this thread
+  ending with that schedule (`Aqua.Standing`).
+  """
+  @spec schedule_thread?(Context.t(), String.t()) :: boolean()
+  def schedule_thread?(%Context{} = ctx, thread_id) when is_binary(thread_id),
+    do: match?({:ok, _}, Arca.CronSchedule.of_thread(Context.actor(ctx), thread_id))
+
   @doc "An empty stream of a running turn's answers (`Aqua.Loop.Stream.new/0`)."
   @spec stream_new() :: Aqua.Loop.Stream.t()
   defdelegate stream_new(), to: Aqua.Loop.Stream, as: :new

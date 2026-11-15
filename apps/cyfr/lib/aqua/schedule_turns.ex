@@ -39,7 +39,9 @@ defmodule Aqua.ScheduleTurns do
   ## What the turn may do
 
   Only what Aqua may do without asking, and what a standing allow already
-  covers, the person's allows in the schedule's thread among them. At the
+  covers: among them an answer "for this schedule" the person gave on a
+  card in the schedule's thread, which holds for this schedule's turns
+  there and ends with the schedule or the thread (`Aqua.Standing`). At the
   first call that would ask, it opens no card and ends failed, saying
   what it needed and how to allow it next time (`Aqua.Loop`).
 

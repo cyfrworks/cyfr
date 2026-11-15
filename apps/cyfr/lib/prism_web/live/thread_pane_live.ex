@@ -250,6 +250,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:parent, nil)
       |> assign(:pending_approvals, [])
       |> assign(:run_schedules, %{})
+      |> assign(:schedule_thread?, false)
       |> assign(:any_messages, false)
       |> reset_live()
 
@@ -257,6 +258,13 @@ defmodule PrismWeb.ThreadPaneLive do
       {true, %{} = thread} ->
         follow_thread(thread.id, thread.athanor_id)
         live = Aqua.thread_state(thread.id, thread.athanor_id)
+
+        socket =
+          assign(
+            socket,
+            :schedule_thread?,
+            Aqua.schedule_thread?(socket.assigns.context, thread.id)
+          )
 
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived thread into every viewer's socket. The runner's
@@ -1899,6 +1907,7 @@ defmodule PrismWeb.ThreadPaneLive do
                     message_id={msg.id}
                     approval_id={msg.approval_id}
                     scheduled={Map.get(@run_schedules, msg.execution_id, false)}
+                    schedule_thread={@schedule_thread?}
                     bounds={Map.take(resolution, ~w(lifecycle until constraint sources))}
                     payload={intent}
                     status={msg.status}

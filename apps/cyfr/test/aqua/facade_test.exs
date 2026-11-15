@@ -29,6 +29,7 @@ defmodule Aqua.FacadeTest do
     providers: 1,
     room_excerpt: 2,
     roster: 1,
+    schedule_thread?: 2,
     stale_consent_refs: 1,
     stream_abandoned: 2,
     stream_add: 2,

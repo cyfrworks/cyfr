@@ -68,6 +68,23 @@ defmodule PrismWeb.AquaApprovalCardTest do
              offers(card(%{"action_kind" => "write", "standing" => "thread"}, scheduled: true))
   end
 
+  test "for this schedule, this thread's answer, is offered only in a schedule's own thread, as the declaration allows" do
+    for_schedule = ~s(data-test="approval-for-schedule")
+
+    refute card(%{"action_kind" => "write"}) =~ for_schedule
+    assert card(%{"action_kind" => "write"}, schedule_thread: true) =~ for_schedule
+
+    assert card(%{"action_kind" => "write", "standing" => "thread"}, schedule_thread: true) =~
+             for_schedule
+
+    refute card(%{"action_kind" => "write", "standing" => false}, schedule_thread: true) =~
+             for_schedule
+
+    for kind <- ["destructive", "external"] do
+      refute card(%{"action_kind" => kind}, schedule_thread: true) =~ for_schedule
+    end
+  end
+
   test "an action declared standing: false offers no standing answer" do
     assert %{once: true, run: false, until: false, always: false, schedule: false} =
              offers(card(%{"action_kind" => "write", "standing" => false}, scheduled: true))
