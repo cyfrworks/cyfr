@@ -702,7 +702,7 @@ defmodule PrismWeb.FilesLive do
   defp tier_hint(:shaped, "aqua" <> _),
     do:
       "A shaped folder: the soul, its roles and its scrolls, edited in place. Create, " <>
-        "disable or reset them from the AQUA page."
+        "disable or reset them from the Aqua page."
 
   defp tier_hint(:read, "notes" <> _),
     do: "Kept out of threads — managed on the Notes surface."

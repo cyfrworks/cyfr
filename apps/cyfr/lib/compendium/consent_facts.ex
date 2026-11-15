@@ -14,7 +14,7 @@ defmodule Compendium.ConsentFacts do
   is the seed-vouching fact the consent bootstrap mints over: the release
   digest the **install media** ships at a row's path, never the athanor's
   copy. Its three cases are this domain's own layout — an agent file under
-  the seed's AQUA tree, a tincture whose artifact is its directory and
+  the seed's Aqua tree, a tincture whose artifact is its directory and
   must be unedited, a WASM unit whose seed release is recomputed from the
   media — and consent must not learn any of them.
 

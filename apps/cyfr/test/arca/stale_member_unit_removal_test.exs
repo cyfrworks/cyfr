@@ -14,7 +14,7 @@ defmodule Arca.StaleMemberUnitRemovalTest do
   the entry gate the removal passed on its way in.
 
   The refusal reaches the person as itself: a component's deletion, an
-  AQUA crew member's and a file's each answer `:not_owner`, so the console and
+  Aqua crew member's and a file's each answer `:not_owner`, so the console and
   an MCP caller read the ownership refusal's class and sentence, never a
   storage failure.
   """
@@ -225,7 +225,7 @@ defmodule Arca.StaleMemberUnitRemovalTest do
       assert {:ok, _} = Compendium.Registry.get(api, name, "1.0.0", "local")
     end
 
-    test "an AQUA crew member's deletion answers the ownership refusal and keeps the member",
+    test "an Aqua crew member's deletion answers the ownership refusal and keeps the member",
          %{ctx: ctx, api: api, actor: actor} do
       slot = claimant!("aqua")
       name = "fence-member-#{System.unique_integer([:positive])}"

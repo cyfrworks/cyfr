@@ -197,7 +197,7 @@ defmodule Prima.Manifest do
 
   defp validate_contracts_block(_), do: :ok
 
-  # The `agent` block is the projected consent shape of an AQUA agent:
+  # The `agent` block is the projected consent shape of an Aqua agent:
   # its catalyst and model; its tools are its caps. It is refused on every
   # other type.
   defp validate_agent_block(%{"type" => "agent", "agent" => agent}),

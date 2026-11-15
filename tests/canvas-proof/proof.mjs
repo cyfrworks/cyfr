@@ -671,7 +671,7 @@ const shownWindow = (page) =>
     return iframe ? { id: iframe.dataset.frameId, state: iframe.dataset.frameState } : null;
   }).catch(() => null);
 
-// AQUA's own control, as the page draws it beside the shell.
+// Aqua's own control, as the page draws it beside the shell.
 const aquaState = (page) =>
   page.evaluate(() => {
     const button = document.getElementById("aqua-panel-button");
@@ -805,7 +805,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.2" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.3" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -860,7 +860,7 @@ async function stepTwoCanvases(page, name, viewport) {
 }
 
 // A horizontal swipe along the shelf, from the empty stretch at the left of
-// its right end, which holds the gear, the chat and AQUA (#shelf-end, the
+// its right end, which holds the gear, the chat and Aqua (#shelf-end, the
 // shell's own and no part of the shelf): a touch swipe in the hand, a
 // pointer drag on the desk.
 async function swipe(page, viewport, direction) {
@@ -1404,7 +1404,7 @@ async function stepValidationFailures(page, name) {
 // load of its frame (desktop.md section 6: a live canvas falls back when its
 // frame dies, not when its page throws), and no `failed` reaches the shell.
 // The shipped canvas shows in its place, the window over it on the desk
-// stays open, the same frame, and AQUA is as it was; one line offers to try
+// stays open, the same frame, and Aqua is as it was; one line offers to try
 // again and the kept version. Restoring the kept version asks its own grant
 // first, with the shipped canvas still in place and nothing restored, and
 // once it is confirmed the kept version is restored, the line goes, and the

@@ -14,7 +14,7 @@ defmodule Aqua.Runner.AdmissionTest do
   alias Aqua.Runner.Admission
 
   @roster [
-    %{"name" => "aqua", "title" => "AQUA"},
+    %{"name" => "aqua", "title" => "Aqua"},
     %{"name" => "planner", "title" => "Planner"},
     %{"name" => "builder", "title" => "Builder"}
   ]

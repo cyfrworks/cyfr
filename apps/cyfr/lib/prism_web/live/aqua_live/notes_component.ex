@@ -179,7 +179,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
           <div>
             <h4 class="text-sm font-medium text-gray-200">{about_title(@pinned_name)}</h4>
             <p class="text-[11px] text-gray-500">
-              Read first on every turn here — up to {@pin_max_bytes} bytes. Written by people, never by AQUA.
+              Read first on every turn here — up to {@pin_max_bytes} bytes. Written by people, never by Aqua.
             </p>
           </div>
           <button
@@ -259,7 +259,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
         </summary>
         <div class="border-t border-gray-800 px-4 py-2 space-y-2">
           <p :if={@notes == []} class="text-xs text-gray-600">
-            Nothing kept yet. AQUA proposes a note when something is worth keeping; you decide.
+            Nothing kept yet. Aqua proposes a note when something is worth keeping; you decide.
           </p>
           <ul :if={@notes != []} class="divide-y divide-gray-800/60">
             <li :for={note <- @notes} class="flex items-center gap-2 py-1">

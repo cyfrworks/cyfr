@@ -2141,7 +2141,7 @@ defmodule Cyfr.StackShapeTest do
     assert dockerignore =~ ~r/^data\/$/m
   end
 
-  test "the AQUA template is the second seed root, and WIT is embedded" do
+  test "the Aqua template is the second seed root, and WIT is embedded" do
     dockerfile = read!("Dockerfile")
     entrypoint = read!("docker-entrypoint.sh")
     compose = read!("docker-compose.yml")

@@ -2157,7 +2157,7 @@ restore_person_case() {
   status=0
   cli_run restore-person restore "$snapshot" || status=$?
   [ "$status" -ne 0 ] || fail "cyfr restore as the person exited 0: $(tail -n 20 "$WORK/restore-person.log")"
-  # The backup lists the managed AQUA files, which the server's container
+  # The backup lists the managed Aqua files, which the server's container
   # owns once the stack has run, so the restore refuses at its start,
   # before it stops anything.
   for said in "cyfr restore cannot put the snapshot back as you" \

@@ -8,7 +8,7 @@ defmodule Locus.Runtime.ModelsCatalogueTest do
   named under `refs` at its versionless ref, one with no key connected is
   not run and lands under `errors` with the refusal its run would meet,
   one with a key is run, and a catalyst that speaks no contract is not
-  asked at all. Opening AQUA's panel on an installation with no key
+  asked at all. Opening Aqua's panel on an installation with no key
   leaves no failed run and nothing waiting on the person.
   """
 

@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/openai-codex/0.1.3/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.4/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
@@ -26,7 +26,7 @@ fake-openai-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
   command is shown as a `tool_call.start`/`end` pair by name only and its
   patch approval allowed; the reply streams as `text.delta` and answers
   `end_turn` with usage and the session, `<key>.<thread>` with the
-  thread's usage so far, which each next chat carries back as AQUA does.
+  thread's usage so far, which each next chat carries back as Aqua does.
 - A held call: a message that makes Codex call one of CYFR's tools answers
   a `tool_call` named as the request named the tool, carrying Codex's
   request and turn, and leaves the call held in the running program; the
@@ -76,8 +76,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.3")
-REF = "catalyst:local.openai-codex:0.1.3"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.4")
+REF = "catalyst:local.openai-codex:0.1.4"
 NEED = "openai-codex"
 OWNER = owner_of("openai-codex")
 HOME = "mcp_openai-codex"
@@ -356,7 +356,7 @@ def main():
                "retry, saying the session was interrupted", output)
         expect(output["error"].get("session") == session,
                "the refusal carries the session with the total before the interrupted call, which the next "
-               "message names as AQUA keeps it", output)
+               "message names as Aqua keeps it", output)
         expect([op for op, _ in bridge.calls if op == "close"] == ["close"] and bridge.methods() == ["answer"],
                "the session is closed, the answer sent once and nothing else", bridge.calls)
         eventually(lambda: not fakes(backends), "the interrupted session's program to end with it")

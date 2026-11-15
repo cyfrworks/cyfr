@@ -155,7 +155,7 @@ defmodule Cyfr.Test.ChatFixture do
 
     File.write!(Path.join([seed, "aqua", "aqua.md"]), """
     ---
-    title: AQUA
+    title: Aqua
     catalyst_ref: #{@ref}
     model: #{@name}
     tool_policy:

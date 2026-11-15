@@ -6,11 +6,11 @@
  * outside the app's frame; the shield and snap preview the `Canvas` hook
  * shows while a gesture runs (js/canvas/windows.js); the shelf along the
  * bottom with its dots; the shelf's right end, the gear, the chat and
- * AQUA (PrismWeb.ShellLive); a Dashboard page's overlay over the desktop
+ * Aqua (PrismWeb.ShellLive); a Dashboard page's overlay over the desktop
  * (PrismWeb.Layouts); and the top bar's ground. Stacking is CanvasLive's:
  * tiles 20, windows from 30 (to 61), the shield 63, a full app 64, the
  * shelf and a Dashboard page's overlay 65, the shell's chips on the shelf
- * and the buttons at its right end 66, the chat's and AQUA's panels 70.
+ * and the buttons at its right end 66, the chat's and Aqua's panels 70.
  *
  * Written against a desktop's chrome tokens (Prima.Manifest.Chrome), which
  * the canvas hook sets on the page's root while that desktop is the
@@ -187,7 +187,7 @@
 
 /* The shelf: along the bottom, under the apps' area, which ends at its top
  * edge. Its left end is the shell's chips' room, its right end the room of
- * the gear, the chat and AQUA (#shelf-end). */
+ * the gear, the chat and Aqua (#shelf-end). */
 .canvas-shelf {
   position: absolute;
   inset: auto 0 0 0;
@@ -209,7 +209,7 @@
 
 /* The shelf's right end, the shell's own and outside the shelf, whose
  * backdrop filter would otherwise be the containing block of the overlays'
- * fixed panels: the gear, the chat with its unread count and AQUA, in that
+ * fixed panels: the gear, the chat with its unread count and Aqua, in that
  * order, centred in the shelf's height. It sets no z-index, so the panels
  * inside it stack with the page; its buttons stand above the shelf. */
 :root { --canvas-shelf-end: 14rem; }

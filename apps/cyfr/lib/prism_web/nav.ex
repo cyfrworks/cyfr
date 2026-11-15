@@ -10,7 +10,7 @@ defmodule PrismWeb.Nav do
   athanor's own address) is no page of the list and is shown in every UI
   mode (`shown?/2`).
 
-  `lite` is AQUA, files, the Vault, schedules, webhooks, API keys,
+  `lite` is Aqua, files, the Vault, schedules, webhooks, API keys,
   programs, settings, tips and legal. `dev` adds the ops surfaces, sectioned. Keys are the
   pages' `active_nav` values; the DOM id a surface renders is
   `<prefix>-<key>` with underscores as hyphens. Every page lives under
@@ -38,7 +38,7 @@ defmodule PrismWeb.Nav do
 
   # In dev order; the lite order is its own list below.
   @items [
-    %{key: "aqua", label: "AQUA", path: "/aqua", icon: "user", section: :top, modes: @both},
+    %{key: "aqua", label: "Aqua", path: "/aqua", icon: "user", section: :top, modes: @both},
     %{key: "files", label: "Files", path: "/files", icon: "folder", section: :top, modes: @both},
     %{
       key: "activities",

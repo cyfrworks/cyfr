@@ -14,7 +14,7 @@ defmodule PrismWeb.SystemLayer.Share do
   together. The sheet says what a share to everyone means while it is
   chosen, each fact while it is true: to anyone, that with no cap anyone on
   this CYFR may use it without limit; to the platform administrator, that
-  it is also what each new person's AQUA uses when it fits. It reads the
+  it is also what each new person's Aqua uses when it fits. It reads the
   choice from the form's last change (`choice`), which the system layer
   keeps on the shown prompt once `choice/2` has held it to the form.
 
@@ -40,7 +40,7 @@ defmodule PrismWeb.SystemLayer.Share do
   @field_max 32
   @uncapped "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
   @newcomers "You administer this CYFR, so a key you share with everyone is also what each " <>
-               "new person's AQUA uses when it fits"
+               "new person's Aqua uses when it fits"
   @thread "shared_thread:"
   # The administrator's setup's daily cap per person, until it is decided.
   @setup_person_daily 50
@@ -241,7 +241,7 @@ defmodule PrismWeb.SystemLayer.Share do
 
   # What a share to everyone means, said only while everyone is chosen and
   # each part only while it is true: no limit while both caps are empty, and
-  # to the platform administrator that newcomers' AQUA uses it, capped or
+  # to the platform administrator that newcomers' Aqua uses it, capped or
   # not. A cap that is not a count is not empty. Nil when nothing applies.
   defp everyone_words(administrator, %{"audience" => @everyone} = choice) do
     uncapped = caps(choice) == {:ok, %{"person_daily" => nil, "total_daily" => nil}}

@@ -41,7 +41,7 @@ defmodule Aqua.AgentConfigTest do
     Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end
 
-  # Every AQUA unit the athanor holds is an unedited copy of what ships.
+  # Every Aqua unit the athanor holds is an unedited copy of what ships.
   defp pristine?(ctx) do
     {:ok, statuses} = Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "aqua")
     statuses != %{} and Enum.all?(statuses, fn {_unit, status} -> status == :shipped end)

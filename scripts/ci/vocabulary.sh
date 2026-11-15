@@ -123,6 +123,28 @@ for p in \
     fail=1
   fi
 done
+# The assistant is written Aqua wherever it is written, in every tracked
+# file. The seed versions below shipped spelling it AQUA and are
+# immutable (scripts/ci/seed-guard.sh), so they keep it; the list is
+# exact: each must still exist and still say AQUA, or it leaves the list.
+aqua_frozen='canvas/0.4.0 canvas/0.5.0 canvas/0.6.0 line/0.1.0 line/0.2.0 night/0.1.0 night/0.2.0 road/0.1.0 road/0.2.0 street/0.1.0 street/0.2.0 switchboard/0.1.0 switchboard/0.2.0'
+aqua_excl=':(exclude)scripts/ci/vocabulary.sh'
+for v in $aqua_frozen; do
+  d="seed/components/tinctures/local/$v"
+  if ! git grep -qI 'AQUA' -- "$d"; then
+    echo "::error::$d no longer says AQUA (or is gone): drop it from aqua_frozen"; fail=1
+  fi
+  aqua_excl="$aqua_excl :(exclude)$d"
+done
+status=0
+hits="$(git grep -In 'AQUA' -- . $aqua_excl)" || status=$?
+if [ "$status" -gt 1 ]; then
+  echo "::error::the assistant's spelling could not be searched (git grep exited $status)"; fail=1
+elif [ -n "$hits" ]; then
+  echo "::error::the assistant is written Aqua, not AQUA"
+  echo "$hits"
+  fail=1
+fi
 # Check athanor_id constraints in every migration. Only the baseline's
 # sessions and decision_logs columns may be nullable.
 # `grep -c` exits 1 when the count is zero and the job's shell is

@@ -536,7 +536,7 @@ describe("the road desktop 0.2.0", () => {
     assert.equal(p.opened.filter((k) => k === "files.changes").length, 2)
   })
 
-  test("an approval opens AQUA; a failed run, schedule and offer open their pages", async () => {
+  test("an approval opens Aqua; a failed run, schedule and offer open their pages", async () => {
     const p = await road({}, {
       "attention.changes": [
         {kind: "approval", id: "a1", label: "Trip", since: iso(-9), destination: {kind: "page", page: "aqua", ref: "th1"}},
@@ -546,7 +546,7 @@ describe("the road desktop 0.2.0", () => {
         {kind: "confirmation", id: "a5", label: "Send mail", since: iso(-6), destination: {kind: "ref", page: null, ref: "c1"}},
       ],
     })
-    for (const [visitor, choice] of [["Approval in Trip", "Open AQUA"], ["digest failed", "Open runs"], ["Backup failed", "Open schedules"], ["report.pdf offered", "Open files"]]) {
+    for (const [visitor, choice] of [["Approval in Trip", "Open Aqua"], ["digest failed", "Open runs"], ["Backup failed", "Open schedules"], ["report.pdf offered", "Open files"]]) {
       tap(p, visitor)
       tap(p, choice)
       tap(p, "Close")
@@ -556,7 +556,7 @@ describe("the road desktop 0.2.0", () => {
     assert.ok(!labels(p).some((l) => l.startsWith("Open")), labels(p).join(" | "))
   })
 
-  test("a shared thread opens the chat and an own thread AQUA's panel", async () => {
+  test("a shared thread opens the chat and an own thread Aqua's panel", async () => {
     const p = await road({}, {
       "threads.changes": [
         {kind: "shared", id: "t1", title: "Trip", people: ["a", "b"], last_activity: iso(-5), waits_on_you: false, unread: 3},
@@ -565,7 +565,7 @@ describe("the road desktop 0.2.0", () => {
     })
     tap(p, "Post boxes")
     tap(p, "Trip, 3 unread")
-    tap(p, "Notes, with AQUA")
+    tap(p, "Notes, with Aqua")
     assert.deepEqual(p.calls.settings, [["chat", "t1"], ["aqua", "t2"]])
   })
 
@@ -578,12 +578,12 @@ describe("the road desktop 0.2.0", () => {
       ],
     })
     tap(p, "Approval in Trip")
-    tap(p, "Open AQUA")
+    tap(p, "Open Aqua")
     tap(p, "digest failed")
     tap(p, "Open runs")
     tap(p, "Post boxes")
     tap(p, "Trip, 2 people")
-    tap(p, "Notes, with AQUA")
+    tap(p, "Notes, with Aqua")
     assert.deepEqual(p.calls.settings, [["aqua", "th1"], ["executions", "e9"], ["chat", "t1"], ["aqua", "t2"]])
   })
 
@@ -680,7 +680,7 @@ describe("the road desktop 0.2.0 draws", () => {
       }
       for (const [card, choices] of [
         ["digest failed", ["Retry run", "Open runs"]],
-        ["Approval in Trip", ["Open AQUA"]],
+        ["Approval in Trip", ["Open Aqua"]],
         ["Maps waits for your grant", ["Review grant"]],
         ["Silo", ["Open settings"]],
         ["Archive", ["Open files"]],
@@ -712,13 +712,13 @@ describe("the road desktop 0.2.0 draws", () => {
   })
 })
 
-// ---- 0.3.0 -------------------------------------------------------------------------------------
+// ---- 0.3.1 -------------------------------------------------------------------------------------
 
-describe("the road desktop 0.3.0", () => {
-  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`
+describe("the road desktop 0.3.1", () => {
+  const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
-  test("the windmill and the tram line with no reading name their feed and say to ask AQUA for one, until a reading comes", async () => {
-    const p = page({version: "0.3.0"})
+  test("the windmill and the tram line with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
+    const p = page({version: "0.3.1"})
     await settle()
     p.pump()
     assert.equal(label(p, "Windmill"), `Windmill: ${sentence("weather")}`)

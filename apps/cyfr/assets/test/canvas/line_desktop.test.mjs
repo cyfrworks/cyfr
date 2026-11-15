@@ -504,7 +504,7 @@ describe("the line desktop 0.2.0", () => {
     assert.doesNotMatch(p.seen(), /Refusal text/)
   })
 
-  test("each attention destination opens its page: AQUA, runs, schedules, files", async () => {
+  test("each attention destination opens its page: Aqua, runs, schedules, files", async () => {
     const p = desk()
     await flush()
     const item = (id, kind, page, since) => ({kind, id, label: id, since: today(10, since), destination: {kind: "page", page, ref: id}})
@@ -515,7 +515,7 @@ describe("the line desktop 0.2.0", () => {
       item("budget.xlsx", "file_offer", "files", 4)
     ])
     await flush()
-    for (const words of ["Open in AQUA", "Open runs", "Open schedules", "Open files"]) p.tap((b) => b.words === words)
+    for (const words of ["Open in Aqua", "Open runs", "Open schedules", "Open files"]) p.tap((b) => b.words === words)
     assert.deepEqual(p.pages, [["aqua", "Trip planning"], ["executions", DIGEST], ["schedules", "Backup photos"], ["files", "budget.xlsx"]])
   })
 
@@ -531,7 +531,7 @@ describe("the line desktop 0.2.0", () => {
       {kind: "own", id: "th_tax", title: "Tax notes", people: ["a"], last_activity: today(13, 0), waits_on_you: false, unread: null}
     ])
     await flush()
-    p.tap((b) => b.words === "Open in AQUA")
+    p.tap((b) => b.words === "Open in Aqua")
     p.tap((b) => b.dataset.key === "th-th_family")
     p.tap((b) => b.dataset.key === "th-th_tax")
     p.tap((b) => b.words === "Open runs")
@@ -540,7 +540,7 @@ describe("the line desktop 0.2.0", () => {
     assert.deepEqual(p.pages, [["aqua", "th_trip"], ["chat", "th_family"], ["aqua", "th_tax"], ["executions", "ex_gone"], ["chat"]])
   })
 
-  test("a shared thread opens the chat and an own thread opens AQUA, with unread counts", async () => {
+  test("a shared thread opens the chat and an own thread opens Aqua, with unread counts", async () => {
     const p = desk({width: 1440})
     await flush()
     p.picture("threads.changes", [
@@ -608,16 +608,16 @@ describe("the line desktop 0.2.0", () => {
   })
 })
 
-// 0.3.0: a feed's widget with no reading names its feed and how to bind one.
-const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.0/", import.meta.url)
+// 0.3.1: a feed's widget with no reading names its feed and how to bind one.
+const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.1/", import.meta.url)
 
-describe("the line desktop 0.3.0", () => {
-  test("a feed widget with no reading names its feed and says to ask AQUA for one, until a reading comes", async () => {
+describe("the line desktop 0.3.1", () => {
+  test("a feed widget with no reading names its feed and says to ask Aqua for one, until a reading comes", async () => {
     const p = desk({version: V3})
     await flush()
     for (const name of ["weather", "vpn"]) {
       assert.ok(
-        p.seen().includes(`No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`),
+        p.seen().includes(`No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`),
         `${name}: ${p.seen()}`
       )
     }

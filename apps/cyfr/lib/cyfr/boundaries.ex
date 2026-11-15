@@ -664,7 +664,7 @@ defmodule Cyfr.Boundaries do
           "bound on the anonymous sign-in requests it mints. " <>
           "`Sanctum.Gate` is the gate the console's and the web tier's calls pass. " <>
           "`Sanctum.Catalog` is the approval card's read of an action's declaration, " <>
-          "the stream ingress's read of a stream's (`CyfrWeb.SSE`) and the AQUA page's " <>
+          "the stream ingress's read of a stream's (`CyfrWeb.SSE`) and the Aqua page's " <>
           "read of the table's tools and of what a chain reaches; `Sanctum.Annotations` " <>
           "is that page's read of a tool's declared actions and the approval card's " <>
           "decoding of a standing. `Sanctum.Refusals` classifies and renders a refusal " <>

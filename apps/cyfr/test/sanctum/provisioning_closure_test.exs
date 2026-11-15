@@ -7,7 +7,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   depends on ships in the seed — the two hands and every shipped
   `model/chat@1` catalyst — so an athanor fills while the registry does
   not answer (the suite's, `config/test.exs`, a closed loopback port for
-  both endpoints), AQUA is consented with its whole closure present, and
+  both endpoints), Aqua is consented with its whole closure present, and
   each model catalyst waits only for a key.
   """
   use ExUnit.Case, async: false

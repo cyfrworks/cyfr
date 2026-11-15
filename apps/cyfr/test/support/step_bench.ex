@@ -327,7 +327,7 @@ defmodule Cyfr.Test.StepBench do
 
     File.write!(Path.join([seed, "aqua", "aqua.md"]), """
     ---
-    title: AQUA
+    title: Aqua
     catalyst_ref: #{@stub}
     model: #{@stub_name}
     ---

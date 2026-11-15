@@ -3,7 +3,7 @@
 
 defmodule Compendium.AquaPath do
   @moduledoc """
-  Path construction for the athanor's AQUA tree — the `aqua/` tenant
+  Path construction for the athanor's Aqua tree — the `aqua/` tenant
   scope's one spelling, as `Compendium.ComponentPath` is for `components/`
   and `Arca.ThreadStorage.blob_root/1` for `threads/`.
 

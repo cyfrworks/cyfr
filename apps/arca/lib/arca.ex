@@ -33,7 +33,7 @@ defmodule Arca do
 
   - `["components" | rest]` → the context's athanor's component artifacts
     (`Compendium.ComponentPath` builds the shape)
-  - `["seed", root | rest]` → seed media (the component bundle, the AQUA
+  - `["seed", root | rest]` → seed media (the component bundle, the Aqua
     template — `Arca.Storage.seed_roots/0`), read in place from local disk
     whatever storage adapter is configured — and read-only at this seam
   - `["cache" | rest]`, `["system" | rest]`, `["shared" | rest]` → global

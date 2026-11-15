@@ -356,7 +356,7 @@ describe("the night desktop 0.2.0", () => {
     picture(runs, [RUN_DONE])
     p.draw()
     p.tap({class: "ripple", "data-ref": "failed:formula:local.digest:1.0.0"})
-    assert.deepEqual(plateButtons(p).map((b) => b.label), ["Open runs", "Ask AQUA"])
+    assert.deepEqual(plateButtons(p).map((b) => b.label), ["Open runs", "Ask Aqua"])
   })
 
   for (const [answer, words] of [
@@ -540,7 +540,7 @@ describe("the night desktop 0.2.0", () => {
     for (const [target, label, page] of [
       ["thread:t1", "Open the approval", "aqua"],
       ["thread:t2", "Open in chat", "chat"],
-      ["thread:t3", "Open in AQUA", "aqua"],
+      ["thread:t3", "Open in Aqua", "aqua"],
       ["failed:formula:local.digest:1.0.0", "Open runs", "executions"],
       ["schedule:sch_1", "Open schedules", "schedules"],
       ["offer:off_1", "Open files", "files"],
@@ -565,7 +565,7 @@ describe("the night desktop 0.2.0", () => {
     assert.match(wall, /3 people/)
   })
 
-  test("a lit sign opens its item's destination at its ref, and a thread plaque opens AQUA or the chat at the thread", async () => {
+  test("a lit sign opens its item's destination at its ref, and a thread plaque opens Aqua or the chat at the thread", async () => {
     const p = await lit({
       runs: [RUN_FAILED],
       attention: [{kind: "approval", id: "ap1", label: "Trip planning", since: AT, destination: {kind: "page", page: "aqua", ref: "t1"}}, FAILED_ITEM],
@@ -579,7 +579,7 @@ describe("the night desktop 0.2.0", () => {
     for (const [target, label, opened] of [
       ["thread:t1", "Open the approval", ["aqua", "t1"]],
       ["thread:t2", "Open in chat", ["chat", "t2"]],
-      ["thread:t3", "Open in AQUA", ["aqua", "t3"]],
+      ["thread:t3", "Open in Aqua", ["aqua", "t3"]],
       ["failed:formula:local.digest:1.0.0", "Open runs", ["executions", "exe_fail"]],
     ]) {
       p.tap({"data-target": target})
@@ -610,16 +610,16 @@ describe("the night desktop 0.2.0", () => {
   })
 })
 
-// ---------- 0.3.0: a feed's sign with no reading names its feed ----------
+// ---------- 0.3.1: a feed's sign with no reading names its feed ----------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.0/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.1/", import.meta.url)
 
-describe("the night desktop 0.3.0", () => {
-  test("a feed sign with no reading names its feed and says to ask AQUA for one, from the moment it opens", async () => {
+describe("the night desktop 0.3.1", () => {
+  test("a feed sign with no reading names its feed and says to ask Aqua for one, from the moment it opens", async () => {
     const p = night2({version: V3, widgets: {vpn: {on: true}}})
     await settle()
     p.draw()
-    const says = (name) => p.street().includes(`No reading from the ${name} feed yet. To bind one, ask AQUA for a feed named ${name}.`)
+    const says = (name) => p.street().includes(`No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`)
     // Opened and not yet answered: the sign is not left dark.
     assert.ok(says("weather") && says("vpn"), p.street())
 

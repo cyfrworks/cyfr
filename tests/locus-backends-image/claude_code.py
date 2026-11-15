@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/claude-code/0.1.5/catalyst.wasm) under a
+(seed/components/catalysts/local/claude-code/0.1.6/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `claude` program, driven by requests signed as
 CYFR signs them (harness.py). The control plane plays CYFR's host for the
@@ -78,8 +78,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.5")
-REF = "catalyst:local.claude-code:0.1.5"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.6")
+REF = "catalyst:local.claude-code:0.1.6"
 NEED = "claude"
 OWNER = owner_of("claude-code")
 HOME = "mcp_claude-code"
@@ -389,7 +389,7 @@ def main():
                "a read the box could not answer after the allow answers provider_error, which the loop does not "
                "retry, saying the session was interrupted", output)
         expect(output["error"].get("session") == session,
-               "the refusal carries the session, which the next message names as AQUA keeps it", output)
+               "the refusal carries the session, which the next message names as Aqua keeps it", output)
         expect([op for op, _ in bridge.calls if op == "close"] == ["close"]
                and [line["type"] for line in sent] == ["control_response"],
                "the session is closed, the allow sent once and nothing else", [bridge.calls, sent])

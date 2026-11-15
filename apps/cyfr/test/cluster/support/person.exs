@@ -11,7 +11,7 @@ defmodule Cyfr.Cluster.Person do
   whose context each member establishes from the session token as the
   console does (`context/1`), in an athanor filled through the explicit
   provision verb on the member that makes the person, which answers once
-  the fill has run there: the shipped AQUA tree and catalysts copied in,
+  the fill has run there: the shipped Aqua tree and catalysts copied in,
   indexed and the soul consented. The model's key is then entered and
   bound through the consent walk (`person!/0`). What such a
   person does then goes through the runner (`send/3`), the approvals door
@@ -23,7 +23,7 @@ defmodule Cyfr.Cluster.Person do
   each member's scripted worker service (`Cyfr.Cluster.Boot.start_worker!/1`),
   so the component is the only stand-in. The seed tree the athanor is
   filled from is the run's own (`seed!/0`), laid once by the control node
-  and read by both members: the suite's own seed carries the AQUA tree
+  and read by both members: the suite's own seed carries the Aqua tree
   alone.
   """
 
@@ -62,7 +62,7 @@ defmodule Cyfr.Cluster.Person do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The run's seed tree: the repository's AQUA tree and the newest shipped
+  The run's seed tree: the repository's Aqua tree and the newest shipped
   version of each catalyst a turn on the soul reaches, without build
   droppings. Laid once per run, at a path the run's own prefix names
   (`Cyfr.Cluster.Store.prefix/0`), under the run's temporary directory;
