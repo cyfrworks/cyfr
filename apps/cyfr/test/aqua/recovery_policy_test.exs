@@ -13,7 +13,6 @@ defmodule Aqua.Runner.RecoveryPolicyTest do
 
   alias Aqua.Runner.RecoveryPolicy
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)

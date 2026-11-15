@@ -21,7 +21,6 @@ defmodule Aqua.ProgramToolTest do
   use PrismWeb.ConnCase, async: false
 
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Source

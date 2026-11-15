@@ -22,7 +22,6 @@ defmodule PrismWeb.FocusIntentTest do
 
   use PrismWeb.ConnCase, async: false
 
-  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Tenancy.Athanors
 
   # Each `ui.*.focus` kind with arguments good enough to mint its path. The

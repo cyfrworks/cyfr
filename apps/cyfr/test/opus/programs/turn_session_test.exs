@@ -16,7 +16,6 @@ defmodule Opus.Programs.TurnSessionTest do
 
   import Ecto.Query
 
-  alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Opus.Programs

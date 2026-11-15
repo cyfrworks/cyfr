@@ -11,7 +11,6 @@ defmodule Aqua.Providers.ApprovalTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Visibility
   alias Sanctum.Context
 

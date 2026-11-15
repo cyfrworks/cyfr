@@ -20,7 +20,6 @@ defmodule Aqua.LaunchTest do
   import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Launch, Tape}
-  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Consent.Bootstrap
 
   @soul "agent:local.aqua"

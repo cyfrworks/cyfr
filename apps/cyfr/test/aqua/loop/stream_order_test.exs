@@ -21,7 +21,6 @@ defmodule Aqua.Loop.StreamOrderTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}

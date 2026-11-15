@@ -17,7 +17,6 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
 
   use ExUnit.Case, async: false
 
-  alias Arca.ThreadStorage, as: Threads
   alias Aqua.Tape
   alias Compendium.{AquaAgent, AquaPath}
   alias Cyfr.Test.ScriptedWorker

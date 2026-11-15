@@ -14,7 +14,6 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
 
   use ExUnit.Case, async: false
 
-  alias Arca.ThreadStorage, as: Threads
   alias Aqua.Tape
   alias Compendium.AquaPath
   alias Cyfr.Test.ScriptedWorker

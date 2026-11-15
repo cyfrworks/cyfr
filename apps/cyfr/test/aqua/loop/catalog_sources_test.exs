@@ -17,7 +17,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.HTTPStub
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Source

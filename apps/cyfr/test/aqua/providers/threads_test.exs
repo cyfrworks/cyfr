@@ -8,7 +8,6 @@ defmodule Aqua.Providers.ThreadsTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Providers.Thread, as: Tool
-  alias Arca.ThreadStorage, as: Threads
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
