@@ -316,6 +316,22 @@
   color: var(--chrome-ink, var(--color-text-primary));
 }
 .canvas-shelf-app[data-canvas-minimised="true"] { opacity: 0.5; }
+
+/* The person's running programs, after the open apps: each a chip with
+ * its Close beside it, dimmed while no screen shows the program. */
+#canvas-shelf-programs { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.canvas-shelf-program { display: flex; align-items: center; }
+.canvas-shelf-program[data-canvas-watched="false"] .canvas-shelf-app { opacity: 0.6; }
+.canvas-shelf-program-close {
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 9px;
+  color: var(--chrome-ink, var(--color-text-secondary));
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.canvas-shelf-program-close:hover { background: var(--color-surface-overlay); color: var(--chrome-ink, var(--color-text-primary)); }
+.canvas-shelf-program-close:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
 .canvas-shelf-app:focus-visible { outline: 1px solid var(--color-border-focus); outline-offset: 0; }
 
 /* At a phone's width the shelf keeps room for the open apps, a minimised
