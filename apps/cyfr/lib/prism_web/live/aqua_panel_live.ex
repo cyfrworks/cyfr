@@ -9,11 +9,12 @@ defmodule PrismWeb.AquaPanelLive do
   `PrismWeb.ThreadPaneLive` focused on You.
 
   Opened beside a shared thread (the chat overlay, `PrismWeb.ChatOverlayLive`,
-  tells it what it has open through `PrismWeb.RoomFeed`), a send from here carries a bounded excerpt
-  of what was said there as context for the turn — read under the
+  tells it what it has open through `PrismWeb.RoomFeed`), a send from here
+  carries a bounded excerpt of what was said there as context for the
+  turn when the person ticks the pane's box for it — read under the
   person's own seat, into the private thread only, never kept — and an
   answer can be pasted onto the shared thread, attributed to the person.
-  The pane does both; the panel names the shared thread and holds the
+  The pane does both and names the shared thread; the panel holds the
   list: the athanor's own threads, and the requests still waiting on a
   crew member, each with its member, who asked, how long ago and the
   task's first line, which turn the panel to the thread it was asked in.
@@ -632,15 +633,6 @@ defmodule PrismWeb.AquaPanelLive do
           class="shrink-0 border-b border-border-default px-3 py-1 text-[11px] text-red-300"
         >
           {@notice}
-        </p>
-
-        <p
-          :if={@room}
-          id="aqua-panel-room"
-          title="What your AQUA reads with each message you send here"
-          class="shrink-0 truncate border-b border-border-default px-3 py-1 text-[11px] text-text-muted"
-        >
-          Reading {PrismWeb.RoomFeed.label(@room)}
         </p>
 
         <ul

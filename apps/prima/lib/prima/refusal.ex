@@ -461,11 +461,19 @@ defmodule Prima.Refusal do
   defp row(:dns_timeout),
     do: {:unavailable, "The registry's DNS lookup timed out; try again shortly."}
 
+  # An account accepts the registry's terms when it is made, and a later
+  # version asks nobody again: the registry refuses only an account with
+  # no acceptance of any version on record.
   defp row({:policy_required, version}) when is_binary(version),
-    do: {:conflict, "Accept the registry's policy version #{version} first."}
+    do:
+      {:conflict,
+       "The account service has no record that your account accepted its terms " <>
+         "(version #{version}), so it refused this."}
 
   defp row({:policy_required, nil}),
-    do: {:conflict, "Accept the registry's current policy first."}
+    do:
+      {:conflict,
+       "The account service has no record that your account accepted its terms, so it refused this."}
 
   defp row(:banned), do: {:forbidden, "The registry has banned this identity."}
 
@@ -597,6 +605,11 @@ defmodule Prima.Refusal do
     do:
       {:forbidden,
        "That cannot be addressed from here — a crew member answers only the thread that asked it"}
+
+  # A person's shared threads are read by their own AQUA, from a turn of
+  # its own (`Aqua.Tape.calling_turn/2`), and by no other chain.
+  defp row(:not_in_a_turn),
+    do: {:forbidden, "Only Aqua reads your shared threads, in a turn of its own"}
 
   defp row(:thread_archived),
     do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}

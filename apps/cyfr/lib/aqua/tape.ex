@@ -712,6 +712,27 @@ defmodule Aqua.Tape do
     do: TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread_id)
 
   @doc """
+  The open turn a chain's call comes from: the one of the thread the gate's
+  lineage names (`args["thread_id"]`) whose root is the lineage's root
+  execution (`args["root_execution_id"]`), both stamped by the host and
+  never by the caller (`Sanctum.Dispatch`). A call with no open turn behind
+  it, such as a component's run started by a key, a webhook or a schedule,
+  answers `{:error, :not_addressable}`.
+  """
+  @spec calling_turn(Context.t(), map()) :: {:ok, turn()} | {:error, term()}
+  def calling_turn(%Context{} = ctx, %{"thread_id" => thread_id, "root_execution_id" => root})
+      when is_binary(thread_id) and is_binary(root) do
+    with {:ok, turns} <- open_turns(ctx, thread_id) do
+      case Enum.find(turns, &(&1.root_execution_id == root)) do
+        nil -> {:error, :not_addressable}
+        turn -> {:ok, turn}
+      end
+    end
+  end
+
+  def calling_turn(%Context{}, _args), do: {:error, :not_addressable}
+
+  @doc """
   Every thread with an open root turn, across tenants — the boot's
   recovery scan; `{:error, :unavailable}` when the database cannot answer.
   """
