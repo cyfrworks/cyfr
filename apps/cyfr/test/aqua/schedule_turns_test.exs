@@ -998,6 +998,55 @@ defmodule Aqua.ScheduleTurnsTest do
       assert %{state: "completed"} = ended!(ctx, third, "completed")
     end
 
+    test "an automatic read turned to never before it dispatches is refused, and the schedule's turn goes on",
+         %{ctx: ctx} do
+      script!([
+        reply("Here."),
+        {:probe, self()},
+        calls([{"t1", "threads", %{"action" => "list"}}]),
+        reply("Done without it.")
+      ])
+
+      id = schedule!(ctx, "Lister", "list what is unread")
+      first = fire!(ctx, id)
+      ScheduleTurns.drain()
+      await_status(ctx, turn_of(ctx, id, first).id, "completed")
+      ended!(ctx, first, "completed")
+
+      # The next fire's turn has taken its policy; while its model is asked,
+      # the person answers threads.list "never".
+      second = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{second.id => :sent}
+      assert_receive {:scripted_probe, player, _model_run}, 30_000
+
+      {:ok, _} =
+        Sanctum.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "deny",
+          agent_name: "aqua",
+          tool: "threads",
+          action: "list"
+        })
+
+      send(player, :continue)
+
+      turn = await_status(ctx, turn_of(ctx, id, second).id, "completed")
+
+      assert [
+               %{
+                 tool: "threads",
+                 action: "list",
+                 outcome: "denied",
+                 error: "threads.list is not in the agent's policy"
+               }
+             ] =
+               steps(ctx, turn)
+
+      assert List.last(Threads.messages(actor(ctx), turn.thread_id)).content == "Done without it."
+      assert %{state: "completed"} = ended!(ctx, second, "completed")
+      assert {:ok, []} = Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
+    end
+
     test "an agent-wide answer ending with the schedule is refused, even in the schedule's own thread, and the card waits",
          %{ctx: ctx} do
       script!([

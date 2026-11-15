@@ -1614,10 +1614,32 @@ defmodule Aqua.Loop do
 
   defp still_allowed(%State{} = state, %Call{} = call) do
     case Turn.current_policy(state.spec) do
+      # The one decision a call is made under (`Policy.decide/3`), read
+      # again from the live grants: a call that would ask now asks; a never
+      # given since is refused as a call decided against it is, and the
+      # turn goes on without it. Only a call that never asks reaches here
+      # (an approved card's call is not re-checked), so a launch's setup
+      # answer cannot arise; it is refused if it ever does.
       {:ok, policy} ->
-        if Policy.auto?(call, policy, place(state)),
-          do: :ok,
-          else: {:ask, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
+        case Policy.decide(call, policy, place(state)) do
+          :auto ->
+            :ok
+
+          :ask ->
+            {:ask, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
+
+          {:ask, _account} ->
+            {:ask, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
+
+          {:deny, message} ->
+            {:denied, message}
+
+          {:refuse, message} ->
+            {:denied, message}
+
+          {:setup_required, _app, _need} ->
+            {:denied, "#{call.tool}.#{call.action} is not allowed"}
+        end
 
       # A store that cannot answer whether the grant still stands is not a
       # grant. Fail closed, the way every other standing question does.
