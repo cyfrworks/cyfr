@@ -308,8 +308,10 @@ export const REGISTRY = "registry.test";
 // `registry.` before CYFR_REGISTRY_URL (`Compendium.RegistryHost`).
 export const OCI = `registry.${REGISTRY}`;
 export const HANDLE = "proof";
-// The name B's administrator makes their account under.
-export const ADMIN_HANDLE = "proof-b";
+// The name B's administrator makes their account under: "me", the slug a
+// person with no name derives from their athanor's plain word, so the
+// nameless person admitted after them collides with it.
+export const ADMIN_HANDLE = "me";
 const NONE_TIME = { tamper: LONG_AGO };
 const nil = () => exact(null);
 // The words a session records for its browser and system (Sanctum.UserAgent).
@@ -483,10 +485,12 @@ function models(S) {
   });
   // A person's own athanor takes their namespace as its name and slug
   // (`Sanctum.Provisioning.mint_personal/2`).
-  const athanorRow = (owner, name, window, readKey) => ({
+  const athanorRow = (owner, name, window, readKey, {
+    nameShown = `\`"${name}"\`: its person's namespace`, slug = name, slugShown = nameShown,
+  } = {}) => ({
     id: anId("ath"),
-    name: exact(name, { shown: `\`"${name}"\`: its person's namespace` }),
-    slug: exact(name, { shown: `\`"${name}"\`: its person's namespace` }),
+    name: exact(name, { shown: nameShown }),
+    slug: exact(slug, { shown: slugShown }),
     owner_user_id: derived(owner, "its person"),
     status: exact("active"),
     archived_at: noTime(),
@@ -600,6 +604,19 @@ function models(S) {
       created_at: within(win(S, "allow")),
       updated_at: within(win(S, "allow")),
     }, "the allow of @proof"],
+    [nameless(), {
+      id: anId("door"),
+      kind: exact("identifier"),
+      value: derived(nameless(), "the identifier the nameless account's recovery code names"),
+      effect: exact("allow"),
+      status: exact("allowed"),
+      requested_by: nil(),
+      added_by: derived(bAdmin(), "B's administrator"),
+      note: nil(),
+      label: exact(null, { shown: "`null`: the allow names an identifier, which carries no name" }),
+      created_at: within(win(S, "nameless_allow")),
+      updated_at: within(win(S, "nameless_allow")),
+    }, "the allow of the nameless account"],
   ]);
 
   // sign_in: the person's passkey, synced to a browser that never visited
@@ -641,6 +658,71 @@ function models(S) {
     [bAdmin(), session(bAdmin(), first("allow:b.athanors")[0]?.id, S.credentials.b?.kid, adminHead(),
       first("sign_in:b.paired_clients").find((r) => r.user_id === bAdmin())?.id, S.cookies.admin, "admin", sessionOf(bAdmin())), "the administrator's"],
     [remote(), session(remote(), personAthanor(), passkey(), headHash(), personClient(), S.cookies.remote, "signin", sessionOf(remote())), "the person's"],
+  ]);
+
+  // collision: an account left without a name (its name was taken when it
+  // claimed it) is allowed at B by its identifier and signs in there; it is
+  // admitted with no namespace, so its athanor is the plain word "Me",
+  // whose slug "me" the administrator's athanor holds: the next free one.
+  const nameless = () => S.nameless?.identifier;
+  const namelessHead = () => S.nameless?.head;
+  const namelessUser = () => first("collision:b.person_identities").find((r) => r.identifier === nameless())?.user_id;
+  const namelessAthanor = () => first("collision:b.athanors").find((r) => r.owner_user_id === namelessUser())?.id;
+  const namelessClient = () => first("collision:b.paired_clients").find((r) => r.user_id === namelessUser())?.id;
+  const readAt = (name) => first(`sign_in:${name}`);
+  const heldFrom = (name, key, moves, label) => {
+    const r = readAt(name).find((row) => row[key.field] === key.value) ?? {};
+    return [key.value, held(r, moves(r), "as read at sign_in"), label];
+  };
+  const movesIn = (fields) => (r) => Object.fromEntries(fields.map((f) =>
+    [f, sameOrWithin(r[f], win(S, "collision"), "as read at sign_in")]));
+  const userMoves = movesIn(["last_seen_at", "updated_at"]);
+  const athanorMoves = movesIn(["provisioned_at", "updated_at"]);
+  const headMoves = (r) => ({
+    ...movesIn(["verified_at", "updated_at"])(r),
+    revision: captured("the cached head's revision, moved by each read since", (v) => Number.isInteger(v) && v >= r.revision, 0),
+  });
+  M["collision:b.users"] = () => byKey(first("collision:b.users"), (r) => r.id, [
+    heldFrom("b.users", { field: "id", value: bAdmin() }, userMoves, "the administrator's"),
+    heldFrom("b.users", { field: "id", value: remote() }, userMoves, "the person's"),
+    [namelessUser(), {
+      ...userRow("collision", "open", "collision:b.users", null),
+      id: derived(namelessUser(), "B's identity row for the nameless account's identifier"),
+      namespace: exact(null, { shown: "`null`: the registry names no name for the account, so the admission learned none" }),
+    }, "the nameless person's"],
+  ]);
+  M["collision:b.athanors"] = () => byKey(first("collision:b.athanors"), (r) => r.owner_user_id, [
+    heldFrom("b.athanors", { field: "owner_user_id", value: bAdmin() }, athanorMoves, "the administrator's"),
+    heldFrom("b.athanors", { field: "owner_user_id", value: remote() }, athanorMoves, "the person's"),
+    [namelessUser(), athanorRow(namelessUser(), "Me", "collision", "collision:b.athanors", {
+      nameShown: "`\"Me\"`: a person with no namespace, address or screen name (`Sanctum.Provisioning`)",
+      slug: "me-2",
+      slugShown: "`\"me-2\"`: \"me\", derived from Me, is the administrator's athanor's, so the next free one (`Sanctum.Tenancy.Athanors`)",
+    }), "the nameless person's"],
+  ]);
+  M["collision:b.person_identities"] = () => byKey(first("collision:b.person_identities"), (r) => r.user_id, [
+    heldFrom("b.person_identities", { field: "user_id", value: bAdmin() }, () => ({}), "the administrator's"),
+    heldFrom("b.person_identities", { field: "user_id", value: remote() }, () => ({}), "the person's"),
+    [namelessUser(), identityRow(namelessUser(), nameless(), namelessHead(), "collision"), "the nameless person's"],
+  ]);
+  M["collision:b.directory_heads"] = () => byKey(first("collision:b.directory_heads"), (r) => r.identifier, [
+    heldFrom("b.directory_heads", { field: "identifier", value: adminId() }, headMoves, "the administrator's"),
+    heldFrom("b.directory_heads", { field: "identifier", value: id }, headMoves, "the person's"),
+    [nameless(), { ...directoryHead(nameless(), namelessHead(), "collision", "collision:b.directory_heads"),
+      genesis: derived(S.nameless?.genesis, "the nameless account's genesis at registry.test, as its JCS text") }, "the nameless person's"],
+  ]);
+  M["collision:b.paired_clients"] = () => byKey(first("collision:b.paired_clients"), (r) => r.user_id, [
+    heldFrom("b.paired_clients", { field: "user_id", value: bAdmin() }, () => ({}), "the administrator's"),
+    heldFrom("b.paired_clients", { field: "user_id", value: remote() }, () => ({}), "the person's"),
+    [namelessUser(), { ...passkeyClient(namelessUser(), namelessAthanor(), S.credentials.nameless?.kid, namelessHead(), "collision",
+      first("collision:b.paired_clients").find((r) => r.user_id === namelessUser())),
+      kid: derived(S.credentials.nameless?.kid, "the kid of the key the nameless account's authenticator holds") }, "the nameless person's"],
+  ]);
+  M["collision:b.sessions"] = () => byKey(first("collision:b.sessions"), (r) => r.user_id, [
+    heldFrom("b.sessions", { field: "user_id", value: bAdmin() }, movesIn(["last_seen_at"]), "the administrator's"),
+    heldFrom("b.sessions", { field: "user_id", value: remote() }, movesIn(["last_seen_at"]), "the person's"),
+    [namelessUser(), session(namelessUser(), namelessAthanor(), S.credentials.nameless?.kid, namelessHead(), namelessClient(),
+      S.cookies.nameless, "collision", first("collision:b.sessions").find((r) => r.user_id === namelessUser())), "the nameless person's"],
   ]);
 
   // sync
@@ -732,14 +814,14 @@ function models(S) {
     ...moving("a.directory_heads", "setup", ["verified_at", "updated_at"])(r),
     revision: captured("the cached head's revision, moved by each read since", (v) => Number.isInteger(v) && v >= r.revision, 0),
   }));
-  M["held:b.users"] = () => heldAll("sign_in:b.users", "sign_in", moving("b.users", "signin", ["last_seen_at", "updated_at"]));
-  M["held:b.athanors"] = () => heldAll("sign_in:b.athanors", "sign_in", moving("b.athanors", "signin", ["provisioned_at", "updated_at"]));
-  M["held:b.sessions"] = () => heldAll("sign_in:b.sessions", "sign_in", moving("b.sessions", "signin", ["last_seen_at"]));
+  M["held:b.users"] = () => heldAll("collision:b.users", "collision", moving("b.users", "collision", ["last_seen_at", "updated_at"]));
+  M["held:b.athanors"] = () => heldAll("collision:b.athanors", "collision", moving("b.athanors", "collision", ["provisioned_at", "updated_at"]));
+  M["held:b.sessions"] = () => heldAll("collision:b.sessions", "collision", moving("b.sessions", "collision", ["last_seen_at"]));
   for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.paired_clients", "setup"],
     ["sync:a.registry_tokens", "sync"], ["setup:registry.directory.entries[a]", "setup"],
     ["setup:registry.namespaces[proof]", "setup"], ["setup:registry.policy_acceptances[a]", "setup"],
     ["ban:registry.banned_identities", "ban"], ["allow:b.server_allowlist", "allow"],
-    ["sign_in:b.person_identities", "sign_in"], ["sign_in:b.paired_clients", "sign_in"]]) {
+    ["collision:b.person_identities", "collision"], ["collision:b.paired_clients", "collision"]]) {
     M[`held:${name.split(":").pop()}`] = () => heldAll(name, step);
   }
   M["held:registry.identity_heads[a]"] = () => heldAll("setup:registry.identity_heads[a]", "setup", () => ({

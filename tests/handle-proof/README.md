@@ -6,7 +6,9 @@ signs in there with their passkey, typing no address: a person makes
 their account `@proof` at the registry's account pages and sets up their
 CYFR A with it; B's administrator, with an account of their own, sets B
 up and allows `@proof`; the person's passkey, synced to a browser that
-never visited B, signs them in at B's sign-in page; a push token the
+never visited B, signs them in at B's sign-in page; an account left
+without a name signs in at B too, and its athanor takes the next free
+slug after the administrator's; a push token the
 passkey signs for at A is stored at both ends, and a ban at the registry
 retires it.
 
@@ -70,8 +72,9 @@ browsers, so the models can be rebuilt from a run's record.
 | Step | What holds |
 |---|---|
 | `setup` | `@proof` is made at `registry.test`'s `/account/new`: the registry's policy accepted, the recovery code shown and saved, then the passkey. The directory holds the account's genesis and the passkey's `add_key`, and the registry holds `@proof` owned by the account's identifier, that identifier's acceptance of its policy, the nonces of the two requests the recovery key signed and its read of the log, and answers `@proof` with the identifier and `https://registry.test`. A is then set up by signing in with the account through its setup link; A's person (with the platform administrator's mark, its namespace `proof`, the name the registry gives the account at the admission), identity, cached head, athanor (named and slugged `proof` after that namespace) and paired client (the passkey, by its kid) are read whole |
-| `allow` | B's administrator makes `@proof-b` at the pages, sets B up with it, and allows `@proof` in Settings, whose row names it `@proof`; B's allowlist holds setup's allow of the administrator's identifier labelled `proof-b` and `@proof`'s identifier labelled `proof`; B's person, identity and athanor (`proof-b`) are its administrator's |
+| `allow` | a third account is begun at the pages under the name `me`, free then: its code is shown, nothing sent. B's administrator makes `@me` at the pages; the third account is then sent and made without a name (step `collision`). The administrator sets B up with `@me` and, in Settings, allows `@proof`, whose row names it `@proof`, and the third account's identifier, whose row names it by that identifier; B's allowlist holds setup's allow of the administrator's identifier labelled `me`, `@proof`'s identifier labelled `proof` and the third account's identifier unlabelled; B's person, identity and athanor (`me`) are its administrator's |
 | `sign_in` | a fresh profile holding the person's passkey opens B's sign-in page and signs in with the account, typing no address: the sign page says "Sign in to https://b.test", and B admits the identifier under its allow (`admission` `open`), with an athanor of their own there named after their namespace, `proof`; B's identities, people, athanors, cached heads, paired clients and sessions are read whole, each session bound to its passkey's kid and head and holding the token its browser's cookie carries |
+| `collision` | the third account, sent once `me` is the administrator's, is made without a name: its genesis and its passkey's `add_key` are logged, the page says the name was taken meanwhile and asks for another, which is never given, and it holds no namespace. Allowed at B by its identifier, it signs in there: B admits it unnamed, with no namespace, so its athanor is the plain word `Me`, whose slug `me` the administrator's athanor holds, and it takes the next free one, `me-2`. B's identities, people, athanors, cached heads, paired clients and sessions are read whole, the earlier rows held as read at `sign_in` |
 | `sync` | "Sync push tokens" at A opens the sign page, which shows the registry request in words ("Create a publishing token named … at registry.test"); the passkey signs it, A completes it and says "Your push tokens are synced."; A's person, with no terms version recorded, records the registry's current one in their preferences once the signature completes; A stores one push token for `@proof`, whose digest is the registry's token for it, made by the account's identifier |
 | `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync says banned's sentence and records no nonce; then every object read in the run is read again and held to what was read before |
 | `readme` | this file's field table holds exactly the rows the proof's models print |
@@ -282,7 +285,7 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | email_verified | exact | `null` |
 | allow:b.users[row] | admission | exact | `"setup"` |
 | allow:b.users[row] | display_name | exact | `null` |
-| allow:b.users[row] | namespace | exact | `"proof-b"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
+| allow:b.users[row] | namespace | exact | `"me"`: the name the registry says the account holds, learned at the admission (`Sanctum.Newcomer`) |
 | allow:b.users[row] | status | exact | `"active"` |
 | allow:b.users[row] | prefs | exact | `"{}"` |
 | allow:b.users[row] | first_seen_at | bound | a time inside B's administrator's account and setup at B |
@@ -293,8 +296,8 @@ row per field of each row of each step's objects:
 | allow:b.users[row] | created_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.users[row] | updated_at | bound | a time inside B's administrator's account and setup at B up to allow:b.users's read |
 | allow:b.athanors[row] | id | captured | a new ath_ id |
-| allow:b.athanors[row] | name | exact | `"proof-b"`: its person's namespace |
-| allow:b.athanors[row] | slug | exact | `"proof-b"`: its person's namespace |
+| allow:b.athanors[row] | name | exact | `"me"`: its person's namespace |
+| allow:b.athanors[row] | slug | exact | `"me"`: its person's namespace |
 | allow:b.athanors[row] | owner_user_id | derived | its person |
 | allow:b.athanors[row] | status | exact | `"active"` |
 | allow:b.athanors[row] | archived_at | exact | `null` |
@@ -322,7 +325,7 @@ row per field of each row of each step's objects:
 | allow:b.server_allowlist[setup's allow of the administrator] | requested_by | exact | `null` |
 | allow:b.server_allowlist[setup's allow of the administrator] | added_by | derived | B's administrator |
 | allow:b.server_allowlist[setup's allow of the administrator] | note | exact | `"setup"` |
-| allow:b.server_allowlist[setup's allow of the administrator] | label | exact | `"proof-b"`: the name the administrator's account holds, learned at the admission (`Sanctum.Newcomer`) |
+| allow:b.server_allowlist[setup's allow of the administrator] | label | exact | `"me"`: the name the administrator's account holds, learned at the admission (`Sanctum.Newcomer`) |
 | allow:b.server_allowlist[setup's allow of the administrator] | created_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.server_allowlist[setup's allow of the administrator] | updated_at | bound | a time inside B's administrator's account and setup at B |
 | allow:b.server_allowlist[the allow of @proof] | id | captured | a new door_ id |
@@ -336,6 +339,17 @@ row per field of each row of each step's objects:
 | allow:b.server_allowlist[the allow of @proof] | label | exact | `"proof"` |
 | allow:b.server_allowlist[the allow of @proof] | created_at | bound | a time inside the allow |
 | allow:b.server_allowlist[the allow of @proof] | updated_at | bound | a time inside the allow |
+| allow:b.server_allowlist[the allow of the nameless account] | id | captured | a new door_ id |
+| allow:b.server_allowlist[the allow of the nameless account] | kind | exact | `"identifier"` |
+| allow:b.server_allowlist[the allow of the nameless account] | value | derived | the identifier the nameless account's recovery code names |
+| allow:b.server_allowlist[the allow of the nameless account] | effect | exact | `"allow"` |
+| allow:b.server_allowlist[the allow of the nameless account] | status | exact | `"allowed"` |
+| allow:b.server_allowlist[the allow of the nameless account] | requested_by | exact | `null` |
+| allow:b.server_allowlist[the allow of the nameless account] | added_by | derived | B's administrator |
+| allow:b.server_allowlist[the allow of the nameless account] | note | exact | `null` |
+| allow:b.server_allowlist[the allow of the nameless account] | label | exact | `null`: the allow names an identifier, which carries no name |
+| allow:b.server_allowlist[the allow of the nameless account] | created_at | bound | a time inside the allow of the nameless account |
+| allow:b.server_allowlist[the allow of the nameless account] | updated_at | bound | a time inside the allow of the nameless account |
 | sign_in:b.person_identities[the administrator's] | directory_url | exact | as read at allow |
 | sign_in:b.person_identities[the administrator's] | head_hash | exact | as read at allow |
 | sign_in:b.person_identities[the administrator's] | id | exact | as read at allow |
@@ -488,6 +502,234 @@ row per field of each row of each step's objects:
 | sign_in:b.sessions[the person's] | system | captured | the system the sign-in's user agent names, in words |
 | sign_in:b.sessions[the person's] | last_seen_at | bound | a time inside the sign-in at B |
 | sign_in:b.sessions[the person's] | inserted_at | bound | a time inside the sign-in at B |
+| collision:b.person_identities[the administrator's] | directory_url | exact | as read at sign_in |
+| collision:b.person_identities[the administrator's] | head_hash | exact | as read at sign_in |
+| collision:b.person_identities[the administrator's] | id | exact | as read at sign_in |
+| collision:b.person_identities[the administrator's] | identifier | exact | as read at sign_in |
+| collision:b.person_identities[the administrator's] | inserted_at | exact | as read at sign_in |
+| collision:b.person_identities[the administrator's] | revision | exact | as read at sign_in |
+| collision:b.person_identities[the administrator's] | updated_at | exact | as read at sign_in |
+| collision:b.person_identities[the administrator's] | user_id | exact | as read at sign_in |
+| collision:b.person_identities[the nameless person's] | id | captured | a new pid_ id |
+| collision:b.person_identities[the nameless person's] | user_id | derived | its person |
+| collision:b.person_identities[the nameless person's] | identifier | derived | the account's identifier |
+| collision:b.person_identities[the nameless person's] | head_hash | derived | the head of the account's log when it was admitted |
+| collision:b.person_identities[the nameless person's] | directory_url | exact | `"https://registry.test"` |
+| collision:b.person_identities[the nameless person's] | revision | exact | `1` |
+| collision:b.person_identities[the nameless person's] | inserted_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.person_identities[the nameless person's] | updated_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.person_identities[the person's] | directory_url | exact | as read at sign_in |
+| collision:b.person_identities[the person's] | head_hash | exact | as read at sign_in |
+| collision:b.person_identities[the person's] | id | exact | as read at sign_in |
+| collision:b.person_identities[the person's] | identifier | exact | as read at sign_in |
+| collision:b.person_identities[the person's] | inserted_at | exact | as read at sign_in |
+| collision:b.person_identities[the person's] | revision | exact | as read at sign_in |
+| collision:b.person_identities[the person's] | updated_at | exact | as read at sign_in |
+| collision:b.person_identities[the person's] | user_id | exact | as read at sign_in |
+| collision:b.users[the administrator's] | admission | exact | as read at sign_in |
+| collision:b.users[the administrator's] | created_at | exact | as read at sign_in |
+| collision:b.users[the administrator's] | denied_at | exact | as read at sign_in |
+| collision:b.users[the administrator's] | display_name | exact | as read at sign_in |
+| collision:b.users[the administrator's] | email | exact | as read at sign_in |
+| collision:b.users[the administrator's] | email_verified | exact | as read at sign_in |
+| collision:b.users[the administrator's] | first_seen_at | exact | as read at sign_in |
+| collision:b.users[the administrator's] | id | exact | as read at sign_in |
+| collision:b.users[the administrator's] | last_seen_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.users[the administrator's] | namespace | exact | as read at sign_in |
+| collision:b.users[the administrator's] | platform_admin_at | exact | as read at sign_in |
+| collision:b.users[the administrator's] | prefs | exact | as read at sign_in |
+| collision:b.users[the administrator's] | security_generation | exact | as read at sign_in |
+| collision:b.users[the administrator's] | status | exact | as read at sign_in |
+| collision:b.users[the administrator's] | updated_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.users[the nameless person's] | id | derived | B's identity row for the nameless account's identifier |
+| collision:b.users[the nameless person's] | email | exact | `null` |
+| collision:b.users[the nameless person's] | email_verified | exact | `null` |
+| collision:b.users[the nameless person's] | admission | exact | `"open"` |
+| collision:b.users[the nameless person's] | display_name | exact | `null` |
+| collision:b.users[the nameless person's] | namespace | exact | `null`: the registry names no name for the account, so the admission learned none |
+| collision:b.users[the nameless person's] | status | exact | `"active"` |
+| collision:b.users[the nameless person's] | prefs | exact | `"{}"` |
+| collision:b.users[the nameless person's] | first_seen_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.users[the nameless person's] | last_seen_at | bound | a time inside the nameless account's making, allow and sign-in at B up to collision:b.users's read |
+| collision:b.users[the nameless person's] | denied_at | exact | `null` |
+| collision:b.users[the nameless person's] | platform_admin_at | exact | `null` |
+| collision:b.users[the nameless person's] | security_generation | exact | `1` |
+| collision:b.users[the nameless person's] | created_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.users[the nameless person's] | updated_at | bound | a time inside the nameless account's making, allow and sign-in at B up to collision:b.users's read |
+| collision:b.users[the person's] | admission | exact | as read at sign_in |
+| collision:b.users[the person's] | created_at | exact | as read at sign_in |
+| collision:b.users[the person's] | denied_at | exact | as read at sign_in |
+| collision:b.users[the person's] | display_name | exact | as read at sign_in |
+| collision:b.users[the person's] | email | exact | as read at sign_in |
+| collision:b.users[the person's] | email_verified | exact | as read at sign_in |
+| collision:b.users[the person's] | first_seen_at | exact | as read at sign_in |
+| collision:b.users[the person's] | id | exact | as read at sign_in |
+| collision:b.users[the person's] | last_seen_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.users[the person's] | namespace | exact | as read at sign_in |
+| collision:b.users[the person's] | platform_admin_at | exact | as read at sign_in |
+| collision:b.users[the person's] | prefs | exact | as read at sign_in |
+| collision:b.users[the person's] | security_generation | exact | as read at sign_in |
+| collision:b.users[the person's] | status | exact | as read at sign_in |
+| collision:b.users[the person's] | updated_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.athanors[the administrator's] | archived_at | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | created_at | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | created_by | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | id | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | name | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | owner_user_id | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | provisioned_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.athanors[the administrator's] | provisioning_failed_at | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | provisioning_failure | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | security_generation | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | settings | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | slug | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | status | exact | as read at sign_in |
+| collision:b.athanors[the administrator's] | updated_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.athanors[the nameless person's] | id | captured | a new ath_ id |
+| collision:b.athanors[the nameless person's] | name | exact | `"Me"`: a person with no namespace, address or screen name (`Sanctum.Provisioning`) |
+| collision:b.athanors[the nameless person's] | slug | exact | `"me-2"`: "me", derived from Me, is the administrator's athanor's, so the next free one (`Sanctum.Tenancy.Athanors`) |
+| collision:b.athanors[the nameless person's] | owner_user_id | derived | its person |
+| collision:b.athanors[the nameless person's] | status | exact | `"active"` |
+| collision:b.athanors[the nameless person's] | archived_at | exact | `null` |
+| collision:b.athanors[the nameless person's] | created_by | derived | its person |
+| collision:b.athanors[the nameless person's] | settings | exact | `null` |
+| collision:b.athanors[the nameless person's] | provisioned_at | bound | null, or a time inside the nameless account's making, allow and sign-in at B up to collision:b.athanors's read |
+| collision:b.athanors[the nameless person's] | provisioning_failed_at | exact | `null` |
+| collision:b.athanors[the nameless person's] | provisioning_failure | exact | `null` |
+| collision:b.athanors[the nameless person's] | security_generation | exact | `1` |
+| collision:b.athanors[the nameless person's] | created_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.athanors[the nameless person's] | updated_at | bound | a time inside the nameless account's making, allow and sign-in at B up to collision:b.athanors's read |
+| collision:b.athanors[the person's] | archived_at | exact | as read at sign_in |
+| collision:b.athanors[the person's] | created_at | exact | as read at sign_in |
+| collision:b.athanors[the person's] | created_by | exact | as read at sign_in |
+| collision:b.athanors[the person's] | id | exact | as read at sign_in |
+| collision:b.athanors[the person's] | name | exact | as read at sign_in |
+| collision:b.athanors[the person's] | owner_user_id | exact | as read at sign_in |
+| collision:b.athanors[the person's] | provisioned_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.athanors[the person's] | provisioning_failed_at | exact | as read at sign_in |
+| collision:b.athanors[the person's] | provisioning_failure | exact | as read at sign_in |
+| collision:b.athanors[the person's] | security_generation | exact | as read at sign_in |
+| collision:b.athanors[the person's] | settings | exact | as read at sign_in |
+| collision:b.athanors[the person's] | slug | exact | as read at sign_in |
+| collision:b.athanors[the person's] | status | exact | as read at sign_in |
+| collision:b.athanors[the person's] | updated_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.directory_heads[the administrator's] | directory_url | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | genesis | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | gone_at | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | head_hash | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | identifier | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | inserted_at | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | keys_added | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | revision | captured | the cached head's revision, moved by each read since |
+| collision:b.directory_heads[the administrator's] | state | exact | as read at sign_in |
+| collision:b.directory_heads[the administrator's] | updated_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.directory_heads[the administrator's] | verified_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.directory_heads[the nameless person's] | identifier | derived | the account's identifier |
+| collision:b.directory_heads[the nameless person's] | genesis | derived | the nameless account's genesis at registry.test, as its JCS text |
+| collision:b.directory_heads[the nameless person's] | directory_url | exact | `"https://registry.test"` |
+| collision:b.directory_heads[the nameless person's] | head_hash | derived | the head of the account's log as the directory serves it |
+| collision:b.directory_heads[the nameless person's] | state | captured | the verified state the head leaves, as JSON text |
+| collision:b.directory_heads[the nameless person's] | keys_added | captured | when each listed key was added, as JSON text |
+| collision:b.directory_heads[the nameless person's] | verified_at | bound | a time inside the nameless account's making, allow and sign-in at B up to collision:b.directory_heads's read |
+| collision:b.directory_heads[the nameless person's] | gone_at | exact | `null` |
+| collision:b.directory_heads[the nameless person's] | revision | captured | the cached head's revision |
+| collision:b.directory_heads[the nameless person's] | inserted_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.directory_heads[the nameless person's] | updated_at | bound | a time inside the nameless account's making, allow and sign-in at B up to collision:b.directory_heads's read |
+| collision:b.directory_heads[the person's] | directory_url | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | genesis | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | gone_at | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | head_hash | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | identifier | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | inserted_at | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | keys_added | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | revision | captured | the cached head's revision, moved by each read since |
+| collision:b.directory_heads[the person's] | state | exact | as read at sign_in |
+| collision:b.directory_heads[the person's] | updated_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.directory_heads[the person's] | verified_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.paired_clients[the administrator's] | athanor_id | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | device_public_key | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | display_name | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | head | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | holder_kind | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | id | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | inserted_at | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | kid | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | source_id | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | source_kind | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | standing | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | updated_at | exact | as read at sign_in |
+| collision:b.paired_clients[the administrator's] | user_id | exact | as read at sign_in |
+| collision:b.paired_clients[the nameless person's] | id | captured | a new pcl_ id |
+| collision:b.paired_clients[the nameless person's] | athanor_id | derived | the person's own athanor here |
+| collision:b.paired_clients[the nameless person's] | user_id | derived | its person |
+| collision:b.paired_clients[the nameless person's] | source_kind | exact | `"passkey"` |
+| collision:b.paired_clients[the nameless person's] | source_id | derived | the client's own id |
+| collision:b.paired_clients[the nameless person's] | device_public_key | exact | `null` |
+| collision:b.paired_clients[the nameless person's] | standing | exact | `"active"` |
+| collision:b.paired_clients[the nameless person's] | holder_kind | exact | `null` |
+| collision:b.paired_clients[the nameless person's] | display_name | exact | `null` |
+| collision:b.paired_clients[the nameless person's] | kid | derived | the kid of the key the nameless account's authenticator holds |
+| collision:b.paired_clients[the nameless person's] | head | derived | the head it signed in under |
+| collision:b.paired_clients[the nameless person's] | inserted_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.paired_clients[the nameless person's] | updated_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.paired_clients[the person's] | athanor_id | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | device_public_key | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | display_name | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | head | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | holder_kind | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | id | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | inserted_at | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | kid | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | source_id | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | source_kind | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | standing | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | updated_at | exact | as read at sign_in |
+| collision:b.paired_clients[the person's] | user_id | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | athanor_id | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | browser | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | client_id | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | email | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | expires_at | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | head | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | id | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | inserted_at | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | kid | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | last_seen_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.sessions[the administrator's] | provider | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | system | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | token_hash | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | token_prefix | exact | as read at sign_in |
+| collision:b.sessions[the administrator's] | user_id | exact | as read at sign_in |
+| collision:b.sessions[the nameless person's] | id | captured | a new ses_ id |
+| collision:b.sessions[the nameless person's] | token_hash | derived | the SHA-256 of the session token the browser's cookie carries |
+| collision:b.sessions[the nameless person's] | token_prefix | derived | the first 8 characters of that token |
+| collision:b.sessions[the nameless person's] | user_id | derived | its person |
+| collision:b.sessions[the nameless person's] | email | exact | `null` |
+| collision:b.sessions[the nameless person's] | provider | exact | `"passkey"` |
+| collision:b.sessions[the nameless person's] | expires_at | derived | inserted_at plus session_ttl_hours (Sanctum.Session) |
+| collision:b.sessions[the nameless person's] | athanor_id | derived | the person's own athanor here |
+| collision:b.sessions[the nameless person's] | kid | derived | the kid of the key the browser's authenticator holds |
+| collision:b.sessions[the nameless person's] | head | derived | the head it signed in under |
+| collision:b.sessions[the nameless person's] | client_id | derived | the passkey's paired client here |
+| collision:b.sessions[the nameless person's] | browser | captured | the browser the sign-in's user agent names, in words |
+| collision:b.sessions[the nameless person's] | system | captured | the system the sign-in's user agent names, in words |
+| collision:b.sessions[the nameless person's] | last_seen_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.sessions[the nameless person's] | inserted_at | bound | a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
+| collision:b.sessions[the person's] | browser | exact | as read at sign_in |
+| collision:b.sessions[the person's] | client_id | exact | as read at sign_in |
+| collision:b.sessions[the person's] | email | exact | as read at sign_in |
+| collision:b.sessions[the person's] | expires_at | exact | as read at sign_in |
+| collision:b.sessions[the person's] | head | exact | as read at sign_in |
+| collision:b.sessions[the person's] | id | exact | as read at sign_in |
+| collision:b.sessions[the person's] | inserted_at | exact | as read at sign_in |
+| collision:b.sessions[the person's] | kid | exact | as read at sign_in |
+| collision:b.sessions[the person's] | last_seen_at | bound | as read at sign_in, or a time inside the nameless account's making, allow and sign-in at B |
+| collision:b.sessions[the person's] | provider | exact | as read at sign_in |
+| collision:b.sessions[the person's] | system | exact | as read at sign_in |
+| collision:b.sessions[the person's] | token_hash | exact | as read at sign_in |
+| collision:b.sessions[the person's] | token_prefix | exact | as read at sign_in |
+| collision:b.sessions[the person's] | user_id | exact | as read at sign_in |
 | sync:a.users[row] | admission | exact | as read at setup |
 | sync:a.users[row] | created_at | exact | as read at setup |
 | sync:a.users[row] | denied_at | exact | as read at setup |
@@ -706,136 +948,201 @@ row per field of each row of each step's objects:
 | held:registry.banned_identities[row] | appeal_allowed_after | exact | as read at ban |
 | held:registry.banned_identities[row] | related_report_ids | exact | as read at ban |
 | held:registry.banned_identities[row] | identifier | exact | as read at ban |
-| held:b.users[the administrator's] | admission | exact | as read at sign_in |
-| held:b.users[the administrator's] | created_at | exact | as read at sign_in |
-| held:b.users[the administrator's] | denied_at | exact | as read at sign_in |
-| held:b.users[the administrator's] | display_name | exact | as read at sign_in |
-| held:b.users[the administrator's] | email | exact | as read at sign_in |
-| held:b.users[the administrator's] | email_verified | exact | as read at sign_in |
-| held:b.users[the administrator's] | first_seen_at | exact | as read at sign_in |
-| held:b.users[the administrator's] | id | exact | as read at sign_in |
-| held:b.users[the administrator's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.users[the administrator's] | namespace | exact | as read at sign_in |
-| held:b.users[the administrator's] | platform_admin_at | exact | as read at sign_in |
-| held:b.users[the administrator's] | prefs | exact | as read at sign_in |
-| held:b.users[the administrator's] | security_generation | exact | as read at sign_in |
-| held:b.users[the administrator's] | status | exact | as read at sign_in |
-| held:b.users[the administrator's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.users[the person's] | admission | exact | as read at sign_in |
-| held:b.users[the person's] | created_at | exact | as read at sign_in |
-| held:b.users[the person's] | denied_at | exact | as read at sign_in |
-| held:b.users[the person's] | display_name | exact | as read at sign_in |
-| held:b.users[the person's] | email | exact | as read at sign_in |
-| held:b.users[the person's] | email_verified | exact | as read at sign_in |
-| held:b.users[the person's] | first_seen_at | exact | as read at sign_in |
-| held:b.users[the person's] | id | exact | as read at sign_in |
-| held:b.users[the person's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.users[the person's] | namespace | exact | as read at sign_in |
-| held:b.users[the person's] | platform_admin_at | exact | as read at sign_in |
-| held:b.users[the person's] | prefs | exact | as read at sign_in |
-| held:b.users[the person's] | security_generation | exact | as read at sign_in |
-| held:b.users[the person's] | status | exact | as read at sign_in |
-| held:b.users[the person's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.person_identities[the administrator's] | directory_url | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | head_hash | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | id | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | identifier | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | inserted_at | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | revision | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | updated_at | exact | as read at sign_in |
-| held:b.person_identities[the administrator's] | user_id | exact | as read at sign_in |
-| held:b.person_identities[the person's] | directory_url | exact | as read at sign_in |
-| held:b.person_identities[the person's] | head_hash | exact | as read at sign_in |
-| held:b.person_identities[the person's] | id | exact | as read at sign_in |
-| held:b.person_identities[the person's] | identifier | exact | as read at sign_in |
-| held:b.person_identities[the person's] | inserted_at | exact | as read at sign_in |
-| held:b.person_identities[the person's] | revision | exact | as read at sign_in |
-| held:b.person_identities[the person's] | updated_at | exact | as read at sign_in |
-| held:b.person_identities[the person's] | user_id | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | athanor_id | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | device_public_key | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | display_name | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | head | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | holder_kind | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | id | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | inserted_at | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | kid | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | source_id | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | source_kind | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | standing | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | updated_at | exact | as read at sign_in |
-| held:b.paired_clients[the administrator's] | user_id | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | athanor_id | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | device_public_key | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | display_name | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | head | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | holder_kind | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | id | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | inserted_at | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | kid | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | source_id | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | source_kind | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | standing | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | updated_at | exact | as read at sign_in |
-| held:b.paired_clients[the person's] | user_id | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | athanor_id | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | browser | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | client_id | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | email | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | expires_at | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | head | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | id | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | inserted_at | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | kid | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.sessions[the administrator's] | provider | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | system | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | token_hash | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | token_prefix | exact | as read at sign_in |
-| held:b.sessions[the administrator's] | user_id | exact | as read at sign_in |
-| held:b.sessions[the person's] | athanor_id | exact | as read at sign_in |
-| held:b.sessions[the person's] | browser | exact | as read at sign_in |
-| held:b.sessions[the person's] | client_id | exact | as read at sign_in |
-| held:b.sessions[the person's] | email | exact | as read at sign_in |
-| held:b.sessions[the person's] | expires_at | exact | as read at sign_in |
-| held:b.sessions[the person's] | head | exact | as read at sign_in |
-| held:b.sessions[the person's] | id | exact | as read at sign_in |
-| held:b.sessions[the person's] | inserted_at | exact | as read at sign_in |
-| held:b.sessions[the person's] | kid | exact | as read at sign_in |
-| held:b.sessions[the person's] | last_seen_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.sessions[the person's] | provider | exact | as read at sign_in |
-| held:b.sessions[the person's] | system | exact | as read at sign_in |
-| held:b.sessions[the person's] | token_hash | exact | as read at sign_in |
-| held:b.sessions[the person's] | token_prefix | exact | as read at sign_in |
-| held:b.sessions[the person's] | user_id | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | archived_at | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | created_at | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | created_by | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | id | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | name | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | owner_user_id | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | provisioned_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.athanors[the administrator's] | provisioning_failed_at | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | provisioning_failure | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | security_generation | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | settings | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | slug | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | status | exact | as read at sign_in |
-| held:b.athanors[the administrator's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.athanors[the person's] | archived_at | exact | as read at sign_in |
-| held:b.athanors[the person's] | created_at | exact | as read at sign_in |
-| held:b.athanors[the person's] | created_by | exact | as read at sign_in |
-| held:b.athanors[the person's] | id | exact | as read at sign_in |
-| held:b.athanors[the person's] | name | exact | as read at sign_in |
-| held:b.athanors[the person's] | owner_user_id | exact | as read at sign_in |
-| held:b.athanors[the person's] | provisioned_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
-| held:b.athanors[the person's] | provisioning_failed_at | exact | as read at sign_in |
-| held:b.athanors[the person's] | provisioning_failure | exact | as read at sign_in |
-| held:b.athanors[the person's] | security_generation | exact | as read at sign_in |
-| held:b.athanors[the person's] | settings | exact | as read at sign_in |
-| held:b.athanors[the person's] | slug | exact | as read at sign_in |
-| held:b.athanors[the person's] | status | exact | as read at sign_in |
-| held:b.athanors[the person's] | updated_at | bound | as read at signin, or a time inside the run from signin's end to the last read |
+| held:b.users[the administrator's] | admission | exact | as read at collision |
+| held:b.users[the administrator's] | created_at | exact | as read at collision |
+| held:b.users[the administrator's] | denied_at | exact | as read at collision |
+| held:b.users[the administrator's] | display_name | exact | as read at collision |
+| held:b.users[the administrator's] | email | exact | as read at collision |
+| held:b.users[the administrator's] | email_verified | exact | as read at collision |
+| held:b.users[the administrator's] | first_seen_at | exact | as read at collision |
+| held:b.users[the administrator's] | id | exact | as read at collision |
+| held:b.users[the administrator's] | last_seen_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.users[the administrator's] | namespace | exact | as read at collision |
+| held:b.users[the administrator's] | platform_admin_at | exact | as read at collision |
+| held:b.users[the administrator's] | prefs | exact | as read at collision |
+| held:b.users[the administrator's] | security_generation | exact | as read at collision |
+| held:b.users[the administrator's] | status | exact | as read at collision |
+| held:b.users[the administrator's] | updated_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.users[the nameless person's] | admission | exact | as read at collision |
+| held:b.users[the nameless person's] | created_at | exact | as read at collision |
+| held:b.users[the nameless person's] | denied_at | exact | as read at collision |
+| held:b.users[the nameless person's] | display_name | exact | as read at collision |
+| held:b.users[the nameless person's] | email | exact | as read at collision |
+| held:b.users[the nameless person's] | email_verified | exact | as read at collision |
+| held:b.users[the nameless person's] | first_seen_at | exact | as read at collision |
+| held:b.users[the nameless person's] | id | exact | as read at collision |
+| held:b.users[the nameless person's] | last_seen_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.users[the nameless person's] | namespace | exact | as read at collision |
+| held:b.users[the nameless person's] | platform_admin_at | exact | as read at collision |
+| held:b.users[the nameless person's] | prefs | exact | as read at collision |
+| held:b.users[the nameless person's] | security_generation | exact | as read at collision |
+| held:b.users[the nameless person's] | status | exact | as read at collision |
+| held:b.users[the nameless person's] | updated_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.users[the person's] | admission | exact | as read at collision |
+| held:b.users[the person's] | created_at | exact | as read at collision |
+| held:b.users[the person's] | denied_at | exact | as read at collision |
+| held:b.users[the person's] | display_name | exact | as read at collision |
+| held:b.users[the person's] | email | exact | as read at collision |
+| held:b.users[the person's] | email_verified | exact | as read at collision |
+| held:b.users[the person's] | first_seen_at | exact | as read at collision |
+| held:b.users[the person's] | id | exact | as read at collision |
+| held:b.users[the person's] | last_seen_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.users[the person's] | namespace | exact | as read at collision |
+| held:b.users[the person's] | platform_admin_at | exact | as read at collision |
+| held:b.users[the person's] | prefs | exact | as read at collision |
+| held:b.users[the person's] | security_generation | exact | as read at collision |
+| held:b.users[the person's] | status | exact | as read at collision |
+| held:b.users[the person's] | updated_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.person_identities[the administrator's] | directory_url | exact | as read at collision |
+| held:b.person_identities[the administrator's] | head_hash | exact | as read at collision |
+| held:b.person_identities[the administrator's] | id | exact | as read at collision |
+| held:b.person_identities[the administrator's] | identifier | exact | as read at collision |
+| held:b.person_identities[the administrator's] | inserted_at | exact | as read at collision |
+| held:b.person_identities[the administrator's] | revision | exact | as read at collision |
+| held:b.person_identities[the administrator's] | updated_at | exact | as read at collision |
+| held:b.person_identities[the administrator's] | user_id | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | directory_url | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | head_hash | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | id | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | identifier | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | inserted_at | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | revision | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | updated_at | exact | as read at collision |
+| held:b.person_identities[the nameless person's] | user_id | exact | as read at collision |
+| held:b.person_identities[the person's] | directory_url | exact | as read at collision |
+| held:b.person_identities[the person's] | head_hash | exact | as read at collision |
+| held:b.person_identities[the person's] | id | exact | as read at collision |
+| held:b.person_identities[the person's] | identifier | exact | as read at collision |
+| held:b.person_identities[the person's] | inserted_at | exact | as read at collision |
+| held:b.person_identities[the person's] | revision | exact | as read at collision |
+| held:b.person_identities[the person's] | updated_at | exact | as read at collision |
+| held:b.person_identities[the person's] | user_id | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | athanor_id | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | device_public_key | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | display_name | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | head | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | holder_kind | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | id | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | inserted_at | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | kid | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | source_id | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | source_kind | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | standing | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | updated_at | exact | as read at collision |
+| held:b.paired_clients[the administrator's] | user_id | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | athanor_id | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | device_public_key | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | display_name | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | head | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | holder_kind | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | id | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | inserted_at | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | kid | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | source_id | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | source_kind | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | standing | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | updated_at | exact | as read at collision |
+| held:b.paired_clients[the nameless person's] | user_id | exact | as read at collision |
+| held:b.paired_clients[the person's] | athanor_id | exact | as read at collision |
+| held:b.paired_clients[the person's] | device_public_key | exact | as read at collision |
+| held:b.paired_clients[the person's] | display_name | exact | as read at collision |
+| held:b.paired_clients[the person's] | head | exact | as read at collision |
+| held:b.paired_clients[the person's] | holder_kind | exact | as read at collision |
+| held:b.paired_clients[the person's] | id | exact | as read at collision |
+| held:b.paired_clients[the person's] | inserted_at | exact | as read at collision |
+| held:b.paired_clients[the person's] | kid | exact | as read at collision |
+| held:b.paired_clients[the person's] | source_id | exact | as read at collision |
+| held:b.paired_clients[the person's] | source_kind | exact | as read at collision |
+| held:b.paired_clients[the person's] | standing | exact | as read at collision |
+| held:b.paired_clients[the person's] | updated_at | exact | as read at collision |
+| held:b.paired_clients[the person's] | user_id | exact | as read at collision |
+| held:b.sessions[the administrator's] | athanor_id | exact | as read at collision |
+| held:b.sessions[the administrator's] | browser | exact | as read at collision |
+| held:b.sessions[the administrator's] | client_id | exact | as read at collision |
+| held:b.sessions[the administrator's] | email | exact | as read at collision |
+| held:b.sessions[the administrator's] | expires_at | exact | as read at collision |
+| held:b.sessions[the administrator's] | head | exact | as read at collision |
+| held:b.sessions[the administrator's] | id | exact | as read at collision |
+| held:b.sessions[the administrator's] | inserted_at | exact | as read at collision |
+| held:b.sessions[the administrator's] | kid | exact | as read at collision |
+| held:b.sessions[the administrator's] | last_seen_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.sessions[the administrator's] | provider | exact | as read at collision |
+| held:b.sessions[the administrator's] | system | exact | as read at collision |
+| held:b.sessions[the administrator's] | token_hash | exact | as read at collision |
+| held:b.sessions[the administrator's] | token_prefix | exact | as read at collision |
+| held:b.sessions[the administrator's] | user_id | exact | as read at collision |
+| held:b.sessions[the nameless person's] | athanor_id | exact | as read at collision |
+| held:b.sessions[the nameless person's] | browser | exact | as read at collision |
+| held:b.sessions[the nameless person's] | client_id | exact | as read at collision |
+| held:b.sessions[the nameless person's] | email | exact | as read at collision |
+| held:b.sessions[the nameless person's] | expires_at | exact | as read at collision |
+| held:b.sessions[the nameless person's] | head | exact | as read at collision |
+| held:b.sessions[the nameless person's] | id | exact | as read at collision |
+| held:b.sessions[the nameless person's] | inserted_at | exact | as read at collision |
+| held:b.sessions[the nameless person's] | kid | exact | as read at collision |
+| held:b.sessions[the nameless person's] | last_seen_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.sessions[the nameless person's] | provider | exact | as read at collision |
+| held:b.sessions[the nameless person's] | system | exact | as read at collision |
+| held:b.sessions[the nameless person's] | token_hash | exact | as read at collision |
+| held:b.sessions[the nameless person's] | token_prefix | exact | as read at collision |
+| held:b.sessions[the nameless person's] | user_id | exact | as read at collision |
+| held:b.sessions[the person's] | athanor_id | exact | as read at collision |
+| held:b.sessions[the person's] | browser | exact | as read at collision |
+| held:b.sessions[the person's] | client_id | exact | as read at collision |
+| held:b.sessions[the person's] | email | exact | as read at collision |
+| held:b.sessions[the person's] | expires_at | exact | as read at collision |
+| held:b.sessions[the person's] | head | exact | as read at collision |
+| held:b.sessions[the person's] | id | exact | as read at collision |
+| held:b.sessions[the person's] | inserted_at | exact | as read at collision |
+| held:b.sessions[the person's] | kid | exact | as read at collision |
+| held:b.sessions[the person's] | last_seen_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.sessions[the person's] | provider | exact | as read at collision |
+| held:b.sessions[the person's] | system | exact | as read at collision |
+| held:b.sessions[the person's] | token_hash | exact | as read at collision |
+| held:b.sessions[the person's] | token_prefix | exact | as read at collision |
+| held:b.sessions[the person's] | user_id | exact | as read at collision |
+| held:b.athanors[the administrator's] | archived_at | exact | as read at collision |
+| held:b.athanors[the administrator's] | created_at | exact | as read at collision |
+| held:b.athanors[the administrator's] | created_by | exact | as read at collision |
+| held:b.athanors[the administrator's] | id | exact | as read at collision |
+| held:b.athanors[the administrator's] | name | exact | as read at collision |
+| held:b.athanors[the administrator's] | owner_user_id | exact | as read at collision |
+| held:b.athanors[the administrator's] | provisioned_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.athanors[the administrator's] | provisioning_failed_at | exact | as read at collision |
+| held:b.athanors[the administrator's] | provisioning_failure | exact | as read at collision |
+| held:b.athanors[the administrator's] | security_generation | exact | as read at collision |
+| held:b.athanors[the administrator's] | settings | exact | as read at collision |
+| held:b.athanors[the administrator's] | slug | exact | as read at collision |
+| held:b.athanors[the administrator's] | status | exact | as read at collision |
+| held:b.athanors[the administrator's] | updated_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.athanors[the nameless person's] | archived_at | exact | as read at collision |
+| held:b.athanors[the nameless person's] | created_at | exact | as read at collision |
+| held:b.athanors[the nameless person's] | created_by | exact | as read at collision |
+| held:b.athanors[the nameless person's] | id | exact | as read at collision |
+| held:b.athanors[the nameless person's] | name | exact | as read at collision |
+| held:b.athanors[the nameless person's] | owner_user_id | exact | as read at collision |
+| held:b.athanors[the nameless person's] | provisioned_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.athanors[the nameless person's] | provisioning_failed_at | exact | as read at collision |
+| held:b.athanors[the nameless person's] | provisioning_failure | exact | as read at collision |
+| held:b.athanors[the nameless person's] | security_generation | exact | as read at collision |
+| held:b.athanors[the nameless person's] | settings | exact | as read at collision |
+| held:b.athanors[the nameless person's] | slug | exact | as read at collision |
+| held:b.athanors[the nameless person's] | status | exact | as read at collision |
+| held:b.athanors[the nameless person's] | updated_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.athanors[the person's] | archived_at | exact | as read at collision |
+| held:b.athanors[the person's] | created_at | exact | as read at collision |
+| held:b.athanors[the person's] | created_by | exact | as read at collision |
+| held:b.athanors[the person's] | id | exact | as read at collision |
+| held:b.athanors[the person's] | name | exact | as read at collision |
+| held:b.athanors[the person's] | owner_user_id | exact | as read at collision |
+| held:b.athanors[the person's] | provisioned_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
+| held:b.athanors[the person's] | provisioning_failed_at | exact | as read at collision |
+| held:b.athanors[the person's] | provisioning_failure | exact | as read at collision |
+| held:b.athanors[the person's] | security_generation | exact | as read at collision |
+| held:b.athanors[the person's] | settings | exact | as read at collision |
+| held:b.athanors[the person's] | slug | exact | as read at collision |
+| held:b.athanors[the person's] | status | exact | as read at collision |
+| held:b.athanors[the person's] | updated_at | bound | as read at collision, or a time inside the run from collision's end to the last read |
 | held:b.server_allowlist[setup's allow of the administrator] | added_by | exact | as read at allow |
 | held:b.server_allowlist[setup's allow of the administrator] | created_at | exact | as read at allow |
 | held:b.server_allowlist[setup's allow of the administrator] | effect | exact | as read at allow |
@@ -858,3 +1165,14 @@ row per field of each row of each step's objects:
 | held:b.server_allowlist[the allow of @proof] | status | exact | as read at allow |
 | held:b.server_allowlist[the allow of @proof] | updated_at | exact | as read at allow |
 | held:b.server_allowlist[the allow of @proof] | value | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | added_by | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | created_at | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | effect | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | id | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | kind | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | label | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | note | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | requested_by | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | status | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | updated_at | exact | as read at allow |
+| held:b.server_allowlist[the allow of the nameless account] | value | exact | as read at allow |
