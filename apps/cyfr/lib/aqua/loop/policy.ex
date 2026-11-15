@@ -204,7 +204,12 @@ defmodule Aqua.Loop.Policy do
       {:error, :row_changed} ->
         {:refuse, "program.start: the program changed since it was listed; list it again"}
 
-      {:error, _gone_or_unread} ->
+      {:error, :unavailable} ->
+        {:refuse,
+         "program.start: the program could not be read just now, so what it would run " <>
+           "cannot be shown; ask again"}
+
+      {:error, _gone} ->
         {:refuse, "program.start: no such program on the Programs page"}
     end
   end
@@ -418,6 +423,7 @@ defmodule Aqua.Loop.Policy do
   @spec card(Call.t(), keyword()) :: map()
   def card(%Call{} = call, opts \\ []) do
     sources = Keyword.get(opts, :sources, [])
+    program = shown_program!(call, Keyword.get(opts, :program))
 
     launch =
       case Keyword.get(opts, :launch) do
@@ -435,14 +441,43 @@ defmodule Aqua.Loop.Policy do
       "id" => Keyword.get(opts, :id) || Prima.UUID7.generate_id("apr"),
       "title" => Keyword.get(opts, :title) || "#{call.tool}.#{call.action}",
       "summary" => Keyword.get(opts, :summary) || "",
-      "action_kind" =>
-        Atom.to_string(Aqua.Kinds.kind_for(call.tool, call.action || "") || :external),
-      "standing" => standing(call),
       "proposal" => proposal,
       "sources" => Prima.Source.to_json_list(sources)
     }
-    |> Prima.MapUtil.put_present("program", Keyword.get(opts, :program))
+    |> Map.merge(standing_rule(call))
+    |> Prima.MapUtil.put_present("program", program)
   end
+
+  @doc """
+  What decides the standing answers a card for `call` may offer: its
+  kind and its standing declaration, as the card carries them
+  (`Aqua.Standing.offered?/2` reads them). A schedule's turn that stops at
+  a call reads the same rule, with no card.
+  """
+  @spec standing_rule(Call.t()) :: %{String.t() => term()}
+  def standing_rule(%Call{} = call) do
+    %{
+      "action_kind" =>
+        Atom.to_string(Aqua.Kinds.kind_for(call.tool, call.action || "") || :external),
+      "standing" => standing(call)
+    }
+  end
+
+  # A program's start has no card without what will run: the program's
+  # name, its pinned command, its folder and its hosts, read as the card
+  # opens (`program_shown/2`).
+  defp shown_program!(%Call{kind: :catalog, tool: "program", action: "start"}, program) do
+    case program do
+      %{"name" => name, "command" => command, "folder" => folder, "hosts" => hosts} = shown
+      when is_binary(name) and is_binary(command) and is_binary(folder) and is_binary(hosts) ->
+        shown
+
+      _missing ->
+        raise ArgumentError, "a program's start has no card without what it runs"
+    end
+  end
+
+  defp shown_program!(%Call{}, _program), do: nil
 
   @doc """
   What a launch of `call` binds of the grant its app roots at, read under

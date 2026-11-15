@@ -230,6 +230,21 @@ defmodule PrismWeb.AquaApprovalCardTest do
                0
     end
 
+    test "one that does not carry what it runs is shown, never approved" do
+      html =
+        card(%{
+          "action_kind" => "execute",
+          "proposal" => %{
+            "tool" => "program",
+            "action" => "start",
+            "args" => %{"program" => "mcp_gh", "epoch" => 3, "terminal_args" => []}
+          }
+        })
+
+      assert html =~ "This card cannot show what the program would run, so it cannot be approved."
+      assert %{once: false, run: false, until: false, always: false} = offers(html)
+    end
+
     test "says what every start widens in plain words, and chooses nothing until pressed" do
       html = program_card()
 

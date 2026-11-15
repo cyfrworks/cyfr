@@ -239,6 +239,77 @@ defmodule Aqua.ProgramToolTest do
     end
   end
 
+  describe "no details, no card" do
+    test "a start whose row cannot be read as its card opens is refused before it asks",
+         %{ctx: ctx, thread: thread, gh: gh} do
+      # The decision's read succeeds; the card's own read, the next one of
+      # the row, finds the store unable to answer.
+      hook = "program-card-read-#{System.unique_integer([:positive])}"
+      on_exit(fn -> :telemetry.detach(hook) end)
+
+      :ok =
+        :telemetry.attach(
+          hook,
+          [:arca, :repo, :query],
+          fn _event, _measures, metadata, id ->
+            if String.contains?(Map.get(metadata, :query, ""), "mcp_servers") and
+                 id in Map.get(metadata, :params, []) do
+              case Process.get(:card_reads, 0) do
+                0 ->
+                  Process.put(:card_reads, 1)
+                  Arca.Repo.query!("ALTER TABLE mcp_servers RENAME TO unread_card_servers")
+
+                1 ->
+                  Process.put(:card_reads, 2)
+                  Arca.Repo.query!("ALTER TABLE unread_card_servers RENAME TO mcp_servers")
+
+                _ ->
+                  :ok
+              end
+            end
+          end,
+          gh.id
+        )
+
+      turn = accept!(ctx, thread, "@aqua run gh")
+      script!([calls([start("c1", gh, ["--version"], 2_000)]), reply("could not")])
+      assert :completed = run(ctx, turn)
+      :telemetry.detach(hook)
+
+      assert %{outcome: "denied", approval_id: nil, error: error} = step(ctx, turn, "c1")
+      assert error =~ "could not be read just now, so what it would run cannot be shown"
+      assert {:ok, ended} = Tape.turn(ctx, turn.id)
+      assert {:ok, []} = Tape.pending_approvals(ctx, ended)
+      refute_received {:session, "open", _message, _fields}
+    end
+
+    test "a program's start has no card without its program" do
+      {:ok, call} =
+        Aqua.Loop.Binding.resolve("program", %{
+          "action" => "start",
+          "program" => "mcp_gh",
+          "epoch" => 1,
+          "terminal_args" => []
+        })
+
+      assert_raise ArgumentError, fn -> Aqua.Loop.Policy.card(call) end
+
+      assert_raise ArgumentError, fn ->
+        Aqua.Loop.Policy.card(call, program: %{"name" => "gh"})
+      end
+
+      assert %{"program" => %{"command" => "gh"}} =
+               Aqua.Loop.Policy.card(call,
+                 program: %{
+                   "name" => "gh",
+                   "command" => "gh",
+                   "folder" => "its own folder",
+                   "hosts" => "every public host"
+                 }
+               )
+    end
+  end
+
   describe "a schedule's turn" do
     test "opens no card and stops at the start, saying how to allow it", %{
       ctx: ctx,

@@ -95,6 +95,7 @@ defmodule PrismWeb.AquaApprovalCard do
       |> Map.put(:kind, action_kind(assigns.payload))
       |> Map.put(:proposal, assigns.payload["proposal"])
       |> Map.put(:read, read_sources(assigns.payload))
+      |> Map.put(:unshowable, unshowable?(assigns.payload))
 
     ~H"""
     <div
@@ -210,6 +211,10 @@ defmodule PrismWeb.AquaApprovalCard do
       <% end %>
 
       <%= cond do %>
+        <% @unshowable and status(@status) in [:pending, :running] -> %>
+          <div class="mt-2 text-[12px] text-amber-300" data-test="approval-unshowable">
+            This card cannot show what the program would run, so it cannot be approved.
+          </div>
         <% status(@status) in [:pending, :running] -> %>
           <%= if @decline_reason_open do %>
             <form
@@ -420,6 +425,18 @@ defmodule PrismWeb.AquaApprovalCard do
     {:ok, assign_new(socket, :limit, fn -> limit(socket.assigns.payload) end)}
   end
 
+  # A program's start whose card does not carry what it would run is
+  # shown, never approved: no details, no card.
+  defp unshowable?(%{"proposal" => %{"tool" => "program", "action" => "start"}} = payload) do
+    not match?(
+      %{"name" => n, "command" => c, "folder" => f, "hosts" => h}
+      when is_binary(n) and is_binary(c) and is_binary(f) and is_binary(h),
+      payload["program"]
+    )
+  end
+
+  defp unshowable?(_payload), do: false
+
   # The words a program's start runs after its command, as the call names
   # them; each is shown whole and quoted, so a space, a quote or a control
   # character in one is seen as it will run.
@@ -451,8 +468,10 @@ defmodule PrismWeb.AquaApprovalCard do
 
   @impl true
   def handle_event("approval:approve", %{"scope" => scope} = params, socket) do
-    case choice(scope, params, socket.assigns) do
+    case unshowable?(socket.assigns.payload) || choice(scope, params, socket.assigns) do
       {:ok, choice} -> send(self(), {:approval_approve, socket.assigns.approval_id, choice})
+      # Nothing to approve: the card does not show what would run.
+      true -> :ok
       :error -> :ok
     end
 

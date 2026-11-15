@@ -186,6 +186,7 @@ defmodule Aqua.Approvals do
     proposal = intent["proposal"] || %{}
 
     with :ok <- Standing.check(intent, scope),
+         :ok <- shows_what_runs(intent),
          :ok <- named_on_card(intent, Map.get(bounds, :sources)),
          :ok <- authorize_card(ctx, turn, proposal),
          :ok <- pins_hold(ctx, turn, approval, intent),
@@ -322,6 +323,21 @@ defmodule Aqua.Approvals do
   # as they stand now. A "never" since the card was raised wins; an agent
   # gone from the roster or a pair it no longer holds makes the card
   # stale. A confirmation card with no proposal has nothing to check.
+  # A program's start is approved only on a card that showed what it
+  # runs: the program, its pinned command, its folder and its hosts.
+  defp shows_what_runs(%{"proposal" => %{"tool" => "program", "action" => "start"}} = intent) do
+    case intent["program"] do
+      %{"name" => name, "command" => command, "folder" => folder, "hosts" => hosts}
+      when is_binary(name) and is_binary(command) and is_binary(folder) and is_binary(hosts) ->
+        :ok
+
+      _missing ->
+        {:error, {:stale_card, "the card did not show what the program would run"}}
+    end
+  end
+
+  defp shows_what_runs(_intent), do: :ok
+
   defp authorize_card(_ctx, _turn, proposal) when map_size(proposal) == 0, do: :ok
 
   defp authorize_card(ctx, turn, %{"tool" => tool, "action" => action})
