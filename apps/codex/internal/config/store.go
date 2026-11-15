@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 )
 
 // Config is the top-level ~/.cyfr/config.json structure.
@@ -17,19 +16,10 @@ type Config struct {
 	Contexts       map[string]*Context `json:"contexts"`
 }
 
-// SignedOut is told the contexts whose old sign-in a load deleted from
-// the file, once, as it is deleted; the command line says so.
-var SignedOut = func(contexts []string) {}
-
-// Context is a named server connection and this command line's standing
-// there: the client CYFR admitted its device key as and the certificate it
-// connects under, both CYFR's own word and neither a credential alone (the
-// key, unlocked, proves the person; cyfr login). The session lives only in
-// memory, and unattended work brings an API key by --token or CYFR_TOKEN.
+// Context is a named server connection: its address alone. The command
+// line keeps no credential; it brings an API key by --token or CYFR_TOKEN.
 type Context struct {
-	URL         string          `json:"url"`
-	ClientID    string          `json:"client_id,omitempty"`
-	Certificate json.RawMessage `json:"certificate,omitempty"`
+	URL string `json:"url"`
 }
 
 // DefaultConfigDir returns ~/.cyfr.
@@ -76,39 +66,7 @@ func LoadFrom(path string) (*Config, error) {
 	if cfg.Contexts == nil {
 		cfg.Contexts = make(map[string]*Context)
 	}
-	dropped, err := dropTokens(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-	if len(dropped) > 0 {
-		// A session an earlier command line saved, by an approval or a
-		// provider's sign-in, proves no device: it is deleted here, with
-		// the file's field, before anything can send it.
-		if err := cfg.SaveTo(path); err != nil {
-			return nil, fmt.Errorf("remove the old sign-in from the config: %w", err)
-		}
-		SignedOut(dropped)
-	}
 	return &cfg, nil
-}
-
-// dropTokens names the contexts whose stored form still carries the
-// session an earlier command line saved ("token").
-func dropTokens(data []byte) ([]string, error) {
-	var stored struct {
-		Contexts map[string]map[string]json.RawMessage `json:"contexts"`
-	}
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return nil, err
-	}
-	var names []string
-	for name, fields := range stored.Contexts {
-		if _, ok := fields["token"]; ok {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	return names, nil
 }
 
 // Save writes the config to disk.
@@ -128,7 +86,7 @@ func (c *Config) SaveTo(path string) error {
 	}
 
 	// MkdirAll does not tighten the permissions of a dir that already exists.
-	// The directory holds this command line's device keys (cyfr login), so
+	// The directory holds the contexts this command line reaches, so
 	// enforce 0700 even when it already exists with looser permissions.
 	if err := os.Chmod(dir, 0700); err != nil {
 		return fmt.Errorf("secure config dir: %w", err)
@@ -176,11 +134,6 @@ func (c *Config) CurrentURL() string {
 		return "http://127.0.0.1:4000"
 	}
 	return ctx.URL
-}
-
-// DefaultForLocal returns a config with the default local context.
-func DefaultForLocal() *Config {
-	return defaultConfig()
 }
 
 func defaultConfig() *Config {

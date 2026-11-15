@@ -69,7 +69,7 @@ func setupTokenOf(t *testing.T) string {
 // holds.
 func setupLinkLine(t *testing.T, address string) string {
 	t.Helper()
-	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person, or run cyfr login --setup here.\n"
+	return "Next: cyfr up. Then open " + address + "/setup#" + setupTokenOf(t) + " to set up its first person.\n"
 }
 
 // initThenPublic is a new CYFR from init, then made public at

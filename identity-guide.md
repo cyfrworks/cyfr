@@ -1,6 +1,6 @@
 # Identity and Recovery
 
-How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from a device of yours: `cyfr login --setup` or `--join` and the box's **Set up CYFR** make one, and `cyfr device approve` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, **Settings → Keys on your account** lists your account's keys and your sessions at that CYFR, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
+How a person has one account for every CYFR they use: their name, their identifier, the keys their devices keep and their recovery code; how a CYFR admits them; what each loss costs and how they come back. The account itself lives at an account service, cyfr.run unless the operator names another, and is changed on its account pages or from the box's screen: a CYFR's setup link or an invitation link, opened in a browser, and the box's **Set up CYFR** make one, and `/account/add` adds a device to it. No CYFR holds any of its keys: **Settings → Your name** shows the name and identifier that CYFR knows you by, **Settings → Keys on your account** lists your account's keys and your sessions at that CYFR, and the devices guide ([devices-guide.md](devices-guide.md)) covers devices and confirming changes.
 
 ---
 
@@ -9,7 +9,7 @@ How a person has one account for every CYFR they use: their name, their identifi
 You have one account, and every CYFR you use admits that same account:
 
 - **Your name** (`@mira`) is how people find you: an administrator or someone in a shared thread adds you by it, and it is your personal namespace for publishing components. It is 1 to 39 lowercase letters and digits joined by single hyphens, it is yours for life, and nobody else can take it. It is never released and never changes: someone who wants another name makes another account.
-- **Your identifier** (`per_…`) is the hash of the first entry of your account's log, and never changes. Settings shows it for the command line; no other page asks for it.
+- **Your identifier** (`per_…`) is the hash of the first entry of your account's log, and never changes. Settings shows it; no other page asks for it.
 - **Your keys** are the passkeys your phones and computers keep for you and the keys your devices hold under their own PIN or passphrase. They live only there: no CYFR holds a key of yours, and the account service holds only their public halves.
 - **Your recovery code** holds one more key, which replaces any of the others. You keep it, apart from your devices.
 
@@ -17,7 +17,7 @@ The account service keeps your account's log: every change to its keys, in one o
 
 ### The account pages
 
-The account service serves these pages, `https://cyfr.run/account/…` unless your CYFR names another. A terminal or the box's screen also makes an account ([Creating Your Account](#creating-your-account)), and a terminal adds another device to one with `cyfr device approve` ([devices-guide.md](devices-guide.md)):
+The account service serves these pages, `https://cyfr.run/account/…` unless your CYFR names another. The box's screen also makes an account ([Creating Your Account](#creating-your-account)), and adds itself to one through `/account/add` ([devices-guide.md](devices-guide.md)):
 
 | Page | What you do there |
 |---|---|
@@ -35,7 +35,7 @@ A CYFR sends its people to one account service, the one `CYFR_DIRECTORY_URL` nam
 
 Any CYFR can serve its own account service (`CYFR_DIRECTORY_SERVE=writer`, the [configuration guide](configuration-guide.md)) and name itself in `CYFR_DIRECTORY_URL` and `CYFR_REGISTRY_URL`. Its people's passkeys then live at that CYFR's address, and every account made there names it, so it keeps its address for good, and losing it loses every account it serves. Its operator can close an account for good: every CYFR that admitted it then ends its sessions and devices, and its name stays reserved.
 
-Such a CYFR serves its people's accounts and names, and no component registry: no component search, no publish tokens, no registry policies and no component storage. Its athanors fill from what CYFR ships, and the components that ship still pull and are still found: a search answers the local matches and says its results are incomplete. What needs the registry does not work there: a pull of a published component, `cyfr registry sync`, and a publish, which refuses for want of the push token a sync would have minted.
+Such a CYFR serves its people's accounts and names, and no component registry: no component search, no publish tokens, no registry policies and no component storage. Its athanors fill from what CYFR ships, and the components that ship still pull and are still found: a search answers the local matches and says its results are incomplete. What needs the registry does not work there: a pull of a published component, a sync of push tokens on the Registry page, and a publish, which refuses for want of the push token a sync would have minted.
 
 The account service is trusted to keep each log in one order and to answer honestly. Signatures stop it forging a change, but a dishonest service could withhold a change or keep answering an old log as current, and nothing detects that.
 
@@ -60,11 +60,9 @@ A tab closed before **I saved it** sent nothing and kept nothing; the passkey it
 
 Your recovery code never passes through an address, a server or the browser's storage; the page holds it in memory until it is done and drops it.
 
-### At a terminal or on a box
+### On a box
 
-At a terminal, `cyfr login --setup` in the project directory `cyfr init` set up makes you that CYFR's first person, and `cyfr login --join` (with `--invitation CODE` when you have one) makes you a new person at a CYFR that admits you. Without an account yet, each makes it there, with the command line as its first device: it asks you to accept the terms when the account service names them, asks your name (or takes `--name`), makes the command line's key under a PIN or passphrase ([devices-guide.md](devices-guide.md)), and shows your recovery code as a QR code and as text. Nothing is sent until you press Enter to say you saved it. If the run stops after that, the next `cyfr login` asks for that recovery code and finishes the same account.
-
-A CYFR box with its own screen does the same at setup: **Set up CYFR** takes your name, a PIN (or the passphrase it shows) and the terms, and shows your recovery code as a QR code to scan or print; **I saved it** makes the account with the box as its first device, and **Open CYFR** opens it.
+A CYFR box with its own screen makes your account at setup: **Set up CYFR** takes your name, a PIN (or the passphrase it shows) and the terms, and shows your recovery code as a QR code to scan or print; **I saved it** makes the account with the box as its first device, and **Open CYFR** opens it.
 
 ---
 
@@ -87,15 +85,15 @@ Anyone holding a copy of your recovery code can do everything above, at once and
 
 ## Signing In at a CYFR
 
-**Sign in with your account** on a CYFR's sign-in page sends your browser to `/account/sign`, which says "Sign in to" that CYFR's address. Your passkey signs that CYFR's request, and the browser returns there; the CYFR checks the signature against your account's keys, asks its own allowlist, and signs you in. The request is that CYFR's own, bound to the browser that asked, used once, and gone after five minutes. Your devices sign in the same way on their own, after their local unlock ([devices-guide.md](devices-guide.md)).
+**Sign in with your account** on a CYFR's sign-in page sends your browser to `/account/sign`, which says "Sign in to" that CYFR's address. Your passkey signs that CYFR's request, and the browser returns there; the CYFR checks the signature against your account's keys, asks its own allowlist, and signs you in. The request is that CYFR's own, bound to the browser that asked, used once, and gone after five minutes. The box's screen signs in the same way on its own, after its local unlock ([devices-guide.md](devices-guide.md)).
 
-A browser that holds no passkey of yours, as one does when you made your account on a CYFR box or with `cyfr login`, has two ways on once it is refused: **Add a passkey with your recovery code**, or **No passkey in this browser?**, which asks your name, makes a passkey for that account in this browser and returns it to the CYFR, which shows its code. On your box's screen, **Your devices** shows "A browser asks to add a passkey" with that code: check it is the same, press **Approve**, and type the box's PIN; the box's key adds the passkey to your account. Then sign in again in the browser with the new passkey. A passkey nobody approves adds nothing and is forgotten after five minutes.
+A browser that holds no passkey of yours, as one does when you made your account on a CYFR box, has two ways on once it is refused: **Add a passkey with your recovery code**, or **No passkey in this browser?**, which asks your name, makes a passkey for that account in this browser and returns it to the CYFR, which shows its code. On your box's screen, **Your devices** shows "A browser asks to add a passkey" with that code: check it is the same, press **Approve**, and type the box's PIN; the box's key adds the passkey to your account. Then sign in again in the browser with the new passkey. A passkey nobody approves adds nothing and is forgotten after five minutes.
 
 Each CYFR decides who it admits:
 
-- **Its setup** admits its first person, who administers it, through the setup link, `cyfr login --setup` or the box's own screen, and then opens nothing.
+- **Its setup** admits its first person, who administers it, through the setup link or the box's own screen, and then opens nothing.
 - **An invitation** admits whoever redeems it, once (below).
-- **Its allowlist** admits an account its administrator allowed by name (`cyfr admin allow @name`), or anyone while it holds `*`. A deny always wins.
+- **Its allowlist** admits an account its administrator allowed by name on **Settings → Server allowlist**, or anyone while it holds `*`. A deny always wins.
 
 Your first sign-in at a CYFR makes you a person there, with an athanor of your own. Your passkeys and devices sign you in at every CYFR that admits you, and you register nothing at each one.
 
@@ -111,7 +109,7 @@ A change that needs a fresh confirmation, such as making an API key, is confirme
 
 An invitation link admits someone to a CYFR without opening it to everyone. The platform administrator creates one on **Settings** (**Invite to this CYFR**); anyone in a shared thread creates one that also seats the newcomer there, from the thread's header. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash.
 
-The page names who invited you, and to which thread. **Sign in with your account** signs you in with the account you have; **Create your account** makes one first, with any name the invitation offers filled in, which you may change. Either redeems the invitation: it makes you a person there, with your own athanor, if you are not one yet, seats you in the thread, and lets your identifier in from then on, so you sign in later without the link. That entry shows in the CYFR's allowlist, where its administrator can remove it. A deny always wins: an account the CYFR denies is refused, and the invitation stays unspent. At a terminal, `cyfr login --join --invitation CODE`, with the code after the link's `#`, redeems it with the command line.
+The page names who invited you, and to which thread. **Sign in with your account** signs you in with the account you have; **Create your account** makes one first, with any name the invitation offers filled in, which you may change. Either redeems the invitation: it makes you a person there, with your own athanor, if you are not one yet, seats you in the thread, and lets your identifier in from then on, so you sign in later without the link. That entry shows in the CYFR's allowlist, where its administrator can remove it. A deny always wins: an account the CYFR denies is refused, and the invitation stays unspent.
 
 A link that has expired, been used or been revoked, whose issuer has since left the thread or been denied, or that was made before the CYFR was restored from a backup, says "This invitation can no longer be used."
 

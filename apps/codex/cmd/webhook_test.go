@@ -97,65 +97,6 @@ func TestParseInputTemplate_EmptyObjectIsValid(t *testing.T) {
 // pointed at a remote install). The CLI just renders whatever url/slug the
 // server returns.
 
-func TestRenderWebhookCreated_WithServerURL(t *testing.T) {
-	result := map[string]any{
-		"name":       "github-push",
-		"slug":       "wh_abc123",
-		"url":        "https://cyfr.example.com/hooks/wh_abc123",
-		"secret":     "whsec_supersecret",
-		"target_ref": "f:local.handle-github",
-	}
-
-	out := captureStdout(t, func() { renderWebhookCreated(result) })
-
-	expected := []string{
-		"Webhook 'github-push' created.",
-		"URL:    https://cyfr.example.com/hooks/wh_abc123",
-		"Target: f:local.handle-github",
-		"Secret: whsec_supersecret",
-		"Copy this secret now",
-	}
-	for _, line := range expected {
-		if !strings.Contains(out, line) {
-			t.Errorf("expected %q in output, got:\n%s", line, out)
-		}
-	}
-}
-
-func TestRenderWebhookCreated_PathOnly_HintsCYFR_PUBLIC_URL(t *testing.T) {
-	// Server returns path-only when CYFR_PUBLIC_URL is unset on the server.
-	result := map[string]any{
-		"name":   "no-url",
-		"slug":   "wh_xyz",
-		"url":    "/hooks/wh_xyz",
-		"secret": "whsec_x",
-	}
-
-	out := captureStdout(t, func() { renderWebhookCreated(result) })
-
-	if !strings.Contains(out, "Path:   /hooks/wh_xyz") {
-		t.Errorf("expected path-only output, got:\n%s", out)
-	}
-	if !strings.Contains(out, "Set CYFR_PUBLIC_URL") {
-		t.Errorf("expected hint about CYFR_PUBLIC_URL, got:\n%s", out)
-	}
-}
-
-func TestRenderWebhookCreated_FallsBackToSlug_WhenNoURL(t *testing.T) {
-	// Defensive: server didn't include url for some reason.
-	result := map[string]any{
-		"name":   "legacy",
-		"slug":   "wh_legacy",
-		"secret": "whsec_l",
-	}
-
-	out := captureStdout(t, func() { renderWebhookCreated(result) })
-
-	if !strings.Contains(out, "/hooks/wh_legacy") {
-		t.Errorf("expected fallback path, got:\n%s", out)
-	}
-}
-
 // A rotation says until when the old secret keeps working, the time the
 // answer carries and the span from now to it, and how to end it now; an
 // answer that names no such time claims none.

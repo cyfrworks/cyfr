@@ -6,7 +6,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 	"strings"
@@ -18,8 +17,6 @@ import (
 
 func init() {
 	rootCmd.AddCommand(mcpCmd)
-	mcpCmd.AddCommand(mcpAddCmd)
-	mcpCmd.AddCommand(mcpUpdateCmd)
 	mcpCmd.AddCommand(mcpRemoveCmd)
 	mcpCmd.AddCommand(mcpListCmd)
 	mcpCmd.AddCommand(mcpGetCmd)
@@ -28,189 +25,18 @@ func init() {
 	mcpCmd.AddCommand(mcpDisableCmd)
 	mcpCmd.AddCommand(mcpRefreshCmd)
 	mcpCmd.AddCommand(mcpRestartCmd)
-	mcpCmd.AddCommand(mcpResetHomeCmd)
 
-	mcpUpdateCmd.Flags().Int("epoch", 0, "The epoch `cyfr mcp get` showed (required)")
-	_ = mcpUpdateCmd.MarkFlagRequired("epoch")
 }
 
 var mcpCmd = &cobra.Command{
 	Use:     "mcp",
 	Short:   "Manage programs and tool servers",
 	GroupID: "admin",
-	Long: `Connect to tool servers elsewhere (Notion, GitHub, custom servers) via the
-standard MCP protocol, and define the programs CYFR runs. A tool server's
-and an MCP program's tools appear alongside built-in tools in tools/list as
-server_name:tool_name.
-
-A tool server's config uses the same JSON format as mcp.json entries.
-Header values can reference a stored vault entry with the vault: prefix.
-
-A program ({"transport":"program","mark":...,"backends":[...]}) runs its
-backends on the backends service: each backend is a command and an env
-whose credentials are vault: templates. Its mark says how it is spoken to:
-"mcp", CYFR speaks MCP to it and offers its tools, or "driven", one backend
-a person or a brain runs. A program may keep its home ("home":"kept"),
-bound its memory ("memory_bytes") and a kept home's disk
-("home_max_bytes"), and name the command a sign-in runs ("login_command");
-a kept MCP program names its login entry ("login_entry_id"). Signing a
-program in runs on a terminal, which the console's Programs page shows.`,
-}
-
-var mcpAddCmd = &cobra.Command{
-	Use:   "add <name> <config-json>",
-	Short: "Add a program or a tool server",
-	Long: `Register a tool server or a program. Config is a JSON object in the same
-format as an mcp.json server entry. A tool server or an MCP program is
-initialized immediately and its tools are discovered.
-
-Header values can reference a stored vault entry with the vault: prefix.
-A program names "transport":"program", its "mark" and its backends instead
-of a url; an env value is a vault: template, except NODE_ENV, LOG_LEVEL, TZ,
-LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
-
-Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
-	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
-  cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'
-  cyfr mcp add gh '{"transport":"program","mark":"mcp","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:gh-token"}}]}'`,
-	Args: cobra.RangeArgs(0, 2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var name string
-		var config ops.McpServersCreateArgsConfig
-
-		switch {
-		case len(args) >= 2:
-			name = args[0]
-			if err := json.Unmarshal([]byte(args[1]), &config); err != nil {
-				return fmt.Errorf("Invalid JSON config: %w", err)
-			}
-		case len(args) == 1:
-			// Could be just a name (interactive config) or just JSON
-			name = args[0]
-			if prompt.IsInteractive(flagNoInteractive) {
-				configStr, err := prompt.InputText(cmd.Context(), "Config JSON", `{"url":"https://"}`)
-				if err != nil {
-					if prompt.IsAborted(err) {
-						return prompt.ErrAborted
-					}
-					return fmt.Errorf("Prompt failed: %w", err)
-				}
-				if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-					return fmt.Errorf("Invalid JSON config: %w", err)
-				}
-			} else {
-				return errors.New("Usage: cyfr mcp add <name> '<config-json>'")
-			}
-		case prompt.IsInteractive(flagNoInteractive):
-			var err error
-			name, err = prompt.InputText(cmd.Context(), "Server name", "notion")
-			if err != nil {
-				if prompt.IsAborted(err) {
-					return prompt.ErrAborted
-				}
-				return fmt.Errorf("Prompt failed: %w", err)
-			}
-			configStr, err := prompt.InputText(cmd.Context(), "Config JSON", `{"url":"https://"}`)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					return prompt.ErrAborted
-				}
-				return fmt.Errorf("Prompt failed: %w", err)
-			}
-			if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-				return fmt.Errorf("Invalid JSON config: %w", err)
-			}
-		default:
-			return errors.New("Usage: cyfr mcp add <name> '<config-json>'")
-		}
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersCreateArgs{Name: name,
-			Config: config})
-		if err != nil {
-			return handleToolError(err)
-		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			status := "unknown"
-			if s, ok := result["status"]; ok {
-				status = fmt.Sprintf("%v", s)
-			}
-			toolCount := 0
-			if tc, ok := result["tools_discovered"]; ok {
-				if n, ok := tc.(float64); ok {
-					toolCount = int(n)
-				}
-			}
-			fmt.Printf("Server '%s' added (%s, %d tools discovered).\n", name, status, toolCount)
-			if names, ok := result["tool_names"]; ok {
-				if list, ok := names.([]any); ok && len(list) > 0 {
-					strs := make([]string, len(list))
-					for i, v := range list {
-						strs[i] = fmt.Sprintf("%v", v)
-					}
-					fmt.Printf("  Tools: %s\n", strings.Join(strs, ", "))
-				}
-			}
-			printWarnings(result)
-		}
-		return nil
-	},
-}
-
-// printWarnings writes each warning the server's definition carries (the
-// answer's warnings list) after the confirmation, one per line.
-func printWarnings(result map[string]any) {
-	warnings, _ := result["warnings"].([]any)
-	for _, w := range warnings {
-		fmt.Printf("  Warning: %v\n", w)
-	}
-}
-
-var mcpUpdateCmd = &cobra.Command{
-	Use:   "update <name> <config-json>",
-	Short: "Replace a program's or a tool server's config",
-	Long: `Replace the config of a program or a tool server already added, whole.
-It keeps its enabled or disabled state and a kept program its folder; an
-enabled one reconnects with the new config and its tools are discovered
-again.
-
---epoch is the epoch "cyfr mcp get" showed: the update is refused when the
-server has changed since.
-
-Header values can reference a stored vault entry with the vault: prefix.
-
-Replacing a server's config takes a signed-in session (cyfr login); an API
-key cannot.`,
-	Example: `  cyfr mcp update notion --epoch 3 '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key-2"}}'`,
-	Args:    cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		epoch, _ := cmd.Flags().GetInt("epoch")
-		if epoch < 1 {
-			return errors.New("--epoch must be the epoch `cyfr mcp get` showed.")
-		}
-		var config ops.McpServersUpdateArgsConfig
-		if err := json.Unmarshal([]byte(args[1]), &config); err != nil {
-			return fmt.Errorf("Invalid JSON config: %w", err)
-		}
-
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersUpdateArgs{Name: name,
-			Epoch:  epoch,
-			Config: config})
-		if err != nil {
-			return handleToolError(err)
-		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			fmt.Printf("Server '%s' updated (%v).\n", name, result["status"])
-			printWarnings(result)
-		}
-		return nil
-	},
+	Long: `List, test, enable, disable, refresh, restart and remove the tool servers
+elsewhere (Notion, GitHub, custom servers) and the programs CYFR runs. A tool
+server's and an MCP program's tools appear alongside built-in tools in
+tools/list as server_name:tool_name. Add one, or change its definition, on
+CYFR's Programs page.`,
 }
 
 var mcpRemoveCmd = &cobra.Command{
@@ -442,27 +268,6 @@ var mcpRestartCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			fmt.Printf("Server '%s' restarted (%v, epoch %v).\n", name, result["status"], result["epoch"])
-		}
-		return nil
-	},
-}
-
-var mcpResetHomeCmd = &cobra.Command{
-	Use:     "reset-home <login-entry-id>",
-	Short:   "Empty a login entry's kept home",
-	Long:    "End every program session in a login entry's kept home and make it again empty, under the same uid: the program signs in afresh.",
-	Example: "  cyfr mcp reset-home vlt_01a1ab7d-6f24-7dce-b322-419062c54cb2",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersResetHomeArgs{Entry: args[0]})
-		if err != nil {
-			return handleToolError(err)
-		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			fmt.Printf("The kept home of '%s' is empty.\n", args[0])
 		}
 		return nil
 	},

@@ -649,7 +649,8 @@ defmodule Prima.RefusalTest do
 
     test "the corrupt registry credential says what to do" do
       assert Refusal.classify({:corrupt, :registry_credential}).message ==
-               "The stored registry credential is damaged; run `cyfr registry sync` to replace it."
+               "The stored registry credential is damaged; sync your push tokens on the Registry " <>
+                 "page to replace it."
     end
 
     test "a policy refusal says the account has no acceptance on record, naming the version" do
@@ -679,7 +680,7 @@ defmodule Prima.RefusalTest do
     end
 
     test "a push with no usable token names the sync that mints one" do
-      assert Refusal.message(:registry_token_missing) =~ "`cyfr registry sync`"
+      assert Refusal.message(:registry_token_missing) =~ "push tokens on the Registry page"
     end
 
     test "every registry refusal CYFR passes on is a reason of the table" do

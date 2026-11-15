@@ -235,8 +235,8 @@ var actions = map[string]action{
 	"/resume": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.onward(ctx, w, r, f, srv.Shell.resumeByPage(ctx, string(f.get("code"))))
 	}},
-	// The account's log is read before the key is opened, as cyfr login
-	// reads it: a key the log no longer lists shows its code again, and
+	// The account's log is read before the key is opened: a key the log
+	// no longer lists shows its code again, and
 	// the PIN typed is erased unused.
 	"/unlock": {run: func(ctx context.Context, srv *Server, w http.ResponseWriter, r *http.Request, f form) {
 		srv.Shell.CheckListed(ctx)
@@ -350,7 +350,7 @@ func (srv *Server) onward(ctx context.Context, w http.ResponseWriter, r *http.Re
 			to = ticket
 		case errors.Is(err, errNoProof):
 			srv.Shell.mu.Lock()
-			srv.Shell.say("Only the page this %s was unlocked on opens CYFR: lock it, then unlock it here.", srv.Shell.cfg.Noun)
+			srv.Shell.say("Only the page this screen was unlocked on opens CYFR: lock it, then unlock it here.")
 			srv.Shell.mu.Unlock()
 		default:
 			srv.Shell.mu.Lock()

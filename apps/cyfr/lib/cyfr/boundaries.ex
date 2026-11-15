@@ -2280,10 +2280,7 @@ defmodule Cyfr.Boundaries do
           "the POST, under the browser pipeline's CSRF token, spends a 32-byte ticket the " <>
           "device's own channel was answered once its proof of an unlock challenge " <>
           "verified, held 60 seconds and taken once, and creates the session in the " <>
-          "issuance transaction that rereads the device's standing; a command line's " <>
-          "`POST /device/session` spends the same ticket the same way and answers the " <>
-          "session's token in its body, reading and setting no cookie, so no CSRF token " <>
-          "is asked"
+          "issuance transaction that rereads the device's standing"
     },
     browser_company_login: %{
       admits: :session,
@@ -2838,13 +2835,6 @@ defmodule Cyfr.Boundaries do
     %{module: Emissary.Web.HandleController, site: :resolve, plane: :external, origin: :none},
     %{module: Emissary.Web.HandleController, site: :name_of, plane: :external, origin: :none},
     %{module: Emissary.Web.HandleController, site: :claim, plane: :external, origin: :none},
-    # A protected command line's session: the unlock's one-time ticket.
-    %{
-      module: Emissary.Web.DeviceSessionController,
-      site: :create,
-      plane: :external,
-      origin: :none
-    },
     # The OAuth callback, which completes a `vault.authorize` the gate
     # admitted: a state no admission left, a provider's denial, and the
     # grant's refusals once the originating context's standing is read

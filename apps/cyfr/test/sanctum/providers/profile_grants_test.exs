@@ -981,12 +981,10 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   end
 
   describe "profile.preview naming one account in two spellings" do
-    # Where the command line meets the refusal first: `cyfr profile grant`
-    # sends profile.plan, profile.preview and profile.commit, and preview
-    # and commit, which carry the bindings, reach the slot check in
-    # `Sanctum.Consent.Commit` that profile.grant reaches. A command line
-    # folding on Unicode tables older than the home's sends `Ꟍ Work` and
-    # `ꟍ work` as two accounts.
+    # profile.preview and profile.commit, which carry the bindings, reach
+    # the slot check in `Sanctum.Consent.Commit` that profile.grant
+    # reaches. A client folding on Unicode tables older than CYFR's sends
+    # `Ꟍ Work` and `ꟍ work` as two accounts.
     test "is refused naming both, and nothing is written", %{ctx: ctx} do
       app = granted_app!(ctx, "preview-twice-unicode")
       actor = Sanctum.Context.actor(ctx)

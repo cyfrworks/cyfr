@@ -87,8 +87,6 @@ type uninstallPlan struct {
 	inFolder []string
 	// settings are this program's settings files, which stay.
 	settings []string
-	// deviceKey is this machine's device key, which stays.
-	deviceKey string
 }
 
 // readUninstallPlan reads what an uninstall of the CYFR in the working
@@ -136,9 +134,6 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			}
 		}
 	}
-	if path, err := deviceKey(); err == nil && fileExists(path) {
-		p.deviceKey = path
-	}
 	return p, nil
 }
 
@@ -181,9 +176,6 @@ func (p *uninstallPlan) show(out io.Writer) {
 	fmt.Fprintln(out, "  the stack's volumes")
 	if len(p.settings) > 0 {
 		fmt.Fprintf(out, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
-	}
-	if p.deviceKey != "" {
-		fmt.Fprintf(out, "  this machine's device key, %s\n", p.deviceKey)
 	}
 	if p.cask {
 		fmt.Fprintln(out, "  this program, which Homebrew installed: remove it with 'brew uninstall --cask cyfr'")
@@ -265,9 +257,6 @@ func (p *uninstallPlan) left(volumes []string) string {
 	}
 	if len(p.settings) > 0 {
 		fmt.Fprintf(&b, "  this program's settings, %s\n", strings.Join(p.settings, ", "))
-	}
-	if p.deviceKey != "" {
-		fmt.Fprintf(&b, "  this machine's device key, %s\n", p.deviceKey)
 	}
 	if len(volumes) > 0 {
 		fmt.Fprintf(&b, "  the stack's volumes, which this command removes:\n    docker volume rm %s\n", shellQuote(volumes))

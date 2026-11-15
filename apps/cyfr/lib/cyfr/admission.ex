@@ -95,7 +95,6 @@ defmodule Cyfr.Admission do
     "Emissary.Web.ExecutionEventsController",
     "Emissary.Web.DirectoryController",
     "Emissary.Web.HandleController",
-    "Emissary.Web.DeviceSessionController",
     "Emissary.Web.OAuthCallbackController",
     "PrismWeb.AuthController",
     "PrismWeb.PasskeyController",

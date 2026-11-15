@@ -20,7 +20,6 @@ defmodule Prima.RemediationTest do
 
       assert remediation["component_ref"] == "catalyst:local.gmail"
       assert remediation["profile_id"] == "prof-x"
-      assert remediation["setup_command"] == "cyfr profile grant catalyst:local.gmail"
       assert remediation["message"] =~ "@ingress"
 
       assert [%{"type" => "unbound_need", "fix" => fix} | _] = remediation["issues"]
@@ -59,7 +58,6 @@ defmodule Prima.RemediationTest do
                     "component_ref" => ref,
                     "profile_id" => nil,
                     "message" => message,
-                    "setup_command" => "cyfr profile grant #{ref}",
                     "issues" => [
                       %{
                         "type" => "consent_required",
@@ -83,7 +81,7 @@ defmodule Prima.RemediationTest do
       assert :not_setup_error = Remediation.analyze(nil)
     end
 
-    test "every typed remediation carries the keys the surfaces read" do
+    test "every typed remediation carries exactly the keys the surfaces read" do
       for term <- [
             {:setup_required, %{profile_id: "p", node_ref: "r", need: "n", reason: :x}},
             {:consent_required,
@@ -97,9 +95,8 @@ defmodule Prima.RemediationTest do
           ] do
         assert {:setup_required, remediation} = Remediation.analyze(term)
 
-        for key <- ["component_ref", "message", "setup_command", "issues"] do
-          assert Map.has_key?(remediation, key), "#{inspect(term)} lost #{key}"
-        end
+        assert Enum.sort(Map.keys(remediation)) ==
+                 ["component_ref", "issues", "message", "profile_id"]
 
         assert is_list(remediation["issues"])
       end
