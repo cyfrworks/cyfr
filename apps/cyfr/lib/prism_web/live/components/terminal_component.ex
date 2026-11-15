@@ -8,8 +8,11 @@ defmodule PrismWeb.TerminalComponent do
   for a terminal opened from Aqua's card, the way back to Aqua; inside
   it the `Terminal` hook (`assets/js/terminal/frame.js`) draws what the
   program writes with the vendored xterm.js. Nothing the program writes
-  reaches the chrome, and the frame asks for nothing but what the person
-  types to the program.
+  reaches the chrome. What the frame sends the program is what the person
+  types and the terminal's own answers to the program's standard queries,
+  never text the program chose. When the program ends, the screen the
+  page drew stays, read-only, beside the ending, until the person closes
+  the frame.
 
   The frame holds no byte of the session: the page that shows it
   (`PrismWeb.ProgramsLive`) attaches to the session

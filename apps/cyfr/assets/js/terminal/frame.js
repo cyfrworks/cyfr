@@ -11,6 +11,16 @@
 // It stores nothing and logs nothing: what passes is handed to the server
 // as the person types it and drawn as the server hands it on.
 //
+// What goes to the program is what the person types and the terminal's own
+// answers to a program's standard queries (the cursor position, the device
+// attributes, a mode's or a setting's state), which full-screen programs
+// need and which carry only the terminal's state back to the program that
+// asked. Nothing a program prints makes the terminal send text the program
+// chose: every window operation is off, the title and icon reports among
+// them (`windowOptions`, all off, set here so no default can change it),
+// a settings query (DECRQSS) answers a setting's value, never the words it
+// was asked, and a colour query answers the colour as numbers.
+//
 // `TerminalHook(deps)` is the LiveView hook, its terminal, addons and
 // window opener given, so a test drives it without a browser.
 
@@ -73,6 +83,7 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
         scrollback: 5000,
         fontSize: 13,
         allowProposedApi: false,
+        windowOptions: {},
         linkHandler: {activate: (_event, uri) => openLink(uri, open), allowNonHttpProtocols: false}
       })
       this.term = term
