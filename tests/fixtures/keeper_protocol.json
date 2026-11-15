@@ -5,7 +5,7 @@
   "signals": ["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"],
   "bounds": { "max_frame_payload_bytes": 65536, "max_line_bytes": 1048576 },
   "request_bounds": { "max_args": 256, "max_env": 256, "max_value_bytes": 32768, "max_spec_bytes": 262144, "max_grace_ms": 60000, "max_socket_path_bytes": 107, "min_memory_bytes": 16777216, "max_memory_bytes": 1099511627776, "cpu_period": 100000, "min_cpu_quota": 1000, "max_cpu_quota": 102400000, "max_home_path_bytes": 4095, "max_uid": 4294967294, "max_home_bytes": 1125899906842624, "max_hosts": 32, "max_pty_size": 1000 },
-  "rlimits": { "core": { "least": 0, "most": 0 }, "fsize": { "least": 1, "most": 268435456 }, "nofile": { "least": 16, "most": 1024 }, "nproc": { "least": 1, "most": 128 } },
+  "rlimits": { "core": { "least": 0, "most": 0 }, "fsize": { "least": 1, "most": 268435456 }, "nofile": { "least": 16, "most": 1024 }, "nproc": { "least": 1, "most": 1024 } },
   "kept_unbounded_rlimits": ["fsize"],
   "frames": [
     { "stream": 3, "payload_hex": "30313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566", "encoded_hex": "030000004030313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566" },

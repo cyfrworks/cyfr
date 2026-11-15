@@ -163,7 +163,7 @@ defmodule Prima.KeeperProtocol do
     core: {0, 0},
     fsize: {1, 256 * 1024 * 1024},
     nofile: {16, 1024},
-    nproc: {1, 128}
+    nproc: {1, 1024}
   ]
 
   # The integers a reply carries: uids, pids and pool counts.

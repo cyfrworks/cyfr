@@ -502,7 +502,7 @@ func TestRlimitsDefaultToTheCeilings(t *testing.T) {
 	if none.Resolve() != Ceilings {
 		t.Fatal("absent rlimits do not resolve to the ceilings")
 	}
-	if Ceilings != (Limits{Nofile: 1024, Nproc: 128, Core: 0, Fsize: 256 << 20}) {
+	if Ceilings != (Limits{Nofile: 1024, Nproc: 1024, Core: 0, Fsize: 256 << 20}) {
 		t.Fatalf("ceilings %+v", Ceilings)
 	}
 	nproc := uint64(8)
