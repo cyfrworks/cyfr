@@ -383,7 +383,18 @@ defmodule Aqua.ModelsTest do
     test_path = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
     on_exit(fn -> remove_root!(test_path) end)
     Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
+    fills_end_first!()
     %{Sanctum.TestContext.local() | origin: :interactive}
+  end
+
+  # The test's athanor is not filled, so a read of it starts its fill in
+  # the background, which lays the athanor's folders under whatever root
+  # `:arca, :base_path` names as it runs. Registered last, this runs first
+  # at the test's end: the fills end while the root is still the test's,
+  # before the root is restored and removed.
+  defp fills_end_first! do
+    test = self()
+    on_exit(fn -> Cyfr.Test.Fill.ended!(test) end)
   end
 
   # A root that is not removed fails the test, naming what it held at that
@@ -442,6 +453,8 @@ defmodule Aqua.ModelsTest do
         do: Application.put_env(:arca, :base_path, original),
         else: Application.delete_env(:arca, :base_path)
     end)
+
+    fills_end_first!()
 
     ctx = Sanctum.TestContext.local()
     ref = "catalyst:local.statusmodel"
