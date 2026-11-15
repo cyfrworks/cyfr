@@ -7,7 +7,8 @@
 // in the page, after the sanitizer. Each case sets the element's
 // data-raw-content and runs the hook's mounted or updated callback, as
 // LiveView does, and compares the element's innerHTML with the expected
-// markup exactly. A render the hook catches and logs fails the run, as does
+// markup exactly; a case with a base names it on the element as
+// data-link-base, as Legal does, and one without removes it. A render the hook catches and logs fails the run, as does
 // any console error. Writes markdown.json to /out and exits non-zero on a
 // mismatch.
 
@@ -15,6 +16,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { chromium } from "../browser/lib.mjs";
 
 const ORIGIN = "http://markdown.test";
+// The account service's address, as a legal page's element names it.
+const BASE = "https://cyfr.run";
 const ASSETS = "/assets";
 // The hook and the vendored modules it imports; nothing else is served.
 const SERVED = /^\/(js\/hooks|vendor)\/[\w.-]+\.(m?js)$/;
@@ -27,7 +30,8 @@ const PAGE = `<!doctype html>
   const el = document.getElementById("message");
   const hook = Object.assign(Object.create(MarkdownContent), {el});
   let mounted = false;
-  window.render = (raw) => {
+  window.render = (raw, base) => {
+    if (base) el.setAttribute("data-link-base", base); else el.removeAttribute("data-link-base");
     el.setAttribute("data-raw-content", raw);
     if (mounted) hook.updated(); else { mounted = true; hook.mounted(); }
     return el.innerHTML;
@@ -65,6 +69,23 @@ const CASES = [
   // DOMPurify keeps a removed element's text.
   ["a form and its controls, removed, their text kept", "<form><input value=\"a\"><button>b</button></form>", "b"],
   ["an iframe, removed", '<iframe src="http://e.com"></iframe>', ""],
+  // A legal page's links, against the account service's address.
+  ["an inline link on a path, resolved against the base", "[it](/legal/ncii/report)",
+    `<p><a href="${BASE}/legal/ncii/report" target="_blank" rel="noopener noreferrer">it</a></p>\n`, { base: BASE }],
+  ["a reference link on a path, resolved against the base", "[it][r]\n\n[r]: /legal/ncii/report",
+    `<p><a href="${BASE}/legal/ncii/report" target="_blank" rel="noopener noreferrer">it</a></p>\n`, { base: BASE }],
+  ["an angle-bracket link on a path, resolved against the base", "[it](</legal/ncii/report>)",
+    `<p><a href="${BASE}/legal/ncii/report" target="_blank" rel="noopener noreferrer">it</a></p>\n`, { base: BASE }],
+  ["a single-quoted HTML link on a path, resolved against the base", "<a href='/legal/ncii/report'>it</a>",
+    `<p><a href="${BASE}/legal/ncii/report">it</a></p>\n`, { base: BASE }],
+  ["links with an address of their own, left as they are", "[a](https://e.com/x) [b](#top) [c](//e.com/y)",
+    '<p><a href="https://e.com/x" target="_blank" rel="noopener noreferrer">a</a> <a href="#top" target="_blank" rel="noopener noreferrer">b</a> <a href="//e.com/y" target="_blank" rel="noopener noreferrer">c</a></p>\n', { base: BASE }],
+  ["code that shows a link, unchanged", "`[it](/legal/ncii/report)`",
+    "<p><code>[it](/legal/ncii/report)</code></p>\n", { base: BASE }],
+  ["a base the page names itself, never read", '<div data-link-base="https://e.com"><a href="/legal/x">it</a></div>',
+    `<div data-link-base="https://e.com"><a href="${BASE}/legal/x">it</a></div>`, { base: BASE }],
+  ["a link on a path with no base named, as it was", "[it](/legal/ncii/report)",
+    '<p><a href="/legal/ncii/report" target="_blank" rel="noopener noreferrer">it</a></p>\n'],
 ];
 
 const browser = await chromium.launch({ channel: "chromium" });
@@ -87,8 +108,8 @@ try {
   await page.goto(`${ORIGIN}/`);
   await page.waitForFunction(() => window.ready === true, null, { timeout: 30_000 });
 
-  for (const [name, raw, expected, { imageError = false } = {}] of CASES) {
-    const actual = await page.evaluate((text) => window.render(text), raw);
+  for (const [name, raw, expected, { imageError = false, base } = {}] of CASES) {
+    const actual = await page.evaluate(([text, b]) => window.render(text, b), [raw, base]);
     // Wait for the image to fail only when it is in the page to fail.
     if (imageError && actual.includes("<img")) {
       await page.waitForFunction(() => window.imageErrors >= 1, null, { timeout: 30_000 });

@@ -858,12 +858,14 @@ func TestInitRefusesAlteredScaffold(t *testing.T) {
 // each of which holds the keyring and the database, and the access engine's
 // state under .cyfr/, beside the runtime state and the environment files.
 func TestInitIgnoresTheSnapshots(t *testing.T) {
+	// The stand-in machine, at no terminal, its docker this test binary,
+	// answering every call with success.
+	standInMachine(t).reachable = true
+	askTerminal = func() bool { return false }
 	t.Chdir(t.TempDir())
-	fake := t.TempDir()
-	if err := os.WriteFile(filepath.Join(fake, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", fake+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fake := os.Getenv("PATH")
+	t.Setenv("FAKE_DOCKER_DIR", fake)
+	dockerStandIn(t, fake)
 	if err := initCmd.RunE(initCmd, nil); err != nil {
 		t.Fatalf("cyfr init: %v", err)
 	}

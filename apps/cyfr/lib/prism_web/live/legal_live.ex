@@ -8,7 +8,15 @@ defmodule PrismWeb.LegalLive do
 
   Each tab triggers a fresh fetch (cached server-side at 5min by the
   upstream Cache-Control); markdown is rendered by the
-  `MarkdownContent` JS hook.
+  `MarkdownContent` JS hook. The pages are the registry's this deployment
+  names (cyfr.run unless configured); `registry/legal_page` answers each
+  page as fetched with its host and that host's address, and the page names
+  its source by that host once one has loaded. The element the page renders
+  into names that address as `data-link-base`, against which the hook
+  resolves the page's relative links.
+
+  The Privacy tab opens with a paragraph of this CYFR's own, saying who
+  can read what is kept here, before cyfr.run's policy.
   """
 
   use PrismWeb, :live_view
@@ -39,6 +47,8 @@ defmodule PrismWeb.LegalLive do
       |> assign(:markdown, "")
       |> assign(:loading, true)
       |> assign(:error, nil)
+      |> assign(:publisher, nil)
+      |> assign(:link_base, nil)
 
     if connected?(socket) do
       send(self(), {:load, initial})
@@ -62,11 +72,13 @@ defmodule PrismWeb.LegalLive do
   @impl true
   def handle_info({:load, name}, socket) do
     case call_tool(socket, "registry/legal_page", %{"name" => name}) do
-      {:ok, %{"name" => _, "title" => title, "content_markdown" => md}} ->
+      {:ok, %{"name" => _, "title" => title, "content_markdown" => md} = page} ->
         {:noreply,
          socket
          |> assign(:title, title)
          |> assign(:markdown, md)
+         |> assign(:publisher, page["registry"])
+         |> assign(:link_base, page["base_url"])
          |> assign(:loading, false)
          |> assign(:error, nil)}
 
@@ -98,7 +110,7 @@ defmodule PrismWeb.LegalLive do
       <div>
         <h2 class="text-lg font-semibold text-white">Legal</h2>
         <p class="text-sm text-gray-400 mt-1">
-          Policy text published by the registry. Lawyer-drafted final copy
+          Policy text published by {@publisher || "the registry"}. Lawyer-drafted final copy
           replaces placeholders before public launch.
         </p>
       </div>
@@ -124,6 +136,23 @@ defmodule PrismWeb.LegalLive do
         Couldn't load page: {@error}
       </div>
 
+      <section
+        :if={@active_tab == "privacy"}
+        id="who-reads"
+        class="rounded-lg border border-gray-800 bg-gray-900/60 p-4 text-sm text-gray-300"
+      >
+        <h3 class="text-base font-semibold text-white mb-2">Who can read what on this CYFR</h3>
+        <p>
+          Whoever runs the machine this CYFR runs on can read what it keeps there: your files,
+          your vault's values and your messages among them. The people of a thread see its
+          messages, and leaving a thread does not take yours out of it. A key someone shares
+          with you is used for you and never shown to you. Your questions and the context AQUA
+          uses to answer them, including other people's words it reads in shared threads, go to
+          the model provider whose key AQUA uses. The policy below is {@publisher || "the registry"}'s, for your account
+          and the components you publish there.
+        </p>
+      </section>
+
       <div :if={!@loading && !@error}>
         <h3 class="text-base font-semibold text-white mb-3">{@title}</h3>
         <div
@@ -131,6 +160,7 @@ defmodule PrismWeb.LegalLive do
           phx-hook="MarkdownContent"
           phx-update="ignore"
           data-raw-content={@markdown}
+          data-link-base={@link_base}
           class="text-gray-300 prose prose-invert max-w-none"
         >
         </div>
