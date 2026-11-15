@@ -406,7 +406,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # row, which the scan asks for.
   @vector_readers %{
     "account_names.json" => [
-      {"apps/codex/cmd/profile_test.go", ~w(unicode keys same different)},
       {"apps/prima/test/prima/authority/blob_test.exs", ~w(unicode keys same different)}
     ],
     "canvas_shape.json" => [
@@ -429,7 +428,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/mcp/message_test.exs", ~w(signal)}
     ],
     "consent_preview.json" => [
-      {"apps/codex/cmd/profile_test.go", ~w(kinds preview)},
       {"apps/cyfr/test/cyfr/consent_preview_render_test.exs", ~w(preview)},
       {"apps/prima/test/prima/consent_preview_test.exs",
        ~w(kinds narrowable_kinds preview refusals version)}
@@ -501,7 +499,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # beside internal/identity/testdata/SOURCE, which names this file's
     # SHA-256), outside this roster's reach.
     "identity.json" => [
-      {"apps/codex/cmd/thread_test.go", ~w(identifiers)},
       {"apps/codex/internal/account/approve_test.go", ~w(chains entries keys)},
       {"apps/codex/internal/account/identity_test.go",
        ~w(chains entries identifiers keys kits user_ids webauthn)},
@@ -638,7 +635,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
     "sign_in.json" => [
-      {"apps/codex/cmd/registry_sign_test.go", ~w(requests)},
       {"apps/codex/internal/account/wire_test.go",
        ~w(answer_refusals answers keys request_refusals requests)},
       {"apps/cyfr/assets/test/account/pages.test.mjs",
