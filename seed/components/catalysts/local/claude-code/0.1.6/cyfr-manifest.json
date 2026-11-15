@@ -1,7 +1,7 @@
 {
   "name": "claude-code",
   "type": "catalyst",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "local",
   "description": "Claude Code as a brain of the model/chat@1 contract: the harness runs as itself in your program's folder, on your own plan, with CYFR's tools through CYFR's gate",
   "contracts": [
@@ -57,7 +57,7 @@
   "examples": [
     {
       "name": "Chat (model/chat@1)",
-      "description": "One turn: the newest message goes to the harness's session, its reply streams as contract events, and the response names the session the next turn continues",
+      "description": "One turn: the newest message goes to the harness's session, after the thread's history when the session is new, its reply streams as contract events, and the response names the session the next turn continues",
       "input": {
         "operation": "chat",
         "params": {
