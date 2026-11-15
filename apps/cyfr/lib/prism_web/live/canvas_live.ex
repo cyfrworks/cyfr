@@ -154,7 +154,9 @@ defmodule PrismWeb.CanvasLive do
        layout_unavailable: false,
        frames: Frames.new(),
        streamed: nil,
-       tinctures: []
+       tinctures: [],
+       programs: [],
+       athanor_route: nil
      )}
   end
 
@@ -381,22 +383,67 @@ defmodule PrismWeb.CanvasLive do
             class="canvas-dot"
           ></button>
         </div>
-        <div id="canvas-shelf-apps" role="group" aria-label="Open apps">
-          <button
-            :for={app <- @shelf_apps}
-            type="button"
-            phx-click={app.push}
-            data-canvas-shelf-app={app.ref}
-            data-canvas-active={to_string(app.active)}
-            data-canvas-minimised={to_string(app.minimised)}
-            aria-pressed={to_string(app.active)}
-            aria-label={app.title}
-            title={app.title}
-            class="canvas-shelf-app"
+        <%!-- The open apps and the running programs scroll sideways as one
+             row, so neither takes the other's room and nothing reaches the
+             shelf's right end. --%>
+        <div class="canvas-shelf-scroll">
+          <div id="canvas-shelf-apps" role="group" aria-label="Open apps">
+            <button
+              :for={app <- @shelf_apps}
+              type="button"
+              phx-click={app.push}
+              data-canvas-shelf-app={app.ref}
+              data-canvas-active={to_string(app.active)}
+              data-canvas-minimised={to_string(app.minimised)}
+              aria-pressed={to_string(app.active)}
+              aria-label={app.title}
+              title={app.title}
+              class="canvas-shelf-app"
+            >
+              <span class="canvas-app-icon" aria-hidden="true">{app.icon}</span>
+              <span class="canvas-shelf-app-name truncate">{app.name}</span>
+            </button>
+          </div>
+          <%!-- The person's running programs, as the shell holds them from C8:
+             a chip opens the program's terminal, Close asks the shell. --%>
+          <div
+            :if={@programs != []}
+            id="canvas-shelf-programs"
+            role="group"
+            aria-label="Running programs"
           >
-            <span class="canvas-app-icon" aria-hidden="true">{app.icon}</span>
-            <span class="canvas-shelf-app-name truncate">{app.name}</span>
-          </button>
+            <div
+              :for={program <- @programs}
+              class="canvas-shelf-program"
+              data-canvas-shelf-program={program.session}
+              data-canvas-watched={to_string(program.attached)}
+            >
+              <.link
+                navigate={
+                  PrismWeb.Nav.href(
+                    "/programs?terminal=" <> URI.encode_www_form(program.session),
+                    @athanor_route
+                  )
+                }
+                aria-label={program_title(program)}
+                title={program_title(program)}
+                class="canvas-shelf-app"
+              >
+                <span class="canvas-app-icon" aria-hidden="true">{program_icon(program)}</span>
+                <span class="canvas-shelf-app-name truncate">{program.name}</span>
+              </.link>
+              <button
+                type="button"
+                phx-click="close_program"
+                phx-value-session={program.session}
+                aria-label={"Close " <> program.name}
+                title={"Close " <> program.name}
+                class="canvas-shelf-program-close"
+              >
+                &times;
+              </button>
+            </div>
+          </div>
         </div>
       </nav>
     </div>
@@ -723,6 +770,23 @@ defmodule PrismWeb.CanvasLive do
       _none -> "·"
     end
   end
+
+  # A running program's chip, in the Programs page's words: since when,
+  # who started it, whether its folder is kept, and whether any screen
+  # shows it.
+  defp program_title(program) do
+    program.name <>
+      ": running since " <>
+      Calendar.strftime(program.started_at, "%H:%M UTC") <>
+      if(program.by == :aqua, do: ", started by Aqua", else: "") <>
+      if(program.kept, do: ", kept", else: "") <>
+      if(program.attached, do: "", else: ", not open on any screen")
+  end
+
+  defp program_icon(%{name: name}) when is_binary(name) and name != "",
+    do: name |> String.first() |> String.upcase()
+
+  defp program_icon(_program), do: "·"
 
   # The tile or window control: a window becomes a tile at the side its
   # middle is on, a tile a window where it stood.

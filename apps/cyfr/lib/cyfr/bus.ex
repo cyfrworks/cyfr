@@ -414,7 +414,7 @@ defmodule Cyfr.Bus do
       match: {:prefix, "bus:programs:"},
       template: "tenant:<athanor_id>:bus:programs:<user_id>",
       producers: ["Opus.Programs.Terminal", "Opus.Programs.Box"],
-      consumers: ["PrismWeb.ProgramsLive"],
+      consumers: ["PrismWeb.ProgramsLive", "PrismWeb.ShellLive"],
       reason:
         "one person's running program sessions moved, on that person's own topic, so their " <>
           "pages list them and no other member learns what they run; it carries what " <>
