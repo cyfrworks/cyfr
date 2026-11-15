@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/claude-code/0.1.6/catalyst.wasm) under a
+(seed/components/catalysts/local/claude-code/0.1.7/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `claude` program, driven by requests signed as
 CYFR signs them (harness.py). The control plane plays CYFR's host for the
@@ -52,7 +52,8 @@ CYFR's tools as the harness starts an MCP server.
   harness with `--resume`, which says in its own words that it finds
   none and ends; the chat answers unknown_session carrying no session,
   having sent nothing of the request, and closes the session on the pipe;
-  the same chat without the session opens a new one.
+  the same chat without the session opens a new one, handed the thread's
+  history as context before the current ask, and answers nothing of it.
 - A pipe refusal answers the contract's refusal type; and nothing the
   harness writes to its stderr or its folder reaches any answer or event.
 
@@ -78,8 +79,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.6")
-REF = "catalyst:local.claude-code:0.1.6"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "claude-code", "0.1.7")
+REF = "catalyst:local.claude-code:0.1.7"
 NEED = "claude"
 OWNER = owner_of("claude-code")
 HOME = "mcp_claude-code"
@@ -426,7 +427,11 @@ def main():
         # ————— a session the kept folder does not hold —————
         bridge.calls.clear()
         gone_id = "0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b"
-        gone = {**later, "session": gone_id}
+        # The thread's history rides with it, as the loop sends it.
+        gone = {**later, "session": gone_id, "messages": [
+            {"role": "user", "content": "say hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hello there."}]},
+            {"role": "user", "content": "what was my first message?"}]}
         output, events = run_catalyst(rt, plane, wasm, "chat", gone, "a chat naming a session the folder does not hold")
         answers.append((output, events))
         argv = bridge.calls[0][1]["argv"]
@@ -443,11 +448,20 @@ def main():
         output, events = run_catalyst(rt, plane, wasm, "chat", fresh, "the same chat without the session")
         answers.append((output, events))
         argv = bridge.calls[0][1]["argv"]
+        sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
+        handed = [line["message"]["content"] for line in sent if line["type"] == "user"]
         expect("--resume" not in argv and output["status"] == 200
-               and output["data"]["session"].split(".")[0] == argv[argv.index("--session-id") + 1]
-               and output["data"]["content"] == [{"type": "text",
-                                                  "text": "Your first message was: what was my first message?"}],
-               "the same chat without the session opens a new session, which holds this message alone", [argv, output])
+               and output["data"]["session"].split(".")[0] == argv[argv.index("--session-id") + 1],
+               "the same chat without the session opens a new session", [argv, output])
+        expect(len(handed) == 1 and handed[0][0]["text"].startswith("[CYFR] This session is new")
+               and "[user]\nsay hello\n\n[you]\nHello there." in handed[0][0]["text"]
+               and handed[0][-1] == {"type": "text", "text": "what was my first message?"}
+               and not any(line["type"] == "control_response" for line in sent),
+               "the new session is handed the thread's history as context, then the current ask, and answers "
+               "nothing of it", sent)
+        reply = output["data"]["content"][0]["text"]
+        expect(reply.startswith("Your first message was: [CYFR] This session is new") and "say hello" in reply,
+               "the new session's first message is the history, so it knows the thread", output)
 
         # ————— a refusal of the pipe —————
         bridge.refuse_next_open = "setup_required"

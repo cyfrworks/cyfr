@@ -4,7 +4,9 @@
 //! `chat` opens the session the request names (`--resume` when it carries
 //! one, else a new `--session-id`), sets CYFR's tools on it, and sends the
 //! newest user message, or, when the request answers a pending ask of the
-//! harness's, the ask's allow with CYFR's answer in its input. It streams
+//! harness's, the ask's allow with CYFR's answer in its input. A new
+//! session is handed the thread's history before that, as context
+//! (`context`). It streams
 //! the reply's text and answers on the first of: an ask to run one of
 //! CYFR's tools (a `tool_call` the host runs through its gate; the ask
 //! stays pending in the session until the next `chat` answers it), the
@@ -27,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
+use crate::context::{self, Part, Takes};
 use crate::harness::{self, Event, Flags, Start};
 use crate::stream::{self, Deltas, Sink};
 
@@ -60,6 +63,9 @@ const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan"];
 
 const MEDIA_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
+
+/// The attachments a new session's history carries as blocks.
+const TAKES: Takes = Takes { kinds: &["image", "document"], media_types: MEDIA_TYPES };
 
 /// How long one read of the pipe waits for a line.
 const RECV_WAIT_MS: u32 = 20_000;
@@ -245,6 +251,10 @@ pub struct Request {
     pub session: Option<String>,
     pub started: Option<String>,
     pub flags: Flags,
+    /// What a new session is handed before the input: the thread's history
+    /// as content blocks (`context::fresh`), none for a session the request
+    /// names, whose transcript holds it.
+    pub context: Vec<Value>,
     pub input: Input,
 }
 
@@ -297,6 +307,10 @@ pub fn parse_request(params: &Value) -> Result<Request, String> {
     if flags.tools.as_ref().is_some_and(|t| t.len() > 4096 || t.contains('\0')) {
         return Err("'options.tools' is past what the pipe takes".into());
     }
+    let context = match session {
+        Some(_) => Vec::new(),
+        None => context::fresh(messages, &TAKES, MAX_LINE_BYTES).into_iter().map(block).collect(),
+    };
     Ok(Request {
         model,
         system,
@@ -304,6 +318,7 @@ pub fn parse_request(params: &Value) -> Result<Request, String> {
         session,
         started,
         flags,
+        context,
         input: input(messages)?,
     })
 }
@@ -381,6 +396,16 @@ fn input(messages: &[Value]) -> Result<Input, String> {
             })
         }
         _ => Err("the last message must be the user's or a tool result".into()),
+    }
+}
+
+/// A part of a new session's history as the harness's block.
+fn block(part: Part) -> Value {
+    match part {
+        Part::Text(text) => json!({"type": "text", "text": text}),
+        Part::Media { kind, media_type, data } => {
+            json!({"type": kind, "source": {"type": "base64", "media_type": media_type, "data": data}})
+        }
     }
 }
 
@@ -976,16 +1001,20 @@ fn converse<P: Pipe, S: Sink>(
             return Err(Refusal::new(502, "provider_error", "Claude Code could not start CYFR's tools."));
         }
     }
+    let handed = |content: Vec<Value>| harness::user([request.context.clone(), content].concat());
     let line = match &request.input {
-        Input::Message(content) => harness::user(content.clone()),
+        Input::Message(content) => handed(content.clone()),
         Input::Answer { request_id, arguments, content, is_error, .. } if resumed => {
             harness::allow(request_id, &answered_input(arguments, content, *is_error))
         }
         // The program that held the ask ended; its resumed session has the
-        // call without CYFR's answer, which comes as a message.
+        // call without CYFR's answer, which comes as a message. A new
+        // session holds no ask either: its history ends on the call, and
+        // the answer comes the same way, never as an allow of the ask id an
+        // earlier session gave.
         Input::Answer { name, content, is_error, .. } => {
             let what = if *is_error { "refused it" } else { "ran it" };
-            harness::user(vec![json!({
+            handed(vec![json!({
                 "type": "text",
                 "text": format!(
                     "Your session restarted while CYFR held your call to {name}. CYFR {what} and answered:\n{}",
@@ -1780,6 +1809,114 @@ mod tests {
 
     fn result_line() -> String {
         r#"{"type":"result","subtype":"success","is_error":false,"usage":{}}"#.into()
+    }
+
+    // -----------------------------------------------------------------------
+    // What a session is handed (`context`)
+    // -----------------------------------------------------------------------
+
+    /// A thread's history: the person's ask, the agent's call and its
+    /// outcome, its reply, and the person's next message.
+    fn history() -> Value {
+        json!([
+            {"role": "user", "content": "Read a.txt"},
+            {"role": "assistant", "content": [{"type": "tool_call", "id": "toolu_1", "name": "files",
+              "arguments": {"path": "a.txt"}, "provider_data": {"request_id": "req-old", "after": 4}}]},
+            {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": "toolu_1", "name": "files", "content": "hi"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It says hi."}]},
+            {"role": "user", "content": "Now say it back."}
+        ])
+    }
+
+    /// The content of the one user line a run sent the harness.
+    fn handed(pipe: &Scripted) -> Vec<Value> {
+        let users: Vec<Value> = pipe
+            .sent
+            .iter()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|v| v["type"] == "user")
+            .collect();
+        assert_eq!(users.len(), 1, "{:?}", pipe.sent);
+        users[0]["message"]["content"].as_array().unwrap().clone()
+    }
+
+    fn texts(content: &[Value]) -> Vec<&str> {
+        content.iter().map(|b| b["text"].as_str().unwrap_or("")).collect()
+    }
+
+    /// No line of the run allows an ask: nothing of the history is answered.
+    fn allows(pipe: &Scripted) -> usize {
+        pipe.sent.iter().filter(|l| sent_type(l).1 == "allow").count()
+    }
+
+    #[test]
+    fn a_new_session_is_handed_the_thread_s_history_as_context_then_the_current_ask() {
+        let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+        let req = request(json!({"model": "default", "messages": history()}));
+        let mut deltas = Deltas::new(Vec::new());
+        chat(&mut pipe, &mut deltas, &req, ID.into(), soon()).unwrap();
+        assert!(pipe.log[0].contains(&format!("--session-id {ID}")), "{:?}", pipe.log);
+        let content = handed(&pipe);
+        let [history, current] = &texts(&content)[..] else { panic!("{content:?}") };
+        assert!(history.starts_with(context::OPENING), "{history}");
+        assert!(history.ends_with(context::CLOSING), "{history}");
+        let order = ["[user]\nRead a.txt", "[you called files with {\"path\":\"a.txt\"}]", "[files answered]\nhi", "[you]\nIt says hi."];
+        let at: Vec<usize> = order.iter().map(|o| history.find(o).unwrap_or_else(|| panic!("{o} in {history}"))).collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{history}");
+        assert!(!history.contains("Now say it back."), "the current ask is not history");
+        assert_eq!(*current, "Now say it back.");
+        assert_eq!(allows(&pipe), 0);
+        assert!(!pipe.sent.iter().any(|l| l.contains("req-old")));
+    }
+
+    #[test]
+    fn a_continued_session_is_handed_only_the_current_ask_running_or_restarted() {
+        let session = started(&Flags::default());
+        let req = request(json!({"model": "default", "session": session, "messages": history()}));
+        for running in [true, false] {
+            let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+            pipe.resumed = running;
+            let mut deltas = Deltas::new(Vec::new());
+            chat(&mut pipe, &mut deltas, &req, "unused".into(), soon()).unwrap();
+            assert!(pipe.log[0].contains(&format!("--resume {ID}")), "{:?}", pipe.log);
+            assert_eq!(handed(&pipe), [json!({"type": "text", "text": "Now say it back."})], "running: {running}");
+        }
+    }
+
+    #[test]
+    fn a_session_lost_after_a_completed_call_is_rebuilt_with_its_outcome_as_context_and_answers_no_old_ask() {
+        // The request ends in the call's result: the session that held the
+        // ask is gone, so the host asks again with no session.
+        let mut messages = history().as_array().unwrap()[..3].to_vec();
+        messages[0] = json!({"role": "user", "content": "Read a.txt and b.txt"});
+        let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+        let req = request(json!({"model": "default", "messages": messages}));
+        let mut deltas = Deltas::new(Vec::new());
+        chat(&mut pipe, &mut deltas, &req, ID.into(), soon()).unwrap();
+        assert!(pipe.log[0].contains(&format!("--session-id {ID}")), "{:?}", pipe.log);
+        let content = handed(&pipe);
+        let [history, answer] = &texts(&content)[..] else { panic!("{content:?}") };
+        assert!(history.contains("[user]\nRead a.txt and b.txt"), "{history}");
+        assert!(history.contains("[you called files with {\"path\":\"a.txt\"}]"), "{history}");
+        assert!(answer.contains("CYFR ran it and answered:\nhi"), "{answer}");
+        assert_eq!(allows(&pipe), 0, "the old ask is not answered");
+        assert!(!pipe.sent.iter().any(|l| l.contains("req-old")), "{:?}", pipe.sent);
+    }
+
+    #[test]
+    fn a_new_session_s_history_carries_the_attachments_the_harness_takes() {
+        let messages = json!([
+            {"role": "user", "content": [{"type": "text", "text": "Look"}, {"type": "image", "media_type": "image/png", "data": "iVBO"}]},
+            {"role": "assistant", "content": "A capybara."},
+            {"role": "user", "content": "Again?"}
+        ]);
+        let mut pipe = Scripted::new(harness_answers(vec![result_line()]));
+        let req = request(json!({"model": "default", "messages": messages}));
+        let mut deltas = Deltas::new(Vec::new());
+        chat(&mut pipe, &mut deltas, &req, ID.into(), soon()).unwrap();
+        let content = handed(&pipe);
+        assert_eq!(content[1], json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBO"}}));
+        assert_eq!(content.last().unwrap(), &json!({"type": "text", "text": "Again?"}));
     }
 
     #[test]

@@ -6,6 +6,7 @@
 #[allow(warnings)]
 mod bindings;
 mod chat;
+mod context;
 mod harness;
 mod stream;
 

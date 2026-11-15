@@ -5,7 +5,7 @@
 
 Two services of the image under test, each as docker-compose.yml runs it:
 locus-runtime runs the shipped catalyst
-(seed/components/catalysts/local/openai-codex/0.1.4/catalyst.wasm) under a
+(seed/components/catalysts/local/openai-codex/0.1.5/catalyst.wasm) under a
 scripted control plane (tests/locus-runtime-image/control_plane.py), and
 locus-backends runs the `openai-codex` program, driven by requests signed as CYFR
 signs them (harness.py). The control plane plays CYFR's host for the
@@ -47,7 +47,8 @@ fake-openai-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
   unknown_session carrying no session once Codex refuses its
   `thread/resume`, with no turn started and the program closed; the same
   chat without the session starts a new thread, its usage counted from
-  nothing.
+  nothing, whose turn is handed the thread's history as context before
+  the current ask, and answers nothing of it.
 - A refused sign-in: once Codex's sign-in is gone from its folder, the
   next program started is refused `authentication` before anything reaches
   a thread, and is closed.
@@ -76,8 +77,8 @@ from harness import ROOT, Stack, eventually, expect, owner_of, require_docker  #
 from control_plane import ZERO_AUTHORITY, ControlPlane  # noqa: E402
 import stack as runtime  # noqa: E402
 
-CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.4")
-REF = "catalyst:local.openai-codex:0.1.4"
+CATALYST = os.path.join(ROOT, "seed", "components", "catalysts", "local", "openai-codex", "0.1.5")
+REF = "catalyst:local.openai-codex:0.1.5"
 NEED = "openai-codex"
 OWNER = owner_of("openai-codex")
 HOME = "mcp_openai-codex"
@@ -393,7 +394,11 @@ def main():
 
         # ————— a thread the kept folder does not hold —————
         bridge.calls.clear()
-        gone = {**resumed, "session": "1c6d8d2f-3a4b-4c7f-9bac-2d3e4f5a6b7c.0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b.24-7-5-2"}
+        # The thread's history rides with it, as the loop sends it.
+        gone = {**resumed, "session": "1c6d8d2f-3a4b-4c7f-9bac-2d3e4f5a6b7c.0b5c7c1e-2f3a-4d6e-8a9b-1c2d3e4f5a6b.24-7-5-2",
+                "messages": [{"role": "user", "content": "say hello"},
+                             {"role": "assistant", "content": [{"type": "text", "text": "Hello there."}]},
+                             {"role": "user", "content": "what was my first message?"}]}
         output, events = run_catalyst(rt, plane, wasm, "chat", gone, "a chat naming a thread the folder does not hold")
         answers.append((output, events))
         expect(output["status"] == 404 and output["error"]["type"] == "unknown_session"
@@ -408,11 +413,20 @@ def main():
         answers.append((output, events))
         expect("thread/start" in bridge.methods() and "thread/resume" not in bridge.methods()
                and output["status"] == 200 and identity(output["data"]["session"]) != identity(session)
-               and output["data"]["content"] == [{"type": "text",
-                                                  "text": "Your first message was: what was my first message?"}]
                and output["data"]["usage"]["input_tokens"] == 12,
                "the same chat without the session starts a new thread, its usage counted from nothing",
                [bridge.methods(), output])
+        sent = [json.loads(line) for op, args in bridge.calls if op == "send" for line in args["lines"]]
+        handed = [line["params"]["input"] for line in sent if line.get("method") == "turn/start"]
+        expect(len(handed) == 1 and handed[0][0]["text"].startswith("[CYFR] This session is new")
+               and "[user]\nsay hello\n\n[you]\nHello there." in handed[0][0]["text"]
+               and handed[0][-1] == {"type": "text", "text": "what was my first message?", "textElements": []}
+               and not any("method" not in line for line in sent),
+               "the new thread is handed the thread's history as context, then the current ask, and answers "
+               "nothing of it", sent)
+        reply = output["data"]["content"][0]["text"]
+        expect(reply.startswith("Your first message was: [CYFR] This session is new") and "say hello" in reply,
+               "the new thread's first message is the history, so it knows the thread", output)
 
         # ————— a refused sign-in —————
         output, events = run_catalyst(rt, plane, wasm, "chat", {**resumed, "messages": [
