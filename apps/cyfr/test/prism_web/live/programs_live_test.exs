@@ -764,6 +764,48 @@ defmodule PrismWeb.ProgramsLiveTest do
              ~s([data-test="terminal-ended"]),
              "This program is not running any more."
            )
+
+    refute has_element?(gone, "#terminal-trm_nobody-screen")
+  end
+
+  # The frame was dropped with its screen at the end, so a program that
+  # printed why it failed and exited left only "The program ended.".
+  test "at the end the screen stays as it was, read-only, beside the ending, until the " <>
+         "person closes the frame; a reload after has no screen",
+       %{conn: conn, athanor: athanor} do
+    fake = controller!()
+    row = driven_row!(athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude")
+    ready!(view, session)
+    Scripted.write(fake, row.id, "why it failed")
+    assert output!(view, session) == "why it failed\r\n"
+
+    Scripted.end_sessions(fake, row.id, 3)
+    assert_push_event(view, "terminal_ended", %{session: ^session}, 3_000)
+    assert has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
+    assert has_element?(view, "#terminal-#{session}-screen[phx-hook=Terminal]")
+    refute has_element?(view, ~s([data-test="terminal-close"]))
+    refute has_element?(view, ~s([data-test="terminal-keep"]))
+
+    # An acknowledgement the browser sends after the end says nothing new.
+    render_hook(view, "terminal_written", %{"session" => session, "delivery" => 2})
+    assert has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
+
+    {reloaded, _html} = mount_athanor(conn, "/programs?terminal=#{session}", athanor)
+    render_hook(reloaded, "terminal_ready", %{"session" => session, "rows" => 24, "cols" => 80})
+
+    assert has_element?(
+             reloaded,
+             ~s([data-test="terminal-ended"]),
+             "This program is not running any more."
+           )
+
+    refute has_element?(reloaded, "#terminal-#{session}-screen")
+
+    view |> element(~s([data-test="terminal-dismiss"])) |> render_click()
+    assert_patch(view)
+    refute has_element?(view, ~s([data-test="terminal"]))
   end
 
   # A page elsewhere can send a signed-in browser to any address, so no

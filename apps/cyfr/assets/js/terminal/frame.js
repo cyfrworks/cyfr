@@ -100,6 +100,19 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
         term.write(decode(data), () => this.written(delivery))
       })
 
+      // The program ended: the screen stays as it was to be read, and
+      // takes no more typing or resizing.
+      this.ended = false
+      this.handleEvent("terminal_ended", ({session}) => {
+        if (session !== this.session) return
+        this.ended = true
+        this.queue = []
+        this.queued = 0
+        term.options.disableStdin = true
+        term.options.cursorBlink = false
+        window.removeEventListener("resize", this.onResize)
+      })
+
       this.onResize = () => this.resized()
       window.addEventListener("resize", this.onResize)
 
@@ -114,19 +127,20 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
     },
 
     written(delivery) {
+      if (this.ended) return
       this.pushEvent("terminal_written", {session: this.session, delivery})
     },
 
     // What the person typed, queued and sent a piece at a time.
     type(data) {
-      if (this.queued + data.length > MAX_PENDING_UNITS) return
+      if (this.ended || this.queued + data.length > MAX_PENDING_UNITS) return
       for (const piece of pieces(data)) this.queue.push(piece)
       this.queued += data.length
       this.send()
     },
 
     send() {
-      if (this.sending || this.queue.length === 0) return
+      if (this.ended || this.sending || this.queue.length === 0) return
       const piece = this.queue.shift()
       this.queued -= piece.length
       this.sending = true

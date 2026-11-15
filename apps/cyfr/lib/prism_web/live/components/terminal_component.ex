@@ -36,7 +36,7 @@ defmodule PrismWeb.TerminalComponent do
   def ended_text(:unanswered), do: "The close was not confirmed yet; CYFR ends the program."
   def ended_text(:not_found), do: "This program is not running any more."
 
-  attr :terminal, :map, required: true, doc: "%{session, name, kept, ended, back}"
+  attr :terminal, :map, required: true, doc: "%{session, name, kept, ended, attached, back}"
 
   @doc "The frame of the terminal `terminal` names."
   def frame(assigns) do
@@ -80,10 +80,25 @@ defmodule PrismWeb.TerminalComponent do
           >
             Close
           </button>
+          <button
+            :if={@terminal.ended}
+            type="button"
+            phx-click="terminal_dismiss"
+            class="rounded px-2 py-1 text-xs text-gray-300 hover:bg-gray-800"
+            data-test="terminal-dismiss"
+          >
+            Close
+          </button>
         </div>
       </div>
+      <p :if={@terminal.ended} class="px-4 py-2 text-xs text-amber-400" data-test="terminal-ended">
+        {ended_text(@terminal.ended)}
+      </p>
+      <%!-- A screen the page drew stays after its program ends, read-only,
+           so what the program last printed can be read; a frame shown for
+           a session already gone has nothing to show. --%>
       <div
-        :if={!@terminal.ended}
+        :if={!@terminal.ended or @terminal.attached}
         id={"terminal-#{@terminal.session}-screen"}
         phx-hook="Terminal"
         phx-update="ignore"
@@ -92,9 +107,6 @@ defmodule PrismWeb.TerminalComponent do
       >
         <div data-terminal-screen class="h-full w-full"></div>
       </div>
-      <p :if={@terminal.ended} class="px-4 py-3 text-xs text-amber-400" data-test="terminal-ended">
-        {ended_text(@terminal.ended)}
-      </p>
     </div>
     """
   end

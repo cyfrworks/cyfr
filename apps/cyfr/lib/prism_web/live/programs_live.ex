@@ -315,7 +315,7 @@ defmodule PrismWeb.ProgramsLive do
          {:ok, %{tail: %{bytes: tail}, kept: kept}} <-
            Opus.Programs.attach(socket.assigns.context, session) do
       _ = resize(socket, session, params)
-      terminal = %{socket.assigns.terminal | kept: kept}
+      terminal = %{socket.assigns.terminal | kept: kept, attached: true}
       {:reply, %{data: Base.encode64(tail)}, assign(socket, :terminal, terminal)}
     else
       {:error, reason} -> {:reply, %{}, ended(socket, session, reason)}
@@ -362,6 +362,12 @@ defmodule PrismWeb.ProgramsLive do
       {:error, reason} -> {:noreply, ended(socket, session, reason)}
     end
   end
+
+  # The person closes the frame of a program that ended; its screen goes.
+  def handle_event("terminal_dismiss", _params, socket),
+    do:
+      {:noreply,
+       push_patch(socket, to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/programs"))}
 
   def handle_event("terminal_close", %{"session" => session}, socket) do
     case Opus.Programs.close(socket.assigns.context, session) do
@@ -963,7 +969,14 @@ defmodule PrismWeb.ProgramsLive do
         _other -> nil
       end)
 
-    assign(socket, :terminal, %{session: session, name: name, kept: false, ended: nil, back: back})
+    assign(socket, :terminal, %{
+      session: session,
+      name: name,
+      kept: false,
+      ended: nil,
+      attached: false,
+      back: back
+    })
   end
 
   defp detach(%{assigns: %{terminal: %{session: session}}} = socket) do
@@ -979,9 +992,21 @@ defmodule PrismWeb.ProgramsLive do
 
   defp resize(_socket, _session, _params), do: {:error, :invalid_size}
 
-  defp ended(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, reason) do
+  # The shown session ended: its screen stays as it was, read-only, with
+  # the ending said beside it, until the person closes the frame. The
+  # first ending is the one said; a later answer for the gone session
+  # (an acknowledgement the browser sent after) changes nothing.
+  defp ended(
+         %{assigns: %{terminal: %{session: session, ended: nil} = terminal}} = socket,
+         session,
+         reason
+       ) do
     if connected?(socket), do: Opus.Programs.detach(socket.assigns.context, session)
-    socket |> assign(:terminal, %{terminal | ended: ended_reason(reason)}) |> load_running()
+
+    socket
+    |> assign(:terminal, %{terminal | ended: ended_reason(reason)})
+    |> push_event("terminal_ended", %{session: session})
+    |> load_running()
   end
 
   defp ended(socket, _session, _reason), do: load_running(socket)

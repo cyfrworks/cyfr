@@ -154,6 +154,26 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
   // The server hands the next output only once the last is drawn: the
   // acknowledgement comes from the write's own callback, so the bound
   // holds for the socket too. A tail replaces what is shown.
+  // At the end the screen stays to be read, and takes nothing more.
+  test("once its program ended, the screen keeps what it shows and sends nothing more", () => {
+    const {hook, term, pushed, handlers} = mount()
+    handlers.terminal_output({session: "trm_1", delivery: 1, data: bytes("why it failed")})
+    const before = pushed.length
+    handlers.terminal_ended({session: "trm_other"})
+    assert.equal(hook.ended, false)
+
+    handlers.terminal_ended({session: "trm_1"})
+    assert.equal(term.options.disableStdin, true)
+    assert.equal(windowListeners.resize, undefined)
+    assert.equal(Buffer.from(term.written.at(-1)).toString(), "why it failed")
+    assert.notEqual(term.written.at(-1), "reset")
+
+    term.data("typed after\r")
+    handlers.terminal_output({session: "trm_1", delivery: 2, data: bytes("late")})
+    assert.equal(pushed.length, before)
+    assert.equal(term.disposed, undefined)
+  })
+
   test("acknowledges each output by its number once drawn, and a tail replaces the screen", () => {
     const {term, pushed, handlers} = mount()
     handlers.terminal_output({session: "trm_other", delivery: 1, data: bytes("not mine")})
