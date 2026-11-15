@@ -9,9 +9,9 @@ defmodule PrismWeb.LegalLive do
   Each tab triggers a fresh fetch (cached server-side at 5min by the
   upstream Cache-Control); markdown is rendered by the
   `MarkdownContent` JS hook. The pages are the registry's this deployment
-  names (`Sanctum.registry_url/0`, cyfr.run unless configured), so a link
-  in them that names a path alone is made absolute against its address
-  before it is rendered: on this CYFR such a path names nothing.
+  names (cyfr.run unless configured); `registry/legal_page` answers its
+  host with each page and makes the page's links absolute against it, and
+  the page names its source by that host once one has loaded.
 
   The Privacy tab opens with a paragraph of this CYFR's own, saying who
   can read what is kept here, before cyfr.run's policy.
@@ -45,7 +45,7 @@ defmodule PrismWeb.LegalLive do
       |> assign(:markdown, "")
       |> assign(:loading, true)
       |> assign(:error, nil)
-      |> assign(:publisher, Sanctum.registry_url())
+      |> assign(:publisher, nil)
 
     if connected?(socket) do
       send(self(), {:load, initial})
@@ -69,11 +69,12 @@ defmodule PrismWeb.LegalLive do
   @impl true
   def handle_info({:load, name}, socket) do
     case call_tool(socket, "registry/legal_page", %{"name" => name}) do
-      {:ok, %{"name" => _, "title" => title, "content_markdown" => md}} ->
+      {:ok, %{"name" => _, "title" => title, "content_markdown" => md} = page} ->
         {:noreply,
          socket
          |> assign(:title, title)
-         |> assign(:markdown, absolute_links(md))
+         |> assign(:markdown, md)
+         |> assign(:publisher, page["registry"])
          |> assign(:loading, false)
          |> assign(:error, nil)}
 
@@ -105,7 +106,7 @@ defmodule PrismWeb.LegalLive do
       <div>
         <h2 class="text-lg font-semibold text-white">Legal</h2>
         <p class="text-sm text-gray-400 mt-1">
-          Policy text published by {@publisher}. Lawyer-drafted final copy
+          Policy text published by {@publisher || "the registry"}. Lawyer-drafted final copy
           replaces placeholders before public launch.
         </p>
       </div>
@@ -142,7 +143,7 @@ defmodule PrismWeb.LegalLive do
           your vault's values and your messages among them. The people of a thread see its
           messages, and leaving a thread does not take yours out of it. A key someone shares
           with you is used for you and never shown to you. What you ask AQUA goes to the model
-          provider whose key AQUA uses. The policy below is {@publisher}'s, for your account
+          provider whose key AQUA uses. The policy below is {@publisher || "the registry"}'s, for your account
           and the components you publish there.
         </p>
       </section>
@@ -160,16 +161,6 @@ defmodule PrismWeb.LegalLive do
       </div>
     </div>
     """
-  end
-
-  # A link that names a path alone, in Markdown or in HTML, made absolute
-  # against the address of the registry whose pages these are.
-  defp absolute_links(markdown) do
-    base = Sanctum.registry_base_url(Sanctum.registry_url())
-
-    markdown
-    |> String.replace(~r{\]\((/[^/)\s][^)\s]*)}, "](" <> base <> "\\1")
-    |> String.replace(~r{href="(/[^/"][^"]*)"}, ~s(href=") <> base <> ~s(\\1"))
   end
 
   defp tab_class(true),

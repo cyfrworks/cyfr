@@ -21,6 +21,32 @@ defmodule Compendium.Providers.RegistryTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  test "a legal page answers the registry it came from, its links that name a path alone made absolute",
+       %{ctx: ctx} do
+    page =
+      "Report it [here](/legal/ncii/report), <a href=\"/legal/dmca\">or here</a>, " <>
+        "or [elsewhere](https://example.com/x)."
+
+    RegistryStub.start!(fn %{method: "GET", path: "/v1/legal/terms"} ->
+      {200,
+       RegistryStub.answer(%{"name" => "terms", "title" => "Terms", "content_markdown" => page})}
+    end)
+
+    host = Compendium.RegistryHost.canonical_rest_host()
+    base = Compendium.RegistryHost.base_url(host)
+
+    assert {:ok,
+            %{
+              "name" => "terms",
+              "title" => "Terms",
+              "registry" => host,
+              "content_markdown" =>
+                "Report it [here](#{base}/legal/ncii/report), " <>
+                  "<a href=\"#{base}/legal/dmca\">or here</a>, " <>
+                  "or [elsewhere](https://example.com/x)."
+            }} == RegistryProvider.handle(ctx, %{"action" => "legal_page", "name" => "terms"})
+  end
+
   # A client reads the tool's description from the catalog: it speaks of
   # the configured registry, never of cyfr.run.
   test "the registry tool describes registry operations, never cyfr.run's" do

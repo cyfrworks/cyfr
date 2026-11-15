@@ -31,13 +31,21 @@ defmodule PrismWeb.LegalLiveTest do
     end)
   end
 
-  # `config/test.exs` configures a registry that is not cyfr.run.
-  test "the page names the registry it reads by its address, never cyfr.run", %{conn: conn} do
+  # `config/test.exs` configures a registry that is not cyfr.run. The
+  # address is the one the page's answer names.
+  test "the page names the registry it read by its address, never cyfr.run", %{conn: conn} do
+    registry!()
     host = Sanctum.registry_url()
     {view, _html} = mount_athanor(conn, "/legal")
+    assert has_element?(view, "#legal-md-terms")
     html = render(view)
     assert html =~ "Policy text published by #{host}."
     refute html =~ "cyfr.run"
+  end
+
+  test "before a page has loaded, the page names no address", %{conn: conn} do
+    html = conn |> get(athanor_path("/legal")) |> html_response(200)
+    assert html =~ "Policy text published by the registry."
   end
 
   test "a page's links that name a path alone resolve against the registry's address", %{
