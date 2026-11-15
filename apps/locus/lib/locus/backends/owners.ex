@@ -1111,11 +1111,14 @@ defmodule Locus.Backends.Owners do
   # What a session's process runs: the program's command with the open's
   # arguments as its own, `"$@"` (the administrator allowed the program;
   # its arguments shape only what runs inside its box), a terminal's on a
-  # pseudo-terminal of the open's size.
+  # pseudo-terminal of the open's size, told the terminal type unless its
+  # environment names one.
   defp spec(state, owner, program, ask, session_id) do
+    env = Map.fetch!(owner.env, program.name)
+
     %{
       argv: ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv],
-      env: Map.fetch!(owner.env, program.name),
+      env: if(ask.size, do: Map.put_new(env, "TERM", LocusBackends.terminal_type()), else: env),
       pool: @pool,
       memory_bytes: ask.memory_bytes,
       cpu_quota: state.cpu_quota,

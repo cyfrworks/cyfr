@@ -141,8 +141,9 @@ defmodule Prima.LocusBackends do
   present for a program whose home is kept and absent for any other. An
   open in mode `terminal` names the terminal's `rows` and `cols`, each 1
   to `max_pty_size/0`, and starts the process on a pseudo-terminal of that
-  size; one in mode `run` names neither. A resumed open leaves the size as
-  it is.
+  size, its `TERM` `terminal_type/0` unless the program's environment names
+  its own; one in mode `run` names neither and is given no default `TERM`.
+  A resumed open leaves the size as it is.
 
   `send` and `recv` speak to a `run` session; `input`, `output` and
   `resize` to a `terminal` one; a message naming a session of the other
@@ -921,6 +922,25 @@ defmodule Prima.LocusBackends do
   @doc "The variable names no program may define: the keeper's (`Prima.KeeperProtocol`)."
   @spec reserved_env_names() :: [String.t()]
   def reserved_env_names, do: KeeperProtocol.reserved_env_names()
+
+  @doc """
+  The terminal type a `terminal` session presents to its process, as
+  `TERM`: an xterm with 256 colours. This wire's terminal mode is drawn by
+  CYFR's console with xterm.js (`PrismWeb.TerminalComponent`), so a
+  terminal client of the wire is an xterm, and this is where that is said
+  once.
+  """
+  @spec terminal_type() :: String.t()
+  def terminal_type, do: "xterm-256color"
+
+  @doc """
+  The most variables a program's environment may name besides `TERM`: the
+  keeper's bound on a spawn's environment (`Prima.KeeperProtocol`) less
+  the one a terminal open may add, so its own `TERM` or the default never
+  takes a spawn past the bound.
+  """
+  @spec max_env_names() :: pos_integer()
+  def max_env_names, do: KeeperProtocol.request_bounds().max_env - 1
 
   @doc "The variable name prefixes no program may define: the keeper's (`Prima.KeeperProtocol`)."
   @spec reserved_env_prefixes() :: [String.t()]
