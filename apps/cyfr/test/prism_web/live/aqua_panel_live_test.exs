@@ -155,8 +155,14 @@ defmodule PrismWeb.AquaPanelLiveTest do
     today
   end
 
-  # A day as the panel's header names one other than today.
-  defp day_name(thread), do: Calendar.strftime(thread.day, "%a %-d %b %Y")
+  # The panel's header names the daily thread shown by its day's date in
+  # words, and nowhere by the ISO date its row's title holds.
+  defp named!(panel, thread) do
+    assert has_element?(panel, "#aqua-panel-day-name", Threads.day_name(thread.day))
+
+    refute panel |> element("#aqua-panel-sheet > header") |> render() =~
+             Date.to_iso8601(thread.day)
+  end
 
   test "the panel opens on today's daily thread beside the shared thread the chat shows, and a send with its box ticked lands there with that thread read into the turn",
        %{conn: conn, me: me, team: team, user: user} do
@@ -165,11 +171,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     {panel, _html} = open_panel(view)
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your Aqua"] header), "Aqua")
-    assert has_element?(panel, "#aqua-panel-day-name", "Today")
 
     pane = child!(panel, "aqua-panel-pane")
     today = today!(me)
     assert thread_of(pane).id == today.id
+    named!(panel, today)
     assert render(pane) =~ "Read #{team.title} with each message"
 
     refute has_element?(pane, ~s(label[title*="room"])),
@@ -489,7 +495,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # The panel is on the thread it was on, and the chat beside it is where
     # it was.
     on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
-    assert has_element?(panel, "#aqua-panel-day-name", "Today")
+    named!(panel, you_thread)
     assert find_live_child(overlay, "chat-thread-" <> team.id)
 
     # Dismissed, it is gone.
@@ -526,7 +532,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     panel |> element("#{waiting} button") |> render_click()
     on_thread!(child!(panel, "aqua-panel-pane"), room.id)
-    assert has_element?(panel, "#aqua-panel-day-name", day_name(room))
+    named!(panel, room)
     assert has_element?(panel, "#aqua-panel-today")
 
     Cyfr.Test.Sandbox.end_views()
@@ -1240,7 +1246,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     panel |> element("#aqua-panel-today") |> render_click()
     on_thread!(pane, today.id)
-    assert has_element?(panel, "#aqua-panel-day-name", "Today")
+    named!(panel, today)
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -1257,13 +1263,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     panel |> element("#aqua-panel-day-before") |> render_click()
     on_thread!(pane, yesterday.id)
-    assert has_element?(panel, "#aqua-panel-day-name", day_name(yesterday))
+    named!(panel, yesterday)
     assert has_element?(panel, "#aqua-panel-today")
 
     # The day between has no thread: back skips it.
     panel |> element("#aqua-panel-day-before") |> render_click()
     on_thread!(pane, older.id)
-    assert has_element?(panel, "#aqua-panel-day-name", day_name(older))
+    named!(panel, older)
     assert has_element?(panel, "#aqua-panel-day-before[disabled]")
 
     panel |> element("#aqua-panel-day-after") |> render_click()
@@ -1271,7 +1277,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     panel |> element("#aqua-panel-day-after") |> render_click()
     on_thread!(pane, today.id)
-    assert has_element?(panel, "#aqua-panel-day-name", "Today")
+    named!(panel, today)
 
     panel |> element("#aqua-panel-day-before") |> render_click()
     panel |> element("#aqua-panel-day-before") |> render_click()
@@ -1290,13 +1296,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     {panel, _html} = open_panel(desktop!(conn))
     pane = show!(panel, earlier.id)
-    assert has_element?(panel, "#aqua-panel-day-name", day_name(earlier))
+    named!(panel, earlier)
 
     Cyfr.Test.ScriptedWorker.script([model_reply("Noted today.")])
     pane |> form("form", %{"message" => "from an earlier day"}) |> render_submit()
 
     on_thread!(pane, today.id)
-    assert has_element?(panel, "#aqua-panel-day-name", "Today")
+    named!(panel, today)
     settled_today!(me)
 
     assert Enum.any?(
@@ -1359,11 +1365,63 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "a desktop loaded with the panel closed leaves the threads as they were, and opening the panel makes today's",
+       %{conn: conn, me: me} do
+    actor = Sanctum.Context.actor(me)
+    day = Aqua.today(me)
+    {:ok, earlier} = Threads.daily(actor, Date.add(day, -1))
+    before = Threads.list(actor)
+
+    view = desktop!(conn)
+    panel = child!(view, "aqua-panel")
+    _ = render(panel)
+    refute has_element?(panel, "#aqua-panel-sheet")
+    refute has_element?(panel, "#aqua-panel-unread")
+    assert Threads.list(actor) == before
+
+    {panel, _html} = open_panel(view)
+    assert {:ok, today} = Threads.day(actor, day)
+    on_thread!(child!(panel, "aqua-panel-pane"), today.id)
+    named!(panel, today)
+    assert Enum.sort(Enum.map(Threads.list(actor), & &1.id)) == Enum.sort([earlier.id, today.id])
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a daily thread made after the desktop loaded, today's or a later day's, is counted on the button",
+       %{conn: conn, me: me} do
+    panel = child!(desktop!(conn), "aqua-panel")
+    _ = render(panel)
+
+    # Made since the desktop loaded, as a send or a fire makes it.
+    today = today!(me)
+    fire!(me, today, "Morning brief")
+
+    wait_until(
+      fn -> has_element?(panel, "#aqua-panel-unread", "1") end,
+      5_000,
+      "the post on today's thread counted"
+    )
+
+    # The day turned while the page stayed: the next day's thread is today's.
+    {:ok, next} = Threads.daily(Sanctum.Context.actor(me), Date.add(today.day, 1))
+    fire!(me, next, "Morning brief")
+    fire!(me, next, "Evening brief")
+
+    wait_until(
+      fn -> has_element?(panel, "#aqua-panel-unread", "2") end,
+      5_000,
+      "the next day's posts counted"
+    )
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "the attention stream's destination opens the thread an approval waits in: an earlier day's or a crew member's",
        %{conn: conn, me: me} do
     actor = Sanctum.Context.actor(me)
-    today = today!(me)
-    {:ok, earlier} = Threads.daily(actor, Date.add(today.day, -5))
+    day = Aqua.today(me)
+    {:ok, earlier} = Threads.daily(actor, Date.add(day, -5))
     {:ok, crew} = Threads.crew_thread(actor, earlier.id, "builder")
 
     panel = child!(desktop!(conn), "aqua-panel")
@@ -1371,17 +1429,20 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     show!(panel, earlier.id)
     assert has_element?(panel, "#aqua-panel-sheet")
-    assert has_element?(panel, "#aqua-panel-day-name", day_name(earlier))
+    named!(panel, earlier)
 
     show!(panel, crew.id)
     assert has_element?(panel, "#aqua-panel-day-name", "builder's thread")
+
+    # Opened at a thread it names, the panel made no thread of today.
+    assert {:error, :not_found} = Threads.day(actor, day)
 
     # An id of no thread of the person's opens today's.
     other = test_user()
     theirs = Sanctum.Test.People.athanor!(other.user_id)
     {:ok, foreign} = Arca.Test.Days.thread(Prima.Actor.in_athanor(theirs.id))
     send(panel.pid, {:open, foreign.id})
-    on_thread!(child!(panel, "aqua-panel-pane"), today.id)
+    on_thread!(child!(panel, "aqua-panel-pane"), today!(me).id)
 
     Cyfr.Test.Sandbox.end_views()
   end

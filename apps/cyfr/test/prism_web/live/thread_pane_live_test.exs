@@ -2279,11 +2279,15 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       strip = ~s([id$="-crew-thread"])
       assert has_element?(pane, strip, "explorer's thread")
 
+      # The room, a daily thread, by its day's date in words, never the
+      # ISO date its row's title holds.
       assert has_element?(
                pane,
                ~s(#{strip} button[phx-click="open_thread"]),
-               "Back to #{room.title}"
+               "Back to #{Threads.day_name(room.day)}"
              )
+
+      refute pane |> element(strip) |> render() =~ room.title
 
       refute has_element?(pane, ~s([id$="-crew-#{explorer.id}"]))
 

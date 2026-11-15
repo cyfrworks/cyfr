@@ -1748,7 +1748,7 @@ defmodule PrismWeb.ThreadPaneLive do
           phx-value-id={@thread.parent_id}
           class="min-h-6 min-w-0 truncate text-blue-400 hover:text-blue-300"
         >
-          Back to {(@parent && @parent.title) || "its thread"}
+          Back to {room_name(@parent)}
         </button>
         <span :if={@thread.archived_at} class="ml-auto shrink-0">Archived</span>
         <button
@@ -2467,6 +2467,12 @@ defmodule PrismWeb.ThreadPaneLive do
        do: :request
 
   defp crew(_row), do: nil
+
+  # The room a crew thread works under: a daily thread by its day's date,
+  # a workspace thread by its title.
+  defp room_name(%{kind: "daily", day: %Date{} = day}), do: Threads.day_name(day)
+  defp room_name(%{title: title}) when is_binary(title), do: title
+  defp room_name(_none), do: "its thread"
 
   # Who sent a line: a person as the console names them, an agent by
   # `agent_name/1`.

@@ -145,10 +145,11 @@ defmodule Cyfr.Providers.AttentionTest do
       assert {:ok, []} = Provider.waiting(ctx, ctx.user_id)
     end
 
-    test "lists a pending approval with its thread's title, until it is decided or expires", %{
-      ctx: ctx,
-      actor: actor
-    } do
+    test "lists a pending approval by its thread's name, a daily thread's day by its date, until it is decided or expires",
+         %{
+           ctx: ctx,
+           actor: actor
+         } do
       thread = thread!(actor)
       waiting = approval!(actor, thread)
       decided = approval!(actor, thread, status: "approved")
@@ -157,9 +158,21 @@ defmodule Cyfr.Providers.AttentionTest do
       assert [item] = refreshed(ctx)
       assert item["kind"] == "approval"
       assert item["id"] == waiting.id
-      assert item["label"] == thread.title
+      assert item["label"] == Arca.ThreadStorage.day_name(thread.day)
+      refute inspect(item) =~ thread.title
       assert item["destination"] == %{"kind" => "page", "page" => "aqua", "ref" => thread.id}
       refute item["id"] in [decided.id, expired.id]
+    end
+
+    test "names an approval in a crew member's thread by that thread's title", %{
+      ctx: ctx,
+      actor: actor
+    } do
+      {:ok, crew} = Arca.ThreadStorage.crew_thread(actor, thread!(actor).id, "builder")
+      approval!(actor, crew)
+
+      assert [%{"label" => "builder", "destination" => %{"ref" => ref}}] = refreshed(ctx)
+      assert ref == crew.id
     end
 
     test "lists an open confirmation by its ref and operation", %{ctx: ctx} do
