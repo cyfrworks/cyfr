@@ -347,13 +347,26 @@ defmodule Opus.Programs do
       wait = max(deadline - System.system_time(:millisecond), 0) + @answer_margin_ms
 
       case DynamicSupervisor.start_child(@relays, {Terminal, spec}) do
-        {:ok, pid} -> GenServer.call(pid, {:open, deadline}, wait)
+        {:ok, pid} -> open(pid, deadline, wait)
         {:error, reason} -> {:error, reason}
       end
     end
   catch
-    :exit, {:timeout, _} -> {:error, :deadline}
     :exit, _ -> {:error, :backends_unavailable}
+  end
+
+  # A start refused for its deadline is ended by its session's owner,
+  # which owes the box its close: an answer the owner gives after the
+  # caller stopped waiting never leaves a session nobody started.
+  defp open(pid, deadline, wait) do
+    GenServer.call(pid, {:open, deadline}, wait)
+  catch
+    :exit, {:timeout, _} ->
+      GenServer.cast(pid, :refused)
+      {:error, :deadline}
+
+    :exit, _ ->
+      {:error, :backends_unavailable}
   end
 
   @doc """

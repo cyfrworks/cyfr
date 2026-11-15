@@ -449,6 +449,45 @@ defmodule Opus.Programs.TerminalTest do
       assert {:ok, [%{session: ^again}]} = Programs.running(ctx)
     end
 
+    # The box answers in time, the session's owner reads it late (paused
+    # here), and its start has answered :deadline by then: the start is
+    # refused, so the session is nobody's and ends, and the box closes
+    # what it gave. The owner took any open it read, and the refused start
+    # became a running session nobody saw start.
+    test "a start refused for its deadline ends, though the box answered in time",
+         %{ctx: ctx, row: row, fake: fake, controller: controller} do
+      Scripted.hold(fake, "opened")
+      deadline = System.system_time(:millisecond) + 1_500
+      opts = Map.merge(@size, %{args: [], by: :person, deadline: deadline})
+      late = Task.async(fn -> Programs.start(ctx, row.id, opts) end)
+      assert_receive {:held, "opened", answer}, 2_000
+
+      [terminal] =
+        Registry.select(Opus.Programs.Registry, [{{{:terminal, :_}, :"$1", :_}, [], [:"$1"]}])
+
+      :ok = :sys.suspend(terminal)
+      send(answer, :go)
+
+      # The box gave the session to its holder inside the deadline.
+      session =
+        eventually(
+          fn ->
+            Enum.find_value(:sys.get_state(controller).sessions, fn
+              {{_a, _s, _h, "trm_" <> _}, %{session: session}} -> session
+              _other -> nil
+            end)
+          end,
+          "the box to give the session"
+        )
+
+      assert {:error, :deadline} = Task.await(late, 5_000)
+      :sys.resume(terminal)
+
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 3_000
+      eventually(fn -> not Process.alive?(terminal) end, "the refused start to end")
+      assert {:ok, []} = Programs.running(ctx)
+    end
+
     test "a close answers closed, already gone, or that the service did not answer",
          %{ctx: ctx, row: row, fake: fake, controller: controller} do
       {closed, _session} = start!(ctx, row)

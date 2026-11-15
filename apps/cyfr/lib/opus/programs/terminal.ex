@@ -89,6 +89,7 @@ defmodule Opus.Programs.Terminal do
        grant: nil,
        session: nil,
        opening: nil,
+       deadline: nil,
        reader: nil,
        subscribers: %{},
        tail: "",
@@ -118,7 +119,7 @@ defmodule Opus.Programs.Terminal do
           send(holder, {:opened, Opus.Programs.box_open(owner, holder, params, deadline)})
         end)
 
-        {:noreply, %{state | opening: from}}
+        {:noreply, %{state | opening: from, deadline: deadline}}
 
       {:error, reason} ->
         {:stop, :normal, {:error, reason}, state}
@@ -198,24 +199,32 @@ defmodule Opus.Programs.Terminal do
 
   def handle_call(_request, _from, state), do: {:reply, {:error, :not_found}, state}
 
+  # The start's caller stopped waiting: the session it asked for is
+  # nobody's, and ends; whatever the box gave it, the box closes.
   @impl true
+  def handle_cast(:refused, state) do
+    if state.opening, do: GenServer.reply(state.opening, {:error, :deadline})
+    {:stop, :normal, ended(%{state | opening: nil}, :closed)}
+  end
+
   def handle_cast({:row_ended, athanor_id, row_id}, state) do
     if state.athanor_id == athanor_id and state.row_id == row_id,
       do: {:stop, :normal, ended(state, :row_changed)},
       else: {:noreply, state}
   end
 
+  # An open the box gave is taken only inside its start's deadline: one
+  # this process reads later (it was busy, or paused) refuses the start,
+  # and the session the box gave is closed as this process ends.
   @impl true
   def handle_info({:opened, {:ok, %{session: session}}}, %{opening: from} = state)
       when from != nil do
-    GenServer.reply(from, {:ok, state.id})
-    terminal = self()
-    grant = state.grant
-    reader = spawn_link(fn -> read(terminal, grant, session, 0, 0) end)
-
-    state = %{state | session: session, opening: nil, reader: reader} |> idle()
-    announce(state, :started)
-    {:noreply, state}
+    if System.system_time(:millisecond) > state.deadline do
+      GenServer.reply(from, {:error, :deadline})
+      {:stop, :normal, %{state | session: session, opening: nil}}
+    else
+      opened(state, from, session)
+    end
   end
 
   def handle_info({:opened, {:error, reason}}, %{opening: from} = state) when from != nil do
@@ -312,6 +321,17 @@ defmodule Opus.Programs.Terminal do
   end
 
   # ---------------------------------------------------------------------------
+
+  defp opened(state, from, session) do
+    GenServer.reply(from, {:ok, state.id})
+    terminal = self()
+    grant = state.grant
+    reader = spawn_link(fn -> read(terminal, grant, session, 0, 0) end)
+
+    state = %{state | session: session, opening: nil, reader: reader} |> idle()
+    announce(state, :started)
+    {:noreply, state}
+  end
 
   defp yours?(state, {athanor_id, user_id}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
