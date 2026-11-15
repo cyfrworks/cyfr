@@ -55,7 +55,7 @@ defmodule Locus.MixProject do
   # (`config/locus_runtime.exs`).
   defp deps do
     [
-      {:wasmex, "~> 0.15.1"},
+      {:wasmex, "~> 0.16.0"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
       {:plug, "~> 1.16"},
