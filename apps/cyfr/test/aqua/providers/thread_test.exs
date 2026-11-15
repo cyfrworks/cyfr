@@ -714,39 +714,90 @@ defmodule Aqua.Providers.ThreadTest do
       assert day == past.day
     end
 
-    test "files attached under a past daily thread go with the send to the thread it joins", %{
-      ctx: ctx
-    } do
+    test "a send whose files were attached before the day turned is refused and leaves nothing",
+         %{ctx: ctx, thread: thread} do
       actor = Sanctum.Context.actor(ctx)
       {:ok, past} = Arca.Test.Days.thread(actor)
       message_id = Prima.UUID7.generate_id("msg")
       {:ok, %{attachments: [ref]}} = attach(ctx, past, message_id, "past bytes")
+      threads = Threads.list(actor)
+      turns = Arca.TurnStorage.open_turns(actor, thread.id)
 
-      sent =
-        call(ctx, %{
-          "action" => "send",
-          "thread" => past.id,
-          "message" => "with a file",
-          "agent" => "aqua",
-          "id" => message_id,
-          "attachments" => [ref]
-        })
+      assert {:error,
+              {:conflict,
+               "The day has turned since these files were attached. Attach them again and send."}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "thread" => past.id,
+                 "message" => "with a file",
+                 "agent" => "aqua",
+                 "id" => message_id,
+                 "attachments" => [ref]
+               })
 
-      # Either the send is refused with nothing written, or the turn of the
-      # thread it joined reads the file it names.
-      case sent do
-        {:ok, %{accepted: true, thread: landed}} ->
-          {:ok, row} = Threads.get_message(actor, message_id)
-          assert row.thread_id == landed
+      # No row, no new day's thread, no turn, and none of the bytes the
+      # send's own session stored under the message.
+      assert {:error, :not_found} = Threads.get_message(actor, message_id)
+      assert Threads.list(actor) == threads
+      assert Threads.messages(actor, past.id) == []
+      assert Threads.messages(actor, thread.id) == []
+      assert Arca.TurnStorage.open_turns(actor, thread.id) == turns
 
-          assert [%{"data" => data}] =
-                   Aqua.Attachments.load(ctx, landed, Aqua.Attachments.attachments_of([row]))
+      assert Arca.list_typed(actor, Threads.blob_root(past.id) ++ [message_id]) in [
+               {:ok, []},
+               {:error, :not_found}
+             ]
+    end
 
-          assert Base.decode64!(data) == "past bytes"
+    test "a send with files that names no thread is refused and leaves nothing", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      actor = Sanctum.Context.actor(ctx)
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(ctx, thread, message_id, "today's bytes")
+      threads = Threads.list(actor)
 
-        {:error, _refused} ->
-          assert {:error, :not_found} = Threads.get_message(actor, message_id)
-      end
+      assert {:error,
+              {:invalid_argument, "A send with files names the thread they were attached to."}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "message" => "with a file",
+                 "agent" => "aqua",
+                 "id" => message_id,
+                 "attachments" => [ref]
+               })
+
+      assert {:error, :not_found} = Threads.get_message(actor, message_id)
+      assert Threads.list(actor) == threads
+      assert Threads.messages(actor, thread.id) == []
+    end
+
+    test "a send whose files were attached to today's thread joins it with them", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      actor = Sanctum.Context.actor(ctx)
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(ctx, thread, message_id, "today's bytes")
+
+      assert {:ok, %{accepted: true, thread: landed}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "thread" => thread.id,
+                 "message" => "with a file",
+                 "agent" => "aqua",
+                 "id" => message_id,
+                 "attachments" => [ref]
+               })
+
+      assert landed == thread.id
+      {:ok, row} = Threads.get_message(actor, message_id)
+
+      assert [%{"data" => data}] =
+               Aqua.Attachments.load(ctx, landed, Aqua.Attachments.attachments_of([row]))
+
+      assert Base.decode64!(data) == "today's bytes"
     end
 
     test "a send naming a crew member's thread goes to that thread, never to today's", %{

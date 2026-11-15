@@ -167,6 +167,29 @@ defmodule Arca.ThreadStorage do
 
   def daily(%Prima.Actor{}, _day), do: {:error, :no_athanor}
 
+  @doc """
+  The daily thread of `day` in the context's athanor, if one was made:
+  a read, which makes nothing. `{:error, :not_found}` for a day with none.
+  """
+  @spec day(Prima.Actor.t(), Date.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def day(%Prima.Actor{athanor_id: athanor_id} = actor, %Date{} = day)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.day", fn -> day_row(actor, day) end)
+    |> Arca.Data.project()
+  end
+
+  def day(%Prima.Actor{}, _day), do: {:error, :no_athanor}
+
+  @doc """
+  How a daily thread's day is named where a person reads it: its date in
+  words, `"Sun 15 Nov 2026"`. Aqua's panel, its pane and the attention list
+  name a day by it alone; the stored title is the date as ISO 8601, which a
+  desktop reads.
+  """
+  @spec day_name(Date.t()) :: String.t()
+  def day_name(%Date{} = day), do: Calendar.strftime(day, "%a %-d %b %Y")
+
   defp day_or_new(actor, day) do
     lock_athanor(actor)
 

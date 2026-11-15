@@ -224,6 +224,59 @@ defmodule Aqua.LoopTest do
              Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
   end
 
+  test "a daily and a workspace thread's prompt lists the requests still waiting in it, and no other's",
+       %{ctx: ctx, thread: daily} do
+    workspace =
+      %Arca.Schemas.Thread{}
+      |> Arca.Schemas.Thread.changeset(%{
+        id: Prima.UUID7.generate_id("thread"),
+        athanor_id: ctx.athanor_id,
+        kind: "workspace",
+        workspace_state: "open",
+        title: "Book the trip",
+        created_by: ctx.user_id
+      })
+      |> Arca.Repo.insert!()
+
+    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
+    script!([reply("one"), reply("two")])
+
+    asked =
+      for {room, task} <- [{daily, "Weigh the daily risks"}, {workspace, "Price the flights"}] do
+        turn = accept!(ctx, room, "hello")
+        assert :completed = Task.await(run(ctx, turn), 30_000)
+
+        # The soul's request to a crew member, still waiting on its reply.
+        {:ok, %{message: request}} =
+          Tape.accept(ctx, room.id, %{
+            message: %{
+              author: Prima.Author.agent(),
+              sent_by: "aqua",
+              addressee: "planner",
+              status: "pending",
+              content: task
+            }
+          })
+
+        {turn, request, task}
+      end
+
+    # Each room's prompt, read once both requests wait, lists its own.
+    for {turn, request, task} <- asked do
+      {:ok, pinned} = Tape.turn(ctx, turn.id)
+      {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
+
+      assert spec.system =~ "## Open requests"
+      assert spec.system =~ "- #{request.id} to planner, asked by aqua"
+      assert spec.system =~ task
+
+      for {_turn, other, other_task} <- asked, other.id != request.id do
+        refute spec.system =~ other.id
+        refute spec.system =~ other_task
+      end
+    end
+  end
+
   defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{

@@ -174,6 +174,13 @@ defmodule Aqua do
   defdelegate put_time_zone(user_id, zone), to: Aqua.Day, as: :put_zone
 
   @doc """
+  The date now in the person's own time zone (`Aqua.Day.today/1`): which
+  daily thread is today's. A read, which makes no thread.
+  """
+  @spec today(Context.t()) :: Date.t()
+  defdelegate today(ctx), to: Aqua.Day
+
+  @doc """
   Move the person's read mark of `thread_id` to `seq`, forward only, while a
   view shows it, and announce the thread again to their list with its
   count (`Aqua.ThreadList`).

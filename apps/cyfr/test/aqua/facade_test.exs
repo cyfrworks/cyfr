@@ -42,6 +42,7 @@ defmodule Aqua.FacadeTest do
     stream_texts: 1,
     strip_attachment_name: 1,
     thread_state: 2,
+    today: 1,
     tool_kind: 2,
     virtual_tool_catalog: 0
   ]

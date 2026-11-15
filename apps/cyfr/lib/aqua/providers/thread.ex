@@ -685,15 +685,22 @@ defmodule Aqua.Providers.Thread do
   # A send joins the daily thread current when it is accepted: one that
   # names no thread, or names a daily thread, of today or another day. Its
   # files are stored under the thread they were attached to, so a send
-  # that carries files names that thread and joins it, or is refused with
-  # nothing written when the day turned since: a message never names
-  # files another thread holds.
+  # that carries files names that thread: a crew member's, or a daily
+  # thread that is still today's. One whose day has turned since is
+  # refused and leaves nothing behind: no row, no new day's thread, and
+  # none of the files this caller stored under the message, so a message
+  # never names files another thread holds.
   defp dispatch(ctx, %{"action" => "send"} = args) do
-    with {:ok, id} <- sends_to(ctx, args["thread"]),
-         :ok <- files_under(args, id) do
-      act("send", ctx, id, args)
-    else
-      {:error, reason} -> {:error, refusal(reason, args["thread"])}
+    case sends_to(ctx, args["thread"], args["attachments"] || []) do
+      {:ok, id} ->
+        act("send", ctx, id, args)
+
+      {:error, :day_turned} ->
+        _ = discard_files(ctx, args)
+        {:error, refusal(:day_turned, args["thread"])}
+
+      {:error, reason} ->
+        {:error, refusal(reason, args["thread"])}
     end
   end
 
@@ -705,20 +712,32 @@ defmodule Aqua.Providers.Thread do
   defp dispatch(_ctx, _args),
     do: {:error, {:invalid_argument, "thread requires an 'action' and a 'thread'"}}
 
-  defp sends_to(ctx, id) when is_binary(id) and id != "" do
+  defp sends_to(ctx, id, files) when is_binary(id) and id != "" do
     case Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id) do
-      {:ok, %{kind: "daily"}} -> today_id(ctx)
-      {:ok, %{id: id}} -> {:ok, id}
-      {:error, _} = refused -> refused
+      {:ok, %{kind: "daily", day: day}} when files != [] ->
+        if day == Aqua.Day.today(ctx), do: {:ok, id}, else: {:error, :day_turned}
+
+      {:ok, %{kind: "daily"}} ->
+        today_id(ctx)
+
+      {:ok, %{id: id}} ->
+        {:ok, id}
+
+      {:error, _} = refused ->
+        refused
     end
   end
 
-  defp sends_to(ctx, _none), do: today_id(ctx)
+  defp sends_to(_ctx, _none, [_ | _]), do: {:error, :files_need_thread}
+  defp sends_to(ctx, _none, []), do: today_id(ctx)
 
-  defp files_under(%{"attachments" => [_ | _]} = args, id),
-    do: if(args["thread"] == id, do: :ok, else: {:error, :files_elsewhere})
+  # What this caller's own session stored under the refused message, and
+  # nothing anyone else stored (`Aqua.Attachments.discard_unsent/3`).
+  defp discard_files(ctx, %{"thread" => thread_id, "id" => message_id})
+       when is_binary(thread_id) and is_binary(message_id),
+       do: Aqua.Attachments.discard_unsent(ctx, thread_id, message_id)
 
-  defp files_under(_args, _id), do: :ok
+  defp discard_files(_ctx, _args), do: :ok
 
   defp today_id(ctx) do
     with {:ok, thread} <- Aqua.Day.current(ctx), do: {:ok, thread.id}
@@ -1077,11 +1096,13 @@ defmodule Aqua.Providers.Thread do
 
   defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
 
-  defp translate(:files_elsewhere, _id),
+  defp translate(:day_turned, _id),
     do:
       {:conflict,
-       "These files were attached to another thread or an earlier day's; " <>
-         "attach them again to today's thread (thread.today) and send."}
+       "The day has turned since these files were attached. Attach them again and send."}
+
+  defp translate(:files_need_thread, _id),
+    do: {:invalid_argument, "A send with files names the thread they were attached to."}
 
   defp translate(:unavailable, _id), do: {:unavailable, "Threads"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}
