@@ -710,10 +710,7 @@ defmodule Aqua.Providers.Thread do
   defp sends_to(ctx, _none), do: today_id(ctx)
 
   defp today_id(ctx) do
-    with {:ok, thread} <- Aqua.Day.current(ctx) do
-      Aqua.ThreadList.changed(ctx, thread.id)
-      {:ok, thread.id}
-    end
+    with {:ok, thread} <- Aqua.Day.current(ctx), do: {:ok, thread.id}
   end
 
   # The whole send envelope: the text, a pre-minted id and the refs

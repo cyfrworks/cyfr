@@ -101,6 +101,9 @@ defmodule Arca.Schemas.Thread do
     |> validate_inclusion(:workspace_state, @workspace_states)
     |> validate_length(:title, max: 200)
     |> validate_kind_fields()
+    # One daily thread per date of an athanor, under the name each adapter
+    # reports the partial index by.
+    |> unique_constraint([:athanor_id, :day])
   end
 
   # Each kind's own fields, present on it and on no other kind.

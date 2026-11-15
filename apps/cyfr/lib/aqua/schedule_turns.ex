@@ -230,10 +230,7 @@ defmodule Aqua.ScheduleTurns do
         {:ok, thread_id}
 
       {:error, :not_found} ->
-        with {:ok, thread} <- Aqua.Day.current(ctx) do
-          Aqua.ThreadList.changed(ctx, thread.id)
-          {:ok, thread.id}
-        end
+        with {:ok, thread} <- Aqua.Day.current(ctx), do: {:ok, thread.id}
 
       {:error, _} = unread ->
         unread
