@@ -218,29 +218,7 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "a brain whose catalyst runs a program not installed offers its install on the card",
          %{conn: conn, ctx: ctx} do
-      manifest = %{
-        "name" => "harness",
-        "type" => "catalyst",
-        "version" => "1.0.0",
-        "publisher" => "local",
-        "needs" => %{
-          "claude" => %{
-            "type" => "login",
-            "program" => "claude",
-            "reason" => "to run Claude Code on your own plan",
-            "install" => %{"command" => "npx -y @anthropic-ai/claude-code"}
-          }
-        }
-      }
-
-      unit =
-        Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
-          manifest: manifest,
-          wasm: Cyfr.Test.Guests.wasm(:catalyst)
-        )
-
-      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
-      soul_names_catalyst!(ctx, "catalyst:local.harness")
+      soul_runs_claude!(ctx)
 
       {view, _html} = mount_athanor(conn, "/aqua")
 
@@ -261,20 +239,61 @@ defmodule PrismWeb.AquaLiveTest do
                URI.decode_query(URI.parse(href).query)
 
       # Once the row is there, the card offers to set it up in its own
-      # terminal, which comes back here.
+      # terminal instead.
       program_row!(ctx, "claude")
       {view, _html} = mount_athanor(conn, "/aqua")
       refute has_element?(view, ~s(#aqua-card-aqua a[data-test="install-program"]))
+      assert has_element?(view, ~s(#aqua-card-aqua [data-test="set-up-program"]), "Set up claude")
+    end
 
-      [href] =
-        view
-        |> render()
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s(#aqua-card-aqua a[data-test="set-up-program"]))
-        |> LazyHTML.attribute("href")
+    # Set up is the person's press: it starts the program in its row's
+    # folder, at a size the frame corrects when it attaches, and shows its
+    # terminal with the way back here.
+    test "Set up on the card starts the program and shows its terminal, which comes back here",
+         %{conn: conn, ctx: ctx} do
+      soul_runs_claude!(ctx)
+      home = program_row!(ctx, "claude").id
+      backends!()
 
-      assert URI.parse(href).path =~ ~r{/programs$}
-      assert %{"open" => "claude", "from" => "aqua"} == URI.decode_query(URI.parse(href).query)
+      {view, _html} = mount_athanor(conn, "/aqua")
+      refute_received {:session, "open", _message, _fields}
+
+      view |> element(~s(#aqua-card-aqua [data-test="set-up-program"])) |> render_click()
+
+      assert_receive {:session, "open",
+                      %{"home_id" => ^home, "argv" => [], "rows" => 24, "cols" => 80}, _fields},
+                     5_000
+
+      {path, _flash} = assert_redirect(view, 5_000)
+      assert URI.parse(path).path =~ ~r{/programs$}
+
+      assert %{"terminal" => "trm_" <> _, "from" => "aqua"} =
+               URI.decode_query(URI.parse(path).query)
+    end
+
+    test "a refused Set up says why on the card and stays there", %{conn: conn, ctx: ctx} do
+      soul_runs_claude!(ctx)
+
+      {:ok, _row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "claude",
+          transport: "http",
+          url: "https://tools.example.com/mcp",
+          config_json: Jason.encode!(%{})
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      view |> element(~s(#aqua-card-aqua [data-test="set-up-program"])) |> render_click()
+      render_async(view, 5_000)
+
+      assert has_element?(
+               view,
+               ~s(#aqua-card-aqua [data-test="set-up-refused"]),
+               "'claude' is a tool server elsewhere; only a program opens here"
+             )
+
+      assert has_element?(view, ~s(#aqua-card-aqua [data-test="set-up-program"]), "Set up claude")
     end
 
     # A brain that runs a program on its own sign-in: with no row, its
@@ -1730,6 +1749,55 @@ defmodule PrismWeb.AquaLiveTest do
   # A person's grant of `ref`, walked as their own page walks it.
   # The athanor's kept driven program row `name`, as an install confirmed
   # on the Programs page leaves it.
+  # The soul's brain is a catalyst whose login needs the `claude` program.
+  defp soul_runs_claude!(ctx) do
+    manifest = %{
+      "name" => "harness",
+      "type" => "catalyst",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "needs" => %{
+        "claude" => %{
+          "type" => "login",
+          "program" => "claude",
+          "reason" => "to run Claude Code on your own plan",
+          "install" => %{"command" => "npx -y @anthropic-ai/claude-code"}
+        }
+      }
+    }
+
+    unit =
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "catalyst", "local", "harness", "1.0.0",
+        manifest: manifest,
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+      )
+
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+    soul_names_catalyst!(ctx, "catalyst:local.harness")
+  end
+
+  @backends_root :crypto.strong_rand_bytes(32)
+
+  # The programs controller on a scripted backends service, put back
+  # however the test ends; what the service is asked arrives here.
+  defp backends! do
+    on_exit(fn ->
+      :persistent_term.erase({Arca.ControlPlane, :generation})
+      Arca.ControlPlane.record(:unclaimed)
+    end)
+
+    fake = Cyfr.Test.ScriptedBackends.start(self(), @backends_root)
+
+    Cyfr.Test.ScriptedBackends.supervise_controller(
+      url: fake.url,
+      root: @backends_root,
+      tick_ms: 3_600_000
+    )
+
+    assert_receive {:control, "reconcile", _reconcile, _fields}, 2_000
+    fake
+  end
+
   defp program_row!(ctx, name) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{

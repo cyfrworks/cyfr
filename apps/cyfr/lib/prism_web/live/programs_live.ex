@@ -43,8 +43,10 @@ defmodule PrismWeb.ProgramsLive do
   a reload or a second tab attaches to the same running screen, and
   leaving ends nothing. An expanded row lists its running sessions, each
   to show again or close, kept current from the person's own
-  `Cyfr.Bus.programs/2` topic. `?open=<row>` opens a row's terminal, and
-  `&from=aqua` adds the way back to Aqua's card.
+  `Cyfr.Bus.programs/2` topic. No address starts, closes or changes
+  anything: `?terminal=` only attaches to one of the person's own running
+  sessions, and `&from=aqua` adds the way back to Aqua's card, whose Set
+  up started it.
 
   Adding a program, every edit that changes its definition and removing
   one are each confirmed by the person (`program_definition`): the system
@@ -424,9 +426,6 @@ defmodule PrismWeb.ProgramsLive do
 
     socket =
       case params do
-        %{"open" => name} when name != "" ->
-          if connected?(socket), do: open_program(socket, name, []), else: socket
-
         %{"terminal" => session} when session != "" ->
           show_terminal(socket, session)
 

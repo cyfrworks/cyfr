@@ -80,13 +80,15 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/chat_overlay_live.ex" => {1, [{"live/chat_overlay_live.ex", :create}]},
     "live/shared_thread_live.ex" => {1, [{"live/shared_thread_live.ex", :add}]},
     "live/shell_live.ex" => {1, [{"live/shell_live.ex", :deliver}]},
-    # A model catalyst's install, answered to the page, and each ready
-    # brain's options, answered to the agents section itself.
+    # A model catalyst's install, answered to the page; each ready
+    # brain's options and a Set up's start of its program, answered to
+    # the agents section itself.
     "live/aqua_live/agents_component.ex" =>
-      {2,
+      {3,
        [
          {"live/aqua_live.ex", :catalyst_installed},
-         {"live/aqua_live/agents_component.ex", :brain_options}
+         {"live/aqua_live/agents_component.ex", :brain_options},
+         {"live/aqua_live/agents_component.ex", :set_up_program}
        ]},
     # A brain's one `models` call after its grant, answered to the page.
     "live/aqua_live.ex" => {1, [{"live/aqua_live.ex", :setup_answer}]},

@@ -760,17 +760,31 @@ defmodule PrismWeb.ProgramsLiveTest do
            )
   end
 
-  test "opened from Aqua's card, the terminal offers the way back to Aqua",
-       %{conn: conn, athanor: athanor} do
+  # A page elsewhere can send a signed-in browser to any address, so no
+  # address starts anything: a start is the person's press.
+  test "an address naming a program to open starts nothing",
+       %{conn: conn, athanor: athanor, user: user} do
     controller!()
-    row = driven_row!(athanor)
-    home = row.id
+    driven_row!(athanor)
 
     {view, _html} = mount_athanor(conn, "/programs?open=claude&from=aqua", athanor)
-    answered(view)
-    path = assert_patch(view, @answered_ms)
-    assert %{"terminal" => _session, "from" => "aqua"} = URI.decode_query(URI.parse(path).query)
-    assert_receive {:session, "open", %{"home_id" => ^home, "argv" => []}, _fields}, 2_000
+    render(view)
+    assert running_calls(view) == []
+    refute_receive {:session, "open", _message, _fields}, 500
+    refute has_element?(view, ~s([data-test="terminal"]))
+    assert {:ok, []} = Opus.Programs.running(person(user, athanor))
+  end
+
+  test "shown from Aqua's card, the terminal offers the way back to Aqua",
+       %{conn: conn, athanor: athanor} do
+    controller!()
+    driven_row!(athanor)
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude")
+
+    {view, _html} =
+      mount_athanor(conn, "/programs?terminal=#{session}&from=aqua", athanor)
 
     [back] =
       view

@@ -42,6 +42,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:program_offers, %{})
      |> assign(:signs_in, MapSet.new())
      |> assign(:installing, nil)
+     |> assign(:setting_up, nil)
+     |> assign(:set_up_refused, %{})
      |> assign(:editor_editing_prompt, nil)
      |> assign(:editor_prompt_content, "")
      |> assign(:editor_prompt_digest, nil)}
@@ -404,7 +406,47 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
+  # Set up on the card is the person's start of the program: it opens
+  # through the gate like the Programs page's Open, at a default size the
+  # frame corrects when it attaches, and shows the running terminal with
+  # the way back here. A refusal stays on the card in the gate's words.
+  def handle_event("set_up_program", %{"program" => program}, socket)
+      when is_binary(program) do
+    CyfrWeb.ContextGuard.guard(socket, fn
+      %{assigns: %{setting_up: nil}} = socket ->
+        ctx = socket.assigns.context
+        tag = CyfrWeb.ContextGuard.capture(ctx)
+        params = %{"name" => program, "rows" => 24, "cols" => 80}
+
+        {:noreply,
+         socket
+         |> assign(:setting_up, program)
+         |> assign(:set_up_refused, Map.delete(socket.assigns.set_up_refused, program))
+         |> start_async(
+           :set_up_program,
+           fn ->
+             {tag, program,
+              PrismWeb.Ops.run_to_end(fn ->
+                PrismWeb.Ops.call_tool(ctx, "mcp_servers/open", params)
+              end)}
+           end,
+           supervisor: Prism.TaskSupervisor
+         )}
+
+      socket ->
+        {:noreply, socket}
+    end)
+  end
+
   @impl true
+  def handle_async(:set_up_program, {:ok, {tag, program, result}}, socket) do
+    socket = assign(socket, :setting_up, nil)
+    CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, set_up(&1, program, result)})
+  end
+
+  # Only the node's shutdown stops a start (`PrismWeb.Ops.run_to_end/1`).
+  def handle_async(:set_up_program, {:exit, _reason}, socket), do: {:noreply, socket}
+
   def handle_async(:brain_options, {:ok, {tag, options}}, socket) do
     CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, assign(&1, :brain_options, options)})
   end
@@ -540,8 +582,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # For each catalyst, the programs its login needs name: one the athanor
   # has no row for is offered to install (the Programs page's install
-  # form), and one it has is offered to set up in its terminal, where the
-  # person signs it in; either comes back to Aqua.
+  # form), and one it has is offered to set up: its press starts it in a
+  # terminal (`set_up_program`), where the person signs it in; either
+  # comes back to Aqua.
   defp program_offers(ctx, plans) do
     plans = for {ref, plan} <- plans, do: {ref, login_programs(plan)}
 
@@ -558,18 +601,27 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     for {ref, needs} <- plans, into: %{} do
       offers =
         for need <- needs, need.program in names or need.install? do
-          installed? = need.program in names
+          query = %{"install" => ref, "need" => need.name, "from" => "aqua"}
 
-          query =
-            if installed?,
-              do: %{"open" => need.program, "from" => "aqua"},
-              else: %{"install" => ref, "need" => need.name, "from" => "aqua"}
-
-          %{program: need.program, installed?: installed?, query: URI.encode_query(query)}
+          %{
+            program: need.program,
+            installed?: need.program in names,
+            query: URI.encode_query(query)
+          }
         end
 
       {ref, offers}
     end
+  end
+
+  defp set_up(socket, _program, {:ok, %{session: session}}) do
+    query = URI.encode_query(%{"terminal" => session, "from" => "aqua"})
+    push_navigate(socket, to: PrismWeb.Focus.path(socket.assigns.athanor, "/programs?" <> query))
+  end
+
+  defp set_up(socket, program, {:error, reason}) do
+    refused = Map.put(socket.assigns.set_up_refused, program, error_message(reason))
+    assign(socket, :set_up_refused, refused)
   end
 
   # Aqua's setup, for the agent whose card links to it: the soul's by
@@ -844,6 +896,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         model_status={Map.get(@model_status, @soul["name"])}
         brain_options={Map.get(@brain_options, @soul["name"], [])}
         installing={@installing}
+        setting_up={@setting_up}
+        set_up_refused={@set_up_refused}
         athanor={@athanor}
         offers={Map.get(@program_offers, @soul["catalyst_ref"], [])}
         signs_in?={MapSet.member?(@signs_in, @soul["catalyst_ref"])}
@@ -860,6 +914,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           model_status={Map.get(@model_status, member["name"])}
           brain_options={Map.get(@brain_options, member["name"], [])}
           installing={@installing}
+          setting_up={@setting_up}
+          set_up_refused={@set_up_refused}
           athanor={@athanor}
           offers={Map.get(@program_offers, member["catalyst_ref"], [])}
           signs_in?={MapSet.member?(@signs_in, member["catalyst_ref"])}
@@ -927,6 +983,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :model_status, :any, default: nil
   attr :brain_options, :list, default: []
   attr :installing, :any, default: nil
+  attr :setting_up, :any, default: nil
+  attr :set_up_refused, :map, default: %{}
   attr :athanor, :any, default: nil
   attr :offers, :list, default: []
   attr :signs_in?, :boolean, default: false
@@ -1069,15 +1127,29 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         class="flex flex-wrap items-center gap-2 text-[11px]"
       >
         <span class="text-gray-400">Its brain runs in a program's own folder; sign it in there:</span>
-        <.link
+        <button
           :for={offer <- @offers}
           :if={offer.installed?}
-          navigate={PrismWeb.Focus.path(@athanor, "/programs?" <> offer.query)}
-          class="text-blue-400 hover:underline"
+          type="button"
+          phx-click="set_up_program"
+          phx-value-program={offer.program}
+          phx-target={@myself}
+          disabled={@setting_up != nil}
+          class="text-blue-400 hover:underline disabled:opacity-50"
           data-test="set-up-program"
         >
-          Set up {offer.program}
-        </.link>
+          {if @setting_up == offer.program,
+            do: "Opening #{offer.program}…",
+            else: "Set up #{offer.program}"}
+        </button>
+        <span
+          :for={offer <- @offers}
+          :if={offer.installed? and Map.has_key?(@set_up_refused, offer.program)}
+          class="text-red-400"
+          data-test="set-up-refused"
+        >
+          {Map.fetch!(@set_up_refused, offer.program)}
+        </span>
       </div>
 
       <%!-- A member with no brain yet is connected through the setup like
