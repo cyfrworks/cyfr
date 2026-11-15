@@ -41,7 +41,7 @@ defmodule Aqua.Runner.Admission do
   alias Sanctum.Tenancy.{Athanors, Users}
 
   # A person's rooms: the threads a crew member's child thread works under.
-  @rooms Arca.ThreadStorage.room_kinds()
+  @rooms Aqua.Tape.room_kinds()
 
   # One human line, in bytes: the one bound every sender passes through.
   @max_message_bytes 32 * 1024

@@ -34,7 +34,7 @@ defmodule Aqua.Loop.Turn do
 
   @default_deadline_ms 15 * 60 * 1000
   # A person's rooms, which hold a crew's waiting requests.
-  @rooms Arca.ThreadStorage.room_kinds()
+  @rooms Tape.room_kinds()
   @probe_timeout_ms 60_000
 
   @type t :: %__MODULE__{}

@@ -668,6 +668,13 @@ defmodule Aqua.Tape do
   end
 
   @doc """
+  The kinds of a person's rooms, the threads a crew member's child thread
+  works under: daily and workspace threads (`Arca.ThreadStorage.room_kinds/0`).
+  """
+  @spec room_kinds() :: [String.t()]
+  defdelegate room_kinds(), to: Threads
+
+  @doc """
   Delete a thread, and with a room its crew members' child threads, their
   open turns cancelled in the same transaction (`Arca.ThreadStorage.delete/3`)
   under the stamp each root's attempt stores; the runtime still holding
