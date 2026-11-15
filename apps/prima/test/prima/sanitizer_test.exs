@@ -394,14 +394,14 @@ defmodule Prima.SanitizerTest do
     end
   end
 
-  # What a person types into a program's sign-in terminal: a pasted code or
-  # a password.
-  describe "a sign-in terminal's line" do
+  # What a person types into a program's terminal: a pasted code or a
+  # password.
+  describe "what is typed on a program's terminal" do
     test "is redacted, and Phoenix's event log filters it" do
-      assert Prima.Sanitizer.sanitize(%{"sign_in_line" => "code-1234", "_target" => ["x"]}) ==
-               %{"sign_in_line" => "[REDACTED]", "_target" => ["x"]}
+      assert Prima.Sanitizer.sanitize(%{"terminal_input" => "code-1234", "_target" => ["x"]}) ==
+               %{"terminal_input" => "[REDACTED]", "_target" => ["x"]}
 
-      assert "sign_in_line" in Prima.Sanitizer.filter_parameters()
+      assert "terminal_input" in Prima.Sanitizer.filter_parameters()
     end
   end
 

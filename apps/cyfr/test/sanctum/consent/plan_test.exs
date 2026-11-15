@@ -259,7 +259,7 @@ defmodule Sanctum.Consent.PlanTest do
       "type" => "login",
       "program" => "claude",
       "reason" => "to run Claude Code on your own plan",
-      "install" => %{"command" => "claude", "login_command" => "claude auth login"}
+      "install" => %{"command" => "claude"}
     }
 
     # A program row of `athanor_id`, written as the row store writes one:

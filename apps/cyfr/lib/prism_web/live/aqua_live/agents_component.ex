@@ -538,11 +538,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     )
   end
 
-  # For each catalyst, the programs its login needs suggest and the
-  # athanor has no row for: each the query of the Programs page's install
-  # form.
+  # For each catalyst, the programs its login needs name: one the athanor
+  # has no row for is offered to install (the Programs page's install
+  # form), and one it has is offered to set up in its terminal, where the
+  # person signs it in; either comes back to Aqua.
   defp program_offers(ctx, plans) do
-    plans = for {ref, plan} <- plans, do: {ref, installable(plan)}
+    plans = for {ref, plan} <- plans, do: {ref, login_programs(plan)}
 
     names =
       if Enum.any?(plans, fn {_ref, needs} -> needs != [] end) do
@@ -556,11 +557,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
     for {ref, needs} <- plans, into: %{} do
       offers =
-        for need <- needs, need.program not in names do
-          %{
-            program: need.program,
-            query: URI.encode_query(%{"install" => ref, "need" => need.name})
-          }
+        for need <- needs, need.program in names or need.install? do
+          installed? = need.program in names
+
+          query =
+            if installed?,
+              do: %{"open" => need.program, "from" => "aqua"},
+              else: %{"install" => ref, "need" => need.name, "from" => "aqua"}
+
+          %{program: need.program, installed?: installed?, query: URI.encode_query(query)}
         end
 
       {ref, offers}
@@ -578,12 +583,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         "/aqua?" <> URI.encode_query(%{"setup" => "1", "agent" => agent["name"]})
       )
 
-  defp installable(plan) do
+  defp login_programs(plan) do
     for need <- plan[:needs] || [],
         need[:kind] == "login",
-        is_map(need[:install]),
         is_binary(need[:program]),
-        do: %{name: need[:name], program: need[:program]}
+        do: %{name: need[:name], program: need[:program], install?: is_map(need[:install])}
   end
 
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
@@ -1045,15 +1049,34 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         />
       </form>
 
-      <div :if={@offers != []} class="flex flex-wrap items-center gap-2 text-[11px]">
+      <div
+        :if={Enum.any?(@offers, &(!&1.installed?))}
+        class="flex flex-wrap items-center gap-2 text-[11px]"
+      >
         <span class="text-amber-300">Its brain runs a program you have not installed:</span>
         <.link
           :for={offer <- @offers}
+          :if={!offer.installed?}
           navigate={PrismWeb.Focus.path(@athanor, "/programs?" <> offer.query)}
           class="text-blue-400 hover:underline"
           data-test="install-program"
         >
           install {offer.program}
+        </.link>
+      </div>
+      <div
+        :if={Enum.any?(@offers, & &1.installed?)}
+        class="flex flex-wrap items-center gap-2 text-[11px]"
+      >
+        <span class="text-gray-400">Its brain runs in a program's own folder; sign it in there:</span>
+        <.link
+          :for={offer <- @offers}
+          :if={offer.installed?}
+          navigate={PrismWeb.Focus.path(@athanor, "/programs?" <> offer.query)}
+          class="text-blue-400 hover:underline"
+          data-test="set-up-program"
+        >
+          Set up {offer.program}
         </.link>
       </div>
 

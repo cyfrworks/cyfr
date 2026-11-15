@@ -45,8 +45,8 @@ defmodule Prima.ConsentPreview do
       what the server reaches as the grant records it: its `address` and
       each header (`headers`) or environment variable (`env`) by name with
       the vault entry it names, a literal by its name alone, and a
-      program's `folder`, `hosts`, `memory_bytes`, `home_max_bytes` and
-      `sign_in_command`, each but its folder absent when unset
+      program's `folder`, `hosts`, `memory_bytes` and `home_max_bytes`,
+      each but its folder absent when unset
       (`Prima.Authority.Blob.server_record?/1`). One row per server.
     * `limits` — the seven fields of `Prima.Limits`, as `Prima.Limits.to_map/1` writes them.
     * `frame` — a tincture's `capabilities`, `placement` (`canvas` for a

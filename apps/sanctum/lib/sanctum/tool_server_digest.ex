@@ -16,8 +16,8 @@ defmodule Sanctum.ToolServerDigest do
   program's settings: its `folder` (`"kept"`, the row's own folder kept
   between runs, or `"scratch"`), its `hosts` (the set of names it
   reaches, sorted, each once; absent, every public host, which `[]`
-  never reads as), its `memory_bytes` and `home_max_bytes` bounds and its
-  `sign_in_command`, each absent when the row leaves it unset:
+  never reads as), and its `memory_bytes` and `home_max_bytes` bounds,
+  each absent when the row leaves it unset:
 
       %{"address" => "https://mcp.example/v1",
         "headers" => [%{"name" => "authorization", "entry" => "github", "scheme" => "Bearer"},
@@ -29,8 +29,7 @@ defmodule Sanctum.ToolServerDigest do
         "folder" => "kept",
         "hosts" => ["api.github.com", "github.com"],
         "memory_bytes" => 268435456,
-        "home_max_bytes" => 1073741824,
-        "sign_in_command" => "gh auth login"}
+        "home_max_bytes" => 1073741824}
 
   A literal's value is never recorded: it is a secret the page never sees.
 
@@ -179,14 +178,12 @@ defmodule Sanctum.ToolServerDigest do
   # without a record, never with one that reads it as wider.
   defp settings(%{"home" => folder} = program) when folder in ["kept", "scratch"] do
     with {:ok, hosts} <- host_set(program["hosts"]),
-         true <- Enum.all?(["memory_bytes", "home_max_bytes"], &bound?(program[&1])),
-         true <- is_nil(program["login_command"]) or nonempty?(program["login_command"]) do
+         true <- Enum.all?(["memory_bytes", "home_max_bytes"], &bound?(program[&1])) do
       {:ok,
        %{"folder" => folder}
        |> put_present("hosts", hosts)
        |> put_present("memory_bytes", program["memory_bytes"])
-       |> put_present("home_max_bytes", program["home_max_bytes"])
-       |> put_present("sign_in_command", program["login_command"])}
+       |> put_present("home_max_bytes", program["home_max_bytes"])}
     else
       _unreadable -> :error
     end
@@ -268,8 +265,7 @@ defmodule Sanctum.ToolServerDigest do
       "hosts" => stored_hosts(Map.get(server, :hosts)),
       "home" => Map.get(server, :home),
       "memory_bytes" => Map.get(server, :memory_bytes),
-      "home_max_bytes" => Map.get(server, :home_max_bytes),
-      "login_command" => Map.get(server, :login_command)
+      "home_max_bytes" => Map.get(server, :home_max_bytes)
     }
   end
 

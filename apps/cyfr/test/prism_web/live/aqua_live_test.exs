@@ -257,8 +257,24 @@ defmodule PrismWeb.AquaLiveTest do
         |> LazyHTML.query(~s(#aqua-card-aqua a[data-test="install-program"]))
         |> LazyHTML.attribute("href")
 
-      assert %{"install" => "catalyst:local.harness", "need" => "claude"} =
+      assert %{"install" => "catalyst:local.harness", "need" => "claude", "from" => "aqua"} ==
                URI.decode_query(URI.parse(href).query)
+
+      # Once the row is there, the card offers to set it up in its own
+      # terminal, which comes back here.
+      program_row!(ctx, "claude")
+      {view, _html} = mount_athanor(conn, "/aqua")
+      refute has_element?(view, ~s(#aqua-card-aqua a[data-test="install-program"]))
+
+      [href] =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(#aqua-card-aqua a[data-test="set-up-program"]))
+        |> LazyHTML.attribute("href")
+
+      assert URI.parse(href).path =~ ~r{/programs$}
+      assert %{"open" => "claude", "from" => "aqua"} == URI.decode_query(URI.parse(href).query)
     end
 
     # A brain that runs a program on its own sign-in: with no row, its
@@ -1723,7 +1739,6 @@ defmodule PrismWeb.AquaLiveTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        login_command: "#{name} auth login",
         config_json: Jason.encode!(%{"command" => "npx -y #{name}", "env" => %{}})
       })
 

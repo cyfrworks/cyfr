@@ -64,20 +64,11 @@ defmodule Opus.Programs do
   sessions, and `Cyfr.Bus.programs/2` announces every change of that
   list. Each call takes the caller's context and is refused when the
   caller no longer stands; a session of another person is not found.
-
-  ## Sign-in
-
-  `sign_in/2` opens a `sign_in` session of a row's login command in the
-  row's kept home, relayed by an `Opus.Programs.SignIn` process to the one
-  subscriber that attaches with the same binding (`sign_in_attach/3`,
-  `sign_in_send/3`, `sign_in_close/2`). The binding is the caller's
-  athanor, person and credential, read from the context, so a token is
-  usable only by the session that asked for it.
   """
 
   use Supervisor
 
-  alias Opus.Programs.{Box, Pipe, Session, SignIn, Terminal}
+  alias Opus.Programs.{Box, Pipe, Session, Terminal}
 
   @registry Opus.Programs.Registry
   # The refusals of a session route that say its owner, and so its
@@ -103,7 +94,7 @@ defmodule Opus.Programs do
   `:root` (the local box's service URL and 32-byte key) and `:cluster`
   (true: no box). With either of the first two absent or invalid the local
   box's start answers `:ignore` and there is no box. The registry comes
-  first, then the sign-in relays, then the box: a box that dies restarts
+  first, then the supervisor of pipe holders and terminals, then the box: a box that dies restarts
   alone, and its holders, refused by the service once its lease lapses,
   hold their owners again.
   """
@@ -260,58 +251,14 @@ defmodule Opus.Programs do
   end
 
   # ============================================================================
-  # Sign-in
+  # A row's sessions
   # ============================================================================
 
   @doc """
-  Start a sign-in on `row` (a stored `mcp_servers` row with a kept home and
-  a login command) in its kept home, for the caller `ctx`: its owner held,
-  its login command running on a pseudo-terminal. Answers a token the same
-  caller attaches to within 30 s; a row whose login command is not its
-  command with words after it has none to run (`:no_login_command`).
-  """
-  @spec sign_in(Sanctum.Context.t(), map()) :: {:ok, String.t()} | {:error, term()}
-  def sign_in(%Sanctum.Context{} = ctx, row) do
-    token = "si_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-    binding = caller(ctx)
-
-    with {:ok, argv} <- login_argv(row) do
-      start_sign_in(token, binding, row, argv)
-    end
-  end
-
-  defp start_sign_in(token, binding, row, argv) do
-    args = [
-      name: relay_name(token),
-      token: token,
-      binding: binding,
-      owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
-      key: key(binding),
-      argv: argv
-    ]
-
-    case DynamicSupervisor.start_child(@relays, {SignIn, args}) do
-      {:ok, _pid} -> {:ok, token}
-      {:error, {:shutdown, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc "Make `pid` the subscriber of the sign-in `token`, which `ctx` started."
-  @spec sign_in_attach(Sanctum.Context.t(), String.t(), pid()) :: :ok | {:error, term()}
-  def sign_in_attach(ctx, token, pid) when is_pid(pid),
-    do: relay_call(token, {:attach, caller(ctx), pid})
-
-  @doc "Write `line` to the sign-in's terminal."
-  @spec sign_in_send(Sanctum.Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def sign_in_send(ctx, token, line) when is_binary(line),
-    do: relay_call(token, {:send, caller(ctx), line})
-
-  @doc """
-  End every running sign-in and pipe session of the athanor's program row
-  `row_id`: the row was deleted, so nothing runs in its home any more.
-  Answers at once; each sign-in relay ends `:row_ended`, and each pipe
-  holder closes its session and releases its owner.
+  End every running terminal and pipe session of the athanor's program row
+  `row_id`: the row was changed or deleted, so nothing runs as it was
+  defined any more. Answers at once; each terminal ends `:row_changed`, and
+  each pipe holder closes its session and releases its owner.
   """
   @spec end_mounts(String.t(), String.t()) :: :ok
   def end_mounts(athanor_id, row_id) when is_binary(athanor_id) and is_binary(row_id) do
@@ -323,18 +270,6 @@ defmodule Opus.Programs do
 
     :ok
   end
-
-  @doc "End the sign-in: its command is ended and its owner released."
-  @spec sign_in_close(Sanctum.Context.t(), String.t()) :: :ok | {:error, term()}
-  def sign_in_close(ctx, token), do: relay_call(token, {:close, caller(ctx)})
-
-  defp relay_call(token, message) do
-    GenServer.call(relay_name(token), message, 35_000)
-  catch
-    :exit, _ -> {:error, :ended}
-  end
-
-  defp relay_name(token), do: {:via, Registry, {@registry, {:sign_in, token}}}
 
   # ============================================================================
   # Terminals
@@ -845,29 +780,5 @@ defmodule Opus.Programs do
         [] -> nil
       end
     end
-  end
-
-  # Who asked: the athanor, the person and the credential that admitted them.
-  defp caller(%Sanctum.Context{} = ctx),
-    do: {ctx.athanor_id, ctx.user_id, ctx.session_token_hash || ctx.api_key_id}
-
-  # One sign-in per caller and row: the session key is the binding's digest.
-  defp key(binding) do
-    "signin-" <>
-      (binding
-       |> :erlang.term_to_binary()
-       |> Prima.Digest.sha256_hex()
-       |> binary_part(0, 32))
-  end
-
-  # A session runs its program's command with arguments of its opener's: a
-  # login command is that command and the words it adds.
-  defp login_argv(row) do
-    login = Map.get(row, :login_command)
-    command = Arca.McpServerStorage.config(row)["command"]
-
-    if is_binary(login) and is_binary(command) and String.starts_with?(login, command <> " "),
-      do: {:ok, login |> String.replace_prefix(command <> " ", "") |> String.split()},
-      else: {:error, :no_login_command}
   end
 end

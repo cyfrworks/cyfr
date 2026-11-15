@@ -361,8 +361,7 @@
               "github.com"
             ],
             "memory_bytes": 268435456,
-            "home_max_bytes": 1073741824,
-            "sign_in_command": "gh auth login"
+            "home_max_bytes": 1073741824
           }
         }
       },
@@ -979,8 +978,7 @@
                   "github.com"
                 ],
                 "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           },
@@ -3786,8 +3784,7 @@
                 "folder": "kept",
                 "hosts": null,
                 "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -3830,8 +3827,7 @@
                   "api.github.com"
                 ],
                 "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -3875,8 +3871,7 @@
                   "github.com"
                 ],
                 "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -3919,8 +3914,7 @@
                   "github.com"
                 ],
                 "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -3962,8 +3956,7 @@
                   "github.com"
                 ],
                 "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -4006,8 +3999,7 @@
                   "github.com"
                 ],
                 "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -4050,8 +4042,7 @@
                   "github.com"
                 ],
                 "memory_bytes": null,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -4094,8 +4085,7 @@
                   "github.com"
                 ],
                 "memory_bytes": 268435456,
-                "home_max_bytes": 0,
-                "sign_in_command": "gh auth login"
+                "home_max_bytes": 0
               }
             }
           }
@@ -4138,52 +4128,7 @@
                   "github.com"
                 ],
                 "memory_bytes": 1.5,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login"
-              }
-            }
-          }
-        ],
-        "v": 1
-      }
-    },
-    {
-      "error": "invalid_field",
-      "name": "a program record naming an empty sign-in command",
-      "preview": {
-        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "removed": [],
-        "rows": [
-          {
-            "kind": "tool_servers",
-            "narrowed": false,
-            "node": "reagent:local.weather",
-            "values": {
-              "digest": "sha256:5b0c1e7f4f2d8a9e6c3b1a0d9e8f7c6b5a4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
-              "name": "github",
-              "tool_patterns": [
-                "issues.*"
-              ],
-              "record": {
-                "address": "npx -y @modelcontextprotocol/server-github",
-                "env": [
-                  {
-                    "entry": "github-token",
-                    "name": "GITHUB_TOKEN"
-                  },
-                  {
-                    "literal": true,
-                    "name": "NODE_ENV"
-                  }
-                ],
-                "folder": "kept",
-                "hosts": [
-                  "api.github.com",
-                  "github.com"
-                ],
-                "memory_bytes": 268435456,
-                "home_max_bytes": 1073741824,
-                "sign_in_command": ""
+                "home_max_bytes": 1073741824
               }
             }
           }
@@ -4227,8 +4172,7 @@
                 ],
                 "memory_bytes": 268435456,
                 "home_max_bytes": 1073741824,
-                "sign_in_command": "gh auth login",
-                "login_command": "gh auth login"
+                "start_command": "gh auth login"
               }
             }
           }

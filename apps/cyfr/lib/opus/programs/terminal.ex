@@ -269,8 +269,13 @@ defmodule Opus.Programs.Terminal do
   def handle_info({Opus.Programs, :stand_down, _key}, state),
     do: {:stop, :normal, ended(state, :row_changed)}
 
-  # A new grant means the box synced the owner again: the service the
-  # session ran on is not the one it runs on now, so its program is gone.
+  # A new grant before the session stands is the one its open is made
+  # under (the box synced the owner again for a service that restarted);
+  # once it stands, the service the session ran on is not the one it runs
+  # on now, so its program is gone.
+  def handle_info({Opus.Programs, :owner, grant}, %{session: nil} = state),
+    do: {:noreply, %{state | grant: grant}}
+
   def handle_info({Opus.Programs, :owner, _grant}, state),
     do: {:stop, :normal, ended(state, :exited)}
 

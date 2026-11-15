@@ -1007,9 +1007,8 @@ defmodule Prima.Authority.Blob do
   value is never recorded. A program's record also holds its `folder`,
   `"kept"` or `"scratch"`, and, each absent (never null) when unset, its
   `hosts` (non-empty names, sorted, each once; `[]` reaches none, absent
-  every public host), its `memory_bytes` and `home_max_bytes` (positive
-  integers) and its `sign_in_command` (a non-empty string); an http
-  server's holds none of them.
+  every public host), and its `memory_bytes` and `home_max_bytes`
+  (positive integers); an http server's holds none of them.
   """
   @spec server_record?(term()) :: boolean()
   def server_record?(%{"address" => address, "headers" => headers} = record)
@@ -1030,7 +1029,6 @@ defmodule Prima.Authority.Blob do
   defp program_setting?({key, bytes}) when key in ["memory_bytes", "home_max_bytes"],
     do: is_integer(bytes) and bytes > 0
 
-  defp program_setting?({"sign_in_command", command}), do: nonempty?(command)
   defp program_setting?(_other), do: false
 
   defp record_values?(values) when is_list(values) do

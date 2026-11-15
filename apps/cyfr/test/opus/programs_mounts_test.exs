@@ -4,11 +4,11 @@
 defmodule Opus.ProgramsMountsTest do
   @moduledoc """
   A kept program's folder is its row's, against a scripted backends
-  service (`Cyfr.Test.ScriptedBackends`): its sessions and sign-ins run in
+  service (`Cyfr.Test.ScriptedBackends`): its sessions and terminals run in
   the home named by the row's id, with no login entry anywhere; a reset
-  names the row; a deleted row ends its sign-ins at once and then retires
-  its home; an archived athanor retires every kept row's home; a sign-in's
-  exit is reported as it is and shows none of its text in its status; and
+  names the row; a deleted row ends its terminals at once and then retires
+  its home; an archived athanor retires every kept row's home; a terminal
+  ends with its program and shows none of its output in its status; and
   the periodic sweep retires every kept home the box holds that no kept
   row of a live athanor holds, while a store that cannot answer retires
   nothing.
@@ -73,7 +73,6 @@ defmodule Opus.ProgramsMountsTest do
         mark: "mcp",
         url: nil,
         home: "kept",
-        login_command: "gh auth login",
         config_json:
           Jason.encode!(%{"command" => "gh mcp", "env" => %{"NODE_ENV" => "production"}})
       })
@@ -90,7 +89,6 @@ defmodule Opus.ProgramsMountsTest do
         mark: "driven",
         url: nil,
         home: home,
-        login_command: if(home == "kept", do: "claude auth login"),
         config_json:
           Jason.encode!(%{"command" => "npx -y @anthropic-ai/claude-code", "env" => %{}})
       })
@@ -105,15 +103,14 @@ defmodule Opus.ProgramsMountsTest do
 
   defp admin(ctx), do: %{ctx | permissions: MapSet.new([:*])}
 
-  defp sign_in!(ctx, row) do
-    assert {:ok, %{session: token, program: name}} =
-             Provider.handle("mcp_servers", admin(ctx), %{
-               "action" => "sign_in",
-               "name" => row.name
-             })
+  # The row's terminal, opened as a person opens it, and attached to here.
+  defp open!(ctx, row) do
+    assert {:ok, %{session: session, program: name}} =
+             Provider.handle("mcp_servers", admin(ctx), %{"action" => "open", "name" => row.name})
 
     assert name == row.name
-    token
+    assert {:ok, _attached} = Programs.attach(admin(ctx), session)
+    session
   end
 
   describe "a kept row's folder" do
@@ -131,21 +128,20 @@ defmodule Opus.ProgramsMountsTest do
       assert open["program"] == Opus.Programs.Definition.program_name()
     end
 
-    test "a sign-in runs in the row's home, and its exit is reported as it is", %{
+    test "a terminal runs in the row's home, and ends with its program", %{
       ctx: ctx,
       fake: fake
     } do
       row = driven_row(ctx)
-      token = sign_in!(ctx, row)
-      :ok = Programs.sign_in_attach(admin(ctx), token, self())
+      session = open!(ctx, row)
 
       home_id = row.id
 
-      assert_receive {:session, "open", %{"home_id" => ^home_id, "mode" => "sign_in"}, _fields},
+      assert_receive {:session, "open", %{"home_id" => ^home_id, "mode" => "terminal"}, _fields},
                      2_000
 
       Scripted.end_sessions(fake, row.id, 0)
-      assert_receive {Programs, ^token, {:ended, {:exited, 0}}}, 5_000
+      assert_receive {Programs, ^session, {:ended, :exited}}, 5_000
     end
 
     test "a reset names the program, and empties its row's home", %{ctx: ctx} do
@@ -176,11 +172,10 @@ defmodule Opus.ProgramsMountsTest do
   end
 
   describe "a deleted row" do
-    test "ends its running sign-in at once, then retires its home", %{ctx: ctx} do
+    test "ends its running terminal at once, then retires its home", %{ctx: ctx} do
       start_reconciler()
       row = driven_row(ctx)
-      token = sign_in!(ctx, row)
-      :ok = Programs.sign_in_attach(admin(ctx), token, self())
+      session = open!(ctx, row)
 
       assert {:ok, %{deleted: "claude"}} =
                Sanctum.TestContext.confirming(admin(ctx), fn person ->
@@ -190,7 +185,7 @@ defmodule Opus.ProgramsMountsTest do
                  })
                end)
 
-      assert_receive {Opus.Programs, ^token, {:ended, :row_ended}}, 3_000
+      assert_receive {Opus.Programs, ^session, {:ended, :row_changed}}, 3_000
       home_id = row.id
 
       assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^home_id} = retire, _},
@@ -201,12 +196,11 @@ defmodule Opus.ProgramsMountsTest do
 
     # A confirmed change to a program's definition ends what runs under
     # the old one at once, as a removal does, and keeps its folder.
-    test "a confirmed change ends its running sign-in at once and keeps its home",
+    test "a confirmed change ends its running terminal at once and keeps its home",
          %{ctx: ctx} do
       start_reconciler()
       row = driven_row(ctx)
-      token = sign_in!(ctx, row)
-      :ok = Programs.sign_in_attach(admin(ctx), token, self())
+      session = open!(ctx, row)
 
       assert {:ok, %{epoch: 2}} =
                Sanctum.TestContext.confirming(admin(ctx), fn person ->
@@ -219,13 +213,12 @@ defmodule Opus.ProgramsMountsTest do
                      "mark" => "driven",
                      "home" => "kept",
                      "command" => "npx -y @anthropic-ai/claude-code --another",
-                     "login_command" => row.login_command,
                      "env" => %{}
                    }
                  })
                end)
 
-      assert_receive {Opus.Programs, ^token, {:ended, :row_ended}}, 3_000
+      assert_receive {Opus.Programs, ^session, {:ended, :row_changed}}, 3_000
       home_id = row.id
       refute_receive {:control, "home", %{"op" => "retire", "home_id" => ^home_id}, _}, 300
     end
@@ -280,22 +273,31 @@ defmodule Opus.ProgramsMountsTest do
     end
   end
 
-  describe "a sign-in's status" do
-    test "shows none of the lines it holds or the text sent to it", %{ctx: ctx, fake: fake} do
+  describe "a terminal's status" do
+    test "shows none of the output it holds or the words its program was started with",
+         %{ctx: ctx, fake: fake} do
       row = driven_row(ctx)
-      token = sign_in!(ctx, row)
 
-      # Held for a subscriber that has not attached yet.
+      assert {:ok, session} =
+               Programs.start(admin(ctx), row.id, %{
+                 rows: 24,
+                 cols: 80,
+                 args: ["--token-word-canary"],
+                 by: :person
+               })
+
+      # Held for whatever attaches later.
       Scripted.write(fake, row.id, "token sk-signin-canary-0123456789")
 
-      [{relay, _}] = Registry.lookup(Opus.Programs.Registry, {:sign_in, token})
+      [{terminal, _}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
 
-      eventually(fn -> match?([_ | _], :sys.get_state(relay).kept) end)
-      status = inspect(:sys.get_status(relay), limit: :infinity, printable_limit: :infinity)
+      eventually(fn -> :sys.get_state(terminal).tail != "" end)
+      status = inspect(:sys.get_status(terminal), limit: :infinity, printable_limit: :infinity)
 
       refute status =~ "sk-signin-canary"
-      assert status =~ "redacted"
-      Programs.sign_in_close(admin(ctx), token)
+      refute status =~ "token-word-canary"
+      assert status =~ "#Opus.Programs.Output<"
+      assert {:ok, :closed} = Programs.close(admin(ctx), session)
     end
   end
 

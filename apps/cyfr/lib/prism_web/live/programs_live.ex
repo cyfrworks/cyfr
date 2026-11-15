@@ -16,8 +16,7 @@ defmodule PrismWeb.ProgramsLive do
   A program's home is `scratch`, made for each process and scrubbed when
   it ends, or `kept`: the row's own folder, which survives its sessions
   and is removed with the row. A row may set its memory bound and a kept
-  home's disk bound, and a program that signs in names its
-  `login_command`. A program's hosts are its network list: the only hosts
+  home's disk bound. A program's hosts are its network list: the only hosts
   it reaches beside the deployment's private hosts, exact names resolved
   each time it starts, which the program forms set and an expanded
   program row changes (`mcp_servers.update` with the row's config and the
@@ -31,10 +30,21 @@ defmodule PrismWeb.ProgramsLive do
   stored value is a literal shows as `[set]`, which `mcp_servers.get`
   answers in its place, and a line left at `[set]` keeps that value
   (`keep_headers`), so no stored value reaches the page. A kept row offers
-  **Sign in**: the sign-in terminal (`PrismWeb.SignInTerminalComponent`)
-  runs the row's login command in the row's folder. **Reset folder**
-  empties it under the same uid (`mcp_servers.reset_home`). A program's
-  folder is its own and is never shared.
+  **Reset folder**, which empties it under the same uid
+  (`mcp_servers.reset_home`). A program's folder is its own and is never
+  shared.
+
+  Every program row offers **Open**: its command, followed by the words
+  the person types, runs on a terminal (`mcp_servers.open`), a session
+  the server owns for the person (`Opus.Programs.start/3`), and the page
+  shows it at `?terminal=<session>` in a frame of CYFR's own
+  (`PrismWeb.TerminalComponent`). The page attaches to the session when
+  the frame's hook stands, and detaches when it shows another or goes:
+  a reload or a second tab attaches to the same running screen, and
+  leaving ends nothing. An expanded row lists its running sessions, each
+  to show again or close, kept current from the person's own
+  `Cyfr.Bus.programs/2` topic. `?open=<row>` opens a row's terminal, and
+  `&from=aqua` adds the way back to Aqua's card.
 
   Adding a program, every edit that changes its definition and removing
   one are each confirmed by the person (`program_definition`): the system
@@ -48,10 +58,10 @@ defmodule PrismWeb.ProgramsLive do
 
   `?install=<component_ref>&need=<need>` opens the program form, driven,
   prefilled from that component's login need (`component.setup_plan`): the program
-  named, its command and login command as the need's install block
-  suggests, its home kept, every field editable. Installing it defines the
-  row, once confirmed, and opens the sign-in terminal in its folder; a
-  grant of the component then binds the row. `?name=` (the
+  named, its command as the need's install block suggests, its home kept,
+  every field editable. Installing it defines the row, once confirmed, and
+  opens its terminal in its folder, where the person signs it in as the
+  program asks; a grant of the component then binds the row. `?name=` (the
   `ui.mcp_server.focus` intent) expands one row.
 
   A definition the catalog refuses says why in its form. A server saved
@@ -72,7 +82,7 @@ defmodule PrismWeb.ProgramsLive do
   @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
 
-  alias PrismWeb.{SignInTerminalComponent, SystemLayer}
+  alias PrismWeb.{SystemLayer, TerminalComponent}
 
   @mib 1_048_576
 
@@ -89,7 +99,7 @@ defmodule PrismWeb.ProgramsLive do
   @forms ~w(config program)
 
   # The events that call off the page's process, one at a time.
-  @calls ~w(add_server add_program save_server delete toggle_enabled test refresh restart reset_home set_hosts)
+  @calls ~w(add_server add_program save_server delete toggle_enabled test refresh restart reset_home set_hosts open)
 
   # What a tool server's Edit shows for a header whose stored value is a
   # literal: `mcp_servers.get` never answers it, and saving the line as it
@@ -101,8 +111,10 @@ defmodule PrismWeb.ProgramsLive do
     # Subscribe once, at mount — handle_params re-fires on every patch,
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
-      actor = Sanctum.Context.actor(socket.assigns[:context])
+      ctx = socket.assigns[:context]
+      actor = Sanctum.Context.actor(ctx)
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.mcp_servers(actor))
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.programs(actor, ctx.user_id))
     end
 
     socket =
@@ -120,7 +132,12 @@ defmodule PrismWeb.ProgramsLive do
       # The row whose definition an open form replaces: %{name, epoch,
       # config}, its config as `mcp_servers.get` answered it.
       |> assign(:editing, nil)
+      # The terminal shown: %{session, name, kept, ended, back}; nil when none.
       |> assign(:terminal, nil)
+      # The person's running sessions (`Opus.Programs.running/1`).
+      |> assign(:running, [])
+      # Whether a terminal this page opens adds the way back to Aqua.
+      |> assign(:from_aqua, false)
       # What the page is doing until a call's answer comes; nil when idle.
       |> assign(:working, nil)
 
@@ -217,8 +234,8 @@ defmodule PrismWeb.ProgramsLive do
         |> Map.merge(program)
         |> Map.merge(%{"transport" => "program", "command" => trimmed(params, "command")})
 
-      # A new driven program is installed: with a kept home and a sign-in,
-      # its sign-in opens in its folder once it is made.
+      # A new driven program is installed: one from a component's need
+      # opens its terminal once it is made.
       if socket.assigns.editing == nil and config["mark"] == "driven",
         do: install(socket, name, config),
         else: save(socket, name, config)
@@ -278,9 +295,72 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The person signs a kept row in, in its own folder.
-  def handle_event("sign_in", %{"name" => name}, socket),
-    do: {:noreply, open_terminal(socket, name)}
+  # The row's command on a terminal, followed by the words the person typed.
+  def handle_event("open", %{"name" => name} = params, socket) do
+    case words(params["args"] || "") do
+      {:ok, args} -> {:noreply, open_program(socket, name, args)}
+      :error -> {:noreply, put_flash(socket, :error, "The words after the command do not read.")}
+    end
+  end
+
+  def handle_event("show_terminal", %{"session" => session}, socket),
+    do: {:noreply, push_patch(socket, to: terminal_path(socket, session))}
+
+  # The frame's hook stands: the page attaches to the session, sets the
+  # frame's size and answers what was printed before.
+  def handle_event("terminal_ready", %{"session" => session} = params, socket) do
+    with %{session: ^session, ended: nil} <- socket.assigns.terminal,
+         {:ok, %{tail: %{bytes: tail}, kept: kept}} <-
+           Opus.Programs.attach(socket.assigns.context, session) do
+      _ = resize(socket, session, params)
+      terminal = %{socket.assigns.terminal | kept: kept}
+      {:reply, %{data: Base.encode64(tail)}, assign(socket, :terminal, terminal)}
+    else
+      {:error, reason} -> {:reply, %{}, ended(socket, session, reason)}
+      _other -> {:reply, %{}, socket}
+    end
+  end
+
+  def handle_event("terminal_input", %{"session" => session, "terminal_input" => data}, socket)
+      when is_binary(data) do
+    case Opus.Programs.input(socket.assigns.context, session, data) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, :unavailable} ->
+        {:noreply, put_flash(socket, :error, "The program did not take that; type it again.")}
+
+      {:error, reason} ->
+        {:noreply, ended(socket, session, reason)}
+    end
+  end
+
+  def handle_event("terminal_resize", %{"session" => session} = params, socket) do
+    _ = resize(socket, session, params)
+    {:noreply, socket}
+  end
+
+  def handle_event("terminal_keep", %{"session" => session} = params, socket) do
+    kept = params["kept"] == "true"
+
+    case Opus.Programs.keep(socket.assigns.context, session, kept) do
+      :ok -> {:noreply, kept(socket, session, kept)}
+      {:error, reason} -> {:noreply, ended(socket, session, reason)}
+    end
+  end
+
+  def handle_event("terminal_close", %{"session" => session}, socket) do
+    case Opus.Programs.close(socket.assigns.context, session) do
+      {:ok, _closed_or_gone} ->
+        {:noreply, ended(socket, session, :closed)}
+
+      {:error, :unanswered} ->
+        {:noreply, ended(socket, session, :unanswered)}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
+    end
+  end
 
   def handle_event("reset_home", %{"name" => name}, socket) do
     {:noreply,
@@ -330,7 +410,21 @@ defmodule PrismWeb.ProgramsLive do
       end
     end
 
-    {:noreply, socket}
+    socket = assign(socket, :from_aqua, params["from"] == "aqua")
+
+    socket =
+      case params do
+        %{"open" => name} when name != "" ->
+          if connected?(socket), do: open_program(socket, name, []), else: socket
+
+        %{"terminal" => session} when session != "" ->
+          show_terminal(socket, session)
+
+        _none ->
+          detach(socket)
+      end
+
+    {:noreply, socket |> load_running()}
   end
 
   @impl true
@@ -347,38 +441,24 @@ defmodule PrismWeb.ProgramsLive do
   def handle_info({:install, ref, need}, socket),
     do: {:noreply, prefill_install(socket, ref, need)}
 
-  # The sign-in relay's lines and its end, for the terminal open now; the
-  # terminal reads only its own session's.
-  def handle_info({Opus.Programs, token, event}, socket) do
+  # What the shown session's program wrote goes straight to the frame's
+  # hook, and is kept nowhere here.
+  def handle_info({Opus.Programs, session, {:bytes, %{bytes: bytes}}}, socket) do
     case socket.assigns.terminal do
-      %{id: id} ->
-        send_update(SignInTerminalComponent, id: id, relay: {token, event})
-        {:noreply, socket}
-
-      nil ->
-        {:noreply, socket}
-    end
-  end
-
-  # The session the terminal open now started, so selecting another target
-  # closes it first. One a terminal no longer open started (the person
-  # chose another target before its start was heard here) is closed now:
-  # no session outlives the terminal it was opened for.
-  def handle_info({SignInTerminalComponent, :started, id, token}, socket) do
-    case socket.assigns.terminal do
-      %{id: ^id} = terminal ->
-        {:noreply, assign(socket, :terminal, %{terminal | token: token})}
+      %{session: ^session} ->
+        {:noreply,
+         push_event(socket, "terminal_output", %{session: session, data: Base.encode64(bytes)})}
 
       _other ->
-        CyfrWeb.ContextGuard.guard(socket, fn socket ->
-          Opus.Programs.sign_in_close(socket.assigns.context, token)
-          {:noreply, socket}
-        end)
+        {:noreply, socket}
     end
   end
 
-  def handle_info({SignInTerminalComponent, :closed}, socket),
-    do: {:noreply, socket |> assign(:terminal, nil) |> refresh_servers()}
+  def handle_info({Opus.Programs, session, {:ended, reason}}, socket),
+    do: {:noreply, ended(socket, session, reason)}
+
+  # The person's running sessions moved, here or on another surface.
+  def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, load_running(socket)}
 
   # A row expanded here and disabled elsewhere has its details read again:
   # a disabled row's `get` starts nothing, so it is read in place.
@@ -446,7 +526,8 @@ defmodule PrismWeb.ProgramsLive do
 
   # What the page says while a change's call runs.
   defp working({:create, name}), do: "Adding #{name}…"
-  defp working({:install, name, _config}), do: "Adding #{name}…"
+  defp working({:install, name, _from_need?}), do: "Adding #{name}…"
+  defp working({:open, name}), do: "Opening #{name}…"
   defp working({:update, name}), do: "Saving #{name}…"
   defp working({:set_hosts, name}), do: "Saving #{name}'s hosts…"
   defp working({:delete, name}), do: "Removing #{name}…"
@@ -564,18 +645,22 @@ defmodule PrismWeb.ProgramsLive do
     |> warnings_flash(result)
   end
 
-  # A new driven program: the row, then (for a kept home with a sign-in)
-  # the sign-in terminal in its folder.
-  defp answered(socket, {:install, name, config}, {:ok, result}) do
+  # A new driven program: the row, then, for one installed from a
+  # component's need, its terminal, where the person signs it in.
+  defp answered(socket, {:install, name, from_need?}, {:ok, result}) do
     socket =
       socket
       |> assign(:install, nil)
       |> answered({:create, name}, {:ok, result})
 
-    if config["home"] == "kept" and present?(config["login_command"]),
-      do: open_terminal(socket, name),
-      else: socket
+    if from_need?, do: open_program(socket, name, []), else: socket
   end
+
+  defp answered(socket, {:open, _name}, {:ok, %{session: session}}),
+    do: push_patch(socket, to: terminal_path(socket, session))
+
+  defp answered(socket, {:open, name}, {:error, reason}),
+    do: put_flash(socket, :error, "Failed to open #{name}: #{error_message(reason)}")
 
   defp answered(socket, _adding, {:error, reason}),
     do: assign(socket, :form_error, "Failed to add: #{error_message(reason)}")
@@ -636,7 +721,7 @@ defmodule PrismWeb.ProgramsLive do
   # program form does not show (the timeout, the tool patterns, console
   # reach), exactly as read. The members it shows are its own, a blank one
   # clearing its member.
-  @shown ~w(command env mark home memory_bytes home_max_bytes login_command hosts)
+  @shown ~w(command env mark home memory_bytes home_max_bytes hosts)
 
   defp edited_base(%{config: config}), do: Map.drop(config, @shown)
   defp edited_base(nil), do: %{}
@@ -673,7 +758,6 @@ defmodule PrismWeb.ProgramsLive do
        "home" => config["home"],
        "memory_mib" => mib_text(config["memory_bytes"]),
        "disk_mib" => mib_text(config["home_max_bytes"]),
-       "login_command" => config["login_command"],
        "hosts" => config["hosts"]
      }}
   end
@@ -689,12 +773,12 @@ defmodule PrismWeb.ProgramsLive do
   defp install(socket, name, config) do
     args = %{"name" => name, "config" => config}
 
-    answer = {:install, name, config}
+    answer = {:install, name, socket.assigns.install != nil}
     {:noreply, call(socket, working(answer), answer, "mcp_servers/create", args)}
   end
 
   # The program form's settings: the mark, the env, the home, the bounds
-  # in MiB, the login command and the hosts. Only what is set is sent.
+  # in MiB and the hosts. Only what is set is sent.
   defp program_config(params) do
     with {:ok, env} <- parse_env(params["env"] || ""),
          {:ok, memory} <- mib(params, "memory_mib", "Memory"),
@@ -707,7 +791,6 @@ defmodule PrismWeb.ProgramsLive do
        %{"env" => env, "home" => home, "mark" => mark}
        |> put_present("memory_bytes", memory)
        |> put_present("home_max_bytes", if(home == "kept", do: disk))
-       |> put_present("login_command", blank_nil(trimmed(params, "login_command")))
        |> put_present("hosts", host_list(params))}
     end
   end
@@ -804,8 +887,7 @@ defmodule PrismWeb.ProgramsLive do
         "mark" => "driven",
         "home" => "kept",
         "name" => field(need, :program),
-        "command" => field(install, :command),
-        "login_command" => field(install, :login_command)
+        "command" => field(install, :command)
       })
     else
       _ ->
@@ -820,25 +902,93 @@ defmodule PrismWeb.ProgramsLive do
   defp login_need?(need, name),
     do: field(need, :kind) == "login" and field(need, :name) == name
 
-  # ————— signing in —————
+  # ————— terminals —————
 
-  # One sign-in at a time: a terminal for a new target closes the session
-  # of the one before (or, when that session's start has not been heard
-  # here yet, closes it when it is: the `:started` above), and each
-  # terminal is a component of its own, so selecting a target, or the same
-  # one again after its session ended, starts afresh and never reaches the
-  # previous session.
-  defp open_terminal(socket, name) do
-    close_terminal(socket)
-    id = "sign-in-#{System.unique_integer([:positive])}"
-    assign(socket, :terminal, %{id: id, row: name, token: nil})
+  # The row's terminal, started through the gate as the person's act; its
+  # answer shows it (`answered/3`).
+  defp open_program(socket, name, args) do
+    params = %{"name" => name, "args" => args, "rows" => 24, "cols" => 80}
+    call(socket, working({:open, name}), {:open, name}, "mcp_servers/open", params)
   end
 
-  defp close_terminal(%{assigns: %{terminal: %{token: token}, context: context}})
-       when is_binary(token),
-       do: Opus.Programs.sign_in_close(context, token)
+  # The words a person typed after the command, split as a shell splits
+  # them, quotes kept together.
+  defp words(text) do
+    {:ok, OptionParser.split(text)}
+  rescue
+    _unbalanced -> :error
+  end
 
-  defp close_terminal(_socket), do: :ok
+  defp terminal_path(socket, session) do
+    query =
+      if socket.assigns.from_aqua,
+        do: %{"terminal" => session, "from" => "aqua"},
+        else: %{"terminal" => session}
+
+    PrismWeb.Focus.path(socket.assigns.athanor_route, "/programs?" <> URI.encode_query(query))
+  end
+
+  # The frame for `session`: the one shown before is detached, and this
+  # one is attached once its hook stands (`terminal_ready`).
+  defp show_terminal(%{assigns: %{terminal: %{session: session}}} = socket, session), do: socket
+
+  defp show_terminal(socket, session) do
+    socket = detach(socket)
+
+    back =
+      if socket.assigns.from_aqua,
+        do: PrismWeb.Focus.path(socket.assigns.athanor_route, "/aqua?setup=1")
+
+    name =
+      Enum.find_value(running(socket), "program", fn
+        %{session: ^session, name: name} -> name
+        _other -> nil
+      end)
+
+    assign(socket, :terminal, %{session: session, name: name, kept: false, ended: nil, back: back})
+  end
+
+  defp detach(%{assigns: %{terminal: %{session: session}}} = socket) do
+    if connected?(socket), do: Opus.Programs.detach(socket.assigns.context, session)
+    assign(socket, :terminal, nil)
+  end
+
+  defp detach(socket), do: socket
+
+  defp resize(socket, session, %{"rows" => rows, "cols" => cols})
+       when is_integer(rows) and is_integer(cols),
+       do: Opus.Programs.resize(socket.assigns.context, session, rows, cols)
+
+  defp resize(_socket, _session, _params), do: {:error, :invalid_size}
+
+  defp ended(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, reason) do
+    if connected?(socket), do: Opus.Programs.detach(socket.assigns.context, session)
+    socket |> assign(:terminal, %{terminal | ended: ended_reason(reason)}) |> load_running()
+  end
+
+  defp ended(socket, _session, _reason), do: load_running(socket)
+
+  defp ended_reason(reason)
+       when reason in [:exited, :closed, :idle, :row_changed, :standing, :unanswered],
+       do: reason
+
+  defp ended_reason(_gone), do: :not_found
+
+  defp kept(%{assigns: %{terminal: %{session: session} = terminal}} = socket, session, kept),
+    do: assign(socket, :terminal, %{terminal | kept: kept})
+
+  defp kept(socket, _session, _kept), do: socket
+
+  defp load_running(socket) do
+    if connected?(socket), do: assign(socket, :running, running(socket)), else: socket
+  end
+
+  defp running(socket) do
+    case Opus.Programs.running(socket.assigns.context) do
+      {:ok, running} -> running
+      {:error, _unanswered} -> []
+    end
+  end
 
   # ————— reading —————
 
@@ -891,11 +1041,6 @@ defmodule PrismWeb.ProgramsLive do
 
   defp trimmed(params, key), do: String.trim(params[key] || "")
 
-  defp blank_nil(""), do: nil
-  defp blank_nil(text), do: text
-
-  defp present?(value), do: is_binary(value) and value != ""
-
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
 
@@ -927,13 +1072,7 @@ defmodule PrismWeb.ProgramsLive do
 
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
 
-      <.live_component
-        :if={@terminal}
-        module={SignInTerminalComponent}
-        id={@terminal.id}
-        context={@context}
-        row={@terminal.row}
-      />
+      <TerminalComponent.frame :if={@terminal} terminal={@terminal} />
 
       <.card :if={@show_add == "program"}>
         <form id="add-program" phx-submit="add_program" class="space-y-4">
@@ -941,7 +1080,7 @@ defmodule PrismWeb.ProgramsLive do
             Install <span class="font-mono">{@prefill["name"]}</span>
             for <span class="font-mono">{@install.ref}</span>
             — {@install.reason}. This is the program as it will run; change anything first.
-            Installing it asks you to confirm the program, then opens its sign-in in the
+            Installing it asks you to confirm the program, then opens its terminal in the
             program's own folder.
           </p>
           <p :if={@editing} class="text-sm text-gray-300" data-test="editing">
@@ -1148,10 +1287,6 @@ defmodule PrismWeb.ProgramsLive do
                             do: bytes(config(@detail)["home_max_bytes"], "the folders' volume"),
                             else: "scratch folder"}
                         </dd>
-                        <dt class="text-gray-500">Sign-in command</dt>
-                        <dd class="font-mono text-gray-300">
-                          {config(@detail)["login_command"] || "none"}
-                        </dd>
                         <dt class="text-gray-500">Folder</dt>
                         <dd class="text-gray-300" data-test="program-folder">
                           {if server[:home] == "kept",
@@ -1221,7 +1356,12 @@ defmodule PrismWeb.ProgramsLive do
                           </div>
                         </div>
                       </div>
-                      <.home_actions server={server} config={config(@detail)} />
+                      <.terminal_actions
+                        :if={server[:transport] == "program"}
+                        server={server}
+                        running={Enum.filter(@running, &(&1.name == server[:name]))}
+                      />
+                      <.home_actions server={server} />
                       <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
                         <.button
                           variant="ghost"
@@ -1309,15 +1449,6 @@ defmodule PrismWeb.ProgramsLive do
   # A program's settings beside its name, command and mark.
   defp program_fields(assigns) do
     ~H"""
-    <div>
-      <label class="block text-xs text-gray-500 uppercase mb-1">Sign-in command</label>
-      <.input
-        name="login_command"
-        value={@prefill["login_command"]}
-        placeholder="optional, such as claude auth login"
-        class="font-mono"
-      />
-    </div>
     <div class="grid gap-3 md:grid-cols-3">
       <div>
         <label class="block text-xs text-gray-500 uppercase mb-1">Folder</label>
@@ -1326,7 +1457,7 @@ defmodule PrismWeb.ProgramsLive do
           class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
         >
           <option value="kept" selected={@prefill["home"] == "kept"}>
-            kept: its own folder, kept with its sign-in and removed with it
+            kept: its own folder, kept between runs and removed with it
           </option>
           <option value="scratch" selected={@prefill["home"] != "kept"}>
             scratch: a fresh folder each run
@@ -1386,9 +1517,65 @@ defmodule PrismWeb.ProgramsLive do
   end
 
   attr :server, :map, required: true
-  attr :config, :map, required: true
+  attr :running, :list, required: true
 
-  # Sign-in and reset for a kept row, in its own folder.
+  # A program's terminal: Open with the words to follow its command, and
+  # each of the person's running sessions of it, to show again or close.
+  defp terminal_actions(assigns) do
+    ~H"""
+    <div class="space-y-2 pt-2 border-t border-gray-800" data-test="terminal-actions">
+      <form
+        id={"open-" <> @server[:name]}
+        phx-submit="open"
+        class="flex flex-wrap items-end gap-2"
+      >
+        <input type="hidden" name="name" value={@server[:name]} />
+        <div class="grow">
+          <label class="block text-xs text-gray-500 uppercase mb-1">
+            Words after its command
+          </label>
+          <.input
+            name="args"
+            value=""
+            placeholder="none, or such as login --device-auth"
+            class="font-mono"
+          />
+        </div>
+        <.button type="submit" variant="ghost" data-test="open-terminal">Open</.button>
+      </form>
+      <div
+        :for={session <- @running}
+        class="flex flex-wrap items-center gap-3 text-xs text-gray-400"
+        data-test="running-session"
+      >
+        <span>
+          Running since {Calendar.strftime(session.started_at, "%H:%M UTC")}{if session.by == :aqua,
+            do: ", started by Aqua"}{if session.kept, do: ", kept"}
+        </span>
+        <button
+          type="button"
+          phx-click="show_terminal"
+          phx-value-session={session.session}
+          class="text-blue-400 hover:underline"
+        >
+          Show
+        </button>
+        <button
+          type="button"
+          phx-click="terminal_close"
+          phx-value-session={session.session}
+          class="text-gray-300 hover:underline"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :server, :map, required: true
+
+  # Reset for a kept row, in its own folder.
   defp home_actions(assigns) do
     ~H"""
     <div
@@ -1396,15 +1583,6 @@ defmodule PrismWeb.ProgramsLive do
       class="flex flex-wrap items-end gap-3 pt-2 border-t border-gray-800"
       data-test="home-actions"
     >
-      <.button
-        :if={@config["login_command"]}
-        variant="ghost"
-        phx-click="sign_in"
-        phx-value-name={@server[:name]}
-        data-test="sign-in"
-      >
-        Sign in
-      </.button>
       <.button
         variant="ghost"
         phx-click="reset_home"

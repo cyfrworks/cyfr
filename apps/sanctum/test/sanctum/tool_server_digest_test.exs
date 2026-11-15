@@ -26,8 +26,7 @@ defmodule Sanctum.ToolServerDigestTest do
         "hosts" => ["api.github.com", "github.com"],
         "home" => "kept",
         "memory_bytes" => 268_435_456,
-        "home_max_bytes" => 1_073_741_824,
-        "login_command" => "gh auth login"
+        "home_max_bytes" => 1_073_741_824
       },
       url: nil,
       headers: %{},
@@ -142,9 +141,7 @@ defmodule Sanctum.ToolServerDigestTest do
             {"home", "scratch"},
             {"memory_bytes", nil},
             {"memory_bytes", 536_870_912},
-            {"home_max_bytes", 2_147_483_648},
-            {"login_command", "gh auth login --web"},
-            {"login_command", nil}
+            {"home_max_bytes", 2_147_483_648}
           ] do
         variant = put_in(@program, [:program, key], value)
         {:ok, digest} = ToolServerDigest.compute(variant)
@@ -170,8 +167,7 @@ defmodule Sanctum.ToolServerDigestTest do
                "folder" => "kept",
                "hosts" => ["api.github.com", "github.com"],
                "memory_bytes" => 268_435_456,
-               "home_max_bytes" => 1_073_741_824,
-               "sign_in_command" => "gh auth login"
+               "home_max_bytes" => 1_073_741_824
              }
 
       assert {:ok, ^digest} =
@@ -200,8 +196,7 @@ defmodule Sanctum.ToolServerDigestTest do
             {"hosts", "github.com"},
             {"hosts", [""]},
             {"memory_bytes", 0},
-            {"home_max_bytes", "1 GiB"},
-            {"login_command", ""}
+            {"home_max_bytes", "1 GiB"}
           ] do
         row = put_in(@program, [:program, key], value)
         assert {:error, {:invalid_server_config, ^row}} = ToolServerDigest.compute(row)
@@ -237,7 +232,6 @@ defmodule Sanctum.ToolServerDigestTest do
           home: "kept",
           memory_bytes: 268_435_456,
           home_max_bytes: 1_073_741_824,
-          login_command: "gh auth login",
           config_json: Jason.encode!(%{"command" => @program.command, "env" => @program.env})
         }
       end
@@ -319,7 +313,6 @@ defmodule Sanctum.ToolServerDigestTest do
       home: server.program["home"],
       memory_bytes: server.program["memory_bytes"],
       home_max_bytes: server.program["home_max_bytes"],
-      login_command: server.program["login_command"],
       config_json: Jason.encode!(%{"command" => server.command, "env" => server.env})
     }
 
@@ -345,7 +338,6 @@ defmodule Sanctum.ToolServerDigestTest do
           home: "scratch",
           memory_bytes: nil,
           home_max_bytes: nil,
-          login_command: nil,
           config_json:
             Jason.encode!(%{
               "headers" => %{

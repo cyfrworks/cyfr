@@ -783,8 +783,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       "folder" => "kept",
       "hosts" => ["api.github.com", "github.com"],
       "memory_bytes" => 268_435_456,
-      "home_max_bytes" => 1_073_741_824,
-      "sign_in_command" => "gh auth login"
+      "home_max_bytes" => 1_073_741_824
     }
 
     # The row the sheet draws for the server asked for, against the head
@@ -918,14 +917,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
              ]
     end
 
-    test "names a program's sign-in command, one set or unset" do
-      assert changes(program_card(%{@held_program | "sign_in_command" => "gh auth login --web"})) ==
-               ["Its sign-in command changed from gh auth login to gh auth login --web."]
-
-      assert changes(program_card(Map.delete(@held_program, "sign_in_command"))) ==
-               ["Its sign-in command changed from gh auth login to none."]
-    end
-
     # The digest moved for its hosts and for a literal's value; the record
     # tells the hosts alone, so the card says that and nothing about the
     # literal, which it cannot tell moved.
@@ -963,8 +954,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
                "Folder: a folder kept between runs",
                "Hosts: api.github.com, github.com",
                "Memory bound: 256 MiB",
-               "Folder bound: 1024 MiB",
-               "Sign-in command: gh auth login"
+               "Folder bound: 1024 MiB"
              ]
 
       bare = Map.take(@held_program, ["address", "env", "folder"])

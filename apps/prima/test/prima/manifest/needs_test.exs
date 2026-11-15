@@ -403,10 +403,7 @@ defmodule Prima.Manifest.NeedsTest do
 
   describe "login" do
     test "is read with its program and install, mounted and never disclosed" do
-      install = %{
-        "command" => "npx -y @anthropic-ai/claude-code",
-        "login_command" => "claude login"
-      }
+      install = %{"command" => "npx -y @anthropic-ai/claude-code"}
 
       read = normalized(login(%{"install" => install, "required" => false}))
 
@@ -415,10 +412,7 @@ defmodule Prima.Manifest.NeedsTest do
                kind: "login",
                qualifier: nil,
                program: "claude",
-               install: %{
-                 command: "npx -y @anthropic-ai/claude-code",
-                 login_command: "claude login"
-               },
+               install: %{command: "npx -y @anthropic-ai/claude-code"},
                reason: "to run Claude Code",
                fields: [],
                scopes: [],
@@ -435,15 +429,11 @@ defmodule Prima.Manifest.NeedsTest do
       bare = normalized(login())
       assert bare.install == nil and bare.required
 
-      # Each suggested command is optional.
+      # The suggested command is optional.
       assert normalized(login(%{"install" => %{"command" => "claude"}})).install ==
-               %{command: "claude", login_command: nil}
+               %{command: "claude"}
 
-      assert normalized(login(%{"install" => %{"login_command" => "claude login"}})).install ==
-               %{command: nil, login_command: "claude login"}
-
-      assert normalized(login(%{"install" => %{}})).install ==
-               %{command: nil, login_command: nil}
+      assert normalized(login(%{"install" => %{}})).install == %{command: nil}
 
       # Every other need is attached or disclosed, never mounted.
       refute Needs.mount_only?(normalized(need()))
@@ -489,10 +479,8 @@ defmodule Prima.Manifest.NeedsTest do
             {%{"command" => long}, {:command, :too_long}},
             {%{"command" => "claude\0"}, {:command, :nul}},
             {%{"command" => "claude --key VAULT:anthropic"}, {:command, :vault_reference}},
-            {%{"command" => "claude", "login_command" => nil}, {:login_command, :not_a_string}},
-            {%{"command" => "claude", "login_command" => ""}, {:login_command, :empty}},
-            {%{"command" => "claude", "login_command" => "login vault:x"},
-             {:login_command, :vault_reference}},
+            {%{"command" => "claude", "login_command" => "claude login"},
+             {:unknown_keys, ["login_command"]}},
             {%{"command" => "claude", "env" => %{}}, {:unknown_keys, ["env"]}}
           ] do
         assert {:invalid_install, "api_key", ^reason} =

@@ -226,9 +226,8 @@ def main():
            and "model/chat@1" in manifest["contracts"],
            "the catalyst declares model/chat@1 and one need, a login for the program openai-codex", manifest["needs"])
     install = need.get("install", {})
-    expect(install.get("command", "").startswith("npx -y @openai/codex@")
-           and install.get("login_command") == install.get("command") + " login --device-auth",
-           "the need suggests fetching Codex with npx and signing in by device auth", install)
+    expect(install.get("command", "").startswith("npx -y @openai/codex@") and list(install) == ["command"],
+           "the need suggests fetching Codex with npx, and nothing about signing in", install)
 
     backends = Stack("locus-backends-openai-codex", image)
     plane = ControlPlane(secrets.token_bytes(32), runtime.SERVICE).serve()

@@ -622,10 +622,10 @@ defmodule Emissary.External.ProviderTest do
       assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
     end
 
-    test "a sign-in and a reset name the program, never a vault entry, and only a kept " <>
+    test "an open and a reset name the program, never a vault entry, and only a kept " <>
            "program's home resets",
          %{ctx: ctx} do
-      for action <- ["sign_in", "reset_home"] do
+      for action <- ["open", "reset_home"] do
         assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, message}}} =
                  Sanctum.Gate.call_external("mcp_servers", Sanctum.TestContext.local(:api), %{
                    "action" => action,

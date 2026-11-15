@@ -20,7 +20,7 @@ defmodule Opus.Programs.Output do
   @spec new(binary()) :: t()
   def new(bytes) when is_binary(bytes), do: %__MODULE__{bytes: bytes}
 
-  defimpl Inspect do
+  defimpl Inspect, for: Opus.Programs.Output do
     use Boundary, classify_to: Opus
 
     def inspect(%{bytes: bytes}, _opts),

@@ -42,7 +42,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # Each `handle_event` and `update` that acts on the context runs inside `guard/2`.
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
-    AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent SignInTerminalComponent
+    AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent
     CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive GrantsComponent
   )
 

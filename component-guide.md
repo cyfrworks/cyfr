@@ -577,7 +577,7 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 
 An OAuth need declares the provider, its scopes and the hosts the token is sent to (`"type": "oauth:google"`, `"scopes": [...]`, `"hosts": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
 
-A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by the athanor's own program row of that name, a driven program with a kept folder, which the grant binds: the program runs in the row's own folder, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. A program's folder is never shared, so no share meets a login need. An optional `install` block suggests the row: `command`, what fetches or runs the program, and `login_command`, its own sign-in, each held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the AQUA page offer **install `<program>`** with both shown and editable; the person decides, confirms the program's whole definition once, and accepting defines the row and opens the sign-in terminal in its folder; the component's grant then binds the row. Pin the version your component was tested against in `command`. The component reaches the program through its pipe ([`cyfr:process/pipe`](#cyfrprocesspipe--a-programs-session)), naming the need.
+A **login need** names a program the component runs with the person's own sign-in: `"type": "login"`, `"program"` the name of the program's row (lowercase letters, digits and hyphens), `reason` and `required`, and no `hosts`, `paths`, `attach`, `disclose`, `fields` or `scopes`. It is satisfied by the athanor's own program row of that name, a driven program with a kept folder, which the grant binds: the program runs in the row's own folder, where its own sign-in lives, and nothing is attached to the component's requests or disclosed to it. A program's folder is never shared, so no share meets a login need. An optional `install` block suggests the row: `command`, what fetches or runs the program, held to the rules of a program's command (at most 4096 bytes, no NUL, no `vault:`). The component's setup plan and the Aqua page offer **install `<program>`** with it shown and editable; the person decides, confirms the program's whole definition once, and accepting defines the row and opens the program's terminal in its folder, where the person signs it in as the program asks; the component's grant then binds the row. Pin the version your component was tested against in `command`. The component reaches the program through its pipe ([`cyfr:process/pipe`](#cyfrprocesspipe--a-programs-session)), naming the need.
 
 ```json
 "needs": {
@@ -585,7 +585,7 @@ A **login need** names a program the component runs with the person's own sign-i
     "type": "login",
     "program": "claude",
     "reason": "to run Claude Code on your own plan",
-    "install": {"command": "npx -y @anthropic-ai/claude-code@2.1.318", "login_command": "npx -y @anthropic-ai/claude-code@2.1.318 auth login"}
+    "install": {"command": "npx -y @anthropic-ai/claude-code@2.1.318"}
   }
 }
 ```

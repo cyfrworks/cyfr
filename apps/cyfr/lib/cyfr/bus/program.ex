@@ -33,7 +33,7 @@ defmodule Cyfr.Bus.Program do
           kept: boolean() | nil,
           attached: boolean() | nil,
           by: :person | :aqua | nil,
-          reason: Opus.Programs.ended() | nil
+          reason: :exited | :closed | :idle | :row_changed | :standing | nil
         }
 
   @doc "The closed union of what happened to the session."

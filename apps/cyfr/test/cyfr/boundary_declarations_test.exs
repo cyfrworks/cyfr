@@ -198,7 +198,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Host.Children), "an admission entry `Cyfr.Boundaries` rosters"},
       {~w(Programs Programs.Definition Programs.Session Programs.StatusRedaction),
        "the programs controller and its session client, which Emissary's servers and " <>
-         "the console's sign-in terminal call downward, rostered in `Cyfr.Boundaries`"}
+         "the console's program terminal call downward, rostered in `Cyfr.Boundaries`"}
     ],
     Aqua => [{~w(Supervisor), "the tree the composition root starts"}]
   }

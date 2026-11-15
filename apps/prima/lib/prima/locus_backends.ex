@@ -56,8 +56,8 @@ defmodule Prima.LocusBackends do
   hyphens, a `command` meeting `check_command/1`, the `env_names` its sealed
   environment carries (each an uppercase variable name, none reserved:
   `reserved_env_names/0`, `reserved_env_prefixes/0`), its `home`
-  (`"scratch"`, scrubbed at retirement, or `"kept"`, one folder per login
-  entry that survives retirement), its `memory_bytes` (absent: the
+  (`"scratch"`, scrubbed at retirement, or `"kept"`, the program row's own
+  folder, which survives retirement), its `memory_bytes` (absent: the
   service's own bound, `LOCUS_BACKENDS_MEMORY_BYTES`, bounds each process)
   and, for a kept home only, its `home_max_bytes` (absent: the homes
   volume is the only bound), and its `hosts`, the only hosts its processes
@@ -98,7 +98,7 @@ defmodule Prima.LocusBackends do
 
   A `homes` message names nothing and is answered with the id of every
   kept home the box holds (`homes[]`), so the controller can retire the
-  homes whose login entry no longer exists.
+  homes whose program row no longer exists.
 
   A `home` message acts on one kept home of one athanor: `op` `reset` ends
   every session in the home `home_id` names and makes it again empty under
@@ -769,7 +769,7 @@ defmodule Prima.LocusBackends do
   @spec modes() :: [mode()]
   def modes, do: @modes
 
-  @doc "The form a kept home's id takes: a login entry's id."
+  @doc "The form a kept home's id takes: its program row's id."
   @spec home_id_pattern() :: Regex.t()
   def home_id_pattern, do: @home_id
 
@@ -856,7 +856,7 @@ defmodule Prima.LocusBackends do
   bytes, with no NUL byte and no `vault:` in any case, since every process
   on the service can read a command line, so a credential never goes in
   one. Refused `:not_a_string`, `:empty`, `:too_long`, `:nul` or
-  `:vault_reference`. A program's command and login command
+  `:vault_reference`. A program's command
   (`Opus.Programs.Definition`) and the program a manifest's
   login need suggests (`Prima.Manifest.Needs`) are held to it.
   """
