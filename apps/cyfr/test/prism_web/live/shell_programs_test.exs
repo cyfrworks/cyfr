@@ -152,8 +152,7 @@ defmodule PrismWeb.ShellProgramsTest do
              Opus.Programs.start(person(user, athanor), row.id, %{
                rows: 24,
                cols: 80,
-               args: [],
-               by: :person
+               args: []
              })
 
     assert_receive {:session, "open", %{"key" => ^session}, _fields}, 2_000
@@ -231,6 +230,56 @@ defmodule PrismWeb.ShellProgramsTest do
 
     assert {:error, {:live_redirect, %{to: ^to}}} =
              desktop |> element(chip(session) <> " a.canvas-shelf-app") |> render_click()
+  end
+
+  test "a program Aqua started stands on the shelf as Aqua's: its chip opens the Programs page, and Close ends it",
+       %{conn: conn, user: user, athanor: athanor, row: row} do
+    require Ecto.Query
+    me = person(user, athanor)
+    actor = Sanctum.Context.actor(me)
+    {:ok, thread} = Arca.ThreadStorage.create(actor)
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: user.user_id, sent_by: "person", content: "run claude"},
+        turn: %{agent: "aqua", requested_by: user.user_id, origin: :interactive}
+      })
+
+    root = "exe_shelf_turn_#{System.unique_integer([:positive])}"
+
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [root_execution_id: root, status: "running"]
+      )
+
+    caller =
+      Opus.Programs.turn(Sanctum.Context.enter_guest(me), %{
+        "thread_id" => thread.id,
+        "root_execution_id" => root,
+        "parent_execution_id" => root
+      })
+
+    assert {:ok, session} =
+             Opus.Programs.start(caller, row.id, %{
+               rows: 50,
+               cols: 200,
+               args: [],
+               epoch: row.epoch
+             })
+
+    {desktop, _html} = mount_desktop(conn)
+    assert has_element?(desktop, chip(session) <> ~s( a[title*=", started by Aqua"]))
+
+    to = athanor_path("/programs")
+
+    assert {:error, {:live_redirect, %{to: ^to}}} =
+             desktop |> element(chip(session) <> " a.canvas-shelf-app") |> render_click()
+
+    {desktop, _html} = mount_desktop(conn)
+    desktop |> element(chip(session) <> " button.canvas-shelf-program-close") |> render_click()
+    assert_receive {:session, "close", _message, _fields}, 2_000
+    assert {:ok, []} = Opus.Programs.running(me)
   end
 
   test "Close's answers read in the terminal's own words, and the shelf lists what is running after",
@@ -327,8 +376,7 @@ defmodule PrismWeb.ShellProgramsTest do
         name: "ghost",
         started_at: DateTime.utc_now(),
         kept: false,
-        attached: false,
-        by: :person
+        attached: false
       )
     )
 
@@ -349,8 +397,7 @@ defmodule PrismWeb.ShellProgramsTest do
         name: "claude",
         started_at: DateTime.utc_now(),
         kept: true,
-        attached: true,
-        by: :person
+        attached: true
       )
     )
 

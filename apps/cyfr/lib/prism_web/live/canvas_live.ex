@@ -405,7 +405,8 @@ defmodule PrismWeb.CanvasLive do
             </button>
           </div>
           <%!-- The person's running programs, as the shell holds them from C8:
-             a chip opens the program's terminal, Close asks the shell. --%>
+             a chip opens the program's terminal, or for one Aqua started, whose
+             screen is its turn's alone, the Programs page; Close asks the shell. --%>
           <div
             :if={@programs != []}
             id="canvas-shelf-programs"
@@ -421,7 +422,7 @@ defmodule PrismWeb.CanvasLive do
               <.link
                 navigate={
                   PrismWeb.Nav.href(
-                    "/programs?terminal=" <> URI.encode_www_form(program.session),
+                    program_path(program),
                     @athanor_route
                   )
                 }
@@ -782,6 +783,11 @@ defmodule PrismWeb.CanvasLive do
       if(program.kept, do: ", kept", else: "") <>
       if(program.attached, do: "", else: ", not open on any screen")
   end
+
+  defp program_path(%{by: :aqua}), do: "/programs"
+
+  defp program_path(%{session: session}),
+    do: "/programs?terminal=" <> URI.encode_www_form(session)
 
   defp program_icon(%{name: name}) when is_binary(name) and name != "",
     do: name |> String.first() |> String.upcase()
