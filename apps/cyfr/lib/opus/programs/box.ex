@@ -1831,10 +1831,8 @@ defmodule Opus.Programs.Box do
         nil -> state
       end
 
-    %{
-      state
-      | sessions: Map.put(state.sessions, open.key, %{session: session, holder: open.holder})
-    }
+    entry = %{session: session, holder: open.holder, ended: Map.get(open.params, :ended)}
+    %{state | sessions: Map.put(state.sessions, open.key, entry)}
   end
 
   defp unclaimed(state, open, session) do
@@ -1850,13 +1848,29 @@ defmodule Opus.Programs.Box do
 
   # A holder that died leaves the box its sessions to close; its opens in
   # flight are settled as their answers come, and no one holds them.
+  # A terminal that dies before it could say so has its end announced
+  # here, from what its open named (`ended`), so no page or shelf shows a
+  # session that is gone; one that ended of itself closed its session
+  # first, and is no longer here.
   defp abandon_sessions(state, holder) do
     {gone, kept} = Enum.split_with(state.sessions, fn {_pk, %{holder: h}} -> h == holder end)
     state = %{state | sessions: Map.new(kept)}
 
-    Enum.reduce(gone, state, fn {{athanor, server, _home, _key}, %{session: session}}, acc ->
+    Enum.reduce(gone, state, fn {{athanor, server, _home, _key}, %{session: session} = entry},
+                                acc ->
+      announce_ended(athanor, Map.get(entry, :ended))
       closing(acc, {athanor, server}, session)
     end)
+  end
+
+  defp announce_ended(_athanor, nil), do: :ok
+
+  defp announce_ended(athanor, %{user_id: user_id} = fields) do
+    actor = Prima.Actor.in_athanor(athanor)
+    fields = fields |> Map.delete(:user_id) |> Map.put(:reason, :exited)
+    payload = Cyfr.Bus.Program.new(actor, :ended, fields)
+    _ = Cyfr.Bus.broadcast(actor, Cyfr.Bus.programs(actor, user_id), payload)
+    :ok
   end
 
   # A close the box owes, sent now and again on every tick until the

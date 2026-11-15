@@ -558,6 +558,29 @@ defmodule Opus.Programs.TerminalTest do
       assert {:ok, []} = Programs.running(ctx)
     end
 
+    # A session's owner killed outright says nothing of its end; the box,
+    # which closes what its holder left, announces it on the person's
+    # topic, so no page or shelf shows a session that is gone.
+    test "when its owner dies outright, announced by the box, and is closed",
+         %{ctx: ctx, row: row} do
+      {id, session} = start!(ctx, row)
+      Process.exit(terminal(id), :kill)
+
+      assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
+
+      assert_receive %Cyfr.Bus.Program{
+                       kind: :ended,
+                       session: ^id,
+                       row_id: row_id,
+                       name: "claude",
+                       reason: :exited
+                     },
+                     2_000
+
+      assert row_id == row.id
+      assert {:ok, []} = Programs.running(ctx)
+    end
+
     test "when its row changes or goes", %{ctx: ctx, row: row} do
       {id, session} = start!(ctx, row)
       {:ok, _} = Programs.attach(ctx, id)

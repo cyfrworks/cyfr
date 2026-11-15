@@ -114,7 +114,9 @@ defmodule Opus.Programs.Terminal do
           mode: :terminal,
           argv: state.argv,
           rows: state.rows,
-          cols: state.cols
+          cols: state.cols,
+          # What the box announces should this process die before it can.
+          ended: Map.put(summary(state), :user_id, state.user_id)
         }
 
         spawn_link(fn ->

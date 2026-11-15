@@ -737,6 +737,16 @@ defmodule PrismWeb.ProgramsLiveTest do
              has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
            end)
 
+    # A session whose owner died outright is said to have ended too.
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    killed = open!(view, "claude")
+    ready!(view, killed)
+    Process.exit(terminal_pid(killed), :kill)
+
+    assert eventually(fn ->
+             has_element?(view, ~s([data-test="terminal-ended"]), "The program ended.")
+           end)
+
     {gone, _html} = mount_athanor(conn, "/programs?terminal=trm_nobody", athanor)
     render_hook(gone, "terminal_ready", %{"session" => "trm_nobody", "rows" => 24, "cols" => 80})
 

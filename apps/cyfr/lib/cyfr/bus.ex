@@ -412,7 +412,7 @@ defmodule Cyfr.Bus do
       struct: Program,
       match: {:prefix, "bus:programs:"},
       template: "tenant:<athanor_id>:bus:programs:<user_id>",
-      producers: ["Opus.Programs.Terminal"],
+      producers: ["Opus.Programs.Terminal", "Opus.Programs.Box"],
       consumers: ["PrismWeb.ProgramsLive"],
       reason:
         "one person's running program sessions moved, on that person's own topic, so their " <>

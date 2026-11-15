@@ -457,7 +457,11 @@ defmodule PrismWeb.ProgramsLive do
   def handle_info({Opus.Programs, session, {:ended, reason}}, socket),
     do: {:noreply, ended(socket, session, reason)}
 
-  # The person's running sessions moved, here or on another surface.
+  # The person's running sessions moved, here or on another surface; the
+  # one shown ended, though its end never reached this page (it died).
+  def handle_info(%Cyfr.Bus.Program{kind: :ended, session: session, reason: reason}, socket),
+    do: {:noreply, ended(socket, session, reason)}
+
   def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, load_running(socket)}
 
   # A row expanded here and disabled elsewhere has its details read again:
