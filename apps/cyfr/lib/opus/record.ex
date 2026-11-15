@@ -193,7 +193,7 @@ defmodule Opus.Record do
     %__MODULE__{
       id: id,
       request_id: ctx.request_id,
-      admitted: admitted(ctx.call_id, if(is_nil(parent_execution_id), do: ctx.origin)),
+      admitted: admitted(ctx.call_id, ctx.origin, parent_execution_id),
       user_id: ctx.user_id,
       athanor_id: ctx.athanor_id,
       reference: reference,
@@ -1045,7 +1045,7 @@ defmodule Opus.Record do
     %__MODULE__{
       id: result.id,
       request_id: result.request_id,
-      admitted: admitted(result[:call_id], stored_origin(result[:origin])),
+      admitted: admitted(result[:call_id], stored_origin(result[:origin]), result[:parent_execution_id]),
       user_id: result.user_id,
       athanor_id: result[:athanor_id],
       reference: result.reference,
@@ -1237,10 +1237,30 @@ defmodule Opus.Record do
   @typedoc "What a run was admitted under: its decision and what started it."
   @type admitted :: %{call_id: String.t() | nil, origin: Prima.Origin.t() | nil}
 
-  defp admitted(call_id, origin), do: %{call_id: call_id, origin: origin}
+  # The one derivation of what a record was admitted under, at admission
+  # and from its row alike: a root keeps the origin it was started with,
+  # and a child has none, though its row stores its parent's
+  # (`Arca.Execution.admit/2`), so a child reads the same before and after
+  # it is stored.
+  defp admitted(call_id, origin, nil = _parent_execution_id),
+    do: %{call_id: call_id, origin: origin}
+
+  defp admitted(call_id, _origin, _parent_execution_id), do: %{call_id: call_id, origin: nil}
+
+  @doc """
+  What started the run a record, or its stored row, stands for
+  (`Prima.Origin`): a root's origin, and nil for a child or for a row read
+  without its origin. A stored row answers as the record read from it
+  does, so a child's row, which stores its parent's origin, answers nil.
+  """
+  @spec origin(t() | map()) :: Prima.Origin.t() | nil
+  def origin(%__MODULE__{admitted: %{origin: origin}}), do: origin
+
+  def origin(row) when is_map(row),
+    do: admitted(nil, stored_origin(Map.get(row, :origin)), Map.get(row, :parent_execution_id)).origin
 
   # A row's origin is one of `Prima.Origin`'s spellings, checked as it is
-  # written; a child's, or a column the read does not select, is nil.
+  # written; one the read does not select is nil.
   defp stored_origin(spelling) do
     case Prima.Origin.from_wire(spelling) do
       {:ok, origin} -> origin

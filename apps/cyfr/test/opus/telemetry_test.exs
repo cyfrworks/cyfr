@@ -257,6 +257,21 @@ defmodule Opus.TelemetryTest do
              }
     end
 
+    test "reports a root row's stored origin, and none for a child's, which stores its parent's" do
+      root = Map.merge(row("reagent"), %{origin: "schedule", parent_execution_id: nil})
+      child = Map.merge(row("reagent"), %{origin: "schedule", parent_execution_id: "exec_p"})
+
+      Telemetry.row_failed(root, failure("Execution terminated", 0))
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _, %{origin: root_origin}}
+
+      Telemetry.row_failed(child, failure("Parent execution (exec_p) terminated", 0))
+
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _,
+                      %{origin: child_origin}}
+
+      assert {root_origin, child_origin} == {:schedule, nil}
+    end
+
     test "reports a type that names no executable type as a reagent" do
       for type <- ["agent", nil, "tincture"] do
         Telemetry.row_failed(row(type), failure("Execution terminated", 0))

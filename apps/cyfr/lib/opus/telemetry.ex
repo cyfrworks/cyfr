@@ -229,7 +229,7 @@ defmodule Opus.Telemetry do
         started_at: row.started_at,
         ended_at: failure.ended_at,
         duration_ms: duration_ms,
-        origin: row_origin(row),
+        origin: Record.origin(row),
         # A row failed from outside its runner is a cascaded child or a
         # lapse, uncertain: retry's rule runs neither again.
         retryable: false
@@ -253,19 +253,6 @@ defmodule Opus.Telemetry do
   end
 
   defp native_duration(%Record{duration_ms: duration_ms}), do: duration_ms * 1_000_000
-
-  # A row's origin as its reader holds it: a record's, as it was admitted,
-  # or a stored row's spelling; one the read did not select is nil.
-  defp row_origin(%Record{admitted: %{origin: origin}}), do: origin
-
-  defp row_origin(%{origin: spelling}) when is_binary(spelling) do
-    case Prima.Origin.from_wire(spelling) do
-      {:ok, origin} -> origin
-      {:error, _none} -> nil
-    end
-  end
-
-  defp row_origin(_row), do: nil
 
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: Sanctum.Refusals.render(reason)
