@@ -102,7 +102,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 - Admission of executions, attempts and accounting, schedules and feeds.
 - The HostAPI server and listener and the WorkerAPI client.
 - Guest storage, guest egress (§5.6), the attached request (§5.5) and output masking.
-- The programs controller: what the backends service runs, its sessions and kept homes, one owner table and lease per box. *Not built yet:* boxes beyond the local one.
+- The programs controller: what the backends service runs, its sessions and kept homes, one owner table and lease per box. The box owns every session it opens and owes each close until the service confirms it. A program a person opens on a terminal is a session the server owns for that athanor and person, never for a page or a browser credential: any of the person's surfaces attaches to it and detaching ends nothing; it ends when its program exits, when it is closed, after a day with nothing attached and nothing printed unless kept, with its row's change or removal, or with its person's standing. *Not built yet:* boxes beyond the local one.
 
 ### Emissary: external application protocols
 

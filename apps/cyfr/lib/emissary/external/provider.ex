@@ -27,8 +27,12 @@ defmodule Emissary.External.Provider do
 
   `sign_in` runs a kept program's login command on a pseudo-terminal in
   the row's home and answers the token a console attaches to
-  (`Opus.Programs.sign_in/2`); `reset_home` empties a kept program's home
-  under the same uid. Both are a person's acts: interactive, admin.
+  (`Opus.Programs.sign_in/2`); `open` starts any program row's command,
+  followed by the words the person typed, on a terminal as a session the
+  server owns for the person (`Opus.Programs.start/3`), every later act on
+  which reaches `Opus.Programs` directly under the same person's
+  standing; `reset_home` empties a kept program's home under the same
+  uid. Each is a person's act: interactive, admin.
 
   Both carry the tool patterns the server is allowed to offer at all. Every
   action but `list` is `permission: :admin`, because it reads or changes
@@ -382,6 +386,29 @@ defmodule Emissary.External.Provider do
         ),
         Operation.new(
           "mcp_servers",
+          "open",
+          "Open a program on a terminal",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "The program's server name; its command runs in its own folder"
+            ),
+            Arg.new("args", {:array, Arg.new(nil, :string)},
+              description:
+                "Words to follow the program's command, as a person typed them (at most 64)"
+            ),
+            Arg.new("rows", :integer, description: "The terminal's rows, 1 to 1000 (default 24)"),
+            Arg.new("cols", :integer,
+              description: "The terminal's columns, 1 to 1000 (default 80)"
+            )
+          ],
+          kind: :execute,
+          planes: [:external],
+          consent: :interactive,
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
           "reset_home",
           "Reset a program's kept home",
           [
@@ -398,7 +425,7 @@ defmodule Emissary.External.Provider do
         )
       ],
       description:
-        "Manage programs and tool servers: tool servers elsewhere over HTTP (Notion, GitHub, custom servers) and programs CYFR runs on the backends service (npx packages), each marked mcp (CYFR offers its tools) or driven (a person or a brain runs it). Create, update, delete, enable/disable, restart and test them; sign in to a kept program and reset its home. A tool server's and an mcp program's tools appear in tools/list as server_name:tool_name.",
+        "Manage programs and tool servers: tool servers elsewhere over HTTP (Notion, GitHub, custom servers) and programs CYFR runs on the backends service (npx packages), each marked mcp (CYFR offers its tools) or driven (a person or a brain runs it). Create, update, delete, enable/disable, restart and test them; sign in to a kept program, open a program on a terminal and reset its home. A tool server's and an mcp program's tools appear in tools/list as server_name:tool_name.",
       title: "Programs"
     )
   end
@@ -414,6 +441,7 @@ defmodule Emissary.External.Provider do
   defp dispatch("disable", ctx, args), do: handle_enable_disable(ctx, args, false)
   defp dispatch("restart", ctx, args), do: handle_restart(ctx, args)
   defp dispatch("sign_in", ctx, args), do: handle_sign_in(ctx, args)
+  defp dispatch("open", ctx, args), do: handle_open(ctx, args)
   defp dispatch("reset_home", ctx, args), do: handle_reset_home(ctx, args)
 
   # ============================================================================
@@ -1162,6 +1190,59 @@ defmodule Emissary.External.Provider do
       end
     end
   end
+
+  # A person's start of a program on a terminal: the session is the
+  # caller's athanor's and person's (`Opus.Programs.start/3`), which every
+  # later act on it reaches directly, under the same person's standing.
+  defp handle_open(ctx, args) do
+    with {:ok, name} <- name_arg(args),
+         {:ok, words} <- open_args(args),
+         {:ok, rows} <- open_size(args, "rows", 24),
+         {:ok, cols} <- open_size(args, "cols", 80),
+         {:ok, server} <- program_row(ctx, name) do
+      case Opus.Programs.start(ctx, server.id, %{rows: rows, cols: cols, args: words, by: :person}) do
+        {:ok, session} -> {:ok, %{session: session, program: name}}
+        {:error, reason} -> {:error, open_refusal(reason, name)}
+      end
+    end
+  end
+
+  defp open_args(%{"args" => words}) when is_list(words) do
+    if Enum.all?(words, &is_binary/1),
+      do: {:ok, words},
+      else: {:error, {:invalid_argument, "args are words of text"}}
+  end
+
+  defp open_args(%{"args" => nil}), do: {:ok, []}
+  defp open_args(%{"args" => _}), do: {:error, {:invalid_argument, "args are words of text"}}
+  defp open_args(_args), do: {:ok, []}
+
+  defp open_size(args, key, default) do
+    case Map.get(args, key) do
+      nil -> {:ok, default}
+      n when is_integer(n) -> {:ok, n}
+      _ -> {:error, {:invalid_argument, "#{key} is a whole number of characters"}}
+    end
+  end
+
+  defp open_refusal(:not_found, name), do: {:not_found, "Server", name}
+
+  defp open_refusal(:not_a_program, name),
+    do: {:invalid_argument, "'#{name}' is a tool server elsewhere; only a program opens here"}
+
+  defp open_refusal(:disabled, name),
+    do: {:invalid_argument, "'#{name}' is disabled; enable it to open it"}
+
+  defp open_refusal(:invalid_size, _name),
+    do: {:invalid_argument, "rows and cols are each 1 to 1000"}
+
+  defp open_refusal(:invalid_args, _name),
+    do:
+      {:invalid_argument,
+       "args are at most 64 words, each at most 4096 bytes of text with no NUL"}
+
+  defp open_refusal(:not_standing, _name), do: :not_standing
+  defp open_refusal(reason, name), do: programs_refusal(reason, "Opening #{name}")
 
   # Every session in the row's home ends and it is made again empty, under
   # the same uid.

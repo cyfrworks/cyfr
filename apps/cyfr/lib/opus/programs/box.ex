@@ -12,9 +12,9 @@ defmodule Opus.Programs.Box do
   An **owner** is one `mcp_servers` row of one athanor whose transport is
   `program` — the pair `(athanor_id, mcp_servers.id)` — held by one or
   more **holders**: the processes that speak over its sessions (an
-  `Emissary.External.Server` for an `mcp` program, a sign-in relay, a pipe
-  holder, `Opus.Programs.Pipe`, whose session the box records and closes
-  should the holder die). The service
+  `Emissary.External.Server` for an `mcp` program, a pipe holder
+  (`Opus.Programs.Pipe`) or a terminal (`Opus.Programs.Terminal`), each of
+  whose sessions the box records and closes should the holder die). The service
   runs an owner's programs at a version `(g, e)`: `g` is this member's
   control-plane generation (`Arca.ControlPlane.generation/0`; a member that
   holds no claim speaks generation 1) and `e` is the row's epoch. An owner
@@ -90,8 +90,8 @@ defmodule Opus.Programs.Box do
   ceiling are read at every tick. Each owner keeps the ceiling the service
   last confirmed on its sync; while it differs from the one read, the
   owner is synced again at every tick this member holds its slot, and a
-  pipe open of it waits for that sync's answer, so the service never
-  admits a pipe by a ceiling the platform no longer names. A hello's answer
+  session open of it waits for that sync's answer, so the service never
+  admits a session by a ceiling the platform no longer names. A hello's answer
   tells the box's pool size, a quarter of which (at least one) is the most
   programs one athanor's owners may define.
 
@@ -115,9 +115,10 @@ defmodule Opus.Programs.Box do
   sync. A re-sync the controller starts itself sends every holder
   `{Opus.Programs, :owner, grant}`.
 
-  ## Pipe sessions
+  ## Sessions
 
-  The box owns every pipe session (`Opus.Programs.Pipe` is its courier).
+  The box owns every session its holders open, a `run` session of a pipe
+  (`Opus.Programs.Pipe`) or a `terminal` one (`Opus.Programs.Terminal`).
   An open is recorded here, with its row, home, key, holder and deadline,
   before the backend is asked, and the box makes it itself, in a process
   it monitors whose wait reaches past the deadline; so whatever the
@@ -126,7 +127,8 @@ defmodule Opus.Programs.Box do
   open that asked when that open's caller still waits, the deadline has
   not passed, its holder holds the owner and no close of that session is
   owed, and the session a key held before is then closed, since two never
-  both stand. Any other answer stays only as the session a later open of
+  both stand. A terminal's key is its own id, so each start is a session
+  of its own and no other open ever shares it. Any other answer stays only as the session a later open of
   the key was given, or one another open in flight for the key will be
   given; otherwise it is closed. A holder that dies, however it dies,
   leaves the box its sessions to close.
@@ -135,8 +137,9 @@ defmodule Opus.Programs.Box do
   one that fails is sent again on every tick, a holder's release never
   drops it, and it is forgotten only when the backend confirms it or no
   longer knows the session or its owner. A holder closing its key's
-  session is answered once the backend has answered the close, or its
-  close window has passed, and only then releases its share; and the box
+  session is answered `:ok` once the backend has confirmed the close, and
+  `{:error, :unanswered}` when it answered otherwise or its close window
+  passed, the close still owed; only then does it release its share; and the box
   sends no release of an owner while a close for it is out, so a release
   never outruns a close the box owes.
 
@@ -218,14 +221,14 @@ defmodule Opus.Programs.Box do
       release_waiters: %{},
       # Kept homes to reset or retire: {athanor, home_id} => %{op, waiters}.
       homes: %{},
-      # Pipe sessions (`Opus.Programs.Pipe`), all the box's: the session
+      # Sessions, all the box's: the session
       # each key's holder was given, {athanor, server, home_id, key} =>
       # %{session, holder}; each open in flight, ref => its record; the
       # monitor of each open's process, monitor => ref; and each session
       # the box owes a close, session => %{owner, inflight}.
-      pipes: %{},
-      pipe_opens: %{},
-      pipe_tasks: %{},
+      sessions: %{},
+      opens: %{},
+      open_tasks: %{},
       closing: %{},
       # Lease maintenance, sent first; then syncs and status reads.
       urgent: :queue.new(),
@@ -341,11 +344,11 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  # A pipe open, recorded before the box's open is sent: whatever the
+  # A session open, recorded before the box's open is sent: whatever the
   # backend answers under the key is the box's from its first byte
-  # (`pipe_opened/3`). Refused at once past the deadline, for a holder
+  # (`session_opened/3`). Refused at once past the deadline, for a holder
   # that does not hold the owner, or for an owner never synced.
-  def handle_call({:pipe_open, owner, holder, params, deadline}, from, state) do
+  def handle_call({:session_open, owner, holder, params, deadline}, from, state) do
     key = {owner.athanor_id, owner.server_id}
 
     case state.owners[key] do
@@ -356,11 +359,11 @@ defmodule Opus.Programs.Box do
             {:reply, {:error, :deadline}, state}
 
           stale_ceiling?(state, key) ->
-            state = park_pipe_open(state, key, entry, holder, params, deadline, from)
+            state = park_open(state, key, entry, holder, params, deadline, from)
             {:noreply, dispatch(state)}
 
           true ->
-            {:noreply, start_pipe_open(state, key, entry, holder, params, deadline, from)}
+            {:noreply, start_open(state, key, entry, holder, params, deadline, from)}
         end
 
       _not_held ->
@@ -372,12 +375,12 @@ defmodule Opus.Programs.Box do
   # from here until the backend confirms it. The holder is answered once
   # the backend has answered the close, or the close window has passed, so
   # its release of the owner never outruns the close.
-  def handle_call({:pipe_close, owner, home_id, pipe_key}, {pid, _tag} = from, state) do
-    pk = {owner.athanor_id, owner.server_id, home_id, pipe_key}
+  def handle_call({:session_close, owner, home_id, session_key}, {pid, _tag} = from, state) do
+    sk = {owner.athanor_id, owner.server_id, home_id, session_key}
 
-    case state.pipes[pk] do
+    case state.sessions[sk] do
       %{holder: ^pid, session: session} ->
-        state = %{state | pipes: Map.delete(state.pipes, pk)}
+        state = %{state | sessions: Map.delete(state.sessions, sk)}
         {:noreply, closing(state, {owner.athanor_id, owner.server_id}, session, nil, from)}
 
       _another_or_none ->
@@ -491,15 +494,15 @@ defmodule Opus.Programs.Box do
     {:noreply, dispatch(state)}
   end
 
-  def handle_info({:pipe_opened, ref, result}, state) when is_map_key(state.pipe_opens, ref),
-    do: {:noreply, pipe_opened(state, ref, result)}
+  def handle_info({:session_opened, ref, result}, state) when is_map_key(state.opens, ref),
+    do: {:noreply, session_opened(state, ref, result)}
 
-  def handle_info({:pipe_opened, _ref, _result}, state), do: {:noreply, state}
+  def handle_info({:session_opened, _ref, _result}, state), do: {:noreply, state}
 
-  def handle_info({:pipe_deadline, ref}, state) when is_map_key(state.pipe_opens, ref),
-    do: {:noreply, pipe_deadline(state, ref)}
+  def handle_info({:open_deadline, ref}, state) when is_map_key(state.opens, ref),
+    do: {:noreply, open_deadline(state, ref)}
 
-  def handle_info({:pipe_deadline, _ref}, state), do: {:noreply, state}
+  def handle_info({:open_deadline, _ref}, state), do: {:noreply, state}
 
   def handle_info({:parked_deadline, key, pref}, state) do
     case state.owners[key] do
@@ -519,19 +522,19 @@ defmodule Opus.Programs.Box do
   end
 
   # A close answered lets a release it held back go.
-  def handle_info({:pipe_closed, session, result}, state),
-    do: {:noreply, state |> pipe_closed(session, result) |> enqueue_release() |> dispatch()}
+  def handle_info({:session_closed, session, result}, state),
+    do: {:noreply, state |> session_closed(session, result) |> enqueue_release() |> dispatch()}
 
   # An open's process that died before it answered: its open is settled
   # as one the box could not make.
   def handle_info({:DOWN, mref, :process, _pid, reason}, state)
-      when is_map_key(state.pipe_tasks, mref) do
-    {ref, tasks} = Map.pop(state.pipe_tasks, mref)
-    state = %{state | pipe_tasks: tasks}
+      when is_map_key(state.open_tasks, mref) do
+    {ref, tasks} = Map.pop(state.open_tasks, mref)
+    state = %{state | open_tasks: tasks}
 
     if reason == :normal,
       do: {:noreply, state},
-      else: {:noreply, pipe_opened(state, ref, {:error, :backends_unavailable})}
+      else: {:noreply, session_opened(state, ref, {:error, :backends_unavailable})}
   end
 
   def handle_info({ref, result}, %State{inflight: {ref, job, spec}} = state) do
@@ -554,7 +557,7 @@ defmodule Opus.Programs.Box do
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     case Enum.find(state.owners, fn {_key, entry} -> entry.holders[pid] == ref end) do
       {key, entry} ->
-        state = abandon_pipes(state, pid)
+        state = abandon_sessions(state, pid)
         entry = remove_holder(entry, pid)
 
         if entry.holders == %{} do
@@ -620,7 +623,7 @@ defmodule Opus.Programs.Box do
           programs: 0,
           waiters: [from],
           # The athanor ceiling the service last confirmed for this owner,
-          # and the pipe opens waiting for it to be the one read.
+          # and the session opens waiting for it to be the one read.
           ceiling: :unconfirmed,
           parked: []
         })
@@ -670,7 +673,7 @@ defmodule Opus.Programs.Box do
           GenServer.reply(from, {:error, :not_held})
         end
 
-        forget_pipes(%{state | owners: owners}, key)
+        forget_sessions(%{state | owners: owners}, key)
     end
   end
 
@@ -1034,7 +1037,7 @@ defmodule Opus.Programs.Box do
   end
 
   # A release never outruns a close the box has out for the same owner: it
-  # waits for the close's answer (`pipe_closed/3` enqueues it again).
+  # waits for the close's answer (`session_closed/3` enqueues it again).
   defp prepare({:release}, state) do
     held = closes_out(state)
     releases = Map.drop(state.releases, MapSet.to_list(held))
@@ -1725,38 +1728,40 @@ defmodule Opus.Programs.Box do
   end
 
   # ============================================================================
-  # Pipe sessions
+  # Sessions
   # ============================================================================
 
   # The box's open runs in a process of its own, monitored here, whose
   # answer reaches the box whenever it comes: its wait reaches past the
   # deadline, so a late answer is still heard and settled.
-  defp start_pipe_open(state, key, entry, holder, params, deadline, from) do
+  defp start_open(state, key, entry, holder, params, deadline, from) do
     ref = make_ref()
     box = self()
     grant = grant(state, key, entry)
 
     params =
-      Map.merge(params, %{mode: :run, timeout_ms: max(deadline - now_ms(), 0) + @late_open_ms})
+      %{mode: :run}
+      |> Map.merge(params)
+      |> Map.put(:timeout_ms, max(deadline - now_ms(), 0) + @late_open_ms)
 
     {_pid, mref} =
-      spawn_monitor(fn -> send(box, {:pipe_opened, ref, Session.open(grant, params)}) end)
+      spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
 
     open = %{
       owner: key,
       grant: grant,
       params: params,
-      pipe: {elem(key, 0), elem(key, 1), params.home_id, params.key},
+      key: {elem(key, 0), elem(key, 1), params.home_id, params.key},
       holder: holder,
       from: from,
       deadline: deadline,
-      timer: Process.send_after(self(), {:pipe_deadline, ref}, max(deadline - now_ms(), 0))
+      timer: Process.send_after(self(), {:open_deadline, ref}, max(deadline - now_ms(), 0))
     }
 
     %{
       state
-      | pipe_opens: Map.put(state.pipe_opens, ref, open),
-        pipe_tasks: Map.put(state.pipe_tasks, mref, ref)
+      | opens: Map.put(state.opens, ref, open),
+        open_tasks: Map.put(state.open_tasks, mref, ref)
     }
   end
 
@@ -1766,10 +1771,10 @@ defmodule Opus.Programs.Box do
   # that session is owed; otherwise it stays only as the session a later
   # open of the key was given, or one another open in flight for the key
   # will be given, and is closed if neither.
-  defp pipe_opened(state, ref, result) do
-    {open, opens} = Map.pop(state.pipe_opens, ref)
+  defp session_opened(state, ref, result) do
+    {open, opens} = Map.pop(state.opens, ref)
     if open.timer, do: Process.cancel_timer(open.timer)
-    state = %{state | pipe_opens: opens}
+    state = %{state | opens: opens}
 
     case result do
       {:ok, %{session: session, resumed: resumed}} ->
@@ -1791,7 +1796,7 @@ defmodule Opus.Programs.Box do
           entry = state.owners[open.owner]
 
           state
-          |> park_pipe_open(open.owner, entry, open.holder, open.params, open.deadline, open.from)
+          |> park_open(open.owner, entry, open.holder, open.params, open.deadline, open.from)
           |> dispatch()
         else
           GenServer.reply(open.from, {:error, {:refused, :stale_boot, boot}})
@@ -1806,10 +1811,10 @@ defmodule Opus.Programs.Box do
 
   # The caller's deadline passed with the box's open still out: the caller
   # is told so, and the open, when it answers, is settled as late.
-  defp pipe_deadline(state, ref) do
-    open = state.pipe_opens[ref]
+  defp open_deadline(state, ref) do
+    open = state.opens[ref]
     GenServer.reply(open.from, {:error, :deadline})
-    %{state | pipe_opens: Map.put(state.pipe_opens, ref, %{open | from: nil, timer: nil})}
+    %{state | opens: Map.put(state.opens, ref, %{open | from: nil, timer: nil})}
   end
 
   defp holds?(state, %{owner: key, holder: holder}),
@@ -1820,21 +1825,24 @@ defmodule Opus.Programs.Box do
   # stand.
   defp give(state, open, session) do
     state =
-      case state.pipes[open.pipe] do
+      case state.sessions[open.key] do
         %{session: ^session} -> state
         %{session: before} -> closing(state, open.owner, before)
         nil -> state
       end
 
-    %{state | pipes: Map.put(state.pipes, open.pipe, %{session: session, holder: open.holder})}
+    %{
+      state
+      | sessions: Map.put(state.sessions, open.key, %{session: session, holder: open.holder})
+    }
   end
 
   defp unclaimed(state, open, session) do
-    given? = match?(%{session: ^session}, state.pipes[open.pipe])
+    given? = match?(%{session: ^session}, state.sessions[open.key])
 
     awaited? =
-      Enum.any?(state.pipe_opens, fn {_ref, other} ->
-        other.pipe == open.pipe and other.from != nil
+      Enum.any?(state.opens, fn {_ref, other} ->
+        other.key == open.key and other.from != nil
       end)
 
     if given? or awaited?, do: state, else: closing(state, open.owner, session, open.grant)
@@ -1842,9 +1850,9 @@ defmodule Opus.Programs.Box do
 
   # A holder that died leaves the box its sessions to close; its opens in
   # flight are settled as their answers come, and no one holds them.
-  defp abandon_pipes(state, holder) do
-    {gone, kept} = Enum.split_with(state.pipes, fn {_pk, %{holder: h}} -> h == holder end)
-    state = %{state | pipes: Map.new(kept)}
+  defp abandon_sessions(state, holder) do
+    {gone, kept} = Enum.split_with(state.sessions, fn {_pk, %{holder: h}} -> h == holder end)
+    state = %{state | sessions: Map.new(kept)}
 
     Enum.reduce(gone, state, fn {{athanor, server, _home, _key}, %{session: session}}, acc ->
       closing(acc, {athanor, server}, session)
@@ -1870,10 +1878,11 @@ defmodule Opus.Programs.Box do
     send_close(%{state | closing: Map.put(state.closing, session, record)}, session)
   end
 
-  # Whoever waits on a close is answered once it was answered, whatever it
-  # answered: a close still owed is sent again on the sweep.
-  defp answer_waiters(record),
-    do: Enum.each(record.waiters, &GenServer.reply(&1, :ok))
+  # Whoever waits on a close is answered once it was answered: `:ok` when
+  # nothing of the session runs, `{:error, :unanswered}` otherwise, the
+  # close still owed and sent again on the sweep.
+  defp answer_waiters(record, answer),
+    do: Enum.each(record.waiters, &GenServer.reply(&1, answer))
 
   defp send_close(state, session) do
     record = state.closing[session]
@@ -1888,25 +1897,25 @@ defmodule Opus.Programs.Box do
         grant = record.grant || grant(state, record.owner, entry)
 
         spawn(fn ->
-          send(box, {:pipe_closed, session, Session.close(grant, session, @close_ms)})
+          send(box, {:session_closed, session, Session.close(grant, session, @close_ms)})
         end)
 
         %{state | closing: Map.put(state.closing, session, %{record | inflight: true})}
 
       true ->
         # An owner released, or never synced, runs no session.
-        answer_waiters(record)
+        answer_waiters(record, :ok)
         %{state | closing: Map.delete(state.closing, session)}
     end
   end
 
-  defp pipe_closed(state, session, result) do
+  defp session_closed(state, session, result) do
     case state.closing[session] do
       nil ->
         state
 
       record ->
-        answer_waiters(record)
+        answer_waiters(record, if(closed?(result), do: :ok, else: {:error, :unanswered}))
 
         if closed?(result),
           do: %{state | closing: Map.delete(state.closing, session)},
@@ -1939,9 +1948,11 @@ defmodule Opus.Programs.Box do
   # An owner dropped holds no session any more. The closes owed for it stay
   # until the backend answers them: its release waits for those out, and a
   # released owner's service confirms the rest by not knowing it.
-  defp forget_pipes(state, {athanor, server}) do
-    pipes = Map.reject(state.pipes, fn {{a, s, _h, _k}, _} -> a == athanor and s == server end)
-    %{state | pipes: pipes}
+  defp forget_sessions(state, {athanor, server}) do
+    sessions =
+      Map.reject(state.sessions, fn {{a, s, _h, _k}, _} -> a == athanor and s == server end)
+
+    %{state | sessions: sessions}
   end
 
   defp now_ms, do: System.system_time(:millisecond)
@@ -2029,10 +2040,10 @@ defmodule Opus.Programs.Box do
   defp stale_ceiling?(state, key),
     do: Map.get(state.owners[key], :ceiling, :unconfirmed) != state.athanor_memory_bytes
 
-  # A pipe open of an owner whose ceiling the service has not confirmed
+  # A session open of an owner whose ceiling the service has not confirmed
   # waits for the sync that carries it; the sync's answer starts it, or its
   # deadline answers it.
-  defp park_pipe_open(state, key, entry, holder, params, deadline, from) do
+  defp park_open(state, key, entry, holder, params, deadline, from) do
     pref = make_ref()
     timer = Process.send_after(self(), {:parked_deadline, key, pref}, max(deadline - now_ms(), 0))
     parked = Map.get(entry, :parked, []) ++ [{pref, holder, params, deadline, from, timer}]
@@ -2065,7 +2076,7 @@ defmodule Opus.Programs.Box do
                 state
 
               true ->
-                start_pipe_open(state, key, entry, holder, params, deadline, from)
+                start_open(state, key, entry, holder, params, deadline, from)
             end
           end)
         end

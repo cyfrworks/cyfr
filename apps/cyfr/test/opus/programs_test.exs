@@ -1312,14 +1312,13 @@ defmodule Opus.ProgramsTest do
     end
 
     defp opened(grant, home_id, mode) do
+      size = if mode == :terminal, do: %{rows: 24, cols: 80}, else: %{}
+
       {:ok, answer} =
-        Opus.Programs.Session.open(grant, %{
-          program: "program",
-          home_id: home_id,
-          key: "k",
-          mode: mode,
-          argv: []
-        })
+        Opus.Programs.Session.open(
+          grant,
+          Map.merge(size, %{program: "program", home_id: home_id, key: "k", mode: mode, argv: []})
+        )
 
       answer
     end
@@ -1330,9 +1329,9 @@ defmodule Opus.ProgramsTest do
       assert %{resumed: true, session: same} = opened(grant, "vlt_keyed", :run)
       assert same == run.session
 
-      assert %{resumed: false, session: sign_in} = opened(grant, "vlt_keyed", :sign_in)
+      assert %{resumed: false, session: terminal} = opened(grant, "vlt_keyed", :terminal)
       assert %{resumed: false, session: other_home} = opened(grant, "vlt_other", :run)
-      assert Enum.uniq([run.session, sign_in, other_home]) == [run.session, sign_in, other_home]
+      assert Enum.uniq([run.session, terminal, other_home]) == [run.session, terminal, other_home]
     end
 
     test "a reset of a home ends every session of that home", %{ctx: ctx, fake: fake} do
@@ -1421,7 +1420,6 @@ defmodule Opus.ProgramsTest do
                             "home" => "kept",
                             "memory_bytes" => 1_073_741_824,
                             "home_max_bytes" => 2_147_483_648,
-                            "login_command" => "claude auth login",
                             "env_names" => []
                           }
                         ]
@@ -2660,7 +2658,7 @@ defmodule Opus.ProgramsTest do
         fn ->
           state = :sys.get_state(controller)
 
-          state.pipe_opens == %{} and
+          state.opens == %{} and
             Enum.all?(state.closing, fn {_id, record} -> not record.inflight end)
         end,
         "the late open and its first close to settle"

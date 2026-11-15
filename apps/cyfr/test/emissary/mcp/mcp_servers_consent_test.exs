@@ -9,8 +9,9 @@ defmodule Emissary.MCP.McpServersConsentTest do
   gate and is not shown them in `tools/list`, a running chain reaches no
   `mcp_servers` action, and a signed-in person defines and changes servers.
   Signing a program in (`sign_in`, a person answering its own sign-in on a
-  terminal) and resetting a kept folder (`reset_home`, the person's files
-  gone) are a person's acts too. The actions that operate a saved server
+  terminal), opening a program on a terminal (`open`, a process made with
+  the row's folder and environment) and resetting a kept folder
+  (`reset_home`, the person's files gone) are a person's acts too. The actions that operate a saved server
   keep their admin posture.
   """
   use ExUnit.Case, async: false
@@ -18,7 +19,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
   alias Sanctum.Visibility
   alias Emissary.External.Provider
 
-  @defining ~w(create update sign_in reset_home)
+  @defining ~w(create update sign_in open reset_home)
   @operating ~w(delete list get test refresh enable disable restart)
 
   setup tags do

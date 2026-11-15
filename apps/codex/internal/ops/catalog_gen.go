@@ -162,6 +162,7 @@ const (
 	McpServersEnable        = "enable"
 	McpServersGet           = "get"
 	McpServersList          = "list"
+	McpServersOpen          = "open"
 	McpServersRefresh       = "refresh"
 	McpServersResetHome     = "reset_home"
 	McpServersRestart       = "restart"
@@ -317,7 +318,7 @@ var Actions = map[string][]string{
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
-	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
+	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "open", "refresh", "reset_home", "restart", "sign_in", "test", "update"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"list", "renew", "revoke", "waiting"},
@@ -2261,6 +2262,27 @@ func (args McpServersListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: McpServersList, fields: fields(args)})
+}
+
+// McpServersOpenArgs carries arguments for mcp_servers.open.
+type McpServersOpenArgs struct {
+	// The program's server name; its command runs in its own folder
+	Name string `json:"name"`
+	// Words to follow the program's command, as a person typed them (at most 64)
+	Args Field[[]string] `json:"args,omitzero"`
+	// The terminal's rows, 1 to 1000 (default 24)
+	Rows Field[int] `json:"rows,omitzero"`
+	// The terminal's columns, 1 to 1000 (default 80)
+	Cols Field[int] `json:"cols,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args McpServersOpenArgs) MarshalJSON() ([]byte, error) {
+	type fields McpServersOpenArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: McpServersOpen, fields: fields(args)})
 }
 
 // McpServersRefreshArgs carries arguments for mcp_servers.refresh.
