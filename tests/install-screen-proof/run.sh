@@ -513,7 +513,11 @@ screen_confirms() {
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   since=$(guest_ssh 'date +%s')
-  screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # The sheet opens with the keyboard's focus on Confirm on this device,
+  # and Enter presses it; the page it opens shows that it was that link.
+  # Chrome's find bar is not used here: closed, it leaves the focus on the
+  # page's body, not on the match in the sheet.
+  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
     sh -c 'grep -q "Confirm on this screen" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
@@ -539,7 +543,8 @@ screen_confirms() {
   guest_chord ctrl 1 || fail "QMP did not send the keys"
   sleep 2
   since=$(guest_ssh 'date +%s')
-  screen_find 'confirm on this device' && printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # Prism's tab keeps its focus on Confirm on this device, as above.
+  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
   confirm_page_until confirm-again "$since" 60
   check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
   printf '\t000000\n' | guest_keys || fail "QMP did not type"
