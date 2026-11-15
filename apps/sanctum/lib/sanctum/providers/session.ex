@@ -195,13 +195,6 @@ defmodule Sanctum.Providers.Session do
     end
   end
 
-  # The person's role here, by the administrator's mark on their row, as
-  # Settings and the door read it: a key's call never carries the mark on
-  # its context (`platform_admin`), whoever made the key.
-  defp role(user_id) do
-    if Sanctum.Tenancy.platform_admin?(user_id), do: "administrator", else: "person"
-  end
-
   # Revoke the Sanctum session authenticated by this request.
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
       when is_binary(hash) do
@@ -431,6 +424,13 @@ defmodule Sanctum.Providers.Session do
   end
 
   # session.whoami helpers: the display fields the Context carries.
+  # The person's role here, by the administrator's mark on their row, as
+  # Settings and the door read it: a key's call never carries the mark on
+  # its context (`platform_admin`), whoever made the key.
+  defp role(user_id) do
+    if Sanctum.Tenancy.platform_admin?(user_id), do: "administrator", else: "person"
+  end
+
   defp derive_email(%Context{email: email}) when is_binary(email) and email != "", do: email
   defp derive_email(_), do: nil
 
