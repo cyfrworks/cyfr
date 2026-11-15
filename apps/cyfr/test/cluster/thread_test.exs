@@ -206,7 +206,7 @@ defmodule Cyfr.Cluster.ThreadTest do
   # read by both because they are rows.
   defp athanor(id, label) do
     athanor = Cell.call(id, Cyfr.Cluster.Fixtures, :athanor!, [label])
-    thread = Cell.call(id, Cyfr.Cluster.Fixtures, :thread!, [athanor.id, "cluster #{label}"])
+    thread = Cell.call(id, Cyfr.Cluster.Fixtures, :thread!, [athanor.id])
     %{athanor: athanor.id, thread: thread.id}
   end
 end

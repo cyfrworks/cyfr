@@ -946,7 +946,8 @@ fn args ->
     ["thread", user_id, text] ->
       ctx = person_ctx.(user_id)
       actor = Sanctum.Context.actor(ctx)
-      {:ok, thread} = Arca.ThreadStorage.create(actor)
+      # The person's daily thread of today, through the storage's own door.
+      {:ok, thread} = Arca.ThreadStorage.daily(actor, Aqua.Day.today(ctx))
 
       # The person's own message, sent as a person's send is.
       {:ok, _message} =
