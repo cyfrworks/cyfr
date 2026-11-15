@@ -416,7 +416,7 @@ On macOS and Windows at a terminal, while Docker does not answer, init offers to
 
 The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. 'cyfr login --setup' in this directory sets up the first person at this terminal instead, with this command line as their device; a headless CYFR (CYFR_HEADLESS=on) serves no page, so there it is the only way. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. 'cyfr login --setup' in this directory sets up the first person at this terminal instead, with this command line as their device. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
 	Example: `  cyfr init
@@ -510,7 +510,7 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 // address signs no one out, and the next step, which on screen is the
 // reboot that shows setup there, and otherwise the setup link or cyfr
 // login --setup at this terminal (sshTunnel's line beside them on a
-// machine with no display). A headless CYFR serves no setup page.
+// machine with no display).
 func initEnding(out io.Writer, screen bool) {
 	values, _ := access.ReadEnvValues(".env")
 	port := existingSelection(".env").port
@@ -518,10 +518,6 @@ func initEnding(out io.Writer, screen bool) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintf(out, "CYFR is set up in this directory, reached from this computer at %s.\n", address)
 	fmt.Fprintln(out, "Want it on your phone and laptop too? Run cyfr access tailnet first.")
-	if headless(values) {
-		fmt.Fprintln(out, "CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.")
-		return
-	}
 	if screen {
 		fmt.Fprintln(out, "Next: cyfr up, then sudo reboot.")
 		fmt.Fprintln(out, "At power-on this screen opens CYFR's setup page, which makes its first person's account with this box as its first device.")
@@ -706,17 +702,6 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		fmt.Fprintln(out, "   the checkout itself as CONTRIBUTING.md's \"Running from source\" says.")
 	}
 	return nil
-}
-
-// headlessVar is the switch that makes CYFR headless: the API and /mcp,
-// and no browser page.
-const headlessVar = "CYFR_HEADLESS"
-
-// headless reports whether .env's values make CYFR headless, CYFR_HEADLESS
-// read as the server's switch reads it (Prima.EnvValue.switch): `on`, white
-// space around it aside.
-func headless(values map[string]string) bool {
-	return strings.TrimSpace(values[headlessVar]) == "on"
 }
 
 // setupLink is the link that sets up the first person of the CYFR at
@@ -928,7 +913,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints, or by 'cyfr login --setup' in this directory, at this terminal. A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so there 'cyfr login --setup' is the only way.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints, or by 'cyfr login --setup' in this directory, at this terminal.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1019,14 +1004,9 @@ func runUp(ctx context.Context, out io.Writer) error {
 // screen when the cyfr-screen service shows it, a reboot away when it is
 // enabled and has not started; otherwise through the setup link, which a
 // local CYFR on a machine with no display reaches through sshTunnel's
-// line, or cyfr login --setup at this terminal. A headless CYFR serves no
-// setup page.
+// line, or cyfr login --setup at this terminal.
 func setupNext(out io.Writer, head access.Head) {
 	values, _ := access.ReadEnvValues(".env")
-	if headless(values) {
-		fmt.Fprintln(out, "Run cyfr login --setup here to set up its first person.")
-		return
-	}
 	link := hyperlink(out, setupLink(access.Describe(head).Address, values))
 	switch enabled, active := machine.screenService(); {
 	case active:
@@ -1123,13 +1103,9 @@ func readSetUp(ctx context.Context, e stackEngine, head access.Head) setUp {
 	return setUpDone
 }
 
-// upThenSetup is the next step of a CYFR that never booted, with .env's
-// values: cyfr up, then its first person set up at the setup link link,
-// or at this terminal for a headless CYFR, which serves no setup page.
-func upThenSetup(values map[string]string, link string) string {
-	if headless(values) {
-		return "Next: cyfr up. Then run cyfr login --setup here to set up its first person."
-	}
+// upThenSetup is the next step of a CYFR that never booted: cyfr up, then
+// its first person set up at the setup link link.
+func upThenSetup(link string) string {
 	return "Next: cyfr up. Then open " + link + " to set up its first person."
 }
 

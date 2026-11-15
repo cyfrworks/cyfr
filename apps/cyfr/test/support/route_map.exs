@@ -340,7 +340,6 @@
       file: "apps/cyfr/lib/prism/router.ex",
       pipelines: %{
         "attachment" => [
-          "CyfrWeb.Plugs.Headless",
           "CyfrWeb.Plugs.FrameRequest",
           ":fetch_session",
           ":protect_from_forgery",
@@ -349,7 +348,6 @@
         ],
         "attachment_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "auth_browser" => [
-          "CyfrWeb.Plugs.Headless",
           "CyfrWeb.Plugs.FrameRequest",
           ":accepts",
           ":fetch_session",
@@ -359,7 +357,6 @@
           "CyfrWeb.Plugs.BrowserCSP"
         ],
         "browser" => [
-          "CyfrWeb.Plugs.Headless",
           "CyfrWeb.Plugs.FrameRequest",
           ":accepts",
           ":fetch_session",

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""Review regressions for the headless boot's credential claims."""
+"""Review regressions for the terminal case's credential claims."""
 
 import argparse
 import json
@@ -36,7 +36,7 @@ class CredentialEvidence(unittest.TestCase):
         self.assertNotEqual(run().returncode, 0, "the boot accepted a device admitted after a setup that made nothing")
 
     def test_first_unlock_rejects_echoed_passphrase_input(self):
-        check = re.search(r'(?ms)^\[ -s "\$HEADLESS/passphrase".*?(?=^# CYFR holds)', SOURCE).group(0)
+        check = re.search(r'(?ms)^\[ -s "\$TERMINAL/passphrase".*?(?=^# CYFR holds)', SOURCE).group(0)
         unlocked = re.search(r'^SAY_UNLOCKED="(.*?)"$', SOURCE, re.M).group(1)
         with tempfile.TemporaryDirectory(prefix="cyfr-credential-evidence-") as scratch:
             cell = Path(scratch)
@@ -66,8 +66,8 @@ class CredentialEvidence(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 copies = transcript.read_text().count(phrase.read_text())
                 self.assertEqual(copies, 1 if mode == "quiet" else 3)
-                return subprocess.run(["bash", "-c", 'set -euo pipefail\nHEADLESS=$1\nSAY_UNLOCKED=$2\n'
-                                       'headless_failed() { exit 1; }\n' + check,
+                return subprocess.run(["bash", "-c", 'set -euo pipefail\nTERMINAL=$1\nSAY_UNLOCKED=$2\n'
+                                       'terminal_failed() { exit 1; }\n' + check,
                                        "check", str(cell), unlocked], capture_output=True, text=True, timeout=10)
 
             self.assertEqual(run("quiet").returncode, 0, "showing the drawn passphrase once is allowed")

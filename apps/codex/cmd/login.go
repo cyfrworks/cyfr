@@ -91,8 +91,7 @@ in the terminal, over what CYFR shows of the change.
 
 --setup makes you this CYFR's first person at this terminal, from the
 directory cyfr init set up, which holds CYFR_SETUP_TOKEN in .env: the
-terminal's way, beside the setup link in a browser, and a headless CYFR's
-(CYFR_HEADLESS=on) only way, since it serves no setup page. --join comes
+terminal's way, beside the setup link in a browser. --join comes
 in as a new person at a CYFR whose admission is open to you, or with
 --invitation, by an invitation's code. Without an account yet, each makes
 your account here, with this command line its first device: it shows your

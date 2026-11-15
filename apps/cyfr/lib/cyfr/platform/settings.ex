@@ -61,7 +61,7 @@ defmodule Cyfr.Platform.Settings do
   message converges within that bound, and publishes the revision it has
   observed, which `list/0` reports per member.
 
-  ## A headless node
+  ## Without the console
 
   `reset/3` and `set/4` are public functions, so an operator without the
   console reaches them on a running node through the release's remote

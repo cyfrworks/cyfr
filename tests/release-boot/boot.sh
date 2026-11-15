@@ -22,7 +22,8 @@
 #            before it stops anything, by the expression it runs, answers the
 #            fingerprint the database records, over `bin/cyfr rpc` while the
 #            cell runs and offline through `bin/cyfr eval` once it stopped.
-#            The running release reads none of Arca's, Sanctum's or the
+#            The fresh cell serves its sign-in page at /login, which says
+#            no one is set up yet. The running release reads none of Arca's, Sanctum's or the
 #            host's test seams, with each seam's key the probe reads and
 #            the test permission set at runtime: it still holds its slot,
 #            writes on its own pool and takes write turns, and starts every
@@ -32,12 +33,12 @@
 #            (`Sanctum.origin()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
 #
-#   headless a headless cell (`CYFR_HEADLESS=on`) whose deployment file
-#            `cyfr init` wrote, its setup token among it, and whose
-#            registry and directory are the cyfr.run stand-in
-#            (tests/registry-stand-in/standin.py) on 127.78.0.1, at a port
-#            it picks: the boot says no one is set up and names `cyfr
-#            login --setup`, never the token; `cyfr login --setup --name
+#   terminal a cell whose deployment file `cyfr init` wrote, its setup
+#            token among it, and whose registry and directory are the
+#            cyfr.run stand-in (tests/registry-stand-in/standin.py) on
+#            127.78.0.1, at a port it picks: the boot says no one is set
+#            up and names the setup link, never the token; `cyfr login
+#            --setup --name
 #            proof`, the command line built from this tree, makes the
 #            account at the terminal, its terms accepted and its recovery
 #            code shown and saved before anything is sent, with this
@@ -132,7 +133,7 @@
 #
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
 # schema in it, as a role that may create databases: the boots case's public
-# home, the headless case's two cells and the restores case create five
+# home, the terminal case's two cells and the restores case create five
 # databases beside it, named for this run (`pg_run_database`), and drop them
 # when it ends; it drops no database it did not create, so runs that share
 # one server and one URL leave each other's alone. A run killed before its
@@ -282,7 +283,7 @@ access_vector_boot() {
   cell_env "$cell" ${words[@]+"${words[@]}"} timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$release/bin/cyfr" start
 }
 
-# The cyfr.run stand-in (tests/registry-stand-in/standin.py) the headless
+# The cyfr.run stand-in (tests/registry-stand-in/standin.py) the terminal
 # case registers its first person at: on STAND_IN_ADDRESS, a loopback
 # address no other proof uses, at the port it picks free (STAND_IN_PORT),
 # serving the registry and, at its own address, the directory. Its
@@ -359,7 +360,7 @@ cleanup() {
   # The cell started last is the one a failed step was asking.
   if [ "$code" -ne 0 ]; then
     local cell
-    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$SILENT" "$HEADLESS" "$ADDRESS" "$CELL"; do
+    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$SILENT" "$TERMINAL" "$ADDRESS" "$CELL"; do
       if [ -n "$cell" ] && [ -f "$cell/boot.log" ]; then
         log_tail "$cell"
         break
@@ -385,7 +386,7 @@ cleanup() {
 }
 # The cells whose log a failed run prints, named before the trap reads
 # them.
-CELL="" ADDRESS="" HEADLESS="" SILENT="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER="" NS_HOLDER=""
+CELL="" ADDRESS="" TERMINAL="" SILENT="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER="" NS_HOLDER=""
 trap cleanup EXIT
 
 # How many of a server's last log lines a failed run prints.
@@ -434,6 +435,12 @@ grep -E "== (Running|Migrated)" "$CELL/boot.log"
 # Liveness beside readiness, so a half-open server cannot pass as a boot.
 curl -fsS -m 10 "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
 echo "GET /api/health -> 200 $(cat "$CELL/health.json")"
+
+step "the fresh cell serves its sign-in page, which says no one is set up yet"
+status="$(curl -sS -m 10 -o "$CELL/login.html" -w '%{http_code}' "http://127.0.0.1:$PORT/login")" || status=""
+[ "$status" = 200 ] || fail "GET /login answered ${status:-nothing}, not 200"
+grep -q 'data-test="not-set-up"' "$CELL/login.html" || fail "the sign-in page does not say no one is set up yet"
+echo "GET /login -> 200, the sign-in page saying no one is set up yet"
 
 # The cell's live slots as `cyfr update` reads them, by the expression it
 # runs: the one `CYFR_LIVE_SLOTS=` line, holding this release and the
@@ -541,7 +548,7 @@ echo "its proxy listener on 127.0.0.1:$(cell_proxy_port "$ADDRESS"): GET /api/he
 server_stop "$ADDRESS"
 
 # ---------------------------------------------------------------------------
-# Case 2: a headless CYFR set up from the command line
+# Case 2: a CYFR set up from the command line
 # ---------------------------------------------------------------------------
 
 # What cell `$1`'s release holds of its people, as one JSON object: each
@@ -549,10 +556,10 @@ server_stop "$ADDRESS"
 # the number of sessions; each paired client (its id, person, holder kind,
 # standing and kid); each device certificate (its client, kid and state);
 # and each identity row (its person and identifier).
-headless_state() {
+terminal_state() {
   cell_cyfr "$1" rpc '
     people = Arca.Repo.all(Arca.Schemas.User)
-    IO.puts("CYFR_HEADLESS=" <> JSON.encode!(%{
+    IO.puts("CYFR_PEOPLE=" <> JSON.encode!(%{
       people: Enum.map(people, &%{id: &1.id, admission: &1.admission,
         admin: Sanctum.Tenancy.platform_admin?(&1.id)}),
       sessions: length(Arca.Repo.all(Arca.Schemas.Session)),
@@ -563,7 +570,7 @@ headless_state() {
       identities: Enum.map(Arca.Repo.all(Arca.Schemas.PersonIdentity),
         &%{user_id: &1.user_id, identifier: &1.identifier})
     }))' |
-    sed -n 's/^CYFR_HEADLESS=//p' | tail -1
+    sed -n 's/^CYFR_PEOPLE=//p' | tail -1
 }
 
 # `cyfr $3...` for cell `$1` as `cell_cli` runs it (release.sh), from a
@@ -579,7 +586,7 @@ headless_state() {
 # returns), and appended to the cell's cli.log; the passphrase is kept in
 # `$1/passphrase` for the next run and among the log's secrets.
 CLI_STATUS=0
-headless_cli() {
+terminal_cli() {
   local cell="$1" shell="$2" dir
   shift 2
   cell_cli_build
@@ -602,21 +609,21 @@ headless_cli() {
   rm -rf "$dir"
 }
 
-# headless_shell CELL: the shell cyfr login starts for cell CELL, a program
+# terminal_shell CELL: the shell cyfr login starts for cell CELL, a program
 # that, in the session the unlock opened, records `cyfr whoami` and its
 # status in CELL/shell.log, then exits 0, which locks the command line.
-headless_shell() {
+terminal_shell() {
   local cell="$1"
   cell_cli_build
-  printf '#!/bin/sh\n"%s" --context headless whoami >"%s/shell.log" 2>&1\necho "whoami exit $?" >>"%s/shell.log"\nexit 0\n' \
+  printf '#!/bin/sh\n"%s" --context terminal whoami >"%s/shell.log" 2>&1\necho "whoami exit $?" >>"%s/shell.log"\nexit 0\n' \
     "$CELL_CLI" "$cell" "$cell" >"$cell/shell"
   chmod 700 "$cell/shell"
   rm -f "$cell/shell.log"
 }
 
 # Fail the run with `$2`, after cell `$1`'s last command-line output
-# (`headless_cli`), redacted.
-headless_failed() {
+# (`terminal_cli`), redacted.
+terminal_failed() {
   echo "----- the command line's output for cell $1 -----" >&2
   redact_log "$1" <"$1/login.log" >&2 || echo "(the output could not be redacted, so it is not printed)" >&2
   fail "$2"
@@ -636,7 +643,7 @@ SAY_SILENT="The account service could not be reached"
 SAY_NOTHING="Nothing was made; run cyfr login --setup again."
 CODE_SHAPE='CYFR(-[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{8}){14}'
 
-step "headless: a CYFR with no person names cyfr login --setup, which on a terminal makes the account at the cyfr.run stand-in with this command line its first device, shows the recovery code and, once it is saved, says hello with the setup token, is admitted as the first person and unlocks into a shell whose session acts as them and ends with it; then unlocks again"
+step "terminal: a CYFR with no person names its setup link; cyfr login --setup on a terminal makes the account at the cyfr.run stand-in with this command line its first device, shows the recovery code and, once it is saved, says hello with the setup token, is admitted as the first person and unlocks into a shell whose session acts as them and ends with it; then unlocks again"
 # cyfr login keeps its key in this machine's TPM chip where it can open
 # one, and the chip's holder then sets the chip's wrong-PIN limits and
 # lockout for good: the case runs only where this user cannot open it, so
@@ -644,19 +651,17 @@ step "headless: a CYFR with no person names cyfr login --setup, which on a termi
 if python3 -I -c 'import os, sys; fd = os.open("/dev/tpmrm0", os.O_RDWR); os.close(fd)' 2>/dev/null; then
   fail "this user can open /dev/tpmrm0: cyfr login would keep the proof's key in this machine's chip and set its lockout; run the boot where the chip is not open to it"
 fi
-HEADLESS="$WORK/headless"
-HEADLESS_URL=""
+TERMINAL="$WORK/terminal"
+TERMINAL_URL=""
 if [ "$ADAPTER" = postgres ]; then
-  HEADLESS_DB="$(pg_run_database headless)"
-  pg_fresh_database "$HEADLESS_DB"
-  HEADLESS_URL="$(pg_url "$HEADLESS_DB")"
+  TERMINAL_DB="$(pg_run_database terminal)"
+  pg_fresh_database "$TERMINAL_DB"
+  TERMINAL_URL="$(pg_url "$TERMINAL_DB")"
 fi
-cell_new "$HEADLESS" "$HEADLESS_URL"
-cell_set "$HEADLESS" CYFR_HEADLESS on
-token="$(cell_value "$HEADLESS" CYFR_SETUP_TOKEN)"
+cell_new "$TERMINAL" "$TERMINAL_URL"
+token="$(cell_value "$TERMINAL" CYFR_SETUP_TOKEN)"
 [[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail "cyfr init wrote no setup token of 64 lowercase hexadecimal characters"
-grep -q '/setup#'"$token" "$HEADLESS/cli.log" ||
-  grep -q 'cyfr login --setup' "$HEADLESS/cli.log" || fail "cyfr init printed neither the setup link nor cyfr login --setup"
+grep -q '/setup#'"$token" "$TERMINAL/cli.log" || fail "cyfr init printed no setup link"
 
 # The stand-in is the cell's registry and its directory, over plain HTTP
 # on loopback, its address a private egress target as an operator names
@@ -664,34 +669,34 @@ grep -q '/setup#'"$token" "$HEADLESS/cli.log" ||
 # reaches cyfr.run.
 stand_in_start "$WORK/cyfr-run"
 STAND_IN_URL="http://$STAND_IN_ADDRESS:$STAND_IN_PORT"
-cell_set "$HEADLESS" CYFR_REGISTRY_URL "$STAND_IN_ADDRESS:$STAND_IN_PORT"
-cell_set "$HEADLESS" CYFR_DIRECTORY_URL "$STAND_IN_URL"
-cell_set "$HEADLESS" CYFR_OCI_REGISTRY_URL 127.0.0.1:9
-targets="$(cell_value "$HEADLESS" CYFR_PRIVATE_EGRESS_TARGETS)"
-cell_set "$HEADLESS" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$STAND_IN_ADDRESS"
+cell_set "$TERMINAL" CYFR_REGISTRY_URL "$STAND_IN_ADDRESS:$STAND_IN_PORT"
+cell_set "$TERMINAL" CYFR_DIRECTORY_URL "$STAND_IN_URL"
+cell_set "$TERMINAL" CYFR_OCI_REGISTRY_URL 127.0.0.1:9
+targets="$(cell_value "$TERMINAL" CYFR_PRIVATE_EGRESS_TARGETS)"
+cell_set "$TERMINAL" CYFR_PRIVATE_EGRESS_TARGETS "${targets:+$targets,}$STAND_IN_ADDRESS"
 echo "the cyfr.run stand-in answers at $STAND_IN_URL"
 
-server_start "$HEADLESS"
-grep -q '\[Cyfr\] Not set up:.*`cyfr login --setup`' "$HEADLESS/boot.log" ||
-  fail "the headless boot did not name cyfr login --setup"
-! grep -qF "$token" "$HEADLESS/boot.log" || fail "the boot log records the setup token"
-echo "the boot: $(grep -o '\[Cyfr\] Not set up:.*' "$HEADLESS/boot.log" | head -1)"
+server_start "$TERMINAL"
+grep -q '\[Cyfr\] Not set up:.*/setup#…' "$TERMINAL/boot.log" ||
+  fail "the boot did not name the setup link"
+! grep -qF "$token" "$TERMINAL/boot.log" || fail "the boot log records the setup token"
+echo "the boot: $(grep -o '\[Cyfr\] Not set up:.*' "$TERMINAL/boot.log" | head -1)"
 
-cell_cli "$HEADLESS" context add headless "http://127.0.0.1:$PORT"
-headless_shell "$HEADLESS"
-headless_cli "$HEADLESS" "$HEADLESS/shell" --context headless login --setup --name proof
-CODE="$(grep -oE "$CODE_SHAPE" "$HEADLESS/login.log" | head -n 1)" || CODE=""
+cell_cli "$TERMINAL" context add terminal "http://127.0.0.1:$PORT"
+terminal_shell "$TERMINAL"
+terminal_cli "$TERMINAL" "$TERMINAL/shell" --context terminal login --setup --name proof
+CODE="$(grep -oE "$CODE_SHAPE" "$TERMINAL/login.log" | head -n 1)" || CODE=""
 [ -z "$CODE" ] || LOG_SECRETS+=("$CODE")
-[ "$CLI_STATUS" = 0 ] || headless_failed "$HEADLESS" "cyfr login --setup --name proof exited $CLI_STATUS"
+[ "$CLI_STATUS" = 0 ] || terminal_failed "$TERMINAL" "cyfr login --setup --name proof exited $CLI_STATUS"
 for line in "$SAY_NAME" "$SAY_CODE" "$SAY_SAVE" "$SAY_ENTER" "$SAY_UNLOCKED" "$SAY_LOCKED"; do
-  grep -qF "$line" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "cyfr login --setup did not say '$line'"
+  grep -qF "$line" "$TERMINAL/login.log" || terminal_failed "$TERMINAL" "cyfr login --setup did not say '$line'"
 done
-[ -n "$CODE" ] || headless_failed "$HEADLESS" "cyfr login --setup showed no recovery code under '$SAY_CODE'"
-[ -s "$HEADLESS/passphrase" ] || headless_failed "$HEADLESS" "cyfr login --setup showed no passphrase to keep the key under"
+[ -n "$CODE" ] || terminal_failed "$TERMINAL" "cyfr login --setup showed no recovery code under '$SAY_CODE'"
+[ -s "$TERMINAL/passphrase" ] || terminal_failed "$TERMINAL" "cyfr login --setup showed no passphrase to keep the key under"
 # The passphrase is shown once, where it is drawn, and echoed nowhere: not
 # at either prompt that asks for it, nor after the unlock.
-[ "$(grep -oF "$(cat "$HEADLESS/passphrase")" "$HEADLESS/login.log" | wc -l)" -eq 1 ] ||
-  headless_failed "$HEADLESS" "the terminal showed the passphrase other than once, where it was drawn"
+[ "$(grep -oF "$(cat "$TERMINAL/passphrase")" "$TERMINAL/login.log" | wc -l)" -eq 1 ] ||
+  terminal_failed "$TERMINAL" "the terminal showed the passphrase other than once, where it was drawn"
 
 # CYFR holds one person, made by setup, the platform administrator, their
 # identity the account's identifier, this command line their one active
@@ -702,7 +707,7 @@ done
 # its directory; and the code printed is the canonical recovery code
 # (Prima.RecoveryCode) of that identifier.
 handle="$(curl -sS -m 10 "$STAND_IN_URL/v1/handles/proof")" || handle=""
-first="$(CODE="$CODE" python3 -I - "$(headless_state "$HEADLESS")" "$WORK/cyfr-run/state.json" "$handle" \
+first="$(CODE="$CODE" python3 -I - "$(terminal_state "$TERMINAL")" "$WORK/cyfr-run/state.json" "$handle" \
   "$STAND_IN_URL" "$STAND_IN_ADDRESS" 2>&1 <<'PY'
 import hashlib, json, os, re, sys
 
@@ -759,15 +764,15 @@ echo "cyfr login --setup --name proof: the account $identifier made at the stand
 
 # In the shell the unlock started, cyfr whoami acted as them; once that
 # shell exited, the lock left no session at CYFR (sessions 0 above).
-grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell did not name $person"
-grep -qx "Platform admin: yes" "$HEADLESS/shell.log" || fail "the first person set up from the command line is not the platform administrator"
-grep -qx "whoami exit 0" "$HEADLESS/shell.log" || fail "cyfr whoami in cyfr login's shell failed"
+grep -qF "User ID: $person" "$TERMINAL/shell.log" || fail "cyfr whoami in cyfr login's shell did not name $person"
+grep -qx "Platform admin: yes" "$TERMINAL/shell.log" || fail "the first person set up from the command line is not the platform administrator"
+grep -qx "whoami exit 0" "$TERMINAL/shell.log" || fail "cyfr whoami in cyfr login's shell failed"
 
 # The namespace cache keeps the person's slug for its shipped lifetime
 # with `:namespace_cache_ttl_ms` set to 0 in the running release, which
 # compiles that test seam out (tests/release-boot/test_seams.exs holds the
 # others): a build that read the key would cache nothing.
-cached="$(cell_cyfr "$HEADLESS" rpc '
+cached="$(cell_cyfr "$TERMINAL" rpc '
   key = {:namespace_slug, "'"$person"'"}
   Application.put_env(:sanctum, :namespace_cache_ttl_ms, 0)
   :ok = Arca.Cache.invalidate(key)
@@ -782,16 +787,16 @@ echo "the namespace cache keeps its shipped lifetime whatever :namespace_cache_t
 # Run again, the same person unlocks again with the passphrase: their code
 # is saved, so none is shown, nothing waits for Enter, and no person or
 # device is made.
-headless_shell "$HEADLESS"
-headless_cli "$HEADLESS" "$HEADLESS/shell" --context headless login --setup --name proof
-[ "$CLI_STATUS" = 0 ] || headless_failed "$HEADLESS" "the second cyfr login --setup --name proof exited $CLI_STATUS"
-grep -qF "$SAY_UNLOCKED" "$HEADLESS/login.log" || headless_failed "$HEADLESS" "the second cyfr login --setup did not say '$SAY_UNLOCKED'"
-! grep -qF "$SAY_CODE" "$HEADLESS/login.log" && ! grep -qF "$CODE" "$HEADLESS/login.log" ||
-  headless_failed "$HEADLESS" "the second cyfr login --setup showed a recovery code that is saved"
-grep -qF "User ID: $person" "$HEADLESS/shell.log" || fail "cyfr whoami in the second shell did not name $person"
-! grep -qF "$(cat "$HEADLESS/passphrase")" "$HEADLESS/login.log" ||
-  headless_failed "$HEADLESS" "the second unlock's terminal showed the passphrase typed at it"
-again="$(python3 -I - "$(headless_state "$HEADLESS")" "$person" "$identifier" "$client" "$kid" 2>&1 <<'PY'
+terminal_shell "$TERMINAL"
+terminal_cli "$TERMINAL" "$TERMINAL/shell" --context terminal login --setup --name proof
+[ "$CLI_STATUS" = 0 ] || terminal_failed "$TERMINAL" "the second cyfr login --setup --name proof exited $CLI_STATUS"
+grep -qF "$SAY_UNLOCKED" "$TERMINAL/login.log" || terminal_failed "$TERMINAL" "the second cyfr login --setup did not say '$SAY_UNLOCKED'"
+! grep -qF "$SAY_CODE" "$TERMINAL/login.log" && ! grep -qF "$CODE" "$TERMINAL/login.log" ||
+  terminal_failed "$TERMINAL" "the second cyfr login --setup showed a recovery code that is saved"
+grep -qF "User ID: $person" "$TERMINAL/shell.log" || fail "cyfr whoami in the second shell did not name $person"
+! grep -qF "$(cat "$TERMINAL/passphrase")" "$TERMINAL/login.log" ||
+  terminal_failed "$TERMINAL" "the second unlock's terminal showed the passphrase typed at it"
+again="$(python3 -I - "$(terminal_state "$TERMINAL")" "$person" "$identifier" "$client" "$kid" 2>&1 <<'PY'
 import json, sys
 state = json.loads(sys.argv[1] or "null")
 person, identifier, client, kid = sys.argv[2:6]
@@ -807,10 +812,10 @@ if state != want:
 PY
 )" || fail "after the second cyfr login --setup: $again"
 echo "cyfr login --setup again: $person unlocked a second time with the passphrase, no code shown, no other person or device made"
-server_stop "$HEADLESS"
+server_stop "$TERMINAL"
 stand_in_stop
 
-step "headless: with the account service silent, cyfr login --setup says so, makes nothing at the cell or anywhere, starts no shell, and exits 1"
+step "terminal: with the account service silent, cyfr login --setup says so, makes nothing at the cell or anywhere, starts no shell, and exits 1"
 SILENT="$WORK/silent"
 SILENT_URL=""
 if [ "$ADAPTER" = postgres ]; then
@@ -819,23 +824,22 @@ if [ "$ADAPTER" = postgres ]; then
   SILENT_URL="$(pg_url "$SILENT_DB")"
 fi
 cell_new "$SILENT" "$SILENT_URL"
-cell_set "$SILENT" CYFR_HEADLESS on
 # Names that resolve nowhere: the registry and the directory never answer.
 cell_set "$SILENT" CYFR_REGISTRY_URL registry.invalid
 cell_set "$SILENT" CYFR_DIRECTORY_URL https://directory.invalid
 cell_set "$SILENT" CYFR_OCI_REGISTRY_URL registry.invalid
 server_start "$SILENT"
 cell_cli "$SILENT" context add silent "http://127.0.0.1:$PORT"
-headless_shell "$SILENT"
-headless_cli "$SILENT" "$SILENT/shell" --context silent login --setup --name proof
-[ "$CLI_STATUS" = 1 ] || headless_failed "$SILENT" "cyfr login --setup with the account service silent exited $CLI_STATUS, not 1"
+terminal_shell "$SILENT"
+terminal_cli "$SILENT" "$SILENT/shell" --context silent login --setup --name proof
+[ "$CLI_STATUS" = 1 ] || terminal_failed "$SILENT" "cyfr login --setup with the account service silent exited $CLI_STATUS, not 1"
 for line in "$SAY_SILENT" "$SAY_NOTHING"; do
-  grep -qF "$line" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup with the account service silent did not say '$line'"
+  grep -qF "$line" "$SILENT/login.log" || terminal_failed "$SILENT" "cyfr login --setup with the account service silent did not say '$line'"
 done
-! grep -qF "$SAY_CODE" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup showed a recovery code while the account service was silent"
+! grep -qF "$SAY_CODE" "$SILENT/login.log" || terminal_failed "$SILENT" "cyfr login --setup showed a recovery code while the account service was silent"
 ! grep -qF "$SAY_UNLOCKED" "$SILENT/login.log" && [ ! -e "$SILENT/shell.log" ] ||
-  headless_failed "$SILENT" "cyfr login --setup started its shell while the account service was silent"
-silent="$(python3 -I - "$(headless_state "$SILENT")" 2>&1 <<'PY'
+  terminal_failed "$SILENT" "cyfr login --setup started its shell while the account service was silent"
+silent="$(python3 -I - "$(terminal_state "$SILENT")" 2>&1 <<'PY'
 import json, sys
 state = json.loads(sys.argv[1] or "null")
 # The account is made at the account service before anything reaches the
@@ -1505,4 +1509,4 @@ reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""
 
-step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, sets up a headless CYFR from the command line, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore, refuses a database another schema built before reading it and keeps its storage reserve"
+step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, serves its sign-in page, sets up a CYFR from the command line, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore, refuses a database another schema built before reading it and keeps its storage reserve"

@@ -248,20 +248,6 @@ defmodule CyfrWeb.RouterTest do
       end
     end
 
-    test "every page pipeline refuses a headless node first" do
-      names = ["browser", "auth_browser", "attachment"]
-
-      for name <- names do
-        assert declared(name) != [], "no section declares the #{name} pipeline"
-      end
-
-      for name <- names, {provider, plugs} <- declared(name) do
-        assert List.first(plugs) == "CyfrWeb.Plugs.Headless",
-               "#{provider}'s #{name} pipeline does not begin with the headless refusal: " <>
-                 inspect(plugs)
-      end
-    end
-
     test "a canvas's page, its SDK and its data route are the wire's paths, and nothing else is routed under them" do
       router = Boundaries.router()
       credential = "c4nv4sR0uteCredential0123456789"

@@ -1068,8 +1068,7 @@ defmodule Cyfr.Application do
 
   # A CYFR with no person yet is set up by its first person, its
   # administrator: through the setup link `cyfr init` and `cyfr setup`
-  # print, or, on a headless CYFR, which serves no page, `cyfr login
-  # --setup`. Said at boot, under `mix phx.server` and in releases alike,
+  # print. Said at boot, under `mix phx.server` and in releases alike,
   # after `not_set_up_marker/0`, which `cyfr up` reads from the log; never
   # with the token. The sandboxed test boot, which holds no database
   # connection here, skips it, and a store that cannot answer says
@@ -1097,18 +1096,12 @@ defmodule Cyfr.Application do
   @doc false
   @spec not_set_up_notice() :: String.t()
   def not_set_up_notice do
-    cond do
-      is_nil(Application.get_env(:sanctum, :setup_token)) ->
-        "no one is set up on this CYFR yet, and CYFR_SETUP_TOKEN is unset, so no one can " <>
-          "set it up: `cyfr init` writes one into .env."
-
-      Cyfr.RuntimeConfig.headless?() ->
-        "no one is set up on this CYFR yet. Its first person, who administers it, runs " <>
-          "`cyfr login --setup` in its directory."
-
-      true ->
-        "no one is set up on this CYFR yet. Its first person, who administers it, opens " <>
-          "the setup link `cyfr init` or `cyfr setup` printed (#{Sanctum.origin()}/setup#…)."
+    if is_nil(Application.get_env(:sanctum, :setup_token)) do
+      "no one is set up on this CYFR yet, and CYFR_SETUP_TOKEN is unset, so no one can " <>
+        "set it up: `cyfr init` writes one into .env."
+    else
+      "no one is set up on this CYFR yet. Its first person, who administers it, opens " <>
+        "the setup link `cyfr init` or `cyfr setup` printed (#{Sanctum.origin()}/setup#…)."
     end
   end
 
