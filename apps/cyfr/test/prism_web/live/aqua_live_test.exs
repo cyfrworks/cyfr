@@ -88,6 +88,39 @@ defmodule PrismWeb.AquaLiveTest do
     refute Arca.exists?(Sanctum.Context.actor(their_ctx), Compendium.AquaPath.agent_file("tom"))
   end
 
+  test "the person's browser setting stands beside the soul's capabilities, which leave the browser's actions to it",
+       %{conn: conn} do
+    user = test_user()
+    mine = Sanctum.Test.People.athanor!(user.user_id)
+    conn = log_in_user(conn, user)
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: mine.id}
+
+    {view, _html} = mount_athanor(conn, "/aqua", mine)
+    switch = ~s([data-test="aqua-browser-switch"])
+
+    assert has_element?(view, switch <> ~s([aria-checked="true"]), "On")
+
+    assert has_element?(
+             view,
+             ~s([data-test="aqua-browser-add"] a[href*="programs?add=browser"]),
+             "Add AQUA's browser"
+           )
+
+    # The setting decides the browser's own actions, so no policy line
+    # offers them; turning it on and off stays the soul's to ask about.
+    refute has_element?(view, ~s([phx-value-key="browser.open"]))
+    refute has_element?(view, ~s([phx-value-key="browser.read"]))
+    assert has_element?(view, ~s([phx-value-key="browser.turn_on"]))
+
+    view |> element(switch) |> render_click()
+    assert {:ok, false} = Aqua.BrowserSetting.allowed?(ctx)
+    assert has_element?(view, switch <> ~s([aria-checked="false"]), "Off")
+
+    view |> element(switch) |> render_click()
+    assert {:ok, true} = Aqua.BrowserSetting.allowed?(ctx)
+    assert has_element?(view, switch <> ~s([aria-checked="true"]))
+  end
+
   # Point the soul at `ref`, and put it back afterwards: the agent files live
   # in the suite's shared tree, so a write left behind is the next test's
   # starting state.

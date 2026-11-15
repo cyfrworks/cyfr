@@ -78,6 +78,11 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
     assert Enum.sort(replay_safe(table)) == [
              "aqua.skill_get",
              "aqua.skill_list",
+             # The page in the turn's browser window, read again: what it
+             # shows now, and nothing on it pressed; and the person's
+             # browser setting, read again.
+             "browser.read",
+             "browser.status",
              "component.inspect",
              "component.list",
              # The four declared resource reads: a resource read is always

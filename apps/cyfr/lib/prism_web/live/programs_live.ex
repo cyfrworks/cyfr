@@ -131,6 +131,9 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:form_error, nil)
       |> assign(:prefill, %{})
       |> assign(:install, nil)
+      # Whether the open form adds AQUA's browser, prefilled with its
+      # definition.
+      |> assign(:adding_browser, false)
       # The row whose definition an open form replaces: %{name, epoch,
       # config}, its config as `mcp_servers.get` answered it.
       |> assign(:editing, nil)
@@ -160,6 +163,7 @@ defmodule PrismWeb.ProgramsLive do
      |> assign(:form_error, nil)
      |> assign(:prefill, %{})
      |> assign(:install, nil)
+     |> assign(:adding_browser, false)
      |> assign(:editing, nil)}
   end
 
@@ -176,6 +180,7 @@ defmodule PrismWeb.ProgramsLive do
          |> assign(:show_add, form)
          |> assign(:form_error, nil)
          |> assign(:install, nil)
+         |> assign(:adding_browser, false)
          |> assign(:editing, %{name: name, epoch: epoch, config: read})
          |> assign(:prefill, Map.put(prefill, "name", name))}
 
@@ -428,6 +433,9 @@ defmodule PrismWeb.ProgramsLive do
         %{"install" => ref, "need" => need} when ref != "" and need != "" ->
           send(self(), {:install, ref, need})
 
+        %{"add" => "browser"} ->
+          send(self(), :add_browser)
+
         _ ->
           :ok
       end
@@ -460,6 +468,8 @@ defmodule PrismWeb.ProgramsLive do
 
   def handle_info({:install, ref, need}, socket),
     do: {:noreply, prefill_install(socket, ref, need)}
+
+  def handle_info(:add_browser, socket), do: {:noreply, prefill_browser(socket)}
 
   # What the shown session's program wrote goes straight to the frame's
   # hook, and is kept nowhere here: the next output, or the tail that
@@ -928,10 +938,36 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
+  # The program form, prefilled with AQUA's browser's definition: the
+  # driver's command, driven, in a kept folder, at the browser's memory
+  # setting. Adding it asks the person to confirm the program, as any
+  # program's addition does; a command changed here is not the browser.
+  defp prefill_browser(socket) do
+    socket
+    |> assign(:show_add, "program")
+    |> assign(:form_error, nil)
+    |> assign(:editing, nil)
+    |> assign(:install, nil)
+    |> assign(:adding_browser, true)
+    |> assign(:prefill, %{
+      "mark" => "driven",
+      "home" => "kept",
+      "name" => Opus.Programs.Definition.browser_name(),
+      "command" => Opus.Programs.Definition.browser_command(),
+      "memory_mib" => Integer.to_string(div(Opus.Browser.memory_bytes(), @mib))
+    })
+  end
+
   defp login_need?(need, name),
     do: field(need, :kind) == "login" and field(need, :name) == name
 
   # ————— terminals —————
+
+  # Who started a running session, in the list's words; a person's own
+  # names nobody.
+  defp starter(:aqua), do: ", started by Aqua"
+  defp starter(:browser), do: ", AQUA's browser"
+  defp starter(_person), do: ""
 
   # The row's terminal, started through the gate as the person's act; its
   # answer shows it (`answered/3`).
@@ -1136,7 +1172,13 @@ defmodule PrismWeb.ProgramsLive do
             Replace the whole definition of <span class="font-mono">{@editing.name}</span>.
             Its folder is kept.
           </p>
-          <p :if={!@install && !@editing} class="text-xs text-gray-500">
+          <p :if={@adding_browser} class="text-sm text-gray-300" data-test="add-browser">
+            Add AQUA's browser: a Chrome that is yours alone, which AQUA uses with a
+            window for each thread while your browser setting on the AQUA page is on. It
+            keeps its profile, and the sites you sign in to, in its own folder. Adding it
+            asks you to confirm the program.
+          </p>
+          <p :if={!@install && !@editing && !@adding_browser} class="text-xs text-gray-500">
             A program the backends service runs under a user of its own, such as an
             <code class="text-gray-400">npx</code>
             package. Its command fetches or runs it; CYFR ships none.
@@ -1600,11 +1642,11 @@ defmodule PrismWeb.ProgramsLive do
         data-test="running-session"
       >
         <span>
-          Running since {Calendar.strftime(session.started_at, "%H:%M UTC")}{if session.by == :aqua,
-            do: ", started by Aqua"}{if session.kept, do: ", kept"}
+          Running since {Calendar.strftime(session.started_at, "%H:%M UTC")}{starter(session.by)}{if session.kept,
+            do: ", kept"}
         </span>
         <button
-          :if={session.by != :aqua}
+          :if={session.by == :person}
           type="button"
           phx-click="show_terminal"
           phx-value-session={session.session}

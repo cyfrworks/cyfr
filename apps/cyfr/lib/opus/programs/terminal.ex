@@ -70,7 +70,13 @@ defmodule Opus.Programs.Terminal do
   standing check, which reads the turn. When its program exits by
   itself, it closes its session and releases its owner as any session
   does, but keeps its last output and its ending for its turn to read
-  until the turn ends or stops it. Every change of
+  until the turn ends or stops it.
+
+  A session of the person's browser (`by: :browser`, `Opus.Browser`) is
+  the person's in what it does: its holder attaches as a person's screen
+  does and is handed acknowledged deliveries and the tail, nothing of a
+  turn ends it, and the day unwatched never runs out while its holder
+  stays attached, which keeps its own idle stop. Every change of
   what `Opus.Programs.running/1` reports is announced on the person's
   own `Cyfr.Bus.programs/2` topic (`Cyfr.Bus.Program`). Nothing that
   passes through is stored or logged: the output it keeps and hands on
@@ -481,17 +487,22 @@ defmodule Opus.Programs.Terminal do
     {:noreply, state}
   end
 
-  # The session's owner: the person who started it, or the turn.
-  defp yours?(%{turn_id: nil} = state, {athanor_id, user_id}),
+  # The session's owner: the person who started it, the turn, or the
+  # person's browser.
+  defp yours?(%{by: :person} = state, {athanor_id, user_id}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
 
-  defp yours?(%{turn_id: turn_id} = state, {athanor_id, user_id, turn_id}) when turn_id != nil,
+  defp yours?(%{by: :aqua, turn_id: turn_id} = state, {athanor_id, user_id, turn_id})
+       when is_binary(turn_id),
+       do: state.athanor_id == athanor_id and state.user_id == user_id
+
+  defp yours?(%{by: :browser} = state, {athanor_id, user_id, :browser}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
 
   defp yours?(_state, _principal), do: false
 
-  # Its owner, or the person whose turn started it: who lists and closes
-  # it.
+  # Its owner, or the person whose turn or browser started it: who lists
+  # and closes it.
   defp listed?(state, {athanor_id, user_id}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
 

@@ -374,6 +374,54 @@ defmodule Arca.Users do
   def update(%Prima.Actor{}, _user_id, _attrs), do: {:error, :cross_tenant}
 
   @doc """
+  Merge `patch` into the person's preferences document (`users.prefs`,
+  JSON) as the row reads under its lock (`FOR UPDATE` on PostgreSQL; the
+  write lock on SQLite), a key patched to `nil` removed, in one
+  transaction: two writers of different keys each keep the other's,
+  whichever commits first. `updated_at` is stamped here.
+  """
+  @spec merge_prefs(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, map()} | {:error, :not_found} | refusal() | write_refusal()
+  def merge_prefs(%Prima.Actor{scope: :platform}, user_id, patch)
+      when is_binary(user_id) and user_id != "" and is_map(patch) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.merge_prefs", fn ->
+      Arca.Repo.transaction(fn ->
+        query = from(u in User, where: u.id == ^user_id)
+
+        with {:ok, user} <- found(query |> Arca.QueryHelpers.for_update() |> Arca.Repo.one()),
+             {:ok, user} <-
+               user
+               |> User.update_changeset(%{
+                 prefs: Jason.encode!(merged_prefs(user.prefs, patch)),
+                 updated_at: DateTime.utc_now()
+               })
+               |> Arca.Repo.update()
+               |> settled() do
+          user
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def merge_prefs(%Prima.Actor{scope: :platform}, _user_id, _patch), do: {:error, :not_found}
+  def merge_prefs(%Prima.Actor{}, _user_id, _patch), do: {:error, :cross_tenant}
+
+  # A stored document that does not read as an object is replaced, as
+  # reading it answers no preferences.
+  defp merged_prefs(stored, patch) do
+    current =
+      case is_binary(stored) && Jason.decode(stored) do
+        {:ok, %{} = map} -> map
+        _unreadable -> %{}
+      end
+
+    current |> Map.merge(patch) |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  @doc """
   Mint a person, as ONE transaction run only by the control plane's
   holder (`Arca.Repo.owned/2`): a member whose slot was taken mints no one
   (`{:error, :not_owner}`).

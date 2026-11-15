@@ -75,9 +75,19 @@ defmodule Opus.Programs do
   once; they end with the turn, and one whose program exited answers its
   last output until then.
 
-  `running/1` lists a person's sessions and those their turns started,
-  and the person may close those too; nothing else of a turn's session
-  is theirs, and nothing of a person's is a turn's. `Cyfr.Bus.programs/2`
+  The person's browser (`by: :browser`): the one session AQUA's browser
+  runs in for a person, held for them by `Opus.Browser`, the only module
+  that names its owner (`browser/2`). It is the person's, not a turn's:
+  their turns use it through `Opus.Browser`, which acts on it only for a
+  caller this module proves (`caller/1`), and no turn's end ends it. It
+  starts only the row of the browser's own definition
+  (`Opus.Programs.Definition.browser?/1`), one session at a time. Its
+  owner reaches it while the person stands, read from the store.
+
+  `running/1` lists a person's sessions, those their turns started and
+  their browser's, and the person may close those too; nothing else of a
+  turn's session or of the browser's is theirs, and nothing of a person's
+  is a turn's or the browser's. `Cyfr.Bus.programs/2`
   announces every change of that list. Another person, another turn, and
   a caller that is neither (a key), find no session, whatever its state,
   and none to list or start.
@@ -105,6 +115,8 @@ defmodule Opus.Programs do
   # How long a wait holds at most.
   @max_wait_ms 30_000
   @local "local"
+  @browser_row {:invalid_argument,
+                "This program is AQUA's browser, which runs only for AQUA; turn it on or off on the AQUA page."}
 
   @typedoc "One program row of one athanor at one epoch."
   @type owner :: Box.owner()
@@ -309,7 +321,19 @@ defmodule Opus.Programs do
   `"parent_execution_id"`), which `turn/2` takes from a provider's
   arguments.
   """
-  @type caller :: Sanctum.Context.t() | {:turn, Sanctum.Context.t(), map()}
+  @type caller ::
+          Sanctum.Context.t()
+          | {:turn, Sanctum.Context.t(), map()}
+          | {:browser, String.t(), String.t()}
+
+  @typedoc """
+  Who a caller is to a session (`caller/1`): a person at a screen, a
+  running turn of theirs, or their browser.
+  """
+  @type principal ::
+          {String.t(), String.t()}
+          | {String.t(), String.t(), String.t()}
+          | {String.t(), String.t(), :browser}
 
   @typedoc "One of the person's running sessions, as `running/1` answers it."
   @type running :: %{
@@ -319,7 +343,7 @@ defmodule Opus.Programs do
           started_at: DateTime.t(),
           kept: boolean(),
           attached: boolean(),
-          by: :person | :aqua
+          by: :person | :aqua | :browser
         }
 
   @typedoc """
@@ -340,8 +364,9 @@ defmodule Opus.Programs do
 
   @doc """
   The caller's athanor's enabled program rows, each by its id, its name,
-  its pinned command and its epoch, by name: what a turn may start.
-  Nothing of a row's environment, hosts or folder.
+  its pinned command and its epoch, by name: what a turn may start, which
+  AQUA's browser is not (`start/3`). Nothing of a row's environment, hosts
+  or folder.
   """
   @spec rows(caller()) ::
           {:ok,
@@ -353,9 +378,10 @@ defmodule Opus.Programs do
           | {:error, term()}
   def rows(caller) do
     with {:ok, _principal} <- who(caller) |> no_stranger(),
-         {:ok, rows} <- Arca.McpServerStorage.list(Sanctum.Context.actor(caller_ctx(caller))) do
+         {:ok, rows} <- Arca.McpServerStorage.list(caller_actor(caller)) do
       programs =
         for %{transport: "program", enabled: true} = row <- rows,
+            not Opus.Programs.Definition.browser?(row),
             {:ok, %{"command" => command}} <- [Jason.decode(row.config_json || "{}")],
             is_binary(command),
             do: %{id: row.id, name: row.name, command: command, epoch: row.epoch}
@@ -427,11 +453,41 @@ defmodule Opus.Programs do
     do: {:turn, ctx, Map.take(args, ~w(thread_id root_execution_id parent_execution_id))}
 
   @doc """
+  The person's browser as a caller: the owner of the session AQUA's
+  browser runs in for the person `user_id` of `athanor_id`, held by
+  `Opus.Browser` alone, which names it here and nowhere else. Every call
+  made with it reads from the store that the person stands; it starts
+  only the row of the browser's own definition.
+  """
+  @spec browser(String.t(), String.t()) :: caller()
+  def browser(athanor_id, user_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and user_id != "",
+      do: {:browser, athanor_id, user_id}
+
+  @doc """
+  Who `caller` is to a session, proved from the store as every call
+  here proves it: `{athanor, user}` for a person at a screen,
+  `{athanor, user, turn}` for a running turn of theirs that made the call
+  itself, `{athanor, user, :browser}` for their browser, and `:stranger`
+  for a caller that stands but is none of these (a key, a frame, a
+  component a turn started, a paused or superseded turn). Refused
+  `:not_standing` for a person who no longer stands and `:unavailable`
+  when the store cannot answer.
+  """
+  @spec caller(caller()) ::
+          {:ok, principal() | :stranger} | {:error, :not_standing | :unavailable}
+  def caller(caller), do: who(caller)
+
+  @doc """
   Start the program row `row_id` of the caller's athanor on a terminal of
   `rows` by `cols`, its pinned command followed by `args`, as a session
   that belongs to the caller (`Opus.Programs.Terminal`): a person's to
   that person, started `by: :person`, a turn's to that turn, started
-  `by: :aqua`. The row must be an enabled program; `args` are at most
+  `by: :aqua`, the browser's to the person's browser, started
+  `by: :browser`. The row must be an enabled program, and the browser's
+  the row of its own definition (`:not_browser` otherwise), one session
+  at a time (`:already_running`), and that row starts for no other caller
+  (an `:invalid_argument` saying so); `args` are at most
   #{Prima.LocusBackends.max_argv()} words, each readable text
   (`Opus.Programs.Words.readable?/1`) of at most 4096 bytes, as an `Opus.Programs.Words` (a plain list is
   wrapped here), which the session holds wrapped: a person's words are
@@ -466,7 +522,8 @@ defmodule Opus.Programs do
          :ok <- size(rows, cols),
          :ok <- args(args),
          :ok <- room(principal),
-         {:ok, row} <- program_row(caller_ctx(caller), row_id),
+         {:ok, row} <- program_row(caller_actor(caller), row_id),
+         :ok <- browser_row(principal, row),
          :ok <- at_epoch(row, Map.get(opts, :epoch)) do
       id = "trm_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
       {athanor_id, user_id, turn_id} = parts(principal)
@@ -482,7 +539,7 @@ defmodule Opus.Programs do
         home_id: if(row.home == "kept", do: row.id),
         owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
         argv: args,
-        by: if(turn_id, do: :aqua, else: :person),
+        by: by(principal),
         rows: rows,
         cols: cols
       ]
@@ -638,8 +695,9 @@ defmodule Opus.Programs do
   `{:ok, :already_gone}` for a session that is not running (or not the
   caller's), and `{:error, :unanswered}` when the service did not
   confirm it in time, the box still owing the close. The session ends
-  `:closed` either way. A person closes their own sessions and those
-  their turns started; a turn closes only its own.
+  `:closed` either way. A person closes their own sessions, those their
+  turns started and their browser's; a turn or the browser closes only
+  its own.
   """
   @spec close(caller(), String.t()) ::
           {:ok, :closed | :already_gone} | {:error, :unanswered | term()}
@@ -660,8 +718,8 @@ defmodule Opus.Programs do
 
   @doc """
   The caller's running sessions in the caller's athanor, oldest first: a
-  person's own and those the person's turns started (`by: :aqua`), a
-  turn's own.
+  person's own, those the person's turns started (`by: :aqua`) and their
+  browser's (`by: :browser`); a turn's or the browser's own.
   """
   @spec running(caller()) :: {:ok, [running()]} | {:error, term()}
   def running(caller) do
@@ -678,7 +736,8 @@ defmodule Opus.Programs do
     end
   end
 
-  # A person lists their own sessions and their turns'; a turn its own.
+  # A person lists their own sessions, their turns' and their browser's; a
+  # turn or the browser its own.
   defp listing({athanor_id, user_id} = person) do
     [
       {{{:terminal, :_}, :"$1", person}, [], [:"$1"]},
@@ -757,6 +816,16 @@ defmodule Opus.Programs do
   defp who({:turn, %Sanctum.Context{} = ctx, lineage}) when is_map(lineage),
     do: turn_of(ctx, lineage)
 
+  # The person's browser stands while its person does, read from the store
+  # and from no context, as a session's owner reads its person.
+  defp who({:browser, athanor_id, user_id}) when is_binary(athanor_id) and is_binary(user_id) do
+    case stands(athanor_id, user_id) do
+      {:ok, true} -> {:ok, {athanor_id, user_id, :browser}}
+      {:ok, false} -> {:error, :not_standing}
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
+
   # The person a session may belong to: the caller stands now (a context
   # validated within the caller bound is used as it is, and any other is
   # read again from the store, `Sanctum.Caller.revalidate_session/1`, as a
@@ -828,14 +897,42 @@ defmodule Opus.Programs do
 
   defp turn_of(%Sanctum.Context{}, _lineage), do: {:ok, :stranger}
 
-  defp caller_ctx(%Sanctum.Context{} = ctx), do: ctx
-  defp caller_ctx({:turn, ctx, _lineage}), do: ctx
+  defp caller_actor(%Sanctum.Context{} = ctx), do: Sanctum.Context.actor(ctx)
+  defp caller_actor({:turn, ctx, _lineage}), do: Sanctum.Context.actor(ctx)
+  defp caller_actor({:browser, athanor_id, _user_id}), do: Prima.Actor.in_athanor(athanor_id)
 
   defp parts({athanor_id, user_id}), do: {athanor_id, user_id, nil}
+  defp parts({athanor_id, user_id, :browser}), do: {athanor_id, user_id, nil}
   defp parts({athanor_id, user_id, turn_id}), do: {athanor_id, user_id, turn_id}
 
-  # A turn holds at most `@turn_sessions` sessions at once; a person's
-  # starts are bounded by the box.
+  defp by({_athanor_id, _user_id}), do: :person
+  defp by({_athanor_id, _user_id, :browser}), do: :browser
+  defp by({_athanor_id, _user_id, _turn_id}), do: :aqua
+
+  # The browser's owner starts the row of the browser's own definition and
+  # no other, so no program of the person's becomes reachable through it;
+  # and that row starts for nobody else, so neither a person's terminal
+  # nor a turn's run holds the browser's profile or drives its Chrome
+  # past the person's browser setting.
+  defp browser_row({_athanor_id, _user_id, :browser}, row) do
+    if Opus.Programs.Definition.browser?(row), do: :ok, else: {:error, :not_browser}
+  end
+
+  defp browser_row(_principal, row) do
+    if Opus.Programs.Definition.browser?(row), do: {:error, @browser_row}, else: :ok
+  end
+
+  # A turn holds at most `@turn_sessions` sessions at once, and the
+  # person's browser one; a person's starts are bounded by the box.
+  defp room({_athanor_id, _user_id, :browser} = browser) do
+    held =
+      if Process.whereis(@registry),
+        do: Registry.count_select(@registry, [{{{:terminal, :_}, :_, browser}, [], [true]}]),
+        else: 0
+
+    if held == 0, do: :ok, else: {:error, :already_running}
+  end
+
   defp room({_athanor_id, _user_id, _turn_id} = turn) do
     held =
       if Process.whereis(@registry),
@@ -887,8 +984,8 @@ defmodule Opus.Programs do
   defp reaches?({athanor_id, user_id}, {athanor_id, user_id, _turn}, :closing), do: true
   defp reaches?(_principal, _owner, _reach), do: false
 
-  defp program_row(ctx, row_id) do
-    case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row_id) do
+  defp program_row(actor, row_id) do
+    case Arca.McpServerStorage.get_by_id(actor, row_id) do
       {:ok, %{transport: "program", enabled: true} = row} -> {:ok, row}
       {:ok, %{transport: "program"}} -> {:error, :disabled}
       {:ok, _not_a_program} -> {:error, :not_a_program}
@@ -936,14 +1033,18 @@ defmodule Opus.Programs do
   is the same answers as the first did. Everything, the owner's
   acquisition and a retry included, fits `deadline` (Unix milliseconds):
   past it the open answers
-  `{:error, :deadline}` and leaves nothing it started open. Refused
-  otherwise as `hold/2` and the session route refuse.
+  `{:error, :deadline}` and leaves nothing it started open. AQUA's
+  browser's row is refused (an `:invalid_argument` saying so): it runs
+  only for its owner, never as a catalyst's pipe. Refused otherwise as
+  `hold/2` and the session route refuse.
   """
   @spec pipe_open(map(), String.t(), [String.t()], String.t(), integer()) ::
           {:ok, %{session: String.t(), resumed: boolean()}} | {:error, term()}
   def pipe_open(row, key, argv, opener, deadline)
       when is_binary(key) and is_list(argv) and is_binary(opener) and is_integer(deadline) do
-    pipe_open(row, key, argv, opener, deadline, 1)
+    if Opus.Programs.Definition.browser?(row),
+      do: {:error, @browser_row},
+      else: pipe_open(row, key, argv, opener, deadline, 1)
   end
 
   # A holder that ended as it was found (its idle period ran out) is

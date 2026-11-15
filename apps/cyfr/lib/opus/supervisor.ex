@@ -5,7 +5,8 @@ defmodule Opus.Supervisor do
   @moduledoc """
   The execution domain's processes: the slots, the attempt tree, the
   background roots, the watches and sweeper, the node's pin table and the
-  host API listener, and the programs controller (`Opus.Programs`).
+  host API listener, the programs controller (`Opus.Programs`) and each
+  person's browser holder (`Opus.Browser`).
   `rest_for_one`, because the watches, the sweeper and the listener read
   the attempt registries and the slots before them, and the listener must
   never outlive a fresh attempt tree: a restart of either restarts every
@@ -94,7 +95,14 @@ defmodule Opus.Supervisor do
         # What the backends service runs: owners, their sessions and kept
         # homes. Last, and started before Emissary's tree, so Emissary's
         # servers stop first at shutdown and still release through it.
-        {Opus.Programs, Keyword.get(opts, :programs, [])}
+        {Opus.Programs, Keyword.get(opts, :programs, [])},
+        # Each person's browser holder (`Opus.Browser`), registered by
+        # person, after the programs controller whose sessions they hold, so
+        # they stop first at shutdown and close their sessions through it.
+        group(Opus.Browser.Tree, [
+          {Registry, keys: :unique, name: Opus.Browser.Registry},
+          {DynamicSupervisor, name: Opus.Browser.Holders, strategy: :one_for_one}
+        ])
       ],
       strategy: :rest_for_one,
       max_restarts: 10,

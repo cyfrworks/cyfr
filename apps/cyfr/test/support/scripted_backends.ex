@@ -40,7 +40,12 @@ defmodule Cyfr.Test.ScriptedBackends do
   never answered. A `terminal` session runs no script: it takes `input`
   and `resize` (the test told of each, as of every message), and `output`
   reads the chunks `write/3` puts in its buffer, each line with a carriage
-  return and a newline as a terminal ends it. A message of the other mode
+  return and a newline as a terminal ends it, and those `write_raw/3`
+  puts as a program wrote them. `set(fake, :terminal, pid)` hands each
+  terminal session's start to `pid` as `{:terminal_opened, fake,
+  session}` and each input as `{:terminal_input, fake, session, bytes}`,
+  in the order they arrive, so a scripted program answers on its
+  terminal (`Cyfr.Test.ScriptedDriver`). A message of the other mode
   is refused `bad_request`. A session the script ends
   (`end_sessions/2`, a reset or retire of its home, or an idle period set
   with `set(fake, :idle_ms, ms)`: no `send` and no `recv` arriving within
@@ -214,6 +219,34 @@ defmodule Cyfr.Test.ScriptedBackends do
     end)
   end
 
+  @doc """
+  Put `bytes` into the running terminal session `session`'s output as its
+  program wrote them, in chunks of at most the wire's
+  `Prima.LocusBackends.max_chunk_bytes/0`, as the service buffers them.
+  """
+  def write_raw(%{agent: agent}, session, bytes) when is_binary(bytes) do
+    Agent.update(agent, fn st ->
+      case st.sessions[session] do
+        %{running: true} = s ->
+          s = Enum.reduce(raw_chunks(bytes), s, &emit(&2, {:raw, &1}))
+          %{st | sessions: Map.put(st.sessions, session, s)}
+
+        _ended_or_gone ->
+          st
+      end
+    end)
+  end
+
+  defp raw_chunks(bytes) do
+    max = LocusBackends.max_chunk_bytes()
+
+    if byte_size(bytes) <= max,
+      do: [bytes],
+      else: [
+        binary_part(bytes, 0, max) | raw_chunks(binary_part(bytes, max, byte_size(bytes) - max))
+      ]
+  end
+
   @doc "The sessions of `server`'s owner, by id."
   def sessions(%{agent: agent}, server) do
     Agent.get(agent, fn st ->
@@ -266,6 +299,13 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp quiesce(deadline \\ System.monotonic_time(:millisecond) + 3_000) do
+    # The browser holders close the sessions they hold through the box as
+    # they stop, before the terminals go.
+    if Process.whereis(Opus.Browser.Holders) do
+      for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(Opus.Browser.Holders),
+          do: DynamicSupervisor.terminate_child(Opus.Browser.Holders, pid)
+    end
+
     for {_id, pid, _type, _modules} <-
           DynamicSupervisor.which_children(Emissary.External.ServerSupervisor) do
       DynamicSupervisor.terminate_child(Emissary.External.ServerSupervisor, pid)
@@ -711,6 +751,9 @@ defmodule Cyfr.Test.ScriptedBackends do
                 do: %{st | homes: MapSet.put(st.homes, message.home_id)},
                 else: st
 
+            if message.mode == :terminal and is_pid(Map.get(st, :terminal)),
+              do: send(st.terminal, {:terminal_opened, %{agent: agent}, id})
+
             {%{"status" => "running", "session" => id, "resumed" => false}, st}
         end
       end)
@@ -776,6 +819,10 @@ defmodule Cyfr.Test.ScriptedBackends do
 
           s ->
             s = if type == :resize, do: %{s | size: {message.rows, message.cols}}, else: s
+
+            if type == :input and is_pid(Map.get(st, :terminal)),
+              do: send(st.terminal, {:terminal_input, %{agent: agent}, id, message.bytes})
+
             {:running, %{st | sessions: Map.put(st.sessions, id, %{s | active: now()})}}
         end
       end)
@@ -803,9 +850,11 @@ defmodule Cyfr.Test.ScriptedBackends do
       s ->
         lines =
           for {seq, text} <- Enum.reverse(s.lines), seq > after_seq do
-            if s.mode == :terminal,
-              do: %{"seq" => seq, "bytes" => Base.encode64(text <> "\r\n")},
-              else: %{"seq" => seq, "text" => text}
+            case {s.mode, text} do
+              {:terminal, {:raw, bytes}} -> %{"seq" => seq, "bytes" => Base.encode64(bytes)}
+              {:terminal, text} -> %{"seq" => seq, "bytes" => Base.encode64(text <> "\r\n")}
+              {_run, text} -> %{"seq" => seq, "text" => text}
+            end
           end
 
         if lines != [] or not s.running or now() >= deadline do

@@ -15,6 +15,7 @@ const (
 	Approval           = "approval"
 	Aqua               = "aqua"
 	Athanor            = "athanor"
+	Browser            = "browser"
 	Build              = "build"
 	Canvas             = "canvas"
 	Component          = "component"
@@ -73,6 +74,9 @@ const (
 	AthanorGet              = "get"
 	AthanorProvision        = "provision"
 	AthanorSettings         = "settings"
+	BrowserStatus           = "status"
+	BrowserTurnOff          = "turn_off"
+	BrowserTurnOn           = "turn_on"
 	BuildCompile            = "compile"
 	BuildStatus             = "status"
 	BuildToolchains         = "toolchains"
@@ -303,6 +307,7 @@ var Actions = map[string][]string{
 	"approval":            {"list", "resolve"},
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
 	"athanor":             {"get", "provision", "settings"},
+	"browser":             {"status", "turn_off", "turn_on"},
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"canvas":              {"activate", "catalog", "restore", "versions", "write"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
@@ -706,6 +711,45 @@ func (args AthanorSettingsArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: AthanorSettings, fields: fields(args)})
+}
+
+// BrowserStatusArgs carries arguments for browser.status.
+type BrowserStatusArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args BrowserStatusArgs) MarshalJSON() ([]byte, error) {
+	type fields BrowserStatusArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: BrowserStatus, fields: fields(args)})
+}
+
+// BrowserTurnOffArgs carries arguments for browser.turn_off.
+type BrowserTurnOffArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args BrowserTurnOffArgs) MarshalJSON() ([]byte, error) {
+	type fields BrowserTurnOffArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: BrowserTurnOff, fields: fields(args)})
+}
+
+// BrowserTurnOnArgs carries arguments for browser.turn_on.
+type BrowserTurnOnArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args BrowserTurnOnArgs) MarshalJSON() ([]byte, error) {
+	type fields BrowserTurnOnArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: BrowserTurnOn, fields: fields(args)})
 }
 
 // BuildCompileArgs carries arguments for build.compile.

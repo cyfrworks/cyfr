@@ -779,12 +779,20 @@ defmodule PrismWeb.CanvasLive do
     program.name <>
       ": running since " <>
       Calendar.strftime(program.started_at, "%H:%M UTC") <>
-      if(program.by == :aqua, do: ", started by Aqua", else: "") <>
+      starter(program.by) <>
       if(program.kept, do: ", kept", else: "") <>
       if(program.attached, do: "", else: ", not open on any screen")
   end
 
-  defp program_path(%{by: :aqua}), do: "/programs"
+  # Who started a running program, in the shelf's words; a person's own
+  # names nobody.
+  defp starter(:aqua), do: ", started by Aqua"
+  defp starter(:browser), do: ", AQUA's browser"
+  defp starter(_person), do: ""
+
+  # Only a person's own session opens on a terminal; one AQUA started or
+  # its browser's shows on the Programs page, where the person closes it.
+  defp program_path(%{by: by}) when by in [:aqua, :browser], do: "/programs"
 
   defp program_path(%{session: session}),
     do: "/programs?terminal=" <> URI.encode_www_form(session)
