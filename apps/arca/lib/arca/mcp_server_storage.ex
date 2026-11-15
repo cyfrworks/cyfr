@@ -204,8 +204,9 @@ defmodule Arca.McpServerStorage do
   In one transaction the row is locked, every profile whose head stands
   on it is blocked to ask again (`Arca.ConsentStorage.head_profiles_on_row/2`
   through `block_dependents/4`, the order a revision binding the row
-  takes), and then the row is deleted; a login need's bindings go with it
-  (the baseline's cascade).
+  takes), every standing answer constrained to the row goes
+  (`Arca.ToolGrantStorage.delete_on_program_row/2`), and then the row is
+  deleted; a login need's bindings go with it (the baseline's cascade).
 
   With `expected` (`%{id, epoch}`, the row a person confirmed removing),
   the row under `name` must still be that row at that epoch, compared
@@ -229,6 +230,7 @@ defmodule Arca.McpServerStorage do
                  [],
                  Arca.StatusTransitions.blocked_profile_status()
                ),
+             {:ok, _ended} <- Arca.ToolGrantStorage.delete_on_program_row(actor, id),
              {1, [server]} <-
                Arca.Repo.delete_all(
                  from(s in McpServer, where: s.id == ^id, select: s)

@@ -241,7 +241,8 @@ defmodule Opus.Sweeper do
 
   # A turn's root ends with its turn, in the turn's one terminal
   # transaction; whatever still holds the root on this member is stopped
-  # once the rows have ended.
+  # once the rows have ended, and so is every program session the turn
+  # started.
   defp end_turn(actor, execution_id, turn_id, grant) do
     with {:ok, turn} <- Arca.TurnStorage.get(actor, turn_id),
          {:ok, ended} <-
@@ -252,6 +253,7 @@ defmodule Opus.Sweeper do
              verify: &Sanctum.ExecutionStanding.stamp_only/1
            }) do
       Logger.info("[Opus.Sweeper] retired turn #{ended.id} ended cancelled")
+      Opus.Programs.end_turn(actor.athanor_id, ended.id)
       Dispatch.stop(execution_id, actor.athanor_id)
     else
       {:error, reason} ->

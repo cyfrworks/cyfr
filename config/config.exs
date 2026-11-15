@@ -52,6 +52,9 @@ config :sanctum,
     # `opus`: an athanor's feeds, and the streams a canvas reads.
     Opus.Providers.Feed,
     Opus.Providers.Tincture,
+    # `opus`: Aqua's own runs of the athanor's programs, in a turn's chain
+    # alone (`Opus.Programs`).
+    Opus.Programs.Provider,
     # `compendium`: builds and components.
     Compendium.Builds.Provider,
     Compendium.Provider,

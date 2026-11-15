@@ -149,7 +149,18 @@ defmodule Arca.ToolGrantStorageTest do
       assert Arca.Schemas.ToolGrant.constraint_kinds() ==
                Enum.map(Prima.Operation.resource_kinds(), &Atom.to_string/1)
 
-      assert Arca.Schemas.ToolGrant.constraint_kinds() == ["storage_path", "egress_domain"]
+      assert Arca.Schemas.ToolGrant.constraint_kinds() ==
+               ["storage_path", "egress_domain", "program_row"]
+    end
+
+    test "a program row is named by its id, whole, never a wildcard" do
+      assert ToolGrantStorage.constraint_errors("program_row", ["mcp_01a1def9-76dc-7b0e"]) == []
+
+      for patterns <- [["mcp_*"], [""], ["mcp gh"], [String.duplicate("a", 65)], [7]] do
+        assert ToolGrantStorage.constraint_errors("program_row", patterns) ==
+                 ["names a pattern outside the program_row grammar"],
+               inspect(patterns)
+      end
     end
 
     test "a vault entry takes no constraint, and one stored before reads as corrupt",

@@ -379,6 +379,9 @@ defmodule Aqua.ToolGrants do
   def refusal_message({:scope_not_permitted, :invalid_constraint}),
     do: "The paths or domains the answer is limited to are not valid ones."
 
+  def refusal_message({:scope_not_permitted, :unconstrained_program}),
+    do: "A standing answer to start a program covers that one program, never every one."
+
   def refusal_message({:scope_not_permitted, :invalid_sources}),
     do: "An answer can follow only the outside sources this card names."
 

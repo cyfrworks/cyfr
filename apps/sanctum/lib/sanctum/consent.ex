@@ -326,6 +326,16 @@ defmodule Sanctum.Consent do
   defdelegate authorize_interactive(ctx), to: Sanctum.Consent.Authz
 
   @doc """
+  Whether `ctx`, a call inside a running chain, is a person's own: the
+  gate's reading of an action declared `consent: :interactive` on the
+  in-chain plane (`Sanctum.Consent.Authz`), an authenticated `:oidc`
+  chain, and never a key's.
+  """
+  @spec authorize_interactive_in_chain(Sanctum.Context.t()) ::
+          {:ok, :interactive} | {:error, Sanctum.Consent.Authz.refusal()}
+  defdelegate authorize_interactive_in_chain(ctx), to: Sanctum.Consent.Authz
+
+  @doc """
   Decide `change`, a change to a program row's definition
   (`program_definition`, `Sanctum.Pairing`): its operation, its exact
   arguments and its preview (`Sanctum.Consent.Authz.confirm/3`). Every

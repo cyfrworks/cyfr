@@ -162,6 +162,59 @@ defmodule Arca.ToolGrantStorage do
 
   def list_for_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
+  @doc """
+  The allows of the actor's athanor constrained to the program row
+  `row_id` (a `program_row` constraint naming it), decoded: the standing
+  answers that stand on that row, which its removal names and ends with
+  the grants of its profiles (`Sanctum.Mount.granted_to/2`,
+  `Arca.McpServerStorage.delete/3`).
+  """
+  @spec on_program_row(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def on_program_row(%Prima.Actor{athanor_id: athanor_id}, row_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.on_program_row", fn ->
+      {:ok, athanor_id |> program_row_grants(row_id) |> Enum.map(&decoded/1)}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def on_program_row(%Prima.Actor{}, _row_id), do: {:error, :no_athanor}
+
+  @doc """
+  Delete the allows `on_program_row/2` answers, inside the caller's
+  transaction (the row's delete), and answer how many went.
+  """
+  @spec delete_on_program_row(Prima.Actor.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def delete_on_program_row(%Prima.Actor{athanor_id: athanor_id}, row_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
+    ids = athanor_id |> program_row_grants(row_id) |> Enum.map(& &1.id)
+
+    {count, _} =
+      from(g in ToolGrant, where: g.athanor_id == ^athanor_id and g.id in ^ids)
+      |> Arca.Repo.delete_all()
+
+    {:ok, count}
+  end
+
+  def delete_on_program_row(%Prima.Actor{}, _row_id), do: {:error, :no_athanor}
+
+  # The athanor's constrained allows, read whole and decoded in memory: a
+  # constraint is JSON, and only a decoded one is compared, by the one
+  # grammar that wrote it.
+  defp program_row_grants(athanor_id, row_id) do
+    from(g in ToolGrant,
+      where: g.athanor_id == ^athanor_id and g.effect == "allow" and not is_nil(g.constraint)
+    )
+    |> Arca.Repo.all()
+    |> Enum.filter(fn grant ->
+      case ToolGrant.decode_constraint(grant.constraint) do
+        %{kind: "program_row", patterns: patterns} -> row_id in patterns
+        _other -> false
+      end
+    end)
+  end
+
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------

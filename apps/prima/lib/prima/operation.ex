@@ -16,12 +16,15 @@ defmodule Prima.Operation do
   string argument, `uri`.
 
   `resource` names the argument that names the resource an action touches
-  and that resource's kind, `{"path", :storage_path}` or
-  `{"domain", :egress_domain}` (`resource_kinds/0`). It is validated at
+  and that resource's kind, `{"path", :storage_path}`,
+  `{"domain", :egress_domain}` or `{"program", :program_row}`, a program
+  row's id (`resource_kinds/0`). It is validated at
   declaration: the argument must be one of the action's own string
   arguments. A standing approval may be constrained to resources of that
   kind only for an action that declares one; an action that declares none
-  takes no standing constraint. Like `resource_schemes`, it is metadata for
+  takes no standing constraint, and an action whose resource is a program
+  row takes a standing allow only constrained to one row
+  (`Sanctum.ToolGrants`). Like `resource_schemes`, it is metadata for
   the gate, absent from the annotation view and from discovery.
 
   `reduces_authority` marks an action that only takes authority away:
@@ -108,10 +111,10 @@ defmodule Prima.Operation do
   @type sources :: [Prima.Source.class()] | {:answer, {module(), atom()}}
 
   @typedoc "The kinds of resource an action's argument may name."
-  @type resource_kind :: :storage_path | :egress_domain
+  @type resource_kind :: :storage_path | :egress_domain | :program_row
 
   @valid_planes [:external, :in_chain]
-  @resource_kinds [:storage_path, :egress_domain]
+  @resource_kinds [:storage_path, :egress_domain, :program_row]
 
   @doc "The kinds of resource a `resource:` declaration may name."
   @spec resource_kinds() :: [resource_kind()]
@@ -291,7 +294,7 @@ defmodule Prima.Operation do
     do:
       raise(
         ArgumentError,
-        "a resource is {argument, :storage_path | :egress_domain}"
+        "a resource is {argument, :storage_path | :egress_domain | :program_row}"
       )
 
   # A URI scheme as RFC 3986 spells it, lowercase only, so one scheme has

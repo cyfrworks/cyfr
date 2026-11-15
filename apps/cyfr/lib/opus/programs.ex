@@ -54,19 +54,33 @@ defmodule Opus.Programs do
 
   ## Terminals
 
-  `start/3` runs a program row's command, with the words a person typed
+  `start/3` runs a program row's command, with the words its caller gives
   after it, on a terminal of the service's, as a session that belongs to
-  the caller's athanor and person and to no page or browser credential
-  (`Opus.Programs.Terminal`). Any of that person's surfaces attaches to
-  it (`attach/2`), types on it (`input/3`), resizes it (`resize/4`),
-  keeps it past a day unwatched (`keep/3`), detaches (`detach/2`, which
-  ends nothing) or closes it (`close/2`); `running/1` lists the person's
-  sessions, and `Cyfr.Bus.programs/2` announces every change of that
-  list. Each call takes the caller's context and is refused when the
-  caller no longer stands. A session is reached only by its person at a
-  screen, as the gate reads an interactive caller: another person, and a
-  caller that is no person at a screen (a key), find no session, whatever
-  its state, and none to list or start.
+  its caller and to no page or browser credential
+  (`Opus.Programs.Terminal`). A caller is a person at a screen, as the
+  gate reads an interactive caller, or a turn of Aqua's, proved from the
+  store from the lineage the gate stamps on its chain's call (`turn/2`);
+  every call takes the caller's context and is refused when the caller
+  no longer stands.
+
+  A person's session: any of that person's surfaces attaches to it
+  (`attach/2`), types on it (`input/3`), resizes it (`resize/4`), keeps
+  it past a day unwatched (`keep/3`), detaches (`detach/2`, which ends
+  nothing) or closes it (`close/2`). Its words are what the person typed.
+
+  A turn's session (`by: :aqua`): that turn alone types on it, reads
+  what it printed (`read/3`, `wait/4`) and closes it; its words are the
+  turn's own, which the card its person approved showed whole or a
+  standing answer for that one row lets it choose. A turn holds a few at
+  once; they end with the turn, and one whose program exited answers its
+  last output until then.
+
+  `running/1` lists a person's sessions and those their turns started,
+  and the person may close those too; nothing else of a turn's session
+  is theirs, and nothing of a person's is a turn's. `Cyfr.Bus.programs/2`
+  announces every change of that list. Another person, another turn, and
+  a caller that is neither (a key), find no session, whatever its state,
+  and none to list or start.
   """
 
   use Supervisor
@@ -86,6 +100,10 @@ defmodule Opus.Programs do
   @max_input Prima.LocusBackends.max_chunk_bytes()
   # How long a terminal's start waits for the service to run it.
   @start_ms 60_000
+  # The most sessions one turn holds at once.
+  @turn_sessions 4
+  # How long a wait holds at most.
+  @max_wait_ms 30_000
   @local "local"
 
   @typedoc "One program row of one athanor at one epoch."
@@ -283,6 +301,16 @@ defmodule Opus.Programs do
   @typedoc "Why a terminal session ended (`Opus.Programs.Terminal`)."
   @type ended :: :exited | :closed | :idle | :row_changed | :standing
 
+  @typedoc """
+  Who calls: a person at a screen, as a `Sanctum.Context` the gate reads as
+  interactive, or a turn of Aqua's, as `{:turn, context, lineage}`: the
+  guest-planed context of a call in that turn's chain and the lineage the
+  gate stamped on it (`"thread_id"`, `"root_execution_id"`,
+  `"parent_execution_id"`), which `turn/2` takes from a provider's
+  arguments.
+  """
+  @type caller :: Sanctum.Context.t() | {:turn, Sanctum.Context.t(), map()}
+
   @typedoc "One of the person's running sessions, as `running/1` answers it."
   @type running :: %{
           session: String.t(),
@@ -294,56 +322,123 @@ defmodule Opus.Programs do
           by: :person | :aqua
         }
 
+  @typedoc """
+  What a turn reads of its session (`read/3`, `wait/4`): its program's
+  name and the output from
+  byte offset `from` up to `next`, `dropped` bytes before `from` that are
+  no longer kept, and whether the program still runs or how it ended.
+  """
+  @type transcript :: %{
+          program: String.t(),
+          output: Opus.Programs.Output.t(),
+          from: non_neg_integer(),
+          next: non_neg_integer(),
+          dropped: non_neg_integer(),
+          running: boolean(),
+          ended: ended() | nil
+        }
+
+  @doc """
+  The caller's athanor's enabled program rows, each by its id, its name,
+  its pinned command and its epoch, by name: what a turn may start.
+  Nothing of a row's environment, hosts or folder.
+  """
+  @spec rows(caller()) ::
+          {:ok,
+           %{
+             programs: [
+               %{id: String.t(), name: String.t(), command: String.t(), epoch: pos_integer()}
+             ]
+           }}
+          | {:error, term()}
+  def rows(caller) do
+    with {:ok, _principal} <- who(caller) |> no_stranger(),
+         {:ok, rows} <- Arca.McpServerStorage.list(Sanctum.Context.actor(caller_ctx(caller))) do
+      programs =
+        for %{transport: "program", enabled: true} = row <- rows,
+            {:ok, %{"command" => command}} <- [Jason.decode(row.config_json || "{}")],
+            is_binary(command),
+            do: %{id: row.id, name: row.name, command: command, epoch: row.epoch}
+
+      {:ok, %{programs: programs}}
+    else
+      {:error, :database_error} -> {:error, :unavailable}
+      other -> other
+    end
+  end
+
+  @doc "The most sessions one turn holds at once."
+  @spec turn_sessions() :: pos_integer()
+  def turn_sessions, do: @turn_sessions
+
+  @doc """
+  The caller a provider's call in a turn's chain is: its context and the
+  lineage the gate stamped on its arguments (`Sanctum.Dispatch`), the
+  arguments a guest sent under those names dropped before it. Which turn
+  that is, and whether it is one, `start/3` and every call after it prove
+  from the store.
+  """
+  @spec turn(Sanctum.Context.t(), map()) :: caller()
+  def turn(%Sanctum.Context{} = ctx, args) when is_map(args),
+    do: {:turn, ctx, Map.take(args, ~w(thread_id root_execution_id parent_execution_id))}
+
   @doc """
   Start the program row `row_id` of the caller's athanor on a terminal of
   `rows` by `cols`, its pinned command followed by `args`, as a session
-  that belongs to the caller's athanor and person
-  (`Opus.Programs.Terminal`), started `by` the person or by Aqua. The
-  row must be an enabled program; `args` are at most
-  #{Prima.LocusBackends.max_argv()} words a person typed, each a string of
-  at most 4096 bytes without a NUL, and never anything resolved from a
-  vault, as an `Opus.Programs.Words` (a plain list is wrapped here), which
-  the session holds wrapped. Answers the session's id once the service runs it, by
-  `deadline` (Unix milliseconds, #{div(60_000, 1000)} s from now unless
-  given): past it the start is refused `:deadline`, the box closes
-  whatever the service answers later, and a new start can be made at
-  once. Refused `:not_standing` (or `:unavailable`) for a caller who does
-  not stand, `:not_found`, `:not_a_program` or `:disabled` for the row,
-  `:invalid_size` or `:invalid_args` for the rest, and as `hold/2` and
-  the session route refuse.
+  that belongs to the caller (`Opus.Programs.Terminal`): a person's to
+  that person, started `by: :person`, a turn's to that turn, started
+  `by: :aqua`. The row must be an enabled program; `args` are at most
+  #{Prima.LocusBackends.max_argv()} words, each a string of at most 4096
+  bytes without a NUL, as an `Opus.Programs.Words` (a plain list is
+  wrapped here), which the session holds wrapped: a person's words are
+  what that person typed; a turn's are its own, which the card its
+  person approved showed whole, or which a standing answer for this row
+  lets it choose. Neither is ever resolved from a vault. With `epoch`, the row must
+  still be at that epoch (the one a card showed), else `:row_changed`.
+  A turn holds at most #{@turn_sessions} sessions at once, ended ones it has not
+  stopped among them: the next is refused `:too_many_sessions`. Answers
+  the session's id once the service runs it, by `deadline` (Unix
+  milliseconds, #{div(60_000, 1000)} s from now unless given): past it
+  the start is refused `:deadline`, the box closes whatever the service
+  answers later, and a new start can be made at once. Refused
+  `:not_standing` (or `:unavailable`) for a caller who does not stand,
+  `:not_found` for a caller who is neither, `:not_found`,
+  `:not_a_program` or `:disabled` for the row, `:invalid_size` or
+  `:invalid_args` for the rest, and as `hold/2` and the session route
+  refuse.
   """
-  @spec start(Sanctum.Context.t(), String.t(), %{
+  @spec start(caller(), String.t(), %{
           required(:rows) => pos_integer(),
           required(:cols) => pos_integer(),
           required(:args) => Opus.Programs.Words.t() | [String.t()],
-          required(:by) => :person | :aqua,
+          optional(:epoch) => pos_integer() | nil,
           optional(:deadline) => integer()
         }) :: {:ok, String.t()} | {:error, term()}
-  def start(
-        %Sanctum.Context{} = ctx,
-        row_id,
-        %{rows: rows, cols: cols, args: args, by: by} = opts
-      )
-      when is_binary(row_id) and by in [:person, :aqua] do
+  def start(caller, row_id, %{rows: rows, cols: cols, args: args} = opts)
+      when is_binary(row_id) do
     args = Opus.Programs.Words.new(args)
 
-    with {:ok, {athanor_id, user_id} = person} <- person(ctx) |> no_stranger(),
+    with {:ok, principal} <- who(caller) |> no_stranger(),
          :ok <- size(rows, cols),
          :ok <- args(args),
-         {:ok, row} <- program_row(ctx, row_id) do
+         :ok <- room(principal),
+         {:ok, row} <- program_row(caller_ctx(caller), row_id),
+         :ok <- at_epoch(row, Map.get(opts, :epoch)) do
       id = "trm_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      {athanor_id, user_id, turn_id} = parts(principal)
 
       spec = [
-        name: terminal_name(id, person),
+        name: terminal_name(id, principal),
         id: id,
         athanor_id: athanor_id,
         user_id: user_id,
+        turn_id: turn_id,
         row_id: row.id,
         row_name: row.name,
         home_id: if(row.home == "kept", do: row.id),
         owner: %{athanor_id: row.athanor_id, server_id: row.id, epoch: row.epoch},
         argv: args,
-        by: by,
+        by: if(turn_id, do: :aqua, else: :person),
         rows: rows,
         cols: cols
       ]
@@ -388,9 +483,9 @@ defmodule Opus.Programs do
   after what is held for it, whatever it owes. Attaching again is
   attaching once.
   `{:error, :not_found}` for a session that is not running or not the
-  caller's person's.
+  caller's own: a person's screen attaches to no session a turn started.
   """
-  @spec attach(Sanctum.Context.t(), String.t()) ::
+  @spec attach(caller(), String.t()) ::
           {:ok,
            %{
              tail: Opus.Programs.Output.t(),
@@ -399,33 +494,33 @@ defmodule Opus.Programs do
              kept: boolean()
            }}
           | {:error, term()}
-  def attach(%Sanctum.Context{} = ctx, session_id),
-    do: terminal_call(ctx, session_id, &{:attach, &1, self()})
+  def attach(caller, session_id),
+    do: terminal_call(caller, session_id, &{:attach, &1, self()})
 
   @doc "Detach the calling process from the session; it ends nothing and answers `:ok`."
-  @spec detach(Sanctum.Context.t(), String.t()) :: :ok
-  def detach(%Sanctum.Context{} = ctx, session_id) do
-    _ = terminal_call(ctx, session_id, &{:detach, &1, self()})
+  @spec detach(caller(), String.t()) :: :ok
+  def detach(caller, session_id) do
+    _ = terminal_call(caller, session_id, &{:detach, &1, self()})
     :ok
   end
 
   @doc """
-  Type `bytes` on the session's terminal, as they are: at most
-  #{div(@max_input, 1024)} KiB a call, the wire's one input
+  Type `bytes` on the caller's own session's terminal, as they are: at
+  most #{div(@max_input, 1024)} KiB a call, the wire's one input
   (`Prima.LocusBackends.max_chunk_bytes/0`; `{:error, :too_large}` past it), so one
   call holds the caller, and the service, for one write alone.
   `{:error, :ended}` once its program no longer runs,
   `{:error, :unavailable}` when the service did not take them.
   """
-  @spec input(Sanctum.Context.t(), String.t(), binary()) :: :ok | {:error, term()}
-  def input(%Sanctum.Context{}, _session_id, ""), do: :ok
+  @spec input(caller(), String.t(), binary()) :: :ok | {:error, term()}
+  def input(_caller, _session_id, ""), do: :ok
 
-  def input(%Sanctum.Context{}, _session_id, bytes)
+  def input(_caller, _session_id, bytes)
       when is_binary(bytes) and byte_size(bytes) > @max_input,
       do: {:error, :too_large}
 
-  def input(%Sanctum.Context{} = ctx, session_id, bytes) when is_binary(bytes) do
-    with {:ok, grant, session} <- terminal_call(ctx, session_id, &{:use, &1}),
+  def input(caller, session_id, bytes) when is_binary(bytes) do
+    with {:ok, grant, session} <- terminal_call(caller, session_id, &{:use, &1}),
          do: typed(Session.input(grant, session, bytes))
   end
 
@@ -438,16 +533,16 @@ defmodule Opus.Programs do
   (`Opus.Programs.Terminal`); any other token answers `:ok` and changes
   nothing. `{:error, :not_found}` for a session it is not attached to.
   """
-  @spec taken(Sanctum.Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def taken(%Sanctum.Context{} = ctx, session_id, delivery) when is_binary(delivery),
-    do: terminal_call(ctx, session_id, &{:taken, &1, self(), delivery})
+  @spec taken(caller(), String.t(), String.t()) :: :ok | {:error, term()}
+  def taken(caller, session_id, delivery) when is_binary(delivery),
+    do: terminal_call(caller, session_id, &{:taken, &1, self(), delivery})
 
   @doc "Set the session's terminal to `rows` by `cols`; its program is signalled the change."
-  @spec resize(Sanctum.Context.t(), String.t(), pos_integer(), pos_integer()) ::
+  @spec resize(caller(), String.t(), pos_integer(), pos_integer()) ::
           :ok | {:error, term()}
-  def resize(%Sanctum.Context{} = ctx, session_id, rows, cols) do
+  def resize(caller, session_id, rows, cols) do
     with :ok <- size(rows, cols),
-         {:ok, grant, session} <- terminal_call(ctx, session_id, &{:resize, &1, rows, cols}),
+         {:ok, grant, session} <- terminal_call(caller, session_id, &{:resize, &1, rows, cols}),
          do: typed(Session.resize(grant, session, rows, cols))
   end
 
@@ -455,25 +550,63 @@ defmodule Opus.Programs do
   Mark the session kept (`true`), so a day with nothing attached and
   nothing printed does not end it, or not (`false`).
   """
-  @spec keep(Sanctum.Context.t(), String.t(), boolean()) :: :ok | {:error, term()}
-  def keep(%Sanctum.Context{} = ctx, session_id, kept) when is_boolean(kept),
-    do: terminal_call(ctx, session_id, &{:keep, &1, kept})
+  @spec keep(caller(), String.t(), boolean()) :: :ok | {:error, term()}
+  def keep(caller, session_id, kept) when is_boolean(kept),
+    do: terminal_call(caller, session_id, &{:keep, &1, kept})
+
+  @doc """
+  What the caller's own session printed after byte offset `offset`, as it
+  stands now (`t:transcript/0`): the session keeps the last
+  #{div(256 * 1024, 1024)} KiB of its output, counted from its first byte,
+  and answers at most #{div(Opus.Programs.Terminal.read_bytes(), 1024)} KiB a call; bytes before
+  what it keeps are counted, not answered. A session whose program
+  exited by itself still answers its last output, and that it ended,
+  until its turn ends or it is stopped. `{:error, :not_found}` for a
+  session that is not the caller's own.
+  """
+  @spec read(caller(), String.t(), non_neg_integer()) ::
+          {:ok, transcript()} | {:error, term()}
+  def read(caller, session_id, offset) when is_integer(offset) and offset >= 0,
+    do: terminal_call(caller, session_id, &{:read, &1, offset})
+
+  @doc """
+  `read/3`, once the session has printed past `offset` and then printed
+  nothing for half a second (`Opus.Programs.Terminal`), or its program has ended, or `ms` (at most
+  #{div(@max_wait_ms, 1000)} s) has passed, whichever comes first.
+  """
+  @spec wait(caller(), String.t(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, transcript()} | {:error, term()}
+  def wait(caller, session_id, offset, ms)
+      when is_integer(offset) and offset >= 0 and is_integer(ms) and ms >= 0 do
+    ms = min(ms, @max_wait_ms)
+
+    terminal_call(
+      caller,
+      session_id,
+      &{:wait, &1, offset, ms},
+      ms + @answer_margin_ms + 5_000
+    )
+  end
 
   @doc """
   End the caller's session `session_id`, carried out whether or not the
   caller waits for it: `{:ok, :closed}` once the service confirmed it,
   `{:ok, :already_gone}` for a session that is not running (or not the
-  caller's person's), and `{:error, :unanswered}` when the service did not
+  caller's), and `{:error, :unanswered}` when the service did not
   confirm it in time, the box still owing the close. The session ends
-  `:closed` either way.
+  `:closed` either way. A person closes their own sessions and those
+  their turns started; a turn closes only its own.
   """
-  @spec close(Sanctum.Context.t(), String.t()) ::
+  @spec close(caller(), String.t()) ::
           {:ok, :closed | :already_gone} | {:error, :unanswered | term()}
-  def close(%Sanctum.Context{} = ctx, session_id) do
-    with {:ok, person} <- person(ctx) do
-      case terminal_pid(session_id, person) do
-        nil -> {:ok, :already_gone}
-        pid -> GenServer.call(pid, {:close, person}, Box.close_timeout_ms() + @answer_margin_ms)
+  def close(caller, session_id) do
+    with {:ok, principal} <- who(caller) do
+      case terminal_pid(session_id, principal, :closing) do
+        nil ->
+          {:ok, :already_gone}
+
+        pid ->
+          GenServer.call(pid, {:close, principal}, Box.close_timeout_ms() + @answer_margin_ms)
       end
     end
   catch
@@ -481,27 +614,99 @@ defmodule Opus.Programs do
     :exit, _ -> {:ok, :already_gone}
   end
 
-  @doc "The caller's person's running sessions in the caller's athanor, oldest first."
-  @spec running(Sanctum.Context.t()) :: {:ok, [running()]} | {:error, term()}
-  def running(%Sanctum.Context{} = ctx) do
-    with {:ok, person} <- person(ctx) do
+  @doc """
+  The caller's running sessions in the caller's athanor, oldest first: a
+  person's own and those the person's turns started (`by: :aqua`), a
+  turn's own.
+  """
+  @spec running(caller()) :: {:ok, [running()]} | {:error, term()}
+  def running(caller) do
+    with {:ok, principal} <- who(caller) do
       pids =
         if Process.whereis(@registry),
-          do: Registry.select(@registry, [{{{:terminal, :_}, :"$1", person}, [], [:"$1"]}]),
+          do: Registry.select(@registry, listing(principal)),
           else: []
 
       summaries =
-        for pid <- pids, {:ok, summary} <- [summary(pid, person)], do: summary
+        for pid <- pids, {:ok, summary} <- [summary(pid, principal)], do: summary
 
       {:ok, Enum.sort_by(summaries, & &1.started_at, DateTime)}
     end
   end
 
-  defp summary(pid, person) do
-    GenServer.call(pid, {:summary, person}, 5_000)
+  # A person lists their own sessions and their turns'; a turn its own.
+  defp listing({athanor_id, user_id} = person) do
+    [
+      {{{:terminal, :_}, :"$1", person}, [], [:"$1"]},
+      {{{:terminal, :_}, :"$1", {athanor_id, user_id, :_}}, [], [:"$1"]}
+    ]
+  end
+
+  defp listing({_athanor_id, _user_id, _turn_id} = turn),
+    do: [{{{:terminal, :_}, :"$1", turn}, [], [:"$1"]}]
+
+  defp listing(:stranger), do: []
+
+  defp summary(pid, principal) do
+    GenServer.call(pid, {:summary, principal}, 5_000)
   catch
     :exit, _ -> {:error, :not_found}
   end
+
+  @doc """
+  End every session the turn `turn_id` of the athanor started, as its turn
+  ended (`:standing`): its process stops, and the box closes its session.
+  Answers at once.
+  """
+  @spec end_turn(String.t(), String.t()) :: :ok
+  def end_turn(athanor_id, turn_id) when is_binary(athanor_id) and is_binary(turn_id) do
+    if Process.whereis(@registry) do
+      for pid <-
+            Registry.select(@registry, [
+              {{{:terminal, :_}, :"$1", {athanor_id, :_, turn_id}}, [], [:"$1"]}
+            ]),
+          do: GenServer.cast(pid, {:turn_ended, turn_id})
+    end
+
+    :ok
+  end
+
+  @doc false
+  # Whether the person stands on this CYFR (`Sanctum.Caller.stands?/1`)
+  # and the athanor is active and theirs, read from the store and from no
+  # context: the one reading of a session's standing, for its owner as
+  # for a turn's call.
+  @spec stands(String.t(), String.t()) :: {:ok, boolean()} | {:error, :unavailable}
+  def stands(athanor_id, user_id) do
+    with {:ok, true} <- Sanctum.Caller.stands?(user_id),
+         {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(athanor_id) do
+      {:ok, athanor.status == "active" and athanor.owner_user_id == user_id}
+    else
+      {:ok, false} -> {:ok, false}
+      {:error, :not_found} -> {:ok, false}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  @doc false
+  # Whether the turn `turn_id` of the athanor is still open, read from the
+  # store; `{:error, :unavailable}` when it cannot answer.
+  @spec turn_open?(String.t(), String.t()) :: {:ok, boolean()} | {:error, :unavailable}
+  def turn_open?(athanor_id, turn_id) do
+    case Arca.TurnStorage.get(Prima.Actor.in_athanor(athanor_id), turn_id) do
+      {:ok, %{status: status}} -> {:ok, status in Prima.TurnState.open_statuses()}
+      {:error, :not_found} -> {:ok, false}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # Who the caller is to a session: `{athanor, user}` for a person at a
+  # screen, `{athanor, user, turn}` for a turn, `:stranger` for a caller
+  # that stands but is neither.
+  defp who(%Sanctum.Context{} = ctx), do: person(ctx)
+
+  defp who({:turn, %Sanctum.Context{} = ctx, lineage}) when is_map(lineage),
+    do: turn_of(ctx, lineage)
 
   # The person a session may belong to: the caller stands now (a context
   # validated within the caller bound is used as it is, and any other is
@@ -530,35 +735,102 @@ defmodule Opus.Programs do
     end
   end
 
+  # The turn a chain's call comes from, proved from the store and never
+  # from an argument: the context is a call inside a running chain
+  # (guest-planed, which no screen's context is, and no context returns
+  # from) that the gate reads as interactive there
+  # (`Sanctum.Consent.authorize_interactive_in_chain/1`, a person's own
+  # sign-in; a key's chain is not); the call is the turn's own, not a
+  # component's it started (the lineage's parent is its root); its person
+  # stands; and the store holds an open turn of the lineage's thread, in
+  # the context's athanor, whose root is the lineage's root and which that
+  # person asked for. The lineage is the gate's (`Sanctum.Dispatch` drops
+  # what a guest sends under its names and stamps its own). Anything else
+  # is a stranger.
+  defp turn_of(%Sanctum.Context{plane: :guest, authenticated: true} = ctx, %{
+         "thread_id" => thread_id,
+         "root_execution_id" => root,
+         "parent_execution_id" => root
+       })
+       when is_binary(thread_id) and is_binary(root) and is_binary(ctx.athanor_id) and
+              ctx.athanor_id != "" and is_binary(ctx.user_id) and ctx.user_id != "" do
+    %{athanor_id: athanor_id, user_id: user_id} = ctx
+
+    with {:ok, :interactive} <- Sanctum.Consent.authorize_interactive_in_chain(ctx),
+         {:ok, true} <- stands(athanor_id, user_id),
+         {:ok, turns} <- Arca.TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread_id) do
+      case Enum.find(turns, &(&1.root_execution_id == root and &1.requested_by == user_id)) do
+        %{id: turn_id} -> {:ok, {athanor_id, user_id, turn_id}}
+        nil -> {:ok, :stranger}
+      end
+    else
+      {:error, {:surface_not_permitted, _method}} -> {:ok, :stranger}
+      {:error, :not_authenticated} -> {:ok, :stranger}
+      {:ok, false} -> {:error, :not_standing}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp turn_of(%Sanctum.Context{}, _lineage), do: {:ok, :stranger}
+
+  defp caller_ctx(%Sanctum.Context{} = ctx), do: ctx
+  defp caller_ctx({:turn, ctx, _lineage}), do: ctx
+
+  defp parts({athanor_id, user_id}), do: {athanor_id, user_id, nil}
+  defp parts({athanor_id, user_id, turn_id}), do: {athanor_id, user_id, turn_id}
+
+  # A turn holds at most `@turn_sessions` sessions at once; a person's
+  # starts are bounded by the box.
+  defp room({_athanor_id, _user_id, _turn_id} = turn) do
+    held =
+      if Process.whereis(@registry),
+        do: Registry.count_select(@registry, [{{{:terminal, :_}, :_, turn}, [], [true]}]),
+        else: 0
+
+    if held < @turn_sessions, do: :ok, else: {:error, :too_many_sessions}
+  end
+
+  defp room(_person), do: :ok
+
+  defp at_epoch(_row, nil), do: :ok
+  defp at_epoch(%{epoch: epoch}, epoch), do: :ok
+  defp at_epoch(_row, _shown), do: {:error, :row_changed}
+
   defp no_stranger({:ok, :stranger}), do: {:error, :not_found}
   defp no_stranger(answer), do: answer
 
-  defp terminal_call(ctx, session_id, message) when is_binary(session_id) do
-    with {:ok, person} <- person(ctx) do
-      case terminal_pid(session_id, person) do
+  defp terminal_call(caller, session_id, message, timeout \\ 5_000) when is_binary(session_id) do
+    with {:ok, principal} <- who(caller) do
+      case terminal_pid(session_id, principal, :owner) do
         nil -> {:error, :not_found}
-        pid -> GenServer.call(pid, message.(person), 5_000)
+        pid -> GenServer.call(pid, message.(principal), timeout)
       end
     end
   catch
     :exit, _ -> {:error, :not_found}
   end
 
-  defp terminal_name(id, person), do: {:via, Registry, {@registry, {:terminal, id}, person}}
+  defp terminal_name(id, principal),
+    do: {:via, Registry, {@registry, {:terminal, id}, principal}}
 
-  # The session's process, when it is `person`'s: whose it is is read from
-  # the registry, beside its name, before the process is asked anything,
-  # so a stranger's answer never depends on the session's state.
-  defp terminal_pid(session_id, {_athanor_id, _user_id} = person) when is_binary(session_id) do
+  # The session's process, when the caller may reach it: whose it is is
+  # read from the registry, beside its name, before the process is asked
+  # anything, so a stranger's answer never depends on the session's
+  # state. Only its owner reaches it, but for a close, which a person may
+  # also make of a session one of their turns started.
+  defp terminal_pid(session_id, principal, reach) when is_binary(session_id) do
     if Process.whereis(@registry) do
       case Registry.lookup(@registry, {:terminal, session_id}) do
-        [{pid, ^person}] -> pid
-        _none_or_another -> nil
+        [{pid, owner}] -> if reaches?(principal, owner, reach), do: pid
+        [] -> nil
       end
     end
   end
 
-  defp terminal_pid(_session_id, _stranger), do: nil
+  defp reaches?(:stranger, _owner, _reach), do: false
+  defp reaches?(owner, owner, _reach), do: true
+  defp reaches?({athanor_id, user_id}, {athanor_id, user_id, _turn}, :closing), do: true
+  defp reaches?(_principal, _owner, _reach), do: false
 
   defp program_row(ctx, row_id) do
     case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row_id) do

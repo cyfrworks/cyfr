@@ -58,7 +58,19 @@ defmodule Opus.Programs.Terminal do
       person standing.
 
   However it ends, killed included, the box closes its session; on the
-  way out it asks so itself, which is the fast path. Every change of
+  way out it asks so itself, which is the fast path.
+
+  A session a turn started (`turn_id`, `by: :aqua`) has no attached
+  process: its turn reads what it printed by offset (`read/3`, `wait/4`
+  in `Opus.Programs`), the last #{div(256 * 1024, 1024)} KiB kept and
+  counted from its first byte, and a wait is answered once output past
+  its offset pauses for half a second, the program ends, or its own
+  time passes. It also ends with its turn (`:standing`): at once when the
+  turn's end says so (`Opus.Programs.end_turn/2`), or at the next
+  standing check, which reads the turn. When its program exits by
+  itself, it closes its session and releases its owner as any session
+  does, but keeps its last output and its ending for its turn to read
+  until the turn ends or stops it. Every change of
   what `Opus.Programs.running/1` reports is announced on the person's
   own `Cyfr.Bus.programs/2` topic (`Cyfr.Bus.Program`). Nothing that
   passes through is stored or logged: the output it keeps and hands on
@@ -72,6 +84,11 @@ defmodule Opus.Programs.Terminal do
   alias Opus.Programs.{Output, Session}
 
   @tail_bytes 256 * 1024
+  # How long a turn's session's output must pause before a wait that saw
+  # some is answered.
+  @settle_ms 500
+  # The most one read of a turn's session answers.
+  @read_bytes 64 * 1024
   @idle_ms 86_400_000
   @standing_ms 300_000
   @recv_wait_ms 25_000
@@ -79,6 +96,10 @@ defmodule Opus.Programs.Terminal do
   # before it takes the program as gone.
   @read_retry_ms 1_000
   @read_retries 60
+
+  @doc "The most one read of a turn's session answers, in bytes."
+  @spec read_bytes() :: pos_integer()
+  def read_bytes, do: @read_bytes
 
   @doc false
   def start_link(args),
@@ -94,6 +115,7 @@ defmodule Opus.Programs.Terminal do
        id: Keyword.fetch!(args, :id),
        athanor_id: Keyword.fetch!(args, :athanor_id),
        user_id: Keyword.fetch!(args, :user_id),
+       turn_id: Keyword.get(args, :turn_id),
        row_id: Keyword.fetch!(args, :row_id),
        name: Keyword.fetch!(args, :row_name),
        home_id: Keyword.fetch!(args, :home_id),
@@ -111,6 +133,11 @@ defmodule Opus.Programs.Terminal do
        reader: nil,
        subscribers: %{},
        tail: Output.new(""),
+       written: 0,
+       printed_at: nil,
+       ended: nil,
+       waiters: %{},
+       settle: nil,
        idle: nil,
        standing: Process.send_after(self(), :standing, @standing_ms)
      }}
@@ -190,6 +217,12 @@ defmodule Opus.Programs.Terminal do
       else: {:reply, :ok, state}
   end
 
+  def handle_call({:use, principal}, _from, %{ended: ended} = state) when ended != nil do
+    if yours?(state, principal),
+      do: {:reply, {:error, :ended}, state},
+      else: {:reply, {:error, :not_found}, state}
+  end
+
   # A send to the session runs in the caller's process under the grant
   # this process holds, apart from it, so a slow service never delays an
   # attach or a close.
@@ -212,17 +245,47 @@ defmodule Opus.Programs.Terminal do
       else: {:reply, {:error, :not_found}, state}
   end
 
-  def handle_call({:summary, person}, _from, state) do
-    if yours?(state, person),
+  # A session listed is one still running, its own or its person's
+  # turn's.
+  def handle_call({:summary, principal}, _from, state) do
+    if listed?(state, principal) and state.ended == nil,
       do: {:reply, {:ok, summary(state)}, state},
       else: {:reply, {:error, :not_found}, state}
+  end
+
+  # What a turn's session printed after `offset`, now.
+  def handle_call({:read, principal, offset}, _from, state) do
+    if yours?(state, principal),
+      do: {:reply, {:ok, transcript(state, offset)}, state},
+      else: {:reply, {:error, :not_found}, state}
+  end
+
+  # The same, once output past `offset` has paused, the program has ended,
+  # or `ms` has passed: answered at once when one of these already holds.
+  def handle_call({:wait, principal, offset, ms}, {pid, _tag} = from, state) do
+    cond do
+      not yours?(state, principal) ->
+        {:reply, {:error, :not_found}, state}
+
+      state.ended != nil or settled?(state, offset) ->
+        {:reply, {:ok, transcript(state, offset)}, state}
+
+      true ->
+        ref = make_ref()
+        timer = Process.send_after(self(), {:waited, ref}, ms)
+        waiter = %{from: from, offset: offset, timer: timer, monitor: Process.monitor(pid)}
+        {:noreply, settling(%{state | waiters: Map.put(state.waiters, ref, waiter)})}
+    end
   end
 
   # A close names the session it was accepted for, by its id: it is
   # carried out here, so the caller leaving changes nothing, and answers
   # what the box answered. Nothing attaches to a session being closed.
-  def handle_call({:close, person}, _from, state) do
-    if yours?(state, person) do
+  def handle_call({:close, _principal}, _from, %{ended: ended} = state) when ended != nil,
+    do: {:stop, :normal, {:ok, :already_gone}, state}
+
+  def handle_call({:close, principal}, _from, state) do
+    if listed?(state, principal) do
       state = stop_reader(state)
       if state.opening, do: GenServer.reply(state.opening, {:error, :closed})
 
@@ -233,7 +296,7 @@ defmodule Opus.Programs.Terminal do
         end
 
       state = ended(state, :closed)
-      {:stop, :normal, answer, %{state | session: nil, opening: nil}}
+      {:stop, :normal, answer, answer_waiters(%{state | session: nil, opening: nil})}
     else
       {:reply, {:ok, :already_gone}, state}
     end
@@ -251,14 +314,23 @@ defmodule Opus.Programs.Terminal do
 
   def handle_cast({:row_ended, athanor_id, row_id}, state) do
     if state.athanor_id == athanor_id and state.row_id == row_id,
-      do: {:stop, :normal, ended(state, :row_changed)},
+      do: finish(state, :row_changed),
       else: {:noreply, state}
   end
+
+  def handle_cast({:turn_ended, turn_id}, %{turn_id: turn_id} = state) when turn_id != nil,
+    do: finish(state, :standing)
+
+  def handle_cast({:turn_ended, _another}, state), do: {:noreply, state}
 
   # An open the box gave is taken only inside its start's deadline: one
   # this process reads later (it was busy, or paused) refuses the start,
   # and the session the box gave is closed as this process ends.
   @impl true
+  def handle_info({Opus.Programs, _kind, _owner_or_grant}, %{ended: ended} = state)
+      when ended != nil,
+      do: {:noreply, state}
+
   def handle_info({:opened, {:ok, %{session: session}}}, %{opening: from} = state)
       when from != nil do
     if System.system_time(:millisecond) > state.deadline do
@@ -280,20 +352,47 @@ defmodule Opus.Programs.Terminal do
 
     if running,
       do: {:noreply, state},
-      else: {:stop, :normal, ended(state, :exited)}
+      else: finish(state, :exited)
   end
 
-  def handle_info({:read_failed, _reason}, state),
-    do: {:stop, :normal, ended(state, :exited)}
+  def handle_info({:read_failed, _reason}, state), do: finish(state, :exited)
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    if match?(%{^pid => %{monitor: ^ref}}, state.subscribers),
-      do: {:noreply, unsubscribe(state, pid)},
-      else: {:noreply, state}
+    cond do
+      match?(%{^pid => %{monitor: ^ref}}, state.subscribers) ->
+        {:noreply, unsubscribe(state, pid)}
+
+      waiter = Enum.find(state.waiters, fn {_key, w} -> w.monitor == ref end) ->
+        {key, %{timer: timer}} = waiter
+        Process.cancel_timer(timer)
+        {:noreply, %{state | waiters: Map.delete(state.waiters, key)}}
+
+      true ->
+        {:noreply, state}
+    end
   end
 
+  # A wait whose time passed is answered what stands.
+  def handle_info({:waited, ref}, state) do
+    case Map.pop(state.waiters, ref) do
+      {nil, _waiters} ->
+        {:noreply, state}
+
+      {waiter, waiters} ->
+        Process.demonitor(waiter.monitor, [:flush])
+        GenServer.reply(waiter.from, {:ok, transcript(state, waiter.offset)})
+        {:noreply, %{state | waiters: waiters}}
+    end
+  end
+
+  # Output paused: every wait that saw some is answered.
+  def handle_info({:settled, token}, %{settle: {_timer, token}} = state),
+    do: {:noreply, settling(answer_settled(%{state | settle: nil}))}
+
+  def handle_info({:settled, _stale}, state), do: {:noreply, state}
+
   def handle_info({:idle, token}, %{idle: {_timer, token}} = state),
-    do: {:stop, :normal, ended(state, :idle)}
+    do: finish(state, :idle)
 
   def handle_info({:idle, _stale}, state), do: {:noreply, state}
 
@@ -319,7 +418,7 @@ defmodule Opus.Programs.Terminal do
   def handle_info(%Cyfr.Bus.CallerInvalidated{}, state), do: {:noreply, state}
 
   def handle_info({Opus.Programs, :stand_down, _key}, state),
-    do: {:stop, :normal, ended(state, :row_changed)}
+    do: finish(state, :row_changed)
 
   # A new grant before the session stands is the one its open is made
   # under (the box synced the owner again for a service that restarted);
@@ -328,8 +427,7 @@ defmodule Opus.Programs.Terminal do
   def handle_info({Opus.Programs, :owner, grant}, %{session: nil} = state),
     do: {:noreply, %{state | grant: grant}}
 
-  def handle_info({Opus.Programs, :owner, _grant}, state),
-    do: {:stop, :normal, ended(state, :exited)}
+  def handle_info({Opus.Programs, :owner, _grant}, state), do: finish(state, :exited)
 
   # The reader ends of itself once it has read the program's end. One
   # that dies otherwise leaves nothing reading the session, so it ends as
@@ -338,7 +436,7 @@ defmodule Opus.Programs.Terminal do
     do: {:noreply, %{state | reader: nil}}
 
   def handle_info({:EXIT, reader, _died}, %{reader: reader} = state),
-    do: {:stop, :normal, ended(%{state | reader: nil}, :exited)}
+    do: finish(%{state | reader: nil}, :exited)
 
   # The courier of the box's open ends once it has carried the answer.
   def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
@@ -379,8 +477,101 @@ defmodule Opus.Programs.Terminal do
     {:noreply, state}
   end
 
-  defp yours?(state, {athanor_id, user_id}),
+  # The session's owner: the person who started it, or the turn.
+  defp yours?(%{turn_id: nil} = state, {athanor_id, user_id}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
+
+  defp yours?(%{turn_id: turn_id} = state, {athanor_id, user_id, turn_id}) when turn_id != nil,
+    do: state.athanor_id == athanor_id and state.user_id == user_id
+
+  defp yours?(_state, _principal), do: false
+
+  # Its owner, or the person whose turn started it: who lists and closes
+  # it.
+  defp listed?(state, {athanor_id, user_id}),
+    do: state.athanor_id == athanor_id and state.user_id == user_id
+
+  defp listed?(state, principal), do: yours?(state, principal)
+
+  # How a session ends. A turn's whose program exited by itself closes its
+  # session and lets its owner go, as every ending does, and stays to
+  # answer its last output and its ending until its turn ends or stops
+  # it; every other ending stops the process, whose `terminate/2` does
+  # the same.
+  defp finish(%{turn_id: turn_id, ended: nil} = state, :exited) when turn_id != nil do
+    state = state |> stop_reader() |> ended(:exited)
+    if state.session, do: close_session(state)
+    if state.grant, do: Opus.Programs.release(state.owner)
+    with {timer, _token} <- state.idle, do: Process.cancel_timer(timer)
+
+    state = %{state | session: nil, grant: nil, idle: nil, ended: :exited}
+    {:noreply, answer_waiters(state)}
+  end
+
+  defp finish(%{ended: nil} = state, reason),
+    do: {:stop, :normal, answer_waiters(%{ended(state, reason) | ended: reason})}
+
+  defp finish(state, _reason), do: {:stop, :normal, state}
+
+  # What the session printed after `offset`: from there, or from the first
+  # byte it still keeps, at most `@read_bytes`, with what
+  # it no longer keeps counted.
+  defp transcript(state, offset) do
+    kept = state.tail.bytes
+    first = state.written - byte_size(kept)
+    from = offset |> max(first) |> min(state.written)
+    length = min(state.written - from, @read_bytes)
+
+    %{
+      program: state.name,
+      output: Output.new(binary_part(kept, from - first, length)),
+      from: from,
+      next: from + length,
+      dropped: max(first - offset, 0),
+      running: state.ended == nil and state.session != nil,
+      ended: state.ended
+    }
+  end
+
+  defp settled?(state, offset),
+    do:
+      state.written > offset and state.printed_at != nil and
+        System.monotonic_time(:millisecond) - state.printed_at >= @settle_ms
+
+  # The pause clock runs while a wait has output past its offset: from
+  # the last output, one timer at a time, its message carrying a token of
+  # its own.
+  defp settling(state) do
+    with {timer, _token} <- state.settle, do: Process.cancel_timer(timer)
+
+    if Enum.any?(state.waiters, fn {_ref, w} -> state.written > w.offset end) do
+      left = @settle_ms - (System.monotonic_time(:millisecond) - (state.printed_at || 0))
+      token = make_ref()
+      timer = Process.send_after(self(), {:settled, token}, max(left, 0))
+      %{state | settle: {timer, token}}
+    else
+      %{state | settle: nil}
+    end
+  end
+
+  defp answer_settled(state) do
+    {ready, waiting} =
+      Enum.split_with(state.waiters, fn {_ref, w} -> settled?(state, w.offset) end)
+
+    for {_ref, waiter} <- ready, do: answer(state, waiter)
+    %{state | waiters: Map.new(waiting)}
+  end
+
+  defp answer_waiters(state) do
+    for {_ref, waiter} <- state.waiters, do: answer(state, waiter)
+    %{state | waiters: %{}}
+  end
+
+  defp answer(state, waiter) do
+    Process.cancel_timer(waiter.timer)
+    Process.demonitor(waiter.monitor, [:flush])
+    GenServer.reply(waiter.from, {:ok, transcript(state, waiter.offset)})
+  end
 
   # The owner, held under the start's deadline. A hold the box answers
   # too late still registers this process, whose stop then releases it.
@@ -417,7 +608,15 @@ defmodule Opus.Programs.Terminal do
     subscribers =
       Map.new(state.subscribers, fn {pid, s} -> {pid, offer(state, pid, s, bytes)} end)
 
-    idle(%{state | tail: Output.new(tail), subscribers: subscribers})
+    %{
+      state
+      | tail: Output.new(tail),
+        subscribers: subscribers,
+        written: state.written + byte_size(bytes),
+        printed_at: System.monotonic_time(:millisecond)
+    }
+    |> idle()
+    |> settling()
   end
 
   # An attached process that took what it was handed last is handed this
@@ -484,26 +683,20 @@ defmodule Opus.Programs.Terminal do
         Application.get_env(:cyfr, :program_idle_ms, @idle_ms)
       end)
 
+  # The person stands on this CYFR and the athanor is active and theirs
+  # (`Opus.Programs.stands/2`), read from the store and from no context,
+  # since the session is the person's and no browser's; and a turn's
+  # session's turn is still open. A store that cannot answer ends nothing.
   defp recheck(state) do
-    case stands(state.athanor_id, state.user_id) do
-      {:ok, false} -> {:stop, :normal, ended(state, :standing)}
+    case {Opus.Programs.stands(state.athanor_id, state.user_id), turn_open(state)} do
+      {{:ok, false}, _turn} -> finish(state, :standing)
+      {_stands, {:ok, false}} -> finish(state, :standing)
       _standing_or_unanswered -> {:noreply, state}
     end
   end
 
-  # The person stands on this CYFR (`Sanctum.Caller.stands?/1`) and the
-  # athanor is active and theirs, read from the store and from no
-  # context, since the session is the person's and no browser's.
-  defp stands(athanor_id, user_id) do
-    with {:ok, true} <- Sanctum.Caller.stands?(user_id),
-         {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(athanor_id) do
-      {:ok, athanor.status == "active" and athanor.owner_user_id == user_id}
-    else
-      {:ok, false} -> {:ok, false}
-      {:error, :not_found} -> {:ok, false}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
+  defp turn_open(%{turn_id: nil}), do: {:ok, true}
+  defp turn_open(state), do: Opus.Programs.turn_open?(state.athanor_id, state.turn_id)
 
   defp summary(state) do
     %{

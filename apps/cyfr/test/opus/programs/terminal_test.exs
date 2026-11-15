@@ -99,7 +99,7 @@ defmodule Opus.Programs.TerminalTest do
              Programs.start(
                ctx,
                row.id,
-               Map.merge(%{args: [], by: :person}, Map.merge(@size, opts))
+               Map.merge(%{args: []}, Map.merge(@size, opts))
              )
 
     assert_receive {:session, "open", %{"key" => ^id} = open, _fields}, 2_000
@@ -142,8 +142,7 @@ defmodule Opus.Programs.TerminalTest do
                Programs.start(ctx, row.id, %{
                  rows: 30,
                  cols: 100,
-                 args: ["auth", "login"],
-                 by: :person
+                 args: ["auth", "login"]
                })
 
       home = row.id
@@ -177,7 +176,7 @@ defmodule Opus.Programs.TerminalTest do
 
     test "a scratch program runs in no folder", %{ctx: ctx} do
       row = program_row(ctx, "scratchy", %{home: "scratch", home_max_bytes: nil})
-      assert {:ok, id} = Programs.start(ctx, row.id, Map.merge(@size, %{args: [], by: :person}))
+      assert {:ok, id} = Programs.start(ctx, row.id, Map.merge(@size, %{args: []}))
       assert_receive {:session, "open", %{"key" => ^id} = open, _fields}, 2_000
       refute Map.has_key?(open, "home_id")
     end
@@ -190,7 +189,7 @@ defmodule Opus.Programs.TerminalTest do
       off = program_row(ctx, "off", %{enabled: false})
       {other_ctx, _user} = person!("someone-else")
       theirs = program_row(other_ctx, "theirs")
-      start = &Programs.start(ctx, &1, Map.merge(%{args: [], by: :person}, Map.merge(@size, &2)))
+      start = &Programs.start(ctx, &1, Map.merge(%{args: []}, Map.merge(@size, &2)))
 
       assert {:error, :not_a_program} = start.(remote.id, %{})
       assert {:error, :disabled} = start.(off.id, %{})
@@ -206,7 +205,7 @@ defmodule Opus.Programs.TerminalTest do
       denied = %{ctx | authenticated: false}
 
       assert {:error, :not_standing} =
-               Programs.start(denied, row.id, Map.merge(@size, %{args: [], by: :person}))
+               Programs.start(denied, row.id, Map.merge(@size, %{args: []}))
 
       refute_received {:session, "open", _message, _fields}
     end
@@ -293,7 +292,7 @@ defmodule Opus.Programs.TerminalTest do
       assert {:ok, []} = Programs.running(key)
 
       assert {:error, :not_found} =
-               Programs.start(key, row.id, Map.merge(@size, %{args: [], by: :person}))
+               Programs.start(key, row.id, Map.merge(@size, %{args: []}))
 
       refute gone?(id)
       assert {:ok, [%{session: ^id, kept: false}]} = Programs.running(ctx)
@@ -449,7 +448,7 @@ defmodule Opus.Programs.TerminalTest do
          %{ctx: ctx, row: row, fake: fake} do
       Scripted.hold(fake, "opened")
       deadline = System.system_time(:millisecond) + 500
-      opts = Map.merge(@size, %{args: [], by: :person})
+      opts = Map.merge(@size, %{args: []})
 
       late = Task.async(fn -> Programs.start(ctx, row.id, Map.put(opts, :deadline, deadline)) end)
       assert_receive {:held, "opened", answer}, 2_000
@@ -476,7 +475,7 @@ defmodule Opus.Programs.TerminalTest do
          %{ctx: ctx, row: row, fake: fake, controller: controller} do
       Scripted.hold(fake, "opened")
       deadline = System.system_time(:millisecond) + 1_500
-      opts = Map.merge(@size, %{args: [], by: :person, deadline: deadline})
+      opts = Map.merge(@size, %{args: [], deadline: deadline})
       late = Task.async(fn -> Programs.start(ctx, row.id, opts) end)
       assert_receive {:held, "opened", answer}, 2_000
 
@@ -683,7 +682,7 @@ defmodule Opus.Programs.TerminalTest do
                       }, _},
                      2_000
 
-      assert {:ok, [%{session: ^id, by: :person}]} = Programs.running(ctx)
+      assert {:ok, [%{session: ^id}]} = Programs.running(ctx)
     end
 
     # The request log's record of an open is the catalogue's logged input,
@@ -898,8 +897,7 @@ defmodule Opus.Programs.TerminalTest do
           Programs.start(ctx, row.id, %{
             rows: 24,
             cols: 80,
-            args: ["login", "--password", @words_secret],
-            by: :person
+            args: ["login", "--password", @words_secret]
           })
         end)
 

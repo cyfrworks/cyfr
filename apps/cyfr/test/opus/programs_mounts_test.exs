@@ -282,8 +282,7 @@ defmodule Opus.ProgramsMountsTest do
                Programs.start(admin(ctx), row.id, %{
                  rows: 24,
                  cols: 80,
-                 args: ["--token-word-canary"],
-                 by: :person
+                 args: ["--token-word-canary"]
                })
 
       # Held for whatever attaches later.

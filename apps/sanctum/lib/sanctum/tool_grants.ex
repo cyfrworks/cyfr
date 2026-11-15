@@ -34,7 +34,8 @@ defmodule Sanctum.ToolGrants do
       execution, a turn or a schedule, and that row's id), a deadline
       still to come, and a constraint, a resource kind and its patterns,
       only for an action that declares an argument naming a resource of
-      that kind (`Prima.Operation`'s `resource:`);
+      that kind (`Prima.Operation`'s `resource:`), and always, naming
+      one row, for an action whose resource is a program row;
     * an allow names the outside sources it covers (`Prima.Source`s,
       each a named outside source; none by default);
     * a deny carries none of them and always stands, so a standing deny
@@ -85,6 +86,7 @@ defmodule Sanctum.ToolGrants do
           | :no_resource
           | :resource_kind
           | :invalid_constraint
+          | :unconstrained_program
           | :invalid_sources
 
   @typedoc "An answer the rule refuses to let stand."
@@ -213,8 +215,10 @@ defmodule Sanctum.ToolGrants do
   together, a deadline is after `now`, a constraint is a resource kind
   the action declares with patterns in the store's one grammar for it
   (`Arca.ToolGrantStorage.constraint_errors/2`): a storage path names one
-  path or a folder ending in `/`, never a wildcard, and the sources it
-  names are named outside sources. Both writes apply it, and a reader
+  path or a folder ending in `/`, never a wildcard, a program row one
+  row's id, and an action whose resource is a program row takes an allow
+  only constrained to exactly one row; and the sources it names are
+  named outside sources. Both writes apply it, and a reader
   applies it to every row it reads back.
   """
   @spec check_standing(map(), DateTime.t()) :: :ok | {:error, refusal()}
@@ -233,8 +237,8 @@ defmodule Sanctum.ToolGrants do
   execution, turn or the schedule its execution was started by, the
   call's resource argument lies inside its constraint (a path read as the
   storage door reads it, refused when absolute or unsafe, then matched as
-  the call spells it by `Prima.ComponentPath.path_granted?/2`, or a host
-  as the egress policy matches it), and every outside source the call's
+  the call spells it by `Prima.ComponentPath.path_granted?/2`, a host
+  as the egress policy matches it, or a program row's id whole), and every outside source the call's
   turn has read is one the allow names (`Prima.Source.uncovered/2`).
 
   A store that cannot be read, a call that names no thread or agent, a
@@ -348,9 +352,14 @@ defmodule Sanctum.ToolGrants do
   # resource's kind, with patterns in the one grammar the store holds a
   # row to (`Arca.ToolGrantStorage.constraint_errors/2`), so no answer this
   # rule lets stand is refused by the write. A stored constraint that does
-  # not decode (`:corrupt`) is none of these.
+  # not decode (`:corrupt`) is none of these. An action whose resource is
+  # a program row stands only constrained to one row: an allow covering
+  # every program, or several, is no answer a person can give.
   defp constraint(attrs, resource) do
     case {Map.get(attrs, :constraint), resource} do
+      {nil, {_argument, :program_row}} ->
+        refuse(:unconstrained_program)
+
       {nil, _resource} ->
         :ok
 
@@ -362,9 +371,16 @@ defmodule Sanctum.ToolGrants do
 
         case constraint_parts(constraint) do
           {:ok, ^declared, patterns} ->
-            if Arca.ToolGrantStorage.constraint_errors(declared, patterns) == [],
-              do: :ok,
-              else: refuse(:invalid_constraint)
+            cond do
+              Arca.ToolGrantStorage.constraint_errors(declared, patterns) != [] ->
+                refuse(:invalid_constraint)
+
+              kind == :program_row and length(patterns) != 1 ->
+                refuse(:unconstrained_program)
+
+              true ->
+                :ok
+            end
 
           {:ok, _other, _patterns} ->
             refuse(:resource_kind)
@@ -502,6 +518,9 @@ defmodule Sanctum.ToolGrants do
     not String.starts_with?(value, "*") and Prima.Manifest.valid_connect_domain?(value) and
       Prima.Network.domain_allowed?(value, patterns)
   end
+
+  # A program row is named by its id, whole.
+  defp inside?("program_row", value, patterns) when is_binary(value), do: value in patterns
 
   defp inside?(_kind, _value, _patterns), do: false
 

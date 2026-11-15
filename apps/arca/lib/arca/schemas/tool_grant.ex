@@ -24,7 +24,8 @@ defmodule Arca.Schemas.ToolGrant do
   An allow may carry bounds: the lifecycle it ends with
   (`lifecycle_kind`, `execution`, `turn` or `schedule`, and
   `lifecycle_id`, that row's id), a deadline (`expires_at`) and a
-  `constraint`, a resource kind (`storage_path` or `egress_domain`) and
+  `constraint`, a resource kind (`storage_path`, `egress_domain` or
+  `program_row`) and
   its patterns, stored as JSON in the one grammar `constraint_errors/2`
   spells. A deny carries none of the four, so a standing deny never
   lapses; one written with any is refused.
@@ -221,7 +222,8 @@ defmodule Arca.Schemas.ToolGrant do
   (`constraint_kinds/0`); between one and #{@max_patterns} patterns, none
   twice; each in its kind's grammar — a storage path is a safe relative
   path, literal or a folder ending in `/`, never a wildcard, an egress
-  domain a bare domain with an optional `*.` prefix. The write
+  domain a bare domain with an optional `*.` prefix, a program row the
+  row's id, matched whole. The write
   holds a row to it, and the rule that decides which answers may stand
   (`Sanctum.ToolGrants.check_standing/2`) asks it before the write.
   """
@@ -257,6 +259,9 @@ defmodule Arca.Schemas.ToolGrant do
 
   defp pattern?("egress_domain", pattern) when is_binary(pattern),
     do: Prima.Manifest.valid_connect_domain?(pattern)
+
+  defp pattern?("program_row", pattern) when is_binary(pattern),
+    do: Regex.match?(~r/\A[A-Za-z0-9_-]{1,64}\z/, pattern)
 
   defp pattern?(_kind, _pattern), do: false
 

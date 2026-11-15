@@ -257,7 +257,8 @@ defmodule Aqua.Tape do
 
   @doc """
   End a turn: the one terminal transaction (`TurnStorage.finish/4`),
-  under the grant its root's attempt stores. A completion needs that
+  under the grant its root's attempt stores. Every program session the
+  turn started ends with it (`Opus.end_turn_programs/2`). A completion needs that
   grant to stand; a turn that fails, is cancelled or ends uncertain
   retires work and needs only the stored stamp. A turn with a reply
   address recorded its reply there, and the crew's delivery consumer is
@@ -274,6 +275,7 @@ defmodule Aqua.Tape do
              |> Map.put_new(:fence, turn.fence)
              |> standing(if(status == "completed", do: :current, else: :retiring))
            ) do
+      Opus.end_turn_programs(finished.athanor_id, finished.id)
       announce_lists(ctx, turn.thread_id, {:ended, finished})
       broadcast(ctx, turn.thread_id, :turn_finished, nil)
       if finished.asking_thread_id, do: wake_crew(ctx)
