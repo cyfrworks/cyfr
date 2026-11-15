@@ -797,6 +797,131 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
   end
 
+  describe "a post draws what it holds" do
+    setup %{here: here, thread: thread, user: user} do
+      pictures = fn n ->
+        [
+          %{
+            "filename" => "shot #{n}.png",
+            "stored_name" => "0-shot_#{n}.png",
+            "media_type" => "image/png"
+          },
+          %{
+            "filename" => "logo.svg",
+            "stored_name" => "1-logo.svg",
+            "media_type" => "image/svg+xml"
+          },
+          %{
+            "filename" => "report.pdf",
+            "stored_name" => "2-report.pdf",
+            "media_type" => "application/pdf"
+          },
+          %{"filename" => "gone.png", "media_type" => "image/png"}
+        ]
+      end
+
+      links = [
+        %{"url" => "https://example.com/plan", "title" => "The plan"},
+        %{"url" => "http://example.org/raw"},
+        %{"url" => "javascript:alert(1)", "title" => "a script"},
+        %{"url" => "data:text/html,<p>x</p>", "title" => "a data address"},
+        %{"url" => "https://", "title" => "no host"},
+        %{"title" => "no address"}
+      ]
+
+      {:ok, mine} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: user.user_id,
+          sent_by: "person",
+          content: "my screenshot",
+          payload: %{"attachments" => pictures.(1), "links" => links}
+        })
+
+      {:ok, aquas} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          # A post may hold no text at all.
+          content: "",
+          payload: %{"attachments" => pictures.(2), "links" => links}
+        })
+
+      {:ok, posts: [mine, aquas]}
+    end
+
+    test "a picture is shown in place and opens large, any other file is a chip that downloads, " <>
+           "and a link is a link, whoever wrote the post",
+         %{conn: conn, athanor: athanor, thread: thread, posts: posts} do
+      pane = open_pane(conn, athanor, thread)
+
+      for {post, n} <- Enum.zip(posts, [1, 2]) do
+        href = &PrismWeb.Focus.path(route(athanor), "/attachments/#{post.id}/#{&1}")
+        large = ~s([id$="-msg-#{post.id}-picture-0"])
+
+        # The PNG: drawn in place, at the attachment address, and drawn
+        # large in a dialog that starts hidden.
+        picture = href.("0-shot_#{n}.png")
+
+        assert has_element?(
+                 pane,
+                 ~s(button[aria-label="Open shot #{n}.png large"] img[src="#{picture}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{large}.hidden [role=dialog][aria-label="shot #{n}.png"] img[src="#{picture}"])
+               )
+
+        assert has_element?(pane, ~s(#{large} button[id$="-picture-0-close"].min-h-6), "Close")
+        refute has_element?(pane, ~s(a[download="shot #{n}.png"]))
+
+        # An SVG runs script and a PDF is no picture: each is a chip that
+        # downloads.
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="#{href.("1-logo.svg")}"][download="logo.svg"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="#{href.("2-report.pdf")}"][download="report.pdf"])
+               )
+
+        refute has_element?(pane, ~s(img[src="#{href.("1-logo.svg")}"]))
+        refute has_element?(pane, ~s(img[alt="gone.png"]))
+
+        # Links: an http or https address with a host, under its title or
+        # itself, opened apart from the page; nothing else is a link.
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="https://example.com/plan"][target=_blank][rel="noopener noreferrer"]),
+                 "The plan"
+               )
+
+        assert has_element?(pane, ~s(a[href="http://example.org/raw"]), "http://example.org/raw")
+      end
+
+      # A file not stored is a chip with no address.
+      assert has_element?(pane, "span.text-xs", "gone.png")
+      refute has_element?(pane, ~s(a[download="gone.png"]))
+
+      html = render(pane)
+
+      for gone <- [
+            "javascript:",
+            "data:text/html",
+            "a script",
+            "a data address",
+            "no host",
+            "no address"
+          ],
+          do: refute(html =~ gone, "#{gone} is drawn")
+
+      refute html =~ @under_12px
+      refute html =~ @inline_style
+    end
+  end
+
   test "a turn stopped on an unknown outcome shows so until it goes on", %{
     conn: conn,
     athanor: athanor,
@@ -1829,6 +1954,86 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(pane, asked, "Build the site")
       assert has_element?(pane, ~s(#{asked} [id$="-reply-#{reply.id}"]), "explorer · done")
       refute has_element?(pane, ~s([id$="-m-#{reply.id}"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a request and the reply under it each draw what they hold, at their own message's address",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+
+      held = fn name ->
+        %{
+          "attachments" => [
+            %{
+              "filename" => "#{name}.png",
+              "stored_name" => "0-#{name}.png",
+              "media_type" => "image/png"
+            },
+            %{
+              "filename" => "#{name}.pdf",
+              "stored_name" => "1-#{name}.pdf",
+              "media_type" => "application/pdf"
+            }
+          ],
+          "links" => [%{"url" => "https://example.com/#{name}", "title" => "The #{name}"}]
+        }
+      end
+
+      {:ok, %{message: request}} =
+        Aqua.Tape.accept(here, room.id, %{
+          message: %{
+            author: here.user_id,
+            sent_by: "person",
+            addressee: "explorer",
+            status: "pending",
+            content: "Build the site",
+            payload: held.("brief")
+          }
+        })
+
+      {:ok, %{message: reply}} =
+        Aqua.Tape.accept(here, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "explorer",
+            addressee: "person",
+            reply_to: request.id,
+            outcome: "done",
+            content: "Built it",
+            payload:
+              Map.merge(held.("result"), %{"from_thread" => child.id, "answers" => [request.id]})
+          },
+          answers: [request.id]
+        })
+
+      pane = open_pane(conn, athanor, room)
+      href = &PrismWeb.Focus.path(route(athanor), "/attachments/#{&1}/#{&2}")
+      asked = ~s([id$="-m-#{request.id}"])
+      answered = ~s(#{asked} [id$="-reply-#{reply.id}"])
+
+      for {scope, row, name} <- [{asked, request, "brief"}, {answered, reply, "result"}] do
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} button img[src="#{href.(row.id, "0-#{name}.png")}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} [id$="-msg-#{row.id}-picture-0"].hidden img[src="#{href.(row.id, "0-#{name}.png")}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} a[href="#{href.(row.id, "1-#{name}.pdf")}"][download="#{name}.pdf"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} a[href="https://example.com/#{name}"]),
+                 "The #{name}"
+               )
+      end
 
       Cyfr.Test.Sandbox.end_views()
     end
