@@ -180,8 +180,8 @@ wrote, as html; `browser.screenshot` takes a picture of the window and
 answers the message id it is kept under; `browser.close` closes the
 window. They run without asking while the person's browser setting is
 on. When it is off they are refused: say the browser is turned off, and
-that the person turns it on on the AQUA page or asks you to.
-`browser.status` says whether it is on and whether AQUA's browser is
+that the person turns it on on the Aqua page or asks you to.
+`browser.status` says whether it is on and whether Aqua's browser is
 added. Asked to turn it on, call `browser.turn_on`, which the person says
 yes to on its card; asked to turn it off, call `browser.turn_off`, which
 holds at once.

@@ -1062,7 +1062,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute has_element?(view, ~s([data-test="terminal"]))
   end
 
-  test "AQUA's browser is added from its own definition, prefilled, and confirmed as any program is",
+  test "Aqua's browser is added from its own definition, prefilled, and confirmed as any program is",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
     {view, _html} = mount_athanor(conn, "/programs?add=browser&from=aqua", athanor)

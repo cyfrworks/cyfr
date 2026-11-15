@@ -373,9 +373,9 @@ defmodule Cyfr.Platform.Settings.Roster do
     "athanor_program_memory_bytes" =>
       "Bytes the program sessions of one athanor may hold on one backends box together, each session counted at its memory bound from its start until its process is gone; an open past it is refused until one ends. Unset, the box's own budget (`LOCUS_BACKENDS_MEMORY_BUDGET`); 0 is refused.",
     "browser_idle_ms" =>
-      "How long AQUA's browser runs with no action of AQUA's before it stops, in milliseconds; its profile stays in its folder, and AQUA's next action starts it again.",
+      "How long Aqua's browser runs with no action of Aqua's before it stops, in milliseconds; its profile stays in its folder, and Aqua's next action starts it again.",
     "browser_memory_bytes" =>
-      "The memory bound AQUA's browser is added with, for its Chrome and its four windows at most; the person changes the bound of the row on the Programs page. The backends service's default total (`LOCUS_BACKENDS_MEMORY_BUDGET`, 1792 MiB) does not hold a 1 GiB browser beside a 1 GiB program: to run both, raise `LOCUS_BACKENDS_MEMORY_BUDGET` in `.env.locus` and `LOCUS_BACKENDS_MEMORY_LIMIT` in `.env` with it, the budget plus 256 MiB.",
+      "The memory bound Aqua's browser is added with, for its Chrome and its four windows at most; the person changes the bound of the row on the Programs page. The backends service's default total (`LOCUS_BACKENDS_MEMORY_BUDGET`, 1792 MiB) does not hold a 1 GiB browser beside a 1 GiB program: to run both, raise `LOCUS_BACKENDS_MEMORY_BUDGET` in `.env.locus` and `LOCUS_BACKENDS_MEMORY_LIMIT` in `.env` with it, the budget plus 256 MiB.",
     "locus_backends_idle_ms" =>
       "How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again.",
     "log_level" =>

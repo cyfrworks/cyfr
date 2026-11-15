@@ -93,7 +93,7 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
   # What a program printed: outside, named by the program it came from.
   @program_output ~w(program.start program.read program.wait)
 
-  # What a page in AQUA's browser holds: outside, named by its host; and
+  # What a page in Aqua's browser holds: outside, named by its host; and
   # the browser's acts that answer nothing of a page, and its setting.
   @browser_page ~w(browser.open browser.read browser.click browser.page browser.screenshot)
   @browser_own ~w(browser.type browser.key browser.close browser.status browser.turn_on

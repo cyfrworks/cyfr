@@ -766,7 +766,7 @@ defmodule Cyfr.Boundaries do
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
           "model listing or a consent status derives an authority there; nothing of " <>
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
-          "Its browser tool acts through AQUA's browser's holder (`Opus.Browser`), which " <>
+          "Its browser tool acts through Aqua's browser's holder (`Opus.Browser`), which " <>
           "proves the caller and holds the person's browser session, and stops it when " <>
           "the person's browser setting goes off. " <>
           "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
@@ -850,7 +850,7 @@ defmodule Cyfr.Boundaries do
           "shows the person's program terminals through the programs controller's facade " <>
           "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
           "`close/2`, `running/1`) under the person's own context, prefills the program " <>
-          "form with AQUA's browser's definition and its memory setting " <>
+          "form with Aqua's browser's definition and its memory setting " <>
           "(`Opus.Browser.memory_bytes/0`), and names none of " <>
           "either's internals. " <>
           "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
@@ -1870,7 +1870,7 @@ defmodule Cyfr.Boundaries do
     # stream's open would be (`Compendium.Desktop`). `validate_arguments/2`:
     # a frame's request is held to its operation's declaration before the
     # person is asked, so an approval never meets a refusal the request
-    # could have had. `follows_setting?/2`: the AQUA page leaves the
+    # could have had. `follows_setting?/2`: the Aqua page leaves the
     # actions that follow the person's browser setting out of the
     # capability list, since the setting decides them.
     "Sanctum.Catalog" => [

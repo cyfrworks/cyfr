@@ -75,7 +75,7 @@ defmodule Opus.Programs do
   once; they end with the turn, and one whose program exited answers its
   last output until then.
 
-  The person's browser (`by: :browser`): the one session AQUA's browser
+  The person's browser (`by: :browser`): the one session Aqua's browser
   runs in for a person, held for them by `Opus.Browser`, the only module
   that names its owner (`browser/2`). It is the person's, not a turn's:
   their turns use it through `Opus.Browser`, which acts on it only for a
@@ -116,7 +116,7 @@ defmodule Opus.Programs do
   @max_wait_ms 30_000
   @local "local"
   @browser_row {:invalid_argument,
-                "This program is AQUA's browser, which runs only for AQUA; turn it on or off on the AQUA page."}
+                "This program is Aqua's browser, which runs only for Aqua; turn it on or off on the Aqua page."}
 
   @typedoc "One program row of one athanor at one epoch."
   @type owner :: Box.owner()
@@ -365,7 +365,7 @@ defmodule Opus.Programs do
   @doc """
   The caller's athanor's enabled program rows, each by its id, its name,
   its pinned command and its epoch, by name: what a turn may start, which
-  AQUA's browser is not (`start/3`). Nothing of a row's environment, hosts
+  Aqua's browser is not (`start/3`). Nothing of a row's environment, hosts
   or folder.
   """
   @spec rows(caller()) ::
@@ -453,7 +453,7 @@ defmodule Opus.Programs do
     do: {:turn, ctx, Map.take(args, ~w(thread_id root_execution_id parent_execution_id))}
 
   @doc """
-  The person's browser as a caller: the owner of the session AQUA's
+  The person's browser as a caller: the owner of the session Aqua's
   browser runs in for the person `user_id` of `athanor_id`, held by
   `Opus.Browser` alone, which names it here and nowhere else. Every call
   made with it reads from the store that the person stands; it starts
@@ -1033,7 +1033,7 @@ defmodule Opus.Programs do
   is the same answers as the first did. Everything, the owner's
   acquisition and a retry included, fits `deadline` (Unix milliseconds):
   past it the open answers
-  `{:error, :deadline}` and leaves nothing it started open. AQUA's
+  `{:error, :deadline}` and leaves nothing it started open. Aqua's
   browser's row is refused (an `:invalid_argument` saying so): it runs
   only for its owner, never as a catalyst's pipe. Refused otherwise as
   `hold/2` and the session route refuse.

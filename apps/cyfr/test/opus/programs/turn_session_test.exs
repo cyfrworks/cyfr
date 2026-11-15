@@ -726,7 +726,7 @@ defmodule Opus.Programs.TurnSessionTest do
       assert {:error, {:invalid_argument, sentence}} =
                call(ctx, lineage, "start", %{"program" => browser.id, "epoch" => browser.epoch})
 
-      assert sentence =~ "AQUA's browser"
+      assert sentence =~ "Aqua's browser"
 
       caller = turn_caller(ctx, lineage)
       assert {:ok, []} = Programs.running(caller)

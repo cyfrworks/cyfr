@@ -3,7 +3,7 @@
 
 defmodule Cyfr.Test.ScriptedDriver do
   @moduledoc """
-  AQUA's browser driver as a script, on the terminal sessions of a
+  Aqua's browser driver as a script, on the terminal sessions of a
   scripted backends service (`Cyfr.Test.ScriptedBackends`, `set(fake,
   :terminal, pid)`): it speaks the driver's framing as the driver does
   (`Opus.Browser.Frame`, whose vectors bind it to the driver), with

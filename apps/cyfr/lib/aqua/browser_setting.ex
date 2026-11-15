@@ -3,16 +3,16 @@
 
 defmodule Aqua.BrowserSetting do
   @moduledoc """
-  The person's browser setting: whether AQUA may use its browser
+  The person's browser setting: whether Aqua may use its browser
   (`Opus.Browser`). There is no yes per thread and no card for the
   browser's own actions: with it on, every action of the browser tool
-  runs without one; with it off, every one is refused, AQUA says so, and
+  runs without one; with it off, every one is refused, Aqua says so, and
   the browser's windows are closed, its profile kept.
 
   It is one value of the person's preferences, `aqua_browser`, read and
   written here and nowhere else. An absent value reads as the default,
   which is on; a value that is not a boolean reads as off. The person
-  turns it on and off with the switch on the AQUA page, or AQUA does
+  turns it on and off with the switch on the Aqua page, or Aqua does
   when asked on the daily thread: turning it on asks with a card in the
   thread, which takes no standing answer, and turning it off holds at
   once (`Aqua.Providers.Browser`). A write merges into the preferences as
@@ -26,7 +26,7 @@ defmodule Aqua.BrowserSetting do
   @default true
 
   @doc """
-  Whether the context's person lets AQUA use the browser, read from the
+  Whether the context's person lets Aqua use the browser, read from the
   store now: `{:ok, false}` for a person this server does not hold, and
   `{:error, :unavailable}` when the store cannot answer.
   """

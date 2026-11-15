@@ -1051,7 +1051,7 @@ defmodule Opus.Programs.TerminalTest do
       assert {:error, {:invalid_argument, sentence}} =
                Programs.start(ctx, browser.id, Map.merge(@size, %{args: []}))
 
-      assert sentence =~ "AQUA's browser"
+      assert sentence =~ "Aqua's browser"
 
       # Nor as a catalyst's pipe.
       assert {:error, {:invalid_argument, _sentence}} =

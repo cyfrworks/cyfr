@@ -135,7 +135,7 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # APT_REFRESH busts the build cache for this layer so the upgrade is not
 # served stale from a cached layer: CI passes the UTC date (YYYY-MM-DD), so
 # the layer refreshes once a day and is shared within it; a local build may
-# leave it. Chromium, and a font for the pages it renders, are AQUA's
+# leave it. Chromium, and a font for the pages it renders, are Aqua's
 # browser's, which cyfr-browser (below) drives.
 ARG APT_REFRESH=0
 RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
@@ -253,7 +253,7 @@ COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 # tools through (catalyst:local.claude-code): it answers each call from the
 # answer CYFR puts in the call's input, and holds nothing.
 COPY --from=keeper /out/cyfr-stub /usr/local/bin/cyfr-stub
-# AQUA's browser: the command of a person's browser row, which the backends
+# Aqua's browser: the command of a person's browser row, which the backends
 # service runs on a terminal in the row's kept home. It starts Chromium
 # headless with its profile in that home and drives it over Chrome's
 # debugging pipe, which stays inside the box: no debugging port is opened.

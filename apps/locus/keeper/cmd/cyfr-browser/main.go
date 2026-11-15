@@ -3,7 +3,7 @@
 
 //go:build linux
 
-// Command cyfr-browser drives AQUA's browser: a headless Chrome with its
+// Command cyfr-browser drives Aqua's browser: a headless Chrome with its
 // profile in a kept home. It is the command of a `driven` program row,
 // which the backends service runs on a pseudo-terminal under the home's
 // uid; its one host, Opus.Browser, speaks framed messages to it over that

@@ -16,7 +16,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   Beside the soul's capabilities stands the person's browser setting,
   read and written through the `browser` tool as the person: the
   browser's own actions follow it rather than a policy line, so the
-  capability list leaves them out. While AQUA's browser is not added, the
+  capability list leaves them out. While Aqua's browser is not added, the
   section offers to add it on the Programs page, where its definition is
   confirmed as any program's is.
   """
@@ -546,7 +546,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:browser, browser_status(ctx))
   end
 
-  # The browser setting, whether AQUA's browser is added and whether it
+  # The browser setting, whether Aqua's browser is added and whether it
   # runs, as `browser.status` answers them; nil when it cannot be read.
   defp browser_status(ctx) do
     case PrismWeb.Ops.call_tool(ctx, "browser/status", %{}) do
@@ -1454,7 +1454,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :athanor, :any, default: nil
   attr :browser, :map, required: true
 
-  # The person's browser setting, and adding AQUA's browser while it is
+  # The person's browser setting, and adding Aqua's browser while it is
   # not added.
   defp browser_setting(assigns) do
     ~H"""
@@ -1466,7 +1466,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       <div class="flex items-center justify-between gap-3">
         <p class="text-[11px] text-gray-400">
           <span class="text-gray-200">Browser</span>
-          — AQUA has a Chrome of its own that is yours alone, with a window for each thread. While this is on, AQUA opens, reads and acts on sites in it without asking. Off, AQUA cannot use it and its windows close; your sign-ins in it stay.
+          — Aqua has a Chrome of its own that is yours alone, with a window for each thread. While this is on, Aqua opens, reads and acts on sites in it without asking. Off, Aqua cannot use it and its windows close; your sign-ins in it stay.
         </p>
         <button
           type="button"
@@ -1488,27 +1488,27 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </button>
       </div>
       <p class="text-[11px] text-gray-500">
-        AQUA is told never to send, submit, buy or publish on a site without your word; that is its instruction, not a lock. A site you sign in to in this Chrome is open to AQUA too.
+        Aqua is told never to send, submit, buy or publish on a site without your word; that is its instruction, not a lock. A site you sign in to in this Chrome is open to Aqua too.
       </p>
       <p
         :if={@browser[:browser] == "not_added"}
         class="text-[11px] text-gray-400"
         data-test="aqua-browser-add"
       >
-        AQUA's browser is not added yet.
+        Aqua's browser is not added yet.
         <.link
           :if={@athanor}
           navigate={PrismWeb.Focus.path(@athanor, "/programs?add=browser&from=aqua")}
           class="text-blue-400 hover:underline"
         >
-          Add AQUA's browser
+          Add Aqua's browser
         </.link>
       </p>
       <p :if={@browser[:browser] == "disabled"} class="text-[11px] text-amber-300">
-        AQUA's browser is disabled on the Programs page; enable it there.
+        Aqua's browser is disabled on the Programs page; enable it there.
       </p>
       <p :if={@browser[:browser] == "not_browser"} class="text-[11px] text-amber-300">
-        A program named aqua-browser is not AQUA's browser; rename or remove it on the Programs page.
+        A program named aqua-browser is not Aqua's browser; rename or remove it on the Programs page.
       </p>
     </div>
     """

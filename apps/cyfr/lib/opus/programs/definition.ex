@@ -144,16 +144,16 @@ defmodule Opus.Programs.Definition do
   @browser_name "aqua-browser"
   @browser_command "cyfr-browser"
 
-  @doc "The name AQUA's browser's row goes by."
+  @doc "The name Aqua's browser's row goes by."
   @spec browser_name() :: String.t()
   def browser_name, do: @browser_name
 
-  @doc "The command of AQUA's browser: the browser driver."
+  @doc "The command of Aqua's browser: the browser driver."
   @spec browser_command() :: String.t()
   def browser_command, do: @browser_command
 
   @doc """
-  AQUA's browser as the config of the row a person adds once
+  Aqua's browser as the config of the row a person adds once
   (`mcp_servers.create`, confirmed as any program's definition is): the
   browser driver's command, which starts Chrome over its debugging pipe
   inside the box, with no environment, driven, in a kept folder of its
@@ -172,7 +172,7 @@ defmodule Opus.Programs.Definition do
   end
 
   @doc """
-  Whether a stored row is AQUA's browser: named `browser_name/0`, the
+  Whether a stored row is Aqua's browser: named `browser_name/0`, the
   driver's command with no environment, driven, in a kept folder. Its
   hosts and bounds are the person's to set, as any program's are; a row
   of that name with any other command, an environment, another mark or a

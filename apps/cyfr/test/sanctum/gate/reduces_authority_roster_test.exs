@@ -19,7 +19,7 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   # shared key among them), withdrawing consent, leaving or removing
   # someone from a shared thread, withdrawing its invitation, denying
   # someone at a door, taking an administrator's mark away, archiving a
-  # shared thread and stopping AQUA using the person's browser.
+  # shared thread and stopping Aqua using the person's browser.
   @roster ~w(
     browser.turn_off
     door.clear_admin

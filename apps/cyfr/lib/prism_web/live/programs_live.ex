@@ -131,7 +131,7 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:form_error, nil)
       |> assign(:prefill, %{})
       |> assign(:install, nil)
-      # Whether the open form adds AQUA's browser, prefilled with its
+      # Whether the open form adds Aqua's browser, prefilled with its
       # definition.
       |> assign(:adding_browser, false)
       # The row whose definition an open form replaces: %{name, epoch,
@@ -938,7 +938,7 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The program form, prefilled with AQUA's browser's definition: the
+  # The program form, prefilled with Aqua's browser's definition: the
   # driver's command, driven, in a kept folder, at the browser's memory
   # setting. Adding it asks the person to confirm the program, as any
   # program's addition does; a command changed here is not the browser.
@@ -966,7 +966,7 @@ defmodule PrismWeb.ProgramsLive do
   # Who started a running session, in the list's words; a person's own
   # names nobody.
   defp starter(:aqua), do: ", started by Aqua"
-  defp starter(:browser), do: ", AQUA's browser"
+  defp starter(:browser), do: ", Aqua's browser"
   defp starter(_person), do: ""
 
   # The row's terminal, started through the gate as the person's act; its
@@ -1173,8 +1173,8 @@ defmodule PrismWeb.ProgramsLive do
             Its folder is kept.
           </p>
           <p :if={@adding_browser} class="text-sm text-gray-300" data-test="add-browser">
-            Add AQUA's browser: a Chrome that is yours alone, which AQUA uses with a
-            window for each thread while your browser setting on the AQUA page is on. It
+            Add Aqua's browser: a Chrome that is yours alone, which Aqua uses with a
+            window for each thread while your browser setting on the Aqua page is on. It
             keeps its profile, and the sites you sign in to, in its own folder. Adding it
             asks you to confirm the program.
           </p>

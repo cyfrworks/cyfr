@@ -787,10 +787,10 @@ defmodule PrismWeb.CanvasLive do
   # Who started a running program, in the shelf's words; a person's own
   # names nobody.
   defp starter(:aqua), do: ", started by Aqua"
-  defp starter(:browser), do: ", AQUA's browser"
+  defp starter(:browser), do: ", Aqua's browser"
   defp starter(_person), do: ""
 
-  # Only a person's own session opens on a terminal; one AQUA started or
+  # Only a person's own session opens on a terminal; one Aqua started or
   # its browser's shows on the Programs page, where the person closes it.
   defp program_path(%{by: by}) when by in [:aqua, :browser], do: "/programs"
 

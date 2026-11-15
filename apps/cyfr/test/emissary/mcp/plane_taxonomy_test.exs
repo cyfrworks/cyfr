@@ -148,7 +148,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
         )
 
       # `program`: Aqua's own runs of a program, a turn's alone; `browser`:
-      # AQUA's acts in its browser, a turn's alone, beside the setting the
+      # Aqua's acts in its browser, a turn's alone, beside the setting the
       # person also reads and sets from a screen.
       assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
                                             source.write source.edit source.delete

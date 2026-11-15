@@ -42,9 +42,9 @@ telling you.
 
 The browser follows the person's browser setting. When an action is
 refused because the browser is turned off, say so and stop: the person
-turns it on on the AQUA page, or asks you to, and then `turn_on` asks
-them on its card. When it was not found, the person adds AQUA's browser
-once from the AQUA page.
+turns it on on the Aqua page, or asks you to, and then `turn_on` asks
+them on its card. When it was not found, the person adds Aqua's browser
+once from the Aqua page.
 
 ## Operations
 
