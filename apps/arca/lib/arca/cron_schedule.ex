@@ -111,7 +111,9 @@ defmodule Arca.CronSchedule do
   One locking transaction checks the member's slot, locks the athanor's
   row, counts its schedules and inserts, so creates racing for the last
   place leave one row in it. Refused with `:schedule_cap` at `cap`,
-  `:conflict` when a live or paused schedule of the athanor holds the name,
+  `:aqua_line_by_person` for a line for Aqua unless `attrs` say
+  `by_person: true` (`update/4`), `:conflict` when a live or paused
+  schedule of the athanor holds the name,
   `:not_owner` on a member that no longer owns its slot, `:not_found` when
   the athanor has no row, `:no_athanor` for an actor that names none,
   `{:validation, errors}` for a malformed field or cap, and
@@ -141,21 +143,36 @@ defmodule Arca.CronSchedule do
   `:not_found`, decided in the write's own locked read, so a write that
   raced a delete changes nothing. Every row, whatever its kind, is
   written only under the member's live slot (`:not_owner` otherwise).
+
+  A write that touches a row's target (`reference`, `resolved_reference`
+  or `input`) where the row as it stands under its lock holds a line for
+  Aqua, or would after the write, is refused `:aqua_line_by_person`
+  unless `by_person: true` says the caller is the schedule's person in a
+  signed-in session of their own (`aqua_target/3`): who may write is
+  decided against the row being written, never one read before.
   """
-  @spec update(Prima.Actor.t(), String.t(), map()) ::
+  @spec update(Prima.Actor.t(), String.t(), map(), keyword()) ::
           {:ok, map()}
           | {:error,
-             :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
+             :not_found
+             | :not_owner
+             | :aqua_line_by_person
+             | {:validation, %{atom() => [String.t()]}}
+             | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
-  def update(%Prima.Actor{} = actor, id, attrs) do
+  def update(%Prima.Actor{} = actor, id, attrs, opts \\ []) do
+    by_person = Keyword.get(opts, :by_person, false) == true
+
     Errors.with_db_rescue("CronSchedule.update", fn ->
       guarded(actor, id, :live, fn schedule ->
-        attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
+        with :ok <- aqua_target(schedule, attrs, by_person) do
+          attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
 
-        schedule
-        |> Row.update_changeset(attrs)
-        |> Arca.Repo.update()
-        |> mapped_validation()
+          schedule
+          |> Row.update_changeset(attrs)
+          |> Arca.Repo.update()
+          |> mapped_validation()
+        end
       end)
     end)
     |> Arca.Data.project()
@@ -754,16 +771,34 @@ defmodule Arca.CronSchedule do
 
   # ---- schedule internals -----------------------------------------------------
 
+  @targets [:reference, :resolved_reference, :input]
+
+  # A line for Aqua runs as its person with nobody present: a write that
+  # touches the target of a row that holds one, before or after the write,
+  # is that person's own act or nothing. `row` is the row as the write's
+  # transaction holds it (none for a create).
+  defp aqua_target(row, attrs, by_person) do
+    touches? = Enum.any?(@targets, &Map.has_key?(attrs, &1))
+
+    aqua? =
+      Enum.any?([row && row.reference, attrs[:reference], attrs[:resolved_reference]], fn ref ->
+        ref == @aqua_line
+      end)
+
+    if touches? and aqua? and not by_person, do: {:error, :aqua_line_by_person}, else: :ok
+  end
+
   # The row a create writes, checked before any lock is taken, so a
   # malformed create waits on nothing. The athanor is the actor's, whatever
   # `attrs` names.
   defp schedule_row(actor, attrs) do
-    with {:ok, cap} <- schedule_cap(Map.fetch(attrs, :cap)) do
+    with {:ok, cap} <- schedule_cap(Map.fetch(attrs, :cap)),
+         :ok <- aqua_target(nil, Map.delete(attrs, :by_person), attrs[:by_person] == true) do
       now = DateTime.utc_now()
 
       row =
         attrs
-        |> Map.delete(:cap)
+        |> Map.drop([:cap, :by_person])
         |> Map.put_new(:id, Prima.UUID7.generate_id("sched"))
         |> Map.put_new(:created_at, now)
         |> Map.put_new(:updated_at, now)

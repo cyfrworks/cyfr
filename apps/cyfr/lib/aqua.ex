@@ -152,6 +152,10 @@ defmodule Aqua do
   @spec thread_state(String.t(), String.t()) :: map() | {:error, term()}
   defdelegate thread_state(thread_id, athanor_id), to: Aqua.Runner, as: :state
 
+  @doc "Whether a card offers an answer of `scope` for its intent. See `Aqua.Standing.offered?/2`."
+  @spec standing_offered?(map(), :thread | :always) :: boolean()
+  defdelegate standing_offered?(intent, scope), to: Aqua.Standing, as: :offered?
+
   @doc """
   Whether `thread_id` is the thread a schedule's line for Aqua runs in, in
   the context's athanor: where a card offers an answer for this thread

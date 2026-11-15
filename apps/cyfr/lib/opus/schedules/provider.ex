@@ -427,7 +427,9 @@ defmodule Opus.Schedules.Provider do
             _ -> update_attrs
           end
 
-        case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs) do
+        case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs,
+               by_person: by_person?(ctx)
+             ) do
           {:ok, updated} ->
             Opus.Schedules.Scheduler.update(updated.id)
             Changes.changed(Sanctum.Context.actor(ctx), updated.id)
@@ -787,7 +789,10 @@ defmodule Opus.Schedules.Provider do
   # a stale value, and no fallback number stands in for it.
   defp insert(ctx, attrs) do
     with {:ok, cap} <- schedule_cap() do
-      case Arca.CronSchedule.create(Sanctum.Context.actor(ctx), Map.put(attrs, :cap, cap)) do
+      case Arca.CronSchedule.create(
+             Sanctum.Context.actor(ctx),
+             Map.merge(attrs, %{cap: cap, by_person: by_person?(ctx)})
+           ) do
         {:ok, schedule} ->
           Opus.Schedules.Scheduler.add(schedule.id)
           Changes.changed(Sanctum.Context.actor(ctx), schedule.id)
@@ -865,7 +870,9 @@ defmodule Opus.Schedules.Provider do
   # refusal vocabulary (`Prima.Refusal`). A write's refusal: a member that
   # lost its slot is answered as itself, as a feed's write is. A create's
   # `:not_found` is its athanor's missing row, which names no schedule.
-  defp store_refusal(reason, _id) when reason in [:not_owner, :no_athanor], do: {:error, reason}
+  defp store_refusal(reason, _id) when reason in [:not_owner, :no_athanor, :aqua_line_by_person],
+    do: {:error, reason}
+
   defp store_refusal(reason, id), do: {:error, format_store_error(reason, id)}
 
   defp format_store_error(reason, id \\ nil)
@@ -897,9 +904,12 @@ defmodule Opus.Schedules.Provider do
   defp re_resolve_to(ctx, schedule, pinned, id) do
     with :ok <- verify_component_exists(ctx, pinned),
          :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id) do
-      case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
-             resolved_reference: pinned
-           }) do
+      case Arca.CronSchedule.update(
+             Sanctum.Context.actor(ctx),
+             schedule.id,
+             %{resolved_reference: pinned},
+             by_person: by_person?(ctx)
+           ) do
         {:ok, updated} ->
           Opus.Schedules.Scheduler.update(updated.id)
           Changes.changed(Sanctum.Context.actor(ctx), updated.id)
@@ -940,6 +950,13 @@ defmodule Opus.Schedules.Provider do
        do: :ok
 
   defp aqua_writer(_ctx), do: {:error, :aqua_line_by_person}
+
+  # What the storage write is told of its caller: whether it is the
+  # person's own signed-in session, decided from the context alone. The
+  # store decides against the row it locks whether that is needed
+  # (`Arca.CronSchedule.update/4`); the check above is only the fast
+  # refusal on the row as read.
+  defp by_person?(ctx), do: aqua_writer(ctx) == :ok
 
   # The line is the input's one field: a non-empty text a person could send.
   defp aqua_input(%{"input" => %{"line" => line} = input})

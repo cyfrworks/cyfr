@@ -76,6 +76,14 @@ defmodule Aqua.Standing do
   def check(_intent, _scope), do: :ok
 
   @doc """
+  Whether an answer of `scope` (`:thread` or `:always`) is offered for the
+  card's intent: the rule `check/2` holds a decision to, which the card's
+  buttons and a stopped schedule turn's sentence both read.
+  """
+  @spec offered?(map(), :thread | :always) :: boolean()
+  def offered?(intent, scope) when scope in [:thread, :always], do: check(intent, scope) == :ok
+
+  @doc """
   The grant rows a decision writes with itself, for the agent the turn
   runs: none for `:once`, an allow at thread or agent scope with the
   bounds the person chose, a deny at agent scope for `:never`. Checked

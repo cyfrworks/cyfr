@@ -1183,7 +1183,7 @@ defmodule Aqua.Loop do
 
     case setup do
       nil -> run_dispatched(state, runnable, cards)
-      {:unasked, call} -> end_unasked(state, runnable, call)
+      {:unasked, step, call} -> end_unasked(state, runnable, step, call)
       setup -> end_for_account(state, setup)
     end
   end
@@ -1294,11 +1294,10 @@ defmodule Aqua.Loop do
   end
 
   # A call that asks opens its card, unless nobody is present to answer
-  # it: a schedule's turn closes it refused and ends there.
-  defp ask(%State{turn: %{origin: "schedule"}} = state, step, %Call{} = call, _opts, acc) do
+  # it: a schedule's turn stops there (`stop_unasked/3`).
+  defp ask(%State{turn: %{origin: "schedule"}}, step, %Call{} = call, _opts, acc) do
     {runnable, cards, _setup} = acc
-    close(state, step, call, {:error, {:denied, unasked(call)}})
-    {runnable, cards, {:unasked, call}}
+    {runnable, cards, {:unasked, step, call}}
   end
 
   defp ask(%State{} = state, step, %Call{} = call, card_opts, {runnable, cards, setup}) do
@@ -1371,26 +1370,44 @@ defmodule Aqua.Loop do
     {:halt, {:failed, {:setup_required, setup}}, state}
   end
 
-  # A schedule's turn stopped at a call it would have to ask for: what was
-  # decided before that call runs, nothing after it starts, and the turn
-  # ends failed saying what it needed and how to allow it next time.
-  defp end_unasked(%State{} = state, runnable, %Call{} = call) do
+  # A schedule's turn whose call asks as it is decided: what was decided
+  # before that call runs first, then the turn stops at it.
+  defp end_unasked(%State{} = state, runnable, step, %Call{} = call) do
     case run_groups(state, Policy.group(runnable)) do
-      {:halt, result, state} ->
-        {:halt, result, state}
-
-      {:ok, state} ->
-        _ = Tape.skip_steps(guest(state), state.turn, "the turn stopped: nobody was asked")
-        {:halt, {:failed, {:unasked, unasked(call)}}, state}
+      {:halt, result, state} -> {:halt, result, state}
+      {:ok, state} -> stop_unasked(state, step, call)
     end
   end
 
+  # The one stop of a schedule's turn at a call it would have to ask for,
+  # whether the call asked as it was decided or became an ask as it
+  # dispatched: that call is closed refused with the sentence, nothing
+  # after it starts (what is left of the response is skipped, and the
+  # turn asks the model nothing more), what already ran stays, and the
+  # turn ends failed with the sentence, its root and its occurrence with
+  # it.
+  defp stop_unasked(%State{} = state, step, %Call{} = call) do
+    sentence = unasked(call)
+    _ = close(state, step, call, {:error, {:denied, sentence}})
+    _ = Tape.skip_steps(guest(state), state.turn, "the turn stopped: nobody was asked")
+    {:halt, {:failed, {:unasked, sentence}}, state}
+  end
+
   # The one sentence a stopped schedule turn leaves: what it needed, and
-  # the way a person allows it in this thread from then on.
+  # how to allow it next time where the action's own declaration lets an
+  # answer stand for this thread (`Aqua.Standing.offered?/2`, the rule the
+  # card offers its answers by); otherwise, that it needs the person there.
   defp unasked(%Call{} = call) do
-    "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
-      "was here to give it. To allow it next time, ask Aqua for it once in this thread " <>
-      "and choose \"for this schedule\" when it asks."
+    needed =
+      "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
+        "was here to give it."
+
+    if Aqua.Standing.offered?(Policy.card(call), :thread),
+      do:
+        needed <>
+          " To allow it next time, ask Aqua for it once in this thread and choose " <>
+          "\"for this schedule\" when it asks.",
+      else: needed <> " This cannot be allowed for a schedule: it needs you here."
   end
 
   # A launch's card binds the turn's sources it shows and what they let
@@ -1451,6 +1468,7 @@ defmodule Aqua.Loop do
     outcome =
       case worker(fn -> run_one(state, item) end) do
         {:ok, {:uncertain, step, reason}} -> {:uncertain, step, reason}
+        {:ok, {:unasked, step, call}} -> {:unasked, step, call}
         {:ok, _} -> :ok
         {:exit, reason} -> settle_dead(state, item, reason)
       end
@@ -1459,6 +1477,7 @@ defmodule Aqua.Loop do
 
     case outcome do
       {:uncertain, step, reason} -> stop_uncertain(state, step, reason, [])
+      {:unasked, step, call} -> stop_unasked(state, step, call)
       _ -> {:ok, state}
     end
   end
@@ -1471,6 +1490,7 @@ defmodule Aqua.Loop do
 
     case outcome do
       {:uncertain, step, reason, rest} -> stop_uncertain(state, step, reason, rest)
+      {:unasked, step, call} -> stop_unasked(state, step, call)
       :ok -> {:ok, state}
     end
   end
@@ -1503,6 +1523,10 @@ defmodule Aqua.Loop do
           {:uncertain, step, reason} ->
             {:uncertain, step, reason, Map.values(running) ++ pending_items(pending)}
 
+          # Nothing more of the group starts; what runs already is let end.
+          {:unasked, step, call} ->
+            with :ok <- collect(state, [], running, cap), do: {:unasked, step, call}
+
           _ ->
             collect(state, pending, running, cap)
         end
@@ -1530,9 +1554,20 @@ defmodule Aqua.Loop do
   defp run_one(%State{} = state, %{step: step, call: {:ok, %Call{} = call}} = item) do
     case still_granted(state, item, call) do
       :ok -> dispatch_one(state, step, call)
+      {:ask, message} -> asks_now(state, step, call, message)
       {:denied, message} -> settle_denied(state, step, call, message)
     end
   end
+
+  # A call whose allow no longer covers it as it dispatches would ask now.
+  # In a schedule's turn nobody is there to: the run reports it, and the
+  # loop stops the turn at it (`stop_unasked/3`); elsewhere it is refused
+  # as before.
+  defp asks_now(%State{turn: %{origin: "schedule"}}, step, %Call{} = call, _message),
+    do: {:unasked, step, call}
+
+  defp asks_now(%State{} = state, step, %Call{} = call, message),
+    do: settle_denied(state, step, call, message)
 
   # The grants a member holds are their live decision; the loop decides from
   # a snapshot `Turn.build/3` took. Revoking "allow in this thread"
@@ -1558,7 +1593,7 @@ defmodule Aqua.Loop do
       {:ok, policy} ->
         if Policy.auto?(call, policy, place(state)),
           do: :ok,
-          else: {:denied, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
+          else: {:ask, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
 
       # A store that cannot answer whether the grant still stands is not a
       # grant. Fail closed, the way every other standing question does.

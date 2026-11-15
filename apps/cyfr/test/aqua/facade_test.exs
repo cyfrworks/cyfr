@@ -31,6 +31,7 @@ defmodule Aqua.FacadeTest do
     roster: 1,
     schedule_thread?: 2,
     stale_consent_refs: 1,
+    standing_offered?: 2,
     stream_abandoned: 2,
     stream_add: 2,
     stream_advance: 2,

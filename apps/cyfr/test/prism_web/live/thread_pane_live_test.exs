@@ -382,7 +382,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         reference: Arca.CronSchedule.aqua_line(),
         resolved_reference: Arca.CronSchedule.aqua_line(),
         input: Jason.encode!(%{"line" => "summarise"}),
-        cap: 0
+        cap: 0,
+        by_person: true
       })
 
     # The schedule's thread, as its first fire names it.

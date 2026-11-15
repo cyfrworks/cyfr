@@ -192,11 +192,29 @@ defmodule Aqua.ScheduleTurnsTest do
     rows
   end
 
-  defp sentence(tool_action),
+  defp sentence(tool_action, allowable \\ true)
+
+  defp sentence(tool_action, true),
     do:
       "This scheduled run needed your approval to use #{tool_action}, and nobody was here " <>
         "to give it. To allow it next time, ask Aqua for it once in this thread and choose " <>
         "\"for this schedule\" when it asks."
+
+  defp sentence(tool_action, false),
+    do:
+      "This scheduled run needed your approval to use #{tool_action}, and nobody was here " <>
+        "to give it. This cannot be allowed for a schedule: it needs you here."
+
+  # One model answer holding several calls, in this order.
+  defp calls(items),
+    do: %{
+      "content" =>
+        Enum.map(items, fn {id, name, args} ->
+          %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}
+        end),
+      "stop_reason" => "tool_call",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+    }
 
   # ---------------------------------------------------------------------------
 
@@ -302,6 +320,101 @@ defmodule Aqua.ScheduleTurnsTest do
       end
 
       assert row!(ctx, id).status == "deleted"
+    end
+
+    # Fires once, in the test's own process, right after the first read of
+    # a schedule row: the key's update has read the row it decides on.
+    @doc false
+    def interleave(_event, _measurements, metadata, %{test: test, act: act}) do
+      with true <- self() == test,
+           :armed <- Process.get(:aqua_race),
+           "cron_schedules" <- metadata[:source] do
+        Process.put(:aqua_race, :fired)
+        act.()
+      end
+
+      :ok
+    end
+
+    test "a key's change held after its read loses to the person turning the schedule into a line for Aqua",
+         %{ctx: ctx} do
+      component = component!(ctx)
+
+      convert = fn ->
+        {:ok, _} =
+          Provider.handle("schedule", ctx, %{
+            "action" => "update",
+            "schedule_id" => component.id,
+            "reference" => @aqua,
+            "input" => %{"line" => "the person's line"}
+          })
+      end
+
+      handler = "aqua-race-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.interleave/4, %{
+          test: self(),
+          act: convert
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      Process.put(:aqua_race, :armed)
+
+      assert Provider.handle("schedule", key(ctx), %{
+               "action" => "update",
+               "schedule_id" => component.id,
+               "input" => %{"line" => "read every shared thread"}
+             }) == {:error, :aqua_line_by_person}
+
+      assert Process.get(:aqua_race) == :fired
+      assert %{reference: @aqua} = row = row!(ctx, component.id)
+      assert Jason.decode!(row.input) == %{"line" => "the person's line"}
+    end
+
+    test "a key's change after the person made the line is refused, by the tool and by the store",
+         %{ctx: ctx} do
+      component = component!(ctx)
+
+      {:ok, _} =
+        Provider.handle("schedule", ctx, %{
+          "action" => "update",
+          "schedule_id" => component.id,
+          "reference" => @aqua,
+          "input" => %{"line" => "the person's line"}
+        })
+
+      assert Provider.handle("schedule", key(ctx), %{
+               "action" => "update",
+               "schedule_id" => component.id,
+               "input" => %{"line" => "read every shared thread"}
+             }) == {:error, :aqua_line_by_person}
+
+      # The store holds the rule itself, whoever calls it.
+      for attrs <- [
+            %{input: Jason.encode!(%{"line" => "x"})},
+            %{reference: "reagent:local.test:1.0.0"},
+            %{resolved_reference: "reagent:local.test:1.0.0"}
+          ] do
+        assert CronSchedule.update(actor(ctx), component.id, attrs) ==
+                 {:error, :aqua_line_by_person}
+      end
+
+      assert {:error, :aqua_line_by_person} =
+               CronSchedule.create(actor(ctx), %{
+                 user_id: ctx.user_id,
+                 name: "by-hand",
+                 cron_expression: hourly_away(),
+                 reference: @aqua,
+                 resolved_reference: @aqua,
+                 input: Jason.encode!(%{"line" => "x"}),
+                 cap: 0
+               })
+
+      assert Jason.decode!(row!(ctx, component.id).input) == %{"line" => "the person's line"}
+
+      assert {:ok, %{status: "paused"}} =
+               CronSchedule.update(actor(ctx), component.id, %{status: "paused"})
     end
 
     test "no agent's call reaches making or changing one: both take the external plane alone" do
@@ -440,6 +553,22 @@ defmodule Aqua.ScheduleTurnsTest do
 
       assert {:ok, [%{kind: :failed_schedule, id: ^id, label: "Keeper"}]} =
                Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
+    end
+
+    test "an act no answer may stand for says it needs the person there, and offers no way to allow it",
+         %{ctx: ctx} do
+      script!([call("d1", "files", %{"action" => "delete", "path" => "data/plan.md"})])
+
+      id = schedule!(ctx, "Cleaner", "delete the plan")
+      occurrence = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+
+      turn = await_status(ctx, turn_of(ctx, id, occurrence).id, "failed")
+      assert turn.error == sentence("files.delete", false)
+      assert [%{tool: "files", action: "delete", outcome: "denied"}] = steps(ctx, turn)
+      assert waiting_cards(ctx) == []
+      assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
+      assert row!(ctx, id).last_error == "Last run failed: " <> sentence("files.delete", false)
     end
 
     test "a call that ran before the one that asks keeps its result, and the asking call never runs",
@@ -604,6 +733,77 @@ defmodule Aqua.ScheduleTurnsTest do
       assert [%{id: ^plain_card}] = waiting_cards(ctx)
       refute Aqua.schedule_thread?(ctx, plain.id)
       :ok = Runner.stop_turn(ctx, plain.id)
+    end
+
+    test "a call whose allow stops covering it as it dispatches stops the turn there, and nothing after it runs",
+         %{ctx: ctx} do
+      script!([
+        reply("Here."),
+        keep("k1", "plan"),
+        reply("Kept."),
+        calls([
+          {"t1", "threads", %{"action" => "list"}},
+          {"k2", "notes", %{"action" => "keep", "name" => "plan2", "content" => "x"}},
+          {"n1", "notes", %{"action" => "list"}}
+        ])
+      ])
+
+      handler = "schedule-failed-#{System.unique_integer([:positive])}"
+      test = self()
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :schedules, :failed],
+          fn _event, _measurements, meta, _ -> send(test, {:failed, meta}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      id = schedule!(ctx, "Keeper", "look, then keep the plan")
+      first = fire!(ctx, id)
+      ScheduleTurns.drain()
+      await_status(ctx, turn_of(ctx, id, first).id, "completed")
+      %{thread_id: thread_id} = row!(ctx, id)
+
+      # For this schedule, following no outside source.
+      {:ok, %{turn_id: asked}} = Runner.send_message(ctx, thread_id, "keep the plan")
+      await_status(ctx, asked, "paused")
+      [%{id: approval_id}] = waiting_cards(ctx)
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval_id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :schedule
+               })
+
+      await_status(ctx, asked, "completed")
+
+      # One answer: a read that brings in other people's words, the keep
+      # its allow covered until then, and another automatic read.
+      second = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{second.id => :sent}
+      turn = await_status(ctx, turn_of(ctx, id, second).id, "failed")
+      assert turn.error == sentence("notes.keep")
+
+      assert [
+               %{tool: "threads", action: "list", outcome: "ok"},
+               %{tool: "notes", action: "keep", outcome: "denied", started_at: nil},
+               %{tool: "notes", action: "list", started_at: nil} = never
+             ] = steps(ctx, turn)
+
+      refute never.outcome == "ok"
+      assert {:ok, %{notes: [%{name: "plan"}]}} = Aqua.Notes.list(ctx)
+      assert waiting_cards(ctx) == []
+
+      second_id = second.id
+      assert %{state: "failed"} = ended!(ctx, second, "failed")
+      assert_receive {:failed, %{schedule_id: ^id, occurrence_id: ^second_id}}, 5_000
+
+      assert {:ok, [%{kind: :failed_schedule, id: ^id}]} =
+               Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
     end
 
     test "an agent-wide answer ending with the schedule is refused, even in the schedule's own thread, and the card waits",
