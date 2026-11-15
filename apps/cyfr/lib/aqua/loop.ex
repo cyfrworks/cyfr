@@ -1525,7 +1525,7 @@ defmodule Aqua.Loop do
 
           # Nothing more of the group starts; what runs already is let end.
           {:unasked, step, call} ->
-            with :ok <- collect(state, [], running, cap), do: {:unasked, step, call}
+            drain_unasked(state, running, {:unasked, step, call})
 
           _ ->
             collect(state, pending, running, cap)
@@ -1546,6 +1546,30 @@ defmodule Aqua.Loop do
   end
 
   defp pending_items(pending), do: Enum.map(pending, &%{item: &1, task: nil})
+
+  # Once a call of the group has reported the stop of a schedule's turn,
+  # that stop is the turn's and it stands. Each sibling already running is
+  # waited for; one that ends with an unknown outcome, by its answer or by
+  # its death, is marked uncertain in place, as the siblings a stop covers
+  # are settled (`cancel_rest/2`), and does not replace the stop.
+  defp drain_unasked(_state, running, unasked) when map_size(running) == 0, do: unasked
+
+  defp drain_unasked(state, running, unasked) do
+    receive do
+      {ref, result} when is_map_key(running, ref) ->
+        Process.demonitor(ref, [:flush])
+
+        with {:uncertain, step, reason} <- result,
+             do: Tape.mark_uncertain(guest(state), state.turn, step, reason)
+
+        drain_unasked(state, Map.delete(running, ref), unasked)
+
+      {:DOWN, ref, :process, _pid, reason} when is_map_key(running, ref) ->
+        {%{item: item}, running} = Map.pop(running, ref)
+        _ = settle_dead(state, item, reason, :mark)
+        drain_unasked(state, running, unasked)
+    end
+  end
 
   # In a worker: the step is dispatched, run, and closed with what it
   # answered. A step that is no longer proposed (skipped, superseded)

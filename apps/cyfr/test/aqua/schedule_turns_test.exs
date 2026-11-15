@@ -806,6 +806,198 @@ defmodule Aqua.ScheduleTurnsTest do
                Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
     end
 
+    # A step's worker of a schedule turn's loop holds at its first read of
+    # the standing rows, as it asks whether its call is still allowed, until
+    # the test lets it go: so a call of one parallel batch, admitted, is
+    # checked again at its dispatch under the rows as the test leaves them.
+    @doc false
+    def hold_check(_event, _measurements, metadata, %{test: test, held: held}) do
+      with "tool_grants" <- metadata[:source],
+           [owner | _] <- Process.get(:"$callers", []),
+           true <- loop?(owner),
+           false <- Agent.get(held, &MapSet.member?(&1, self())) do
+        Agent.update(held, &MapSet.put(&1, self()))
+        send(test, {:held, self()})
+
+        receive do
+          :go -> :ok
+        end
+      end
+
+      :ok
+    end
+
+    defp loop?(pid),
+      do: Enum.any?(Registry.keys(Aqua.RunnerRegistry, pid), &match?({:turn, _}, &1))
+
+    # The soul's own file asks for `threads.list`, its grant walked again.
+    defp soul_asks!(ctx, key) do
+      path = Compendium.AquaPath.soul_file()
+      {:ok, binary} = Arca.get(actor(ctx), path)
+      {:ok, soul} = Compendium.AquaAgent.parse(Compendium.AquaPath.soul_name(), binary)
+      soul = %{soul | tool_policy: Map.put(soul.tool_policy, key, "ask")}
+      :ok = Arca.put(actor(ctx), path, Compendium.AquaAgent.serialize(soul))
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
+      decisions = %{ref: @aqua, selections: [%{dep: @model, label: "default"}]}
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
+      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(ctx, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+    end
+
+    # A schedule whose thread holds "for this schedule" for threads.list,
+    # which the soul asks for, and the parallel batch of its next fire held
+    # at both calls' dispatch checks with that answer withdrawn: the read
+    # reports the stop while its sibling's fetch is still running.
+    defp withdrawn_mid_batch!(ctx) do
+      soul_asks!(ctx, "threads.list")
+
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, "catalyst:local.http"],
+         script: [
+           reply("Here."),
+           calls([
+             {"t1", "threads", %{"action" => "list"}},
+             {"h1", "http", %{"action" => "get", "url" => "https://example.test/a"}}
+           ]),
+           {:probe, self()},
+           %{"status" => 200, "body" => "a"}
+         ]}
+      )
+
+      id = schedule!(ctx, "Lister", "list what is unread")
+      first = fire!(ctx, id)
+      ScheduleTurns.drain()
+      await_status(ctx, turn_of(ctx, id, first).id, "completed")
+      ended!(ctx, first, "completed")
+      %{thread_id: thread_id} = row!(ctx, id)
+
+      # "For this schedule", following no outside source, as the card's
+      # answer writes it; the thread has read nothing outside yet.
+      {:ok, _} =
+        Sanctum.ToolGrants.put(ctx, %{
+          scope: "thread",
+          effect: "allow",
+          thread_id: thread_id,
+          agent_name: "aqua",
+          tool: "threads",
+          action: "list",
+          lifecycle_kind: "schedule",
+          lifecycle_id: id
+        })
+
+      {:ok, held} = Agent.start_link(fn -> MapSet.new() end)
+      handler = "hold-check-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_check/4, %{
+          test: self(),
+          held: held
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      second = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{second.id => :sent}
+      # The read's worker asks the standing rows whether its call is still
+      # allowed; the fetch's, an automatic one, asks them nothing.
+      assert_receive {:held, read}, 30_000
+
+      # The answer is withdrawn between the batch's admission and its dispatch.
+      {1, _} =
+        Arca.Repo.delete_all(
+          from(g in Arca.Schemas.ToolGrant,
+            where: g.thread_id == ^thread_id and g.tool == "threads"
+          )
+        )
+
+      :telemetry.detach(handler)
+
+      # The fetch's run is held by the script; then the read's worker
+      # reports the stop and ends.
+      assert_receive {:scripted_probe, player, fetch}, 30_000
+      [{waiter, _}] = Registry.lookup(Opus.Registry, fetch)
+      refute waiter == read
+      send(read, :go)
+      wait_until(fn -> not Process.alive?(read) end, 30_000, "the read's worker to end")
+
+      {id, second, waiter, player}
+    end
+
+    defp stopped_mid_batch!(ctx, id, second) do
+      turn = await_status(ctx, turn_of(ctx, id, second).id, "failed")
+      assert turn.error == sentence("threads.list")
+
+      assert [
+               %{tool: "threads", action: "list", outcome: "denied", error: denied},
+               %{tool: "http", action: "get", dispatch_state: "uncertain", outcome: "uncertain"}
+             ] = steps(ctx, turn)
+
+      assert denied == sentence("threads.list")
+      assert %{state: "failed"} = ended!(ctx, second, "failed")
+
+      assert {:ok, [%{kind: :failed_schedule, id: ^id}]} =
+               Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
+
+      # The model was asked nothing after the batch.
+      assert length(Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))) ==
+               2
+
+      turn
+    end
+
+    test "a sibling that dies after a parallel read reported the stop is marked uncertain, and the stop stands",
+         %{ctx: ctx} do
+      {id, second, waiter, player} = withdrawn_mid_batch!(ctx)
+
+      Process.exit(waiter, :kill)
+      send(player, :continue)
+
+      stopped_mid_batch!(ctx, id, second)
+    end
+
+    test "a sibling whose run is lost after a parallel read reported the stop is marked uncertain, and the stop stands",
+         %{ctx: ctx} do
+      {id, second, _waiter, player} = withdrawn_mid_batch!(ctx)
+
+      # The fetch's runner dies: its waiter answers an unknown outcome.
+      Process.exit(player, :kill)
+
+      turn = stopped_mid_batch!(ctx, id, second)
+
+      # Marked from the waiter's own answer, not from a death.
+      assert [
+               _read,
+               %{tool: "http", error: "Execution terminated: runner stopped without cleanup"}
+             ] =
+               steps(ctx, turn)
+    end
+
+    test "a turn ended failed with a step marked uncertain holds nothing back: the schedule's next turn there runs unrestricted",
+         %{ctx: ctx} do
+      {id, second, waiter, player} = withdrawn_mid_batch!(ctx)
+      Process.exit(waiter, :kill)
+      send(player, :continue)
+      stopped_mid_batch!(ctx, id, second)
+
+      ScriptedWorker.script([reply("Next.")])
+
+      third = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{third.id => :sent}
+      turn = await_status(ctx, turn_of(ctx, id, third).id, "completed")
+      refute Tape.restricted?(ctx, turn)
+      assert %{state: "completed"} = ended!(ctx, third, "completed")
+    end
+
     test "an agent-wide answer ending with the schedule is refused, even in the schedule's own thread, and the card waits",
          %{ctx: ctx} do
       script!([
