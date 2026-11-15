@@ -141,7 +141,15 @@ async function openAfresh(page, url) {
 // the code read (`readShownCode`), "I saved it", which submits.
 // Answers the code, the section the page ends on (`done`, or `done-return`
 // when a CYFR's request waits) and any error it says.
-export async function createAccount(page, keys, { directory = null, name, secrets, timeoutMs = STEP_MS }) {
+export async function createAccount(page, keys, options) {
+  const begun = await beginAccount(page, keys, options);
+  return begun.section === "show-code" ? finishAccount(page, keys, begun, options) : begun;
+}
+
+// `createAccount` up to the code shown: the name chosen and the passkey
+// made, nothing sent to the registry yet. Answers the section the page is
+// on (`show-code` when it got there), the code and any error it says.
+export async function beginAccount(page, keys, { directory = null, name, secrets, timeoutMs = STEP_MS }) {
   await keys.attach(page);
   if (directory) await openAfresh(page, `${directory.origin}/account/new#name=${encodeURIComponent(name)}`);
   else await page.waitForURL((url) => url.pathname === "/account/new", { timeout: timeoutMs });
@@ -153,11 +161,17 @@ export async function createAccount(page, keys, { directory = null, name, secret
   await page.locator("#create").click();
   const codeShown = await settle(page, ["show-code"], { timeoutMs });
   if (codeShown.section !== "show-code") return { ...codeShown, code: null };
-  const code = await readShownCode(page, secrets);
+  return { ...codeShown, code: await readShownCode(page, secrets) };
+}
+
+// The rest of `createAccount` on a page `beginAccount` left at its code:
+// "I saved it", which sends the account, its passkey and its name.
+export async function finishAccount(page, keys, begun, { timeoutMs = STEP_MS } = {}) {
+  await keys.attach(page);
   await page.locator("#saved").click();
   const ended = await settle(page, ["done", "done-return", "rename", "policy-again"], { timeoutMs });
   await keys.sync();
-  return { ...ended, code };
+  return { ...ended, code: begun.code };
 }
 
 // "Continue to <CYFR>" on the new page's last section: the passkey asked

@@ -19,12 +19,17 @@
 #       value the file holds (`{"bytes": base64}` for bytes), behind the
 #       server's back and with the database's foreign-key and check
 #       constraints off for that write, as a tamper or the restore of one:
-#       `{set: 1}`.
+#       `{set: 1}`. A string or bytes value is bound in the storage class
+#       the column declares, a blob to a BLOB column, as the server's own
+#       writes store it: SQLite never finds a TEXT value equal to a BLOB
+#       one, so a restore in the other class leaves a row its server no
+#       longer finds by that column.
 #
 #   state TABLE
-#       The whole table, every row as `rows` answers it, and the database's
-#       whole schema (`sqlite_master`), which a tamper's restore must leave
-#       as they were.
+#       The whole table, every row as `rows` answers it with the storage
+#       class of each stored value (`typeof`, by column, as `classes`), and
+#       the database's whole schema (`sqlite_master`), which a tamper's
+#       restore must leave as they were.
 #
 #   reseal USER_ID REGISTRY SLUG @PATCH_FILE
 #       The person's sealed push token opened, the members the file's JSON
@@ -79,6 +84,17 @@ fn args ->
   decode = fn
     %{"bytes" => b64} -> Base.decode64!(b64)
     value -> value
+  end
+
+  declared = fn table, field ->
+    %{rows: info} = Arca.Repo.query!("PRAGMA table_info(#{table})", [])
+    Enum.find_value(info, fn [_cid, name, type | _rest] -> if name == field, do: String.upcase(type) end)
+  end
+
+  # A value bound as the column stores it (the header, `set`).
+  bound = fn
+    value, "BLOB" when is_binary(value) -> {:blob, value}
+    value, _type -> value
   end
 
   rows = fn table, where ->
@@ -148,7 +164,7 @@ fn args ->
     ["set", table, id, field, value] ->
       table = table!.(table)
       unless field in columns.(table), do: raise("no column #{field} in #{table}")
-      value = value |> Jason.decode!() |> decode.()
+      value = value |> Jason.decode!() |> decode.() |> bound.(declared.(table, field))
 
       answer.(%{set: unchecked.("UPDATE #{table} SET #{field} = ?1 WHERE #{key.(table)} = ?2", [value, id])})
 
@@ -161,7 +177,15 @@ fn args ->
           []
         )
 
-      answer.(%{rows: rows.(table, nil), schema: schema})
+      names = columns.(table)
+      classes = Enum.map_join(names, ", ", &"typeof(\"#{&1}\")")
+      %{rows: stored} = Arca.Repo.query!("SELECT #{classes} FROM #{table} ORDER BY 1", [])
+
+      answer.(%{
+        rows: rows.(table, nil),
+        classes: Enum.map(stored, &Map.new(Enum.zip(names, &1))),
+        schema: schema
+      })
 
     ["reseal", user_id, registry, slug, patch] ->
       {_ciphertext, aad} = sealed_token.(user_id, registry, slug)
