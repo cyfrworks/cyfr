@@ -1168,7 +1168,8 @@ defmodule PrismWeb.VaultLiveTest do
                ["Everyone on this CYFR", "Traders"]
 
       # The caps start empty, and the sheet says what empty, 0 and a number
-      # mean, and what an uncapped share to everyone does.
+      # mean; what a share to everyone means it says once everyone is chosen,
+      # and that it has no limit only while both caps stay empty.
       refute view |> element(sheet <> ~s( input[name="person_daily"])) |> render() =~ "value="
       refute view |> element(sheet <> ~s( input[name="total_daily"])) |> render() =~ "value="
 
@@ -1178,11 +1179,24 @@ defmodule PrismWeb.VaultLiveTest do
                "An empty cap is no limit. 0 admits no use. A number is the most requests that day"
              )
 
-      assert has_element?(
-               view,
-               ~s([data-test="share-uncapped"]),
+      everyone = ~s([data-test="share-everyone"])
+      refute has_element?(view, everyone)
+
+      typed = %{"audience" => "everyone", "person_daily" => "", "total_daily" => ""}
+      view |> form(sheet, typed) |> render_change()
+
+      assert texts(view, everyone) == [
                "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
-             )
+             ]
+
+      view |> form(sheet, %{typed | "total_daily" => "10"}) |> render_change()
+      refute has_element?(view, everyone)
+
+      view
+      |> form(sheet, %{typed | "audience" => "shared_thread:#{traders.id}"})
+      |> render_change()
+
+      refute has_element?(view, everyone)
 
       # No value of the key is asked for, and no component policy offered.
       refute has_element?(view, sheet <> ~s( input[type="password"]))

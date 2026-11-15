@@ -11,8 +11,12 @@ defmodule PrismWeb.SystemLayer.Share do
 
   The caps start empty. Empty is no limit, `0` admits no use, and a
   number is the most requests that day, per person or by everyone
-  together. The sheet says what a share to everyone with no cap means,
-  and to the platform administrator what it means for a newcomer's AQUA.
+  together. The sheet says what a share to everyone means while it is
+  chosen, each fact while it is true: to anyone, that with no cap anyone on
+  this CYFR may use it without limit; to the platform administrator, that
+  it is also what each new person's AQUA uses when it fits. It reads the
+  choice from the form's last change (`choice`), which the system layer
+  keeps for the open prompt.
 
   `args/2` holds what the sheet sent to `share.create`'s arguments before
   anything is dispatched, through `audience/2` and `caps/1`, which the
@@ -24,12 +28,16 @@ defmodule PrismWeb.SystemLayer.Share do
   use Phoenix.Component
 
   @everyone "everyone"
+  @uncapped "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
+  @newcomers "You administer this CYFR, so a key you share with everyone is also what each " <>
+               "new person's AQUA uses when it fits"
   @thread "shared_thread:"
 
   attr :id, :string, required: true
   attr :prompt, :map, required: true
   attr :administrator, :boolean, required: true
   attr :myself, :any, required: true
+  attr :choice, :map, default: %{}
 
   @doc "The sheet's form: the audience, the two caps and what they mean."
   def sheet(assigns) do
@@ -37,6 +45,7 @@ defmodule PrismWeb.SystemLayer.Share do
     <form
       id={"#{@id}-share"}
       phx-submit="share_create"
+      phx-change="share_change"
       phx-target={@myself}
       class="space-y-3"
       data-test="share-sheet"
@@ -52,7 +61,13 @@ defmodule PrismWeb.SystemLayer.Share do
       <fieldset class="space-y-1" data-test="share-audience">
         <legend class="text-sm font-medium">Share {@prompt.subject.name} with</legend>
         <label class="flex items-center gap-2 text-sm">
-          <input type="radio" name="audience" value={everyone()} required />
+          <input
+            type="radio"
+            name="audience"
+            value={everyone()}
+            checked={@choice["audience"] == everyone()}
+            required
+          />
           <span>Everyone on this CYFR</span>
         </label>
         <label :for={thread <- @prompt.subject.threads} class="flex items-center gap-2 text-sm">
@@ -60,6 +75,7 @@ defmodule PrismWeb.SystemLayer.Share do
             type="radio"
             name="audience"
             value={thread_value(thread.id)}
+            checked={@choice["audience"] == thread_value(thread.id)}
             data-thread={thread.id}
           />
           <span>{thread.name}</span>
@@ -80,6 +96,7 @@ defmodule PrismWeb.SystemLayer.Share do
             <input
               type="number"
               name="person_daily"
+              value={@choice["person_daily"]}
               min="0"
               step="1"
               inputmode="numeric"
@@ -92,6 +109,7 @@ defmodule PrismWeb.SystemLayer.Share do
             <input
               type="number"
               name="total_daily"
+              value={@choice["total_daily"]}
               min="0"
               step="1"
               inputmode="numeric"
@@ -103,8 +121,12 @@ defmodule PrismWeb.SystemLayer.Share do
         <p class="text-xs text-gray-300" data-test="share-caps-meaning">
           An empty cap is no limit. 0 admits no use. A number is the most requests that day; a day ends at midnight UTC.
         </p>
-        <p class="text-xs text-gray-300" data-test="share-uncapped">
-          {uncapped(@administrator)}
+        <p
+          :if={everyone_words(@administrator, @choice)}
+          class="text-xs text-gray-300"
+          data-test="share-everyone"
+        >
+          {everyone_words(@administrator, @choice)}
         </p>
       </fieldset>
     </form>
@@ -190,12 +212,20 @@ defmodule PrismWeb.SystemLayer.Share do
   defp everyone, do: @everyone
   defp thread_value(id), do: audience_value(%{"audience" => "thread", "thread_id" => id})
 
-  defp uncapped(true),
-    do:
-      "Shared with everyone and no cap, anyone on this CYFR may use it without limit. You " <>
-        "administer this CYFR, so a key you share with everyone is also what each new " <>
-        "person's AQUA uses when it fits, with no limit unless you set one."
+  # What a share to everyone means, said only while everyone is chosen and
+  # each part only while it is true: no limit while both caps are empty, and
+  # to the platform administrator that newcomers' AQUA uses it, capped or
+  # not. A cap that is not a count is not empty. Nil when nothing applies.
+  defp everyone_words(administrator, %{"audience" => @everyone} = choice) do
+    uncapped = caps(choice) == {:ok, %{"person_daily" => nil, "total_daily" => nil}}
 
-  defp uncapped(false),
-    do: "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
+    case {administrator, uncapped} do
+      {false, false} -> nil
+      {false, true} -> @uncapped
+      {true, false} -> @newcomers <> "."
+      {true, true} -> @uncapped <> " " <> @newcomers <> ", with no limit unless you set one."
+    end
+  end
+
+  defp everyone_words(_administrator, _choice), do: nil
 end

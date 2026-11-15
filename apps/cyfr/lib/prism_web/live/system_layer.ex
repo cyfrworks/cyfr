@@ -724,7 +724,8 @@ defmodule PrismWeb.SystemLayer do
        restore_places: %{},
        restore_notice: nil,
        restore_error: nil,
-       reenabling: %{}
+       reenabling: %{},
+       share_choice: nil
      )}
   end
 
@@ -1496,6 +1497,16 @@ defmodule PrismWeb.SystemLayer do
           {:noreply, socket}
       end
     end)
+  end
+
+  # The sharing sheet's choice as it changes, kept for the prompt it was
+  # made in, so the sheet says what the share being made means
+  # (`PrismWeb.SystemLayer.Share`); another prompt starts from none.
+  def handle_event("share_change", %{"prompt_id" => id} = params, socket) do
+    case open(socket, id, [:share]) do
+      {:ok, _prompt} -> {:noreply, assign(socket, :share_choice, {id, params})}
+      :none -> {:noreply, socket}
+    end
   end
 
   def handle_event("pairing_revoke", %{"id" => id, "client" => client_id}, socket)
@@ -2590,6 +2601,7 @@ defmodule PrismWeb.SystemLayer do
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
+            share_choice={@share_choice}
           />
 
           <.panel
@@ -2729,6 +2741,7 @@ defmodule PrismWeb.SystemLayer do
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
+  attr :share_choice, :any, default: nil
 
   # The consent walk: the sheet starts from the plan and preview the
   # prompt arrived with and hands each walk it makes back to this layer.
@@ -2890,6 +2903,7 @@ defmodule PrismWeb.SystemLayer do
       prompt={@prompt}
       administrator={match?(%Context{platform_admin: true}, @context)}
       myself={@myself}
+      choice={share_choice(@share_choice, @prompt.id)}
     />
     """
   end
@@ -2920,6 +2934,10 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp body(assigns), do: ~H""
+
+  # The sharing sheet's last change, for the prompt it was made in.
+  defp share_choice({id, choice}, id), do: choice
+  defp share_choice(_kept, _prompt_id), do: %{}
 
   attr :preview, :map, required: true
   attr :test, :string, required: true
