@@ -40,6 +40,8 @@ defmodule Arca.Schemas.CronSchedule do
   @missed_runs ~w(skip catch_up)
   @kinds ~w(schedule feed)
   @aqua_line "agent:local.aqua"
+  # What every row's id begins with (`Prima.UUID7.generate_id/1`).
+  @id_prefixes ["sched_", "feed_"]
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -141,6 +143,7 @@ defmodule Arca.Schemas.CronSchedule do
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
     |> validate_missed_runs()
+    |> validate_name()
     |> unique_constraint(:name, name: :cron_schedules_athanor_kind_name_active)
     |> unique_constraint(:name, name: :cron_schedules_athanor_id_kind_name_index)
   end
@@ -189,6 +192,7 @@ defmodule Arca.Schemas.CronSchedule do
       :updated_at
     ])
     |> validate_inclusion(:concurrency, @concurrency)
+    |> validate_name()
     |> unique_constraint(:name, name: :cron_schedules_athanor_kind_name_active)
     |> unique_constraint(:name, name: :cron_schedules_athanor_id_kind_name_index)
   end
@@ -217,11 +221,24 @@ defmodule Arca.Schemas.CronSchedule do
       :updated_at
     ])
     |> validate_required([:resolved_reference])
+    |> validate_name()
     |> validate_profile_bound()
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
     |> validate_missed_runs()
     |> close_episode()
+  end
+
+  # A row is named by its id or its name in one lookup
+  # (`Arca.CronSchedule.get_by_id_or_name/3`), so no name may begin as an
+  # id does: an identifier then never means two rows, not even after the
+  # row an id named is deleted.
+  defp validate_name(changeset) do
+    validate_change(changeset, :name, fn :name, name ->
+      if String.starts_with?(name, @id_prefixes),
+        do: [name: "may not begin with sched_ or feed_, as only an id does"],
+        else: []
+    end)
   end
 
   # A component's schedule binds a profile and an Aqua line binds none,

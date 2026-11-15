@@ -302,7 +302,8 @@ defmodule Opus.Programs do
   row must be an enabled program; `args` are at most
   #{Prima.LocusBackends.max_argv()} words a person typed, each a string of
   at most 4096 bytes without a NUL, and never anything resolved from a
-  vault. Answers the session's id once the service runs it, by
+  vault, as an `Opus.Programs.Words` (a plain list is wrapped here), which
+  the session holds wrapped. Answers the session's id once the service runs it, by
   `deadline` (Unix milliseconds, #{div(60_000, 1000)} s from now unless
   given): past it the start is refused `:deadline`, the box closes
   whatever the service answers later, and a new start can be made at
@@ -314,7 +315,7 @@ defmodule Opus.Programs do
   @spec start(Sanctum.Context.t(), String.t(), %{
           required(:rows) => pos_integer(),
           required(:cols) => pos_integer(),
-          required(:args) => [String.t()],
+          required(:args) => Opus.Programs.Words.t() | [String.t()],
           required(:by) => :person | :aqua,
           optional(:deadline) => integer()
         }) :: {:ok, String.t()} | {:error, term()}
@@ -324,6 +325,8 @@ defmodule Opus.Programs do
         %{rows: rows, cols: cols, args: args, by: by} = opts
       )
       when is_binary(row_id) and by in [:person, :aqua] do
+    args = Opus.Programs.Words.new(args)
+
     with {:ok, {athanor_id, user_id} = person} <- person(ctx) |> no_stranger(),
          :ok <- size(rows, cols),
          :ok <- args(args),
@@ -376,8 +379,8 @@ defmodule Opus.Programs do
   answered the last of its output (an `Opus.Programs.Output`), the
   terminal's size and whether it is kept, after which the process
   receives `{Opus.Programs, session_id, {:bytes, delivery, output}}`,
-  each output an `Opus.Programs.Output` and each delivery numbered 1, 2,
-  … for this process, the next only once it said it took the last
+  each output an `Opus.Programs.Output` and each delivery a fresh random
+  token, the next only once it said it took the last by its token
   (`taken/3`); `{Opus.Programs, session_id, {:tail, delivery, output}}`
   when more came meanwhile than is kept for it, the last
   #{div(256 * 1024, 1024)} KiB, to show in place of what it showed; and
@@ -427,16 +430,16 @@ defmodule Opus.Programs do
   end
 
   @doc """
-  The calling process, attached to the session, took the delivery
-  numbered `delivery` (a page's browser drew it): when that is the one
+  The calling process, attached to the session, took the delivery whose
+  token is `delivery` (a page's browser drew it): when that is the one
   outstanding for it, it is handed what came since, or the next output.
   Until it says so it is handed nothing more, and what comes meanwhile
   is kept for it, the last #{div(256 * 1024, 1024)} KiB at most
-  (`Opus.Programs.Terminal`); any other number answers `:ok` and changes
+  (`Opus.Programs.Terminal`); any other token answers `:ok` and changes
   nothing. `{:error, :not_found}` for a session it is not attached to.
   """
-  @spec taken(Sanctum.Context.t(), String.t(), pos_integer()) :: :ok | {:error, term()}
-  def taken(%Sanctum.Context{} = ctx, session_id, delivery) when is_integer(delivery),
+  @spec taken(Sanctum.Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def taken(%Sanctum.Context{} = ctx, session_id, delivery) when is_binary(delivery),
     do: terminal_call(ctx, session_id, &{:taken, &1, self(), delivery})
 
   @doc "Set the session's terminal to `rows` by `cols`; its program is signalled the change."
@@ -575,13 +578,11 @@ defmodule Opus.Programs do
       else: {:error, :invalid_size}
   end
 
-  defp args(args) when is_list(args) do
+  defp args(%Opus.Programs.Words{list: args}) when is_list(args) do
     if length(args) <= Prima.LocusBackends.max_argv() and Enum.all?(args, &arg?/1),
       do: :ok,
       else: {:error, :invalid_args}
   end
-
-  defp args(_args), do: {:error, :invalid_args}
 
   defp arg?(arg),
     do:

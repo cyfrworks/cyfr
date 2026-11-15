@@ -39,7 +39,9 @@ defmodule PrismWeb.TerminalComponent do
   def ended_text(:unanswered), do: "The close was not confirmed yet; CYFR ends the program."
   def ended_text(:not_found), do: "This program is not running any more."
 
-  attr :terminal, :map, required: true, doc: "%{session, name, kept, ended, attached, back}"
+  attr :terminal, :map,
+    required: true,
+    doc: "%{session, name, kept, ended, attached, delivery, back}"
 
   @doc "The frame of the terminal `terminal` names."
   def frame(assigns) do

@@ -528,7 +528,7 @@ services:
     # The backends wire's health operation, answered without a key
     # (Prima.LocusBackends), in place of the image's builds probe.
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -X POST -H 'content-type: application/json' -d '{\"version\":2}' http://localhost:4101/locus/v1/backends/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -X POST -H 'content-type: application/json' -d '{\"version\":3}' http://localhost:4101/locus/v1/backends/health || exit 1"]
       interval: 10s
       timeout: 3s
       start_period: 20s

@@ -613,6 +613,13 @@ defmodule Prima.Refusal do
   defp row(:aqua_line_by_person),
     do: {:forbidden, "Only you, signed in, can give a schedule a line for Aqua or change it"}
 
+  # A schedule's update made against a definition the schedule no longer
+  # has (`Arca.CronSchedule.update/4`'s `definition:`).
+  defp row(:schedule_changed),
+    do:
+      {:conflict,
+       "This schedule changed since it was read; read it again and make the change there"}
+
   # A crew member whose brain cannot take a job yet (`Aqua.Crew.ready/2`):
   # the sentence says what the person does about it.
   defp row({:crew_unready, member, :no_brain}) when is_binary(member),

@@ -50,7 +50,7 @@ defmodule Opus.Programs.Session do
           required(:key) => String.t(),
           optional(:home_id) => String.t() | nil,
           optional(:mode) => :run | :terminal,
-          optional(:argv) => [String.t()],
+          optional(:argv) => Opus.Programs.Words.t(),
           optional(:rows) => pos_integer(),
           optional(:cols) => pos_integer(),
           optional(:timeout_ms) => pos_integer()
@@ -64,7 +64,7 @@ defmodule Opus.Programs.Session do
         home_id: Map.get(params, :home_id),
         key: params.key,
         mode: Map.get(params, :mode, :run),
-        argv: Map.get(params, :argv, []),
+        argv: params |> Map.get(:argv, Opus.Programs.Words.new([])) |> Opus.Programs.Words.list(),
         rows: Map.get(params, :rows),
         cols: Map.get(params, :cols)
       })

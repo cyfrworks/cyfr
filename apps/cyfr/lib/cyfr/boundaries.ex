@@ -768,7 +768,8 @@ defmodule Cyfr.Boundaries do
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -827,7 +828,8 @@ defmodule Cyfr.Boundaries do
           "row's status, a person's start of it on a terminal and a kept home's reset. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{
@@ -843,12 +845,13 @@ defmodule Cyfr.Boundaries do
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
           "shows the person's program terminals through the programs controller's facade " <>
-          "(`Opus.Programs.attach/2`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
+          "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
           "`close/2`, `running/1`) under the person's own context, and names none of " <>
           "either's internals. " <>
           "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
-          "`Programs.StatusRedaction`, `Schedules.Scheduler` and `Supervisor` beside its " <>
+          "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
+          "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
     },
     %{

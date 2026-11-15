@@ -55,11 +55,13 @@ class FakeWebLinks {
 let fitted
 let opened
 let windowListeners
+let focused
 
 beforeEach(() => {
   fitted = {rows: 30, cols: 100}
   opened = []
   windowListeners = {}
+  focused = true
   globalThis.window = {
     addEventListener: (type, fn) => (windowListeners[type] = fn),
     removeEventListener: (type) => delete windowListeners[type]
@@ -75,7 +77,8 @@ function mount() {
       Terminal: FakeTerminal,
       FitAddon: FakeFit,
       WebLinksAddon: FakeWebLinks,
-      open: (...args) => opened.push(args)
+      open: (...args) => opened.push(args),
+      focused: () => focused
     })
   )
   const screen = {}
@@ -139,6 +142,22 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
     assert.equal(Buffer.from(term.written[0]).toString(), "earlier\r\n")
   })
 
+  // Every screen attached to a session draws what the program writes; only
+  // the one the person is at sends, so a query is answered once.
+  test("a screen whose document has no focus sends nothing, and sends again once it has", () => {
+    const {term, pushed} = mount()
+    focused = false
+    term.data("\u001b[3;1R")
+    term.data("typed elsewhere")
+    assert.equal(pushed.filter((p) => p.event === "terminal_input").length, 0)
+
+    focused = true
+    term.data("k")
+    assert.deepEqual(pushed.filter((p) => p.event === "terminal_input").map((p) => p.payload), [
+      {session: "trm_1", terminal_input: "k"}
+    ])
+  })
+
   test("types what the person types, and draws only its own session's output", () => {
     const {term, pushed, handlers} = mount()
     term.data("code-1234\r")
@@ -157,7 +176,7 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
   // At the end the screen stays to be read, and takes nothing more.
   test("once its program ended, the screen keeps what it shows and sends nothing more", () => {
     const {hook, term, pushed, handlers} = mount()
-    handlers.terminal_output({session: "trm_1", delivery: 1, data: bytes("why it failed")})
+    handlers.terminal_output({session: "trm_1", delivery: "t-1", data: bytes("why it failed")})
     const before = pushed.length
     handlers.terminal_ended({session: "trm_other"})
     assert.equal(hook.ended, false)
@@ -169,27 +188,27 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
     assert.notEqual(term.written.at(-1), "reset")
 
     term.data("typed after\r")
-    handlers.terminal_output({session: "trm_1", delivery: 2, data: bytes("late")})
+    handlers.terminal_output({session: "trm_1", delivery: "t-2", data: bytes("late")})
     assert.equal(pushed.length, before)
     assert.equal(term.disposed, undefined)
   })
 
-  test("acknowledges each output by its number once drawn, and a tail replaces the screen", () => {
+  test("acknowledges each output by its token once drawn, and a tail replaces the screen", () => {
     const {term, pushed, handlers} = mount()
-    handlers.terminal_output({session: "trm_other", delivery: 1, data: bytes("not mine")})
+    handlers.terminal_output({session: "trm_other", delivery: "t-other", data: bytes("not mine")})
     assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 0)
 
-    handlers.terminal_output({session: "trm_1", delivery: 1, data: bytes("one")})
+    handlers.terminal_output({session: "trm_1", delivery: "t-1", data: bytes("one")})
     assert.deepEqual(pushed.at(-1), {
       event: "terminal_written",
-      payload: {session: "trm_1", delivery: 1},
+      payload: {session: "trm_1", delivery: "t-1"},
       reply: undefined
     })
 
-    handlers.terminal_tail({session: "trm_1", delivery: 2, data: bytes("the last of it")})
+    handlers.terminal_tail({session: "trm_1", delivery: "t-2", data: bytes("the last of it")})
     assert.equal(term.written.at(-2), "reset")
     assert.equal(Buffer.from(term.written.at(-1)).toString(), "the last of it")
-    assert.deepEqual(pushed.at(-1).payload, {session: "trm_1", delivery: 2})
+    assert.deepEqual(pushed.at(-1).payload, {session: "trm_1", delivery: "t-2"})
     assert.equal(pushed.filter((p) => p.event === "terminal_written").length, 2)
   })
 

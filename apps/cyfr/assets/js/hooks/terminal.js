@@ -13,5 +13,6 @@ export default TerminalHook({
   Terminal,
   FitAddon,
   WebLinksAddon,
-  open: (...args) => window.open(...args)
+  open: (...args) => window.open(...args),
+  focused: () => document.hasFocus()
 })

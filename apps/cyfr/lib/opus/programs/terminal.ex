@@ -21,8 +21,9 @@ defmodule Opus.Programs.Terminal do
   Any number of processes attach to it (`attach/3`), each monitored:
   each is answered the last #{div(256 * 1024, 1024)} KiB of output and the
   terminal's size, then hears `{Opus.Programs, id, {:bytes, delivery,
-  output}}` for what the program writes, each delivery numbered for it,
-  and `{Opus.Programs, id, {:ended, reason}}` once. A detach, or an
+  output}}` for what the program writes, each delivery named by a token
+  of its own that cannot be guessed, and `{Opus.Programs, id, {:ended,
+  reason}}` once. A detach, or an
   attached process's exit, ends nothing.
 
   Nothing a program prints can grow memory here without bound. The
@@ -30,9 +31,10 @@ defmodule Opus.Programs.Terminal do
   taken the last, so what a program prints faster than it is taken waits
   in the service's own bounded buffer, which drops its oldest. An
   attached process is handed the next output only once it has said it
-  took the last by its number (`Opus.Programs.taken/3`, which a page says
+  took the last by its token (`Opus.Programs.taken/3`, which a page says
   once its browser has drawn it), so one delivery at most is ever
-  unacknowledged for it, whatever it sends; what comes meanwhile is kept
+  unacknowledged for it, whatever it sends, and an acknowledgement
+  proves the delivery reached it; what comes meanwhile is kept
   for it, at most the last #{div(256 * 1024, 1024)} KiB, and handed whole
   as `{Opus.Programs, id, {:tail, delivery, output}}` when more than that
   came, which replaces what it shows. At the end it is handed what is
@@ -148,7 +150,7 @@ defmodule Opus.Programs.Terminal do
     if yours?(state, person) do
       subscribers =
         Map.put_new_lazy(state.subscribers, pid, fn ->
-          %{monitor: Process.monitor(pid), outstanding: nil, sent: 0, pending: nil, lost: false}
+          %{monitor: Process.monitor(pid), outstanding: nil, pending: nil, lost: false}
         end)
 
       state = state |> Map.put(:subscribers, subscribers) |> idle() |> changed()
@@ -162,11 +164,12 @@ defmodule Opus.Programs.Terminal do
 
   # An attached process took the delivery it names: when that is the one
   # outstanding for it, it is handed what came since, or the next output
-  # when nothing did. Any other number, repeated or never sent, changes
-  # nothing, so one delivery at most is ever unacknowledged per process.
+  # when nothing did. Any other token, repeated, guessed or never sent,
+  # changes nothing, so one delivery at most is ever unacknowledged per
+  # process, and only one that received it can name it.
   def handle_call({:taken, person, pid, delivery}, _from, state) do
     case state.subscribers do
-      %{^pid => %{outstanding: ^delivery} = subscriber} when is_integer(delivery) ->
+      %{^pid => %{outstanding: ^delivery} = subscriber} when is_binary(delivery) ->
         if yours?(state, person),
           do: {:reply, :ok, put_in(state.subscribers[pid], hand(state, pid, subscriber))},
           else: {:reply, {:error, :not_found}, state}
@@ -356,19 +359,12 @@ defmodule Opus.Programs.Terminal do
   end
 
   # What the program wrote is an `Output` from the moment it enters this
-  # process (the reader hands nothing else), in its state and in every
-  # message it handles, so no status, debug log or crash report has a
-  # byte of it to print. The words the program was started with are the
-  # person's, and are left out too.
+  # process (the reader hands nothing else), and the words it was started
+  # with are `Opus.Programs.Words` from the gate on, in its state and in
+  # every message it handles, so no status, debug log or crash report has
+  # a byte or a word of either to print.
   @impl true
-  def format_status(status) do
-    status
-    |> Map.new(fn
-      {:state, %{} = state} -> {:state, %{state | argv: :redacted}}
-      other -> other
-    end)
-    |> Opus.Programs.StatusRedaction.format_status()
-  end
+  def format_status(status), do: Opus.Programs.StatusRedaction.format_status(status)
 
   # ---------------------------------------------------------------------------
 
@@ -452,12 +448,12 @@ defmodule Opus.Programs.Terminal do
     deliver(state, pid, %{subscriber | pending: nil, lost: false}, kind, pending)
   end
 
-  # Each delivery to a process carries the next number of its own, which
+  # Each delivery to a process carries a fresh random token, which
   # its acknowledgement names (`taken/3`).
   defp deliver(state, pid, subscriber, kind, %Output{} = output) do
-    delivery = subscriber.sent + 1
+    delivery = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
     send(pid, {Opus.Programs, state.id, {kind, delivery, output}})
-    %{subscriber | outstanding: delivery, sent: delivery}
+    %{subscriber | outstanding: delivery}
   end
 
   defp unsubscribe(state, pid) do

@@ -1164,25 +1164,29 @@ defmodule Emissary.External.Provider do
          {:ok, rows} <- open_size(args, "rows", 24),
          {:ok, cols} <- open_size(args, "cols", 80),
          {:ok, server} <- program_row(ctx, name) do
-      case Opus.Programs.start(ctx, server.id, %{rows: rows, cols: cols, args: words, by: :person}) do
+      opts = %{rows: rows, cols: cols, args: words, by: :person}
+
+      case Opus.Programs.start(ctx, server.id, opts) do
         {:ok, session} -> {:ok, %{session: session, program: name}}
         {:error, reason} -> {:error, open_refusal(reason, name)}
       end
     end
   end
 
+  # The words are wrapped as they enter, so nothing that prints this
+  # process's state or a message of it prints them.
   defp open_args(%{"terminal_args" => words}) when is_list(words) do
     if Enum.all?(words, &is_binary/1),
-      do: {:ok, words},
+      do: {:ok, Opus.Programs.Words.new(words)},
       else: {:error, {:invalid_argument, "terminal_args are words of text"}}
   end
 
-  defp open_args(%{"terminal_args" => nil}), do: {:ok, []}
+  defp open_args(%{"terminal_args" => nil}), do: {:ok, Opus.Programs.Words.new([])}
 
   defp open_args(%{"terminal_args" => _}),
     do: {:error, {:invalid_argument, "terminal_args are words of text"}}
 
-  defp open_args(_args), do: {:ok, []}
+  defp open_args(_args), do: {:ok, Opus.Programs.Words.new([])}
 
   defp open_size(args, key, default) do
     case Map.get(args, key) do

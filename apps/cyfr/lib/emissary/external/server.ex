@@ -979,8 +979,7 @@ defmodule Emissary.External.Server do
       program: Opus.Programs.Definition.program_name(),
       key: @session_key,
       home_id: state.home_id,
-      mode: :run,
-      argv: []
+      mode: :run
     }
 
     case Opus.Programs.Session.open(state.grant, params) do

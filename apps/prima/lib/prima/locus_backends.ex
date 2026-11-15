@@ -1070,12 +1070,12 @@ defmodule Prima.LocusBackends do
 
   # ————— the health probe —————
 
-  @doc "The health probe's body: `{\"version\": 2}`."
+  @doc "The health probe's body: `{\"version\": #{@version}}`."
   @spec health_body() :: binary()
   def health_body, do: Jason.encode!(%{"version" => @version})
 
   @doc """
-  A health probe's body, read strictly: exactly `{"version": 2}`. Another
+  A health probe's body, read strictly: exactly `{"version": #{@version}}`. Another
   version, or none, is `{:error, {:version, presented}}`; anything else
   `:not_json` or `{:unknown_field, name}`.
   """
@@ -1913,7 +1913,7 @@ defmodule Prima.LocusBackends do
 
   # ————— refusals —————
 
-  @doc "The body a refusal is answered with: `{\"version\": 2, \"error\": <code>}`."
+  @doc "The body a refusal is answered with: `{\"version\": #{@version}, \"error\": <code>}`."
   @spec encode_refusal(refusal()) :: binary()
   def encode_refusal(refusal),
     do: Jason.encode!(%{"version" => @version, "error" => Atom.to_string(code(refusal))})

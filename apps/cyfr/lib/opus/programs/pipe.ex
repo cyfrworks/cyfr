@@ -80,7 +80,7 @@ defmodule Opus.Programs.Pipe do
           program: Opus.Programs.Definition.program_name(),
           home_id: owner.server_id,
           key: state.key,
-          argv: argv
+          argv: Opus.Programs.Words.new(argv)
         }
 
         spawn_link(fn ->
