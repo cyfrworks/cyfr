@@ -36,10 +36,10 @@ defmodule PrismWeb.ProgramsLive do
   empties it under the same uid (`mcp_servers.reset_home`). A program's
   folder is its own and is never shared.
 
-  Adding a program, an edit that lets it reach more and removing one are
-  each confirmed by the person (`program_definition`): the system layer
-  shows the whole definition, and the page repeats the change once it is
-  confirmed (`system_layer_repeat/4`). A removal's confirmation says that
+  Adding a program, every edit that changes its definition and removing
+  one are each confirmed by the person (`program_definition`): the system
+  layer shows the whole definition, and the page repeats the change once
+  it is confirmed (`system_layer_repeat/4`). A removal's confirmation says that
   its folder goes with it and which grants that use it will ask again.
 
   An expanded row's details are read again after it is enabled or
@@ -1278,7 +1278,8 @@ defmodule PrismWeb.ProgramsLive do
                           variant="ghost"
                           phx-click="delete"
                           phx-value-name={server[:name]}
-                          data-confirm="Delete this row?"
+                          data-confirm={delete_question(@detail)}
+                          data-test="delete-server"
                         >
                           Delete
                         </.button>
@@ -1294,6 +1295,14 @@ defmodule PrismWeb.ProgramsLive do
     </div>
     """
   end
+
+  # A tool server elsewhere is deleted on the browser's question, which
+  # names the grants that stand on it and will ask again
+  # (`mcp_servers.get`'s `grants`), as a program's confirmation does.
+  defp delete_question(%{grants: grants}) when is_list(grants),
+    do: "Delete this row? " <> SystemLayer.grants_asking_again(grants)
+
+  defp delete_question(_detail), do: "Delete this row?"
 
   attr :prefill, :map, required: true
 

@@ -321,12 +321,17 @@ defmodule Sanctum.Consent do
   arguments and its preview (`Sanctum.Consent.Authz.confirm/3`). Every
   other confirmed change is decided inside the Sanctum module that owns
   its data; a program row is written by `Emissary.External.Provider`
-  through Arca, so it asks for and consumes this one action here.
+  through Arca, so it asks for and consumes this one action here, for
+  the program operations alone (`mcp_servers.create`, `update` and
+  `delete`); any other operation is `{:error, :invalid_request}`.
   """
   @spec confirm_program_definition(Sanctum.Context.t(), Sanctum.Consent.Authz.change()) ::
           :ok | {:error, term()}
-  def confirm_program_definition(%Sanctum.Context{} = ctx, change),
-    do: Sanctum.Consent.Authz.confirm(ctx, :program_definition, change)
+  def confirm_program_definition(%Sanctum.Context{} = ctx, %{operation: operation} = change)
+      when operation in ["mcp_servers.create", "mcp_servers.update", "mcp_servers.delete"],
+      do: Sanctum.Consent.Authz.confirm(ctx, :program_definition, change)
+
+  def confirm_program_definition(%Sanctum.Context{}, _change), do: {:error, :invalid_request}
 
   @doc """
   The context's own person's confirmations of sensitive changes still

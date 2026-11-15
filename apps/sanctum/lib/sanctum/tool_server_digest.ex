@@ -59,10 +59,15 @@ defmodule Sanctum.ToolServerDigest do
   carries its own patterns and only ever reaches their intersection with
   the server's (`tool_patterns/1`). An http row has no mark, command, env
   or program settings; a program has no url.
-  Only a tool server has a digest: an `http` row or a program marked
-  `mcp`; a `driven` program offers no tools. A program of either mark is
-  recorded: its install confirmation shows and binds the record
-  (`Emissary.External.Provider`).
+
+  Every row has this digest (`definition/1`), and it is the one answer to
+  whether a row's definition changed: a program's change asks its
+  confirmation exactly when it moves the digest
+  (`Emissary.External.Provider`), and a login need's binding of a driven
+  program is approved at it (`Sanctum.Mount`), so a binding made for one
+  definition does not mount another. A grant's tool_server resource pins
+  it only of a tool server (`from_server/1`): an `http` row or a program
+  marked `mcp`; a `driven` program offers no tools.
 
   There is deliberately no stored digest column — a stored digest is a cache someone
   forgets to recompute; deriving at read makes "changed config ⇒ mismatch ⇒
@@ -84,8 +89,6 @@ defmodule Sanctum.ToolServerDigest do
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
-  def compute(%{mark: "driven"} = server), do: {:error, {:invalid_server_config, server}}
-
   def compute(server) do
     with {:ok, record, literals} <- record_of(server) do
       %{
@@ -221,9 +224,24 @@ defmodule Sanctum.ToolServerDigest do
     tool["inputSchema"] || tool["parameters"] || %{}
   end
 
-  @doc "The digest for a stored server row (`Arca.McpServerStorage`)."
+  @doc """
+  The digest of a stored row's definition (`Arca.McpServerStorage`), of
+  any transport and mark, `{:error, {:invalid_server_config, _}}` for one
+  whose record does not read. A row an add or an update would store reads
+  the same way, its `id` the stored row's.
+  """
+  @spec definition(map()) :: {:ok, String.t()} | {:error, term()}
+  def definition(server), do: server |> fields() |> compute()
+
+  @doc """
+  The digest a grant's tool_server resource pins of a stored tool server:
+  its `definition/1`. A `driven` program is no tool server and has none.
+  """
   @spec from_server(map()) :: {:ok, String.t()} | {:error, term()}
-  def from_server(server), do: server |> fields() |> compute()
+  def from_server(%{transport: "program", mark: "driven"} = server),
+    do: {:error, {:invalid_server_config, server}}
+
+  def from_server(server), do: definition(server)
 
   # A stored row as `compute/1` and `recorded/1` read it.
   defp fields(server) do

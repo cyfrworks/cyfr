@@ -47,14 +47,25 @@ defmodule Emissary.External.Provider do
 
   A program's definition is also a sensitive change (`program_definition`
   in `Sanctum.Pairing`'s table), confirmed by the person whatever surface
-  asks: adding a program, an update that lets it reach more than the
-  stored row (a new host, a new or changed vault binding, a larger memory
-  or disk bound, another command, sign-in command, mark or kind of
-  folder), and its removal, which names the grants that use it and will
-  ask again. The confirmation shows and binds the whole definition
-  (`definition_change/4`), so one given for `TOKEN=vault:personal` does
-  not admit `TOKEN=vault:work`. An update that only narrows asks nothing,
-  and a tool server elsewhere asks none.
+  asks, decided by what the row is and what it becomes: becoming a
+  program, by an add or by an update of a tool server elsewhere, is an
+  addition; a program whose definition an update moves
+  (`Sanctum.ToolServerDigest.definition/1`, the digest its grants are
+  bound at, so they ask again) is a change; a program that stops being
+  one, by its delete or by an update to a tool server elsewhere, is its
+  removal, which names every grant that stands on it and will ask again.
+  The confirmation shows and binds the whole definition and the row it
+  changes, its id and epoch (`definition_change/4`), so one given for
+  `TOKEN=vault:personal` does not admit `TOKEN=vault:work`, and the write
+  carries that id and epoch into the storage transaction, which refuses
+  another row or a row written since. A re-save that moves nothing asks
+  nothing, and a tool server elsewhere that stays one asks none.
+
+  Deleting any row, a tool server elsewhere's too, blocks every profile
+  whose grant stands on it (`Arca.McpServerStorage.delete/3`), so a
+  grant of a server that is gone asks again rather than refusing at use.
+  `get` names those grants (`grants`, `Sanctum.Mount.granted_to/2`), the
+  ones a change's or a removal's confirmation names too.
 
   `create` and `update` refuse a definition whose header names no active
   vault entry with a destination covering the server's URL, or whose
@@ -74,8 +85,9 @@ defmodule Emissary.External.Provider do
   is refused when the row has moved on. A write that changes what runs —
   update, delete, disable, restart — stops the server's process, which
   releases a program on the backends service; the next use starts it
-  again at the new epoch. A deleted program's sessions end and its kept
-  home is retired (`Emissary.External.Reconciler.row_deleted/2`).
+  again at the new epoch. A removed program's sessions end and its kept
+  home is retired (`Emissary.External.Reconciler.row_deleted/2`), whether
+  its row was deleted or made a tool server elsewhere.
 
   A literal credential in a credential-shaped header is refused rather than
   sealed — `mcp_servers.config_json` is not an encrypted column, and a token
@@ -414,7 +426,7 @@ defmodule Emissary.External.Provider do
   defp handle_create(ctx, args) do
     with {:ok, name, attrs} <- server_args(ctx, args),
          {:ok, cap} <- server_cap(),
-         :ok <- confirm_definition(ctx, "mcp_servers.create", name, nil, attrs) do
+         :ok <- confirm_change(ctx, name, nil, attrs) do
       attrs = Map.merge(attrs, %{name: name, cap: cap})
 
       case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs) do
@@ -447,14 +459,21 @@ defmodule Emissary.External.Provider do
          {:ok, args} <- kept_headers(ctx, args, epoch),
          {:ok, name, attrs} <- server_args(ctx, args),
          {:ok, stored} <- stored_at(ctx, name, epoch),
-         :ok <- confirm_definition(ctx, "mcp_servers.update", name, stored, attrs) do
-      case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, attrs, epoch) do
+         :ok <- confirm_change(ctx, name, stored, attrs) do
+      case Arca.McpServerStorage.update(
+             Sanctum.Context.actor(ctx),
+             name,
+             attrs,
+             %{id: stored.id, epoch: epoch}
+           ) do
         {:ok, %{enabled: true} = server} ->
           stop_process(ctx, name)
+          left_programs(ctx, stored, server)
           {:ok, ctx |> connect(server) |> with_warnings(server)}
 
         {:ok, server} ->
           stop_process(ctx, name)
+          left_programs(ctx, stored, server)
           changed(ctx)
           {:ok, server |> summary(%{status: "disabled"}) |> with_warnings(server)}
 
@@ -475,6 +494,13 @@ defmodule Emissary.External.Provider do
       end
     end
   end
+
+  # A program made a tool server elsewhere is removed as a program: its
+  # sessions end and its folder is retired, as its delete does.
+  defp left_programs(ctx, %{transport: "program"} = stored, %{transport: "http"}),
+    do: Emissary.External.Reconciler.row_deleted(ctx.athanor_id, stored)
+
+  defp left_programs(_ctx, _stored, _server), do: :ok
 
   defp kept_headers(_ctx, %{"keep_headers" => []} = args, _epoch), do: {:ok, args}
 
@@ -850,12 +876,16 @@ defmodule Emissary.External.Provider do
   defp error_text(reason), do: Sanctum.Refusals.render(reason)
 
   # The row is deleted first; stopping the process then releases what it
-  # ran.
+  # ran. The delete carries the row read and confirmed, its id and epoch.
   defp handle_delete(ctx, args) do
     with {:ok, name} <- name_arg(args),
          {:ok, stored} <- program_row(ctx, name),
-         :ok <- confirm_removal(ctx, name, stored) do
-      case Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), name) do
+         :ok <- confirm_change(ctx, name, stored, nil) do
+      case Arca.McpServerStorage.delete(
+             Sanctum.Context.actor(ctx),
+             name,
+             %{id: stored.id, epoch: stored.epoch}
+           ) do
         {:ok, server} ->
           stop_process(ctx, name)
           Emissary.External.Reconciler.row_deleted(ctx.athanor_id, server)
@@ -864,6 +894,10 @@ defmodule Emissary.External.Provider do
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}
+
+        {:error, :stale_epoch} ->
+          {:error,
+           {:conflict, "Server '#{name}' changed since it was read — read it again and retry"}}
 
         {:error, reason} ->
           Logger.warning(
@@ -880,40 +914,56 @@ defmodule Emissary.External.Provider do
   # ============================================================================
 
   # A program row's definition is a sensitive change (`program_definition`,
-  # `Sanctum.Pairing`): adding one, from Add program, an install block or
-  # the command line; an update that lets the stored row reach more
-  # (`widens?/2`); and its removal. A tool server elsewhere asks none, and
-  # neither does an update that only narrows what a program reaches.
-  defp confirm_definition(ctx, operation, name, stored, %{transport: "program"} = attrs) do
-    if is_nil(stored) or widens?(stored, attrs) do
-      row = Map.merge(%{id: folder_id(stored), enabled: enabled?(stored)}, attrs)
-      confirmed(ctx, definition_change(operation, name, row, nil))
-    else
-      :ok
+  # `Sanctum.Pairing`), decided by what the row is (`stored`, nil for an
+  # add) and what it becomes (`attrs`, nil for a delete): becoming a
+  # program is an addition, a program whose definition moves is a change,
+  # and a program that stops being one is its removal. Whether a program's
+  # definition moved is the one rule its grants are held to: its
+  # definition's digest (`Sanctum.ToolServerDigest.definition/1`), every
+  # value of its record and each literal's value with it.
+  # A confirmed change to a stored row names the grants that stand on it
+  # (`Sanctum.Mount.granted_to/2`): its digest moves, so each asks again.
+  defp confirm_change(ctx, name, nil, %{transport: "program"} = attrs) do
+    row = Map.merge(%{id: "new", enabled: true}, attrs)
+    confirmed(ctx, definition_change("mcp_servers.create", name, row, nil))
+  end
+
+  defp confirm_change(
+         ctx,
+         name,
+         %{transport: "program"} = stored,
+         %{transport: "program"} = attrs
+       ) do
+    row = Map.merge(stored, attrs)
+
+    if same_definition?(stored, row),
+      do: :ok,
+      else: confirm_with_grants(ctx, "mcp_servers.update", name, stored, row)
+  end
+
+  defp confirm_change(ctx, name, %{transport: "program"} = stored, _http_or_nothing),
+    do: confirm_with_grants(ctx, "mcp_servers.delete", name, stored, stored)
+
+  defp confirm_change(ctx, name, stored, %{transport: "program"} = attrs),
+    do: confirm_with_grants(ctx, "mcp_servers.create", name, stored, Map.merge(stored, attrs))
+
+  defp confirm_change(_ctx, _name, _tool_server, _tool_server_or_nothing), do: :ok
+
+  defp confirm_with_grants(ctx, operation, name, stored, row) do
+    case Sanctum.Mount.granted_to(ctx.athanor_id, stored) do
+      {:ok, grants} -> confirmed(ctx, definition_change(operation, name, row, grants))
+      {:error, :unavailable} -> {:error, grants_unavailable(name)}
     end
   end
 
-  defp confirm_definition(_ctx, _operation, _name, _stored, _attrs), do: :ok
+  defp grants_unavailable(name), do: {:unavailable, "The grants that use '#{name}'"}
 
-  defp folder_id(nil), do: "new"
-  defp folder_id(%{id: id}), do: id
-
-  defp enabled?(nil), do: true
-  defp enabled?(%{enabled: enabled}), do: enabled == true
-
-  # A removal names the grants it asks again (`Sanctum.Mount.granted_to/2`)
-  # before it is given: they are part of what is confirmed.
-  defp confirm_removal(ctx, name, %{transport: "program"} = stored) do
-    case Sanctum.Mount.granted_to(ctx.athanor_id, stored.id) do
-      {:ok, grants} ->
-        confirmed(ctx, definition_change("mcp_servers.delete", name, stored, grants))
-
-      {:error, :unavailable} ->
-        {:error, {:unavailable, "The grants that use '#{name}'"}}
+  defp same_definition?(stored, row) do
+    case {Sanctum.ToolServerDigest.definition(stored), Sanctum.ToolServerDigest.definition(row)} do
+      {{:ok, digest}, {:ok, digest}} -> true
+      _moved_or_unrecorded -> false
     end
   end
-
-  defp confirm_removal(_ctx, _name, _stored), do: :ok
 
   defp confirmed(ctx, {:ok, change}) do
     case Sanctum.Consent.confirm_program_definition(ctx, change) do
@@ -934,21 +984,24 @@ defmodule Emissary.External.Provider do
   @doc """
   The `program_definition` change `operation` (`mcp_servers.create`,
   `update` or `delete`) makes to the program row `row` named `name`, as
-  `Sanctum.Consent.confirm_program_definition/2` takes it: what the confirmation shows
-  and what it binds, from one definition.
+  `Sanctum.Consent.confirm_program_definition/2` takes it: what the
+  confirmation shows and what it binds, from one definition.
 
   The row is a stored row, or the row an add or update would store (its
-  `id` the stored row's, `"new"` for an add). What is shown is its record
-  (`Sanctum.ToolServerDigest.recorded/1`): the command, and each
-  environment variable by its name with the vault entry it names
-  (`TOKEN=vault:personal`), a literal by its name alone, and its
-  settings: the folder (a kept program's is the row's own, `"new"` until
-  it is made; a scratch program's is `"scratch"`), the hosts, the memory
-  and disk bounds and the sign-in command; and beside it the mark. A removal also names
-  `grants`, the components whose grant binds the row and asks again
-  (`Sanctum.Mount.granted_to/2`). The arguments are the same definition
-  with the row's stored config beside it, so a literal's value is bound
-  without being shown. `{:error, _}` for a row that is no program or
+  `id` and `epoch` the stored row's, `"new"` and none for an add). What
+  is shown is its record (`Sanctum.ToolServerDigest.recorded/1`): the
+  command, and each environment variable by its name with the vault
+  entry it names (`TOKEN=vault:personal`), a literal by its name alone,
+  and its settings: the folder (a kept program's is the row's own,
+  `"new"` until it is made; a scratch program's is `"scratch"`), the
+  hosts, the memory and disk bounds and the sign-in command; and beside
+  it the mark. A change to a stored row also names `grants`, the
+  components whose grant stands on the row and asks again
+  (`Sanctum.Mount.granted_to/2`), `nil` for an add of a new row. The
+  arguments are the same definition with the row's stored config beside
+  it, so a literal's value is bound without being shown, and the row's
+  id and epoch, so an approval given for one row admits no other row
+  made under its name. `{:error, _}` for a row that is no program or
   whose record does not read.
   """
   @spec definition_change(String.t(), String.t(), map(), [String.t()] | nil) ::
@@ -977,7 +1030,10 @@ defmodule Emissary.External.Provider do
       {:ok,
        %{
          operation: operation,
-         arguments: Map.merge(shown, %{"name" => name, "config" => row.config_json}),
+         arguments:
+           shown
+           |> Map.merge(%{"name" => name, "config" => row.config_json, "row" => row.id})
+           |> put_present("epoch", Map.get(row, :epoch)),
          resource: name,
          details: shown
        }}
@@ -1004,44 +1060,6 @@ defmodule Emissary.External.Provider do
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
-
-  # Whether `attrs`, a program's definition, reaches more than the stored
-  # row: a tool server made a program; another command, sign-in command,
-  # mark or kind of folder; a host the stored list does not hold, or no
-  # list where one stood; a larger memory or disk bound, or none where one
-  # stood; an environment variable bound to a vault entry, or to another
-  # entry, that it was not. Removing a binding, a host or raising nothing
-  # is no widening.
-  defp widens?(%{transport: "program"} = stored, attrs) do
-    old = Arca.McpServerStorage.config(stored)
-    new = Jason.decode!(attrs.config_json)
-
-    stored.mark != attrs.mark or old["command"] != new["command"] or
-      stored.login_command != attrs.login_command or stored.home != attrs.home or
-      larger?(stored.memory_bytes, attrs.memory_bytes) or
-      larger?(stored.home_max_bytes, attrs.home_max_bytes) or
-      more_hosts?(Definition.settings(stored)["hosts"], Definition.settings(attrs)["hosts"]) or
-      new_binding?(old["env"] || %{}, new["env"] || %{})
-  end
-
-  defp widens?(_tool_server, _attrs), do: true
-
-  # No bound is the largest.
-  defp larger?(nil, _new), do: false
-  defp larger?(old, new) when is_integer(old) and is_integer(new), do: new > old
-  defp larger?(_old, _new), do: true
-
-  # No list is every public host; a stored list that does not read is
-  # read as reaching nothing, so any new list asks.
-  defp more_hosts?(nil, _new), do: false
-
-  defp more_hosts?(old, new) when is_list(old) and is_list(new),
-    do: not MapSet.subset?(MapSet.new(new), MapSet.new(old))
-
-  defp more_hosts?(_old, _new), do: true
-
-  defp new_binding?(old, new),
-    do: Enum.any?(new, fn {var, value} -> VaultRef.vault_ref?(value) and old[var] != value end)
 
   # A program is released and started again at a new epoch.
   defp handle_restart(ctx, args) do
@@ -1190,16 +1208,23 @@ defmodule Emissary.External.Provider do
               _ -> []
             end
 
-          {:ok,
-           Map.merge(summary(server, %{}), %{
-             enabled: server.enabled,
-             config: readable_config(server),
-             status: format_status(status),
-             server_info: format_server_info(status),
-             tools: tools,
-             programs: program_status(ctx, server),
-             warnings: warnings(server)
-           })}
+          case Sanctum.Mount.granted_to(ctx.athanor_id, server) do
+            {:ok, grants} ->
+              {:ok,
+               Map.merge(summary(server, %{}), %{
+                 enabled: server.enabled,
+                 config: readable_config(server),
+                 status: format_status(status),
+                 server_info: format_server_info(status),
+                 tools: tools,
+                 programs: program_status(ctx, server),
+                 warnings: warnings(server),
+                 grants: grants
+               })}
+
+            {:error, :unavailable} ->
+              {:error, grants_unavailable(name)}
+          end
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}

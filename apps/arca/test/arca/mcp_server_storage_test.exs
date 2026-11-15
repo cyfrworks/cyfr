@@ -135,7 +135,7 @@ defmodule Arca.McpServerStorageTest do
       assert %{transport: "program", mark: "driven", home: "kept"} = piped
       assert {:ok, ^piped} = McpServerStorage.get(actor, "claude")
 
-      assert {:ok, %{epoch: 1}} =
+      assert {:ok, %{id: gh, epoch: 1}} =
                McpServerStorage.insert(actor, %{
                  cap: 0,
                  name: "gh",
@@ -156,7 +156,7 @@ defmodule Arca.McpServerStorageTest do
                    home_max_bytes: nil,
                    login_command: nil
                  },
-                 1
+                 %{id: gh, epoch: 1}
                )
 
       assert %{
@@ -408,16 +408,45 @@ defmodule Arca.McpServerStorageTest do
                })
 
       assert {:ok, %{epoch: 2}} =
-               McpServerStorage.update(actor, "casrow", %{url: "https://y.com/mcp"}, 1)
+               McpServerStorage.update(actor, "casrow", %{url: "https://y.com/mcp"}, %{
+                 id: id,
+                 epoch: 1
+               })
 
       assert {:error, :stale_epoch} =
-               McpServerStorage.update(actor, "casrow", %{url: "https://z.com/mcp"}, 1)
+               McpServerStorage.update(actor, "casrow", %{url: "https://z.com/mcp"}, %{
+                 id: id,
+                 epoch: 1
+               })
 
       assert {:error, :stale_epoch} = McpServerStorage.bump_epoch(actor, id, 1)
 
       assert {:ok, %{url: "https://y.com/mcp", epoch: 2}} = McpServerStorage.get(actor, "casrow")
 
-      assert {:error, :not_found} = McpServerStorage.update(actor, "absent", %{enabled: true}, 1)
+      assert {:error, :not_found} =
+               McpServerStorage.update(actor, "absent", %{enabled: true}, %{id: id, epoch: 2})
+    end
+
+    # The row a write expects is the row it read, by its id: another row
+    # made under the name at the same epoch is not written.
+    test "a write naming the row it read is refused on another row under the name",
+         %{actor: actor} do
+      assert {:ok, %{id: first}} =
+               McpServerStorage.insert(actor, %{cap: 0, name: "reborn", url: "https://x.com/mcp"})
+
+      assert {:ok, _} = McpServerStorage.delete(actor, "reborn")
+
+      assert {:ok, %{id: second, epoch: 1}} =
+               McpServerStorage.insert(actor, %{cap: 0, name: "reborn", url: "https://y.com/mcp"})
+
+      assert {:error, :stale_epoch} =
+               McpServerStorage.update(actor, "reborn", %{url: "https://z.com/mcp"}, %{
+                 id: first,
+                 epoch: 1
+               })
+
+      assert {:ok, %{id: ^second, url: "https://y.com/mcp", epoch: 1}} =
+               McpServerStorage.get(actor, "reborn")
     end
 
     test "an http row has a url and a program has none", %{actor: actor} do

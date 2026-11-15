@@ -410,7 +410,7 @@ defmodule Arca.ConsentStorageTest do
           nil
         )
 
-      assert {:ok, [profile_id]} = ConsentStorage.head_profiles_referencing(actor, row.id)
+      assert {:ok, [profile_id]} = ConsentStorage.head_profiles_on_row(actor, row)
       assert profile_id == profile.id
 
       assert {:ok, %{id: id}} = Arca.McpServerStorage.delete(actor, "claude")
@@ -418,6 +418,122 @@ defmodule Arca.ConsentStorageTest do
 
       assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, profile.id)
       assert {:ok, _head, []} = ConsentStorage.get_head(actor, profile.id)
+    end
+
+    # A grant of a program's tools names the row in the head's blob, on an
+    # edge's `tool_servers`, not in a binding row: it stands on the row as
+    # a login binding does, so the row's removal names it and blocks it.
+    test "a head that grants a row's tools stands on it, and the row's delete blocks it",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      row = program!(athanor, "github")
+
+      [granting, bound, elsewhere] =
+        for label <- ["granted", "bound", "elsewhere"] do
+          {:ok, profile} =
+            Writers.put_profile(%{
+              id: "prof_tools_" <> label,
+              athanor_id: athanor,
+              source_ref: "reagent:local.storage-test",
+              kind: "owner",
+              label: label,
+              status: "active"
+            })
+
+          profile
+        end
+
+      for {profile, server} <- [{granting, "github"}, {elsewhere, "another"}] do
+        policy = tool_grant_blob(server)
+
+        {:ok, _} =
+          ConsentStorage.insert_revision(
+            %{
+              consent_attrs(athanor, profile.id, 1)
+              | resolved_policy: policy,
+                blob_digest: Prima.Digest.sha256(policy)
+            },
+            [],
+            nil
+          )
+      end
+
+      {:ok, _} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, bound.id, 1),
+          [program_ref(row.id)],
+          nil
+        )
+
+      assert {:ok, standing} = ConsentStorage.head_profiles_on_row(actor, row)
+      assert standing == Enum.sort([granting.id, bound.id])
+
+      assert {:ok, _} = Arca.McpServerStorage.delete(actor, "github")
+
+      assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, granting.id)
+      assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, bound.id)
+      assert {:ok, %{status: "active"}} = ProfileStorage.get(actor, elsewhere.id)
+    end
+
+    # The row a person confirmed removing, by its id and epoch: another row
+    # made under its name, or the row written since, is not deleted.
+    test "a delete that expects a row deletes only that row at that epoch",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      first = program!(athanor, "claude")
+      Arca.Repo.delete!(first)
+      replacement = program!(athanor, "claude")
+
+      assert {:error, :stale_epoch} =
+               Arca.McpServerStorage.delete(actor, "claude", %{id: first.id, epoch: 1})
+
+      assert {:error, :stale_epoch} =
+               Arca.McpServerStorage.delete(actor, "claude", %{id: replacement.id, epoch: 2})
+
+      assert {:ok, %{id: standing}} = Arca.McpServerStorage.get(actor, "claude")
+      assert standing == replacement.id
+
+      assert {:ok, %{id: id}} =
+               Arca.McpServerStorage.delete(actor, "claude", %{id: replacement.id, epoch: 1})
+
+      assert id == replacement.id
+    end
+
+    defp tool_grant_blob(server) do
+      node = "reagent:local.storage-test"
+
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          node => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{
+              "@ingress" => %{
+                "tool_servers" => [
+                  %{
+                    "server_digest" => "sha256:granted",
+                    "server_name" => server,
+                    "tool_patterns" => ["*"],
+                    "record" => %{
+                      "address" => "npx -y server",
+                      "env" => [],
+                      "folder" => "scratch"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      })
     end
   end
 

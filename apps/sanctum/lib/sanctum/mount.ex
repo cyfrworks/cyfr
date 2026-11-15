@@ -26,14 +26,18 @@ defmodule Sanctum.Mount do
        otherwise), and its name is the program the component's trusted
        manifest names for the need (`{:another_program, row_name}`
        otherwise: the binding mounts another program);
-    4. only then is the binding used (`Sanctum.Attach.lifetime/3`), which
+    4. the row's definition is the one the binding was approved at
+       (`Sanctum.ToolServerDigest.definition/1`, the binding's digest):
+       a row whose command, environment or settings changed since is
+       `:binding_went_stale`, and the grant asks again;
+    5. only then is the binding used (`Sanctum.Attach.lifetime/3`), which
        consumes a `once` binding for this root, so a mount refused by any
        check above consumes nothing.
 
   A consent offers a login need the athanor's own program rows that fit
   it (`programs/1`, `Prima.Manifest.Needs.fit/2`) and binds one by its id
-  at `binding_digest/1`, read again at the commit (`program/2`); a share
-  is never offered for it.
+  at its definition's digest, read again at the commit (`program/2`); a
+  share is never offered for it.
 
   `agents_mounting/2` and `orphaned_homes/1` are the reads the programs
   controller makes of the same rows: the agents whose brain runs in a
@@ -55,6 +59,7 @@ defmodule Sanctum.Mount do
           | :connection_not_granted
           | :grant_expired
           | :unavailable
+          | :binding_went_stale
           | {:program_unavailable, String.t()}
           | {:another_program, String.t()}
           | {:unavailable, String.t()}
@@ -84,6 +89,7 @@ defmodule Sanctum.Mount do
          :ok <- Attach.live(ctx, binding, use),
          :ok <- own(binding),
          {:ok, row} <- program_row(ctx, binding.entry_id, program),
+         :ok <- approved_at(row, binding),
          :ok <- Attach.lifetime(ctx, binding, use) do
       {:ok, row}
     end
@@ -111,18 +117,6 @@ defmodule Sanctum.Mount do
   @spec program(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def program(%Context{} = ctx, row_id) when is_binary(row_id),
     do: Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id)
-
-  @doc """
-  The digest a login need's binding of the program row `row` is approved
-  at: the row and the program it is, so a binding of a row made again
-  under its name, or of another program, does not pass a commit's
-  re-read.
-  """
-  @spec binding_digest(map()) :: String.t()
-  def binding_digest(%{id: id, name: name}) when is_binary(id) and is_binary(name) do
-    {:ok, digest} = Prima.JCS.hash(%{"row" => id, "program" => name})
-    digest
-  end
 
   # The edge's binding of the need: a row id under a key whose edge names
   # this need when it names one.
@@ -152,6 +146,20 @@ defmodule Sanctum.Mount do
         false
     end
   end
+
+  defp approved_at(row, %{binding_digest: approved}) when is_binary(approved) do
+    case Sanctum.ToolServerDigest.definition(row) do
+      {:ok, digest} ->
+        if Plug.Crypto.secure_compare(digest, approved),
+          do: :ok,
+          else: {:error, :binding_went_stale}
+
+      {:error, _unrecorded} ->
+        {:error, :binding_went_stale}
+    end
+  end
+
+  defp approved_at(_row, _binding), do: {:error, :binding_went_stale}
 
   defp own(%{scope: "athanor"}), do: :ok
   defp own(_shared_or_unscoped), do: {:error, :connection_not_granted}
@@ -201,19 +209,21 @@ defmodule Sanctum.Mount do
   end
 
   @doc """
-  The components whose grant binds the program row `row_id` of
+  The components whose grant stands on the row `row` (`%{id, name}`) of
   `athanor_id`: the source of each profile there, not revoked, whose head
-  binds the row (`Arca.ConsentStorage.head_profiles_referencing/2`),
-  sorted, each once. They are the grants a removal of the row asks again
-  (`Arca.McpServerStorage.delete/2`), which its confirmation names before
-  it is given. `{:error, :unavailable}` when the store cannot answer.
+  binds the row to a login need or grants its tools
+  (`Arca.ConsentStorage.head_profiles_on_row/2`, the same answer the
+  row's delete blocks), sorted, each once. They are the grants a removal
+  of the row asks again, which its confirmation names before it is
+  given. `{:error, :unavailable}` when the store cannot answer.
   """
-  @spec granted_to(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, :unavailable}
-  def granted_to(athanor_id, row_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
+  @spec granted_to(String.t(), %{id: String.t(), name: String.t()}) ::
+          {:ok, [String.t()]} | {:error, :unavailable}
+  def granted_to(athanor_id, %{id: id, name: name} = row)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_binary(name) do
     actor = Prima.Actor.in_athanor(athanor_id)
 
-    with {:ok, ids} <- Arca.ConsentStorage.head_profiles_referencing(actor, row_id),
+    with {:ok, ids} <- Arca.ConsentStorage.head_profiles_on_row(actor, row),
          {:ok, profiles} <- profiles(actor, ids) do
       {:ok,
        for(

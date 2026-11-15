@@ -1862,7 +1862,8 @@ defmodule Sanctum.Consent.Commit do
   # Nothing is unsealed.
   defp fetch_bound(ctx, {:own, id}, %{kind: "login"} = declared_need, need) do
     with {:ok, row} <- fetch_program(ctx, id),
-         :exact <- Prima.Manifest.Needs.fit(declared_need, row) do
+         :exact <- Prima.Manifest.Needs.fit(declared_need, row),
+         {:ok, digest} <- program_digest(row) do
       {:ok, destination} = Prima.Destination.from_map(%{"program" => row.name})
 
       {:ok,
@@ -1876,7 +1877,7 @@ defmodule Sanctum.Consent.Commit do
            attach_only: true,
            destination: Prima.Destination.canonical(destination)
          },
-         digest: Sanctum.Mount.binding_digest(row),
+         digest: digest,
          scope: "athanor",
          kind: "program",
          provider: "",
@@ -2127,6 +2128,15 @@ defmodule Sanctum.Consent.Commit do
     case Sanctum.Mount.program(ctx, id) do
       {:ok, row} -> {:ok, row}
       {:error, reason} -> {:error, {:entry_unavailable, id, reason}}
+    end
+  end
+
+  # A login need binds a program row at its definition's digest
+  # (`Sanctum.Mount`); a row whose definition does not read is bound by none.
+  defp program_digest(row) do
+    case Sanctum.ToolServerDigest.definition(row) do
+      {:ok, digest} -> {:ok, digest}
+      {:error, _unrecorded} -> {:error, {:entry_unavailable, row.id, :unrecorded}}
     end
   end
 
@@ -2874,7 +2884,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp live_digest(ctx, %{destination: %{"program" => _program}, entry_id: id}) do
-    with {:ok, row} <- fetch_program(ctx, id), do: {:ok, Sanctum.Mount.binding_digest(row)}
+    with {:ok, row} <- fetch_program(ctx, id), do: program_digest(row)
   end
 
   defp live_digest(ctx, %{entry_id: id}) do

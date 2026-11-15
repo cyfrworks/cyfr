@@ -254,9 +254,37 @@ defmodule Sanctum.ToolServerDigestTest do
                ToolServerDigest.from_server(row.(~s({"a":1})))
     end
 
-    test "only a tool server has a digest: a driven program and an old kind have none" do
+    # Every row's definition has a digest, a driven program's too, which
+    # its login grants are bound at; only a tool server's is pinned by a
+    # grant of its tools.
+    test "a driven program's definition has a digest, which it is no tool server's" do
+      driven = %{@program | mark: "driven"}
+      {:ok, mcp} = ToolServerDigest.compute(@program)
+      assert {:ok, digest} = ToolServerDigest.compute(driven)
+      refute digest == mcp
+
+      {:ok, moved} = ToolServerDigest.compute(%{driven | env: %{"NODE_ENV" => "development"}})
+      refute moved == digest
+
+      row = fn mark ->
+        %{
+          id: "srv_driven",
+          transport: "program",
+          mark: mark,
+          url: nil,
+          enabled: true,
+          home: "kept",
+          config_json: ~s({"command":"claude","env":{}})
+        }
+      end
+
+      assert {:ok, _} = ToolServerDigest.definition(row.("driven"))
+      assert {:error, {:invalid_server_config, _}} = ToolServerDigest.from_server(row.("driven"))
+      assert ToolServerDigest.from_server(row.("mcp")) == ToolServerDigest.definition(row.("mcp"))
+    end
+
+    test "an old kind or a broken row has no digest" do
       for row <- [
-            %{@program | mark: "driven"},
             %{@program | mark: nil},
             %{@base | mark: "mcp"},
             %{@program | transport: "stdio", mark: nil},

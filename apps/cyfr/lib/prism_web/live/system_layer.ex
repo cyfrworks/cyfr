@@ -2989,7 +2989,7 @@ defmodule PrismWeb.SystemLayer do
         entry: assigns.panel.entry,
         methods: (assigns.panel.entry && assigns.panel.entry[:methods]) || [],
         open: assigns.panel.status in [:pending, :waiting],
-        removal: removal(assigns.panel.entry)
+        consequence: consequence(assigns.panel.entry)
       )
 
     ~H"""
@@ -3010,7 +3010,9 @@ defmodule PrismWeb.SystemLayer do
         test="confirmation-preview"
       />
 
-      <p :if={@removal} class="text-sm" data-test="confirmation-removal">{@removal}</p>
+      <p :if={@consequence} class="text-sm" data-test="confirmation-consequence">
+        {@consequence}
+      </p>
 
       <p
         :if={is_nil(@entry) or is_nil(@entry[:preview])}
@@ -3279,31 +3281,53 @@ defmodule PrismWeb.SystemLayer do
   defp detail(value) when is_list(value), do: Enum.join(value, ", ")
   defp detail(value), do: value
 
-  # What removing a program does beyond its row, said before it is
-  # confirmed: its sessions and its folder end with it, and the grants
-  # that use it, which its confirmation names, ask again.
-  defp removal(%{
+  # What a program's change does beyond its row, said before it is
+  # confirmed: a removal ends its sessions and its folder; and every
+  # change to a stored row makes the grants that stand on it, which its
+  # confirmation names, ask again.
+  defp consequence(%{
          action: "program_definition",
-         preview: %{"operation" => "mcp_servers.delete", "details" => details}
+         preview: %{"operation" => operation, "details" => details}
        }) do
     ends =
-      if details["folder"] == "scratch",
-        do: "Removing it ends its sessions.",
-        else: "Removing it ends its sessions and removes its folder with everything kept there."
+      cond do
+        operation != "mcp_servers.delete" ->
+          []
 
-    case details["grants_asking_again"] do
-      [one] ->
-        "#{ends} The one grant that uses it will ask again: #{one}."
+        details["folder"] == "scratch" ->
+          ["Removing it ends its sessions."]
 
-      [_ | _] = all ->
-        "#{ends} The #{length(all)} grants that use it will ask again: #{Enum.join(all, ", ")}."
+        true ->
+          ["Removing it ends its sessions and removes its folder with everything kept there."]
+      end
 
-      _none ->
-        "#{ends} No grant uses it."
+    grants =
+      case details["grants_asking_again"] do
+        "none" -> [grants_asking_again([])]
+        [_ | _] = all -> [grants_asking_again(all)]
+        _no_stored_row -> []
+      end
+
+    case ends ++ grants do
+      [] -> nil
+      said -> Enum.join(said, " ")
     end
   end
 
-  defp removal(_entry), do: nil
+  defp consequence(_entry), do: nil
+
+  @doc """
+  The sentence that names the grants, by their components, that a change
+  to a program row or tool server makes ask again
+  (`Sanctum.Mount.granted_to/2`): what a confirmation of the change and
+  a tool server's delete say alike.
+  """
+  @spec grants_asking_again([String.t()]) :: String.t()
+  def grants_asking_again([]), do: "No grant uses it."
+  def grants_asking_again([one]), do: "The one grant that uses it will ask again: #{one}."
+
+  def grants_asking_again(all) when is_list(all),
+    do: "The #{length(all)} grants that use it will ask again: #{Enum.join(all, ", ")}."
 
   # The client that asked, as the home named it: a hint, never a proof.
   defp asker(%{"kind" => "client"} = asker), do: "a paired device#{named(asker)}"

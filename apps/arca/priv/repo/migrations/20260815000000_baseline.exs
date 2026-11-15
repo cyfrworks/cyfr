@@ -1958,8 +1958,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     # several rows of one consent. `consumed_by_root` is the root
     # execution a `once` binding was consumed under. A program row is
     # deleted, not tombstoned as an entry is, so its bindings go with it;
-    # its delete first blocks the profiles whose head binds it
-    # (`Arca.McpServerStorage.delete/2`), which then ask again.
+    # its delete first blocks the profiles whose head stands on it
+    # (`Arca.McpServerStorage.delete/3`), which then ask again.
     create table(:consent_vault_refs, primary_key: false) do
       add :consent_id, references(:consents, column: :id, type: :string), null: false
       add :athanor_id, :string, null: false

@@ -961,7 +961,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert has_element?(
              view,
-             ~s([data-test="confirmation-removal"]),
+             ~s([data-test="confirmation-consequence"]),
              "Removing it ends its sessions and removes its folder with everything kept there. " <>
                "No grant uses it."
            )
@@ -1047,9 +1047,14 @@ defmodule PrismWeb.ProgramsLiveTest do
              "api.example.com, registry.npmjs.org"
            )
 
-    # Fewer hosts reach less: nothing is asked.
+    # Fewer hosts are a change to the definition, confirmed as any is.
     view |> form("form#hosts-fetch", %{"hosts" => "api.example.com"}) |> render_submit()
     answered(view)
+
+    assert %{"details" => %{"hosts" => ["api.example.com"]}} =
+             asked(user, athanor, "mcp_servers.update")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
     assert open_confirmations(user, athanor) == []
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "fetch")
     assert Jason.decode!(row.hosts) == ["api.example.com"]
@@ -1165,7 +1170,10 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute_received {:control, "home", _home, _fields}
   end
 
-  test "an Edit that only narrows saves at once, and a stale epoch is refused in the form",
+  # Every change to a program's definition is confirmed, a narrower one
+  # too, and its confirmation says which grants will ask again.
+  test "an Edit that only narrows is confirmed, saying which grants ask again, and a stale " <>
+         "epoch is refused in the form",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()
 
@@ -1189,6 +1197,13 @@ defmodule PrismWeb.ProgramsLiveTest do
     view |> form("form#add-program", %{"memory_mib" => "1024"}) |> render_submit()
     answered(view)
 
+    assert %{"details" => %{"memory_bytes" => "1073741824", "grants_asking_again" => "none"}} =
+             asked(user, athanor, "mcp_servers.update")
+
+    assert has_element?(view, ~s([data-test="confirmation-consequence"]), "No grant uses it.")
+    assert {:ok, ^row} = Arca.McpServerStorage.get(ctx(athanor), "gh")
+
+    confirm!(view, user, athanor, "mcp_servers.update")
     assert open_confirmations(user, athanor) == []
     assert {:ok, saved} = Arca.McpServerStorage.get(ctx(athanor), "gh")
     assert {saved.id, saved.home, saved.memory_bytes} == {row.id, "kept", 1_073_741_824}
@@ -1356,6 +1371,76 @@ defmodule PrismWeb.ProgramsLiveTest do
       })
 
     row
+  end
+
+  # A tool server elsewhere is deleted on the browser's question, which
+  # names the grant of its tools that will ask again; the delete blocks it.
+  test "Delete on a tool server names the grants of its tools, which ask again once it is gone",
+       %{conn: conn, athanor: athanor, user: user} do
+    tool_server!(user, athanor)
+    source = "reagent:local.relay-user"
+    granted = Sanctum.Context.internal(athanor_id: athanor.id, scope: :athanor)
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        granted,
+        %{
+          id: "prof_relay_user",
+          kind: :owner,
+          source_ref: source,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "cons_relay_user",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          resolved_policy:
+            Jason.encode!(%{
+              "canonical" => "jcs-1",
+              "nodes" => %{
+                source => %{
+                  "limits" => Prima.Test.AuthorityFixtures.limits_map(),
+                  "edges" => %{
+                    "@ingress" => %{
+                      "tool_servers" => [
+                        %{
+                          "server_digest" => "sha256:relay",
+                          "server_name" => "relay",
+                          "tool_patterns" => ["search"],
+                          "record" => %{"address" => "https://127.0.0.1:9/mcp", "headers" => []}
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }),
+          activation: %{source => "sha256:act"}
+        }
+      )
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=relay]") |> render_click()
+
+    assert has_element?(
+             view,
+             ~s([data-test="delete-server"][data-confirm="Delete this row? ) <>
+               ~s(The one grant that uses it will ask again: #{source}."])
+           )
+
+    view |> element(~s([data-test="delete-server"])) |> render_click()
+    answered(view)
+
+    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "relay")
+    assert open_confirmations(user, athanor) == []
+
+    assert {:ok, %{status: "needs_consent"}} =
+             Arca.ProfileStorage.get(ctx(athanor), "prof_relay_user")
   end
 
   defp edit_relay(view) do

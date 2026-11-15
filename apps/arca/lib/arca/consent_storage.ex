@@ -62,9 +62,10 @@ defmodule Arca.ConsentStorage do
   it directly. A selection names no entry on the borrower's row and takes
   no lock.
 
-  A program row's delete (`Arca.McpServerStorage.delete/2`) takes its row
-  and then blocks the profiles whose heads bind it (`block_dependents/4`),
-  so it meets a revision binding the row in the same order.
+  A row's delete (`Arca.McpServerStorage.delete/3`) takes its row and then
+  blocks the profiles whose heads stand on it (`head_profiles_on_row/2`,
+  `block_dependents/4`), so it meets a revision binding the row in the
+  same order.
 
   The one order is vault entries by athanor and id; then program rows by
   id; then shares by id; then the profiles, deduplicated and ordered by athanor and id before any
@@ -788,8 +789,7 @@ defmodule Arca.ConsentStorage do
   def get_head(%Prima.Actor{}, _profile_id), do: {:error, :no_athanor}
 
   @doc """
-  Profiles whose **head** revision references a vault entry, or the
-  program row a login need binds, by its id.
+  Profiles whose **head** revision references a vault entry, by its id.
 
   Deliberately head-only: counting every historical revision would
   over-report — a profile that dropped the entry two revisions ago is not
@@ -806,7 +806,7 @@ defmodule Arca.ConsentStorage do
           on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
           join: p in Arca.Schemas.Profile,
           on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
-          where: r.vault_entry_id == ^vault_entry_id or r.mcp_server_id == ^vault_entry_id,
+          where: r.vault_entry_id == ^vault_entry_id,
           distinct: true,
           select: p.id
         )
@@ -819,6 +819,72 @@ defmodule Arca.ConsentStorage do
   end
 
   def head_profiles_referencing(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
+
+  @doc """
+  The one answer to what stands on the `mcp_servers` row `row`
+  (`%{id, name}`) of the actor's athanor: the profiles there whose
+  **head** revision binds it to a login need, by its id (a
+  `consent_vault_refs` row), or grants its tools, by its name (a
+  `tool_servers` resource on any edge of the head's blob,
+  `Prima.Authority.Blob`), each id once, sorted. A tool-server grant is
+  scoped to its profile's athanor, so only this athanor's heads are read;
+  a head whose blob does not parse grants nothing and is not answered.
+
+  A program's removal names their sources before it is confirmed
+  (`Sanctum.Mount.granted_to/2`), and the row's delete blocks them in its
+  transaction (`block_dependents/4`), from this one answer.
+  """
+  @spec head_profiles_on_row(Prima.Actor.t(), %{id: String.t(), name: String.t()}) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def head_profiles_on_row(%Prima.Actor{athanor_id: athanor_id}, %{id: id, name: name})
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_binary(name) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_profiles_on_row", fn ->
+      bound =
+        from(r in ConsentVaultRef,
+          join: c in Consent,
+          on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
+          where: r.mcp_server_id == ^id,
+          select: p.id
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+
+      granted =
+        from(c in Consent,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
+          select: {p.id, c.resolved_policy}
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+        |> Enum.flat_map(fn {profile_id, policy} ->
+          if grants_tools_of?(policy, name), do: [profile_id], else: []
+        end)
+
+      {:ok, Enum.sort(Enum.uniq(bound ++ granted))}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def head_profiles_on_row(%Prima.Actor{}, _row), do: {:error, :no_athanor}
+
+  defp grants_tools_of?(policy, name) when is_binary(policy) do
+    case Prima.Authority.Blob.parse(policy) do
+      {:ok, %Prima.Authority.Blob{nodes: nodes}} ->
+        Enum.any?(nodes, fn {_ref, node} ->
+          Enum.any?(node.edges, fn {_key, edge} ->
+            Enum.any?(edge.tool_servers, &(&1.server_name == name))
+          end)
+        end)
+
+      {:error, _unparsed} ->
+        false
+    end
+  end
+
+  defp grants_tools_of?(_policy, _name), do: false
 
   @doc """
   The edges by which the **head** revisions of the actor's athanor reach
@@ -911,7 +977,9 @@ defmodule Arca.ConsentStorage do
   @doc """
   Block, for `actor`, every profile that depends on what a transaction is
   changing, in that transaction: the profiles of `entry`'s athanor whose head binds the
-  entry (`{athanor_id, entry_id}`, or nil for none) and the profiles, in
+  entry (`{athanor_id, entry_id}`, or nil for none), or stands on the
+  `mcp_servers` row it names (`{athanor_id, %{id, name}}`,
+  `head_profiles_on_row/2`), and the profiles, in
   every athanor, whose head binds one of `share_ids`. The union is
   deduplicated and ordered by athanor and id before any is locked; the
   ones not revoked are then locked in that order and each takes
@@ -933,7 +1001,7 @@ defmodule Arca.ConsentStorage do
   """
   @spec block_dependents(
           Prima.Actor.t(),
-          {String.t(), String.t()} | nil,
+          {String.t(), String.t() | %{id: String.t(), name: String.t()}} | nil,
           [String.t()],
           String.t()
         ) :: {:ok, [{String.t(), String.t()}]} | {:error, :cross_tenant | term()}
@@ -961,6 +1029,11 @@ defmodule Arca.ConsentStorage do
   end
 
   defp entry_heads(nil), do: []
+
+  defp entry_heads({athanor_id, %{id: _, name: _} = row}) do
+    {:ok, ids} = head_profiles_on_row(Prima.Actor.in_athanor(athanor_id), row)
+    Enum.map(ids, &{athanor_id, &1})
+  end
 
   defp entry_heads({athanor_id, entry_id}) do
     {:ok, ids} = head_profiles_referencing(Prima.Actor.in_athanor(athanor_id), entry_id)

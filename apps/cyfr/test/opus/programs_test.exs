@@ -1262,6 +1262,20 @@ defmodule Opus.ProgramsTest do
     ctx
   end
 
+  # Whether the login binding the crew member's brain holds still binds
+  # its program row as the row stands now (`Sanctum.Consent.row_binding/3`).
+  defp binding_of_brain(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.harnessbrain")
+    {:ok, consent} = Sanctum.Consent.head_consent(ctx, profile.id)
+    [ref] = Enum.filter(consent.vault_refs, &is_binary(&1.mcp_server_id))
+
+    case Sanctum.Consent.row_binding(ctx, consent, ref) do
+      {:program, _id, {:ok, _row}} -> :ok
+      {:program, _id, refused} -> refused
+    end
+  end
+
   defp commit!(ctx, ref, over) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
     decisions = Map.merge(%{ref: ref}, over)
@@ -1729,7 +1743,11 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{epoch: 2}} = update.(confirmed, "personal")
     end
 
-    test "an update that only narrows asks nothing, and one that reaches more asks",
+    # Every change to what a program's definition holds asks, a narrower
+    # one too: there is no change that is only narrowing. A re-save that
+    # changes nothing asks nothing.
+    test "every change to a program's definition asks, and a re-save that changes nothing " <>
+           "asks nothing",
          %{ctx: ctx, admin: admin, row: row} do
       vault_entry(ctx, %{name: "personal"})
       vault_entry(ctx, %{name: "work"})
@@ -1745,7 +1763,7 @@ defmodule Opus.ProgramsTest do
         "hosts" => ["a.example", "b.example"],
         "memory_bytes" => 1_073_741_824,
         "home_max_bytes" => 2_147_483_648,
-        "env" => %{"TOKEN" => "vault:personal", "OTHER" => "vault:work"}
+        "env" => %{"TOKEN" => "vault:personal", "NODE_ENV" => "production"}
       }
 
       update = fn ctx, epoch, config ->
@@ -1760,35 +1778,221 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{epoch: 2}} =
                Sanctum.TestContext.confirming(person, &update.(&1, row.epoch, wide))
 
-      narrow =
-        Map.merge(wide, %{
-          "hosts" => ["a.example"],
-          "memory_bytes" => 536_870_912,
-          "home_max_bytes" => 1_073_741_824,
-          "env" => %{"TOKEN" => "vault:personal"}
-        })
+      # The same definition, its hosts in another order, is saved again
+      # with nothing asked.
+      assert {:ok, %{epoch: 3}} =
+               update.(person, 2, Map.put(wide, "hosts", ["b.example", "a.example"]))
 
-      # Fewer hosts, smaller bounds and a binding removed reach less.
-      assert {:ok, %{epoch: 3}} = update.(person, 2, narrow)
       assert confirmations(person, "mcp_servers.update") |> length() == 1
 
       for {why, config} <- [
-            {"a host added", Map.put(narrow, "hosts", ["a.example", "c.example"])},
-            {"no host list", Map.delete(narrow, "hosts")},
-            {"a larger memory bound", Map.put(narrow, "memory_bytes", 2_147_483_648)},
-            {"no memory bound", Map.delete(narrow, "memory_bytes")},
-            {"a larger disk bound", Map.put(narrow, "home_max_bytes", 4_294_967_296)},
-            {"a binding added",
-             Map.put(narrow, "env", %{"TOKEN" => "vault:personal", "MORE" => "vault:work"})},
-            {"a binding changed", Map.put(narrow, "env", %{"TOKEN" => "vault:work"})},
-            {"another command", Map.put(narrow, "command", "npx -y other")},
-            {"another sign-in command", Map.put(narrow, "login_command", "claude login --other")},
-            {"another mark", Map.put(narrow, "mark", "mcp")}
+            {"a host removed", Map.put(wide, "hosts", ["a.example"])},
+            {"a host added", Map.put(wide, "hosts", ["a.example", "b.example", "c.example"])},
+            {"no host list", Map.delete(wide, "hosts")},
+            {"a smaller memory bound", Map.put(wide, "memory_bytes", 536_870_912)},
+            {"no memory bound", Map.delete(wide, "memory_bytes")},
+            {"a smaller disk bound", Map.put(wide, "home_max_bytes", 1_073_741_824)},
+            {"a binding removed", Map.put(wide, "env", %{"NODE_ENV" => "production"})},
+            {"a binding changed", put_in(wide, ["env", "TOKEN"], "vault:work")},
+            {"a literal's value changed", put_in(wide, ["env", "NODE_ENV"], "development")},
+            {"a literal removed", Map.put(wide, "env", %{"TOKEN" => "vault:personal"})},
+            {"another command", Map.put(wide, "command", "npx -y other")},
+            {"another sign-in command", Map.put(wide, "login_command", "claude login --other")},
+            {"no sign-in command", Map.delete(wide, "login_command")},
+            {"a scratch folder",
+             wide |> Map.put("home", "scratch") |> Map.delete("home_max_bytes")},
+            {"another mark", Map.put(wide, "mark", "mcp")}
           ] do
         assert {:error, {:confirmation_required, _signal}} = update.(person, 3, config), why
       end
 
       assert {:ok, %{epoch: 3}} = Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # A literal environment value is part of what a program is: with
+    # `sh -c "$DEBUG"`, DEBUG from "printf safe" to "cat .credentials" is
+    # another program in the same signed-in folder. The change asks, and
+    # the login grant made for the old definition is stale once it lands.
+    test "a literal environment value changed asks again, and the login grant made for the " <>
+           "old definition no longer binds the row",
+         %{ctx: ctx, admin: admin, row: row} do
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      actor = Sanctum.Context.actor(ctx)
+
+      update = fn ctx, epoch, debug ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => epoch,
+          "config" => %{
+            "transport" => "program",
+            "mark" => "driven",
+            "home" => "kept",
+            "command" => ~s(sh -c "$DEBUG"),
+            "login_command" => "claude auth login",
+            "memory_bytes" => 1_073_741_824,
+            "home_max_bytes" => 2_147_483_648,
+            "env" => %{"DEBUG" => debug}
+          }
+        })
+      end
+
+      assert {:ok, %{epoch: 2}} =
+               Sanctum.TestContext.confirming(person, &update.(&1, row.epoch, "printf safe"))
+
+      ctx = harness_member!(ctx, row.id)
+      assert binding_of_brain(ctx) == :ok
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               update.(person, 2, "cat .credentials")
+
+      assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(actor, "claude")
+
+      # What the prompt shows is what happens: the grants that bind the
+      # row ask again, and it names them.
+      assert %{
+               "operation" => "mcp_servers.update",
+               "details" => %{
+                 "environment" => ["DEBUG (a literal, not shown)"],
+                 "grants_asking_again" => [
+                   "agent:local.harness",
+                   "catalyst:local.harnessbrain"
+                 ]
+               }
+             } = preview(person, id)
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, %{epoch: 3}} = update.(%{person | confirmation_id: id}, 2, "cat .credentials")
+      assert binding_of_brain(ctx) == {:error, :binding_went_stale}
+    end
+
+    # Leaving the programs is a program's removal and asks as one, naming
+    # the grants that use it; coming to them is an addition.
+    test "an update that makes a program a tool server elsewhere asks its removal, and one " <>
+           "that makes a tool server a program asks its addition",
+         %{ctx: ctx, admin: admin, row: row} do
+      Prima.Test.Env.put_app_env(:cyfr, :external_server_reconciler_enabled, true)
+      start_supervised!(Emissary.External.Reconciler)
+      ctx = harness_member!(ctx, row.id)
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      actor = Sanctum.Context.actor(ctx)
+
+      update = fn ctx, epoch, config ->
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "update",
+          "name" => "claude",
+          "epoch" => epoch,
+          "config" => config
+        })
+      end
+
+      elsewhere = %{"transport" => "http", "url" => "https://example.com/mcp"}
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               update.(person, row.epoch, elsewhere)
+
+      assert {:ok, ^row} = Arca.McpServerStorage.get(actor, "claude")
+
+      assert %{
+               "operation" => "mcp_servers.delete",
+               "resource" => "claude",
+               "details" => %{
+                 "folder" => folder,
+                 "grants_asking_again" => [
+                   "agent:local.harness",
+                   "catalyst:local.harnessbrain"
+                 ]
+               }
+             } = preview(person, id)
+
+      assert folder == row.id
+
+      Sanctum.TestContext.prove!(person, id)
+      home = row.id
+
+      assert {:ok, _} = update.(%{person | confirmation_id: id}, row.epoch, elsewhere)
+
+      assert {:ok, %{transport: "http", mark: nil, epoch: 2}} =
+               Arca.McpServerStorage.get(actor, "claude")
+
+      # Its folder goes with it, as a removal's does.
+      assert_receive {:control, "home", %{"op" => "retire", "home_id" => ^home}, _}, 2_000
+
+      program = %{
+        "transport" => "program",
+        "mark" => "driven",
+        "home" => "kept",
+        "command" => "npx -y @anthropic-ai/claude-code",
+        "env" => %{}
+      }
+
+      assert {:error, {:confirmation_required, %{id: id}}} = update.(person, 2, program)
+      assert %{"operation" => "mcp_servers.create", "resource" => "claude"} = preview(person, id)
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, _} = update.(%{person | confirmation_id: id}, 2, program)
+      assert {:ok, %{transport: "program", epoch: 3}} = Arca.McpServerStorage.get(actor, "claude")
+    end
+
+    # An approval is given for one row: another row made under its name
+    # since, with the same definition, is not removed on it.
+    test "a removal confirmed for one row does not remove another made under its name",
+         %{ctx: ctx, admin: admin} do
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+      first = driven_row(ctx, "twin", %{home: "scratch", home_max_bytes: nil})
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "twin"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} = delete.(person)
+      Sanctum.TestContext.prove!(person, id)
+
+      # The row is replaced under its name, the same definition.
+      {:ok, _} = Arca.McpServerStorage.delete(actor, "twin")
+      second = driven_row(ctx, "twin", %{home: "scratch", home_max_bytes: nil})
+      refute second.id == first.id
+
+      assert {:error, {:confirmation_required, %{id: other}}} =
+               delete.(%{person | confirmation_id: id})
+
+      refute other == id
+      assert {:ok, %{id: standing}} = Arca.McpServerStorage.get(actor, "twin")
+      assert standing == second.id
+    end
+
+    # A grant of a program's tools stands on the row as a login grant
+    # does: its removal names it, and blocks it in the delete's
+    # transaction.
+    test "removing a program names and asks again the grants of its tools",
+         %{ctx: ctx, admin: admin} do
+      vault_entry(ctx)
+      github = mcp_row(ctx, "github")
+      ctx = %{ctx | origin: :interactive}
+      actor = Sanctum.Context.actor(ctx)
+      ref = "reagent:local.tool-user"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "tool-user",
+          version: "1.0.0",
+          type: "reagent"
+        })
+
+      commit!(ctx, ref, %{tool_servers: [%{server_name: "github"}]})
+      assert {:ok, [%{status: "active"}]} = Arca.ProfileStorage.list_for_source(actor, ref)
+
+      {person, _user} = Sanctum.TestContext.person!(%{admin | origin: :interactive})
+      delete = &Provider.handle("mcp_servers", &1, %{"action" => "delete", "name" => "github"})
+
+      assert {:error, {:confirmation_required, %{id: id}}} = delete.(person)
+
+      assert %{
+               "operation" => "mcp_servers.delete",
+               "details" => %{"grants_asking_again" => [^ref]}
+             } = preview(person, id)
+
+      Sanctum.TestContext.prove!(person, id)
+      assert {:ok, %{deleted: "github", id: deleted}} = delete.(%{person | confirmation_id: id})
+      assert deleted == github.id
+      assert {:ok, [%{status: "needs_consent"}]} = Arca.ProfileStorage.list_for_source(actor, ref)
     end
 
     # Removing a program ends its sessions and retires its folder, and every

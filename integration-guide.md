@@ -1413,9 +1413,10 @@ environment, marked by how it is spoken to: `mcp`, CYFR's MCP client
 speaking to it over the lines of a session the service runs for it, its
 tools named `<row>:<tool>`, or `driven`, a program a person or a brain
 runs. A package that bundles several MCP servers is a row for each. A
-tool server elsewhere is an `http` row. Adding a program, an update that
-lets it reach more and its removal are each confirmed by the person, who
-is shown the whole definition (`program_definition`, as `mcp_servers`
+tool server elsewhere is an `http` row. Adding a program, every update
+that changes its definition and its removal, an update that makes it a
+tool server elsewhere included, are each confirmed by the person, who is
+shown the whole definition (`program_definition`, as `mcp_servers`
 documents it). A program's process runs under a pooled uid of its own, or
 its kept folder's, started by `cyfr-locus`, with an environment built
 only from its definition and a memory bound of its own; the service keeps nothing of CYFR's, and CYFR

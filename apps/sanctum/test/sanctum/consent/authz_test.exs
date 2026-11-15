@@ -1009,6 +1009,26 @@ defmodule Sanctum.Consent.AuthzTest do
       refute again == confirmed.confirmation_id
     end
 
+    # The program action is as narrow as its name: a change of any other
+    # operation is refused before a record is opened or read, even one
+    # confirmed under the program action.
+    test "a program's definition is confirmed for the three program operations alone",
+         %{session_ctx: session_ctx} do
+      for operation <- ["vault.create", "profile.grant", "mcp_servers.enable"] do
+        change = %{operation: operation, arguments: %{name: "prod-key"}, resource: "prod-key"}
+        confirmed = Sanctum.TestContext.confirmed(session_ctx, :program_definition, change)
+
+        assert {:error, :invalid_request} =
+                 Sanctum.Consent.confirm_program_definition(confirmed, change),
+               operation
+
+        assert record(session_ctx, confirmed.confirmation_id).state == "confirmed"
+      end
+
+      assert {:error, :invalid_request} =
+               Sanctum.Consent.confirm_program_definition(session_ctx, %{arguments: %{}})
+    end
+
     test "check/3 consumes nothing, and consume/2 consumes inside the caller's transaction",
          %{session_ctx: session_ctx} do
       confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())

@@ -598,10 +598,13 @@ defmodule Sanctum.Consent.Loader do
   defp live_program(ctx, id, digest) do
     case Sanctum.Mount.program(ctx, id) do
       {:ok, row} ->
-        if is_binary(digest) and
-             Plug.Crypto.secure_compare(Sanctum.Mount.binding_digest(row), digest),
-           do: {:ok, row},
-           else: {:error, :binding_went_stale}
+        with true <- is_binary(digest),
+             {:ok, live} <- Sanctum.ToolServerDigest.definition(row),
+             true <- Plug.Crypto.secure_compare(live, digest) do
+          {:ok, row}
+        else
+          _moved_or_unrecorded -> {:error, :binding_went_stale}
+        end
 
       {:error, _} = refused ->
         refused

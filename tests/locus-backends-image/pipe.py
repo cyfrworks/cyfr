@@ -301,7 +301,7 @@ def cyfr_controller(image):
         expect(athanor, "a person is signed in on cyfr, in an athanor of their own", signed_in)
 
         created = confirmed(stack, token, {"action": "create", "name": ROW, "config": {
-            "transport": "program", "mark": "driven", "home": "kept", "backends": [{"name": "cat", "command": COMMAND}],
+            "transport": "program", "mark": "driven", "home": "kept", "command": COMMAND, "env": {},
         }})
         print(f"created: {json.dumps(created)[:400]}", flush=True)
         row_id = created.get("id")

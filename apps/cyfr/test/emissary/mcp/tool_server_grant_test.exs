@@ -329,7 +329,10 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # The whole definition replaced, the same command, every public host.
     {:ok, _} =
-      Arca.McpServerStorage.update(actor, "fetcher", %{hosts: nil}, program.epoch)
+      Arca.McpServerStorage.update(actor, "fetcher", %{hosts: nil}, %{
+        id: program.id,
+        epoch: program.epoch
+      })
 
     Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
