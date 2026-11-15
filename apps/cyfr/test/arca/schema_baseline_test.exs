@@ -819,6 +819,8 @@ defmodule Arca.SchemaBaselineTest do
     %{
       id: "thr_#{System.unique_integer([:positive])}",
       athanor_id: "ath_schema",
+      kind: "daily",
+      day: Arca.Test.Days.next(),
       title: "Claimed",
       created_by: "usr_schema",
       turn_seq: 0,

@@ -16,7 +16,6 @@ defmodule Arca.TurnTransitionContractTest do
 
   alias Arca.ExecutionAttempts
   alias Arca.Schemas.{Execution, ExecutionAttempt, Turn, TurnStep}
-  alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
 
   @standing %{grant: :stored, verify: &Arca.Test.Actor.admits/1}

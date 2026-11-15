@@ -80,8 +80,11 @@ defmodule Aqua.Day do
   """
   @spec put_zone(String.t(), term()) :: :ok | {:error, term()}
   def put_zone(user_id, zone) when is_binary(user_id) do
-    with true <- zone?(zone) || {:error, :invalid_zone},
-         {:ok, user} <- Users.get(user_id) do
+    if zone?(zone), do: keep_zone(user_id, zone), else: {:error, :invalid_zone}
+  end
+
+  defp keep_zone(user_id, zone) do
+    with {:ok, user} <- Users.get(user_id) do
       if Users.prefs(user)["time_zone"] == zone do
         :ok
       else
