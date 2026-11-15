@@ -334,16 +334,20 @@ describe("shell verbs go over the port", () => {
     for (const {verb, message} of fixture.shell.filter(({verb}) => !CANVAS_VERBS.includes(verb))) {
       const received = nextMessage(shell)
       let asking = null
-      if (verb === "open") api.open(message.args.ref, message.args.subject ?? null)
+      if (verb === "open") asking = api.open(message.args.ref, message.args.subject ?? null)
       else if (verb === "title") api.title(message.args.title)
       else if (verb === "credential") api.credential(message.args.name)
       else if (verb === "request") asking = api.request(message.args.operation, message.args.args)
       else api[verb]()
       const got = await received
-      // A request is numbered by the page's own count, its answer under it.
-      const call = verb === "request" ? got.args.call : undefined
+      // An open and a request are numbered by the page's own count, each
+      // answer under it.
+      const call = verb === "request" || verb === "open" ? got.args.call : undefined
       assert.deepEqual(got, call === undefined ? message : {...message, args: {...message.args, call}}, verb)
-      if (asking) {
+      if (verb === "open") {
+        shell.postMessage(toFrameMessage("opened", FRAME, {call, outcome: "opened"}))
+        assert.deepEqual({...(await asking)}, {outcome: "opened"})
+      } else if (asking) {
         shell.postMessage(toFrameMessage("decided", FRAME, {call, outcome: "approved"}))
         assert.deepEqual({...(await asking)}, {outcome: "approved"})
       }
@@ -1275,9 +1279,11 @@ describe("a canvas asks the shell", () => {
     api.ready()
 
     await eventually(() => heard.length === 3)
+    const call = heard[1].args.call
+    assert.ok(Number.isInteger(call) && call > 0)
     assert.deepEqual(heard, [
       {v: 1, verb: "press", frame: CANVAS, args: PRESS},
-      {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup"}},
+      {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup", call}},
       {v: 1, verb: "ready", frame: CANVAS, args: {}}
     ])
   })
@@ -1438,7 +1444,10 @@ describe("a canvas reports its own failure, once", () => {
     open()
     await eventually(() => heard.length === 2)
     await tick()
-    assert.deepEqual(heard, [failed("load"), {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup"}}])
+    assert.deepEqual(heard, [
+      failed("load"),
+      {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup", call: heard[1].args.call}}
+    ])
   })
 
   test("an uncaught error or an unhandled rejection after ready() is no failure: nothing is reported", async () => {
@@ -1550,6 +1559,26 @@ describe("a desktop's verbs and data", () => {
     const expected = {prefs: OPEN.canvas.prefs, appearance: OPEN.canvas.appearance, person: OPEN.canvas.person}
     assert.deepEqual({...api.desktop}, expected)
     assert.deepEqual({...seen[0]}, expected)
+  })
+
+  test("an open posts the wire's message under its call and settles with the shell's answer", async () => {
+    const client = await canvasClient()
+    const port = client.open(SHOWN)
+    const {api, heard} = client
+
+    const opened = api.open("t:local.weather-lookup")
+    const tooSoon = api.open("t:local.vault", {kind: "run", id: "exec_1"})
+    const refused = api.open("t:local.nobody")
+    await eventually(() => sent(heard, "open").length === 3)
+    const [first, second, third] = sent(heard, "open").map(({args}) => args)
+    assert.deepEqual(second, {ref: "t:local.vault", subject: {kind: "run", id: "exec_1"}, call: first.call + 1})
+
+    answerOn(port, "opened", {call: second.call, outcome: "cancelled", reason: "too_soon"})
+    answerOn(port, "opened", {call: first.call, outcome: "opened"})
+    answerOn(port, "opened", {call: third.call, outcome: "refused", reason: "not_found"})
+    assert.deepEqual({...(await opened)}, {outcome: "opened"})
+    assert.deepEqual({...(await tooSoon)}, {outcome: "cancelled", reason: "too_soon"})
+    assert.deepEqual({...(await refused)}, {outcome: "refused", reason: "not_found"})
   })
 
   test("a press of a control posts the wire's message and settles with the shell's answer; a feed's press answers nothing", async () => {
@@ -1698,17 +1727,18 @@ describe("a desktop's verbs and data", () => {
     api.ask("runs")
     api.settings("schedules")
     api.settings(atRecord.page, atRecord.ref)
-    api.open("t:local.runs", {kind: "url", id: "x"})
+    await assert.rejects(api.open("t:local.runs", {kind: "url", id: "x"}), {code: "invalid_argument"})
     api.open("t:local.runs", subject)
     await settled(client)
 
+    const asked = heard.filter(({verb}) => ["ask", "settings", "open"].includes(verb))
     assert.deepEqual(
-      heard.filter(({verb}) => ["ask", "settings", "open"].includes(verb)).map(({verb, args}) => [verb, args]),
+      asked.map(({verb, args}) => [verb, args]),
       [
         ["ask", {widget: "runs"}],
         ["settings", {page: "schedules"}],
         ["settings", atRecord],
-        ["open", {ref: "t:local.runs", subject}]
+        ["open", {ref: "t:local.runs", subject, call: asked[3].args.call}]
       ]
     )
   })
