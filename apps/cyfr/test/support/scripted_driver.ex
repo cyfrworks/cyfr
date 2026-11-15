@@ -6,7 +6,7 @@ defmodule Cyfr.Test.ScriptedDriver do
   AQUA's browser driver as a script, on the terminal sessions of a
   scripted backends service (`Cyfr.Test.ScriptedBackends`, `set(fake,
   :terminal, pid)`): it speaks the driver's framing as the driver does
-  (`Opus.Browser.Frame`, `tests/fixtures/browser_frames.json`), with
+  (`Opus.Browser.Frame`, whose vectors bind it to the driver), with
   Chrome's part answered by the test. Test-only.
 
   On a session's start it writes `hello`. Each request is reported to the
