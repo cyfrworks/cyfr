@@ -1258,6 +1258,9 @@ defmodule PrismWeb.ShellDesktopTest do
       main = canvas(view).id
       subject = %{"kind" => "run", "id" => "exec_0190f3a2"}
 
+      # The canvas is told `installed` with its open, so it lists the app.
+      handshake!(view, main)
+
       verb!(view, main, :open, %{
         "ref" => "tincture:local.plain-view",
         "subject" => subject,
@@ -1275,29 +1278,30 @@ defmodule PrismWeb.ShellDesktopTest do
       assert app.subject == subject
       assert handshake!(view, app.id)["subject"] == subject
 
-      # An app's own open is answered too, under its call.
-      verb!(view, app.id, :open, %{"ref" => "tincture:local.plain-view", "call" => 8}, nil)
+      # An app's own open is answered too, under its call. An app is told
+      # no list of tinctures, so a subject it names that the tincture does
+      # not take is refused as a tincture not listed is: the refusal tells
+      # it nothing about what is installed.
       app_id = app.id
-      assert answer!(view, app_id, "opened") == %{"call" => 8, "outcome" => "opened"}
 
-      # An app is told no list of tinctures, so a subject it names that the
-      # tincture does not take is refused as a tincture not listed is: the
-      # refusal tells it nothing about what is installed.
       verb!(
         view,
-        app.id,
+        app_id,
         :open,
-        %{"ref" => "tincture:local.plain-view", "subject" => subject, "call" => 9},
+        %{"ref" => "tincture:local.plain-view", "subject" => subject, "call" => 8},
         nil
       )
 
       assert answer!(view, app_id, "opened") ==
-               %{"call" => 9, "outcome" => "refused", "reason" => "not_found"}
+               %{"call" => 8, "outcome" => "refused", "reason" => "not_found"}
 
-      verb!(view, app.id, :open, %{"ref" => "tincture:local.nobody", "call" => 10}, nil)
+      verb!(view, app_id, :open, %{"ref" => "tincture:local.nobody", "call" => 9}, nil)
 
       assert answer!(view, app_id, "opened") ==
-               %{"call" => 10, "outcome" => "refused", "reason" => "not_found"}
+               %{"call" => 9, "outcome" => "refused", "reason" => "not_found"}
+
+      verb!(view, app_id, :open, %{"ref" => "tincture:local.plain-view", "call" => 10}, nil)
+      assert answer!(view, app_id, "opened") == %{"call" => 10, "outcome" => "opened"}
     end
 
     test "opening an existing app on another subject delivers the new subject", %{conn: conn} do

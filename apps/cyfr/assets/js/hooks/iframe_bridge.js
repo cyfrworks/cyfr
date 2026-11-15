@@ -327,10 +327,10 @@ const IframeBridge = {
 
     // A call number used already is a replay or a forgery, and an answer
     // under it, the bridge's or the shell's, would settle the call that
-    // number belongs to: it is dropped and answered nothing. Every verb
-    // that carries a call is held to it, an app's open as a canvas's,
+    // number belongs to: it is dropped and answered nothing. A person's
+    // verb and every open are held to it, an app's open as a canvas's,
     // whatever the person's input says about it.
-    if ("call" in message.args) {
+    if ((person || message.verb === "open") && "call" in message.args) {
       if (message.args.call <= this._lastCall) {
         this._drop()
         return
