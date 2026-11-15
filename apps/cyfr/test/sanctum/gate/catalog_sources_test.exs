@@ -124,13 +124,13 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
       read = &Compendium.Providers.Component.answer_sources(nil, &1)
       pulled = Prima.Source.outside("catalyst:acme.weather")
 
-      assert read.(%{"component_ref" => "catalyst:local.claude:1.4.2"}) == []
+      assert read.(%{"component_ref" => "catalyst:local.claude:1.4.3"}) == []
       assert read.(%{"component_ref" => "catalyst:acme.weather:0.2.0"}) == [pulled]
       assert read.(%{component_ref: "catalyst:acme.weather:0.2.0", needs: []}) == [pulled]
 
       listing = %{
         components: [
-          %{component_ref: "catalyst:local.claude:1.4.2", description: "shipped"},
+          %{component_ref: "catalyst:local.claude:1.4.3", description: "shipped"},
           %{component_ref: "catalyst:acme.weather:0.2.0", description: "theirs"},
           %{component_ref: "catalyst:acme.weather:0.3.0", description: "theirs again"}
         ],

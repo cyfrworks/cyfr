@@ -6,16 +6,14 @@ defmodule Sanctum.Providers.Session do
   Session tool handlers for the Sanctum MCP provider — logout, whoami,
   the person's name here, their account's keys and sessions here and one
   session's end, a protected device's unlock and lock, and the caller's
-  self-description resources. A command line signs in as
-  a protected device does (`Sanctum.DeviceUnlock`): its shell unlocks on
-  its device channel and spends the ticket at `POST /device/session`.
+  self-description resources.
 
   `unlock` and `lock` are a protected device's, through its device
   channel alone (`auth_method: :device`, a client that reports a holder):
   `unlock` with no arguments answers an `unlock` challenge, and with its
   `proof` alone a single-use `ticket`, the `session_id` it reserved and
-  the ticket's `expires_at` (ms), which the device's browser, or its
-  command line, redeems for its session (`Sanctum.DeviceUnlock`); `lock` with the `lock` proof the
+  the ticket's `expires_at` (ms), which the device's browser redeems for
+  its session (`Sanctum.DeviceUnlock`); `lock` with the `lock` proof the
   device signed for that session retires it, `locked: true` even when it
   is already gone. A browser's session, or any other context, is refused.
 
@@ -159,7 +157,8 @@ defmodule Sanctum.Providers.Session do
   end
 
   def handle(%Context{authenticated: false}, %{"action" => "whoami"}) do
-    {:error, {:invalid_argument, "Not authenticated. Run 'cyfr login' to sign in."}}
+    {:error,
+     {:invalid_argument, "Not authenticated. Sign in on CYFR's screen, or call with an API key."}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "whoami"}) do

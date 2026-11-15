@@ -85,7 +85,6 @@ defmodule Prima.DeviceTest do
       admission =
         case message["admission"] do
           %{"setup" => token} -> %{admission: {:setup, token}}
-          %{"invitation" => code} -> %{admission: {:invitation, code}}
           nil -> %{}
         end
 
@@ -103,7 +102,7 @@ defmodule Prima.DeviceTest do
                  )}}
     end
 
-    assert Enum.map(hellos, &Map.keys(&1["admission"] || %{})) == [["setup"], ["invitation"], []]
+    assert Enum.map(hellos, &Map.keys(&1["admission"] || %{})) == [["setup"], []]
   end
 
   test "the public checks of a hello's fields agree with its vectors" do
@@ -116,7 +115,6 @@ defmodule Prima.DeviceTest do
 
       case message["admission"] do
         %{"setup" => token} -> assert Device.setup_token?(token)
-        %{"invitation" => code} -> assert Device.invitation_code?(code)
         nil -> :ok
       end
     end
@@ -133,9 +131,6 @@ defmodule Prima.DeviceTest do
           case m["admission"] do
             %{"setup" => token} = admission when map_size(admission) == 1 ->
               refute Device.setup_token?(token)
-
-            %{"invitation" => code} = admission when map_size(admission) == 1 ->
-              refute Device.invitation_code?(code)
 
             _not_one_capability ->
               :ok
@@ -200,7 +195,7 @@ defmodule Prima.DeviceTest do
     assert {:ok, {:refused, %{error: %{"class" => "unauthenticated", "message" => sentence}}}} =
              Device.decode(message, :home)
 
-    assert sentence == Prima.Refusal.message(:invitation_invalid)
+    assert sentence == Prima.Refusal.message(:setup_closed)
   end
 
   test "every refusal is refused with its reason, and its field when it names one" do
