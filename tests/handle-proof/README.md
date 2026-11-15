@@ -126,8 +126,11 @@ row must leave a read filtered by that very field. The write has the
 database's own checks off for it alone (on a CYFR, SQLite's foreign keys
 and CHECK constraints; on the registry, foreign keys for the transaction
 and the table's CHECK constraints, dropped by the tamper and added back
-from their saved definitions by the restore). The restore runs however the
-comparison ends, and after it the whole table, and the CYFR's whole schema
+from their saved definitions by the restore). On a CYFR a value is
+written in the storage class its column declares, a blob to a BLOB column,
+as the server's own writes store it. The restore runs however the
+comparison ends, and after it the whole table with each stored value's
+storage class, and the CYFR's whole schema
 or every constraint on the registry's table as PostgreSQL prints it, must
 be what they were before the first tamper, and the registry's session back
 to `origin`.
