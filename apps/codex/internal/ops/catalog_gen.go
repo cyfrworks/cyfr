@@ -2266,7 +2266,7 @@ type McpServersOpenArgs struct {
 	// The program's server name; its command runs in its own folder
 	Name string `json:"name"`
 	// Words to follow the program's command, as a person typed them (at most 64)
-	Args Field[[]string] `json:"args,omitzero"`
+	TerminalArgs Field[[]string] `json:"terminal_args,omitzero"`
 	// The terminal's rows, 1 to 1000 (default 24)
 	Rows Field[int] `json:"rows,omitzero"`
 	// The terminal's columns, 1 to 1000 (default 80)

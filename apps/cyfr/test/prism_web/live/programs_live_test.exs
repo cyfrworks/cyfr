@@ -609,7 +609,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
   defp open!(view, name, args \\ "") do
     view |> element("tr[phx-value-name=#{name}]") |> render_click()
-    view |> form("form#open-#{name}", %{"args" => args}) |> render_submit()
+    view |> form("form#open-#{name}", %{"terminal_args" => args}) |> render_submit()
     answered(view)
     opened_session(view)
   end

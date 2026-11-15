@@ -297,7 +297,7 @@ defmodule PrismWeb.ProgramsLive do
 
   # The row's command on a terminal, followed by the words the person typed.
   def handle_event("open", %{"name" => name} = params, socket) do
-    case words(params["args"] || "") do
+    case words(params["terminal_args"] || "") do
       {:ok, args} -> {:noreply, open_program(socket, name, args)}
       :error -> {:noreply, put_flash(socket, :error, "The words after the command do not read.")}
     end
@@ -923,7 +923,7 @@ defmodule PrismWeb.ProgramsLive do
   # The row's terminal, started through the gate as the person's act; its
   # answer shows it (`answered/3`).
   defp open_program(socket, name, args) do
-    params = %{"name" => name, "args" => args, "rows" => 24, "cols" => 80}
+    params = %{"name" => name, "terminal_args" => args, "rows" => 24, "cols" => 80}
     call(socket, working({:open, name}), {:open, name}, "mcp_servers/open", params)
   end
 
@@ -1551,7 +1551,7 @@ defmodule PrismWeb.ProgramsLive do
             Words after its command
           </label>
           <.input
-            name="args"
+            name="terminal_args"
             value=""
             placeholder="none, or such as login --device-auth"
             class="font-mono"

@@ -403,6 +403,21 @@ defmodule Prima.SanitizerTest do
 
       assert "terminal_input" in Prima.Sanitizer.filter_parameters()
     end
+
+    test "the words typed after a program's command are redacted, and any other args are kept" do
+      assert Prima.Sanitizer.sanitize(%{
+               "terminal_args" => ["login", "--password", "hunter2"],
+               "args" => ["--version"],
+               "call" => %{"args" => %{"symbol" => "ACME"}}
+             }) ==
+               %{
+                 "terminal_args" => "[REDACTED]",
+                 "args" => ["--version"],
+                 "call" => %{"args" => %{"symbol" => "ACME"}}
+               }
+
+      assert "terminal_args" in Prima.Sanitizer.filter_parameters()
+    end
   end
 
   # A pending confirmation's secret travels as a context's `confirmation_id`

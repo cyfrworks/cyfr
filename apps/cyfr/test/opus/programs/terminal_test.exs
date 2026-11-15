@@ -665,7 +665,7 @@ defmodule Opus.Programs.TerminalTest do
                Provider.handle("mcp_servers", ctx, %{
                  "action" => "open",
                  "name" => "claude",
-                 "args" => ["--version"],
+                 "terminal_args" => ["--version"],
                  "rows" => 40,
                  "cols" => 120
                })
@@ -683,6 +683,30 @@ defmodule Opus.Programs.TerminalTest do
                      2_000
 
       assert {:ok, [%{session: ^id, by: :person}]} = Programs.running(ctx)
+    end
+
+    # The request log's record of an open is the catalogue's logged input,
+    # sanitized (`Sanctum.Dispatch`, `Sanctum.RequestLog.opened/3`): who
+    # opened which program at what size, never the words after its command.
+    test "its request log record keeps the program and size, not the words" do
+      canary = "review-private-password-8e59"
+
+      input = %{
+        "action" => "open",
+        "name" => "installed-tool",
+        "terminal_args" => ["login", "--password", canary],
+        "rows" => 24,
+        "cols" => 80
+      }
+
+      assert Sanctum.Catalog.logged_input("mcp_servers", input) |> Prima.Sanitizer.sanitize() ==
+               %{
+                 "action" => "open",
+                 "name" => "installed-tool",
+                 "terminal_args" => "[REDACTED]",
+                 "rows" => 24,
+                 "cols" => 80
+               }
     end
 
     test "refuses a missing program, a tool server elsewhere and a bad size", %{ctx: ctx} do

@@ -372,7 +372,7 @@ defmodule Emissary.External.Provider do
               required: true,
               description: "The program's server name; its command runs in its own folder"
             ),
-            Arg.new("args", {:array, Arg.new(nil, :string)},
+            Arg.new("terminal_args", {:array, Arg.new(nil, :string)},
               description:
                 "Words to follow the program's command, as a person typed them (at most 64)"
             ),
@@ -1171,14 +1171,17 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp open_args(%{"args" => words}) when is_list(words) do
+  defp open_args(%{"terminal_args" => words}) when is_list(words) do
     if Enum.all?(words, &is_binary/1),
       do: {:ok, words},
-      else: {:error, {:invalid_argument, "args are words of text"}}
+      else: {:error, {:invalid_argument, "terminal_args are words of text"}}
   end
 
-  defp open_args(%{"args" => nil}), do: {:ok, []}
-  defp open_args(%{"args" => _}), do: {:error, {:invalid_argument, "args are words of text"}}
+  defp open_args(%{"terminal_args" => nil}), do: {:ok, []}
+
+  defp open_args(%{"terminal_args" => _}),
+    do: {:error, {:invalid_argument, "terminal_args are words of text"}}
+
   defp open_args(_args), do: {:ok, []}
 
   defp open_size(args, key, default) do
@@ -1202,7 +1205,7 @@ defmodule Emissary.External.Provider do
   defp open_refusal(:invalid_args, _name),
     do:
       {:invalid_argument,
-       "args are at most 64 words, each at most 4096 bytes of text with no NUL"}
+       "terminal_args are at most 64 words, each at most 4096 bytes of text with no NUL"}
 
   defp open_refusal(:not_standing, _name), do: :not_standing
   defp open_refusal(reason, name), do: programs_refusal(reason, "Opening #{name}")
