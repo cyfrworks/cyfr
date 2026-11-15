@@ -2,8 +2,8 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {
-  ANSWER_OF,
   ANSWER_VERBS,
+  APP_ANSWERS,
   CREDENTIAL,
   HANDSHAKE,
   PERSON_VERBS,
@@ -39,9 +39,6 @@ const TOLD = TOLD_VERBS
 // The person's verbs an app's frame sends, held to the person's input as a
 // canvas's are; an app's other verbs reach the view while it acts.
 const FROM_APP_PERSON = Object.freeze(["request"])
-
-// The answers an app hears: its open's and its request's.
-const APP_ANSWERS = Object.freeze([...ANSWER_OF.open, ...ANSWER_OF.request])
 
 /**
  * IframeBridge hook — the shell's end of a tincture frame's MessagePort.
@@ -330,8 +327,10 @@ const IframeBridge = {
 
     // A call number used already is a replay or a forgery, and an answer
     // under it, the bridge's or the shell's, would settle the call that
-    // number belongs to: it is dropped and answered nothing.
-    if (person && "call" in message.args) {
+    // number belongs to: it is dropped and answered nothing. Every verb
+    // that carries a call is held to it, an app's open as a canvas's,
+    // whatever the person's input says about it.
+    if ("call" in message.args) {
       if (message.args.call <= this._lastCall) {
         this._drop()
         return

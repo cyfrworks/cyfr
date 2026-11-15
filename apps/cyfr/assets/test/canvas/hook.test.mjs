@@ -414,7 +414,7 @@ describe("what a canvas frame is told", () => {
     assert.deepEqual(elsewhere, [])
   })
 
-  test("a canvas's answers reach only the canvas frame they name, a request's any frame they name, and only answers", () => {
+  test("a canvas's answers reach only the canvas frame they name, an open's and a request's any frame they name, and only answers", () => {
     const frame = canvasFrame(FRAME)
     const app = frameElement(OTHER)
     const seen = told(frame)
@@ -424,8 +424,11 @@ describe("what a canvas frame is told", () => {
     const prefs = {call: 2, outcome: "saved", document: {}, revision: 1}
     const requested = {call: 3, request: "req_9fKd02LmQpZx7Yt1Rw5sVa"}
     const decided = {call: 3, outcome: "approved"}
+    const opened = {call: 4, outcome: "opened"}
 
     seen.splice(0)
+    handlers.canvas_answer({frame: OTHER, verb: "opened", args: opened})
+    handlers.canvas_answer({frame: FRAME, verb: "opened", args: opened})
     handlers.canvas_answer({frame: FRAME, verb: "pressed", args})
     handlers.canvas_answer({frame: OTHER, verb: "pressed", args})
     handlers.canvas_answer({frame: OTHER, verb: "prefs", args: prefs})
@@ -437,10 +440,12 @@ describe("what a canvas frame is told", () => {
     handlers.canvas_answer(null)
 
     assert.deepEqual(seen, [
+      {verb: "opened", args: opened},
       {verb: "pressed", args},
       {verb: "decided", args: decided}
     ])
     assert.deepEqual(elsewhere, [
+      {verb: "opened", args: opened},
       {verb: "requested", args: requested},
       {verb: "decided", args: decided}
     ])
@@ -1273,6 +1278,33 @@ describe("a request, from an app's frame as from a canvas's", () => {
         bridge.heard.filter(({verb}) => verb === "opened"),
         [{v: 1, verb: "opened", frame: FRAME, args: {call: 2, outcome: "cancelled"}}]
       )
+    } finally {
+      bridge.close()
+    }
+  })
+
+  test("an app's open under a call number it used already is dropped and answered nothing, whatever its input", async () => {
+    const bridge = connectBridge({reply: APP, frame: FRAME, app: true})
+    const port = bridge.load()
+    const open = {v: 1, verb: "open", frame: FRAME, args: {ref: "t:local.weather", call: 1}}
+
+    try {
+      activation("inactive")
+      await send(bridge, port, open)
+      await send(bridge, port, open)
+      await send(bridge, port, {...open, args: {...open.args, call: 0}})
+      assert.deepEqual(forwarded(bridge.events), [open])
+      assert.equal(bridge.hook.dropped, 2)
+      await sleep(20)
+      assert.deepEqual(
+        bridge.heard.filter(({verb}) => verb === "opened"),
+        []
+      )
+
+      // The next call number goes on.
+      const next = {...open, args: {...open.args, call: 2}}
+      await send(bridge, port, next)
+      assert.deepEqual(forwarded(bridge.events), [open, next])
     } finally {
       bridge.close()
     }

@@ -509,8 +509,7 @@ export const TOLD_VERBS = Object.freeze(["posture", "covered", "installed", "sta
 // `requested` once the person is asked, then `decided`, or `decided` alone
 // when it ended before; a canvas's write `prefs`; and its press of a
 // control `pressed`, or as a request is when the person approves the
-// control's operation first. Only an open's and a request's answers reach
-// a frame that is no canvas.
+// control's operation first.
 export const ANSWER_OF = Object.freeze({
   open: Object.freeze(["opened"]),
   press: Object.freeze(["pressed", "requested", "decided"]),
@@ -518,6 +517,10 @@ export const ANSWER_OF = Object.freeze({
   request: Object.freeze(["requested", "decided"])
 })
 export const ANSWER_VERBS = Object.freeze([...new Set(Object.values(ANSWER_OF).flat())])
+
+// The answers a frame that is no canvas hears: its open's and its
+// request's. Every other answer reaches a canvas frame alone.
+export const APP_ANSWERS = Object.freeze([...new Set([...ANSWER_OF.open, ...ANSWER_OF.request])])
 
 // What a page hears through `cyfr.on`: on a canvas what the shell tells
 // it and `desktop`, its preferences, appearance and person; on an app,
