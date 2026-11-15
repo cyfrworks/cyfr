@@ -2266,8 +2266,6 @@ defmodule PrismWeb.ThreadPaneLive do
                 aria-modal="true"
                 aria-label={a["filename"]}
                 phx-click={close_large(large)}
-                phx-keydown={close_large(large)}
-                phx-key="Escape"
                 class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-black/85 p-4"
               >
                 <img
@@ -2275,9 +2273,14 @@ defmodule PrismWeb.ThreadPaneLive do
                   alt={a["filename"]}
                   class="max-h-[90%] max-w-full object-contain"
                 />
+                <%!-- Escape is bound here, where opening puts the focus:
+                      LiveView reads a key binding from the key's own
+                      target, never from an ancestor. --%>
                 <button
                   id={"#{large}-close"}
                   type="button"
+                  phx-keydown={close_large(large)}
+                  phx-key="Escape"
                   class="min-h-6 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700"
                 >
                   Close

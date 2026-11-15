@@ -920,6 +920,41 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       refute html =~ @under_12px
       refute html =~ @inline_style
     end
+
+    test "Escape closes a picture opened large from where opening it put the focus, " <>
+           "and gives the focus back to the picture",
+         %{conn: conn, athanor: athanor, thread: thread} do
+      doc = conn |> open_pane(athanor, thread) |> render() |> LazyHTML.from_fragment()
+
+      opens =
+        doc |> LazyHTML.query(~s(button[aria-label$=" large"])) |> LazyHTML.attribute("phx-click")
+
+      # One picture in each of the two posts.
+      assert length(opens) == 2
+
+      for open <- opens do
+        ops = Jason.decode!(open)
+        [large] = for ["remove_class", %{"names" => ["hidden"], "to" => to}] <- ops, do: to
+        [focused] = for ["focus", %{"to" => to}] <- ops, do: to
+        assert ["push_focus", _] = hd(ops)
+
+        # LiveView reads a key binding from the key's own target alone, never
+        # an ancestor's: the element opening puts the focus on carries it.
+        held = LazyHTML.query(doc, focused)
+        assert LazyHTML.attribute(held, "phx-key") == ["Escape"]
+        assert [escape] = LazyHTML.attribute(held, "phx-keydown")
+        escape = Jason.decode!(escape)
+
+        assert ["add_class", %{"names" => ["hidden"], "to" => ^large}] =
+                 Enum.find(escape, &(hd(&1) == "add_class"))
+
+        assert Enum.any?(escape, &(hd(&1) == "pop_focus"))
+
+        # It sits inside the large view's own dialog, whose Escape the panel
+        # leaves to it (`aqua_panel/index.js`).
+        assert doc |> LazyHTML.query(~s(#{large} [role=dialog] #{focused})) |> Enum.count() == 1
+      end
+    end
   end
 
   test "a turn stopped on an unknown outcome shows so until it goes on", %{
