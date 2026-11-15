@@ -11,7 +11,7 @@ defmodule Sanctum.Providers.Session do
   `whoami` answers the caller here: their person, athanor and the
   administrator's mark (`platform_admin`), when their session ends, their
   name as the screen shows it (`name`, `Sanctum.Tenancy.Users.display_name/1`),
-  their `role` (`administrator` or `member`, by that mark) and, for a call
+  their `role` (`administrator` or `person`, by that mark) and, for a call
   made with an API key, the key's name (`key_name`, nil otherwise).
 
   `unlock` and `lock` are a protected device's, through its device
@@ -183,7 +183,7 @@ defmodule Sanctum.Providers.Session do
            session_expires_at: session_expires_at(ctx),
            key_name: key_name,
            name: Sanctum.Tenancy.Users.display_name(ctx.user_id),
-           role: if(ctx.platform_admin == true, do: "administrator", else: "member")
+           role: if(ctx.platform_admin == true, do: "administrator", else: "person")
          }}
 
       {:error, :not_found} ->

@@ -150,7 +150,7 @@ defmodule Sanctum.ProviderTest do
       assert Map.has_key?(result, :provider)
       assert result.athanor_id == ctx.athanor_id
       assert result.platform_admin == false
-      assert {result.key_name, result.role} == {nil, "member"}
+      assert {result.key_name, result.role} == {nil, "person"}
       refute Map.has_key?(result, :display_name)
       refute Map.has_key?(result, :scope)
       refute Map.has_key?(result, :registry)
@@ -177,7 +177,7 @@ defmodule Sanctum.ProviderTest do
                user_id: issuer.user_id,
                key_name: "nightly",
                name: "Mira Okafor",
-               role: "member",
+               role: "person",
                platform_admin: false
              }
 
