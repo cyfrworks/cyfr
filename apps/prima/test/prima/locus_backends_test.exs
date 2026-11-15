@@ -114,6 +114,7 @@ defmodule Prima.LocusBackendsTest do
       assert LocusBackends.reserved_env_names() == KeeperProtocol.reserved_env_names()
       assert LocusBackends.reserved_env_prefixes() == KeeperProtocol.reserved_env_prefixes()
       assert LocusBackends.reserved_env_prefixes() == @vectors["reserved_env_prefixes"]
+      assert LocusBackends.terminal_type() == @vectors["terminal_type"]
     end
 
     test "the health probe's body is the version alone, and another version is refused" do

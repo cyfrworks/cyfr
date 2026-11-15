@@ -34,7 +34,10 @@ defmodule Opus.Programs.Definition do
       too;
     * an env value is a vault template (`Prima.VaultRef`); only the
       non-secret names in `Prima.LocusBackends.literal_env_names/0` may
-      hold a literal, of at most 4096 bytes, instead.
+      hold a literal, of at most 4096 bytes, instead;
+    * the env names at most `Prima.LocusBackends.max_env_names/0`
+      variables besides `TERM`, which a terminal is given when the env
+      names none.
 
   `warnings/1` answers what a definition does that the administrator may
   choose but is told of, one sentence each: a command that holds one of
@@ -363,6 +366,22 @@ defmodule Opus.Programs.Definition do
   end
 
   defp check_env(env) when is_map(env) do
+    with :ok <- env_count(env) do
+      check_env_entries(env)
+    end
+  end
+
+  defp check_env(_env), do: invalid("config.env must be an object")
+
+  defp env_count(env) do
+    max = LocusBackends.max_env_names()
+
+    if map_size(Map.delete(env, "TERM")) <= max,
+      do: :ok,
+      else: invalid("config.env names at most #{max} variables besides TERM")
+  end
+
+  defp check_env_entries(env) do
     env
     |> Enum.sort()
     |> each(fn {key, value} -> env_entry(key, value) end)
@@ -371,8 +390,6 @@ defmodule Opus.Programs.Definition do
       error -> error
     end
   end
-
-  defp check_env(_env), do: invalid("config.env must be an object")
 
   defp env_entry(key, value) when is_binary(key) and is_binary(value) do
     cond do

@@ -176,6 +176,30 @@ defmodule Opus.Programs.DefinitionTest do
     end
   end
 
+  # A terminal open adds TERM when a row names none, and the keeper refuses
+  # a spawn whose environment passes its bound: a row at the bound opened
+  # a run but could never open a terminal.
+  test "an env names at most the keeper's bound less one variable besides TERM" do
+    keeper =
+      Path.expand("../../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    max = Prima.LocusBackends.max_env_names()
+    assert max == keeper["request_bounds"]["max_env"] - 1
+
+    names = fn n -> Map.new(1..n, &{"V#{&1}", "vault:x"}) end
+    assert {:ok, _} = Definition.validate(config(%{"env" => names.(max)}))
+
+    assert {:ok, %{"env" => env}} =
+             Definition.validate(config(%{"env" => Map.put(names.(max), "TERM", "vault:term")}))
+
+    assert map_size(env) == max + 1
+
+    assert refused(config(%{"env" => names.(max + 1)})) ==
+             "config.env names at most #{max} variables besides TERM"
+  end
+
   # The keeper's vectors and the backends wire's hold the prefixes the
   # keeper and the backends service refuse, and the wire's the names the
   # service lets hold a literal, so a program CYFR accepts is one neither
