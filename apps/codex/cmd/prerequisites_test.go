@@ -226,18 +226,6 @@ func TestInitRunsTheRealSudo(t *testing.T) {
 	}
 }
 
-func currentAccount(t *testing.T) string {
-	t.Helper()
-	u, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u.Username
-}
-
-// passwordSentence is the one line before sudo's own prompt.
-const passwordSentence = "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.\n"
-
 // The one sentence comes right after the answer and right before sudo's
 // own prompt, for Ubuntu's sudo group and its older admin group alike.
 func TestInitSaysWhosePasswordBeforeSudoAsks(t *testing.T) {

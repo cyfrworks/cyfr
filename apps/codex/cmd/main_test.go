@@ -62,6 +62,7 @@ func testMachine(system string) machineSeams {
 		screenService:  func() (bool, bool) { return false, false },
 		system:         func() string { return system },
 		passwordless:   func() bool { return false },
+		terminal:       func() bool { return false },
 		authenticate:   func() error { return refused },
 		apply:          func([]string) error { return refused },
 		forget:         func() {},
