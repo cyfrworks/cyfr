@@ -55,11 +55,13 @@ class FakeWebLinks {
 let fitted
 let opened
 let windowListeners
+let focused
 
 beforeEach(() => {
   fitted = {rows: 30, cols: 100}
   opened = []
   windowListeners = {}
+  focused = true
   globalThis.window = {
     addEventListener: (type, fn) => (windowListeners[type] = fn),
     removeEventListener: (type) => delete windowListeners[type]
@@ -75,7 +77,8 @@ function mount() {
       Terminal: FakeTerminal,
       FitAddon: FakeFit,
       WebLinksAddon: FakeWebLinks,
-      open: (...args) => opened.push(args)
+      open: (...args) => opened.push(args),
+      focused: () => focused
     })
   )
   const screen = {}
@@ -137,6 +140,22 @@ describe("the terminal carries the person's keys and the program's bytes", () =>
     assert.deepEqual(pushed.map((p) => [p.event, p.payload]), [["terminal_ready", {session: "trm_1", rows: 30, cols: 100}]])
     pushed[0].reply({data: bytes("earlier\r\n")})
     assert.equal(Buffer.from(term.written[0]).toString(), "earlier\r\n")
+  })
+
+  // Every screen attached to a session draws what the program writes; only
+  // the one the person is at sends, so a query is answered once.
+  test("a screen whose document has no focus sends nothing, and sends again once it has", () => {
+    const {term, pushed} = mount()
+    focused = false
+    term.data("\u001b[3;1R")
+    term.data("typed elsewhere")
+    assert.equal(pushed.filter((p) => p.event === "terminal_input").length, 0)
+
+    focused = true
+    term.data("k")
+    assert.deepEqual(pushed.filter((p) => p.event === "terminal_input").map((p) => p.payload), [
+      {session: "trm_1", terminal_input: "k"}
+    ])
   })
 
   test("types what the person types, and draws only its own session's output", () => {

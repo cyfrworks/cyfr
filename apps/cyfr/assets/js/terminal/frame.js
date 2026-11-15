@@ -19,10 +19,15 @@
 // chose: every window operation is off, the title and icon reports among
 // them (`windowOptions`, all off, set here so no default can change it),
 // a settings query (DECRQSS) answers a setting's value, never the words it
-// was asked, and a colour query answers the colour as numbers.
+// was asked, and a colour query answers the colour as numbers. Answers and
+// keys come only from the screen the person is at: every screen attached
+// to a session draws what the program writes, and one whose document does
+// not have focus sends nothing, so a query is answered once, by the screen
+// in front of the person, and goes unanswered while they are at none, as
+// it does when no screen is attached.
 //
-// `TerminalHook(deps)` is the LiveView hook, its terminal, addons and
-// window opener given, so a test drives it without a browser.
+// `TerminalHook(deps)` is the LiveView hook, its terminal, addons, window
+// opener and focus reading given, so a test drives it without a browser.
 
 // The OSC numbers whose effects the terminal never carries out: the window
 // and icon titles, and a clipboard write.
@@ -73,7 +78,7 @@ export function decode(data) {
   return bytes
 }
 
-export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
+export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open, focused}) {
   return {
     mounted() {
       this.session = this.el.dataset.session
@@ -97,6 +102,7 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.queue = []
       this.queued = 0
       this.sending = false
+      this.replaying = false
       term.onData((data) => this.type(data))
 
       // Each output is acknowledged by its token once drawn, and the
@@ -108,7 +114,7 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.handleEvent("terminal_tail", ({session, delivery, data}) => {
         if (session !== this.session) return
         term.reset()
-        term.write(decode(data), () => this.written(delivery))
+        this.replay(decode(data), () => this.written(delivery))
       })
 
       // The program ended: the screen stays as it was to be read, and
@@ -132,8 +138,19 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
       this.fit.fit()
       this.size = {rows: term.rows, cols: term.cols}
       this.pushEvent("terminal_ready", {session: this.session, ...this.size}, (reply) => {
-        if (reply && typeof reply.data === "string") term.write(decode(reply.data))
+        if (reply && typeof reply.data === "string") this.replay(decode(reply.data))
         term.focus()
+      })
+    },
+
+    // What the program printed before, drawn again: a query in it was
+    // answered when the program asked it, so the terminal's answers to it
+    // now are not the program's to read and are not sent.
+    replay(bytes, done) {
+      this.replaying = true
+      this.term.write(bytes, () => {
+        this.replaying = false
+        if (done) done()
       })
     },
 
@@ -144,7 +161,8 @@ export function TerminalHook({Terminal, FitAddon, WebLinksAddon, open}) {
 
     // What the person typed, queued and sent a piece at a time.
     type(data) {
-      if (this.ended || this.queued + data.length > MAX_PENDING_UNITS) return
+      if (this.ended || this.replaying || !focused()) return
+      if (this.queued + data.length > MAX_PENDING_UNITS) return
       for (const piece of pieces(data)) this.queue.push(piece)
       this.queued += data.length
       this.send()
