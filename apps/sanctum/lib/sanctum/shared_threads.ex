@@ -149,7 +149,7 @@ defmodule Sanctum.SharedThreads do
     case Arca.SharedThreads.list_for(server(), user_id) do
       {:ok, rows} ->
         with {:ok, unread} <- unread([user_id: user_id], :thread_id),
-             do: listed_rows(for(%{status: "active"} = row <- rows, do: row), unread)
+             do: listed_rows(Enum.filter(rows, &listed?/1), unread)
 
       {:error, reason} ->
         unavailable(reason)
@@ -203,18 +203,31 @@ defmodule Sanctum.SharedThreads do
   end
 
   @doc """
-  The thread's newest `count` messages, oldest first, for a person seated
-  in it: what their own AQUA reads of the thread they have open
-  (`Aqua.RoomExcerpt`).
+  What a person's own AQUA reads of a thread their list of threads names
+  (`listed/1`'s, by the same rule: an active thread they hold an active
+  seat in): their read mark (`read_seq`), how many of the thread's
+  messages someone else wrote past it (`unread`), and its newest `count`
+  messages, oldest first (`Aqua.RoomExcerpt`). All three come from one
+  read of the store (`Arca.SharedMessages.read_tail/4`), so they agree
+  however the thread moves meanwhile. Any other thread answers as a
+  missing one.
   """
-  @spec tail(String.t(), String.t(), pos_integer()) :: {:ok, [map()]} | {:error, term()}
+  @spec tail(String.t(), String.t(), pos_integer()) ::
+          {:ok, %{read_seq: non_neg_integer(), unread: non_neg_integer(), messages: [map()]}}
+          | {:error, term()}
   def tail(user_id, thread_id, count)
       when is_binary(user_id) and is_binary(thread_id) and is_integer(count) and count > 0 do
-    with {:ok, _thread} <- seated(user_id, thread_id) do
-      case Arca.SharedMessages.latest(server(), thread_id, count) do
-        {:ok, rows} -> {:ok, Enum.map(rows, &message/1)}
-        {:error, reason} -> unavailable(reason)
-      end
+    case Arca.SharedMessages.read_tail(server(), thread_id, user_id, count) do
+      {:ok, %{status: status, read_seq: read_seq, unread: unread, messages: rows}} ->
+        if listed?(%{status: status}),
+          do: {:ok, %{read_seq: read_seq, unread: unread, messages: Enum.map(rows, &message/1)}},
+          else: missing(thread_id)
+
+      {:error, :not_found} ->
+        missing(thread_id)
+
+      {:error, reason} ->
+        unavailable(reason)
     end
   end
 
@@ -822,6 +835,11 @@ defmodule Sanctum.SharedThreads do
       {:error, reason} -> unavailable(reason)
     end
   end
+
+  # A thread a person's list names, among those they hold a seat in: an
+  # active one (`listed/1`, `tail/3`).
+  defp listed?(%{status: "active"}), do: true
+  defp listed?(_thread), do: false
 
   # The threads of a list, each read with its people; one that cannot be
   # read leaves the list unanswered rather than shorter.

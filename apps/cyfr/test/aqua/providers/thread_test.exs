@@ -138,7 +138,7 @@ defmodule Aqua.Providers.ThreadTest do
                ) == {:error, unknown}
       end
 
-      assert Enum.map(Tool.tools(), & &1.name) == ["thread", "crew"]
+      assert Enum.map(Tool.tools(), & &1.name) == ["thread", "crew", "threads"]
       refute Enum.any?(Sanctum.Catalog.tool_actions(), &String.starts_with?(&1, "turn."))
 
       for caller <- [ctx, admin, key] do
