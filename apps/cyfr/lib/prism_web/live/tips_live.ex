@@ -105,8 +105,10 @@ defmodule PrismWeb.TipsLive do
 
       <.tip id="failures" title="When something fails" athanor_route={@athanor_route}>
         <p>
-          Executions lists every run with its <strong>Status</strong>, <strong>Duration</strong>
-          and when it <strong>Started</strong>. Open a failed one to read its <strong>Error</strong>, what went wrong in the run's own words.
+          Executions shows recent runs, newest first, with their <strong>Status</strong>,
+          <strong>Duration</strong>
+          and when each <strong>Started</strong>. Open a failed one to
+          read its <strong>Error</strong>, what went wrong in the run's own words.
         </p>
         <p>Executions is in dev's side menu, and "Show me" opens it in lite too.</p>
       </.tip>
