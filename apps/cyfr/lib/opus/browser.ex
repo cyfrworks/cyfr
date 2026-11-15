@@ -688,9 +688,12 @@ defmodule Opus.Browser do
 
   defp idle_ms, do: setting("browser_idle_ms")
 
+  # Both settings the holder reads are positive whole numbers, as their
+  # validators admit them.
   defp setting(key) do
-    {:ok, value} = Arca.PlatformSettings.effective(key)
-    value
+    case Arca.PlatformSettings.effective(key) do
+      {:ok, value} when is_integer(value) and value > 0 -> value
+    end
   end
 
   defp now, do: System.monotonic_time(:millisecond)
