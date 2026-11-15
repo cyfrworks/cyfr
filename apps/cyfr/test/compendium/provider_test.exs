@@ -802,7 +802,7 @@ defmodule Compendium.ProviderTest do
 
       # Resolution succeeded (no claim/credential error); the push then fails only
       # because the local component itself was never built in this test.
-      refute err_msg(msg) =~ "personal namespace"
+      refute err_msg(msg) =~ "no name recorded here"
       refute err_msg(msg) =~ "No push token"
       assert err_msg(msg) =~ "Component not found locally"
     end
@@ -2628,7 +2628,7 @@ defmodule Compendium.ProviderTest do
                })
 
       refute match?(%Prima.Refusal{stage: :admission}, msg)
-      assert err_msg(msg) =~ "personal namespace"
+      assert err_msg(msg) =~ "no name recorded here"
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do

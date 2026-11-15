@@ -150,10 +150,42 @@ defmodule Sanctum.ProviderTest do
       assert Map.has_key?(result, :provider)
       assert result.athanor_id == ctx.athanor_id
       assert result.platform_admin == false
-      # No display_name: UI consumers render `email || user_id` directly.
+      assert {result.key_name, result.role} == {nil, "person"}
       refute Map.has_key?(result, :display_name)
       refute Map.has_key?(result, :scope)
       refute Map.has_key?(result, :registry)
+    end
+
+    test "whoami by an API key names the key, its person as the screen names them, and their role",
+         %{ctx: ctx} do
+      issuer = Sanctum.TestContext.issuer!(ctx)
+
+      Arca.Repo.update_all(
+        Ecto.Query.from(u in Arca.Schemas.User, where: u.id == ^issuer.user_id),
+        set: [display_name: "Mira Okafor"]
+      )
+
+      whoami = fn key_name ->
+        {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(issuer, %{name: key_name})
+        {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+        {:ok, result} = Provider.handle("session", key_ctx, %{"action" => "whoami"})
+        Map.take(result, [:user_id, :key_name, :name, :role, :platform_admin])
+      end
+
+      assert whoami.("nightly") == %{
+               user_id: issuer.user_id,
+               key_name: "nightly",
+               name: "Mira Okafor",
+               role: "person",
+               platform_admin: false
+             }
+
+      # The role is the person's, by the mark on their row; the key's call
+      # itself never carries the operator capability.
+      {:ok, _row} = Sanctum.TestContext.ensure_platform(issuer.user_id)
+
+      assert %{key_name: "weekly", role: "administrator", platform_admin: false} =
+               whoami.("weekly")
     end
 
     test "whoami returns error when not authenticated" do
