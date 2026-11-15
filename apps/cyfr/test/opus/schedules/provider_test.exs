@@ -44,6 +44,26 @@ defmodule Opus.Schedules.ProviderTest do
     {:ok, ctx: ctx}
   end
 
+  describe "the answer" do
+    test "names the profile a component's schedule fires under, and none for a line for Aqua",
+         %{ctx: ctx} do
+      {:ok, %{schedule_id: id, profile_id: "prof-cron"}} =
+        Provider.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "answer-profile",
+          "cron_expression" => "*/5 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      assert {:ok, %{profile_id: "prof-cron"}} =
+               Provider.handle("schedule", ctx, %{"action" => "get", "schedule_id" => id})
+
+      assert {:ok, %{schedules: [%{schedule_id: ^id, profile_id: "prof-cron"}]}} =
+               Provider.handle("schedule", ctx, %{"action" => "list"})
+    end
+  end
+
   describe "missed runs" do
     defp create!(ctx, extra) do
       Provider.handle(

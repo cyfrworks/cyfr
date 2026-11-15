@@ -115,7 +115,8 @@ defmodule PrismWeb.SchedulesLiveTest do
   } do
     submitted = Map.put(params, "profile_id", "nonexistent-profile")
     render_submit(view, "create", submitted)
-    assert :sys.get_state(view.pid).socket.assigns.flash["error"]
+    assert has_element?(view, ~s(#schedule-form [data-test="schedule-form-error"]))
+    refute :sys.get_state(view.pid).socket.assigns.flash["error"]
 
     assert {:error, :not_found} =
              Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
@@ -389,6 +390,287 @@ defmodule PrismWeb.SchedulesLiveTest do
       })
 
     {feed, binding}
+  end
+
+  describe "editing a schedule" do
+    # A schedule made through the form, and its row as stored.
+    defp made!(view, ctx, params) do
+      render_submit(view, "create", params)
+      {:ok, row} = schedule(ctx, params)
+      row
+    end
+
+    defp edit!(view, id), do: render_click(view, "edit", %{"id" => id})
+
+    defp form_error(view),
+      do: view |> element(~s(#schedule-form [data-test="schedule-form-error"])) |> render()
+
+    # Only what the update may change moves; the rest of the row stays.
+    defp same_but(before, now, fields) do
+      for key <-
+            [
+              :name,
+              :cron_expression,
+              :reference,
+              :resolved_reference,
+              :profile_id,
+              :input,
+              :status,
+              :missed_runs,
+              :catch_up_limit,
+              :thread_id
+            ] -- fields do
+        assert Map.fetch!(now, key) == Map.fetch!(before, key), "#{key} moved"
+      end
+    end
+
+    test "Edit opens the one form prefilled, and Save changes the name, the time, the input and the missed runs",
+         %{view: view, ctx: ctx, params: params} do
+      before = made!(view, ctx, params)
+      edit!(view, before.id)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_create and assigns.editing.schedule_id == before.id
+      assert assigns.cron_preset == "custom" and assigns.cron_custom == "0 0 1 1 *"
+
+      assert assigns.form.params ==
+               %{
+                 "name" => params["name"],
+                 "target" => "component",
+                 "line" => "",
+                 "reference" => "reagent:local.schedule-target",
+                 "profile_id" => params["profile_id"],
+                 "input" => ~s({"count":0,"enabled":false}),
+                 "missed_runs" => "skip",
+                 "catch_up_limit" => ""
+               }
+
+      # The schedule's unversioned reference is offered though the list names versions.
+      assert has_element?(
+               view,
+               ~s(#schedule-form select[name=reference] option[value="reagent:local.schedule-target"][selected])
+             )
+
+      assert has_element?(view, ~s(#schedule-form [data-test="schedule-editing"]), params["name"])
+
+      renamed = params["name"] <> "-renamed"
+
+      render_submit(
+        view,
+        "save",
+        %{
+          params
+          | "name" => renamed,
+            "cron_custom" => "0 0 2 2 *",
+            "input" => ~s({"count":1})
+        }
+        |> Map.merge(%{"missed_runs" => "catch_up", "catch_up_limit" => "2"})
+      )
+
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+
+      assert %{
+               name: ^renamed,
+               cron_expression: "0 0 2 2 *",
+               missed_runs: "catch_up",
+               catch_up_limit: 2
+             } =
+               now
+
+      assert Jason.decode!(now.input) == %{"count" => 1}
+      assert %DateTime{month: 2, day: 2, hour: 0, minute: 0} = now.next_run_at
+      same_but(before, now, [:name, :cron_expression, :input, :missed_runs, :catch_up_limit])
+      refute :sys.get_state(view.pid).socket.assigns.show_create
+      assert :sys.get_state(view.pid).socket.assigns.flash == %{"info" => "Schedule saved"}
+
+      # An emptied input clears it.
+      edit!(view, before.id)
+      render_submit(view, "save", %{params | "name" => renamed, "input" => ""})
+      {:ok, cleared} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      assert cleared.input == nil
+    end
+
+    test "what it runs moves to a component the new profile's grant covers",
+         %{view: view, ctx: ctx, params: params} do
+      before = made!(view, ctx, params)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "other-target",
+          version: "0.1.0",
+          type: "reagent",
+          description: "Another target"
+        })
+
+      other_profile =
+        Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.other-target")
+
+      edit!(view, before.id)
+
+      render_submit(view, "save", %{
+        params
+        | "reference" => "reagent:local.other-target:0.1.0",
+          "profile_id" => other_profile
+      })
+
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+
+      assert %{
+               reference: "reagent:local.other-target:0.1.0",
+               resolved_reference: "reagent:local.other-target:0.1.0",
+               profile_id: ^other_profile
+             } = now
+
+      same_but(before, now, [:reference, :resolved_reference, :profile_id])
+    end
+
+    test "a repoint the grant does not cover, or a time that is no time, is refused in the form and the row is unchanged",
+         %{view: view, ctx: ctx, params: params} do
+      before = made!(view, ctx, params)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "uncovered",
+          version: "0.1.0",
+          type: "reagent",
+          description: "No grant covers it"
+        })
+
+      edit!(view, before.id)
+      repoint = %{params | "reference" => "reagent:local.uncovered:0.1.0"}
+      render_submit(view, "save", repoint)
+
+      assert form_error(view) =~ "profile binding refused"
+      refute :sys.get_state(view.pid).socket.assigns.flash["info"] == "Schedule saved"
+
+      assert :sys.get_state(view.pid).socket.assigns.form.params["reference"] ==
+               repoint["reference"]
+
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      same_but(before, now, [])
+
+      render_submit(view, "save", %{params | "cron_custom" => "* * *"})
+      assert form_error(view) =~ "cron"
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      same_but(before, now, [])
+    end
+
+    test "a line for Aqua is edited by its person, and an empty one is refused in the tool's words",
+         %{view: view, ctx: ctx, params: params} do
+      render_change(view, "target_change", %{"target" => "aqua"})
+
+      aqua = %{
+        "name" => params["name"],
+        "target" => "aqua",
+        "line" => "summarise what is unread",
+        "cron_custom" => "0 0 1 1 *",
+        "missed_runs" => "skip"
+      }
+
+      before = made!(view, ctx, aqua)
+      edit!(view, before.id)
+
+      assert :sys.get_state(view.pid).socket.assigns.form.params["line"] ==
+               "summarise what is unread"
+
+      assert has_element?(view, "#schedule-form textarea[name=line]", "summarise what is unread")
+
+      render_submit(view, "save", %{aqua | "line" => "list what is due today"})
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      assert Jason.decode!(now.input) == %{"line" => "list what is due today"}
+      same_but(before, now, [:input])
+
+      edit!(view, before.id)
+      render_submit(view, "save", %{aqua | "line" => "  "})
+      assert form_error(view) =~ "A line for Aqua must say something"
+      {:ok, unchanged} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      same_but(now, unchanged, [])
+    end
+
+    test "a component's schedule becomes a line for Aqua and back, binding a profile again",
+         %{view: view, ctx: ctx, params: params} do
+      before = made!(view, ctx, params)
+
+      edit!(view, before.id)
+      render_change(view, "target_change", %{"target" => "aqua"})
+
+      render_submit(view, "save", %{
+        "name" => params["name"],
+        "target" => "aqua",
+        "line" => "what changed overnight",
+        "cron_custom" => "0 0 1 1 *",
+        "missed_runs" => "skip"
+      })
+
+      {:ok, aqua} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+
+      assert %{
+               reference: "agent:local.aqua",
+               resolved_reference: "agent:local.aqua",
+               profile_id: nil
+             } =
+               aqua
+
+      assert Jason.decode!(aqua.input) == %{"line" => "what changed overnight"}
+
+      # Back to a component: the profile is asked for, then bound.
+      edit!(view, before.id)
+      assert :sys.get_state(view.pid).socket.assigns.form.params["target"] == "aqua"
+      render_change(view, "target_change", %{"target" => "component"})
+      back = Map.put(params, "target", "component")
+      render_submit(view, "save", %{back | "profile_id" => ""})
+      assert form_error(view) =~ "Please enter the profile"
+      {:ok, still} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      same_but(aqua, still, [])
+
+      render_submit(view, "save", back)
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      same_but(before, now, [])
+    end
+
+    test "a paused schedule edited stays paused", %{view: view, ctx: ctx, params: params} do
+      before = made!(view, ctx, params)
+      render_click(view, "pause", %{"id" => before.id})
+      edit!(view, before.id)
+      render_submit(view, "save", %{params | "name" => params["name"] <> "-p"})
+
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      assert %{status: "paused"} = now
+      assert now.name == params["name"] <> "-p"
+    end
+
+    test "a person who is not the schedule's cannot edit it", %{
+      view: view,
+      ctx: ctx,
+      params: params
+    } do
+      before = made!(view, ctx, params)
+
+      other = test_user()
+      other_conn = log_in_user(build_conn(), other)
+      {other_view, _html} = mount_athanor(other_conn, "/schedules")
+
+      # Their page lists none of it, so Edit opens nothing.
+      edit!(other_view, before.id)
+      refute :sys.get_state(other_view.pid).socket.assigns.show_create
+      render_submit(other_view, "save", %{params | "name" => "taken"})
+
+      other_ctx = %{
+        Sanctum.TestContext.local()
+        | athanor_id: seated_athanor().id,
+          user_id: other.user_id
+      }
+
+      assert {:error, _not_found} =
+               Opus.Schedules.Provider.handle("schedule", other_ctx, %{
+                 "action" => "update",
+                 "schedule_id" => before.id,
+                 "name" => "taken"
+               })
+
+      {:ok, now} = Arca.CronSchedule.get(Sanctum.Context.actor(ctx), before.id)
+      same_but(before, now, [])
+    end
   end
 
   defp assert_form(view, params) do

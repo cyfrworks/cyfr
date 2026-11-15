@@ -831,6 +831,7 @@ defmodule Opus.Schedules.Provider do
       cron_expression: schedule.cron_expression,
       reference: schedule.reference,
       resolved_reference: schedule.resolved_reference,
+      profile_id: schedule.profile_id,
       input: decode_stored(schedule.input, nil, "input"),
       metadata: decode_stored(schedule.metadata, nil, "metadata"),
       status: schedule.status,
