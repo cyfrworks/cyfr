@@ -310,6 +310,30 @@ defmodule Aqua.ModelsTest do
     assert states(ctx) == %{"keyed" => :needs_key}
   end
 
+  # The removal at a test's end: a root it cannot remove fails the test with
+  # what the root held. A folder whose entries cannot be removed stands in
+  # for one written to while it is removed.
+  test "a storage root that cannot be removed fails with what it held, and when" do
+    root =
+      Path.join(System.tmp_dir!(), "models_unremovable_#{System.unique_integer([:positive])}")
+
+    locked = Path.join(root, "locked")
+    File.mkdir_p!(locked)
+    File.write!(Path.join(locked, "late.bin"), "12345")
+    File.chmod!(locked, 0o500)
+
+    on_exit(fn ->
+      File.chmod(locked, 0o700)
+      File.rm_rf(root)
+    end)
+
+    error = assert_raise ExUnit.AssertionError, fn -> remove_root!(root) end
+
+    assert error.message =~ ~r/^#{Regex.escape(root)} was not removed at \d{4}-\d\d-\d\dT[^ ]+: /
+    assert error.message =~ "  locked: directory, "
+    assert error.message =~ ~r/  locked\/late\.bin: regular, 5 bytes, modified \d{4}-/
+  end
+
   # A catalyst that speaks `model/chat@1` with `needs`, published under
   # the test's storage root.
   defp chat_brain!(ctx, name, needs) do
@@ -357,9 +381,48 @@ defmodule Aqua.ModelsTest do
   # A context whose storage root is the test's own, removed when it ends.
   defp storage_root!(prefix) do
     test_path = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(test_path) end)
+    on_exit(fn -> remove_root!(test_path) end)
     Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
     %{Sanctum.TestContext.local() | origin: :interactive}
+  end
+
+  # A root that is not removed fails the test, naming what it held at that
+  # moment and when. `File.rm_rf/1` passes over a child it cannot remove and
+  # reports only the root's own removal, so "file already exists" means
+  # something was left or written while the root was removed; the listing
+  # says what, so the run that meets it names the writer.
+  defp remove_root!(root) do
+    case File.rm_rf(root) do
+      {:ok, _removed} ->
+        :ok
+
+      {:error, reason, path} ->
+        at = DateTime.utc_now()
+
+        flunk("""
+        #{root} was not removed at #{DateTime.to_iso8601(at)}: #{:file.format_error(reason)} at #{path}. It held:
+        #{held(root)}
+        """)
+    end
+  end
+
+  # Each path under the root, with its type, size and modification time.
+  defp held(root) do
+    root
+    |> Path.join("**")
+    |> Path.wildcard(match_dot: true)
+    |> Enum.sort()
+    |> Enum.map_join("\n", fn path ->
+      name = Path.relative_to(path, root)
+
+      case File.lstat(path, time: :posix) do
+        {:ok, %File.Stat{type: type, size: size, mtime: mtime}} ->
+          "  #{name}: #{type}, #{size} bytes, modified #{DateTime.to_iso8601(DateTime.from_unix!(mtime))}"
+
+        {:error, reason} ->
+          "  #{name}: #{:file.format_error(reason)}"
+      end
+    end)
   end
 
   # A model catalyst whose one need is a key, published under a storage

@@ -927,7 +927,7 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 		if !access.HasComposeFile(".") {
 			return fmt.Errorf("There is no CYFR in this directory, so nothing was started: it holds no compose file (%s). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one", strings.Join(access.ComposeMainFiles, ", "))
 		}
-		if continued, err := upWithGroup(continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
+		if continued, err := withDockerGroup("up", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
 		return runUp(ctx, cmd.OutOrStdout())
