@@ -1,0 +1,4 @@
+source 25ea65b028fdded4bf7ae0ec53ecd849e14005e0412eadf9d2c1bc18ad04f7ad
+wasm c3e2eaffe5cd4c8b680a3291be497673b2c0e355e07b6ebfbdcd5abf709b42ef
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+cargo-component 0.21.1

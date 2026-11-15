@@ -95,8 +95,8 @@ defmodule Arca.InstallationClaims do
   @doc false
   @spec first_person_made() :: :ok
   # Said by `Arca.Users.mint/3` once the mint of the first person, by
-  # setup or `cyfr login --setup`, committed. Logged at the
-  # boot's notice level, so a log that holds the one holds the other.
+  # setup, committed. Logged at the boot's notice level, so a log that
+  # holds the one holds the other.
   def first_person_made do
     Logger.warning(set_up_marker() <> " this CYFR has its first person.")
   end

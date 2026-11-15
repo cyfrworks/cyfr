@@ -45,13 +45,6 @@
           "CyfrWeb.Plugs.ApiSecurityHeaders"
         ],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "device_session" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.FrameRequest",
-          "CyfrWeb.Plugs.AuthRateLimit"
-        ],
         "tincture" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -207,15 +200,6 @@
           auth: "public_oauth_state",
           live_view: nil,
           pipe_through: ["oauth_callback", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/device/session",
-          plug: "Emissary.Web.DeviceSessionController",
-          plug_opts: ":create",
-          auth: "device_unlock_ticket",
-          live_view: nil,
-          pipe_through: ["device_session"]
         },
         %{
           verb: "GET",

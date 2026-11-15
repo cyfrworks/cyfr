@@ -5,9 +5,8 @@
 // `cyfr` releases behind the harness's HTTPS front (README.md): the
 // directory dir.test, which serves the account pages, and h.test, the
 // CYFR people join. Chromium alone, since a passkey is made and used by
-// its virtual authenticator (../browser/account.mjs); the device that
-// joins by its hello is a test device (../browser/device.mjs) this process
-// drives. Each step is one row of the record; the proof fails when a row
+// its virtual authenticator (../browser/account.mjs). Each step is one row
+// of the record; the proof fails when a row
 // does not hold, and stops at the first row a later one rests on.
 //
 // H's part of a step (its setup token, the people it holds) is run.sh's,
@@ -19,9 +18,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  addDevice, confirmInTab, continueToCyfr, createAccount, landing, passkeys, readLog, usePasskey,
+  confirmInTab, continueToCyfr, createAccount, landing, passkeys, readLog, usePasskey,
 } from "../browser/account.mjs";
-import { helloDevice, newDevice } from "../browser/device.mjs";
 import { ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, startProxy } from "../browser/lib.mjs";
 
 const [homesFile, outDir] = process.argv.slice(2);
@@ -81,10 +79,9 @@ async function openInvitation(page, link) {
 // The steps
 // ---------------------------------------------------------------------------
 
-async function main(browser, proxy) {
+async function main(browser) {
   const opKeys = passkeys();
   const personKeys = passkeys();
-  const deviceOwnerKeys = passkeys();
   const op = await (await browser.newContext()).newPage();
   const person = await (await browser.newContext()).newPage();
 
@@ -148,37 +145,6 @@ async function main(browser, proxy) {
     "an API key the person asks for at H waits on a fresh confirmation; the sign page asks to confirm a change at H, the passkey " +
       "signs it, and the waiting page makes the key",
     record.confirm)) return;
-
-  // device: an account whose only key is a device added at the pages; the
-  // device's hello at H brings an invitation's code, and H admits the
-  // account and the device on that one connection.
-  const deviceLink = await invite(op, operator.segment);
-  const owner = await (await browser.newContext()).newPage();
-  const ownerAccount = await createAccount(owner, deviceOwnerKeys, { directory: DIR, name: "join-d", secrets });
-  const ownerIdentifier = ownerAccount.code?.identifier;
-  const device = newDevice({ name: "join proof device" });
-  const added = await addDevice(owner, deviceOwnerKeys, { directory: DIR, device });
-  const ownerLog = ownerIdentifier ? await readLog(DIR, ownerIdentifier) : null;
-  const hello = await helloDevice(device, {
-    identifier: ownerIdentifier, admission: { invitation: new URL(deviceLink).hash.slice(1) },
-    proxyPort: proxy.address().port, base: H.origin,
-  });
-  const standing = hello.channel?.standing ?? null;
-  hello.channel?.close();
-  const deviceAtH = await atH(ownerIdentifier);
-  const client = deviceAtH?.clients.find((c) => c.kid === device.kid) ?? null;
-  const spentAgain = await openInvitation(await (await browser.newContext()).newPage(), deviceLink);
-  record.device = {
-    added: { section: added.section, shown: added.shown, error: added.error }, log: ownerLog,
-    hello: hello.channel ? { standing: !!standing, certificate_audience: device.certificate?.audience } : { code: hello.code, log: hello.log },
-    at_h: deviceAtH, client, link_spent: spentAgain.refused,
-  };
-  row("device",
-    added.section === "added" && ownerLog?.keys.some((k) => k.kid === device.kid && k.kind === "device") && !!hello.channel &&
-      !!standing && deviceAtH?.admission === "invitation" && client?.standing === "active" && spentAgain.refused,
-    "a device added to its account at /account/add says hello at H with an invitation's code: H admits the account under it, " +
-      "issues the device its certificate and stands its channel on the same connection, and the code is spent",
-    record.device);
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +161,7 @@ const version = browser.version();
 console.log(`== chromium ${version}`);
 let failure = null;
 try {
-  await main(browser, proxy);
+  await main(browser);
 } catch (error) {
   failure = redact(error.stack || String(error));
   console.error(`FAIL: ${failure}`);
@@ -210,7 +176,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["operator", "invited", "spent", "confirm", "device"];
+const STEPS = ["operator", "invited", "spent", "confirm"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";

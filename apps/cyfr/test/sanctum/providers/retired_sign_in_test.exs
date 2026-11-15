@@ -7,8 +7,7 @@ defmodule Sanctum.Providers.RetiredSignInTest do
   gone: every former entry refuses. The session tool declares none of the
   approval, setup or device-flow actions and the gate dispatches none of
   them, anonymous or signed in; `/cli` is no page; and the store holds
-  neither the pending sign-ins table nor the sessions' machine column. A
-  command line signs in as a protected device (`POST /device/session`).
+  neither the pending sign-ins table nor the sessions' machine column.
   """
 
   use PrismWeb.ConnCase, async: false

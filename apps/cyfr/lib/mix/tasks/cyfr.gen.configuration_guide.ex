@@ -68,7 +68,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
     security posture a stolen operator session must not change: it changes
     with a restart. A **platform setting** is stored in the database, the
     same on every server, and a platform admin changes it on Prism's
-    Settings page, with `cyfr settings`, or through the `settings` tool.
+    Settings page or through the `settings` tool.
 
     `.env.example` is the starting `.env`: the keys and addresses `cyfr init`
     writes, and the deployment choices commented out. The Locus services'

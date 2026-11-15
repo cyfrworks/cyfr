@@ -451,8 +451,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(protocol common_fields purpose_fields keys proofs verify)},
       {"apps/codex/internal/shell/server_test.go", ~w(exchange)},
       {"apps/cyfr/assets/test/device_unlock/complete.test.mjs", ~w(exchange)},
-      {"apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs",
-       ~w(exchange)},
       {"apps/cyfr/test/prism_web/controllers/device_unlock_controller_test.exs", ~w(exchange)},
       {"apps/prima/test/prima/device_cert_test.exs", ~w(keys proofs purpose_fields verify)},
       {"apps/prima/test/prima/device_unlock_test.exs",

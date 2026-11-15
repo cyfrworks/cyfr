@@ -276,10 +276,10 @@ defmodule Compendium.OCI.ClientTest do
       # pull asks for a blob only once the manifest path has proven the
       # caller's entitlement, so each refusal comes before any cached blob.
       assert {:error, tag_refusal} = Client.pull(b, "#{registry}/#{@repo}:1.0.0")
-      assert tag_refusal =~ "cyfr registry sync"
+      assert tag_refusal =~ "push tokens on the Registry page"
 
       assert {:error, pin_refusal} = Client.pull(b, "#{registry}/#{@repo}@#{ctx.pin}")
-      assert pin_refusal =~ "cyfr registry sync"
+      assert pin_refusal =~ "push tokens on the Registry page"
 
       # Every refusal was the registry's answer to B's own credential.
       assert [_ | _] = seen = requests(ctx.agent)
@@ -306,7 +306,7 @@ defmodule Compendium.OCI.ClientTest do
       :ok = Cache.forget_entitlement(key(a, ref), ctx.registry, @repo)
 
       assert {:error, refusal} = Client.pull(a, pinned)
-      assert refusal =~ "cyfr registry sync"
+      assert refusal =~ "push tokens on the Registry page"
       assert [{"HEAD", _, "Bearer tok_a"}] = requests(ctx.agent)
       refute Cache.entitled?(key(a, ref), ctx.registry, @repo)
     end
@@ -370,7 +370,7 @@ defmodule Compendium.OCI.ClientTest do
       _readme = with_readme(ctx.agent, 401)
 
       assert {:error, message} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
-      assert message =~ "cyfr registry sync"
+      assert message =~ "push tokens on the Registry page"
     end
   end
 
@@ -476,7 +476,7 @@ defmodule Compendium.OCI.ClientTest do
 
       assert message =~ Sanctum.Refusals.render({:limit_reached, :athanor_storage_bytes, 1})
       assert message =~ "No credentials configured for"
-      assert message =~ "cyfr registry sync"
+      assert message =~ "push tokens on the Registry page"
     end
   end
 
@@ -517,7 +517,7 @@ defmodule Compendium.OCI.ClientTest do
         source: Compendium.Source.oci(),
         auth_note:
           "You are pulling anonymously from #{ctx.registry}. Private components will not " <>
-            "be accessible. Run `cyfr registry sync` to mint your push tokens."
+            "be accessible. Sync your push tokens on the Registry page."
       }
     end
 

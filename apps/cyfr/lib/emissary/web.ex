@@ -28,7 +28,6 @@ defmodule Emissary.Web do
     exports: [
       AccountController,
       CanvasController,
-      DeviceSessionController,
       DeviceChannel,
       DirectoryController,
       ExecutionEventsController,

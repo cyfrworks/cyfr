@@ -2,13 +2,13 @@
 // Copyright 2026 CYFR Works Inc.
 //
 // A test device: a client of a CYFR's device channel (`/device/websocket`,
-// the wire `cyfr login` and a box's screen speak, `Emissary.Web.DeviceChannel`)
+// the wire a box's screen speaks, `Emissary.Web.DeviceChannel`)
 // that a proof drives frame by frame, in the proof's own process. It makes
 // an Ed25519 key in memory, which never leaves this process, and shows its
 // `pub` and `kid` so the proof puts the key on an account's log. Its first
 // connection is its hello (`Prima.Device`, tests/fixtures/device.json): it
-// names its kid, the account and, when it brings one, the setup token or
-// an invitation's code, as a software-held device (an honest client's
+// names its kid, the account and, when it brings one, the setup token,
+// as a software-held device (an honest client's
 // report: the CYFR cannot see where a key is held); it answers the CYFR's
 // sign-in request with Ed25519 over the request's digest
 // (tests/fixtures/sign_in.json), takes the client and certificate it is
@@ -177,8 +177,8 @@ function frame(opcode, payload) {
 // it was issued for, so that CYFR's verdict is the one recorded), answered
 // when the CYFR stands it (`opened`) or closes it (`closed`, the close
 // code). With `hello` (`{identifier, admission}`, the account the device's
-// key is listed in and the setup token or invitation code it brings, as
-// `{setup: token}` or `{invitation: code}`, or none) the connection opens
+// key is listed in and the setup token it brings, as `{setup: token}`, or
+// none) the connection opens
 // with the device's hello instead, answers the sign-in request, keeps the
 // client and certificate `admitted` names, and connects under them.
 // `intent` sends one and answers `{ok, result, error, ms}`; `asleep` stops

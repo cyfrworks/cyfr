@@ -51,7 +51,7 @@ func TestDeviceVectors_TheFirstConnection(t *testing.T) {
 			t.Errorf("%s:\n got %s\nwant %s", m.Name, a, b)
 		}
 	}
-	if hellos != 3 || by["sign_in_request"] == nil || by["sign_in_answer"] == nil || by["admitted"] == nil {
+	if hellos != 2 || by["sign_in_request"] == nil || by["sign_in_answer"] == nil || by["admitted"] == nil {
 		t.Fatalf("the fixture holds %d hellos and no first connection", hellos)
 	}
 
@@ -116,7 +116,7 @@ func TestDeviceVectors_ARefusalIsReadAsItsSentence(t *testing.T) {
 		raw, _ := json.Marshal(m.Message)
 		got, ok := readRefused(raw)
 		want := m.Message["error"].(map[string]any)
-		if !ok || got.Class != want["class"] || got.Message != want["message"] || sentence(got, "command line") != want["message"] {
+		if !ok || got.Class != want["class"] || got.Message != want["message"] || sentence(got, "screen") != want["message"] {
 			t.Errorf("%s: read %+v, %v", m.Name, got, ok)
 		}
 		read++
