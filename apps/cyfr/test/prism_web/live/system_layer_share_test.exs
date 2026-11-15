@@ -169,6 +169,52 @@ defmodule PrismWeb.SystemLayerShareTest do
     end
   end
 
+  describe "choice/2" do
+    test "keeps the audience the sheet offers and the caps as typed, and nothing else" do
+      assert Share.choice(
+               %{
+                 "audience" => "shared_thread:sth_pair",
+                 "person_daily" => "5",
+                 "total_daily" => "",
+                 "prompt_id" => "share-vlt_1",
+                 "_target" => ["person_daily"]
+               },
+               @subject
+             ) ==
+               {:ok,
+                %{
+                  "audience" => "shared_thread:sth_pair",
+                  "person_daily" => "5",
+                  "total_daily" => ""
+                }}
+
+      assert Share.choice(%{"prompt_id" => "share-vlt_1"}, @subject) == {:ok, %{}}
+    end
+
+    test "refuses a change the form could not have sent" do
+      for change <- [
+            %{"audience" => "shared_thread:sth_elsewhere"},
+            %{"audience" => "listed"},
+            %{"audience" => %{"x" => "bad"}},
+            %{"audience" => "everyone", "person_daily" => %{"x" => "bad"}},
+            %{"audience" => "everyone", "total_daily" => ["1"]},
+            %{"audience" => "everyone", "person_daily" => 5},
+            %{"audience" => "everyone", "person_daily" => String.duplicate("9", 33)}
+          ] do
+        assert Share.choice(change, @subject) == :error, inspect(change)
+      end
+    end
+
+    test "an arriving prompt that carries a choice is refused" do
+      assert PrismWeb.SystemLayer.Prompt.validate(
+               Map.put(@prompt, :choice, %{"audience" => "everyone"})
+             ) == {:error, :invalid_prompt}
+
+      assert {:ok, prompt} = PrismWeb.SystemLayer.Prompt.validate(@prompt)
+      refute Map.has_key?(prompt, :choice)
+    end
+  end
+
   describe "args/2" do
     test "an audience of everyone, or of one of the prompt's threads" do
       assert Share.args(@subject, %{"audience" => "everyone"}) ==

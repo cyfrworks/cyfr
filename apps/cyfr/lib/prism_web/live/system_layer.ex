@@ -724,8 +724,7 @@ defmodule PrismWeb.SystemLayer do
        restore_places: %{},
        restore_notice: nil,
        restore_error: nil,
-       reenabling: %{},
-       share_choice: nil
+       reenabling: %{}
      )}
   end
 
@@ -1499,13 +1498,18 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # The sharing sheet's choice as it changes, kept for the prompt it was
-  # made in, so the sheet says what the share being made means
-  # (`PrismWeb.SystemLayer.Share`); another prompt starts from none.
+  # The sharing sheet's choice as it changes, so the sheet says what the
+  # share being made means (`PrismWeb.SystemLayer.Share`). It is kept on
+  # the shown prompt itself, so it ends with that prompt, however it ends,
+  # and a prompt arriving under the same id starts from none
+  # (`Prompt.validate/1` keeps no choice). A change the sheet's form could
+  # not have sent is not kept (`Share.choice/2`).
   def handle_event("share_change", %{"prompt_id" => id} = params, socket) do
-    case open(socket, id, [:share]) do
-      {:ok, _prompt} -> {:noreply, assign(socket, :share_choice, {id, params})}
-      :none -> {:noreply, socket}
+    with {:ok, prompt} <- open(socket, id, [:share]),
+         {:ok, choice} <- Share.choice(params, prompt.subject) do
+      {:noreply, assign(socket, :current, Map.put(prompt, :choice, choice))}
+    else
+      _unkept -> {:noreply, socket}
     end
   end
 
@@ -2601,7 +2605,6 @@ defmodule PrismWeb.SystemLayer do
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
-            share_choice={@share_choice}
           />
 
           <.panel
@@ -2741,7 +2744,6 @@ defmodule PrismWeb.SystemLayer do
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
-  attr :share_choice, :any, default: nil
 
   # The consent walk: the sheet starts from the plan and preview the
   # prompt arrived with and hands each walk it makes back to this layer.
@@ -2903,7 +2905,7 @@ defmodule PrismWeb.SystemLayer do
       prompt={@prompt}
       administrator={match?(%Context{platform_admin: true}, @context)}
       myself={@myself}
-      choice={share_choice(@share_choice, @prompt.id)}
+      choice={Map.get(@prompt, :choice, %{})}
     />
     """
   end
@@ -2934,10 +2936,6 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp body(assigns), do: ~H""
-
-  # The sharing sheet's last change, for the prompt it was made in.
-  defp share_choice({id, choice}, id), do: choice
-  defp share_choice(_kept, _prompt_id), do: %{}
 
   attr :preview, :map, required: true
   attr :test, :string, required: true

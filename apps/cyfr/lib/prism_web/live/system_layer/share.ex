@@ -16,7 +16,7 @@ defmodule PrismWeb.SystemLayer.Share do
   this CYFR may use it without limit; to the platform administrator, that
   it is also what each new person's AQUA uses when it fits. It reads the
   choice from the form's last change (`choice`), which the system layer
-  keeps for the open prompt.
+  keeps on the shown prompt once `choice/2` has held it to the form.
 
   `args/2` holds what the sheet sent to `share.create`'s arguments before
   anything is dispatched, through `audience/2` and `caps/1`, which the
@@ -28,6 +28,8 @@ defmodule PrismWeb.SystemLayer.Share do
   use Phoenix.Component
 
   @everyone "everyone"
+  # A cap is a count: no longer text is one, so none is kept.
+  @field_max 32
   @uncapped "Shared with everyone and no cap, anyone on this CYFR may use it without limit."
   @newcomers "You administer this CYFR, so a key you share with everyone is also what each " <>
                "new person's AQUA uses when it fits"
@@ -173,6 +175,21 @@ defmodule PrismWeb.SystemLayer.Share do
     do: @thread <> id
 
   def audience_value(%{"audience" => audience}), do: to_string(audience)
+
+  @doc """
+  The choice a change of the sheet of `subject` sent, held to the form:
+  the audience, one the sheet offers, and the two caps, each a string of
+  at most #{@field_max} bytes, nothing else. `:error` when any of them is
+  not, and nothing of that change is kept: the form never sends one.
+  """
+  @spec choice(map(), %{threads: [%{id: String.t()}]}) :: {:ok, map()} | :error
+  def choice(params, %{threads: threads}) when is_map(params) do
+    choice = Map.take(params, ["audience", "person_daily", "total_daily"])
+    if Enum.all?(choice, &field?(&1, threads)), do: {:ok, choice}, else: :error
+  end
+
+  defp field?({"audience", value}, threads), do: match?({:ok, _}, audience(value, threads))
+  defp field?({_cap, value}, _threads), do: is_binary(value) and byte_size(value) <= @field_max
 
   @doc """
   Both daily caps as typed, `person_daily` and `total_daily`: each a whole
