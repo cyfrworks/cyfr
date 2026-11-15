@@ -63,10 +63,12 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
   alias Sanctum.Catalog
   alias Sanctum.Gate.CatalogSourcesTest.{Declared, Undeclared}
 
-  # What reaches the registry or the bytes it served, and an execution's
-  # own retained payload, whatever an outside sender wrote into it.
+  # What reaches the registry or the bytes it served, an execution's own
+  # retained payload, whatever an outside sender wrote into it, and what
+  # other people said in a shared thread the person sits in.
   @outside ~w(component.search component.discover component.get_blob component.pull
-              component.deprecate component.yank record.payload) ++
+              component.deprecate component.yank record.payload threads.list
+              threads.read) ++
              for(
                action <- ~w(sync claim_publisher verify_publisher tokens_list
                             tokens_issue tokens_revoke members_list members_add members_update

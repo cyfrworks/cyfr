@@ -393,17 +393,25 @@ defmodule Sanctum.SharedThreadsTest do
   end
 
   describe "tail/3 and people_in_threads_with/1" do
-    test "tail reads the newest messages, oldest first, for a seated person alone",
+    test "tail reads the reader's mark, what is unread to them and the newest messages, of a thread their list names alone",
          %{alice: alice, bob: bob, carol: carol} do
       thread = thread!(alice) |> seated!(alice, [bob])
       id = thread.id
-      for n <- 1..4, do: {:ok, _} = SharedThreads.post(alice, id, "line #{n}")
+      for n <- 1..2, do: {:ok, _} = SharedThreads.post(alice, id, "line #{n}")
+      :ok = SharedThreads.mark_read(bob, id)
+      for n <- 3..4, do: {:ok, _} = SharedThreads.post(alice, id, "line #{n}")
+      {:ok, _} = SharedThreads.post(bob, id, "mine")
 
-      assert {:ok, tail} = SharedThreads.tail(bob, id, 2)
-      assert Enum.map(tail, & &1.content) == ["line 3", "line 4"]
-      assert [%{seq: 3, author: ^alice}, %{seq: 4}] = tail
+      assert {:ok, %{read_seq: 2, unread: 2, messages: tail}} = SharedThreads.tail(bob, id, 2)
+      assert Enum.map(tail, & &1.content) == ["line 4", "mine"]
+      assert [%{seq: 4, author: ^alice}, %{seq: 5, author: ^bob}] = tail
 
       assert {:error, {:not_found, "Thread", ^id}} = SharedThreads.tail(carol, id, 2)
+
+      # An archived thread is not on the list, so not read either.
+      {:ok, _} = SharedThreads.archive(alice, id)
+      assert {:ok, []} = SharedThreads.listed(bob)
+      assert {:error, {:not_found, "Thread", ^id}} = SharedThreads.tail(bob, id, 2)
     end
 
     test "people_in_threads_with names everyone seated with the person in an active thread, by name",

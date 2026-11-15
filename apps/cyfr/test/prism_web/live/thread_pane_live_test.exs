@@ -580,6 +580,28 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute html =~ "A.Q.U.A."
   end
 
+  test "a line says once that what Aqua reads in a shared thread goes to the person's model provider, until they dismiss it",
+       %{conn: conn, user: user, athanor: athanor, thread: thread} do
+    sentence =
+      "Aqua reads your shared threads when you ask about them. What it reads there, other people's words included, goes to your model provider."
+
+    pane = open_pane(conn, athanor, thread)
+    assert has_element?(pane, ~s([id$="-reads-notice"]), sentence)
+
+    # Another mount, before it is dismissed, says it again.
+    again = open_pane(conn, athanor, thread)
+    assert has_element?(again, ~s([id$="-reads-notice"]), sentence)
+
+    again |> element(~s(button[phx-click="dismiss_reads_notice"])) |> render_click()
+    refute has_element?(again, ~s([id$="-reads-notice"]))
+
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    assert Sanctum.Tenancy.Users.prefs(row)["aqua_reads_threads_seen"] == true
+
+    # Kept on the person's own row: no mount says it again.
+    refute has_element?(open_pane(conn, athanor, thread), ~s([id$="-reads-notice"]))
+  end
+
   test "at 720×720 an open thread's text and small targets carry the shared size classes alone",
        %{
          conn: conn,
@@ -619,7 +641,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute source =~ @under_12px
     refute source =~ @inline_style
 
-    for click <- ~w(approve_all_pending decline_all_pending retry_send discard_send dismiss_link) do
+    for click <-
+          ~w(approve_all_pending decline_all_pending retry_send discard_send dismiss_link dismiss_reads_notice) do
       assert source =~ ~r/phx-click="#{click}"[^>]*class="[^"]*min-h-6/,
              "the #{click} control is under 24 px"
     end

@@ -50,13 +50,19 @@ defmodule PrismWeb.ThreadPaneLive do
 
   The pane sits beside the shared thread the chat overlay shows, when it
   shows one (`PrismWeb.RoomFeed`, the session's `room_feed` and `room`):
-  it reads that thread into each send as the turn's context
-  (`Aqua.RoomExcerpt` — under the person's own seat, never kept), and
-  offers to paste a line onto it (`thread.aloud`). What a turn asks of
-  the browser is its sender's alone: a page the assistant points at is
-  offered as a link under the thread (`<dom>-links`), never followed, so
-  the page the person is reading stays; every other intent is pushed as
-  `aqua:intents` naming this pane.
+  ticked, its box reads that thread into each send as the turn's context
+  (`Aqua.RoomExcerpt` — under the person's own seat, never kept); it
+  starts unticked, since AQUA reads a shared thread itself when a
+  question needs it (`threads.read`). It offers to paste a line onto the
+  thread (`thread.aloud`). Until the person dismisses it, a line says
+  that what AQUA reads in a shared thread, other people's words
+  included, goes to their model provider; dismissing it writes
+  `users.prefs`' `aqua_reads_threads_seen`, so it is said once.
+
+  What a turn asks of the browser is its sender's alone: a page the
+  assistant points at is offered as a link under the thread
+  (`<dom>-links`), never followed, so the page the person is reading
+  stays; every other intent is pushed as `aqua:intents` naming this pane.
 
   The panel's own header names AQUA and the thread, so the pane draws no
   name or thread label of its own, and its model override, soul or crew
@@ -102,7 +108,8 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # The pane sits beside the shared thread the chat overlay shows: it hears
-  # which on the desktop's feed and reads it into each send.
+  # which on the desktop's feed, and reads it into a send only when the
+  # person ticks the box.
   defp beside(socket, session) do
     room_feed = session["room_feed"]
 
@@ -110,8 +117,32 @@ defmodule PrismWeb.ThreadPaneLive do
 
     socket
     |> assign(:room, session["room"])
-    |> assign(:read_room?, true)
+    |> assign(:read_room?, false)
+    |> assign(:reads_notice?, not reads_notice_seen?(socket.assigns.context))
   end
+
+  @reads_notice_seen "aqua_reads_threads_seen"
+
+  # A person whose row cannot be read is told again rather than never.
+  defp reads_notice_seen?(%{user_id: user_id}) when is_binary(user_id) do
+    case Users.get(user_id) do
+      {:ok, user} -> Users.prefs(user)[@reads_notice_seen] == true
+      _unread -> false
+    end
+  end
+
+  defp reads_notice_seen?(_ctx), do: false
+
+  defp keep_reads_notice_seen(%{user_id: user_id}) when is_binary(user_id) do
+    with {:ok, user} <- Users.get(user_id),
+         {:ok, _user} <- Users.put_prefs(user, %{@reads_notice_seen => true}) do
+      :ok
+    else
+      {:error, _unkept} -> Logger.warning("[ThreadPaneLive] the reads notice was not kept")
+    end
+  end
+
+  defp keep_reads_notice_seen(_ctx), do: :ok
 
   # Everything the pane knows of its athanor, from its own context: the
   # athanor row, the roster (the athanor's soul and crew), the members and
@@ -511,6 +542,13 @@ defmodule PrismWeb.ThreadPaneLive do
   # Beside a shared thread: whether each send reads it.
   def handle_event("toggle_read_room", _params, socket) do
     {:noreply, assign(socket, :read_room?, not socket.assigns.read_room?)}
+  end
+
+  # Said once: the person's own row keeps that they have read it. A write
+  # that fails leaves it to be said again at the next mount.
+  def handle_event("dismiss_reads_notice", _params, socket) do
+    keep_reads_notice_seen(socket.assigns.context)
+    {:noreply, assign(socket, :reads_notice?, false)}
   end
 
   # A line from this thread onto the shared thread beside it, through
@@ -2025,6 +2063,23 @@ defmodule PrismWeb.ThreadPaneLive do
             ×
           </button>
         </div>
+      </div>
+
+      <div
+        :if={@reads_notice?}
+        id={@dom <> "-reads-notice"}
+        class="flex items-start gap-2 border-t border-gray-800 px-3 py-1.5 text-xs text-gray-400"
+      >
+        <p class="min-w-0 flex-1">
+          Aqua reads your shared threads when you ask about them. What it reads there, other people's words included, goes to your model provider.
+        </p>
+        <button
+          type="button"
+          phx-click="dismiss_reads_notice"
+          class="min-h-6 shrink-0 px-1 text-gray-500 hover:text-gray-200"
+        >
+          Got it
+        </button>
       </div>
 
       <label

@@ -148,7 +148,7 @@ defmodule Aqua.Crew do
          {:ok, title} <- title(args["title"]),
          {:ok, tools} <- tools(args["tools"]),
          {:ok, options} <- options(args["options"]),
-         {:ok, turn} <- calling_turn(ctx, args),
+         {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          :ok <- Admission.request(thread, turn.agent, member, roster),
@@ -199,7 +199,7 @@ defmodule Aqua.Crew do
   """
   @spec list(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def list(%Context{} = ctx, args) do
-    with {:ok, turn} <- calling_turn(ctx, args),
+    with {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, person} <- asker(ctx, turn),
          {:ok, index} <- index(person, roster) do
@@ -422,24 +422,6 @@ defmodule Aqua.Crew do
 
   defp options(_options),
     do: {:error, {:invalid_argument, "crew.ask takes 'options' as an object"}}
-
-  # The turn the call comes from, by the thread and root the gate's
-  # lineage stamped: a call with no open turn behind it asks nobody.
-  defp calling_turn(ctx, %{"thread_id" => thread_id, "root_execution_id" => root})
-       when is_binary(thread_id) and is_binary(root) do
-    case Tape.open_turns(ctx, thread_id) do
-      {:ok, turns} ->
-        case Enum.find(turns, &(&1.root_execution_id == root)) do
-          nil -> {:error, :not_addressable}
-          turn -> {:ok, turn}
-        end
-
-      {:error, _} = refused ->
-        refused
-    end
-  end
-
-  defp calling_turn(_ctx, _args), do: {:error, :not_addressable}
 
   # ---------------------------------------------------------------------------
   # The consumer
