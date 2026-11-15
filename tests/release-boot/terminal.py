@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""A person at a terminal, for the release boot's headless case.
+"""A person at a terminal, for the release boot's terminal case.
 
     python3 -I terminal.py PASSPHRASE_FILE TRANSCRIPT CYFR [ARG...]
 

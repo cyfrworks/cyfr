@@ -43,7 +43,7 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
-  describe "company_login_config/3 — the company sign-in, its days and its issuer" do
+  describe "company_login_config/2 — the company sign-in, its days and its issuer" do
     @company_oidc %{issuer: "https://auth.example.com", client_id: "cid", client_secret: "secret"}
     @workos_names ~w(CYFR_WORKOS_CLIENT_ID CYFR_WORKOS_API_KEY CYFR_WORKOS_ORGANIZATION)
     @workos_env %{
@@ -61,8 +61,8 @@ defmodule Cyfr.RuntimeConfigTest do
 
     # Every case but the issuer's own has an OpenID Connect issuer, so a
     # refusal is the one setting under test and never a missing issuer.
-    defp company(map, oidc \\ @company_oidc, headless? \\ false),
-      do: RuntimeConfig.company_login_config(env(map), oidc, headless?)
+    defp company(map, oidc \\ @company_oidc),
+      do: RuntimeConfig.company_login_config(env(map), oidc)
 
     # Whether `message` names `var` itself: CYFR_COMPANY_LOGIN inside
     # CYFR_COMPANY_LOGIN_DAYS does not count.
@@ -152,19 +152,9 @@ defmodule Cyfr.RuntimeConfigTest do
       end
     end
 
-    test "WorkOS on a headless node is refused, naming CYFR_HEADLESS and never the key" do
-      for mode <- [@join, @renew] do
-        assert {:error, message} = company(Map.merge(@workos_env, mode), nil, true)
-        assert names?(message, "CYFR_HEADLESS"), message
-        refute message =~ @workos.api_key
-
-        assert {:ok, %{issuer: :workos}} = company(Map.merge(@workos_env, mode), nil, false)
-      end
-    end
-
     test "join or renew with neither WorkOS nor an OpenID Connect issuer is refused, naming both" do
-      for mode <- [@join, @renew], headless? <- [false, true] do
-        assert {:error, message} = company(mode, nil, headless?)
+      for mode <- [@join, @renew] do
+        assert {:error, message} = company(mode, nil)
         assert message =~ "CYFR_COMPANY_LOGIN=#{mode["CYFR_COMPANY_LOGIN"]}", message
 
         for var <- ["CYFR_OIDC_ISSUER" | @workos_names],

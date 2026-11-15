@@ -90,7 +90,7 @@ defmodule Cyfr.RuntimeConfig do
   Resolve the company sign-in every person here may be held to
   (`Sanctum.CompanyLogin`) from `CYFR_COMPANY_LOGIN`,
   `CYFR_COMPANY_LOGIN_DAYS` and WorkOS's three settings, given the OpenID
-  Connect issuer `oidc_config/1` resolved and whether the node is headless.
+  Connect issuer `oidc_config/1` resolved.
 
   Answers `{:ok, %{mode:, days:, issuer:, workos:}}`: the mode `:off`
   (unset or empty), `:join` or `:renew`; the days, a positive whole number
@@ -99,11 +99,10 @@ defmodule Cyfr.RuntimeConfig do
   nil otherwise; and WorkOS's `%{client_id:, api_key:, organization:}` or
   nil. Refused, naming the setting: another mode; days missing with
   `renew`, set with any other mode, or not a positive whole number; WorkOS
-  set in part, set while the mode is `off`, or set on a headless CYFR,
-  which has no page to sign in on; and `join` or `renew` with no company
-  issuer.
+  set in part or set while the mode is `off`; and `join` or `renew` with
+  no company issuer.
   """
-  @spec company_login_config(getenv, map() | nil, boolean()) ::
+  @spec company_login_config(getenv, map() | nil) ::
           {:ok,
            %{
              mode: :off | :join | :renew,
@@ -112,12 +111,11 @@ defmodule Cyfr.RuntimeConfig do
              workos: %{client_id: String.t(), api_key: String.t(), organization: String.t()} | nil
            }}
           | {:error, String.t()}
-  def company_login_config(getenv, oidc, headless?)
-      when is_function(getenv, 1) and is_boolean(headless?) do
+  def company_login_config(getenv, oidc) when is_function(getenv, 1) do
     with {:ok, mode} <- company_mode(blank_to_nil(getenv.("CYFR_COMPANY_LOGIN"))),
          {:ok, days} <- company_days(mode, blank_to_nil(getenv.("CYFR_COMPANY_LOGIN_DAYS"))),
          {:ok, workos} <- workos_config(getenv),
-         :ok <- workos_allowed(workos, mode, headless?) do
+         :ok <- workos_allowed(workos, mode) do
       issuer =
         cond do
           workos -> :workos
@@ -184,21 +182,15 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  defp workos_allowed(nil, _mode, _headless?), do: :ok
+  defp workos_allowed(nil, _mode), do: :ok
 
-  defp workos_allowed(_workos, _mode, true),
-    do:
-      {:error,
-       "CYFR_HEADLESS=on cannot be combined with WorkOS: a company sign-in runs in the " <>
-         "browser page a headless CYFR does not serve."}
-
-  defp workos_allowed(_workos, :off, false),
+  defp workos_allowed(_workos, :off),
     do:
       {:error,
        "WorkOS is the company sign-in's issuer: set CYFR_COMPANY_LOGIN to join or renew, " <>
          "or unset CYFR_WORKOS_CLIENT_ID, CYFR_WORKOS_API_KEY and CYFR_WORKOS_ORGANIZATION."}
 
-  defp workos_allowed(_workos, _mode, false), do: :ok
+  defp workos_allowed(_workos, _mode), do: :ok
 
   @doc """
   Browser cross-origin allowlist: `config/config.exs` configures the empty
@@ -254,14 +246,6 @@ defmodule Cyfr.RuntimeConfig do
            "(a host call's body), got #{got}"}
     end
   end
-
-  @doc """
-  Whether this node is headless (`CYFR_HEADLESS`): the API, MCP and public
-  tinctures are served and every browser route answers 404 — a Codex-only
-  node. Read at request time by `CyfrWeb.Plugs.Headless`.
-  """
-  @spec headless?() :: boolean()
-  def headless?, do: Application.get_env(:cyfr, :headless, false) == true
 
   @doc "Whether this node runs as an OTP release (RELEASE_ROOT is set)."
   @spec release?() :: boolean()

@@ -405,7 +405,6 @@
 0.2	apps/cyfr/test/cyfr_web/plugs/control_plane_ownership_test.exs
 0.0	apps/cyfr/test/cyfr_web/plugs/cors_test.exs
 0.2	apps/cyfr/test/cyfr_web/plugs/frame_request_test.exs
-0.2	apps/cyfr/test/cyfr_web/plugs/headless_test.exs
 0.0	apps/cyfr/test/cyfr_web/plugs/mcp_origin_test.exs
 0.4	apps/cyfr/test/cyfr_web/plugs/mcp_rate_limit_test.exs
 0.1	apps/cyfr/test/cyfr_web/plugs/parser_errors_test.exs

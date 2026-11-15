@@ -64,7 +64,7 @@ Your recovery code never passes through an address, a server or the browser's st
 
 At a terminal, `cyfr login --setup` in the project directory `cyfr init` set up makes you that CYFR's first person, and `cyfr login --join` (with `--invitation CODE` when you have one) makes you a new person at a CYFR that admits you. Without an account yet, each makes it there, with the command line as its first device: it asks you to accept the terms when the account service names them, asks your name (or takes `--name`), makes the command line's key under a PIN or passphrase ([devices-guide.md](devices-guide.md)), and shows your recovery code as a QR code and as text. Nothing is sent until you press Enter to say you saved it. If the run stops after that, the next `cyfr login` asks for that recovery code and finishes the same account.
 
-A CYFR box with its own screen does the same at setup: **Set up CYFR** takes your name, a PIN (or the passphrase it shows) and the terms, and shows your recovery code as a QR code to scan or print; **I saved it** makes the account with the box as its first device, and **Open CYFR** opens it. A headless CYFR (`CYFR_HEADLESS`) serves no setup page, so there `cyfr login --setup` is the only way.
+A CYFR box with its own screen does the same at setup: **Set up CYFR** takes your name, a PIN (or the passphrase it shows) and the terms, and shows your recovery code as a QR code to scan or print; **I saved it** makes the account with the box as its first device, and **Open CYFR** opens it.
 
 ---
 

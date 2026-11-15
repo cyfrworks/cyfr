@@ -51,7 +51,6 @@ value is literal throughout, an open `$(` included.
 | `CYFR_DB_POOL_SIZE` | The database connection pool's size (default 20). |
 | `CYFR_DB_SSL` | TLS to the PostgreSQL server (default off). |
 | `CYFR_DIRECTORY_URL` | The account service this deployment's people sign in through, whose account pages a browser is sent to and whose accounts this CYFR reads: an `https` URL, or an `http` one on this machine's loopback (`localhost`, `127.0.0.0/8` or `::1`), since loopback has no network path for TLS to protect and an account service is trusted only to order signed entries; the address is still reached only when `CYFR_PRIVATE_EGRESS_TARGETS` lists it, and accounts made there sign in at no CYFR on another machine. Default `https://cyfr.run` in every build, the account service cyfr.run hosts, whose registry takes requests only from the accounts it keeps. Choosing another is a choice about how long an account lasts. A malformed value, `http` on any other host, or one longer than 1,024 bytes refuses the boot. |
-| `CYFR_HEADLESS` | CYFR with Codex access only (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_OIDC_ISSUER`. |
 | `CYFR_HOST` | CYFR's hostname, which `cyfr access` writes with the mode: `localhost` with local access, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) with tailnet access, and the domain Caddy's certificate names with public access. The boot refuses a host the mode does not allow. |
 | `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare server; compose binds the server's own address on the locus-runtime network, so the host API is reachable from that network alone). |
 | `CYFR_HOST_API_PORT` | The host API's port (default 4300). |
@@ -101,7 +100,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_TRUSTED_PROXY_HOPS` | The proxy hops in front of the proxy listener when `CYFR_TRUSTED_PROXY_CIDRS` is unset (default 1; 0 to 16). Too few resolves client addresses to a proxy, so API-key address allowlists fail closed. |
 | `CYFR_WASM_TOOLS` | The absolute path of the pinned `wasm-tools` every component is validated with before it is stored or compiled (default `/usr/local/bin/wasm-tools`, where the image installs it; `scripts/wasm-tools.sh` installs the pinned release). A path that names no executable refuses the boot. |
 | `CYFR_WORKOS_API_KEY` | The WorkOS API key, set in `.env` alone and never in a tracked file: the secret CYFR's server sends with a company sign-in's code to WorkOS's token endpoint. With `CYFR_WORKOS_CLIENT_ID` and `CYFR_WORKOS_ORGANIZATION`, all three or none. |
-| `CYFR_WORKOS_CLIENT_ID` | The WorkOS client ID, with `CYFR_WORKOS_API_KEY` and `CYFR_WORKOS_ORGANIZATION`: set together, WorkOS's single sign-on is the company issuer `CYFR_COMPANY_LOGIN` requires, and an OIDC issuer configured beside it goes unused. WorkOS lists `<origin>/auth/company/callback` as its redirect URI. Set while `CYFR_COMPANY_LOGIN` is `off`, set in part, or on a headless CYFR, it refuses the boot. |
+| `CYFR_WORKOS_CLIENT_ID` | The WorkOS client ID, with `CYFR_WORKOS_API_KEY` and `CYFR_WORKOS_ORGANIZATION`: set together, WorkOS's single sign-on is the company issuer `CYFR_COMPANY_LOGIN` requires, and an OIDC issuer configured beside it goes unused. WorkOS lists `<origin>/auth/company/callback` as its redirect URI. Set while `CYFR_COMPANY_LOGIN` is `off` or set in part, it refuses the boot. |
 | `CYFR_WORKOS_ORGANIZATION` | The WorkOS organization ID (`org_…`) every company sign-in must come from, with `CYFR_WORKOS_CLIENT_ID` and `CYFR_WORKOS_API_KEY`; a sign-in WorkOS answers for another organization is refused. Changing it makes every person sign in with their company again. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | The OTLP endpoint traces go to (default `http://localhost:4318`). Not under the prefix; listed so every name the boot reads is documented in one place. |
 
@@ -212,7 +211,7 @@ assigns one.
 | `CYFR_CLUSTER_DATABASE_URL` | the test harness: the cluster suite's shared database |
 | `CYFR_GOLDEN_RECORD` | the test harness: rewrites the consent bootstrap's golden file |
 
-## Headless recovery
+## Recovery without the console
 
 The settings functions are public, so an operator without the console
 reaches them through the release. `bin/cyfr rpc` changes the **running

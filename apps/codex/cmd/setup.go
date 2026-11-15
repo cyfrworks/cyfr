@@ -229,7 +229,7 @@ func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
 	values, _ := access.ReadEnvValues(".env")
 	link := setupLink(access.Describe(head).Address, values)
 	opened := func() {
-		if head.Mode != access.ModeTailnet && !headless(values) && openOnDisplay(link, noOpen, out) {
+		if head.Mode != access.ModeTailnet && openOnDisplay(link, noOpen, out) {
 			fmt.Fprintln(out, "Opened it in your browser.")
 		}
 	}
@@ -239,14 +239,11 @@ func setupNextHere(ctx context.Context, noOpen bool, out io.Writer) error {
 		opened()
 	case read == setUpDone:
 		fmt.Fprintln(out, "CYFR is set up and has its first person. cyfr open opens it.")
-	case read == setUpUnknown && headless(values):
-		// A headless CYFR serves no setup page to point at.
-		fmt.Fprintln(out, "Run cyfr login --setup here if no one is set up yet. cyfr open opens CYFR.")
 	case read == setUpUnknown:
 		fmt.Fprintf(out, "Open %s.\n", hyperlink(out, link))
 		opened()
 	case neverBooted():
-		fmt.Fprintln(out, "CYFR is already set up here. "+upThenSetup(values, hyperlink(out, link)))
+		fmt.Fprintln(out, "CYFR is already set up here. "+upThenSetup(hyperlink(out, link)))
 	default:
 		fmt.Fprintln(out, "CYFR is already set up here. Next: cyfr up.")
 	}

@@ -10,7 +10,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
   from `Cyfr.Platform.Settings.Roster`: the deployment variables, the
   platform settings with their key, variable, type, default, group, scope
   and stale policy, the compose-only names, the names other programs own,
-  and the headless recovery procedure.
+  and the recovery procedure without the console.
 
       mix cyfr.gen.configuration_guide
       mix cyfr.gen.configuration_guide --check
@@ -136,7 +136,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
     |---|---|
     #{Enum.map_join(Roster.foreign(), "\n", &foreign_row/1)}
 
-    ## Headless recovery
+    ## Recovery without the console
 
     The settings functions are public, so an operator without the console
     reaches them through the release. `bin/cyfr rpc` changes the **running

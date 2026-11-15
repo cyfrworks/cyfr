@@ -1030,7 +1030,7 @@ defmodule Cyfr.Boundaries do
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.FrameRequest
-        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SignInResponse
+        CyfrWeb.Router CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
