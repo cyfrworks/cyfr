@@ -269,7 +269,6 @@ defmodule Arca.Users do
           Prima.Actor.t(),
           (({String.t(), String.t()} -> boolean()) -> {:ok, term()} | {:error, term()})
         ) :: {:ok, term()} | {:error, :not_owner | term()} | refusal()
-  # arca:unscoped-ok a person is the instance's, held by no athanor.
   def with_admins_locked(%Prima.Actor{scope: :platform}, write) when is_function(write, 1) do
     Arca.Repo.owned("Arca.Users.with_admins_locked", fn ->
       :ok = lock_admins()
