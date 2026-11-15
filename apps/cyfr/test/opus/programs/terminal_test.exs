@@ -266,6 +266,57 @@ defmodule Opus.Programs.TerminalTest do
       refute_received {:session, "close", _message, _fields}
     end
 
+    # A key names its creator's athanor and person, and stands; it is no
+    # person at a screen, so it reaches what a stranger reaches: nothing.
+    # The sign-in relay's checks, and this owner's before, admitted it.
+    test "a key carrying its creator's own ids finds none of their sessions",
+         %{ctx: ctx, row: row} do
+      {id, _session} = start!(ctx, row)
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(Sanctum.TestContext.issuer!(ctx), %{name: "terminal-key"})
+
+      {:ok, key} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      assert {key.athanor_id, key.user_id} == {ctx.athanor_id, ctx.user_id}
+
+      assert {:error, :not_found} = Programs.attach(key, id)
+      assert {:error, :not_found} = Programs.input(key, id, "x")
+      assert {:error, :not_found} = Programs.resize(key, id, 10, 10)
+      assert {:error, :not_found} = Programs.keep(key, id, true)
+      assert :ok = Programs.detach(key, id)
+      assert {:ok, :already_gone} = Programs.close(key, id)
+      assert {:ok, []} = Programs.running(key)
+
+      assert {:error, :not_found} =
+               Programs.start(key, row.id, Map.merge(@size, %{args: [], by: :person}))
+
+      refute gone?(id)
+      assert {:ok, [%{session: ^id, kept: false}]} = Programs.running(ctx)
+      refute_received {:session, "close", _message, _fields}
+      refute_received {:session, "input", _message, _fields}
+    end
+
+    # Whose a session is is read beside its name, before it is asked
+    # anything: a stranger's answer is the same whether the session is
+    # busy, here suspended, or missing. Asked of the process first, a
+    # stranger's close of a busy session timed out as unanswered.
+    test "a stranger's answer does not depend on the session's state", %{ctx: ctx, row: row} do
+      {id, _session} = start!(ctx, row)
+      {stranger, _user} = person!("stranger-busy")
+      :ok = :sys.suspend(terminal(id))
+
+      try do
+        assert {:ok, :already_gone} = Programs.close(stranger, id)
+        assert {:error, :not_found} = Programs.attach(stranger, id)
+        assert {:error, :not_found} = Programs.keep(stranger, id, true)
+        assert {:ok, :already_gone} = Programs.close(stranger, "trm_missing")
+      after
+        :sys.resume(terminal(id))
+      end
+
+      refute gone?(id)
+    end
+
     test "a detach and an attached process's exit end nothing", %{ctx: ctx, row: row} do
       {id, _session} = start!(ctx, row)
 

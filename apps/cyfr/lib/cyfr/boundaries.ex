@@ -1910,7 +1910,11 @@ defmodule Cyfr.Boundaries do
     # while a program row is written by Emissary's provider through Arca,
     # so no Sanctum module decides it; `confirm_program_definition/2` asks
     # for and consumes that one action only.
+    # `authorize_interactive/1`: a program's terminal session is reached
+    # only by its person at a screen, as the gate reads an interactive
+    # caller (`Opus.Programs`).
     "Sanctum.Consent" => [
+      authorize_interactive: 1,
       binding_live: 4,
       confirm_program_definition: 2,
       head_consent: 2,

@@ -63,7 +63,10 @@ defmodule Opus.Programs do
   ends nothing) or closes it (`close/2`); `running/1` lists the person's
   sessions, and `Cyfr.Bus.programs/2` announces every change of that
   list. Each call takes the caller's context and is refused when the
-  caller no longer stands; a session of another person is not found.
+  caller no longer stands. A session is reached only by its person at a
+  screen, as the gate reads an interactive caller: another person, and a
+  caller that is no person at a screen (a key), find no session, whatever
+  its state, and none to list or start.
   """
 
   use Supervisor
@@ -319,7 +322,7 @@ defmodule Opus.Programs do
         %{rows: rows, cols: cols, args: args, by: by} = opts
       )
       when is_binary(row_id) and by in [:person, :aqua] do
-    with {:ok, {athanor_id, user_id} = person} <- standing(ctx),
+    with {:ok, {athanor_id, user_id} = person} <- person(ctx) |> no_stranger(),
          :ok <- size(rows, cols),
          :ok <- args(args),
          {:ok, row} <- program_row(ctx, row_id) do
@@ -431,8 +434,8 @@ defmodule Opus.Programs do
   @spec close(Sanctum.Context.t(), String.t()) ::
           {:ok, :closed | :already_gone} | {:error, :unanswered | term()}
   def close(%Sanctum.Context{} = ctx, session_id) do
-    with {:ok, person} <- standing(ctx) do
-      case terminal_pid(session_id) do
+    with {:ok, person} <- person(ctx) do
+      case terminal_pid(session_id, person) do
         nil -> {:ok, :already_gone}
         pid -> GenServer.call(pid, {:close, person}, Box.close_timeout_ms() + @answer_margin_ms)
       end
@@ -445,7 +448,7 @@ defmodule Opus.Programs do
   @doc "The caller's person's running sessions in the caller's athanor, oldest first."
   @spec running(Sanctum.Context.t()) :: {:ok, [running()]} | {:error, term()}
   def running(%Sanctum.Context{} = ctx) do
-    with {:ok, person} <- standing(ctx) do
+    with {:ok, person} <- person(ctx) do
       pids =
         if Process.whereis(@registry),
           do: Registry.select(@registry, [{{{:terminal, :_}, :"$1", person}, [], [:"$1"]}]),
@@ -464,18 +467,24 @@ defmodule Opus.Programs do
     :exit, _ -> {:error, :not_found}
   end
 
-  # The caller stands now: a context validated within the caller bound is
-  # used as it is, and any other is read again from the store
-  # (`Sanctum.Caller.revalidate_session/1`), as a page's guard does; a
-  # caller whose athanor moved, or who no longer stands, is refused.
-  defp standing(%Sanctum.Context{athanor_id: athanor_id} = ctx) do
+  # The person a session may belong to: the caller stands now (a context
+  # validated within the caller bound is used as it is, and any other is
+  # read again from the store, `Sanctum.Caller.revalidate_session/1`, as a
+  # page's guard does), and is that person at a screen, as the gate reads
+  # an interactive caller (`Sanctum.Consent.authorize_interactive/1`). A
+  # caller who stands but is no person at a screen, a key among them, is
+  # answered as a stranger is: `:stranger`, which finds no session.
+  defp person(%Sanctum.Context{athanor_id: athanor_id} = ctx) do
     current =
       if Sanctum.Caller.fresh?(ctx), do: {:ok, ctx}, else: Sanctum.Caller.revalidate_session(ctx)
 
     case current do
-      {:ok, %{authenticated: true, athanor_id: ^athanor_id, user_id: user_id}}
+      {:ok, %{authenticated: true, athanor_id: ^athanor_id, user_id: user_id} = current}
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and user_id != "" ->
-        {:ok, {athanor_id, user_id}}
+        case Sanctum.Consent.authorize_interactive(current) do
+          {:ok, :interactive} -> {:ok, {athanor_id, user_id}}
+          {:error, _not_at_a_screen} -> {:ok, :stranger}
+        end
 
       {:error, :unavailable} ->
         {:error, :unavailable}
@@ -485,9 +494,12 @@ defmodule Opus.Programs do
     end
   end
 
+  defp no_stranger({:ok, :stranger}), do: {:error, :not_found}
+  defp no_stranger(answer), do: answer
+
   defp terminal_call(ctx, session_id, message) when is_binary(session_id) do
-    with {:ok, person} <- standing(ctx) do
-      case terminal_pid(session_id) do
+    with {:ok, person} <- person(ctx) do
+      case terminal_pid(session_id, person) do
         nil -> {:error, :not_found}
         pid -> GenServer.call(pid, message.(person), 5_000)
       end
@@ -498,16 +510,19 @@ defmodule Opus.Programs do
 
   defp terminal_name(id, person), do: {:via, Registry, {@registry, {:terminal, id}, person}}
 
-  defp terminal_pid(session_id) when is_binary(session_id) do
+  # The session's process, when it is `person`'s: whose it is is read from
+  # the registry, beside its name, before the process is asked anything,
+  # so a stranger's answer never depends on the session's state.
+  defp terminal_pid(session_id, {_athanor_id, _user_id} = person) when is_binary(session_id) do
     if Process.whereis(@registry) do
       case Registry.lookup(@registry, {:terminal, session_id}) do
-        [{pid, _person}] -> pid
-        [] -> nil
+        [{pid, ^person}] -> pid
+        _none_or_another -> nil
       end
     end
   end
 
-  defp terminal_pid(_session_id), do: nil
+  defp terminal_pid(_session_id, _stranger), do: nil
 
   defp program_row(ctx, row_id) do
     case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row_id) do
