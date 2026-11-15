@@ -590,7 +590,7 @@ defmodule Prima.Refusal do
   defp row(:archived), do: {:forbidden, "This athanor is archived — nothing runs in it"}
 
   defp row(:no_agent),
-    do: {:setup_required, "This athanor has no assistant to address — reset its AQUA tree"}
+    do: {:setup_required, "This athanor has no assistant to address — reset its Aqua tree"}
 
   # Who may post where (`Aqua.Runner.Admission`), and a crew member's
   # retired thread.
@@ -599,7 +599,7 @@ defmodule Prima.Refusal do
       {:forbidden,
        "That cannot be addressed from here — a crew member answers only the thread that asked it"}
 
-  # A person's shared threads are read by their own AQUA, from a turn of
+  # A person's shared threads are read by their own Aqua, from a turn of
   # its own (`Aqua.Tape.calling_turn/2`), and by no other chain.
   defp row(:not_in_a_turn),
     do: {:forbidden, "Only Aqua reads your shared threads, in a turn of its own"}
@@ -623,34 +623,34 @@ defmodule Prima.Refusal do
   # A crew member whose brain cannot take a job yet (`Aqua.Crew.ready/2`):
   # the sentence says what the person does about it.
   defp row({:crew_unready, member, :no_brain}) when is_binary(member),
-    do: {:setup_required, "#{member} has no brain yet — pick its model on the AQUA page"}
+    do: {:setup_required, "#{member} has no brain yet — pick its model on the Aqua page"}
 
   defp row({:crew_unready, member, :not_installed}) when is_binary(member),
     do:
       {:setup_required,
-       "#{member}'s brain is not installed here — install it from its card on the AQUA page"}
+       "#{member}'s brain is not installed here — install it from its card on the Aqua page"}
 
   defp row({:crew_unready, member, :no_key}) when is_binary(member),
     do:
       {:setup_required,
-       "#{member}'s brain has no key bound yet — connect one from its card on the AQUA page"}
+       "#{member}'s brain has no key bound yet — connect one from its card on the Aqua page"}
 
   defp row({:crew_unready, member, :no_grant}) when is_binary(member),
     do:
       {:setup_required,
-       "#{member}'s brain needs only your grant — connect it from its card on the AQUA page"}
+       "#{member}'s brain needs only your grant — connect it from its card on the Aqua page"}
 
   defp row({:crew_unready, member, :no_program}) when is_binary(member),
     do:
       {:setup_required,
        "#{member}'s program is not set up — set it up on the Programs page, then connect " <>
-         "it from its card on the AQUA page"}
+         "it from its card on the Aqua page"}
 
   defp row({:crew_unready, member, :consent_stale}) when is_binary(member),
     do:
       {:consent_required,
        "#{member}'s brain changed since it was consented to — confirm the change from its " <>
-         "card on the AQUA page"}
+         "card on the Aqua page"}
 
   defp row({:crew_unready, member, :consent_damaged}) when is_binary(member),
     do:

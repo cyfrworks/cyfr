@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Copyright 2026 CYFR Works Inc.
  *
- * The AQUA panel (PrismWeb.AquaPanelLive): an overlay over the page that
+ * The Aqua panel (PrismWeb.AquaPanelLive): an overlay over the page that
  * takes no room from it. The `AquaPanel` hook (js/aqua_panel/) writes its
  * rectangle as four custom properties on the panel's style; the values
  * below are where it stands before the hook has drawn it. Docked, it is

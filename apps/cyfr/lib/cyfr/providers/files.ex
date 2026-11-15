@@ -37,7 +37,7 @@ defmodule Cyfr.Providers.Files do
   removed one's place.
 
   Only `data/` is listed: it is the folder the person fills, and every
-  other folder holds a component's, AQUA's, a note's or a thread's own
+  other folder holds a component's, Aqua's, a note's or a thread's own
   files, which their own pages and streams show. No field carries a
   file's contents, a download link or a person's identifier.
   """

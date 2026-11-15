@@ -130,8 +130,8 @@ defmodule Prima.TinctureWire do
     * `prefs` — write the desktop's preferences: `args.document`, an
       object (what it may hold is `Prima.CanvasPrefs`'), and `args.call`,
       the number its answer carries back;
-    * `ask` — ask AQUA about a widget: `args.widget`, a widget id
-      (`widget?/1`). The sentence AQUA's panel opens with is Prism's;
+    * `ask` — ask Aqua about a widget: `args.widget`, a widget id
+      (`widget?/1`). The sentence Aqua's panel opens with is Prism's;
     * `settings` — open one of Prism's pages: `args.page`, a page's key
       (`page?/1`), and optionally `args.ref` (`subject_id?/1`), the record
       on that page to open at; which pages exist, and which take a record,

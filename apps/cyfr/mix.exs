@@ -68,7 +68,7 @@ defmodule Cyfr.App.MixProject do
       {:arca, in_umbrella: true},
       {:sanctum, in_umbrella: true},
       {:jason, "~> 1.4"},
-      # AQUA agent/skill frontmatter (Compendium.AquaAgent)
+      # Aqua agent/skill frontmatter (Compendium.AquaAgent)
       {:yaml_elixir, "~> 2.12"},
       {:plug, "~> 1.14"},
       {:phoenix_pubsub, "~> 2.1"},

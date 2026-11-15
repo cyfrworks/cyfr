@@ -3,7 +3,7 @@
 
 defmodule Compendium.AquaAgent do
   @moduledoc """
-  The AQUA agent file format and the tree's roster: the soul at
+  The Aqua agent file format and the tree's roster: the soul at
   `aqua/aqua.md` and one frontmatter-markdown file per crew member under
   `aqua/crew/`, served through the seed overlay like every other aqua
   path, so an unedited file tracks the shipped seed and an edited one

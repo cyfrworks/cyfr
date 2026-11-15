@@ -9,7 +9,7 @@ defmodule Aqua.ToolGrants do
   Two sources, one rule:
 
     * **Declared** — the agent's markdown `tool_policy`. The author's
-      intent, edited on the AQUA page. A chat click never writes here.
+      intent, edited on the Aqua page. A chat click never writes here.
     * **Granted** — a `tool_grants` row. What a human answered when the
       agent asked. `"allow"` covers the calls its bounds admit, each
       decided as it is made; `"deny"` is the decline verb, and it **beats

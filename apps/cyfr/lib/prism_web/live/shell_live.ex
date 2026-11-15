@@ -30,7 +30,7 @@ defmodule PrismWeb.ShellLive do
   @moduledoc """
   The Prism shell, the person's desktop: their canvases, the tinctures
   opened over them, the system layer, the shelf's own controls (the gear,
-  the chat and AQUA) and, when no canvas runs, the tincture picker. It
+  the chat and Aqua) and, when no canvas runs, the tincture picker. It
   fills the screen under the top bar.
 
   It is no route's page. The `:athanor` session's root layout renders it
@@ -47,9 +47,9 @@ defmodule PrismWeb.ShellLive do
   the Dashboard's Settings page, which opens as an overlay over the desktop
   (`PrismWeb.Layouts`); the chat (`PrismWeb.ChatOverlayLive`), CYFR's own
   overlay of the person's shared threads and pairs, with its unread count;
-  and AQUA (`PrismWeb.AquaPanelLive`). The two overlays are this view's
+  and Aqua (`PrismWeb.AquaPanelLive`). The two overlays are this view's
   nested LiveViews, so they too stay while the pages change. The chat
-  tells AQUA's panel the shared thread it has open on this view's own
+  tells Aqua's panel the shared thread it has open on this view's own
   topic (`PrismWeb.RoomFeed`), and a desktop's `ask` reaches the panel on
   another (`Cyfr.Bus.aqua_ask/1`); neither gets a frame's port, and no
   message body enters a frame.
@@ -121,7 +121,7 @@ defmodule PrismWeb.ShellLive do
   switched to; any other becomes the visible canvas's tincture, its apps
   kept, a change of the layout made and written as a gesture is (below),
   and the canvas is decided anew. The page key `aqua_setup` opens Aqua's
-  setup, the AQUA page at `?setup=1`, as the overlay over the desktop.
+  setup, the Aqua page at `?setup=1`, as the overlay over the desktop.
 
   A canvas frame is a page like any tincture's: its messages over the
   port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
@@ -145,14 +145,14 @@ defmodule PrismWeb.ShellLive do
   (below); `grant` is a request for a grant that asks for no answer;
   `prefs` writes the person's preferences for the canvas over
   the revision this view handed the frame or last answered it
-  (`Compendium.put_desktop_prefs/5`); `ask` opens AQUA's panel beside the
+  (`Compendium.put_desktop_prefs/5`); `ask` opens Aqua's panel beside the
   page with Prism's own sentence naming a widget the version declares
   (`Cyfr.Bus.AquaAsk`); and `settings` opens one of the Dashboard's pages
   for the person's UI mode (`PrismWeb.Nav`) as the overlay over the
   desktop: the view pushes `navigate` to its own hook (`ShellPage`, on
   `#shell-page`), which moves the page's LiveView there, so the canvas
   that asked keeps running under it; `chat` opens the chat overlay and
-  `aqua` AQUA's panel in place, each at the thread a `ref` names when
+  `aqua` Aqua's panel in place, each at the thread a `ref` names when
   the person's own seat reads it there (a shared thread they sit in, a
   thread of their own), and a Dashboard page ignores a `ref` but
   Executions, which opens at the run it names in either UI mode. An open, a control's press
@@ -330,7 +330,7 @@ defmodule PrismWeb.ShellLive do
   heard by the shell's own hook (`ShellPage`, on `#shell-page`, an empty
   element of its own), which hands this view a key typed on the desktop as
   `keynav` and keeps every key typed into a field or inside what stands
-  over the desktop (a Dashboard page, the top bar, the chat, AQUA) for
+  over the desktop (a Dashboard page, the top bar, the chat, Aqua) for
   that, so no key typed there launches or closes an app. The system layer
   (`PrismWeb.SystemLayer`) is mounted above them.
 
@@ -1423,7 +1423,7 @@ defmodule PrismWeb.ShellLive do
     do: Enum.any?(socket.assigns.requests, fn {_id, request} -> request.frame == frame_id end)
 
   # A grant is offered through the system layer's generic grant path (the
-  # one AQUA's own asks take: Sanctum's preview, which the person confirms
+  # one Aqua's own asks take: Sanctum's preview, which the person confirms
   # or not). One offer of a component stands at a time, whatever raised
   # it; a component granted with nothing its grant needs missing has
   # nothing to ask (`conflict`). A grant with a connection it needs
@@ -1598,9 +1598,9 @@ defmodule PrismWeb.ShellLive do
   defp decided(socket, frame, call, outcome, reason),
     do: answer(socket, frame, "decided", Prima.TinctureWire.decided(call, outcome, reason))
 
-  # ---- asking AQUA, and Prism's pages -----------------------------------------
+  # ---- asking Aqua, and Prism's pages -----------------------------------------
 
-  # The person asked AQUA about one of the desktop's widgets: the panel
+  # The person asked Aqua about one of the desktop's widgets: the panel
   # opens with a sentence Prism writes, naming the widget and the desktop
   # by what its declaration and the layout call them and nothing the page
   # shows, after any draft the person had, and sends nothing.
@@ -1625,7 +1625,7 @@ defmodule PrismWeb.ShellLive do
 
   # CYFR's own overlays on the desktop, which open in place, the canvas
   # running under them: `chat` the chat, at the shared thread `ref` names
-  # when the person sits in it, and `aqua` AQUA's panel, at the person's
+  # when the person sits in it, and `aqua` Aqua's panel, at the person's
   # own thread `ref` names, where an approval waits (the attention
   # stream's `aqua` destination). Each overlay reads the thread under the
   # person's own seat.
@@ -1642,7 +1642,7 @@ defmodule PrismWeb.ShellLive do
   # The shell's chooser of desktops, over the canvas.
   defp settings(socket, "desktops", _ref), do: open_chooser(socket)
 
-  # Aqua's setup, a section of the AQUA page at its own address, opened as
+  # Aqua's setup, a section of the Aqua page at its own address, opened as
   # the overlay over the desktop like any of Prism's pages.
   defp settings(socket, "aqua_setup", _ref) do
     push_event(socket, "navigate", %{
@@ -3381,7 +3381,7 @@ defmodule PrismWeb.ShellLive do
   def system_layer_report(_id, _outcome, _socket), do: :pass
 
   # The refresh's answer, taken only under the focus it was started for.
-  # The chat overlay and AQUA's panel report in once connected: a
+  # The chat overlay and Aqua's panel report in once connected: a
   # desktop's `settings` of `chat` or `aqua` opens them.
   @impl true
   def handle_info({:chat_overlay, pid}, socket) when is_pid(pid),
@@ -3691,7 +3691,7 @@ defmodule PrismWeb.ShellLive do
         Devices
       </button>
 
-      <%!-- The shelf's right end: Desktops, the gear, the chat and AQUA, the shell's
+      <%!-- The shelf's right end: Desktops, the gear, the chat and Aqua, the shell's
            own, drawn above the shelf and outside it (whose backdrop filter
            would make it the containing block of the overlays' fixed
            panels). The gear opens the Dashboard's Settings page as the

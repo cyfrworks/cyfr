@@ -3,7 +3,7 @@
 
 defmodule Aqua.RoomExcerpt do
   @moduledoc """
-  What a shared thread says, read for the person's own AQUA.
+  What a shared thread says, read for the person's own Aqua.
 
   The person has a shared thread open beside their own thread and asks
   their own assistant about it. That assistant is not in the shared
@@ -20,7 +20,7 @@ defmodule Aqua.RoomExcerpt do
   message together stay inside the runner's message cap.
 
   The same text answers `threads.read` (`Aqua.Providers.Thread`), the
-  person's AQUA reading a thread they sit in when a question needs it
+  person's Aqua reading a thread they sit in when a question needs it
   (`read_marked/2`): there each message the person has not seen is marked,
   a message of files alone is named as one, and the answer counts them.
   The mark, the count and the lines come from one read

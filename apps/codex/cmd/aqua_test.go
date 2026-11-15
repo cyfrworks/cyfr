@@ -103,7 +103,7 @@ func TestAquaGetExamplesNameWhatShips(t *testing.T) {
 func TestRenderAquaList(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
-			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
+			map[string]any{"name": "aqua", "title": "Aqua", "type": "soul", "description": "The athanor's assistant"},
 			map[string]any{"name": "explorer", "title": "Explorer", "type": "crew", "description": "Researches the web"},
 			map[string]any{"name": "component-guide", "title": "Component Guide", "type": "doc", "description": "Building WASM components"},
 		},
@@ -116,7 +116,7 @@ func TestRenderAquaList(t *testing.T) {
 
 	// Sections in the server's order, each entry under its own heading.
 	ordered := []string{
-		"Soul", "aqua ", "AQUA — The athanor's assistant",
+		"Soul", "aqua ", "Aqua — The athanor's assistant",
 		"Crew", "explorer", "Explorer — Researches the web",
 		"Guides", "component-guide", "Component Guide — Building WASM components",
 		"Scrolls", "release-notes", "How to write release notes",
@@ -141,7 +141,7 @@ func TestRenderAquaList(t *testing.T) {
 func TestRenderAquaList_NoScrolls(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
-			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
+			map[string]any{"name": "aqua", "title": "Aqua", "type": "soul", "description": "The athanor's assistant"},
 		},
 		"skills": []any{},
 	}
@@ -161,7 +161,7 @@ func TestRenderAquaList_NoScrolls(t *testing.T) {
 func TestRenderAquaList_ScrollsUnavailable(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
-			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
+			map[string]any{"name": "aqua", "title": "Aqua", "type": "soul", "description": "The athanor's assistant"},
 			map[string]any{"name": "explorer", "title": "Explorer", "type": "crew", "description": "Researches the web"},
 		},
 		"skills_error": "connection reset",

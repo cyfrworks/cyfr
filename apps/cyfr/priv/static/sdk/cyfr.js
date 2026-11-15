@@ -1000,8 +1000,8 @@
         return awaitAnswer("prefs", { document: document2 });
       },
       /**
-       * On a canvas, ask AQUA about one of its widgets, by the widget's id:
-       * AQUA's panel opens with a sentence CYFR writes naming the widget and
+       * On a canvas, ask Aqua about one of its widgets, by the widget's id:
+       * Aqua's panel opens with a sentence CYFR writes naming the widget and
        * the desktop, after the person's draft, and sends nothing. Only for
        * an input of the person's.
        */

@@ -28,7 +28,7 @@ defmodule PrismWeb.CanvasLive do
   65, the shell's own chips on it and the fallback's line after them 67,
   the layout note 68, the connection notice 69); a Dashboard page's overlay
   over the desktop (65, `PrismWeb.Layouts`) and the top bar (66); the chat's
-  and AQUA's panels (70, `PrismWeb.ChatOverlayLive`, `PrismWeb.AquaPanelLive`);
+  and Aqua's panels (70, `PrismWeb.ChatOverlayLive`, `PrismWeb.AquaPanelLive`);
   the command palette (80); and the system layer's prompts, which the
   browser draws in its top layer above every z-index. Raising an app
   restyles its wrapper and never moves it. A window or tile raised above a
@@ -72,7 +72,7 @@ defmodule PrismWeb.CanvasLive do
   `canvas`, the current one pressed); the visible canvas's open apps
   (`data-canvas-shelf-app`, the active one marked, a minimised one dimmed;
   a click raises it, `frame_raise`, or restores it, `app_restore`); and
-  room at the right end for the shell's gear, chat and AQUA
+  room at the right end for the shell's gear, chat and Aqua
   (`PrismWeb.ShellLive`, `#shelf-end`). The hook
   reads a horizontal swipe on the shelf as a canvas switch. The shelf
   lists the apps the shell holds and the ones the shell's arrangement
@@ -362,7 +362,7 @@ defmodule PrismWeb.CanvasLive do
 
       <%!-- The shelf is Prism's: no canvas draws or reaches it. Its left
            end leaves room for the shell's own chips, its right end for the
-           gear, the chat and AQUA, which the shell draws. --%>
+           gear, the chat and Aqua, which the shell draws. --%>
       <nav
         :if={@shelf}
         id="canvas-shelf"

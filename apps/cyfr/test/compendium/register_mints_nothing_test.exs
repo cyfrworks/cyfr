@@ -11,7 +11,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   Both halves are pinned here because neither implies the other:
   `consent: :staging` refuses `Context.plane: :guest`, which stops a WASM
-  formula but not AQUA, which runs host-side with the person's own
+  formula but not Aqua, which runs host-side with the person's own
   external context.
   """
 
@@ -39,16 +39,16 @@ defmodule Compendium.RegisterMintsNothingTest do
   end
 
   describe "the register action's reach" do
-    test "is refused in-chain, so an approved AQUA proposal cannot run it" do
+    test "is refused in-chain, so an approved Aqua proposal cannot run it" do
       refute Sanctum.Catalog.chain_reachable?("component", "register"),
              """
              `component.register` is reachable in-chain again.
 
-             An approved AQUA proposal executes inside the chain, so this
+             An approved Aqua proposal executes inside the chain, so this
              re-opens the path where a catalyst stages bytes under
              `components/local/` and the agent is talked into indexing
              them. `consent: :staging` does NOT cover this: it refuses
-             `Context.plane: :guest`, and AQUA is not a guest.
+             `Context.plane: :guest`, and Aqua is not a guest.
              """
     end
 

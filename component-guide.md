@@ -28,7 +28,7 @@ your-project/
         │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
-        ├── aqua/          # The athanor's AQUA: the soul, its roles, its scrolls
+        ├── aqua/          # The athanor's Aqua: the soul, its roles, its scrolls
         ├── threads/ # Chat attachment files
         ├── notes/         # What was kept out of a thread — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
@@ -1298,10 +1298,10 @@ counted in its storage. The rules:
   (`forked_from`); when a newer version of that upstream line is present
   locally, status flags it `upstream_superseded`.
 
-The AQUA tree — the soul, its roles and its scrolls — follows the same
+The Aqua tree — the soul, its roles and its scrolls — follows the same
 model: provisioning copies the shipped tree into the athanor's `aqua/`, an
 edited file reads as edited by its bytes, and the `aqua` tool's `reset`
-action (from the AQUA page or over MCP) restores edited copies — one role by name, or every one —
+action (from the Aqua page or over MCP) restores edited copies — one role by name, or every one —
 while keeping the roles and scrolls the athanor made; `skill_reset` restores
 one scroll.
 
@@ -1321,7 +1321,7 @@ the server's, and each folder is one of three tiers.
   inside a unit the folder's grammar knows: a `local` component's version
   directory, the soul, a role, a scroll. A write outside one is refused with
   the shape spelled out; a unit is created and removed by its own verb
-  (scaffold, pull, fork, the AQUA page), and one the server ships is reset,
+  (scaffold, pull, fork, the Aqua page), and one the server ships is reset,
   never deleted. An edit inside a component re-registers its row; an edit
   under `aqua/` rewrites the agent index.
 - **Read-only** — `notes/` and `threads/`. Shown and downloaded here,
@@ -1424,7 +1424,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `secret_denied` | Name outside the vault-entry projection (its field map) | Declare the name in the need's `fields`; operator re-grants |
 | `authorization_required` | OAuth vault entry has no live grant | Re-authorize the entry (console Vault page) |
 | `corrupt` | The binary changed since it was registered | `cyfr register` then re-run |
-| `invalid_argument` (reserved path) | A `file` write or delete named `components/.staging/` or `aqua/.staging/`, the server's store of unit revisions: "This folder holds the server's stored unit revisions and only the server changes it — edit or remove a unit at its own path, one unit at a time" | Edit the unit's own file, or remove the unit at its own path (`cyfr remove <ref>`, the AQUA page) |
+| `invalid_argument` (reserved path) | A `file` write or delete named `components/.staging/` or `aqua/.staging/`, the server's store of unit revisions: "This folder holds the server's stored unit revisions and only the server changes it — edit or remove a unit at its own path, one unit at a time" | Edit the unit's own file, or remove the unit at its own path (`cyfr remove <ref>`, the Aqua page) |
 
 For tincture-specific errors, see the [Tincture Reference](tincture-guide.md#error-reference).
 

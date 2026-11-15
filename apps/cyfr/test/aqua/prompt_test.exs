@@ -15,7 +15,7 @@ defmodule Aqua.PromptTest do
   end
 
   defp agent(policy \\ %{}),
-    do: %{"name" => "aqua", "prompt" => "You are AQUA.", "tool_policy" => policy}
+    do: %{"name" => "aqua", "prompt" => "You are Aqua.", "tool_policy" => policy}
 
   defp authority_granting(paths),
     do: %{resources: %{storage: %{paths: paths, actions: ["read"]}}}
@@ -123,7 +123,7 @@ defmodule Aqua.PromptTest do
   test "the console prelude is part of the one composition, and lists no approvals", %{ctx: ctx} do
     prompt = Prompt.compose(ctx, agent: agent(%{"component.pull" => "ask"}), authority: nil).text
 
-    assert prompt =~ "## AQUA Shell Control"
+    assert prompt =~ "## Aqua Shell Control"
     assert prompt =~ "call the `ui` tool"
     refute prompt =~ "Actions that need approval"
   end
@@ -169,7 +169,7 @@ defmodule Aqua.PromptTest do
 
       {before, notes} = split_last(prompt, "## Notes")
       assert before =~ "## Runtime Context"
-      assert before =~ "## AQUA Shell Control"
+      assert before =~ "## Aqua Shell Control"
 
       assert notes =~ "### Pinned: about-you\n\nWe are planning a trip."
       # Sorted by name, first line only, no timestamps.
@@ -220,7 +220,7 @@ defmodule Aqua.PromptTest do
         Prompt.compose(home, agent: agent(%{"component.pull" => "ask"}), authority: nil).text
 
       {before, rest} = split_last(prompt, "## Scrolls")
-      assert before =~ "## AQUA Shell Control"
+      assert before =~ "## Aqua Shell Control"
       [scrolls, _notes] = String.split(rest, "## Notes", parts: 2)
       assert scrolls =~ "- capability-acquisition — "
       assert scrolls =~ "`aqua.skill_get`"

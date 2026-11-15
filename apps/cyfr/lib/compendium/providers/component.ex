@@ -130,7 +130,7 @@ defmodule Compendium.Providers.Component do
         ),
         # Registration indexes the athanor's components tree without granting
         # consent. It requires a console or CLI caller: staging consent refuses
-        # guests, and omitting :in_chain excludes formula and AQUA invocation.
+        # guests, and omitting :in_chain excludes formula and Aqua invocation.
         # Operation planes and Context.plane are separate checks.
         Operation.new(
           "component",

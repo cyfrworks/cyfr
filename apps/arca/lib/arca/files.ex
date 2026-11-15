@@ -19,7 +19,7 @@ defmodule Arca.Files do
       place, but only inside a unit the root's grammar recognises: a
       component version directory of the `local` publisher, the soul, a
       crew member or a scroll. Units are made and removed by their own verbs
-      (scaffold, pull, fork, the AQUA page); a unit the server ships is
+      (scaffold, pull, fork, the Aqua page); a unit the server ships is
       restored, never deleted. The storage layer stamps a write here with
       a pending projection generation (`Arca.StorageProjectionChanges`),
       so the component and agent indexes' next read reflects it or
@@ -486,8 +486,8 @@ defmodule Arca.Files do
   end
 
   defp above_unit_message(["aqua" | _], segments) do
-    "'#{join(segments)}' is outside any AQUA unit: the soul is aqua/aqua.md, a crew member is " <>
-      "aqua/crew/{name}.md, a scroll is aqua/skills/{name}/SKILL.md — create one from the AQUA page"
+    "'#{join(segments)}' is outside any Aqua unit: the soul is aqua/aqua.md, a crew member is " <>
+      "aqua/crew/{name}.md, a scroll is aqua/skills/{name}/SKILL.md — create one from the Aqua page"
   end
 
   defp inside_file_message(segments),
@@ -695,7 +695,7 @@ defmodule Arca.Files do
 
   defp bundled_message(path),
     do:
-      "'#{path}' ships with the server and cannot be deleted — reset it from the Components or AQUA page"
+      "'#{path}' ships with the server and cannot be deleted — reset it from the Components or Aqua page"
 
   defp cap_message(cap),
     do: "The athanor's storage is at its limit (#{cap} bytes) — remove something first"

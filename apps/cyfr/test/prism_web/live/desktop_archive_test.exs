@@ -4,7 +4,7 @@
 defmodule PrismWeb.DesktopArchiveTest do
   @moduledoc """
   Archiving a person's athanor sends every open desktop
-  (`PrismWeb.ShellLive`) away, the chat and AQUA's panel nested in it
+  (`PrismWeb.ShellLive`) away, the chat and Aqua's panel nested in it
   with it, and a fresh open of the athanor is refused.
   """
 

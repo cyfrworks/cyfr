@@ -74,7 +74,7 @@ if [ ${#MISSING[@]} -gt 0 ]; then
   exit 1
 fi
 
-# The AQUA template ships under its operator-project name `aqua/` (the
+# The Aqua template ships under its operator-project name `aqua/` (the
 # codex scaffold contract) while living at seed/aqua in this repo.
 [ -d seed/aqua ] || { echo "Error: seed/aqua missing" >&2; exit 1; }
 

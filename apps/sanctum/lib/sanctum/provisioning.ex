@@ -22,7 +22,7 @@ defmodule Sanctum.Provisioning do
   ## What this module does, and what it does not
 
   Copying the seed bundle in, scanning it into rows, pulling the published
-  closure, checking the shipped AQUA tree and indexing the athanor's agents
+  closure, checking the shipped Aqua tree and indexing the athanor's agents
   are the component domain's work, not identity's — `Compendium.Provisioning`
   owns them. This module owns the athanor's **claim**, the **consent
   bootstrap** the fill mints, the **readiness and failure writes** on the

@@ -3,7 +3,7 @@
 
 defmodule Compendium.Providers.Aqua do
   @moduledoc """
-  AQUA tool handlers for the Compendium MCP provider — the soul and its
+  Aqua tool handlers for the Compendium MCP provider — the soul and its
   crew, the scrolls, and the documentation guides.
 
   The soul and its crew are the athanor's own: one frontmatter-markdown
@@ -390,8 +390,8 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, running under the soul's tool policy), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
-      title: "AQUA Agent System"
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua'), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, running under the soul's tool policy), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
+      title: "Aqua Agent System"
     )
   end
 

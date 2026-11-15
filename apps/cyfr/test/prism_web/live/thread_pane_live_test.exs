@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# A store that cannot give the AQUA crew listing; every other read is the
+# A store that cannot give the Aqua crew listing; every other read is the
 # local adapter's.
 defmodule PrismWeb.ThreadPaneLiveTest.UnreadableCrew do
   @moduledoc false
@@ -17,7 +17,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # The pane on its own: what it says when the session is gone, that a
   # refusal reaches the person as a sentence, that what it pushes names
   # the pane it is for and a page it points at is a link, and that a kept
-  # model catalogue is read without a run; and in its host, AQUA's panel on
+  # model catalogue is read without a run; and in its host, Aqua's panel on
   # the desktop, where a grant is asked and a crew thread opens. On the
   # person's own athanor.
   use PrismWeb.ConnCase, async: false
@@ -37,8 +37,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   @under_12px ~r/text-\[(?:\d|1[01])(?:\.\d+)?px\]/
   @inline_style ~r/\sstyle=/
 
-  # The empty state's way to a model: the AQUA page, named.
-  @connect "Connect one on your AQUA page."
+  # The empty state's way to a model: the Aqua page, named.
+  @connect "Connect one on your Aqua page."
 
   setup %{conn: conn} do
     test_path = Path.join(System.tmp_dir!(), "pane_#{:rand.uniform(1_000_000)}")
@@ -195,7 +195,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
-  # The pane in its host: AQUA's panel on the desktop, opened (a panel the
+  # The pane in its host: Aqua's panel on the desktop, opened (a panel the
   # session left open opens so) and turned to `thread`. Answers the panel
   # and its pane.
   defp panel_pane(conn, thread) do
@@ -876,7 +876,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     # announced as one.
     turn.(:turn_starting, user.user_id)
     turn.(:turn_finished, nil)
-    assert announced.() == "AQUA stopped without a reply."
+    assert announced.() == "Aqua stopped without a reply."
 
     {:ok, reply} =
       Threads.append(Sanctum.Context.actor(here), thread.id, %{
@@ -889,7 +889,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     turn.(:turn_started, "trn_replied")
     turn.(:message, reply)
     turn.(:turn_finished, nil)
-    assert announced.() == "AQUA replied."
+    assert announced.() == "Aqua replied."
   end
 
   # A component in `ctx`'s athanor a turn can ask a grant for.
@@ -1330,7 +1330,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       :ok
     end
 
-    test "with its program's row set up, it says it needs only the grant, given on the AQUA page",
+    test "with its program's row set up, it says it needs only the grant, given on the Aqua page",
          %{conn: conn, athanor: athanor, here: here} do
       pane = empty_pane(conn, athanor)
       assert render(pane) =~ "has no model yet"
@@ -1353,13 +1353,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(
                pane,
                ~s([data-test="model-grant"]),
-               "your AQUA's model needs only your grant."
+               "your Aqua's model needs only your grant."
              )
 
       assert has_element?(
                pane,
                ~s(a[href="#{athanor_path("/aqua?setup=1", athanor)}"]),
-               "Grant it on your AQUA page."
+               "Grant it on your Aqua page."
              )
 
       refute render(pane) =~ "has no model yet"
@@ -1370,8 +1370,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # The athanor as a fill leaves it, its soul's model connected
-  # (`ready_athanor!/2`): the shipped AQUA tree and the components the
-  # soul depends on (the suite's own seed tree ships the AQUA template
+  # (`ready_athanor!/2`): the shipped Aqua tree and the components the
+  # soul depends on (the suite's own seed tree ships the Aqua template
   # alone), the soul's consent selecting its model's default
   # profile, and a key bound to that profile. The seed path it moves is
   # restored only once the work the test's views started has stopped.
@@ -1429,7 +1429,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
              "revoke the damaged profile and grant it again."
   @unanswered "A consent this model runs under cannot be read right now — try again."
 
-  # What the pane's empty state and the AQUA page's agents panel each say
+  # What the pane's empty state and the Aqua page's agents panel each say
   # of the athanor's model: `sentence`, with no model to connect and no key
   # to change over a consent that exists.
   defp model_consent_reads!(conn, athanor, sentence) do
@@ -1572,7 +1572,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute render(pane) =~ @connect
   end
 
-  # The AQUA page's agents panel over the same: no model to install, no
+  # The Aqua page's agents panel over the same: no model to install, no
   # key to connect or change, on the soul's card.
   defp panel_reads_unread!(conn, athanor) do
     {panel, _html} = mount_athanor(conn, "/aqua", athanor)

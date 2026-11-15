@@ -5,7 +5,7 @@ defmodule PrismWeb.TopbarLive do
   @moduledoc """
   The chrome — a nested LiveView mounted via `live_render` in the app
   layout, remounted with every page: the brand (a link to the desktop),
-  the link to the person's AQUA page, the drawer button (the Dashboard's
+  the link to the person's Aqua page, the drawer button (the Dashboard's
   pages, each opening over the desktop), a search icon for the palette,
   the person, how many files
   people have offered the person and wait for their answer (`file/offers`,
@@ -474,7 +474,7 @@ defmodule PrismWeb.TopbarLive do
       >
         {Phoenix.Flash.get(@flash, kind)}
       </div>
-      <!-- The drawer, the brand, the person's AQUA -->
+      <!-- The drawer, the brand, the person's Aqua -->
       <div class="flex items-center gap-2 lg:w-[15rem] lg:pl-1">
         <button
           :if={@authenticated}
@@ -500,7 +500,7 @@ defmodule PrismWeb.TopbarLive do
           navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
           class="rounded-md px-2 py-1 text-xs font-medium uppercase tracking-wider text-gray-300 hover:bg-gray-800/60 hover:text-gray-200"
         >
-          AQUA
+          Aqua
         </.link>
       </div>
 

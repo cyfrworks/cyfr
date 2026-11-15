@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaLive.Section do
   @moduledoc """
-  What the AQUA page's sections share.
+  What the Aqua page's sections share.
 
   Each section of the page (`PrismWeb.AquaLive`) is a `Phoenix.LiveComponent`
   that owns its reads and its writes: it loads itself when the page tells

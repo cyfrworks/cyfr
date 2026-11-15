@@ -498,16 +498,16 @@ defmodule PrismWeb.LoginLive do
         <div class="flex items-start gap-3">
           <img
             src={~p"/images/logo.jpg"}
-            alt="AQUA"
+            alt="Aqua"
             class="h-10 w-10 rounded-full shrink-0 mt-1 ring-2 ring-indigo-400/30"
           />
           <div class="flex-1 min-w-0">
-            <div class="text-[10px] text-indigo-300/60 uppercase tracking-wider mb-1.5">AQUA</div>
+            <div class="text-[10px] text-indigo-300/60 uppercase tracking-wider mb-1.5">Aqua</div>
             <div class="relative bg-gray-900 rounded-lg rounded-tl-none px-4 py-3">
               <div class="absolute -left-2 top-3 w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-r-[8px] border-r-gray-900">
               </div>
               <p class="text-sm text-gray-300 leading-relaxed">
-                <span class="font-semibold text-white">AQUA</span>, your trusted assistant,
+                <span class="font-semibold text-white">Aqua</span>, your trusted assistant,
                 is at your service&mdash;ready to forge your brilliance into reality.
               </p>
             </div>

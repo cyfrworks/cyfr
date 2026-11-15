@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.AquaLive do
   @moduledoc """
-  The athanor's AQUA, at `/a/<athanor>/aqua`: the soul and the crew it
+  The athanor's Aqua, at `/a/<athanor>/aqua`: the soul and the crew it
   hands jobs to — each with a prompt and a brain, the soul with the
   capability allowlist the crew runs under too, a crew member with what
   it is good at and what to avoid — the athanor's own
@@ -63,7 +63,7 @@ defmodule PrismWeb.AquaLive do
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(:page_title, "AQUA")
+      |> assign(:page_title, "Aqua")
       |> assign(:active_nav, "aqua")
       |> assign(:loading, true)
       |> assign(:provenance, %{})
@@ -778,13 +778,13 @@ defmodule PrismWeb.AquaLive do
     ~H"""
     <div class="space-y-6">
       <div>
-        <h3 class="text-sm font-medium text-gray-200">AQUA</h3>
+        <h3 class="text-sm font-medium text-gray-200">Aqua</h3>
         <p class="text-[11px] text-gray-500 mt-0.5">
           One assistant — the soul — and its crew: who it hands a job to, each on a brain of its own. How a job is done is a scroll any of them reads.
         </p>
       </div>
 
-      <.live_loading :if={@loading} message="Loading AQUA…" />
+      <.live_loading :if={@loading} message="Loading Aqua…" />
 
       <.consent_status stale_consents={@stale_consents} />
 

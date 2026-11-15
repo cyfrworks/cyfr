@@ -188,7 +188,7 @@ defmodule Aqua.Aloud do
   end
 
   # The copy is the person's, attributed to them; the mark says the words
-  # were their assistant's, so a thread can render "shared from AQUA".
+  # were their assistant's, so a thread can render "shared from Aqua".
   defp put_shared_agent(payload, %{author: @agent_author}),
     do: Map.put(payload, "shared_agent", true)
 

@@ -42,7 +42,7 @@ defmodule Opus.EventsTest do
   end
 
   # Producers must route events under the execution's own athanor — consumers
-  # (AQUA LiveView, SSE replay) subscribe and replay with the record's
+  # (Aqua LiveView, SSE replay) subscribe and replay with the record's
   # athanor, so a misrouted event is invisible to them.
 
   test "the record's athanor routes the broadcast and the replay", %{} do

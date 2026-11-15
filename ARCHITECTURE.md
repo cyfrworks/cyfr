@@ -88,7 +88,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 
 - Component kinds, manifests, the registry, activation, provenance and builds over Locus.
 - The tincture rules (`Compendium.Tincture.Rules`): what a tincture may serve and declare, and the frame policy derived from it.
-- The component, registry, source, build, AQUA-file, canvas and layout providers.
+- The component, registry, source, build, Aqua-file, canvas and layout providers.
 
 ### Aqua: the assistant
 
@@ -162,7 +162,7 @@ Telemetry becomes a bus message only through Host's bridge.
 | The storage and counted cap decision (`Prima.Caps`) | Prima | Sanctum |
 | Component facts for consent and the gate's stream admission, and filling an athanor with its components (`Sanctum.Consent.Components`) | Sanctum | Compendium |
 | Proxied tool resolution (`Sanctum.Proxy`) | Sanctum | Emissary's external half |
-| Where a storage unit's bytes live (`Arca.Storage.UnitLocator`) | Arca | Compendium's component and AQUA path grammars |
+| Where a storage unit's bytes live (`Arca.Storage.UnitLocator`) | Arca | Compendium's component and Aqua path grammars |
 
 Host installs each implementation at boot, and the declaring module fails closed when none is installed; a fifth port is an architecture change. **Why:** each port is a need a lower layer cannot meet without naming a higher one.
 

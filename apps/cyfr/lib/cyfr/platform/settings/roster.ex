@@ -239,7 +239,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_SECRET_KEY_BASE",
      "The key base that signs sessions (`openssl rand -base64 48`), which `cyfr init` mints. Production requires it, and a value that is blank or shorter than 64 bytes refuses the boot. Unless `CYFR_CRYPTO_KEYRING` is set, the at-rest keyring derives from it, so a new key leaves everything sealed under the old one unreadable and a restored data directory needs the same value."},
     {"CYFR_SEED_PATH",
-     "The seed tree read in place: the component bundle under `components/` and the AQUA template under `aqua/` (default `seed`; the image sets its own)."},
+     "The seed tree read in place: the component bundle under `components/` and the Aqua template under `aqua/` (default `seed`; the image sets its own)."},
     {"CYFR_SESSION_SALT",
      "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_SETUP_TOKEN",
