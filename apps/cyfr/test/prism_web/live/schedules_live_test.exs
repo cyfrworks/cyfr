@@ -724,6 +724,68 @@ defmodule PrismWeb.SchedulesLiveTest do
       same_but(changed, saved, [:cron_expression])
     end
 
+    test "a form whose schedule changed kind since it opened hears that it changed, either way, and reloads as the other kind",
+         %{view: view, ctx: ctx, params: params} do
+      actor = Sanctum.Context.actor(ctx)
+      opened = made!(view, ctx, params)
+      edit!(view, opened.id)
+
+      # Made a line for Aqua elsewhere, by its person.
+      {:ok, aqua} =
+        Arca.CronSchedule.update(
+          actor,
+          opened.id,
+          %{
+            reference: "agent:local.aqua",
+            resolved_reference: "agent:local.aqua",
+            profile_id: nil,
+            input: ~s({"line":"made elsewhere"})
+          },
+          by_person: true
+        )
+
+      render_submit(view, "save", %{params | "cron_custom" => "0 0 2 2 *"})
+      assert form_error(view) =~ "This schedule changed since you opened it"
+      {:ok, now} = Arca.CronSchedule.get(actor, opened.id)
+      same_but(aqua, now, [])
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.form.params["target"] == "aqua"
+      assert assigns.form.params["line"] == "made elsewhere"
+      assert has_element?(view, "#schedule-form textarea[name=line]", "made elsewhere")
+
+      # And back: the Aqua form, saved after the schedule became a component's.
+      {:ok, component} =
+        Arca.CronSchedule.update(
+          actor,
+          opened.id,
+          %{
+            reference: opened.reference,
+            resolved_reference: opened.resolved_reference,
+            profile_id: opened.profile_id,
+            input: ~s({"n":1})
+          },
+          by_person: true
+        )
+
+      render_submit(view, "save", %{
+        "name" => params["name"],
+        "target" => "aqua",
+        "line" => "made elsewhere",
+        "cron_custom" => "0 0 2 2 *",
+        "missed_runs" => "skip"
+      })
+
+      assert form_error(view) =~ "This schedule changed since you opened it"
+      {:ok, now} = Arca.CronSchedule.get(actor, opened.id)
+      same_but(component, now, [])
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.form.params["target"] == "component"
+      assert assigns.form.params["input"] == ~s({"n":1})
+      assert has_element?(view, "#schedule-form input[name=profile_id]")
+    end
+
     test "a fire, a failure, a pause and a resume between opening and Save do not make the form stale",
          %{view: view, ctx: ctx, params: params} do
       opened = made!(view, ctx, params)

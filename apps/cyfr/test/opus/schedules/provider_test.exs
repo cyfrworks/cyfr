@@ -96,6 +96,19 @@ defmodule Opus.Schedules.ProviderTest do
       assert {:ok, %{name: "first", cron_expression: "*/5 * * * *"}} =
                Provider.handle("schedule", ctx, %{"action" => "get", "schedule_id" => id})
 
+      # A stale definition is the answer before anything said of the
+      # schedule as it now is: a line for Aqua given to a component's
+      # schedule, a reference or a profile the schedule's grant refuses.
+      for stale <- [
+            %{"input" => %{"line" => "x"}, "reference" => "agent:local.aqua"},
+            %{"reference" => "reagent:local.nothing:9.9.9"},
+            %{"profile_id" => "prof-none"},
+            %{"cron_expression" => "not a time"}
+          ] do
+        assert {:error, :schedule_changed} = update.(Map.put(stale, "definition", read)),
+               inspect(stale)
+      end
+
       # Without one, an update is made against whatever the schedule holds.
       assert {:ok, %{cron_expression: "*/10 * * * *"}} =
                update.(%{"cron_expression" => "*/10 * * * *"})

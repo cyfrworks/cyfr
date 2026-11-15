@@ -391,8 +391,12 @@ defmodule Opus.Schedules.Provider do
 
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
+    # A definition given is compared first, so a caller who read an
+    # older schedule hears that, never a refusal about what the schedule
+    # has become; the store's comparison under the row's lock decides.
     with {:schedule, {:ok, schedule}} <-
            {:schedule, schedule(ctx, id)},
+         :ok <- Arca.CronSchedule.as_read(schedule, args["definition"]),
          :ok <- validate_cron_if_present(args["cron_expression"]),
          {:ok, missed} <- missed_runs(args, schedule),
          {:ok, line} <- aqua_update(ctx, schedule, args) do

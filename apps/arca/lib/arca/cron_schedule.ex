@@ -209,10 +209,17 @@ defmodule Arca.CronSchedule do
     |> Base.url_encode64(padding: false)
   end
 
-  defp as_read(_schedule, nil), do: :ok
+  @doc """
+  Whether `row` still has the definition a caller read (`definition/1`),
+  `:ok` with none given, else `{:error, :schedule_changed}`. `update/4`
+  asks it under the row's lock, which decides; a caller may ask it of a
+  row it read first to refuse sooner.
+  """
+  @spec as_read(map(), String.t() | nil) :: :ok | {:error, :schedule_changed}
+  def as_read(_row, nil), do: :ok
 
-  defp as_read(schedule, read) when is_binary(read) do
-    if definition(schedule) == read, do: :ok, else: {:error, :schedule_changed}
+  def as_read(%{} = row, read) when is_binary(read) do
+    if definition(row) == read, do: :ok, else: {:error, :schedule_changed}
   end
 
   @doc "Gets a schedule by ID with tenant-scoped lookup."
