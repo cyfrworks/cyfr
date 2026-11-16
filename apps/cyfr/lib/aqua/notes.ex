@@ -276,7 +276,7 @@ defmodule Aqua.Notes do
   @spec pin(Context.t(), String.t(), String.t(), provenance(), keyword()) ::
           {:ok, %{pinned: String.t(), athanor_id: String.t()}}
           | {:ok, %{cleared: String.t(), athanor_id: String.t()}}
-          | {:error, refusal()}
+          | {:error, refusal() | {:declined, term()}}
   def pin(%Context{} = ctx, name, content, provenance \\ [], opts \\ [])
       when is_binary(content) do
     revision = Keyword.get(opts, :revision)

@@ -3,9 +3,11 @@
 
 defmodule Aqua.Providers.NotesTest.Staging do
   @moduledoc false
-  # A storage cap that runs, once, what a test planted before it answers.
-  # `Arca.Storage.stage/3` asks it while a note's bytes are staged, before
-  # the publication's transaction, so what is planted lands in that window.
+  # A storage cap that runs what a test planted before it answers, which
+  # guards itself to act once. `Arca.Storage.stage/3` asks it while a
+  # note's bytes are staged, before the publication's transaction, so what
+  # is planted lands in that window. The test plants it through
+  # `Prima.Test.Env`, which restores it.
   @behaviour Prima.Caps
 
   @impl Prima.Caps
@@ -14,14 +16,11 @@ defmodule Aqua.Providers.NotesTest.Staging do
   @impl Prima.Caps
   def check_storage(_actor, _incoming) do
     case :persistent_term.get({__MODULE__, :once}, nil) do
-      nil ->
-        :ok
-
-      between ->
-        :persistent_term.erase({__MODULE__, :once})
-        between.()
-        :ok
+      nil -> :ok
+      between -> between.()
     end
+
+    :ok
   end
 end
 
@@ -553,9 +552,13 @@ defmodule Aqua.Providers.NotesTest do
 
       # The turn is superseded while the page's bytes are staged, after the
       # gate admitted the call and before the publication commits.
+      once = :atomics.new(1, [])
+
       Prima.Test.Env.put_persistent_term({Aqua.Providers.NotesTest.Staging, :once}, fn ->
-        assert {:ok, _} = Aqua.Tape.supersede(ctx, turn)
-        send(parent, :superseded_before_publication)
+        if :atomics.compare_exchange(once, 1, 0, 1) == :ok do
+          assert {:ok, _} = Aqua.Tape.supersede(ctx, turn)
+          send(parent, :superseded_before_publication)
+        end
       end)
 
       result =
