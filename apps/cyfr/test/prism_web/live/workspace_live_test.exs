@@ -696,6 +696,42 @@ defmodule PrismWeb.WorkspaceLiveTest do
       assert {:monitors, ^before} = Process.info(browser.pid, :monitors)
     end
 
+    # Review round two, finding 9: what the person types travels as a
+    # parameter the event log filters, as a program's terminal's does.
+    test "LiveView's line for the person's input carries nothing they typed",
+         %{conn: conn, mine: mine, me: me, daily: daily} do
+      work = open!(me, daily, "Private input")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+      watch = watch_of(browser)
+      typed = "typed-canary-7"
+
+      key = %{
+        "k" => "key",
+        "type" => "down",
+        "key" => "x",
+        "code" => "KeyX",
+        "text" => typed,
+        "vk" => 88,
+        "mods" => 0
+      }
+
+      Prima.Test.Env.configure_logger(level: :debug)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          render_hook(browser, "browser_input", %{"watch" => watch, "browser_input" => [key]})
+          assert_receive {:driver, :input, _s, ^cast, [%{"text" => ^typed}]}, 5_000
+        end)
+
+      assert log =~ ~s(HANDLE EVENT "browser_input")
+      assert log =~ ~s("browser_input" => "[FILTERED]")
+      refute log =~ typed
+    end
+
     test "leaving the page ends its stream", %{conn: conn, mine: mine, me: me, daily: daily} do
       work = open!(me, daily, "Look it up")
       browse!(me, work)
