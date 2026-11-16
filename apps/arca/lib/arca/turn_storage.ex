@@ -3547,8 +3547,8 @@ defmodule Arca.TurnStorage do
     under_workspace =
       from([c] in crew_query,
         join: w in Thread,
-        on: w.athanor_id == c.athanor_id and w.id == c.parent_id,
-        where: c.kind == "crew" and w.kind == "workspace"
+        on: w.id == c.parent_id,
+        where: w.athanor_id == ^athanor_id and c.kind == "crew" and w.kind == "workspace"
       )
 
     if Arca.Repo.exists?(under_workspace),
