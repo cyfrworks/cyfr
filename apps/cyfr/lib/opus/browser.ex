@@ -560,6 +560,10 @@ defmodule Opus.Browser do
   # ===========================================================================
 
   @doc false
+  # TEMPORARY STUBS until the browser helper is merged.
+  def answer(_a, _u, _r, _s, _b), do: :ok
+  def held(_a, _u, _r, _p), do: :ok
+
   def start_link({athanor_id, user_id}),
     do:
       GenServer.start_link(__MODULE__, {athanor_id, user_id},

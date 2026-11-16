@@ -525,6 +525,16 @@ defmodule Cyfr.Bus do
           "subscriber acts, so a peer's delivery writes nothing twice"
     },
     %{
+      key: :page_calls,
+      scope: :global,
+      struct: Cyfr.Bus.PageCall,
+      match: {:exact, "aqua:page_calls"},
+      template: "aqua:page_calls",
+      producers: ["Opus.Browser"],
+      consumers: ["Aqua.PageCalls"],
+      reason: "TEMPORARY STUB"
+    },
+    %{
       key: :schedule_turns,
       scope: :global,
       struct: ScheduleTurnDue,
@@ -901,6 +911,7 @@ defmodule Cyfr.Bus do
   @doc "A committed claim of a schedule's Aqua line (`Cyfr.Bus.ScheduleTurnDue`)."
   @spec schedule_turns() :: String.t()
   def schedule_turns, do: "aqua:schedule_turns"
+  def page_calls, do: "aqua:page_calls"
 
   @doc "A committed crew record (`Cyfr.Bus.CrewPending`)."
   @spec crew_deliveries() :: String.t()

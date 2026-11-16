@@ -47,6 +47,7 @@ defmodule Cyfr do
       Bus.RoomInView,
       Bus.ScheduleCompleted,
       Bus.ScheduleTurnDue,
+      Bus.PageCall,
       Bus.ScheduleRun,
       Bus.Schedules,
       Bus.Session,
