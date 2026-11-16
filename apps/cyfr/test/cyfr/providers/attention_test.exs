@@ -177,6 +177,45 @@ defmodule Cyfr.Providers.AttentionTest do
       assert ref == crew.id
     end
 
+    test "names an approval in a workspace thread by its title, with no day, and sends the person to that thread",
+         %{ctx: ctx, actor: actor} do
+      {:ok, %{workspace: workspace}} =
+        Arca.TurnStorage.open_workspace(actor, %{
+          daily_id: thread!(actor).id,
+          id: Prima.UUID7.generate_id("thread"),
+          title: "Moon report",
+          opening: %{
+            id: Prima.UUID7.generate_id("msg"),
+            author: ctx.user_id,
+            content: "write the moon report",
+            payload: %{"ask" => "write the moon report"}
+          },
+          pointer: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            content: "Moon report",
+            payload: %{"title" => "Moon report"}
+          },
+          files: fn _thread, _message -> {:ok, []} end,
+          person_id: ctx.user_id,
+          origin: :interactive
+        })
+
+      approval!(actor, workspace)
+
+      # Aqua's panel, at that destination, opens the workspace thread's
+      # layer (`PrismWeb.AquaPanelLive`).
+      assert [item] = refreshed(ctx)
+
+      assert %{
+               "label" => "Moon report",
+               "day" => nil,
+               "destination" => %{"kind" => "page", "page" => "aqua", "ref" => ref}
+             } = item
+
+      assert ref == workspace.id
+    end
+
     test "lists an open confirmation by its ref and operation", %{ctx: ctx} do
       ref = confirmation!(ctx)
 
