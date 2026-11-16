@@ -160,16 +160,18 @@ defmodule Aqua.Notes do
 
   The note is published over the revision read just before it, so a write
   that landed in between is answered `{:conflict, _}` rather than
-  overwritten.
+  overwritten. `opts`' `:verify` is the writer's owner check, asked where
+  the publication commits, as `pin/5` asks it.
   """
-  @spec keep(Context.t(), String.t(), String.t(), provenance()) ::
+  @spec keep(Context.t(), String.t(), String.t(), provenance(), keyword()) ::
           {:ok, %{kept: String.t(), athanor_id: String.t(), replaced: boolean()}}
-          | {:error, refusal()}
-  def keep(%Context{} = ctx, name, content, provenance \\ []) when is_binary(content) do
+          | {:error, refusal() | {:declined, term()}}
+  def keep(%Context{} = ctx, name, content, provenance \\ [], opts \\ [])
+      when is_binary(content) do
     with :ok <- check_name(name),
          :ok <- refuse_pinned(name, "keep", "pin"),
          {:ok, current} <- document(ctx, name) do
-      keep_over(ctx, name, content, revision(current), provenance)
+      keep_over(ctx, name, content, revision(current), provenance, opts)
     end
   end
 
@@ -199,14 +201,22 @@ defmodule Aqua.Notes do
   is answered `{:conflict, _}` and left as it is. A pinned name is
   refused, as in `keep/4`.
   """
-  @spec keep_over(Context.t(), String.t(), String.t(), non_neg_integer(), provenance()) ::
+  @spec keep_over(
+          Context.t(),
+          String.t(),
+          String.t(),
+          non_neg_integer(),
+          provenance(),
+          keyword()
+        ) ::
           {:ok, %{kept: String.t(), athanor_id: String.t(), replaced: boolean()}}
-          | {:error, refusal()}
-  def keep_over(%Context{} = ctx, name, content, revision_read, provenance \\ [])
+          | {:error, refusal() | {:declined, term()}}
+  def keep_over(%Context{} = ctx, name, content, revision_read, provenance \\ [], opts \\ [])
       when is_binary(content) and is_integer(revision_read) and revision_read >= 0 do
     with :ok <- check_name(name),
          :ok <- refuse_pinned(name, "keep", "pin"),
-         :ok <- publish(ctx, name, encode(ctx, content, provenance), revision_read) do
+         {:ok, _revision} <-
+           published(ctx, name, encode(ctx, content, provenance), revision_read, owner(opts)) do
       # Keeping under a name that exists replaces what was there — said so
       # in the answer, so the tape can say so too, never silently.
       {:ok, %{kept: name, athanor_id: Context.athanor!(ctx), replaced: revision_read > 0}}
@@ -280,7 +290,7 @@ defmodule Aqua.Notes do
   def pin(%Context{} = ctx, name, content, provenance \\ [], opts \\ [])
       when is_binary(content) do
     revision = Keyword.get(opts, :revision)
-    closures = for {:verify, verify} <- opts, is_function(verify, 0), do: {:verify, verify}
+    closures = owner(opts)
 
     with :ok <- check_name(name),
          :ok <- require_pinned(ctx, name) do
@@ -730,6 +740,11 @@ defmodule Aqua.Notes do
         end
     end
   end
+
+  # The writer's owner check, when it names one (`:verify`), as the
+  # publication asks it where it commits.
+  defp owner(opts),
+    do: for({:verify, verify} <- opts, is_function(verify, 0), do: {:verify, verify})
 
   # Over the revision the writer read, when it names one; else over the
   # page as it stands now.

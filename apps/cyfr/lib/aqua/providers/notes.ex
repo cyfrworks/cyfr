@@ -20,7 +20,14 @@ defmodule Aqua.Providers.Notes do
   about-you page, and `workspace`, the notes of the workspace thread the
   turn runs in, which the lineage names and no argument does. A turn's
   `pin` names the revision of the page it read, and one the person changed
-  since is refused, so a turn never writes over what it did not read. The
+  since is refused, so a turn never writes over what it did not read.
+  Whether a write comes from a turn is read from the lineage the gate
+  stamped: a `pin` or a `workspace` in a chain, and a `keep` whose lineage
+  names the turn's thread, writes only while the turn the lineage names
+  holds its fence, asked again where the write commits; a turn that ended,
+  was superseded or is not found writes nothing. Only the person's own
+  call at the door writes with no turn, and a `keep` from a component's
+  chain, which names no thread, keeps with that execution's ledger. The
   consent class keeps its surface half there — only an `:oidc` session's
   chain gets through — so the same formula started by a key or a schedule
   is refused exactly as at the door.
@@ -308,6 +315,20 @@ defmodule Aqua.Providers.Notes do
 
   # ---------------------------------------------------------------------------
 
+  # A note a turn keeps is written only while that turn holds its fence;
+  # one a component's chain keeps, whose lineage names no turn, as before.
+  defp dispatch(
+         %Context{plane: :guest} = ctx,
+         %{"action" => "keep", "name" => name, "content" => content} = args
+       )
+       when is_binary(name) and is_binary(content) do
+    with {:ok, verify} <- keep_hold(ctx, args) do
+      ctx
+      |> Notes.keep(name, content, provenance(args, ctx), verify: verify)
+      |> written_in_turn()
+    end
+  end
+
   defp dispatch(ctx, %{"action" => "keep", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
        do: Notes.keep(ctx, name, content, provenance(args, ctx))
@@ -391,30 +412,41 @@ defmodule Aqua.Providers.Notes do
 
   defp revision_read(_args), do: {:error, {:invalid_argument, @page_unread}}
 
-  # The owner check a turn's pin is published under: the turn the lineage
-  # names, held by the holder that made the call, at the fence it holds
-  # now, asked again where the publication commits (`Aqua.Tape.hold/2`),
-  # as `thread.post` and `workspace.report` write under it. A chain no
-  # turn runs, a component's run started from a screen, has no turn to
-  # hold and publishes as before.
+  # The owner check a write in a chain is published under, decided as
+  # `thread.post` and `workspace.report` decide it: the turn the lineage
+  # names, held by the holder that made the call (`Aqua.Tape.held_turn/2`),
+  # whose fence is asked again where the publication commits
+  # (`Aqua.Tape.hold/2`). A call no open turn answers for, one whose turn
+  # ended, was superseded or is not found, or a chain with no turn,
+  # writes nothing: only a call at the door, the person's own, writes with
+  # no turn.
   defp turn_hold(ctx, args) do
     case Aqua.Tape.held_turn(ctx, args) do
       {:ok, turn} -> {:ok, fn -> Aqua.Tape.hold(ctx, turn) end}
-      {:error, :not_addressable} -> {:ok, nil}
+      {:error, :not_addressable} -> {:error, :not_in_a_turn}
       {:error, :superseded} -> {:error, {:conflict, @turn_moved}}
       {:error, _unread} -> {:error, {:unavailable, "Notes"}}
     end
   end
 
+  # A keep's: a turn's chain, which the gate stamps with the turn's thread
+  # (`Aqua.Loop.Binding`), as a pin's; a component's chain, whose lineage
+  # names no thread, keeps as before, with its execution's ledger.
+  defp keep_hold(ctx, %{"thread_id" => thread_id} = args) when is_binary(thread_id),
+    do: turn_hold(ctx, args)
+
+  defp keep_hold(_ctx, _args), do: {:ok, nil}
+
   defp pinned_in_turn({:error, {:conflict, _}}), do: {:error, {:conflict, @page_moved}}
-  defp pinned_in_turn({:error, {:declined, :superseded}}), do: {:error, {:conflict, @turn_moved}}
+  defp pinned_in_turn(answered), do: written_in_turn(answered)
 
-  defp pinned_in_turn({:error, {:declined, :not_open}}),
-    do:
-      {:error,
-       {:conflict, "The turn ended while the page was being written; nothing was written."}}
+  # A write whose turn lost its fence, or ended, before it committed.
+  defp written_in_turn({:error, {:declined, :superseded}}), do: {:error, {:conflict, @turn_moved}}
 
-  defp pinned_in_turn(answered), do: answered
+  defp written_in_turn({:error, {:declined, :not_open}}),
+    do: {:error, {:conflict, "The turn ended while this was being written; nothing was written."}}
+
+  defp written_in_turn(answered), do: answered
 
   # Where a note was kept from. In a chain the registry stamps the
   # execution and the thread onto the call as host-only keys

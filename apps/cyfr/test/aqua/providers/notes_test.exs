@@ -342,17 +342,26 @@ defmodule Aqua.Providers.NotesTest do
       "root_execution_id" => "forged"
     }
 
-    lineage = [lineage: %{root_execution_id: "exec_1", thread_id: "thread_1"}]
+    {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+    turn = turn_in!(ctx, daily, [])
+    lineage = [lineage: %{root_execution_id: turn.root_execution_id, thread_id: daily.id}]
 
     # The person's own session, now guest-planed by the approved run: the
     # plane is not asked again, the surface is.
     assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth, lineage)
     assert id == mine.id
 
-    assert {:ok, %{thread: "thread_1", execution: "exec_1", kept_by: kept_by}} =
+    assert {:ok, %{thread: thread, execution: execution, kept_by: kept_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
 
+    assert thread == daily.id and execution == turn.root_execution_id
     assert kept_by == ctx.user_id
+
+    # A lineage that names a thread no open turn of it answers for keeps
+    # nothing.
+    unheld = [lineage: %{root_execution_id: "exec_1", thread_id: "thread_1"}]
+    assert {:error, :not_in_a_turn} = in_chain(ctx, %{args | "name" => "unheld"}, auth, unheld)
+    assert {:error, {:not_found, "note", "unheld"}} = Aqua.Notes.read(ctx, "unheld")
 
     # With no thread or root in the host's lineage the forged values are
     # still not recorded: the execution kept is the calling one.
@@ -609,6 +618,148 @@ defmodule Aqua.Providers.NotesTest do
 
       assert {:error, {:conflict, _}} = Aqua.Notes.workspace(ctx, held, "late notes")
       assert notes_of(ctx, work) == nil
+    end
+  end
+
+  describe "a write from a turn that ended" do
+    # The turn ends as the gate admits the call, before its handler runs.
+    defp ended_on_admission!(ctx, turn, action) do
+      handler = "notes-ended-#{System.unique_integer([:positive])}"
+      parent = self()
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :decision, :admitted],
+          fn _event, _measure, meta, _config ->
+            if meta.tool == "notes" and meta.action == action do
+              :telemetry.detach(handler)
+              assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+              send(parent, :ended_on_admission)
+            end
+          end,
+          nil
+        )
+    end
+
+    defp lineage_of(turn),
+      do: [
+        lineage: %{
+          root_execution_id: turn.root_execution_id,
+          parent_execution_id: turn.root_execution_id,
+          attempt: turn.attempt,
+          thread_id: turn.thread_id
+        }
+      ]
+
+    defp pin_args(content, revision),
+      do: %{
+        "action" => "pin",
+        "name" => "about-you",
+        "content" => content,
+        "revision" => revision
+      }
+
+    test "an ended turn cannot be treated as a chain with no turn", %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = running!(ctx, daily)
+      assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+
+      assert {:error, _} =
+               in_chain(
+                 ctx,
+                 pin_args("after ending", 0),
+                 granting([{"notes", "pin"}]),
+                 lineage_of(turn)
+               )
+
+      assert :none = Aqua.Notes.pinned(ctx)
+    end
+
+    test "a turn ended after admission cannot publish a pin", %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = running!(ctx, daily)
+      ended_on_admission!(ctx, turn, "pin")
+
+      assert {:error, _} =
+               in_chain(
+                 ctx,
+                 pin_args("after ending", 0),
+                 granting([{"notes", "pin"}]),
+                 lineage_of(turn)
+               )
+
+      assert_received :ended_on_admission
+      assert :none = Aqua.Notes.pinned(ctx)
+    end
+
+    test "a turn ended after admission cannot clear the page", %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Keep this page")
+      {:ok, %{revision: revision}} = Aqua.Notes.read(ctx, "about-you")
+      turn = running!(ctx, daily)
+      ended_on_admission!(ctx, turn, "pin")
+
+      assert {:error, _} =
+               in_chain(
+                 ctx,
+                 pin_args("", revision),
+                 granting([{"notes", "pin"}]),
+                 lineage_of(turn)
+               )
+
+      assert_received :ended_on_admission
+      assert {:ok, %{content: "Keep this page"}} = Aqua.Notes.pinned(ctx)
+    end
+
+    test "a turn ended before its call, or after its admission, writes no workspace notes",
+         %{ctx: ctx} do
+      args = %{"action" => "workspace", "content" => "half done"}
+
+      before = workspace!(ctx, "Ended before")
+      turn = running!(ctx, before)
+      assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+
+      assert {:error, _} =
+               in_chain(ctx, args, granting([{"notes", "workspace"}]), lineage_of(turn))
+
+      assert notes_of(ctx, before) == nil
+
+      after_admission = workspace!(ctx, "Ended after admission")
+      turn = running!(ctx, after_admission)
+      ended_on_admission!(ctx, turn, "workspace")
+
+      assert {:error, _} =
+               in_chain(ctx, args, granting([{"notes", "workspace"}]), lineage_of(turn))
+
+      assert_received :ended_on_admission
+      assert notes_of(ctx, after_admission) == nil
+    end
+
+    test "a note a turn keeps is not kept once that turn ended, before its call or after its admission",
+         %{ctx: ctx} do
+      args = %{"action" => "keep", "name" => "late", "content" => "kept late"}
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+
+      turn = running!(ctx, daily)
+      assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+      assert {:error, _} = in_chain(ctx, args, granting([{"notes", "keep"}]), lineage_of(turn))
+
+      turn = running!(ctx, daily)
+      ended_on_admission!(ctx, turn, "keep")
+      assert {:error, _} = in_chain(ctx, args, granting([{"notes", "keep"}]), lineage_of(turn))
+      assert_received :ended_on_admission
+
+      assert {:error, {:not_found, "note", "late"}} = Aqua.Notes.read(ctx, "late")
+    end
+
+    test "a call at the door, with no chain, still writes the page and keeps a note", %{ctx: ctx} do
+      assert {:ok, %{pinned: "about-you"}} = call(ctx, pin_args("Prefers mornings.", 0))
+      assert {:ok, %{content: "Prefers mornings."}} = Aqua.Notes.pinned(ctx)
+
+      assert {:ok, %{kept: "door"}} =
+               call(ctx, %{"action" => "keep", "name" => "door", "content" => "at the door"})
     end
   end
 
