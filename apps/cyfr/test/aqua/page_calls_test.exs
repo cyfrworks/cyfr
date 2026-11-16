@@ -830,4 +830,68 @@ defmodule Aqua.PageCallsTest do
     ended!(ctx, turn.id)
     assert [%{kind: "page_call"}, %{kind: "page_result"}] = page_rows(ctx, room)
   end
+
+  # ---------------------------------------------------------------------------
+  # Found by these tests; each passes once its fix outside Aqua.PageCalls lands
+  # ---------------------------------------------------------------------------
+
+  test "the yes to a call that waited behind a card runs it once, on what the turn read by then",
+       %{ctx: ctx, driver: driver} do
+    app = app!(ctx, @exit)
+    worker!([app])
+    room = workspace!(ctx)
+    _put = put!(ctx, room, @html)
+
+    invoke(driver, room, 1, app <> ":1.0.0")
+    {_turn, first} = paused!(ctx)
+    invoke(driver, room, 2, app <> ":1.0.0")
+    waiting!(room, 1)
+
+    ScriptedWorker.script([{:output, %{"run" => 1}}])
+    {:ok, _} = Approvals.resolve(ctx, first.id, %{decision: :approved})
+    assert answered!(1) == {200, result(%{"run" => 1})}
+
+    {turn, second} = paused!(ctx)
+    ScriptedWorker.script([{:output, %{"run" => 2}}])
+    {:ok, _} = Approvals.resolve(ctx, second.id, %{decision: :approved})
+    assert answered!(2) == {200, result(%{"run" => 2})}
+    assert %{status: "completed"} = ended!(ctx, turn.id)
+    assert app_runs() == 2 and length(runs_of(ctx, app)) == 2
+  end
+
+  test "a component with no grant is answered consent_required, and the thread asks for its grant",
+       %{ctx: ctx, driver: driver} do
+    app = app!(ctx, nil, false)
+    worker!([app])
+    room = workspace!(ctx)
+    _put = put!(ctx, room, @html)
+
+    invoke(driver, room, 1, app <> ":1.0.0")
+    {turn, approval} = paused!(ctx)
+    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    assert {403, %{"ok" => false, "error" => %{"class" => "consent_required"}}} = answered!(1)
+
+    assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user_id}},
+                   10_000
+
+    assert {ref, user_id} == {app <> ":1.0.0", ctx.user_id}
+    ended!(ctx, turn.id)
+    assert runs_of(ctx, app) == []
+  end
+
+  test "a turn whose last call's request is gone ends", %{ctx: ctx, driver: driver} do
+    app = app!(ctx, @exit)
+    worker!([app])
+    room = workspace!(ctx)
+    _put = put!(ctx, room, @html)
+
+    invoke(driver, room, 1, app <> ":1.0.0")
+    {turn, _approval} = paused!(ctx)
+    :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "callend", "id" => 1}))
+
+    assert %{status: "completed"} = ended!(ctx, turn.id)
+    assert {:ok, [%{outcome: "skipped"}]} = Tape.steps(ctx, turn)
+    assert %{running: false, paused: false} = Runner.state(room.id, ctx.athanor_id)
+  end
 end
