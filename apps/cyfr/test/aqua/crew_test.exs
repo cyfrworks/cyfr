@@ -13,7 +13,11 @@ defmodule Aqua.CrewTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Phoenix.ConnTest, only: [get: 2, response: 2]
+  import Phoenix.LiveViewTest, only: [live_isolated: 3, has_element?: 2]
   import Prima.Test.Wait
+
+  @endpoint CyfrWeb.Endpoint
 
   alias Aqua.{Approvals, Crew, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
@@ -71,6 +75,13 @@ defmodule Aqua.CrewTest do
 
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
   defp drain(ctx), do: Crew.drain(ctx.athanor_id)
+  defp refs_of(row), do: Aqua.Attachments.refs_of(row)
+
+  defp pending(ctx, kind) do
+    {:ok, records} = Arca.Outbox.pending(actor(ctx), "crew_delivery", kind)
+    records
+  end
+
   defp rows(ctx, thread_id), do: Threads.messages(actor(ctx), thread_id)
   defp row(ctx, id), do: elem(Tape.message(ctx, id), 1)
 
@@ -101,16 +112,17 @@ defmodule Aqua.CrewTest do
   end
 
   # A request as `crew.ask` writes it, committed and never broadcast.
-  defp soul_request!(ctx, room, member, task, job \\ %{}) do
+  defp soul_request!(ctx, room, member, task, job \\ %{}, message \\ & &1) do
     {:ok, %{message: row}} =
       TurnStorage.accept_message(actor(ctx), room.id, %{
-        message: %{
-          author: Prima.Author.agent(),
-          sent_by: "aqua",
-          addressee: member,
-          status: "pending",
-          content: task
-        },
+        message:
+          message.(%{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            addressee: member,
+            status: "pending",
+            content: task
+          }),
         request: %{
           member: member,
           task: task,
@@ -1168,7 +1180,7 @@ defmodule Aqua.CrewTest do
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
   end
 
-  test "a delivered request carries the request's attachments to the member's turn",
+  test "a delivered request carries copies of the request's files, its own, to the member's turn",
        %{ctx: ctx, room: room} do
     script!([reply("I see a square.")])
     message_id = Prima.UUID7.generate_id("msg")
@@ -1188,8 +1200,16 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     await_status(ctx, delivered_turn(ctx, child, message_id), "completed")
 
+    # The delivered row holds a copy of its own, and the request keeps its.
     [delivered | _] = rows(ctx, child.id)
-    assert Tape.payload(delivered)["attachments"] == refs
+    request = row(ctx, message_id)
+    assert [%{"filename" => "square.png", "media_type" => "image/png"}] = refs_of(delivered)
+    data = Base.encode64("PNGBYTES")
+
+    for held <- [delivered, request] do
+      assert [%{"data" => ^data}] =
+               Aqua.Attachments.load(ctx, held.thread_id, Aqua.Attachments.attachments_of([held]))
+    end
 
     %{input: %{"params" => %{"messages" => messages}}} =
       Enum.find(
@@ -1203,6 +1223,167 @@ defmodule Aqua.CrewTest do
              blocks,
              &(&1["type"] == "image" and &1["data"] == Base.encode64("PNGBYTES"))
            )
+
+    # The member's thread draws it from the delivered row, whose address
+    # gives its bytes.
+    {:ok, session} = Sanctum.TestContext.create_session(ctx)
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Test.init_test_session(%{CyfrWeb.SignInResponse.session_key() => session.token})
+
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+    [ref] = refs_of(delivered)
+
+    picture =
+      PrismWeb.Focus.path(
+        Sanctum.Tenancy.Athanors.route_slug(athanor),
+        "/attachments/#{delivered.id}/#{ref["stored_name"]}"
+      )
+
+    {:ok, pane, _html} =
+      live_isolated(conn, PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => ctx.athanor_id, "thread_id" => child.id}
+      )
+
+    assert has_element?(pane, ~s(img[src="#{picture}"]))
+    assert conn |> get(picture) |> response(200) == "PNGBYTES"
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a request delivered again after a try that died once it copied holds one copy",
+       %{ctx: ctx, room: room} do
+    script!([reply("One square.")])
+    message_id = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+    {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
+
+    {:ok, %{admitted: :request}} =
+      Runner.send_message(ctx, room.id, "@planner what is this?",
+        id: message_id,
+        attachments: refs
+      )
+
+    # The earlier try made the member's thread and copied, then died
+    # before the row.
+    {:ok, child} = Tape.crew_thread(ctx, room.id, "planner")
+    [record] = pending(ctx, "crew_request")
+    id = Crew.request_copy_id(record)
+    {:ok, [_residue]} = Aqua.Attachments.copy(ctx, child.id, id, [%{png | "bytes" => "STALE"}])
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    delivered = row(ctx, id)
+    assert [ref] = refs_of(delivered)
+    {:ok, files} = Arca.Storage.list_prefix(actor(ctx), Threads.blob_root(child.id) ++ [id])
+    assert [_one] = files
+    {:ok, path} = Aqua.Attachments.blob_path(child.id, id, ref)
+    assert {:ok, "PNGBYTES"} = Arca.get(actor(ctx), path)
+  end
+
+  test "a request whose file is gone ends with the member's reply saying so, not a wait",
+       %{ctx: ctx, room: room} do
+    message_id = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+    {:ok, [ref] = refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
+
+    {:ok, %{admitted: :request}} =
+      Runner.send_message(ctx, room.id, "@planner what is this?",
+        id: message_id,
+        attachments: refs
+      )
+
+    {:ok, path} = Aqua.Attachments.blob_path(room.id, message_id, ref)
+    :ok = Arca.delete(actor(ctx), path)
+
+    assert {:ok, %{"refused" => 1}} = drain(ctx)
+    assert pending(ctx, "crew_request") == []
+    assert [failed] = Enum.filter(rows(ctx, room.id), &(&1.reply_to == message_id))
+    assert failed.content == "planner could not be reached: A file it carried is no longer kept"
+    assert [] = Threads.children(actor(ctx), room.id) |> Enum.flat_map(&rows(ctx, &1.id))
+  end
+
+  test "a request whose files the athanor's storage cannot hold ends with the reply saying so",
+       %{ctx: ctx, room: room} do
+    message_id = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+    {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
+
+    {:ok, %{admitted: :request}} =
+      Runner.send_message(ctx, room.id, "@planner what is this?",
+        id: message_id,
+        attachments: refs
+      )
+
+    Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
+    Arca.Usage.invalidate(actor(ctx))
+
+    assert {:ok, %{"refused" => 1}} = drain(ctx)
+    assert pending(ctx, "crew_request") == []
+    assert [failed] = Enum.filter(rows(ctx, room.id), &(&1.reply_to == message_id))
+
+    assert failed.content ==
+             "planner could not be reached: The athanor's storage is full — free some space and retry"
+  end
+
+  test "a request whose room was deleted before it was delivered ends, and leaves no copy",
+       %{ctx: ctx, room: room} do
+    message_id = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+    {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
+
+    {:ok, %{admitted: :request}} =
+      Runner.send_message(ctx, room.id, "@planner what is this?",
+        id: message_id,
+        attachments: refs
+      )
+
+    assert {:ok, _} = Tape.delete_thread(ctx, room.id)
+    assert {:ok, outcome} = drain(ctx)
+    refute Map.has_key?(outcome, "pending")
+    assert pending(ctx, "crew_request") == []
+  end
+
+  test "the member's turn carries the sources of the request's files",
+       %{ctx: ctx, room: room} do
+    script!([reply("Read.")])
+    outside = Prima.Source.outside("moon.example")
+
+    # The soul's turn that read outside material asks with a file.
+    {:ok, %{turn: asker}} =
+      TurnStorage.accept_message(actor(ctx), room.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "ask the planner"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+      })
+
+    :ok = Tape.join_sources(ctx, asker, [outside])
+
+    request =
+      soul_request!(ctx, room, "planner", "read this", %{}, fn message ->
+        Cyfr.Test.StoredFiles.message!(
+          actor(ctx),
+          room.id,
+          Map.put(message, :payload, %{
+            "from_turn" => asker.id,
+            "attachments" => [
+              %{
+                "filename" => "moon.txt",
+                "stored_name" => "0-moon.txt",
+                "media_type" => "text/plain"
+              }
+            ]
+          })
+        )
+      end)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    turn_id = delivered_turn(ctx, child, request.id)
+    await_status(ctx, turn_id, "completed")
+
+    [delivered | _] = rows(ctx, child.id)
+    assert [%{"sources" => [_ | _]}] = refs_of(delivered)
+    {:ok, %{sources: sources}} = Tape.turn(ctx, turn_id)
+    assert outside in Prima.Source.decode(sources)
   end
 
   # The scripted brain takes image/png and application/pdf inline.

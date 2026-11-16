@@ -1236,6 +1236,11 @@ defmodule Prima.Refusal do
   defp row(:storage_full),
     do: {:rate_limited, "The athanor's storage is full — free some space and retry"}
 
+  # A file a message or a delivery names whose bytes are no longer kept
+  # (`Arca.ThreadStorage`'s unsent sweep, `Aqua.Attachments.carried/3`).
+  defp row(:attachment_missing), do: {:not_found, "A file it carried is no longer kept"}
+  defp row(:files_gone), do: {:not_found, "Its files are no longer kept — attach them again"}
+
   defp row(:storage_unverifiable),
     do: {:unavailable, "The athanor's storage use could not be read — retry shortly"}
 
