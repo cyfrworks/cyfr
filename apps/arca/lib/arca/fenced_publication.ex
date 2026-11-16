@@ -247,19 +247,26 @@ defmodule Arca.FencedPublication do
   does, and raises its athanor's floor to the revision removed: its next
   publication creates it again above every revision it held.
 
+  `opts` may carry the higher owner's `verify:` closure, run as
+  `publish/4` runs it: first in the transaction, before the slot is
+  verified, its refusal removing nothing and answered as it gave it.
+
   Raises `ArgumentError` for a change naming anything else, or one that
   carries staged bytes or `attrs`.
   """
-  @spec remove(Change.t(), non_neg_integer(), writer()) :: :ok | {:error, refusal()}
-  def remove(%Change{} = change, revision_read, slot)
-      when is_integer(revision_read) and revision_read >= 0 do
+  @spec remove(Change.t(), non_neg_integer(), writer(), keyword()) ::
+          :ok | {:error, refusal() | term()}
+  def remove(%Change{} = change, revision_read, slot, opts \\ [])
+      when is_integer(revision_read) and revision_read >= 0 and is_list(opts) do
     {athanor_id, key} = removal!(change)
     slot = writer!(slot)
+    verify = closure!(opts, :verify, 0)
 
     fenced("Arca.FencedPublication.remove", fn ->
       started = System.monotonic_time(:millisecond)
 
-      with :ok <- owned(slot),
+      with :ok <- ran(verify, []),
+           :ok <- owned(slot),
            :ok <- hold_floor(athanor_id, revision_read),
            :ok <- within_budget(started) do
         removal(athanor_id, key, revision_read)

@@ -298,6 +298,7 @@ defmodule Aqua.Providers.Notes do
   @page_moved "The about-you page changed since this turn read it, so nothing was written. " <>
                 "Read it again with notes.read and write it whole over the revision that " <>
                 "answers, keeping what the person wrote."
+  @turn_moved "The turn's owner changed. Retry the operation."
   @page_unread "notes.pin in a turn names, as revision, the revision of the page it read: " <>
                  "the one the Notes section shows beside the page, or notes.read answers; " <>
                  "0 when none is pinned."
@@ -321,15 +322,11 @@ defmodule Aqua.Providers.Notes do
          %{"action" => "pin", "name" => name, "content" => content} = args
        )
        when is_binary(name) and is_binary(content) do
-    case args["revision"] do
-      revision when is_integer(revision) and revision >= 0 ->
-        case Notes.pin(ctx, name, content, provenance(args, ctx), revision: revision) do
-          {:error, {:conflict, _}} -> {:error, {:conflict, @page_moved}}
-          answered -> answered
-        end
-
-      _none ->
-        {:error, {:invalid_argument, @page_unread}}
+    with {:ok, revision} <- revision_read(args),
+         {:ok, verify} <- turn_hold(ctx, args) do
+      ctx
+      |> Notes.pin(name, content, provenance(args, ctx), revision: revision, verify: verify)
+      |> pinned_in_turn()
     end
   end
 
@@ -387,6 +384,37 @@ defmodule Aqua.Providers.Notes do
     do: %{note | sources: Prima.Source.to_json_list(sources)}
 
   defp page(args), do: [limit: args["limit"], after: args["after"]]
+
+  # A turn's pin names the revision it read.
+  defp revision_read(%{"revision" => revision}) when is_integer(revision) and revision >= 0,
+    do: {:ok, revision}
+
+  defp revision_read(_args), do: {:error, {:invalid_argument, @page_unread}}
+
+  # The owner check a turn's pin is published under: the turn the lineage
+  # names, held by the holder that made the call, at the fence it holds
+  # now, asked again where the publication commits (`Aqua.Tape.hold/2`),
+  # as `thread.post` and `workspace.report` write under it. A chain no
+  # turn runs, a component's run started from a screen, has no turn to
+  # hold and publishes as before.
+  defp turn_hold(ctx, args) do
+    case Aqua.Tape.held_turn(ctx, args) do
+      {:ok, turn} -> {:ok, fn -> Aqua.Tape.hold(ctx, turn) end}
+      {:error, :not_addressable} -> {:ok, nil}
+      {:error, :superseded} -> {:error, {:conflict, @turn_moved}}
+      {:error, _unread} -> {:error, {:unavailable, "Notes"}}
+    end
+  end
+
+  defp pinned_in_turn({:error, {:conflict, _}}), do: {:error, {:conflict, @page_moved}}
+  defp pinned_in_turn({:error, {:declined, :superseded}}), do: {:error, {:conflict, @turn_moved}}
+
+  defp pinned_in_turn({:error, {:declined, :not_open}}),
+    do:
+      {:error,
+       {:conflict, "The turn ended while the page was being written; nothing was written."}}
+
+  defp pinned_in_turn(answered), do: answered
 
   # Where a note was kept from. In a chain the registry stamps the
   # execution and the thread onto the call as host-only keys

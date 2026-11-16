@@ -445,6 +445,15 @@ defmodule Aqua.Tape do
       })
 
   @doc """
+  Whether the caller still holds `turn`, open, at the fence it read,
+  inside the caller's own transaction (`TurnStorage.hold/3`): what a
+  publication a turn makes checks where it commits.
+  """
+  @spec hold(Context.t(), turn()) :: :ok | {:error, :superseded | :not_open}
+  def hold(%Context{} = ctx, turn),
+    do: TurnStorage.hold(Sanctum.Context.actor(ctx), turn.id, turn.fence)
+
+  @doc """
   Write the notes of the workspace thread `turn` runs in, the bytes
   `Aqua.Notes` encodes or nil to clear them, under the turn's fence
   (`TurnStorage.write_notes/4`).

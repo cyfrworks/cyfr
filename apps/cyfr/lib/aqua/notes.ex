@@ -266,6 +266,12 @@ defmodule Aqua.Notes do
   Set a pinned page in the focused athanor. Only the pinned names are
   accepted; a page over the cap is refused, not truncated — the person trims
   it or keeps the detail as a note. Empty content clears the page.
+
+  `opts`: `:revision`, the revision the writer read, written over and no
+  other; `:verify`, the writer's owner check, asked where the publication
+  commits (`Arca.FencedPublication`'s `verify:`), whose refusal writes
+  nothing and is answered `{:error, {:declined, reason}}`: a turn's pin
+  is published only while its turn still holds its fence.
   """
   @spec pin(Context.t(), String.t(), String.t(), provenance(), keyword()) ::
           {:ok, %{pinned: String.t(), athanor_id: String.t()}}
@@ -274,12 +280,13 @@ defmodule Aqua.Notes do
   def pin(%Context{} = ctx, name, content, provenance \\ [], opts \\ [])
       when is_binary(content) do
     revision = Keyword.get(opts, :revision)
+    closures = for {:verify, verify} <- opts, is_function(verify, 0), do: {:verify, verify}
 
     with :ok <- check_name(name),
          :ok <- require_pinned(ctx, name) do
       case String.trim(content) do
-        "" -> clear(ctx, name, revision)
-        body -> write_pinned(ctx, name, body, provenance, revision)
+        "" -> clear(ctx, name, revision, closures)
+        body -> write_pinned(ctx, name, body, provenance, revision, closures)
       end
     end
   end
@@ -726,7 +733,7 @@ defmodule Aqua.Notes do
 
   # Over the revision the writer read, when it names one; else over the
   # page as it stands now.
-  defp write_pinned(ctx, name, body, provenance, revision) do
+  defp write_pinned(ctx, name, body, provenance, revision, closures) do
     size = byte_size(body)
 
     if size > @pin_max_bytes do
@@ -736,7 +743,14 @@ defmodule Aqua.Notes do
           "trim it, or keep the detail as a note"}}
     else
       with {:ok, current} <- document(ctx, name),
-           :ok <- publish(ctx, name, encode(ctx, body, provenance), revision || revision(current)) do
+           {:ok, _revision} <-
+             published(
+               ctx,
+               name,
+               encode(ctx, body, provenance),
+               revision || revision(current),
+               closures
+             ) do
         {:ok, %{pinned: name, athanor_id: Context.athanor!(ctx)}}
       end
     end
@@ -745,7 +759,7 @@ defmodule Aqua.Notes do
   # Clearing a page nobody set is already clear. A writer that names the
   # revision it read clears only that one: a page written since, or one
   # cleared and written again, is refused and stays.
-  defp clear(ctx, name, revision) do
+  defp clear(ctx, name, revision, closures) do
     with {:ok, current} <- document(ctx, name) do
       read = if is_integer(revision), do: revision, else: revision(current)
 
@@ -757,7 +771,7 @@ defmodule Aqua.Notes do
           {:error, publication_refusal(name, :stale)}
 
         true ->
-          with :ok <- unpublish(ctx, name, %{revision: read}),
+          with :ok <- unpublish(ctx, name, %{revision: read}, closures),
                do: {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
       end
     end
@@ -819,12 +833,12 @@ defmodule Aqua.Notes do
     end
   end
 
-  defp unpublish(ctx, name, %{revision: revision_read}) do
+  defp unpublish(ctx, name, %{revision: revision_read}, closures \\ []) do
     actor = Sanctum.Context.actor(ctx)
     change = %Arca.FencedPublication.Change{resource: {:document, actor.athanor_id, key(name)}}
 
     with {:ok, slot} <- slot() do
-      case Arca.FencedPublication.remove(change, revision_read, slot) do
+      case Arca.FencedPublication.remove(change, revision_read, slot, closures) do
         :ok -> :ok
         {:error, reason} -> {:error, publication_refusal(name, reason)}
       end

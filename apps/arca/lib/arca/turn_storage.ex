@@ -2701,6 +2701,36 @@ defmodule Arca.TurnStorage do
   defp read_turns!(_athanor_id, _other), do: Arca.Repo.rollback(:invalid_sources)
 
   @doc """
+  Whether the caller still holds the turn `turn_id`, open, at `fence`,
+  asked inside the caller's own transaction and holding the turn's row
+  until it ends: `:ok`, `{:error, :superseded}` for a fence that moved and
+  `{:error, :not_open}` for a turn that ended. It writes nothing and rolls
+  nothing back, so a publication's owner check (`Arca.FencedPublication`'s
+  `verify:`) answers with it where the publication commits, taking the
+  turn's row first, before the publication's own locks.
+  """
+  @spec hold(Prima.Actor.t(), String.t(), non_neg_integer()) ::
+          :ok | {:error, :superseded | :not_open}
+  # arca:db-raise-ok inside the caller's transaction
+  def hold(%Prima.Actor{athanor_id: athanor_id}, turn_id, fence)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and
+             is_integer(fence) do
+    case from(t in Turn,
+           where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
+         )
+         |> Arca.Repo.update_all(set: [fence: fence]) do
+      {1, _} ->
+        if turn!(athanor_id, turn_id).status in @open, do: :ok, else: {:error, :not_open}
+
+      {0, _} ->
+        {:error, :superseded}
+    end
+  end
+
+  def hold(%Prima.Actor{}, _turn_id, _fence),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.hold/3")
+
+  @doc """
   Write the notes of the workspace thread the turn `turn_id` runs in:
   `notes`, the bytes `Aqua.Notes` encodes, or nil to clear them, under
   the turn's row lock and only while the caller still holds the turn at
