@@ -873,7 +873,7 @@ defmodule Arca.ThreadStorage do
   thread's (`lock_threads!/2`), and the turns asked again under those
   locks: one that opened or read the thread in between sends the
   deletion round again, at most three times, and then it is
-  `{:error, :busy}`. So a delivery from it
+  `{:error, :thread_in_use}`. So a delivery from it
   (`Arca.TurnStorage.accept_message/3` for a row naming it) lands before
   the deletion and goes with it, or finds it gone.
 
@@ -890,7 +890,7 @@ defmodule Arca.ThreadStorage do
              :no_athanor
              | :not_found
              | {:child_awaits_card, String.t()}
-             | :busy
+             | :thread_in_use
              | :database_error}
   def delete(actor, id, attrs \\ %{})
 
@@ -915,7 +915,7 @@ defmodule Arca.ThreadStorage do
           do_delete(actor, id, attrs, tries - 1)
 
         {:error, :turns_moved} ->
-          {:error, :busy}
+          {:error, :thread_in_use}
 
         {:error, reason} ->
           {:error, reason}
