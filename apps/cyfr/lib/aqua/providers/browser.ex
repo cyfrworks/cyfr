@@ -42,7 +42,8 @@ defmodule Aqua.Providers.Browser do
   The entry is handed with the `<base>` and the SDK a tincture's entry is
   served with (`Compendium.tincture_head_tags/3`); a plain page's entry
   is first given a head (`Compendium.plain_entry/1`), and a tincture's is
-  handed as it was written.
+  handed as it was written. A tincture's put carries the reference it was
+  given, which the window's calls are announced with.
 
   `screenshot` keeps the image as a draft of the turn's attempt, under a
   message id of its own that has not been sent, in the turn's thread,
@@ -515,12 +516,12 @@ defmodule Aqua.Providers.Browser do
   end
 
   # A tincture version as the endpoint reads it; its entry is handed as
-  # it was written.
+  # it was written, and its put carries the reference it was put by.
   defp tincture(ctx, reference) when is_binary(reference) do
     with {:ok, %{name: name, entry: entry, files: files}} <-
            Compendium.tincture_files(ctx, reference, Opus.Browser.put_bound()) |> over_bound(),
          {:ok, root} <- root(ctx, name) do
-      {:ok, handed(root, entry, files, & &1)}
+      {:ok, Map.put(handed(root, entry, files, & &1), :tincture, reference)}
     end
   end
 

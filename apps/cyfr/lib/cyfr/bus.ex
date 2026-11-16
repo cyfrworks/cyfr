@@ -62,6 +62,7 @@ defmodule Cyfr.Bus do
     LayoutPublished,
     McpServers,
     Notify,
+    PageCall,
     Ping,
     PolicyDecision,
     Program,
@@ -537,6 +538,19 @@ defmodule Cyfr.Bus do
           "consumer, which starts only the claims its own boot holds"
     },
     %{
+      key: :page_calls,
+      scope: :global,
+      struct: PageCall,
+      match: {:exact, "aqua:page_calls"},
+      template: "aqua:page_calls",
+      producers: ["Opus.Browser"],
+      consumers: ["Aqua.PageCalls"],
+      reason:
+        "a page's call is held where the person's browser runs, and the runner of its " <>
+          "thread may run on another member: every member hears it, and the thread's " <>
+          "claim decides which runner takes it"
+    },
+    %{
       key: :crew_deliveries,
       scope: :global,
       struct: CrewPending,
@@ -901,6 +915,10 @@ defmodule Cyfr.Bus do
   @doc "A committed claim of a schedule's Aqua line (`Cyfr.Bus.ScheduleTurnDue`)."
   @spec schedule_turns() :: String.t()
   def schedule_turns, do: "aqua:schedule_turns"
+
+  @doc "A page's call in Aqua's browser, or its end (`Cyfr.Bus.PageCall`)."
+  @spec page_calls() :: String.t()
+  def page_calls, do: "aqua:page_calls"
 
   @doc "A committed crew record (`Cyfr.Bus.CrewPending`)."
   @spec crew_deliveries() :: String.t()

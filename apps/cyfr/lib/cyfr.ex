@@ -39,6 +39,7 @@ defmodule Cyfr do
       Bus.LayoutPublished,
       Bus.McpServers,
       Bus.Notify,
+      Bus.PageCall,
       Bus.Ping,
       Bus.PolicyDecision,
       Bus.Program,
