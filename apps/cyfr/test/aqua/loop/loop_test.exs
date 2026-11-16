@@ -2681,12 +2681,13 @@ defmodule Aqua.LoopTest do
       assert [
                %{kind: "model", outcome: "ok"} = first,
                %{id: page_id, purpose: "page", outcome: "ok"},
-               %{tool: "component", purpose: "chat", outcome: "ok"},
+               %{tool: "component", purpose: "chat", outcome: "ok"} = own,
                %{kind: "model", outcome: "ok"} = second
              ] = steps
 
       assert page_id == page.id
       closed = step!(ctx, turn, page.id)
+      assert DateTime.compare(closed.started_at, own.started_at) != :gt
       assert DateTime.compare(closed.ended_at, second.started_at) != :gt
       assert DateTime.compare(first.ended_at, closed.started_at) != :gt
 

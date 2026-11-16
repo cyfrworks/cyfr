@@ -2584,12 +2584,7 @@ defmodule Aqua.Loop do
     |> Enum.reduce(running, &take_call(state, &1, &2))
   end
 
-  defp take_call(
-         %State{} = state,
-         %{step: step, call: {:ok, %Call{kind: kind} = call}} = item,
-         running
-       )
-       when kind != :launch do
+  defp take_call(%State{} = state, %{step: step, call: {:ok, %Call{} = call}} = item, running) do
     if state.restricted? and not Policy.replay_safe?(call) do
       running
     else
@@ -2597,6 +2592,11 @@ defmodule Aqua.Loop do
         :auto ->
           task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
           Map.put(running, task.ref, %{item: item, task: task})
+
+        # A launch with no card lets the root go around its run: it runs
+        # once the model has answered.
+        {:auto, _decided} ->
+          running
 
         :ask ->
           _ = ask(state, step, call, [], {[], 0, nil})
