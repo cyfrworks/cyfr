@@ -584,7 +584,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, ~s(button[phx-click="paste"]), "Paste to Plans")
   end
 
-  test "a workspace thread's pointer and report are drawn as posts that name it, with the report's files",
+  test "a workspace thread's pointer and report are cards with its state as it is now and Open, which opens its layer; a deleted one takes them away",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)
 
@@ -610,6 +610,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         origin: :interactive
       })
 
+    # A report written as done, of a thread at work again since: the card
+    # says what it is now, never the outcome it was written with.
     {:ok, %{message: report}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
         message: %{
@@ -629,23 +631,93 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                 "media_type" => "image/png",
                 "size" => 4
               }
-            ]
+            ],
+            "links" => [%{"url" => "https://example.com/moon", "title" => "The moon"}]
           }
         }
       })
 
     [pointer] = Enum.filter(Threads.messages(actor, thread.id), &(&1.kind == "pointer"))
-    pane = open_pane(conn, athanor, thread)
+    {panel, pane} = panel_pane(conn, thread)
 
-    assert has_element?(pane, ~s([id$="-m-#{pointer.id}"]), "Workspace thread · Moon report")
-    assert has_element?(pane, ~s([id$="-m-#{report.id}"]), "Report · Moon report")
+    card = fn msg -> ~s([id$="-m-#{msg.id}"]) end
+
+    assert has_element?(pane, card.(pointer), "Workspace thread")
+    assert has_element?(pane, ~s(#{card.(pointer)} [data-raw-content="Moon report"]))
+    assert has_element?(pane, ~s(#{card.(pointer)} [data-state="open"]), "Working on it")
+    assert has_element?(pane, ~s(#{card.(report)} [data-state="open"]), "Working on it")
+    refute has_element?(pane, ~s(#{card.(report)} [data-state="done"]))
+
+    # The report keeps its summary, its picture and its link.
+    assert has_element?(pane, card.(report), "Report · Moon report")
 
     assert has_element?(
              pane,
-             ~s([id$="-m-#{report.id}"] [data-raw-content="The moon report is written."])
+             ~s(#{card.(report)} [data-raw-content="The moon report is written."])
            )
 
-    assert has_element?(pane, ~s([id$="-m-#{report.id}"] img))
+    assert has_element?(pane, ~s(#{card.(report)} img))
+    assert has_element?(pane, ~s(#{card.(report)} a[href="https://example.com/moon"]))
+
+    # A move the person's list announces draws both cards again.
+    {1, _} =
+      Arca.Repo.update_all(
+        from(t in Arca.Schemas.Thread, where: t.id == ^workspace.id),
+        set: [workspace_state: "needs_you"]
+      )
+
+    Aqua.ThreadList.changed(here, workspace.id)
+
+    Prima.Test.Wait.wait_until(fn ->
+      has_element?(pane, ~s(#{card.(pointer)} [data-state="needs_you"]), "Needs you") and
+        has_element?(pane, ~s(#{card.(report)} [data-state="needs_you"]), "Needs you")
+    end)
+
+    # Open opens the workspace thread at its layer, and the panel gives way.
+    pane |> element(~s(#{card.(pointer)} button[phx-click="open_thread"])) |> render_click()
+    assert_push_event(panel, "navigate", %{to: to})
+    assert to == PrismWeb.WorkspaceLive.address(route(athanor), workspace.id)
+    refute has_element?(panel, "#aqua-panel-sheet")
+
+    # Deleted, its pointer and reports go from a pane that shows them.
+    {_panel, pane} = panel_pane(conn, thread)
+    assert has_element?(pane, card.(pointer))
+    {:ok, _} = Aqua.Tape.delete_thread(here, workspace.id)
+
+    Prima.Test.Wait.wait_until(fn ->
+      not has_element?(pane, card.(pointer)) and not has_element?(pane, card.(report))
+    end)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a card whose workspace thread cannot be found has no Open",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    # A report as the tape announces it, naming a workspace thread that no
+    # longer stands.
+    {:ok, %{message: said}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: Prima.Author.agent(), sent_by: "aqua", content: "Done."}
+      })
+
+    # The row as a store whose thread went would hand it over.
+    report = %{said | kind: "report", workspace_id: "thr_gone"}
+    pane = open_pane(conn, athanor, thread)
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: athanor.id,
+      thread_id: thread.id,
+      kind: :message,
+      data: report
+    })
+
+    Prima.Test.Wait.wait_until(fn ->
+      has_element?(pane, ~s([id$="-m-#{report.id}"]), "This workspace thread was deleted")
+    end)
+
+    refute has_element?(pane, ~s([id$="-m-#{report.id}"] button[phx-click="open_thread"]))
   end
 
   test "the thread shown is read to its newest row as it opens and as each row lands, never back",

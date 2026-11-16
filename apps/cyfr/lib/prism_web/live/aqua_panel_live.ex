@@ -36,17 +36,33 @@ defmodule PrismWeb.AquaPanelLive do
   turn when the person ticks the pane's box for it — read under the
   person's own seat, into the daily thread only, never kept — and an
   answer can be pasted onto the shared thread, attributed to the person.
-  The pane does both and names the shared thread. The panel lists the
-  requests still waiting on a crew member, each with its member, who
-  asked, how long ago and the task's first line, which turn the panel to
-  the thread it was asked in. A crew member's thread is reached from its
-  room. While the athanor's seeding has not finished the panel says so
-  and offers to try it again (`athanor.provision`).
+  The pane does both and names the shared thread. A crew member's thread
+  is reached from its room. While the athanor's seeding has not finished
+  the panel says so and offers to try it again (`athanor.provision`).
+
+  The panel lists the person's workspace threads (`Aqua.workspaces/1`):
+  each still going, each waiting on them and each finished one with posts
+  they have not seen, by its title, its state
+  (`PrismWeb.DisplayHelpers.work_state/1`) and how many posts are new. A
+  finished one they have read leaves by itself. The list is read when the
+  panel opens and again, while it is open, when the person's list
+  announces a workspace thread and when a card opens or is decided in the
+  athanor (`Cyfr.Bus.Notify`), since a card in a crew member's thread
+  under one moves it without announcing it.
+
+  A workspace thread is not shown in the panel: it opens as its own layer
+  over the desktop (`PrismWeb.WorkspaceLive`). Asked for one, from the
+  list, a card's Open in the pane, the desktop or the attention stream,
+  the panel moves the page there through the desktop's `navigate`
+  (`assets/js/hooks/shell_page.js`) and closes, the conversation being
+  the layer's. A crew member's thread under a workspace thread moves the
+  page to that layer and is shown here, over it, where its card is
+  decided.
 
   The desktop opens it for a canvas's `settings` of `aqua`, on today's
   thread, or at the thread a `ref` names, where the attention stream's
   approvals send the person: any thread of their athanor, an earlier
-  day's or a crew member's included.
+  day's or a crew member's included, and a workspace thread at its layer.
 
   A page may ask it about something it shows (`Cyfr.Bus.AquaAsk`, on the
   page's own topic the session names, `aqua_ask`): a closed panel opens on
@@ -124,7 +140,7 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:today, nil)
       |> assign(:unread, 0)
       |> assign(:earlier, false)
-      |> assign(:pending, [])
+      |> assign(:works, [])
       |> assign(:pane, nil)
       |> assign(:room, session["room"])
       |> assign(:room_feed, room_feed)
@@ -258,14 +274,44 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   # The panel opens on the thread `thread_id` names in the person's
-  # athanor, reading today's as it stands, or on today's, made if none.
-  # The waiting requests are read when it opens and whenever it turns:
-  # closed, the panel costs the page nothing.
+  # athanor, reading today's as it stands, or on today's, made if none; a
+  # workspace thread opens at its layer. The workspace threads are read
+  # when it opens and whenever it turns: closed, the panel costs the page
+  # nothing.
   defp open_on(socket, thread_id) do
     case own_thread(socket, thread_id) do
-      %{} = thread -> socket |> count_today() |> assign(:open, true) |> show(thread)
+      %{} = thread -> socket |> count_today() |> assign(:open, true) |> reach(thread)
       nil -> socket |> assign(:open, true) |> show_today()
     end
+  end
+
+  # A thread of the person's, where it lives: a workspace thread is its
+  # layer, to which the page moves while the panel closes; a crew member's
+  # thread under one moves the page to that layer and is shown here, over
+  # it; any other thread is shown here.
+  defp reach(socket, %{kind: "workspace", id: id}) do
+    socket
+    |> go_to_workspace(id)
+    |> assign(:open, false)
+    |> assign(:pane, nil)
+    |> remember()
+  end
+
+  defp reach(socket, %{kind: "crew", parent_id: parent} = thread) do
+    case own_thread(socket, parent) do
+      %{kind: "workspace", id: id} -> socket |> go_to_workspace(id) |> show(thread)
+      _room -> show(socket, thread)
+    end
+  end
+
+  defp reach(socket, thread), do: show(socket, thread)
+
+  # The page moves to the workspace thread's layer through the desktop's
+  # hook, which moves the page's LiveView on any view's `navigate` and
+  # leaves the desktop and its frames as they are.
+  defp go_to_workspace(socket, id) do
+    to = PrismWeb.WorkspaceLive.address(Athanors.route_slug(socket.assigns.athanor), id)
+    push_event(socket, "navigate", %{to: to})
   end
 
   defp show_today(socket) do
@@ -274,18 +320,24 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   defp show(socket, thread) do
-    pending =
-      case Threads.pending_requests(actor(socket)) do
-        requests when is_list(requests) -> requests
-        {:error, _} -> []
-      end
-
     socket
     |> assign(:thread, thread)
     |> assign(:earlier, earlier?(socket, thread))
-    |> assign(:pending, pending)
+    |> read_works()
     |> switch_pane(thread)
   end
+
+  # The person's workspace threads as the list shows them, read under the
+  # panel's context; a read that fails keeps what was shown.
+  defp read_works(socket) do
+    case Aqua.workspaces(socket.assigns.context) do
+      {:ok, works} -> assign(socket, :works, works)
+      {:error, _unread} -> socket
+    end
+  end
+
+  defp read_works_if_open(%{assigns: %{open: true}} = socket), do: read_works(socket)
+  defp read_works_if_open(socket), do: socket
 
   # Whether a daily thread has an earlier day to step back to.
   defp earlier?(socket, %{kind: "daily", day: %Date{} = day}),
@@ -366,11 +418,10 @@ defmodule PrismWeb.AquaPanelLive do
 
   def handle_event("today", _params, socket), do: {:noreply, show_today(socket)}
 
-  # A request waiting on the crew turns the panel to the thread it was
-  # asked in.
+  # A workspace thread of the list opens at its layer.
   def handle_event("show_thread", %{"id" => id}, socket) do
     case own_thread(socket, id) do
-      %{} = thread -> {:noreply, show(socket, thread)}
+      %{} = thread -> {:noreply, reach(socket, thread)}
       nil -> {:noreply, socket}
     end
   end
@@ -442,11 +493,12 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   # The pane asked for a thread of the person's: a crew member's thread or
-  # its room, one the assistant pointed at, or the daily thread a send
-  # joined. The panel turns to it rather than moving the page.
+  # its room, one the assistant pointed at, the daily thread a send joined,
+  # or a card's workspace thread. The panel turns to it, or a workspace
+  # thread opens at its layer.
   def handle_info({:pane, _pane, {:open_thread, thread_id}}, socket) do
     case own_thread(socket, thread_id) do
-      %{} = thread -> {:noreply, show(socket, thread)}
+      %{} = thread -> {:noreply, reach(socket, thread)}
       nil -> {:noreply, socket}
     end
   end
@@ -486,12 +538,20 @@ defmodule PrismWeb.AquaPanelLive do
       ),
       do: {:noreply, follow_day(socket, id, unread)}
 
+  # A workspace thread moved, was read or left: an open panel reads its
+  # list again.
+  def handle_info(%ThreadListed{kind: :workspace}, %{assigns: %{phase: :ready}} = socket),
+    do: {:noreply, read_works_if_open(socket)}
+
   # Today's thread deleted: the next open makes it again.
   def handle_info(
         %ThreadListed{kind: :removed, id: id},
         %{assigns: %{today: %{id: id}}} = socket
       ),
       do: {:noreply, socket |> assign(:today, nil) |> assign(:unread, 0)}
+
+  def handle_info(%ThreadListed{kind: :removed}, %{assigns: %{phase: :ready}} = socket),
+    do: {:noreply, read_works_if_open(socket)}
 
   def handle_info(%ThreadListed{}, socket), do: {:noreply, socket}
 
@@ -501,6 +561,13 @@ defmodule PrismWeb.AquaPanelLive do
         %{assigns: %{phase: :ready}} = socket
       ),
       do: {:noreply, reload_athanor(socket)}
+
+  # A card opened or decided: a workspace thread, by a card of its own or
+  # one in a crew member's thread under it, may wait on the person or no
+  # longer.
+  def handle_info(%Cyfr.Bus.Notify{kind: kind}, %{assigns: %{phase: :ready}} = socket)
+      when kind in [:approval_pending, :approval_resolved],
+      do: {:noreply, read_works_if_open(socket)}
 
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
@@ -757,25 +824,36 @@ defmodule PrismWeb.AquaPanelLive do
           {@notice}
         </p>
 
+        <%!-- The workspace threads still going, waiting on the person or
+              holding posts they have not seen; each opens at its layer. --%>
         <ul
-          :if={@pending != []}
-          id="aqua-panel-pending"
-          aria-label="Waiting on the crew"
+          :if={@works != []}
+          id="aqua-panel-works"
+          aria-label="Workspace threads"
           class="max-h-28 shrink-0 overflow-y-auto border-b border-border-default py-0.5"
         >
-          <li :for={request <- @pending} id={"aqua-panel-pending-" <> request.id}>
+          <li :for={work <- @works} id={"aqua-panel-work-" <> work.id} data-state={work.state}>
             <button
               type="button"
               phx-click="show_thread"
-              phx-value-id={request.thread_id}
-              title={request.content}
+              phx-value-id={work.id}
+              title={work.title}
               class="flex min-h-6 w-full min-w-0 items-center gap-1.5 px-3 text-left text-xs text-text-secondary hover:text-text-primary"
             >
-              <span class="shrink-0 font-semibold">{request.addressee}</span>
-              <span class="shrink-0 text-text-muted">
-                from {asker(request, @context)} · {relative_time(request.inserted_at)}
+              <span class="min-w-0 truncate font-semibold">{work.title}</span>
+              <span class={[
+                "shrink-0",
+                if(work.waits_on_you, do: "text-amber-300", else: "text-text-muted")
+              ]}>
+                {work_state(work.state)}
               </span>
-              <span class="min-w-0 truncate">{first_line(request.content)}</span>
+              <span
+                :if={work.unread > 0}
+                class="shelf-end-count shrink-0"
+                aria-label={"#{work.unread} new"}
+              >
+                {work.unread}
+              </span>
             </button>
           </li>
         </ul>
@@ -818,14 +896,6 @@ defmodule PrismWeb.AquaPanelLive do
   defp thread_name(%{kind: "daily", day: day}), do: day_name(day)
   defp thread_name(%{kind: "crew", agent: agent}), do: "#{agent}'s thread"
   defp thread_name(%{title: title}), do: title
-
-  # Who asked: the person by the console's name for them, the soul as Aqua.
-  defp asker(%{sent_by: "person", author: author}, ctx), do: PrismWeb.People.label(author, ctx)
-
-  defp asker(%{sent_by: agent}, _ctx),
-    do: if(Prima.AgentRef.soul?(agent), do: "Aqua", else: agent)
-
-  defp first_line(text), do: text |> String.trim() |> String.split("\n", parts: 2) |> hd()
 
   @doc "The id of the panel's own system layer, beside the page's."
   @spec layer_id() :: String.t()

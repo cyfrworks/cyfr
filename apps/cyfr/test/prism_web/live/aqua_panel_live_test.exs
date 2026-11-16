@@ -509,35 +509,127 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel lists the requests waiting on the crew, and one turns the panel to the day it was asked in",
-       %{conn: conn, me: me} do
-    actor = Sanctum.Context.actor(me)
-    {:ok, room} = Threads.daily(actor, Date.add(today!(me).day, -4))
-    {:ok, _child} = Threads.crew_thread(actor, room.id, "builder")
+  # A workspace thread the person opened from a post of today's thread;
+  # the crew's delivery consumer is off in the suite, so it starts no turn.
+  defp workspace!(me, title) do
+    me = %{me | origin: :interactive}
+    today = today!(me)
 
-    {:ok, %{message: request}} =
-      Aqua.Tape.accept(me, room.id, %{
-        message: %{
-          author: me.user_id,
-          sent_by: "person",
-          addressee: "builder",
-          status: "pending",
-          content: "Build the site\nand test it"
-        }
+    {:ok, %{message: asked}} =
+      Arca.TurnStorage.accept_message(Sanctum.Context.actor(me), today.id, %{
+        message: %{author: me.user_id, sent_by: "person", content: "please #{title}"}
       })
+
+    {:ok, %{workspace: id}} =
+      Aqua.Providers.Workspace.handle("workspace", me, %{
+        "action" => "open",
+        "thread" => today.id,
+        "refs" => [asked.id],
+        "title" => title,
+        "ask" => title
+      })
+
+    {:ok, workspace} = Threads.get(Sanctum.Context.actor(me), id)
+    workspace
+  end
+
+  # Its work done: a post of Aqua's the person has not seen, a report, and
+  # the turn ended.
+  defp finished!(me, workspace) do
+    me = %{me | origin: :interactive}
+    actor = Sanctum.Context.actor(me)
+
+    [opening | _] =
+      Enum.filter(Threads.messages(actor, workspace.id), &(&1.kind == "opening"))
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, workspace.id, %{
+        message: %{author: me.user_id, sent_by: "person", content: opening.content},
+        opening_id: opening.id,
+        turn: %{agent: "aqua", requested_by: me.user_id, origin: :interactive}
+      })
+
+    {:ok, post} =
+      Aqua.Tape.post(me, turn, %{
+        id: Prima.UUID7.generate_id("msg"),
+        content: "Done here",
+        payload: %{"post" => true}
+      })
+
+    {:ok, _} = Aqua.Tape.report_workspace(me, turn, "done", %{summary: "Done."})
+    {:ok, current} = Aqua.Tape.turn(me, turn.id)
+    {:ok, _} = Aqua.Tape.finish(me, current, "cancelled", %{error: "stopped"})
+    post
+  end
+
+  # A state the store's rule wrote, as S5's writers do.
+  defp state!(workspace, state) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(t in Arca.Schemas.Thread, where: t.id == ^workspace.id),
+        set: [workspace_state: state]
+      )
+  end
+
+  defp layer(mine, workspace), do: PrismWeb.WorkspaceLive.address(route(mine), workspace.id)
+
+  test "the panel lists the workspace threads going, waiting on the person and finished but unread; one opens at its layer, and a finished one leaves once read",
+       %{conn: conn, mine: mine, me: me} do
+    going = workspace!(me, "Going")
+    waiting = workspace!(me, "Waiting")
+    state!(waiting, "needs_you")
+    unread = workspace!(me, "Finished unread")
+    _post = finished!(me, unread)
+    read = workspace!(me, "Finished read")
+    seen = finished!(me, read)
+    :ok = Aqua.mark_read(me, read.id, seen.seq)
 
     {panel, _html} = open_panel(desktop!(conn))
 
-    waiting = "#aqua-panel-pending-#{request.id}"
-    assert has_element?(panel, waiting, "builder")
-    assert has_element?(panel, waiting, "from You")
-    assert has_element?(panel, waiting, "Build the site")
-    refute has_element?(panel, waiting, "and test it")
+    assert has_element?(panel, ~s(#aqua-panel-work-#{going.id}[data-state="open"]), "Going")
+    assert has_element?(panel, "#aqua-panel-work-#{going.id}", "Working on it")
+    assert has_element?(panel, "#aqua-panel-work-#{waiting.id}", "Needs you")
+    assert has_element?(panel, "#aqua-panel-work-#{unread.id}", "Done")
+    assert has_element?(panel, ~s(#aqua-panel-work-#{unread.id} [aria-label="1 new"]))
+    refute has_element?(panel, "#aqua-panel-work-#{read.id}")
 
-    panel |> element("#{waiting} button") |> render_click()
-    on_thread!(child!(panel, "aqua-panel-pane"), room.id)
-    named!(panel, room)
-    assert has_element?(panel, "#aqua-panel-today")
+    # The waiting-on-crew list is gone.
+    refute has_element?(panel, "#aqua-panel-pending")
+
+    # Read on another device, the finished one leaves this panel's list.
+    [last | _] = Enum.reverse(Threads.messages(Sanctum.Context.actor(me), unread.id))
+    :ok = Aqua.mark_read(me, unread.id, last.seq)
+    wait_until(fn -> not has_element?(panel, "#aqua-panel-work-#{unread.id}") end)
+
+    # A card in a crew member's thread under one moves it with no
+    # announcement of its own: the athanor's notice reads the list again.
+    state!(going, "needs_you")
+    Sanctum.Notify.broadcast(me.athanor_id, :approval_pending, %{thread_id: "thr_crew"})
+    wait_until(fn -> has_element?(panel, "#aqua-panel-work-#{going.id}", "Needs you") end)
+
+    # One opens at its layer: the page moves there and the panel gives way.
+    panel |> element("#aqua-panel-work-#{waiting.id} button") |> render_click()
+    assert_push_event(panel, "navigate", %{to: to})
+    assert to == layer(mine, waiting)
+    refute has_element?(panel, "#aqua-panel-sheet")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "reading a workspace thread leaves today's count as it is",
+       %{conn: conn, me: me} do
+    workspace = workspace!(me, "Elsewhere")
+    seen = finished!(me, workspace)
+    view = desktop!(conn)
+    panel = child!(view, "aqua-panel")
+    fire!(me, today!(me), "Morning brief")
+    wait_until(fn -> has_element?(panel, "#aqua-panel-unread", "1") end)
+
+    :ok = Aqua.mark_read(me, workspace.id, seen.seq)
+
+    # The workspace thread's announcement is heard, and today's count stands.
+    render(panel)
+    assert has_element?(panel, "#aqua-panel-unread", "1")
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -1470,8 +1562,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the attention stream's destination opens the thread an approval waits in: an earlier day's or a crew member's",
-       %{conn: conn, me: me} do
+  test "the attention stream's destination opens the thread an approval waits in: an earlier day's or a crew member's, and a workspace thread at its layer",
+       %{conn: conn, mine: mine, me: me} do
     actor = Sanctum.Context.actor(me)
     day = Aqua.today(me)
     {:ok, earlier} = Threads.daily(actor, Date.add(day, -5))
@@ -1489,6 +1581,23 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # Opened at a thread it names, the panel made no thread of today.
     assert {:error, :not_found} = Threads.day(actor, day)
+
+    # A workspace thread opens at its layer, and the panel gives way; a crew
+    # member's thread under one moves the page to that layer and is shown
+    # here, over it, where its card is decided.
+    workspace = workspace!(me, "Moon report")
+    {:ok, under} = Threads.crew_thread(actor, workspace.id, "builder")
+
+    send(panel.pid, {:open, workspace.id})
+    assert_push_event(panel, "navigate", %{to: to})
+    assert to == layer(mine, workspace)
+    refute has_element?(panel, "#aqua-panel-sheet")
+
+    send(panel.pid, {:open, under.id})
+    assert_push_event(panel, "navigate", %{to: to})
+    assert to == layer(mine, workspace)
+    on_thread!(child!(panel, "aqua-panel-pane"), under.id)
+    assert has_element?(panel, "#aqua-panel-day-name", "builder's thread")
 
     # An id of no thread of the person's opens today's.
     other = test_user()

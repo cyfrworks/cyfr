@@ -71,6 +71,19 @@ defmodule PrismWeb.DisplayHelpers do
   def day_name(%Date{} = day), do: Calendar.strftime(day, "%a %-d %b %Y")
 
   @doc """
+  A workspace thread's state as a person reads it, from the state the
+  store keeps (`Aqua.workspace/2`'s `state`): the one wording of it in the
+  console, which the workspace layer, its cards on the daily thread and
+  the panel's list share. A state it does not know reads as none.
+  """
+  @spec work_state(String.t() | nil) :: String.t() | nil
+  def work_state("open"), do: "Working on it"
+  def work_state("needs_you"), do: "Needs you"
+  def work_state("done"), do: "Done"
+  def work_state("failed"), do: "Failed"
+  def work_state(_state), do: nil
+
+  @doc """
   Format a timestamp for display. `:time` gives "14:03" for inline,
   same-day surfaces; `:datetime` gives "2026-08-27 14:03 UTC". Accepts a
   `DateTime` or an ISO8601 string; nil and unparseable values pass

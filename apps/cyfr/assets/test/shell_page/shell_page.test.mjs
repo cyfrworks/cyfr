@@ -47,6 +47,14 @@ describe("the shell's navigate", () => {
     assert.deepEqual(moves, ["/a/@alice/schedules"])
   })
 
+  // Aqua's panel, a view nested in the desktop, pushes the same event to
+  // open a workspace thread at its layer.
+  test("moves the page to a workspace thread's layer", () => {
+    const {handlers, moves} = mount()
+    handlers.navigate({to: "/a/@alice/workspace/thr_01"})
+    assert.deepEqual(moves, ["/a/@alice/workspace/thr_01"])
+  })
+
   test("moves nowhere for an address off this origin or of another shape", () => {
     const {handlers, moves} = mount()
     handlers.navigate({to: "https://example.com/a"})
@@ -182,6 +190,11 @@ describe("a Dashboard page over the desktop", () => {
 
     windowListeners["phx:page-loading-stop"]({detail: {kind: "redirect", to: ORIGIN + "/a/@alice"}})
     assert.deepEqual(shown, [{desktop: false}, {desktop: true}])
+  })
+
+  test("a workspace thread's layer is a page over the desktop", () => {
+    at("/a/@alice/workspace/thr_01")
+    assert.deepEqual(mount().shown, [{desktop: false}])
   })
 
   test("the desktop's own addresses are no page", () => {

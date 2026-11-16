@@ -8,7 +8,9 @@
 //
 // The shell's `navigate` (a desktop's `settings` verb) moves the page's
 // LiveView to the Dashboard page named, which opens as the overlay over
-// the desktop, the desktop and its frames untouched. And the desktop's own
+// the desktop, the desktop and its frames untouched. A hook hears the
+// event from any view of the document, so Aqua's panel, nested in the
+// desktop, moves the page the same way to a workspace thread's layer. And the desktop's own
 // address with `?publisher=&tincture_name=` (the palette's and Aqua's focus
 // on a tincture, PrismWeb.DesktopLive) is handed to the shell as
 // `focus_named`, and with `?shell=desktops` (the palette's desktops) as the

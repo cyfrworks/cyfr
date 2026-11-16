@@ -565,6 +565,15 @@
           pipe_through: ["browser"]
         },
         %{
+          verb: "GET",
+          path: "/a/:athanor/workspace/:id",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":show",
+          auth: "browser_authenticated",
+          live_view: "PrismWeb.WorkspaceLive",
+          pipe_through: ["browser"]
+        },
+        %{
           verb: "POST",
           path: "/auth/company",
           plug: "PrismWeb.AuthController",

@@ -1483,11 +1483,11 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.AquaPanelLive",
       into: "Arca.ThreadStorage",
-      functions: [:adjacent_day, :day, :get, :pending_requests, :unread],
+      functions: [:adjacent_day, :day, :get, :unread],
       reason:
         "the panel reads today's daily thread without making it, the day a step either " <>
-          "way, the thread a destination names, today's unread count and the crew requests " <>
-          "still waiting, all under the caller's actor; the assistant owns every thread write."
+          "way, the thread a destination names and today's unread count, all under the " <>
+          "caller's actor; the assistant owns every thread write."
     },
     %{
       from: "PrismWeb.AttachmentController",

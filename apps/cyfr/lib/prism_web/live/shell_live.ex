@@ -1633,7 +1633,8 @@ defmodule PrismWeb.ShellLive do
   # running under them: `chat` the chat, at the shared thread `ref` names
   # when the person sits in it, and `aqua` Aqua's panel, on today's daily
   # thread, or at the thread of the person's athanor `ref` names, the one
-  # an approval waits in (the attention stream's `aqua` destination). Each
+  # an approval waits in (the attention stream's `aqua` destination); the
+  # panel opens a workspace thread at its layer, over the canvas. Each
   # overlay reads the thread under the person's own seat.
   defp settings(%{assigns: %{chat_overlay: pid}} = socket, "chat", ref) when is_pid(pid) do
     send(pid, if(ref, do: {:open, ref}, else: :open))

@@ -24,7 +24,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     DesktopLive ChatRedirectLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
     MyReportsLive BuildsLive VaultLive ApiKeysLive WebhooksLive
-    SchedulesLive SettingsLive ProgramsLive TipsLive LegalLive
+    SchedulesLive SettingsLive ProgramsLive TipsLive LegalLive WorkspaceLive
   )
 
   # The sign-in page and the invitation page are what an anonymous caller
