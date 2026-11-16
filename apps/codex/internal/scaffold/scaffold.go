@@ -197,6 +197,7 @@ var shippedCrew = map[string]bool{
 
 var shippedScrolls = map[string]bool{
 	"artisan":                true,
+	"browser":                true,
 	"builder":                true,
 	"canvas":                 true,
 	"capability-acquisition": true,

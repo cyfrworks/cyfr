@@ -365,4 +365,34 @@ defmodule Arca.UsersTest do
       assert {:ok, []} = Users.list(server(), order: :id, after: List.last(read))
     end
   end
+
+  describe "merge_prefs/3" do
+    test "merges into the preferences as the row reads now, removes a key patched to nil, and keeps the rest" do
+      person = person!(%{prefs: Jason.encode!(%{"mode" => "dark", "theme" => "aqua"})})
+
+      assert {:ok, _} = Users.merge_prefs(server(), person.id, %{"time_zone" => "Europe/Lisbon"})
+
+      assert {:ok, _} =
+               Users.merge_prefs(server(), person.id, %{"aqua_browser" => false, "theme" => nil})
+
+      {:ok, row} = Users.get(server(), person.id)
+
+      assert Jason.decode!(row.prefs) == %{
+               "mode" => "dark",
+               "time_zone" => "Europe/Lisbon",
+               "aqua_browser" => false
+             }
+    end
+
+    test "a stored document that does not read is replaced, and a person it does not hold is not found" do
+      person = person!(%{prefs: "not json"})
+      assert {:ok, row} = Users.merge_prefs(server(), person.id, %{"mode" => "light"})
+      assert Jason.decode!(row.prefs) == %{"mode" => "light"}
+
+      assert {:error, :not_found} =
+               Users.merge_prefs(server(), "usr_absent", %{"mode" => "light"})
+
+      assert {:error, :cross_tenant} = Users.merge_prefs(in_athanor("ath_x"), person.id, %{})
+    end
+  end
 end

@@ -278,7 +278,8 @@ defmodule Cyfr.ApplicationTest do
                Opus.WorkerWatch,
                Opus.Host.Egress.Pins,
                Opus.HostListener,
-               Opus.Programs
+               Opus.Programs,
+               Opus.Browser.Tree
              ]},
             {Aqua.Supervisor,
              [

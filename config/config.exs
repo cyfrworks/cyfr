@@ -42,6 +42,9 @@ config :sanctum,
     # What was kept out of a thread — a separate object from the tape,
     # which is what lets a thread be erased honestly.
     Aqua.Providers.Notes,
+    # Aqua's browser, a Chrome that is the person's alone, and the
+    # person's setting that says whether Aqua may use it.
+    Aqua.Providers.Browser,
     # `arca`: the athanor's files as the Files page shows them, one tier
     # per folder.
     Arca.Providers.Files,

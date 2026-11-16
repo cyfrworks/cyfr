@@ -218,6 +218,41 @@ defmodule Prima.OperationTest do
       assert_raise ArgumentError, fn -> Operation.validate!(%{op | resource_schemes: nil}) end
     end
 
+    test "only the browser tool's in-chain actions follow the person's setting, and none unless it says so" do
+      refute Operation.new("probe", "peek", "Peek", [], kind: :read, planes: [:external]).follows_setting
+
+      assert %Operation{follows_setting: true} =
+               Operation.new("browser", "open", "Open", [],
+                 kind: :external,
+                 planes: [:in_chain],
+                 follows_setting: true
+               )
+
+      for {tool, planes} <- [
+            {"http", [:in_chain]},
+            {"browser", [:external]},
+            {"browser", [:external, :in_chain]}
+          ] do
+        assert_raise ArgumentError,
+                     "only the browser tool's in-chain actions follow the setting",
+                     fn ->
+                       Operation.new(tool, "open", "Open", [],
+                         kind: :external,
+                         planes: planes,
+                         follows_setting: true
+                       )
+                     end
+      end
+
+      assert_raise ArgumentError, "invalid operation annotation", fn ->
+        Operation.new("browser", "open", "Open", [],
+          kind: :external,
+          planes: [:in_chain],
+          follows_setting: nil
+        )
+      end
+    end
+
     test "only a read may go unrecorded, and every action is recorded unless it says otherwise" do
       read = Operation.new("probe", "peek", "Peek", [], kind: :read, planes: [:external])
       assert read.recorded

@@ -611,7 +611,7 @@ defmodule Prima.KeeperProtocolTest do
       assert %{"grace_ms" => 60_000} =
                Jason.decode!(line(%{type: :release, spawn_id: @spawn_id, grace_ms: 60_000}))
 
-      rlimits = %{nofile: 1024, nproc: 128, core: 0, fsize: 268_435_456}
+      rlimits = %{nofile: 1024, nproc: 1024, core: 0, fsize: 268_435_456}
       assert %{"rlimits" => _} = Jason.decode!(line(spawn_request(%{rlimits: rlimits})))
 
       assert refused(spawn_request(%{rlimits: %{"nofile" => 16}})) =~ ~r/\Arlimits\.nofile /

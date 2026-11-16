@@ -70,7 +70,16 @@ defmodule Opus.Programs.Terminal do
   standing check, which reads the turn. When its program exits by
   itself, it closes its session and releases its owner as any session
   does, but keeps its last output and its ending for its turn to read
-  until the turn ends or stops it. Every change of
+  until the turn ends or stops it.
+
+  A session of the person's browser (`by: :browser`, `Opus.Browser`) is
+  the person's in what it does: its holder attaches as a person's screen
+  does and is handed acknowledged deliveries and the tail, and nothing of
+  a turn ends it. That holder, named at its start (`held_by`), keeps its
+  idle stop, so the session lives as long as it from the moment it is
+  asked for: starting or started, it ends `:closed` once that process is
+  gone, however it ended. A person's session is held by no process and
+  only detaches. Every change of
   what `Opus.Programs.running/1` reports is announced on the person's
   own `Cyfr.Bus.programs/2` topic (`Cyfr.Bus.Program`). Nothing that
   passes through is stored or logged: the output it keeps and hands on
@@ -122,6 +131,7 @@ defmodule Opus.Programs.Terminal do
        owner: Keyword.fetch!(args, :owner),
        argv: Keyword.fetch!(args, :argv),
        by: Keyword.fetch!(args, :by),
+       held_by: watch(Keyword.get(args, :held_by)),
        rows: Keyword.fetch!(args, :rows),
        cols: Keyword.fetch!(args, :cols),
        started_at: DateTime.utc_now(),
@@ -361,6 +371,15 @@ defmodule Opus.Programs.Terminal do
 
   def handle_info({:read_failed, _reason}, state), do: finish(state, :exited)
 
+  # The browser's session lives as long as the process that holds it,
+  # which keeps its idle stop: from its start on, opening or open, it ends
+  # once that process is gone, killed included, and a start still waiting
+  # is refused.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{held_by: {_pid_held, ref}} = state) do
+    if state.opening, do: GenServer.reply(state.opening, {:error, :closed})
+    finish(%{state | opening: nil}, :closed)
+  end
+
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     cond do
       match?(%{^pid => %{monitor: ^ref}}, state.subscribers) ->
@@ -470,6 +489,9 @@ defmodule Opus.Programs.Terminal do
 
   # ---------------------------------------------------------------------------
 
+  defp watch(nil), do: nil
+  defp watch(pid) when is_pid(pid), do: {pid, Process.monitor(pid)}
+
   defp opened(state, from, session) do
     GenServer.reply(from, {:ok, state.id})
     terminal = self()
@@ -481,17 +503,22 @@ defmodule Opus.Programs.Terminal do
     {:noreply, state}
   end
 
-  # The session's owner: the person who started it, or the turn.
-  defp yours?(%{turn_id: nil} = state, {athanor_id, user_id}),
+  # The session's owner: the person who started it, the turn, or the
+  # person's browser.
+  defp yours?(%{by: :person} = state, {athanor_id, user_id}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
 
-  defp yours?(%{turn_id: turn_id} = state, {athanor_id, user_id, turn_id}) when turn_id != nil,
+  defp yours?(%{by: :aqua, turn_id: turn_id} = state, {athanor_id, user_id, turn_id})
+       when is_binary(turn_id),
+       do: state.athanor_id == athanor_id and state.user_id == user_id
+
+  defp yours?(%{by: :browser} = state, {athanor_id, user_id, :browser}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
 
   defp yours?(_state, _principal), do: false
 
-  # Its owner, or the person whose turn started it: who lists and closes
-  # it.
+  # Its owner, or the person whose turn or browser started it: who lists
+  # and closes it.
   defp listed?(state, {athanor_id, user_id}),
     do: state.athanor_id == athanor_id and state.user_id == user_id
 

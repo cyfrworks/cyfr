@@ -322,9 +322,11 @@ defmodule Aqua.Approvals do
 
   # The card's pair against the CURRENT policy of the turn's agent: the
   # definition as the tree holds it now, composed with the standing rows
-  # as they stand now. A "never" since the card was raised wins; an agent
-  # gone from the roster or a pair it no longer holds makes the card
-  # stale. A confirmation card with no proposal has nothing to check.
+  # and the person's browser setting as they stand now. A "never" since
+  # the card was raised wins, and so does the setting turned off for an
+  # action that follows it; an agent gone from the roster or a pair it no
+  # longer holds makes the card stale. A confirmation card with no
+  # proposal has nothing to check.
   # A program's start is approved only on a card that showed what it
   # runs: the program, its pinned command, its folder and its hosts.
   defp shows_what_runs(%{"proposal" => %{"tool" => "program", "action" => "start"}} = intent) do
@@ -348,15 +350,18 @@ defmodule Aqua.Approvals do
 
     with {:ok, authored} <- authored_policy(ctx, name),
          {:ok, rows} <- Aqua.ToolGrants.for_thread(ctx, turn.thread_id, name) do
-      policy = Aqua.ToolGrants.resolve(authored, rows)
+      policy = Aqua.ToolGrants.resolve(authored, rows, Aqua.BrowserSetting.allowed?(ctx))
 
       case Map.get(policy, "#{tool}.#{action}") do
         mode when mode in ["ask", "auto"] ->
           :ok
 
         "deny" ->
-          {:error,
-           {:stale_card, "#{tool}.#{action} was declined for good since this card was raised"}}
+          if Sanctum.Catalog.follows_setting?(tool, action),
+            do: {:error, {:stale_card, "This confirmation is no longer current."}},
+            else:
+              {:error,
+               {:stale_card, "#{tool}.#{action} was declined for good since this card was raised"}}
 
         _ ->
           {:error, {:stale_card, "#{name} no longer holds #{tool}.#{action} — the card is stale"}}

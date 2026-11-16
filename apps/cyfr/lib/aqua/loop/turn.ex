@@ -91,7 +91,10 @@ defmodule Aqua.Loop.Turn do
            Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
          policy =
            agent["tool_policy"]
-           |> Aqua.ToolGrants.resolve(Map.fetch!(grants, agent["name"]))
+           |> Aqua.ToolGrants.resolve(
+             Map.fetch!(grants, agent["name"]),
+             Aqua.BrowserSetting.allowed?(ctx)
+           )
            |> narrowed(options["tools"]),
          {:ok, catalyst, model} <- model(ctx, turn, agent),
          {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn),
@@ -418,13 +421,14 @@ defmodule Aqua.Loop.Turn do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The agent's policy recomposed against the member's grants as they stand.
+  The agent's policy recomposed against the member's grants and browser
+  setting as they stand.
 
   `build/3`'s policy is a snapshot. A member withdrawing a standing grant
-  mid-turn writes the rows and refreshes the runner; nothing rebuilds the
-  snapshot a running loop decides from, so a call that has not dispatched
-  yet asks again. The authored half is the pinned agent definition and is
-  never re-read here.
+  or turning the browser setting off mid-turn writes the store; nothing
+  rebuilds the snapshot a running loop decides from, so a call that has
+  not dispatched yet is decided again here. The authored half is the
+  pinned agent definition and is never re-read here.
   """
   @spec current_policy(t()) :: {:ok, map()} | {:error, term()}
   def current_policy(%__MODULE__{ctx: ctx, turn: turn, agent: agent, options: options}) do
@@ -433,7 +437,7 @@ defmodule Aqua.Loop.Turn do
     with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [name]) do
       {:ok,
        agent["tool_policy"]
-       |> Aqua.ToolGrants.resolve(Map.fetch!(grants, name))
+       |> Aqua.ToolGrants.resolve(Map.fetch!(grants, name), Aqua.BrowserSetting.allowed?(ctx))
        |> narrowed((options || %{})["tools"])}
     end
   end

@@ -304,7 +304,7 @@ type Limits struct {
 }
 
 // Ceilings are the default limits and the most a request may ask for.
-var Ceilings = Limits{Nofile: 1024, Nproc: 128, Core: 0, Fsize: 256 << 20}
+var Ceilings = Limits{Nofile: 1024, Nproc: 1024, Core: 0, Fsize: 256 << 20}
 
 // Unlimited is RLIM_INFINITY: no limit at all.
 const Unlimited = ^uint64(0)

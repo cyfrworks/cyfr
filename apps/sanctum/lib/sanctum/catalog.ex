@@ -1133,6 +1133,25 @@ defmodule Sanctum.Catalog do
   def auto_permitted?(_tool, _action), do: false
 
   @doc """
+  Whether `tool.action` follows the person's own browser setting
+  (`Prima.Operation`'s `follows_setting`) rather than an authored policy
+  line: the browser tool's actions alone declare it, so with the setting
+  on they run without a card, external ones among them, and with it off
+  they are refused. No other action, external or not, is decided this way.
+  """
+  @spec follows_setting?(String.t(), String.t()) :: boolean()
+  def follows_setting?(tool, action) when is_binary(tool) and is_binary(action) do
+    with {:ok, {_module, %{operations: operations}}} <- lookup(tool),
+         %Operation{follows_setting: true} <- Enum.find(operations, &(&1.action == action)) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def follows_setting?(_tool, _action), do: false
+
+  @doc """
   One `tool.action` as the standing rule reads it, by its name, classified
   as `tool_kind/2` classifies it: a virtual hand from its table, an
   upstream `server:tool` as external (it declares no standing and names no

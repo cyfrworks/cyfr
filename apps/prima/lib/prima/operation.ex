@@ -51,6 +51,14 @@ defmodule Prima.Operation do
   Like `resource`, it is metadata for the gate, absent from the
   annotation view and from discovery.
 
+  `follows_setting: true` marks an action that follows the person's own
+  browser setting rather than an authored policy line: with the setting
+  on the assistant runs it without a card, an external one among them,
+  and with it off the action is refused (`Aqua.BrowserSetting`). It is
+  admitted for the browser tool's in-chain actions alone (`validate!/1`):
+  no other external action takes a standing allow. It is metadata for
+  the gate, absent from the annotation view and from discovery.
+
   `recorded: false` marks a read whose admitted call the gate's decision
   audit leaves out (`Sanctum.Catalog.recorded?/2`): discovery, the audit's
   own reads, and the reads the shell makes of the caller's own state on
@@ -80,6 +88,7 @@ defmodule Prima.Operation do
     auth: :required,
     resource_schemes: [],
     reduces_authority: false,
+    follows_setting: false,
     recorded: true
   ]
 
@@ -100,6 +109,7 @@ defmodule Prima.Operation do
           resource: {String.t(), resource_kind()} | nil,
           resource_schemes: [String.t()],
           reduces_authority: boolean(),
+          follows_setting: boolean(),
           recorded: boolean(),
           sources: sources() | nil
         }
@@ -145,6 +155,7 @@ defmodule Prima.Operation do
           :resource,
           :resource_schemes,
           :reduces_authority,
+          :follows_setting,
           :recorded,
           :sources | @annotation_fields
         ]
@@ -174,7 +185,8 @@ defmodule Prima.Operation do
              op.consent in [nil, :interactive, :staging] and
              op.scope in [nil, :platform] and op.standing in [nil, false, :thread] and
              op.recovery in [nil, :replay_safe] and
-             is_boolean(op.reduces_authority) and is_boolean(op.recorded) and
+             is_boolean(op.reduces_authority) and is_boolean(op.follows_setting) and
+             is_boolean(op.recorded) and
              (is_nil(op.permission) or is_atom(op.permission)),
            do: raise(ArgumentError, "invalid operation annotation")
 
@@ -186,6 +198,9 @@ defmodule Prima.Operation do
 
     if not op.recorded and op.kind != :read,
       do: raise(ArgumentError, "only a read may go unrecorded")
+
+    if op.follows_setting and (op.tool != "browser" or op.planes != [:in_chain]),
+      do: raise(ArgumentError, "only the browser tool's in-chain actions follow the setting")
 
     if Enum.any?(op.args, &(&1.name == "action")),
       do: raise(ArgumentError, "action is the operation discriminator")

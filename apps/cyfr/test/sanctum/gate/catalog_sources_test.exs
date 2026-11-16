@@ -93,6 +93,12 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
   # What a program printed: outside, named by the program it came from.
   @program_output ~w(program.start program.read program.wait)
 
+  # What a page in Aqua's browser holds: outside, named by its host; and
+  # the browser's acts that answer nothing of a page, and its setting.
+  @browser_page ~w(browser.open browser.read browser.click browser.page browser.screenshot)
+  @browser_own ~w(browser.type browser.key browser.close browser.status browser.turn_on
+                  browser.turn_off)
+
   test "every in-chain action of every configured provider declares the sources its answers carry" do
     undeclared =
       for module <- Catalog.configured_providers(),
@@ -128,6 +134,16 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
               operation(name),
             name
           )
+
+    for name <- @browser_page,
+        do:
+          assert(
+            %Prima.Operation{sources: {:answer, {Aqua.Providers.Browser, :answer_sources}}} =
+              operation(name),
+            name
+          )
+
+    for name <- @browser_own, do: assert(%Prima.Operation{sources: []} = operation(name), name)
   end
 
   describe "an answer describing installed components" do
