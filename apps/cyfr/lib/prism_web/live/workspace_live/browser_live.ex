@@ -157,8 +157,17 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
     {:noreply, push_event(socket, "browser_input_taken", %{})}
   end
 
+  # A stream that another page took leaves the window standing; any other
+  # end is the browser stopping, which leaves no window to offer.
+  def handle_info(
+        {Opus.Browser, watch, {:ended, :replaced}},
+        %{assigns: %{watch: watch}} = socket
+      ),
+      do: {:noreply, socket |> forget() |> assign(:stream, ended(:replaced))}
+
   def handle_info({Opus.Browser, watch, {:ended, reason}}, %{assigns: %{watch: watch}} = socket),
-    do: {:noreply, socket |> forget() |> assign(:stream, ended(reason))}
+    do:
+      {:noreply, socket |> forget() |> assign(:window?, false) |> assign(:stream, ended(reason))}
 
   # A watch this page no longer holds says nothing here.
   def handle_info({Opus.Browser, _another, _message}, socket), do: {:noreply, socket}
@@ -167,7 +176,9 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
         {:DOWN, _monitor, :process, holder, _reason},
         %{assigns: %{holder: holder}} = socket
       ),
-      do: {:noreply, socket |> forget() |> assign(:stream, ended(:unavailable))}
+      do:
+        {:noreply,
+         socket |> forget() |> assign(:window?, false) |> assign(:stream, ended(:unavailable))}
 
   def handle_info(%ThreadEvent{kind: kind}, socket) when kind in [:tool_activity, :turn_finished],
     do: {:noreply, read_window(socket)}

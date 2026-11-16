@@ -566,6 +566,9 @@ defmodule PrismWeb.WorkspaceLiveTest do
         "the stream to end in the turned-off sentence"
       )
 
+      # The browser stopped: no window stands to offer.
+      refute has_element?(browser, "#workspace-browser-watch")
+
       render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
 
       assert has_element?(
