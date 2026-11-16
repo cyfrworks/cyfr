@@ -63,6 +63,37 @@ defmodule Prima.SourceTest do
     assert Source.uncovered([Source.new(:pinned)], []) == []
   end
 
+  test "a thread source names the thread read, holds no class and sorts after every class" do
+    read = [
+      Source.thread("thr_b"),
+      Source.outside("x"),
+      Source.thread("thr_a"),
+      Source.new(:filed)
+    ]
+
+    assert Source.set(read) ==
+             [
+               Source.new(:filed),
+               Source.outside("x"),
+               Source.thread("thr_a"),
+               Source.thread("thr_b")
+             ]
+
+    assert Source.classes_of(read) == [:filed, :outside]
+    assert Source.threads(read) == ["thr_a", "thr_b"]
+    assert Source.material(read) |> Source.set() == [Source.new(:filed), Source.outside("x")]
+    refute :thread in Source.classes()
+
+    # Its JSON keeps its name, and reads back as itself; one with no name
+    # is no thread and reads as outside, as any unknown class does.
+    assert Source.decode(Source.encode(read)) == Source.set(read)
+    assert Source.from_json(%{"class" => "thread", "name" => nil}) == Source.outside(nil)
+
+    # It never stands in for an outside source, and nothing covers it.
+    assert Source.uncovered(read, []) == [Source.outside("x")]
+    assert Prima.Flow.uncovered([Source.thread("thr_a")], {:domain, "a.example"}) == []
+  end
+
   test "union and classes_of keep the fixed order" do
     assert Source.union([Source.outside("x")], [Source.new(:pinned)]) ==
              [Source.new(:pinned), Source.outside("x")]

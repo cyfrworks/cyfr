@@ -2620,7 +2620,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Who wrote it: a user id, an agent, or "system".
       add :author, :string, null: false
       # text | approval | error | system | tool_call | tool_result |
-      # compaction | turn_aborted
+      # compaction | turn_aborted | opening | pointer | report
       add :kind, :string, null: false, default: "text"
       add :content, :text, null: false, default: ""
       # Kind-specific JSON: an approval's intent and proposal, a text
@@ -2649,6 +2649,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :reply_to, :string
       # A reply's or notice's outcome.
       add :outcome, :string, check: if(sqlite?, do: message_outcome)
+      # The workspace thread a daily thread's pointer or report names,
+      # with which it is deleted. A plain string, from which nothing
+      # cascades.
+      add :workspace_id, :string
       add :inserted_at, :utc_datetime_usec, null: false
     end
 
@@ -2661,6 +2665,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:messages, [:athanor_id, :inserted_at])
     create index(:messages, [:athanor_id, :turn_id])
     create index(:messages, [:athanor_id, :reply_to])
+    create index(:messages, [:athanor_id, :workspace_id], where: "workspace_id IS NOT NULL")
     create index(:messages, [:thread_id, :status])
   end
 

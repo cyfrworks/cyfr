@@ -53,18 +53,39 @@ defmodule Prima.OutboxRecord do
   final text, cut to `max_reply_bytes/0` on a character boundary with
   `truncated` set; the rest stays on the turn), `person_id` and `origin`.
 
+  `workspace_open` is a workspace thread opened, or opened again, with an
+  opening message (`workspace_open/1`): its source is the workspace
+  thread (`thread`), its revision the opening row's insertion instant,
+  and its snapshot holds `workspace_id`, `opening_id` (the opening row
+  whose turn the delivery starts), `person_id` and `origin`.
+
+  `workspace_report` is a workspace thread's state moved to `done`,
+  `failed` or `needs_you` (`workspace_report/1`): its source is the
+  workspace thread, its revision the move's instant, and its snapshot
+  holds `workspace_id`, `title`, `turn_id` (the turn that reported, or
+  the host for it), `outcome` (one of `report_outcomes/0`), `summary`
+  (cut to `max_reply_bytes/0` on a character boundary with `truncated`
+  set), `attachments` (the files of the workspace thread's posts the
+  report carries, each `{"message_id", "stored_name"}`, copied at
+  delivery), `sources` (the turn's ledger at the move, canonical JSON
+  objects), `person_id`, `origin`, and for `needs_you` the card's
+  `approval_id`.
+
   A record's snapshot is canonical JSON text (`Prima.JCS`): the record
   as stored is the record as recorded, byte for byte. A field with no
   value is left out of the text and reads back as nil.
   """
 
-  @kinds ~w(schedule_outcome crew_request crew_reply)
-  @source_kinds ~w(schedule_occurrence message turn)
+  @kinds ~w(schedule_outcome crew_request crew_reply workspace_open workspace_report)
+  @source_kinds ~w(schedule_occurrence message turn thread)
   @max_output_bytes 64 * 1024
   # A reply is delivered as a message to the asking thread, so it is cut
   # to the one bound every message passes (`Aqua.Runner.Admission`).
   @max_reply_bytes 32 * 1024
   @reply_outcomes ~w(done failed cancelled uncertain needs_you)
+  @report_outcomes ~w(done failed needs_you)
+  # The files one report carries, as a message carries at most.
+  @max_report_files 10
   @origins Prima.Origin.values()
 
   @enforce_keys [:source_kind, :source_id, :source_revision, :athanor_id, :kind, :snapshot]
@@ -105,6 +126,14 @@ defmodule Prima.OutboxRecord do
   @doc "The outcomes a `crew_reply` may carry, a closed roster."
   @spec reply_outcomes() :: [String.t()]
   def reply_outcomes, do: @reply_outcomes
+
+  @doc "The outcomes a `workspace_report` may carry, a closed roster."
+  @spec report_outcomes() :: [String.t()]
+  def report_outcomes, do: @report_outcomes
+
+  @doc "The most files a `workspace_report` carries."
+  @spec max_report_files() :: pos_integer()
+  def max_report_files, do: @max_report_files
 
   @doc """
   The record of a completed schedule occurrence, from what the finish
@@ -249,6 +278,121 @@ defmodule Prima.OutboxRecord do
         |> card(outcome, Map.get(attrs, :approval_id))
     }
   end
+
+  @doc """
+  The record of a workspace thread opened with an opening message, from
+  what the opening's transaction wrote: `athanor_id`, `workspace_id`,
+  the opening row's `opening_id` and `inserted_at`, `person_id` and
+  `origin`.
+  """
+  @spec workspace_open(map()) :: t()
+  def workspace_open(%{
+        athanor_id: athanor_id,
+        workspace_id: workspace_id,
+        opening_id: opening_id,
+        inserted_at: %DateTime{} = inserted_at,
+        person_id: person_id,
+        origin: origin
+      })
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
+             workspace_id != "" and is_binary(opening_id) and opening_id != "" and
+             is_binary(person_id) and person_id != "" and origin in @origins do
+    %__MODULE__{
+      source_kind: "thread",
+      source_id: workspace_id,
+      source_revision: instant(inserted_at),
+      athanor_id: athanor_id,
+      kind: "workspace_open",
+      snapshot: %{
+        "workspace_id" => workspace_id,
+        "opening_id" => opening_id,
+        "person_id" => person_id,
+        "origin" => Prima.Origin.to_wire(origin)
+      }
+    }
+  end
+
+  @doc """
+  The record of a workspace thread's state moved to an outcome, from what
+  the moving transaction read: `athanor_id`, `workspace_id`, `title`,
+  `turn_id`, `moved_at`, `outcome` (one of `report_outcomes/0`),
+  `summary`, `attachments` (`[%{"message_id", "stored_name"}]`, at most
+  `max_report_files/0`), `sources` (`Prima.Source`), `person_id` and
+  `origin`; a `needs_you` record also names the card's `approval_id`.
+  """
+  @spec workspace_report(map()) :: t()
+  def workspace_report(
+        %{
+          athanor_id: athanor_id,
+          workspace_id: workspace_id,
+          title: title,
+          turn_id: turn_id,
+          moved_at: %DateTime{} = moved_at,
+          outcome: outcome,
+          summary: summary,
+          attachments: attachments,
+          sources: sources,
+          person_id: person_id,
+          origin: origin
+        } = attrs
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
+             workspace_id != "" and is_binary(title) and is_binary(turn_id) and turn_id != "" and
+             outcome in @report_outcomes and is_binary(summary) and is_list(attachments) and
+             length(attachments) <= @max_report_files and is_list(sources) and
+             is_binary(person_id) and person_id != "" and origin in @origins do
+    files!(attachments)
+    {summary, truncated?} = cap(summary, @max_reply_bytes)
+
+    %__MODULE__{
+      source_kind: "thread",
+      source_id: workspace_id,
+      source_revision: instant(moved_at),
+      athanor_id: athanor_id,
+      kind: "workspace_report",
+      snapshot:
+        %{
+          "workspace_id" => workspace_id,
+          "title" => title,
+          "turn_id" => turn_id,
+          "outcome" => outcome,
+          "summary" => summary,
+          "truncated" => truncated?,
+          "attachments" => attachments,
+          "sources" => stored_sources(sources),
+          "person_id" => person_id,
+          "origin" => Prima.Origin.to_wire(origin)
+        }
+        |> card(outcome, Map.get(attrs, :approval_id))
+    }
+  end
+
+  @doc """
+  The sources a `workspace_report` snapshot records for the turn that
+  reported (`Prima.Source`); a snapshot that records none it can read is
+  one unnamed outside source, as `sources/1` reads a schedule's.
+  """
+  @spec report_sources(t()) :: [Prima.Source.t()]
+  def report_sources(%__MODULE__{kind: "workspace_report", snapshot: %{"sources" => sources}})
+      when is_list(sources),
+      do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
+
+  def report_sources(%__MODULE__{}), do: [Prima.Source.outside(nil)]
+
+  # A file a report carries names a post of the workspace thread and the
+  # blob stored under it, and nothing else.
+  defp files!(attachments) do
+    unless Enum.all?(attachments, &file?/1),
+      do: raise(ArgumentError, "a report's attachments are {message_id, stored_name} pairs")
+
+    :ok
+  end
+
+  defp file?(%{"message_id" => id, "stored_name" => name} = file)
+       when map_size(file) == 2 and is_binary(id) and id != "" and is_binary(name) and name != "",
+       do: true
+
+  defp file?(_file), do: false
 
   defp card(snapshot, "needs_you", approval_id) when is_binary(approval_id) and approval_id != "",
     do: Map.put(snapshot, "approval_id", approval_id)
