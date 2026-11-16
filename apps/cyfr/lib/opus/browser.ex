@@ -92,7 +92,9 @@ defmodule Opus.Browser do
   viewer's input (`input/2`, events `Opus.Browser.Input` reads) goes to
   that window alone, at most `Opus.Browser.Input.max_events/0` events
   waiting, the rest dropped, each write decided by the writer as a
-  request is, just before its first byte. A watch ends with
+  request is, just before its first byte. A watch is asked
+  with the moment its caller stops waiting, and the holder admits nothing
+  past it; a caller whose wait ran out withdraws it. A watch ends with
   `{:ended, reason}` once, and nothing after: on
   `unwatch/1`, the viewer's exit, a newer watch of its window
   (`:replaced`), `stop/2`, or the session's end. Once it ended, no image
@@ -119,8 +121,9 @@ defmodule Opus.Browser do
   @answer_margin_ms 5_000
   @rows 50
   @cols 200
-  # How long a watch's call waits for its holder, which answers at once.
-  @watch_ms 10_000
+  # How long a watch's caller waits for its holder, which answers at once:
+  # past it the holder admits nothing for that caller.
+  @watch_ms 5_000
 
   @doc "The most windows one browser holds at once."
   @spec max_windows() :: pos_integer()
@@ -236,17 +239,32 @@ defmodule Opus.Browser do
              is_function(allowed?, 0) do
     with {:ok, {athanor_id, user_id}} <- person_of(ctx),
          {:ok, pid} <- holder(athanor_id, user_id) do
-      GenServer.call(
-        pid,
-        {:watch, self(), window, %{width: width, height: height}, allowed?},
-        @watch_ms
-      )
+      ask(pid, window, %{width: width, height: height}, allowed?)
     end
-  catch
-    :exit, _ -> {:error, :unavailable}
   end
 
   def watch(_ctx, _window, _size, _allowed?), do: {:error, :not_owned}
+
+  # The watch is asked with the moment its caller stops waiting: the holder
+  # admits nothing past it. A caller whose wait ran out withdraws the ask,
+  # which reaches the holder after it, so a watch it was not told of is
+  # ended as soon as it was admitted.
+  defp ask(pid, window, size, allowed?) do
+    ask = make_ref()
+    deadline = now() + @watch_ms
+
+    try do
+      GenServer.call(
+        pid,
+        {:watch, self(), ask, deadline, window, size, allowed?},
+        @watch_ms + @answer_margin_ms
+      )
+    catch
+      :exit, _ ->
+        GenServer.cast(pid, {:withdraw, ask, self()})
+        {:error, :unavailable}
+    end
+  end
 
   @doc "The viewer drew image `n` of its watch; the next may come."
   @spec seen(watch(), pos_integer()) :: :ok
@@ -506,8 +524,12 @@ defmodule Opus.Browser do
   def handle_call({:wanted_input, ref, cast}, _from, state),
     do: {:reply, watching?(state, ref, cast), state}
 
-  def handle_call({:watch, viewer, window, size, allowed?}, _from, state) do
+  def handle_call({:watch, viewer, ask, deadline, window, size, allowed?}, _from, state) do
     cond do
+      # Its caller has stopped waiting: nothing is admitted for it.
+      now() > deadline ->
+        {:reply, {:error, :unavailable}, state}
+
       state.stopping ->
         {:reply, {:error, :turned_off}, state}
 
@@ -525,6 +547,7 @@ defmodule Opus.Browser do
 
         watch = %{
           ref: ref,
+          ask: ask,
           viewer: viewer,
           monitor: Process.monitor(viewer),
           window: window,
@@ -586,6 +609,14 @@ defmodule Opus.Browser do
 
       _ended_waiting_or_another ->
         {:noreply, state}
+    end
+  end
+
+  # A caller that stopped waiting for its watch withdraws it.
+  def handle_cast({:withdraw, ask, viewer}, state) do
+    case Enum.find(Map.values(state.watches), &(&1.ask == ask and &1.viewer == viewer)) do
+      nil -> {:noreply, state}
+      watch -> {:noreply, end_watch(state, watch, nil)}
     end
   end
 

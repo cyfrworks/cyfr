@@ -1343,6 +1343,31 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "the watch's review, round one" do
+    # Finding 2: a watch asked of a holder that answers only after its
+    # caller stopped waiting is admitted for no one.
+    test "a watch whose caller stopped waiting is not admitted, and no cast is asked for it",
+         %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      pid = holder(ctx)
+      :ok = :sys.suspend(pid)
+
+      result =
+        try do
+          Opus.Browser.watch(ctx, lineage["thread_id"], %{width: 1280, height: 720}, fn ->
+            true
+          end)
+        after
+          :sys.resume(pid)
+        end
+
+      assert result == {:error, :unavailable}
+      refute_receive {:driver, :req, _s, %{"op" => "cast"}}, 500
+      assert :sys.get_state(pid).watches == %{}
+      refute_received {Opus.Browser, _watch, :watching}
+    end
+  end
+
   defp watch!(ctx, window, size \\ %{width: 1280, height: 720}) do
     assert {:ok, watch} = Opus.Browser.watch(ctx, window, size, fn -> true end)
     watch
