@@ -61,6 +61,11 @@ defmodule Aqua.Supervisor do
           {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one}
           | thread_recovery(Keyword.fetch!(opts, :thread_recovery))
         ]),
+        # Hands each call a page in Aqua's browser makes to its thread's
+        # runner (`Aqua.PageCalls`), so after the runners. 5 s: its stop
+        # holds no work in flight; a call it held is answered unavailable
+        # by the browser once it is gone.
+        Supervisor.child_spec(Aqua.PageCalls, shutdown: 5_000),
         # The status watch reads on the task supervisor above. Last, so its
         # restart restarts no runner. 5 s: its stop, which holds no work in
         # flight.

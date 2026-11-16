@@ -52,7 +52,8 @@ defmodule Arca.ThreadStorage do
   @room_kinds Thread.room_kinds()
 
   # The rows a person reads as posts: what a turn writes for itself
-  # (`tool_call`, `tool_result`, `compaction`, `turn_aborted`) is none.
+  # (`tool_call`, `tool_result`, `compaction`, `turn_aborted`, `page_call`,
+  # `page_result`) is none.
   @post_kinds ~w(text approval error system opening pointer report)
 
   # ---------------------------------------------------------------------------
@@ -1075,7 +1076,7 @@ defmodule Arca.ThreadStorage do
     carried =
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.thread_id in ^reader_ids,
-        where: m.kind == "tool_result" and like(m.payload, ^"%\"threads\"%"),
+        where: m.kind in ["tool_result", "page_result"] and like(m.payload, ^"%\"threads\"%"),
         select: {m.id, m.payload}
       )
       |> Repo.all()

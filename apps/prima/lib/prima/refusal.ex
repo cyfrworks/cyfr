@@ -329,6 +329,28 @@ defmodule Prima.Refusal do
   def http_status(class), do: Map.fetch!(@http_statuses, class)
 
   @doc """
+  The refusal of what a tincture does not declare: a component, an
+  action, a stream, or, as a sentence, why it declares nothing it can
+  reach. A frame's call is held to its declaration with it, and so is a
+  page's call in Aqua's browser (`Aqua.PageCalls`).
+  """
+  @spec undeclared(:component | :action | :stream | String.t()) :: t()
+  def undeclared(:component),
+    do: undeclared(:undeclared_component, "This tincture does not declare that component.")
+
+  def undeclared(:action),
+    do: undeclared(:undeclared_action, "This tincture does not declare that action.")
+
+  def undeclared(:stream),
+    do: undeclared(:undeclared_stream, "This tincture does not declare that stream.")
+
+  def undeclared(why) when is_binary(why),
+    do: undeclared(:undeclared, "This tincture declares nothing it can reach: #{why}.")
+
+  defp undeclared(reason, message),
+    do: %__MODULE__{class: :forbidden, reason: reason, message: message}
+
+  @doc """
   The credential refusals' reasons, each a typed reason of this table and
   a guest error `type` a host call may answer: where a credential may go,
   how it is disclosed, which provider and account it is for, how a share

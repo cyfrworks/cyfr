@@ -487,7 +487,7 @@ defmodule Emissary.Web.FrameSocket do
     if Enum.any?(declaration.streams, &(&1.name == name and takes?(&1.subject, subject))) and
          not (is_binary(subject) and holder_bound?(name)),
        do: :ok,
-       else: {:error, FrameAdmission.undeclared(:stream)}
+       else: {:error, Prima.Refusal.undeclared(:stream)}
   end
 
   # A declared subject is a literal, `*` for any literal the provider's

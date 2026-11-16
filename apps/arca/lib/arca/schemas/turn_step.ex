@@ -10,7 +10,10 @@ defmodule Arca.Schemas.TurnStep do
   A step's `purpose` is what it serves, set by the host and never by a
   model: `chat` (the turn's own work), `flush` (the silent request that
   lets the model keep notes before a summary, and the calls it proposed),
-  or `compaction` (the summary request).
+  `compaction` (the summary request), or `page` (a call a page in Aqua's
+  browser made, which the host proposed: its call and answer are rows of
+  their own, `page_call` and `page_result`, which no model's request
+  carries).
   """
 
   use Ecto.Schema
@@ -19,7 +22,7 @@ defmodule Arca.Schemas.TurnStep do
 
   @type t :: %__MODULE__{}
 
-  @purposes ["chat", "flush", "compaction"]
+  @purposes ["chat", "flush", "compaction", "page"]
 
   schema "turn_steps" do
     field :athanor_id, :string

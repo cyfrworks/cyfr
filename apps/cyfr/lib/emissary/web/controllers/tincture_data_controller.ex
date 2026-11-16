@@ -276,13 +276,13 @@ defmodule Emissary.Web.TinctureDataController do
   defp granted(:invoke, %{ref: ref}, %{manifest: manifest}) do
     if Compendium.tincture_invokes?(manifest, ref),
       do: :ok,
-      else: {:error, FrameAdmission.undeclared(:component)}
+      else: {:error, Prima.Refusal.undeclared(:component)}
   end
 
   defp granted(:action, %{operation: operation}, %{declaration: declaration}) do
     if operation in declaration.actions,
       do: :ok,
-      else: {:error, FrameAdmission.undeclared(:action)}
+      else: {:error, Prima.Refusal.undeclared(:action)}
   end
 
   defp read(:invoke, _request), do: :invoke
