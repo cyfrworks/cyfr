@@ -2633,6 +2633,112 @@ defmodule Arca.TurnStorage do
 
   def join_sources(%Prima.Actor{}, _turn_id, _sources, _attrs), do: {:error, :no_athanor}
 
+  @doc """
+  Join what a turn read of the athanor's threads into its sources, before
+  its read answers (`thread.search`, `thread.events`): under the turn's
+  row lock and only while the caller still holds the turn at
+  `attrs[:fence]` and the turn is open, the thread rows `attrs[:threads]`
+  names are taken in the one order (`Arca.ThreadStorage.lock_threads!/2`),
+  and each that stands joins as a `thread` source
+  (`Prima.Source.thread/1`), with `attrs[:sources]` and the sources of the
+  turns `attrs[:sources_from]` names, as a step's opening joins them; a
+  turn named there that is not found is an unnamed outside source, so a
+  post whose writer cannot be read never reads as the athanor's own.
+
+  Answers the ids of the threads that stood, whose posts the read may
+  answer, with the sources joined. A thread deleted before this takes its
+  row is not among them; one deleted after finds this turn by its source,
+  as a deletion finds every turn that read it. `{:error, :superseded}`
+  for a caller whose fence moved, `{:error, :not_open}` for a turn that
+  ended.
+  """
+  @spec join_read(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, %{threads: [String.t()], sources: [Prima.Source.t()]}} | {:error, term()}
+  def join_read(%Prima.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.join_read", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        turn = own!(athanor_id, turn_id, attrs)
+
+        unless turn.status in Prima.TurnState.open_statuses(),
+          do: Arca.Repo.rollback(:not_open)
+
+        standing =
+          for thread <- Arca.ThreadStorage.lock_threads!(actor, Map.get(attrs, :threads, [])),
+              do: thread.id
+
+        sources =
+          Prima.Source.set(
+            Enum.map(standing, &Prima.Source.thread/1) ++
+              sources!(Map.get(attrs, :sources, [])) ++
+              read_turns!(athanor_id, Map.get(attrs, :sources_from, []))
+          )
+
+        _turn = join_sources!(athanor_id, turn, sources)
+        %{threads: standing, sources: sources}
+      end)
+    end)
+  end
+
+  def join_read(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  # The sources of the turns `ids` names, and an unnamed outside source for
+  # each the athanor holds no row of.
+  # arca:db-raise-ok inside the caller's transaction
+  defp read_turns!(_athanor_id, []), do: []
+
+  defp read_turns!(athanor_id, ids) when is_list(ids) do
+    ids = Enum.uniq(ids)
+
+    found =
+      from(t in Turn, where: t.athanor_id == ^athanor_id and t.id in ^ids, select: t.sources)
+      |> Arca.Repo.all()
+
+    missing = if length(found) < length(ids), do: [Prima.Source.outside(nil)], else: []
+    Enum.flat_map(found, &Prima.Source.decode/1) ++ missing
+  end
+
+  defp read_turns!(_athanor_id, _other), do: Arca.Repo.rollback(:invalid_sources)
+
+  @doc """
+  Write the notes of the workspace thread the turn `turn_id` runs in:
+  `notes`, the bytes `Aqua.Notes` encodes, or nil to clear them, under
+  the turn's row lock and only while the caller still holds the turn at
+  `attrs[:fence]` and the turn is open. The turn names the thread, so no
+  caller names another. `{:error, :not_a_workspace}` for a turn of any
+  other kind of thread; `{:error, :superseded}` and `{:error, :not_open}`
+  as `join_read/3`.
+  """
+  @spec write_notes(Prima.Actor.t(), String.t(), String.t() | nil, map()) ::
+          :ok | {:error, term()}
+  def write_notes(%Prima.Actor{athanor_id: athanor_id}, turn_id, notes, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and
+             (is_binary(notes) or is_nil(notes)) and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.write_notes", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        turn = own!(athanor_id, turn_id, attrs)
+
+        unless turn.status in Prima.TurnState.open_statuses(),
+          do: Arca.Repo.rollback(:not_open)
+
+        case from(c in Thread,
+               where: c.athanor_id == ^athanor_id and c.id == ^turn.thread_id,
+               where: c.kind == "workspace"
+             )
+             |> Arca.Repo.update_all(set: [notes: notes]) do
+          {1, _} -> :ok
+          {0, _} -> Arca.Repo.rollback(:not_a_workspace)
+        end
+      end)
+      |> case do
+        {:ok, :ok} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  def write_notes(%Prima.Actor{}, _turn_id, _notes, _attrs), do: {:error, :no_athanor}
+
   # ---------------------------------------------------------------------------
   # The consumption boundary
   # ---------------------------------------------------------------------------

@@ -1012,11 +1012,12 @@ defmodule Arca.ThreadStorage do
   # read one (a `thread` source on the turn, `Prima.Source.thread/1`),
   # the compactions written since its first such turn was accepted, which
   # may summarize what was read, and the brain's session, which may hold
-  # it, its generation raised so no turn keeps the old one. A turn still
-  # open there is cancelled as a stop cancels it, its reply recorded;
-  # answers those, for the caller's runtime to stop after the commit.
-  # `readers` (`readers/2`) is what the caller read under its locks, whose
-  # open turns it already holds.
+  # it, its generation raised so no turn keeps the old one; and there the
+  # results of the reads that carried one's posts (`blank_reads!/3`). A
+  # turn still open there is cancelled as a stop cancels it, its reply
+  # recorded; answers those, for the caller's runtime to stop after the
+  # commit. `readers` (`readers/2`) is what the caller read under its
+  # locks, whose open turns it already holds.
   # arca:db-raise-ok inside the caller's transaction
   # arca:unscoped-ok every statement names the actor's athanor.
   defp forget!(%Prima.Actor{athanor_id: athanor_id} = actor, ids, readers, attrs) do
@@ -1024,6 +1025,8 @@ defmodule Arca.ThreadStorage do
       Repo.delete_all(
         from(m in Message, where: m.athanor_id == ^athanor_id and m.workspace_id in ^ids)
       )
+
+    blank_reads!(athanor_id, ids, Enum.map(readers, &elem(&1, 0)))
 
     for {thread_id, since, _open} <- readers do
       Repo.delete_all(
@@ -1046,6 +1049,50 @@ defmodule Arca.ThreadStorage do
       {thread_id, _since, open} ->
         Arca.TurnStorage.cancel_open!(actor, thread_id, Map.put(stop, :only, open), :reply)
     end)
+  end
+
+  @doc """
+  The sentence a read's result holds once the thread it read is deleted
+  (`delete/3`): what the model reads in its place.
+  """
+  @spec forgotten_read() :: String.t()
+  def forgotten_read,
+    do: "What this read answered came from a thread that has since been deleted."
+
+  # The reads whose answers carried posts of the threads `ids` in the
+  # threads `reader_ids`: a `thread.search` or `thread.events` step's
+  # result row whose text names one of them, as every such answer names
+  # each thread it carries (its sources). Its text becomes
+  # `forgotten_read/0`; the row stays, so the call it answers still has
+  # its result.
+  # arca:db-raise-ok inside the caller's transaction
+  defp blank_reads!(_athanor_id, _ids, []), do: :ok
+
+  defp blank_reads!(athanor_id, ids, reader_ids) do
+    named =
+      Enum.reduce(ids, dynamic(false), fn id, acc ->
+        dynamic(
+          [m],
+          ^acc or fragment("? LIKE ? ESCAPE '!'", m.content, ^("%" <> like_escape(id) <> "%"))
+        )
+      end)
+
+    reads =
+      from(s in Arca.Schemas.TurnStep,
+        where: s.athanor_id == ^athanor_id and s.tool == "thread",
+        where: s.action in ["search", "events"] and not is_nil(s.result_message_id),
+        select: s.result_message_id
+      )
+
+    {_, _} =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id in ^reader_ids,
+        where: m.kind == "tool_result" and m.id in subquery(reads),
+        where: ^named
+      )
+      |> Repo.update_all(set: [content: forgotten_read()])
+
+    :ok
   end
 
   # Each thread outside `ids` with a turn whose sources name one of them:
@@ -1195,6 +1242,8 @@ defmodule Arca.ThreadStorage do
   The messages of a thread, oldest first. `after_seq:` / `upto_seq:`
   bound the window (exclusive / inclusive) — a turn's task is the human
   rows between the last turn's cursor and the message that started it.
+  `posts: true` keeps only the rows a person reads as posts, leaving out
+  what a turn writes for itself.
   """
   @spec messages(Prima.Actor.t(), String.t(), keyword()) ::
           [map()] | {:error, :no_athanor | :database_error}
@@ -1218,6 +1267,11 @@ defmodule Arca.ThreadStorage do
           seq -> from(m in query, where: m.seq <= ^seq)
         end
 
+      query =
+        if Keyword.get(opts, :posts, false),
+          do: from(m in query, where: m.kind in ^@post_kinds),
+          else: query
+
       # `:limit` bounds a read that would otherwise load every row of a
       # long-lived thread; unset loads all (turn assembly needs the
       # whole transcript).
@@ -1235,6 +1289,115 @@ defmodule Arca.ThreadStorage do
   end
 
   def messages(%Prima.Actor{}, _thread_id, _opts), do: {:error, :no_athanor}
+
+  # The most posts one search answers, and how many rows it reads at a
+  # time while it looks for them.
+  @search_max 20
+  @search_batch 200
+
+  @doc """
+  The posts of the athanor's daily and workspace threads whose text holds
+  `needle`, newest first: a plain substring match of the text folded to
+  lower case by `String.downcase/1`, made here over the rows read a page
+  at a time, so both adapters answer the same posts in the same order
+  and no character of `needle` is a pattern. A crew member's thread is
+  never searched. `opts`: `:limit` (#{@search_max}, the most), `:before`
+  (the `next` a previous answer gave: posts older than that one).
+
+  Answers `%{posts: [%{message: row, thread: %{id, kind, day, title}}],
+  next: id | nil, scanned: rows read}`; `next` is the last post's id
+  when the answer is full, and a page after it may be empty. A `before`
+  that names no post of the athanor is `{:error, :not_found}`.
+  """
+  @spec search(Prima.Actor.t(), String.t(), keyword()) ::
+          {:ok, %{posts: [map()], next: String.t() | nil, scanned: non_neg_integer()}}
+          | {:error, :no_athanor | :not_found | :database_error}
+  def search(actor, needle, opts \\ [])
+
+  def search(%Prima.Actor{athanor_id: athanor_id} = actor, needle, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(needle) and needle != "" do
+    limit = opts |> Keyword.get(:limit, @search_max) |> min(@search_max) |> max(1)
+
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.search", fn ->
+      with {:ok, cursor} <- search_cursor(actor, Keyword.get(opts, :before)) do
+        {posts, scanned} = search_pages(actor, String.downcase(needle), cursor, limit, [], 0)
+        next = if length(posts) == limit, do: List.last(posts).message.id
+
+        {:ok, %{posts: posts, next: next, scanned: scanned}}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def search(%Prima.Actor{}, _needle, _opts), do: {:error, :no_athanor}
+
+  defp search_cursor(_actor, nil), do: {:ok, nil}
+
+  defp search_cursor(actor, id) when is_binary(id) do
+    case message_row(actor, id) do
+      {:ok, %Message{inserted_at: at, id: id}} -> {:ok, {at, id}}
+      {:error, :not_found} -> {:error, :not_found}
+    end
+  end
+
+  defp search_cursor(_actor, _other), do: {:error, :not_found}
+
+  # One page of the athanor's posts older than `cursor`, newest first,
+  # until the answer is full or the rows run out. Ordered by when each
+  # was written and then by id, which both adapters compare alike.
+  # arca:db-raise-ok inside the caller's rescue.
+  defp search_pages(_actor, _needle, _cursor, limit, found, scanned)
+       when length(found) >= limit,
+       do: {Enum.take(found, limit), scanned}
+
+  defp search_pages(
+         %Prima.Actor{athanor_id: athanor_id} = actor,
+         needle,
+         cursor,
+         limit,
+         found,
+         scanned
+       ) do
+    query =
+      from(m in Message,
+        join: c in Thread,
+        on: c.id == m.thread_id and c.athanor_id == m.athanor_id,
+        where: m.athanor_id == ^athanor_id and c.kind in ^@room_kinds,
+        where: m.kind in ^@post_kinds,
+        order_by: [desc: m.inserted_at, desc: m.id],
+        limit: ^@search_batch,
+        select: {m, %{id: c.id, kind: c.kind, day: c.day, title: c.title}}
+      )
+
+    query =
+      case cursor do
+        nil ->
+          query
+
+        {at, id} ->
+          from([m, _c] in query,
+            where: m.inserted_at < ^at or (m.inserted_at == ^at and m.id < ^id)
+          )
+      end
+
+    rows = query |> QueryHelpers.where_tenant(actor) |> Repo.all()
+
+    hits =
+      for {message, thread} <- rows,
+          String.contains?(String.downcase(message.content || ""), needle),
+          do: %{message: message, thread: thread}
+
+    found = found ++ hits
+    scanned = scanned + length(rows)
+
+    case List.last(rows) do
+      {%Message{inserted_at: at, id: id}, _thread} when length(rows) == @search_batch ->
+        search_pages(actor, needle, {at, id}, limit, found, scanned)
+
+      _last_page ->
+        {Enum.take(found, limit), scanned}
+    end
+  end
 
   @doc """
   The newest `n` messages of a thread, in ascending order.

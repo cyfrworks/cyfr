@@ -2542,8 +2542,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     thread_kind = known("threads_kind_known", "kind", ~w(daily workspace crew))
 
     # Each kind holds its own fields and no other's: a day names its date,
-    # a workspace thread its state and the post that asked for it, and a
-    # crew member's thread the room it works under.
+    # a workspace thread its state, the post that asked for it and its
+    # notes, and a crew member's thread the room it works under.
     thread_whole = %{
       name: "threads_kind_whole",
       expr:
@@ -2551,6 +2551,7 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(kind = 'workspace') = (workspace_state IS NOT NULL) AND " <>
           "(kind = 'workspace' OR opened_from IS NULL) AND " <>
           "(kind = 'workspace' OR workspace_outcome IS NULL) AND " <>
+          "(kind = 'workspace' OR notes IS NULL) AND " <>
           "(kind = 'crew') = (parent_id IS NOT NULL)"
     }
 
@@ -2589,6 +2590,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # work: what it becomes once nothing it accepted remains to run and
       # no card waits.
       add :workspace_outcome, :string, check: if(sqlite?, do: workspace_outcome)
+      # A workspace thread's notes, its own turns' to write: the note's
+      # bytes with the provenance it was written with. They go with the row.
+      add :notes, :text
       # `seq` of the last message the person has seen: one mark per thread,
       # since an athanor is one person's, moved forward only.
       add :read_seq, :integer, null: false, default: 0, check: if(sqlite?, do: read_mark)
