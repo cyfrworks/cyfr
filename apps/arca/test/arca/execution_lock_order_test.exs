@@ -818,4 +818,67 @@ defmodule Arca.ExecutionLockOrderTest do
 
     refute log =~ "deadlock", log
   end
+
+  # A room with a crew member's thread holding one accepted turn, that
+  # turn held by a third transaction.
+  defp member_turn_held! do
+    actor = committed_athanor!()
+    {:ok, room} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, room.id, "planner") end)
+    turn = accepted!(actor, child)
+    %{actor: actor, room: room, child: child, turn: turn, blocker: hold_turn(turn.id)}
+  end
+
+  test "an archive that a deletion of its room goes before finds no thread, and writes nothing" do
+    %{actor: actor, room: room, child: child, turn: turn, blocker: blocker} = member_turn_held!()
+    turn_id = turn.id
+
+    log =
+      capture_log(fn ->
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+
+        {archive, archive_backend} =
+          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+        release(blocker)
+
+        assert {:ok, %{cancelled: [%{turn_id: ^turn_id}]}} = Task.await(deletion, 10_000)
+        assert {:error, :not_found} = Task.await(archive, 10_000)
+      end)
+
+    refute log =~ "MatchError", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, child.id) end)
+  end
+
+  test "a deletion that an archive of its member's thread goes before removes the archived thread" do
+    %{actor: actor, room: room, child: child, turn: turn, blocker: blocker} = member_turn_held!()
+    turn_id = turn.id
+
+    log =
+      capture_log(fn ->
+        {archive, archive_backend} =
+          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+        release(blocker)
+
+        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: [%{turn_id: ^turn_id}]}} =
+                 Task.await(archive, 10_000)
+
+        assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, child.id) end)
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, room.id) end)
+  end
 end

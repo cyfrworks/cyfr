@@ -528,7 +528,9 @@ defmodule Arca.ThreadStorage do
   carry), so a crash after the commit leaves nothing to recover. Answers
   the thread and the cancelled turns with the steps their holders'
   runtime cancels; archiving one already archived answers it unchanged
-  with none; a thread of the person's own is `{:error, :not_crew}`.
+  with none; a thread of the person's own is `{:error, :not_crew}`; one a
+  deletion removed while the archive waited on its turns is
+  `{:error, :not_found}`, with nothing written.
   """
   @spec archive(Prima.Actor.t(), String.t(), map()) ::
           {:ok, %{thread: map(), cancelled: [map()]}}
@@ -546,12 +548,22 @@ defmodule Arca.ThreadStorage do
           {:ok, %Thread{kind: "crew", archived_at: nil}} ->
             cancel = Map.put_new(attrs, :error, "the thread was archived")
             cancelled = Arca.TurnStorage.cancel_open!(actor, id, cancel, :reply)
-            {:ok, thread} = thread_row(actor, id)
 
-            archived =
-              thread |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
+            # Read again under the thread's own lock: a deletion that went
+            # while the archive waited on the thread's turns leaves nothing
+            # to archive, which is a refusal with nothing written.
+            case held_row(actor, id) do
+              %Thread{} = thread ->
+                archived =
+                  thread
+                  |> Ecto.Changeset.change(archived_at: DateTime.utc_now())
+                  |> Repo.update!()
 
-            %{thread: archived, cancelled: cancelled}
+                %{thread: archived, cancelled: cancelled}
+
+              nil ->
+                Repo.rollback(:not_found)
+            end
 
           {:ok, %Thread{kind: "crew"} = thread} ->
             %{thread: thread, cancelled: []}
@@ -568,6 +580,16 @@ defmodule Arca.ThreadStorage do
   end
 
   def archive(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
+
+  # The thread's row, held until the caller's transaction ends, or nil
+  # when it is gone.
+  # arca:db-raise-ok inside the caller's transaction
+  defp held_row(actor, id) do
+    from(c in Thread, where: c.id == ^id)
+    |> QueryHelpers.where_tenant(actor)
+    |> QueryHelpers.for_update()
+    |> Repo.one()
+  end
 
   @doc """
   Forget the brain session (`brain_session`) of every thread of the
