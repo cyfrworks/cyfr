@@ -33,6 +33,21 @@ defmodule Aqua.Providers.Browser do
   before the image is stored, so a turn superseded meanwhile writes
   nothing.
 
+  ## The person's watch
+
+  `watch` shows the person one workspace thread's window, live, on the
+  page that asked (C12), and takes their clicks and keys into it: the
+  person at a screen and no one else (`planes: [:external]`, `consent:
+  :interactive`, proved again by the session owner, `Opus.Browser.person/1`),
+  for a workspace thread of their own (`Aqua.workspace/2`). It is
+  refused with the turned-off sentence while the setting is off, and
+  starts no browser then: off, no browser of the person's runs. The
+  watch belongs to the calling process, the page's view, which the gate
+  runs the handler on (`Opus.Browser.watch/4`): its images and its end
+  come to it, it says when it drew an image and hands the person's input
+  under that watch alone, and it ends with that process. A stream open
+  when the setting goes off ends with the turned-off sentence.
+
   ## The setting
 
   `turn_on` and `turn_off` set the person's browser setting; `status`
@@ -176,6 +191,34 @@ defmodule Aqua.Providers.Browser do
         ),
         Operation.new(
           "browser",
+          "watch",
+          "Watch this thread's window",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              max: 64,
+              description: "watch: the workspace thread whose window the person watches"
+            ),
+            Arg.new("width", :integer,
+              required: true,
+              min: 16,
+              max: 4096,
+              description: "watch: the width, in pixels, the window's images are scaled to fit"
+            ),
+            Arg.new("height", :integer,
+              required: true,
+              min: 16,
+              max: 4096,
+              description: "watch: the height, in pixels, the window's images are scaled to fit"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive,
+          sources: []
+        ),
+        Operation.new(
+          "browser",
           "status",
           "Browser setting",
           [],
@@ -197,7 +240,7 @@ defmodule Aqua.Providers.Browser do
         )
       ],
       description:
-        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
+        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; watch shows the person a workspace thread's window on their own page; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
       title: "Browser"
     )
   end
@@ -249,6 +292,20 @@ defmodule Aqua.Providers.Browser do
     with {:ok, _who} <- person_or_turn(ctx, args),
          {:ok, on} <- Aqua.BrowserSetting.put(ctx, on) |> unavailable() do
       {:ok, %{on: on}}
+    end
+  end
+
+  defp action("watch", ctx, %{"thread" => thread, "width" => width, "height" => height})
+       when is_binary(thread) and is_integer(width) and is_integer(height) do
+    with :ok <- Opus.Browser.person(ctx) |> watcher(),
+         {:ok, true} <- Aqua.BrowserSetting.allowed?(ctx) |> unavailable() |> on(),
+         {:ok, _work} <- workspace(ctx, thread),
+         {:ok, _watch} <-
+           Opus.Browser.watch(ctx, thread, %{width: width, height: height}, fn ->
+             Aqua.BrowserSetting.allowed?(ctx) == {:ok, true}
+           end)
+           |> watcher() do
+      {:ok, %{watching: thread}}
     end
   end
 
@@ -340,6 +397,30 @@ defmodule Aqua.Providers.Browser do
       {:error, reason} -> refused({:error, reason})
     end
   end
+
+  defp workspace(ctx, thread) do
+    case Aqua.workspace(ctx, thread) do
+      {:ok, work} -> {:ok, work}
+      {:error, :not_found} -> {:error, {:not_found, "thread", thread}}
+      {:error, reason} -> refused({:error, reason})
+    end
+  end
+
+  # A watch's refusals, in words the person reads at their screen.
+  defp watcher(:ok), do: :ok
+  defp watcher({:ok, _} = ok), do: ok
+
+  defp watcher({:error, :not_owned}),
+    do: {:error, conflict("Only you, at your own screen, can watch Aqua's browser.")}
+
+  defp watcher({:error, :too_many_watches}),
+    do:
+      {:error,
+       conflict(
+         "Aqua's browser is already showing #{Opus.Browser.max_windows()} threads' windows; close one of them first."
+       )}
+
+  defp watcher({:error, reason}), do: refused({:error, reason})
 
   defp on({:ok, true}), do: {:ok, true}
   defp on({:ok, false}), do: {:error, conflict(turned_off())}

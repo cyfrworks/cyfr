@@ -1413,6 +1413,104 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "browser.watch" do
+    test "the person watches a workspace thread of their own from the process that asked, starting the browser",
+         %{ctx: ctx} do
+      work = workspace!(ctx)
+      args = %{"action" => "watch", "thread" => work, "width" => 390, "height" => 390}
+
+      assert {:ok, %{watching: ^work}} = Sanctum.Gate.call_external("browser", ctx, args)
+      assert_receive {Opus.Browser, _watch, :watching}, 5_000
+      assert_receive {:driver, :opened, session}, 5_000
+
+      assert_receive {:driver, :req, ^session,
+                      %{
+                        "op" => "cast",
+                        "win" => ^work,
+                        "args" => %{"width" => 390, "height" => 390}
+                      }},
+                     5_000
+    end
+
+    test "a thread that is no workspace thread of the person's is not found, and nothing starts",
+         %{ctx: ctx, lineage: lineage} do
+      {other, _user} = person!("watch-elsewhere")
+      browser_row!(other)
+      theirs = workspace!(other)
+
+      for thread <- [lineage["thread_id"], theirs, "thr_none"] do
+        assert {:error, {:not_found, "thread", ^thread}} =
+                 Provider.handle("browser", ctx, %{
+                   "action" => "watch",
+                   "thread" => thread,
+                   "width" => 640,
+                   "height" => 640
+                 })
+      end
+
+      refute_received {Opus.Browser, _watch, _message}
+      assert holder(ctx) == nil
+    end
+
+    test "while the setting is off it is refused with the turned-off sentence and starts no browser",
+         %{ctx: ctx} do
+      work = workspace!(ctx)
+      assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+
+      assert refusal(
+               Provider.handle("browser", ctx, %{
+                 "action" => "watch",
+                 "thread" => work,
+                 "width" => 640,
+                 "height" => 640
+               })
+             ) == Provider.turned_off()
+
+      refute_received {:session, "open", _open, _fields}
+      assert holder(ctx) == nil
+    end
+
+    test "a key, a turn or a component reaches no watch, and the console's plane alone offers it",
+         %{ctx: ctx, lineage: lineage} do
+      work = workspace!(ctx)
+      key = %{guest(ctx) | auth_method: :api_key, api_key_id: "key_1"}
+      args = %{"action" => "watch", "thread" => work, "width" => 640, "height" => 640}
+
+      for caller <- [key, guest(ctx)] do
+        assert refusal(Provider.handle("browser", caller, Map.merge(args, lineage))) ==
+                 "Only you, at your own screen, can watch Aqua's browser."
+      end
+
+      [watch] = for %{action: "watch"} = op <- Provider.definition().operations, do: op
+      assert watch.planes == [:external] and watch.consent == :interactive and watch.kind == :read
+      refute_received {Opus.Browser, _watch, _message}
+      assert holder(ctx) == nil
+    end
+  end
+
+  # A workspace thread of the person's, opened from a post of their day.
+  defp workspace!(ctx) do
+    ctx = %{ctx | origin: :interactive}
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, daily} = Aqua.Day.current(ctx)
+
+    {:ok, %{message: asked}} =
+      TurnStorage.accept_message(actor, daily.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "please look it up"}
+      })
+
+    {:ok, %{workspace: id}} =
+      Aqua.Providers.Workspace.handle("workspace", ctx, %{
+        "action" => "open",
+        "thread" => daily.id,
+        "refs" => [asked.id],
+        "title" => "Look it up",
+        "ask" => "Look it up"
+      })
+
+    id
+  end
+
   defp watch!(ctx, window, size \\ %{width: 1280, height: 720}) do
     assert {:ok, watch} = Opus.Browser.watch(ctx, window, size, fn -> true end)
     watch
