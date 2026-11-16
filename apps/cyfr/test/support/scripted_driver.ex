@@ -33,8 +33,9 @@ defmodule Cyfr.Test.ScriptedDriver do
   session, id, seq, bytes}`, its base64 read, and once the last is in the
   put is reported as `{:driver, :put, session, request, bytes}`, the
   files' bytes laid end to end, and answered as any request is. A page's
-  call is the test's to write (`call/5`, its body's bytes carried in
-  base64 as the driver carries them), and the host's `answer` is reported
+  call is the test's to write (`call/6`, naming the put it belongs to by
+  its request's id, its body's bytes carried in base64 as the driver
+  carries them), and the host's `answer` is reported
   as `{:driver, :answer, session, id, status, body}`.
   """
 
@@ -70,8 +71,12 @@ defmodule Cyfr.Test.ScriptedDriver do
   @doc "Write image `seq` of cast `cast` on every session."
   def image(driver, cast, seq, jpeg), do: write(driver, image_frame(cast, seq, jpeg))
 
-  @doc "Pass up a page's call `id` from window `win` on every session: its `op` and its `body`'s bytes."
-  def call(driver, id, win, op, body),
+  @doc """
+  Pass up a page's call `id` from window `win` on every session: the id of
+  the `page` request whose put it belongs to, its `op` and its `body`'s
+  bytes.
+  """
+  def call(driver, id, win, put, op, body),
     do:
       write(
         driver,
@@ -79,6 +84,7 @@ defmodule Cyfr.Test.ScriptedDriver do
           "t" => "call",
           "id" => id,
           "win" => win,
+          "put" => put,
           "op" => op,
           "body" => Base.encode64(body)
         })

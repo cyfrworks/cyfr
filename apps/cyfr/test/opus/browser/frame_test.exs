@@ -46,7 +46,12 @@ defmodule Opus.Browser.FrameTest do
     assert vectors["call"] == %{"max_body" => Frame.call_max_body()}
 
     base64 = 4 * div(Frame.call_max_body() + 2, 3)
-    envelope = byte_size(~s({"t":"call","id":#{2 ** 63},"win":"","op":"invoke","body":""}))
+
+    envelope =
+      byte_size(
+        ~s({"t":"call","id":#{2 ** 63},"win":"","put":#{2 ** 63},"op":"invoke","body":""})
+      )
+
     assert base64 + envelope < Frame.max_to_host()
   end
 

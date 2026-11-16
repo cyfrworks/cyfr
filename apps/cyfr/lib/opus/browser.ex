@@ -90,16 +90,21 @@ defmodule Opus.Browser do
   ## A page's call
 
   The driver passes up a page's call to CYFR (`call`, a `POST` of the
-  tincture wire from a page it put, its body's bytes in base64), and the
-  holder answers it (`answer`) with an HTTP status and a body. The holder
-  keeps each window's put, the turn that put it and the tincture
-  reference it put (nil for a page of html or files), from the put's
-  answer until the window closes or the session ends. A call from a
-  window with a put is held under a request the holder names and is
-  announced on `Cyfr.Bus.page_calls/0` (`Cyfr.Bus.PageCall`, kind `call`)
-  with its window, its op, its body's bytes and that put; the holder
-  decides nothing of it. A call from a window with no put is answered at
-  once with the wire's refusal for `unavailable`
+  tincture wire from a page it put, its body's bytes in base64), naming
+  the put the calling document belongs to by the id of its `page`
+  request, and the holder answers it (`answer`) with an HTTP status and
+  a body. The holder keeps each window's puts by that id, each with the
+  turn that put it and the tincture reference it put (nil for a page of
+  html or files), from the moment it sends the put, since the driver
+  passes up a document's calls from its commit, before the put is
+  answered. A put waiting for its answer is kept as its waiting request
+  and forgotten with it if it fails; one that succeeded is kept until
+  another put of its window succeeds, the window closes or the session
+  ends. A call naming a put of its window the holder keeps is held under
+  a request the holder names and is announced on `Cyfr.Bus.page_calls/0`
+  (`Cyfr.Bus.PageCall`, kind `call`) with its window, its op, its body's
+  bytes and that put; the holder decides nothing of it. A call naming no
+  such put is answered at once with the wire's refusal for `unavailable`
   (`Prima.TinctureWire.refusal/1` at the status its class answers with,
   `Prima.Refusal.http_status/1`), and one that does not read, or whose
   body is past `Opus.Browser.Frame.call_max_body/0`, with the wire's
@@ -275,7 +280,7 @@ defmodule Opus.Browser do
   page it opens at; and `files` in the order they are handed, each its
   `path` below the root, with no leading slash, its `type` and its
   `bytes`; and, for a tincture, `tincture`, the reference it was put by,
-  which the window's calls are announced with (moduledoc).
+  which the calls of its documents are announced with (moduledoc).
   """
   @type put :: %{
           required(:root) => String.t(),
@@ -1079,14 +1084,14 @@ defmodule Opus.Browser do
   # ---------------------------------------------------------------------------
   # A page's calls
 
-  # A call from a window with a put is held and announced with that put;
-  # any other is answered at once and announced to nobody.
+  # A call naming a put of its window that is kept is held and announced
+  # with that put; any other is answered at once and announced to nobody.
   defp call(%{"id" => id} = call, state) do
     case read_call(call) do
-      {:ok, window, op, body} ->
-        case state.puts do
-          %{^window => put} -> hold(state, id, window, op, body, put)
-          _no_put -> refuse_call(state, id, :unavailable)
+      {:ok, window, put_id, op, body} ->
+        case put_of(state, window, put_id) do
+          nil -> refuse_call(state, id, :unavailable)
+          put -> hold(state, id, window, op, body, put)
         end
 
       {:error, reason} ->
@@ -1094,12 +1099,24 @@ defmodule Opus.Browser do
     end
   end
 
-  defp read_call(%{"win" => window, "op" => op, "body" => body})
-       when is_binary(window) and op in @call_ops and is_binary(body) do
+  # The put `id` of `window`: one that succeeded and is kept, or one sent
+  # and not yet answered, whose entry the driver may already show.
+  defp put_of(state, window, id) do
+    case {state.puts, state.pending} do
+      {%{{^window, ^id} => put}, _pending} -> put
+      {_puts, %{^id => %{op: "page", window: ^window} = request}} -> put_fields(request)
+      _neither -> nil
+    end
+  end
+
+  defp put_fields(request), do: %{turn_id: request.turn_id, tincture: request.tincture}
+
+  defp read_call(%{"win" => window, "put" => put_id, "op" => op, "body" => body})
+       when is_binary(window) and is_integer(put_id) and op in @call_ops and is_binary(body) do
     case Base.decode64(body) do
       {:ok, bytes} ->
         if byte_size(bytes) <= Frame.call_max_body(),
-          do: {:ok, window, op, bytes},
+          do: {:ok, window, put_id, op, bytes},
           else:
             {:error,
              {:invalid_argument,
@@ -1113,10 +1130,12 @@ defmodule Opus.Browser do
   defp read_call(_malformed), do: {:error, malformed_call()}
 
   defp malformed_call,
-    do: {:invalid_argument, "A call names its window, invoke or action, and its body in base64."}
+    do:
+      {:invalid_argument,
+       "A call names its window, its put, invoke or action, and its body in base64."}
 
   defp hold(state, id, window, op, body, put) do
-    request = Prima.UUID7.generate_id("pcl")
+    request = Prima.UUID7.generate_id("pgc")
     call = %{id: id, window: window, monitor: nil}
 
     state = %{
@@ -1373,16 +1392,16 @@ defmodule Opus.Browser do
     end
   end
 
-  # A put that succeeded is its window's put, which the window's calls are
-  # announced with, until another put, the window's close or the session's
-  # end.
-  defp windows(state, %{op: "page", window: window} = request, :ok) do
-    put = %{turn_id: request.turn_id, tincture: request.tincture}
+  # A put that succeeded is kept, and the window's other puts are
+  # forgotten: the driver shows one put of a window at a time, the one it
+  # answered last.
+  defp windows(state, %{op: "page", window: window, id: id} = request, :ok) do
+    state = closed(state, window)
 
     %{
       state
       | windows: MapSet.put(state.windows, window),
-        puts: Map.put(state.puts, window, put)
+        puts: Map.put(state.puts, {window, id}, put_fields(request))
     }
   end
 
@@ -1398,7 +1417,7 @@ defmodule Opus.Browser do
     do: %{
       state
       | windows: MapSet.delete(state.windows, window),
-        puts: Map.delete(state.puts, window)
+        puts: Map.reject(state.puts, &match?({{^window, _id}, _put}, &1))
     }
 
   # After a tail: each response still incomplete is asked for again from

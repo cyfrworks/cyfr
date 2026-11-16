@@ -596,6 +596,13 @@ type siteFile struct {
 // most size bytes, and answers its response.
 func (h *pageHost) put(id int, win, root, entry string, files []siteFile, size int) map[string]any {
 	h.t.Helper()
+	h.sendPut(id, win, root, entry, files, size)
+	return h.response(id)
+}
+
+// sendPut sends a put as put does, and leaves its response to come.
+func (h *pageHost) sendPut(id int, win, root, entry string, files []siteFile, size int) {
+	h.t.Helper()
 	manifest := []map[string]any{}
 	var all []byte
 	for _, f := range files {
@@ -611,7 +618,6 @@ func (h *pageHost) put(id int, win, root, entry string, files []siteFile, size i
 	for seq, part := range parts {
 		h.send(map[string]any{"t": "part", "id": id, "seq": seq, "part": base64.StdEncoding.EncodeToString(part)})
 	}
-	return h.response(id)
 }
 
 const testRoot = "/t/ath01/local/site"
@@ -878,7 +884,7 @@ func TestCallsArePassedUpOnlyFromThePutsDocuments(t *testing.T) {
 
 	id := r.f.pause("S1", "POST", reservedOrigin+"/_f/v1/invoke", "M1", true, `{"ref":"local.counter:0.1.0"}`)
 	call := r.h.take(isCall, "the page's call")
-	if !jsonEqual(call, `{"t":"call","id":1,"win":"thr_01","op":"invoke","body":"eyJyZWYiOiJsb2NhbC5jb3VudGVyOjAuMS4wIn0="}`) {
+	if !jsonEqual(call, `{"t":"call","id":1,"win":"thr_01","put":1,"op":"invoke","body":"eyJyZWYiOiJsb2NhbC5jb3VudGVyOjAuMS4wIn0="}`) {
 		t.Fatalf("the page's call went up as %v", call)
 	}
 	r.f.none("a call before its answer")
@@ -1285,4 +1291,70 @@ func TestAPutEndsWhenItsWindowLeavesIt(t *testing.T) {
 		t.Fatalf("after navigation to another site, the old put answered %d %q", a.status, a.body)
 	}
 	r.h.quiet(isCall, "a call went up after the put ended")
+}
+
+// A call names the put its document belongs to, from the commit of that
+// put's entry, before its load and so before the put is answered: on a
+// window's first put, and while a put replaces another, where the earlier
+// put's document names the earlier put until the new entry commits, and
+// the new document the new put.
+func TestACallNamesThePutItsDocumentBelongsTo(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	call := func(what string) map[string]any {
+		t.Helper()
+		request := r.f.pause("S1", "POST", reservedOrigin+"/_f/v1/invoke", "M1", true, `{}`)
+		m := r.h.take(isCall, what)
+		r.h.send(map[string]any{"t": "answer", "id": m["id"], "status": 200, "body": "{}"})
+		if a := r.f.answer(request); a.status != 200 {
+			t.Fatalf("%s was answered %+v", what, a)
+		}
+		return m
+	}
+	unanswered := func(id int) {
+		t.Helper()
+		isResponse := func(m map[string]any) bool { return m["t"] == "res" && m["id"] == float64(id) }
+		for _, m := range r.h.held {
+			if isResponse(m) {
+				t.Fatalf("put %d was answered before its load: %v", id, m)
+			}
+		}
+		r.h.quiet(isResponse, fmt.Sprintf("put %d was answered before its load", id))
+	}
+	// Each put's entry is answered at once and commits only when the test
+	// says, with its load after that.
+	start := func(id int, root string) pageAnswer {
+		t.Helper()
+		r.f.fail(reservedOrigin+root, navFail{hangs: true, late: true})
+		r.h.sendPut(id, "thr_01", root, "index.html", testSite, 64)
+		return r.f.navigated()
+	}
+	load := func(id int, root string, nav pageAnswer) {
+		t.Helper()
+		r.f.event("S1", "Page.lifecycleEvent", map[string]any{"frameId": "M1", "loaderId": "L" + nav.request, "name": "load"})
+		if got := r.h.response(id); !jsonEqual(got, `{"ok":{"url":"`+reservedOrigin+root+`","title":"Put"}}`) {
+			t.Fatalf("put %d answered %v", id, got)
+		}
+	}
+
+	first := start(1, testRoot+"/first")
+	r.f.commitOnly("S1", reservedOrigin+testRoot+"/first", "L"+first.request)
+	if m := call("the first put's call before its load"); !jsonEqual(m, `{"t":"call","id":1,"win":"thr_01","put":1,"op":"invoke","body":"e30="}`) {
+		t.Fatalf("a call of the first put's document before its load went up as %v", m)
+	}
+	unanswered(1)
+	load(1, testRoot+"/first", first)
+
+	second := start(2, testRoot)
+	if m := call("the earlier put's call while another is shown"); !jsonEqual(m, `{"t":"call","id":2,"win":"thr_01","put":1,"op":"invoke","body":"e30="}`) {
+		t.Fatalf("a call of the earlier put's document while the next put loads went up as %v", m)
+	}
+	r.f.commitOnly("S1", reservedOrigin+testRoot, "L"+second.request)
+	if m := call("the new put's call before its load"); !jsonEqual(m, `{"t":"call","id":3,"win":"thr_01","put":2,"op":"invoke","body":"e30="}`) {
+		t.Fatalf("a call of the new put's document before its load went up as %v", m)
+	}
+	unanswered(2)
+	load(2, testRoot, second)
+	r.h.quiet(func(m map[string]any) bool { return m["t"] == "callend" }, "an answered call was ended")
 }
