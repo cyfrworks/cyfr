@@ -725,6 +725,23 @@ describe("a public tincture's top-level page names itself", () => {
     assert.deepEqual(api.public, {athanor: "@alice", publisher: "stripe.com", name: "pay-desk"})
   })
 
+  // A page Aqua puts into its browser's window is a top-level page at the
+  // reserved origin, at a public tincture's path: the client is in its
+  // public mode there, as it is, with nothing changed for it.
+  test("a page put into Aqua's browser is in public mode at its entry and below it", async () => {
+    for (const pathname of ["/t/@home/local/plain", "/t/@home/local/plain/", "/t/@home/local/plain/sub/page.html"]) {
+      const {api, server, sockets} = await frameClient({framed: false, pathname})
+      const identity = {athanor: "@home", publisher: "local", name: "plain"}
+      assert.deepEqual(api.public, identity, pathname)
+
+      const [invoke] = fixture.requests.map((vector) => vector.body)
+      await api.invoke(invoke.ref, invoke.operation, invoke.args)
+      assert.equal(server.requests[0].headers.authorization, undefined)
+      assert.deepEqual(server.requests[0].body, {...invoke, public: identity})
+      assert.equal(sockets.length, 0)
+    }
+  })
+
   test("a framed page waits for its shell even at a /t/ path", async () => {
     const {api, server} = await frameClient({handshakeTimeoutMs: 50})
     assert.equal(api.public, null)
