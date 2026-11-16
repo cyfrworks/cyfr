@@ -237,8 +237,11 @@ defmodule Aqua.Providers.NotesTest do
     refute Map.has_key?(Arca.Storage.guest_scopes(), "notes")
     assert "notes" in Arca.Storage.tenant_roots()
 
+    # A workspace thread's notes are a chain's alone: its turn names the
+    # thread.
     for {name, spec} <- Tool.definition().annotations.actions do
-      assert spec.planes == [:external, :in_chain], "#{name} is not reachable from a chain"
+      planes = if name == "workspace", do: [:in_chain], else: [:external, :in_chain]
+      assert spec.planes == planes, "#{name} is not reachable from a chain"
       assert spec.consent == :interactive, "#{name} is reachable by a standing credential"
     end
   end
@@ -427,7 +430,7 @@ defmodule Aqua.Providers.NotesTest do
     caps = Prima.Manifest.Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)
     granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
 
-    for action <- ~w(keep pin forget list read search) do
+    for action <- ~w(keep pin forget list read search workspace) do
       assert "notes.#{action}" in granted, "notes.#{action} is not in the shipped caps"
     end
 
@@ -449,14 +452,141 @@ defmodule Aqua.Providers.NotesTest do
     actions = Tool.definition().annotations.actions
 
     # A filed note follows the thread it was kept from, never the agent;
-    # a pinned page is changed one click at a time; forget is destructive
-    # and already takes no standing allow.
+    # an endorsement is one click at a time; forget is destructive and
+    # already takes no standing allow. The about-you page and a workspace
+    # thread's notes are Aqua's to keep current: no standing rule of
+    # their own, so an authored `auto` runs them with no card, and the
+    # workspace notes are a chain's alone.
     assert actions["keep"].standing == :thread
-    assert actions["pin"].standing == false
+    assert actions["endorse"].standing == false
     assert actions["forget"].kind == :destructive
+    assert %{kind: :write, planes: [:in_chain], consent: :interactive} = actions["workspace"]
 
-    for name <- ~w(forget list read search) do
+    for name <- ~w(pin workspace forget list read search) do
       refute Map.has_key?(actions[name], :standing), "#{name} declares a standing rule"
+    end
+
+    for action <- ~w(pin workspace), do: assert(Aqua.Kinds.auto_permitted?("notes", action))
+    for action <- ~w(keep endorse forget), do: refute(Aqua.Kinds.auto_permitted?("notes", action))
+  end
+
+  describe "a workspace thread's notes" do
+    # A turn of `thread` running on its own root, having read `sources`.
+    defp turn_in!(ctx, thread, sources) do
+      actor = Context.actor(ctx)
+
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      root = "exec_ws_#{System.unique_integer([:positive])}"
+
+      {1, _} =
+        Arca.Repo.update_all(turn_row(actor.athanor_id, turn.id),
+          set: [root_execution_id: root, sources: Prima.Source.encode(sources)]
+        )
+
+      %{turn | root_execution_id: root}
+    end
+
+    defp workspace!(ctx, title) do
+      %Arca.Schemas.Thread{}
+      |> Arca.Schemas.Thread.changeset(%{
+        id: Prima.UUID7.generate_id("thread"),
+        athanor_id: ctx.athanor_id,
+        kind: "workspace",
+        workspace_state: "open",
+        title: title,
+        created_by: ctx.user_id
+      })
+      |> Arca.Repo.insert!()
+      |> Map.from_struct()
+    end
+
+    defp write(ctx, turn, args) do
+      call(
+        Context.enter_guest(ctx),
+        Map.merge(
+          %{
+            "action" => "workspace",
+            "thread_id" => turn.thread_id,
+            "root_execution_id" => turn.root_execution_id
+          },
+          args
+        )
+      )
+    end
+
+    defp notes_of(ctx, thread) do
+      {:ok, row} = Arca.ThreadStorage.get(Context.actor(ctx), thread.id)
+      Aqua.Notes.thread_notes(row)
+    end
+
+    test "a turn writes its own workspace thread's notes, named by the lineage, with what it read",
+         %{ctx: ctx} do
+      host = Prima.Source.outside("news.example")
+      work = workspace!(ctx, "Fares")
+      elsewhere = workspace!(ctx, "Elsewhere")
+      turn = turn_in!(ctx, work, [host, Prima.Source.thread(elsewhere.id)])
+
+      # An argument naming another thread names nothing.
+      assert {:ok, %{workspace_notes: id}} =
+               write(ctx, turn, %{"content" => "Fares rise Monday.", "thread" => elsewhere.id})
+
+      assert id == work.id
+      assert notes_of(ctx, elsewhere) == nil
+
+      assert %{content: "Fares rise Monday.", sources: [^host], kept_by: by, thread: thread} =
+               notes_of(ctx, work)
+
+      assert by == Prima.Author.agent() and thread == work.id
+
+      # Whole each time; empty content clears them.
+      assert {:ok, _} = write(ctx, turn, %{"content" => "Booked."})
+      assert %{content: "Booked."} = notes_of(ctx, work)
+      assert {:ok, %{cleared_workspace_notes: _}} = write(ctx, turn, %{"content" => "  "})
+      assert notes_of(ctx, work) == nil
+
+      too_long = String.duplicate("x", Aqua.Notes.pin_max_bytes() + 1)
+      assert {:error, {:invalid_argument, _}} = write(ctx, turn, %{"content" => too_long})
+      assert notes_of(ctx, work) == nil
+    end
+
+    test "a daily thread keeps no such notes, a stale holder writes none, and a chain with no turn none",
+         %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = turn_in!(ctx, daily, [])
+      assert {:error, {:invalid_argument, _}} = write(ctx, turn, %{"content" => "x"})
+
+      work = workspace!(ctx, "Fenced")
+      held = turn_in!(ctx, work, [])
+
+      stale = %{
+        "content" => "late",
+        "parent_execution_id" => held.root_execution_id,
+        "attempt" => "att_replaced"
+      }
+
+      assert {:error, {:conflict, _}} = write(ctx, held, stale)
+
+      assert {:error, :not_in_a_turn} =
+               write(ctx, %{held | root_execution_id: "exec_forged"}, %{"content" => "x"})
+
+      assert {:error, :not_in_a_turn} = call(ctx, %{"action" => "workspace", "content" => "x"})
+      assert notes_of(ctx, work) == nil
+    end
+
+    test "deleting the workspace thread deletes its notes with it", %{ctx: ctx} do
+      work = workspace!(ctx, "Short-lived")
+      turn = turn_in!(ctx, work, [])
+      assert {:ok, _} = write(ctx, turn, %{"content" => "Half done."})
+      assert %{content: "Half done."} = notes_of(ctx, work)
+      assert {:ok, _} = Arca.ThreadStorage.delete(Context.actor(ctx), work.id)
+
+      assert {:error, :not_found} = Arca.ThreadStorage.get(Context.actor(ctx), work.id)
+      assert Enum.all?(Arca.ThreadStorage.list(Context.actor(ctx)), &is_nil(&1.notes))
     end
   end
 

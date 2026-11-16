@@ -258,7 +258,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     card =
       card!(here, thread, %{
         "tool" => "notes",
-        "action" => "pin",
+        "action" => "endorse",
         "args" => %{"name" => "plan"}
       })
 

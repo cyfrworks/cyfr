@@ -319,7 +319,7 @@ defmodule Sanctum.Gate.CatalogTest do
     # reaches either, or, for a launch alone, by `stored_answers`.
     @never_standing ~w(
       aqua.skill_create aqua.skill_update browser.turn_on canvas.write execution.retry
-      execution.run file.move notes.endorse notes.pin registry.appeal registry.claim_publisher
+      execution.run file.move notes.endorse registry.appeal registry.claim_publisher
       registry.members_add registry.members_remove registry.members_update registry.report
       registry.sync registry.tokens_issue registry.tokens_revoke registry.verify_publisher
       tincture.invoke_protected tincture.invoke_public

@@ -26,6 +26,22 @@ defmodule Aqua.Notes do
   rather than truncated). Everything else is **filed**: listed by name,
   read on demand. Pinning an empty page clears it; that is unpin.
 
+  Aqua writes the pinned page itself, with no card where its policy says
+  so, as it writes a workspace thread's notes (`workspace/4`): a page
+  written so is kept by Aqua, names the thread it was written in and
+  keeps the sources that turn read. When that thread is deleted the page
+  stays as it is, and a read says it was learned in a deleted thread
+  (`read/3`'s `from_deleted_thread`), for the person to remove it or make
+  it their own; nothing here rewrites it.
+
+  ## A workspace thread's notes
+
+  A workspace thread keeps notes of its own, written whole by its turns
+  (`workspace/4`) and read into every turn of that thread
+  (`thread_notes/1`). They are the note's bytes as a filed note's are,
+  with its provenance, kept on the thread's row
+  (`Arca.TurnStorage.write_notes/4`), so they go with the thread.
+
   ## A note lands where you are
 
   Reads and writes take no scope. Every call acts on the athanor the
@@ -251,19 +267,87 @@ defmodule Aqua.Notes do
   accepted; a page over the cap is refused, not truncated — the person trims
   it or keeps the detail as a note. Empty content clears the page.
   """
-  @spec pin(Context.t(), String.t(), String.t(), provenance()) ::
+  @spec pin(Context.t(), String.t(), String.t(), provenance(), keyword()) ::
           {:ok, %{pinned: String.t(), athanor_id: String.t()}}
           | {:ok, %{cleared: String.t(), athanor_id: String.t()}}
           | {:error, refusal()}
-  def pin(%Context{} = ctx, name, content, provenance \\ []) when is_binary(content) do
+  def pin(%Context{} = ctx, name, content, provenance \\ [], opts \\ [])
+      when is_binary(content) do
+    revision = Keyword.get(opts, :revision)
+
     with :ok <- check_name(name),
          :ok <- require_pinned(ctx, name) do
       case String.trim(content) do
-        "" -> clear(ctx, name)
-        body -> write_pinned(ctx, name, body, provenance)
+        "" -> clear(ctx, name, revision)
+        body -> write_pinned(ctx, name, body, provenance, revision)
       end
     end
   end
+
+  @doc """
+  Write the notes of the workspace thread `turn` runs in, whole, under the
+  turn's fence (`Aqua.Tape.write_notes/3`): held to the pinned page's cap
+  (`pin_max_bytes/0`), since they are read into every turn of that thread,
+  and cleared by empty content. They carry `provenance` as a filed note
+  does. A turn of any other kind of thread is refused.
+  """
+  @spec workspace(Context.t(), map(), String.t(), provenance()) ::
+          {:ok, %{workspace_notes: String.t()}}
+          | {:ok, %{cleared_workspace_notes: String.t()}}
+          | {:error, refusal() | :superseded}
+  def workspace(%Context{} = ctx, turn, content, provenance \\ []) when is_binary(content) do
+    body = String.trim(content)
+    size = byte_size(body)
+
+    cond do
+      size > @pin_max_bytes ->
+        {:error,
+         {:invalid_argument,
+          "a workspace thread's notes hold at most #{@pin_max_bytes} bytes and these are #{size} — " <>
+            "keep them short, or post the detail"}}
+
+      true ->
+        bytes = if body == "", do: nil, else: encode(ctx, body, provenance)
+
+        case Aqua.Tape.write_notes(ctx, turn, bytes) do
+          :ok when is_nil(bytes) ->
+            {:ok, %{cleared_workspace_notes: turn.thread_id}}
+
+          :ok ->
+            {:ok, %{workspace_notes: turn.thread_id}}
+
+          {:error, :not_a_workspace} ->
+            {:error,
+             {:invalid_argument,
+              "workspace writes a workspace thread's notes; this turn is not in one"}}
+
+          {:error, :superseded} ->
+            {:error, {:conflict, "The turn's owner changed. Retry the operation."}}
+
+          {:error, :not_open} ->
+            {:error, {:conflict, "The turn ended while its notes were being written."}}
+
+          {:error, reason} ->
+            Logger.error(
+              "[Aqua.Notes] a workspace thread's notes were not written: #{inspect(reason)}"
+            )
+
+            {:error, {:unavailable, "Notes"}}
+        end
+    end
+  end
+
+  @doc """
+  A workspace thread's notes as a note, with the provenance they were
+  written with, read from its row (`Arca.Schemas.Thread`'s `notes`); nil
+  for a thread with none.
+  """
+  @spec thread_notes(map()) :: note() | nil
+  def thread_notes(%{kind: "workspace", notes: bytes, athanor_id: athanor_id})
+      when is_binary(bytes),
+      do: decode(%{athanor_id: athanor_id}, "workspace", bytes)
+
+  def thread_notes(_thread), do: nil
 
   @doc """
   Remove a filed note from the focused athanor. A pinned page is cleared by
@@ -379,6 +463,8 @@ defmodule Aqua.Notes do
 
   def describe(%{pinned: name}), do: "📝 Pinned #{name}"
   def describe(%{cleared: name}), do: "📝 Cleared #{name}"
+  def describe(%{workspace_notes: _thread}), do: "📝 Wrote this workspace thread's notes"
+  def describe(%{cleared_workspace_notes: _thread}), do: "📝 Cleared this workspace thread's notes"
   def describe(%{forgot: name}), do: "📝 Forgot the note: #{name}"
   def describe(%{endorsed: name}), do: "📝 Made the note your own: #{name}"
   def describe(_result), do: nil
@@ -512,12 +598,20 @@ defmodule Aqua.Notes do
   unavailable, so a run never acts on a read its outcome cannot account
   for.
   """
-  @spec read(Context.t(), String.t(), keyword()) :: {:ok, note()} | {:error, refusal()}
+  @spec read(Context.t(), String.t(), keyword()) ::
+          {:ok, note() | %{revision: pos_integer(), from_deleted_thread: boolean()}}
+          | {:error, refusal()}
   def read(%Context{} = ctx, name, opts \\ []) do
     with :ok <- check_name(name) do
       case read_with_revision(ctx, name) do
         {:ok, note, revision} ->
-          with :ok <- read_by_run(ctx, name, revision, opts), do: {:ok, note}
+          with :ok <- read_by_run(ctx, name, revision, opts),
+               do:
+                 {:ok,
+                  Map.merge(note, %{
+                    revision: revision,
+                    from_deleted_thread: from_deleted_thread?(ctx, note)
+                  })}
 
         :none ->
           with :ok <- read_by_run(ctx, name, 0, opts),
@@ -528,6 +622,17 @@ defmodule Aqua.Notes do
       end
     end
   end
+
+  # Whether Aqua wrote the note in a thread the athanor no longer holds:
+  # it names that thread, and the thread is not found. A thread that
+  # cannot be read marks nothing.
+  defp from_deleted_thread?(ctx, %{kept_by: kept_by, thread: thread})
+       when is_binary(thread) and thread != "" do
+    kept_by == Prima.Author.agent() and
+      Arca.ThreadStorage.get(Context.actor(ctx), thread) == {:error, :not_found}
+  end
+
+  defp from_deleted_thread?(_ctx, _note), do: false
 
   # The note and the revision it was read at; `:none` where nothing holds
   # the name; `:unreadable` where its store or its bytes could not answer,
@@ -615,7 +720,9 @@ defmodule Aqua.Notes do
     end
   end
 
-  defp write_pinned(ctx, name, body, provenance) do
+  # Over the revision the writer read, when it names one; else over the
+  # page as it stands now.
+  defp write_pinned(ctx, name, body, provenance, revision) do
     size = byte_size(body)
 
     if size > @pin_max_bytes do
@@ -625,17 +732,30 @@ defmodule Aqua.Notes do
           "trim it, or keep the detail as a note"}}
     else
       with {:ok, current} <- document(ctx, name),
-           :ok <- publish(ctx, name, encode(ctx, body, provenance), revision(current)) do
+           :ok <- publish(ctx, name, encode(ctx, body, provenance), revision || revision(current)) do
         {:ok, %{pinned: name, athanor_id: Context.athanor!(ctx)}}
       end
     end
   end
 
-  # Clearing a page nobody set is already clear.
-  defp clear(ctx, name) do
-    with {:ok, current} <- document(ctx, name),
-         :ok <- if(current, do: unpublish(ctx, name, current), else: :ok) do
-      {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
+  # Clearing a page nobody set is already clear. A writer that names the
+  # revision it read clears only that one: a page written since, or one
+  # cleared and written again, is refused and stays.
+  defp clear(ctx, name, revision) do
+    with {:ok, current} <- document(ctx, name) do
+      read = if is_integer(revision), do: revision, else: revision(current)
+
+      cond do
+        is_nil(current) and read == 0 ->
+          {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
+
+        is_nil(current) ->
+          {:error, publication_refusal(name, :stale)}
+
+        true ->
+          with :ok <- unpublish(ctx, name, %{revision: read}),
+               do: {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
+      end
     end
   end
 

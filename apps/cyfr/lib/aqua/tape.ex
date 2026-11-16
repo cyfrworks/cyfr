@@ -425,6 +425,34 @@ defmodule Aqua.Tape do
     do:
       TurnStorage.join_sources(Sanctum.Context.actor(ctx), turn.id, sources, %{fence: turn.fence})
 
+  @doc """
+  Join what the turn read of the athanor's threads into its sources
+  before its read answers (`TurnStorage.join_read/3`), under the turn's
+  row lock and its fence: `threads` (each whose posts it read), `sources`
+  (what those rows carry, `carried_sources/1`) and `turns`
+  (`writing_turns/1`). Answers the threads that still stood, whose posts
+  alone the read may answer, and the sources joined.
+  """
+  @spec join_read(Context.t(), turn(), [String.t()], [Prima.Source.t()], [String.t()]) ::
+          {:ok, %{threads: [String.t()], sources: [Prima.Source.t()]}} | {:error, term()}
+  def join_read(%Context{} = ctx, turn, threads, sources, turns),
+    do:
+      TurnStorage.join_read(Sanctum.Context.actor(ctx), turn.id, %{
+        fence: turn.fence,
+        threads: threads,
+        sources: sources,
+        sources_from: turns
+      })
+
+  @doc """
+  Write the notes of the workspace thread `turn` runs in, the bytes
+  `Aqua.Notes` encodes or nil to clear them, under the turn's fence
+  (`TurnStorage.write_notes/4`).
+  """
+  @spec write_notes(Context.t(), turn(), String.t() | nil) :: :ok | {:error, term()}
+  def write_notes(%Context{} = ctx, turn, notes),
+    do: TurnStorage.write_notes(Sanctum.Context.actor(ctx), turn.id, notes, %{fence: turn.fence})
+
   @doc "Flip a proposed step to dispatched, in its own commit."
   @spec mark_dispatched(Context.t(), turn(), step()) :: {:ok, step()} | {:error, term()}
   def mark_dispatched(%Context{} = ctx, turn, step),
@@ -943,6 +971,70 @@ defmodule Aqua.Tape do
   @doc "The decoded `payload` of a message row."
   @spec payload(row()) :: map()
   def payload(row), do: Threads.payload(row)
+
+  @doc """
+  What `rows` carry of the athanor's other threads, as sources: a pointer
+  or a report names its workspace thread, and an opening the daily
+  thread its refs are posts of, each a `thread` source
+  (`Prima.Source.thread/1`) by which forgetting that thread finds the
+  turn that read it; a report the sources its record kept of the turn
+  that reported, so its outside material joins even once that turn's row
+  is gone; and a copied file the sources of the post it was copied from
+  (`Aqua.Attachments.copied_sources/1`). What every reader of rows joins
+  besides the sources of the turns that wrote them (`writing_turns/1`).
+  """
+  @spec carried_sources([row()]) :: [Prima.Source.t()]
+  def carried_sources(rows) when is_list(rows),
+    do: Enum.flat_map(rows, &(carried(&1) ++ files_carried(&1)))
+
+  defp carried(%{kind: kind, workspace_id: id} = row)
+       when kind in ["pointer", "report"] and is_binary(id),
+       do: [Prima.Source.thread(id) | kept(row)]
+
+  defp carried(%{kind: "opening"} = row) do
+    case payload(row) do
+      %{"from" => %{"thread" => id}} when is_binary(id) and id != "" ->
+        [Prima.Source.thread(id)]
+
+      _ ->
+        []
+    end
+  end
+
+  defp carried(_row), do: []
+
+  defp files_carried(row),
+    do: Enum.flat_map(Aqua.Attachments.refs_of(row), &Aqua.Attachments.copied_sources/1)
+
+  defp kept(%{kind: "report"} = row) do
+    case payload(row)["sources"] do
+      sources when is_list(sources) -> Enum.map(sources, &Prima.Source.from_json/1)
+      _ -> []
+    end
+  end
+
+  defp kept(_row), do: []
+
+  @doc """
+  The turns whose words `rows` carry: each row's own turn, and the turn a
+  crew row came from (a delivered request's asking turn, a reply's member
+  turn). A person's own row names none.
+  """
+  @spec writing_turns([row()]) :: [String.t()]
+  def writing_turns(rows) when is_list(rows) do
+    rows
+    |> Enum.flat_map(fn row ->
+      from =
+        case payload(row) do
+          %{"from_turn" => id} when is_binary(id) -> [id]
+          _ -> []
+        end
+
+      [Map.get(row, :turn_id) | from]
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
 
   @doc "One message row of the tenant."
   @spec message(Context.t(), String.t()) :: {:ok, row()} | {:error, term()}

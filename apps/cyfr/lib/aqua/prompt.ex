@@ -19,9 +19,9 @@ defmodule Aqua.Prompt do
     * `requests` — the thread's requests still waiting on a reply, which
       are listed with their age.
     * `where` — where the turn is (`where/2`): on the person's daily
-      thread, or in a workspace thread, with its title and what the
-      person asked, read from its first opening; none for a crew
-      member's thread.
+      thread, or in a workspace thread, with its title, what the person
+      asked, read from its first opening, and its notes
+      (`Aqua.Notes.thread_notes/1`); none for a crew member's thread.
 
   Orders stable sections before the clock to preserve a reusable prompt
   prefix: authored prompt, granted capabilities, tool prelude, scroll
@@ -31,15 +31,19 @@ defmodule Aqua.Prompt do
 
   ## What the prompt read
 
-  The prompt is read material too: the pinned page and the filed notes'
-  index are injected without a tool call. `compose/2` answers the sources
-  it read beside the text (`Prima.Source`): `pinned` when it injected the
-  pinned page, `filed` when the index shows a note, and the provenance of
-  every note the index shows, so an outside-derived note joins the turn's
-  sources without a `notes.read`. The loop records them on the turn as it
-  opens each model step. A note that carries outside sources is shown
-  attributed: quoted material from outside, never the person's words or
-  instructions.
+  The prompt is read material too: the pinned page, the filed notes'
+  index and a workspace thread's notes are injected without a tool call.
+  `compose/2` answers the sources it read beside the text
+  (`Prima.Source`): `pinned` when it injected the pinned page, `filed`
+  when the index shows a note or it injected a workspace thread's notes,
+  and the provenance of each of those, so outside-derived material joins
+  the turn's sources without a `notes.read`. The loop records them on the
+  turn as it opens each model step. A page or a note that carries outside
+  sources is shown attributed: quoted material from outside, never the
+  person's words or instructions. Aqua writes the pinned page and a
+  workspace thread's notes itself, so one written after reading outside
+  material carries that into every turn that reads it, until the person
+  writes the page themselves on the Aqua page or removes it.
   """
 
   require Logger
@@ -55,7 +59,9 @@ defmodule Aqua.Prompt do
         ]
 
   @typedoc "Where a turn is, for its prompt's \"Where you are\"."
-  @type where :: %{kind: :daily} | %{kind: :workspace, title: String.t(), ask: String.t()}
+  @type where ::
+          %{kind: :daily}
+          | %{kind: :workspace, title: String.t(), ask: String.t(), notes: map() | nil}
 
   @typedoc "A composed prompt: its text and the sources it read."
   @type composed :: %{text: String.t(), sources: [Prima.Source.t()]}
@@ -73,6 +79,7 @@ defmodule Aqua.Prompt do
     %{"prompt" => prompt, "tool_policy" => tool_policy} = Keyword.fetch!(opts, :agent)
     authority = Keyword.get(opts, :authority)
     {notes, sources} = notes(ctx)
+    where = Keyword.get(opts, :where)
 
     text =
       IO.iodata_to_binary([
@@ -83,12 +90,12 @@ defmodule Aqua.Prompt do
         scrolls(ctx),
         notes,
         crew(Keyword.get(opts, :crew, [])),
-        where(Keyword.get(opts, :where)),
+        where(where),
         requests(Keyword.get(opts, :requests, [])),
         clock()
       ])
 
-    %{text: text, sources: Prima.Source.set(sources)}
+    %{text: text, sources: Prima.Source.set(sources ++ where_sources(where))}
   end
 
   # ---------------------------------------------------------------------------
@@ -121,10 +128,13 @@ defmodule Aqua.Prompt do
   @spec where(Context.t(), map()) :: where() | nil
   def where(%Context{}, %{kind: "daily"}), do: %{kind: :daily}
 
-  def where(%Context{} = ctx, %{kind: "workspace", id: thread_id, title: title}) do
+  def where(%Context{} = ctx, %{kind: "workspace", id: thread_id, title: title} = thread) do
     case Arca.ThreadStorage.messages(Context.actor(ctx), thread_id, limit: 1) do
-      [%{kind: "opening", content: ask}] -> %{kind: :workspace, title: title, ask: ask || ""}
-      _ -> nil
+      [%{kind: "opening", content: ask}] ->
+        %{kind: :workspace, title: title, ask: ask || "", notes: Aqua.Notes.thread_notes(thread)}
+
+      _ ->
+        nil
     end
   end
 
@@ -143,16 +153,32 @@ defmodule Aqua.Prompt do
     ]
   end
 
-  defp where(%{kind: :workspace, title: title, ask: ask}) do
+  defp where(%{kind: :workspace, title: title, ask: ask} = where) do
     [
       "\n\n---\n\n## Where you are\n\nYou are working the workspace thread \"",
       title,
       "\", which the person's daily thread opened for one piece of work. They asked:\n\n",
       quoted(ask),
       "\n\nDo the work here and post what you make with `thread.post`. When it is done or " <>
-        "has failed, say so with `workspace.report`: the report lands on the daily thread."
+        "has failed, say so with `workspace.report`: the report lands on the daily thread. " <>
+        "Keep this thread's notes current with `notes.workspace`: what you have learned, " <>
+        "decided and still have to do, written whole and short, so a later turn here " <>
+        "picks the work up from them.",
+      thread_notes(Map.get(where, :notes))
     ]
   end
+
+  defp thread_notes(nil), do: []
+
+  defp thread_notes(%{content: content} = note),
+    do: ["\n\n### This thread's notes", attributed(note), "\n\n", content]
+
+  # What the section read: a workspace thread's notes are a note, with the
+  # provenance they were written with.
+  defp where_sources(%{kind: :workspace, notes: %{sources: sources}}),
+    do: [Prima.Source.new(:filed) | Prima.Source.material(sources)]
+
+  defp where_sources(_where), do: []
 
   defp quoted(text),
     do: text |> String.trim() |> String.split("\n") |> Enum.map_join("\n", &("> " <> &1))
@@ -307,8 +333,9 @@ defmodule Aqua.Prompt do
   # has to discover it by being refused.
   @notes_rule "These notes belong to the athanor this thread is in. Propose " <>
                 "`notes.keep` for what people would want found again — a decision, a " <>
-                "fact, a preference — and `notes.pin` only for what every future turn " <>
-                "needs; never keep a secret or a credential."
+                "fact, a preference. Keep the pinned page current yourself with " <>
+                "`notes.pin`, whole and short, for what every future turn needs to know " <>
+                "about the person; never keep a secret or a credential."
 
   # The notes actions are interactive: only a session's chain reaches
   # them. A turn started any other way is not told to read what it cannot.
@@ -326,8 +353,9 @@ defmodule Aqua.Prompt do
 
     {pinned, pinned_sources} =
       case Aqua.Notes.pinned(ctx) do
-        {:ok, %{name: name, content: content}} ->
-          {["\n\n### Pinned: ", name, "\n\n", content], [Prima.Source.new(:pinned)]}
+        {:ok, %{name: name, content: content} = page} ->
+          {["\n\n### Pinned: ", name, attributed(page), "\n\n", content],
+           [Prima.Source.new(:pinned) | Prima.Source.material(page.sources)]}
 
         :none ->
           {[], []}
@@ -356,22 +384,26 @@ defmodule Aqua.Prompt do
      pinned_sources ++ index_sources}
   end
 
-  defp index_line(%{name: name, line: line} = entry) do
-    attributed =
-      case entry |> Map.get(:sources, []) |> Enum.filter(&Prima.Source.outside?/1) do
-        [] -> []
-        outside -> String.replace(@attributed, "OUTSIDE", outside_names(outside))
-      end
+  defp index_line(%{name: name, line: line} = entry),
+    do: ["- ", name, if(line == "", do: [], else: [" — ", line]), attributed(entry), "\n"]
 
-    ["- ", name, if(line == "", do: [], else: [" — ", line]), attributed, "\n"]
+  # A page or a note that carries outside sources, said so beside it.
+  defp attributed(note) do
+    case note |> Map.get(:sources, []) |> Enum.filter(&Prima.Source.outside?/1) do
+      [] -> []
+      outside -> String.replace(@attributed, "OUTSIDE", outside_names(outside))
+    end
   end
 
   defp outside_names(outside),
     do: Enum.map_join(outside, ", ", &(&1.name || "an unnamed source"))
 
-  # `filed` for a shown note, joined by each shown note's own sources.
+  # `filed` for a shown note, joined by each shown note's own material.
   defp filed_sources([]), do: []
 
   defp filed_sources(entries),
-    do: [Prima.Source.new(:filed) | Enum.flat_map(entries, &Map.get(&1, :sources, []))]
+    do: [
+      Prima.Source.new(:filed)
+      | Enum.flat_map(entries, &Prima.Source.material(Map.get(&1, :sources, [])))
+    ]
 end

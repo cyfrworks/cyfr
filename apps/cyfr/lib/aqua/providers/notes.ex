@@ -15,10 +15,13 @@ defmodule Aqua.Providers.Notes do
 
   The actions are reachable in-chain too, which is how an agent keeps a
   note at all: it proposes, a person clicks, and the approved call runs
-  inside the chain under the turn's authority. The consent class keeps its
-  surface half there — only an `:oidc` session's chain gets through — so
-  the same formula started by a key or a schedule is refused exactly as at
-  the door.
+  inside the chain under the turn's authority. Two writes need no click
+  where the soul's policy says `auto`, as the seed's does: `pin`, the
+  about-you page, and `workspace`, the notes of the workspace thread the
+  turn runs in, which the lineage names and no argument does. The
+  consent class keeps its surface half there — only an `:oidc` session's
+  chain gets through — so the same formula started by a key or a schedule
+  is refused exactly as at the door.
 
   ## Where a note lands
 
@@ -28,9 +31,9 @@ defmodule Aqua.Providers.Notes do
   ## What a person may pre-answer
 
   `keep` may be granted standing for one thread and no wider
-  (`standing: :thread`); `pin` never (`standing: false`), because a
-  pinned page is read into every turn and each change to it deserves a
-  click; `endorse` never either, since it makes outside material the
+  (`standing: :thread`); `pin` and `workspace` declare no standing of
+  their own, so an authored `auto` runs them with no card; `endorse`
+  never (`standing: false`), since it makes outside material the
   person's own; `forget` is destructive and already takes no standing
   allow. The annotation is the one source for every gate that honours it.
 
@@ -45,10 +48,16 @@ defmodule Aqua.Providers.Notes do
   disclosed vault value carries `vault_disclosed`, whatever admitted the
   keep. Of those, the outside sources make it outside material, shown
   attributed and endorsable: an approval admits the action and never
-  endorses the content. Pins are not marked. `endorse` is the one
-  clearing, of the outside sources only: it names the sources the note
-  carries, so the card a person approves shows them, and it writes only
-  while the note still carries exactly those.
+  endorses the content. A page `pin` or `workspace` writes in a chain
+  keeps them the same way, is kept by Aqua (`Prima.Author.agent/0`) and
+  names the thread it was written in, and is never endorsed by being
+  written. A thread source is left out: what a note holds outlives the
+  thread it was kept from, so reading a note never makes a turn one that
+  read that thread. `endorse` is the one clearing of a filed note's
+  outside sources: it names the sources the note carries, so the card a
+  person approves shows them, and it writes only while the note still
+  carries exactly those. The person's own write of the pinned page, on
+  the Aqua page, carries no sources: what they wrote is theirs.
   """
 
   @behaviour Prima.Provider
@@ -65,11 +74,13 @@ defmodule Aqua.Providers.Notes do
   @doc false
   def definition do
     alias Prima.{Arg, Operation}
-    # In-chain as well as at the door: the writes are `ask` in the
-    # soul's policy, so from a chain each one is a card a person
-    # clicked; the reads are `auto`, bounded to the athanor by the
-    # domain. Interactive on every action — the credential gate is
-    # the same on both planes. A write answers only the name it wrote
+    # In-chain as well as at the door: of the writes, `keep`, `endorse`
+    # and `forget` are `ask` in the soul's policy, so from a chain each
+    # one is a card a person clicked, and `pin` and `workspace` are
+    # `auto`, Aqua's own pages; the reads are `auto`, bounded to the
+    # athanor by the domain. `workspace` is a chain's alone: the turn
+    # names its thread. Interactive on every action — the credential
+    # gate is the same on both planes. A write answers only the name it wrote
     # (`Aqua.Notes.describe/1`), so it carries no source; a read
     # carries the notes' own provenance (`answer_sources/2`).
     Operation.tool(
@@ -124,13 +135,34 @@ defmodule Aqua.Providers.Notes do
             Arg.new("execution", :string,
               description:
                 "keep, pin, at the external entry: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
+            ),
+            Arg.new("revision", :integer,
+              min: 0,
+              description:
+                "pin: the revision the page stood at when it was read (read answers it); a page written since is refused and left as it is"
             )
           ],
           kind: :write,
           sources: [],
           planes: [:external, :in_chain],
-          consent: :interactive,
-          standing: false
+          consent: :interactive
+        ),
+        Operation.new(
+          "notes",
+          "workspace",
+          "Write workspace thread notes",
+          [
+            Arg.new("content", :string,
+              required: true,
+              bulk: true,
+              description:
+                "workspace: the notes of the workspace thread this turn runs in, whole — empty content clears them"
+            )
+          ],
+          kind: :write,
+          sources: [],
+          planes: [:in_chain],
+          consent: :interactive
         ),
         Operation.new(
           "notes",
@@ -243,7 +275,7 @@ defmodule Aqua.Providers.Notes do
         )
       ],
       description:
-        "What was kept out of a thread. Distinct from the transcript: erasing a thread does not erase what someone kept from it. A note lands in the athanor you are working in; the pinned page (about-you) is read into every turn and held short.",
+        "What was kept out of a thread. Distinct from the transcript: erasing a thread does not erase what someone kept from it. A note lands in the athanor you are working in; the pinned page (about-you) is read into every turn and held short. A workspace thread's notes are its own, read into its every turn, and go with it.",
       title: "Notes"
     )
   end
@@ -268,11 +300,37 @@ defmodule Aqua.Providers.Notes do
        when is_binary(name) and is_binary(content),
        do: Notes.keep(ctx, name, content, provenance(args, ctx))
 
-  # A pinned page is set one card at a time and carries no sources: the
-  # person who approved it made it theirs.
+  # The pinned page, whole: in a chain Aqua's, with the sources the
+  # chain read; at the door the person's, with none. A `revision` writes
+  # only over the page as it was read.
   defp dispatch(ctx, %{"action" => "pin", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
-       do: Notes.pin(ctx, name, content, Keyword.delete(provenance(args, ctx), :sources))
+       do: Notes.pin(ctx, name, content, provenance(args, ctx), revision: args["revision"])
+
+  # The notes of the workspace thread the calling turn runs in, held by
+  # the holder that made the call: the lineage names the turn, and the
+  # turn the thread.
+  defp dispatch(
+         %Context{plane: :guest} = ctx,
+         %{"action" => "workspace", "content" => content} = args
+       )
+       when is_binary(content) do
+    case Aqua.Tape.held_turn(ctx, args) do
+      {:ok, turn} ->
+        Notes.workspace(ctx, turn, content, provenance(args, ctx))
+
+      {:error, :not_addressable} ->
+        {:error, :not_in_a_turn}
+
+      {:error, :superseded} ->
+        {:error, {:conflict, "The turn's owner changed. Retry the operation."}}
+
+      {:error, _} ->
+        {:error, {:unavailable, "Notes"}}
+    end
+  end
+
+  defp dispatch(_ctx, %{"action" => "workspace"}), do: {:error, :not_in_a_turn}
 
   defp dispatch(ctx, %{"action" => "forget", "name" => name}) when is_binary(name),
     do: Notes.forget(ctx, name)
@@ -308,16 +366,21 @@ defmodule Aqua.Providers.Notes do
   # the chain's turns read and the calling execution's own ledger, so a
   # component that runs no turn keeps what it read too. At the door a
   # person says what they choose to.
+  # A page Aqua writes itself, the pinned page or a workspace thread's
+  # notes, is kept by Aqua; a note a card admitted, by the person who
+  # approved it.
   defp provenance(args, %Context{plane: :guest} = ctx) do
     [
       thread: args["thread_id"],
       execution: args["root_execution_id"] || args["parent_execution_id"],
       sources:
-        Prima.Source.union(
-          Notes.chain_sources(ctx, args["root_execution_id"]),
-          caller_sources(ctx, args["parent_execution_id"])
+        Prima.Source.material(
+          Prima.Source.union(
+            Notes.chain_sources(ctx, args["root_execution_id"]),
+            caller_sources(ctx, args["parent_execution_id"])
+          )
         )
-    ]
+    ] ++ if(args["action"] in ["pin", "workspace"], do: [kept_by: Prima.Author.agent()], else: [])
   end
 
   defp provenance(args, _ctx) do

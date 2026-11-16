@@ -206,6 +206,93 @@ defmodule Aqua.PromptTest do
       assert composed.text =~ "- decided — Lisbon\n"
     end
 
+    test "an about-you page Aqua wrote after outside material is shown attributed, and joins " <>
+           "that material into the turn that reads it, but no thread it was learned in",
+         %{home: home} do
+      host = Prima.Source.outside("news.example")
+
+      {:ok, _} =
+        Aqua.Notes.pin(home, "about-you", "Flies to Lisbon on the 3rd.",
+          kept_by: Prima.Author.agent(),
+          thread: "thr_learned",
+          sources: [host]
+        )
+
+      composed = Prompt.compose(home, agent: agent(), authority: nil)
+
+      assert composed.text =~
+               "### Pinned: about-you (kept after reading outside material: news.example"
+
+      assert composed.sources == [Prima.Source.new(:pinned), host]
+
+      # The person's own write of it carries nothing but the page.
+      {:ok, _} = Aqua.Notes.pin(home, "about-you", "Flies to Lisbon on the 3rd.")
+      composed = Prompt.compose(home, agent: agent(), authority: nil)
+      assert composed.text =~ "### Pinned: about-you\n\nFlies to Lisbon on the 3rd."
+      assert composed.sources == [Prima.Source.new(:pinned)]
+    end
+
+    test "a workspace thread's prompt carries its notes, with what they were written from; a " <>
+           "daily thread's carries none",
+         %{home: home} do
+      actor = Sanctum.Context.actor(home)
+      host = Prima.Source.outside("news.example")
+
+      work =
+        %Arca.Schemas.Thread{}
+        |> Arca.Schemas.Thread.changeset(%{
+          id: Prima.UUID7.generate_id("thread"),
+          athanor_id: home.athanor_id,
+          kind: "workspace",
+          workspace_state: "open",
+          title: "Fares",
+          created_by: home.user_id
+        })
+        |> Arca.Repo.insert!()
+
+      {:ok, _opening} =
+        Arca.ThreadStorage.append(actor, work.id, %{
+          author: home.user_id,
+          sent_by: "person",
+          kind: "opening",
+          content: "Track fares"
+        })
+
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(actor, work.id, %{
+          message: %{author: home.user_id, sent_by: "person", content: "@aqua go"},
+          turn: %{agent: "aqua", requested_by: home.user_id, origin: :interactive}
+        })
+
+      assert {:ok, _} =
+               Aqua.Notes.workspace(home, turn, "Fares rise Monday; book by Sunday.",
+                 kept_by: Prima.Author.agent(),
+                 thread: work.id,
+                 sources: [host]
+               )
+
+      {:ok, thread} = Arca.ThreadStorage.get(actor, work.id)
+      where = Prompt.where(home, thread)
+      composed = Prompt.compose(home, agent: agent(), authority: nil, where: where)
+
+      [_before, section] = String.split(composed.text, "## Where you are", parts: 2)
+      assert section =~ "`notes.workspace`"
+
+      assert section =~
+               "### This thread's notes (kept after reading outside material: news.example"
+
+      assert section =~ "Fares rise Monday; book by Sunday."
+      assert Prima.Source.new(:filed) in composed.sources and host in composed.sources
+
+      {:ok, daily} = Arca.Test.Days.thread(actor)
+
+      composed =
+        Prompt.compose(home, agent: agent(), authority: nil, where: Prompt.where(home, daily))
+
+      refute composed.text =~ "This thread's notes"
+      refute host in composed.sources
+    end
+
     test "a person's own athanor carries about-you", %{home: home} do
       {:ok, _} = Aqua.Notes.pin(home, "about-you", "Prefers mornings.")
 
@@ -346,7 +433,7 @@ defmodule Aqua.PromptTest do
         })
 
       assert Prompt.where(ctx, workspace) ==
-               %{kind: :workspace, title: "Moon report", ask: "write the moon report"}
+               %{kind: :workspace, title: "Moon report", ask: "write the moon report", notes: nil}
     end
   end
 end

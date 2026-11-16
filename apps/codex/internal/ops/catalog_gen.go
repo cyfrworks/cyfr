@@ -277,6 +277,7 @@ const (
 	ThreadList              = "list"
 	ThreadRestartForConsent = "restart_for_consent"
 	ThreadRevokeGrant       = "revoke_grant"
+	ThreadSearch            = "search"
 	ThreadSend              = "send"
 	ThreadStop              = "stop"
 	ThreadToday             = "today"
@@ -341,7 +342,7 @@ var Actions = map[string][]string{
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
 	"system":              {"notify", "status"},
-	"thread":              {"aloud", "approve", "archive", "attach", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "today"},
+	"thread":              {"aloud", "approve", "archive", "attach", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "search", "send", "stop", "today"},
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
@@ -2549,6 +2550,8 @@ type NotesPinArgs struct {
 	Thread Field[string] `json:"thread,omitzero"`
 	// keep, pin, at the external entry: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored.
 	Execution Field[string] `json:"execution,omitzero"`
+	// pin: the revision the page stood at when it was read (read answers it); a page written since is refused and left as it is
+	Revision Field[int] `json:"revision,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4820,7 +4823,7 @@ type ThreadEventsArgs struct {
 	Thread string `json:"thread"`
 	// events: replay messages after this seq. Omit to start from the beginning.
 	AfterSeq Field[int] `json:"after_seq,omitzero"`
-	// events: rows per page (default and ceiling 500). Page by passing the returned cursor as after_seq.
+	// events: rows per page (default and ceiling 500; in a turn, posts only, at most 50). Page by passing the returned cursor as after_seq.
 	Limit Field[int] `json:"limit,omitzero"`
 }
 
@@ -4903,6 +4906,25 @@ func (args ThreadRevokeGrantArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadRevokeGrant, fields: fields(args)})
+}
+
+// ThreadSearchArgs carries arguments for thread.search.
+type ThreadSearchArgs struct {
+	// search: the words to find in past posts of the daily and workspace threads, matched as written, case ignored (at most 200 bytes)
+	Q string `json:"q"`
+	// search: how many posts to answer at most (default and ceiling 20)
+	Limit Field[int] `json:"limit,omitzero"`
+	// search: the next a previous answer gave, for older posts
+	Before Field[string] `json:"before,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ThreadSearchArgs) MarshalJSON() ([]byte, error) {
+	type fields ThreadSearchArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ThreadSearch, fields: fields(args)})
 }
 
 // ThreadSendArgs carries arguments for thread.send.

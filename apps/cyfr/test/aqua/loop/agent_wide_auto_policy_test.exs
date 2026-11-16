@@ -26,7 +26,7 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
   @model "catalyst:local.claude"
 
   @not_agent_wide [
-    {"notes.pin", %{"name" => "page", "content" => "the pinned page"}},
+    {"notes.endorse", %{"name" => "page", "sources" => []}},
     {"notes.keep", %{"name" => "status", "content" => "all well"}},
     {"aqua.skill_create", %{"name" => "tidy", "description" => "Tidy up", "content" => "# Tidy"}}
   ]
@@ -77,7 +77,7 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
       end
     end
 
-    test "refuses a glob at auto that covers notes.pin, naming it", %{ctx: ctx} do
+    test "refuses a glob at auto that covers notes.endorse, naming it", %{ctx: ctx} do
       assert {:error, {:invalid_argument, sentence}} =
                Cyfr.Test.AquaTool.call(ctx, %{
                  "action" => "update",
@@ -86,7 +86,8 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
                })
 
       assert sentence =~ "notes.* at auto would cover "
-      assert sentence =~ "notes.pin"
+      assert sentence =~ "notes.endorse"
+      refute sentence =~ "notes.pin"
       refute sentence =~ "notes.read"
     end
   end

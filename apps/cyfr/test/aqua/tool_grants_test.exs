@@ -172,9 +172,10 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "the ceiling demotes an automatic action declared to take no agent-wide standing allow, written or globbed" do
-      # A pin, an endorsement and a scroll's writes are asked at every
-      # call, and a kept note takes a standing allow for one thread only:
-      # a file that says auto for one reaches the guest as ask.
+      # An endorsement and a scroll's writes are asked at every call, and
+      # a kept note takes a standing allow for one thread only: a file that
+      # says auto for one reaches the guest as ask. The about-you page is
+      # Aqua's to write, so its auto holds.
       authored = %{
         "notes.pin" => "auto",
         "notes.keep" => "auto",
@@ -185,7 +186,7 @@ defmodule Aqua.ToolGrantsTest do
       }
 
       assert ToolGrants.resolve(authored, [], {:ok, true}) == %{
-               "notes.pin" => "ask",
+               "notes.pin" => "auto",
                "notes.keep" => "ask",
                "notes.endorse" => "ask",
                "aqua.skill_create" => "ask",
@@ -194,13 +195,14 @@ defmodule Aqua.ToolGrantsTest do
              }
 
       globbed = ToolGrants.resolve(%{"notes.*" => "auto"}, [], {:ok, true})
-      assert globbed["notes.pin"] == "ask"
+      assert globbed["notes.pin"] == "auto"
+      assert globbed["notes.workspace"] == "auto"
       assert globbed["notes.endorse"] == "ask"
       assert globbed["notes.keep"] == "ask"
       assert globbed["notes.read"] == "auto"
 
       for {tool, action, standing} <- [
-            {"notes", "pin", false},
+            {"notes", "endorse", false},
             {"aqua", "skill_create", false},
             {"notes", "keep", :thread}
           ] do
@@ -551,7 +553,7 @@ defmodule Aqua.ToolGrantsTest do
                Sanctum.Catalog.action_declaration("notes.keep")
 
       assert {:ok, %{kind: :write, standing: false, resource: nil}} =
-               Sanctum.Catalog.action_declaration("notes.pin")
+               Sanctum.Catalog.action_declaration("notes.endorse")
 
       assert {:ok, %{kind: :external, standing: nil, resource: nil}} =
                Sanctum.Catalog.action_declaration("srv:repos.list.do")
@@ -645,15 +647,15 @@ defmodule Aqua.ToolGrantsTest do
 
     test "an action that never stands takes no standing allow at any scope, and a deny stands",
          %{ctx: ctx} do
-      # `notes.pin` is `kind: :write` — the kind alone would admit it. Its
-      # `standing: false` declaration is what refuses it here.
+      # `notes.endorse` is `kind: :write` — the kind alone would admit it.
+      # Its `standing: false` declaration is what refuses it here.
       assert {:error, {:scope_not_permitted, :never_standing}} =
-               grant(ctx, %{tool: "notes", action: "pin"})
+               grant(ctx, %{tool: "notes", action: "endorse"})
 
       assert {:error, {:scope_not_permitted, :never_standing}} =
-               grant(ctx, %{scope: "agent", tool: "notes", action: "pin"})
+               grant(ctx, %{scope: "agent", tool: "notes", action: "endorse"})
 
-      assert {:ok, _} = grant(ctx, %{tool: "notes", action: "pin", effect: "deny"})
+      assert {:ok, _} = grant(ctx, %{tool: "notes", action: "endorse", effect: "deny"})
 
       # A scroll is read into every turn's prompt index, so the two scroll
       # writes a chain may propose are `standing: false` the same way —
@@ -673,7 +675,7 @@ defmodule Aqua.ToolGrantsTest do
 
     test "an allow the action's current declaration would refuse stops counting at the read",
          %{ctx: ctx} do
-      # A row written before `notes.pin` declared `standing: false` (or by
+      # A row written before `notes.endorse` declared `standing: false` (or by
       # a surface that never went through `put/2`). It must not auto-run
       # anything — neither by being listed as a standing answer
       # (`allowed_keys/1`) nor by becoming `auto` in the policy the formula
@@ -686,7 +688,7 @@ defmodule Aqua.ToolGrantsTest do
           thread_id: "thread_1",
           agent_name: "aqua",
           tool: "notes",
-          action: "pin",
+          action: "endorse",
           granted_by: ctx.user_id
         }
 
@@ -699,11 +701,11 @@ defmodule Aqua.ToolGrantsTest do
       assert ToolGrants.allowed_keys(rows) == MapSet.new()
 
       assert ToolGrants.resolve(
-               %{"notes.pin" => "ask", "notes.forget" => "auto"},
+               %{"notes.endorse" => "ask", "notes.forget" => "auto"},
                rows,
                {:ok, true}
              ) ==
-               %{"notes.pin" => "ask", "notes.forget" => "deny"}
+               %{"notes.endorse" => "ask", "notes.forget" => "deny"}
     end
 
     test "a thread-only action takes a thread allow and refuses the agent scope",

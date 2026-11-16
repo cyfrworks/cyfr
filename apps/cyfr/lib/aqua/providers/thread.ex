@@ -8,13 +8,34 @@ defmodule Aqua.Providers.Thread do
   Exposes Aqua thread addressing, queuing, history and approvals to
   MCP clients through the thread runner.
 
-  `thread.post` is the one action of `thread` a running turn calls: a
-  post into the thread its turn runs in, under its fence, with text, the
+  `thread.post` is the one action of `thread` a running turn writes with:
+  a post into the thread its turn runs in, under its fence, with text, the
   files it hands (stored under the post's own row first), links, which
   are shown and never fetched, and a screenshot the same attempt of the
   turn took (`Aqua.Attachments.drafted/3`), copied into the post with
   the sources of the page it shows. The lineage the gate stamps names the
   thread and the turn; no argument does.
+
+  ## Recall
+
+  `thread.search` and `thread.events` are the two a turn reads with, as
+  the person does at the door: a search finds past posts of the
+  athanor's daily and workspace threads by a plain substring of their
+  text, case folded, the same on both adapters
+  (`Arca.ThreadStorage.search/3`), and answers each as a pointer (its
+  thread, the day or the title, the post, its `seq`, who wrote it, when,
+  and 240 bytes around the match); `events` then reads that thread
+  after a `seq`, in a turn fifty posts at most. A crew member's thread is
+  neither searched nor read, and another athanor's is not found. A turn
+  reads only while the person's Aqua holds it, the holder that made the
+  call: before a read answers, what it carries joins the turn's sources
+  under the turn's fence (`Aqua.Tape.join_read/5`): each thread whose
+  posts it answers or that those posts carry (a pointer's or a report's
+  workspace thread, an opening's daily thread), what the posts carry (a
+  report's kept sources, a copied file's), and the sources of the turns
+  that wrote them. So deleting a thread a turn read finds that turn, and
+  blanks the read's result (`Arca.ThreadStorage.delete/3`); a thread
+  deleted before the join is not answered.
 
   `crew` is the second tool this provider serves: `ask` and `list`, the
   soul's hand-off to a crew member from inside its turn (`Aqua.Crew`).
@@ -53,10 +74,11 @@ defmodule Aqua.Providers.Thread do
   ## Two gates, on different axes
 
     * **Plane.** `Sanctum.Gate.call_external/4` refuses a
-      `:guest` context outright, and these actions declare
-      `planes: [:external]` so they never appear in-chain. A running agent
-      cannot read or post into threads — including other people's in
-      the same athanor.
+      `:guest` context outright, and these actions but `post`, `search`
+      and `events` declare `planes: [:external]` so they never appear
+      in-chain. A running agent cannot speak, decide, or post into a
+      thread but its own, and reads only its own athanor's daily and
+      workspace threads — never other people's.
     * **Surface.** Every action declares `consent: :interactive`, which the
       registry's dispatch gate holds to
       `Sanctum.Consent.Authz.authorize_interactive/1` — `:oidc` and nothing
@@ -204,6 +226,14 @@ defmodule Aqua.Providers.Thread do
     normalized
   end
 
+  # The bounds of a read: a search's query in bytes, the posts it
+  # answers, a snippet's bytes, and the rows a turn's read of a thread
+  # answers in one page.
+  @query_max 200
+  @search_max 20
+  @snippet_max 240
+  @read_page_max 50
+
   # The most links one post shows.
   @links_max 20
   @url_max 2048
@@ -212,11 +242,13 @@ defmodule Aqua.Providers.Thread do
   @doc false
   def definition do
     alias Prima.{Arg, Operation}
-    # `:external` on every action but `post`: a running agent must not be
-    # able to read or post into a thread but its own, and `post` reaches
-    # only that one, named by the lineage. And `:interactive` on every
-    # other action: only a person's own session may speak, decide, or
-    # read as them — never a standing credential.
+    # `:external` on every action but `post`, `search` and `events`: a
+    # running agent must not speak, decide or post but into its own
+    # thread, and `post` reaches only that one, named by the lineage;
+    # `search` and `events` read, for the person and for a turn of theirs,
+    # the athanor's daily and workspace threads. And `:interactive` on
+    # every action but `post`: only a person's own session, or its chain,
+    # may speak, decide, or read as them — never a standing credential.
     # Advisory: maxLength counts graphemes; the governing bound is
     # the runner's 32 KiB byte check, which every sender passes
     # through (the console included).
@@ -488,13 +520,41 @@ defmodule Aqua.Providers.Thread do
             ),
             Arg.new("limit", :integer,
               description:
-                "events: rows per page (default and ceiling 500). Page by passing the returned cursor as after_seq."
+                "events: rows per page (default and ceiling 500; in a turn, posts only, at most #{@read_page_max}). Page by passing the returned cursor as after_seq."
             )
           ],
           kind: :read,
-          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
-          planes: [:external],
-          consent: :interactive
+          sources: {:answer, {__MODULE__, :read_sources}},
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "thread",
+          "search",
+          "Search threads",
+          [
+            Arg.new("q", :string,
+              required: true,
+              max: @query_max,
+              description:
+                "search: the words to find in past posts of the daily and workspace threads, matched as written, case ignored (at most #{@query_max} bytes)"
+            ),
+            Arg.new("limit", :integer,
+              min: 1,
+              max: @search_max,
+              description:
+                "search: how many posts to answer at most (default and ceiling #{@search_max})"
+            ),
+            Arg.new("before", :string,
+              description: "search: the next a previous answer gave, for older posts"
+            )
+          ],
+          kind: :read,
+          sources: {:answer, {__MODULE__, :read_sources}},
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          recovery: :replay_safe
         ),
         Operation.new(
           "thread",
@@ -693,6 +753,11 @@ defmodule Aqua.Providers.Thread do
 
   @impl true
   def handle("thread", %Context{} = ctx, %{"action" => "post"} = args), do: post(ctx, args)
+  def handle("thread", %Context{} = ctx, %{"action" => "search"} = args), do: search(ctx, args)
+
+  def handle("thread", %Context{plane: :guest} = ctx, %{"action" => "events"} = args),
+    do: read_thread(ctx, args)
+
   def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle("crew", %Context{} = ctx, %{"action" => "ask"} = args), do: Aqua.Crew.ask(ctx, args)
 
@@ -1312,6 +1377,226 @@ defmodule Aqua.Providers.Thread do
        do: {:invalid_argument, "post refused: " <> Sanctum.Refusals.render(reason)}
 
   defp post_refusal(reason), do: refusal(reason, nil)
+
+  # ---------------------------------------------------------------------------
+  # Recall: searching past posts, and a turn's read of a thread
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  What a read's answer carries (`search` and `events`, their `sources:`
+  declaration, `Prima.Operation.answer_sources/3`): the sources the read
+  joined into its turn before it answered (`Aqua.Tape.join_read/5`), each
+  thread it carries posts of among them, which the answer names. An answer
+  that names none, the person's own read at the door, is an unnamed
+  outside source, never the athanor's own.
+  """
+  @spec read_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
+  def read_sources(_actor, %{sources: sources}) when is_list(sources),
+    do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
+
+  def read_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
+
+  # Past posts of the athanor's daily and workspace threads, newest first,
+  # each as a pointer to open with `events`. From a turn, the posts it
+  # answers join the turn's sources first, under its fence, and only the
+  # posts of threads that still stand then are answered.
+  defp search(ctx, args) do
+    with {:ok, needle} <- query(args["q"]),
+         {:ok, reader} <- recall_reader(ctx, args),
+         {:ok, found} <-
+           storage(
+             Arca.ThreadStorage.search(Sanctum.Context.actor(ctx), needle,
+               limit: min(args["limit"] || @search_max, @search_max),
+               before: args["before"]
+             ),
+             "before",
+             args["before"]
+           ),
+         {:ok, posts, sources} <- joined(ctx, reader, found.posts, & &1.message) do
+      results = Enum.map(posts, &pointer(&1, needle))
+      {:ok, with_sources(%{results: results, count: length(results), next: found.next}, sources)}
+    end
+  end
+
+  # A turn's read of one daily or workspace thread of its athanor: its
+  # posts after `after_seq`, at most fifty, joined into the turn's sources
+  # before they are answered. A crew member's thread, or one of another
+  # athanor, is not found.
+  defp read_thread(ctx, %{"thread" => id} = args) when is_binary(id) and id != "" do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, reader} <- recall_reader(ctx, args),
+         {:ok, %{kind: kind}} when kind in ["daily", "workspace"] <-
+           Arca.ThreadStorage.get(actor, id),
+         rows when is_list(rows) <- Arca.ThreadStorage.messages(actor, id, read_opts(args)),
+         {:ok, rows, sources} <- joined(ctx, reader, rows, & &1) do
+      rows = Enum.map(rows, &render/1)
+      {:ok, with_sources(%{thread: id, messages: rows, cursor: cursor(rows)}, sources)}
+    else
+      {:ok, %{}} -> {:error, {:not_found, "thread", id}}
+      {:error, :not_found} -> {:error, {:not_found, "thread", id}}
+      {:error, {_kind, _detail} = refusal} -> {:error, refusal}
+      {:error, {_kind, _a, _b} = refusal} -> {:error, refusal}
+      {:error, reason} -> {:error, refusal(reason, id)}
+    end
+  end
+
+  defp read_thread(_ctx, _args),
+    do: {:error, {:invalid_argument, "events requires a 'thread'"}}
+
+  defp read_opts(args) do
+    after_seq = if is_integer(args["after_seq"]), do: [after_seq: args["after_seq"]], else: []
+
+    limit =
+      case args["limit"] do
+        n when is_integer(n) and n > 0 -> min(n, @read_page_max)
+        _ -> @read_page_max
+      end
+
+    [{:limit, limit}, {:posts, true} | after_seq]
+  end
+
+  defp query(q) when is_binary(q) do
+    cond do
+      byte_size(q) > @query_max ->
+        {:error, {:invalid_argument, "search takes a query of at most #{@query_max} bytes"}}
+
+      String.trim(q) == "" ->
+        {:error, {:invalid_argument, "search needs a query"}}
+
+      true ->
+        {:ok, String.trim(q)}
+    end
+  end
+
+  defp query(_q), do: {:error, {:invalid_argument, "search needs a query"}}
+
+  # Who reads: the person at the door, or in a chain the open turn of the
+  # person's Aqua the lineage names, held by the holder that made the call.
+  defp recall_reader(%Context{plane: :guest, user_id: user_id} = ctx, args)
+       when is_binary(user_id) do
+    case Tape.held_turn(ctx, args) do
+      {:ok, %{requested_by: ^user_id} = turn} -> {:ok, {:turn, turn}}
+      {:ok, _someone_else} -> {:error, :not_in_a_turn}
+      {:error, :not_addressable} -> {:error, :not_in_a_turn}
+      {:error, reason} -> {:error, refusal(reason, nil)}
+    end
+  end
+
+  defp recall_reader(%Context{plane: :guest}, _args), do: {:error, :not_in_a_turn}
+  defp recall_reader(%Context{}, _args), do: {:ok, :person}
+
+  # The rows a read answers, and the sources it carries. The person's read
+  # joins nothing. A turn's joins, under its fence, every thread whose
+  # posts the rows are or carry, what the rows carry, and the turns that
+  # wrote them (`Aqua.Tape.join_read/5`); a row of a thread or carrying one
+  # that no longer stands is not answered.
+  defp joined(_ctx, :person, items, _row), do: {:ok, items, nil}
+
+  defp joined(ctx, {:turn, turn}, items, row) do
+    rows = Enum.map(items, row)
+    carried = Tape.carried_sources(rows)
+    threads = Enum.uniq(Enum.map(rows, & &1.thread_id) ++ Prima.Source.threads(carried))
+
+    case Tape.join_read(
+           ctx,
+           turn,
+           threads,
+           Prima.Source.material(carried),
+           Tape.writing_turns(rows)
+         ) do
+      {:ok, %{threads: standing, sources: sources}} ->
+        kept =
+          Enum.filter(items, fn item ->
+            row = row.(item)
+            needs = [row.thread_id | Prima.Source.threads(Tape.carried_sources([row]))]
+            Enum.all?(needs, &(&1 in standing))
+          end)
+
+        {:ok, kept, sources}
+
+      {:error, reason} ->
+        {:error, refusal(reason, nil)}
+    end
+  end
+
+  defp with_sources(answer, nil), do: answer
+
+  defp with_sources(answer, sources),
+    do: Map.put(answer, :sources, Prima.Source.to_json_list(sources))
+
+  defp storage({:ok, _} = ok, _arg, _value), do: ok
+
+  defp storage({:error, :not_found}, arg, value),
+    do: {:error, {:invalid_argument, "#{arg} '#{value}' is not a post of this athanor"}}
+
+  defp storage({:error, _}, _arg, _value), do: {:error, {:unavailable, "Storage"}}
+
+  # One post a search found: where it is, who wrote it, and the text
+  # around the match.
+  defp pointer(%{message: message, thread: thread}, needle) do
+    %{
+      thread: thread.id,
+      kind: thread.kind,
+      message: message.id,
+      seq: message.seq,
+      by: message.sent_by,
+      at: message.inserted_at,
+      snippet: snippet(message.content || "", needle)
+    }
+    |> Map.merge(if thread.kind == "daily", do: %{day: thread.day}, else: %{title: thread.title})
+  end
+
+  @doc """
+  The text of `content` around the first place it holds `needle`, case
+  folded as the search folds it: whole characters only, on one line, at
+  most #{@snippet_max} bytes, an ellipsis where text was left out.
+  """
+  @spec snippet(String.t(), String.t()) :: String.t()
+  def snippet(content, needle) when is_binary(content) and is_binary(needle) do
+    graphemes = content |> String.replace(~r/\s+/u, " ") |> String.trim() |> String.graphemes()
+    at = match_at(graphemes, String.downcase(needle))
+    from = max(at - 40, 0)
+    lead = if from > 0, do: "…", else: ""
+    window(Enum.drop(graphemes, from), lead, byte_size(lead))
+  end
+
+  # The index of the grapheme the first match begins in, 0 for none.
+  defp match_at(graphemes, needle) do
+    lowered = Enum.map(graphemes, &String.downcase/1)
+
+    case :binary.match(IO.iodata_to_binary(lowered), needle) do
+      {offset, _} ->
+        lowered
+        |> Enum.scan(0, &(byte_size(&1) + &2))
+        |> Enum.find_index(&(&1 > offset))
+        |> Kernel.||(0)
+
+      :nomatch ->
+        0
+    end
+  end
+
+  # Graphemes from the start until the bound, leaving room for a closing
+  # ellipsis when any are left out.
+  defp window(graphemes, lead, used) do
+    total = graphemes |> Enum.map(&byte_size/1) |> Enum.sum()
+
+    if used + total <= @snippet_max do
+      lead <> Enum.join(graphemes)
+    else
+      room = @snippet_max - used - byte_size("…")
+
+      {taken, _} =
+        Enum.reduce_while(graphemes, {[], 0}, fn g, {acc, size} ->
+          if size + byte_size(g) <= room,
+            do: {:cont, {[g | acc], size + byte_size(g)}},
+            else: {:halt, {acc, size}}
+        end)
+
+      lead <> (taken |> Enum.reverse() |> Enum.join()) <> "…"
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Shared threads, read for the person

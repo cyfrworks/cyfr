@@ -790,44 +790,8 @@ defmodule Aqua.Loop do
     do: Request.offers_search?(spec.policy, spec.authority, spec.capabilities)
 
   # What a request reads of the athanor's other threads, by the rows that
-  # bring it in: a pointer or a report names its workspace thread, and an
-  # opening the daily thread its refs are posts of; each is a `thread`
-  # source, by which forgetting that thread finds this turn. A report also
-  # carries the sources its record kept of the turn that reported, so its
-  # outside material joins even once that turn's row is gone.
-  defp thread_sources(rows) do
-    Enum.flat_map(rows, &(row_sources(&1) ++ files_sources(&1)))
-  end
-
-  defp row_sources(%{kind: kind, workspace_id: id} = row)
-       when kind in ["pointer", "report"] and is_binary(id),
-       do: [Prima.Source.thread(id) | kept_sources(row)]
-
-  defp row_sources(%{kind: "opening"} = row) do
-    case Tape.payload(row) do
-      %{"from" => %{"thread" => id}} when is_binary(id) and id != "" ->
-        [Prima.Source.thread(id)]
-
-      _ ->
-        []
-    end
-  end
-
-  defp row_sources(_row), do: []
-
-  # A copied file carries the sources of the post it was copied from
-  # (`Aqua.Attachments`), which a request that shows it reads too.
-  defp files_sources(row),
-    do: Enum.flat_map(Aqua.Attachments.refs_of(row), &Aqua.Attachments.copied_sources/1)
-
-  defp kept_sources(%{kind: "report"} = row) do
-    case Tape.payload(row)["sources"] do
-      sources when is_list(sources) -> Enum.map(sources, &Prima.Source.from_json/1)
-      _ -> []
-    end
-  end
-
-  defp kept_sources(_row), do: []
+  # bring it in (`Aqua.Tape.carried_sources/1`).
+  defp thread_sources(rows), do: Tape.carried_sources(rows)
 
   # The daily thread's posts the openings among `rows` refer to, read as
   # they stand now and never copied: a post of another thread, or one
@@ -856,20 +820,8 @@ defmodule Aqua.Loop do
   # this one's, and the turn a crew row came from — a delivered request's
   # asking turn, a reply's member turn — whose words it carries. An
   # unattached row of a person's names none.
-  defp earlier_turns(%State{turn: turn}, rows) do
-    rows
-    |> Enum.flat_map(fn row ->
-      from =
-        case Tape.payload(row) do
-          %{"from_turn" => id} when is_binary(id) -> [id]
-          _ -> []
-        end
-
-      [Map.get(row, :turn_id) | from]
-    end)
-    |> Enum.reject(&(is_nil(&1) or &1 == turn.id))
-    |> Enum.uniq()
-  end
+  defp earlier_turns(%State{turn: turn}, rows),
+    do: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == turn.id))
 
   defp ask_model(%State{} = state, step, request, retained, retries) do
     answer = model_call(state, step, request, retained)

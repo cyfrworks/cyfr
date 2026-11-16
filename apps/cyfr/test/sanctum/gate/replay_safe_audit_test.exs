@@ -106,6 +106,11 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
              "source.grep",
              "source.read",
              "source.tree",
+             # Past posts of the athanor's own threads, searched or read
+             # again: a repeat joins the same threads and answers the posts
+             # as they stand now, a deleted thread's not at all.
+             "thread.events",
+             "thread.search",
              # A shared thread the person sits in, read again: what it says
              # now, and no read mark moved.
              "threads.list",
