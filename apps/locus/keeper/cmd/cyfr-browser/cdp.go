@@ -65,8 +65,13 @@ func newCDP(w io.Writer, r io.Reader, onTarget func(string, json.RawMessage)) *c
 }
 
 // call sends one command and decodes its result into result, which may
-// be nil.
+// be nil. A command whose context has ended is not written: this is the
+// one place that decides, so nothing of work that was cancelled, timed out
+// or replaced reaches Chrome, whatever queue it waited in.
 func (c *cdp) call(ctx context.Context, session, method string, params, result any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	if c.err != nil {
 		c.mu.Unlock()

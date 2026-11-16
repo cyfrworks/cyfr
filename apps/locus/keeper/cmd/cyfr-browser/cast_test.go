@@ -7,6 +7,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -583,5 +585,25 @@ func TestACastAfterAnUncastStartsOnceTheOldHasStopped(t *testing.T) {
 	h.chrome.mu.Unlock()
 	if order != "start S1, stop S1, stopped S1, start S1" {
 		t.Fatalf("the screencasts went %s", order)
+	}
+}
+
+// Review round one, finding 1: a cast that ended writes nothing of the
+// input queued for it, however much waited.
+func TestAnEndedCastWritesNothingOfItsQueuedInput(t *testing.T) {
+	var wire bytes.Buffer
+	b := &browser{c: &cdp{w: &wire, calls: map[int64]*pending{}}}
+	cs := newCasts(b, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &cast{id: 1, cancel: cancel, input: make(chan inputBatch, 3)}
+	cs.byID[1] = c
+	for range 3 {
+		c.input <- inputBatch{session: "S1", calls: []cdpInput{{method: "Input.dispatchKeyEvent",
+			params: map[string]any{"type": "keyDown", "text": "x"}}}}
+	}
+	cs.uncast(1)
+	b.runInput(ctx, c.input)
+	if wire.Len() != 0 {
+		t.Fatalf("an ended cast still wrote %d input commands", bytes.Count(wire.Bytes(), []byte{0}))
 	}
 }

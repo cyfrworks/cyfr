@@ -408,14 +408,15 @@ func (b *browser) ackFrame(f chromeFrame) {
 
 // runInput dispatches the person's input in the order it came, each call
 // on its window's session directly, so it lands beside a request that
-// holds the window.
+// holds the window. Every call carries the cast's own context, so once the
+// cast ended nothing of it is written (cdp.call), whatever was queued.
 func (b *browser) runInput(ctx context.Context, batches <-chan inputBatch) {
 	for batch := range batches {
 		for _, call := range batch.calls {
 			one, cancel := context.WithTimeout(ctx, opWait)
 			err := b.c.call(one, batch.session, call.method, call.params, nil)
 			cancel()
-			if errors.Is(err, context.Canceled) || errors.Is(err, errDetached) {
+			if errors.Is(err, errDetached) || ctx.Err() != nil {
 				break
 			}
 		}
