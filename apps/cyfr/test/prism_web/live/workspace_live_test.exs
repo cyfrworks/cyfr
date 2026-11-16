@@ -512,12 +512,19 @@ defmodule PrismWeb.WorkspaceLiveTest do
         "mods" => 0
       }
 
-      render_hook(browser, "browser_input", %{"browser_input" => [press]})
+      watch = watch_of(browser)
+      render_hook(browser, "browser_input", %{"watch" => watch, "browser_input" => [press]})
       assert_receive {:driver, :input, _s, ^cast, [^press]}, 5_000
+      assert_push_event(browser, "browser_input_taken", %{watch: ^watch}, 5_000)
 
-      # What does not read as events is dropped.
-      render_hook(browser, "browser_input", %{"browser_input" => [%{press | "x" => 7}]})
+      # What does not read as events is dropped, and the hook may go on.
+      render_hook(browser, "browser_input", %{
+        "watch" => watch,
+        "browser_input" => [%{press | "x" => 7}]
+      })
+
       refute_receive {:driver, :input, _s, ^cast, _events}, 200
+      assert_push_event(browser, "browser_input_taken", %{watch: ^watch}, 5_000)
 
       browser |> element("#workspace-browser-close") |> render_click()
       assert_receive {:driver, :uncast, _s, ^cast}, 5_000
@@ -605,6 +612,43 @@ defmodule PrismWeb.WorkspaceLiveTest do
       assert has_element?(browser, "#workspace-browser-taken button", "Show it here instead")
     end
 
+    # Review round two, finding 6: what is meant for a watch ends with it.
+    test "a reopened stream takes no input meant for the watch before it",
+         %{conn: conn, mine: mine, me: me, daily: daily} do
+      work = open!(me, daily, "Look it up")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => old}}, 5_000
+      before = watch_of(browser)
+
+      browser |> element("#workspace-browser-close") |> render_click()
+      assert_receive {:driver, :uncast, _s, ^old}, 5_000
+      assert watch_of(browser) == nil
+
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => new}}, 5_000
+      now = watch_of(browser)
+      assert is_binary(now) and now != before
+
+      key = %{
+        "k" => "key",
+        "type" => "down",
+        "key" => "x",
+        "code" => "KeyX",
+        "text" => "x",
+        "vk" => 88,
+        "mods" => 0
+      }
+
+      render_hook(browser, "browser_input", %{"watch" => before, "browser_input" => [key]})
+      refute_receive {:driver, :input, _s, ^new, _events}, 200
+
+      render_hook(browser, "browser_input", %{"watch" => now, "browser_input" => [key]})
+      assert_receive {:driver, :input, _s, ^new, [^key]}, 5_000
+    end
+
     test "leaving the page ends its stream", %{conn: conn, mine: mine, me: me, daily: daily} do
       work = open!(me, daily, "Look it up")
       browse!(me, work)
@@ -616,6 +660,16 @@ defmodule PrismWeb.WorkspaceLiveTest do
       GenServer.stop(view.pid)
       assert_receive {:driver, :uncast, _s, ^cast}, 5_000
     end
+  end
+
+  # The watch the view names on the page, as the hook reads it, or nil.
+  defp watch_of(browser) do
+    browser
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#workspace-browser")
+    |> LazyHTML.attribute("data-watch")
+    |> List.first()
   end
 
   defp browser_answer(answers, %{"op" => op}) do

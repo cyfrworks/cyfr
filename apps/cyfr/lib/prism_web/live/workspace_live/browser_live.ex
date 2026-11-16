@@ -97,26 +97,31 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
   # batch on its way at a time: the hook sends the next once it hears the
   # last was taken. What does not read as events, or comes while one is on
   # its way, is dropped and counted, and the hook is told it may go on.
+  # A batch for a watch this page no longer holds is dropped unanswered:
+  # the hook leaves what it held for that watch once it hears it ended.
   def handle_event(
         "browser_input",
-        %{"browser_input" => events},
+        %{"watch" => id, "browser_input" => events},
         %{assigns: %{watch: watch}} = socket
       )
       when is_list(events) and watch != nil do
-    case Opus.Browser.input(watch, events) do
-      :ok ->
-        {:noreply, socket}
+    if id == watch_id(watch) do
+      case Opus.Browser.input(watch, events) do
+        :ok ->
+          {:noreply, socket}
 
-      {:error, _busy_or_bad} ->
-        {:noreply,
-         socket
-         |> assign(:dropped, socket.assigns.dropped + 1)
-         |> push_event("browser_input_taken", %{})}
+        {:error, _busy_or_bad} ->
+          {:noreply,
+           socket
+           |> assign(:dropped, socket.assigns.dropped + 1)
+           |> push_event("browser_input_taken", %{watch: id})}
+      end
+    else
+      {:noreply, socket}
     end
   end
 
-  def handle_event("browser_input", _params, socket),
-    do: {:noreply, push_event(socket, "browser_input_taken", %{})}
+  def handle_event("browser_input", _params, socket), do: {:noreply, socket}
 
   def handle_event("browser_close", _params, socket), do: {:noreply, stop(socket)}
 
@@ -154,7 +159,7 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
   # The holder took the last batch of input: the hook may send the next.
   def handle_info({Opus.Browser, watch, :input_taken}, %{assigns: %{watch: watch}} = socket) do
     :ok = Opus.Browser.input_taken(watch)
-    {:noreply, push_event(socket, "browser_input_taken", %{})}
+    {:noreply, push_event(socket, "browser_input_taken", %{watch: watch_id(watch)})}
   end
 
   # A stream that another page took leaves the window standing; any other
@@ -203,6 +208,11 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
 
   defp clamp(side), do: side |> max(16) |> min(4096)
 
+  # The watch as the page names it: the reference its messages carry,
+  # which no other watch shares. It is a name to compare and no more.
+  defp watch_id(nil), do: nil
+  defp watch_id({_holder, ref}), do: ref |> :erlang.ref_to_list() |> List.to_string()
+
   # What the page says when the stream ended.
   defp ended(:replaced), do: :taken
   defp ended(:turned_off), do: {:ended, Aqua.browser_turned_off()}
@@ -221,6 +231,7 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
       id="workspace-browser"
       phx-hook="WorkspaceStream"
       data-stream={stream_name(@stream)}
+      data-watch={watch_id(@watch)}
       data-dropped={@dropped}
       class={if(@window? or @stream != nil, do: nil, else: "hidden")}
     >

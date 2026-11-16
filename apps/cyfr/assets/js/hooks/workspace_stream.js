@@ -13,7 +13,10 @@
 // most MAX_EVENTS a push, the moves since the last push folded into one,
 // and IN_FLIGHT pushes on their way: the next goes only once the server
 // says it took the last ("browser_input_taken"); what comes meanwhile
-// waits here, within MAX_EVENTS.
+// waits here, within MAX_EVENTS. The view names the watch the page holds
+// (data-watch), and each input push and its answer name it too: what the
+// hook holds for a watch, the push on its way and the events waiting, ends
+// with that watch, and an answer for another watch is passed over.
 
 export const MAX_EVENTS = 64
 export const IN_FLIGHT = 1
@@ -112,9 +115,7 @@ export function decode(base64) {
 
 export const WorkspaceStream = ({createImageBitmap, requestAnimationFrame, devicePixelRatio}) => ({
   mounted() {
-    this.queue = new Queue()
-    this.pressed = null
-    this.touch = null
+    this.begin(this.el.dataset.watch)
     this.flushing = false
     this.onClick = (e) => {
       if (!e.target.closest?.("[data-browser-watch]")) return
@@ -123,13 +124,27 @@ export const WorkspaceStream = ({createImageBitmap, requestAnimationFrame, devic
       this.pushEvent("browser_watch", size(width, devicePixelRatio()))
     }
     this.el.addEventListener("click", this.onClick)
-    this.inFlight = 0
     this.handleEvent("browser_image", ({n, jpeg}) => this.draw(n, jpeg))
-    this.handleEvent("browser_input_taken", () => {
+    this.handleEvent("browser_input_taken", ({watch}) => {
+      if (watch !== this.watch) return
       this.inFlight = Math.max(0, this.inFlight - 1)
       this.schedule()
     })
     this.listen(this.canvas())
+  },
+
+  updated() {
+    if ((this.el.dataset.watch || null) !== this.watch) this.begin(this.el.dataset.watch)
+  },
+
+  // A watch starts with nothing of the one before it: no push on its way
+  // and no event waiting. With no watch, nothing is kept or sent.
+  begin(watch) {
+    this.watch = watch || null
+    this.queue = new Queue()
+    this.inFlight = 0
+    this.pressed = null
+    this.touch = null
   },
 
   destroyed() {
@@ -155,7 +170,7 @@ export const WorkspaceStream = ({createImageBitmap, requestAnimationFrame, devic
   },
 
   send(event) {
-    if (!event) return
+    if (!event || !this.watch) return
     this.queue.add(event)
     this.schedule()
   },
@@ -170,7 +185,7 @@ export const WorkspaceStream = ({createImageBitmap, requestAnimationFrame, devic
       const events = this.queue.take()
       if (events.length === 0) return
       this.inFlight++
-      this.pushEvent("browser_input", {browser_input: events})
+      this.pushEvent("browser_input", {watch: this.watch, browser_input: events})
     })
   },
 

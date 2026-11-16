@@ -105,6 +105,7 @@ function mount() {
   const rootListeners = {}
   const el = {
     clientWidth: 390,
+    dataset: {},
     querySelector: () => canvas,
     addEventListener: (type, fn) => (rootListeners[type] = fn),
     removeEventListener() {}
@@ -126,7 +127,13 @@ function mount() {
   })
   hook.mounted()
   const frame = () => frames.splice(0).forEach((fn) => fn())
-  return {hook, canvas, listeners, rootListeners, pushed, handlers, drawn, frame}
+  // The view names the watch the page holds, or none, and patches it.
+  const watch = (id) => {
+    if (id) el.dataset.watch = id
+    else delete el.dataset.watch
+    hook.updated()
+  }
+  return {hook, canvas, listeners, rootListeners, pushed, handlers, drawn, frame, watch}
 }
 
 test("nothing is asked until a watch button is pressed, then the canvas's size is", () => {
@@ -147,7 +154,8 @@ test("an image is drawn before the hook says it drew it", async () => {
 })
 
 test("the person's input goes in one push a frame, each event one the vectors accept", () => {
-  const {listeners, pushed, frame} = mount()
+  const {listeners, pushed, frame, watch} = mount()
+  watch("w1")
   const stop = () => {}
   listeners.pointerdown({pointerType: "mouse", clientX: 300, clientY: 200, button: 0, detail: 1, preventDefault: stop})
   listeners.pointermove({pointerType: "mouse", clientX: 310, clientY: 200})
@@ -158,6 +166,7 @@ test("the person's input goes in one push a frame, each event one the vectors ac
   assert.deepEqual(pushed, [])
   frame()
   assert.equal(pushed.length, 1)
+  assert.equal(pushed[0].payload.watch, "w1")
   const events = pushed[0].payload.browser_input
   events.forEach(accepted)
   assert.deepEqual(
@@ -168,7 +177,8 @@ test("the person's input goes in one push a frame, each event one the vectors ac
 })
 
 test("a tap is a click where the finger lifted, and a finger drawn across scrolls", () => {
-  const {listeners, pushed, frame, canvas} = mount()
+  const {listeners, pushed, frame, canvas, watch} = mount()
+  watch("w1")
   canvas.width = 800
   listeners.pointerdown({pointerType: "touch", clientX: 300, clientY: 200})
   listeners.pointerup({pointerType: "touch", clientX: 300, clientY: 200, button: 0, detail: 1})
@@ -183,7 +193,8 @@ test("a tap is a click where the finger lifted, and a finger drawn across scroll
 })
 
 test("one push is on its way at a time: what comes meanwhile waits here until the server took the last", () => {
-  const {listeners, handlers, pushed, frame} = mount()
+  const {listeners, handlers, pushed, frame, watch} = mount()
+  watch("w1")
   const stop = () => {}
   const press = (x) => ({pointerType: "mouse", clientX: x, clientY: 200, button: 0, detail: 1, preventDefault: stop})
   listeners.pointerdown(press(300))
@@ -193,11 +204,59 @@ test("one push is on its way at a time: what comes meanwhile waits here until th
   listeners.keydown({key: "i", code: "KeyI", keyCode: 73, preventDefault: stop, stopPropagation: stop})
   frame()
   assert.equal(pushed.length, 1, "nothing more goes while the first is on its way")
-  handlers.browser_input_taken()
+  handlers.browser_input_taken({watch: "w1"})
   frame()
   assert.equal(pushed.length, 2)
   assert.deepEqual(
     pushed[1].payload.browser_input.map((e) => [e.k, e.type]),
     [["mouse", "up"], ["key", "down"]]
   )
+})
+
+const typed = (key) => ({key, code: "KeyX", keyCode: 88, preventDefault() {}, stopPropagation() {}})
+
+test("with no watch nothing is kept or sent", () => {
+  const {listeners, pushed, frame} = mount()
+  listeners.keydown(typed("x"))
+  frame()
+  assert.deepEqual(pushed, [])
+})
+
+// Review round two, finding 6: what the hook holds for a watch ends with it.
+test("closing a watch drops what waited for it: nothing goes at the next frame", () => {
+  const {listeners, pushed, frame, watch} = mount()
+  watch("w1")
+  listeners.keydown(typed("x"))
+  watch(null)
+  frame()
+  assert.deepEqual(pushed, [], "a closed watch's waiting input must not go")
+})
+
+test("a push on its way when its watch ended holds nothing back from the next watch", () => {
+  const {listeners, pushed, frame, watch} = mount()
+  watch("w1")
+  listeners.keydown(typed("a"))
+  frame()
+  assert.equal(pushed.length, 1)
+  // The watch closed before the server answered the push, so no answer comes.
+  watch(null)
+  watch("w2")
+  listeners.keydown(typed("b"))
+  frame()
+  assert.equal(pushed.length, 2, "the new watch's input goes")
+  assert.deepEqual([pushed[1].payload.watch, pushed[1].payload.browser_input[0].key], ["w2", "b"])
+})
+
+test("an answer for another watch lets no second push go", () => {
+  const {listeners, handlers, pushed, frame, watch} = mount()
+  watch("w2")
+  listeners.keydown(typed("a"))
+  frame()
+  listeners.keydown(typed("b"))
+  handlers.browser_input_taken({watch: "w1"})
+  frame()
+  assert.equal(pushed.length, 1, "the old watch's answer is passed over")
+  handlers.browser_input_taken({watch: "w2"})
+  frame()
+  assert.equal(pushed.length, 2)
 })
