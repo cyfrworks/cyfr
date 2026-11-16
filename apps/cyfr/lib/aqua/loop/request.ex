@@ -377,25 +377,40 @@ defmodule Aqua.Loop.Request do
   those blocks belong to; without it they land on the first user message,
   which is only the right one in a transcript of one), `:refs` (the
   daily-thread posts an opening refers to, by id, as they read now),
-  `:removed` (by row id, the refs of a row's files the person deleted,
-  each said to be removed where the row is, and never named as carried).
+  `:removed` (by row id, the refs of a row's files the person deleted:
+  every row the request carries that holds one is named in one block
+  beside the initiating message's own, and an opening never names one as
+  carried).
   """
   @spec messages([Aqua.Tape.row()], keyword()) :: [map()]
   def messages(rows, opts \\ []) when is_list(rows) do
-    removed = Keyword.get(opts, :removed, %{})
+    items = apply_compaction(rows)
+    blocks = List.wrap(Keyword.get(opts, :attachments))
+    blocks = blocks ++ removed_note(items, Keyword.get(opts, :removed, %{}))
 
-    rows
-    |> apply_compaction()
-    |> Enum.reduce([], fn row, acc ->
-      row |> shape(acc, opts) |> removed_note(acc, row, removed)
-    end)
+    items
+    |> Enum.reduce([], fn row, acc -> shape(row, acc, opts) end)
     |> Enum.reverse()
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
     |> merge_same_role()
-    |> attach_blocks(Keyword.get(opts, :attachments), Keyword.get(opts, :task_message_id))
+    |> attach_blocks(blocks, Keyword.get(opts, :task_message_id))
     |> attach(:excerpt, Keyword.get(opts, :excerpt))
   end
+
+  @doc """
+  The rows a request made of `rows` carries to the model: those the
+  latest compaction keeps, and the older ones it pins. What a round reads
+  of storage for its request it reads for these alone.
+  """
+  @spec carried([Aqua.Tape.row()]) :: [Aqua.Tape.row()]
+  def carried(rows) when is_list(rows) do
+    for item <- apply_compaction(rows), row = carried_row(item), do: row
+  end
+
+  defp carried_row({:pinned, row}), do: row
+  defp carried_row({:shaped, _summary}), do: nil
+  defp carried_row(row), do: row
 
   # ---------------------------------------------------------------------------
   # Tools
@@ -522,33 +537,26 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  # A row whose files were deleted says so in the message it landed in: the
-  # head, whether the row began it or joined it. A row that drew nothing
-  # says nothing.
-  defp removed_note(acc, acc, _row, _removed), do: acc
-
-  defp removed_note([head | rest] = shaped, _before, %{id: id}, removed) do
-    case Map.get(removed, id, []) do
+  # The files the person deleted of every row the request carries, named in
+  # one block, whatever the row is and however it is shown.
+  defp removed_note(items, removed) do
+    case for(item <- items, row = carried_row(item), ref <- Map.get(removed, row.id, []), do: ref) do
       [] ->
-        shaped
+        []
 
       refs ->
         names = Enum.map_join(refs, ", ", & &1["filename"])
-        noun = if length(refs) == 1, do: "The file", else: "The files"
 
-        note = %{
-          "type" => "text",
-          "text" => "[#{noun} #{names} of this post #{were(refs)} removed]"
-        }
-
-        [%{head | blocks: head.blocks ++ [note]} | rest]
+        [
+          %{
+            "type" => "text",
+            "text" =>
+              "[The person deleted these files of posts in this thread; they can no longer " <>
+                "be read: #{names}]"
+          }
+        ]
     end
   end
-
-  defp removed_note(shaped, _before, _row, _removed), do: shaped
-
-  defp were([_one]), do: "was"
-  defp were(_many), do: "were"
 
   defp shape({:shaped, message}, acc, _opts), do: [message | acc]
 
@@ -852,7 +860,6 @@ defmodule Aqua.Loop.Request do
 
   def without_excerpt(request), do: request
 
-  defp attach_blocks(messages, nil, _task_message_id), do: strip_ids(messages)
   defp attach_blocks(messages, [], _task_message_id), do: strip_ids(messages)
 
   defp attach_blocks(messages, blocks, task_message_id) when is_list(blocks) do

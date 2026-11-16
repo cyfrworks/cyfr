@@ -680,12 +680,12 @@ defmodule Aqua.Loop do
   defp model_round(%State{} = state) do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
          {:ok, rows} <- Tape.projection(guest(state), state.turn),
-         {:ok, planned, rows} <- compact(state, rows),
-         first? = planned.steps == 0,
+         removed = removed_files(state.spec.ctx, rows),
+         {:ok, planned, rows} <- compact(state, rows, removed),
          cited = cited(planned, rows),
          {:ok, step, planned} <- open_model_step(planned, "chat", rows, cited) do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
-      request = request(planned, rows, excerpt, first?, cited)
+      request = request(planned, rows, excerpt, cited, removed)
       planned = %{planned | sent_upto: highest_seq(rows)}
 
       if excerpt do
@@ -706,7 +706,7 @@ defmodule Aqua.Loop do
   # Every round carries the sender's attachments: the projection renders
   # text, and an image or a document exists only as these typed blocks, so
   # a round without them would not show the model what it was asked about.
-  defp request(%State{spec: spec} = state, rows, excerpt, _first?, cited) do
+  defp request(%State{spec: spec} = state, rows, excerpt, cited, removed) do
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
     multi? = length(authors) > 1
@@ -723,7 +723,7 @@ defmodule Aqua.Loop do
         attachments: spec.attachments,
         task_message_id: state.turn.message_id,
         refs: Map.new(cited, &{&1.id, &1}),
-        removed: removed_files(spec.ctx, rows)
+        removed: removed
       )
 
     Request.build(
@@ -741,11 +741,13 @@ defmodule Aqua.Loop do
   defp agent_or_system?(author),
     do: author in Prima.Author.reserved()
 
-  # By row id, the refs of each row's files the person deleted from Files,
-  # read anew each round (`Aqua.Attachments.as_kept/2`): one listing per row
-  # that holds files.
+  # By row id, the refs of each row's files the person deleted from Files
+  # (`Aqua.Attachments.as_kept/2`): read once a round, before the size
+  # estimate, which the dispatch shares, and only for the rows the request
+  # carries to the model (`Request.carried/1`), one listing per row that
+  # holds files. A compaction this round makes keeps a subset of them.
   defp removed_files(ctx, rows) do
-    for row <- rows,
+    for row <- rows |> Planner.prune() |> Request.carried(),
         Aqua.Attachments.refs_of(row) != [],
         removed = Enum.filter(Aqua.Attachments.as_kept(ctx, row), &(&1["removed"] == true)),
         removed != [],
@@ -2517,13 +2519,13 @@ defmodule Aqua.Loop do
   # Compaction
   # ---------------------------------------------------------------------------
 
-  defp compact(%State{spec: spec} = state, rows, flush? \\ true) do
+  defp compact(%State{spec: spec} = state, rows, removed, flush? \\ true) do
     # Size the request the way the executor will: it encodes the input and
     # refuses it past the consented cap of the node being entered, which for
     # a model call is the catalyst, not the agent. Without this the turn
     # fails at admission on a request compaction could have made fit.
     excerpt = if state.excerpt_sent?, do: nil, else: spec.excerpt
-    probe = request(state, rows, excerpt, state.steps == 0, cited(state, rows))
+    probe = request(state, rows, excerpt, cited(state, rows), removed)
 
     case Planner.plan(rows,
            capabilities: spec.capabilities,
@@ -2549,7 +2551,7 @@ defmodule Aqua.Loop do
         case flush(state, rows, probe) do
           {:flushed, state} ->
             with {:ok, rows} <- Tape.projection(guest(state), state.turn),
-                 do: compact(state, rows, false)
+                 do: compact(state, rows, removed, false)
 
           {:skipped, state} ->
             summarize(state, rows, boundary)

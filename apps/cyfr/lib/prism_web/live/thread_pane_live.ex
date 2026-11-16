@@ -124,6 +124,10 @@ defmodule PrismWeb.ThreadPaneLive do
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
 
+  # The thread events that carry a row the pane draws, each with its files
+  # as they stand when it arrives (`files_kept/2`).
+  @row_events [:message, :request, :reply, :notice]
+
   # How many of a thread's newest rows the pane reads when it opens one.
   @window 500
 
@@ -415,8 +419,8 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # A post's files as the pane draws them, each one whose bytes the person
   # deleted from Files marked removed (`Aqua.attachments_as_kept/2`), read
-  # when the thread opens. A row read later, as it lands, has its files as
-  # stored.
+  # when the thread opens and when a row arrives. A post already drawn
+  # changes at the next read.
   defp files_kept(row, ctx) do
     case Aqua.attachment_refs(row) do
       [] -> row
@@ -771,6 +775,7 @@ defmodule PrismWeb.ThreadPaneLive do
         %ThreadEvent{thread_id: id, kind: kind, data: data},
         %{assigns: %{thread: %{id: id}}} = socket
       ) do
+    data = if kind in @row_events, do: files_kept(data, socket.assigns.context), else: data
     {:noreply, socket |> handle_thread_event(kind, data) |> seen(landed(kind, data))}
   end
 

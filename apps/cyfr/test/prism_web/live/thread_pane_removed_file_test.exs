@@ -129,6 +129,40 @@ defmodule PrismWeb.ThreadPaneRemovedFileTest do
     assert get(conn, href(athanor, post, ctx.other)).status == 404
   end
 
+  # Astra's probe (#4046): a post's first drawing, as it arrives.
+  test "a post that arrives after its file was deleted from Files is drawn removed", ctx do
+    %{conn: conn, athanor: athanor, actor: actor, thread: thread} = ctx
+    pane = open_pane(conn, athanor, thread)
+    here = %{Sanctum.TestContext.local(:prism) | athanor_id: athanor.id}
+    id = Prima.UUID7.generate_id("msg")
+
+    {:ok, refs} =
+      Aqua.Attachments.store(here, thread.id, id, [
+        %{"filename" => "late.png", "media_type" => "image/png", "bytes" => @png}
+      ])
+
+    {:ok, post} =
+      Threads.append(actor, thread.id, %{
+        id: id,
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        content: "new picture",
+        payload: %{"attachments" => refs}
+      })
+
+    {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}")
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: athanor.id,
+      thread_id: thread.id,
+      kind: :message,
+      data: post
+    })
+
+    assert has_element?(pane, "[data-removed]", "late.png was removed")
+    refute has_element?(pane, ~s(img[src="#{href(athanor, post, hd(refs)["stored_name"])}"]))
+  end
+
   test "a post's folder that cannot be read right now draws nothing as removed", ctx do
     %{conn: conn, athanor: athanor, thread: thread, post: post} = ctx
 

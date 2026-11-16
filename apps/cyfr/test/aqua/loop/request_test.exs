@@ -717,9 +717,72 @@ defmodule Aqua.Loop.RequestTest do
 
       assert Enum.any?(texts, &(&1 =~ "[Files carried in: notes.txt]"))
       refute Enum.any?(texts, &(&1 =~ "Files carried in: moon.png"))
-      assert "[The file moon.png of this post was removed]" in texts
-      assert "[The files moon.png, notes.txt of this post were removed]" in texts
-      assert Enum.count(texts, &(&1 =~ "removed")) == 2
+
+      assert Enum.filter(texts, &(&1 =~ "can no longer be read")) == [
+               "[The person deleted these files of posts in this thread; they can no longer " <>
+                 "be read: moon.png, moon.png, notes.txt]"
+             ]
+    end
+
+    # Astra's probes (#4046): a row that draws nothing of its own, and one a
+    # compaction pins, each still name the file that was deleted.
+    test "a deleted file is named for a crew request a compaction pins" do
+      ref = %{"filename" => "gone.png", "stored_name" => "0-gone.png"}
+
+      request = %{
+        row(1, "text", @agent, "read this", %{"attachments" => [ref]})
+        | sent_by: "aqua",
+          addressee: "planner",
+          status: "pending"
+      }
+
+      compaction = row(2, "compaction", @system, "Earlier work", %{"first_kept_seq" => 3})
+      ask = %{row(3, "text", "usr_1", "continue") | sent_by: "person"}
+
+      text =
+        [request, compaction, ask]
+        |> Request.messages(me: "aqua", removed: %{"msg_1" => [ref]})
+        |> Jason.encode!()
+
+      assert text =~ "still waiting on its reply"
+      assert text =~ "they can no longer be read: gone.png"
+    end
+
+    test "a deleted file of the reader's own post, which draws nothing of its own, is named" do
+      ref = %{"filename" => "gone.png", "stored_name" => "0-gone.png"}
+
+      post = %{
+        row(1, "text", @agent, "Here it is", %{"post" => true, "attachments" => [ref]})
+        | sent_by: "aqua"
+      }
+
+      ask = %{row(2, "text", "usr_1", "use that picture") | sent_by: "person"}
+
+      text =
+        [post, ask]
+        |> Request.messages(me: "aqua", removed: %{"msg_1" => [ref]})
+        |> Jason.encode!()
+
+      refute text =~ "Here it is"
+      assert text =~ "they can no longer be read: gone.png"
+    end
+
+    test "the rows a request carries are those its compaction keeps and pins" do
+      pinned = %{
+        row(1, "text", @agent, "read this")
+        | sent_by: "aqua",
+          addressee: "planner",
+          status: "pending"
+      }
+
+      older = %{row(2, "text", "usr_1", "old") | sent_by: "person"}
+      compaction = row(3, "compaction", @system, "Earlier", %{"first_kept_seq" => 4})
+      kept = %{row(4, "text", "usr_1", "new") | sent_by: "person"}
+
+      assert Enum.map(Request.carried([pinned, older, compaction, kept]), & &1.id) ==
+               ["msg_1", "msg_4"]
+
+      assert Enum.map(Request.carried([older, kept]), & &1.id) == ["msg_2", "msg_4"]
     end
 
     test "a pointer is one line naming its workspace thread; a report names it, its outcome and summary" do
