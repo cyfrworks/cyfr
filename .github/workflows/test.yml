@@ -418,15 +418,44 @@ jobs:
       - name: The tag pipeline's image publication
         run: bash tests/ci-publish-test.sh
 
+  # Which of the host and partitions self-test jobs this run needs: on a
+  # pull request, those whose scripts read a file it changes; everywhere
+  # else, both (scripts/ci/self-test-scope.sh, which holds each job's
+  # paths). A job it leaves out is skipped; one this job fails to decide
+  # runs.
+  self-test-scope:
+    name: Which harness self-tests this change needs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      host: ${{ steps.scope.outputs.host }}
+      partitions: ${{ steps.scope.outputs.partitions }}
+    steps:
+      # The merge commit and its two parents, the base and the head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: The self-tests whose paths changed
+        id: scope
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/ci/self-test-scope.sh
+
   # The harness's own tests, each against stand-ins for what the harness
   # runs. They run stand-in gates and queues with real deadlines, so they
   # take jobs of their own beside the others, split three ways by how long
   # each script takes, each job with only the setup its scripts need.
+  # The host and partitions jobs are skipped only when self-test-scope
+  # succeeded and answered false for them: a scope job that failed, even
+  # after writing an answer (GitHub keeps a failed job's outputs), runs
+  # both. tests/ci-guards-test.sh holds both conditions to that.
   #
   # The containment library and the host queue need Bash, flock, perl and
   # Python, which the runner ships.
   harness-tests-host:
     name: Harness self-tests (containment, host queue)
+    needs: self-test-scope
+    if: ${{ !cancelled() && (needs.self-test-scope.result != 'success' || needs.self-test-scope.outputs.host != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -458,6 +487,8 @@ jobs:
   # nothing of the checkout's build.
   harness-tests-partitions:
     name: Harness self-tests (partitions)
+    needs: self-test-scope
+    if: ${{ !cancelled() && (needs.self-test-scope.result != 'success' || needs.self-test-scope.outputs.partitions != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -1151,7 +1182,8 @@ jobs:
 
   # Dockerfile.locus built once per run, for every job that runs the image:
   # builder-image, locus-runtime-image, locus-backends-image and the
-  # browser job's tincture proof each load this build under their own tag.
+  # browser-tincture job's tincture proof each load this build under their
+  # own tag.
   locus-image:
     name: The Locus image, built once for this run
     runs-on: ubuntu-latest
@@ -1783,17 +1815,12 @@ jobs:
     # The longest shard, the approval and file-offer proofs at both
     # viewports, takes about a quarter of this. A hang is cut here.
     timeout-minutes: 60
-    # The tincture proof's builds service runs the Locus image this run
-    # built once.
-    needs: locus-image
+    # Shard a, whose tincture proof needs the Locus image, is the
+    # browser-tincture job below, on these steps; these shards start at once.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - shard: a
-            title: frame facts, markdown, tincture, containment
-            proofs: [frame-facts, markdown, tincture, containment]
-            build: frame-facts
           - shard: b
             title: identity and join proofs
             proofs: [identity, join]
@@ -1806,7 +1833,7 @@ jobs:
             title: multi-home smoke, grant, share and canvas proofs, HSTS
             proofs: [multi-home-smoke, grant, share, canvas, hsts]
             build: multi-home-smoke
-    steps:
+    steps: &browser-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cache deps and the prod build
         uses: ./.github/actions/setup-elixir
@@ -1979,6 +2006,23 @@ jobs:
       - name: HSTS behind the shipped proxy
         if: contains(matrix.proofs, 'hsts')
         run: tests/proxy-hsts/run.sh
+
+  # The browser job's shard a, on its steps, once the Locus image is built:
+  # the tincture proof's builds service runs the image this run built once.
+  browser-tincture:
+    name: Browser harness (${{ matrix.title }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: locus-image
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: a
+            title: frame facts, markdown, tincture, containment
+            proofs: [frame-facts, markdown, tincture, containment]
+            build: frame-facts
+    steps: *browser-steps
 
   # The tailscale image docker-compose.yml pins is the one a passing
   # real-tailnet run recorded (tests/tailnet-real/verified-image, which only
