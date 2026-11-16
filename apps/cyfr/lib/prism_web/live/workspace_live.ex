@@ -316,6 +316,10 @@ defmodule PrismWeb.WorkspaceLive do
             @tab != "work" && "max-md:hidden"
           ]}
         >
+          {live_render(@socket, PrismWeb.WorkspaceLive.BrowserLive,
+            id: "workspace-browser-view",
+            session: %{"athanor_id" => @context.athanor_id, "thread_id" => @work.id}
+          )}
           <div>
             <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Steps</h2>
             <p :if={@steps == []} id="workspace-no-steps" class="text-sm text-gray-500">

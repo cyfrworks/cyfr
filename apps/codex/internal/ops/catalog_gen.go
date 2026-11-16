@@ -78,6 +78,7 @@ const (
 	BrowserStatus           = "status"
 	BrowserTurnOff          = "turn_off"
 	BrowserTurnOn           = "turn_on"
+	BrowserWatch            = "watch"
 	BuildCompile            = "compile"
 	BuildStatus             = "status"
 	BuildToolchains         = "toolchains"
@@ -311,7 +312,7 @@ var Actions = map[string][]string{
 	"approval":            {"list", "resolve"},
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
 	"athanor":             {"get", "provision", "settings"},
-	"browser":             {"status", "turn_off", "turn_on"},
+	"browser":             {"status", "turn_off", "turn_on", "watch"},
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"canvas":              {"activate", "catalog", "restore", "versions", "write"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
@@ -757,6 +758,25 @@ func (args BrowserTurnOnArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: BrowserTurnOn, fields: fields(args)})
+}
+
+// BrowserWatchArgs carries arguments for browser.watch.
+type BrowserWatchArgs struct {
+	// watch: the workspace thread whose window the person watches
+	Thread string `json:"thread"`
+	// watch: the width, in pixels, the window's images are scaled to fit
+	Width int `json:"width"`
+	// watch: the height, in pixels, the window's images are scaled to fit
+	Height int `json:"height"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args BrowserWatchArgs) MarshalJSON() ([]byte, error) {
+	type fields BrowserWatchArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: BrowserWatch, fields: fields(args)})
 }
 
 // BuildCompileArgs carries arguments for build.compile.

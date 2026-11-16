@@ -65,7 +65,11 @@ func newCDP(w io.Writer, r io.Reader, onTarget func(string, json.RawMessage)) *c
 }
 
 // call sends one command and decodes its result into result, which may
-// be nil.
+// be nil. A command whose context has ended is not written: this is the
+// one place that decides, holding the write lock just before the first
+// byte, so nothing of work that was cancelled, timed out or replaced
+// reaches Chrome, whatever queue it waited in, the wait for that lock
+// included.
 func (c *cdp) call(ctx context.Context, session, method string, params, result any) error {
 	c.mu.Lock()
 	if c.err != nil {
@@ -87,7 +91,9 @@ func (c *cdp) call(ctx context.Context, session, method string, params, result a
 	data, err := json.Marshal(message)
 	if err == nil {
 		c.wmu.Lock()
-		_, err = c.w.Write(append(data, 0))
+		if err = ctx.Err(); err == nil {
+			_, err = c.w.Write(append(data, 0))
+		}
 		c.wmu.Unlock()
 	}
 	if err != nil {
@@ -286,6 +292,15 @@ func (w *watch) wake() {
 	case w.signal <- struct{}{}:
 	default:
 	}
+}
+
+// drain takes every event the watch holds now.
+func (w *watch) drain() []cdpEvent {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	events := w.events
+	w.events = nil
+	return events
 }
 
 // next answers the next matching event, the error that ended the

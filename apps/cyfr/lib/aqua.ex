@@ -109,6 +109,13 @@ defmodule Aqua do
           {:ok, [String.t()]} | :error
   defdelegate attachment_blob_path(thread_id, message_id, ref), to: Attachments, as: :blob_path
 
+  @doc """
+  A message row's attachment refs, each whose bytes the person deleted
+  marked removed (`Aqua.Attachments.as_kept/2`).
+  """
+  @spec attachments_as_kept(Sanctum.Context.t(), Aqua.Tape.row()) :: [Attachments.ref()]
+  defdelegate attachments_as_kept(ctx, message), to: Attachments, as: :as_kept
+
   @doc "The attachment refs a message row carries (`Aqua.Attachments.refs_of/1`)."
   @spec attachment_refs(Aqua.Tape.row()) :: [Attachments.ref()]
   defdelegate attachment_refs(message), to: Attachments, as: :refs_of
@@ -207,6 +214,10 @@ defmodule Aqua do
   """
   @spec workspace(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   defdelegate workspace(ctx, thread_id), to: Aqua.Providers.Workspace, as: :record
+
+  @doc "What a person reads while their browser setting is off. See `Aqua.Providers.Browser.turned_off/0`."
+  @spec browser_turned_off() :: String.t()
+  defdelegate browser_turned_off(), to: Aqua.Providers.Browser, as: :turned_off
 
   @doc """
   A thread's steps across its turns, newest first, each a sentence of

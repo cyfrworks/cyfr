@@ -166,7 +166,7 @@ func TestOpenAndReadOverFakeChrome(t *testing.T) {
 	driverIn, hostOut := io.Pipe()
 	s := newSlot(driverOut, 9, time.Minute)
 	served := make(chan error, 1)
-	go func() { served <- serve(driverIn, s, b.do, nil, make(chan os.Signal)) }()
+	go func() { served <- serve(driverIn, s, b, nil, make(chan os.Signal)) }()
 	h := &host{t: t, in: hostOut, out: bufio.NewReader(hostIn), r: reader{max: maxToHost}}
 
 	h.send(map[string]any{"t": "req", "id": 1, "win": "thr_01", "op": "read", "args": map[string]any{}})
@@ -209,7 +209,7 @@ func TestFailedOpenLeavesNoWindow(t *testing.T) {
 	driverIn, hostOut := io.Pipe()
 	s := newSlot(driverOut, 9, time.Minute)
 	served := make(chan error, 1)
-	go func() { served <- serve(driverIn, s, b.do, nil, make(chan os.Signal)) }()
+	go func() { served <- serve(driverIn, s, b, nil, make(chan os.Signal)) }()
 	h := &host{t: t, in: hostOut, out: bufio.NewReader(hostIn), r: reader{max: maxToHost}}
 
 	h.send(map[string]any{"t": "req", "id": 1, "win": "thr_01", "op": "open", "args": map[string]any{"url": unreachableURL}})
@@ -262,4 +262,33 @@ func jsonEqual(got map[string]any, want string) bool {
 func decodeObject(text string) (map[string]any, error) {
 	var value map[string]any
 	return value, json.Unmarshal([]byte(text), &value)
+}
+
+// Chrome's temporary folder is made in its home, and a dead Chrome's lock
+// folders there are removed; anything else in it is kept.
+func TestChromeTempIsMadeAndClearedOfADeadChromesLocks(t *testing.T) {
+	home := t.TempDir()
+	if err := chromeTemp(home); err != nil {
+		t.Fatal(err)
+	}
+	dir := home + "/" + chromeTmp
+	stale := dir + "/org.chromium.Chromium.ZcmaaZ"
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale+"/SingletonSocket", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/kept", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromeTemp(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("a dead Chrome's lock folder was left: %v", err)
+	}
+	if _, err := os.Stat(dir + "/kept"); err != nil {
+		t.Fatalf("a file of the home's temporary folder was removed: %v", err)
+	}
 }

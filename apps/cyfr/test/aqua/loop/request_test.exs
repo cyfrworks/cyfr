@@ -194,7 +194,7 @@ defmodule Aqua.Loop.RequestTest do
       row(8, "text", "usr_b", "thanks")
     ]
 
-    messages = Request.messages(rows, multi_author?: true, names: %{"usr_a" => "Ann"})
+    messages = Request.messages(rows, %{}, multi_author?: true, names: %{"usr_a" => "Ann"})
 
     assert [
              %{
@@ -253,7 +253,7 @@ defmodule Aqua.Loop.RequestTest do
 
       unnamed = struct(row(3, "text", @system, "a plain line"), sent_by: "person")
 
-      assert Request.messages([fire_row(1), theirs, unnamed],
+      assert Request.messages([fire_row(1), theirs, unnamed], %{},
                me: "aqua",
                multi_author?: true,
                names: %{"usr_a" => "Ann"}
@@ -273,7 +273,7 @@ defmodule Aqua.Loop.RequestTest do
     # (`Aqua.Loop`'s compaction): the fire's line is still the schedule's,
     # never the agent's own words.
     test "reads as the schedule's line in a request that names no reader" do
-      assert Request.messages([fire_row(1)]) == [
+      assert Request.messages([fire_row(1)], %{}) == [
                %{"role" => "user", "content" => [%{"type" => "text", "text" => @line}]}
              ]
     end
@@ -302,7 +302,7 @@ defmodule Aqua.Loop.RequestTest do
       row(5, "turn_aborted", @system, "restart")
     ]
 
-    messages = Request.messages(rows)
+    messages = Request.messages(rows, %{})
 
     assert [
              _,
@@ -354,7 +354,7 @@ defmodule Aqua.Loop.RequestTest do
                %{"role" => "user", "content" => [%{"text" => "what next?"}]},
                %{"role" => "assistant", "content" => [%{"text" => "Asking the planner."}]},
                %{"role" => "user", "content" => said}
-             ] = Request.messages(rows, me: "aqua")
+             ] = Request.messages(rows, %{}, me: "aqua")
 
       texts = Enum.map(said, & &1["text"])
 
@@ -367,7 +367,9 @@ defmodule Aqua.Loop.RequestTest do
 
       # In the member's thread the soul's task is said to the member.
       assert [%{"role" => "user", "content" => [%{"text" => "[aqua]\nplan it"}]}] =
-               Request.messages([crew(1, "aqua", "plan it", addressee: "planner")], me: "planner")
+               Request.messages([crew(1, "aqua", "plan it", addressee: "planner")], %{},
+                 me: "planner"
+               )
     end
 
     # A harness brain rebuilds a new session from the request alone
@@ -414,7 +416,7 @@ defmodule Aqua.Loop.RequestTest do
         crew(12, "aqua", "And add the dentist.", addressee: "claude-code", status: "pending")
       ]
 
-      messages = Request.messages(rows, me: "claude-code")
+      messages = Request.messages(rows, %{}, me: "claude-code")
 
       %{"cases" => [_alone, thread | _]} =
         "../../../../../tests/fixtures/session_context.json"
@@ -444,7 +446,7 @@ defmodule Aqua.Loop.RequestTest do
         crew(4, "person", "and now?", addressee: "aqua")
       ]
 
-      [%{"role" => "user", "content" => blocks}] = Request.messages(rows, me: "aqua")
+      [%{"role" => "user", "content" => blocks}] = Request.messages(rows, %{}, me: "aqua")
       texts = Enum.map(blocks, & &1["text"])
 
       assert [
@@ -475,11 +477,11 @@ defmodule Aqua.Loop.RequestTest do
                  %{"text" => "## Read from a shared thread\n\nBob: hi"}
                ]
              }
-           ] = Request.messages(rows, excerpt: "Bob: hi")
+           ] = Request.messages(rows, %{}, excerpt: "Bob: hi")
 
     # Attachments ride on the initiating message, first user message.
     [%{"content" => content}] =
-      Request.messages([row(1, "text", "usr_a", "see")],
+      Request.messages([row(1, "text", "usr_a", "see")], %{},
         attachments: [%{"type" => "image", "media_type" => "image/png", "data" => "…"}]
       )
 
@@ -498,10 +500,10 @@ defmodule Aqua.Loop.RequestTest do
     # Without the id there is nothing to aim at and the oldest message takes
     # it, which is the whole defect in a thread with history.
     assert [%{"content" => [_, ^image]}, _, %{"content" => [_]}] =
-             Request.messages(rows, attachments: [image])
+             Request.messages(rows, %{}, attachments: [image])
 
     assert [%{"content" => [_]}, _, %{"content" => [_, ^image]}] =
-             Request.messages(rows, attachments: [image], task_message_id: "msg_3")
+             Request.messages(rows, %{}, attachments: [image], task_message_id: "msg_3")
   end
 
   test "the provider's own search runs only when the policy turns it on and the grant carries it" do
@@ -664,7 +666,7 @@ defmodule Aqua.Loop.RequestTest do
       }
 
       [%{"role" => "user", "content" => [%{"text" => text}]}] =
-        Request.messages([opening],
+        Request.messages([opening], %{},
           me: "aqua",
           names: %{"usr_1" => "Ada"},
           refs: %{"msg_ref" => cited}
@@ -675,6 +677,113 @@ defmodule Aqua.Loop.RequestTest do
       assert text =~ "[Post msg_ref of the daily thread, by Ada]\nthe moon is full tonight"
       refute text =~ "msg_gone"
       assert text =~ "[Files carried in: moon.png]"
+    end
+
+    test "a file the person deleted is said removed where its post is, and never named as carried" do
+      moon = %{
+        "filename" => "moon.png",
+        "stored_name" => "0-moon.png",
+        "media_type" => "image/png"
+      }
+
+      notes = %{"filename" => "notes.txt", "stored_name" => "1-notes.txt"}
+
+      opening = %{
+        row(1, "opening", "usr_1", "write the moon report", %{
+          "title" => "Moon report",
+          "asked_by" => "usr_1",
+          "attachments" => [moon, notes]
+        })
+        | sent_by: "person",
+          thread_id: "thr_work"
+      }
+
+      older = %{
+        row(2, "text", "usr_1", "and these", %{"attachments" => [moon, notes]})
+        | sent_by: "person"
+      }
+
+      kept = %{
+        row(3, "text", "usr_1", "and this one", %{"attachments" => [notes]})
+        | sent_by: "person"
+      }
+
+      [%{"content" => blocks}] =
+        Request.messages([opening, older, kept], %{"msg_1" => [moon], "msg_2" => [moon, notes]},
+          me: "aqua",
+          names: %{"usr_1" => "Ada"}
+        )
+
+      texts = Enum.map(blocks, & &1["text"])
+
+      assert Enum.any?(texts, &(&1 =~ "[Files carried in: notes.txt]"))
+      refute Enum.any?(texts, &(&1 =~ "Files carried in: moon.png"))
+
+      assert Enum.filter(texts, &(&1 =~ "can no longer be read")) == [
+               "[The person deleted these files of posts in this thread; they can no longer " <>
+                 "be read: moon.png, moon.png, notes.txt]"
+             ]
+    end
+
+    # Astra's probes (#4046): a row that draws nothing of its own, and one a
+    # compaction pins, each still name the file that was deleted.
+    test "a deleted file is named for a crew request a compaction pins" do
+      ref = %{"filename" => "gone.png", "stored_name" => "0-gone.png"}
+
+      request = %{
+        row(1, "text", @agent, "read this", %{"attachments" => [ref]})
+        | sent_by: "aqua",
+          addressee: "planner",
+          status: "pending"
+      }
+
+      compaction = row(2, "compaction", @system, "Earlier work", %{"first_kept_seq" => 3})
+      ask = %{row(3, "text", "usr_1", "continue") | sent_by: "person"}
+
+      text =
+        [request, compaction, ask]
+        |> Request.messages(%{"msg_1" => [ref]}, me: "aqua")
+        |> Jason.encode!()
+
+      assert text =~ "still waiting on its reply"
+      assert text =~ "they can no longer be read: gone.png"
+    end
+
+    test "a deleted file of the reader's own post, which draws nothing of its own, is named" do
+      ref = %{"filename" => "gone.png", "stored_name" => "0-gone.png"}
+
+      post = %{
+        row(1, "text", @agent, "Here it is", %{"post" => true, "attachments" => [ref]})
+        | sent_by: "aqua"
+      }
+
+      ask = %{row(2, "text", "usr_1", "use that picture") | sent_by: "person"}
+
+      text =
+        [post, ask]
+        |> Request.messages(%{"msg_1" => [ref]}, me: "aqua")
+        |> Jason.encode!()
+
+      refute text =~ "Here it is"
+      assert text =~ "they can no longer be read: gone.png"
+    end
+
+    test "the rows a request carries are those its compaction keeps and pins" do
+      pinned = %{
+        row(1, "text", @agent, "read this")
+        | sent_by: "aqua",
+          addressee: "planner",
+          status: "pending"
+      }
+
+      older = %{row(2, "text", "usr_1", "old") | sent_by: "person"}
+      compaction = row(3, "compaction", @system, "Earlier", %{"first_kept_seq" => 4})
+      kept = %{row(4, "text", "usr_1", "new") | sent_by: "person"}
+
+      assert Enum.map(Request.carried([pinned, older, compaction, kept]), & &1.id) ==
+               ["msg_1", "msg_4"]
+
+      assert Enum.map(Request.carried([older, kept]), & &1.id) == ["msg_2", "msg_4"]
     end
 
     test "a pointer is one line naming its workspace thread; a report names it, its outcome and summary" do
@@ -699,7 +808,7 @@ defmodule Aqua.Loop.RequestTest do
 
       # Each is another thread's word to the reader, never its own speech.
       [%{"role" => "user", "content" => [%{"text" => pointed}, %{"text" => reported}]}] =
-        Request.messages([pointer, report], me: "aqua")
+        Request.messages([pointer, report], %{}, me: "aqua")
 
       assert pointed ==
                ~s|[The workspace thread "Moon report" (thr_work) was opened or asked again from here]|
@@ -713,7 +822,7 @@ defmodule Aqua.Loop.RequestTest do
       theirs = %{row(2, "text", @agent, "their chart", %{"post" => true}) | sent_by: "planner"}
 
       assert [%{"role" => "user", "content" => [%{"text" => "[planner]\ntheir chart"}]}] =
-               Request.messages([mine, theirs], me: "aqua")
+               Request.messages([mine, theirs], %{}, me: "aqua")
     end
   end
 end

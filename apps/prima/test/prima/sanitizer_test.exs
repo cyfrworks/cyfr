@@ -420,6 +420,18 @@ defmodule Prima.SanitizerTest do
     end
   end
 
+  # What a person types into the window of Aqua's browser they watch.
+  describe "what is typed into a watched window of Aqua's browser" do
+    test "is redacted, and Phoenix's event log filters it" do
+      key = %{"k" => "key", "type" => "down", "key" => "p", "text" => "p"}
+
+      assert Prima.Sanitizer.sanitize(%{"browser_input" => [key], "n" => 3}) ==
+               %{"browser_input" => "[REDACTED]", "n" => 3}
+
+      assert "browser_input" in Prima.Sanitizer.filter_parameters()
+    end
+  end
+
   # A pending confirmation's secret travels as a context's `confirmation_id`
   # and as the MCP request metadata key `cyfr/confirmationId`.
   describe "a pending confirmation's secret" do

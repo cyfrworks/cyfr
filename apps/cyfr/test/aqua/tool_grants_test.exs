@@ -344,9 +344,13 @@ defmodule Aqua.ToolGrantsTest do
                ToolGrants.resolve(@authored, [], {:ok, false})
 
       # A glob names the family as its exact lines do; the setting's own
-      # turn_on still asks, since it takes no standing answer.
+      # turn_on still asks, since it takes no standing answer, and the
+      # person's watch keeps the line it was given, which no agent can use:
+      # no turn's chain is offered it.
       assert ToolGrants.resolve(%{"browser.*" => "auto"}, [], {:ok, true}) ==
-               Map.merge(family("auto"), %{@setting_lines | "browser.turn_on" => "ask"})
+               family("auto")
+               |> Map.merge(%{@setting_lines | "browser.turn_on" => "ask"})
+               |> Map.put("browser.watch", "auto")
 
       assert ToolGrants.effective(%{"browser.open" => "ask"}, [], {:ok, false}) ==
                %{"browser.open" => {:deny, :setting}}

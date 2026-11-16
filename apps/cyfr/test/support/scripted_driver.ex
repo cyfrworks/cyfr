@@ -21,6 +21,12 @@ defmodule Cyfr.Test.ScriptedDriver do
   released response's every chunk at once, as a driver that ignored the
   acknowledgements would, to force a tail. Every `again` is reported as
   `{:driver, :again, session, id, seq}`.
+
+  A cast (C12) is a request of op `cast`, reported and answered as any
+  request is; its images are the test's to write (`image/4`), and the
+  host's `seen`, `uncast` and `input` are reported as `{:driver, :seen,
+  session, cast, seq}`, `{:driver, :uncast, session, cast}` and
+  `{:driver, :input, session, cast, events}`.
   """
 
   use GenServer
@@ -41,6 +47,19 @@ defmodule Cyfr.Test.ScriptedDriver do
 
   @doc "Write `bytes` on every session as the driver's own output."
   def write(driver, bytes), do: GenServer.call(driver, {:write, bytes})
+
+  @doc "The frame of image `seq` of cast `cast`, its JPEG `jpeg`."
+  def image_frame(cast, seq, jpeg),
+    do:
+      Frame.message(%{
+        "t" => "image",
+        "id" => cast,
+        "seq" => seq,
+        "jpeg" => Base.encode64(jpeg)
+      })
+
+  @doc "Write image `seq` of cast `cast` on every session."
+  def image(driver, cast, seq, jpeg), do: write(driver, image_frame(cast, seq, jpeg))
 
   @impl true
   def init({test, opts}) do
@@ -184,6 +203,21 @@ defmodule Cyfr.Test.ScriptedDriver do
         write_frame(state, session, %{"t" => "gone", "id" => id})
         state
     end
+  end
+
+  defp message(state, session, %{"t" => "seen", "id" => cast, "seq" => seq}) do
+    send(state.test, {:driver, :seen, session, cast, seq})
+    state
+  end
+
+  defp message(state, session, %{"t" => "uncast", "id" => cast}) do
+    send(state.test, {:driver, :uncast, session, cast})
+    state
+  end
+
+  defp message(state, session, %{"t" => "input", "id" => cast, "evs" => events}) do
+    send(state.test, {:driver, :input, session, cast, events})
+    state
   end
 
   defp message(state, _session, _other), do: state

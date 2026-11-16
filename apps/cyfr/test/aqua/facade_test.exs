@@ -16,9 +16,11 @@ defmodule Aqua.FacadeTest do
     attachment_blob_path: 3,
     attachment_limits: 0,
     attachment_refs: 1,
+    attachments_as_kept: 2,
     auto_permitted?: 2,
     brain_options: 2,
     brain_signs_in?: 1,
+    browser_turned_off: 0,
     describe_note_result: 1,
     mark_read: 3,
     model_status: 2,
@@ -97,6 +99,12 @@ defmodule Aqua.FacadeTest do
     assert {:ok, path} = Aqua.attachment_blob_path("thr_1", "msg_1", ref)
     assert {:ok, ^path} = Aqua.Attachments.blob_path("thr_1", "msg_1", ref)
     assert :error = Aqua.attachment_blob_path("thr_1", "msg_1", %{"filename" => "a.txt"})
+
+    # A row that holds no file reads no storage and answers none.
+    row = %Arca.Schemas.Message{id: "msg_1", thread_id: "thr_1", payload: nil}
+    ctx = Sanctum.TestContext.local()
+    assert Aqua.attachments_as_kept(ctx, row) == Aqua.Attachments.as_kept(ctx, row)
+    assert Aqua.attachments_as_kept(ctx, row) == []
   end
 
   test "an action's kind and its auto rule are Aqua.Kinds', the virtual catalog Prima's" do

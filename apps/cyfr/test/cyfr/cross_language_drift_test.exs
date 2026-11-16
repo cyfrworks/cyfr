@@ -411,8 +411,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "browser_frames.json" => [
       {"apps/cyfr/test/opus/browser/frame_test.exs",
        ~w(start max_to_host max_to_driver max_response encode decode messages)},
+      {"apps/cyfr/test/opus/browser/input_test.exs", ~w(input input_in_flight)},
+      {"apps/cyfr/assets/test/workspace_stream/stream.test.mjs", ~w(input input_in_flight)},
       {"apps/locus/keeper/cmd/cyfr-browser/frame_test.go",
-       ~w(start max_to_host max_to_driver max_response encode decode)},
+       ~w(start max_to_host max_to_driver max_response input_in_flight encode decode input)},
       {"tests/locus-backends-image/browser.py", ~w(start max_to_host max_to_driver encode decode)}
     ],
     "canvas_shape.json" => [

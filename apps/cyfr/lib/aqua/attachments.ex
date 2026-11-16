@@ -540,6 +540,48 @@ defmodule Aqua.Attachments do
     end)
   end
 
+  @doc """
+  A row's refs as its files stand now: each whose bytes are confirmed
+  gone — the person deleted it from Files (`Arca.Files`, `threads/`) —
+  marked `"removed" => true`. One listing of the row's own folder; a
+  folder that cannot be read right now marks none, so a passing storage
+  error never reads as a removal.
+  """
+  @spec as_kept(Context.t(), Aqua.Tape.row()) :: [ref()]
+  def as_kept(%Context{} = ctx, row) do
+    case refs_of(row) do
+      [] -> []
+      refs -> mark_removed(refs, kept_names(ctx, row, refs))
+    end
+  end
+
+  # A ref with no stored name references no bytes, so it is never removed.
+  defp mark_removed(refs, {:ok, kept}) do
+    for ref <- refs do
+      if is_binary(ref["stored_name"]) and ref["stored_name"] not in kept,
+        do: Map.put(ref, "removed", true),
+        else: ref
+    end
+  end
+
+  defp mark_removed(refs, :unread), do: refs
+
+  # The names the row's folder holds: listed, not read, and only a listing
+  # that answered counts. A folder that is not there holds none.
+  defp kept_names(ctx, %{thread_id: thread_id, id: message_id}, refs) do
+    with [path | _] <-
+           for(ref <- refs, {:ok, path} <- [blob_path(thread_id, message_id, ref)], do: path),
+         {:ok, entries} <-
+           listed(Arca.list_typed(Sanctum.Context.actor(ctx), Enum.drop(path, -1))) do
+      {:ok, for({name, :file} <- entries, do: name)}
+    else
+      _unread -> :unread
+    end
+  end
+
+  defp listed({:error, :not_found}), do: {:ok, []}
+  defp listed(listed), do: listed
+
   @doc "The refs stored on a message row's payload (`[]` when none)."
   @spec refs_of(Aqua.Tape.row()) :: [ref()]
   def refs_of(msg) do
