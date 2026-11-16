@@ -40,7 +40,10 @@ defmodule Aqua.Prompt do
   the turn's sources without a `notes.read`. The loop records them on the
   turn as it opens each model step. A page or a note that carries outside
   sources is shown attributed: quoted material from outside, never the
-  person's words or instructions. Aqua writes the pinned page and a
+  person's words or instructions. The pinned page shows the revision it
+  stands at, which a turn's `notes.pin` names to write it again, so a
+  turn never writes over a page the person changed after the turn read
+  it. Aqua writes the pinned page and a
   workspace thread's notes itself, so one written after reading outside
   material carries that into every turn that reads it, until the person
   writes the page themselves on the Aqua page or removes it.
@@ -335,7 +338,8 @@ defmodule Aqua.Prompt do
                 "`notes.keep` for what people would want found again — a decision, a " <>
                 "fact, a preference. Keep the pinned page current yourself with " <>
                 "`notes.pin`, whole and short, for what every future turn needs to know " <>
-                "about the person; never keep a secret or a credential."
+                "about the person, naming as its `revision` the one shown beside the page " <>
+                "here, or 0 when none is pinned; never keep a secret or a credential."
 
   # The notes actions are interactive: only a session's chain reaches
   # them. A turn started any other way is not told to read what it cannot.
@@ -354,8 +358,14 @@ defmodule Aqua.Prompt do
     {pinned, pinned_sources} =
       case Aqua.Notes.pinned(ctx) do
         {:ok, %{name: name, content: content} = page} ->
-          {["\n\n### Pinned: ", name, attributed(page), "\n\n", content],
-           [Prima.Source.new(:pinned) | Prima.Source.material(page.sources)]}
+          {[
+             "\n\n### Pinned: ",
+             name,
+             " (revision #{page.revision})",
+             attributed(page),
+             "\n\n",
+             content
+           ], [Prima.Source.new(:pinned) | Prima.Source.material(page.sources)]}
 
         :none ->
           {[], []}

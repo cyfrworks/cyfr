@@ -2550,7 +2550,7 @@ type NotesPinArgs struct {
 	Thread Field[string] `json:"thread,omitzero"`
 	// keep, pin, at the external entry: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored.
 	Execution Field[string] `json:"execution,omitzero"`
-	// pin: the revision the page stood at when it was read (read answers it); a page written since is refused and left as it is
+	// pin: the revision the page stood at when it was read (read answers it, and a turn's Notes section shows it); a page written since is refused and left as it is. A turn always names it.
 	Revision Field[int] `json:"revision,omitzero"`
 }
 

@@ -390,7 +390,12 @@ defmodule Aqua.NotesStoreTest do
                Aqua.Providers.Notes.handle(
                  "notes",
                  guest,
-                 Map.merge(lineage, %{"action" => "pin", "name" => "about-you", "content" => "y"})
+                 Map.merge(lineage, %{
+                   "action" => "pin",
+                   "name" => "about-you",
+                   "content" => "y",
+                   "revision" => 0
+                 })
                )
 
       # Aqua's own page: kept by Aqua, naming the thread it was written in,

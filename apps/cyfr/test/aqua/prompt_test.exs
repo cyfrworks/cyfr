@@ -171,7 +171,7 @@ defmodule Aqua.PromptTest do
       assert before =~ "## Runtime Context"
       assert before =~ "## Aqua Shell Control"
 
-      assert notes =~ "### Pinned: about-you\n\nWe are planning a trip."
+      assert notes =~ "### Pinned: about-you (revision 1)\n\nWe are planning a trip."
       # Sorted by name, first line only, no timestamps.
       assert notes =~ "- decided — Lisbon\n- flight — BA117 on the 3rd\n"
       refute notes =~ "seat 4A"
@@ -221,14 +221,14 @@ defmodule Aqua.PromptTest do
       composed = Prompt.compose(home, agent: agent(), authority: nil)
 
       assert composed.text =~
-               "### Pinned: about-you (kept after reading outside material: news.example"
+               "### Pinned: about-you (revision 1) (kept after reading outside material: news.example"
 
       assert composed.sources == [Prima.Source.new(:pinned), host]
 
       # The person's own write of it carries nothing but the page.
       {:ok, _} = Aqua.Notes.pin(home, "about-you", "Flies to Lisbon on the 3rd.")
       composed = Prompt.compose(home, agent: agent(), authority: nil)
-      assert composed.text =~ "### Pinned: about-you\n\nFlies to Lisbon on the 3rd."
+      assert composed.text =~ "### Pinned: about-you (revision 2)\n\nFlies to Lisbon on the 3rd."
       assert composed.sources == [Prima.Source.new(:pinned)]
     end
 
@@ -298,7 +298,7 @@ defmodule Aqua.PromptTest do
 
       prompt = Prompt.compose(home, agent: agent(), authority: nil).text
 
-      assert prompt =~ "### Pinned: about-you\n\nPrefers mornings."
+      assert prompt =~ "### Pinned: about-you (revision 1)\n\nPrefers mornings."
       assert prompt =~ "No notes filed yet."
     end
 

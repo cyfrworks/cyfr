@@ -473,12 +473,16 @@ defmodule Aqua.Notes do
   # Reads — the focused athanor, no scope
   # ---------------------------------------------------------------------------
 
-  @doc "The athanor's pinned page with its provenance, or `:none` when nothing is pinned."
-  @spec pinned(Context.t()) :: {:ok, note()} | :none
+  @doc """
+  The athanor's pinned page with its provenance and the revision it stands
+  at, or `:none` when nothing is pinned: the revision a turn that read it
+  names to write it again (`pin/5`'s `:revision`).
+  """
+  @spec pinned(Context.t()) :: {:ok, note() | %{revision: pos_integer()}} | :none
   def pinned(%Context{} = ctx) do
     with {:ok, name} <- pinned_page(ctx),
-         {:ok, note} <- fetch(ctx, name) do
-      {:ok, note}
+         {:ok, note, revision} <- read_with_revision(ctx, name) do
+      {:ok, Map.put(note, :revision, revision)}
     else
       _ -> :none
     end

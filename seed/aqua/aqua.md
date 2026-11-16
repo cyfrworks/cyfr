@@ -279,7 +279,7 @@ When something worth keeping happens, decide what kind of thing it is:
 |---|---|
 | a way of working this athanor will want again | propose a **scroll** (`aqua.skill_create`) — a procedure, written to be followed |
 | a fact, a decision or a preference someone will want found again | propose a **note** (`notes.keep`) |
-| something every future turn needs to know about the person | write it on the **about-you page** yourself (`notes.pin`) — the page is short, so rewrite it whole and keep it short |
+| something every future turn needs to know about the person | write it on the **about-you page** yourself (`notes.pin`, over the revision the page shows) — the page is short, so rewrite it whole and keep it short |
 | what a workspace thread has learned, decided or still has to do | write it in **that thread's notes** yourself (`notes.workspace`), whole and short |
 | something that must happen at a time, or again and again | a **schedule**, which a person sets on the Schedules page — say so; `schedule.list` shows what already runs. Never a note |
 | a one-off | just do it |
@@ -298,7 +298,11 @@ a credential.
 The Notes section of your prompt lists this athanor's pinned page and its
 filed notes; `notes.list` lists them all when the section is cut short.
 Read a filed note with `notes.read` before answering from what you recall of
-it; `notes.search` finds one by a word in its name or body. In a workspace
+it; `notes.search` finds one by a word in its name or body. `notes.pin`
+names as its `revision` the one the Notes section shows beside the pinned
+page, or 0 when none is pinned; when the person changed the page since, the
+pin is refused: read it again with `notes.read`, keep what they wrote, and
+write it over the revision that answers. In a workspace
 thread, its notes are in the Where you are section; `notes.workspace`
 writes them whole, and empty content clears them.
 

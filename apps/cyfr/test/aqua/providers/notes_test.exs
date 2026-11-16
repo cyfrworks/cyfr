@@ -420,6 +420,63 @@ defmodule Aqua.Providers.NotesTest do
     assert :none = Aqua.Notes.pinned(other)
   end
 
+  test "a person's save during a turn stands: the turn's pin over the page it read, or over none, " <>
+         "is refused and writes nothing, and one over the page read again writes it",
+       %{ctx: ctx} do
+    {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Likes ramen.")
+
+    # The turn's prompt shows the page with the revision it stands at.
+    composed = Aqua.Prompt.compose(ctx, agent: %{"prompt" => "", "tool_policy" => %{}})
+    [_, read] = Regex.run(~r/### Pinned: about-you \(revision (\d+)\)/, composed.text)
+    read = String.to_integer(read)
+
+    # The person saves the page on the Aqua page while the turn works.
+    assert {:ok, %{pinned: "about-you"}} =
+             call(ctx, %{
+               "action" => "pin",
+               "name" => "about-you",
+               "content" => "Likes ramen; vegetarian since May.",
+               "revision" => read
+             })
+
+    {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+    turn = turn_in!(ctx, daily, [])
+
+    pin = fn args ->
+      call(
+        Context.enter_guest(ctx),
+        Map.merge(
+          %{
+            "action" => "pin",
+            "name" => "about-you",
+            "content" => "Likes ramen.\nPrefers mornings.",
+            "thread_id" => daily.id,
+            "root_execution_id" => turn.root_execution_id
+          },
+          args
+        )
+      )
+    end
+
+    # A pin that names no revision, and one over the revision the turn read.
+    assert {:error, {:invalid_argument, unread}} = pin.(%{})
+    assert unread =~ "revision"
+    assert {:error, {:conflict, moved}} = pin.(%{"revision" => read})
+    assert moved =~ "Read it again with notes.read"
+
+    assert {:ok, %{content: "Likes ramen; vegetarian since May.", kept_by: by, revision: now}} =
+             Aqua.Notes.read(ctx, "about-you")
+
+    assert by == ctx.user_id and now == read + 1
+
+    # Read again, the turn writes over what the person wrote.
+    assert {:ok, %{pinned: "about-you"}} =
+             pin.(%{"revision" => now, "content" => "Vegetarian since May.\nPrefers mornings."})
+
+    assert {:ok, %{content: "Vegetarian since May.\nPrefers mornings.", kept_by: "aqua"}} =
+             Aqua.Notes.read(ctx, "about-you")
+  end
+
   test "the shipped soul's manifest grants the notes actions its policy names" do
     # The chain authority is exact `tool.action` membership in the consent
     # blob, minted from the manifest's caps against the loaded providers —

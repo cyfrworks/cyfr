@@ -18,7 +18,9 @@ defmodule Aqua.Providers.Notes do
   inside the chain under the turn's authority. Two writes need no click
   where the soul's policy says `auto`, as the seed's does: `pin`, the
   about-you page, and `workspace`, the notes of the workspace thread the
-  turn runs in, which the lineage names and no argument does. The
+  turn runs in, which the lineage names and no argument does. A turn's
+  `pin` names the revision of the page it read, and one the person changed
+  since is refused, so a turn never writes over what it did not read. The
   consent class keeps its surface half there — only an `:oidc` session's
   chain gets through — so the same formula started by a key or a schedule
   is refused exactly as at the door.
@@ -139,7 +141,7 @@ defmodule Aqua.Providers.Notes do
             Arg.new("revision", :integer,
               min: 0,
               description:
-                "pin: the revision the page stood at when it was read (read answers it); a page written since is refused and left as it is"
+                "pin: the revision the page stood at when it was read (read answers it, and a turn's Notes section shows it); a page written since is refused and left as it is. A turn always names it."
             )
           ],
           kind: :write,
@@ -291,6 +293,15 @@ defmodule Aqua.Providers.Notes do
   def answer_sources(_actor, answer),
     do: Prima.Source.set([Prima.Source.new(:filed) | Aqua.Notes.sources_of_answer({:ok, answer})])
 
+  # What a turn's pin is told when the page is not the one it read, and
+  # when it names no revision at all.
+  @page_moved "The about-you page changed since this turn read it, so nothing was written. " <>
+                "Read it again with notes.read and write it whole over the revision that " <>
+                "answers, keeping what the person wrote."
+  @page_unread "notes.pin in a turn names, as revision, the revision of the page it read: " <>
+                 "the one the Notes section shows beside the page, or notes.read answers; " <>
+                 "0 when none is pinned."
+
   @impl true
   def handle("notes", %Context{} = ctx, args), do: dispatch(ctx, args)
 
@@ -301,8 +312,27 @@ defmodule Aqua.Providers.Notes do
        do: Notes.keep(ctx, name, content, provenance(args, ctx))
 
   # The pinned page, whole: in a chain Aqua's, with the sources the
-  # chain read; at the door the person's, with none. A `revision` writes
-  # only over the page as it was read.
+  # chain read, written only over the revision the turn read, so a page
+  # the person changed since is never written over by a turn that did not
+  # read it; at the door the person's, with none. A `revision` writes only
+  # over the page as it was read.
+  defp dispatch(
+         %Context{plane: :guest} = ctx,
+         %{"action" => "pin", "name" => name, "content" => content} = args
+       )
+       when is_binary(name) and is_binary(content) do
+    case args["revision"] do
+      revision when is_integer(revision) and revision >= 0 ->
+        case Notes.pin(ctx, name, content, provenance(args, ctx), revision: revision) do
+          {:error, {:conflict, _}} -> {:error, {:conflict, @page_moved}}
+          answered -> answered
+        end
+
+      _none ->
+        {:error, {:invalid_argument, @page_unread}}
+    end
+  end
+
   defp dispatch(ctx, %{"action" => "pin", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
        do: Notes.pin(ctx, name, content, provenance(args, ctx), revision: args["revision"])
