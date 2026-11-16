@@ -145,7 +145,7 @@ defmodule Aqua.Prompt do
 
   defp where(%{kind: :workspace, title: title, ask: ask}) do
     [
-      "\n\n---\n\n## Where you are\n\nYou are the orchestrator of the workspace thread \"",
+      "\n\n---\n\n## Where you are\n\nYou are working the workspace thread \"",
       title,
       "\", which the person's daily thread opened for one piece of work. They asked:\n\n",
       quoted(ask),

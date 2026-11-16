@@ -35,8 +35,8 @@ defmodule Aqua do
     Aqua, each fire a turn of the daily thread current when it fires.
   - `Aqua.Day` — the person's day, and the daily thread that holds it.
   - `Aqua.Providers.Workspace` — workspace threads, opened from a daily
-    thread for one piece of work, with an orchestrator of their own,
-    reporting back to it; `Aqua.Steps` — what Aqua did in a thread, one
+    thread for one piece of work, which the soul works in turns of their
+    own, reporting back to it; `Aqua.Steps` — what Aqua did in a thread, one
     sentence a step.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into a
     shared thread you sit in.

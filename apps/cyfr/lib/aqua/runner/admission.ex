@@ -34,11 +34,10 @@ defmodule Aqua.Runner.Admission do
       member. No other kind of thread admits one.
     * A workspace thread's opening (`:opening`, the row its opening's
       transaction wrote there) is a turn of the soul in that workspace
-      thread, the workspace thread's orchestrator, sent by the person
-      who asked.
+      thread, which works it, sent by the person who asked.
     * A workspace thread's report (`:report`) is a turn of the soul in a
-      daily thread, the daily orchestrator, sent by the soul that worked
-      it. No other kind of thread admits one.
+      daily thread, sent by the soul that worked it. No other kind of
+      thread admits one.
 
   Anything else is refused `:not_addressable`.
   """

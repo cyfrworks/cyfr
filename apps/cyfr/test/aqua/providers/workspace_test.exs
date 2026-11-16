@@ -4,7 +4,7 @@
 defmodule Aqua.Providers.WorkspaceTest do
   @moduledoc """
   Workspace threads: opened from a daily thread in one transaction with
-  their pointer and the record that starts their orchestrator, reporting
+  their pointer and the record that starts the soul's turn there, reporting
   back to the daily thread current when the report is delivered, every
   move of their state in the transaction of the write that moves it, and
   forgotten with everything other threads kept of them. The crew's
@@ -208,7 +208,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert [%{snapshot: %{"opening_id" => opening_id}}] = records(ctx, "workspace_open")
       assert opening_id == opening.id
 
-      # Delivered, the orchestrator's turn opens on the opening itself,
+      # Delivered, the soul's turn there opens on the opening itself,
       # narrowed to what it named and the means to post and report.
       assert {:ok, %{"applied" => 1}} = drain(ctx)
       %{turn_id: turn_id} = Enum.find(rows(ctx, workspace.id), &(&1.id == opening.id))
@@ -227,19 +227,19 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert sent(first) =~ ~s(asked, in this workspace thread \\"Moon report\\")
       assert sent(first) =~ "write the moon report"
 
-      # Each orchestrator reads where it is from its prompt: the daily
+      # Each turn of the soul reads where it is from its prompt: the daily
       # thread's, and the workspace thread's with its title and ask.
       assert first.input["params"]["system"] =~ "## Where you are"
 
       assert first.input["params"]["system"] =~
-               ~s(orchestrator of the workspace thread "Moon report")
+               ~s(You are working the workspace thread "Moon report")
 
       assert first.input["params"]["system"] =~ "> write the moon report"
 
       daily_call = Enum.find(chats("agent:local.aqua"), &(sent(&1) =~ "make me a moon report"))
       assert daily_call.input["params"]["system"] =~ "## Where you are"
       assert daily_call.input["params"]["system"] =~ "on the person's daily thread"
-      refute daily_call.input["params"]["system"] =~ "orchestrator of the workspace thread"
+      refute daily_call.input["params"]["system"] =~ "working the workspace thread"
 
       # Once.
       assert {:ok, %{}} = drain(ctx)

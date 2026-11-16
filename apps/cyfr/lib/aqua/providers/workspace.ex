@@ -5,9 +5,9 @@ defmodule Aqua.Providers.Workspace do
   @moduledoc """
   The `workspace` tool: workspace threads, the second tier of the
   person's threads. A daily thread is where the person talks to Aqua; a
-  workspace thread is one Aqua opens for one piece of work, with an
-  orchestrator of its own (the soul, in a turn of that thread), pointed at
-  by a post of the daily thread, and reporting back to it.
+  workspace thread is one Aqua opens for one piece of work, which the soul
+  works in turns of that thread, pointed at by a post of the daily
+  thread, and reporting back to it.
 
     * `open` opens one, or sends a further ask to one, from a daily
       thread: in one transaction the thread, its opening (the envelope:
@@ -15,11 +15,11 @@ defmodule Aqua.Providers.Workspace do
       it refers to, the files it carries, copied into it, the tools it is
       narrowed to, whether its browser work is kept apart, its title), a
       pointer post on the daily thread and the `workspace_open` record
-      whose delivery starts the orchestrator's turn
+      whose delivery starts the soul's turn there
       (`Arca.TurnStorage.open_workspace/2`, `Aqua.Crew`). It answers the
       thread's id at once, and the calling turn goes on, as `crew.ask`'s
       does. A thread asked again that had finished opens again.
-    * `report` is the orchestrator's: from a turn of the workspace thread
+    * `report` is the soul's there: from a turn of the workspace thread
       it reports, under that turn's fence, it moves the thread from
       `open` to `done` or `failed` with a summary and the files of the
       thread's posts it carries, and the `workspace_report` record lands

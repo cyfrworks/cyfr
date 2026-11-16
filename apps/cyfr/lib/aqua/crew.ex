@@ -79,8 +79,8 @@ defmodule Aqua.Crew do
       it carries copied from the workspace thread's posts into its own
       row first, under an id its record decides, so a delivery tried
       again first discards what an earlier try stored on that thread. It
-      opens or waits as a turn of the daily orchestrator, which tells the
-      person.
+      opens or waits as a turn of the soul on the daily thread, which
+      tells the person.
 
   A record whose workspace thread is gone is receipted `refused` and
   delivers nothing; a delivery in flight when it goes lands nothing
@@ -115,7 +115,7 @@ defmodule Aqua.Crew do
   @consumer "crew_delivery"
   @kinds ["crew_request", "crew_reply", "workspace_open", "workspace_report"]
   # What an opening narrowed to named tools keeps whatever it names: the
-  # orchestrator's means of posting in its thread and of reporting it.
+  # soul's means of posting in its thread and of reporting it.
   @workspace_means ["thread.post", "workspace.report"]
   @lease_ms 30_000
   @tick_ms 30_000
@@ -801,8 +801,7 @@ defmodule Aqua.Crew do
     "msg_rpt_" <> digest
   end
 
-  # What a report says: the summary the workspace thread's orchestrator
-  # wrote, or for a move the host made, which carries none, one sentence
+  # What a report says: the summary the soul wrote in the workspace thread, or for a move the host made, which carries none, one sentence
   # of what happened.
   defp report_text(%{"summary" => summary} = snapshot) when is_binary(summary) do
     case String.trim(summary) do
