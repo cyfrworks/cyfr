@@ -7,8 +7,8 @@ defmodule Opus.Browser.FrameTest do
   driver reads too (`tests/fixtures/browser_frames.json`): every body
   encodes to the exact frame, and a stream fed piece by piece gives the
   bodies and the bytes still held, a cut, corrupt or oversized frame
-  never taken as whole; and the bounds, a put's among them, are the
-  vectors'.
+  never taken as whole; and the bounds, a put's and a call's among them,
+  are the vectors'.
   """
   use ExUnit.Case, async: true
 
@@ -39,6 +39,15 @@ defmodule Opus.Browser.FrameTest do
     base64 = 4 * div(Frame.put_part_bytes() + 2, 3)
     envelope = byte_size(~s({"t":"part","id":#{2 ** 63},"seq":#{2 ** 63},"part":""}))
     assert base64 + envelope <= Frame.max_to_driver()
+  end
+
+  test "a call's bound is the vectors', and a call of the most bytes is a frame the host takes",
+       %{vectors: vectors} do
+    assert vectors["call"] == %{"max_body" => Frame.call_max_body()}
+
+    base64 = 4 * div(Frame.call_max_body() + 2, 3)
+    envelope = byte_size(~s({"t":"call","id":#{2 ** 63},"win":"","op":"invoke","body":""}))
+    assert base64 + envelope < Frame.max_to_host()
   end
 
   test "every body encodes to its exact frame", %{vectors: vectors} do
