@@ -348,6 +348,69 @@ defmodule Aqua.AttachmentsTest do
       refute Arca.exists?(actor, path)
     end
 
+    test "a screenshot's draft deleted from Files cannot be posted; a claim marker deleted " <>
+           "while it is held lets the same turn claim it again",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      turn = %{id: "turn_shot", attempt: 1, thread_id: thread.id}
+      file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => "PNG"}
+      sources = [Prima.Source.outside("moon.example")]
+
+      # Its facts deleted: the draft is no draft.
+      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, sources)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/draft")
+      assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
+
+      # Its picture deleted: nothing to post either.
+      {:ok, id, ref} = Attachments.draft(ctx, turn, file, sources)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/#{ref["stored_name"]}")
+      assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
+
+      # The claim marker deleted while a publication holds it: the case the
+      # slice accepts, the same turn may claim the same screenshot again.
+      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, sources)
+      assert {:ok, %{"bytes" => "PNG"}} = Attachments.drafted(ctx, turn, id)
+      assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/published")
+      assert {:ok, %{"bytes" => "PNG"}} = Attachments.drafted(ctx, turn, id)
+    end
+
+    test "deleting a copy's bytes leaves the sources its ref recorded", %{
+      ctx: ctx,
+      other: other
+    } do
+      actor = Sanctum.Context.actor(ctx)
+      outside = Prima.Source.outside("moon.example")
+      target = Prima.UUID7.generate_id("msg")
+
+      {:ok, [copied]} =
+        Attachments.copy(ctx, other.id, target, [
+          %{
+            "filename" => "a.txt",
+            "media_type" => "text/plain",
+            "bytes" => "A",
+            "sources" => Prima.Source.to_json_list([outside])
+          }
+        ])
+
+      {:ok, _} =
+        Arca.TurnStorage.accept_message(actor, other.id, %{
+          message: %{
+            id: target,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "copied",
+            payload: %{"attachments" => [copied]}
+          }
+        })
+
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{other.id}/#{target}")
+      {:ok, row} = Arca.ThreadStorage.get_message(actor, target)
+
+      assert [%{"removed" => true} = gone] = Attachments.as_kept(ctx, row)
+      assert outside in Attachments.copied_sources(gone)
+    end
+
     test "a copy is held to the storage cap before its first byte", %{ctx: ctx, other: other} do
       installed = Prima.Caps.impl!()
       Prima.Caps.install!(Aqua.AttachmentsTest.PlantedCaps)

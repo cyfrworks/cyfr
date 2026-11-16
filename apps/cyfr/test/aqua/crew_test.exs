@@ -1306,7 +1306,9 @@ defmodule Aqua.CrewTest do
       )
 
     {:ok, path} = Aqua.Attachments.blob_path(room.id, message_id, ref)
-    :ok = Arca.delete(actor(ctx), path)
+    # The person deletes the request's folder from Files before it is delivered.
+    {:ok, _} = Arca.Files.delete(actor(ctx), "threads/#{room.id}/#{message_id}")
+    refute Arca.exists?(actor(ctx), path)
 
     assert {:ok, %{"refused" => 1}} = drain(ctx)
     assert pending(ctx, "crew_request") == []

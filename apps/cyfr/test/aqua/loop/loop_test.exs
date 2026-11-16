@@ -362,6 +362,47 @@ defmodule Aqua.LoopTest do
     assert %{outcome: "ok"} = Enum.find(steps, &(&1.kind == "ui"))
   end
 
+  test "a later turn reads that a file of an earlier post was deleted from Files, and runs",
+       %{ctx: ctx, thread: thread} do
+    id = Prima.UUID7.generate_id("msg")
+
+    {:ok, refs} =
+      Aqua.Attachments.store(ctx, thread.id, id, [
+        %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG"},
+        %{"filename" => "notes.txt", "media_type" => "text/plain", "bytes" => "notes"}
+      ])
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{
+          id: id,
+          author: ctx.user_id,
+          sent_by: "person",
+          content: "the moon tonight",
+          payload: %{"attachments" => refs}
+        }
+      })
+
+    [moon, _notes] = refs
+
+    {:ok, _} =
+      Arca.Files.delete(
+        Sanctum.Context.actor(ctx),
+        "threads/#{thread.id}/#{id}/#{moon["stored_name"]}"
+      )
+
+    script!([reply("noted")])
+    turn = accept!(ctx, thread, "what did I send?")
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    %{input: %{"params" => %{"messages" => messages}}} =
+      Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+
+    texts = for m <- messages, b <- List.wrap(m["content"]), is_binary(b["text"]), do: b["text"]
+    assert "[The file moon.png of this post was removed]" in texts
+    refute Enum.any?(texts, &(&1 =~ "notes.txt"))
+  end
+
   test "a reply lands as rows before the turn ends, and the root is let go", %{
     ctx: ctx,
     thread: thread

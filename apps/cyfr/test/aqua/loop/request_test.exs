@@ -677,6 +677,51 @@ defmodule Aqua.Loop.RequestTest do
       assert text =~ "[Files carried in: moon.png]"
     end
 
+    test "a file the person deleted is said removed where its post is, and never named as carried" do
+      moon = %{
+        "filename" => "moon.png",
+        "stored_name" => "0-moon.png",
+        "media_type" => "image/png"
+      }
+
+      notes = %{"filename" => "notes.txt", "stored_name" => "1-notes.txt"}
+
+      opening = %{
+        row(1, "opening", "usr_1", "write the moon report", %{
+          "title" => "Moon report",
+          "asked_by" => "usr_1",
+          "attachments" => [moon, notes]
+        })
+        | sent_by: "person",
+          thread_id: "thr_work"
+      }
+
+      older = %{
+        row(2, "text", "usr_1", "and these", %{"attachments" => [moon, notes]})
+        | sent_by: "person"
+      }
+
+      kept = %{
+        row(3, "text", "usr_1", "and this one", %{"attachments" => [notes]})
+        | sent_by: "person"
+      }
+
+      [%{"content" => blocks}] =
+        Request.messages([opening, older, kept],
+          me: "aqua",
+          names: %{"usr_1" => "Ada"},
+          removed: %{"msg_1" => [moon], "msg_2" => [moon, notes]}
+        )
+
+      texts = Enum.map(blocks, & &1["text"])
+
+      assert Enum.any?(texts, &(&1 =~ "[Files carried in: notes.txt]"))
+      refute Enum.any?(texts, &(&1 =~ "Files carried in: moon.png"))
+      assert "[The file moon.png of this post was removed]" in texts
+      assert "[The files moon.png, notes.txt of this post were removed]" in texts
+      assert Enum.count(texts, &(&1 =~ "removed")) == 2
+    end
+
     test "a pointer is one line naming its workspace thread; a report names it, its outcome and summary" do
       pointer = %{
         row(1, "pointer", @agent, "Moon report", %{

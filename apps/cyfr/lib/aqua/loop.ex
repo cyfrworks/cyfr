@@ -722,7 +722,8 @@ defmodule Aqua.Loop do
         excerpt: excerpt,
         attachments: spec.attachments,
         task_message_id: state.turn.message_id,
-        refs: Map.new(cited, &{&1.id, &1})
+        refs: Map.new(cited, &{&1.id, &1}),
+        removed: removed_files(spec.ctx, rows)
       )
 
     Request.build(
@@ -739,6 +740,18 @@ defmodule Aqua.Loop do
 
   defp agent_or_system?(author),
     do: author in Prima.Author.reserved()
+
+  # By row id, the refs of each row's files the person deleted from Files,
+  # read anew each round (`Aqua.Attachments.as_kept/2`): one listing per row
+  # that holds files.
+  defp removed_files(ctx, rows) do
+    for row <- rows,
+        Aqua.Attachments.refs_of(row) != [],
+        removed = Enum.filter(Aqua.Attachments.as_kept(ctx, row), &(&1["removed"] == true)),
+        removed != [],
+        into: %{},
+        do: {row.id, removed}
+  end
 
   # The model step is dispatched before the call: a recovery finds it
   # without a response and never replays it.

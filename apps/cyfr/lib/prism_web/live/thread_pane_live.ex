@@ -309,11 +309,11 @@ defmodule PrismWeb.ThreadPaneLive do
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived thread into every viewer's socket. The runner's
         # own turn assembly stays windowed separately.
-        actor = Sanctum.Context.actor(socket.assigns.context)
+        ctx = socket.assigns.context
 
         rows =
-          case Threads.latest_messages(actor, thread.id, @window) do
-            rows when is_list(rows) -> Enum.map(rows, &files_kept(&1, actor))
+          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window) do
+            rows when is_list(rows) -> Enum.map(rows, &files_kept(&1, ctx))
             {:error, _} -> []
           end
 
@@ -413,44 +413,16 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:works, Map.delete(socket.assigns.works, id))
   end
 
-  # A post's files as the pane draws them: each one whose bytes the
-  # person deleted from Files marked `"removed"`, read when the thread
-  # opens, one listing of the post's own folder. A folder that cannot be
-  # read right now marks nothing, so a passing storage error never draws a
-  # file as removed. A row read later, as it lands, has its files as
+  # A post's files as the pane draws them, each one whose bytes the person
+  # deleted from Files marked removed (`Aqua.attachments_as_kept/2`), read
+  # when the thread opens. A row read later, as it lands, has its files as
   # stored.
-  defp files_kept(row, actor) do
-    case Threads.payload(row)["attachments"] do
-      [_ | _] = refs -> Map.put(row, :attachments, mark_removed(refs, row, actor))
-      _none -> row
+  defp files_kept(row, ctx) do
+    case Aqua.attachment_refs(row) do
+      [] -> row
+      _refs -> Map.put(row, :attachments, Aqua.attachments_as_kept(ctx, row))
     end
   end
-
-  defp mark_removed(refs, row, actor) do
-    case kept_names(refs, row, actor) do
-      {:ok, kept} ->
-        Enum.map(refs, fn ref ->
-          if MapSet.member?(kept, ref["stored_name"]),
-            do: ref,
-            else: Map.put(ref, "removed", true)
-        end)
-
-      :unread ->
-        refs
-    end
-  end
-
-  defp kept_names([ref | _], row, actor) do
-    with {:ok, path} <- Aqua.attachment_blob_path(row.thread_id, row.id, ref),
-         {:ok, entries} <- listed(Arca.list_typed(actor, Enum.drop(path, -1))) do
-      {:ok, for({name, :file} <- entries, into: MapSet.new(), do: name)}
-    else
-      _unread -> :unread
-    end
-  end
-
-  defp listed({:error, :not_found}), do: {:ok, []}
-  defp listed(listed), do: listed
 
   # A row's files: those `files_kept/2` read, else the stored refs.
   defp attachments(row),

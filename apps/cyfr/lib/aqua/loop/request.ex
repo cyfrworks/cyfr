@@ -376,13 +376,19 @@ defmodule Aqua.Loop.Request do
   blocks for the initiating message), `:task_message_id` (which message
   those blocks belong to; without it they land on the first user message,
   which is only the right one in a transcript of one), `:refs` (the
-  daily-thread posts an opening refers to, by id, as they read now).
+  daily-thread posts an opening refers to, by id, as they read now),
+  `:removed` (by row id, the refs of a row's files the person deleted,
+  each said to be removed where the row is, and never named as carried).
   """
   @spec messages([Aqua.Tape.row()], keyword()) :: [map()]
   def messages(rows, opts \\ []) when is_list(rows) do
+    removed = Keyword.get(opts, :removed, %{})
+
     rows
     |> apply_compaction()
-    |> Enum.reduce([], fn row, acc -> shape(row, acc, opts) end)
+    |> Enum.reduce([], fn row, acc ->
+      row |> shape(acc, opts) |> removed_note(acc, row, removed)
+    end)
     |> Enum.reverse()
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
@@ -515,6 +521,34 @@ defmodule Aqua.Loop.Request do
         [{:shaped, summary} | pinned ++ kept]
     end
   end
+
+  # A row whose files were deleted says so in the message it landed in: the
+  # head, whether the row began it or joined it. A row that drew nothing
+  # says nothing.
+  defp removed_note(acc, acc, _row, _removed), do: acc
+
+  defp removed_note([head | rest] = shaped, _before, %{id: id}, removed) do
+    case Map.get(removed, id, []) do
+      [] ->
+        shaped
+
+      refs ->
+        names = Enum.map_join(refs, ", ", & &1["filename"])
+        noun = if length(refs) == 1, do: "The file", else: "The files"
+
+        note = %{
+          "type" => "text",
+          "text" => "[#{noun} #{names} of this post #{were(refs)} removed]"
+        }
+
+        [%{head | blocks: head.blocks ++ [note]} | rest]
+    end
+  end
+
+  defp removed_note(shaped, _before, _row, _removed), do: shaped
+
+  defp were([_one]), do: "was"
+  defp were(_many), do: "were"
 
   defp shape({:shaped, message}, acc, _opts), do: [message | acc]
 
@@ -674,8 +708,11 @@ defmodule Aqua.Loop.Request do
         "\n\n[Post #{cited.id} of the daily thread, by #{sender(cited, opts)}]\n#{cited.content}"
       end
 
+    gone =
+      for ref <- Map.get(Keyword.get(opts, :removed, %{}), row.id, []), do: ref["stored_name"]
+
     files =
-      case Aqua.Attachments.refs_of(row) do
+      case Enum.reject(Aqua.Attachments.refs_of(row), &(&1["stored_name"] in gone)) do
         [] -> ""
         refs -> "\n\n[Files carried in: #{Enum.map_join(refs, ", ", & &1["filename"])}]"
       end
