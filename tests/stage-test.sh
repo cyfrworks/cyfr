@@ -4,7 +4,8 @@
 #
 # scripts/stage.sh against a toy repository with a toy table and a stand-in
 # scripts/heavy-check.sh that records each call and runs its command (a
-# command holding `#queue-deadline` is answered 75, as a queue deadline is)
+# command holding `#queue-deadline` is answered 75, as a queue deadline is,
+# and a folder's ticket ends STUB_TICKET_EXIT after its chain when that is set)
 # and a stand-in scripts/test-partitioned.sh that records each call;
 # scripts/lib/nightly.py's flakes and weights on planted run directories;
 # and the real table, read whole by the real scripts/stage.sh, each
@@ -55,6 +56,7 @@ printf '%s\n' "$*" >>"$STUB_CALLS"
 case "$*" in *'#queue-deadline'*) exit 75 ;; esac
 while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift
+case "$*" in *stage-chain.sh*) [ -z "${STUB_TICKET_EXIT:-}" ] || { "$@"; exit "$STUB_TICKET_EXIT"; } ;; esac
 exec "$@"
 EOF
 chmod +x "$repo/scripts/heavy-check.sh" "$repo/scripts/test-partitioned.sh"
@@ -274,7 +276,7 @@ table "${toy_rows[@]}" 'release|slow|1|60|-|always|exec sleep 6107'
 for sig in INT:130 TERM:143; do
   name=${sig%%:*} want=${sig##*:}
   : >"$STUB_CALLS"
-  (cd "$repo" && exec "${defaulted[@]}" INT scripts/stage.sh -l "$S/logs-$name" release) >"$S/$name.out" 2>&1 &
+  (cd "$repo" && exec "${defaulted[@]}" INT scripts/stage.sh -l "$S/logs-$name" release) >"$S/$name.out" 2>"$S/$name.err" &
   runner=$!
   until_true 10 grep -q 'sleep 6107' "$STUB_CALLS" || fail "$name: the slow row never started"
   until_true 10 pgrep -f '^sleep 6107$' >/dev/null || fail "$name: no sleep found"
@@ -288,6 +290,8 @@ for sig in INT:130 TERM:143; do
   status=0; wait "$runner" || status=$?
   [ "$status" = "$want" ] || fail "$name: exited $status, not $want"
   grep -qx "_EXIT=$runner $want" "$S/$name.out" || fail "$name: the last line is $(tail -n 1 "$S/$name.out")"
+  [ "$(tail -n 2 "$S/$name.out" | head -n 1 | sed -E 's/ [0-9]+s$//')" = "slow: failed $want" ] ||
+    fail "$name: the stopped row did not read failed $want: $(cat "$S/$name.out")"
   until_true 10 eval '! kill -0 "$sleeper"' || fail "$name: the row's command outlived the stage"
 done
 table "${toy_rows[@]}"
@@ -347,8 +351,8 @@ grep -q -- '^-q 1 -t 1800 -- bash -c s=0' "$STUB_CALLS" || fail "the dependency 
 # One ticket per folder, holding each of its rows' holds and a minute
 # for each stop; a row of no folder on a ticket of its own.
 [ "$(grep -c -- '^-q 1 -t 60 -- bash -c ' "$STUB_CALLS")" = 2 ] || fail "the rows of no folder were not queued alone: $(cat "$STUB_CALLS")"
-grep -q -- "^-q 1 -t 360 -- bash scripts/lib/stage-chain.sh $S/logs-lanes/dev.results 0 first 60  echo first" "$STUB_CALLS" &&
-  grep -q -- "^-q 1 -t 120 -- bash scripts/lib/stage-chain.sh $S/logs-lanes/test.results 3 beside 60  echo beside" "$STUB_CALLS" ||
+grep -q -- "^-q 1 -t 360 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes/dev.results 0 first 60  echo first" "$STUB_CALLS" &&
+  grep -q -- "^-q 1 -t 120 -- bash scripts/lib/stage-chain.sh [0-9]* $S/logs-lanes/test.results 3 beside 60  echo beside" "$STUB_CALLS" ||
   fail "a folder's rows were not queued on one ticket each: $(cat "$STUB_CALLS")"
 [ "$(wc -l <"$STUB_CALLS")" = 5 ] || fail "the stage queued other tickets: $(cat "$STUB_CALLS")"
 [ -e "$S/logs-lanes/dev.queue.log" ] && [ -e "$S/logs-lanes/test.queue.log" ] || fail 'a ticket kept no log'
@@ -451,7 +455,7 @@ grep -q -- '^-q 1 -t 181 -- ' "$STUB_CALLS" || fail "the ticket's hold: $(cat "$
 table 'handoff|q1|1|60|dev|always|echo one #queue-deadline' 'handoff|q2|1|60|dev|always|echo two' 'handoff|free|1|60|-|always|true'
 stage queued -l "$S/logs-queued" handoff
 [ "$rc" = 1 ] || fail "exited $rc, not 1"
-[ "$(sed -n '2,$p' "$S/queued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'q1: not run 75;q2: not run 75;free: ok;' ] ||
+[ "$(sed -n '2,$p' "$S/queued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'q1: not run 75;q2: not run 75;free: ok;dev ticket: not run 75;' ] ||
   fail "the rows said: $(cat "$S/queued.out")"
 
 begin "a ticket killed outright fails the row it ran and every row after it, none of which starts, and its row's command is stopped"
@@ -461,15 +465,40 @@ table 'handoff|victim|1|60|dev|always|exec sleep 6122' 'handoff|orphan|1|60|dev|
 runner=$!
 until_true 10 pgrep -f '^sleep 6122$' >/dev/null || fail 'the row never started'
 sleeper=$(pgrep -f '^sleep 6122$' | head -1)
-chain=$(pgrep -f "stage-chain.sh $S/logs-killed/dev.results" | head -1)
+chain=$(pgrep -f "stage-chain.sh .*$S/logs-killed/dev.results" | head -1)
 [ -n "$chain" ] || fail 'no ticket found'
 kill -KILL "$chain"
 status=0; wait "$runner" || status=$?
 [ "$status" = 1 ] || fail "exited $status, not 1: $(cat "$S/killed.out")"
-[ "$(sed -n '2,$p' "$S/killed.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'victim: failed 137;orphan: failed 137;free: ok;' ] ||
+[ "$(sed -n '2,$p' "$S/killed.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'victim: failed 137;orphan: failed 137;free: ok;dev ticket: failed 137;' ] ||
   fail "the rows said: $(cat "$S/killed.out")"
 [ ! -e "$S/logs-killed/orphan.ran" ] || fail 'a row started after its ticket was killed'
 until_true 20 eval '! kill -0 "$sleeper"' || { kill -KILL "$sleeper"; fail "the killed ticket's row outlived it"; }
+
+begin "a ticket that ends red after every row of its folder passed fails the stage and says so after the rows"
+table 'handoff|first|1|60|dev|always|true' 'handoff|after|1|60|dev|always|true' 'handoff|free|1|60|-|always|true'
+STUB_TICKET_EXIT=42 stage red-ticket -l "$S/logs-red-ticket" handoff
+[ "$rc" = 1 ] || fail "exited $rc, not 1: $(cat "$S/red-ticket.out")"
+framed red-ticket 1
+[ "$(sed -n '2,$p' "$S/red-ticket.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'first: ok;after: ok;free: ok;dev ticket: failed 42;' ] ||
+  fail "the rows said: $(cat "$S/red-ticket.out")"
+
+begin "a chain whose stage is gone starts no more rows; the row it was running ends as it would"
+table 'handoff|first|1|60|dev|always|echo $$ >"$STAGE_LOGDIR/first.pid"; for _ in $(seq 300); do [ -e "$STAGE_LOGDIR/go" ] && exit 0; sleep 0.1; done; exit 1' \
+  'handoff|second|1|60|dev|always|touch "$STAGE_LOGDIR/second.ran"'
+(cd "$repo" && exec scripts/stage.sh -l "$S/logs-orphan" handoff) >"$S/orphan.out" 2>"$S/orphan.err" &
+runner=$!
+until_true 10 test -s "$S/logs-orphan/first.pid" || fail 'the first row never started'
+chain=$(pgrep -f "stage-chain.sh .*$S/logs-orphan/dev.results" | head -1)
+[ -n "$chain" ] || fail 'no ticket found'
+kill -KILL "$runner"
+wait "$runner" 2>/dev/null || :
+touch "$S/logs-orphan/go"
+until_true 20 eval '! kill -0 "$chain"' || { kill -KILL "$chain"; fail 'the ticket outlived its stage by more than its row'; }
+[ ! -e "$S/logs-orphan/second.ran" ] || fail 'a row started after its stage was gone'
+grep -qF "the stage $runner that queued this ticket is gone: second and the rows after it do not start" "$S/logs-orphan/dev.queue.log" ||
+  fail "the ticket's log: $(cat "$S/logs-orphan/dev.queue.log")"
+grep -qx '0 0 [0-9]*' "$S/logs-orphan/dev.results" || fail "the running row did not end as it would: $(cat "$S/logs-orphan/dev.results")"
 table "${toy_rows[@]}"
 reset_tree
 
@@ -479,7 +508,7 @@ table 'handoff|slow-a|1|60|dev|always|exec sleep 6111' 'handoff|after|1|60|dev|a
 for sig in INT:130 TERM:143; do
   name=${sig%%:*} want=${sig##*:}
   : >"$STUB_CALLS"
-  (cd "$repo" && exec "${defaulted[@]}" INT scripts/stage.sh -l "$S/logs-side-$name" handoff) >"$S/side-$name.out" 2>&1 &
+  (cd "$repo" && exec "${defaulted[@]}" INT scripts/stage.sh -l "$S/logs-side-$name" handoff) >"$S/side-$name.out" 2>"$S/side-$name.err" &
   runner=$!
   until_true 10 pgrep -f '^sleep 6111$' >/dev/null && until_true 10 pgrep -f '^sleep 6112$' >/dev/null ||
     fail "$name: the two rows never ran side by side"
@@ -493,6 +522,9 @@ for sig in INT:130 TERM:143; do
   [ "$status" = "$want" ] || fail "$name: exited $status, not $want"
   for sleeper in $sleepers; do until_true 10 eval '! kill -0 "$sleeper"' || fail "$name: a row's command outlived the stage"; done
   [ ! -e "$S/logs-side-$name/after.ran" ] || fail "$name: a row started after the signal"
+  [ "$(sed -n '2,$p' "$S/side-$name.out" | grep -v '^stage: ' | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = \
+    "slow-a: failed $want;after: failed $want;slow-b: failed $want;" ] ||
+    fail "$name: the rows the signal stopped or kept from starting did not each read failed: $(cat "$S/side-$name.out")"
 done
 table "${toy_rows[@]}"
 reset_tree
@@ -576,7 +608,7 @@ GH_EXIT=1 nightly unreached -l "$S/logs-unreached"
 call_is unreached "$head" 0 'first: ok Ns\nsecond: ok Ns' "$S/logs-unreached"
 grep -qF "nightly: the report of status 0 for $head did not reach GitHub (gh exited 1)" "$S/unreached.err" || fail "it said: $(cat "$S/unreached.err")"
 
-begin 'INT and TERM stop the stage and its row, and the stopped night is reported'
+begin 'INT and TERM stop the stage and its row, and the stopped night is reported with the row it stopped'
 table "${toy_rows[@]}" 'nightly|slow|1|60|-|always|exec sleep 6108'
 for sig in INT:130 TERM:143; do
   name=${sig%%:*} want=${sig##*:}
@@ -595,7 +627,7 @@ for sig in INT:130 TERM:143; do
   status=0; wait "$runner" || status=$?
   [ "$status" = "$want" ] || fail "$name: exited $status, not $want"
   until_true 10 eval '! kill -0 "$sleeper"' || fail "$name: the row's command outlived the night"
-  call_is "$name" "$head with changes" 143 '' "$S/logs-night-$name"
+  call_is "$name" "$head with changes" 143 'slow: failed 143 Ns' "$S/logs-night-$name"
 done
 reset_tree
 

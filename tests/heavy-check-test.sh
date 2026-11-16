@@ -1311,9 +1311,11 @@ t_queue_default() {
 # processors, and a stage stopped while they run stops both and gives every
 # quarter back (the loop below the cases checks that none is left held). The
 # rows of one folder hold one quarter between them, one after another, and a
-# stage stopped while one runs stops it and gives the quarter back.
+# stage stopped while one runs stops it and gives the quarter back. A ticket
+# killed after its rows passed fails the stage, and a ticket whose stage is
+# killed starts no more rows.
 t_stage_side_by_side() {
-  local repo=$scratch/stage-repo s=0 one two runner held
+  local repo=$scratch/stage-repo s=0 one two runner held ticket nested
   rm -rf "$repo" "$scratch"/stage-logs*
   mkdir -p "$repo/scripts/lib"
   git init -q -b main "$repo"
@@ -1364,6 +1366,41 @@ t_stage_side_by_side() {
   [ "$s" = 143 ] || fail "the stopped stage exited $s, not 143"
   for one in $held; do dead "$one" || fail "a folder's row outlived the stopped stage"; done
   [ "$("${hc[@]}" --status)" = idle ] || fail "the queue still showed: $("${hc[@]}" --status | tr '\n' '|')"
+  # The row passes and leaves a session of its own that takes 6 s to stop,
+  # so the ticket is still stopping it when it is killed.
+  printf 'handoff\tfirst\t1\t60\tdev\talways\t%s\n' \
+    '. scripts/lib/contain.sh; contain_start bash -c '"'"'trap "sleep 6; exit 0" TERM; echo $$ >"$STAGE_LOGDIR/nested.pid"; while :; do sleep 0.2; done'"'"'; for _ in $(seq 100); do [ -s "$STAGE_LOGDIR/nested.pid" ] && exit 0; sleep 0.05; done; exit 1' \
+    >"$repo/scripts/stages.tsv"
+  (cd "$repo" && STAGE_BASE=HEAD exec "${clean[@]}" bash scripts/stage.sh -l "$scratch/stage-logs-4" handoff) >"$scratch/stage4.out" 2>"$scratch/stage4.err" &
+  runner=$!; started+=("$runner")
+  until_true 20 grep -q '^0 0 ' "$scratch/stage-logs-4/dev.results" || fail "the row never passed: $(tr '\n' '|' <"$scratch/stage4.out")"
+  ticket=$(sed -n 's/^_START=//p' "$scratch/stage-logs-4/dev.queue.log") nested=$(cat "$scratch/stage-logs-4/nested.pid")
+  kill -0 "$ticket" || fail 'the ticket had already ended'
+  kill -KILL "$ticket"
+  s=0; wait "$runner" || s=$?
+  [ "$s" = 1 ] || fail "a stage whose ticket was killed after its row passed exited $s: $(tr '\n' '|' <"$scratch/stage4.out")"
+  grep -qx 'first: ok [0-9]*s' "$scratch/stage4.out" && grep -qx 'dev ticket: failed 137 [0-9]*s' "$scratch/stage4.out" ||
+    fail "the summary: $(tr '\n' '|' <"$scratch/stage4.out")"
+  until_true 30 dead "$nested" || fail "the killed ticket's session outlived its watchdog"
+  until_true 30 eval '[ "$("${hc[@]}" --status)" = idle ]' || fail "the queue still showed: $("${hc[@]}" --status | tr '\n' '|')"
+  forget_killed
+  # The stage is killed while the first row runs: the row ends as it
+  # would, and the second never starts.
+  printf 'handoff\t%s\t1\t60\tdev\talways\t%s\n' \
+    first 'echo $$ >"$STAGE_LOGDIR/first.pid"; for _ in $(seq 300); do [ -e "$STAGE_LOGDIR/go" ] && exit 0; sleep 0.1; done; exit 1' \
+    second 'touch "$STAGE_LOGDIR/second.ran"' >"$repo/scripts/stages.tsv"
+  (cd "$repo" && STAGE_BASE=HEAD exec "${clean[@]}" bash scripts/stage.sh -l "$scratch/stage-logs-5" handoff) >"$scratch/stage5.out" 2>"$scratch/stage5.err" &
+  runner=$!; started+=("$runner")
+  until_true 20 test -s "$scratch/stage-logs-5/first.pid" || fail "the first row never started: $(tr '\n' '|' <"$scratch/stage5.out")"
+  ticket=$(sed -n 's/^_START=//p' "$scratch/stage-logs-5/dev.queue.log")
+  kill -KILL "$runner"
+  wait "$runner" 2>/dev/null || :
+  touch "$scratch/stage-logs-5/go"
+  until_true 30 dead "$ticket" || fail 'the ticket outlived its stage by more than its row'
+  [ ! -e "$scratch/stage-logs-5/second.ran" ] || fail 'a row started after its stage was killed'
+  grep -q "is gone: second and the rows after it do not start" "$scratch/stage-logs-5/dev.queue.log" ||
+    fail "the ticket's log: $(tr '\n' '|' <"$scratch/stage-logs-5/dev.queue.log")"
+  until_true 30 eval '[ "$("${hc[@]}" --status)" = idle ]' || fail "the queue still showed: $("${hc[@]}" --status | tr '\n' '|')"
 }
 
 # --- stopping the check stops its command and frees the host ------------------

@@ -99,8 +99,12 @@
 # its ticket queues and each next one when the one before it ends. Not
 # run is a status of 69, a prerequisite the check names is missing, or
 # 75, heavy-check's queue deadline passed before it started; it counts as
-# failed. A row of a folder whose ticket ended before the row did reads
-# the ticket's status, 1 for a ticket that ended 0. The dependency
+# failed. A folder's ticket that ends with any status but 0 fails the
+# stage whatever its rows read, and says `<folder> ticket: failed
+# <status> <seconds>s` (or not run) after every row's line, the seconds
+# from when it queued; a row of the folder it left without a line reads
+# that status, 1 for a ticket that ended 0. A ticket whose stage is gone
+# starts no more rows (scripts/lib/stage-chain.sh). The dependency
 # compile, when there is one, says `deps: ...` first, alike. -n prints
 # `would compile deps (1 quarter): <folders>` when it would, then `would
 # run <check> (<n> quarter[s]): <command>` or `would skip <check>:
@@ -113,14 +117,16 @@
 # touched path with whitespace, before any row runs; 69 outside a Git
 # checkout, without the stage's base, or when Git cannot list the changed
 # paths a row's globs match; 130, 143 and 129 on INT, TERM and HUP, once
-# every running row has stopped, and no row starts after the signal.
+# every running row has stopped, and no row starts after the signal: each
+# row that had not ended reads `failed <status>`, printed with the rest
+# before the frame.
 # Every exit is framed, a usage refusal's included. It needs Bash 5.1 or
 # later (wait -n -p).
 set -uo pipefail
 
 # Each running heavy-check's pid, and the row index (or deps) it runs.
 declare -A running=()
-finished=false
+finished=false launched=false
 finish() {
   local status=$?
   trap - EXIT
@@ -131,9 +137,17 @@ finish() {
 }
 on_signal() {
   trap '' INT TERM HUP
-  local pid
+  local pid folder i
   for pid in "${!running[@]}"; do kill -TERM "$pid" 2>/dev/null; done
   for pid in "${!running[@]}"; do wait "$pid" 2>/dev/null; done
+  # Every row the signal left without a line reads its status as failed.
+  if $launched; then
+    for folder in "${!chain_read[@]}"; do collect "$folder"; done
+    if $deps_waits && [ -z "$deps_line" ]; then deps_line=$(result deps "$1" $((SECONDS - deps_began))); fi
+    for i in "${!rows[@]}"; do unfinished "$i" "$1"; done
+    flush
+    if [ "${#tickets[@]}" -gt 0 ]; then printf '%s\n' "${tickets[@]}"; fi
+  fi
   exit "$1"
 }
 printf '_START=%s\n' "$$"
@@ -386,7 +400,8 @@ launch() {
   running[$!]=$entry
 }
 began=() lines=()
-declare -A lane=() chain_last=() chain_read=()
+declare -A lane=() chain_began=() chain_last=() chain_read=()
+tickets=()
 start_row() { # INDEX: the row on a ticket of its own
   local check quarters hold command
   IFS=$'\t' read -r _ _ check quarters hold _ _ command <<<"${rows[$1]}"
@@ -412,9 +427,9 @@ start_lane() {
     args+=("$i" "$check" "$hold" "${row_tests[$i]}" "$command")
   done
   : >"$logdir/$folder.results"
-  chain_last[$folder]=$EPOCHSECONDS chain_read[$folder]=0
+  chain_began[$folder]=$EPOCHSECONDS chain_last[$folder]=$EPOCHSECONDS chain_read[$folder]=0
   launch "chain $folder" "$most" "$total" "$logdir/$folder.queue.log" \
-    bash scripts/lib/stage-chain.sh "$logdir/$folder.results" "${args[@]}"
+    bash scripts/lib/stage-chain.sh "$$" "$logdir/$folder.results" "${args[@]}"
   chains=$((chains + 1))
   tick
 }
@@ -434,6 +449,22 @@ collect() {
     [ "$status" = 0 ] || failures=$((failures + 1))
   done <"$logdir/$folder.results"
   chain_read[$folder]=$n
+}
+# unfinished INDEX STATUS: a row that has no line yet reads STATUS, as
+# failed or not run, and fails the stage; its seconds run from its start,
+# which for a folder's row is the end of the row before it.
+unfinished() {
+  local check folder=${lanes[$1]} since=0
+  [ -z "${lines[$1]+set}" ] || return 0
+  IFS=$'\t' read -r _ _ check _ <<<"${rows[$1]}"
+  if [ -n "${chain_last[$folder]+set}" ]; then
+    since=$((EPOCHSECONDS - chain_last[$folder]))
+    chain_last[$folder]=$EPOCHSECONDS
+  elif [ -n "${began[$1]+set}" ]; then
+    since=$((SECONDS - began[$1]))
+  fi
+  lines[$1]=$(result "$check" "$2" "$since")
+  failures=$((failures + 1))
 }
 # A folder's rows report while its ticket runs: the stage looks every two
 # seconds while a ticket runs.
@@ -466,6 +497,7 @@ for i in ${rows[@]+"${!rows[@]}"}; do
     lane[${lanes[$i]}]+="$i "
   fi
 done
+failures=0 launched=true
 if [ -n "$deps_command" ]; then
   deps_waits=true deps_began=$SECONDS
   launch deps 1 1800 "$logdir/deps.log" bash -c "$deps_command"
@@ -476,7 +508,6 @@ for i in ${rows[@]+"${!rows[@]}"}; do
   if [ -z "${reasons[$i]}" ] && [ "${lanes[$i]}" = - ]; then start_row "$i"; fi
 done
 
-failures=0
 flush
 while [ "${#running[@]}" -gt 0 ]; do
   pid=
@@ -505,18 +536,18 @@ while [ "${#running[@]}" -gt 0 ]; do
         done
       fi ;;
     'chain '*)
-      # The rows its ticket's end left without a line read its status.
+      # A ticket that ended red fails the stage whatever its rows read, and
+      # the rows it left without a line read its status.
       folder=${entry#chain }
       chains=$((chains - 1))
       collect "$folder"
-      [ "$status" != 0 ] || status=1
-      for i in ${lane[$folder]}; do
-        [ -z "${lines[$i]+set}" ] || continue
-        IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$i]}"
-        lines[$i]=$(result "$check" "$status" $((EPOCHSECONDS - chain_last[$folder])))
-        chain_last[$folder]=$EPOCHSECONDS
+      if [ "$status" != 0 ]; then
+        tickets+=("$(result "$folder ticket" "$status" $((EPOCHSECONDS - chain_began[$folder])))")
         failures=$((failures + 1))
-      done ;;
+      else
+        status=1
+      fi
+      for i in ${lane[$folder]}; do unfinished "$i" "$status"; done ;;
     *)
       [ "$status" = 0 ] || failures=$((failures + 1))
       IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$entry]}"
@@ -528,5 +559,6 @@ while [ "${#running[@]}" -gt 0 ]; do
   flush
 done
 
+if [ "${#tickets[@]}" -gt 0 ]; then printf '%s\n' "${tickets[@]}"; fi
 finished=true
 [ "$failures" = 0 ]
