@@ -367,17 +367,20 @@ defmodule Arca.ThreadStorage do
     do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.lock_athanor!/1")
 
   @doc false
-  # The one order of a write that takes more than one thread row, by a
-  # lock, an update, a delete or a row it adds that names one: the
-  # athanor's row first, before its turn's and before any thread row,
-  # then the thread rows it holds together, in id order. Each such write
-  # holds the athanor's row while it takes the others, so no two of them
-  # wait on each other's thread rows; a write that takes one thread row
-  # takes no second. Retention, a deletion, a report landing in a daily
-  # thread, an opening and its pointer, and every write of a turn in a
-  # crew thread under a workspace thread, which may move the workspace
-  # thread (`Arca.TurnStorage`'s "Workspace threads"), take them this
-  # way. Answers the rows of `ids` that stand, held until the caller's
+  # The one order of the rows a write takes among turns, the athanor's row
+  # and thread rows, which every write keeps:
+  #
+  #   * its turns first: a turn's writers take the turn before its thread.
+  #   * then the athanor's row: shared by the standing check
+  #     (`Arca.ExecutionStanding.locked/2`), after the turn; taken for
+  #     update, before any standing check of its own, by every create of a
+  #     thread and by a write that takes more than one thread row, by a
+  #     lock, an update, a delete or a row it adds that names one.
+  #   * then the thread rows, those it holds together in id order, which
+  #     this function takes after the athanor's row.
+  #
+  # A write that takes one thread row takes no second, and no athanor lock
+  # for it. Answers the rows of `ids` that stand, held until the caller's
   # transaction ends. An in-transaction helper.
   @spec lock_threads!(Prima.Actor.t(), [String.t()]) :: [Thread.t()]
   # arca:db-raise-ok inside the caller's transaction

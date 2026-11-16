@@ -9,9 +9,13 @@ defmodule Arca.ExecutionLockOrderTest do
   lapse of a turn's root against the turn's end. A turn's writers take
   the turn before its thread, an archive of the thread among them, and a
   room's deletion holds the athanor's lock a child's creation waits on.
-  A write that takes more than one thread row takes the athanor's row
-  first (`Arca.ThreadStorage.lock_threads!/2`), retention and a report
-  landing on its daily thread among them.
+  Turns, then the athanor's row, then thread rows
+  (`Arca.ThreadStorage.lock_threads!/2` states the order): a write that
+  takes more than one thread row takes the athanor's row before them,
+  retention and a report landing on its daily thread among them; the
+  standing check reads the athanor's row after a turn, so an opening
+  takes its asking turn first; a step
+  write, which takes no second thread row, takes no athanor lock.
   These run outside the sandbox, on connections of their own, with the
   run's attempt held by a third transaction so both writes are seen
   waiting before either goes on; a PostgreSQL deadlock would abort one of
@@ -136,6 +140,118 @@ defmodule Arca.ExecutionLockOrderTest do
 
     unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
     actor
+  end
+
+  # An opening of a workspace thread from `daily`.
+  defp opening(actor, daily, attrs) do
+    Map.merge(
+      %{
+        daily_id: daily.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Moon report",
+        opened_from: "msg_ask",
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: actor.user_id,
+          content: "write the moon report",
+          payload: %{}
+        },
+        pointer: %{author: "aqua", sent_by: "aqua", content: "Moon report", payload: %{}},
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: actor.user_id,
+        origin: :interactive
+      },
+      attrs
+    )
+  end
+
+  # A running turn of `agent` in `thread`, its root admitted and started,
+  # committed in an athanor whose rows go with it (`committed_athanor!/0`).
+  defp running!(actor, thread, agent) do
+    unboxed(fn ->
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: agent, requested_by: actor.user_id, origin: :interactive}
+        })
+
+      root_id = "exec_lock_order_#{System.unique_integer([:positive])}"
+      budget_id = "bgt_lock_order_#{System.unique_integer([:positive])}"
+
+      {:ok, %{attempt: attempt}} =
+        Arca.Execution.admit(
+          %{
+            id: root_id,
+            reference: "agent:local.#{agent}",
+            user_id: actor.user_id,
+            athanor_id: actor.athanor_id,
+            component_type: "agent",
+            kind: "turn",
+            turn_id: turn.id,
+            origin: :interactive
+          },
+          reservation: %{budget_id: budget_id, cap: 4},
+          grant: Arca.Test.Actor.grant(actor.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
+        )
+
+      {:ok, started} =
+        TurnStorage.start(actor, turn.id, %{
+          root_execution_id: root_id,
+          attempt: attempt.attempt,
+          budget_id: budget_id,
+          recovery_limit: 3,
+          fence: turn.fence
+        })
+
+      started
+    end)
+  end
+
+  # The standing check a write runs (`attrs[:verify]`), paused: it tells
+  # the test that made it (the calling process) it is about to read the
+  # athanor's row, and once let go reads it shared, as the identity
+  # domain's check does (`Arca.Test.Actor.verify/1`).
+  defp paused_verify do
+    test = self()
+
+    fn grant ->
+      send(test, {:verifying, self()})
+
+      receive do
+        :verify -> Arca.Test.Actor.verify(grant)
+      after
+        10_000 -> {:error, :unavailable}
+      end
+    end
+  end
+
+  # The athanor's row held shared by a transaction of its own, as a
+  # standing check holds it, until it is released.
+  defp hold_standing(athanor_id) do
+    test = self()
+
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            {:ok, %{}} =
+              Arca.ExecutionStanding.locked(Prima.Actor.in_athanor(athanor_id), athanor_id)
+
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> Arca.Repo.rollback(:timeout)
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
+    assert_receive :held, 5_000
+    blocker
   end
 
   defp release(blocker) do
@@ -429,22 +545,7 @@ defmodule Arca.ExecutionLockOrderTest do
         {:ok, daily} = Arca.Test.Days.thread(actor)
 
         {:ok, %{workspace: workspace}} =
-          TurnStorage.open_workspace(actor, %{
-            daily_id: daily.id,
-            id: Prima.UUID7.generate_id("thread"),
-            title: "Moon report",
-            opened_from: "msg_ask",
-            opening: %{
-              id: Prima.UUID7.generate_id("msg"),
-              author: actor.user_id,
-              content: "write the moon report",
-              payload: %{}
-            },
-            pointer: %{author: "aqua", sent_by: "aqua", content: "Moon report", payload: %{}},
-            files: fn _thread, _message -> {:ok, []} end,
-            person_id: actor.user_id,
-            origin: :interactive
-          })
+          TurnStorage.open_workspace(actor, opening(actor, daily, %{}))
 
         # Finished, so both are retention's to remove.
         {1, _} =
@@ -521,5 +622,74 @@ defmodule Arca.ExecutionLockOrderTest do
 
     refute log =~ "deadlock", log
     assert unboxed(fn -> Threads.children(actor, room.id) end) == []
+  end
+
+  test "an opening takes its asking turn before the athanor's row, so a takeover of that turn never deadlocks it" do
+    actor = committed_athanor!()
+    {:ok, daily} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    turn = running!(actor, daily, "aqua")
+
+    verify = paused_verify()
+
+    log =
+      capture_log(fn ->
+        # The takeover holds the turn and is about to read the standing.
+        {takeover, _backend} =
+          waiting(:takeover, fn ->
+            TurnStorage.takeover(actor, turn.id, %{
+              fence: turn.fence,
+              grant: :stored,
+              verify: verify
+            })
+          end)
+
+        assert_receive {:verifying, verifier}, 5_000
+
+        {opening, opening_backend} =
+          waiting(:opening, fn ->
+            TurnStorage.open_workspace(
+              actor,
+              opening(actor, daily, %{turn: %{id: turn.id, fence: turn.fence}})
+            )
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(opening_backend, ["turns"])
+        send(verifier, :verify)
+
+        # The takeover moved the fence, so the opening it held off finds
+        # its turn superseded.
+        assert {:ok, %{fence: fence}} = Task.await(takeover, 10_000)
+        assert fence == turn.fence + 1
+        assert {:error, :superseded} = Task.await(opening, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+  end
+
+  test "a step write in a crew member's thread under a workspace thread takes no lock on the athanor's row" do
+    actor = committed_athanor!()
+    {:ok, daily} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+
+    {:ok, %{workspace: workspace}} =
+      unboxed(fn -> TurnStorage.open_workspace(actor, opening(actor, daily, %{})) end)
+
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, workspace.id, "planner") end)
+    turn = running!(actor, child, "planner")
+    standing = hold_standing(actor.athanor_id)
+
+    step =
+      Task.async(fn ->
+        unboxed(fn ->
+          TurnStorage.put_step(actor, turn.id, %{
+            kind: "model",
+            idempotency_key: "model:lock-order",
+            fence: turn.fence
+          })
+        end)
+      end)
+
+    # It lands while the athanor's row is held, so it never asked for it.
+    assert {:ok, {:ok, %{kind: "model"}}} = Task.yield(step, 5_000)
+    release(standing)
   end
 end

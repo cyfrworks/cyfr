@@ -98,8 +98,9 @@ defmodule Arca.TurnStorage do
   A row that names a workspace thread (a report delivered to a daily
   thread) lands only while that thread stands. Taking more than one
   thread row, it takes them in the one order
-  `Arca.ThreadStorage.lock_threads!/2` states, as does every write of a
-  turn in a crew thread under a workspace thread, which may move it.
+  `Arca.ThreadStorage.lock_threads!/2` states, as does a write of a turn
+  in a crew thread under a workspace thread that may move it: its turn,
+  then the athanor's row, then the thread rows.
 
   ## The root's grant
 
@@ -513,9 +514,9 @@ defmodule Arca.TurnStorage do
   - `:person_id`, `:origin` — whose ask it is and how it started, which
     the `workspace_open` record carries.
 
-  The athanor's row is taken first, as every create of a thread takes it
-  (`Arca.ThreadStorage.daily/2`), then the turn, the daily thread and
-  the workspace thread. Answers `%{workspace, opening, pointer}`;
+  The asking turn is taken first, then the athanor's row, as every
+  create of a thread takes it, and the daily and the workspace thread
+  together (`Arca.ThreadStorage.lock_threads!/2`). Answers `%{workspace, opening, pointer}`;
   `{:error, :not_found}` for a thread that is not the athanor's,
   `{:error, :not_a_daily_thread}`, `{:error, :not_a_workspace}`, the
   thread ceiling's refusal, or the files' own.
@@ -540,8 +541,6 @@ defmodule Arca.TurnStorage do
 
   # arca:db-raise-ok inside the caller's transaction
   defp opened!(%Prima.Actor{athanor_id: athanor_id} = actor, attrs) do
-    _ = Arca.ThreadStorage.lock_athanor!(actor)
-
     asking =
       case Map.get(attrs, :turn) do
         nil -> nil
@@ -1177,6 +1176,7 @@ defmodule Arca.TurnStorage do
       Arca.Repo.locking_transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
+        work_lock!(athanor_id, turn)
         grant = granted!(athanor_id, turn, status, attrs)
 
         if status == "completed" and steer_rows(athanor_id, turn) != [],
@@ -1299,7 +1299,6 @@ defmodule Arca.TurnStorage do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     reason = Map.get(attrs, :error, "cancelled")
     now = DateTime.utc_now()
-    work_first!(athanor_id, crew_thread(athanor_id, thread_id))
 
     taken =
       from(t in Turn,
@@ -1311,6 +1310,8 @@ defmodule Arca.TurnStorage do
       |> only(Map.get(attrs, :only))
       |> Arca.QueryHelpers.for_update()
       |> Arca.Repo.all()
+
+    if taken != [], do: work_lock!(athanor_id, thread_id)
 
     if taken != [] do
       from(t in Turn, where: t.athanor_id == ^athanor_id and t.id in ^taken)
@@ -1519,6 +1520,7 @@ defmodule Arca.TurnStorage do
       with_seq_retry(fn ->
         Arca.Repo.locking_transaction(fn ->
           turn = own!(athanor_id, turn_id, attrs)
+          work_lock!(athanor_id, turn)
           lock_root!(athanor_id, turn)
           now = DateTime.utc_now()
           step = step!(athanor_id, Map.fetch!(attrs, :step_id))
@@ -1600,6 +1602,7 @@ defmodule Arca.TurnStorage do
           turn = take!(athanor_id, turn_id, attrs)
           if turn.status != "running", do: Arca.Repo.rollback(:not_running)
           if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
+          work_lock!(athanor_id, turn)
           grant = standing!(athanor_id, turn, attrs, :required)
 
           # Setting a turn down is recovery, so it is admitted by the same
@@ -2148,6 +2151,7 @@ defmodule Arca.TurnStorage do
       with_seq_retry(fn ->
         Arca.Repo.locking_transaction(fn ->
           turn = own!(athanor_id, turn_id, attrs)
+          work_lock!(athanor_id, turn)
           skip_proposed!(actor, athanor_id, turn, reason)
         end)
       end)
@@ -2323,6 +2327,7 @@ defmodule Arca.TurnStorage do
             do: Arca.Repo.rollback(:proposal_digest_required)
 
           turn = open!(own_step!(athanor_id, step_id, attrs))
+          work_lock!(athanor_id, turn)
           step = step!(athanor_id, step_id)
           if step.dispatch_state != "proposed", do: Arca.Repo.rollback(:not_proposed)
           thread = thread!(athanor_id, turn.thread_id)
@@ -2404,6 +2409,7 @@ defmodule Arca.TurnStorage do
         Arca.Repo.locking_transaction(fn ->
           approval = approval!(athanor_id, approval_id)
           turn = own!(athanor_id, approval.turn_id, attrs)
+          work_lock!(athanor_id, turn)
           approval = approval!(athanor_id, approval_id)
           if approval.status != "pending", do: Arca.Repo.rollback({:already_resolved, approval})
           step = step!(athanor_id, approval.step_id)
@@ -3449,7 +3455,6 @@ defmodule Arca.TurnStorage do
   # arca:db-raise-ok inside the caller's transaction
   defp own!(athanor_id, turn_id, attrs) do
     fence = held_fence!(attrs)
-    work_first!(athanor_id, crew_turn(athanor_id, turn_id))
 
     case from(t in Turn,
            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
@@ -3523,7 +3528,6 @@ defmodule Arca.TurnStorage do
   # arca:db-raise-ok inside the caller's transaction
   defp take!(athanor_id, turn_id, attrs) do
     fence = held_fence!(attrs)
-    work_first!(athanor_id, crew_turn(athanor_id, turn_id))
 
     case from(t in Turn,
            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
@@ -3537,18 +3541,26 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # A write of a turn in a crew thread under a workspace thread may move
-  # the workspace thread too (`settle_work!/2`), a second thread row, so
-  # it takes the athanor's row first, before the turn's: the one order of
-  # `Arca.ThreadStorage.lock_threads!/2`. A thread's kind and room never
-  # change, so they are read unlocked.
+  # A write of a turn in a crew member's thread under a workspace thread
+  # that may move the workspace thread's state (`settle_work!/2`) takes a
+  # second thread row, so it takes the athanor's row after its turn and
+  # before any thread row: the order `Arca.ThreadStorage.lock_threads!/2`
+  # states. Its callers are those writes alone, a card opened, decided or
+  # skipped, a turn's end, its cancel and its set-downs; any other write
+  # of a turn takes no second thread row and no athanor lock, nor does a
+  # write of a turn that is over, which skips and ends nothing. A
+  # thread's kind and room never change, so they are read unlocked.
   # arca:db-raise-ok inside the caller's transaction
-  defp work_first!(athanor_id, crew_query) do
+  defp work_lock!(athanor_id, %Turn{status: status, thread_id: thread_id}),
+    do: if(status in @open, do: work_lock!(athanor_id, thread_id), else: :ok)
+
+  defp work_lock!(athanor_id, thread_id) when is_binary(thread_id) do
     under_workspace =
-      from([c] in crew_query,
+      from(c in Thread,
         join: w in Thread,
         on: w.id == c.parent_id,
-        where: w.athanor_id == ^athanor_id and c.kind == "crew" and w.kind == "workspace"
+        where: c.athanor_id == ^athanor_id and c.id == ^thread_id and c.kind == "crew",
+        where: w.athanor_id == ^athanor_id and w.kind == "workspace"
       )
 
     if Arca.Repo.exists?(under_workspace),
@@ -3557,16 +3569,26 @@ defmodule Arca.TurnStorage do
     :ok
   end
 
-  defp crew_thread(athanor_id, thread_id),
-    do: from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread_id)
-
-  defp crew_turn(athanor_id, turn_id) do
-    from(c in Thread,
-      join: t in Turn,
-      on: t.athanor_id == c.athanor_id and t.thread_id == c.id,
-      where: c.athanor_id == ^athanor_id and t.id == ^turn_id
+  @doc false
+  # The turns `turn_ids` names, held until the caller's transaction ends,
+  # in id order: what a write that stops or removes turns takes before the
+  # athanor's row (`Arca.ThreadStorage.lock_threads!/2`). An
+  # in-transaction helper; answers the ids it holds.
+  @spec hold_turns!(Prima.Actor.t(), [String.t()]) :: [String.t()]
+  # arca:db-raise-ok inside the caller's transaction
+  def hold_turns!(%Prima.Actor{athanor_id: athanor_id}, turn_ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(turn_ids) do
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.id in ^turn_ids,
+      order_by: [asc: t.id],
+      select: t.id
     )
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
   end
+
+  def hold_turns!(%Prima.Actor{}, _turn_ids),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.hold_turns!/2")
 
   # A turn that is over takes no further row or bookkeeping.
   # arca:db-raise-ok inside the caller's transaction
