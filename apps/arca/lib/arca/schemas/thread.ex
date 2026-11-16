@@ -31,6 +31,11 @@ defmodule Arca.Schemas.Thread do
   member opens a new one. Each kind holds its own fields and no other's,
   which the table's CHECK holds too.
 
+  A workspace thread keeps its `notes`, which its own turns write and its
+  prompt reads (`Arca.TurnStorage.write_notes/4`): the note's bytes as
+  `Aqua.Notes` encodes one, with the provenance it was written with. They
+  are the thread's own and go with its row.
+
   `read_seq` is the `seq` of the last message the person has seen; an
   athanor is one person's, so one mark per thread, moved forward only.
   `brain_session` is the brain's own opaque session for the thread, and
@@ -74,6 +79,7 @@ defmodule Arca.Schemas.Thread do
     field :opened_from, :string
     field :workspace_state, :string
     field :workspace_outcome, :string
+    field :notes, :string
     field :read_seq, :integer, default: 0
     field :brain_session, :string
     field :brain_generation, :integer, default: 0
@@ -134,6 +140,11 @@ defmodule Arca.Schemas.Thread do
     |> then(fn cs ->
       if kind != "workspace" and get_field(cs, :workspace_outcome) != nil,
         do: add_error(cs, :workspace_outcome, "only a workspace thread reports"),
+        else: cs
+    end)
+    |> then(fn cs ->
+      if kind != "workspace" and get_field(cs, :notes) != nil,
+        do: add_error(cs, :notes, "only a workspace thread keeps notes"),
         else: cs
     end)
   end

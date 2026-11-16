@@ -1171,6 +1171,92 @@ defmodule Aqua.LaunchTest do
     end
   end
 
+  # An app whose manifest declares that the pinned page may reach its one
+  # exit, and nothing else, granted.
+  defp pinned_flow_app!(ctx) do
+    name = "pinned-flow-app-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "caps" => %{
+        "egress" => %{"domains" => ["api.example.com"]},
+        "flows" => [%{"from" => "pinned", "to" => "api.example.com"}]
+      }
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    app = "reagent:local." <> name
+    grant!(ctx, app, [])
+    %{app: app, args: %{"reference" => app <> ":1.0.0", "input" => %{}}}
+  end
+
+  # A turn that read the prompt as it is composed now, as the loop's
+  # first model step records what the prompt read: one of a thread of its
+  # own, since one turn holds a thread at a time.
+  defp prompted!(ctx, _thread, pins) do
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    composed = Aqua.Prompt.compose(ctx, agent: %{"prompt" => "", "tool_policy" => %{}})
+    read!(ctx, turn, composed.sources)
+    turn
+  end
+
+  test "an about-you page Aqua wrote after reading outside material makes every later turn's " <>
+         "launch of an app whose grant lets only the page out ask; the person's own write or " <>
+         "Remove on the Aqua page ends it",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    %{args: args} = pinned_flow_app!(ctx)
+
+    # The person's own page: the grant lets it out, and the launch runs.
+    {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd.")
+    assert {:auto, _} = decide(ctx, prompted!(ctx, thread, pins), args)
+
+    # Aqua rewrites it after reading the news, with no card: every turn that
+    # reads the page from then on carries the news, which the grant does
+    # not let out, so each launch asks.
+    {:ok, _} =
+      Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd; fares rise Monday.",
+        kept_by: Prima.Author.agent(),
+        thread: thread.id,
+        sources: [@news]
+      )
+
+    for _turn <- 1..2, do: assert(:ask = decide(ctx, prompted!(ctx, thread, pins), args))
+
+    # The person saves the page as their own on the Aqua page: the next
+    # turn runs the app with no card again.
+    {:ok, %{revision: revision}} = Aqua.Notes.read(ctx, "about-you")
+
+    {:ok, _} =
+      Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd; fares rise Monday.", [],
+        revision: revision
+      )
+
+    assert {:auto, _} = decide(ctx, prompted!(ctx, thread, pins), args)
+
+    # Or removes Aqua's page, over the revision the Aqua page read.
+    {:ok, _} =
+      Aqua.Notes.pin(ctx, "about-you", "Fares rise Monday.",
+        kept_by: Prima.Author.agent(),
+        thread: thread.id,
+        sources: [@news]
+      )
+
+    assert :ask = decide(ctx, prompted!(ctx, thread, pins), args)
+    {:ok, %{revision: revision}} = Aqua.Notes.read(ctx, "about-you")
+    {:ok, %{cleared: "about-you"}} = Aqua.Notes.pin(ctx, "about-you", "", [], revision: revision)
+    assert {:auto, _} = decide(ctx, prompted!(ctx, thread, pins), args)
+  end
+
   test "a thread the turn's posts came from is no material a grant must cover",
        %{ctx: ctx, thread: thread, pins: pins} do
     %{args: args} = granted_app!(ctx)

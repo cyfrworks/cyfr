@@ -49,6 +49,8 @@ defmodule Aqua.Steps do
     {"crew", "ask"} => "Asked the crew for help",
     {"crew", "list"} => "Looked at who is in the crew",
     {"thread", "post"} => "Posted in the thread",
+    {"thread", "search"} => "Searched past posts",
+    {"thread", "events"} => "Read a thread",
     {"workspace", "open"} => "Opened a workspace thread",
     {"workspace", "report"} => "Reported back to the daily thread",
     {"workspace", "list"} => "Looked at the workspace threads",
@@ -56,6 +58,7 @@ defmodule Aqua.Steps do
     {"threads", "read"} => "Read a shared thread",
     {"notes", "keep"} => "Kept a note",
     {"notes", "pin"} => "Wrote the about-you page",
+    {"notes", "workspace"} => "Wrote this thread's notes",
     {"notes", "read"} => "Read a note",
     {"notes", "list"} => "Looked at the notes",
     {"notes", "forget"} => "Forgot a note"

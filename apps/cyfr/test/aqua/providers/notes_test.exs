@@ -1,6 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Aqua.Providers.NotesTest.Staging do
+  @moduledoc false
+  # A storage cap that runs what a test planted before it answers, which
+  # guards itself to act once. `Arca.Storage.stage/3` asks it while a
+  # note's bytes are staged, before the publication's transaction, so what
+  # is planted lands in that window. The test plants it through
+  # `Prima.Test.Env`, which restores it.
+  @behaviour Prima.Caps
+
+  @impl Prima.Caps
+  def check_counted(_actor, _key, _count), do: :ok
+
+  @impl Prima.Caps
+  def check_storage(_actor, _incoming) do
+    case :persistent_term.get({__MODULE__, :once}, nil) do
+      nil -> :ok
+      between -> between.()
+    end
+
+    :ok
+  end
+end
+
 defmodule Aqua.Providers.NotesTest do
   # Notes are not the transcript. These pin the difference, and the rule
   # that makes "whose notes" a fact about where you are rather than an
@@ -237,8 +260,11 @@ defmodule Aqua.Providers.NotesTest do
     refute Map.has_key?(Arca.Storage.guest_scopes(), "notes")
     assert "notes" in Arca.Storage.tenant_roots()
 
+    # A workspace thread's notes are a chain's alone: its turn names the
+    # thread.
     for {name, spec} <- Tool.definition().annotations.actions do
-      assert spec.planes == [:external, :in_chain], "#{name} is not reachable from a chain"
+      planes = if name == "workspace", do: [:in_chain], else: [:external, :in_chain]
+      assert spec.planes == planes, "#{name} is not reachable from a chain"
       assert spec.consent == :interactive, "#{name} is reachable by a standing credential"
     end
   end
@@ -316,17 +342,26 @@ defmodule Aqua.Providers.NotesTest do
       "root_execution_id" => "forged"
     }
 
-    lineage = [lineage: %{root_execution_id: "exec_1", thread_id: "thread_1"}]
+    {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+    turn = turn_in!(ctx, daily, [])
+    lineage = [lineage: %{root_execution_id: turn.root_execution_id, thread_id: daily.id}]
 
     # The person's own session, now guest-planed by the approved run: the
     # plane is not asked again, the surface is.
     assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth, lineage)
     assert id == mine.id
 
-    assert {:ok, %{thread: "thread_1", execution: "exec_1", kept_by: kept_by}} =
+    assert {:ok, %{thread: thread, execution: execution, kept_by: kept_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
 
+    assert thread == daily.id and execution == turn.root_execution_id
     assert kept_by == ctx.user_id
+
+    # A lineage that names a thread no open turn of it answers for keeps
+    # nothing.
+    unheld = [lineage: %{root_execution_id: "exec_1", thread_id: "thread_1"}]
+    assert {:error, :not_in_a_turn} = in_chain(ctx, %{args | "name" => "unheld"}, auth, unheld)
+    assert {:error, {:not_found, "note", "unheld"}} = Aqua.Notes.read(ctx, "unheld")
 
     # With no thread or root in the host's lineage the forged values are
     # still not recorded: the execution kept is the calling one.
@@ -417,6 +452,317 @@ defmodule Aqua.Providers.NotesTest do
     assert :none = Aqua.Notes.pinned(other)
   end
 
+  test "a person's save during a turn stands: the turn's pin over the page it read, or over none, " <>
+         "is refused and writes nothing, and one over the page read again writes it",
+       %{ctx: ctx} do
+    {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Likes ramen.")
+
+    # The turn's prompt shows the page with the revision it stands at.
+    composed = Aqua.Prompt.compose(ctx, agent: %{"prompt" => "", "tool_policy" => %{}})
+    [_, read] = Regex.run(~r/### Pinned: about-you \(revision (\d+)\)/, composed.text)
+    read = String.to_integer(read)
+
+    # The person saves the page on the Aqua page while the turn works.
+    assert {:ok, %{pinned: "about-you"}} =
+             call(ctx, %{
+               "action" => "pin",
+               "name" => "about-you",
+               "content" => "Likes ramen; vegetarian since May.",
+               "revision" => read
+             })
+
+    {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+    turn = turn_in!(ctx, daily, [])
+
+    pin = fn args ->
+      call(
+        Context.enter_guest(ctx),
+        Map.merge(
+          %{
+            "action" => "pin",
+            "name" => "about-you",
+            "content" => "Likes ramen.\nPrefers mornings.",
+            "thread_id" => daily.id,
+            "root_execution_id" => turn.root_execution_id
+          },
+          args
+        )
+      )
+    end
+
+    # A pin that names no revision, and one over the revision the turn read.
+    assert {:error, {:invalid_argument, unread}} = pin.(%{})
+    assert unread =~ "revision"
+    assert {:error, {:conflict, moved}} = pin.(%{"revision" => read})
+    assert moved =~ "Read it again with notes.read"
+
+    assert {:ok, %{content: "Likes ramen; vegetarian since May.", kept_by: by, revision: now}} =
+             Aqua.Notes.read(ctx, "about-you")
+
+    assert by == ctx.user_id and now == read + 1
+
+    # Read again, the turn writes over what the person wrote.
+    assert {:ok, %{pinned: "about-you"}} =
+             pin.(%{"revision" => now, "content" => "Vegetarian since May.\nPrefers mornings."})
+
+    assert {:ok, %{content: "Vegetarian since May.\nPrefers mornings.", kept_by: "aqua"}} =
+             Aqua.Notes.read(ctx, "about-you")
+  end
+
+  # A running turn with its root, as the loop starts one.
+  defp running!(ctx, thread) do
+    {:ok, %{turn: turn}} =
+      Aqua.Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "draw the moon"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    {:ok, %{execution: execution, attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_tool_#{System.unique_integer([:positive])}",
+          reference: "agent:local.aqua",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn.id,
+          origin: :interactive
+        },
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    {:ok, turn} =
+      Aqua.Tape.start_turn(ctx, turn, %{
+        root_execution_id: execution.id,
+        attempt: attempt.attempt,
+        profile_id: "prof_x",
+        consent_id: "consent_x",
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+      })
+
+    turn
+  end
+
+  describe "a turn's page under its fence" do
+    setup do
+      installed = Prima.Caps.impl!()
+      on_exit(fn -> Prima.Caps.install!(installed) end)
+      Prima.Caps.install!(Aqua.Providers.NotesTest.Staging)
+      :ok
+    end
+
+    test "a pin admitted before its turn loses the fence publishes nothing", %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = running!(ctx, daily)
+      parent = self()
+
+      # The turn is superseded while the page's bytes are staged, after the
+      # gate admitted the call and before the publication commits.
+      once = :atomics.new(1, [])
+
+      Prima.Test.Env.put_persistent_term({Aqua.Providers.NotesTest.Staging, :once}, fn ->
+        if :atomics.compare_exchange(once, 1, 0, 1) == :ok do
+          assert {:ok, _} = Aqua.Tape.supersede(ctx, turn)
+          send(parent, :superseded_before_publication)
+        end
+      end)
+
+      result =
+        in_chain(
+          ctx,
+          %{
+            "action" => "pin",
+            "name" => "about-you",
+            "content" => "stale owner's page",
+            "revision" => 0
+          },
+          granting([{"notes", "pin"}]),
+          lineage: %{
+            root_execution_id: turn.root_execution_id,
+            parent_execution_id: turn.root_execution_id,
+            attempt: turn.attempt,
+            thread_id: daily.id
+          }
+        )
+
+      assert_received :superseded_before_publication
+      assert {:ok, fresh} = Aqua.Tape.turn(ctx, turn.id)
+      assert fresh.fence > turn.fence
+      assert {:error, _refused} = result
+      assert :none = Aqua.Notes.pinned(ctx)
+    end
+
+    test "a turn that lost its fence clears no page and writes no workspace notes", %{ctx: ctx} do
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Likes ramen.")
+      {:ok, %{revision: read}} = Aqua.Notes.read(ctx, "about-you")
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = running!(ctx, daily)
+      assert {:ok, _} = Aqua.Tape.supersede(ctx, turn)
+
+      assert {:error, {:declined, :superseded}} =
+               Aqua.Notes.pin(ctx, "about-you", "", [],
+                 revision: read,
+                 verify: fn -> Aqua.Tape.hold(ctx, turn) end
+               )
+
+      assert {:ok, %{content: "Likes ramen."}} = Aqua.Notes.pinned(ctx)
+
+      # A workspace thread's notes are written in the transaction that
+      # takes the turn's row on its fence (`Arca.TurnStorage.write_notes/4`).
+      work = workspace!(ctx, "Fenced notes")
+      held = running!(ctx, work)
+      assert {:ok, _} = Aqua.Tape.supersede(ctx, held)
+
+      assert {:error, {:conflict, _}} = Aqua.Notes.workspace(ctx, held, "late notes")
+      assert notes_of(ctx, work) == nil
+    end
+  end
+
+  describe "a write from a turn that ended" do
+    # The turn ends as the gate admits the call, before its handler runs.
+    defp ended_on_admission!(ctx, turn, action) do
+      handler = "notes-ended-#{System.unique_integer([:positive])}"
+      parent = self()
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :decision, :admitted],
+          fn _event, _measure, meta, _config ->
+            if meta.tool == "notes" and meta.action == action do
+              :telemetry.detach(handler)
+              assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+              send(parent, :ended_on_admission)
+            end
+          end,
+          nil
+        )
+    end
+
+    defp lineage_of(turn),
+      do: [
+        lineage: %{
+          root_execution_id: turn.root_execution_id,
+          parent_execution_id: turn.root_execution_id,
+          attempt: turn.attempt,
+          thread_id: turn.thread_id
+        }
+      ]
+
+    defp pin_args(content, revision),
+      do: %{
+        "action" => "pin",
+        "name" => "about-you",
+        "content" => content,
+        "revision" => revision
+      }
+
+    test "an ended turn cannot be treated as a chain with no turn", %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = running!(ctx, daily)
+      assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+
+      assert {:error, _} =
+               in_chain(
+                 ctx,
+                 pin_args("after ending", 0),
+                 granting([{"notes", "pin"}]),
+                 lineage_of(turn)
+               )
+
+      assert :none = Aqua.Notes.pinned(ctx)
+    end
+
+    test "a turn ended after admission cannot publish a pin", %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = running!(ctx, daily)
+      ended_on_admission!(ctx, turn, "pin")
+
+      assert {:error, _} =
+               in_chain(
+                 ctx,
+                 pin_args("after ending", 0),
+                 granting([{"notes", "pin"}]),
+                 lineage_of(turn)
+               )
+
+      assert_received :ended_on_admission
+      assert :none = Aqua.Notes.pinned(ctx)
+    end
+
+    test "a turn ended after admission cannot clear the page", %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Keep this page")
+      {:ok, %{revision: revision}} = Aqua.Notes.read(ctx, "about-you")
+      turn = running!(ctx, daily)
+      ended_on_admission!(ctx, turn, "pin")
+
+      assert {:error, _} =
+               in_chain(
+                 ctx,
+                 pin_args("", revision),
+                 granting([{"notes", "pin"}]),
+                 lineage_of(turn)
+               )
+
+      assert_received :ended_on_admission
+      assert {:ok, %{content: "Keep this page"}} = Aqua.Notes.pinned(ctx)
+    end
+
+    test "a turn ended before its call, or after its admission, writes no workspace notes",
+         %{ctx: ctx} do
+      args = %{"action" => "workspace", "content" => "half done"}
+
+      before = workspace!(ctx, "Ended before")
+      turn = running!(ctx, before)
+      assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+
+      assert {:error, _} =
+               in_chain(ctx, args, granting([{"notes", "workspace"}]), lineage_of(turn))
+
+      assert notes_of(ctx, before) == nil
+
+      after_admission = workspace!(ctx, "Ended after admission")
+      turn = running!(ctx, after_admission)
+      ended_on_admission!(ctx, turn, "workspace")
+
+      assert {:error, _} =
+               in_chain(ctx, args, granting([{"notes", "workspace"}]), lineage_of(turn))
+
+      assert_received :ended_on_admission
+      assert notes_of(ctx, after_admission) == nil
+    end
+
+    test "a note a turn keeps is not kept once that turn ended, before its call or after its admission",
+         %{ctx: ctx} do
+      args = %{"action" => "keep", "name" => "late", "content" => "kept late"}
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+
+      turn = running!(ctx, daily)
+      assert {:ok, _} = Aqua.Tape.finish(ctx, turn, "cancelled")
+      assert {:error, _} = in_chain(ctx, args, granting([{"notes", "keep"}]), lineage_of(turn))
+
+      turn = running!(ctx, daily)
+      ended_on_admission!(ctx, turn, "keep")
+      assert {:error, _} = in_chain(ctx, args, granting([{"notes", "keep"}]), lineage_of(turn))
+      assert_received :ended_on_admission
+
+      assert {:error, {:not_found, "note", "late"}} = Aqua.Notes.read(ctx, "late")
+    end
+
+    test "a call at the door, with no chain, still writes the page and keeps a note", %{ctx: ctx} do
+      assert {:ok, %{pinned: "about-you"}} = call(ctx, pin_args("Prefers mornings.", 0))
+      assert {:ok, %{content: "Prefers mornings."}} = Aqua.Notes.pinned(ctx)
+
+      assert {:ok, %{kept: "door"}} =
+               call(ctx, %{"action" => "keep", "name" => "door", "content" => "at the door"})
+    end
+  end
+
   test "the shipped soul's manifest grants the notes actions its policy names" do
     # The chain authority is exact `tool.action` membership in the consent
     # blob, minted from the manifest's caps against the loaded providers —
@@ -427,7 +773,7 @@ defmodule Aqua.Providers.NotesTest do
     caps = Prima.Manifest.Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)
     granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
 
-    for action <- ~w(keep pin forget list read search) do
+    for action <- ~w(keep pin forget list read search workspace) do
       assert "notes.#{action}" in granted, "notes.#{action} is not in the shipped caps"
     end
 
@@ -449,14 +795,141 @@ defmodule Aqua.Providers.NotesTest do
     actions = Tool.definition().annotations.actions
 
     # A filed note follows the thread it was kept from, never the agent;
-    # a pinned page is changed one click at a time; forget is destructive
-    # and already takes no standing allow.
+    # an endorsement is one click at a time; forget is destructive and
+    # already takes no standing allow. The about-you page and a workspace
+    # thread's notes are Aqua's to keep current: no standing rule of
+    # their own, so an authored `auto` runs them with no card, and the
+    # workspace notes are a chain's alone.
     assert actions["keep"].standing == :thread
-    assert actions["pin"].standing == false
+    assert actions["endorse"].standing == false
     assert actions["forget"].kind == :destructive
+    assert %{kind: :write, planes: [:in_chain], consent: :interactive} = actions["workspace"]
 
-    for name <- ~w(forget list read search) do
+    for name <- ~w(pin workspace forget list read search) do
       refute Map.has_key?(actions[name], :standing), "#{name} declares a standing rule"
+    end
+
+    for action <- ~w(pin workspace), do: assert(Aqua.Kinds.auto_permitted?("notes", action))
+    for action <- ~w(keep endorse forget), do: refute(Aqua.Kinds.auto_permitted?("notes", action))
+  end
+
+  describe "a workspace thread's notes" do
+    # A turn of `thread` running on its own root, having read `sources`.
+    defp turn_in!(ctx, thread, sources) do
+      actor = Context.actor(ctx)
+
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      root = "exec_ws_#{System.unique_integer([:positive])}"
+
+      {1, _} =
+        Arca.Repo.update_all(turn_row(actor.athanor_id, turn.id),
+          set: [root_execution_id: root, sources: Prima.Source.encode(sources)]
+        )
+
+      %{turn | root_execution_id: root}
+    end
+
+    defp workspace!(ctx, title) do
+      %Arca.Schemas.Thread{}
+      |> Arca.Schemas.Thread.changeset(%{
+        id: Prima.UUID7.generate_id("thread"),
+        athanor_id: ctx.athanor_id,
+        kind: "workspace",
+        workspace_state: "open",
+        title: title,
+        created_by: ctx.user_id
+      })
+      |> Arca.Repo.insert!()
+      |> Map.from_struct()
+    end
+
+    defp write(ctx, turn, args) do
+      call(
+        Context.enter_guest(ctx),
+        Map.merge(
+          %{
+            "action" => "workspace",
+            "thread_id" => turn.thread_id,
+            "root_execution_id" => turn.root_execution_id
+          },
+          args
+        )
+      )
+    end
+
+    defp notes_of(ctx, thread) do
+      {:ok, row} = Arca.ThreadStorage.get(Context.actor(ctx), thread.id)
+      Aqua.Notes.thread_notes(row)
+    end
+
+    test "a turn writes its own workspace thread's notes, named by the lineage, with what it read",
+         %{ctx: ctx} do
+      host = Prima.Source.outside("news.example")
+      work = workspace!(ctx, "Fares")
+      elsewhere = workspace!(ctx, "Elsewhere")
+      turn = turn_in!(ctx, work, [host, Prima.Source.thread(elsewhere.id)])
+
+      # An argument naming another thread names nothing.
+      assert {:ok, %{workspace_notes: id}} =
+               write(ctx, turn, %{"content" => "Fares rise Monday.", "thread" => elsewhere.id})
+
+      assert id == work.id
+      assert notes_of(ctx, elsewhere) == nil
+
+      assert %{content: "Fares rise Monday.", sources: [^host], kept_by: by, thread: thread} =
+               notes_of(ctx, work)
+
+      assert by == Prima.Author.agent() and thread == work.id
+
+      # Whole each time; empty content clears them.
+      assert {:ok, _} = write(ctx, turn, %{"content" => "Booked."})
+      assert %{content: "Booked."} = notes_of(ctx, work)
+      assert {:ok, %{cleared_workspace_notes: _}} = write(ctx, turn, %{"content" => "  "})
+      assert notes_of(ctx, work) == nil
+
+      too_long = String.duplicate("x", Aqua.Notes.pin_max_bytes() + 1)
+      assert {:error, {:invalid_argument, _}} = write(ctx, turn, %{"content" => too_long})
+      assert notes_of(ctx, work) == nil
+    end
+
+    test "a daily thread keeps no such notes, a stale holder writes none, and a chain with no turn none",
+         %{ctx: ctx} do
+      {:ok, daily} = Arca.Test.Days.thread(Context.actor(ctx))
+      turn = turn_in!(ctx, daily, [])
+      assert {:error, {:invalid_argument, _}} = write(ctx, turn, %{"content" => "x"})
+
+      work = workspace!(ctx, "Fenced")
+      held = turn_in!(ctx, work, [])
+
+      stale = %{
+        "content" => "late",
+        "parent_execution_id" => held.root_execution_id,
+        "attempt" => "att_replaced"
+      }
+
+      assert {:error, {:conflict, _}} = write(ctx, held, stale)
+
+      assert {:error, :not_in_a_turn} =
+               write(ctx, %{held | root_execution_id: "exec_forged"}, %{"content" => "x"})
+
+      assert {:error, :not_in_a_turn} = call(ctx, %{"action" => "workspace", "content" => "x"})
+      assert notes_of(ctx, work) == nil
+    end
+
+    test "deleting the workspace thread deletes its notes with it", %{ctx: ctx} do
+      work = workspace!(ctx, "Short-lived")
+      turn = turn_in!(ctx, work, [])
+      assert {:ok, _} = write(ctx, turn, %{"content" => "Half done."})
+      assert %{content: "Half done."} = notes_of(ctx, work)
+      assert {:ok, _} = Arca.ThreadStorage.delete(Context.actor(ctx), work.id)
+
+      assert {:error, :not_found} = Arca.ThreadStorage.get(Context.actor(ctx), work.id)
+      assert Enum.all?(Arca.ThreadStorage.list(Context.actor(ctx)), &is_nil(&1.notes))
     end
   end
 

@@ -539,6 +539,61 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-notes button[phx-value-name=about-you]")
     end
 
+    test "a page Aqua wrote says so and what it read; learned in a deleted thread it is " <>
+           "marked with Remove, which removes it as read and no newer page",
+         %{conn: conn, ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, learned} = Arca.Test.Days.thread(actor)
+
+      by_aqua = [
+        kept_by: Prima.Author.agent(),
+        thread: learned.id,
+        sources: [Prima.Source.outside("news.example")]
+      ]
+
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon.", by_aqua)
+
+      {view, html} = mount_athanor(conn, "/aqua")
+      assert html =~ "Flies to Lisbon."
+      assert has_element?(view, "#aqua-about-by", "Written by Aqua after reading news.example")
+      refute has_element?(view, "#aqua-about-deleted")
+
+      {:ok, _} = Arca.ThreadStorage.delete(actor, learned.id)
+      {view, html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, "#aqua-about-deleted", "a thread that has since been deleted")
+      assert html =~ "Flies to Lisbon."
+
+      # A page written after the section read it is not what Remove removes.
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd.", by_aqua)
+      html = view |> with_target("#aqua-notes-section") |> render_click("about_remove", %{})
+      assert html =~ "Could not remove it"
+      assert {:ok, %{content: "Flies to Lisbon on the 3rd."}} = Aqua.Notes.pinned(ctx)
+
+      # Read again, Remove removes it.
+      assert has_element?(view, "#aqua-about-deleted")
+      view |> with_target("#aqua-notes-section") |> render_click("about_remove", %{})
+      assert :none = Aqua.Notes.pinned(ctx)
+      assert render(view) =~ "Nothing pinned yet."
+    end
+
+    test "a save over a page Aqua wrote since the editor opened is refused and keeps Aqua's",
+         %{conn: conn, ctx: ctx} do
+      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Prefers mornings.")
+      {view, _html} = mount_athanor(conn, "/aqua")
+      view |> with_target("#aqua-notes-section") |> render_click("about_edit", %{})
+
+      {:ok, _} =
+        Aqua.Notes.pin(ctx, "about-you", "Prefers mornings and tea.",
+          kept_by: Prima.Author.agent()
+        )
+
+      html =
+        view |> form("#aqua-about form", %{"content" => "Prefers evenings."}) |> render_submit()
+
+      assert html =~ "Could not pin that"
+      assert {:ok, %{content: "Prefers mornings and tea."}} = Aqua.Notes.pinned(ctx)
+    end
+
     test "the pinned editor counts bytes, and the tool's refusal over the cap is the flash",
          %{conn: conn, ctx: ctx} do
       cap = Aqua.Notes.pin_max_bytes()

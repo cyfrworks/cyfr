@@ -8,6 +8,13 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   kept here out of the threads. Both are written through the tool a
   card in chat goes through, so one gate answers for both; a write here
   changes nothing another section shows, so the section reloads itself.
+
+  Aqua keeps the page current itself, so the section says when Aqua wrote
+  it and what outside material it had read, and marks a page Aqua learned
+  in a thread since deleted, with Remove. A save and a Remove each name
+  the revision the section read, so neither writes over a page Aqua or
+  another device wrote since: that one is refused and the section reads
+  the page again.
   """
 
   use PrismWeb, :live_component
@@ -22,6 +29,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
      |> assign(:pinned_name, nil)
      |> assign(:pin_max_bytes, Aqua.pin_max_bytes())
      |> assign(:about, "")
+     |> assign(:about_note, nil)
      |> assign(:about_draft, "")
      |> assign(:about_editing?, false)
      |> assign(:notes, [])
@@ -57,9 +65,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
 
   def handle_event("about_save", %{"content" => content}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      args = %{"name" => socket.assigns.pinned_name, "content" => content}
-
-      case call_tool(socket.assigns.context, "notes/pin", args) do
+      case pin(socket, content) do
         {:ok, result} ->
           {:noreply,
            socket
@@ -69,6 +75,21 @@ defmodule PrismWeb.AquaLive.NotesComponent do
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Could not pin that: #{error_message(reason)}")}
+      end
+    end)
+  end
+
+  # Remove the page Aqua learned in a deleted thread: the page as it was
+  # read, and no newer one.
+  def handle_event("about_remove", _params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case pin(socket, "") do
+        {:ok, _result} ->
+          {:noreply, socket |> load() |> put_flash(:info, "Removed.")}
+
+        {:error, reason} ->
+          {:noreply,
+           socket |> load() |> put_flash(:error, "Could not remove it: #{error_message(reason)}")}
       end
     end)
   end
@@ -105,6 +126,22 @@ defmodule PrismWeb.AquaLive.NotesComponent do
     end)
   end
 
+  # The page written over the revision this section read, or over none
+  # when it read no page.
+  defp pin(socket, content) do
+    revision =
+      case socket.assigns.about_note do
+        %{revision: revision} -> revision
+        nil -> 0
+      end
+
+    call_tool(socket.assigns.context, "notes/pin", %{
+      "name" => socket.assigns.pinned_name,
+      "content" => content,
+      "revision" => revision
+    })
+  end
+
   # ============================================================================
   # Reads
   # ============================================================================
@@ -119,13 +156,16 @@ defmodule PrismWeb.AquaLive.NotesComponent do
 
     case Aqua.pinned_note_page(ctx) do
       {:ok, name} ->
-        about =
+        note =
           case call_tool(ctx, "notes/read", %{"name" => name}) do
-            {:ok, %{content: content}} -> content
-            _ -> ""
+            {:ok, %{content: _} = note} -> note
+            _ -> nil
           end
 
-        socket |> assign(:pinned_name, name) |> assign(:about, about)
+        socket
+        |> assign(:pinned_name, name)
+        |> assign(:about_note, note)
+        |> assign(:about, (note && note.content) || "")
 
       {:error, _} ->
         socket
@@ -145,6 +185,19 @@ defmodule PrismWeb.AquaLive.NotesComponent do
 
   defp about_title("about-you"), do: "About you"
   defp about_title(_page), do: "About us"
+
+  defp by_aqua?(%{kept_by: by}), do: by == Prima.Author.agent()
+  defp by_aqua?(_note), do: false
+
+  # The outside material the page was written after reading, by name.
+  defp outside_line(%{sources: sources}) when is_list(sources) do
+    case for(%{"class" => "outside"} = source <- sources, do: source["name"] || "a source") do
+      [] -> nil
+      names -> "after reading " <> Enum.join(Enum.uniq(names), ", ")
+    end
+  end
+
+  defp outside_line(_note), do: nil
 
   defp provenance_line(%{kept_by: by, kept_at: at, thread: thread}) do
     [
@@ -179,7 +232,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
           <div>
             <h4 class="text-sm font-medium text-gray-200">{about_title(@pinned_name)}</h4>
             <p class="text-[11px] text-gray-500">
-              Read first on every turn here — up to {@pin_max_bytes} bytes. Written by people, never by Aqua.
+              Read first on every turn here — up to {@pin_max_bytes} bytes. Aqua keeps it current; what you write here is yours.
             </p>
           </div>
           <button
@@ -238,6 +291,31 @@ defmodule PrismWeb.AquaLive.NotesComponent do
             </div>
           </div>
         </form>
+        <p
+          :if={not @about_editing? and @about != "" and by_aqua?(@about_note)}
+          id="aqua-about-by"
+          class="text-[10px] text-gray-500"
+        >
+          Written by Aqua{if line = outside_line(@about_note), do: " " <> line}. Edit it to make it yours.
+        </p>
+        <div
+          :if={(not @about_editing? and @about_note) && @about_note[:from_deleted_thread]}
+          id="aqua-about-deleted"
+          class="flex items-center justify-between gap-2 rounded border border-amber-800/60 bg-amber-950/30 px-2 py-1"
+        >
+          <span class="text-[11px] text-amber-300">
+            Aqua learned this in a thread that has since been deleted.
+          </span>
+          <button
+            type="button"
+            phx-click="about_remove"
+            phx-target={@myself}
+            data-confirm="Remove the about-you page? Aqua no longer reads it on any turn."
+            class="rounded px-2 py-1 text-xs text-amber-200 hover:bg-amber-900/40"
+          >
+            Remove
+          </button>
+        </div>
         <pre
           :if={not @about_editing? and @about != ""}
           class="whitespace-pre-wrap text-xs text-gray-300 font-sans"

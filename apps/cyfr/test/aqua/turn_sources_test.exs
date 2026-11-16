@@ -209,6 +209,50 @@ defmodule Aqua.TurnSourcesTest do
       assert host in sources(ctx, second)
     end
 
+    test "a search that finds a post with a screenshot carries what its page came from",
+         %{ctx: ctx, thread: thread, host: host} do
+      first = running!(ctx, thread)
+      file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => "PNG"}
+      {:ok, shot, _ref} = Aqua.Attachments.draft(ctx, first, file, [host])
+
+      lineage = %{
+        "thread_id" => thread.id,
+        "root_execution_id" => first.root_execution_id,
+        "parent_execution_id" => first.root_execution_id,
+        "attempt" => first.attempt
+      }
+
+      guest = Sanctum.Context.enter_guest(ctx)
+
+      assert {:ok, %{files: 1}} =
+               Aqua.Providers.Thread.handle(
+                 "thread",
+                 guest,
+                 Map.merge(lineage, %{
+                   "action" => "post",
+                   "text" => "the moon tonight",
+                   "screenshot" => shot
+                 })
+               )
+
+      {:ok, _} = Tape.finish(ctx, first, "cancelled")
+
+      # A turn of another thread finds the post, and reads what the picture
+      # came from with it.
+      reader = running!(ctx, workspace!(ctx, "Elsewhere"))
+
+      assert {:ok, %{count: 1}} =
+               Aqua.Providers.Thread.handle("thread", guest, %{
+                 "action" => "search",
+                 "q" => "moon tonight",
+                 "thread_id" => reader.thread_id,
+                 "root_execution_id" => reader.root_execution_id
+               })
+
+      assert host in sources(ctx, reader)
+      assert Source.thread(thread.id) in sources(ctx, reader)
+    end
+
     test "a compaction summary carries its turn's sources into the next turn",
          %{ctx: ctx, thread: thread, host: host} do
       # The first turn reads outside, then compacts its own older rows.
@@ -332,6 +376,188 @@ defmodule Aqua.TurnSourcesTest do
 
       assert :completed = run(ctx, later)
       assert host in sources(ctx, later)
+    end
+  end
+
+  describe "a read of the athanor's threads, and forgetting it" do
+    test "a search and a read join the threads they carry; deleting the thread they read blanks " <>
+           "those results alone, deletes the reader's later compactions and clears its session",
+         %{ctx: ctx, thread: daily} do
+      actor = Sanctum.Context.actor(ctx)
+      work = workspace!(ctx, "Fares")
+      say!(ctx, work, "the fares rise on Monday")
+      say!(ctx, daily, "call the plumber on Thursday")
+
+      turn = accept!(ctx, daily, "@aqua what did we find about fares?")
+
+      script!([
+        calls([
+          {"s1", "thread", %{"action" => "search", "q" => "fares rise"}},
+          {"s2", "thread", %{"action" => "search", "q" => "plumber"}}
+        ]),
+        calls([{"e1", "thread", %{"action" => "events", "thread" => work.id}}]),
+        reply("They rise on Monday.")
+      ])
+
+      assert :completed = run(ctx, turn)
+      assert Source.thread(work.id) in sources(ctx, turn)
+      assert Source.thread(daily.id) in sources(ctx, turn)
+
+      read = result(ctx, turn, "s1")
+      other = result(ctx, turn, "s2")
+      opened = result(ctx, turn, "e1")
+      assert read.content =~ "the fares rise on Monday"
+      assert opened.content =~ "the fares rise on Monday"
+      assert other.content =~ "plumber"
+
+      # What the reader kept of the thread since it first read it.
+      {:ok, summary} =
+        Threads.append(actor, daily.id, %{
+          author: "system",
+          sent_by: "aqua",
+          kind: "compaction",
+          content: "they rise on Monday"
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Thread, where: c.id == ^daily.id),
+          set: [brain_session: "sess_fares"]
+        )
+
+      {:ok, %{brain_generation: generation}} = Threads.get(actor, daily.id)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, work.id)
+
+      assert result(ctx, turn, "s1").content == Threads.forgotten_read()
+      assert result(ctx, turn, "e1").content == Threads.forgotten_read()
+      assert result(ctx, turn, "s2").content == other.content
+      assert {:error, :not_found} = Threads.get_message(actor, summary.id)
+      assert {:ok, %{brain_session: nil, brain_generation: raised}} = Threads.get(actor, daily.id)
+      assert raised == generation + 1
+    end
+
+    test "deletion blanks a long events result even when its thread id was clipped",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Private research")
+      for n <- 1..25, do: say!(ctx, work, "private-fact-#{n}: " <> String.duplicate("x", 12_000))
+      turn = accept!(ctx, daily, "@aqua read that research")
+
+      # A window the long answer fits, so no compaction summarizes it first.
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, @http, @files],
+         script: [
+           calls([{"e1", "thread", %{"action" => "events", "thread" => work.id}}]),
+           reply("Read it.")
+         ],
+         window: 1_000_000},
+        id: :script
+      )
+
+      assert :completed = run(ctx, turn)
+      read = result(ctx, turn, "e1")
+      assert read.content =~ "private-fact-1"
+      # The binding cut the answer, the thread's id with it.
+      refute String.contains?(read.content, work.id)
+      assert Source.thread(work.id) in sources(ctx, turn)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, work.id)
+      assert result(ctx, turn, "e1").content == Threads.forgotten_read()
+    end
+
+    test "a search answer that carried two threads is blanked whole when one of them is deleted",
+         %{ctx: ctx, thread: daily} do
+      gone = workspace!(ctx, "Fares, first")
+      kept = workspace!(ctx, "Fares, second")
+      say!(ctx, gone, "the fares rise on Monday")
+      say!(ctx, kept, "the fares fall on Friday")
+      turn = accept!(ctx, daily, "@aqua what about fares?")
+
+      script!([
+        calls([{"s1", "thread", %{"action" => "search", "q" => "the fares"}}]),
+        reply("Up Monday, down Friday.")
+      ])
+
+      assert :completed = run(ctx, turn)
+      read = result(ctx, turn, "s1")
+      assert read.content =~ "rise on Monday" and read.content =~ "fall on Friday"
+
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+      assert result(ctx, turn, "s1").content == Threads.forgotten_read()
+      assert {:ok, _} = Threads.get(Sanctum.Context.actor(ctx), kept.id)
+    end
+
+    test "retention removing a thread a turn searched blanks that read the same way",
+         %{ctx: ctx, thread: daily} do
+      actor = Sanctum.Context.actor(ctx)
+      work = workspace!(ctx, "Old fares")
+      say!(ctx, work, "the old fares were lower")
+
+      turn = accept!(ctx, daily, "@aqua what were the old fares?")
+
+      script!([
+        calls([{"s1", "thread", %{"action" => "search", "q" => "old fares"}}]),
+        reply("Lower.")
+      ])
+
+      assert :completed = run(ctx, turn)
+      assert result(ctx, turn, "s1").content =~ "the old fares were lower"
+
+      long_ago = DateTime.add(DateTime.utc_now(), -400, :day)
+
+      {1, _} =
+        Arca.Repo.update_all(from(c in Arca.Schemas.Thread, where: c.id == ^work.id),
+          set: [last_message_at: long_ago, inserted_at: long_ago]
+        )
+
+      assert {:ok, 1} = Threads.delete_before(actor, DateTime.add(DateTime.utc_now(), -1, :day))
+      assert {:error, :not_found} = Threads.get(actor, work.id)
+      assert result(ctx, turn, "s1").content == Threads.forgotten_read()
+    end
+
+    test "a thread deleted before a turn's read joins it is neither joined nor answered",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Gone first")
+      turn = running!(ctx, daily)
+      assert {:ok, _} = Tape.delete_thread(ctx, work.id)
+
+      assert {:ok, %{threads: [standing], sources: joined}} =
+               Tape.join_read(ctx, turn, [work.id, daily.id], [], [])
+
+      assert standing == daily.id
+      refute Source.thread(work.id) in joined
+      refute Source.thread(work.id) in sources(ctx, turn)
+    end
+
+    test "a thread deleted after a turn's read joined it, before the read's step closed, stops " <>
+           "that turn, and the read's result is never written",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Gone after")
+      say!(ctx, work, "a secret of the thread")
+      turn = running!(ctx, daily)
+      step = read_step!(ctx, turn)
+
+      assert {:ok, %{threads: [_]}} = Tape.join_read(ctx, turn, [work.id], [], [])
+      assert {:ok, %{cancelled: [_ | _]}} = Tape.delete_thread(ctx, work.id)
+      assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn.id)
+
+      assert {:error, _} =
+               Tape.close_step(ctx, turn, step, "ok", %{
+                 result: %{content: "a secret of the thread", payload: %{}}
+               })
+
+      refute Enum.any?(rows(ctx, daily), &(&1.content == "a secret of the thread"))
+    end
+
+    test "a holder whose fence moved joins nothing", %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Fenced")
+      turn = running!(ctx, daily)
+
+      assert {:error, :superseded} =
+               Tape.join_read(ctx, %{turn | fence: turn.fence + 1}, [work.id], [], [])
+
+      assert sources(ctx, turn) == []
     end
   end
 
@@ -582,6 +808,62 @@ defmodule Aqua.TurnSourcesTest do
       })
 
     sources(ctx, turn) -- before
+  end
+
+  defp workspace!(ctx, title) do
+    %Arca.Schemas.Thread{}
+    |> Arca.Schemas.Thread.changeset(%{
+      id: Prima.UUID7.generate_id("thread"),
+      athanor_id: ctx.athanor_id,
+      kind: "workspace",
+      workspace_state: "done",
+      title: title,
+      created_by: ctx.user_id
+    })
+    |> Arca.Repo.insert!()
+    |> Map.from_struct()
+  end
+
+  defp say!(ctx, thread, content) do
+    {:ok, row} =
+      Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+        author: ctx.user_id,
+        sent_by: "person",
+        content: content
+      })
+
+    row
+  end
+
+  # The result row of one call, by the id its model gave it.
+  defp result(ctx, turn, call_id) do
+    %{result_message_id: id} = step(ctx, turn, call_id)
+    {:ok, row} = Tape.message(ctx, id)
+    row
+  end
+
+  # A dispatched `thread.search` step of a running turn, as the loop
+  # leaves one while the call runs.
+  defp read_step!(ctx, turn) do
+    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
+
+    {:ok, %{calls: [%{step: step}]}} =
+      Tape.record_response(ctx, turn, model_step, %{
+        text: nil,
+        tool_calls: [
+          %{
+            tool_call_id: "r1",
+            name: "thread",
+            tool: "thread",
+            action: "search",
+            arguments: %{"action" => "search", "q" => "secret"},
+            kind: "read"
+          }
+        ]
+      })
+
+    {:ok, step} = Tape.mark_dispatched(ctx, turn, step)
+    step
   end
 
   defp status(ctx, turn) do

@@ -237,12 +237,16 @@ defmodule Compendium.AquaAgentTest do
     end
 
     test "an action declared to take no agent-wide standing allow is never auto" do
-      # A pin, an endorsement and a scroll's writes are asked at every
-      # call, and a kept note takes a standing allow for one thread only,
-      # so an authored auto, which holds in every thread, would be a
-      # standing answer they never take.
+      # An endorsement and a scroll's writes are asked at every call, and a
+      # kept note takes a standing allow for one thread only, so an
+      # authored auto, which holds in every thread, would be a standing
+      # answer they never take. The about-you page and a workspace thread's
+      # notes are Aqua's own, and take auto.
+      for key <- ~w(notes.pin notes.workspace),
+          do: assert(:ok = AquaAgent.validate_tool_policy(%{key => "auto"}))
+
       for key <-
-            ~w(notes.pin notes.endorse notes.keep aqua.skill_create aqua.skill_update) do
+            ~w(notes.endorse notes.keep aqua.skill_create aqua.skill_update) do
         assert {:error, msg} =
                  AquaAgent.validate_tool_policy(%{key => "auto"})
 
@@ -253,7 +257,8 @@ defmodule Compendium.AquaAgentTest do
       assert {:error, msg} =
                AquaAgent.validate_tool_policy(%{"notes.*" => "auto"})
 
-      assert msg =~ "notes.pin"
+      assert msg =~ "notes.endorse"
+      refute msg =~ "notes.pin"
 
       assert :ok =
                AquaAgent.validate_tool_policy(%{"notes.read" => "auto"})
