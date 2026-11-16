@@ -117,7 +117,7 @@ func (f *castChrome) serve(commands io.Reader) {
 			}
 			_ = json.Unmarshal(m.Params, &p)
 			reply(map[string]any{"sessionId": "S" + strings.TrimPrefix(p.TargetID, "T")})
-		case "Page.enable", "Page.setLifecycleEventsEnabled":
+		case "Page.enable", "Page.setLifecycleEventsEnabled", "Network.enable", "Fetch.enable", "Target.setAutoAttach":
 			reply(map[string]any{})
 		case "Page.getFrameTree":
 			reply(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "F" + m.SessionID}}})

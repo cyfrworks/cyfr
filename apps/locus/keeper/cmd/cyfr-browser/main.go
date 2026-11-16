@@ -33,13 +33,18 @@
 // chunks through the one send slot (slot.go), which the host acknowledges
 // chunk by chunk and may ask to send again. A `req` of op `cast` starts a
 // window's cast, whose images go out one at a time beside the responses
-// and whose window takes the person's input (cast.go, input.go). Chrome
+// and whose window takes the person's input (cast.go, input.go). A `req`
+// of op `page` is a put, which runs once the `part`s that follow it have
+// brought its files; the window's page is answered from them, and the
+// calls it makes go up as `call`s, each fulfilled by the host's `answer`
+// or ended by the driver's `callend` (page.go). Chrome
 // exiting ends the driver with 1; its input ending, a hangup or a TERM
 // closes Chrome, which then writes its profile, and ends it with 0.
 package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -176,10 +181,15 @@ type chromeProcess struct {
 // component checks, sync, the time and spelling services, field trials,
 // domain reliability, safe-browsing and phishing models, metrics and
 // pings, the cast and translate services, the server checks of autofill,
-// optimization hints, the new tab's feed and lens, and the AI Mode
-// eligibility check (AimEnabled), which no narrower switch stops. Measured
-// with Chrome's own network log over a start with nothing asked
-// (tests/locus-backends-image/browser.py), it makes no request.
+// optimization hints, the new tab's feed and lens, the AI Mode eligibility
+// check (AimEnabled), which no narrower switch stops, and the preconnect to
+// the default search engine that every new window makes
+// (PreconnectToSearch). Measured with Chrome's own network log over a start
+// with nothing asked and over a session of put pages
+// (tests/locus-backends-image/browser.py), it makes no request. Nor does
+// Chrome ever ask a resolver for the reserved origin's name: what a page
+// asks of it that no interception pauses, a socket, a preconnect or a
+// shared worker's request, fails at once inside Chrome.
 var quiet = []string{
 	"--no-startup-window", "--no-first-run", "--no-default-browser-check",
 	"--disable-background-networking", "--disable-component-update", "--disable-sync",
@@ -189,7 +199,8 @@ var quiet = []string{
 	"--disable-features=Translate,OptimizationHints,OptimizationHintsFetching,OptimizationGuideModelDownloading," +
 		"OptimizationTargetPrediction,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication," +
 		"CertificateTransparencyComponentUpdater,NetworkTimeServiceQuerying,InterestFeedContentSuggestions," +
-		"LensOverlay,AimEnabled",
+		"LensOverlay,AimEnabled,PreconnectToSearch",
+	"--host-resolver-rules=MAP " + reservedHost + " ~NOTFOUND",
 }
 
 // startChrome starts Chrome on its debugging pipe with its profile in
@@ -364,7 +375,8 @@ func (p *chromeProcess) kill() {
 
 // event is what the serve loop acts on: a host message, a request's
 // response made ready, a cast's start, frame or end, or the end of the
-// host's input.
+// host's input. A part's bytes are its text; an answer's status and body
+// are its own.
 type event struct {
 	kind    string
 	id      int64
@@ -375,6 +387,8 @@ type event struct {
 	session string
 	frame   chromeFrame
 	input   []inputEvent
+	status  int
+	body    string
 }
 
 // serve answers the host until its input ends (nil), Chrome exits
@@ -383,6 +397,8 @@ func serve(in io.Reader, s *slot, b *browser, exited <-chan struct{}, stop <-cha
 	events := make(chan event, 64)
 	cs := newCasts(b, s, events)
 	defer cs.stop()
+	ps := newPuts(s, func(r request) { go func() { events <- event{kind: "ready", id: r.ID, text: b.do(r)} }() })
+	cl := newCalls(b, s)
 	go readFrames(in, events)
 	tick := time.NewTicker(min(max(s.keep/4, 10*time.Millisecond), time.Second))
 	defer tick.Stop()
@@ -394,7 +410,11 @@ func serve(in io.Reader, s *slot, b *browser, exited <-chan struct{}, stop <-cha
 		case <-stop:
 			return nil
 		case <-tick.C:
-			err = s.expire()
+			if err = s.expire(); err == nil {
+				err = ps.expire()
+			}
+		case pe := <-b.pages:
+			err = cl.take(pe)
 		case e := <-events:
 			switch e.kind {
 			case "end":
@@ -403,11 +423,17 @@ func serve(in io.Reader, s *slot, b *browser, exited <-chan struct{}, stop <-cha
 				var run bool
 				if run, err = s.take(e.req.ID); run && e.req.Op == "cast" {
 					cs.start(e.req)
+				} else if run && e.req.Op == "page" {
+					err = ps.start(e.req)
 				} else if run {
 					go func(r request) { events <- event{kind: "ready", id: r.ID, text: b.do(r)} }(e.req)
 				}
 			case "ready":
 				err = s.ready(e.id, e.text)
+			case "part":
+				err = ps.part(e.id, e.seq, e.text, e.failed)
+			case "answer":
+				cl.answer(e.id, e.status, e.body)
 			case "ack":
 				err = s.ack(e.id, int(e.seq))
 			case "again":
@@ -453,20 +479,35 @@ func readFrames(in io.Reader, events chan<- event) {
 
 func parse(body []byte) (event, bool) {
 	var m struct {
-		T    string          `json:"t"`
-		ID   *int64          `json:"id"`
-		Seq  *int64          `json:"seq"`
-		Win  string          `json:"win"`
-		Op   string          `json:"op"`
-		Args json.RawMessage `json:"args"`
-		Evs  json.RawMessage `json:"evs"`
+		T      string          `json:"t"`
+		ID     *int64          `json:"id"`
+		Seq    *int64          `json:"seq"`
+		Win    string          `json:"win"`
+		Op     string          `json:"op"`
+		Args   json.RawMessage `json:"args"`
+		Of     int64           `json:"of"`
+		Evs    json.RawMessage `json:"evs"`
+		Part   *string         `json:"part"`
+		Status *int            `json:"status"`
+		Body   *string         `json:"body"`
 	}
 	if json.Unmarshal(body, &m) != nil || m.ID == nil {
 		return event{}, false
 	}
 	switch m.T {
 	case "req":
-		return event{kind: "req", req: request{ID: *m.ID, Win: m.Win, Op: m.Op, Args: m.Args}}, true
+		return event{kind: "req", req: request{ID: *m.ID, Win: m.Win, Op: m.Op, Args: m.Args, Of: m.Of}}, true
+	case "part":
+		if m.Seq == nil || m.Part == nil {
+			return event{}, false
+		}
+		data, err := base64.StdEncoding.DecodeString(*m.Part)
+		return event{kind: "part", id: *m.ID, seq: *m.Seq, text: data, failed: err != nil}, true
+	case "answer":
+		if m.Status == nil || m.Body == nil {
+			return event{}, false
+		}
+		return event{kind: "answer", id: *m.ID, status: *m.Status, body: *m.Body}, true
 	case "ack", "again", "seen":
 		if m.Seq == nil {
 			return event{}, false

@@ -11,8 +11,8 @@ Opus.Browser, speaking the driver's framing from its vector file,
 tests/fixtures/browser_frames.json, whose cases it reproduces before any
 container starts:
 
-- The first exchange: the driver says hello once Chrome answers; a `page`
-  of about a megabyte of html and a `read` whose text is over a megabyte
+- The first exchange: the driver says hello once Chrome answers; a put of
+  a page of about a megabyte of html and a `read` whose text is over a megabyte
   arrive whole, in numbered chunks, every chunk acknowledged and every
   frame's digest checked.
 - With the host not acknowledging, the driver's output stops after the one
@@ -35,10 +35,30 @@ container starts:
   they point at, at a phone's width and at 720p alike, and nowhere else.
 - Each operation once: open (a public page unless CYFR_TEST_OFFLINE=1, an
   address the guard refuses, and an address of another scheme), five
-  failed opens that leave no window, page,
+  failed opens that leave no window, page (a put of one file),
   read, click (a button whose click changes the page, seen by the next
   read), type, key, screenshot (a PNG that decodes) and close, with the
   errors no_window, bad_ref and bad_key.
+- Pages put into the Chrome (C15), in a session that logs Chrome's
+  network: a put of several files, handed over in parts as Opus.Browser
+  hands it, loads under the reserved origin, its entry, a classic script,
+  a module and its import, a stylesheet, a WebAssembly file, an image and
+  a frame's file each answered by the driver from the put; the page is a
+  secure context; its POSTs to invoke and action arrive as calls with
+  their bodies' bytes in base64, named by their window, and the host's
+  answers are the page's; a frame of the reserved origin inside the page
+  calls, and a frame of another origin (data:) does not; a socket and an
+  event stream fail and the page goes on; a service worker's registration
+  is refused; a dedicated worker is delivered its window's files and makes
+  no call, nor does a shared worker; a page of one file loads the same
+  way; a window the driver did not put, of the page's own origin, opened
+  by the person's click, makes no call; a window with no put is answered
+  nothing for the reserved origin; a plain page with no head tag, handed
+  as the host hands it (the vector file's plain_entry), has window.cyfr
+  and loads a file named relative to its <base>; a put past its bound in
+  bytes or files is refused; and over the session nothing left the box, no
+  file the driver answered reached Chrome's network stack, and Chrome
+  never asked a resolver for the reserved name.
 - Another program in another kept home, under another uid, cannot read the
   browser's profile, nothing of the browser's uid listens on a TCP port,
   and Chrome runs on its debugging pipe with no debugging port.
@@ -56,7 +76,10 @@ container starts:
 
 It prints, without gating, Chrome's memory with one, three and six windows
 (the summed PSS of its processes and the session cgroup's memory.current),
-the time and frame count of the megabyte read, the first start's time and
+the time and frame count of the megabyte read, puts of one, eight and
+thirty-two MiB handed over the session and the time their largest file is
+answered whole in, what a shared worker and srcdoc and sandboxed frames
+saw, the first start's time and
 the home's bytes, and, at a phone's width (390 by 844) and at 720p, a
 cast's images a second on a page that changes every frame, their size, and
 the delay from a press to the first image that shows it.
@@ -100,6 +123,16 @@ MAX_TO_DRIVER = FRAMES["max_to_driver"]
 TAIL_BYTES = 256 * 1024
 # The bytes one terminal input carries at most.
 INPUT_BYTES = BOUNDS["max_chunk_bytes"]
+# A put's bound and the bytes one part carries, and a call's body's bound.
+PUT = FRAMES["put"]
+CALL = FRAMES["call"]
+# Where a put's files sit: the reserved origin, under a public tincture's address.
+RESERVED = "https://cyfr.invalid"
+ATHANOR = "ath_browser"
+
+
+def root_of(name):
+    return f"/t/{ATHANOR}/local/{name}"
 
 OWNER = owner_of("browser")
 # The browser's home is named as a real row's is, mcp_ and a UUID: Chrome's
@@ -338,6 +371,25 @@ class Host:
     def ask(self, id, win, op, args=None):
         self.send({"t": "req", "id": id, "win": win, "op": op, "args": args or {}})
         return self.response(id)[0]
+
+    def send_put(self, id, win, files, root, entry="index.html"):
+        """Hands a put over as Opus.Browser does: its `page` request naming each file's path, type and size, then the
+        files' bytes end to end in `part`s of at most PUT["part_bytes"], in order."""
+        data = b"".join(body for _path, _type, body in files)
+        parts = [data[i:i + PUT["part_bytes"]] for i in range(0, len(data), PUT["part_bytes"])]
+        self.send({"t": "req", "id": id, "win": win, "op": "page", "of": len(parts), "args": {
+            "root": root, "entry": entry, "files": [{"path": path, "type": typ, "size": len(body)}
+                                                    for path, typ, body in files]}})
+        self.write(b"".join(encode(wire({"t": "part", "id": id, "seq": seq, "part": base64.b64encode(part).decode()}))
+                            for seq, part in enumerate(parts)))
+
+    def put(self, id, win, files, root, entry="index.html"):
+        self.send_put(id, win, files, root, entry)
+        return self.response(id)[0]
+
+    def put_html(self, id, win, html, name="page"):
+        """A page of one file, its entry."""
+        return self.put(id, win, [("index.html", "text/html", html.encode())], root_of(name))
 
     def close(self):
         status, closed = self.c.close(OWNER, self.session)
@@ -582,6 +634,329 @@ def tcp_listeners(stack):
 ELF_MACHINE = {"x86_64": "3e00", "aarch64": "b700"}
 
 
+# ————— pages put into the Chrome, and their calls (C15) —————
+
+# A WebAssembly module whose one export adds two i32s, and a PNG of one pixel.
+ADD_WASM = bytes.fromhex("0061736d0100000001070160027f7f017f030201000707010361646400000a09010700200020016a0b")
+PIXEL_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+# A frame answers its parent's message by posting a call of its own, as a simple request, which no preflight
+# precedes, and says how it went.
+FRAME_POST = ("addEventListener('message', async e => { let result; try { const r = await fetch('" + RESERVED
+              + "/_f/v1/invoke', {method: 'POST', mode: 'no-cors', body: JSON.stringify({from: FROM})});"
+              " result = r.type + ' ' + r.status + (r.type === 'opaque' ? '' : ' ' + await r.text()) }"
+              " catch (err) { result = 'rejected ' + err.name } parent.postMessage({id: e.data.id, result}, '*') })")
+
+
+def html_attribute(text):
+    return text.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def proof_site(root):
+    """A built site of several files under `root`, its entry naming its own directory in a <base> as the host's
+    head tags do: a classic script, a module that imports another, a stylesheet, a WebAssembly file, an image, a
+    frame of one of its files, frames of no origin of its own (data:, srcdoc, a sandbox), a dedicated, a shared and
+    a service worker, a socket and an event stream. On load its proof script runs each, every step bounded, and
+    writes what it saw into the title."""
+    from urllib.parse import quote
+    data_frame = "data:text/html," + quote(f"<script>const FROM = 'data'; {FRAME_POST}</script>")
+    srcdoc = html_attribute(f"<script>const FROM = 'srcdoc'; {FRAME_POST}</script>")
+    entry = (f'<!doctype html><html><head><base href="{root}/"><title>loading</title>'
+             '<link rel=stylesheet href="style.css"><script src="app.js"></script>'
+             '<script type=module src="main.mjs"></script></head>'
+             '<body><h1 id=h>A site</h1><img id=img src="pic.png" alt="">'
+             '<iframe id=same src="frame.html"></iframe>'
+             f'<iframe id=data src="{html_attribute(data_frame)}"></iframe>'
+             f'<iframe id=srcdoc srcdoc="{srcdoc}"></iframe>'
+             '<iframe id=sandboxed sandbox="allow-scripts" src="frame.html"></iframe>'
+             '<script src="proof.js"></script></body></html>')
+    proof = """
+const out = {};
+const bounded = (p, ms = 8000) => Promise.race([p, new Promise(r => setTimeout(() => r('timeout'), ms))]);
+const step = async (name, p) => { try { out[name] = await bounded(p) } catch (e) { out[name] = 'rejected ' + (e && e.name) } };
+const post = async (path, from) => { const r = await fetch(path, {method: 'POST', headers: {'content-type': 'application/json'},
+  body: JSON.stringify({from})}); return r.status + ' ' + await r.text() };
+const ask = id => new Promise(resolve => { const asked = Math.random();
+  addEventListener('message', function on(e) { if (e.data && e.data.id === asked) { removeEventListener('message', on); resolve(e.data.result) } });
+  document.getElementById(id).contentWindow.postMessage({id: asked}, '*') });
+addEventListener('load', async () => {
+  out.secure = window.isSecureContext;
+  out.classic = window.classic === 1;
+  out.module = window.moduleValue === 42;
+  out.css = getComputedStyle(document.getElementById('h')).color;
+  out.image = document.getElementById('img').naturalWidth;
+  out.frameFile = document.getElementById('same').contentWindow.kind;
+  await step('wasm', WebAssembly.instantiateStreaming(fetch('add.wasm')).then(m => m.instance.exports.add(2, 3)));
+  await step('post', post('/_f/v1/invoke', 'page'));
+  await step('action', post('/_f/v1/action', 'page-action'));
+  await step('frame', ask('same'));
+  await step('data', ask('data'));
+  await step('srcdoc', ask('srcdoc'));
+  await step('sandboxed', ask('sandboxed'));
+  await step('socket', new Promise(r => { const w = new WebSocket('wss://cyfr.invalid/socket'); w.onerror = () => r('error'); w.onopen = () => r('open') }));
+  await step('events', new Promise(r => { const e = new EventSource('events'); e.onerror = () => { r('error ' + e.readyState); e.close() }; e.onopen = () => r('open') }));
+  await step('worker', new Promise(r => { const w = new Worker('worker.js'); w.onmessage = e => r(e.data); w.onerror = () => r('error') }));
+  await step('shared', new Promise(r => { const w = new SharedWorker('shared.js'); w.port.onmessage = e => r(e.data); w.onerror = () => r('error') }));
+  await step('serviceWorker', navigator.serviceWorker.register('sw.js').then(() => 'registered', e => 'rejected ' + e.name));
+  out.after = 'responsive';
+  document.title = 'done ' + JSON.stringify(out);
+});
+"""
+    worker = """(async () => { const out = {};
+  try { const r = await fetch(LIB); out.get = r.status + ' ' + (await r.text()) } catch (e) { out.get = 'rejected ' + e.name }
+  try { const r = await fetch('/_f/v1/invoke', {method: 'POST', body: JSON.stringify({from: FROM})}); out.post = r.status + ' ' + await r.text() }
+  catch (e) { out.post = 'rejected ' + e.name }
+  return out })()"""
+    return [
+        ("index.html", "text/html", entry.encode()),
+        ("proof.js", "text/javascript", proof.encode()),
+        ("app.js", "text/javascript", b"window.classic = 1;"),
+        ("main.mjs", "text/javascript", b"import {v} from './lib.mjs'; window.moduleValue = v;"),
+        ("lib.mjs", "text/javascript", b"export const v = 42;"),
+        ("style.css", "text/css", b"h1 { color: rgb(1, 2, 3) }"),
+        ("add.wasm", "application/wasm", ADD_WASM),
+        ("pic.png", "image/png", PIXEL_PNG),
+        ("frame.html", "text/html",
+         f"<!doctype html><title>frame</title><script>window.kind = 'frame'; const FROM = self.origin === 'null' ? "
+         f"'sandboxed' : 'frame'; {FRAME_POST}</script>".encode()),
+        ("worker.js", "text/javascript",
+         f"const FROM = 'worker', LIB = 'lib.mjs'; {worker}.then(out => postMessage(out));".encode()),
+        ("shared.js", "text/javascript",
+         f"const FROM = 'shared', LIB = 'shared-lib.mjs'; onconnect = e => {worker}.then(out => e.ports[0].postMessage(out));"
+         .encode()),
+        ("shared-lib.mjs", "text/javascript", b"export const v = 43;"),
+        ("sw.js", "text/javascript", b"addEventListener('fetch', () => {});"),
+    ]
+
+
+# A page that, when clicked, opens a window of its own origin that the driver did not put, whose script posts a call.
+POPUP_PAGE = ("<title>popup</title><body style='margin:0'><div id=d style='width:100vw;height:100vh' onclick=\"popup()\">"
+              "</div><script>function popup() { const w = window.open('', '_blank'); if (!w) { document.title = 'popup "
+              "blocked'; return } addEventListener('message', e => { document.title = 'popup ' + e.data });"
+              " w.document.write('<script>fetch(\\'" + RESERVED + "/_f/v1/invoke\\', {method: \\'POST\\', mode: "
+              "\\'no-cors\\', body: \\'{\"from\":\"popup\"}\\'}).then(r => opener.postMessage(r.type + \\' \\' + r.status, "
+              "\\'*\\'), e => opener.postMessage(\\'rejected \\' + e.name, \\'*\\'))<\\/script>'); w.document.close() }"
+              "</script></body>")
+
+ONE_PAGE = "<title>one</title><script>document.title = 'one ' + isSecureContext + ' ' + location.href</script>"
+
+
+def measured_site(root, total):
+    """A built site of `total` bytes in several files under `root`, raw bytes most of it, its entry fetching the
+    largest and writing into its title its status, length, the milliseconds it took and its SHA-256."""
+    entry = (b'<!doctype html><base href="' + root.encode() + b'/"><title>loading</title><script>(async () => {'
+             b" const t0 = performance.now();"
+             b" const r = await fetch('big.bin'); const b = await r.arrayBuffer(); const ms = performance.now() - t0;"
+             b" const d = [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map(x => x.toString(16)"
+             b".padStart(2, '0')).join(''); document.title = 'big ' + r.status + ' ' + b.byteLength + ' ' +"
+             b" Math.round(ms) + ' ' + d })()</script>")
+    files = [("index.html", "text/html", entry), ("style.css", "text/css", b"body { margin: 0 }"),
+             ("app.js", "text/javascript", b"/*" + b"x" * (total // 64) + b"*/"),
+             ("asset.bin", "application/octet-stream", os.urandom(total // 16))]
+    files.append(("big.bin", "application/octet-stream", os.urandom(total - sum(len(body) for _p, _t, body in files))))
+    return files
+
+
+def answer_calls(p, seen):
+    """Answers every call the inbox holds with its sender's name, keeping each in `seen` with its body's bytes, which
+    travel in base64, as `text`."""
+    for m in [m for m in p.inbox if m["t"] == "call"]:
+        p.inbox.remove(m)
+        m["text"] = base64.b64decode(m["body"], validate=True).decode(errors="replace")
+        seen.append(m)
+        try:
+            sender = json.loads(m["text"]).get("from")
+        except (ValueError, AttributeError):
+            sender = None
+        p.send({"t": "answer", "id": m["id"], "status": 200, "body": json.dumps({"echo": sender})})
+
+
+def titled(p, win, prefix, ids, seen, timeout_s=150):
+    """The rest of the title of the page in `win` once it begins with `prefix`, its calls answered meanwhile."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        p.read(300)
+        answer_calls(p, seen)
+        title = ok(p.ask(next(ids), win, "read"), f"the page in {win} is read")["title"]
+        answer_calls(p, seen)
+        if title.startswith(prefix):
+            return title[len(prefix):]
+        if time.monotonic() > deadline:
+            sys.exit(f"FAIL: the page in {win} never titled itself {prefix!r}: {title!r}")
+        time.sleep(0.3)
+
+
+def net_log_of_pages(text):
+    """What a Chrome network log shows of a session: the lookups and connections made, which leave the box (a DNS
+    query, a TCP connection, a QUIC session); the URLs that reached Chrome's network stack and the hosts it was asked
+    to resolve, which do not; and the addresses a UDP socket was connected to, which sends nothing, as the
+    resolver's check of whether IPv6 is reachable does."""
+    text = text.rstrip()
+    try:
+        log = json.loads(text)
+    except json.JSONDecodeError:
+        log = json.loads(text.rstrip(",") + "]}")
+    names = {number: name for name, number in log["constants"]["logEventTypes"].items()}
+    left, urls, asked, udp = set(), set(), set(), set()
+    for event in log.get("events", []):
+        kind, params = names.get(event.get("type")), event.get("params") or {}
+        if kind in ("HOST_RESOLVER_MANAGER_JOB", "HOST_RESOLVER_DNS_TASK", "HOST_RESOLVER_SYSTEM_TASK", "DNS_TRANSACTION",
+                    "DNS_TRANSACTION_QUERY", "TCP_CONNECT", "TCP_CONNECT_ATTEMPT", "QUIC_SESSION"):
+            left.add((kind, json.dumps(params, sort_keys=True)[:200]))
+        elif kind == "URL_REQUEST_START_JOB" and "url" in params:
+            urls.add(params["url"])
+        elif kind == "HOST_RESOLVER_MANAGER_REQUEST" and "host" in params:
+            asked.add(params["host"])
+        elif kind == "UDP_CONNECT" and "address" in params:
+            udp.add(params["address"])
+    return sorted(left), sorted(urls), sorted(asked), sorted(udp)
+
+
+def pages(stack, c, uid):
+    """Pages put into the Chrome and their calls (C15), in a session that logs Chrome's network."""
+    net_log = f"{KEPT_ROOT}/{BROWSER_HOME}/pages-netlog.json"
+    p = Host(stack, c, BROWSER_HOME, ["--net-log", net_log])
+    expect("error" not in p.hello(), "a session that logs Chrome's network says hello")
+    ids = iter(range(5000, 9000))
+    seen = []
+
+    # The first proof: a put of several files, and what its page does under the reserved origin.
+    site = proof_site(root_of("site"))
+    shown = ok(p.put(next(ids), "thr_site", site, root_of("site")), "a put of several files loads")
+    expect(shown == {"url": RESERVED + root_of("site"), "title": "loading"},
+           "it answers its entry's address under the reserved origin", shown)
+    out = json.loads(titled(p, "thr_site", "done ", ids, seen))
+    print(f"proof: the put page saw {json.dumps(out, sort_keys=True)}", flush=True)
+    print(f"proof: the calls passed up: {json.dumps([{k: m[k] for k in ('win', 'op', 'body', 'text')} for m in seen])}",
+          flush=True)
+    senders = [json.loads(m["text"]).get("from") for m in seen]
+    for what, held in (
+            ("the navigation to the reserved origin is answered with the entry", shown["title"] == "loading"),
+            ("a classic script is answered", out["classic"] is True),
+            ("a module and the module it imports are answered", out["module"] is True),
+            ("a stylesheet is answered", out["css"] == "rgb(1, 2, 3)"),
+            ("a WebAssembly file is answered, as its type, and runs", out["wasm"] == 5),
+            ("an image is answered", out["image"] == 1),
+            ("the page is a secure context", out["secure"] is True),
+            ("a file is answered to a frame inside the put page", out["frameFile"] == "frame")):
+        expect(held, f"proof: {what}", out)
+    page_call = next((m for m in seen if json.loads(m["text"]).get("from") == "page"), None)
+    expect(page_call is not None and page_call["win"] == "thr_site" and page_call["op"] == "invoke"
+           and page_call["body"] == base64.b64encode(b'{"from":"page"}').decode() and out["post"] == '200 {"echo": "page"}',
+           "proof: a POST to invoke arrives with its body, named by its window, and its answer is the page's", [seen, out])
+    expect(any(m["op"] == "action" and m["text"] == '{"from":"page-action"}' for m in seen)
+           and out["action"] == '200 {"echo": "page-action"}', "a POST to action is a call of op action", [seen, out])
+    expect("frame" in senders and out["frame"] == 'basic 200 {"echo": "frame"}',
+           "a call from a frame of the reserved origin inside the page is passed up", [seen, out])
+    expect("data" not in senders and out["data"] == "rejected TypeError",
+           "a call from a frame of another origin inside the page is not passed up, and fails", [seen, out])
+    expect(out["socket"] == "error" and out["events"] == "error 2" and out["after"] == "responsive",
+           "proof: a socket and an event stream fail, and the page goes on", out)
+    expect(out["serviceWorker"] == "rejected TypeError",
+           "proof: a service worker's registration is refused, and the page goes on", out)
+    expect(isinstance(out["worker"], dict) and out["worker"]["get"] == "200 export const v = 42;"
+           and out["worker"]["post"] == "rejected TypeError" and "worker" not in senders,
+           "proof: a dedicated worker is delivered its window's files and makes no call", out)
+    expect("shared" not in senders, "a shared worker makes no call", [seen, out])
+    print(f"measure: a shared worker saw {json.dumps(out['shared'])}; a srcdoc frame's call "
+          f"{'was' if 'srcdoc' in senders else 'was not'} passed up ({out['srcdoc']}); a sandboxed frame of a put file's "
+          f"{'was' if 'sandboxed' in senders else 'was not'} ({out['sandboxed']})", flush=True)
+
+    # A page of one file loads the same way.
+    shown = ok(p.put_html(next(ids), "thr_one", ONE_PAGE, "one"), "a page of one file is put")
+    expect(shown["url"] == RESERVED + root_of("one") and shown["title"] == f"one true {RESERVED}{root_of('one')}",
+           "a page of one file loads under the reserved origin, a secure context", shown)
+
+    # A plain page with no head tag, as the host hands it: its entry after Compendium.plain_entry/1 and
+    # tincture_head_tags/3, the SDK's source in its script, has window.cyfr and loads a file named relative to its
+    # <base>.
+    plain = FRAMES["plain_entry"]
+    with open(os.path.join(ROOT, "apps", "cyfr", "priv", "static", "sdk", "cyfr.js"), "rb") as sdk:
+        entry = plain["entry"].encode().replace(b"{sdk}", sdk.read())
+    expect(plain["href"] == root_of("plain") + "/", "the plain entry's base names the put's root", plain["href"])
+    ok(p.put(next(ids), "thr_plain", [("index.html", "text/html", entry), ("pic.png", "image/png", PIXEL_PNG)],
+             root_of("plain")), "a plain page with no head tag is put with the SDK and a <base>")
+    seen_plain = titled(p, "thr_plain", "object ", ids, seen, 30)
+    expect(seen_plain == "1", "a plain page with no head tag has window.cyfr and loads a file named relative to its "
+           "<base>", seen_plain)
+
+    # A site in another window: a window the driver did not put, of the page's own origin, opened by the person's click.
+    ok(p.put_html(next(ids), "thr_popup", POPUP_PAGE, "popup"), "a page that opens a window on a click is put")
+    cast = next(ids)
+    ok(p.ask(cast, "thr_popup", "cast", {"width": 1280, "height": 720}), "the page is cast")
+    first = p.image(cast, "the page's first image")
+    p.send({"t": "seen", "id": cast, "seq": first["seq"]})
+    p.send({"t": "input", "id": cast, "evs": [{"k": "mouse", "type": t, "x": 0.5, "y": 0.5, "button": "left",
+                                               "clicks": 1, "mods": 0} for t in ("down", "up")]})
+    opened = titled(p, "thr_popup", "popup ", ids, seen, 30)
+    p.send({"t": "uncast", "id": cast})
+    p.drop_images()
+    expect(opened == "rejected TypeError" and "popup" not in [json.loads(m["text"]).get("from") for m in seen],
+           "a call from a window the driver did not put, of the reserved origin, is not passed up", [opened, seen])
+
+    # A window with no put is answered nothing for the reserved origin: its request fails, as no response would
+    # (an empty 404 fails the open too, but as a response).
+    nothing = p.ask(next(ids), "thr_noput", "open", {"url": RESERVED + root_of("site")})
+    refused(nothing, "unreachable", "a window with no put is answered nothing for the reserved origin")
+    expect("net::ERR_BLOCKED_BY_CLIENT" in nothing["error"]["message"],
+           "its request was failed, with no response", nothing)
+
+    # The put's bound, and what the session carries within it.
+    refused(p.ask(next(ids), "thr_measure", "page", {"root": root_of("over"), "entry": "index.html", "files": [
+        {"path": "index.html", "type": "text/html", "size": PUT["max_bytes"] + 1}]}), "too_large",
+        "a put of a byte past its bound is refused before any part")
+    refused(p.ask(next(ids), "thr_measure", "page", {"root": root_of("over"), "entry": "f0", "files": [
+        {"path": f"f{n}", "type": "text/plain", "size": 0} for n in range(PUT["max_files"] + 1)]}), "too_large",
+        "a put of a file past its bound is refused")
+    for mib in (1, 8, 32):
+        files = measured_site(root_of(f"site{mib}"), mib << 20)
+        keep_lease(c)
+        id = next(ids)
+        started = time.monotonic()
+        p.send_put(id, "thr_measure", files, root_of(f"site{mib}"))
+        handed_s = time.monotonic() - started
+        shown = ok(p.response(id, timeout_s=300)[0], f"a put of {mib} MiB loads")
+        put_s = time.monotonic() - started
+        status, length, ms, digest = titled(p, "thr_measure", "big ", ids, seen, 120).split()
+        big = files[-1][2]
+        expect(status == "200" and int(length) == len(big) and digest == hashlib.sha256(big).hexdigest(),
+               f"the largest file of the {mib} MiB put, {len(big)} bytes, is answered whole", [status, length, digest])
+        print(f"measure: a put of {mib} MiB in {len(files)} files was handed over the session in {handed_s:.2f} s and "
+              f"loaded in {put_s:.2f} s; its largest file, {len(big)} bytes, was answered whole in {ms} ms", flush=True)
+
+    # A put at its bound in files: an entry and the rest small scripts, its last file fetched.
+    root = root_of("files")
+    many = [("index.html", "text/html", (f'<!doctype html><base href="{root}/"><title>loading</title><script>'
+                                         f"fetch('f{PUT['max_files'] - 1}.js').then(r => r.text()).then(t => "
+                                         "document.title = 'last ' + t)</script>").encode())]
+    many += [(f"f{n}.js", "text/javascript", f"// {n}".encode()) for n in range(1, PUT["max_files"])]
+    id = next(ids)
+    started = time.monotonic()
+    p.send_put(id, "thr_measure", many, root)
+    shown = ok(p.response(id, timeout_s=300)[0], f"a put of {len(many)} files loads")
+    put_s = time.monotonic() - started
+    last = titled(p, "thr_measure", "last ", ids, seen, 60)
+    expect(len(many) == PUT["max_files"] and last == f"// {PUT['max_files'] - 1}",
+           "a put at its bound in files loads, and its last file is answered", [len(many), last])
+    print(f"measure: a put of {len(many)} files, the bound, was handed over and loaded in {put_s:.2f} s", flush=True)
+
+    closed = ok(p.ask(next(ids), "", "close_all"), "every window of the session is closed")
+    p.close()
+    eventually(lambda: not stack.under_uid(uid), "the page session's processes to end")
+    left, urls, asked, udp = net_log_of_pages(as_home(stack, BROWSER_HOME, f"cat {net_log}", "Chrome's network log"))
+    as_home(stack, BROWSER_HOME, f"rm {net_log}", "the network log removed")
+    expect(left == [], "over the page session nothing left the box: no DNS query, TCP connection or QUIC session", left)
+    # What the page and its frames loaded, and what its dedicated worker fetched; not what its shared worker asked for.
+    delivered = [RESERVED + root_of("site")] + [f"{RESERVED}{root_of('site')}/{path}" for path, _t, _b in site
+                                                if path != "shared-lib.mjs"]
+    expect(not [u for u in urls if u in delivered], "no file the driver answered reached Chrome's network stack", urls)
+    expect(all("cyfr.invalid" not in host for host in asked),
+           "Chrome never asked a resolver for the reserved name: its rule answered each lookup", asked)
+    print(f"proof: of the page session, these reached Chrome's network stack and failed there, the reserved name "
+          f"never resolved ({len(asked)} lookups answered by its rule: {asked}): {urls}; UDP sockets connected, "
+          f"which send nothing: {udp}; windows closed {closed}", flush=True)
+
+
 def first_start(stack, c):
     """A first start fetches this machine's Chrome, built for its architecture, and a public page loads in it."""
     started = time.monotonic()
@@ -644,9 +1019,10 @@ def main():
         print(f"measure: the first start fetched Chrome {version} and said hello in {first_start_s:.1f} s", flush=True)
         html = megabyte_page()
         started = time.monotonic()
-        shown = ok(b.ask(1, "thr_big", "page", {"html": html}), "a page of about a megabyte of html is shown")
+        shown = ok(b.put_html(1, "thr_big", html, "long"), "a page of about a megabyte of html is put")
         page_s = time.monotonic() - started
-        expect(shown == {"url": "about:blank", "title": "A long page"}, "the page answers its address and title", shown)
+        expect(shown == {"url": RESERVED + root_of("long"), "title": "A long page"},
+               "the page answers its address under the reserved origin and its title", shown)
         started = time.monotonic()
         b.send({"t": "req", "id": 2, "win": "thr_big", "op": "read", "args": {}})
         answer, reference, frames = b.response(2)
@@ -701,7 +1077,7 @@ def main():
         expect(lacking == 0 and text4 == reference, "asked again from the first chunk it lacks, the host gets it whole")
 
         # ————— a cast over the same session —————
-        ok(b.ask(300, "thr_article", "page", {"html": article(0)}), "a realistic page is shown")
+        ok(b.put_html(300, "thr_article", article(0)), "a realistic page is shown")
         for size, (width, height), cast in (("a phone's width", (390, 844), 301), ("720p", (1280, 720), 302)):
             ok(b.ask(cast, "thr_article", "cast", {"width": width, "height": height}), f"the realistic page cast at {size}")
             shown = b.image(cast, f"the realistic page's image at {size}")
@@ -710,7 +1086,7 @@ def main():
             b.send({"t": "uncast", "id": cast})
         b.quiet(1, lambda m: False)
         b.drop_images()
-        ok(b.ask(303, "thr_cast", "page", {"html": ANIMATED_PAGE}), "an animated page is shown")
+        ok(b.put_html(303, "thr_cast", ANIMATED_PAGE), "an animated page is shown")
         for size, (width, height), cast in (("a phone's width", (390, 844), 304), ("720p", (1280, 720), 305)):
             expect(ok(b.ask(cast, "thr_cast", "cast", {"width": width, "height": height}), f"a cast at {size}") == {},
                    f"a cast at {size} answers that it casts")
@@ -804,9 +1180,9 @@ def main():
         b.send({"t": "uncast", "id": 308})
 
         # The person's input lands where the image they point at shows, at a phone's width and at 720p alike.
-        ok(b.ask(309, "thr_input", "page", {"html": INPUT_PAGE}), "a page that writes where a press lands is shown")
+        ok(b.put_html(309, "thr_input", INPUT_PAGE), "a page that writes where a press lands is shown")
         # A window made after it takes Chrome's focus: the keys sent to this one still reach its page.
-        ok(b.ask(316, "thr_focus", "page", {"html": PROBE_PAGE}), "a window made after it is shown")
+        ok(b.put_html(316, "thr_focus", PROBE_PAGE), "a window made after it is shown")
         read_ids = iter(range(1000, 2000))
         for size, (width, height), cast in (("a phone's width", (390, 844), 310), ("720p", (1280, 720), 311)):
             ok(b.ask(cast, "thr_input", "cast", {"width": width, "height": height}), f"the input page cast at {size}")
@@ -885,7 +1261,7 @@ def main():
             opened = ok(b.ask(13, "thr_ops", "open", {"url": "https://example.com/"}), "a public page opens")
             expect(opened == {"url": "https://example.com/", "title": "Example Domain"},
                    "the open answers once the page has loaded, with its address and title", opened)
-        shown = ok(b.ask(14, "thr_ops", "page", {"html": PROBE_PAGE}), "a page Aqua wrote is shown")
+        shown = ok(b.put_html(14, "thr_ops", PROBE_PAGE), "a page Aqua wrote is shown")
         expect(shown["title"] == "Probe page", "it answers its title", shown)
         text = ok(b.ask(15, "thr_ops", "read"), "the page is read")["text"]
         expect('heading "Before"' in text, "the read has the page's heading", text)
@@ -946,7 +1322,7 @@ def main():
         for count in (1, 3, 6):
             keep_lease(c)
             for n in range(count):
-                ok(b.ask(100 + count * 10 + n, f"thr_m{n}", "page", {"html": article(n)}), f"window {n} shows a page")
+                ok(b.put_html(100 + count * 10 + n, f"thr_m{n}", article(n)), f"window {n} shows a page")
             time.sleep(2)
             print(f"measure: Chrome with {count} window{'s' if count > 1 else ''} of a realistic page: "
                   f"{memory(stack, uid, driver)}", flush=True)
@@ -954,6 +1330,8 @@ def main():
         expect(closed == {"closed": 6}, "closing every window answers how many there were", closed)
         b.close()
         eventually(lambda: not stack.under_uid(uid), "the browser's processes to end with its session")
+
+        pages(stack, c, uid)
 
         expect(not [p for p in chrome_processes(stack, uid) if version not in p["cmd"]],
                "the Chrome that ran is the one the home holds", version)
@@ -964,7 +1342,7 @@ def main():
         expect(in_store(stack, BROWSER_HOME) == fetched,
                "a restart reuses the home's Chrome: the same version folder, no check of the list, nothing staged",
                [fetched, in_store(stack, BROWSER_HOME)])
-        s.send({"t": "req", "id": 1, "win": "thr_short", "op": "page", "args": {"html": PROBE_PAGE}})
+        s.send_put(1, "thr_short", [("index.html", "text/html", PROBE_PAGE.encode())], root_of("page"))
         first = s.take(lambda m: m["t"] == "res" and m["id"] == 1, "the unacknowledged response")
         s.send({"t": "again", "id": 1, "seq": 0})
         again = s.take(lambda m: m["t"] == "res" and m["id"] == 1, "the response sent again")
@@ -1037,7 +1415,7 @@ def main():
         before = in_store(stack, BROWSER_HOME)
         u = Host(stack, c, BROWSER_HOME, ["--source", UNREACHABLE])
         expect("error" not in u.hello(), "with its list unreachable, a home that holds a Chrome says hello")
-        shown = ok(u.ask(1, "thr_unreachable", "page", {"html": PROBE_PAGE}), "and its Chrome shows a page")
+        shown = ok(u.put_html(1, "thr_unreachable", PROBE_PAGE), "and its Chrome shows a page")
         expect(shown["title"] == "Probe page", "the page answers its title", shown)
         after = in_store(stack, BROWSER_HOME)
         expect(after["versions"] == before["versions"] and not after["staging"]
