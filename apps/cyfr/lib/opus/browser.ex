@@ -79,19 +79,21 @@ defmodule Opus.Browser do
   by the session owner as a person and no other caller: it starts the
   browser when none runs, as an action does, and asks the driver for that
   window's cast, a request of op `cast` whose id names the cast from then
-  on. Each image of it is handed to the process that asked, the viewer,
-  as `{Opus.Browser, ref, {:image, n, output}}`, its JPEG an
-  `Opus.Programs.Output`, and to no other process; the next is handed
+  on. Its messages go to the process that asked, the viewer, as
+  `{Opus.Browser, watch, message}`, `watch` the handle `seen/2`,
+  `input/2` and `unwatch/1` take, the first `:watching` once it is
+  admitted. Each image of it is `{:image, n, output}`, its JPEG an
+  `Opus.Programs.Output`, handed to no other process; the next is handed
   only once the viewer said it drew this one (`seen/2`), and only then is
   the driver told, so a viewer that does not say so is sent no further
   image, while every action's response still arrives whole beside it. A
-  window that does not stand, or that closed, is `{Opus.Browser, ref,
-  :waiting}`, and its cast is asked again once an action opens it. The
+  window that does not stand, or that closed, is `:waiting`, and its
+  cast is asked again once an action opens it. The
   viewer's input (`input/2`, events `Opus.Browser.Input` reads) goes to
   that window alone, at most `Opus.Browser.Input.max_events/0` events
   waiting, the rest dropped, each write decided by the writer as a
   request is, just before its first byte. A watch ends with
-  `{Opus.Browser, ref, {:ended, reason}}` once, and nothing after: on
+  `{:ended, reason}` once, and nothing after: on
   `unwatch/1`, the viewer's exit, a newer watch of its window
   (`:replaced`), `stop/2`, or the session's end. Once it ended, no image
   of its cast and no input of its viewer goes anywhere. After a
@@ -338,6 +340,20 @@ defmodule Opus.Browser do
     :exit, _ -> close_running(Programs.browser(athanor_id, user_id))
   end
 
+  @doc """
+  The windows the person's browser holds now, each named by its thread;
+  none when no browser of theirs runs.
+  """
+  @spec windows(String.t(), String.t()) :: [String.t()]
+  def windows(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do
+    case lookup(athanor_id, user_id) do
+      nil -> []
+      pid -> GenServer.call(pid, :windows, @watch_ms)
+    end
+  catch
+    :exit, _ -> []
+  end
+
   @doc "Whether the person's browser holds a session now."
   @spec running?(String.t(), String.t()) :: boolean()
   def running?(athanor_id, user_id) do
@@ -484,6 +500,8 @@ defmodule Opus.Browser do
     end
   end
 
+  def handle_call(:windows, _from, state), do: {:reply, MapSet.to_list(state.windows), state}
+
   # Input is wanted while its watch stands on the cast it was given for.
   def handle_call({:wanted_input, ref, cast}, _from, state),
     do: {:reply, watching?(state, ref, cast), state}
@@ -521,6 +539,7 @@ defmodule Opus.Browser do
         }
 
         state = %{state | watches: Map.put(state.watches, ref, watch), last_act: now()}
+        tell(watch, :watching)
         {:reply, {:ok, {self(), ref}}, state |> cast(ref, allowed?) |> idle()}
     end
   end
@@ -1015,7 +1034,7 @@ defmodule Opus.Browser do
     end
   end
 
-  defp tell(watch, message), do: send(watch.viewer, {__MODULE__, watch.ref, message})
+  defp tell(watch, message), do: send(watch.viewer, {__MODULE__, {self(), watch.ref}, message})
 
   # Ask the driver for the watch's cast, starting the browser first when
   # none runs (`allowed?` as an action's): only a new watch may find none,
