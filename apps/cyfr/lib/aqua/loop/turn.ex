@@ -461,17 +461,15 @@ defmodule Aqua.Loop.Turn do
 
   defp excerpt(_ctx, _options), do: nil
 
-  # The initiating message's attachments as blocks the brain takes. A
-  # delivered request's are the request's own, stored under its row in its
-  # room.
+  # The initiating message's attachments as blocks the brain takes, each
+  # stored under that message's own row: a delivered request's were copied
+  # there from the request (`Aqua.Crew`).
   defp attachments(ctx, %{message_id: message_id, thread_id: thread_id}, media_types)
        when is_binary(message_id) do
     case Tape.message(ctx, message_id) do
       {:ok, row} ->
-        {thread_id, refs} = stored_under(row, thread_id, Aqua.Attachments.attachments_of([row]))
-
         ctx
-        |> Aqua.Attachments.load(thread_id, refs)
+        |> Aqua.Attachments.load(thread_id, Aqua.Attachments.attachments_of([row]))
         |> Enum.map(&attachment_block(&1, media_types))
 
       _ ->
@@ -516,17 +514,6 @@ defmodule Aqua.Loop.Turn do
       bytes
     else
       _opaque -> nil
-    end
-  end
-
-  defp stored_under(row, thread_id, refs) do
-    case Tape.payload(row) do
-      %{"request_id" => request_id, "from_thread" => room}
-      when is_binary(request_id) and is_binary(room) ->
-        {room, Enum.map(refs, &%{&1 | message_id: request_id})}
-
-      _ ->
-        {thread_id, refs}
     end
   end
 end

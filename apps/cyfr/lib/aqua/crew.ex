@@ -663,16 +663,7 @@ defmodule Aqua.Crew do
       # thread or turn is made for it.
       with :ok <- ready(ctx, snapshot["member"]),
            {:ok, child} <- Tape.crew_thread(ctx, snapshot["room_thread_id"], snapshot["member"]) do
-        ctx
-        |> Runner.send_message(child.id, request.content,
-          sent_by: request.sent_by,
-          request: request,
-          crew: %{tools: snapshot["tools"], options: snapshot["options"]},
-          attachments: Tape.payload(request)["attachments"] || [],
-          payload: delivered_payload(request),
-          receipt: receipt(record, held, "applied")
-        )
-        |> delivered("applied", fn reason -> failed(ctx, record, request, reason, held) end)
+        deliver_request(ctx, record, request, child, held)
       else
         {:error, reason} ->
           if undeliverable?(reason),
@@ -769,6 +760,57 @@ defmodule Aqua.Crew do
     end
   end
 
+  # The request delivered into the member's own thread, its files copied
+  # under the delivered row first, as a report's are: an earlier try's
+  # copies discarded at its recorded place, this try's place recorded
+  # before its first byte, and a landing that fails leaves no copy. A copy
+  # that cannot be made ends the request with the member's failed reply
+  # saying why; one that may pass waits.
+  defp deliver_request(ctx, record, request, child, held) do
+    id = request_copy_id(record)
+    snapshot = record.snapshot
+    files = for ref <- Tape.payload(request)["attachments"] || [], do: carried_ref(request, ref)
+
+    with :ok <- place_copy(ctx, record, child.id, id),
+         {:ok, files} <- ctx |> Aqua.Attachments.carried(request.thread_id, files) |> kept(),
+         {:ok, refs} <- Aqua.Attachments.copy(ctx, child.id, id, files) do
+      ctx
+      |> Runner.send_message(child.id, request.content,
+        id: id,
+        sent_by: request.sent_by,
+        request: request,
+        crew: %{tools: snapshot["tools"], options: snapshot["options"]},
+        attachments: refs,
+        payload: delivered_payload(request),
+        receipt: receipt(record, held, "applied")
+      )
+      |> tap(&unlanded(&1, ctx, child.id, id))
+      |> delivered("applied", fn reason -> failed(ctx, record, request, reason, held) end)
+    else
+      {:error, reason} ->
+        _ = Aqua.Attachments.discard(ctx, child.id, id)
+
+        if uncopyable?(reason),
+          do: failed(ctx, record, request, reason, held),
+          else: {:wait, reason}
+    end
+  end
+
+  # A request's file that is gone, or whose thread went with it, is one
+  # the member is not given: the person reads that it is no longer kept.
+  defp kept({:error, :not_a_post}), do: {:error, :attachment_missing}
+  defp kept(answer), do: answer
+
+  defp carried_ref(request, ref),
+    do: %{"message_id" => request.id, "stored_name" => ref["stored_name"]}
+
+  # A copy that no retry makes: the athanor's storage is full, a file of
+  # the request is gone, or the request's thread with it.
+  defp uncopyable?(reason),
+    do:
+      reason in [:storage_full, :too_many_attachments, :attachment_too_large] or
+        undeliverable?(reason)
+
   defp unlanded({:ok, _landed}, _ctx, _thread_id, _id), do: :ok
   defp unlanded(_refused, ctx, thread_id, id), do: Aqua.Attachments.discard(ctx, thread_id, id)
 
@@ -816,7 +858,16 @@ defmodule Aqua.Crew do
   # stores its copies under the same id, so a later try finds and
   # discards an earlier one's on the same daily thread.
   @spec report_id(Prima.OutboxRecord.t()) :: String.t()
-  def report_id(%Prima.OutboxRecord{} = record) do
+  def report_id(%Prima.OutboxRecord{} = record), do: record_id(record, "msg_rpt_")
+
+  @doc false
+  # The delivered request's row id, decided by its record as a report's
+  # is: every try copies the request's files under the same id.
+  @spec request_copy_id(Prima.OutboxRecord.t()) :: String.t()
+  def request_copy_id(%Prima.OutboxRecord{} = record), do: record_id(record, "msg_req_")
+
+  # The row id every try of one delivery writes: the record's digest.
+  defp record_id(%Prima.OutboxRecord{} = record, prefix) do
     %{source_kind: kind, source_id: id, source_revision: revision} =
       Prima.OutboxRecord.source(record)
 
@@ -825,7 +876,7 @@ defmodule Aqua.Crew do
       |> Base.url_encode64(padding: false)
       |> binary_part(0, 26)
 
-    "msg_rpt_" <> digest
+    prefix <> digest
   end
 
   # What a report says: the summary the soul wrote in the workspace thread, or for a move the host made, which carries none, one sentence
