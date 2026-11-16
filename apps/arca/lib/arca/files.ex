@@ -6,7 +6,7 @@ defmodule Arca.Files do
   The athanor's files as a person sees them: one tree whose folders are
   the console tier of the storage layout (`Arca.Storage.console_folders/0`),
   spoken in the console's names — `data/`, `components/`, `aqua/`,
-  `notes/`, `threads/`. The server's own storage has no name here
+  `threads/`, `notes/`. The server's own storage has no name here
   and is never listed; another athanor's tree is unreachable because the
   athanor is the actor's, never the path's. Every operation takes the
   `Prima.Actor` first and refuses one with no athanor as
@@ -24,8 +24,12 @@ defmodule Arca.Files do
       a pending projection generation (`Arca.StorageProjectionChanges`),
       so the component and agent indexes' next read reflects it or
       answers unavailable.
-    * `:read` (`notes/`, `threads/`) — listed, read and downloaded;
-      written only by their own surfaces.
+    * `:removable` (`threads/`) — listed, read, downloaded and deleted:
+      a file, a message's folder or a thread's folder goes, never the
+      folder itself. Written only by the threads its files belong to, and
+      nothing is moved into it.
+    * `:read` (`notes/`) — listed, read and downloaded; written only by
+      its own surface.
 
   `notes/` is served from fenced documents (`Arca.FencedPublication`),
   not from a storage root: a note is the document whose key is its path
@@ -49,7 +53,7 @@ defmodule Arca.Files do
   @max_write 20_000_000
   @max_entries 1_000
 
-  @type tier :: :open | :shaped | :read
+  @type tier :: :open | :shaped | :removable | :read
 
   # Folders whose files are fenced documents keyed by their path here.
   @document_roots ["notes"]
@@ -420,8 +424,8 @@ defmodule Arca.Files do
     with :ok <- Arca.Overlay.reserved(physical), do: shaped_writable(physical, segments)
   end
 
-  defp writable(:read, _physical, segments),
-    do: {:error, {:invalid_argument, read_only_message(segments)}}
+  defp writable(tier, _physical, segments) when tier in [:removable, :read],
+    do: {:error, {:invalid_argument, read_only_message(tier, segments)}}
 
   defp shaped_writable(physical, segments) do
     case Arca.Storage.locate(physical) do
@@ -439,7 +443,7 @@ defmodule Arca.Files do
     end
   end
 
-  defp deletable(:open, _physical, _segments), do: :ok
+  defp deletable(tier, _physical, _segments) when tier in [:open, :removable], do: :ok
 
   # Above the units the storage layer decides: an empty stray folder goes,
   # one holding units refuses. The revision store refuses before anything
@@ -454,7 +458,7 @@ defmodule Arca.Files do
   end
 
   defp deletable(:read, _physical, segments),
-    do: {:error, {:invalid_argument, read_only_message(segments)}}
+    do: {:error, {:invalid_argument, read_only_message(:read, segments)}}
 
   # A pulled component is fork-to-modify, never rewritten in place — the
   # same rule the guest boundary applies, reading the unit's publisher the
@@ -493,7 +497,10 @@ defmodule Arca.Files do
   defp inside_file_message(segments),
     do: "'#{join(segments)}' is below a file — a crew member is one file, not a folder"
 
-  defp read_only_message([folder | _]),
+  defp read_only_message(:removable, [folder | _]),
+    do: "'#{folder}/' is written by the threads its files belong to — read or delete them here"
+
+  defp read_only_message(:read, [folder | _]),
     do: "'#{folder}/' is read here and written on its own page"
 
   # ---- storage ---------------------------------------------------------------

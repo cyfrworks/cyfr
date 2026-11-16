@@ -6,8 +6,9 @@ defmodule PrismWeb.FilesLive do
   The athanor's files, one tree: the folders the storage layout shows a
   person, each in its tier. `data/` is theirs to fill and clear;
   `components/` and `aqua/` hold shaped units whose files are edited in
-  place; `notes/` and `threads/` are read here and managed on
-  their own pages. The server's own storage is not a folder at all.
+  place; `threads/` holds the files of Aqua's threads, read and deleted
+  here and written by their threads; `notes/` is read here and managed on
+  its own page. The server's own storage is not a folder at all.
 
   Every read and change goes through the `file` tool; the bytes of a
   file are downloaded from `PrismWeb.FileController`. The folder in view
@@ -686,11 +687,13 @@ defmodule PrismWeb.FilesLive do
 
   defp tier_label(:open), do: "open"
   defp tier_label(:shaped), do: "shaped"
+  defp tier_label(:removable), do: "read and delete"
   defp tier_label(:read), do: "read-only"
   defp tier_label(_), do: nil
 
   defp tier_class(:open), do: "bg-emerald-900/50 text-emerald-300"
   defp tier_class(:shaped), do: "bg-amber-900/50 text-amber-300"
+  defp tier_class(:removable), do: "bg-gray-800 text-gray-400"
   defp tier_class(:read), do: "bg-gray-800 text-gray-400"
   defp tier_class(_), do: "bg-gray-800 text-gray-400"
 
@@ -707,8 +710,10 @@ defmodule PrismWeb.FilesLive do
   defp tier_hint(:read, "notes" <> _),
     do: "Kept out of threads — managed on the Notes surface."
 
-  defp tier_hint(:read, "threads" <> _),
-    do: "Chat attachments — managed from the threads they belong to."
+  defp tier_hint(:removable, "threads" <> _),
+    do:
+      "The files of Aqua's threads, one folder per thread and per post. Deleting one " <>
+        "frees its space; the post then says the file was removed."
 
   defp tier_hint(_tier, _path), do: nil
 
@@ -717,6 +722,11 @@ defmodule PrismWeb.FilesLive do
 
   defp writable?(nil), do: false
   defp writable?(%{tier: tier}), do: tier in [:open, :shaped]
+
+  # Whether the folder in view offers Delete: a writable one, or one whose
+  # files the person may only delete (`threads/`).
+  defp deletable?(%{tier: :removable}), do: true
+  defp deletable?(listing), do: writable?(listing)
 
   defp count([_one], noun), do: "1 #{noun}"
   defp count(list, noun), do: "#{length(list)} #{noun}s"
@@ -975,7 +985,7 @@ defmodule PrismWeb.FilesLive do
                     Move
                   </button>
                   <button
-                    :if={@path != "" and writable?(@listing) and not Map.get(entry, :held, false)}
+                    :if={@path != "" and deletable?(@listing) and not Map.get(entry, :held, false)}
                     type="button"
                     phx-click="delete"
                     phx-value-path={child(@path, entry.name)}

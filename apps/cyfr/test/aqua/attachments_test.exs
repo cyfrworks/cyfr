@@ -280,6 +280,74 @@ defmodule Aqua.AttachmentsTest do
       assert {:error, :attachment_missing} = Attachments.carried(ctx, thread.id, [named])
     end
 
+    test "a file deleted from Files before a carry refuses it whole; one deleted after it was " <>
+           "read lands in the copy; a copy made stays when its source goes",
+         %{ctx: ctx, thread: thread, other: other} do
+      actor = Sanctum.Context.actor(ctx)
+
+      files = [
+        %{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "A"},
+        %{"filename" => "b.txt", "media_type" => "text/plain", "bytes" => "B"}
+      ]
+
+      {post, [a, b]} = posted!(ctx, thread, files)
+      named = for ref <- [a, b], do: %{"message_id" => post, "stored_name" => ref["stored_name"]}
+
+      # Before the carry reads it: the carry refuses, and nothing is copied.
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{post}/#{b["stored_name"]}")
+      assert {:error, :attachment_missing} = Attachments.carried(ctx, thread.id, named)
+      assert {:ok, []} = Arca.list(actor, ["threads", other.id])
+
+      # After the carry read the bytes, before the copy: the copy holds them.
+      {post, [a, _b]} = posted!(ctx, thread, files)
+      named = for ref <- [a], do: %{"message_id" => post, "stored_name" => ref["stored_name"]}
+      assert {:ok, [file]} = Attachments.carried(ctx, thread.id, named)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{post}")
+
+      target = Prima.UUID7.generate_id("msg")
+      assert {:ok, [copied]} = Attachments.copy(ctx, other.id, target, [file])
+      {:ok, path} = Attachments.blob_path(other.id, target, copied)
+      assert {:ok, "A"} = Arca.get(actor, path)
+
+      # After the copy: the source thread's whole folder goes, the copy stays.
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}")
+      assert {:ok, "A"} = Arca.get(actor, path)
+    end
+
+    test "a message's folder deleted from Files before its files are stored, or after, " <>
+           "leaves an upload whole or its post with refs whose bytes are gone",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      id = Prima.UUID7.generate_id("msg")
+      file = [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "A"}]
+
+      # Before: the folder is gone and the upload lays it again.
+      assert {:error, {:not_found, _, _}} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}")
+      assert {:ok, [ref]} = Attachments.store(ctx, thread.id, id, file)
+      {:ok, path} = Attachments.blob_path(thread.id, id, ref)
+      assert {:ok, "A"} = Arca.get(actor, path)
+
+      # After the bytes landed, before the post: the post keeps its ref and
+      # no bytes, which is what the pane draws as removed.
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}")
+
+      {:ok, _} =
+        Arca.TurnStorage.accept_message(actor, thread.id, %{
+          message: %{
+            id: id,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "with a file",
+            payload: %{"attachments" => [ref]}
+          }
+        })
+
+      {:ok, row} = Arca.ThreadStorage.get_message(actor, id)
+      assert [%{"stored_name" => stored}] = Attachments.refs_of(row)
+      assert stored == ref["stored_name"]
+      refute Arca.exists?(actor, path)
+    end
+
     test "a copy is held to the storage cap before its first byte", %{ctx: ctx, other: other} do
       installed = Prima.Caps.impl!()
       Prima.Caps.install!(Aqua.AttachmentsTest.PlantedCaps)

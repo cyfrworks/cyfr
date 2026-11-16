@@ -296,9 +296,11 @@ defmodule Aqua.AloudTest do
     assert {:ok, %{filename: "flight.txt", media_type: "text/plain", bytes: "BA117"}} =
              SharedThreads.attachment(bob.user.id, trip.id, posted.id, stored)
 
-    # And they are the thread's own copy: removing the private original
-    # leaves them where they were said.
-    remove_blobs!(ctx, private.id, message_id, refs)
+    # And they are the thread's own copy: the person deleting the private
+    # thread's files from Files leaves them where they were said.
+    assert {:ok, _} = Arca.Files.delete(Sanctum.Context.actor(ctx), "threads/#{private.id}")
+    {:ok, blob} = Aqua.Attachments.blob_path(private.id, message_id, hd(refs))
+    refute Arca.exists?(Sanctum.Context.actor(ctx), blob)
 
     assert {:ok, %{bytes: "BA117"}} =
              SharedThreads.attachment(bob.user.id, trip.id, posted.id, stored)

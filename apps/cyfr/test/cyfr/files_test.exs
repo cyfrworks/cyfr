@@ -115,7 +115,7 @@ defmodule Arca.FilesTest do
              %{name: "data", tier: :open},
              %{name: "aqua", tier: :shaped},
              %{name: "components", tier: :shaped},
-             %{name: "threads", tier: :read},
+             %{name: "threads", tier: :removable},
              %{name: "notes", tier: :read}
            ]
 
@@ -482,14 +482,151 @@ defmodule Arca.FilesTest do
     assert msg =~ "at most"
   end
 
-  test "the read-only folders are listed and read, never written", %{actor: actor} do
+  test "notes/ is listed and read, never written or deleted", %{actor: actor} do
     assert {:ok, %{tier: :read, entries: []}} = Files.list(actor, "notes")
-    assert {:ok, %{tier: :read}} = Files.list(actor, "threads")
+    note!(actor, "notes/plan.md", "the plan")
 
-    for path <- ["notes/plan.md", "threads/thread_1/blob.bin"] do
-      assert {:error, {:invalid_argument, msg}} = Files.write(actor, path, "x")
-      assert msg =~ "read here"
-      assert {:error, {:invalid_argument, _}} = Files.delete(actor, path)
+    assert {:error, {:invalid_argument, msg}} = Files.write(actor, "notes/plan.md", "x")
+    assert msg =~ "read here"
+
+    assert {:error, {:invalid_argument, msg}} = Files.delete(actor, "notes/plan.md")
+    assert msg =~ "read here"
+    assert {:ok, %{content: "the plan"}} = Files.read(actor, "notes/plan.md")
+  end
+
+  describe "threads/" do
+    test "is listed and read; a file, a message's folder and a thread's folder are deleted",
+         %{actor: actor} do
+      thread_file!(actor, "threads/t1/m1/0-a.png", "png")
+      thread_file!(actor, "threads/t1/m1/1-b.txt", "text")
+      thread_file!(actor, "threads/t1/m2/0-c.txt", "c")
+      thread_file!(actor, "threads/t2/m3/0-d.txt", "d")
+
+      assert {:ok, %{tier: :removable, entries: threads}} = Files.list(actor, "threads")
+      assert Enum.map(threads, & &1.name) == ["t1", "t2"]
+      assert {:ok, %{content: "text"}} = Files.read(actor, "threads/t1/m1/1-b.txt")
+
+      assert Files.delete(actor, "threads/t1/m1/0-a.png") ==
+               {:ok, %{deleted: "threads/t1/m1/0-a.png"}}
+
+      refute Arca.exists?(actor, ["threads", "t1", "m1", "0-a.png"])
+      assert {:ok, %{entries: [%{name: "1-b.txt"}]}} = Files.list(actor, "threads/t1/m1")
+
+      assert Files.delete(actor, "threads/t1/m1") == {:ok, %{deleted: "threads/t1/m1"}}
+      assert {:ok, %{entries: [%{name: "m2"}]}} = Files.list(actor, "threads/t1")
+
+      assert Files.delete(actor, "threads/t1") == {:ok, %{deleted: "threads/t1"}}
+      assert {:ok, %{entries: [%{name: "t2"}]}} = Files.list(actor, "threads")
+      refute Arca.exists?(actor, ["threads", "t1", "m2", "0-c.txt"])
+      assert {:ok, %{content: "d"}} = Files.read(actor, "threads/t2/m3/0-d.txt")
+
+      assert Files.delete(actor, "threads/t1") == {:error, {:not_found, "File", "threads/t1"}}
+    end
+
+    test "itself is not deleted, and nothing is written or moved into it", %{actor: actor} do
+      thread_file!(actor, "threads/t1/m1/0-a.txt", "kept")
+      {:ok, _} = Files.write(actor, "data/a.txt", "a")
+
+      for folder <- ["threads", "threads/"] do
+        assert {:error, {:invalid_argument, msg}} = Files.delete(actor, folder)
+        assert msg =~ "is a folder"
+      end
+
+      for path <- ["threads/t1/m1/0-a.txt", "threads/t1/m1/new.txt"] do
+        assert {:error, {:invalid_argument, msg}} = Files.write(actor, path, "x")
+        assert msg =~ "written by the threads its files belong to"
+
+        assert {:error, {:invalid_argument, _}} =
+                 Files.update(actor, path, fn text -> {:ok, text <> "x"} end)
+      end
+
+      assert {:error, {:invalid_argument, msg}} =
+               Files.move(actor, "data/a.txt", "threads/t1/a.txt")
+
+      assert msg =~ "outside data/"
+
+      assert {:error, {:invalid_argument, _}} =
+               Files.move(actor, "threads/t1/m1/0-a.txt", "threads/t1/m1/1-a.txt")
+
+      assert {:ok, %{content: "kept"}} = Files.read(actor, "threads/t1/m1/0-a.txt")
+      refute Arca.exists?(actor, ["threads", "t1", "m1", "new.txt"])
+      refute Arca.exists?(actor, ["threads", "t1", "a.txt"])
+      assert {:ok, %{content: "a"}} = Files.read(actor, "data/a.txt")
+    end
+
+    test "never reaches another athanor's thread files", %{actor: actor} do
+      other = person!("t", System.unique_integer([:positive]))
+      thread_file!(other.actor, "threads/t1/m1/0-a.txt", "theirs")
+
+      assert Files.delete(actor, "threads/t1/m1/0-a.txt") ==
+               {:error, {:not_found, "File", "threads/t1/m1/0-a.txt"}}
+
+      assert Files.delete(actor, "threads/t1") == {:error, {:not_found, "File", "threads/t1"}}
+      assert {:ok, %{entries: []}} = Files.list(actor, "threads")
+      assert {:ok, %{content: "theirs"}} = Files.read(other.actor, "threads/t1/m1/0-a.txt")
+    end
+
+    test "a path is checked before anything goes, and a missing one is not found", %{
+      actor: actor
+    } do
+      thread_file!(actor, "threads/t1/m1/0-a.txt", "kept")
+      {:ok, _} = Files.write(actor, "data/a.txt", "a")
+
+      for path <- ["threads/../data/a.txt", "threads/t1/../../data", "threads/t1/m1/a\\b"] do
+        assert {:error, {:invalid_argument, _}} = Files.delete(actor, path)
+      end
+
+      assert {:error, {:not_found, "File", "threads/t9"}} = Files.delete(actor, "threads/t9")
+
+      # A name spelled like an in-flight write is storage's own; it is no
+      # file of a thread, and refused without anything going.
+      assert {:error, _refused} = Files.delete(actor, "threads/t1/m1/0-a.txt.tmp.1")
+
+      assert {:ok, %{content: "kept"}} = Files.read(actor, "threads/t1/m1/0-a.txt")
+      assert {:ok, %{content: "a"}} = Files.read(actor, "data/a.txt")
+    end
+
+    test "a thread's folder deleted before its thread, or after, ends the same: no rows, no " <>
+           "bytes, nothing refused",
+         %{actor: actor} do
+      {:ok, first} = Arca.Test.Days.thread(actor)
+      {:ok, second} = Arca.Test.Days.thread(actor)
+      thread_file!(actor, "threads/#{first.id}/m1/0-a.txt", "a")
+      thread_file!(actor, "threads/#{second.id}/m1/0-b.txt", "b")
+
+      # Files first, then the thread.
+      assert {:ok, _} = Files.delete(actor, "threads/#{first.id}")
+      assert {:ok, _} = Arca.ThreadStorage.delete(actor, first.id)
+
+      # The thread first, then Files: its folder went with it.
+      assert {:ok, _} = Arca.ThreadStorage.delete(actor, second.id)
+      expected = "threads/#{second.id}"
+      assert {:error, {:not_found, "File", ^expected}} = Files.delete(actor, expected)
+
+      # Retention's leg after a delete from Files finds nothing to reclaim.
+      thread_file!(actor, "threads/t-orphan/m1/0-c.txt", "c")
+      assert {:ok, _} = Files.delete(actor, "threads/t-orphan")
+      assert {:ok, 0} = Arca.ThreadStorage.sweep_orphaned_blobs(actor)
+      assert {:ok, %{entries: []}} = Files.list(actor, "threads")
+    end
+
+    test "a deleted thread's folder releases its bytes against the storage cap", %{actor: actor} do
+      thread_file!(actor, "threads/t1/m1/0-a.bin", :binary.copy("a", 1_000))
+      Arca.Usage.invalidate(actor)
+      {:ok, before} = Arca.Usage.athanor_bytes(actor)
+
+      # Room for 500 more bytes: the 1,000 the thread holds are what blocks a write of 800.
+      Cyfr.Test.Settings.put("athanor_storage_bytes", before + 500)
+      big = :binary.copy("b", 800)
+
+      assert {:error, {:invalid_argument, msg}} = Files.write(actor, "data/b.bin", big)
+      assert msg =~ "at its limit"
+
+      assert {:ok, _} = Files.delete(actor, "threads/t1")
+      assert {:ok, bytes} = Arca.Usage.athanor_bytes(actor)
+      assert bytes == before - 1_000
+
+      assert {:ok, %{size: 800}} = Files.write(actor, "data/b.bin", big)
     end
   end
 
@@ -874,6 +1011,12 @@ defmodule Arca.FilesTest do
 
   # A document published straight through the store, as a note is kept:
   # staged bytes and their reference, with no claimant in this suite.
+  # A post's file as the thread stores it: threads/<thread>/<message>/<name>.
+  defp thread_file!(actor, path, bytes) do
+    :ok = Arca.put(actor, String.split(path, "/"), bytes)
+    path
+  end
+
   defp note!(actor, key, bytes) do
     {:ok, staged} = Arca.Storage.stage(actor, "notes", bytes)
 

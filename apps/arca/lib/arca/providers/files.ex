@@ -227,8 +227,9 @@ defmodule Arca.Providers.Files do
       title: "Files",
       description:
         "The athanor's files, as the Files page shows them. data/ is yours to fill; " <>
-          "components/ and aqua/ hold shaped units you may edit in place; notes/ and " <>
-          "threads/ are read here and managed on their own pages. Paths are " <>
+          "components/ and aqua/ hold shaped units you may edit in place; threads/ " <>
+          "holds the files of Aqua's threads, read and deleted here; notes/ is read " <>
+          "here and managed on its own page. Paths are " <>
           "folder-relative, like data/reports/q3.csv. An offer sends a copy of files " <>
           "under data/ to a person you share a thread with, who accepts it into " <>
           "their own data/."
