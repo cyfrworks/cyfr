@@ -162,7 +162,10 @@ type chromeProcess struct {
 }
 
 // startChrome starts Chrome on its debugging pipe with its profile in
-// $HOME/chrome, waits for its first answer, and gives b its pipe.
+// $HOME/chrome, waits for its first answer, and gives b its pipe. Chrome
+// opens no window of its own at start (--no-startup-window): it loads
+// nothing on its own account, neither the pages of the profile's last
+// session nor its startup pages, until a request asks for a window.
 func startChrome(path string, b *browser) (*chromeProcess, error) {
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -187,7 +190,7 @@ func startChrome(path string, b *browser) (*chromeProcess, error) {
 		commandsOut.Close()
 		return nil, err
 	}
-	cmd := exec.Command(path, "--headless", "--no-sandbox", "--remote-debugging-pipe",
+	cmd := exec.Command(path, "--headless", "--no-sandbox", "--remote-debugging-pipe", "--no-startup-window",
 		"--user-data-dir="+profile, "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
 		"--password-store=basic", "--window-size=1280,900")
 	cmd.Env = append(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "DBUS_SESSION_BUS_ADDRESS=disabled:")
@@ -232,7 +235,8 @@ func startChrome(path string, b *browser) (*chromeProcess, error) {
 }
 
 // ready waits for Chrome's first answer, has it report its targets' ends,
-// and closes the page it opened at start, which no window uses.
+// and closes any page target it finds, which no window uses: with no
+// startup window there is none.
 func ready(ctx context.Context, c *cdp) error {
 	if err := c.call(ctx, "", "Browser.getVersion", nil, nil); err != nil {
 		return err

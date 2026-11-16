@@ -728,6 +728,42 @@ def main():
         s.close()
         eventually(lambda: not stack.under_uid(uid), "the short keep's processes to end with its session")
 
+        # ————— a profile with open pages starts empty —————
+        # A Chrome that ends abruptly with a page open, as a crash or its memory bound leaves a profile, in a profile
+        # set to continue where it left off: a later start loads nothing on its own account, so no session it
+        # writes holds that page.
+        if os.environ.get("CYFR_TEST_OFFLINE") == "1":
+            print("skip: a profile's last session needs a public page to hold (CYFR_TEST_OFFLINE=1)", flush=True)
+        else:
+            token = f"cyfr-restore-{os.urandom(6).hex()}"
+            profile_dir = f"{KEPT_ROOT}/{BROWSER_HOME}/chrome/Default"
+            sessions = lambda: set(as_home(stack, BROWSER_HOME, f"ls {profile_dir}/Sessions 2>/dev/null; true",
+                                           "the profile's sessions").split())
+            holding = lambda names: [n for n in names if as_home(
+                stack, BROWSER_HOME, f"grep -a -c {token} {profile_dir}/Sessions/{n} || true", "a session's pages").strip() != "0"]
+            as_home(stack, BROWSER_HOME,
+                    f"cd {profile_dir} && if grep -q '\"session\":{{' Preferences; "
+                    f"then sed -i 's/\"session\":{{/\"session\":{{\"restore_on_startup\":1,/' Preferences; "
+                    f"else sed -i 's/^{{/{{\"session\":{{\"restore_on_startup\":1}},/' Preferences; fi",
+                    "the profile set to continue where it left off")
+            r = Host(stack, c, BROWSER_HOME)
+            expect("error" not in r.hello(), "a session that will end with a page open starts")
+            ok(r.ask(1, "thr_restore", "open", {"url": f"https://example.com/?{token}"}), "a page is open")
+            eventually(lambda: holding(sessions()), "the profile's session to hold the open page", 30)
+            main_pids = [p["pid"] for p in chrome_processes(stack, uid) if "--type=" not in p["cmd"]]
+            as_home(stack, BROWSER_HOME, f"kill -9 {' '.join(map(str, main_pids))}", "Chrome ended abruptly")
+            eventually(lambda: (r.read(1_000), not r.running)[1], "the driver to end with its Chrome")
+            eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
+            before = sessions()
+            expect(holding(before), "the profile's last session holds the open page", sorted(before))
+            again = Host(stack, c, BROWSER_HOME)
+            expect("error" not in again.hello(), "the profile with an open page starts")
+            time.sleep(5)
+            written = sessions() - before
+            expect(not holding(written), "a later start reopens none of the last session's pages", sorted(written))
+            again.close()
+            eventually(lambda: not stack.under_uid(uid), "the later session's processes to end")
+
         # ————— its Chrome, fetched —————
         # A day after the last check, with a list that cannot be reached: the home's Chrome starts.
         as_home(stack, BROWSER_HOME, f"touch -d '2 days ago' {store(BROWSER_HOME)}/checked",

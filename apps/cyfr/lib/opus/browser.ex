@@ -220,7 +220,9 @@ defmodule Opus.Browser do
   End the person's browser, as the browser setting going off does: every
   request waiting is answered `:turned_off`, and its session is closed,
   its profile kept. A session of the person's browser that no holder
-  holds is closed too. Answers once the close was asked.
+  holds is closed too. Answers once the close was asked, without waiting
+  for a start under way: the session that start brings up is sent
+  nothing and is closed as soon as the start answers.
   """
   @spec stop(String.t(), String.t()) :: :ok
   def stop(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do

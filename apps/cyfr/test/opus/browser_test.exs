@@ -822,6 +822,41 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "review round five" do
+    # Finding 13, the rule restated: turning the setting off holds at once;
+    # nothing new starts after it and nothing reaches Chrome, and a session
+    # that a start already in flight creates is sent nothing and is closed
+    # as soon as that start answers.
+    test "off returns while a start waits on the service; the session it then makes is closed with nothing written, and so for a second start held longer",
+         %{fake: fake, ctx: ctx, lineage: lineage} do
+      for held_ms <- [0, 1_500] do
+        assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
+        Scripted.hold(fake, "open", 30_000)
+
+        open =
+          Task.async(fn -> call(ctx, lineage, "open", %{"url" => "https://example.com/"}) end)
+
+        assert_receive {:held, "open", service}, 5_000
+
+        # Off returns, and the action is answered, while the start still
+        # waits on the service.
+        assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+        assert refusal(Task.await(open, 5_000)) == "The browser is turned off."
+        refute_received {:session, "open", _open, _fields}
+
+        Process.sleep(held_ms)
+        send(service, :go)
+        assert_receive {:session, "open", _open, _fields}, 5_000
+        assert_receive {:session, "close", _close, _fields}, 5_000
+        refute_received {:session, "input", _input, _fields}
+        refute_received {:driver, :req, _session, _request}
+        eventually(fn -> browser_sessions(ctx) == [] end, "the late session to be closed")
+        eventually(fn -> holder(ctx) == nil end, "no holder to remain")
+        refute_received {:session, "input", _input, _fields}
+      end
+    end
+  end
+
   describe "the browser's row" do
     test "with none, the browser was not found", %{ctx: ctx, row: row, lineage: lineage} do
       {:ok, _} =
