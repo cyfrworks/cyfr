@@ -371,9 +371,11 @@ defmodule Arca.ThreadStorage do
   # and thread rows, which every write keeps:
   #
   #   * its turns first. A turn's writers take the turn before its thread;
-  #     a write that stops or removes turns (a deletion) chooses them and
-  #     holds them (`Arca.TurnStorage.hold_turns!/2`) before anything
-  #     else, then asks again under its locks.
+  #     a write that takes more than one turn takes them through one
+  #     function, by when each was accepted and then by id
+  #     (`Arca.TurnStorage.hold_turns!/2`); a write that stops or removes
+  #     turns (a deletion, retention) chooses them and holds them so
+  #     before anything else, then asks again under its locks.
   #   * then the athanor's row: shared by the standing check
   #     (`Arca.ExecutionStanding.locked/2`), after the turn; taken for
   #     update, before any standing check of its own, by every create of a
@@ -921,18 +923,18 @@ defmodule Arca.ThreadStorage do
     end
   end
 
-  # The open turns a deletion of `thread` stops or removes: its own and
-  # its children's, and those of other threads that read one of them.
+  # The turns a deletion of `thread` stops or removes: every turn of the
+  # thread and of its children, which go with them, and the open turns of
+  # other threads that read one of them, which it stops.
   defp stopped_turns(%Prima.Actor{athanor_id: athanor_id} = actor, %Thread{} = thread) do
     ids = [thread.id | child_ids(actor, thread)]
-    open_turns(athanor_id, ids, readers(athanor_id, ids))
+    removed_turns(athanor_id, ids, readers(athanor_id, ids))
   end
 
-  defp open_turns(athanor_id, ids, readers) do
+  defp removed_turns(athanor_id, ids, readers) do
     own =
       from(t in Arca.Schemas.Turn,
         where: t.athanor_id == ^athanor_id and t.thread_id in ^ids,
-        where: t.status in ^Prima.TurnState.open_statuses(),
         select: t.id
       )
       |> Repo.all()
@@ -940,9 +942,9 @@ defmodule Arca.ThreadStorage do
     Enum.uniq(own ++ for({_thread_id, _since, open} <- readers, turn_id <- open, do: turn_id))
   end
 
-  # The turns chosen before the locks still cover those open under them;
-  # a turn that opened or read the thread in between sends the deletion
-  # round again, choosing it first.
+  # The turns chosen before the locks still cover those under them; a turn
+  # that opened or read the thread in between sends the deletion round
+  # again, choosing it first.
   defp still_chosen!(open, chosen),
     do: if(open -- chosen == [], do: :ok, else: Repo.rollback(:turns_moved))
 
@@ -955,7 +957,7 @@ defmodule Arca.ThreadStorage do
          children = child_ids(actor, thread),
          ids = [thread.id | children],
          readers = readers(athanor_id, ids),
-         :ok <- still_chosen!(open_turns(athanor_id, ids, readers), chosen),
+         :ok <- still_chosen!(removed_turns(athanor_id, ids, readers), chosen),
          [] <- Arca.TurnStorage.awaiting_card!(actor, children) do
       cancel = Map.put_new(attrs, :error, "the room was deleted")
 
@@ -1609,9 +1611,22 @@ defmodule Arca.ThreadStorage do
 
       candidates ->
         Repo.locking_transaction(fn ->
-          _held = lock_threads!(actor, candidates)
+          # The turns of the threads it may remove, which go with them,
+          # before the athanor's row and the threads (`lock_threads!/2`).
+          held =
+            Arca.TurnStorage.hold_turns!(
+              actor,
+              from(t in Arca.Schemas.Turn, where: t.thread_id in ^candidates)
+            )
+
+          _threads = lock_threads!(actor, candidates)
           stale = MapSet.new(stale_ids(actor, cutoff))
           deletable = Enum.filter(candidates, &MapSet.member?(stale, &1))
+
+          # A turn a removed thread took after the turns were held keeps
+          # the threads for the next cycle.
+          if removed_turns(actor.athanor_id, deletable, []) -- held != [],
+            do: Repo.rollback(:turns_moved)
 
           # No open turn had read these (`stale_ids/2`); one that read
           # them since keeps them for the next cycle. That is asked before
@@ -1639,7 +1654,7 @@ defmodule Arca.ThreadStorage do
             Enum.each(deleted, &delete_blobs_after(actor, &1))
             {:ok, count}
 
-          {:error, :read_by_an_open_turn} ->
+          {:error, reason} when reason in [:read_by_an_open_turn, :turns_moved] ->
             {:ok, 0}
         end
     end

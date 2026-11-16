@@ -15,7 +15,10 @@ defmodule Arca.ExecutionLockOrderTest do
   retention and a report landing on its daily thread among them; the
   standing check reads the athanor's row after a turn, so an opening
   takes its asking turn first and a deletion the turns it stops; a step
-  write, which takes no second thread row, takes no athanor lock.
+  write, which takes no second thread row, takes no athanor lock. A write
+  that takes more than one turn takes them by when each was accepted,
+  then by id (`Arca.TurnStorage.hold_turns!/2`), an archive and a
+  deletion alike.
   These run outside the sandbox, on connections of their own, with the
   run's attempt held by a third transaction so both writes are seen
   waiting before either goes on; a PostgreSQL deadlock would abort one of
@@ -123,6 +126,47 @@ defmodule Arca.ExecutionLockOrderTest do
     on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
     assert_receive :held, 5_000
     blocker
+  end
+
+  # The turn `id` held by a transaction of its own until it is released.
+  defp hold_turn(id) do
+    test = self()
+
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            from(t in Turn, where: t.id == ^id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> Arca.Repo.rollback(:timeout)
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
+    assert_receive :held, 5_000
+    blocker
+  end
+
+  # A turn of the member's in `thread`, accepted and never run.
+  defp accepted!(actor, thread) do
+    unboxed(fn ->
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      turn
+    end)
   end
 
   # An athanor no other case names, its row committed, whose rows go with
@@ -730,5 +774,48 @@ defmodule Arca.ExecutionLockOrderTest do
 
     refute log =~ "deadlock", log
     assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, room.id) end)
+  end
+
+  test "an archive and a deletion take a crew thread's turns in one order, by when each was accepted" do
+    actor = committed_athanor!()
+    {:ok, room} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, room.id, "planner") end)
+    [lower, higher] = Enum.sort_by([accepted!(actor, child), accepted!(actor, child)], & &1.id)
+
+    # The lower id accepted later: by id and by acceptance the two turns
+    # stand in opposite orders.
+    unboxed(fn ->
+      {1, _} =
+        Arca.Repo.update_all(from(t in Turn, where: t.id == ^lower.id),
+          set: [accepted_at: DateTime.add(higher.accepted_at, 1, :second)]
+        )
+    end)
+
+    log =
+      capture_log(fn ->
+        blocker = hold_turn(higher.id)
+
+        # The archive waits on the earlier-accepted turn, holding none.
+        {archive, archive_backend} =
+          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+        release(blocker)
+
+        # Both took the earlier-accepted turn first, so the archive went
+        # first with both and the deletion followed with nothing to cancel.
+        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: cancelled}} =
+                 Task.await(archive, 10_000)
+
+        assert length(cancelled) == 2
+        assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
   end
 end

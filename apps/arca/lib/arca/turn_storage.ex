@@ -1301,15 +1301,11 @@ defmodule Arca.TurnStorage do
     now = DateTime.utc_now()
 
     taken =
-      from(t in Turn,
-        where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
-        where: t.status in ^@open,
-        order_by: [asc: t.accepted_at, asc: t.id],
-        select: t.id
+      hold_turns!(
+        actor,
+        from(t in Turn, where: t.thread_id == ^thread_id, where: t.status in ^@open)
+        |> only(Map.get(attrs, :only))
       )
-      |> only(Map.get(attrs, :only))
-      |> Arca.QueryHelpers.for_update()
-      |> Arca.Repo.all()
 
     if taken != [], do: work_lock!(athanor_id, thread_id)
 
@@ -3570,17 +3566,22 @@ defmodule Arca.TurnStorage do
   end
 
   @doc false
-  # The turns `turn_ids` names, held until the caller's transaction ends,
-  # in id order: what a write that stops or removes turns takes before the
-  # athanor's row (`Arca.ThreadStorage.lock_threads!/2`). An
-  # in-transaction helper; answers the ids it holds.
-  @spec hold_turns!(Prima.Actor.t(), [String.t()]) :: [String.t()]
+  # The one function a write that takes more than one turn takes them
+  # through, in the one order: when each was accepted, then its id, the
+  # order a thread's cancel always kept (`Arca.ThreadStorage.lock_threads!/2`
+  # states the whole order). `turns` is a query over the turns to take, or
+  # their ids; each is held until the caller's transaction ends, and their
+  # ids are answered in that order. An in-transaction helper.
+  @spec hold_turns!(Prima.Actor.t(), Ecto.Query.t() | [String.t()]) :: [String.t()]
   # arca:db-raise-ok inside the caller's transaction
-  def hold_turns!(%Prima.Actor{athanor_id: athanor_id}, turn_ids)
-      when is_binary(athanor_id) and athanor_id != "" and is_list(turn_ids) do
-    from(t in Turn,
-      where: t.athanor_id == ^athanor_id and t.id in ^turn_ids,
-      order_by: [asc: t.id],
+  def hold_turns!(%Prima.Actor{} = actor, turn_ids) when is_list(turn_ids),
+    do: hold_turns!(actor, from(t in Turn, where: t.id in ^turn_ids))
+
+  def hold_turns!(%Prima.Actor{athanor_id: athanor_id}, %Ecto.Query{} = turns)
+      when is_binary(athanor_id) and athanor_id != "" do
+    from(t in turns,
+      where: t.athanor_id == ^athanor_id,
+      order_by: [asc: t.accepted_at, asc: t.id],
       select: t.id
     )
     |> Arca.QueryHelpers.for_update()
