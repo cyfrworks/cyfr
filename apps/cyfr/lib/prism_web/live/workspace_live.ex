@@ -21,7 +21,10 @@ defmodule PrismWeb.WorkspaceLive do
   thread's events arrive; the results are the posts of Aqua's that hold a
   picture, a file or a link, which the pane reads and tells this page
   (`{:results, …}`, `{:result, …}`), drawn as the pane draws a post. The
-  thread's title and state are `Aqua.workspace/2`'s, worded by
+  pane reads a thread's newest posts only, as many as it shows: when its
+  read filled that window, the results say they are what the latest posts
+  hold, as the conversation shows them, and no earlier result is listed
+  as if there were none. The thread's title and state are `Aqua.workspace/2`'s, worded by
   `PrismWeb.DisplayHelpers.work_state/1`, read again when the person's
   list announces the thread (`Cyfr.Bus.ThreadListed`) and when a card
   opens or is decided in the athanor (`Cyfr.Bus.Notify`), since a card in
@@ -72,6 +75,7 @@ defmodule PrismWeb.WorkspaceLive do
       |> assign(:tab, "conversation")
       |> assign(:steps, [])
       |> assign(:results, [])
+      |> assign(:window, nil)
       |> assign(:pane, nil)
 
     case Aqua.workspace(ctx, id) do
@@ -126,6 +130,7 @@ defmodule PrismWeb.WorkspaceLive do
     |> assign(:page_title, "Workspace thread")
     |> assign(:steps, [])
     |> assign(:results, [])
+    |> assign(:window, nil)
     |> assign(:pane, nil)
   end
 
@@ -174,12 +179,17 @@ defmodule PrismWeb.WorkspaceLive do
   def handle_info({:pane, _pane, {:ready, pid, _thread_id}}, socket) when is_pid(pid),
     do: {:noreply, assign(socket, :pane, pid)}
 
-  # What the thread made, as the pane read it: the newest first.
+  # What the thread made, as the pane read it: the newest first, and
+  # whether the pane's read filled its window.
   def handle_info(
-        {:pane, _pane, {:results, id, results}},
+        {:pane, _pane, {:results, id, results, window}},
         %{assigns: %{work: %{id: id}}} = socket
-      ),
-      do: {:noreply, assign(socket, :results, Enum.sort_by(results, & &1.seq, :desc))}
+      ) do
+    {:noreply,
+     socket
+     |> assign(:results, Enum.sort_by(results, & &1.seq, :desc))
+     |> assign(:window, window)}
+  end
 
   def handle_info({:pane, _pane, {:result, id, result}}, %{assigns: %{work: %{id: id}}} = socket) do
     results = [result | Enum.reject(socket.assigns.results, &(&1.id == result.id))]
@@ -336,8 +346,11 @@ defmodule PrismWeb.WorkspaceLive do
             <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
               Results
             </h2>
+            <p :if={@window} id="workspace-results-window" class="mb-2 text-xs text-gray-500">
+              What the latest {@window} posts hold, as the conversation shows them.
+            </p>
             <p :if={@results == []} id="workspace-no-results" class="text-sm text-gray-500">
-              Nothing made yet.
+              {if @window, do: "Nothing in them.", else: "Nothing made yet."}
             </p>
             <div :if={@results != []} id="workspace-results" class="space-y-3">
               <ThreadPaneLive.message_bubble

@@ -86,9 +86,13 @@ defmodule PrismWeb.ThreadPaneLive do
   What the thread made is told to the host as it is read, for a host that
   shows it beside the conversation (`PrismWeb.WorkspaceLive`): Aqua's
   posts that hold a picture, a file or a link, `{:results, thread_id,
-  results}` when a thread opens and `{:result, thread_id, result}` as each
-  one lands, each `%{id, seq, content, attachments, links}` from the rows
-  the pane reads under its own context.
+  results, window}` when a thread opens and `{:result, thread_id, result}`
+  as each one lands, each `%{id, seq, content, attachments, links}` from
+  the rows the pane reads under its own context. The pane reads a thread's
+  newest posts only, `@window` of them, and has no way to earlier ones:
+  `window` is that number when the read filled it, so earlier posts and
+  what they hold may exist and are shown nowhere here, and nil when the
+  pane holds the whole thread.
 
   What a turn asks of the browser is its sender's alone: a page the
   assistant points at is offered as a link under the thread
@@ -119,6 +123,9 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
+
+  # How many of a thread's newest rows the pane reads when it opens one.
+  @window 500
 
   # The threads that hold crew threads.
   @rooms Threads.room_kinds()
@@ -306,7 +313,7 @@ defmodule PrismWeb.ThreadPaneLive do
           case Threads.latest_messages(
                  Sanctum.Context.actor(socket.assigns.context),
                  thread.id,
-                 500
+                 @window
                ) do
             rows when is_list(rows) -> rows
             {:error, _} -> []
@@ -316,7 +323,8 @@ defmodule PrismWeb.ThreadPaneLive do
 
         tell_host(
           socket,
-          {:results, thread.id, rows |> Enum.map(&result/1) |> Enum.reject(&is_nil/1)}
+          {:results, thread.id, rows |> Enum.map(&result/1) |> Enum.reject(&is_nil/1),
+           if(length(rows) >= @window, do: @window)}
         )
 
         socket
@@ -2109,7 +2117,7 @@ defmodule PrismWeb.ThreadPaneLive do
                     result_summary={resolution["summary"]}
                     scope={scope_atom(resolution["scope"])}
                     resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
-                    agent_label={@assistant && @assistant["title"]}
+                    agent_label={@assistant && assistant_label(@assistant)}
                   />
                 <% Map.has_key?(@cards, msg.id) -> %>
                   <.work_card

@@ -222,6 +222,8 @@ defmodule PrismWeb.WorkspaceLiveTest do
     src = PrismWeb.ThreadPaneLive.attachment_path(route(mine), chart, ref["stored_name"])
 
     wait_until(fn -> has_element?(view, ~s(#workspace-results img[src="#{src}"])) end)
+    # The pane holds the whole thread: the results claim no window.
+    refute has_element?(view, "#workspace-results-window")
 
     assert has_element?(
              view,
@@ -232,6 +234,41 @@ defmodule PrismWeb.WorkspaceLiveTest do
     # Its conversation is the pane on the workspace thread itself.
     assert pane_thread(pane).id == workspace.id
     assert has_element?(pane, "#workspace-pane-thread[data-thread='#{workspace.id}']")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a thread longer than the pane reads says its results are what the latest posts hold, and lists no earlier one",
+       %{conn: conn, mine: mine, me: me, daily: daily} do
+    workspace = open!(me, daily, "Long one")
+    turn = work!(me, workspace)
+
+    {:ok, _} =
+      Tape.post(me, turn, %{
+        id: Prima.UUID7.generate_id("msg"),
+        content: "An early result",
+        payload: %{"post" => true, "links" => [%{"url" => "https://example.com/early"}]}
+      })
+
+    {:ok, current} = Tape.turn(me, turn.id)
+    {:ok, _} = Tape.finish(me, current, "cancelled", %{error: "stopped"})
+
+    for n <- 1..500 do
+      {:ok, _} =
+        Threads.append(actor(me), workspace.id, %{
+          author: me.user_id,
+          sent_by: "person",
+          content: "note #{n}"
+        })
+    end
+
+    {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
+    _pane = on_thread!(child!(view, "workspace-pane"), workspace.id)
+
+    wait_until(fn -> has_element?(view, "#workspace-results-window") end)
+    assert has_element?(view, "#workspace-results-window", "latest 500 posts")
+    assert has_element?(view, "#workspace-no-results", "Nothing in them.")
+    refute render(view) =~ "https://example.com/early"
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -293,6 +330,19 @@ defmodule PrismWeb.WorkspaceLiveTest do
     # person reads it, never by its handle.
     assert has_element?(pane, ~s(textarea[placeholder^="Ask Aqua…"]))
     refute render(pane) =~ "Ask aqua…"
+
+    # A card the next turn opens there names it so too, and the thread
+    # waits on the person.
+    Cyfr.Test.ScriptedWorker.script([
+      model_call("c1", "files", %{"action" => "delete", "path" => "notes.md"})
+    ])
+
+    pane |> form("form", %{"message" => "delete my notes"}) |> render_submit()
+
+    wait_until(fn -> has_element?(pane, ~s([id^="workspace-pane-card-"]), "wants to") end, 60_000)
+    assert has_element?(pane, ~s([id^="workspace-pane-card-"]), "Aqua wants to")
+    refute render(pane) =~ "aqua wants to"
+    wait_until(fn -> has_element?(view, ~s(#workspace-state[data-state="needs_you"])) end)
 
     Cyfr.Test.Sandbox.end_views()
   end
