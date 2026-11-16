@@ -280,17 +280,16 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
         Aqua has no page open in this thread yet. It shows here as soon as Aqua opens one.
       </p>
 
-      <%!-- The window, drawn by the hook; the page keeps its own drawing. --%>
-      <div
-        id="workspace-browser-screen"
-        phx-update="ignore"
-        class={if(@stream == :showing, do: nil, else: "hidden")}
-      >
-        <canvas
-          tabindex="0"
-          aria-label="Aqua's browser, this thread's window. Click or type to use it."
-          class="block h-auto w-full touch-none rounded-md border border-gray-800 bg-black outline-none focus:border-blue-500"
-        ></canvas>
+      <%!-- The window, drawn by the hook: the page keeps its own drawing,
+            so only the wrapper around it is shown or hidden from here. --%>
+      <div id="workspace-browser-screen" class={if(@stream == :showing, do: nil, else: "hidden")}>
+        <div id="workspace-browser-canvas" phx-update="ignore">
+          <canvas
+            tabindex="0"
+            aria-label="Aqua's browser, this thread's window. Click or type to use it."
+            class="block h-auto w-full touch-none rounded-md border border-gray-800 bg-black outline-none focus:border-blue-500"
+          ></canvas>
+        </div>
       </div>
     </div>
     """
