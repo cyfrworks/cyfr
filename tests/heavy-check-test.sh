@@ -1268,21 +1268,26 @@ t_queue() {
   touch "$scratch/release-q"; wait "$q"
 }
 
-# --- the default queue deadline outlasts every stage row's hold ----------------
-# scripts/stage.sh queues each row with its hold alone (-t), so a row queued
-# behind another waits heavy-check's default queue deadline: one at or under
-# a row's hold would let a row behind that one give up unrun, exit 75.
+# --- the default queue deadline outlasts every stage ticket's hold -------------
+# scripts/stage.sh queues a row of no folder with its hold alone (-t), and
+# the save or handoff rows of one folder on one ticket holding the sum of
+# their holds and 60 s each, so a ticket queued behind another waits
+# heavy-check's default queue deadline: one at or under a ticket's hold
+# would let a ticket behind that one give up unrun, exit 75.
 # await-task.sh's default queue deadline is the same, so an await does not
 # give up on a check that still waits.
 default_queue() {
   sed -n 's/^QUARTERS=4; HOLD=[0-9]*; QUEUE=\([1-9][0-9]*\); STATUS=false$/\1/p' "$check"
 }
-# unheld TABLE: each row of TABLE whose hold the default does not outlast.
+# unheld TABLE: each ticket of TABLE whose hold the default does not outlast.
 unheld() {
   local queue
   queue=$(default_queue)
   [ "$(printf '%s\n' "$queue" | grep -c .)" = 1 ] || { echo "no one QUEUE default in $check"; return; }
-  awk -F'\t' -v queue="$queue" '!/^#/ && NF == 7 && $4 + 0 >= queue + 0 { print $1 "/" $2 " holds " $4 }' "$1"
+  awk -F'\t' -v queue="$queue" '
+    !/^#/ && NF == 7 && ($1 == "save" || $1 == "handoff") && $5 != "-" { chain[$1 "/" $5] += $4 + 60; next }
+    !/^#/ && NF == 7 && $4 + 0 >= queue + 0 { print $1 "/" $2 " holds " $4 }
+    END { for (t in chain) if (chain[t] >= queue + 0) print t " holds " chain[t] }' "$1"
 }
 t_queue_default() {
   local left awaits
@@ -1294,13 +1299,19 @@ t_queue_default() {
   # The control: a row that holds as long as the default is caught.
   { cat "$root/scripts/stages.tsv"; printf 'release\tlong\t4\t14400\t-\talways\ttrue\n'; } >"$scratch/stages.tsv"
   [ "$(unheld "$scratch/stages.tsv")" = 'release/long holds 14400' ] || fail "a row holding the default was not caught: $(unheld "$scratch/stages.tsv")"
+  # And a folder whose rows' holds add up to it.
+  { cat "$root/scripts/stages.tsv"; printf 'handoff\tlong-%s\t1\t7140\ttest_pg\talways\ttrue\n' a b; } >"$scratch/stages.tsv"
+  [ "$(unheld "$scratch/stages.tsv")" = "handoff/test_pg holds $(( $(awk -F'\t' '$1 == "handoff" && $5 == "test_pg" { s += $4 + 60 } END { print s }' "$root/scripts/stages.tsv") + 14400 ))" ] ||
+    fail "a folder whose rows' holds reach the default was not caught: $(unheld "$scratch/stages.tsv")"
 }
 
 # --- a stage's rows side by side on this queue ----------------------------------
 # scripts/stage.sh queues every row that names no folder when the stage
 # starts: two of them hold a quarter each at once, each told its own
 # processors, and a stage stopped while they run stops both and gives every
-# quarter back (the loop below the cases checks that none is left held).
+# quarter back (the loop below the cases checks that none is left held). The
+# rows of one folder hold one quarter between them, one after another, and a
+# stage stopped while one runs stops it and gives the quarter back.
 t_stage_side_by_side() {
   local repo=$scratch/stage-repo s=0 one two runner held
   rm -rf "$repo" "$scratch"/stage-logs*
@@ -1334,6 +1345,24 @@ t_stage_side_by_side() {
   wait "$runner" || s=$?
   [ "$s" = 143 ] || fail "the stopped stage exited $s, not 143"
   for one in $held; do dead "$one" || fail "a row's command outlived the stopped stage"; done
+  [ "$("${hc[@]}" --status)" = idle ] || fail "the queue still showed: $("${hc[@]}" --status | tr '\n' '|')"
+  printf 'handoff\t%s\t1\t60\tdev\talways\techo "$HEAVY_CHECK_CPUS" >"$STAGE_LOGDIR/%s.cpus"%s\n' \
+    first first '' second second '; exec sleep 6123' >"$repo/scripts/stages.tsv"
+  (cd "$repo" && STAGE_BASE=HEAD exec "${clean[@]}" bash scripts/stage.sh -l "$scratch/stage-logs-3" handoff) >"$scratch/stage3.out" 2>&1 &
+  runner=$!; started+=("$runner")
+  until_true 10 pgrep -f '^sleep 6123$' >/dev/null || fail "the folder's second row never ran: $(tr '\n' '|' <"$scratch/stage3.out")"
+  [ "$("${hc[@]}" --status | grep -c '^held ')" = 1 ] && [ "$("${hc[@]}" --status | grep -c '^held quarters=1 ')" = 1 ] ||
+    fail "the folder's rows did not hold one quarter between them: $("${hc[@]}" --status | tr '\n' '|')"
+  one=$(cat "$scratch/stage-logs-3/first.cpus") two=$(cat "$scratch/stage-logs-3/second.cpus")
+  [ "$one" = "$two" ] || fail "the folder's rows were told $one and $two"
+  case " ${Q[*]:1} " in *" $one "*) ;; *) fail "the folder's rows were told '$one', not one quarter's processors" ;; esac
+  held=$(pgrep -f '^sleep 6123$' | tr '\n' ' ')
+  s=0
+  kill -TERM "$runner"
+  until_true 10 eval '! kill -0 "$runner"' || fail 'the stage was still running 10 s after TERM'
+  wait "$runner" || s=$?
+  [ "$s" = 143 ] || fail "the stopped stage exited $s, not 143"
+  for one in $held; do dead "$one" || fail "a folder's row outlived the stopped stage"; done
   [ "$("${hc[@]}" --status)" = idle ] || fail "the queue still showed: $("${hc[@]}" --status | tr '\n' '|')"
 }
 

@@ -17,10 +17,14 @@
 #   stage    one of the five above
 #   check    [a-z0-9-]+, unique within its stage
 #   quarters 1 or 4, the quarters of the machine it takes, heavy-check's -q
-#   hold     heavy-check's -t in seconds. A row waits for the host as long
-#            as heavy-check's default queue deadline, which is longer than
-#            every hold here (tests/heavy-check-test.sh holds the two
-#            together), so a row queued behind any one other row still runs
+#   hold     the seconds the command may run before it is stopped. A row
+#            of no folder is heavy-check's -t; the rows of one folder
+#            share a ticket whose -t is the sum of their holds and 60 s
+#            each for a stop. A ticket waits for the host as long as
+#            heavy-check's default queue deadline, which is longer than
+#            every ticket's hold here (tests/heavy-check-test.sh holds the
+#            two together), so a ticket queued behind any one other still
+#            runs
 #   folder   the build folder the command compiles into or reads, which
 #            another row of the stage may use too: dev (Mix's default
 #            _build/dev), dev_pg, test or test_pg, the _build folder of
@@ -34,11 +38,14 @@
 # Lines that start with #, and blank lines, are skipped. The whole table
 # is read, and every row's when decided on the changed set as the stage
 # found it, before any row runs. In save and handoff the rows of one
-# folder run one after another in the table's order and every other row
-# runs beside them, each queued for its own quarters when the stage
-# starts, so a stage can hold every quarter at once; every other stage
-# runs its rows one after another in the table's order. Every row runs
-# whatever an earlier one ended with. When the save or handoff rows that
+# folder that run take one heavy-check ticket, on the most quarters one of
+# them takes, and run under it one after another in the table's order
+# (scripts/lib/stage-chain.sh), and every other row runs beside them on a
+# ticket of its own; every ticket queues when the stage starts, so a stage
+# can hold every quarter at once. Every other stage runs its rows one
+# after another in the table's order, each on a ticket of its own. Every
+# row runs whatever an earlier one ended with. When the save or handoff
+# rows that
 # run name two folders or more, the stage first compiles the dependencies
 # into each of those folders in turn, in the order the table first names
 # them, on one quarter (`mix deps.loadpaths` under the folder's build path,
@@ -63,9 +70,20 @@
 # -a postgres --only cluster and an object store); sorted, each once.
 # PATHS after `--` replace them. A touched path with whitespace is refused.
 #
+# A row whose command is scripts/test-partitioned.sh, its options, then
+# test paths to its end (words that start apps/, or $STAGE_TESTS) runs
+# those paths' tests. When two such rows of one folder run with the same
+# options, a touched test that one names by $STAGE_TESTS and the other
+# names, itself or by a directory that holds it, runs once, in the other:
+# the first sees STAGE_TESTS without it and its log names the row it runs
+# in, and with no touched test left it is skipped (`every touched test
+# runs in <checks>`).
+#
 # Each row's command sees STAGE, STAGE_TESTS (the touched tests,
 # separated by spaces) and STAGE_LOGDIR, and writes its output to
-# $STAGE_LOGDIR/<check>.log. Without -l the log directory is a fresh
+# $STAGE_LOGDIR/<check>.log. A folder's ticket writes heavy-check's own
+# lines to <folder>.queue.log and each of its rows' ends to
+# <folder>.results. Without -l the log directory is a fresh
 # /tmp/cyfr-stage.<stage>.XXXXXX, the name scripts/janitor.sh removes after
 # seven days; it is named on stderr. The name carries no PROOF_RUN_PREFIX:
 # logs outlive the run that wrote them, and the janitor finds them by this
@@ -77,17 +95,20 @@
 # every row before it have ended: `<check>: ok <seconds>s`, `<check>:
 # failed <status> <seconds>s`, `<check>: not run <status> <seconds>s` or
 # `<check>: skipped (<reason>) <seconds>s`, the seconds from the row's
-# start, its wait for the host included. Not run is a status of 69, a
-# prerequisite the check names is missing, or 75, heavy-check's queue
-# deadline passed before it started; it counts as failed. The dependency
+# start, its wait for the host included: a folder's first row starts when
+# its ticket queues and each next one when the one before it ends. Not
+# run is a status of 69, a prerequisite the check names is missing, or
+# 75, heavy-check's queue deadline passed before it started; it counts as
+# failed. A row of a folder whose ticket ended before the row did reads
+# the ticket's status, 1 for a ticket that ended 0. The dependency
 # compile, when there is one, says `deps: ...` first, alike. -n prints
 # `would compile deps (1 quarter): <folders>` when it would, then `would
 # run <check> (<n> quarter[s]): <command>` or `would skip <check>:
 # <reason>` per row, and runs nothing.
 #
 # Exits 0 when every row that ran passed and 1 otherwise; 64 on usage, or
-# inside a heavy-check (HEAVY_CHECK_HELD set), since each row queues for
-# its own quarters; 65 for a table that is missing or unreadable, or a line of
+# inside a heavy-check (HEAVY_CHECK_HELD set), since the stage queues its
+# own tickets; 65 for a table that is missing or unreadable, or a line of
 # it that is not a row, naming it, or a
 # touched path with whitespace, before any row runs; 69 outside a Git
 # checkout, without the stage's base, or when Git cannot list the changed
@@ -138,7 +159,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 is_stage "$stage" || { usage >&2; exit 64; }
-[ -z "${HEAVY_CHECK_HELD:-}" ] || refuse 64 'each row queues for its own quarters: run this outside scripts/heavy-check.sh'
+[ -z "${HEAVY_CHECK_HELD:-}" ] || refuse 64 'the stage queues its own tickets: run this outside scripts/heavy-check.sh'
 # A caller's MIX_ENV or MIX_BUILD_PATH would move a lane's rows into
 # another folder, or two lanes into one.
 unset MIX_ENV MIX_BUILD_PATH
@@ -263,6 +284,47 @@ for i in ${rows[@]+"${!rows[@]}"}; do
   IFS=$'\t' read -r _ _ _ _ _ folder _ <<<"${rows[$i]}"
   case $stage in save | handoff) lanes+=("$folder") ;; *) lanes+=(stage) ;; esac
 done
+
+# Each row's STAGE_TESTS, and what its log says first. A touched test that
+# a test row of a folder names by $STAGE_TESTS alone and another test row
+# of the folder, with the same options, names runs in the other (the
+# header's rule).
+runner() { # INDEX: sets r_options and r_paths for a test row, else returns 1
+  local command words k
+  IFS=$'\t' read -r _ _ _ _ _ _ _ command <<<"${rows[$1]}"
+  read -r -a words <<<"$command"
+  [ "${words[0]-}" = scripts/test-partitioned.sh ] || return 1
+  k=${#words[@]}
+  while [ "$k" -gt 1 ]; do
+    case ${words[k - 1]} in apps/* | '$STAGE_TESTS') k=$((k - 1)) ;; *) break ;; esac
+  done
+  [ "$k" -lt "${#words[@]}" ] || return 1
+  r_options="${words[*]:0:k}" r_paths=("${words[@]:k}")
+}
+row_tests=() notes=()
+for i in ${rows[@]+"${!rows[@]}"}; do
+  row_tests[$i]=${tests[*]+${tests[*]}} notes[$i]=
+  [ "${lanes[$i]}" != - ] && [ "${lanes[$i]}" != stage ] && [ -z "${reasons[$i]}" ] &&
+    runner "$i" && [ "${r_paths[*]}" = '$STAGE_TESTS' ] || continue
+  options=$r_options kept=() elsewhere=()
+  for test_path in ${tests[@]+"${tests[@]}"}; do
+    in=
+    for j in "${!rows[@]}"; do
+      [ "$j" != "$i" ] && [ "${lanes[$j]}" = "${lanes[$i]}" ] && [ -z "${reasons[$j]}" ] &&
+        runner "$j" && [ "$r_options" = "$options" ] || continue
+      for named in "${r_paths[@]}"; do
+        named=${named%/}
+        if [ "$test_path" = "$named" ] || [[ $test_path == "$named"/* ]]; then in=$j; break 2; fi
+      done
+    done
+    if [ -z "$in" ]; then kept+=("$test_path"); continue; fi
+    IFS=$'\t' read -r _ _ check _ <<<"${rows[$in]}"
+    notes[$i]+="==> stage: $test_path runs in $check"$'\n'
+    [[ " ${elsewhere[*]-} " == *" $check "* ]] || elsewhere+=("$check")
+  done
+  row_tests[$i]=${kept[*]-}
+  [ "${#kept[@]}" -gt 0 ] || [ "${#elsewhere[@]}" = 0 ] || reasons[$i]="every touched test runs in ${elsewhere[*]}"
+done
 # The lanes the rows that run name, in the order the table first names
 # them, and, for two folders or more, the dependency compile into each in
 # turn.
@@ -315,25 +377,72 @@ result() {
     *) echo "$1: failed $2 $3s" ;;
   esac
 }
-# launch ENTRY QUARTERS HOLD LOG COMMAND: COMMAND queued for the host in
+# launch ENTRY QUARTERS HOLD LOG COMMAND...: COMMAND queued for the host in
 # the background, its heavy-check's pid recorded with ENTRY.
 launch() {
-  scripts/heavy-check.sh -q "$2" -t "$3" -- bash -c "$5" >"$4" 2>&1 &
-  running[$!]=$1
+  local entry=$1 quarters=$2 hold=$3 log=$4
+  shift 4
+  scripts/heavy-check.sh -q "$quarters" -t "$hold" -- "$@" >"$log" 2>&1 &
+  running[$!]=$entry
 }
 began=() lines=()
-declare -A lane=()
-start_row() { # INDEX
+declare -A lane=() chain_last=() chain_read=()
+start_row() { # INDEX: the row on a ticket of its own
   local check quarters hold command
   IFS=$'\t' read -r _ _ check quarters hold _ _ command <<<"${rows[$1]}"
   began[$1]=$SECONDS
-  launch "$1" "$quarters" "$hold" "$logdir/$check.log" "$command"
+  launch "$1" "$quarters" "$hold" "$logdir/$check.log" bash -c "$command"
 }
-next_in() { # FOLDER: starts the folder's next row, when one is left
-  local left=${lane[$1]-}
+# start_lane FOLDER: the stage lane's next row on a ticket of its own, or
+# every row of a build folder on one ticket.
+chains=0
+start_lane() {
+  local folder=$1 left=${lane[$1]-} i check quarters hold command most=1 total=0 args=()
   [ -n "$left" ] || return 0
-  lane[$1]=${left#* }
-  start_row "${left%% *}"
+  if [ "$folder" = stage ]; then
+    lane[$folder]=${left#* }
+    start_row "${left%% *}"
+    return 0
+  fi
+  for i in $left; do
+    IFS=$'\t' read -r _ _ check quarters hold _ _ command <<<"${rows[$i]}"
+    [ "$quarters" -le "$most" ] || most=$quarters
+    total=$((total + hold + 60))
+    printf '%s' "${notes[$i]}" >"$logdir/$check.log"
+    args+=("$i" "$check" "$hold" "${row_tests[$i]}" "$command")
+  done
+  : >"$logdir/$folder.results"
+  chain_last[$folder]=$EPOCHSECONDS chain_read[$folder]=0
+  launch "chain $folder" "$most" "$total" "$logdir/$folder.queue.log" \
+    bash scripts/lib/stage-chain.sh "$logdir/$folder.results" "${args[@]}"
+  chains=$((chains + 1))
+  tick
+}
+# collect FOLDER: the lines of the folder's rows that have ended since the
+# last look. A line still being written is left for the next.
+collect() {
+  local folder=$1 n=0 index status ended check
+  [ -f "$logdir/$folder.results" ] || return 0
+  while read -r index status ended; do
+    n=$((n + 1))
+    [ "$n" -gt "${chain_read[$folder]}" ] || continue
+    [[ " ${lane[$folder]} " == *" $index "* ]] && [ -z "${lines[$index]+set}" ] &&
+      [[ $status =~ ^[0-9]+$ ]] && [[ $ended =~ ^[0-9]+$ ]] || continue
+    IFS=$'\t' read -r _ _ check _ <<<"${rows[$index]}"
+    lines[$index]=$(result "$check" "$status" $((ended - chain_last[$folder])))
+    chain_last[$folder]=$ended
+    [ "$status" = 0 ] || failures=$((failures + 1))
+  done <"$logdir/$folder.results"
+  chain_read[$folder]=$n
+}
+# A folder's rows report while its ticket runs: the stage looks every two
+# seconds while a ticket runs.
+ticking=false tick_pid=
+tick() {
+  ! $ticking || return 0
+  sleep 2 &
+  tick_pid=$! ticking=true
+  running[$tick_pid]=tick
 }
 printed=0 deps_line=
 deps_waits=false
@@ -359,9 +468,9 @@ for i in ${rows[@]+"${!rows[@]}"}; do
 done
 if [ -n "$deps_command" ]; then
   deps_waits=true deps_began=$SECONDS
-  launch deps 1 1800 "$logdir/deps.log" "$deps_command"
+  launch deps 1 1800 "$logdir/deps.log" bash -c "$deps_command"
 else
-  for folder in ${folders[@]+"${folders[@]}"}; do next_in "$folder"; done
+  for folder in ${folders[@]+"${folders[@]}"}; do start_lane "$folder"; done
 fi
 for i in ${rows[@]+"${!rows[@]}"}; do
   if [ -z "${reasons[$i]}" ] && [ "${lanes[$i]}" = - ]; then start_row "$i"; fi
@@ -376,28 +485,46 @@ while [ "${#running[@]}" -gt 0 ]; do
   [ -n "$pid" ] && [ -n "${running[$pid]+set}" ] || continue
   entry=${running[$pid]}
   unset "running[$pid]"
-  [ "$status" = 0 ] || failures=$((failures + 1))
-  if [ "$entry" = deps ]; then
-    deps_line=$(result deps "$status" $((SECONDS - deps_began)))
-    if [ "$status" = 0 ]; then
-      for folder in "${folders[@]}"; do next_in "$folder"; done
-    else
-      # A row of a folder would compile what the failed compile left there,
-      # beside the other folders' rows: none starts.
-      for folder in "${folders[@]}"; do
-        for i in ${lane[$folder]}; do
-          IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$i]}"
-          lines[$i]="$check: not run 69 0s"
-          failures=$((failures + 1))
+  case $entry in
+    tick) ticking=false ;;
+    deps)
+      [ "$status" = 0 ] || failures=$((failures + 1))
+      deps_line=$(result deps "$status" $((SECONDS - deps_began)))
+      if [ "$status" = 0 ]; then
+        for folder in "${folders[@]}"; do start_lane "$folder"; done
+      else
+        # A row of a folder would compile what the failed compile left there,
+        # beside the other folders' rows: none starts.
+        for folder in "${folders[@]}"; do
+          for i in ${lane[$folder]}; do
+            IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$i]}"
+            lines[$i]="$check: not run 69 0s"
+            failures=$((failures + 1))
+          done
+          lane[$folder]=
         done
-        lane[$folder]=
-      done
-    fi
-  else
-    IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$entry]}"
-    lines[$entry]=$(result "$check" "$status" $((SECONDS - began[entry])))
-    [ "${lanes[$entry]}" = - ] || next_in "${lanes[$entry]}"
-  fi
+      fi ;;
+    'chain '*)
+      # The rows its ticket's end left without a line read its status.
+      folder=${entry#chain }
+      chains=$((chains - 1))
+      collect "$folder"
+      [ "$status" != 0 ] || status=1
+      for i in ${lane[$folder]}; do
+        [ -z "${lines[$i]+set}" ] || continue
+        IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$i]}"
+        lines[$i]=$(result "$check" "$status" $((EPOCHSECONDS - chain_last[$folder])))
+        chain_last[$folder]=$EPOCHSECONDS
+        failures=$((failures + 1))
+      done ;;
+    *)
+      [ "$status" = 0 ] || failures=$((failures + 1))
+      IFS=$'\t' read -r _ _ check _ _ _ _ <<<"${rows[$entry]}"
+      lines[$entry]=$(result "$check" "$status" $((SECONDS - began[entry])))
+      [ "${lanes[$entry]}" = - ] || start_lane "${lanes[$entry]}" ;;
+  esac
+  for folder in "${!chain_read[@]}"; do collect "$folder"; done
+  if [ "$chains" -gt 0 ]; then tick; elif $ticking; then kill "$tick_pid" 2>/dev/null; fi
   flush
 done
 

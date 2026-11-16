@@ -4,7 +4,8 @@
 #
 # scripts/stage.sh against a toy repository with a toy table and a stand-in
 # scripts/heavy-check.sh that records each call and runs its command (a
-# command holding `#queue-deadline` is answered 75, as a queue deadline is);
+# command holding `#queue-deadline` is answered 75, as a queue deadline is)
+# and a stand-in scripts/test-partitioned.sh that records each call;
 # scripts/lib/nightly.py's flakes and weights on planted run directories;
 # and the real table, read whole by the real scripts/stage.sh, each
 # self-test its handoff runs held to a pull-request workflow that runs it
@@ -41,7 +42,13 @@ table() { printf '%s\n' "$@" | tr '|' '\t' >"$repo/scripts/stages.tsv"; }
 repo="$S/repo"
 git init -q -b main "$repo"
 mkdir -p "$repo/scripts"
+mkdir -p "$repo/scripts/lib"
 cp "$ROOT/scripts/stage.sh" "$repo/scripts/"
+cp "$ROOT/scripts/lib/stage-chain.sh" "$ROOT/scripts/lib/contain.sh" "$repo/scripts/lib/"
+cat >"$repo/scripts/test-partitioned.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$RUNNER_CALLS"
+EOF
 cat >"$repo/scripts/heavy-check.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_CALLS"
@@ -50,8 +57,8 @@ while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
 EOF
-chmod +x "$repo/scripts/heavy-check.sh"
-export STUB_CALLS="$S/calls"
+chmod +x "$repo/scripts/heavy-check.sh" "$repo/scripts/test-partitioned.sh"
+export STUB_CALLS="$S/calls" RUNNER_CALLS="$S/runner-calls"
 for f in apps/arca/lib/arca/x.ex apps/arca/test/arca/x_test.exs apps/cyfr/lib/cyfr/a.ex apps/cyfr/test/cyfr/a_test.exs \
   apps/cyfr/lib/cyfr/no_mirror.ex apps/cyfr/lib/cyfr/gone.ex apps/cyfr/test/cyfr/gone_test.exs apps/cyfr/test/cyfr/old_test.exs \
   apps/cyfr/lib/cluster/k.ex apps/cyfr/test/cluster/k_test.exs apps/cyfr/test/cluster/c_test.exs notes/today.md README.md; do
@@ -324,7 +331,7 @@ lane_rows=(
   'handoff|quick|1|60|-|always|true'
 )
 
-begin "a folder's rows run one after another whatever each ended with, other folders' rows and rows of none run beside them, after the dependencies are compiled into each folder in turn, and the summary keeps the table's order"
+begin "a folder's rows run one after another on one ticket whatever each ended with, other folders' rows and rows of none run beside them, after the dependencies are compiled into each folder in turn, and the summary keeps the table's order"
 reset_tree
 table "${lane_rows[@]}"
 lanes lanes -l "$S/logs-lanes" handoff
@@ -337,7 +344,15 @@ diff "$S/want" "$FAKE_MIX_CALLS" >/dev/null || fail "the dependencies were compi
 [ "$(head -n 2 "$EVENTS" | tr '\n' ';')" = 'deps default;deps _build/test;' ] || fail "a folder's row started before the dependencies were compiled: $(tr '\n' ';' <"$EVENTS")"
 grep -qx '==> test' "$S/logs-lanes/deps.log" || fail "deps.log holds: $(cat "$S/logs-lanes/deps.log")"
 grep -q -- '^-q 1 -t 1800 -- bash -c s=0' "$STUB_CALLS" || fail "the dependency compile was not queued on one quarter: $(cat "$STUB_CALLS")"
-[ "$(grep -c -- '^-q 1 -t 60 -- bash -c ' "$STUB_CALLS")" = 6 ] || fail "each row was not queued for its own quarter: $(cat "$STUB_CALLS")"
+# One ticket per folder, holding each of its rows' holds and a minute
+# for each stop; a row of no folder on a ticket of its own.
+[ "$(grep -c -- '^-q 1 -t 60 -- bash -c ' "$STUB_CALLS")" = 2 ] || fail "the rows of no folder were not queued alone: $(cat "$STUB_CALLS")"
+grep -q -- "^-q 1 -t 360 -- bash scripts/lib/stage-chain.sh $S/logs-lanes/dev.results 0 first 60  echo first" "$STUB_CALLS" &&
+  grep -q -- "^-q 1 -t 120 -- bash scripts/lib/stage-chain.sh $S/logs-lanes/test.results 3 beside 60  echo beside" "$STUB_CALLS" ||
+  fail "a folder's rows were not queued on one ticket each: $(cat "$STUB_CALLS")"
+[ "$(wc -l <"$STUB_CALLS")" = 5 ] || fail "the stage queued other tickets: $(cat "$STUB_CALLS")"
+[ -e "$S/logs-lanes/dev.queue.log" ] && [ -e "$S/logs-lanes/test.queue.log" ] || fail 'a ticket kept no log'
+[ -e "$S/logs-lanes/third.ran" ] || fail 'the row after a failed one did not run'
 lanes lanes-dry -n handoff
 grep -qxF 'would compile deps (1 quarter): dev test' "$S/lanes-dry.out" || fail "the dry run said: $(cat "$S/lanes-dry.out")"
 [ ! -s "$FAKE_MIX_CALLS" ] || fail 'a dry run compiled the dependencies'
@@ -367,6 +382,96 @@ FAKE_MIX_EXIT=1 lanes deps-failed -l "$S/logs-deps-failed" handoff
   fail "a row of a folder started after the failed compile: $(cat "$STUB_CALLS")"
 [ "$(cut -d'|' -f1-3 "$FAKE_MIX_CALLS" | tr '\n' ';')" = 'default|sqlite|dev;_build/test_pg|postgres|test;' ] ||
   fail "a failed compile stopped the next folder's: $(tr '\n' ';' <"$FAKE_MIX_CALLS")"
+
+begin 'a touched test that two test rows of one folder name runs once, in the row that names it, which the other says; another folder, other options and a row of no test keep it'
+tests_rows=(
+  'handoff|tests|1|60|test|tests|scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS'
+  'handoff|rosters|1|60|test|always|scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/a_test.exs'
+  'handoff|arca|1|60|test|apps/arca/**|scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test/'
+  'handoff|traced|1|60|test|always|scripts/test-partitioned.sh -n 1 -a sqlite -- --trace apps/cyfr/test/cyfr/gone_test.exs'
+  'handoff|tests-pg|1|60|test_pg|tests|scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors $STAGE_TESTS'
+  'handoff|arca-pg|1|60|test_pg|apps/arca/**|scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test'
+  'handoff|listed|1|60|-|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/listed.txt"'
+)
+reset_tree
+table "${tests_rows[@]}"
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/a.ex"
+printf '# edit\n' >>"$repo/apps/arca/lib/arca/x.ex"
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/gone.ex"
+: >"$RUNNER_CALLS"
+lanes once -l "$S/logs-once" handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/once.err")"
+printf '%s\n' 'deps: ok' 'tests: ok' 'rosters: ok' 'arca: ok' 'traced: ok' 'tests-pg: ok' 'arca-pg: ok' 'listed: ok' >"$S/want"
+diff "$S/want" "$S/once.rows" >/dev/null || fail "the rows said: $(tr '\n' ';' <"$S/once.rows")"
+printf '%s\n' '-n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/gone_test.exs' \
+  '-n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/a_test.exs' \
+  '-n 1 -a sqlite -- --warnings-as-errors apps/arca/test/' \
+  '-n 1 -a sqlite -- --trace apps/cyfr/test/cyfr/gone_test.exs' \
+  '-n 1 -a postgres -- --warnings-as-errors apps/cyfr/test/cyfr/a_test.exs apps/cyfr/test/cyfr/gone_test.exs' \
+  '-n 1 -a postgres -- --warnings-as-errors apps/arca/test' | LC_ALL=C sort >"$S/want"
+diff "$S/want" <(LC_ALL=C sort "$RUNNER_CALLS") >/dev/null || fail "the runner ran: $(tr '\n' ';' <"$RUNNER_CALLS")"
+printf '%s\n' '==> stage: apps/arca/test/arca/x_test.exs runs in arca' '==> stage: apps/cyfr/test/cyfr/a_test.exs runs in rosters' >"$S/want"
+diff "$S/want" "$S/logs-once/tests.log" >/dev/null || fail "the tests row's log says: $(cat "$S/logs-once/tests.log")"
+printf '%s\n' '==> stage: apps/arca/test/arca/x_test.exs runs in arca-pg' >"$S/want"
+diff "$S/want" "$S/logs-once/tests-pg.log" >/dev/null || fail "the postgres tests row's log says: $(cat "$S/logs-once/tests-pg.log")"
+[ "$(tr '\n' ' ' <"$S/logs-once/listed.txt")" = 'apps/arca/test/arca/x_test.exs apps/cyfr/test/cyfr/a_test.exs apps/cyfr/test/cyfr/gone_test.exs ' ] ||
+  fail "a row of no folder lost touched tests: $(cat "$S/logs-once/listed.txt")"
+# With every touched test run elsewhere, the row is skipped and says where.
+reset_tree
+table "${tests_rows[@]}"
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/a.ex"
+: >"$RUNNER_CALLS"
+lanes once-all -l "$S/logs-once-all" handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/once-all.err")"
+grep -qx 'tests: skipped (every touched test runs in rosters)' "$S/once-all.rows" || fail "the rows said: $(tr '\n' ';' <"$S/once-all.rows")"
+[ "$(grep -c -- '-a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/a_test.exs$' "$RUNNER_CALLS")" = 1 ] &&
+  grep -qx -- '-n 1 -a postgres -- --warnings-as-errors apps/cyfr/test/cyfr/a_test.exs' "$RUNNER_CALLS" ||
+  fail "the runner ran: $(tr '\n' ';' <"$RUNNER_CALLS")"
+lanes once-dry -n handoff
+grep -qxF 'would skip tests: every touched test runs in rosters' "$S/once-dry.out" || fail "the dry run said: $(cat "$S/once-dry.out")"
+reset_tree
+
+begin "a folder's rows report while its ticket runs, each row is stopped at its own hold and the next still runs, and a ticket that never starts leaves each of its rows not run"
+table 'handoff|early|1|60|dev|always|true' \
+  'handoff|late|1|60|dev|always|for _ in $(seq 300); do [ -e "$STAGE_LOGDIR/go" ] && exit 0; sleep 0.1; done; exit 1'
+: >"$STUB_CALLS"
+(cd "$repo" && scripts/stage.sh -l "$S/logs-early" handoff) >"$S/early.out" 2>"$S/early.err" &
+runner=$!
+until_true 10 grep -qx 'early: ok [0-9]*s' "$S/early.out" || { touch "$S/logs-early/go"; wait "$runner"; fail "the first row's line waited for the ticket: $(cat "$S/early.out")"; }
+touch "$S/logs-early/go"
+status=0; wait "$runner" || status=$?
+[ "$status" = 0 ] && grep -qx 'late: ok [0-9]*s' "$S/early.out" || fail "exited $status: $(cat "$S/early.out")"
+table 'handoff|held|1|1|dev|always|exec sleep 6121' 'handoff|next|1|60|dev|always|touch "$STAGE_LOGDIR/next.ran"'
+stage held -l "$S/logs-held" handoff
+[ "$rc" = 1 ] || fail "exited $rc, not 1"
+grep -qx 'held: failed 124 [0-9]*s' "$S/held.out" && grep -qx 'next: ok [0-9]*s' "$S/held.out" || fail "the rows said: $(cat "$S/held.out")"
+grep -qx '==> stage: hold deadline after 1s: the command was stopped' "$S/logs-held/held.log" || fail "the held row's log: $(cat "$S/logs-held/held.log")"
+grep -q -- '^-q 1 -t 181 -- ' "$STUB_CALLS" || fail "the ticket's hold: $(cat "$STUB_CALLS")"
+! pgrep -f '^sleep 6121$' >/dev/null || fail 'the held row outlived its hold'
+table 'handoff|q1|1|60|dev|always|echo one #queue-deadline' 'handoff|q2|1|60|dev|always|echo two' 'handoff|free|1|60|-|always|true'
+stage queued -l "$S/logs-queued" handoff
+[ "$rc" = 1 ] || fail "exited $rc, not 1"
+[ "$(sed -n '2,$p' "$S/queued.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'q1: not run 75;q2: not run 75;free: ok;' ] ||
+  fail "the rows said: $(cat "$S/queued.out")"
+
+begin "a ticket killed outright fails the row it ran and every row after it, none of which starts, and its row's command is stopped"
+table 'handoff|victim|1|60|dev|always|exec sleep 6122' 'handoff|orphan|1|60|dev|always|touch "$STAGE_LOGDIR/orphan.ran"' \
+  'handoff|free|1|60|-|always|true'
+(cd "$repo" && scripts/stage.sh -l "$S/logs-killed" handoff) >"$S/killed.out" 2>"$S/killed.err" &
+runner=$!
+until_true 10 pgrep -f '^sleep 6122$' >/dev/null || fail 'the row never started'
+sleeper=$(pgrep -f '^sleep 6122$' | head -1)
+chain=$(pgrep -f "stage-chain.sh $S/logs-killed/dev.results" | head -1)
+[ -n "$chain" ] || fail 'no ticket found'
+kill -KILL "$chain"
+status=0; wait "$runner" || status=$?
+[ "$status" = 1 ] || fail "exited $status, not 1: $(cat "$S/killed.out")"
+[ "$(sed -n '2,$p' "$S/killed.out" | sed '$d' | sed -E 's/ [0-9]+s$//' | tr '\n' ';')" = 'victim: failed 137;orphan: failed 137;free: ok;' ] ||
+  fail "the rows said: $(cat "$S/killed.out")"
+[ ! -e "$S/logs-killed/orphan.ran" ] || fail 'a row started after its ticket was killed'
+until_true 20 eval '! kill -0 "$sleeper"' || { kill -KILL "$sleeper"; fail "the killed ticket's row outlived it"; }
+table "${toy_rows[@]}"
+reset_tree
 
 begin 'INT and TERM stop every row running side by side, and no row starts after them'
 table 'handoff|slow-a|1|60|dev|always|exec sleep 6111' 'handoff|after|1|60|dev|always|touch "$STAGE_LOGDIR/after.ran"' \

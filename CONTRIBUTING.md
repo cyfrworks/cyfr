@@ -193,30 +193,33 @@ same worktree refuses, naming the run that holds it.
   toolchain. `scripts/commit-gate.sh` looks for it in
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
 - Checks run in stages. `scripts/stages.tsv` names what each stage runs,
-  and `scripts/stage.sh STAGE` runs it, queuing each check through
+  and `scripts/stage.sh STAGE` runs it, queuing its checks through
   `scripts/heavy-check.sh` for the quarters the table names. In `save`
   and `handoff` the checks that use one build folder (`_build/dev`,
   `dev_pg`, `test` or `test_pg`, the table's folder column) run one after
-  another and the rest side by side, so one stage can hold all four
-  quarters for a while; every other stage runs its checks one after
-  another. A stage's summary lists every check in the table's order. The
+  another on one queue ticket and the rest side by side, each on its own,
+  so one stage can hold all four quarters for a while; a touched test
+  that two test checks of one folder name runs once, in the one that names
+  it. Every other stage runs its checks one after another. A stage's
+  summary lists every check in the table's order. The
   host answers while you edit and keeps itself; GitHub proves the tree:
   - `save`, after an edit: the format and credo checks, an incremental
     compile with warnings as errors, and the touched tests on SQLite;
   - `handoff`, before you report a change ready, one quarter for each
-    check: the format and credo checks, a forced compile on both
-    adapters, the generated files' checks, the touched tests on both
-    adapters (all of `apps/arca/test` when Arca changed), the roster
-    tests that read the whole source tree (the boundaries, the test seams,
-    Sanctum's gate rosters, the restore order, the cross-language drift and
-    the router's route map)
-    and CI's vocabulary scan (`scripts/ci/vocabulary.sh`) on every change,
-    the configuration check when an `apps` source changed, `mix dialyzer`
-    when a `lib` file changed, the light self-test of every harness
-    script you touched, and the install proof when its inputs changed.
-    Each app compiled and tested alone (CI's island jobs), the proofs
-    under `tests/` and the suites' untouched files are the pull request's
-    run's;
+    build folder's checks and for each other check: the format and credo
+    checks, a compile with warnings as errors on both adapters (unforced:
+    a warning or Boundary violation compiled earlier still fails it), the
+    generated files' checks, the touched tests on both adapters (all of
+    `apps/arca/test` when Arca changed), the roster tests that read the
+    whole source tree (the boundaries, the test seams, Sanctum's gate
+    rosters, the restore order, the cross-language drift and the router's
+    route map) and CI's vocabulary scan (`scripts/ci/vocabulary.sh`) on
+    every change, the configuration check when an `apps` source changed,
+    `mix dialyzer` when a `lib` file changed, and the light self-test of
+    every harness script you touched. Each app compiled and tested alone
+    (CI's island jobs), the proofs under `tests/` and the suites' untouched
+    files are the pull request's run's, and the install proof the
+    nightly's;
   - `pull-request`: the pull request's run on GitHub is the check, and it
     runs every check in parallel. `scripts/stage.sh pull-request` runs
     `scripts/commit-gate.sh`, CI's checks on this host, for working
