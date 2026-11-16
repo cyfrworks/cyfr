@@ -369,24 +369,24 @@ defmodule Aqua.Loop.Request do
   end
 
   @doc """
-  The projection shaped for the contract. `opts`: `:me` (the agent the
+  The projection shaped for the contract. `removed`, by row id, the refs
+  of a row's files the person deleted, is every caller's to give, so none
+  can leave a deleted file unnamed: every row the request carries that
+  holds one is named in one block beside the initiating message's own,
+  and an opening never names one as carried. `opts`: `:me` (the agent the
   turn runs, whose rows are its own speech), `:names` (a map of
   user id to display name, used when `:multi_author?` is true),
   `:excerpt` (the room excerpt, a transient block), `:attachments` (typed
   blocks for the initiating message), `:task_message_id` (which message
   those blocks belong to; without it they land on the first user message,
   which is only the right one in a transcript of one), `:refs` (the
-  daily-thread posts an opening refers to, by id, as they read now),
-  `:removed` (by row id, the refs of a row's files the person deleted:
-  every row the request carries that holds one is named in one block
-  beside the initiating message's own, and an opening never names one as
-  carried).
+  daily-thread posts an opening refers to, by id, as they read now).
   """
-  @spec messages([Aqua.Tape.row()], keyword()) :: [map()]
-  def messages(rows, opts \\ []) when is_list(rows) do
+  @spec messages([Aqua.Tape.row()], %{String.t() => [map()]}, keyword()) :: [map()]
+  def messages(rows, removed, opts \\ []) when is_list(rows) and is_map(removed) do
+    opts = Keyword.put(opts, :removed, removed)
     items = apply_compaction(rows)
-    blocks = List.wrap(Keyword.get(opts, :attachments))
-    blocks = blocks ++ removed_note(items, Keyword.get(opts, :removed, %{}))
+    blocks = List.wrap(Keyword.get(opts, :attachments)) ++ removed_note(items, removed)
 
     items
     |> Enum.reduce([], fn row, acc -> shape(row, acc, opts) end)
@@ -717,7 +717,7 @@ defmodule Aqua.Loop.Request do
       end
 
     gone =
-      for ref <- Map.get(Keyword.get(opts, :removed, %{}), row.id, []), do: ref["stored_name"]
+      for ref <- Map.get(Keyword.fetch!(opts, :removed), row.id, []), do: ref["stored_name"]
 
     files =
       case Enum.reject(Aqua.Attachments.refs_of(row), &(&1["stored_name"] in gone)) do

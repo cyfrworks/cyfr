@@ -715,15 +715,14 @@ defmodule Aqua.Loop do
       if multi?, do: Map.new(authors, &{&1, Sanctum.Tenancy.Users.display_name(&1)}), else: %{}
 
     messages =
-      Request.messages(rows,
+      Request.messages(rows, removed,
         me: spec.agent["name"],
         names: names,
         multi_author?: multi?,
         excerpt: excerpt,
         attachments: spec.attachments,
         task_message_id: state.turn.message_id,
-        refs: Map.new(cited, &{&1.id, &1}),
-        removed: removed
+        refs: Map.new(cited, &{&1.id, &1})
       )
 
     Request.build(
@@ -2554,14 +2553,14 @@ defmodule Aqua.Loop do
                  do: compact(state, rows, removed, false)
 
           {:skipped, state} ->
-            summarize(state, rows, boundary)
+            summarize(state, rows, boundary, removed)
 
           {:error, :superseded} = superseded ->
             superseded
         end
 
       {:compact, boundary} ->
-        summarize(state, rows, boundary)
+        summarize(state, rows, boundary, removed)
     end
   end
 
@@ -2722,7 +2721,10 @@ defmodule Aqua.Loop do
   defp keep_note(%State{} = state, step, {:error, message}),
     do: close(state, step, nil, {:error, message})
 
-  defp summarize(%State{spec: spec} = state, rows, boundary) do
+  # `removed` is the round's read (`removed_files/2`): the rows a summary
+  # stands for are among those the round's request carried, so a
+  # compaction lists nothing of its own.
+  defp summarize(%State{spec: spec} = state, rows, boundary, removed) do
     previous = rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last()
 
     # Only what the previous summary does not already stand for, and
@@ -2738,7 +2740,7 @@ defmodule Aqua.Loop do
       end)
 
     request =
-      Planner.summary_request(Request.messages(older),
+      Planner.summary_request(Request.messages(older, removed),
         model: spec.model,
         previous_summary: previous && previous.content
       )
