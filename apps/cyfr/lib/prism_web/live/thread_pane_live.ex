@@ -1008,12 +1008,14 @@ defmodule PrismWeb.ThreadPaneLive do
   # ---------------------------------------------------------------------------
 
   # A step's text row replaces the answer that streamed for it.
+  # A row a turn writes for itself lands as the thread reads it on open:
+  # as its steps, never as a post.
   defp handle_thread_event(socket, :message, row) do
     if result = result(row), do: tell_host(socket, {:result, row.thread_id, result})
 
     socket
     |> hold_card(row)
-    |> upsert_message(row)
+    |> then(&if(Threads.post?(row), do: upsert_message(&1, row), else: &1))
     |> assign(:partials, Aqua.stream_landed(socket.assigns.partials, row))
     |> assign(:turn_replied, socket.assigns.turn_replied or replied?(row, socket))
   end

@@ -2101,10 +2101,17 @@ defmodule Aqua.RunnerTest do
       put = put!(api_line(ctx), ws)
       assert %{origin: "programmatic", requested_by: person, agent: "aqua"} = put
       assert person == ctx.user_id
+      # It asks no model, so its brain is not described for it: with the
+      # description the putting turn cached forgotten, none is asked.
+      Arca.Cache.delete_match({:model_caps, ctx.athanor_id, :_, :_, :_})
+      described = Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "describe"))
       call = page_call(ctx, put, "http.get", %{"url" => "https://example.test/x"})
       assert {:ok, runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
       assert runner == Runner.whereis(ws.id)
       assert_receive {:scripted_probe, http, _}, 60_000
+
+      assert described ==
+               Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "describe"))
 
       assert %{running: true, turn_id: id, turn_user: ^person, queued: 0} =
                Runner.state(ws.id, ctx.athanor_id)

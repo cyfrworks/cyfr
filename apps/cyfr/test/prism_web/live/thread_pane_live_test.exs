@@ -731,6 +731,44 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute has_element?(pane, ~s([id$="-m-#{report.id}"] button[phx-click="open_thread"]))
   end
 
+  test "a row a turn writes for itself, a page's call's answer among them, is no post as it lands",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, %{message: said}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: Prima.Author.agent(), sent_by: "aqua", content: "a post"}
+      })
+
+    pane = open_pane(conn, athanor, thread)
+
+    for kind <- ~w(page_call page_result tool_call tool_result) do
+      row = %{said | id: "msg_#{kind}", kind: kind, content: ~s({"ok":true,"v":1})}
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: athanor.id,
+        thread_id: thread.id,
+        kind: :message,
+        data: row
+      })
+    end
+
+    # A post sent after them lands, so they were taken first.
+    landed = %{said | id: "msg_later", content: "a later post"}
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: athanor.id,
+      thread_id: thread.id,
+      kind: :message,
+      data: landed
+    })
+
+    Prima.Test.Wait.wait_until(fn -> has_element?(pane, ~s([id$="-m-msg_later"])) end)
+
+    for kind <- ~w(page_call page_result tool_call tool_result),
+        do: refute(has_element?(pane, ~s([id$="-m-msg_#{kind}"])))
+  end
+
   test "the thread shown is read to its newest row as it opens and as each row lands, never back",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)

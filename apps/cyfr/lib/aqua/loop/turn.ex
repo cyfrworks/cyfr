@@ -69,7 +69,10 @@ defmodule Aqua.Loop.Turn do
   @doc """
   Build the spec for `turn` as `ctx` (the actor's external-plane context).
   `opts`: `:authority` (the turn's pinned authority, required),
-  `:excerpt?` (read the room excerpt the turn's options name).
+  `:excerpt?` (read the room excerpt the turn's options name), and
+  `:asks_model?`: false for a turn opened on a page's call, which asks no
+  model, so its brain is not described and its capabilities are none
+  (`Aqua.Models.none/0`).
 
   Refuses an agent that names no model (`:no_model`), a catalyst the
   athanor does not hold or that does not speak `model/chat@1`, and a
@@ -97,8 +100,9 @@ defmodule Aqua.Loop.Turn do
            )
            |> narrowed(options["tools"]),
          {:ok, catalyst, model} <- model(ctx, turn, agent),
-         {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn),
-         :ok <- brain_options(brain_options, capabilities) do
+         asks? = Keyword.get(opts, :asks_model?, true),
+         {:ok, capabilities} <- asked(asks?, ctx, authority, catalyst, model, turn),
+         :ok <- if(asks?, do: brain_options(brain_options, capabilities), else: :ok) do
       prompt =
         Aqua.Prompt.compose(ctx,
           agent: agent,
@@ -338,6 +342,11 @@ defmodule Aqua.Loop.Turn do
       do: :ok,
       else: {:error, {:catalyst_not_chat, catalyst}}
   end
+
+  defp asked(false, _ctx, _authority, _catalyst, _model, _turn), do: {:ok, Aqua.Models.none()}
+
+  defp asked(true, ctx, authority, catalyst, model, turn),
+    do: capabilities(ctx, authority, catalyst, model, turn)
 
   defp capabilities(ctx, authority, catalyst, model, turn) do
     case Aqua.Models.capabilities(ctx, catalyst, model, authority.consent_id,

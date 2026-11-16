@@ -69,6 +69,13 @@ defmodule Arca.ThreadStorage do
   def room_kinds, do: @room_kinds
 
   @doc """
+  Whether `row` is one a person reads as a post: what a turn writes for
+  itself is drawn as its steps, never as a post (`messages/3`'s `posts:`).
+  """
+  @spec post?(map()) :: boolean()
+  def post?(%{kind: kind}), do: kind in @post_kinds
+
+  @doc """
   The athanor's threads, most recently active first. `opts`: `:limit`
   (200 by default) and `:kind` (one of `Arca.Schemas.Thread.kinds/0`, or a
   list of them; every kind when absent).

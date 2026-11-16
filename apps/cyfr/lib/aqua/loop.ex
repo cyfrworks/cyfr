@@ -304,7 +304,12 @@ defmodule Aqua.Loop do
       with {:ok, turn} <- Tape.turn(ctx, turn_id),
            {:ok, claim, turn} <- reclaim(ctx, turn, mode),
            {:ok, authority} <- pinned_authority(ctx, turn),
-           {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false),
+           {:ok, spec} <-
+             Turn.build(ctx, turn,
+               authority: authority,
+               excerpt?: false,
+               asks_model?: asks_model?(ctx, turn)
+             ),
            {:ok, turn} <- Tape.pin_catalyst(ctx, turn, spec.catalyst) do
         spec = Turn.with_turn(spec, turn)
 
@@ -509,7 +514,11 @@ defmodule Aqua.Loop do
                agent_capability_digest: snapshot.capability_digest,
                recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
              }),
-           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority),
+           {:ok, spec} <-
+             Turn.build(ctx, started,
+               authority: claim.authority,
+               asks_model?: asks_model?(ctx, started)
+             ),
            {:ok, started} <- Tape.pin_catalyst(ctx, started, spec.catalyst) do
         {:ok,
          %State{
@@ -2459,10 +2468,14 @@ defmodule Aqua.Loop do
 
   defp open_call(%State{} = state), do: {:ok, state}
 
-  defp opened_on_call?(%State{turn: %{message_id: id}} = state) when is_binary(id),
-    do: match?({:ok, %{kind: "page_call"}}, Tape.message(guest(state), id))
+  defp opened_on_call?(%State{} = state), do: not asks_model?(guest(state), state.turn)
 
-  defp opened_on_call?(%State{}), do: false
+  # A turn opened on a page's call asks no model, so its brain is not
+  # described when the turn is built (`Turn.build/3`).
+  defp asks_model?(ctx, %{message_id: id}) when is_binary(id),
+    do: not match?({:ok, %{kind: "page_call"}}, Tape.message(ctx, id))
+
+  defp asks_model?(_ctx, _turn), do: true
 
   # Whether the model's last answer called nothing: no step but a page's
   # came after it.
