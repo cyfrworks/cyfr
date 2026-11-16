@@ -181,6 +181,34 @@ defmodule Aqua.TurnSourcesTest do
       assert [] = for(%{kind: kind} = s <- steps(ctx, second), kind != "model", do: s)
     end
 
+    test "a screenshot a turn posted carries what its page came from into the next turn",
+         %{ctx: ctx, thread: thread, host: host} do
+      # The turn that took it read nothing outside: only the picture did.
+      first = running!(ctx, thread)
+      file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => "PNG"}
+      {:ok, shot, _ref} = Aqua.Attachments.draft(ctx, first, file, [host])
+
+      lineage = %{
+        "action" => "post",
+        "thread_id" => thread.id,
+        "root_execution_id" => first.root_execution_id,
+        "parent_execution_id" => first.root_execution_id,
+        "attempt" => first.attempt,
+        "screenshot" => shot
+      }
+
+      assert {:ok, %{files: 1}} =
+               Aqua.Providers.Thread.handle("thread", Sanctum.Context.enter_guest(ctx), lineage)
+
+      refute host in sources(ctx, first)
+      {:ok, _} = Tape.finish(ctx, first, "cancelled")
+
+      second = accept!(ctx, thread, "@aqua what did you see?")
+      script!([reply("The moon.")])
+      assert :completed = run(ctx, second)
+      assert host in sources(ctx, second)
+    end
+
     test "a compaction summary carries its turn's sources into the next turn",
          %{ctx: ctx, thread: thread, host: host} do
       # The first turn reads outside, then compacts its own older rows.

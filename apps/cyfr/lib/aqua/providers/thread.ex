@@ -10,8 +10,10 @@ defmodule Aqua.Providers.Thread do
 
   `thread.post` is the one action of `thread` a running turn calls: a
   post into the thread its turn runs in, under its fence, with text, the
-  files it hands (stored under the post's own row first) and links, which
-  are shown and never fetched. The lineage the gate stamps names the
+  files it hands (stored under the post's own row first), links, which
+  are shown and never fetched, and a screenshot the same attempt of the
+  turn took (`Aqua.Attachments.drafted/3`), copied into the post with
+  the sources of the page it shows. The lineage the gate stamps names the
   thread and the turn; no argument does.
 
   `crew` is the second tool this provider serves: `ask` and `list`, the
@@ -567,6 +569,11 @@ defmodule Aqua.Providers.Thread do
                   ]}
                )},
               description: "post: links the post shows, each {url, title}; never fetched"
+            ),
+            Arg.new("screenshot", :string,
+              max: 64,
+              description:
+                "post: the message_id a browser.screenshot of this turn answered; the post shows that picture"
             )
           ],
           kind: :write,
@@ -1193,26 +1200,54 @@ defmodule Aqua.Providers.Thread do
   # posts nothing.
   defp post(%Context{plane: :guest} = ctx, args) do
     text = String.trim(args["text"] || "")
+    shot = args["screenshot"]
 
     with {:ok, files} <- decode_files(args["files"] || []),
          {:ok, links} <- links(args["links"]),
-         :ok <- something(text, files, links),
-         {:ok, turn} <- calling(ctx, args) do
+         :ok <- something(text, files ++ List.wrap(shot), links),
+         {:ok, turn} <- calling(ctx, args),
+         {:ok, drafted} <- drafted(ctx, turn, shot) do
       id = Prima.UUID7.generate_id("msg")
 
-      with {:ok, refs} <- Aqua.Attachments.copy(ctx, turn.thread_id, id, files),
+      with {:ok, refs} <- Aqua.Attachments.copy(ctx, turn.thread_id, id, files ++ drafted),
            {:ok, row} <-
              Tape.post(ctx, turn, %{id: id, content: text, payload: posted(refs, links)}) do
+        # Published: the draft's own bytes go, the post keeps its copy.
+        drop_draft(ctx, turn, shot)
         {:ok, %{posted: row.id, thread: turn.thread_id, seq: row.seq, files: length(refs)}}
       else
         {:error, reason} ->
           _ = Aqua.Attachments.discard(ctx, turn.thread_id, id)
+          release_draft(ctx, turn, shot)
           {:error, post_refusal(reason)}
       end
     end
   end
 
   defp post(%Context{}, _args), do: {:error, :not_in_a_turn}
+
+  # The screenshot this attempt of the turn took and has not posted,
+  # claimed for this post (`Aqua.Attachments.drafted/3`).
+  defp drafted(_ctx, _turn, nil), do: {:ok, []}
+
+  defp drafted(ctx, turn, shot) do
+    case Aqua.Attachments.drafted(ctx, turn, shot) do
+      {:ok, file} -> {:ok, [file]}
+      {:error, :not_a_draft} -> {:error, {:invalid_argument, not_a_draft()}}
+      {:error, reason} -> {:error, post_refusal(reason)}
+    end
+  end
+
+  defp drop_draft(_ctx, _turn, nil), do: :ok
+  defp drop_draft(ctx, turn, shot), do: _ = Aqua.Attachments.discard(ctx, turn.thread_id, shot)
+
+  defp release_draft(_ctx, _turn, nil), do: :ok
+  defp release_draft(ctx, turn, shot), do: Aqua.Attachments.release(ctx, turn.thread_id, shot)
+
+  @doc false
+  def not_a_draft,
+    do:
+      "That screenshot is not one this turn took and has not posted yet; take the screenshot again and post the message id it answers."
 
   defp calling(ctx, args) do
     case Tape.held_turn(ctx, args) do
@@ -1223,7 +1258,8 @@ defmodule Aqua.Providers.Thread do
   end
 
   defp something("", [], []),
-    do: {:error, {:invalid_argument, "post requires a 'text', 'files' or 'links'"}}
+    do:
+      {:error, {:invalid_argument, "post requires a 'text', 'files', 'links' or a 'screenshot'"}}
 
   defp something(text, _files, _links) when byte_size(text) > 32 * 1024,
     do: {:error, :message_too_long}

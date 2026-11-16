@@ -1060,6 +1060,55 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
   end
 
+  test "a screenshot Aqua posted is drawn in place, opens large, and its address gives the picture",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: here.user_id, sent_by: "person", content: "look at the moon"},
+        turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
+      })
+
+    root = "exe_shot_root_#{System.unique_integer([:positive])}"
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [root_execution_id: root, status: "running"]
+      )
+
+    {:ok, turn} = Aqua.Tape.turn(here, turn.id)
+    png = <<137, 80, 78, 71, 13, 10, 26, 10, "the moon">>
+    file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => png}
+
+    {:ok, shot, _ref} =
+      Aqua.Attachments.draft(here, turn, file, [Prima.Source.outside("moon.example")])
+
+    {:ok, %{posted: post_id}} =
+      Aqua.Providers.Thread.handle("thread", Sanctum.Context.enter_guest(here), %{
+        "action" => "post",
+        "thread_id" => thread.id,
+        "root_execution_id" => root,
+        "parent_execution_id" => root,
+        "screenshot" => shot
+      })
+
+    pane = open_pane(conn, athanor, thread)
+    picture = PrismWeb.Focus.path(route(athanor), "/attachments/#{post_id}/0-screenshot.png")
+
+    assert has_element?(
+             pane,
+             ~s(button[aria-label="Open screenshot.png large"] img[src="#{picture}"])
+           )
+
+    assert has_element?(
+             pane,
+             ~s([id$="-msg-#{post_id}-picture-0"].hidden [role=dialog] img[src="#{picture}"])
+           )
+
+    assert conn |> get(picture) |> response(200) == png
+  end
+
   describe "a post draws what it holds" do
     setup %{here: here, thread: thread, user: user} do
       pictures = fn n ->
