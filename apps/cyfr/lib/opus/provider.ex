@@ -326,7 +326,12 @@ defmodule Opus.Provider do
             host: :intercepted,
             kind: :execute,
             planes: [:external],
-            permission: :execute
+            permission: :execute,
+            # A run stands on its component's grant, so an author may let
+            # the assistant start one with no card; an answer a person gave
+            # on one run's card lets that run's sources through and never
+            # stands for another.
+            stored_answers: false
           ),
           Operation.new(
             "execution",

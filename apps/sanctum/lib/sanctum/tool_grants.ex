@@ -31,6 +31,8 @@ defmodule Sanctum.ToolGrants do
     * `standing: false` takes none at all, and `standing: :thread` none
       at agent scope but one that ends with a schedule, which covers that
       schedule's runs alone in whatever thread they run;
+    * `stored_answers: false` takes none at all either, whatever an
+      author may make automatic (`Prima.Operation`);
     * an allow may carry bounds: the lifecycle it ends with (an
       execution, a turn or a schedule, and that row's id), a deadline
       still to come, and a constraint, a resource kind and its patterns,
@@ -341,6 +343,7 @@ defmodule Sanctum.ToolGrants do
          {:ok, declaration} <- declaration(tool, action),
          :ok <- standing_kind(declaration.kind),
          :ok <- declared_standing(declaration.standing, scope, attrs),
+         :ok <- stored_answers(declaration.stored_answers),
          :ok <- lifecycle(attrs),
          :ok <- deadline(attrs, now),
          :ok <- constraint(attrs, declaration.resource),
@@ -360,8 +363,11 @@ defmodule Sanctum.ToolGrants do
 
   defp declaration(tool, action) do
     case Sanctum.Catalog.action_declaration("#{tool}.#{action}") do
-      {:ok, %{kind: _, standing: _, resource: _} = declaration} -> {:ok, declaration}
-      _ -> refuse(:unknown_kind)
+      {:ok, %{kind: _, standing: _, stored_answers: _, resource: _} = declaration} ->
+        {:ok, declaration}
+
+      _ ->
+        refuse(:unknown_kind)
     end
   end
 
@@ -383,6 +389,10 @@ defmodule Sanctum.ToolGrants do
 
   defp declared_standing(:thread, _scope, _attrs), do: refuse(:thread_only)
   defp declared_standing(_standing, _scope, _attrs), do: refuse(:never_standing)
+
+  # An action declared to keep no answer takes none at any scope.
+  defp stored_answers(true), do: :ok
+  defp stored_answers(_none), do: refuse(:never_standing)
 
   # A lifecycle names its kind and the row it ends with, together.
   defp lifecycle(attrs) do

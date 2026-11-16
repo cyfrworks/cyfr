@@ -1339,6 +1339,59 @@ defmodule Aqua.LaunchTest do
     assert launched_of(ctx, app) == []
   end
 
+  # Review round one, finding 1 (#3464): a stored answer never stands for
+  # a launch, so none brings in one the author left out.
+  test "with no execution.run line the launch is denied: the store refuses a standing allow for " <>
+         "it, and one stored past the store changes nothing",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    %{args: args} = quiet_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    denied = {:deny, "execution.run is not in the agent's policy"}
+    assert decide(ctx, turn, args, %{}) == denied
+
+    allow = %{
+      scope: "thread",
+      effect: "allow",
+      thread_id: thread.id,
+      agent_name: "aqua",
+      tool: "execution",
+      action: "run"
+    }
+
+    for scope <- [allow, %{allow | scope: "agent", thread_id: nil}] do
+      assert Sanctum.ToolGrants.put(ctx, scope) ==
+               {:error, {:scope_not_permitted, :never_standing}}
+    end
+
+    {:ok, _} =
+      Arca.ToolGrantStorage.put(
+        Map.merge(allow, %{athanor_id: ctx.athanor_id, granted_by: ctx.user_id})
+      )
+
+    {:ok, rows} = Sanctum.ToolGrants.for_thread(ctx, thread.id)
+    assert [%{tool: "execution", action: "run"}] = rows
+
+    for setting <- [{:ok, true}, {:ok, false}] do
+      policy = Aqua.ToolGrants.resolve(%{}, rows, setting)
+      refute Map.has_key?(policy, "execution.run")
+      assert decide(ctx, turn, args, policy) == denied
+    end
+
+    # Beside a line, the row counts for nothing either: the author's line
+    # decides.
+    assert Aqua.ToolGrants.resolve(%{"execution.run" => "ask"}, rows, {:ok, true}) ==
+             %{"execution.run" => "ask"}
+
+    refute Sanctum.ToolGrants.admits?(ctx, %{
+             agent_name: "aqua",
+             thread_id: thread.id,
+             tool: "execution",
+             action: "run",
+             args: args,
+             sources: []
+           })
+  end
+
   test "a decided launch of an app with no grant is answered consent_required by the gate; one " <>
          "granted since its decision runs nothing",
        %{ctx: ctx, thread: thread, pins: pins} do

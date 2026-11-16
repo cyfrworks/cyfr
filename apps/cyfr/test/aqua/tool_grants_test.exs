@@ -215,8 +215,9 @@ defmodule Aqua.ToolGrantsTest do
 
     test "the ceiling admits an authored auto on a launch, and a stored allow never makes one run without its card" do
       # A launch is decided by its line: an authored auto reaches the guest
-      # as auto, where the component's grant decides it.
-      assert {:ok, %{kind: :execute, standing: nil}} =
+      # as auto, where the component's grant decides it. No answer a person
+      # gives is ever kept for it.
+      assert {:ok, %{kind: :execute, standing: nil, stored_answers: false}} =
                Sanctum.Catalog.action_declaration("execution.run")
 
       assert Aqua.Kinds.auto_permitted?("execution", "run")
@@ -225,9 +226,9 @@ defmodule Aqua.ToolGrantsTest do
                "execution.run" => "auto"
              }
 
-      # A stored allow for execution.run, which no card writes, leaves an
-      # authored auto as it is and an authored ask asking, and the launch
-      # under it asks whatever the row covers.
+      # A stored allow for execution.run, which the store refuses, counts
+      # for nothing however it was written: it leaves an authored auto as
+      # it is, an authored ask asking, and no line no line.
       allow = %{
         scope: "agent",
         effect: "allow",
@@ -252,6 +253,8 @@ defmodule Aqua.ToolGrantsTest do
 
       assert ToolGrants.resolve(%{"execution.run" => "auto"}, [allow], {:ok, true}) ==
                %{"execution.run" => "auto"}
+
+      assert ToolGrants.resolve(%{}, [allow], {:ok, true}) == %{}
     end
 
     test "an HTTP post, put or patch the author made automatic asks; a GET stays automatic" do
@@ -948,7 +951,7 @@ defmodule Aqua.ToolGrantsTest do
       refute Sanctum.ToolGrants.admits?(ctx, write_call(run!(ctx, nil)))
     end
 
-    test "a thread-only action takes an agent-wide allow only when it ends with a schedule; a destructive and an external action take none",
+    test "a thread-only action takes an agent-wide allow only when it ends with a schedule; a launch, a destructive and an external action take none",
          %{ctx: ctx, a: a} do
       schedule = %{scope: "agent", lifecycle_kind: "schedule", lifecycle_id: a.id}
 
@@ -960,9 +963,8 @@ defmodule Aqua.ToolGrantsTest do
       assert {:error, {:scope_not_permitted, :thread_only}} =
                grant(ctx, %{scope: "agent", tool: "notes", action: "keep"})
 
-      # A launch's card offers no standing answer (`Aqua.Standing`); the
-      # store's own rule reads the declaration, which leaves it to the card.
       for {pair, reason} <- [
+            {%{tool: "execution", action: "run"}, :never_standing},
             {%{tool: "files", action: "delete"}, :destructive},
             {%{tool: "http", action: "post"}, :external}
           ] do

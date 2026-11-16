@@ -59,6 +59,16 @@ defmodule Prima.Operation do
   no other external action takes a standing allow. It is metadata for
   the gate, absent from the annotation view and from discovery.
 
+  `stored_answers: false` marks an action no standing answer a person
+  gives is ever kept for, though its `standing` lets an author make it
+  automatic: whether an author may write `auto` for an action and whether
+  a stored standing answer may exist for it are two facts, and this is
+  the second. `Sanctum.ToolGrants`' one rule refuses such a row when it
+  is written and counts none when it reads one back. It is declared only
+  beside a `standing` of nil, since `false` and `:thread` already say how
+  far an answer reaches. It is metadata for the gate, absent from the
+  annotation view and from discovery.
+
   `recorded: false` marks a read whose admitted call the gate's decision
   audit leaves out (`Sanctum.Catalog.recorded?/2`): discovery, the audit's
   own reads, and the reads the shell makes of the caller's own state on
@@ -89,6 +99,7 @@ defmodule Prima.Operation do
     resource_schemes: [],
     reduces_authority: false,
     follows_setting: false,
+    stored_answers: true,
     recorded: true
   ]
 
@@ -110,6 +121,7 @@ defmodule Prima.Operation do
           resource_schemes: [String.t()],
           reduces_authority: boolean(),
           follows_setting: boolean(),
+          stored_answers: boolean(),
           recorded: boolean(),
           sources: sources() | nil
         }
@@ -156,6 +168,7 @@ defmodule Prima.Operation do
           :resource_schemes,
           :reduces_authority,
           :follows_setting,
+          :stored_answers,
           :recorded,
           :sources | @annotation_fields
         ]
@@ -186,7 +199,7 @@ defmodule Prima.Operation do
              op.scope in [nil, :platform] and op.standing in [nil, false, :thread] and
              op.recovery in [nil, :replay_safe] and
              is_boolean(op.reduces_authority) and is_boolean(op.follows_setting) and
-             is_boolean(op.recorded) and
+             is_boolean(op.stored_answers) and is_boolean(op.recorded) and
              (is_nil(op.permission) or is_atom(op.permission)),
            do: raise(ArgumentError, "invalid operation annotation")
 
@@ -198,6 +211,9 @@ defmodule Prima.Operation do
 
     if not op.recorded and op.kind != :read,
       do: raise(ArgumentError, "only a read may go unrecorded")
+
+    if not op.stored_answers and not is_nil(op.standing),
+      do: raise(ArgumentError, "a standing declaration already says how far an answer reaches")
 
     if op.follows_setting and (op.tool != "browser" or op.planes != [:in_chain]),
       do: raise(ArgumentError, "only the browser tool's in-chain actions follow the setting")

@@ -2311,8 +2311,8 @@ defmodule Aqua.LoopTest do
 
     walk!(ctx, %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]})
 
-    # A row no card writes, since a launch's card offers no standing
-    # answer, stored all the same.
+    # A row the store refuses, since no answer stands for a launch,
+    # written past it all the same.
     {:ok, _} =
       Arca.ToolGrantStorage.put(%{
         athanor_id: ctx.athanor_id,
