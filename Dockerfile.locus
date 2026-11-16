@@ -135,8 +135,15 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # APT_REFRESH busts the build cache for this layer so the upgrade is not
 # served stale from a cached layer: CI passes the UTC date (YYYY-MM-DD), so
 # the layer refreshes once a day and is shared within it; a local build may
-# leave it. Chromium, and a font for the pages it renders, are Aqua's
-# browser's, which cyfr-browser (below) drives.
+# leave it.
+#
+# Aqua's browser fetches its Chrome into its kept home, as a program
+# fetches itself (cyfr-browser, below); the image holds no Chrome, only
+# the shared libraries Chrome links and a font for the pages it renders.
+# libgbm is linked but never used by a headless Chrome, which allocates no
+# GPU buffer, so its one library is taken from its package without the
+# Mesa drivers, LLVM and Z3 the package depends on (about 190 MiB). It is
+# then in no package's list: the image scans do not see it.
 ARG APT_REFRESH=0
 RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
@@ -148,8 +155,35 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     build-essential \
     iptables \
     && apt-get install -y --no-install-recommends \
-    chromium \
     fonts-liberation \
+    libasound2t64 \
+    libatk-bridge2.0-0t64 \
+    libatk1.0-0t64 \
+    libatspi2.0-0t64 \
+    libcairo2 \
+    libcups2t64 \
+    libdbus-1-3 \
+    libdrm2 \
+    libexpat1 \
+    libglib2.0-0t64 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    && cd /tmp && apt-get download libgbm1 \
+    && dpkg-deb -x libgbm1_*.deb /tmp/libgbm1 \
+    && cp -a /tmp/libgbm1/usr/lib/. /usr/lib/ \
+    && rm -rf /tmp/libgbm1 /tmp/libgbm1_*.deb \
+    && ldconfig \
+    && ! ldd /usr/lib/*/libgbm.so.1 | grep -q 'not found' \
+    && cd / \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
@@ -254,9 +288,10 @@ COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 # answer CYFR puts in the call's input, and holds nothing.
 COPY --from=keeper /out/cyfr-stub /usr/local/bin/cyfr-stub
 # Aqua's browser: the command of a person's browser row, which the backends
-# service runs on a terminal in the row's kept home. It starts Chromium
-# headless with its profile in that home and drives it over Chrome's
-# debugging pipe, which stays inside the box: no debugging port is opened.
+# service runs on a terminal in the row's kept home. It fetches Chrome for
+# Testing into that home when the home holds none, starts it headless with
+# its profile there and drives it over Chrome's debugging pipe, which stays
+# inside the box: no debugging port is opened.
 COPY --from=keeper /out/cyfr-browser /usr/local/bin/cyfr-browser
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The egress guard the builds and backends islands run (docker-compose.yml's

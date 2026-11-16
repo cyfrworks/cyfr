@@ -1072,6 +1072,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert has_element?(view, ~s(form#add-program input[name="name"][value="aqua-browser"]))
     assert has_element?(view, ~s(form#add-program input[name="command"][value="cyfr-browser"]))
     assert has_element?(view, ~s(form#add-program input[name="memory_mib"][value="1024"]))
+    assert has_element?(view, ~s(form#add-program input[name="disk_mib"][value="2048"]))
 
     view |> form("form#add-program", %{}) |> render_submit()
     answered(view)
@@ -1083,6 +1084,7 @@ defmodule PrismWeb.ProgramsLiveTest do
                "folder" => "new",
                "hosts" => "every public host",
                "memory_bytes" => "1073741824",
+               "home_max_bytes" => "2147483648",
                "environment" => "none"
              }
            } = asked(user, athanor, "mcp_servers.create")
@@ -1091,6 +1093,8 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "aqua-browser")
     assert Opus.Programs.Definition.browser?(row)
+    # Its folder holds a Chrome, a second being fetched beside it, and the profile.
+    assert row.home_max_bytes == 2 * 1024 * 1_048_576
     assert open_confirmations(user, athanor) == []
     refute_received {:session, "open", _message, _fields}
   end

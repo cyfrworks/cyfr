@@ -11,7 +11,14 @@
 // over Chrome's debugging pipe, which never leaves the box. No debugging
 // port is ever opened.
 //
-//	cyfr-browser [--chrome PATH] [--chunk BYTES] [--keep-ms MS]
+//	cyfr-browser [--chrome PATH | --source URL] [--chunk BYTES] [--keep-ms MS]
+//
+// Chrome is not in the image: the driver fetches it into the kept home
+// and starts the one there (fetch.go), from Google's list of Chrome for
+// Testing's builds, or from the list --source names, which only tests
+// pass. --chrome starts the Chrome at PATH and fetches nothing. A home
+// that holds no Chrome and cannot fetch one says hello with the error
+// that the browser could not be downloaded.
 //
 // The framing and its messages are defined in
 // tests/fixtures/browser_frames.json (its "comment"). The driver puts its
@@ -47,7 +54,6 @@ import (
 )
 
 const (
-	defaultChrome = "/usr/lib/chromium/chromium"
 	defaultChunk  = 49152
 	defaultKeepMS = 120000
 	// startWait bounds Chrome's first answer.
@@ -64,14 +70,15 @@ func main() {
 
 func run(args []string) int {
 	flags := flag.NewFlagSet("cyfr-browser", flag.ContinueOnError)
-	chrome := flags.String("chrome", defaultChrome, "Chrome's binary")
+	chrome := flags.String("chrome", "", "Chrome's binary, started in place of the home's, fetching nothing")
+	source := flags.String("source", defaultSource, "the list of Chrome for Testing's builds the home's Chrome is fetched from")
 	chunk := flags.Int("chunk", defaultChunk, "bytes of response text one res frame carries")
 	keepMS := flags.Int64("keep-ms", defaultKeepMS, "milliseconds an unacknowledged response is kept")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 {
-		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH] [--chunk 1-%d] [--keep-ms MS]\n", maxChunk)
+	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 || *source == "" {
+		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH | --source URL] [--chunk 1-%d] [--keep-ms MS]\n", maxChunk)
 		return 2
 	}
 	if err := makeRaw(int(os.Stdin.Fd())); err != nil {
@@ -81,7 +88,16 @@ func run(args []string) int {
 	s := newSlot(os.Stdout, *chunk, time.Duration(*keepMS)*time.Millisecond)
 	hello := helloMessage{T: "hello", V: 1, Chunk: *chunk, KeepMS: *keepMS}
 	b := newBrowser()
-	chromium, err := startChrome(*chrome, b)
+	path, err := chromePath(*chrome, *source)
+	if err != nil {
+		hello.Error = notDownloaded
+		if !errors.Is(err, errNotDownloaded) {
+			hello.Error = "The browser could not start: " + err.Error() + "."
+		}
+		_ = s.write(hello)
+		return 1
+	}
+	chromium, err := startChrome(path, b)
 	if err != nil {
 		hello.Error = "The browser could not start: " + err.Error() + "."
 		_ = s.write(hello)
@@ -100,6 +116,19 @@ func run(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// chromePath is the Chrome to start: the one --chrome names, else the
+// home's, fetched first when it holds none or a day has passed.
+func chromePath(chrome, source string) (string, error) {
+	if chrome != "" {
+		return chrome, nil
+	}
+	s, err := newStore(os.Getenv("HOME"), source)
+	if err != nil {
+		return "", err
+	}
+	return s.chrome(context.Background(), os.Stderr)
 }
 
 // makeRaw sets the terminal on fd as cfmakeraw(3) does: no echo, no line

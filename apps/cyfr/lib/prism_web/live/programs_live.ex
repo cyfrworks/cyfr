@@ -938,11 +938,14 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The program form, prefilled with Aqua's browser's definition: the
-  # driver's command, driven, in a kept folder, at the browser's memory
-  # setting. Adding it asks the person to confirm the program, as any
-  # program's addition does; a command changed here is not the browser.
+  # The program form, prefilled with Aqua's browser's definition
+  # (`Opus.Programs.Definition.browser/1`): the driver's command, driven,
+  # in a kept folder of its bound, at the browser's memory setting. Adding
+  # it asks the person to confirm the program, as any program's addition
+  # does; a command changed here is not the browser.
   defp prefill_browser(socket) do
+    browser = Opus.Programs.Definition.browser(Opus.Browser.memory_bytes())
+
     socket
     |> assign(:show_add, "program")
     |> assign(:form_error, nil)
@@ -950,11 +953,12 @@ defmodule PrismWeb.ProgramsLive do
     |> assign(:install, nil)
     |> assign(:adding_browser, true)
     |> assign(:prefill, %{
-      "mark" => "driven",
-      "home" => "kept",
+      "mark" => browser["mark"],
+      "home" => browser["home"],
       "name" => Opus.Programs.Definition.browser_name(),
-      "command" => Opus.Programs.Definition.browser_command(),
-      "memory_mib" => Integer.to_string(div(Opus.Browser.memory_bytes(), @mib))
+      "command" => browser["command"],
+      "memory_mib" => Integer.to_string(div(browser["memory_bytes"], @mib)),
+      "disk_mib" => Integer.to_string(div(browser["home_max_bytes"], @mib))
     })
   end
 
