@@ -216,6 +216,16 @@ jobs:
           LOADED: cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
         run: scripts/ci/image-boots.sh "$IMAGE" "$LOADED"
 
+      # Aqua's browser on arm64, the one place an arm64 image runs: its
+      # driver fetches the linux-arm64 Chrome for Testing into a fresh kept
+      # home at its first start and a public page loads in it. The pull
+      # request's image suite proves the rest on amd64.
+      - name: Aqua's browser fetches its Chrome and loads a page
+        if: matrix.image == 'cyfr-locus' && matrix.platform == 'linux/arm64'
+        env:
+          LOADED: cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
+        run: python3 tests/locus-backends-image/browser.py --first-start "$LOADED"
+
       - name: Upload the digest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

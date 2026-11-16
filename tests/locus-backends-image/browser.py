@@ -48,8 +48,13 @@ It prints, without gating, Chrome's memory with one, three and six windows
 the time and frame count of the megabyte read, the first start's time and
 the home's bytes.
 
+With --first-start it proves one thing alone, for an image of another
+architecture, which the release workflow's arm64 job starts: a first start
+fetches this machine's Chrome, built for its architecture, and a public
+page loads in it.
+
 Prerequisites: harness.py's, and the public network, from which the first
-start fetches Chrome. Usage: tests/locus-backends-image/browser.py IMAGE
+start fetches Chrome. Usage: tests/locus-backends-image/browser.py [--first-start] IMAGE
 """
 
 import base64
@@ -489,11 +494,42 @@ def tcp_listeners(stack):
     return listening
 
 
+# The ELF machine of a binary built for each `uname -m` a box may report.
+ELF_MACHINE = {"x86_64": "3e00", "aarch64": "b700"}
+
+
+def first_start(stack, c):
+    """A first start fetches this machine's Chrome, built for its architecture, and a public page loads in it."""
+    started = time.monotonic()
+    b = Host(stack, c, BROWSER_HOME)
+    hello = b.hello()
+    first_start_s = time.monotonic() - started
+    expect("error" not in hello, "the first start fetches Chrome and says hello", hello)
+    fetched = in_store(stack, BROWSER_HOME)
+    expect(len(fetched["versions"]) == 1 and all(v["runs"] for v in fetched["versions"].values()),
+           "one Chrome is published whole in the home", fetched)
+    version = next(iter(fetched["versions"]))
+    machine = imagesuite.read_output(stack.exec("uname -m"), "the box's machine").strip()
+    elf = as_home(stack, BROWSER_HOME, f"od -An -tx1 -j18 -N2 {store(BROWSER_HOME)}/versions/{version}/chrome",
+                  "the Chrome's ELF machine").replace(" ", "").strip()
+    expect(ELF_MACHINE.get(machine) == elf, f"the fetched Chrome is built for this box's {machine}", [machine, elf])
+    opened = ok(b.ask(1, "thr_first", "open", {"url": "https://example.com/"}), "a public page opens")
+    expect(opened == {"url": "https://example.com/", "title": "Example Domain"}, "it loads, with its address and title",
+           opened)
+    print(f"measure: the first start fetched Chrome {version} for {machine} and said hello in {first_start_s:.1f} s",
+          flush=True)
+    b.close()
+
+
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: browser.py IMAGE")
+    args = sys.argv[1:]
+    only_first_start = args[:1] == ["--first-start"]
+    if only_first_start:
+        args = args[1:]
+    if len(args) != 1:
+        sys.exit("usage: browser.py [--first-start] IMAGE")
     require_docker()
-    stack = Stack("locus-backends-browser", sys.argv[1])
+    stack = Stack("locus-backends-browser", args[0])
     try:
         stack.up()
         c = stack.controller()
@@ -501,6 +537,9 @@ def main():
         status, answer, _ = c.sync(OWNER, PROGRAMS)
         expect(status == 200, "an owner of the browser and a probe, both kept, is synced", answer)
         _renewed[0] = time.monotonic()
+        if only_first_start:
+            first_start(stack, c)
+            return
 
         # ————— the first exchange, on the Chrome the first start fetches —————
         in_image = imagesuite.read_word(stack.exec(
