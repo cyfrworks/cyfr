@@ -80,9 +80,16 @@ func (f *pageChrome) write(message map[string]any) {
 	_, _ = f.w.Write(append(data, 0))
 }
 
-// pause pauses a request on session, as the frame it names made it, with
-// a network id when network is set, and answers its request id.
+// pause pauses a script's fetch on session, as the frame it names made it,
+// with a network id when network is set, and answers its request id.
 func (f *pageChrome) pause(session, method, address, frame string, network bool, body string) string {
+	return f.pauseAs(session, "Fetch", method, address, frame, network, body)
+}
+
+// pauseAs pauses a request of resourceType on session, of the frame it
+// names: the frame whose document made it, or for a navigation the frame
+// it loads into.
+func (f *pageChrome) pauseAs(session, resourceType, method, address, frame string, network bool, body string) string {
 	f.mu.Lock()
 	f.paused++
 	id := fmt.Sprintf("interception-%d", f.paused)
@@ -94,7 +101,7 @@ func (f *pageChrome) pause(session, method, address, frame string, network bool,
 		request["postData"] = body
 		request["postDataEntries"] = []any{map[string]any{"bytes": base64.StdEncoding.EncodeToString([]byte(body))}}
 	}
-	params := map[string]any{"requestId": id, "request": request, "frameId": frame, "resourceType": "Fetch"}
+	params := map[string]any{"requestId": id, "request": request, "frameId": frame, "resourceType": resourceType}
 	if network {
 		params["networkId"] = "net-" + id
 	}
@@ -1007,4 +1014,39 @@ func TestCallsEndWithTheirDocument(t *testing.T) {
 		t.Fatalf("the close answered %v", got)
 	}
 	ended(request, id, "its window closed", true)
+}
+
+// A call is a script's fetch from an admitted document, named by the frame
+// of the document that made it. A navigation to a call path, a form's
+// that a document of any origin submits into a frame of the put among
+// them, names the frame it loads into: it is no call, and is answered as
+// any path the put does not hold.
+func TestANavigationToACallPathIsNoCall(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	if shown := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
+		t.Fatalf("the put answered %v", shown)
+	}
+	r.f.navigated()
+	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	r.f.frame("S1", "F2", "M1", reservedOrigin)
+	for _, c := range []struct {
+		what, kind, method, path, frame string
+	}{
+		{"a form submitted into a frame of the put", "Document", "POST", "/_f/v1/invoke", "F2"},
+		{"a form submitted into the page", "Document", "POST", "/_f/v1/action", "M1"},
+		{"a navigation of a frame to a call path", "Document", "GET", "/_f/v1/invoke", "F2"},
+		{"a beacon", "Ping", "POST", "/_f/v1/invoke", "M1"},
+	} {
+		if a := r.f.answer(r.f.pauseAs("S1", c.kind, c.method, reservedOrigin+c.path, c.frame, true, `{"from":"form"}`)); a.method != "Fetch.fulfillRequest" || a.status != 404 {
+			t.Errorf("%s was answered %+v, not 404", c.what, a)
+		}
+	}
+	r.h.quiet(isCall, "a navigation went up as a call")
+	for n, c := range []struct{ kind, frame string }{{"Fetch", "F2"}, {"XHR", "M1"}} {
+		r.f.pauseAs("S1", c.kind, "POST", reservedOrigin+"/_f/v1/invoke", c.frame, true, `{"from":"script"}`)
+		if call := r.h.take(isCall, c.kind+"'s call"); call["id"] != float64(n+1) || bodyOf(call) != `{"from":"script"}` {
+			t.Fatalf("a %s from a document of the put went up as %v", c.kind, call)
+		}
+	}
 }

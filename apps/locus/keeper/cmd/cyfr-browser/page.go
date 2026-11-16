@@ -372,9 +372,16 @@ type pausedRequest struct {
 			Bytes *string `json:"bytes"`
 		} `json:"postDataEntries"`
 	} `json:"request"`
-	FrameID   string `json:"frameId"`
-	NetworkID string `json:"networkId"`
+	FrameID      string `json:"frameId"`
+	NetworkID    string `json:"networkId"`
+	ResourceType string `json:"resourceType"`
 }
+
+// callTypes are the requests a call can be: what a document's script
+// fetches. Chrome names such a request's frame as the frame of the
+// document that made it, where a navigation's, a form's among them, is the
+// frame it loads into.
+var callTypes = map[string]bool{"Fetch": true, "XHR": true}
 
 // paused answers one request for the reserved origin: a GET or HEAD from
 // the window's files, a call to the host when it is admitted, anything
@@ -411,7 +418,7 @@ func (b *browser) paused(w *window, session, kind string, events *watch, params 
 		return
 	}
 	op := callOps[u.Path]
-	if op == "" {
+	if op == "" || !callTypes[p.ResourceType] {
 		go b.answerPaused(session, p.RequestID, 404, nil, nil)
 		return
 	}
@@ -452,9 +459,10 @@ func (t *frameTree) origin(id string) (string, bool) {
 	return "", false
 }
 
-// admits says whether a POST paused on session came from a document of the
-// reserved origin: its frame's security origin as the session's frame tree
-// has it. A worker's request is paused on its frame's session with that
+// admits says whether a script's POST paused on session (callTypes) came
+// from a document of the reserved origin: the security origin of the frame
+// it names, the frame of the document that made it, as the session's frame
+// tree has it. A worker's request is paused on its frame's session with that
 // frame's id, but carries no network id, since no worker's network is
 // enabled; a frame's carries one. Chrome reports a navigation of the frame
 // it made before it answered the tree ahead of the answer, so one queued
