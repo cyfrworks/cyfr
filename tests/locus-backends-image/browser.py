@@ -805,6 +805,8 @@ def main():
 
         # The person's input lands where the image they point at shows, at a phone's width and at 720p alike.
         ok(b.ask(309, "thr_input", "page", {"html": INPUT_PAGE}), "a page that writes where a press lands is shown")
+        # A window made after it takes Chrome's focus: the keys sent to this one still reach its page.
+        ok(b.ask(316, "thr_focus", "page", {"html": PROBE_PAGE}), "a window made after it is shown")
         read_ids = iter(range(1000, 2000))
         for size, (width, height), cast in (("a phone's width", (390, 844), 310), ("720p", (1280, 720), 311)):
             ok(b.ask(cast, "thr_input", "cast", {"width": width, "height": height}), f"the input page cast at {size}")
@@ -861,8 +863,8 @@ def main():
         expect('textbox "Field" = "hihi"' in ok(b.ask(312, "thr_input", "read"), "the field is read again")["text"],
                "input for a cast that ended reaches no window")
         b.drop_images()
-        for n, win in enumerate(("thr_article", "thr_cast", "thr_input")):
-            expect(ok(b.ask(313 + n, win, "close"), f"the window {win} is closed") == {"closed": True},
+        for n, win in enumerate(("thr_article", "thr_cast", "thr_input", "thr_focus")):
+            expect(ok(b.ask(320 + n, win, "close"), f"the window {win} is closed") == {"closed": True},
                    f"the cast's window {win} is closed, so the windows counted below are the operations' own")
 
         # ————— each operation —————

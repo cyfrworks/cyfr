@@ -339,6 +339,13 @@ func (b *browser) attach(ctx context.Context, w *window, target string) error {
 	if err := b.c.call(ctx, session, "Page.enable", nil, nil); err != nil {
 		return err
 	}
+	// Chrome hands key events only to its focused window, and a window made
+	// after this one takes the focus: each window behaves as focused, so the
+	// keys sent to it, Aqua's or the person's, reach its page whichever was
+	// made last.
+	if err := b.c.call(ctx, session, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}, nil); err != nil {
+		return err
+	}
 	if err := b.c.call(ctx, session, "Page.setLifecycleEventsEnabled", map[string]any{"enabled": true}, nil); err != nil {
 		return err
 	}
