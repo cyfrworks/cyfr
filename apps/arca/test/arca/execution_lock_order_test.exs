@@ -9,6 +9,9 @@ defmodule Arca.ExecutionLockOrderTest do
   lapse of a turn's root against the turn's end. A turn's writers take
   the turn before its thread, an archive of the thread among them, and a
   room's deletion holds the athanor's lock a child's creation waits on.
+  A write that takes more than one thread row takes the athanor's row
+  first (`Arca.ThreadStorage.lock_threads!/2`), retention and a report
+  landing on its daily thread among them.
   These run outside the sandbox, on connections of their own, with the
   run's attempt held by a third transaction so both writes are seen
   waiting before either goes on; a PostgreSQL deadlock would abort one of
@@ -88,6 +91,51 @@ defmodule Arca.ExecutionLockOrderTest do
     on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
     assert_receive :held, 5_000
     blocker
+  end
+
+  # The thread `id` held by a transaction of its own until it is released.
+  defp hold_thread(id) do
+    test = self()
+
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            from(c in Thread, where: c.id == ^id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> Arca.Repo.rollback(:timeout)
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
+    assert_receive :held, 5_000
+    blocker
+  end
+
+  # An athanor no other case names, its row committed, whose rows go with
+  # it when the case ends: the athanor's row lock is the one in question.
+  defp committed_athanor! do
+    athanor_id = "ath_lock_order_#{System.unique_integer([:positive])}"
+    actor = Arca.Test.Actor.local(athanor_id: athanor_id)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id))
+      end)
+    end)
+
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
+    actor
   end
 
   defp release(blocker) do
@@ -371,6 +419,79 @@ defmodule Arca.ExecutionLockOrderTest do
       end)
 
     refute log =~ "deadlock", log
+  end
+
+  test "retention and a report landing on its daily thread take the athanor first and never deadlock" do
+    actor = committed_athanor!()
+
+    {daily, workspace} =
+      unboxed(fn ->
+        {:ok, daily} = Arca.Test.Days.thread(actor)
+
+        {:ok, %{workspace: workspace}} =
+          TurnStorage.open_workspace(actor, %{
+            daily_id: daily.id,
+            id: Prima.UUID7.generate_id("thread"),
+            title: "Moon report",
+            opened_from: "msg_ask",
+            opening: %{
+              id: Prima.UUID7.generate_id("msg"),
+              author: actor.user_id,
+              content: "write the moon report",
+              payload: %{}
+            },
+            pointer: %{author: "aqua", sent_by: "aqua", content: "Moon report", payload: %{}},
+            files: fn _thread, _message -> {:ok, []} end,
+            person_id: actor.user_id,
+            origin: :interactive
+          })
+
+        # Finished, so both are retention's to remove.
+        {1, _} =
+          Arca.Repo.update_all(from(c in Thread, where: c.id == ^workspace.id),
+            set: [workspace_state: "done", workspace_outcome: "done"]
+          )
+
+        {daily, workspace}
+      end)
+
+    # The daily thread's id first, as retention takes its candidates.
+    assert daily.id < workspace.id
+    cutoff = DateTime.add(DateTime.utc_now(), 3600)
+
+    report = %{
+      author: "aqua",
+      sent_by: "aqua",
+      kind: "report",
+      workspace_id: workspace.id,
+      content: "Done."
+    }
+
+    log =
+      capture_log(fn ->
+        blocker = hold_thread(daily.id)
+
+        # Retention holds the athanor and waits on the daily thread.
+        {retention, retention_backend} =
+          waiting(:retention, fn -> Threads.delete_before(actor, cutoff) end)
+
+        Arca.Test.LockWait.await_lock_wait!(retention_backend, ["threads"])
+
+        {landing, landing_backend} =
+          waiting(:landing, fn ->
+            TurnStorage.accept_message(actor, daily.id, %{message: report})
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(landing_backend)
+        release(blocker)
+
+        # Retention went first, so the report finds its workspace thread gone.
+        assert {:ok, 2} = Task.await(retention, 10_000)
+        assert {:error, :workspace_gone} = Task.await(landing, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, daily.id) end)
   end
 
   test "a child made while its room is deleted waits for the deletion and finds no room" do

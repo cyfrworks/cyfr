@@ -96,8 +96,10 @@ defmodule Arca.TurnStorage do
       `failed` is `open` again.
 
   A row that names a workspace thread (a report delivered to a daily
-  thread) lands only while that thread stands, which is taken before the
-  thread the row lands on, as a deletion takes it first.
+  thread) lands only while that thread stands. Taking more than one
+  thread row, it takes them in the one order
+  `Arca.ThreadStorage.lock_threads!/2` states, as does every write of a
+  turn in a crew thread under a workspace thread, which may move it.
 
   ## The root's grant
 
@@ -238,7 +240,7 @@ defmodule Arca.TurnStorage do
             if is_nil(opens) and steer_id,
               do: steered!(athanor_id, thread_id, steer_id, Map.get(attrs, :reply_address))
 
-          from_workspace!(athanor_id, message)
+          from_workspace!(actor, thread_id, message)
           thread = locked_thread!(athanor_id, thread_id)
           if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
           card_waits!(athanor_id, message)
@@ -545,6 +547,12 @@ defmodule Arca.TurnStorage do
         nil -> nil
         %{id: turn_id} = held -> open!(own!(athanor_id, turn_id, held))
       end
+
+    _held =
+      Arca.ThreadStorage.lock_threads!(
+        actor,
+        Enum.reject([Map.fetch!(attrs, :daily_id), Map.get(attrs, :workspace_id)], &is_nil/1)
+      )
 
     daily = locked_thread!(athanor_id, Map.fetch!(attrs, :daily_id))
     if daily.kind != "daily", do: Arca.Repo.rollback(:not_a_daily_thread)
@@ -892,26 +900,21 @@ defmodule Arca.TurnStorage do
   defp posted!(_athanor_id, %Thread{} = thread, _message), do: thread
 
   # A delivery from a workspace thread (a report naming it) lands only
-  # while that thread stands, taken before the thread it lands on, so a
-  # deletion that holds it first leaves the delivery nothing to land on
-  # and one that waits on it removes what landed.
+  # while that thread stands. It takes two thread rows, the workspace
+  # thread's and the one it lands on, in the one order
+  # (`Arca.ThreadStorage.lock_threads!/2`), so a deletion or retention
+  # that holds them first leaves the delivery nothing to land on, and one
+  # that waits removes what landed.
   # arca:db-raise-ok inside the caller's transaction
-  defp from_workspace!(_athanor_id, %{workspace_id: nil}), do: :ok
-
-  defp from_workspace!(athanor_id, %{workspace_id: workspace_id}) when is_binary(workspace_id) do
-    from(c in Thread,
-      where: c.athanor_id == ^athanor_id and c.id == ^workspace_id and c.kind == "workspace",
-      select: c.id
-    )
-    |> Arca.QueryHelpers.for_share()
-    |> Arca.Repo.one()
-    |> case do
-      nil -> Arca.Repo.rollback(:workspace_gone)
-      _standing -> :ok
-    end
+  defp from_workspace!(actor, thread_id, %{workspace_id: workspace_id})
+       when is_binary(workspace_id) do
+    actor
+    |> Arca.ThreadStorage.lock_threads!([workspace_id, thread_id])
+    |> Enum.any?(&(&1.id == workspace_id and &1.kind == "workspace"))
+    |> if(do: :ok, else: Arca.Repo.rollback(:workspace_gone))
   end
 
-  defp from_workspace!(_athanor_id, _message), do: :ok
+  defp from_workspace!(_actor, _thread_id, _message), do: :ok
 
   # ---------------------------------------------------------------------------
   # Lifecycle
@@ -1296,6 +1299,7 @@ defmodule Arca.TurnStorage do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     reason = Map.get(attrs, :error, "cancelled")
     now = DateTime.utc_now()
+    work_first!(athanor_id, crew_thread(athanor_id, thread_id))
 
     taken =
       from(t in Turn,
@@ -3445,6 +3449,7 @@ defmodule Arca.TurnStorage do
   # arca:db-raise-ok inside the caller's transaction
   defp own!(athanor_id, turn_id, attrs) do
     fence = held_fence!(attrs)
+    work_first!(athanor_id, crew_turn(athanor_id, turn_id))
 
     case from(t in Turn,
            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
@@ -3518,6 +3523,7 @@ defmodule Arca.TurnStorage do
   # arca:db-raise-ok inside the caller's transaction
   defp take!(athanor_id, turn_id, attrs) do
     fence = held_fence!(attrs)
+    work_first!(athanor_id, crew_turn(athanor_id, turn_id))
 
     case from(t in Turn,
            where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.fence == ^fence
@@ -3529,6 +3535,37 @@ defmodule Arca.TurnStorage do
       {0, _} ->
         Arca.Repo.rollback(:superseded)
     end
+  end
+
+  # A write of a turn in a crew thread under a workspace thread may move
+  # the workspace thread too (`settle_work!/2`), a second thread row, so
+  # it takes the athanor's row first, before the turn's: the one order of
+  # `Arca.ThreadStorage.lock_threads!/2`. A thread's kind and room never
+  # change, so they are read unlocked.
+  # arca:db-raise-ok inside the caller's transaction
+  defp work_first!(athanor_id, crew_query) do
+    under_workspace =
+      from([c] in crew_query,
+        join: w in Thread,
+        on: w.athanor_id == c.athanor_id and w.id == c.parent_id,
+        where: c.kind == "crew" and w.kind == "workspace"
+      )
+
+    if Arca.Repo.exists?(under_workspace),
+      do: Arca.ThreadStorage.lock_athanor!(Prima.Actor.in_athanor(athanor_id))
+
+    :ok
+  end
+
+  defp crew_thread(athanor_id, thread_id),
+    do: from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread_id)
+
+  defp crew_turn(athanor_id, turn_id) do
+    from(c in Thread,
+      join: t in Turn,
+      on: t.athanor_id == c.athanor_id and t.thread_id == c.id,
+      where: c.athanor_id == ^athanor_id and t.id == ^turn_id
+    )
   end
 
   # A turn that is over takes no further row or bookkeeping.

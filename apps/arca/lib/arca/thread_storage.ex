@@ -354,8 +354,9 @@ defmodule Arca.ThreadStorage do
 
   @doc false
   # The athanor's row, held until the caller's transaction ends: what
-  # every create of a thread, a deletion and the blob sweep take first, so
-  # they run one at a time in an athanor. An in-transaction helper.
+  # every create of a thread, every write that takes more than one thread
+  # row (`lock_threads!/2`) and the blob sweep take first, so they run one
+  # at a time in an athanor. An in-transaction helper.
   @spec lock_athanor!(Prima.Actor.t()) :: String.t() | nil
   # arca:db-raise-ok inside the caller's transaction
   def lock_athanor!(%Prima.Actor{athanor_id: athanor_id} = actor)
@@ -364,6 +365,34 @@ defmodule Arca.ThreadStorage do
 
   def lock_athanor!(%Prima.Actor{}),
     do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.lock_athanor!/1")
+
+  @doc false
+  # The one order of a write that takes more than one thread row, by a
+  # lock, an update, a delete or a row it adds that names one: the
+  # athanor's row first, before its turn's and before any thread row,
+  # then the thread rows it holds together, in id order. Each such write
+  # holds the athanor's row while it takes the others, so no two of them
+  # wait on each other's thread rows; a write that takes one thread row
+  # takes no second. Retention, a deletion, a report landing in a daily
+  # thread, an opening and its pointer, and every write of a turn in a
+  # crew thread under a workspace thread, which may move the workspace
+  # thread (`Arca.TurnStorage`'s "Workspace threads"), take them this
+  # way. Answers the rows of `ids` that stand, held until the caller's
+  # transaction ends. An in-transaction helper.
+  @spec lock_threads!(Prima.Actor.t(), [String.t()]) :: [Thread.t()]
+  # arca:db-raise-ok inside the caller's transaction
+  def lock_threads!(%Prima.Actor{athanor_id: athanor_id} = actor, ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(ids) do
+    lock_athanor(actor)
+
+    from(c in Thread, where: c.id in ^ids, order_by: [asc: c.id])
+    |> QueryHelpers.where_tenant(actor)
+    |> QueryHelpers.for_update()
+    |> Repo.all()
+  end
+
+  def lock_threads!(%Prima.Actor{}, _ids),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.lock_threads!/2")
 
   # `threads.athanor_id` names no foreign key, so a create in an athanor
   # with no row lands with nothing locked; only an athanor with a row has
@@ -829,10 +858,10 @@ defmodule Arca.ThreadStorage do
   `Prima.Source.thread/1`) the compactions written since the first such
   turn was accepted and the brain's session, whose generation is raised;
   an open turn that read it is cancelled as a stop cancels it, its reply
-  recorded, and answered with the others. The thread's row is held from
-  the start, so a delivery from it (`Arca.TurnStorage.accept_message/3`
-  for a row naming it) lands before the deletion and goes with it, or
-  finds it gone.
+  recorded, and answered with the others. The athanor's row and the
+  thread's are held from the start (`lock_threads!/2`), so a delivery
+  from it (`Arca.TurnStorage.accept_message/3` for a row naming it)
+  lands before the deletion and goes with it, or finds it gone.
 
   The attachment blobs (`blob_root/1` under the athanor's storage) go
   after the commit, never before the transaction that decides: a refused
@@ -869,9 +898,7 @@ defmodule Arca.ThreadStorage do
   # arca:unscoped-ok thread_row(actor, id) establishes the thread's
   # ownership, and every child id is read from it under the actor.
   defp delete_rows(actor, id, attrs) do
-    lock_athanor(actor)
-
-    with {:ok, thread} <- locked_row(actor, id),
+    with [thread] <- lock_threads!(actor, [id]),
          children = child_ids(actor, thread),
          [] <- Arca.TurnStorage.awaiting_card!(actor, children) do
       cancel = Map.put_new(attrs, :error, "the room was deleted")
@@ -894,23 +921,9 @@ defmodule Arca.ThreadStorage do
 
       %{ids: ids, cancelled: cancelled ++ stopped}
     else
-      {:error, reason} -> Repo.rollback(reason)
+      # No such thread: the athanor's row and none of its threads held.
+      [] -> Repo.rollback(:not_found)
       [member | _] -> Repo.rollback({:child_awaits_card, member})
-    end
-  end
-
-  # The thread's row, held until the caller's transaction ends: a delivery
-  # into or from it that takes it first lands before the deletion and goes
-  # with it, and one that waits on it finds it gone.
-  # arca:db-raise-ok inside the caller's transaction
-  defp locked_row(actor, id) do
-    from(c in Thread, where: c.id == ^id)
-    |> QueryHelpers.where_tenant(actor)
-    |> QueryHelpers.for_update()
-    |> Repo.one()
-    |> case do
-      nil -> {:error, :not_found}
-      thread -> {:ok, thread}
     end
   end
 
@@ -1526,8 +1539,8 @@ defmodule Arca.ThreadStorage do
 
   # Which threads go is decided in the transaction that deletes them, and
   # their bytes go only once it has committed. The candidates are read,
-  # their rows taken as a person's post takes them (`Arca.TurnStorage`'s
-  # acceptance holds the thread's row before it writes), and the window
+  # their rows taken in the one order of a write that takes more than one
+  # (`lock_threads!/2`), and the window
   # asked again over the rows as they then stand: a thread that a post
   # landed in, that was opened again, or that a turn began in meanwhile
   # is left, and counted as kept. Every kind of thread retention removes
@@ -1541,8 +1554,7 @@ defmodule Arca.ThreadStorage do
 
       candidates ->
         Repo.locking_transaction(fn ->
-          lock_athanor(actor)
-          _held = lock_rows(actor, candidates)
+          _held = lock_threads!(actor, candidates)
           stale = MapSet.new(stale_ids(actor, cutoff))
           deletable = Enum.filter(candidates, &MapSet.member?(stale, &1))
 
@@ -1570,16 +1582,6 @@ defmodule Arca.ThreadStorage do
             {:ok, 0}
         end
     end
-  end
-
-  # The rows of `ids`, held until the caller's transaction ends, in one
-  # order so two holders never wait on each other.
-  # arca:db-raise-ok inside the caller's transaction
-  defp lock_rows(actor, ids) do
-    from(c in Thread, where: c.id in ^ids, order_by: [asc: c.id], select: c.id)
-    |> QueryHelpers.where_tenant(actor)
-    |> QueryHelpers.for_update()
-    |> Repo.all()
   end
 
   # The retention window both verbs speak, scoped the one way this module
