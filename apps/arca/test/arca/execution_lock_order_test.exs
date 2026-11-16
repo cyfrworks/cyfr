@@ -14,7 +14,7 @@ defmodule Arca.ExecutionLockOrderTest do
   takes more than one thread row takes the athanor's row before them,
   retention and a report landing on its daily thread among them; the
   standing check reads the athanor's row after a turn, so an opening
-  takes its asking turn first; a step
+  takes its asking turn first and a deletion the turns it stops; a step
   write, which takes no second thread row, takes no athanor lock.
   These run outside the sandbox, on connections of their own, with the
   run's attempt held by a third transaction so both writes are seen
@@ -691,5 +691,44 @@ defmodule Arca.ExecutionLockOrderTest do
     # It lands while the athanor's row is held, so it never asked for it.
     assert {:ok, {:ok, %{kind: "model"}}} = Task.yield(step, 5_000)
     release(standing)
+  end
+
+  test "a deletion takes the turns it stops before the athanor's row, so a completion's standing check never deadlocks it" do
+    actor = committed_athanor!()
+    {:ok, room} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, room.id, "planner") end)
+    turn = running!(actor, child, "planner")
+
+    verify = paused_verify()
+
+    log =
+      capture_log(fn ->
+        # The completion holds the child's turn and is about to read the
+        # standing.
+        {completion, _backend} =
+          waiting(:completion, fn ->
+            TurnStorage.finish(actor, turn.id, "completed", %{
+              fence: turn.fence,
+              grant: :stored,
+              verify: verify
+            })
+          end)
+
+        assert_receive {:verifying, verifier}, 5_000
+
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+        send(verifier, :verify)
+
+        # The deletion waited on the turn without the athanor's row, so
+        # the completion read its standing and ended the turn first.
+        assert {:ok, %{status: "completed"}} = Task.await(completion, 10_000)
+        assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, room.id) end)
   end
 end

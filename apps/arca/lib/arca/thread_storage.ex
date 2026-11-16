@@ -370,7 +370,10 @@ defmodule Arca.ThreadStorage do
   # The one order of the rows a write takes among turns, the athanor's row
   # and thread rows, which every write keeps:
   #
-  #   * its turns first: a turn's writers take the turn before its thread.
+  #   * its turns first. A turn's writers take the turn before its thread;
+  #     a write that stops or removes turns (a deletion) chooses them and
+  #     holds them (`Arca.TurnStorage.hold_turns!/2`) before anything
+  #     else, then asks again under its locks.
   #   * then the athanor's row: shared by the standing check
   #     (`Arca.ExecutionStanding.locked/2`), after the turn; taken for
   #     update, before any standing check of its own, by every create of a
@@ -380,8 +383,10 @@ defmodule Arca.ThreadStorage do
   #     this function takes after the athanor's row.
   #
   # A write that takes one thread row takes no second, and no athanor lock
-  # for it. Answers the rows of `ids` that stand, held until the caller's
-  # transaction ends. An in-transaction helper.
+  # for it. Nothing takes the athanor's row before a turn's, so no two
+  # writes wait on each other across the three. Answers the rows of `ids`
+  # that stand, held until the caller's transaction ends. An
+  # in-transaction helper.
   @spec lock_threads!(Prima.Actor.t(), [String.t()]) :: [Thread.t()]
   # arca:db-raise-ok inside the caller's transaction
   def lock_threads!(%Prima.Actor{athanor_id: athanor_id} = actor, ids)
@@ -861,10 +866,14 @@ defmodule Arca.ThreadStorage do
   `Prima.Source.thread/1`) the compactions written since the first such
   turn was accepted and the brain's session, whose generation is raised;
   an open turn that read it is cancelled as a stop cancels it, its reply
-  recorded, and answered with the others. The athanor's row and the
-  thread's are held from the start (`lock_threads!/2`), so a delivery
-  from it (`Arca.TurnStorage.accept_message/3` for a row naming it)
-  lands before the deletion and goes with it, or finds it gone.
+  recorded, and answered with the others. The turns it stops or
+  removes are chosen and held first, then the athanor's row and the
+  thread's (`lock_threads!/2`), and the turns asked again under those
+  locks: one that opened or read the thread in between sends the
+  deletion round again, at most three times, and then it is
+  `{:error, :busy}`. So a delivery from it
+  (`Arca.TurnStorage.accept_message/3` for a row naming it) lands before
+  the deletion and goes with it, or finds it gone.
 
   The attachment blobs (`blob_root/1` under the athanor's storage) go
   after the commit, never before the transaction that decides: a refused
@@ -876,7 +885,11 @@ defmodule Arca.ThreadStorage do
   @spec delete(Prima.Actor.t(), String.t(), map()) ::
           {:ok, %{cancelled: [map()]}}
           | {:error,
-             :no_athanor | :not_found | {:child_awaits_card, String.t()} | :database_error}
+             :no_athanor
+             | :not_found
+             | {:child_awaits_card, String.t()}
+             | :busy
+             | :database_error}
   def delete(actor, id, attrs \\ %{})
 
   def delete(%Prima.Actor{athanor_id: athanor_id} = actor, id, attrs)
@@ -887,30 +900,69 @@ defmodule Arca.ThreadStorage do
 
   def delete(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
-  defp do_delete(actor, id, attrs) do
-    case Repo.locking_transaction(fn -> delete_rows(actor, id, attrs) end) do
-      {:ok, %{ids: ids, cancelled: cancelled}} ->
-        Enum.each(ids, &delete_blobs_after(actor, &1))
-        {:ok, %{cancelled: cancelled}}
+  defp do_delete(actor, id, attrs, tries \\ 3) do
+    with {:ok, thread} <- thread_row(actor, id) do
+      chosen = stopped_turns(actor, thread)
 
-      {:error, reason} ->
-        {:error, reason}
+      case Repo.locking_transaction(fn -> delete_rows(actor, id, attrs, chosen) end) do
+        {:ok, %{ids: ids, cancelled: cancelled}} ->
+          Enum.each(ids, &delete_blobs_after(actor, &1))
+          {:ok, %{cancelled: cancelled}}
+
+        {:error, :turns_moved} when tries > 1 ->
+          do_delete(actor, id, attrs, tries - 1)
+
+        {:error, :turns_moved} ->
+          {:error, :busy}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
+  # The open turns a deletion of `thread` stops or removes: its own and
+  # its children's, and those of other threads that read one of them.
+  defp stopped_turns(%Prima.Actor{athanor_id: athanor_id} = actor, %Thread{} = thread) do
+    ids = [thread.id | child_ids(actor, thread)]
+    open_turns(athanor_id, ids, readers(athanor_id, ids))
+  end
+
+  defp open_turns(athanor_id, ids, readers) do
+    own =
+      from(t in Arca.Schemas.Turn,
+        where: t.athanor_id == ^athanor_id and t.thread_id in ^ids,
+        where: t.status in ^Prima.TurnState.open_statuses(),
+        select: t.id
+      )
+      |> Repo.all()
+
+    Enum.uniq(own ++ for({_thread_id, _since, open} <- readers, turn_id <- open, do: turn_id))
+  end
+
+  # The turns chosen before the locks still cover those open under them;
+  # a turn that opened or read the thread in between sends the deletion
+  # round again, choosing it first.
+  defp still_chosen!(open, chosen),
+    do: if(open -- chosen == [], do: :ok, else: Repo.rollback(:turns_moved))
+
   # arca:unscoped-ok thread_row(actor, id) establishes the thread's
   # ownership, and every child id is read from it under the actor.
-  defp delete_rows(actor, id, attrs) do
+  defp delete_rows(%Prima.Actor{athanor_id: athanor_id} = actor, id, attrs, chosen) do
+    _held = Arca.TurnStorage.hold_turns!(actor, chosen)
+
     with [thread] <- lock_threads!(actor, [id]),
          children = child_ids(actor, thread),
+         ids = [thread.id | children],
+         readers = readers(athanor_id, ids),
+         :ok <- still_chosen!(open_turns(athanor_id, ids, readers), chosen),
          [] <- Arca.TurnStorage.awaiting_card!(actor, children) do
       cancel = Map.put_new(attrs, :error, "the room was deleted")
 
       cancelled =
         Enum.flat_map(children, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
 
-      ids = [thread.id | children]
-      stopped = forget!(actor, ids, attrs)
+      stopped = forget!(actor, ids, readers, attrs)
 
       # Explicit message deletion also covers SQLite connections without
       # foreign_keys=ON.
@@ -939,15 +991,15 @@ defmodule Arca.ThreadStorage do
   # it, its generation raised so no turn keeps the old one. A turn still
   # open there is cancelled as a stop cancels it, its reply recorded;
   # answers those, for the caller's runtime to stop after the commit.
+  # `readers` (`readers/2`) is what the caller read under its locks, whose
+  # open turns it already holds.
   # arca:db-raise-ok inside the caller's transaction
   # arca:unscoped-ok every statement names the actor's athanor.
-  defp forget!(%Prima.Actor{athanor_id: athanor_id} = actor, ids, attrs) do
+  defp forget!(%Prima.Actor{athanor_id: athanor_id} = actor, ids, readers, attrs) do
     {_, _} =
       Repo.delete_all(
         from(m in Message, where: m.athanor_id == ^athanor_id and m.workspace_id in ^ids)
       )
-
-    readers = readers(athanor_id, ids)
 
     for {thread_id, since, _open} <- readers do
       Repo.delete_all(
@@ -1562,9 +1614,15 @@ defmodule Arca.ThreadStorage do
           deletable = Enum.filter(candidates, &MapSet.member?(stale, &1))
 
           # No open turn had read these (`stale_ids/2`); one that read
-          # them since keeps them for the next cycle, and nothing is
-          # stopped here.
-          if forget!(actor, deletable, %{}) != [], do: Repo.rollback(:read_by_an_open_turn)
+          # them since keeps them for the next cycle. That is asked before
+          # anything is forgotten, so retention stops no turn and takes no
+          # turn's row after the athanor's.
+          readers = readers(actor.athanor_id, deletable)
+
+          if Enum.any?(readers, fn {_thread_id, _since, open} -> open != [] end),
+            do: Repo.rollback(:read_by_an_open_turn)
+
+          [] = forget!(actor, deletable, readers, %{})
 
           Repo.delete_all(from(m in Message, where: m.thread_id in ^deletable))
           delete_thread_satellites(deletable)
