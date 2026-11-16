@@ -227,6 +227,20 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert sent(first) =~ ~s(asked, in this workspace thread \\"Moon report\\")
       assert sent(first) =~ "write the moon report"
 
+      # Each orchestrator reads where it is from its prompt: the daily
+      # thread's, and the workspace thread's with its title and ask.
+      assert first.input["params"]["system"] =~ "## Where you are"
+
+      assert first.input["params"]["system"] =~
+               ~s(orchestrator of the workspace thread "Moon report")
+
+      assert first.input["params"]["system"] =~ "> write the moon report"
+
+      daily_call = Enum.find(chats("agent:local.aqua"), &(sent(&1) =~ "make me a moon report"))
+      assert daily_call.input["params"]["system"] =~ "## Where you are"
+      assert daily_call.input["params"]["system"] =~ "on the person's daily thread"
+      refute daily_call.input["params"]["system"] =~ "orchestrator of the workspace thread"
+
       # Once.
       assert {:ok, %{}} = drain(ctx)
       assert records(ctx, "workspace_open") == []
@@ -531,6 +545,47 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       assert %{} = Crew.drain_all()
       assert [_once] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
+    end
+
+    test "outside material a workspace thread's turn read reaches the daily turn that reads its report: a thread in between launders no source",
+         %{ctx: ctx, daily: daily} do
+      script!([reply("Working."), reply("The moon is full tonight.")])
+      workspace = open!(ctx, daily)
+      turn = turn!(ctx, workspace.id)
+
+      # What the reporting turn read: a page of a host outside the athanor.
+      outside = Prima.Source.outside("moon.example")
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [sources: Prima.Source.encode([outside])]
+        )
+
+      {:ok, turn} = Tape.turn(ctx, turn.id)
+      {:ok, _} = Tape.report_workspace(ctx, turn, "done", %{summary: "Full moon tonight."})
+      stop!(ctx, turn)
+
+      assert %{} = Crew.drain_all()
+      {:ok, today} = Aqua.Day.current(ctx)
+      [%{turn_id: daily_turn}] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
+      await_status(ctx, daily_turn, "completed")
+
+      {:ok, %{sources: sources}} = Tape.turn(ctx, daily_turn)
+      read = Prima.Source.decode(sources)
+
+      # The outside material rides with the report; the thread source only
+      # names the workspace thread it came from, and holds no class.
+      assert outside in read
+      assert workspace.id in Prima.Source.threads(read)
+      assert :outside in Prima.Source.classes_of(read)
+      refute :thread in Prima.Source.classes_of(read)
+
+      # A flow decision over what the daily turn read holds the outside
+      # source to a declared flow, and asks nothing of the thread source.
+      uncovered = Prima.Flow.uncovered(read, {:domain, "other.example"})
+      assert outside in uncovered
+      refute Enum.any?(uncovered, &Prima.Source.thread?/1)
     end
 
     test "a report delivered after midnight lands on the new day's daily thread",

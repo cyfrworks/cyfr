@@ -11,6 +11,8 @@ defmodule Arca.WorkspaceStorageTest do
 
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
 
@@ -210,6 +212,82 @@ defmodule Arca.WorkspaceStorageTest do
     # A card its turn's cancel invalidates settles it too.
     {:ok, _} = TurnStorage.skip_steps(actor, member.id, "stopped", %{fence: member.fence})
     assert state(actor, workspace.id) == "open"
+  end
+
+  test "a deletion leaves nothing of a report, whichever comes first: one that landed goes with it, and one after it lands nothing",
+       %{actor: actor, daily: daily} do
+    report = fn workspace ->
+      %{
+        author: "aqua",
+        sent_by: "aqua",
+        kind: "report",
+        workspace_id: workspace.id,
+        content: "Done."
+      }
+    end
+
+    # The report lands, then the deletion: it goes with the thread.
+    first = open!(actor, daily)
+
+    {:ok, %{message: landed}} =
+      TurnStorage.accept_message(actor, daily.id, %{message: report.(first)})
+
+    {:ok, _} = Threads.delete(actor, first.id)
+    refute Enum.any?(Threads.messages(actor, daily.id), &(&1.id == landed.id))
+
+    # The deletion, then the report: it lands nothing.
+    second = open!(actor, daily)
+    {:ok, _} = Threads.delete(actor, second.id)
+
+    assert {:error, :workspace_gone} =
+             TurnStorage.accept_message(actor, daily.id, %{message: report.(second)})
+
+    refute Enum.any?(
+             Threads.messages(actor, daily.id),
+             &(&1.workspace_id in [first.id, second.id])
+           )
+  end
+
+  test "retention keeps a thread an open turn has read, which it cannot stop without the turn's root grant",
+       %{actor: actor, daily: daily} do
+    workspace = open!(actor, daily)
+    reader = running!(actor, daily)
+    read = Prima.Source.encode([Prima.Source.thread(workspace.id)])
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(t in Arca.Schemas.Turn, where: t.id == ^reader.id),
+        set: [sources: read]
+      )
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.Thread, where: c.id == ^workspace.id),
+        set: [workspace_state: "done"]
+      )
+
+    future = DateTime.add(DateTime.utc_now(), 3600, :second)
+    assert {:ok, 0} = Threads.count_before(actor, future)
+    assert {:ok, 0} = Threads.delete_before(actor, future)
+    assert {:ok, _kept} = Threads.get(actor, workspace.id)
+
+    # Forgetting it would stop the open turn that read it, and stopping a
+    # turn with a root ends its attempt under the root's grant, which
+    # retention does not hold: a deletion that names none is refused.
+    assert {:error, :missing_grant} = Threads.delete(actor, workspace.id)
+
+    # Once that turn has ended, retention forgets the thread.
+    {:ok, _} =
+      TurnStorage.finish(actor, reader.id, "failed", %{
+        fence: reader.fence,
+        error: "stopped",
+        grant: :stored,
+        verify: &Arca.Test.Actor.admits/1
+      })
+
+    assert {:ok, removed} = Threads.delete_before(actor, future)
+    assert removed >= 1
+    assert {:error, :not_found} = Threads.get(actor, workspace.id)
   end
 
   test "a row naming a workspace thread lands only while it stands", %{actor: actor, daily: daily} do

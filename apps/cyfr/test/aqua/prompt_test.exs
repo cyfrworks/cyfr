@@ -292,7 +292,11 @@ defmodule Aqua.PromptTest do
         Prompt.compose(ctx,
           agent: agent(),
           authority: nil,
-          where: %{title: "Moon report", ask: "write the moon report\nwith a chart"}
+          where: %{
+            kind: :workspace,
+            title: "Moon report",
+            ask: "write the moon report\nwith a chart"
+          }
         ).text
 
       [_, where] = String.split(prompt, "## Where you are", parts: 2)
@@ -305,9 +309,18 @@ defmodule Aqua.PromptTest do
       assert before_clock =~ "## Where you are"
     end
 
-    test "a turn of any other thread is told nothing of it", %{ctx: ctx} do
+    test "a daily thread's turn is told it is on the daily thread; a crew member's, nothing",
+         %{ctx: ctx} do
+      assert Prompt.where(ctx, %{kind: "daily", id: "thr_1", title: "2026-11-16"}) ==
+               %{kind: :daily}
+
+      prompt = Prompt.compose(ctx, agent: agent(), authority: nil, where: %{kind: :daily}).text
+      [_, where] = String.split(prompt, "## Where you are", parts: 2)
+      assert where =~ "on the person's daily thread"
+      assert where =~ "`workspace.open`"
+
+      assert Prompt.where(ctx, %{kind: "crew", id: "thr_2", title: "planner"}) == nil
       refute Prompt.compose(ctx, agent: agent(), authority: nil).text =~ "Where you are"
-      assert Prompt.where(ctx, %{kind: "daily", id: "thr_1", title: "2026-11-16"}) == nil
     end
 
     test "where/2 reads a workspace thread's first opening", %{ctx: ctx} do
@@ -332,7 +345,8 @@ defmodule Aqua.PromptTest do
           origin: :interactive
         })
 
-      assert Prompt.where(ctx, workspace) == %{title: "Moon report", ask: "write the moon report"}
+      assert Prompt.where(ctx, workspace) ==
+               %{kind: :workspace, title: "Moon report", ask: "write the moon report"}
     end
   end
 end

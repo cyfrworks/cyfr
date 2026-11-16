@@ -101,7 +101,8 @@ defmodule Aqua.Loop.Turn do
           agent: agent,
           authority: authority,
           crew: crew(ctx, roster, policy, soul?),
-          requests: requests(ctx, thread)
+          requests: requests(ctx, thread),
+          where: Aqua.Prompt.where(ctx, thread)
         )
 
       spec = %__MODULE__{
