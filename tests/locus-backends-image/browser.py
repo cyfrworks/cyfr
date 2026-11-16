@@ -698,8 +698,8 @@ def main():
         expect(lacking == 0 and text4 == reference, "asked again from the first chunk it lacks, the host gets it whole")
 
         # ————— a cast over the same session —————
-        ok(b.ask(39, "thr_article", "page", {"html": article(0)}), "a realistic page is shown")
-        for size, (width, height), cast in (("a phone's width", (390, 844), 37), ("720p", (1280, 720), 38)):
+        ok(b.ask(300, "thr_article", "page", {"html": article(0)}), "a realistic page is shown")
+        for size, (width, height), cast in (("a phone's width", (390, 844), 301), ("720p", (1280, 720), 302)):
             ok(b.ask(cast, "thr_article", "cast", {"width": width, "height": height}), f"the realistic page cast at {size}")
             shown = b.image(cast, f"the realistic page's image at {size}")
             print(f"measure: a cast at {size} ({width}x{height}) of a realistic page: its image is "
@@ -707,8 +707,8 @@ def main():
             b.send({"t": "uncast", "id": cast})
         b.quiet(1, lambda m: False)
         b.drop_images()
-        ok(b.ask(40, "thr_cast", "page", {"html": ANIMATED_PAGE}), "an animated page is shown")
-        for size, (width, height), cast in (("a phone's width", (390, 844), 41), ("720p", (1280, 720), 42)):
+        ok(b.ask(303, "thr_cast", "page", {"html": ANIMATED_PAGE}), "an animated page is shown")
+        for size, (width, height), cast in (("a phone's width", (390, 844), 304), ("720p", (1280, 720), 305)):
             expect(ok(b.ask(cast, "thr_cast", "cast", {"width": width, "height": height}), f"a cast at {size}") == {},
                    f"a cast at {size} answers that it casts")
             started = time.monotonic()
@@ -725,17 +725,17 @@ def main():
             print(f"measure: a cast at {size} ({width}x{height}) of a page that changes every frame sent "
                   f"{rate:.1f} images a second, each {sum(sizes) / len(sizes) / 1024:.1f} KiB on average "
                   f"({max(sizes) / 1024:.1f} KiB at most)", flush=True)
-            if cast == 41:
+            if cast == 304:
                 b.send({"t": "uncast", "id": cast})
                 b.quiet(1, lambda m: False)
                 b.inbox = [m for m in b.inbox if not (m["t"] == "image" and m["id"] == cast)]
 
         # With the host not acknowledging an image, no further image comes, and a read still arrives whole.
-        cast = 42
+        cast = 305
         stalled = b.image(cast, "the image left unacknowledged")
         b.inbox = [m for m in b.inbox if m["t"] != "image"]
-        b.send({"t": "req", "id": 43, "win": "thr_big", "op": "read", "args": {}})
-        answer, text43, _frames = b.response(43)
+        b.send({"t": "req", "id": 306, "win": "thr_big", "op": "read", "args": {}})
+        answer, text43, _frames = b.response(306)
         expect(text43 == reference, "a read beside an unacknowledged image arrives whole")
         expect(not b.quiet(3, lambda m: m["t"] == "image"),
                "with an image unacknowledged, the driver sends no further image", b.inbox[-3:])
@@ -747,7 +747,7 @@ def main():
         # as it reads it and every chunk but the last blindly, then keeps only the last 256 KiB of what it read.
         b.inbox = [m for m in b.inbox if m["t"] != "image"]
         b.send({"t": "seen", "id": cast, "seq": stalled["seq"] + 1})
-        b.send({"t": "req", "id": 44, "win": "thr_big", "op": "read", "args": {}})
+        b.send({"t": "req", "id": 307, "win": "thr_big", "op": "read", "args": {}})
         poured, scan = bytearray(), Reader(MAX_TO_HOST)
         acked = False
         while True:
@@ -758,10 +758,10 @@ def main():
                 m = json.loads(body)
                 if m["t"] == "image" and m["id"] == cast:
                     b.send({"t": "seen", "id": cast, "seq": m["seq"]})
-                elif m["t"] == "res" and m["id"] == 44 and not acked:
-                    b.write(b"".join(encode(wire({"t": "ack", "id": 44, "seq": seq})) for seq in range(of - 1)))
+                elif m["t"] == "res" and m["id"] == 307 and not acked:
+                    b.write(b"".join(encode(wire({"t": "ack", "id": 307, "seq": seq})) for seq in range(of - 1)))
                     acked = True
-                elif m["t"] == "res" and m["id"] == 44 and m["seq"] == of - 1:
+                elif m["t"] == "res" and m["id"] == 307 and m["seq"] == of - 1:
                     done = True
             if done:
                 break
@@ -789,21 +789,21 @@ def main():
         # The host ends the cast and asks for another, and asks the response again from the first chunk it lacks.
         b.inbox = []
         b.send({"t": "uncast", "id": cast})
-        held = {m["seq"]: base64.b64decode(m["part"], validate=True) for m in taken if m["t"] == "res" and m["id"] == 44}
+        held = {m["seq"]: base64.b64decode(m["part"], validate=True) for m in taken if m["t"] == "res" and m["id"] == 307}
         lacking = min(set(range(of)) - set(held))
-        b.send({"t": "again", "id": 44, "seq": lacking})
-        answer, text44, _frames = b.response(44, held)
+        b.send({"t": "again", "id": 307, "seq": lacking})
+        answer, text44, _frames = b.response(307, held)
         expect(text44 == reference, "asked again from the first chunk it lacks, the response arrives whole")
-        expect(ok(b.ask(45, "thr_cast", "cast", {"width": 1280, "height": 720}), "a cast anew") == {},
+        expect(ok(b.ask(308, "thr_cast", "cast", {"width": 1280, "height": 720}), "a cast anew") == {},
                "the cast asked for anew answers that it casts")
-        expect(b.image(45, "the new cast's first image")["seq"] == 1, "the new cast goes on with its first image")
+        expect(b.image(308, "the new cast's first image")["seq"] == 1, "the new cast goes on with its first image")
         print(f"measure: the tail of a shared output of {len(poured)} bytes began in a {cut_kind} frame", flush=True)
-        b.send({"t": "uncast", "id": 45})
+        b.send({"t": "uncast", "id": 308})
 
         # The person's input lands where the image they point at shows, at a phone's width and at 720p alike.
-        ok(b.ask(46, "thr_input", "page", {"html": INPUT_PAGE}), "a page that writes where a press lands is shown")
+        ok(b.ask(309, "thr_input", "page", {"html": INPUT_PAGE}), "a page that writes where a press lands is shown")
         read_ids = iter(range(1000, 2000))
-        for size, (width, height), cast in (("a phone's width", (390, 844), 47), ("720p", (1280, 720), 48)):
+        for size, (width, height), cast in (("a phone's width", (390, 844), 310), ("720p", (1280, 720), 311)):
             ok(b.ask(cast, "thr_input", "cast", {"width": width, "height": height}), f"the input page cast at {size}")
             first = b.image(cast, f"the input page's image at {size}")
             b.send({"t": "seen", "id": cast, "seq": first["seq"]})
@@ -826,7 +826,7 @@ def main():
             keys = [{"k": "key", "type": t, "key": c, "code": f"Key{c.upper()}", "text": c if t == "down" else "",
                      "vk": ord(c.upper()), "mods": 0} for c in ("h", "i") for t in ("down", "up")]
             b.send({"t": "input", "id": cast, "evs": field + keys})
-            want = 'textbox "Field" = "hi"' if cast == 47 else 'textbox "Field" = "hihi"'
+            want = 'textbox "Field" = "hi"' if cast == 310 else 'textbox "Field" = "hihi"'
             deadline = time.monotonic() + 10
             text = ""
             while want not in text and time.monotonic() < deadline:
@@ -853,11 +853,14 @@ def main():
                   "the press's input and the image both carried over the session", flush=True)
             b.send({"t": "uncast", "id": cast})
         # Input for a cast that ended goes nowhere.
-        b.send({"t": "input", "id": 48, "evs": keys})
+        b.send({"t": "input", "id": 311, "evs": keys})
         time.sleep(1)
-        expect('textbox "Field" = "hihi"' in ok(b.ask(49, "thr_input", "read"), "the field is read again")["text"],
+        expect('textbox "Field" = "hihi"' in ok(b.ask(312, "thr_input", "read"), "the field is read again")["text"],
                "input for a cast that ended reaches no window")
         b.drop_images()
+        for n, win in enumerate(("thr_article", "thr_cast", "thr_input")):
+            expect(ok(b.ask(313 + n, win, "close"), f"the window {win} is closed") == {"closed": True},
+                   f"the cast's window {win} is closed, so the windows counted below are the operations' own")
 
         # ————— each operation —————
         refused(b.ask(10, "thr_ops", "read"), "no_window", "a read before any page has no window")
