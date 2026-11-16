@@ -251,12 +251,12 @@ defmodule Aqua.Attachments do
     actor = Context.actor(ctx)
     thread_id = turn.thread_id
 
-    with true <- Regex.match?(@draft_id, id) || {:error, :not_a_draft},
-         :ok <- unsent(ctx, id) |> drafted_refusal(),
-         {:ok, facts} <- Arca.get(actor, draft_path(thread_id, id)) |> drafted_refusal(),
-         {:ok, facts} <- Jason.decode(facts) |> drafted_refusal(),
+    with :ok <- draft_id(id),
+         :ok <- ctx |> unsent(id) |> drafted_refusal(),
+         {:ok, facts} <- facts(actor, thread_id, id),
          {:ok, ref} <- own_draft(ctx, turn, facts),
-         :ok <- Arca.put_if_none_match(actor, claim_path(thread_id, id), "") |> drafted_refusal() do
+         :ok <-
+           actor |> Arca.put_if_none_match(claim_path(thread_id, id), "") |> drafted_refusal() do
       case bytes_of(actor, thread_id, id, ref) do
         {:ok, file} ->
           {:ok, Map.put(file, "sources", facts["sources"])}
@@ -289,10 +289,24 @@ defmodule Aqua.Attachments do
 
   defp own_draft(_ctx, _turn, _facts), do: {:error, :not_a_draft}
 
+  defp draft_id(id),
+    do: if(Regex.match?(@draft_id, id), do: :ok, else: {:error, :not_a_draft})
+
+  # The facts beside a draft's file, as `draft/4` wrote them.
+  defp facts(actor, thread_id, id) do
+    with {:ok, text} <- actor |> Arca.get(draft_path(thread_id, id)) |> drafted_refusal(),
+         {:ok, %{} = facts} <- Jason.decode(text) do
+      {:ok, facts}
+    else
+      {:error, :database_error} -> {:error, :database_error}
+      _unreadable -> {:error, :not_a_draft}
+    end
+  end
+
   # A draft that is not there, was sent, or is claimed: one refusal, so
   # nothing tells another turn's or person's draft from none.
   defp drafted_refusal(:ok), do: :ok
-  defp drafted_refusal({:ok, _} = ok), do: ok
+  defp drafted_refusal({:ok, value}), do: {:ok, value}
   defp drafted_refusal({:error, :database_error}), do: {:error, :database_error}
   defp drafted_refusal({:error, _}), do: {:error, :not_a_draft}
 
