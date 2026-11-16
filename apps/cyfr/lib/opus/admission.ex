@@ -96,8 +96,9 @@ defmodule Opus.Admission do
     is `{:error, :connection_not_granted}` before anything runs
     (`Prima.Authority.root/3`). Absent or nil, the ingress's default.
 
-  A context carrying `approved_entry` (`Sanctum.Context`, set by an
-  approved launch alone) roots only where the loaded root's binding names
+  A context carrying `approved_entry` (`Sanctum.Context`, set by
+  `Aqua.Launch` alone, for a launch approved on its card or decided with
+  none) roots only where the loaded root's binding names
   that entry under the name its binding stored. Another entry, another
   stored name, a vault that binds none, or a name the ingress no longer
   binds is `{:error, :approved_entry_moved}` before anything runs, in
@@ -328,9 +329,9 @@ defmodule Opus.Admission do
   `Opus.Close.fail/3` answers.
 
   The context the run is admitted with, which its row, its close and its
-  attempt carry on, holds no `approved_entry` (`Sanctum.Context`): an
-  approved launch's is compared where its root is loaded
-  (`authority_for/4`) and consumed here.
+  attempt carry on, holds no `approved_entry` (`Sanctum.Context`): a
+  launch's is compared where its root is loaded (`authority_for/4`) and
+  consumed here.
   """
   @spec admit(Context.t(), String.t(), map(), keyword()) :: {:ok, admitted()} | {:error, term()}
   def admit(%Context{} = ctx, reference, input, opts)
@@ -341,12 +342,12 @@ defmodule Opus.Admission do
     # the slot on the database and refuses `:not_owner` as a barrier.
     if Arca.ControlPlane.held?() do
       ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Prima.UUID7.request_id()}
-      # An approved launch's entry was compared where its root was loaded;
+      # A launch's entry was compared where its root was loaded;
       # the context the run carries on (its row, its close, its attempt and
       # so its chain, its children and its calls) holds none, so nothing
       # later in the run compares against it.
       #
-      # An approved launch's stamp seeds the root's row and is cleared the
+      # A launch's stamp seeds the root's row and is cleared the
       # same way: it reaches the record as an option taken off the
       # context here alone, never from the caller's options.
       launch = if is_nil(opts[:parent_execution_id]), do: ctx.launch
@@ -1027,10 +1028,11 @@ defmodule Opus.Admission do
 
   defp at_revision(refused, _consent_id), do: refused
 
-  # An approved launch roots only at the consent revision its card showed
-  # (the context's `launch`, which `Aqua.Launch` alone sets): the card bound
-  # the classes it let flow to that grant's exits, so a changed grant is a
-  # stale approval, refused before anything starts.
+  # A launch roots only at the consent revision its card showed or its
+  # decision read (the context's `launch`, which `Aqua.Launch` alone sets):
+  # the classes a card let flow, and a decision's cover, were judged against
+  # that grant's exits, so a changed grant is a stale launch, refused before
+  # anything starts.
   defp launched({:ok, authority, _stamp} = loaded, %Context{launch: %{consent_id: consent_id}})
        when is_binary(consent_id) do
     if authority.consent_id == consent_id, do: loaded, else: {:error, :approved_grant_moved}
@@ -1038,14 +1040,14 @@ defmodule Opus.Admission do
 
   defp launched(loaded, _ctx), do: loaded
 
-  # An approved launch roots only on the account its card showed (the
-  # context's `approved_entry`, which `Aqua.Launch` alone sets), judged on
-  # the loader's own answer: the same read of the head that picked the
-  # root's named binding, with none between. The root's binding must name
-  # the approved entry under the name its binding stored. Another entry,
-  # another stored name, a vault that binds none, or a name the ingress no
-  # longer binds at all (`:connection_not_granted` from the pick) is the
-  # same stale approval, refused before anything starts.
+  # A launch roots only on the account its card showed or its decision
+  # resolved (the context's `approved_entry`, which `Aqua.Launch` alone
+  # sets), judged on the loader's own answer: the same read of the head
+  # that picked the root's named binding, with none between. The root's
+  # binding must name that entry under the name its binding stored.
+  # Another entry, another stored name, a vault that binds none, or a name
+  # the ingress no longer binds at all (`:connection_not_granted` from the
+  # pick) is the same stale launch, refused before anything starts.
   defp approved_root(%Context{approved_entry: nil}, loaded), do: loaded
 
   defp approved_root(%Context{approved_entry: approved}, {:ok, authority, _stamp} = loaded) do
@@ -1199,8 +1201,8 @@ defmodule Opus.Admission do
   end
 
   # An option is kept only when it carries a value.
-  # A launched root runs under the id its card's approval minted, so the
-  # loop can read its row whatever the launch answers.
+  # A launched root runs under its step's pre-minted id, so the loop can
+  # read its row whatever the launch answers.
   defp launch_opts(opts, nil), do: opts
 
   defp launch_opts(opts, %{execution_id: id} = launch) when is_binary(id),

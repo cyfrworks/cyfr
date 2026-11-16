@@ -327,9 +327,11 @@ defmodule Opus.Provider do
             kind: :execute,
             planes: [:external],
             permission: :execute,
-            # A run started outside a chain is an external act: each one is
-            # decided when it is asked, and no standing answer stands for it.
-            standing: false
+            # A run stands on its component's grant, so an author may let
+            # the assistant start one with no card; an answer a person gave
+            # on one run's card lets that run's sources through and never
+            # stands for another.
+            stored_answers: false
           ),
           Operation.new(
             "execution",
@@ -891,15 +893,16 @@ defmodule Opus.Provider do
   # classes it setup required, in its own sentence (`Prima.Refusal`).
   defp format_root_result({:error, :connection_not_granted} = refused), do: refused
 
-  # A root whose loaded binding is not the account an approved launch's
-  # card showed (its entry under its stored name, or a name no longer
-  # bound) stays typed: the launch answers it in its own sentence, naming
-  # the account, and the gate classes it a conflict (`Prima.Refusal`).
+  # A root whose loaded binding is not the account a launch's card showed
+  # or its decision resolved (its entry under its stored name, or a name
+  # no longer bound) stays typed: the launch answers it in its own
+  # sentence, naming the account, and the gate classes it a conflict
+  # (`Prima.Refusal`).
   defp format_root_result({:error, :approved_entry_moved} = refused), do: refused
 
-  # A root whose loaded consent revision is not the one an approved
-  # launch's card bound stays typed, so the launch answers it as a stale
-  # approval with nothing run.
+  # A root whose loaded consent revision is not the one a launch's card
+  # or decision bound stays typed, so the launch answers it as stale with
+  # nothing run.
   defp format_root_result({:error, :approved_grant_moved} = refused), do: refused
 
   # A retry's grant with a new revision since its run stays typed, a

@@ -173,9 +173,10 @@ defmodule Opus.Record do
     itself, so every row in a chain carries the same value.
 
   A root's source ledger is seeded from what admitted it, never from an
-  argument: an approved launch's stamp (`:launch`, `%{sources, classes}`,
-  which `Opus.Admission` takes off the approver's context alone) seeds the
-  turn's sources and writes the classes the person let flow; a webhook's
+  argument: a launch's stamp (`:launch`, `%{sources, classes}`, which
+  `Opus.Admission` takes off the context `Aqua.Launch` builds alone) seeds
+  the turn's sources and writes the classes the person let flow on its
+  card, none for a launch decided with no card; a webhook's
   run starts outside; a frame's invocation starts with the classes its
   declared reads may carry (`:frame_sources`, which `Opus.Tincture`
   alone passes); an interactive, programmatic, scheduled or feed run

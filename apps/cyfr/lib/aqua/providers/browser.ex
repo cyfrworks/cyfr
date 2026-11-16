@@ -26,12 +26,14 @@ defmodule Aqua.Providers.Browser do
   argument, for a caller the session owner proves to be that running
   turn. What a page holds is outside material, named by its host.
 
-  `screenshot` stores the image under a message id of its own that has
-  not been sent, in the turn's thread, as a person's files wait under an
-  unsent message (`Aqua.Attachments.store/4`), and answers that id: a
-  post publishes it, or it expires unsent. The turn is proved again
-  before the image is stored, so a turn superseded meanwhile writes
-  nothing.
+  `screenshot` keeps the image as a draft of the turn's attempt, under a
+  message id of its own that has not been sent, in the turn's thread,
+  with the sources of what it shows beside it
+  (`Aqua.Attachments.draft/4`), and answers that id: that attempt's
+  `thread.post` publishes it (its `screenshot`); one never posted stays
+  unsent, its bytes kept until its thread is deleted.
+  The turn is proved again before the image is stored, so a turn
+  superseded meanwhile writes nothing.
 
   ## The person's watch
 
@@ -44,11 +46,12 @@ defmodule Aqua.Providers.Browser do
   line are refused and start nothing), for a workspace thread of their
   own (`Aqua.workspace/2`). It is refused with the turned-off sentence
   while the setting is off, and starts no browser then: off, no browser
-  of the person's runs. The watch belongs to the calling process, the page's view, which the gate
-  runs the handler on (`Opus.Browser.watch/4`): its images and its end
-  come to it, it says when it drew an image and hands the person's input
-  under that watch alone, and it ends with that process. A stream open
-  when the setting goes off ends with the turned-off sentence.
+  of the person's runs. The watch belongs to the calling process, the
+  page's view, which the gate runs the handler on
+  (`Opus.Browser.watch/4`): its images and its end come to it, it says
+  when it drew an image and hands the person's input under that watch
+  alone, and it ends with that process. A stream open when the setting
+  goes off ends with the turned-off sentence.
 
   ## The setting
 
@@ -242,7 +245,7 @@ defmodule Aqua.Providers.Browser do
         )
       ],
       description:
-        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; watch shows the person a workspace thread's window on their own page; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
+        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on, and thread.post shows a screenshot by the message_id it answered; watch shows the person a workspace thread's window on their own page; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
       title: "Browser"
     )
   end
@@ -345,23 +348,27 @@ defmodule Aqua.Providers.Browser do
      }}
   end
 
-  # The image is stored only while the turn still runs: one superseded
-  # since the driver answered writes nothing.
+  # The image is kept only while the turn still runs, as a draft of that
+  # attempt (`Aqua.Attachments.draft/4`): one superseded since the driver
+  # answered writes nothing. The draft keeps what the page it shows came
+  # from: the turn's sources so far, which name the host of every page
+  # it opened or read, and the screenshot's own, an outside source.
   defp answered(
          "screenshot",
          ctx,
-         {:turn, _ctx, lineage} = caller,
-         _args,
+         {:turn, _ctx, _lineage} = caller,
+         args,
          %{"png" => png} = answer
        )
        when is_binary(png) do
     with {:bytes, {:ok, bytes}} <- {:bytes, Base.decode64(png)},
-         {:ok, _turn} <- Opus.Browser.turn(caller) |> refused() do
-      message_id = Prima.UUID7.generate_id("msg")
+         {:ok, _turn} <- Opus.Browser.turn(caller) |> refused(),
+         {:ok, turn} <- held(ctx, args) do
       file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => bytes}
+      sources = Prima.Source.decode(turn.sources) ++ answer_sources(nil, answer)
 
-      case Aqua.Attachments.store(ctx, lineage["thread_id"], message_id, [file]) do
-        {:ok, [ref]} ->
+      case Aqua.Attachments.draft(ctx, turn, file, sources) do
+        {:ok, message_id, ref} ->
           {:ok,
            %{
              message_id: message_id,
@@ -423,6 +430,15 @@ defmodule Aqua.Providers.Browser do
        )}
 
   defp watcher({:error, reason}), do: refused({:error, reason})
+
+  # The turn as its fence holds it now, with the attempt the call came from.
+  defp held(ctx, args) do
+    case Aqua.Tape.held_turn(ctx, args) do
+      {:ok, turn} -> {:ok, turn}
+      {:error, :database_error} -> {:error, refusal(:unavailable)}
+      {:error, _lost} -> {:error, refusal(:not_owned)}
+    end
+  end
 
   defp on({:ok, true}), do: {:ok, true}
   defp on({:ok, false}), do: {:error, conflict(turned_off())}

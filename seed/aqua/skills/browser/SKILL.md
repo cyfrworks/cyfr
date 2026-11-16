@@ -22,7 +22,8 @@ quicker.
 - A long page comes in parts: read on from the `next` an answer gave.
 - `page` shows a page you wrote, as one html file, in the window: use it
   to show the person a result. `screenshot` answers the message id the
-  picture is kept under; a post shows it, and an unsent one expires.
+  picture is kept under: to show it, post it in this turn with
+  `thread.post`'s `screenshot`.
 - `close` this thread's window when you are done with it: the browser
   holds four windows at most.
 
@@ -71,7 +72,8 @@ Show a page you wrote:
 browser(action: "page", html: "<!doctype html><title>Results</title><h1>Results</h1>")
 ```
 
-Take a picture of the window:
+Take a picture of the window and post it into this thread:
 ```
 browser(action: "screenshot")
+thread(action: "post", text: "The page as it stands", screenshot: "<message_id it answered>")
 ```

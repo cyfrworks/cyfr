@@ -65,6 +65,24 @@ defmodule Aqua.Loop.RequestTest do
     assert ext["description"] =~ "approval"
   end
 
+  test "a launch under auto is said to run on the component's grant and still ask when what was read is not covered; under ask, to ask" do
+    execution = fn policy ->
+      policy |> Request.tool_definitions() |> Enum.find(&(&1["name"] == "execution"))
+    end
+
+    auto = execution.(%{"execution.run" => "auto", "execution.logs" => "auto"})
+    assert auto["description"] =~ "A component the person has granted runs at once through run;"
+    assert auto["description"] =~ "does not let it send on"
+    refute auto["description"] =~ "Actions run need"
+
+    asks = execution.(%{"execution.run" => "ask"})
+    assert asks["description"] =~ "Actions run need the person's approval"
+    refute asks["description"] =~ "granted runs at once"
+
+    # Another tool's auto says nothing of a grant.
+    refute execution.(%{"execution.logs" => "auto"})["description"] =~ "granted"
+  end
+
   test "catalog tools alone, and an instruction as the person's last word" do
     assert [%{"name" => "notes"} = notes] = Request.catalog_tools(%{"notes.keep" => "auto"})
     assert get_in(notes, ["parameters", "properties", "action", "enum"]) == ["keep"]

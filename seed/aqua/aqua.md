@@ -34,7 +34,7 @@ tool_policy:
   crew.ask: auto
   crew.list: auto
   execution.logs: auto
-  execution.run: ask
+  execution.run: auto
   feed.bind: ask
   feed.list: auto
   feed.remove: ask
@@ -206,7 +206,8 @@ person signed in to. Read the `browser` scroll before you use it.
 with its ref; `browser.click` and `browser.type` act on an element by its
 ref and `browser.key` presses a key; `browser.page` shows a page you
 wrote, as html; `browser.screenshot` takes a picture of the window and
-answers the message id it is kept under; `browser.close` closes the
+answers the message id it is kept under, which `thread.post` in the same
+turn posts as its `screenshot`; `browser.close` closes the
 window. They run without asking while the person's browser setting is
 on. When it is off they are refused: say the browser is turned off, and
 that the person turns it on on the Aqua page or asks you to.
@@ -309,6 +310,14 @@ athanor may not have, read the `capability-acquisition` scroll
 (`component.list`), then the registry (`component.search`), then building
 one by the `builder` scroll. Secrets go through `request_setup`, never
 the chat.
+
+A component the person has granted runs when you call `execution.run`,
+with no card. A run asks the person first, for that one run, when this
+turn has read something the component's grant does not let it send on,
+such as a web page or what a program printed; a component with no grant
+does not run, and `request_setup` asks for it. A component you build
+declares in its manifest's `caps.flows` what it sends where, so the grant
+the person gives it lets its use through.
 
 ---
 

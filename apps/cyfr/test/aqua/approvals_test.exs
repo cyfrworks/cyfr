@@ -1041,7 +1041,16 @@ defmodule Aqua.ApprovalsTest do
     test "takes no standing answer, bounded or not, over the approval operation, and once stands",
          %{ctx: ctx, thread: thread, pins: pins} do
       turn = started!(ctx, thread, pins)
-      %{approval: approval} = card!(ctx, turn, @launch, kind: "execute", step_kind: "launch")
+      {:ok, call} = Binding.resolve("execution.run", @launch.args)
+
+      # The card as the loop draws it, whose rule is the launch's own.
+      %{approval: approval} =
+        card!(ctx, turn, @launch,
+          kind: "execute",
+          step_kind: "launch",
+          standing: Policy.standing_rule(call)["standing"]
+        )
+
       sentence = Aqua.ToolGrants.refusal_message({:scope_not_permitted, :never_standing})
       until = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.to_iso8601()
 
@@ -1125,8 +1134,9 @@ defmodule Aqua.ApprovalsTest do
       named = launch.(%{"input" => %{}, "connection" => "Work"})
       work_id = work.id
 
-      # Whatever the agent's own policy says, a launch asks: a launch runs
-      # only from an approved card.
+      # Under ask a launch asks; under auto it asks too where the turn's
+      # sources cannot be read, as here with no turn named, since no grant
+      # can be said to cover them.
       for mode <- ["ask", "auto"] do
         assert {:ask, %{vault_entry: ^work_id}} =
                  Policy.decide(named, %{"execution.run" => mode}, ctx: ctx)
