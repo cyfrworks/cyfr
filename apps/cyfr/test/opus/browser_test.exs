@@ -181,6 +181,45 @@ defmodule Opus.BrowserTest do
 
   defp refusal({:error, reason}), do: Sanctum.Refusals.render(reason)
 
+  defp post(ctx, lineage, args) do
+    Aqua.Providers.Thread.handle(
+      "thread",
+      guest(ctx),
+      Map.merge(args, Map.put(lineage, "action", "post"))
+    )
+  end
+
+  defp not_a_draft, do: Aqua.Providers.Thread.not_a_draft()
+
+  # A turn's `open` of `url`, with the sources its result closes with
+  # joined into the turn, as the loop joins them when the step closes.
+  defp opened!(ctx, turn, lineage, url) do
+    {:ok, answer} = call(ctx, lineage, "open", %{"url" => url})
+    {:ok, turn} = Aqua.Tape.turn(ctx, turn.id)
+    :ok = Aqua.Tape.join_sources(ctx, turn, Provider.answer_sources(nil, answer))
+  end
+
+  defp attempt!(turn, attempt) do
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [attempt: attempt]
+      )
+  end
+
+  defp posts(ctx, thread_id) do
+    Sanctum.Context.actor(ctx)
+    |> Threads.messages(thread_id)
+    |> Enum.filter(&(&1.sent_by != "person"))
+  end
+
+  defp gone?(ctx, thread_id, id) do
+    case Arca.list(Sanctum.Context.actor(ctx), Threads.blob_root(thread_id) ++ [id]) do
+      {:ok, []} -> true
+      {:error, :not_found} -> true
+      _held -> false
+    end
+  end
+
   describe "a turn's actions" do
     test "run in the window of the turn's thread, named from the lineage, in one browser of the person's",
          %{ctx: ctx, lineage: lineage} do
@@ -332,6 +371,182 @@ defmodule Opus.BrowserTest do
                  Sanctum.Context.actor(ctx),
                  Arca.ThreadStorage.blob_root(lineage["thread_id"])
                )
+    end
+  end
+
+  describe "a posted screenshot" do
+    setup context do
+      png = <<137, 80, 78, 71, 13, 10, 26, 10, "the moon">>
+
+      answers(
+        context,
+        "screenshot",
+        {:ok, %{"png" => Base.encode64(png), "width" => 1280, "height" => 900}}
+      )
+
+      # The page was asked for at one address and landed at another.
+      answers(
+        context,
+        "open",
+        {:ok, %{"url" => "https://moon.example/landed", "title" => "Moon"}}
+      )
+
+      {:ok, png: png}
+    end
+
+    test "is the post's own file, carrying the outside source of the page it shows; the draft goes and posts once",
+         %{ctx: ctx, turn: turn, lineage: lineage, png: png} do
+      opened!(ctx, turn, lineage, "https://moon.example/")
+      {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
+      thread_id = lineage["thread_id"]
+
+      assert {:ok, %{posted: post_id, thread: ^thread_id, files: 1}} =
+               post(ctx, lineage, %{"text" => "The moon", "screenshot" => shot})
+
+      {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), post_id)
+
+      assert [%{"filename" => "screenshot.png", "media_type" => "image/png"} = ref] =
+               Aqua.Attachments.refs_of(row)
+
+      # The landing page's host, never the asked-for address, and the
+      # screenshot's own outside source.
+      assert Prima.Source.outside("moon.example") in Aqua.Attachments.copied_sources(ref)
+      assert Prima.Source.outside("browser") in Aqua.Attachments.copied_sources(ref)
+
+      # Readable from the post alone.
+      data = Base.encode64(png)
+
+      assert [%{"data" => ^data}] =
+               Aqua.Attachments.load(ctx, thread_id, [%{message_id: post_id, ref: ref}])
+
+      # The draft's bytes went; the post kept its copy.
+      assert gone?(ctx, thread_id, shot)
+      assert post(ctx, lineage, %{"screenshot" => shot}) |> refusal() == not_a_draft()
+      assert [_one] = posts(ctx, thread_id)
+    end
+
+    test "of an earlier page keeps an outside source with no name of a host",
+         %{ctx: ctx, lineage: lineage} do
+      {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
+      {:ok, %{posted: post_id}} = post(ctx, lineage, %{"screenshot" => shot})
+      {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), post_id)
+      [ref] = Aqua.Attachments.refs_of(row)
+      assert Aqua.Attachments.copied_sources(ref) == [Prima.Source.outside("browser")]
+    end
+
+    test "is refused, in one sentence, to another turn, thread, person or athanor, and when it is not there",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
+      thread_id = lineage["thread_id"]
+
+      # Another turn of the same thread, the first one ended.
+      set_status(turn, "completed")
+      {:ok, thread} = Threads.get(Sanctum.Context.actor(ctx), thread_id)
+      {_next, next} = turn!(ctx, thread: thread)
+      assert post(ctx, next, %{"screenshot" => shot}) |> refusal() == not_a_draft()
+
+      # A turn of another thread of the same person.
+      {_elsewhere, elsewhere} = turn!(ctx)
+      assert post(ctx, elsewhere, %{"screenshot" => shot}) |> refusal() == not_a_draft()
+
+      # Another person speaking as the turn that took it.
+      someone = %{ctx | user_id: "usr_someone_else"}
+      set_status(turn, "running")
+      assert post(someone, lineage, %{"screenshot" => shot}) |> refusal() == not_a_draft()
+
+      # A turn of another person in an athanor of their own.
+      {other, _user} = person!("screenshot-other")
+      {_theirs, theirs} = turn!(other)
+      assert post(other, theirs, %{"screenshot" => shot}) |> refusal() == not_a_draft()
+
+      # None by that id, an id that is no message id, and a sent message.
+      for missing <- [Prima.UUID7.generate_id("msg"), "../" <> shot, "draft"],
+          do: assert(post(ctx, lineage, %{"screenshot" => missing}) |> refusal() == not_a_draft())
+
+      {:ok, %{posted: sent}} = post(ctx, lineage, %{"text" => "sent"})
+      assert post(ctx, lineage, %{"screenshot" => sent}) |> refusal() == not_a_draft()
+
+      # Refused every time, the turn's own draft is still its to post.
+      assert {:ok, %{files: 1}} = post(ctx, lineage, %{"screenshot" => shot})
+    end
+
+    test "whose bytes are gone is refused, and the post writes nothing",
+         %{ctx: ctx, lineage: lineage} do
+      {:ok, %{message_id: shot, attachment: ref}} = call(ctx, lineage, "screenshot")
+      thread_id = lineage["thread_id"]
+      {:ok, blob} = Aqua.Attachments.blob_path(thread_id, shot, ref)
+      :ok = Arca.delete(Sanctum.Context.actor(ctx), blob)
+
+      assert post(ctx, lineage, %{"text" => "look", "screenshot" => shot}) |> refusal() ==
+               not_a_draft()
+
+      assert posts(ctx, thread_id) == []
+    end
+
+    test "taken by an attempt a takeover replaced, or by a turn since cancelled, publishes nothing",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      attempt!(turn, "att_first")
+      first = Map.put(lineage, "attempt", "att_first")
+      {:ok, %{message_id: shot}} = call(ctx, first, "screenshot")
+
+      # The takeover's holder runs the next attempt: the draft is not its.
+      attempt!(turn, "att_second")
+      second = Map.put(lineage, "attempt", "att_second")
+      assert post(ctx, second, %{"screenshot" => shot}) |> refusal() == not_a_draft()
+
+      # The holder it replaced is superseded.
+      assert {:error, _superseded} = post(ctx, first, %{"screenshot" => shot})
+
+      # The first attempt back, the turn cancelled: nothing posts.
+      attempt!(turn, "att_first")
+      set_status(turn, "cancelled")
+      assert {:error, _not_in_a_turn} = post(ctx, first, %{"screenshot" => shot})
+      assert posts(ctx, lineage["thread_id"]) == []
+    end
+
+    test "of a deleted thread is gone with it", %{ctx: ctx, turn: turn, lineage: lineage} do
+      {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
+      set_status(turn, "completed")
+      assert {:ok, _} = Threads.delete(Sanctum.Context.actor(ctx), lineage["thread_id"])
+      assert gone?(ctx, lineage["thread_id"], shot)
+    end
+
+    test "posted by two posts at once is one picture, in one post",
+         %{ctx: ctx, lineage: lineage} do
+      {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
+
+      answers =
+        1..2
+        |> Enum.map(fn _ -> Task.async(fn -> post(ctx, lineage, %{"screenshot" => shot}) end) end)
+        |> Enum.map(&Task.await(&1, 10_000))
+
+      assert [{:ok, %{posted: post_id, files: 1}}] = Enum.filter(answers, &match?({:ok, _}, &1))
+      assert [{:error, _}] = Enum.reject(answers, &match?({:ok, _}, &1))
+      assert [%{id: ^post_id}] = posts(ctx, lineage["thread_id"])
+      assert gone?(ctx, lineage["thread_id"], shot)
+    end
+
+    test "a post refused for its bounds copies nothing and leaves the draft to post",
+         %{ctx: ctx, lineage: lineage} do
+      {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
+      thread_id = lineage["thread_id"]
+      %{max_files: max} = Aqua.Attachments.limits()
+
+      files =
+        for n <- 1..max,
+            do: %{
+              "filename" => "f#{n}.txt",
+              "media_type" => "text/plain",
+              "data" => Base.encode64("x")
+            }
+
+      assert {:error, _too_many} = post(ctx, lineage, %{"files" => files, "screenshot" => shot})
+      assert posts(ctx, thread_id) == []
+
+      {:ok, entries} = Arca.list(Sanctum.Context.actor(ctx), Threads.blob_root(thread_id))
+      assert entries == [shot]
+
+      assert {:ok, %{files: 1}} = post(ctx, lineage, %{"screenshot" => shot})
     end
   end
 

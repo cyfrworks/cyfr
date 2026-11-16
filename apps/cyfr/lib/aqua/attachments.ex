@@ -45,6 +45,7 @@ defmodule Aqua.Attachments do
   @max_file_bytes 20_000_000
   @name_max 120
   @unsent_ttl_ms 24 * 60 * 60 * 1000
+  @draft_id ~r/\Amsg_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
 
   @type file :: %{required(String.t()) => term()}
   @type ref :: %{required(String.t()) => term()}
@@ -197,6 +198,108 @@ defmodule Aqua.Attachments do
 
     Prima.Source.to_json_list(read ++ copied_sources(ref))
   end
+
+  @doc """
+  Keep `file`, a picture a running turn took, as a draft: stored under a
+  message id of its own that has not been sent, in the turn's thread, as
+  `copy/4` stores, with its facts beside it under the same id (`draft`):
+  the turn and the attempt that took it, its thread, person and athanor,
+  the file's ref and `sources`, what the page it shows came from when it
+  was taken. Only `drafted/3`, called by the same attempt of the same
+  turn, publishes it. Answers the draft's id and the file's ref; a write
+  that fails leaves nothing.
+  """
+  @spec draft(Context.t(), Aqua.Tape.turn(), file(), [Prima.Source.t()]) ::
+          {:ok, String.t(), ref()} | {:error, term()}
+  def draft(%Context{} = ctx, turn, file, sources) when is_list(sources) do
+    id = Prima.UUID7.generate_id("msg")
+
+    with {:ok, [ref]} <- write(ctx, turn.thread_id, id, [file]) do
+      facts =
+        Jason.encode!(%{
+          "turn" => turn.id,
+          "attempt" => turn.attempt,
+          "thread" => turn.thread_id,
+          "person" => ctx.user_id,
+          "athanor" => ctx.athanor_id,
+          "ref" => ref,
+          "sources" => Prima.Source.to_json_list(sources)
+        })
+
+      case Arca.put_if_none_match(Context.actor(ctx), draft_path(turn.thread_id, id), facts) do
+        :ok ->
+          {:ok, id, ref}
+
+        {:error, _} ->
+          _ = discard(ctx, turn.thread_id, id)
+          {:error, :storage_error}
+      end
+    end
+  end
+
+  @doc """
+  The file of the draft `id` (`draft/4`) for a copy (`copy/4`), with the
+  sources it was taken with, claimed for one publication: only a draft
+  of `turn`'s own attempt, thread, person and athanor that has not been
+  sent and that no other publication holds. Any other is
+  `{:error, :not_a_draft}`, and so is one whose bytes have gone. The
+  caller ends the claim: `discard/3` of the draft once the post is
+  written, `release/3` when it is not.
+  """
+  @spec drafted(Context.t(), Aqua.Tape.turn(), term()) :: {:ok, file()} | {:error, term()}
+  def drafted(%Context{} = ctx, turn, id) when is_binary(id) do
+    actor = Context.actor(ctx)
+    thread_id = turn.thread_id
+
+    with true <- Regex.match?(@draft_id, id) || {:error, :not_a_draft},
+         :ok <- unsent(ctx, id) |> drafted_refusal(),
+         {:ok, facts} <- Arca.get(actor, draft_path(thread_id, id)) |> drafted_refusal(),
+         {:ok, facts} <- Jason.decode(facts) |> drafted_refusal(),
+         {:ok, ref} <- own_draft(ctx, turn, facts),
+         :ok <- Arca.put_if_none_match(actor, claim_path(thread_id, id), "") |> drafted_refusal() do
+      case bytes_of(actor, thread_id, id, ref) do
+        {:ok, file} ->
+          {:ok, Map.put(file, "sources", facts["sources"])}
+
+        {:error, _gone} ->
+          release(ctx, thread_id, id)
+          {:error, :not_a_draft}
+      end
+    end
+  end
+
+  def drafted(_ctx, _turn, _id), do: {:error, :not_a_draft}
+
+  @doc "End a claim `drafted/3` took that published nothing: the draft stays publishable."
+  @spec release(Context.t(), String.t(), String.t()) :: :ok
+  def release(%Context{} = ctx, thread_id, id) do
+    _ = Arca.delete(Context.actor(ctx), claim_path(thread_id, id))
+    :ok
+  end
+
+  # The draft's ref, when the draft is this attempt's of this turn, in its
+  # thread, of its person and athanor, and was kept with its sources.
+  defp own_draft(ctx, turn, %{"ref" => %{} = ref, "sources" => [_ | _]} = facts) do
+    if facts["turn"] == turn.id and facts["attempt"] == turn.attempt and
+         facts["thread"] == turn.thread_id and facts["person"] == ctx.user_id and
+         facts["athanor"] == ctx.athanor_id,
+       do: {:ok, ref},
+       else: {:error, :not_a_draft}
+  end
+
+  defp own_draft(_ctx, _turn, _facts), do: {:error, :not_a_draft}
+
+  # A draft that is not there, was sent, or is claimed: one refusal, so
+  # nothing tells another turn's or person's draft from none.
+  defp drafted_refusal(:ok), do: :ok
+  defp drafted_refusal({:ok, _} = ok), do: ok
+  defp drafted_refusal({:error, :database_error}), do: {:error, :database_error}
+  defp drafted_refusal({:error, _}), do: {:error, :not_a_draft}
+
+  # The facts and the claim of a draft beside its file. A stored file is
+  # named `<n>-<name>` (`stored_name/2`), so neither name is ever a file's.
+  defp draft_path(thread_id, id), do: Arca.ThreadStorage.blob_root(thread_id) ++ [id, "draft"]
+  defp claim_path(thread_id, id), do: Arca.ThreadStorage.blob_root(thread_id) ++ [id, "published"]
 
   @doc "The sources a copied file came with (`[]` for a file that is no copy)."
   @spec copied_sources(ref()) :: [Prima.Source.t()]
