@@ -369,6 +369,37 @@ defmodule Arca.WorkspaceStorageTest do
     assert state(actor, workspace.id) == "done"
   end
 
+  test "a report while a crew member's card waits lands and leaves the thread waiting; once the last card is settled and nothing else remains, it is what the report said",
+       %{actor: actor, daily: daily} do
+    workspace = open!(actor, daily)
+    [opening] = Threads.messages(actor, workspace.id)
+    own = opening_turn!(actor, workspace, opening)
+    {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
+    member = running!(actor, child)
+    card = card!(actor, member, "k1")
+    assert state(actor, workspace.id) == "needs_you"
+
+    assert {:ok, %{workspace_state: "needs_you"}} =
+             TurnStorage.report_workspace(actor, own.id, "done", %{
+               fence: own.fence,
+               summary: "Done."
+             })
+
+    assert state(actor, workspace.id) == "needs_you"
+
+    assert ["needs_you", "done"] =
+             for(record <- records(actor, "workspace_report"), do: record.snapshot["outcome"])
+
+    # Decided, the card leaves the member's turn still running: at work.
+    decline!(actor, member, card)
+    assert state(actor, workspace.id) == "open"
+
+    # The member's turn ends and nothing else remains: what the report said.
+    finish!(actor, member)
+    assert state(actor, workspace.id) == "done"
+    assert length(records(actor, "workspace_report")) == 2
+  end
+
   # Retention decides under the rows it deletes.
   test "a person's post that lands as retention removes a thread keeps the thread, or finds it gone",
        %{actor: actor, daily: daily} do

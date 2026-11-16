@@ -20,12 +20,12 @@ defmodule Aqua.Providers.Workspace do
       thread's id at once, and the calling turn goes on, as `crew.ask`'s
       does. A thread asked again that had finished opens again.
     * `report` is the soul's there: from a turn of the workspace thread
-      it reports, under that turn's fence, it moves the thread from
-      `open` to `done` or `failed` with a summary and the files of the
-      thread's posts it carries, and the `workspace_report` record lands
-      the report on the daily thread current when it is delivered. The
-      host makes the other moves (`Arca.TurnStorage`'s "Workspace
-      threads").
+      it reports, under that turn's fence, `done` or `failed` with a
+      summary and the files of the thread's posts it carries, which the
+      thread becomes once nothing else it accepted remains to run and no
+      card waits, and the `workspace_report` record lands the report on
+      the daily thread current when it is delivered. The host makes the
+      other moves (`Arca.TurnStorage`'s "Workspace threads").
     * `list` answers the records a view reads (`records/1`).
 
   ## Who calls

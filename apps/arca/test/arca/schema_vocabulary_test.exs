@@ -74,6 +74,8 @@ defmodule Arca.SchemaVocabularyTest do
       {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()},
       {"mcp_servers", "mcp_servers_home_known", "home", Arca.Schemas.McpServer.homes()},
       {"threads", "threads_kind_known", "kind", Arca.Schemas.Thread.kinds()},
+      {"threads", "threads_workspace_outcome_known", "workspace_outcome",
+       Arca.Schemas.Thread.workspace_outcomes()},
       {"messages", "messages_outcome_known", "outcome", Arca.Schemas.Message.outcomes()}
     ]
   end
@@ -277,6 +279,12 @@ defmodule Arca.SchemaVocabularyTest do
       for row <- [
             room,
             thread(ctx, %{kind: "workspace", day: nil, workspace_state: "needs_you"}),
+            thread(ctx, %{
+              kind: "workspace",
+              day: nil,
+              workspace_state: "needs_you",
+              workspace_outcome: "done"
+            }),
             thread(ctx, %{kind: "crew", day: nil, parent_id: room.id})
           ] do
         assert {1, _} = insert!("threads", row)
@@ -291,6 +299,17 @@ defmodule Arca.SchemaVocabularyTest do
         "threads_workspace_state_known"
       )
 
+      refused!(
+        "threads",
+        thread(ctx, %{
+          kind: "workspace",
+          day: nil,
+          workspace_state: "open",
+          workspace_outcome: "open"
+        }),
+        "threads_workspace_outcome_known"
+      )
+
       for row <- [
             thread(ctx, %{day: nil}),
             thread(ctx, %{workspace_state: "open"}),
@@ -298,7 +317,9 @@ defmodule Arca.SchemaVocabularyTest do
             thread(ctx, %{parent_id: room.id}),
             thread(ctx, %{kind: "workspace", day: nil}),
             thread(ctx, %{kind: "crew"}),
-            thread(ctx, %{kind: "crew", day: nil})
+            thread(ctx, %{kind: "crew", day: nil}),
+            thread(ctx, %{workspace_outcome: "done"}),
+            thread(ctx, %{kind: "crew", day: nil, parent_id: room.id, workspace_outcome: "failed"})
           ] do
         refused!("threads", row, "threads_kind_whole")
       end

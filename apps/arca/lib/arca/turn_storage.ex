@@ -70,20 +70,30 @@ defmodule Arca.TurnStorage do
   A workspace thread is opened, or asked again, in one transaction
   (`open_workspace/2`): the thread, its opening row, the daily thread's
   pointer and the `workspace_open` record whose delivery opens the turn
-  on that opening (`accept_message/3`'s `:opening_id`). Its state moves
-  in the transaction of the write that moves it, and a move to `done`,
-  `failed` or `needs_you` records its `workspace_report` there too:
+  on that opening (`accept_message/3`'s `:opening_id`).
 
-    * a card opened there moves `open` to `needs_you` (`open_approval/3`);
-    * the last card waiting there, decided, skipped or invalidated,
-      moves `needs_you` back to `open`, reporting nothing;
-    * a turn's own report of its work as `done` or `failed`
+  One rule decides its state (`work_state!/2`), and every write that may
+  move it asks the rule in its own transaction: a workspace thread is
+  finished when nothing it accepted remains to run, in it or in a crew
+  thread under it, and no card waits in any of them. Finished, it is what
+  its last report said (`workspace_outcome`), or `open` when none did
+  since it last took new work; until then it is `needs_you` while a card
+  waits and `open` otherwise. A turn that reported has no work left to
+  run, and a request asked of a crew member is left until its answer
+  lands. The writes that ask it:
+
+    * a turn's report of its work as `done` or `failed`
       (`report_workspace/4`), once a turn, or a turn there that ends
-      failed or uncertain without one (`finish/4`), records the report
-      and moves the thread to that outcome when nothing else it accepted
-      remains to run, and leaves it as it is otherwise;
-    * a person's message there, or a further opening, moves `done` or
-      `failed` back to `open`, reporting nothing.
+      failed or uncertain without one (`finish/4`), which records the
+      `workspace_report` and its outcome, landing whatever else remains;
+    * a card opened there or in a crew thread under it (`open_approval/3`),
+      which records a `needs_you` report when the thread comes to wait;
+    * a card left `pending` by a decision, a skip or an invalidation, a
+      turn's end there or in a crew thread under it, and a row landing
+      there (a crew member's answer among them), reporting nothing;
+    * a person's message there, or a further opening, which is new work:
+      what an earlier report said no longer ends it, and `done` or
+      `failed` is `open` again.
 
   A row that names a workspace thread (a report delivered to a daily
   thread) lands only while that thread stands, which is taken before the
@@ -258,6 +268,7 @@ defmodule Arca.TurnStorage do
           answered!(athanor_id, thread, row, Map.get(attrs, :answers, []))
           requested!(actor, thread, row, Map.get(attrs, :request))
           receipted!(actor, Map.get(attrs, :receipt))
+          if thread.kind == "workspace", do: settle_work!(athanor_id, thread)
 
           %{message: %{row | turn_id: turn && turn.id}, turn: turn}
         end)
@@ -616,26 +627,26 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # A workspace thread that finished opens again; one at work or waiting
-  # on its person stays as it is.
+  # New work in a workspace thread, a person's post or a further opening:
+  # what an earlier report said no longer ends it, and a finished one is
+  # at work again; one waiting on its person still waits.
   # arca:db-raise-ok inside the caller's transaction
-  defp reopened!(athanor_id, %Thread{kind: "workspace", workspace_state: state} = thread)
-       when state in ["done", "failed"] do
+  defp reopened!(athanor_id, %Thread{kind: "workspace", workspace_state: state} = thread) do
+    state = if state in ["done", "failed"], do: "open", else: state
+
     {1, _} =
       from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread.id)
-      |> Arca.Repo.update_all(set: [workspace_state: "open"])
+      |> Arca.Repo.update_all(set: [workspace_state: state, workspace_outcome: nil])
 
-    %{thread | workspace_state: "open"}
+    %{thread | workspace_state: state, workspace_outcome: nil}
   end
-
-  defp reopened!(_athanor_id, %Thread{} = thread), do: thread
 
   @doc """
   Report the work of a running turn of a workspace thread as `outcome`
   (`done` or `failed`) under the turn's fence, with its
   `workspace_report` record in the same transaction, under the thread's
-  row: the thread moves to `outcome` only when nothing else it accepted
-  remains to run (the moduledoc's "Workspace threads"). `attrs`:
+  row: the thread is `outcome` once nothing else it accepted remains to
+  run and no card waits (the moduledoc's "Workspace threads"). `attrs`:
   `:fence`, `:summary`, `:attachments` (`[%{"message_id",
   "stored_name"}]`, files of the thread's own posts). A turn whose fence
   moved is `{:error, :superseded}`, one that is over `{:error,
@@ -658,7 +669,7 @@ defmodule Arca.TurnStorage do
           when state in ["open", "needs_you"] ->
             if reported?(athanor_id, thread.id, turn.id), do: Arca.Repo.rollback(:reported)
 
-            moved!(athanor_id, thread, turn, outcome, %{
+            report!(athanor_id, thread, turn, outcome, %{
               summary: Map.get(attrs, :summary) || "",
               attachments: Map.get(attrs, :attachments, [])
             })
@@ -676,19 +687,10 @@ defmodule Arca.TurnStorage do
 
   def report_workspace(%Prima.Actor{}, _turn_id, _outcome, _attrs), do: {:error, :no_athanor}
 
-  # A report of `outcome` by `turn`, the `workspace_report` that tells the
-  # daily thread, recorded under the identity of the turn's person and
-  # origin, with the thread's state moved as it derives (`state_after/4`).
-  # Answers the thread as moved.
+  # The workspace_report that tells the daily thread, recorded under the
+  # identity of the reporting turn's person and origin.
   # arca:db-raise-ok inside the caller's transaction
-  defp moved!(athanor_id, %Thread{} = thread, %Turn{} = turn, outcome, report) do
-    now = DateTime.utc_now()
-    state = state_after(athanor_id, thread, turn, outcome)
-
-    {1, _} =
-      from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread.id)
-      |> Arca.Repo.update_all(set: [workspace_state: state])
-
+  defp reported!(athanor_id, %Thread{} = thread, %Turn{} = turn, outcome, report) do
     with {:ok, origin} <- Prima.Origin.from_wire(turn.origin) do
       record =
         Prima.OutboxRecord.workspace_report(%{
@@ -697,7 +699,7 @@ defmodule Arca.TurnStorage do
           workspace_id: thread.id,
           title: thread.title,
           turn_id: turn.id,
-          moved_at: now,
+          moved_at: DateTime.utc_now(),
           outcome: outcome,
           summary: Map.get(report, :summary) || "",
           attachments: Map.get(report, :attachments, []),
@@ -710,93 +712,134 @@ defmodule Arca.TurnStorage do
     else
       _no_origin -> Arca.Repo.rollback(:no_origin)
     end
-
-    %{thread | workspace_state: state}
   end
 
-  # A card waits on the person whatever else runs. A report of `done` or
-  # `failed` ends the reporting turn's own work, and the thread's with it
-  # only when nothing else it accepted remains to run: no other open turn
-  # of it, and no opening still waiting for its turn. Until then the
-  # thread keeps the state it has, and the report still lands.
+  # The one rule of a workspace thread's state, which every write that may
+  # move it asks (a report, a card opened or settled, a turn's end, a
+  # crew member's answer, new work): a workspace thread is finished when
+  # nothing it accepted remains to run, in it or in a crew thread under
+  # it, and no card waits in any of them. Finished, it is what its last
+  # report since it last took new work said (`workspace_outcome`), or at
+  # work when none said anything; until then it waits on its person while
+  # a card waits, and is at work otherwise. A turn that reported its work
+  # done or failed has none left to run, though its row stays open until
+  # it ends; a request it asked a crew member is left until answered.
   # arca:db-raise-ok inside the caller's transaction
-  defp state_after(_athanor_id, %Thread{}, %Turn{}, "needs_you"), do: "needs_you"
+  defp work_state!(athanor_id, %Thread{kind: "workspace"} = workspace) do
+    threads =
+      from(c in Thread,
+        where: c.athanor_id == ^athanor_id,
+        where: c.id == ^workspace.id or (c.kind == "crew" and c.parent_id == ^workspace.id),
+        select: c.id
+      )
 
-  defp state_after(athanor_id, %Thread{} = thread, %Turn{} = turn, outcome) do
-    other_turns =
+    card_waits =
+      from(a in Approval,
+        where: a.athanor_id == ^athanor_id and a.thread_id in subquery(threads),
+        where: a.status == "pending"
+      )
+
+    turns_run =
       from(t in Turn,
-        where: t.athanor_id == ^athanor_id and t.thread_id == ^thread.id,
-        where: t.status in ^@open and t.id != ^turn.id
+        where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
+        where: t.status in ^@open and t.id not in ^reported_turns(athanor_id, workspace.id)
       )
 
-    waiting_openings =
+    asked =
       from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.thread_id == ^thread.id,
-        where: m.kind == "opening" and is_nil(m.turn_id)
+        where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace.id,
+        where:
+          (m.kind == "opening" and is_nil(m.turn_id)) or
+            (not is_nil(m.addressee) and m.status == "pending")
       )
 
-    if Arca.Repo.exists?(other_turns) or Arca.Repo.exists?(waiting_openings),
-      do: thread.workspace_state,
-      else: outcome
+    cond do
+      Arca.Repo.exists?(card_waits) -> "needs_you"
+      Arca.Repo.exists?(turns_run) or Arca.Repo.exists?(asked) -> "open"
+      workspace.workspace_outcome in ["done", "failed"] -> workspace.workspace_outcome
+      true -> "open"
+    end
+  end
+
+  # The workspace thread's state as the rule now has it, written when it
+  # moved. Answers the thread as it stands.
+  # arca:db-raise-ok inside the caller's transaction
+  defp settle_work!(athanor_id, %Thread{kind: "workspace"} = workspace) do
+    case work_state!(athanor_id, workspace) do
+      same when same == workspace.workspace_state ->
+        workspace
+
+      state ->
+        {1, _} =
+          from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
+          |> Arca.Repo.update_all(set: [workspace_state: state])
+
+        %{workspace | workspace_state: state}
+    end
+  end
+
+  # A turn's report of its work: what the thread becomes once its work is
+  # finished, recorded, and the thread's state asked again.
+  # arca:db-raise-ok inside the caller's transaction
+  defp report!(athanor_id, %Thread{} = workspace, %Turn{} = turn, outcome, report) do
+    {1, _} =
+      from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
+      |> Arca.Repo.update_all(set: [workspace_outcome: outcome])
+
+    reported!(athanor_id, workspace, turn, outcome, report)
+    settle_work!(athanor_id, %{workspace | workspace_outcome: outcome})
   end
 
   # Whether `turn` has reported its work done or failed already: each
   # turn of a workspace thread reports its own work once.
   # arca:db-raise-ok inside the caller's transaction
-  defp reported?(athanor_id, workspace_id, turn_id) do
+  defp reported?(athanor_id, workspace_id, turn_id),
+    do: turn_id in reported_turns(athanor_id, workspace_id)
+
+  # The turns of a workspace thread that reported its work done or failed.
+  # arca:db-raise-ok inside the caller's transaction
+  defp reported_turns(athanor_id, workspace_id) do
     from(r in Arca.Schemas.OutboxRecord,
       where: r.athanor_id == ^athanor_id and r.kind == "workspace_report",
       where: r.source_kind == "thread" and r.source_id == ^workspace_id,
       select: r.snapshot
     )
     |> Arca.Repo.all()
-    |> Enum.any?(fn text ->
-      match?(
-        {:ok, %{"turn_id" => ^turn_id, "outcome" => outcome}} when outcome in ["done", "failed"],
-        Prima.Json.decode(text)
-      )
+    |> Enum.flat_map(fn text ->
+      case Prima.Json.decode(text) do
+        {:ok, %{"turn_id" => turn_id, "outcome" => outcome}} when outcome in ["done", "failed"] ->
+          [turn_id]
+
+        _needs_you ->
+          []
+      end
     end)
   end
 
-  # The host's moves, each in the transaction of the write
-  # that causes it. A card opened in a workspace thread at work, or in a
-  # crew member's thread under it, whose job is part of its work: it waits
-  # on its person, and the daily thread is told.
+  # A card opened in a workspace thread, or in a crew member's thread
+  # under it, whose job is part of its work: the thread waits on its
+  # person, and the daily thread is told when it did not already.
   # arca:db-raise-ok inside the caller's transaction
   defp waits!(athanor_id, %Thread{} = thread, turn, approval_id) do
     case work_of(athanor_id, thread) do
-      %Thread{workspace_state: "open"} = workspace ->
-        moved!(athanor_id, workspace, turn, "needs_you", %{approval_id: approval_id})
+      %Thread{workspace_state: was} = workspace ->
+        settled = settle_work!(athanor_id, workspace)
 
-      _none_or_not_at_work ->
+        if was != "needs_you" and settled.workspace_state == "needs_you",
+          do: reported!(athanor_id, workspace, turn, "needs_you", %{approval_id: approval_id})
+
+      nil ->
         :ok
     end
   end
 
-  # The last card waiting in a workspace thread and its crew members'
-  # threads decided, by any way a card leaves `pending`: it is at work
-  # again, and nothing is reported.
+  # A card left `pending` by any way, a decision, a skip or an
+  # invalidation: the thread's state asked again, reporting nothing.
   # arca:db-raise-ok inside the caller's transaction
   defp settled!(athanor_id, thread_id) do
-    with %Thread{workspace_state: "needs_you"} = workspace <-
-           work_of(athanor_id, thread!(athanor_id, thread_id)) do
-      threads =
-        from(c in Thread,
-          where: c.athanor_id == ^athanor_id,
-          where: c.id == ^workspace.id or (c.kind == "crew" and c.parent_id == ^workspace.id),
-          select: c.id
-        )
-
-      waiting =
-        from(a in Approval,
-          where: a.athanor_id == ^athanor_id and a.thread_id in subquery(threads),
-          where: a.status == "pending"
-        )
-
-      unless Arca.Repo.exists?(waiting) do
-        from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
-        |> Arca.Repo.update_all(set: [workspace_state: "open"])
-      end
+    case work_of(athanor_id, thread!(athanor_id, thread_id)) do
+      %Thread{} = workspace -> settle_work!(athanor_id, workspace)
+      nil -> :ok
     end
 
     :ok
@@ -816,24 +859,30 @@ defmodule Arca.TurnStorage do
 
   defp work_of(_athanor_id, %Thread{}), do: nil
 
-  # A turn of a workspace thread that ended failed or uncertain fails the
-  # work, with its error as the report's summary; a cancel or a completion
-  # moves nothing.
+  # A turn of a workspace thread, or of a crew member's thread under it,
+  # ended: the thread's state asked again. A turn of the workspace thread
+  # itself that ended failed or uncertain without a report of its own
+  # fails its work first, with its error as the report's summary.
   # arca:db-raise-ok inside the caller's transaction
-  defp ended_work!(athanor_id, %Turn{} = turn, status, attrs)
-       when status in ["failed", "uncertain"] do
-    case thread!(athanor_id, turn.thread_id) do
-      %Thread{kind: "workspace", workspace_state: state} = thread
-      when state in ["open", "needs_you"] ->
-        unless reported?(athanor_id, thread.id, turn.id),
-          do: moved!(athanor_id, thread, turn, "failed", %{summary: Map.get(attrs, :error) || ""})
+  defp ended_work!(athanor_id, %Turn{} = turn, status, attrs) do
+    case work_of(athanor_id, thread!(athanor_id, turn.thread_id)) do
+      %Thread{id: id, workspace_state: state} = workspace
+      when id == turn.thread_id and status in ["failed", "uncertain"] and
+             state in ["open", "needs_you"] ->
+        if reported?(athanor_id, workspace.id, turn.id),
+          do: settle_work!(athanor_id, workspace),
+          else:
+            report!(athanor_id, workspace, turn, "failed", %{
+              summary: Map.get(attrs, :error) || ""
+            })
 
-      %Thread{} ->
+      %Thread{workspace_state: state} = workspace when state in ["open", "needs_you"] ->
+        settle_work!(athanor_id, workspace)
+
+      _finished_or_none ->
         :ok
     end
   end
-
-  defp ended_work!(_athanor_id, %Turn{}, _status, _attrs), do: :ok
 
   # A person's post in a finished workspace thread opens it again.
   # arca:db-raise-ok inside the caller's transaction

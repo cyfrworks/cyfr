@@ -766,8 +766,8 @@ defmodule Aqua.Tape do
 
   @doc """
   Report the outcome of the workspace thread `turn` runs in, under its
-  fence (`Arca.TurnStorage.report_workspace/4`): the thread moved and its
-  `workspace_report` recorded. The thread's place in the person's list is
+  fence (`Arca.TurnStorage.report_workspace/4`): its `workspace_report`
+  recorded, and the thread moved to the outcome once its work is finished. The thread's place in the person's list is
   announced and the crew's delivery consumer woken after the commit.
   """
   @spec report_workspace(Context.t(), turn(), String.t(), map()) ::

@@ -2551,12 +2551,18 @@ defmodule Arca.Repo.Migrations.Baseline do
         "(kind = 'daily') = (day IS NOT NULL) AND " <>
           "(kind = 'workspace') = (workspace_state IS NOT NULL) AND " <>
           "(kind = 'workspace' OR opened_from IS NULL) AND " <>
+          "(kind = 'workspace' OR workspace_outcome IS NULL) AND " <>
           "(kind = 'crew') = (parent_id IS NOT NULL)"
     }
 
     # `Arca.Schemas.Thread.workspace_states/0`.
     workspace_state =
       known("threads_workspace_state_known", "workspace_state", ~w(open needs_you done failed))
+
+    # What a workspace thread's last report said, which it becomes once
+    # its work is finished.
+    workspace_outcome =
+      known("threads_workspace_outcome_known", "workspace_outcome", ~w(done failed))
 
     read_mark = %{name: "threads_read_seq_counted", expr: "read_seq >= 0"}
 
@@ -2580,6 +2586,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # plain string from which nothing cascades, and how its work stands.
       add :opened_from, :string
       add :workspace_state, :string, check: if(sqlite?, do: workspace_state)
+      # What its last report said, done or failed, since it last took new
+      # work: what it becomes once nothing it accepted remains to run and
+      # no card waits.
+      add :workspace_outcome, :string, check: if(sqlite?, do: workspace_outcome)
       # `seq` of the last message the person has seen: one mark per thread,
       # since an athanor is one person's, moved forward only.
       add :read_seq, :integer, null: false, default: 0, check: if(sqlite?, do: read_mark)
@@ -2611,7 +2621,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :threads, [thread_kind, thread_whole, workspace_state, read_mark])
+    checked(sqlite?, :threads, [
+      thread_kind,
+      thread_whole,
+      workspace_state,
+      workspace_outcome,
+      read_mark
+    ])
+
     create unique_index(:threads, [:id, :athanor_id])
 
     # One daily thread per date of an athanor: of two callers making the

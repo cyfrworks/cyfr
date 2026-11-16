@@ -19,13 +19,17 @@ defmodule Arca.Schemas.Thread do
   `kind` is `"daily"`, `"workspace"` or `"crew"`. A daily thread is the
   person's thread of one `day`, the date in their own time zone, one per
   date of the athanor. A workspace thread is one Aqua opens for a piece of
-  work, with its `workspace_state` (`workspace_states/0`) and the daily
-  thread's post it was `opened_from`. A crew thread is a child thread a
-  crew member (`agent`) works in under the room thread `parent_id` names,
-  a daily or a workspace thread, one per member per room while it stands;
-  `archived_at` is when a child thread was retired, after which it admits
-  nothing and the next request to its member opens a new one. Each kind
-  holds its own fields and no other's, which the table's CHECK holds too.
+  work, with its `workspace_state` (`workspace_states/0`), the daily
+  thread's post it was `opened_from`, and its `workspace_outcome`
+  (`workspace_outcomes/0`): what its last report since it last took new
+  work said, which it becomes once that work is finished
+  (`Arca.TurnStorage`'s "Workspace threads"). A crew thread is a child
+  thread a crew member (`agent`) works in under the room thread
+  `parent_id` names, a daily or a workspace thread, one per member per
+  room while it stands; `archived_at` is when a child thread was
+  retired, after which it admits nothing and the next request to its
+  member opens a new one. Each kind holds its own fields and no other's,
+  which the table's CHECK holds too.
 
   `read_seq` is the `seq` of the last message the person has seen; an
   athanor is one person's, so one mark per thread, moved forward only.
@@ -44,6 +48,7 @@ defmodule Arca.Schemas.Thread do
 
   @kinds ~w(daily workspace crew)
   @workspace_states ~w(open needs_you done failed)
+  @workspace_outcomes ~w(done failed)
 
   @doc "The `kind` vocabulary, the `threads_kind_known` check's."
   @spec kinds() :: [String.t()]
@@ -57,6 +62,10 @@ defmodule Arca.Schemas.Thread do
   @spec workspace_states() :: [String.t()]
   def workspace_states, do: @workspace_states
 
+  @doc "What a workspace thread's report says, the `threads_workspace_outcome_known` check's."
+  @spec workspace_outcomes() :: [String.t()]
+  def workspace_outcomes, do: @workspace_outcomes
+
   schema "threads" do
     field :athanor_id, :string
     field :kind, :string
@@ -64,6 +73,7 @@ defmodule Arca.Schemas.Thread do
     field :day, :date
     field :opened_from, :string
     field :workspace_state, :string
+    field :workspace_outcome, :string
     field :read_seq, :integer, default: 0
     field :brain_session, :string
     field :brain_generation, :integer, default: 0
@@ -85,6 +95,7 @@ defmodule Arca.Schemas.Thread do
     :day,
     :opened_from,
     :workspace_state,
+    :workspace_outcome,
     :title,
     :created_by,
     :agent,
@@ -99,6 +110,7 @@ defmodule Arca.Schemas.Thread do
     |> validate_required([:id, :athanor_id, :kind, :title, :created_by])
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:workspace_state, @workspace_states)
+    |> validate_inclusion(:workspace_outcome, @workspace_outcomes)
     |> validate_length(:title, max: 200)
     |> validate_kind_fields()
     # One daily thread per date of an athanor, under the name each adapter
@@ -117,6 +129,11 @@ defmodule Arca.Schemas.Thread do
     |> then(fn cs ->
       if kind != "workspace" and get_field(cs, :opened_from) != nil,
         do: add_error(cs, :opened_from, "only a workspace thread is opened from a post"),
+        else: cs
+    end)
+    |> then(fn cs ->
+      if kind != "workspace" and get_field(cs, :workspace_outcome) != nil,
+        do: add_error(cs, :workspace_outcome, "only a workspace thread reports"),
         else: cs
     end)
   end
