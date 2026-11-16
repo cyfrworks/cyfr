@@ -2769,7 +2769,10 @@ defmodule Aqua.LoopTest do
       send(model, :continue)
 
       assert :completed = Task.await(task, 60_000)
-      assert %{outcome: "ok", kind: "launch", result_message_id: result} = step!(ctx, turn, launch.id)
+
+      assert %{outcome: "ok", kind: "launch", result_message_id: result} =
+               step!(ctx, turn, launch.id)
+
       assert {:ok, %{kind: "page_result", content: body}} = Tape.message(ctx, result)
       assert %{"ok" => true, "result" => %{"answered" => true}} = Jason.decode!(body)
 

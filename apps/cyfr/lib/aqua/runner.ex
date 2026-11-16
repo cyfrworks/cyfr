@@ -1174,8 +1174,7 @@ defmodule Aqua.Runner do
          %{live: %{turn_id: turn_id}} = state
        ),
        do:
-         {:noreply,
-          propose(%{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)})}
+         {:noreply, propose(%{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)})}
 
   defp handle_owned_info(
          %ThreadEvent{kind: :delta_abandoned, data: %{turn_id: turn_id} = marker},
@@ -1507,7 +1506,8 @@ defmodule Aqua.Runner do
 
   defp orphaned({mode, turn}, state) when mode in [:wait, :continue, :adopt] do
     with {:ok, steps} <- Tape.steps(state.ctx, turn),
-         [_ | _] = ids <- for(%{purpose: "page", dispatch_state: "proposed", id: id} <- steps, do: id) do
+         [_ | _] = ids <-
+           for(%{purpose: "page", dispatch_state: "proposed", id: id} <- steps, do: id) do
       _ = Tape.skip_steps(state.ctx, turn, @orphaned, ids)
     end
 
@@ -1675,7 +1675,8 @@ defmodule Aqua.Runner do
     with {:ok, %{status: "running"} = turn} <- Tape.turn(state.ctx, turn_id) do
       {pages, proposed?, state} = propose_all(state, turn, state.pages, false)
 
-      with true <- proposed?, pid when is_pid(pid) <- Aqua.Loop.holder(turn.id),
+      with true <- proposed?,
+           pid when is_pid(pid) <- Aqua.Loop.holder(turn.id),
            do: send(pid, {:page_call, turn.id})
 
       %{state | pages: pages}
@@ -1704,7 +1705,8 @@ defmodule Aqua.Runner do
   defp open_call(state, call) do
     with true <- Opus.available?() || {:error, :execution_unavailable},
          {:ok, put} <- Tape.turn(state.ctx, call.put_turn_id),
-         {:ok, actor} <- Sanctum.Tenancy.continuation(put.requested_by, state.athanor_id, put.origin),
+         {:ok, actor} <-
+           Sanctum.Tenancy.continuation(put.requested_by, state.athanor_id, put.origin),
          {:ok, %{turn: turn}} <-
            Tape.accept(actor, state.id, %{
              message: %{
@@ -1779,7 +1781,11 @@ defmodule Aqua.Runner do
       if MapSet.member?(waiting, request) or state.paused != nil do
         state
       else
-        refuse_call(state, %{request: request, user_id: user_id}, "the turn ended before the call ran")
+        refuse_call(
+          state,
+          %{request: request, user_id: user_id},
+          "the turn ended before the call ran"
+        )
       end
     end)
   end
@@ -1787,10 +1793,12 @@ defmodule Aqua.Runner do
   # A request that ended: its step, while still proposed, is skipped and
   # its card withdrawn, so a late yes runs nothing.
   defp withdraw(state, request) do
-    with {:ok, %{message: row, turn: %{id: turn_id}}} <- Tape.accepted(state.ctx, state.id, request),
+    with {:ok, %{message: row, turn: %{id: turn_id}}} <-
+           Tape.accepted(state.ctx, state.id, request),
          {:ok, turn} <- Tape.turn(state.ctx, turn_id),
          {:ok, steps} <- Tape.steps(state.ctx, turn),
-         %{id: id} <- Enum.find(steps, &(&1.message_id == row.id and &1.dispatch_state == "proposed")) do
+         %{id: id} <-
+           Enum.find(steps, &(&1.message_id == row.id and &1.dispatch_state == "proposed")) do
       Tape.skip_steps(state.ctx, turn, "the page's request ended", [id])
     end
   end

@@ -241,7 +241,12 @@ defmodule Aqua.PageCalls do
 
     case Keyword.get(opts, :message_id) do
       nil ->
-        Map.put(step, :call, %{kind: "page_call", content: name, client_id: request, payload: payload})
+        Map.put(step, :call, %{
+          kind: "page_call",
+          content: name,
+          client_id: request,
+          payload: payload
+        })
 
       message_id ->
         Map.put(step, :message_id, message_id)

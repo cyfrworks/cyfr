@@ -638,8 +638,11 @@ defmodule Aqua.Loop do
   defp skip_pages(%State{} = state) do
     with {:ok, steps} <- Tape.steps(guest(state), state.turn) do
       case for(%{purpose: "page", dispatch_state: "proposed", id: id} <- steps, do: id) do
-        [] -> :ok
-        ids -> Tape.skip_steps(guest(state), state.turn, "the turn ended before the call ran", ids)
+        [] ->
+          :ok
+
+        ids ->
+          Tape.skip_steps(guest(state), state.turn, "the turn ended before the call ran", ids)
       end
     end
   end
@@ -2487,8 +2490,7 @@ defmodule Aqua.Loop do
                   {items, carded + 1}
 
                 approval ->
-                  {[%{step: step, call: recall(state, step), approval: approval} | items],
-                   carded}
+                  {[%{step: step, call: recall(state, step), approval: approval} | items], carded}
               end
 
             _step, acc ->
