@@ -117,7 +117,7 @@ defmodule Aqua.StepsTest do
     assert {:ok, []} = Aqua.steps(other, thread.id)
   end
 
-  test "a page's step reads as the page's, kept and live alike; a model's call's as before",
+  test "a page's step reads as the page's, by its purpose; a model's call's as before",
        %{ctx: ctx, thread: thread} do
     turn = turn!(ctx, thread)
 

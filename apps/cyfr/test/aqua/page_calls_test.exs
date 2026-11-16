@@ -635,7 +635,7 @@ defmodule Aqua.PageCallsTest do
     assert runs_of(ctx, app) == []
   end
 
-  test "a component with no grant is refused, and the thread asks for its grant",
+  test "a component with no grant asks, and its yes is refused with nothing run",
        %{ctx: ctx, driver: driver} do
     app = app!(ctx, nil, false)
     worker!([app])
