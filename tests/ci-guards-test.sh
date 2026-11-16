@@ -4,8 +4,9 @@
 #
 # Regression cases for scripts/ci/seed-guard.sh, scripts/ci/config-seam.sh,
 # scripts/ci/retry.sh, scripts/ci/world-checks.sh,
-# scripts/ci/self-test-scope.sh and scripts/ci/storage-diagrams.py, and for
-# scripts/release.sh's use of the seed guard.
+# scripts/ci/self-test-scope.sh, scripts/ci/storage-diagrams.py and
+# scripts/ci/main-run.py (against a stand-in gh), and for scripts/release.sh's
+# use of the seed guard.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -839,6 +840,268 @@ if [ "$code" -eq 7 ] && [ "$(wc -l < "$scratch/count")" -eq 3 ] && [ "$(tr '\n' 
 label="retry: no command is refused"
 run_retry
 if [ "$code" -eq 64 ]; then pass "$label"; else fail "$label"; fi
+
+# --- scripts/ci/main-run.py ---
+
+main_run="$root/scripts/ci/main-run.py"
+# The stand-in gh answers from $GH_STATE, a JSON list of push runs on main.
+# `api --paginate URL` lists, two to a page as gh prints pages, the runs of
+# the URL's head_sha, or without one every run created at or after its
+# `created` bound; each page states the total, which GH_SHORT makes one
+# more than it lists, as a capped or broken listing does. A POST to
+# runs/ID/rerun-failed-jobs or runs/ID/rerun takes the run to its next
+# attempt, queued; under GH_STALE the listing keeps the attempt it had and
+# a second POST for the run is refused, as for a run already rerunning.
+# Every call is a line of $GH_CALLS; under GH_FAIL every call fails, under
+# GH_FAIL_POST every POST.
+mkdir -p "$scratch/gh-bin"
+cat > "$scratch/gh-bin/gh" <<'GH'
+#!/usr/bin/env python3
+import json, os, re, sys, urllib.parse
+args = sys.argv[1:]
+with open(os.environ["GH_CALLS"], "a") as f:
+    f.write(" ".join(args) + "\n")
+if os.environ.get("GH_FAIL") or args[:1] != ["api"]:
+    sys.exit("gh: stand-in refused")
+state = os.environ["GH_STATE"]
+runs = json.load(open(state))
+if args[1:3] == ["-X", "POST"]:
+    m = re.fullmatch(r"repos/\{owner\}/\{repo\}/actions/runs/(\d+)/(rerun-failed-jobs|rerun)", args[3])
+    run = next((r for r in runs if m and str(r["id"]) == m[1]), None)
+    posted = state + ".posted"
+    seen = open(posted).read().split() if os.path.exists(posted) else []
+    if os.environ.get("GH_FAIL_POST") or run is None or m[1] in seen:
+        sys.exit("gh: HTTP 403")
+    open(posted, "a").write(m[1] + "\n")
+    if not os.environ.get("GH_STALE"):
+        run.update(run_attempt=run["run_attempt"] + 1, status="queued", conclusion=None)
+        json.dump(runs, open(state, "w"))
+    sys.exit(0)
+path, _, query = args[-1].partition("?")
+q = dict(urllib.parse.parse_qsl(query))
+if args[1] != "--paginate" or path != "repos/{owner}/{repo}/actions/runs" or (q.get("branch"), q.get("event")) != ("main", "push"):
+    sys.exit(f"gh: stand-in does not answer {args}")
+if "head_sha" in q:
+    runs = [r for r in runs if r["head_sha"] == q["head_sha"]]
+else:
+    runs = [r for r in runs if r["created_at"] >= q["created"].removeprefix(">=")]
+total = len(runs) + (1 if os.environ.get("GH_SHORT") else 0)
+for i in range(0, max(len(runs), 1), 2):
+    print(json.dumps({"total_count": total, "workflow_runs": runs[i:i + 2]}))
+GH
+chmod +x "$scratch/gh-bin/gh"
+
+# Main: B, then C, D and E, a minute apart from 12:00 UTC, with X on a
+# branch. B's workflow files would mislead a reader of them (Wild runs on
+# every branch's push, Codex only under apps/codex): the script reads runs
+# alone.
+main_run_repo() {
+  local c n=0
+  new_repo
+  mkdir -p .github/workflows
+  printf "name: Wild\non:\n  push:\n    branches: ['**']\njobs: {}\n" > .github/workflows/wild.yml
+  printf "name: Codex\non:\n  push:\n    branches: [main]\n    paths: ['apps/codex/**']\njobs: {}\n" > .github/workflows/codex.yml
+  printf "name: Test\non:\n  push:\n    branches: [main]\njobs: {}\n" > .github/workflows/test.yml
+  for c in B C D E; do
+    printf '%s\n' "$c" > "$c.txt"
+    GIT_COMMITTER_DATE="2026-01-01T12:0${n}:00Z" GIT_AUTHOR_DATE="2026-01-01T12:0${n}:00Z" commit "$c"
+    eval "$c=\$(git rev-parse HEAD)"; n=$((n + 1))
+  done
+  git checkout -q -b side "$C"; printf 'x\n' > x.txt; commit X; X=$(git rev-parse HEAD); git checkout -q main
+  git init -q --bare "$repo.origin"
+  git remote add origin "$repo.origin"
+  git push -q origin main
+  git fetch -q origin
+  rm -f "$scratch/gh-state.posted"
+}
+# runs 'WORKFLOW COMMIT STATUS CONCLUSION ATTEMPT [CREATED]'...: the
+# stand-in's runs, numbered from 101 in order, COMMIT one of B C D E X,
+# each named after its workflow and made at 13:00 UTC unless CREATED says.
+runs() {
+  : > "$scratch/gh-calls"
+  python3 -I - "$scratch/gh-state" "$B" "$C" "$D" "$E" "$X" "$@" <<'PY'
+import json, sys
+state, shas, specs = sys.argv[1], dict(zip("BCDEX", sys.argv[2:7])), sys.argv[7:]
+runs = []
+for i, spec in enumerate(specs):
+    wf, c, status, conclusion, attempt, *created = spec.split()
+    runs.append({"id": 101 + i, "name": wf.removesuffix(".yml").capitalize(), "path": f".github/workflows/{wf}",
+                 "head_sha": shas[c], "status": status, "conclusion": None if conclusion == "-" else conclusion,
+                 "run_attempt": int(attempt), "created_at": (created or ["2026-01-01T13:00:00Z"])[0],
+                 "html_url": f"https://example.invalid/runs/{101 + i}"})
+json.dump(runs, open(state, "w"))
+PY
+}
+# main_run_at COMMIT [ARGS...]: reads with COMMIT given, MAIN_RUN_ENV set.
+main_run_at() {
+  local c=$1; shift
+  # shellcheck disable=SC2086 # each word is one assignment
+  env PATH="$scratch/gh-bin:$PATH" GH_STATE="$scratch/gh-state" GH_CALLS="$scratch/gh-calls" ${MAIN_RUN_ENV:-} \
+    python3 -I "$main_run" "$@" ${c:+"$c"} > "$scratch/out" 2> "$scratch/err"
+  code=$?
+}
+line() { grep -qxE -- "$1" "$scratch/out"; }
+lines() { grep -c '' "$scratch/out"; }
+posts() { grep -c -- '-X POST' "$scratch/gh-calls"; }
+reran() { grep -qxF -- "api -X POST repos/{owner}/{repo}/actions/runs/$1/rerun-failed-jobs" "$scratch/gh-calls"; }
+
+label="main-run: the commit's own runs green, one line for each workflow with a run"
+main_run_repo
+runs "test.yml C completed success 1" "codex.yml C completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 0 ] && [ "$(lines)" = 3 ] && line 'Codex: green, run 102 on [0-9a-f]{9} \(the commit\), attempt 1: https://example.invalid/runs/102' &&
+  line 'Test: green, run 101 on [0-9a-f]{9} \(the commit\), attempt 1: .*' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+label="main-run: origin's main head is the commit by default"
+main_run_repo
+runs "test.yml E completed success 1" "codex.yml C completed failure 1"
+main_run_at ""
+if [ "$code" -eq 0 ] && [ "$(lines)" = 2 ] && line 'Test: green, run 101 .*\(the commit\).*' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a workflow without a run is not listed, nor called path-filtered"
+main_run_repo
+runs "test.yml C completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 0 ] && [ "$(lines)" = 2 ] && line 'Test: green, .*' && ! grep -q 'Codex\|Wild\|not run' "$scratch/out"; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a workflow's run is read whatever its file's branch patterns say"
+main_run_repo
+runs "wild.yml C completed failure 2" "test.yml C completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 4 ] && line 'Wild: red twice \(failure\), run 101 .*: open a regression job'; then pass "$label"; else fail "$label"; fi
+
+label="main-run: no run on the commit or later on main is no run yet, and the read waits"
+main_run_repo
+runs "test.yml B completed success 1" "test.yml X completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 2 ] && [ "$(lines)" = 2 ] && line 'no run yet'; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a run in progress waits"
+main_run_repo
+runs "test.yml C in_progress - 1" "codex.yml C completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 2 ] && line 'Test: running, run 101 .*' && line 'Codex: green, .*'; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a red first attempt has its failed jobs rerun once, and a second read starts no second rerun"
+main_run_repo
+runs "test.yml C completed failure 1" "codex.yml C completed success 1"
+main_run_at "$C"
+first=$code first_ok=false
+line 'Test: red \(failure\), rerun started, run 101 on [0-9a-f]{9} \(the commit\), attempt 1: .*' && reran 101 && [ "$(posts)" = 1 ] && first_ok=true
+main_run_at "$C"
+if [ "$first" -eq 3 ] && $first_ok && [ "$code" -eq 2 ] && line 'Test: running, run 101 .*attempt 2: .*' && [ "$(posts)" = 1 ]; then pass "$label"; else fail "$label"; fi
+
+# A second read that still sees the first attempt cannot tell it from the
+# first read: it asks again, and GitHub, which refuses a rerun of a run
+# already rerunning, makes it an error rather than a second rerun.
+label="main-run: a second read of a stale first attempt asks again and reports the refusal"
+main_run_repo
+runs "test.yml C completed failure 1"
+MAIN_RUN_ENV=GH_STALE=1 main_run_at "$C"
+first=$code
+MAIN_RUN_ENV=GH_STALE=1 main_run_at "$C"
+if [ "$first" -eq 3 ] && [ "$code" -eq 1 ] && line 'Test: red \(failure\), its rerun could not be started .*HTTP 403.*' &&
+  [ "$(posts)" = 2 ] && [ "$(grep -c '' "$scratch/gh-state.posted")" = 1 ]; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a run red on its rerun is red twice and never rerun again"
+main_run_repo
+runs "test.yml C completed failure 2" "codex.yml C completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 4 ] && line 'Test: red twice \(failure\), run 101 .*attempt 2: .*: open a regression job' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+for conclusion in timed_out action_required startup_failure stale; do
+  label="main-run: a whole run concluded $conclusion is red"
+  main_run_repo
+  runs "test.yml C completed $conclusion 1"
+  main_run_at "$C" -n
+  if [ "$code" -eq 3 ] && line "Test: red \\($conclusion\\), would rerun, run 101 .*" && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+done
+
+for conclusion in skipped neutral; do
+  label="main-run: a whole run concluded $conclusion is green"
+  main_run_repo
+  runs "test.yml C completed $conclusion 1"
+  main_run_at "$C"
+  if [ "$code" -eq 0 ] && line 'Test: green, run 101 .*'; then pass "$label"; else fail "$label"; fi
+done
+
+label="main-run: a cancelled run gives way to a later commit's"
+main_run_repo
+runs "test.yml C completed cancelled 1" "test.yml D completed success 1" "codex.yml C completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 0 ] && line 'Test: green, run 102 on [0-9a-f]{9} \(1 commit later on main\), attempt 1: .*' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a cover of cancelled runs alone starts nothing and is red twice"
+main_run_repo
+runs "test.yml C completed cancelled 1" "test.yml D completed cancelled 1" "codex.yml C completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 4 ] && line 'Test: red \(cancelled, and nothing newer covers it\), nothing started, run 101 .*: open a regression job' &&
+  [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+label="main-run: the nearest covering run decides, the commit's own before a later one"
+main_run_repo
+runs "test.yml E completed failure 2" "test.yml D completed success 1" "codex.yml C completed success 1" "codex.yml D completed failure 1"
+main_run_at "$C"
+if [ "$code" -eq 0 ] && line 'Test: green, run 102 on [0-9a-f]{9} \(1 commit later on main\), .*' && line 'Codex: green, run 103 .*\(the commit\).*' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+# A push that left main's first-parent line: C on main, then D (a child of
+# C) pushed, then main fast-forwarded to X, a merge of D into E, a branch
+# commit from C. Main's first-parent line is X, E, C, and D's runs still
+# cover C, before X's.
+label="main-run: a pushed commit off main's first-parent line still covers it"
+main_run_repo
+git reset -q --hard "$C"
+printf 'd\n' > d2.txt; commit D2; D=$(git rev-parse HEAD)
+git push -q -f origin main
+git checkout -q -b branch "$C"; printf 'e\n' > e2.txt; commit E2; E=$(git rev-parse HEAD)
+git merge -q --no-ff -m merge "$D"; X=$(git rev-parse HEAD)
+git checkout -q main; git merge -q --ff-only "$X"; git push -q origin main
+runs "test.yml D completed failure 2" "test.yml X completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 4 ] && [ "$(git rev-list --first-parent "$X" | grep -c "$D")" = 0 ] &&
+  line "Test: red twice \\(failure\\), run 101 on ${D:0:9} \\([0-9]+ commits? later on main\\), .*"; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a commit's run made long before its commit time still covers it"
+main_run_repo
+runs "test.yml C completed failure 2 2026-01-01T10:00:00Z" "test.yml D completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 4 ] && line 'Test: red twice \(failure\), run 101 .*'; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a listing that does not hold every run is an error, never a later green"
+main_run_repo
+runs "test.yml C completed failure 2" "test.yml D completed success 1"
+MAIN_RUN_ENV=GH_SHORT=1 main_run_at "$C"
+if [ "$code" -eq 1 ] && has_err 'were not all read' && ! grep -q 'green' "$scratch/out"; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a red-twice line outranks a rerun started beside it"
+main_run_repo
+runs "test.yml C completed failure 2" "codex.yml C completed failure 1"
+main_run_at "$C"
+if [ "$code" -eq 4 ] && line 'Codex: red \(failure\), rerun started, .*' && line 'Test: red twice .*' && reran 102 && [ "$(posts)" = 1 ]; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a rerun that cannot be started is an error"
+main_run_repo
+runs "test.yml C completed failure 1" "codex.yml C completed success 1"
+MAIN_RUN_ENV=GH_FAIL_POST=1 main_run_at "$C"
+if [ "$code" -eq 1 ] && line 'Test: red \(failure\), its rerun could not be started .*'; then pass "$label"; else fail "$label"; fi
+
+label="main-run: runs that cannot be read are an error"
+main_run_repo
+runs "test.yml C completed success 1"
+MAIN_RUN_ENV=GH_FAIL=1 main_run_at "$C"
+if [ "$code" -eq 1 ] && has_err 'main-run: gh api'; then pass "$label"; else fail "$label"; fi
+
+label="main-run: a commit not on origin's main is refused"
+main_run_repo
+runs "test.yml X completed success 1"
+main_run_at "$X"
+if [ "$code" -eq 64 ] && has_err 'is not on origin' && [ ! -s "$scratch/out" ]; then pass "$label"; else fail "$label"; fi
+
+label="main-run: an unknown option is refused"
+main_run_repo
+runs
+main_run_at "$C" --wait
+if [ "$code" -eq 64 ] && has_err 'usage:' && [ "$(grep -c '' "$scratch/gh-calls")" = 0 ]; then pass "$label"; else fail "$label"; fi
 
 # --- scripts/release.sh runs the seed guard against the last tag ---
 
