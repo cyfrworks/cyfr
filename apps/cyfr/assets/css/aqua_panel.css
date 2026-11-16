@@ -55,7 +55,7 @@
   box-shadow: 0 0 10px color-mix(in srgb, var(--color-accent-hover) 60%, transparent);
 }
 
-/* The header's dock and close controls. */
+/* The header's controls: a step by day, the menu, dock and close. */
 .aqua-panel-ghost {
   display: grid;
   place-items: center;

@@ -8,7 +8,6 @@ defmodule Aqua.Providers.ThreadsTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Providers.Thread, as: Tool
-  alias Arca.ThreadStorage, as: Threads
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -50,7 +49,7 @@ defmodule Aqua.Providers.ThreadsTest do
   # root execution: the lineage a call from it carries, as the handler reads
   # it, and as the host stamps a call its own run makes.
   defp open_turn!(ctx) do
-    {:ok, own} = Threads.create(Context.actor(ctx))
+    {:ok, own} = Arca.Test.Days.thread(Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       Aqua.Tape.accept(ctx, own.id, %{

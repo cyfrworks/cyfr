@@ -33,7 +33,11 @@ defmodule Arca.Schemas.ToolGrant do
   An allow constrained to a program row carries that row in
   `program_row`, part of its identity with the scope, agent, tool and
   action (`key_row/1`), so one program's answer never replaces another's;
-  every other answer carries `""`.
+  every other answer carries `""`. An allow that ends with a schedule
+  carries that schedule in `schedule_id` the same way (`key_schedule/1`):
+  an answer for one schedule stands beside one for another and beside one
+  for no schedule, and a write replaces, and a revoke removes, the answer
+  of its own schedule alone.
 
   An allow also names the outside sources it covers (`sources`, a JSON
   list of named outside `Prima.Source`s, empty by default): a turn that
@@ -70,6 +74,7 @@ defmodule Arca.Schemas.ToolGrant do
     field :constraint, :string
     field :sources, :string, default: "[]"
     field :program_row, :string, default: ""
+    field :schedule_id, :string, default: ""
   end
 
   @doc "The lifecycles a bounded allow may end with."
@@ -138,6 +143,7 @@ defmodule Arca.Schemas.ToolGrant do
     |> validate_thread()
     |> put_constraint(constraint)
     |> put_change(:program_row, if(constraint, do: key_row(%{constraint: constraint}), else: ""))
+    |> then(&put_change(&1, :schedule_id, key_schedule(&1.changes)))
     |> put_sources(sources)
     |> validate_lifecycle()
     |> validate_bounds()
@@ -162,6 +168,18 @@ defmodule Arca.Schemas.ToolGrant do
 
   defp key_row_of(row) when is_binary(row), do: row
   defp key_row_of(_none), do: ""
+
+  @doc """
+  The schedule an answer's identity carries: the schedule an allow ends
+  with (`lifecycle_kind` `"schedule"` and its `lifecycle_id`), or the
+  `schedule_id` a key names, and `""` for every other answer. With the
+  scope, thread or athanor, agent, tool, action and program row, it is the
+  key a write replaces and a revoke removes.
+  """
+  @spec key_schedule(map()) :: String.t()
+  def key_schedule(%{lifecycle_kind: "schedule", lifecycle_id: id}) when is_binary(id), do: id
+  def key_schedule(%{schedule_id: id}) when is_binary(id), do: id
+  def key_schedule(attrs) when is_map(attrs), do: ""
 
   @doc """
   A constraint as a writer hands it, read one way whatever its keys:

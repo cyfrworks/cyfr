@@ -5,23 +5,23 @@ defmodule Cyfr.Bus.ThreadListed do
   @moduledoc """
   One thread in one person's list of threads, on that person's own
   `Cyfr.Bus.threads/2` topic, for the stream a canvas reads
-  (`threads.changes`): the kind is `own` or `shared` with the thread's
-  `title`, the display names of its `people`, its `last_activity`,
-  whether it `waits_on_you` and how many of its messages are `unread` to
-  the person (nil for an own thread, which keeps no read mark), or
-  `removed` with its `id` once it leaves the list. Never a message, a
-  person's id or an address.
+  (`threads.changes`): the kind is `daily` or `workspace`, a thread of the
+  person's athanor, or `shared`, with the thread's `title`, the display
+  names of its `people`, its `last_activity`, whether it `waits_on_you`
+  and how many of its posts are `unread` to the person, or `removed` with
+  its `id` once it leaves the list. Never a message, a person's id or an
+  address.
   """
 
   alias Cyfr.Bus.Payload
 
-  @kinds [:own, :shared, :removed]
+  @kinds [:daily, :workspace, :shared, :removed]
   @fields [:id, :title, :people, :last_activity, :waits_on_you, :unread]
 
   @enforce_keys [:athanor_id, :kind]
   defstruct [:athanor_id, :kind, :revision, :at | @fields]
 
-  @type kind :: :own | :shared | :removed
+  @type kind :: :daily | :workspace | :shared | :removed
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
@@ -36,7 +36,10 @@ defmodule Cyfr.Bus.ThreadListed do
           unread: non_neg_integer() | nil
         }
 
-  @doc "The closed union: the thread is the person's own or shared, or it left their list."
+  @doc """
+  The closed union: the thread is a daily or a workspace thread of the
+  person's athanor or a shared one, or it left their list.
+  """
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
 

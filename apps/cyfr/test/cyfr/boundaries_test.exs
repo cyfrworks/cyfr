@@ -858,7 +858,8 @@ defmodule Cyfr.BoundariesTest do
 
           def kept(key), do: Arca.Cache.get(key)
           def taken(key), do: Arca.Cache.take(key)
-          def threads(actor), do: Threads.list(actor)
+          def threads(actor, thread), do: Threads.unread(actor, thread)
+          def all_threads(actor), do: Threads.list(actor)
           def runs, do: &Arca.Execution.list/2
           def consultations(actor), do: Arca.PolicyLog.list(actor, [])
         end
@@ -867,10 +868,11 @@ defmodule Cyfr.BoundariesTest do
       :code.purge(PrismWeb.PlantedSurfaceLive)
       :code.delete(PrismWeb.PlantedSurfaceLive)
 
-      # Spoken as the panel, which reads the cache and the thread list and
-      # writes the cache with `put` alone: a `take` it was never rostered for
-      # is reported though its row names a read of the same store, and so is
-      # every store it has no row for.
+      # Spoken as the panel, which reads the cache and a thread's unread count
+      # and writes the cache with `put` alone: a `take` it was never rostered
+      # for is reported though its row names a read of the same store, and so
+      # are a thread list its row does not name and every store it has no row
+      # for.
       planted =
         for {_from, into, function} <- arca_reaches(binary),
             do: {"PrismWeb.AquaPanelLive", into, function}
@@ -878,7 +880,8 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.surface_read_violations(planted) == [
                "PrismWeb.AquaPanelLive -> Arca.Cache.take",
                "PrismWeb.AquaPanelLive -> Arca.Execution.list",
-               "PrismWeb.AquaPanelLive -> Arca.PolicyLog.list"
+               "PrismWeb.AquaPanelLive -> Arca.PolicyLog.list",
+               "PrismWeb.AquaPanelLive -> Arca.ThreadStorage.list"
              ]
 
       # Under its own name, a planted surface has no row at all, so even the

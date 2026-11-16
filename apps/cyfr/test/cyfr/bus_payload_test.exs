@@ -153,13 +153,13 @@ defmodule Cyfr.BusPayloadTest do
         by: :person,
         reason: :closed
       ),
-      ThreadListed.new(@actor, :own,
+      ThreadListed.new(@actor, :daily,
         id: "thr_payload",
-        title: "Plans",
+        title: "2026-11-09",
         people: ["Ada"],
         last_activity: ~U[2026-11-09 09:00:00Z],
         waits_on_you: false,
-        unread: nil
+        unread: 2
       ),
       SystemStatus.new(@actor, :changed,
         health: "ok",

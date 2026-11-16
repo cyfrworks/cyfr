@@ -15,7 +15,7 @@ defmodule Aqua.Providers.ThreadTest do
     Cyfr.Test.Sandbox.setup!()
 
     ctx = Sanctum.TestContext.local(:prism)
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -413,8 +413,8 @@ defmodule Aqua.Providers.ThreadTest do
 
       # One turn holds a thread at a time — that is what the thread's claim
       # means — so each card is raised in a thread of its own.
-      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
-      {:ok, second} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      {:ok, second} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
       destructive =
         card!(ctx, thread, %{
@@ -464,27 +464,55 @@ defmodule Aqua.Providers.ThreadTest do
                call(elsewhere, %{"action" => "events", "thread" => thread.id})
     end
 
-    test "a headless client can mint and list threads — the id needs no console", %{ctx: ctx} do
-      assert {:ok, %{id: id, title: "Plans"}} =
-               call(ctx, %{"action" => "create", "title" => "Plans"})
+    test "a headless client finds today's thread and lists threads — the id needs no console",
+         %{ctx: ctx} do
+      before = Aqua.Day.today(ctx)
+
+      assert {:ok, %{id: id, kind: "daily", day: day, title: title, parent_id: nil}} =
+               call(ctx, %{"action" => "today"})
+
+      assert day in [before, Aqua.Day.today(ctx)]
+      assert title == Date.to_iso8601(day)
+
+      # Asked again on the same day, the same thread.
+      assert {:ok, %{id: again, day: again_day}} = call(ctx, %{"action" => "today"})
+      if again_day == day, do: assert(again == id)
 
       assert {:ok, %{threads: rows}} = call(ctx, %{"action" => "list"})
-      assert Enum.any?(rows, &(&1.id == id))
+      assert Enum.count(rows, &(&1.id == id)) == 1
     end
 
-    test "the athanor's thread count is held to the operator's cap", %{ctx: ctx} do
-      # The setup already minted one thread; a cap of one refuses the next.
+    test "no thread is created on demand: create is no action of the tool", %{ctx: ctx} do
+      before = Threads.list(Sanctum.Context.actor(ctx))
+
+      assert {:refused, {:unknown_action, "thread.create"}} =
+               admission(ctx, "thread", %{"action" => "create", "title" => "Plans"})
+
+      assert Threads.list(Sanctum.Context.actor(ctx)) == before
+    end
+
+    test "the athanor's thread count is held to the operator's cap, a new day's included", %{
+      ctx: ctx
+    } do
+      # The setup already minted one thread; a cap of one refuses today's,
+      # whether asked for or joined by a send.
       Cyfr.Test.Settings.put("max_threads_per_athanor", 1)
+      before = Threads.list(Sanctum.Context.actor(ctx))
 
       assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
-               call(ctx, %{"action" => "create", "title" => "One too many"})
+               call(ctx, %{"action" => "today"})
+
+      assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
+               call(ctx, %{"action" => "send", "message" => "hello", "agent" => "aqua"})
+
+      assert Threads.list(Sanctum.Context.actor(ctx)) == before
 
       # Another athanor's count is its own: another person's, in their own.
       n = System.unique_integer([:positive])
       {other, user} = Sanctum.TestContext.person!(%{ctx | user_id: "local|idp|other-#{n}"})
       other = %{other | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
-      assert {:ok, %{id: _}} = call(other, %{"action" => "create"})
+      assert {:ok, %{id: _, kind: "daily"}} = call(other, %{"action" => "today"})
     end
   end
 
@@ -508,7 +536,7 @@ defmodule Aqua.Providers.ThreadTest do
       {ctx, user} = Sanctum.TestContext.person!(ctx)
       ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
 
-      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
       {:ok, shared} = Sanctum.SharedThreads.create(ctx.user_id, "Trip")
       {:ok, ctx: ctx, thread: thread, shared: shared}
     end
@@ -646,8 +674,174 @@ defmodule Aqua.Providers.ThreadTest do
       ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
       Sanctum.TestContext.ready!(ctx.athanor_id)
       Cyfr.Test.Sandbox.stop_work_on_exit()
-      {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+      # Today's daily thread, which a send naming it joins as named.
+      {:ok, thread} = Aqua.Day.current(ctx)
       {:ok, ctx: ctx, thread: thread}
+    end
+
+    test "a send naming no thread joins today's daily thread and answers its id", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      assert {:ok, %{accepted: true, message_id: id, thread: landed}} =
+               call(ctx, %{"action" => "send", "message" => "good morning", "agent" => "aqua"})
+
+      assert landed == thread.id
+      assert {:ok, %{thread_id: ^landed}} = Threads.get_message(Sanctum.Context.actor(ctx), id)
+      assert [%{id: ^landed}] = Threads.list(Sanctum.Context.actor(ctx), kind: "daily")
+    end
+
+    test "a send naming a past daily thread joins today's, and the past day keeps what it held",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, past} = Arca.Test.Days.thread(actor)
+
+      {:ok, kept} =
+        Threads.append(actor, past.id, %{author: ctx.user_id, sent_by: "person", content: "then"})
+
+      assert {:ok, %{accepted: true, message_id: id, thread: landed}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "thread" => past.id,
+                 "message" => "now",
+                 "agent" => "aqua"
+               })
+
+      assert landed == thread.id
+      assert {:ok, %{thread_id: ^landed}} = Threads.get_message(actor, id)
+      assert Enum.map(Threads.messages(actor, past.id), & &1.id) == [kept.id]
+      assert {:ok, %{day: day}} = Threads.get(actor, past.id)
+      assert day == past.day
+    end
+
+    test "a send whose files were attached before the day turned is refused and leaves nothing",
+         %{ctx: ctx, thread: thread} do
+      # The person's own session, which remembers what it stored.
+      mine = %{ctx | session_token_hash: :crypto.hash(:sha256, "mine")}
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, past} = Arca.Test.Days.thread(actor)
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(mine, past, message_id, "past bytes")
+      {:ok, blob} = Aqua.attachment_blob_path(past.id, message_id, ref)
+      assert {:ok, "past bytes"} = Arca.get(actor, blob)
+      threads = Threads.list(actor)
+      turns = Arca.TurnStorage.open_turns(actor, thread.id)
+
+      assert {:error,
+              {:conflict,
+               "The day has turned since these files were attached. Attach them again and send."}} =
+               call(mine, %{
+                 "action" => "send",
+                 "thread" => past.id,
+                 "message" => "with a file",
+                 "agent" => "aqua",
+                 "id" => message_id,
+                 "attachments" => [ref]
+               })
+
+      # No row, no new day's thread, no turn, and none of the bytes the
+      # send's own session stored under the message.
+      assert {:error, :not_found} = Threads.get_message(actor, message_id)
+      assert Threads.list(actor) == threads
+      assert Threads.messages(actor, past.id) == []
+      assert Threads.messages(actor, thread.id) == []
+      assert Arca.TurnStorage.open_turns(actor, thread.id) == turns
+
+      refute Arca.exists?(actor, blob)
+    end
+
+    test "a send with files that names no thread is refused and leaves nothing", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      actor = Sanctum.Context.actor(ctx)
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(ctx, thread, message_id, "today's bytes")
+      threads = Threads.list(actor)
+
+      assert {:error,
+              {:invalid_argument, "A send with files names the thread they were attached to."}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "message" => "with a file",
+                 "agent" => "aqua",
+                 "id" => message_id,
+                 "attachments" => [ref]
+               })
+
+      assert {:error, :not_found} = Threads.get_message(actor, message_id)
+      assert Threads.list(actor) == threads
+      assert Threads.messages(actor, thread.id) == []
+    end
+
+    test "a send whose files were attached to today's thread joins it with them", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      actor = Sanctum.Context.actor(ctx)
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(ctx, thread, message_id, "today's bytes")
+
+      assert {:ok, %{accepted: true, thread: landed}} =
+               call(ctx, %{
+                 "action" => "send",
+                 "thread" => thread.id,
+                 "message" => "with a file",
+                 "agent" => "aqua",
+                 "id" => message_id,
+                 "attachments" => [ref]
+               })
+
+      assert landed == thread.id
+      {:ok, row} = Threads.get_message(actor, message_id)
+
+      assert [%{"data" => data}] =
+               Aqua.Attachments.load(ctx, landed, Aqua.Attachments.attachments_of([row]))
+
+      assert Base.decode64!(data) == "today's bytes"
+    end
+
+    test "a send naming a crew member's thread goes to that thread, never to today's", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, crew} = Threads.crew_thread(actor, thread.id, "planner")
+
+      # The athanor has no crew member of that name, which only the crew
+      # thread's own admission asks: today's thread would take the line.
+      assert {:error, :not_addressable} =
+               call(ctx, %{
+                 "action" => "send",
+                 "thread" => crew.id,
+                 "message" => "hello",
+                 "agent" => "aqua"
+               })
+
+      assert Threads.messages(actor, thread.id) == []
+      assert [%{id: only}] = Threads.list(actor, kind: "daily")
+      assert only == thread.id
+    end
+
+    test "a send naming another athanor's thread is not found, and makes no thread", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      n = System.unique_integer([:positive])
+      {other, user} = Sanctum.TestContext.person!(%{ctx | user_id: "local|idp|stranger-#{n}"})
+      other = %{other | athanor_id: Sanctum.Test.People.athanor!(user).id}
+
+      assert {:error, {:not_found, "thread", id}} =
+               call(other, %{
+                 "action" => "send",
+                 "thread" => thread.id,
+                 "message" => "hello",
+                 "agent" => "aqua"
+               })
+
+      assert id == thread.id
+      assert Threads.list(Sanctum.Context.actor(other)) == []
+      assert Threads.messages(Sanctum.Context.actor(ctx), thread.id) == []
     end
 
     test "get answers the thread with its live state", %{ctx: ctx, thread: thread} do

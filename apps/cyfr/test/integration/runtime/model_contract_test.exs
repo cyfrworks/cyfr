@@ -1019,7 +1019,7 @@ defmodule Locus.Runtime.ModelContractTest do
   defp play(ctx, steps, thread) when is_list(steps), do: play(ctx, message(steps), thread)
 
   defp play(ctx, text, thread) when is_binary(text) do
-    thread = thread || elem({:ok, _} = Threads.create(Sanctum.Context.actor(ctx)), 1)
+    thread = thread || elem({:ok, _} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx)), 1)
 
     # The thread's runner has let its last turn go, so this line opens a
     # turn of its own and steers none.

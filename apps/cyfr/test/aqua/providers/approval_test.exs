@@ -11,7 +11,6 @@ defmodule Aqua.Providers.ApprovalTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Visibility
   alias Sanctum.Context
 
@@ -19,7 +18,7 @@ defmodule Aqua.Providers.ApprovalTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local(:prism)
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 

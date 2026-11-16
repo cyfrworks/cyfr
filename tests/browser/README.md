@@ -154,7 +154,9 @@ helpers:
 Chromium with its virtual authenticator: `passkeys()` holds one person's
 passkeys and gives them to each page a ceremony runs in; `createAccount`
 makes an account at `/account/new` and reads the recovery code it shows
-(`readShownCode`, decoded by the bundle's own reader), and
+(`readShownCode`, decoded by the bundle's own reader), in two halves a
+proof may hold apart (`beginAccount` up to the code shown, nothing sent;
+`finishAccount` sends it), and
 `continueToCyfr` answers the request a CYFR's "Create your account" sent
 along; `usePasskey` signs the request the sign page holds; `signIn` is a
 CYFR's sign-in, `confirmInTab` a confirmation the system layer opens in a

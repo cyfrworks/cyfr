@@ -610,10 +610,14 @@ describe("the line desktop 0.2.0", () => {
   })
 })
 
-// 0.3.1: a feed's widget with no reading names its feed and how to bind one.
-const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.1/", import.meta.url)
+// 0.3.2: a feed's widget with no reading names its feed and how to bind one,
+// and the threads are Aqua's daily and workspace threads and shared ones.
+const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.2/", import.meta.url)
+// A daily thread's title: the ISO date `n` days from today, in UTC, the
+// stand-in's person's zone.
+const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the line desktop 0.3.1", () => {
+describe("the line desktop 0.3.2", () => {
   test("a feed widget with no reading names its feed and says to ask Aqua for one, until a reading comes", async () => {
     const p = desk({version: V3})
     await flush()
@@ -629,5 +633,57 @@ describe("the line desktop 0.3.1", () => {
     assert.doesNotMatch(p.seen(), /No reading from the weather feed/)
     assert.match(p.seen(), /Weather Lisbon .*21 Temp c/)
     assert.match(p.seen(), /No reading from the vpn feed yet/)
+  })
+
+  test("today's daily thread reads Today and opens Aqua, an earlier day's is not listed, a workspace thread opens Aqua and a shared one the chat", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("threads.changes", [
+      {kind: "daily", id: "th_today", title: day(0), people: ["Noor"], last_activity: today(13, 0), waits_on_you: false, unread: 2},
+      {kind: "daily", id: "th_before", title: day(-1), people: ["Noor"], last_activity: today(12, 30), waits_on_you: false, unread: 1},
+      {kind: "workspace", id: "th_work", title: "Ferry tracker", people: ["Noor"], last_activity: today(12, 0), waits_on_you: false, unread: 0},
+      {kind: "shared", id: "th_family", title: "Family", people: ["a", "b", "c"], last_activity: today(11, 0), waits_on_you: false, unread: 1}
+    ])
+    await flush()
+    assert.match(p.seen(), /Today With Aqua · 2 unread/)
+    assert.match(p.seen(), /Ferry tracker With Aqua/)
+    assert.match(p.seen(), /Family 3 people · 1 unread/)
+    assert.ok(!p.seen().includes(day(0)) && !p.seen().includes(day(-1)), p.seen())
+    assert.deepEqual(p.buttons().filter((b) => b.dataset.key?.startsWith("th-")).map((b) => b.dataset.key), ["th-th_today", "th-th_work", "th-th_family"])
+    p.tap((b) => b.dataset.key === "th-th_today")
+    p.tap((b) => b.dataset.key === "th-th_work")
+    p.tap((b) => b.dataset.key === "th-th_family")
+    assert.deepEqual(p.pages, [["aqua", "th_today"], ["aqua", "th_work"], ["chat", "th_family"]])
+  })
+
+  test("the newest daily thread reads Yesterday a day back, and its date further back", async () => {
+    const date = new Intl.DateTimeFormat("en-GB", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
+      const p = desk({version: V3, width: 1440})
+      await flush()
+      p.picture("threads.changes", [{kind: "daily", id: "th_1", title: day(n), people: ["Noor"], last_activity: today(9, 0), waits_on_you: false, unread: 0}])
+      await flush()
+      assert.ok(p.seen().includes(`Threads 1 of 1 All threads ${words} With Aqua`), p.seen())
+    }
+  })
+
+  test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
+    const date = new Intl.DateTimeFormat("en-GB", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("attention.changes", [[day(0), day(0), "th_0"], [day(-1), day(-1), "th_1"], [day(-3), day(-3), "th_3"], ["builder", null, "th_crew"]].map(([label, d, ref], i) =>
+      ({kind: "approval", id: `ap_${i}`, label, day: d, since: today(9, i), destination: {kind: "page", page: "aqua", ref}})))
+    await flush()
+    assert.deepEqual(p.buttons().filter((b) => b.dataset.page === "aqua").map((b) => b.label),
+      ["Open in Aqua: Today", "Open in Aqua: Yesterday", `Open in Aqua: ${date}`, "Open in Aqua: builder"])
+    assert.ok([0, -1, -3].every((n) => !p.seen().includes(day(n))), p.seen())
+  })
+
+  test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("attention.changes", [{kind: "approval", id: "ap_crew", label: "2026-11-15", day: null, since: today(9, 0), destination: {kind: "page", page: "aqua", ref: "th_crew"}}])
+    await flush()
+    assert.deepEqual(p.buttons().filter((b) => b.dataset.page === "aqua").map((b) => b.label), ["Open in Aqua: 2026-11-15"])
   })
 })

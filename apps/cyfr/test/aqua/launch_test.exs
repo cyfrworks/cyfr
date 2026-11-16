@@ -20,7 +20,6 @@ defmodule Aqua.LaunchTest do
   import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Launch, Tape}
-  alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Consent.Bootstrap
 
   @soul "agent:local.aqua"
@@ -63,7 +62,7 @@ defmodule Aqua.LaunchTest do
     {:ok, %{revision_digest: revision, capability_digest: capability}} =
       Compendium.AgentIndex.snapshot(ctx, "aqua")
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     pins = %{
       profile_id: profile_id,

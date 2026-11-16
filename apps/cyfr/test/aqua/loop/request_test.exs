@@ -209,6 +209,58 @@ defmodule Aqua.Loop.RequestTest do
            }
   end
 
+  describe "a schedule's fire" do
+    @line "[The schedule \"Morning\" (sched_1) fired with its line]\nsummarise what is unread"
+
+    defp fire_row(seq) do
+      struct(
+        row(seq, "text", @system, "summarise what is unread", %{
+          "schedule" => %{"id" => "sched_1", "name" => "Morning"}
+        }),
+        sent_by: "person",
+        addressee: "aqua"
+      )
+    end
+
+    test "reads to the model as the schedule's line, naming it by name and id" do
+      # Only the server's voice names a schedule: a person's line carrying
+      # the same payload, and a server's line with none, read as lines.
+      theirs =
+        struct(
+          row(2, "text", "usr_a", "and this", %{
+            "schedule" => %{"id" => "sched_1", "name" => "x"}
+          }),
+          sent_by: "person"
+        )
+
+      unnamed = struct(row(3, "text", @system, "a plain line"), sent_by: "person")
+
+      assert Request.messages([fire_row(1), theirs, unnamed],
+               me: "aqua",
+               multi_author?: true,
+               names: %{"usr_a" => "Ann"}
+             ) == [
+               %{
+                 "role" => "user",
+                 "content" => [
+                   %{"type" => "text", "text" => @line},
+                   %{"type" => "text", "text" => "Ann: and this"},
+                   %{"type" => "text", "text" => "#{@system}: a plain line"}
+                 ]
+               }
+             ]
+    end
+
+    # The thread's summary asks for the rows it folds with no reader named
+    # (`Aqua.Loop`'s compaction): the fire's line is still the schedule's,
+    # never the agent's own words.
+    test "reads as the schedule's line in a request that names no reader" do
+      assert Request.messages([fire_row(1)]) == [
+               %{"role" => "user", "content" => [%{"type" => "text", "text" => @line}]}
+             ]
+    end
+  end
+
   test "repeated call ids across steps stay distinct, and a dangling call is answered" do
     rows = [
       row(1, "text", "usr_a", "go"),
@@ -298,6 +350,69 @@ defmodule Aqua.Loop.RequestTest do
       # In the member's thread the soul's task is said to the member.
       assert [%{"role" => "user", "content" => [%{"text" => "[aqua]\nplan it"}]}] =
                Request.messages([crew(1, "aqua", "plan it", addressee: "planner")], me: "planner")
+    end
+
+    # A harness brain rebuilds a new session from the request alone
+    # (`context.rs` in the claude-code and openai-codex catalysts): the
+    # thread's projection rides every request whole, with a session or
+    # without, and its last message is the current ask. The shared vectors'
+    # case is this thread, so the rule reads what the loop sends.
+    test "a crew member's thread rides every request whole, its last message the current ask" do
+      call = fn seq, step, id, name, arguments ->
+        row(seq, "tool_call", @agent, name, %{
+          "tool_call_id" => id,
+          "name" => name,
+          "arguments" => arguments,
+          "step_id" => step
+        })
+      end
+
+      result = fn seq, id, name, content, error? ->
+        row(seq, "tool_result", @system, content, %{
+          "tool_call_id" => id,
+          "name" => name,
+          "is_error" => error?
+        })
+      end
+
+      rows = [
+        row(1, "text", "usr_a", "an early word"),
+        row(2, "compaction", @system, "The person wants the todo list kept short.", %{
+          "first_kept_seq" => 3
+        }),
+        crew(3, "aqua", "Tidy notes/todo.md.", addressee: "claude-code", status: "answered"),
+        crew(4, "claude-code", "I will read it first.",
+          payload: Jason.encode!(%{"step_id" => "s1"})
+        ),
+        call.(5, "s1", "call_1", "files", %{"action" => "read", "path" => "notes/todo.md"}),
+        result.(6, "call_1", "files", "1: buy milk\n2: call Ana", false),
+        call.(7, "s2", "call_2", "files", %{"action" => "write", "path" => "notes/todo.md"}),
+        call.(8, "s2", "call_3", "http", %{"action" => "get", "url" => "https://example.com"}),
+        result.(9, "call_2", "files", "written", false),
+        result.(10, "call_3", "http", "Refused by the person.", true),
+        crew(11, "claude-code", "Done: two items are left.",
+          payload: Jason.encode!(%{"step_id" => "s3"})
+        ),
+        crew(12, "aqua", "And add the dentist.", addressee: "claude-code", status: "pending")
+      ]
+
+      messages = Request.messages(rows, me: "claude-code")
+
+      %{"cases" => [_alone, thread | _]} =
+        "../../../../../tests/fixtures/session_context.json"
+        |> Path.expand(__DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+
+      assert messages == thread["messages"]
+
+      assert %{"role" => "user", "content" => [%{"text" => "[aqua asked claude-code" <> _}]} =
+               List.last(messages)
+
+      fresh = Request.build(model: "m", messages: messages)
+      continued = Request.build(model: "m", messages: messages, session: "s1")
+      assert fresh["messages"] == messages
+      assert continued == Map.put(fresh, "session", "s1")
     end
 
     test "a request the reader made still shows once a compaction summarized its call away, while it waits" do

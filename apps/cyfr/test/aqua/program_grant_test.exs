@@ -10,8 +10,6 @@ defmodule Aqua.ProgramGrantTest do
   """
   use ExUnit.Case, async: false
 
-  alias Arca.ThreadStorage, as: Threads
-
   setup do
     Cyfr.Test.Sandbox.setup!()
 
@@ -27,7 +25,7 @@ defmodule Aqua.ProgramGrantTest do
         permissions: MapSet.new([:*])
     }
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     turn = %{id: "turn_1", thread_id: thread.id, agent: "aqua", root_execution_id: nil}
     {:ok, ctx: ctx, turn: turn, gh: row!(ctx, "gh"), jq: row!(ctx, "jq")}
   end
@@ -200,8 +198,8 @@ defmodule Aqua.ProgramGrantTest do
 
       assert listed ==
                MapSet.new([
-                 {"aqua", "program", "start", %{id: gh.id, name: "gh"}},
-                 {"aqua", "program", "start", %{id: jq.id, name: "jq"}}
+                 {"aqua", "program", "start", %{id: gh.id, name: "gh"}, nil},
+                 {"aqua", "program", "start", %{id: jq.id, name: "jq"}, nil}
                ])
 
       # A renamed row's answer reads as the program it covers.
@@ -213,7 +211,7 @@ defmodule Aqua.ProgramGrantTest do
         )
 
       assert {:ok, renamed} = Aqua.ToolGrants.allowed_by_agent(ctx, turn.thread_id)
-      assert {"aqua", "program", "start", %{id: gh.id, name: "github"}} in renamed
+      assert {"aqua", "program", "start", %{id: gh.id, name: "github"}, nil} in renamed
     end
 
     test "a second answer for gh replaces gh's alone", %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
@@ -253,7 +251,9 @@ defmodule Aqua.ProgramGrantTest do
       assert Map.keys(stored(ctx)) == Enum.sort([gh.id, jq.id])
 
       assert :ok =
-               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start", jq.id)
+               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start", %{
+                 program: jq.id
+               })
 
       assert Map.keys(stored(ctx)) == [gh.id]
     end

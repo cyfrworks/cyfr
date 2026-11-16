@@ -23,18 +23,28 @@ defmodule Aqua.Standing do
   A standing allow may carry the bounds the person chose: the lifecycle
   it ends with, a deadline, the resources it covers and the outside
   sources it also follows (none unless chosen, so an allow asks again
-  after any outside read it does not name). The lifecycle is
-  named by its kind and read from the card's own turn — `:execution` the
-  turn's root execution, `:turn` the turn, and for this thread's answer
-  only `:schedule`, the schedule that root was started by or else the
-  schedule whose own thread the card's turn runs in (`Arca.CronSchedule.of_thread/2`:
-  a schedule's line for Aqua runs every fire there), refused when there is
-  none — so a person can bound an answer only by the run or the schedule
-  the card belongs to. An answer for this thread ending with the schedule
-  holds for that schedule's turns in that thread (`Sanctum.ToolGrants`
-  covers a call only when its execution was started by the schedule), and
-  ends when the schedule is deleted or the thread is. Bounds on `:once` or
-  on a deny are refused rather than dropped.
+  after any outside read it does not name). The lifecycle is named by its
+  kind: `:execution` the card's turn's root execution and `:turn` the
+  turn, both read from the card's own turn, so a person can bound an
+  answer only by the run the card belongs to.
+
+  ## An answer for a schedule
+
+  A schedule of Aqua's fires into the daily thread as a turn of it, and a
+  scheduled turn opens no card (`Aqua.Loop`), so its answer is given later
+  on a card of a turn the person started, which no schedule started. The
+  card offers it with the person's schedules that hold a line for Aqua
+  (`schedules/1`), and the person names one: `:always` with `lifecycle:
+  :schedule` and `schedule`, its id. The row is agent-wide and ends with
+  that schedule, held to it when it is written: a live schedule of the
+  context's athanor and person that holds a line for Aqua, else
+  `:no_schedule`. The gate covers with it only a call whose execution that
+  schedule started, so it follows that schedule's runs on whatever day's
+  thread they land, and no run of another schedule and no turn of the
+  person's own (`Sanctum.ToolGrants`); it ends when the schedule is
+  deleted. An action that takes a standing answer for one thread only
+  takes one for a schedule too, and still none agent-wide without it.
+  Bounds on `:once` or on a deny are refused rather than dropped.
   """
 
   alias Sanctum.Context
@@ -44,14 +54,18 @@ defmodule Aqua.Standing do
   @typedoc "The run a standing allow ends with, as the person names it."
   @type lifecycle :: :execution | :turn | :schedule
 
+  @aqua_line Arca.CronSchedule.aqua_line()
+
   @typedoc """
   The bounds a person chose for a standing answer: the `lifecycle` it
   ends with, the time it ends at (`until`), the resources it covers
   (`constraint`, a resource kind and its patterns) and the outside
-  `sources` it also follows. Each is optional.
+  `sources` it also follows. Each is optional. An answer for a schedule
+  names it (`schedule`, its id) with the lifecycle `:schedule`.
   """
   @type bounds :: %{
           optional(:lifecycle) => lifecycle() | nil,
+          optional(:schedule) => String.t() | nil,
           optional(:until) => DateTime.t() | nil,
           optional(:constraint) => %{kind: String.t(), patterns: [String.t()]} | nil,
           optional(:sources) => [Prima.Source.t()] | nil
@@ -80,12 +94,42 @@ defmodule Aqua.Standing do
   def check(_intent, _scope), do: :ok
 
   @doc """
-  Whether an answer of `scope` (`:thread` or `:always`) is offered for the
-  card's intent: the rule `check/2` holds a decision to, which the card's
-  buttons and a stopped schedule turn's sentence both read.
+  `check/2` for a decision with its bounds: an agent-wide answer that ends
+  with a schedule is held to the rule of an answer for one thread, since
+  it covers that schedule's runs alone.
   """
-  @spec offered?(map(), :thread | :always) :: boolean()
+  @spec check(map(), scope(), bounds()) :: :ok | {:error, {:scope_not_permitted, term()}}
+  def check(intent, :always, %{lifecycle: :schedule}), do: check(intent, :thread)
+  def check(intent, scope, _bounds), do: check(intent, scope)
+
+  @doc """
+  Whether an answer of `scope` (`:thread`, `:always`, or `:schedule`, an
+  agent-wide answer that ends with a schedule) is offered for the card's
+  intent: the rule `check/3` holds a decision to, which the card's buttons
+  and a stopped schedule turn's sentence both read.
+  """
+  @spec offered?(map(), :thread | :always | :schedule) :: boolean()
+  def offered?(intent, :schedule), do: check(intent, :always, %{lifecycle: :schedule}) == :ok
   def offered?(intent, scope) when scope in [:thread, :always], do: check(intent, scope) == :ok
+
+  @doc """
+  The schedules an answer may end with: the context's person's live
+  schedules that hold a line for Aqua in the context's athanor, oldest
+  first, each `%{id, name}`. None when they cannot be read.
+  """
+  @spec schedules(Context.t()) :: {:ok, [%{id: String.t(), name: String.t()}]}
+  def schedules(%Context{user_id: user_id} = ctx) do
+    case Arca.CronSchedule.list(Context.actor(ctx), kind: "schedule", limit: :infinity) do
+      {:ok, rows} ->
+        {:ok,
+         for row <- Enum.reverse(rows), aqua_line?(row, user_id) do
+           %{id: row.id, name: row.name}
+         end}
+
+      {:error, _unread} ->
+        {:ok, []}
+    end
+  end
 
   @doc """
   The grant rows a decision writes with itself, for the agent the turn
@@ -171,7 +215,7 @@ defmodule Aqua.Standing do
   # for the rule to refuse; an allow's lifecycle is read from the card's
   # own turn.
   defp bound(ctx, turn, row, bounds) do
-    with {:ok, lifecycle} <- lifecycle(ctx, turn, row, Map.get(bounds, :lifecycle)) do
+    with {:ok, lifecycle} <- lifecycle(ctx, turn, row, bounds) do
       {:ok,
        Map.merge(lifecycle, %{
          expires_at: Map.get(bounds, :until),
@@ -182,53 +226,57 @@ defmodule Aqua.Standing do
     end
   end
 
-  defp lifecycle(_ctx, _turn, _row, nil), do: {:ok, %{}}
+  defp lifecycle(ctx, turn, row, bounds) do
+    case {Map.get(bounds, :lifecycle), Map.get(bounds, :schedule)} do
+      {nil, nil} -> {:ok, %{}}
+      {kind, nil} -> ended_with(ctx, turn, row, kind)
+      {:schedule, id} -> schedule(ctx, row, id)
+      {_kind, _schedule} -> {:error, {:scope_not_permitted, :invalid_lifecycle}}
+    end
+  end
 
-  defp lifecycle(_ctx, _turn, {_scope, "deny"}, kind)
+  defp ended_with(_ctx, _turn, {_scope, "deny"}, kind)
        when kind in [:execution, :turn, :schedule],
        do: {:ok, %{lifecycle_kind: Atom.to_string(kind)}}
 
-  defp lifecycle(_ctx, %{root_execution_id: id}, _row, :execution) when is_binary(id),
+  defp ended_with(_ctx, %{root_execution_id: id}, _row, :execution) when is_binary(id),
     do: {:ok, %{lifecycle_kind: "execution", lifecycle_id: id}}
 
-  defp lifecycle(_ctx, %{id: id}, _row, :turn) when is_binary(id),
+  defp ended_with(_ctx, %{id: id}, _row, :turn) when is_binary(id),
     do: {:ok, %{lifecycle_kind: "turn", lifecycle_id: id}}
 
-  # An answer for this thread may end with a schedule: the one the turn's
-  # root was started by, read from its row in the caller's athanor, else
-  # the one whose own thread this is. An agent-wide answer ends with none:
-  # a schedule's turn opens no card, so no agent-wide card has a schedule
-  # to end with.
-  defp lifecycle(ctx, turn, {"thread", _effect}, :schedule) do
-    with :none <- started_by(ctx, turn),
-         :none <- thread_of(ctx, turn) do
-      {:error, {:scope_not_permitted, :no_schedule}}
-    end
-  end
+  # An answer that ends with a schedule names the schedule.
+  defp ended_with(_ctx, _turn, _row, :schedule),
+    do: {:error, {:scope_not_permitted, :no_schedule}}
 
-  defp lifecycle(_ctx, _turn, _row, _kind),
+  defp ended_with(_ctx, _turn, _row, _kind),
     do: {:error, {:scope_not_permitted, :invalid_lifecycle}}
 
-  defp started_by(ctx, %{root_execution_id: id}) when is_binary(id) do
-    case Arca.Execution.get_tenant(Context.actor(ctx), id) do
-      %{schedule_id: schedule_id} when is_binary(schedule_id) -> ended_with(schedule_id)
-      {:error, _unreadable} = error -> error
-      _unscheduled -> :none
+  # An agent-wide allow ends with the schedule the person named, while it
+  # is one of theirs that holds a line for Aqua, read in the caller's
+  # athanor: another athanor's, another person's or a deleted one is no
+  # schedule to name. A deny's is passed on for the rule to refuse.
+  defp schedule(_ctx, {"agent", "deny"}, _id), do: {:ok, %{lifecycle_kind: "schedule"}}
+
+  defp schedule(%Context{user_id: user_id} = ctx, {"agent", "allow"}, id) when is_binary(id) do
+    case Arca.CronSchedule.get(Context.actor(ctx), id) do
+      {:ok, row} ->
+        if aqua_line?(row, user_id),
+          do: {:ok, %{lifecycle_kind: "schedule", lifecycle_id: id}},
+          else: {:error, {:scope_not_permitted, :no_schedule}}
+
+      {:error, :not_found} ->
+        {:error, {:scope_not_permitted, :no_schedule}}
+
+      {:error, _unread} = error ->
+        error
     end
   end
 
-  defp started_by(_ctx, _turn), do: :none
+  defp schedule(_ctx, _row, _id), do: {:error, {:scope_not_permitted, :invalid_lifecycle}}
 
-  defp thread_of(ctx, %{thread_id: thread_id}) when is_binary(thread_id) do
-    case Arca.CronSchedule.of_thread(Context.actor(ctx), thread_id) do
-      {:ok, %{id: schedule_id}} -> ended_with(schedule_id)
-      {:error, :not_found} -> :none
-      {:error, _unreadable} = error -> error
-    end
+  defp aqua_line?(row, user_id) do
+    row.kind == "schedule" and row.reference == @aqua_line and row.status != "deleted" and
+      is_binary(user_id) and row.user_id == user_id
   end
-
-  defp thread_of(_ctx, _turn), do: :none
-
-  defp ended_with(schedule_id),
-    do: {:ok, %{lifecycle_kind: "schedule", lifecycle_id: schedule_id}}
 end

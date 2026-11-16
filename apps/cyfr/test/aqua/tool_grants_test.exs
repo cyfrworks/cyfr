@@ -7,6 +7,8 @@ defmodule Aqua.ToolGrantsTest do
   # further than the athanor it was given in.
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Aqua.Loop.Binding
   alias Aqua.Loop.Binding.Call
   alias Aqua.Loop.Policy
@@ -232,7 +234,7 @@ defmodule Aqua.ToolGrantsTest do
         %{effect: "allow", scope: "thread", tool: "component", action: "list"}
       ]
 
-      assert ToolGrants.allowed_keys(rows) == MapSet.new([{"component", "list", nil}])
+      assert ToolGrants.allowed_keys(rows) == MapSet.new([{"component", "list", nil, nil}])
     end
 
     test "no grants leaves the declared policy exactly as written" do
@@ -302,12 +304,12 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "is listed among the thread's standing answers, so it can be withdrawn" do
-      assert ToolGrants.allowed_keys([bounded(%{})]) == MapSet.new([{"files", "write", nil}])
+      assert ToolGrants.allowed_keys([bounded(%{})]) == MapSet.new([{"files", "write", nil, nil}])
 
       assert ToolGrants.allowed_keys([
                bounded(%{}),
                %{effect: "allow", scope: "thread", tool: "component", action: "list"}
-             ]) == MapSet.new([{"component", "list", nil}, {"files", "write", nil}])
+             ]) == MapSet.new([{"component", "list", nil, nil}, {"files", "write", nil, nil}])
 
       # Listed is not automatic: the guest still asks for it.
       assert ToolGrants.resolve(%{}, [bounded(%{})]) == %{"files.write" => "ask"}
@@ -582,6 +584,157 @@ defmodule Aqua.ToolGrantsTest do
     end
   end
 
+  describe "answers for a schedule" do
+    setup %{ctx: ctx} do
+      Arca.Test.Actor.ensure_athanor_row(ctx.athanor_id)
+      {:ok, a: schedule!(ctx, "Morning"), b: schedule!(ctx, "Evening")}
+    end
+
+    defp schedule!(ctx, name) do
+      {:ok, row} =
+        Arca.CronSchedule.create(Sanctum.Context.actor(ctx), %{
+          user_id: ctx.user_id,
+          name: "#{name}-#{System.unique_integer([:positive])}",
+          cron_expression: "*/5 * * * *",
+          reference: "reagent:local.test:1.0.0",
+          resolved_reference: "reagent:local.test:1.0.0",
+          profile_id: "prof_test",
+          cap: 0
+        })
+
+      row
+    end
+
+    # An execution the schedule started, as its root's admission records
+    # it; none for nil.
+    defp run!(ctx, schedule_id) do
+      id = "exec_tgs_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Arca.Execution.admit(
+          %{
+            id: id,
+            reference: "catalyst:local.test:1.0.0",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "catalyst",
+            origin: :schedule
+          },
+          grant: Arca.Test.Actor.grant(ctx.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
+        )
+
+      if schedule_id do
+        {1, _} =
+          Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^id),
+            set: [schedule_id: schedule_id]
+          )
+      end
+
+      id
+    end
+
+    defp write_call(execution_id),
+      do: %{
+        agent_name: "aqua",
+        thread_id: "thread_1",
+        tool: "files",
+        action: "write",
+        args: %{"path" => "data/notes/a.md", "content" => "x"},
+        execution_id: execution_id,
+        sources: []
+      }
+
+    defp listed(ctx),
+      do: ctx |> rows("thread_1", ctx.athanor_id, "aqua") |> ToolGrants.allowed_keys()
+
+    test "one for A, one for B and an ordinary one stand side by side, each covering its own runs; a second for A replaces A's alone, withdrawing B's leaves the others, and deleting A ends A's alone",
+         %{ctx: ctx, a: a, b: b} do
+      write = %{
+        scope: "agent",
+        effect: "allow",
+        agent_name: "aqua",
+        tool: "files",
+        action: "write"
+      }
+
+      for_a = Map.merge(write, %{lifecycle_kind: "schedule", lifecycle_id: a.id})
+      for_b = Map.merge(write, %{lifecycle_kind: "schedule", lifecycle_id: b.id})
+      [run_a, run_b, plain] = [run!(ctx, a.id), run!(ctx, b.id), run!(ctx, nil)]
+
+      covered = fn ->
+        for run <- [run_a, run_b, plain], do: Sanctum.ToolGrants.admits?(ctx, write_call(run))
+      end
+
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, for_a)
+      assert covered.() == [true, false, false]
+
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, for_b)
+      assert covered.() == [true, true, false]
+
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, write)
+      assert covered.() == [true, true, true]
+
+      assert listed(ctx) ==
+               MapSet.new([
+                 {"files", "write", nil, a.id},
+                 {"files", "write", nil, b.id},
+                 {"files", "write", nil, nil}
+               ])
+
+      assert ToolGrants.allowed_by_agent(ctx, "thread_1") ==
+               {:ok,
+                MapSet.new([
+                  {"aqua", "files", "write", nil, %{id: a.id, name: a.name}},
+                  {"aqua", "files", "write", nil, %{id: b.id, name: b.name}},
+                  {"aqua", "files", "write", nil, nil}
+                ])}
+
+      notes = %{kind: "storage_path", patterns: ["data/notes/"]}
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, Map.put(for_a, :constraint, notes))
+
+      assert ctx
+             |> rows("thread_1", ctx.athanor_id, "aqua")
+             |> Enum.map(&{&1.schedule_id, &1.constraint})
+             |> Enum.sort() == Enum.sort([{a.id, notes}, {b.id, nil}, {"", nil}])
+
+      key = Map.delete(write, :effect)
+      assert :ok = ToolGrants.revoke(ctx, Map.put(key, :schedule_id, b.id))
+
+      assert listed(ctx) ==
+               MapSet.new([{"files", "write", nil, a.id}, {"files", "write", nil, nil}])
+
+      {:ok, _} = Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), a.id)
+      assert listed(ctx) == MapSet.new([{"files", "write", nil, nil}])
+
+      assert :ok = ToolGrants.revoke(ctx, key)
+      assert listed(ctx) == MapSet.new()
+      assert covered.() == [false, false, false]
+    end
+
+    test "a thread-only action takes an agent-wide allow only when it ends with a schedule; a launch, a destructive and an external action take none",
+         %{ctx: ctx, a: a} do
+      schedule = %{scope: "agent", lifecycle_kind: "schedule", lifecycle_id: a.id}
+
+      assert {:ok, %{scope: "agent", schedule_id: id}} =
+               grant(ctx, Map.merge(schedule, %{tool: "notes", action: "keep"}))
+
+      assert id == a.id
+
+      assert {:error, {:scope_not_permitted, :thread_only}} =
+               grant(ctx, %{scope: "agent", tool: "notes", action: "keep"})
+
+      for {pair, reason} <- [
+            {%{tool: "execution", action: "run"}, :never_standing},
+            {%{tool: "files", action: "delete"}, :destructive},
+            {%{tool: "http", action: "post"}, :external}
+          ] do
+        assert {:error, {:scope_not_permitted, ^reason}} = grant(ctx, Map.merge(schedule, pair)),
+               "#{pair.tool}.#{pair.action} stood for a schedule"
+      end
+    end
+  end
+
   describe "put/2 replaces rather than accumulates" do
     test "flipping allow to deny leaves one row, not a contradictory pair", %{ctx: ctx} do
       {:ok, _} = grant(ctx, %{scope: "agent", effect: "allow"})
@@ -613,7 +766,7 @@ defmodule Aqua.ToolGrantsTest do
 
       assert MapSet.equal?(
                keys,
-               MapSet.new([{"component", "pull", nil}, {"record", "list", nil}])
+               MapSet.new([{"component", "pull", nil, nil}, {"record", "list", nil, nil}])
              )
     end
 
@@ -653,7 +806,7 @@ defmodule Aqua.ToolGrantsTest do
         })
 
       listed = ctx |> rows("thread_1", ctx.athanor_id, "aqua") |> ToolGrants.allowed_keys()
-      assert listed == MapSet.new([{"files", "write", nil}])
+      assert listed == MapSet.new([{"files", "write", nil, nil}])
 
       assert :ok =
                ToolGrants.revoke(ctx, %{

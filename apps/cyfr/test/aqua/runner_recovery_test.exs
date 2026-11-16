@@ -67,7 +67,7 @@ defmodule Aqua.RunnerRecoveryTest do
 
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end

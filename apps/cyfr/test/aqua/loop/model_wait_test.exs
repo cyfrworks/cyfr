@@ -77,7 +77,7 @@ defmodule Aqua.Loop.ModelWaitTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
@@ -261,6 +261,68 @@ defmodule Aqua.Loop.ModelWaitTest do
     assert resumed["session"] == "brain-1"
     assert again == Map.delete(resumed, "session")
     assert next["session"] == "brain-2"
+
+    # The request asked without the session carries the thread, in order,
+    # which the brain's new session is rebuilt from.
+    assert [
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "hello"}]},
+             %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "Hello."}]},
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "are you there?"}]}
+           ] = again["messages"]
+  end
+
+  test "a session lost after a completed call is asked again with the call and its outcome, run once",
+       %{ctx: ctx, thread: thread} do
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, @hand],
+       script: [
+         Map.put(
+           calls([{"c1", "files", %{"action" => "list", "path" => "data"}}]),
+           "session",
+           "brain-1"
+         ),
+         {:output, %{"entries" => ["notes.txt"]}},
+         {:refuse, unknown_session()},
+         Map.put(reply("One file."), "session", "brain-2")
+       ]}
+    )
+
+    turn = accept!(ctx, thread, "what is in data?")
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    assert [opened, continued, again] = chat_requests()
+    refute Map.has_key?(opened, "session")
+    assert continued["session"] == "brain-1"
+    refute Map.has_key?(again, "session")
+    assert again == Map.delete(continued, "session")
+
+    # The request ends in the call's outcome: the new session is handed the
+    # call and its result as history, and the hand ran once.
+    assert [
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "text", "text" => "what is in data?"}]
+             },
+             %{"role" => "assistant", "content" => [%{"type" => "tool_call", "id" => "c1"}]},
+             %{
+               "role" => "tool",
+               "content" => [%{"type" => "tool_result", "tool_call_id" => "c1"} = result]
+             }
+           ] = again["messages"]
+
+    refute result["is_error"]
+    assert result["content"] =~ "notes.txt"
+
+    hands =
+      for %{input: input} <- ScriptedWorker.calls(),
+          input["operation"] not in ["chat", "describe", "models"],
+          do: input
+
+    assert [_once] = hands
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert [%{outcome: "ok"}] = Enum.filter(steps, &(&1.kind == "tool"))
+    assert {:ok, %{brain_session: "brain-2"}} = Threads.get(Sanctum.Context.actor(ctx), thread.id)
   end
 
   test "a refusal of the request asked again without the session ends the turn, the session forgotten",
@@ -452,7 +514,7 @@ defmodule Aqua.Loop.ModelWaitTest do
     # The athanor's next root is admitted and runs, in a thread of its own
     # beside the stopped turn's.
     ScriptedWorker.script([reply("hi")])
-    {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, other} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     next = accept!(ctx, other, "again")
     assert :completed = Task.await(run(ctx, next), 30_000)
   end

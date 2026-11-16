@@ -6,7 +6,8 @@ defmodule Aqua.StandingTest do
   Whether a card's answer may stand for calls nobody has seen yet: an
   external or destructive action takes no standing allow, whatever its
   own standing rule says, and answers for this call alone or a standing
-  deny stay open to it.
+  deny stay open to it. An answer for a schedule is agent-wide, names its
+  schedule, and is held to the rule of an answer for one thread.
   """
 
   use ExUnit.Case, async: true
@@ -49,6 +50,72 @@ defmodule Aqua.StandingTest do
   test "a write with no standing rule of its own may stand for the thread or always" do
     for scope <- [:thread, :always] do
       assert :ok = Standing.check(intent("write"), scope)
+    end
+  end
+
+  describe "an answer for a schedule" do
+    @for_schedule %{lifecycle: :schedule, schedule: "sched_1"}
+
+    test "is offered where an answer for one thread is, and held to that rule though agent-wide" do
+      for standing <- [nil, "thread"] do
+        intent = intent("write", standing)
+        assert Standing.offered?(intent, :schedule)
+        assert :ok = Standing.check(intent, :always, @for_schedule)
+        assert Standing.offered?(intent, :schedule) == Standing.offered?(intent, :thread)
+      end
+
+      # One for one thread only is still none agent-wide without it.
+      thread_only = intent("write", "thread")
+      refute Standing.offered?(thread_only, :always)
+
+      assert {:error, {:scope_not_permitted, :thread_only}} =
+               Standing.check(thread_only, :always, %{})
+    end
+
+    test "is offered for no action that never stands, and for no destructive or external one" do
+      for {intent, reason} <- [
+            {intent("write", false), :never_standing},
+            {intent("destructive"), "destructive"},
+            {intent("external", "thread"), "external"}
+          ] do
+        refute Standing.offered?(intent, :schedule)
+
+        assert {:error, {:scope_not_permitted, ^reason}} =
+                 Standing.check(intent, :always, @for_schedule)
+      end
+    end
+
+    test "is offered on no launch's card" do
+      {:ok, call} =
+        Binding.resolve("execution.run", %{
+          "reference" => "formula:local.nowhere:1.0.0",
+          "input" => %{}
+        })
+
+      rule = Policy.standing_rule(call)
+
+      for scope <- [:schedule, :thread, :always] do
+        refute Standing.offered?(rule, scope), "a launch's card offers #{scope}"
+      end
+    end
+
+    test "is agent-wide and names its schedule; any other spelling is refused before a row is built" do
+      ctx = Sanctum.TestContext.local()
+      turn = %{id: "turn_1", thread_id: "thread_1", agent: "aqua", root_execution_id: "exec_1"}
+      proposal = %{"tool" => "files", "action" => "write"}
+
+      for {scope, bounds, reason} <- [
+            {:thread, %{lifecycle: :schedule}, :no_schedule},
+            {:thread, @for_schedule, :invalid_lifecycle},
+            {:always, %{lifecycle: :schedule}, :no_schedule},
+            {:always, %{lifecycle: :turn, schedule: "sched_1"}, :invalid_lifecycle},
+            {:once, @for_schedule, :bounds_without_standing},
+            {:never, @for_schedule, :bounded_deny}
+          ] do
+        assert Standing.rows(ctx, turn, proposal, scope, bounds) ==
+                 {:error, {:scope_not_permitted, reason}},
+               "#{scope} #{inspect(bounds)} was not refused as #{reason}"
+      end
     end
   end
 

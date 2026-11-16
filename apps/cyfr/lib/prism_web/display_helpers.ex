@@ -63,6 +63,14 @@ defmodule PrismWeb.DisplayHelpers do
   def truncate(s, _max), do: to_string(s)
 
   @doc """
+  A day as a person reads it: its date in words, `"Sun 15 Nov 2026"`. The
+  one wording of a daily thread's day in the console: Aqua's panel and its
+  pane name a day by it, and the store answers the date alone.
+  """
+  @spec day_name(Date.t()) :: String.t()
+  def day_name(%Date{} = day), do: Calendar.strftime(day, "%a %-d %b %Y")
+
+  @doc """
   Format a timestamp for display. `:time` gives "14:03" for inline,
   same-day surfaces; `:datetime` gives "2026-08-27 14:03 UTC". Accepts a
   `DateTime` or an ISO8601 string; nil and unparseable values pass

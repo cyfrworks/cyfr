@@ -421,7 +421,7 @@ defmodule Aqua.NotesStoreTest do
   # writes leave it.
   defp chain!(ctx, actor, sources) do
     actor = Map.put(actor, :user_id, ctx.user_id)
-    {:ok, thread} = Arca.ThreadStorage.create(actor)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{

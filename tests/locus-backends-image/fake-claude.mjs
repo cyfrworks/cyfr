@@ -17,7 +17,8 @@
 //   carries is kept; `mcp_set_servers` starts each stdio server it names
 //   (the image's `cyfr-stub`), lists its tools over MCP and answers
 //   `added`.
-// - A user message is a turn: `system/init`, then by its words: `hello`
+// - A user message is a turn: `system/init`, then by the words of its last
+//   text block (a new session's history rides before it): `hello`
 //   asks to run its own `Bash` and replies naming its flags and prompt;
 //   `read` makes an `assistant` `tool_use` of `mcp__cyfr__files`, asks
 //   `can_use_tool` and holds until the driver's `control_response`, calls
@@ -156,16 +157,20 @@ function reply(text) {
 
 async function turn(message) {
   const content = message.message.content;
-  const text = typeof content === 'string' ? content : content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  const texts = typeof content === 'string' ? [content] : content.filter((b) => b.type === 'text').map((b) => b.text);
+  const text = texts.join('');
+  // The words of the ask, its last text block: a new session's history
+  // rides in a block before it, and is read but never acted on.
+  const words = texts[texts.length - 1] ?? '';
   transcript.push({ role: 'user', text });
   save();
   out({ type: 'system', subtype: 'init', session_id: sessionId, model, tools: [...OWN_TOOLS, ...mcpTools()], mcp_servers: [...servers.keys()].map((name) => ({ name, status: 'connected' })), permissionMode: flag('--permission-mode') || 'default' });
 
-  if (text.includes('hello')) {
+  if (words.includes('hello')) {
     const { decision } = await ask('Bash', { command: 'cat canary.txt' });
     const ran = decision.behavior === 'allow' ? 'allowed' : 'refused';
     reply(`Hello from the fake harness: session ${sessionId}, model ${model}, effort ${flag('--effort') || 'unset'}, tools ${flag('--tools') ?? 'all'}, Bash ${ran}, prompt "${appended}".`);
-  } else if (text.includes('read')) {
+  } else if (words.includes('read')) {
     const input = { action: 'read', path: 'notes.txt' };
     out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text: 'Reading it.' }, { type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: 'mcp__cyfr__files', input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });
     const { decision, toolUseId } = await ask('mcp__cyfr__files', input);
@@ -186,7 +191,7 @@ async function turn(message) {
       said = `Denied: ${decision.message}`;
     }
     reply(said);
-  } else if (text.includes('first message')) {
+  } else if (words.includes('first message')) {
     reply(`Your first message was: ${transcript[0].text}`);
   } else {
     reply('ok');

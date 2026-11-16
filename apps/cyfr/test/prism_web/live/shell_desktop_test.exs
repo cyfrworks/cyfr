@@ -1207,9 +1207,9 @@ defmodule PrismWeb.ShellDesktopTest do
       assert %{id: ^main, state: :live} = canvas(view)
     end
 
-    test "settings of aqua with a ref opens Aqua's panel at that thread of the person's own, and at its kept one otherwise",
+    test "settings of aqua with a ref opens Aqua's panel at that thread of the person's own, and at today's otherwise",
          %{conn: conn, ctx: ctx, user: user} do
-      {:ok, plans} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx), %{title: "Plans"})
+      {:ok, plans} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
       {:ok, theirs} = Sanctum.SharedThreads.create(user.user_id, "Shared, not Aqua's")
       view = shell!(conn)
       main = canvas(view).id
@@ -1224,10 +1224,30 @@ defmodule PrismWeb.ShellDesktopTest do
       assert id == plans.id
 
       # A shared thread is not one of the person's own with Aqua: the
-      # panel stays at the thread it holds.
+      # panel turns to today's.
       verb!(view, main, :settings, %{"page" => "aqua", "ref" => theirs.id})
       _ = render(view)
-      assert %{id: ^id} = :sys.get_state(panel.pid).socket.assigns.thread
+      {:ok, today} = Aqua.Day.current(%{ctx | user_id: user.user_id})
+      assert %{id: today_id} = :sys.get_state(panel.pid).socket.assigns.thread
+      assert today_id == today.id
+    end
+
+    test "the desktop keeps the zone the browser reports as the person's, and one that is no zone leaves it",
+         %{conn: conn, user: user} do
+      zone = fn ->
+        {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+        Sanctum.Tenancy.Users.prefs(row)["time_zone"]
+      end
+
+      assert zone.() == nil
+      shell!(put_connect_params(conn, %{"time_zone" => "Asia/Singapore"}))
+      assert zone.() == "Asia/Singapore"
+
+      shell!(put_connect_params(conn, %{"time_zone" => "Not/A_Zone"}))
+      assert zone.() == "Asia/Singapore"
+
+      shell!(conn)
+      assert zone.() == "Asia/Singapore"
     end
 
     test "settings of chat with a ref opens the chat at that shared thread, read under the person's seat",

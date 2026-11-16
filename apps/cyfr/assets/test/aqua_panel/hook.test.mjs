@@ -102,7 +102,7 @@ describe("on the desk", () => {
 
   test("a press on a header control is not a drag", () => {
     const p = panel({x: "100", y: "100", w: "400", h: "500"})
-    gesture(p, target("[data-aqua-grip]", "select"), [200, 120], [260, 150])
+    gesture(p, target("[data-aqua-grip]", "button"), [200, 120], [260, 150])
     assert.deepEqual(p.drawn(), {x: 100, y: 100, w: 400, h: 500})
     assert.deepEqual(p.pushed, [])
   })
@@ -159,6 +159,19 @@ describe("Escape", () => {
     p.fire("keydown", {key: "Escape", isComposing: true})
     p.fire("keydown", {key: "Enter"})
     assert.equal(prevented, true)
+    assert.deepEqual(p.pushed, [{event: "close", payload: {}}])
+  })
+
+  test("in a dialog the panel holds, is that dialog's alone: the panel stays open", () => {
+    const p = panel()
+    const large = {}
+    const inLarge = {closest: (selector) => (selector === '[role="dialog"]' ? large : null)}
+    const inPanel = {closest: (selector) => (selector === '[role="dialog"]' ? p.el : null)}
+    let prevented = false
+    p.fire("keydown", {key: "Escape", target: inLarge, preventDefault: () => (prevented = true)})
+    assert.equal(prevented, false, "the dialog's own binding still hears it")
+    assert.deepEqual(p.pushed, [])
+    p.fire("keydown", {key: "Escape", target: inPanel})
     assert.deepEqual(p.pushed, [{event: "close", payload: {}}])
   })
 

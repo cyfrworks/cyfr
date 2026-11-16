@@ -60,7 +60,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     conn = log_in_user(conn, user, athanor_id: athanor.id)
     here = %{Sanctum.TestContext.local(:prism) | user_id: user.user_id, athanor_id: athanor.id}
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
 
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(here), thread.id, %{
@@ -195,17 +195,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
-  # The pane in its host: Aqua's panel on the desktop, opened (a panel the
-  # session left open opens so) and turned to `thread`. Answers the panel
-  # and its pane.
+  # The pane in its host: Aqua's panel on the desktop, opened at `thread`
+  # as the attention stream opens it. Answers the panel and its pane.
   defp panel_pane(conn, thread) do
     {desktop, _html} = mount_desktop(conn)
     panel = child!(desktop, "aqua-panel")
-
-    unless has_element?(panel, "#aqua-panel-sheet"),
-      do: panel |> element("#aqua-panel-button") |> render_click()
-
-    panel |> form("#aqua-panel-thread-form", %{"id" => thread.id}) |> render_change()
+    send(panel.pid, {:open, thread.id})
+    render(panel)
     {panel, on_thread!(child!(panel, "aqua-panel-pane"), thread.id)}
   end
 
@@ -233,7 +229,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     bob = test_user()
     theirs = Sanctum.Test.People.athanor!(bob.user_id)
     bobs = %{Sanctum.TestContext.local(:prism) | user_id: bob.user_id, athanor_id: theirs.id}
-    {:ok, secret} = Threads.create(Sanctum.Context.actor(bobs))
+    {:ok, secret} = Arca.Test.Days.thread(Sanctum.Context.actor(bobs))
 
     {:ok, _} =
       Threads.append(Sanctum.Context.actor(bobs), secret.id, %{
@@ -293,7 +289,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     pane = open_pane(conn, athanor, thread)
     card_dom = ~s([id$="-card-#{card.id}"])
 
-    # Its run was started by no schedule, so no answer can end with one.
+    # The person has no schedule of Aqua's, so no answer for one is offered.
     assert has_element?(pane, ~s(#{card_dom} [phx-value-lifecycle="execution"]))
     refute has_element?(pane, ~s(#{card_dom} [phx-value-lifecycle="schedule"]))
 
@@ -362,22 +358,18 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   }
 
   # A card of its own in a thread of its own: deciding a card settles it.
-  # A scheduled card's run row names the schedule it was started by.
   defp offer!(conn, athanor, here) do
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
     card = card!(here, thread, @write, %{"standing" => nil})
     {open_pane(conn, athanor, thread), card}
   end
 
-  # A card in the thread a schedule's line for Aqua runs in.
-  defp offer_in_schedule_thread!(conn, athanor, here) do
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
-    card = card!(here, thread, @write, %{"standing" => nil})
-
+  # A schedule of the person's that holds a line for Aqua.
+  defp schedule!(here, name) do
     {:ok, schedule} =
       Arca.CronSchedule.create(Sanctum.Context.actor(here), %{
         user_id: here.user_id,
-        name: "line-#{System.unique_integer([:positive])}",
+        name: name,
         cron_expression: "0 0 1 1 *",
         reference: Arca.CronSchedule.aqua_line(),
         resolved_reference: Arca.CronSchedule.aqua_line(),
@@ -386,14 +378,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         by_person: true
       })
 
-    # The schedule's thread, as its first fire names it.
-    {1, _} =
-      Arca.Repo.update_all(
-        from(s in Arca.Schemas.CronSchedule, where: s.id == ^schedule.id),
-        set: [thread_id: thread.id]
-      )
-
-    {open_pane(conn, athanor, thread), card}
+    schedule
   end
 
   # The grant that reached `approval.resolve` for `card`, as it was asked.
@@ -462,9 +447,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
-  describe "a schedule's own thread" do
-    test "its card offers for this schedule as this thread's answer ending with the schedule; no other thread's does",
+  describe "an answer for a schedule" do
+    test "a daily thread's card offers it with a schedule to name, and the one picked reaches approval.resolve agent-wide, ending with it",
          %{conn: conn, athanor: athanor, here: here} do
+      # No schedule of Aqua's: nothing to name, nothing offered.
       {plain_pane, plain} = offer!(conn, athanor, here)
 
       refute has_element?(
@@ -472,14 +458,54 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                ~s([id$="-card-#{plain.id}"] [data-test="approval-for-schedule"])
              )
 
-      {pane, card} = offer_in_schedule_thread!(conn, athanor, here)
-      click_offer(pane, card, ~s(button[data-test="approval-for-schedule"]))
+      morning = schedule!(here, "Morning brief")
+      evening = schedule!(here, "Evening brief")
+      {pane, card} = offer!(conn, athanor, here)
+      offer = ~s([id$="-card-#{card.id}"] [data-test="approval-for-schedule"])
+      assert has_element?(pane, offer, "Morning brief")
+      assert has_element?(pane, offer, "Evening brief")
+
+      click_offer(pane, card, ~s(button[phx-value-schedule="#{evening.id}"]))
       input = resolved(card)
 
-      assert input["scope"] == "thread"
+      assert input["scope"] == "always"
       assert input["lifecycle"] == "schedule"
+      assert input["schedule"] == evening.id
       refute Map.has_key?(input, "until")
+
+      # A schedule the card does not name chooses nothing.
+      {forged_pane, forged} = offer!(conn, athanor, here)
+
+      forged_pane
+      |> element(~s([id$="-card-#{forged.id}"] button[phx-value-schedule="#{morning.id}"]))
+      |> render_click(%{"schedule" => "sched_not_theirs"})
+
+      refute Arca.Repo.all(
+               from(l in Arca.Schemas.McpLog,
+                 where: l.tool == "approval" and l.action == "resolve",
+                 select: l.input
+               )
+             )
+             |> Enum.any?(&(Jason.decode!(&1)["approval"] == forged.approval_id))
     end
+  end
+
+  test "a card that arrives after a schedule was made offers it, though the pane opened before the schedule existed",
+       %{conn: conn, athanor: athanor, here: here} do
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
+    pane = open_pane(conn, athanor, thread)
+
+    morning = schedule!(here, "Morning after mount")
+    card = card!(here, thread, @write, %{"standing" => nil})
+    offer = ~s([id$="-card-#{card.id}"] [data-test="approval-for-schedule"])
+
+    Prima.Test.Wait.wait_until(
+      fn -> has_element?(pane, offer, "Morning after mount") end,
+      5_000,
+      "the card offers the schedule made after the pane opened"
+    )
+
+    assert has_element?(pane, ~s(#{offer} button[phx-value-schedule="#{morning.id}"]))
   end
 
   test "the thread's standing answers are listed, bounded ones too, each to withdraw",
@@ -490,7 +516,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       athanor_id: thread.athanor_id,
       thread_id: thread.id,
       kind: :grants,
-      data: MapSet.new([{"aqua", "files", "write", nil}])
+      data: MapSet.new([{"aqua", "files", "write", nil, nil}])
     })
 
     render(pane)
@@ -500,6 +526,102 @@ defmodule PrismWeb.ThreadPaneLiveTest do
              pane,
              ~s([data-test="standing-answers"] button[phx-click="revoke_grant"][phx-value-tool="files"][phx-value-action="write"])
            )
+  end
+
+  test "an answer for a schedule is listed by the schedule's name, and withdrawing it names that schedule",
+       %{conn: conn, athanor: athanor, thread: thread} do
+    pane = open_pane(conn, athanor, thread)
+    schedule = %{id: "sched_brief", name: "Morning brief"}
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :grants,
+      data: MapSet.new([{"aqua", "files", "write", nil, schedule}])
+    })
+
+    render(pane)
+    assert has_element?(pane, ~s([data-test="standing-answer"]), "files.write, for Morning brief")
+
+    pane
+    |> element(~s([data-test="standing-answer"] button[phx-value-schedule="sched_brief"]))
+    |> render_click()
+
+    [input] =
+      Arca.Repo.all(
+        from(l in Arca.Schemas.McpLog,
+          where: l.tool == "thread" and l.action == "revoke_grant",
+          select: l.input
+        )
+      )
+
+    assert %{"schedule" => "sched_brief", "tool" => "files", "tool_action" => "write"} =
+             Jason.decode!(input)
+  end
+
+  test "a schedule's fire is drawn as that schedule's, never as the person's own line, and is not offered to paste",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    {:ok, fire} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: Prima.Author.system(),
+        sent_by: "person",
+        content: "summarise what is unread",
+        payload: %{"schedule" => %{"id" => "sched_brief", "name" => "Morning brief"}}
+      })
+
+    room = PrismWeb.RoomFeed.room("sthr_beside", "Plans")
+    pane = open_pane(conn, athanor, thread, %{"room" => room})
+    shown = ~s([id$="-m-#{fire.id}"])
+
+    assert has_element?(pane, shown, "Schedule · Morning brief")
+    assert has_element?(pane, shown, "summarise what is unread")
+    assert has_element?(pane, "#{shown} .items-start")
+    refute has_element?(pane, "#{shown} .items-end")
+    refute has_element?(pane, "#{shown} .bg-indigo-600")
+    refute has_element?(pane, ~s(#{shown} button[phx-click="paste"]))
+
+    # The person's own line beside it is theirs, and theirs to paste.
+    assert has_element?(pane, ~s(button[phx-click="paste"]), "Paste to Plans")
+  end
+
+  test "the thread shown is read to its newest row as it opens and as each row lands, never back",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, said} =
+      Threads.append(actor, thread.id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        content: "an answer"
+      })
+
+    {:ok, unseen} = Threads.get(actor, thread.id)
+    assert {:ok, 1} = Threads.unread(actor, unseen)
+
+    pane = open_pane(conn, athanor, thread)
+    assert {:ok, %{read_seq: seq}} = Threads.get(actor, thread.id)
+    assert seq == said.seq
+
+    {:ok, later} =
+      Aqua.Tape.append(here, thread.id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        content: "a later answer"
+      })
+
+    landed = later.seq
+
+    Prima.Test.Wait.wait_until(
+      fn -> match?({:ok, %{read_seq: ^landed}}, Threads.get(actor, thread.id)) end,
+      5_000,
+      "the read mark at the row that landed"
+    )
+
+    # A row heard again, behind the mark, moves nothing.
+    Aqua.Tape.announce(here, thread.id, :message, said)
+    _ = render(pane)
+    assert {:ok, %{read_seq: ^landed} = seen} = Threads.get(actor, thread.id)
+    assert {:ok, 0} = Threads.unread(actor, seen)
   end
 
   test "a program's standing answer is listed by the program's name, and withdrawing it withdraws that program's alone",
@@ -562,7 +684,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert Enum.any?(1..300, fn _ -> withdrawn.() or (Process.sleep(10) && false) end)
 
     assert {:ok, left} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)
-    assert left == MapSet.new([{"aqua", "program", "start", %{id: jq.id, name: "jq"}}])
+    assert left == MapSet.new([{"aqua", "program", "start", %{id: jq.id, name: "jq"}, nil}])
   end
 
   test "what the pane pushes names the pane it is for, and a page it points at is a link, never pushed",
@@ -761,7 +883,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     event.(:turn_starting, user.user_id)
     event.(:queued, 2)
     event.(:tool_activity, [%{tool: "files.read", status: :running, preview: "notes.md"}])
-    event.(:grants, MapSet.new([{"aqua", "files", "read", nil}, {"aqua", "notes", "write", nil}]))
+
+    event.(
+      :grants,
+      MapSet.new([{"aqua", "files", "read", nil, nil}, {"aqua", "notes", "write", nil, nil}])
+    )
+
     event.(:restart_prompt, %{text: "two files", user_id: user.user_id})
 
     # A file on its way up.
@@ -795,6 +922,166 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, ~s(button.min-h-6[phx-click="dismiss_restart"]))
     assert has_element?(pane, "a.min-h-6.text-xs[download]", "notes.md")
     assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
+  end
+
+  describe "a post draws what it holds" do
+    setup %{here: here, thread: thread, user: user} do
+      pictures = fn n ->
+        [
+          %{
+            "filename" => "shot #{n}.png",
+            "stored_name" => "0-shot_#{n}.png",
+            "media_type" => "image/png"
+          },
+          %{
+            "filename" => "logo.svg",
+            "stored_name" => "1-logo.svg",
+            "media_type" => "image/svg+xml"
+          },
+          %{
+            "filename" => "report.pdf",
+            "stored_name" => "2-report.pdf",
+            "media_type" => "application/pdf"
+          },
+          %{"filename" => "gone.png", "media_type" => "image/png"}
+        ]
+      end
+
+      links = [
+        %{"url" => "https://example.com/plan", "title" => "The plan"},
+        %{"url" => "http://example.org/raw"},
+        %{"url" => "javascript:alert(1)", "title" => "a script"},
+        %{"url" => "data:text/html,<p>x</p>", "title" => "a data address"},
+        %{"url" => "https://", "title" => "no host"},
+        %{"title" => "no address"}
+      ]
+
+      {:ok, mine} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: user.user_id,
+          sent_by: "person",
+          content: "my screenshot",
+          payload: %{"attachments" => pictures.(1), "links" => links}
+        })
+
+      {:ok, aquas} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          # A post may hold no text at all.
+          content: "",
+          payload: %{"attachments" => pictures.(2), "links" => links}
+        })
+
+      {:ok, posts: [mine, aquas]}
+    end
+
+    test "a picture is shown in place and opens large, any other file is a chip that downloads, " <>
+           "and a link is a link, whoever wrote the post",
+         %{conn: conn, athanor: athanor, thread: thread, posts: posts} do
+      pane = open_pane(conn, athanor, thread)
+
+      for {post, n} <- Enum.zip(posts, [1, 2]) do
+        href = &PrismWeb.Focus.path(route(athanor), "/attachments/#{post.id}/#{&1}")
+        large = ~s([id$="-msg-#{post.id}-picture-0"])
+
+        # The PNG: drawn in place, at the attachment address, and drawn
+        # large in a dialog that starts hidden.
+        picture = href.("0-shot_#{n}.png")
+
+        assert has_element?(
+                 pane,
+                 ~s(button[aria-label="Open shot #{n}.png large"] img[src="#{picture}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{large}.hidden [role=dialog][aria-label="shot #{n}.png"] img[src="#{picture}"])
+               )
+
+        assert has_element?(pane, ~s(#{large} button[id$="-picture-0-close"].min-h-6), "Close")
+        refute has_element?(pane, ~s(a[download="shot #{n}.png"]))
+
+        # An SVG runs script and a PDF is no picture: each is a chip that
+        # downloads.
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="#{href.("1-logo.svg")}"][download="logo.svg"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="#{href.("2-report.pdf")}"][download="report.pdf"])
+               )
+
+        refute has_element?(pane, ~s(img[src="#{href.("1-logo.svg")}"]))
+        refute has_element?(pane, ~s(img[alt="gone.png"]))
+
+        # Links: an http or https address with a host, under its title or
+        # itself, opened apart from the page; nothing else is a link.
+        assert has_element?(
+                 pane,
+                 ~s(a.min-h-6[href="https://example.com/plan"][target=_blank][rel="noopener noreferrer"]),
+                 "The plan"
+               )
+
+        assert has_element?(pane, ~s(a[href="http://example.org/raw"]), "http://example.org/raw")
+      end
+
+      # A file not stored is a chip with no address.
+      assert has_element?(pane, "span.text-xs", "gone.png")
+      refute has_element?(pane, ~s(a[download="gone.png"]))
+
+      html = render(pane)
+
+      for gone <- [
+            "javascript:",
+            "data:text/html",
+            "a script",
+            "a data address",
+            "no host",
+            "no address"
+          ],
+          do: refute(html =~ gone, "#{gone} is drawn")
+
+      refute html =~ @under_12px
+      refute html =~ @inline_style
+    end
+
+    test "Escape closes a picture opened large from where opening it put the focus, " <>
+           "and gives the focus back to the picture",
+         %{conn: conn, athanor: athanor, thread: thread} do
+      doc = conn |> open_pane(athanor, thread) |> render() |> LazyHTML.from_fragment()
+
+      opens =
+        doc |> LazyHTML.query(~s(button[aria-label$=" large"])) |> LazyHTML.attribute("phx-click")
+
+      # One picture in each of the two posts.
+      assert length(opens) == 2
+
+      for open <- opens do
+        ops = Jason.decode!(open)
+        [large] = for ["remove_class", %{"names" => ["hidden"], "to" => to}] <- ops, do: to
+        [focused] = for ["focus", %{"to" => to}] <- ops, do: to
+        assert ["push_focus", _] = hd(ops)
+
+        # LiveView reads a key binding from the key's own target alone, never
+        # an ancestor's: the element opening puts the focus on carries it.
+        held = LazyHTML.query(doc, focused)
+        assert LazyHTML.attribute(held, "phx-key") == ["Escape"]
+        assert [escape] = LazyHTML.attribute(held, "phx-keydown")
+        escape = Jason.decode!(escape)
+
+        assert ["add_class", %{"names" => ["hidden"], "to" => ^large}] =
+                 Enum.find(escape, &(hd(&1) == "add_class"))
+
+        assert Enum.any?(escape, &(hd(&1) == "pop_focus"))
+
+        # It sits inside the large view's own dialog, whose Escape the panel
+        # leaves to it (`aqua_panel/index.js`).
+        assert doc |> LazyHTML.query(~s(#{large} [role=dialog] #{focused})) |> Enum.count() == 1
+      end
+    end
   end
 
   test "a turn stopped on an unknown outcome shows so until it goes on", %{
@@ -1119,7 +1406,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   test "with no message of the turn that asked to offer, the pane cuts nothing and says so",
        %{conn: conn, user: user, thread: thread, here: here} do
     # A line of another thread is no message of this thread's turn.
-    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(here))
+    {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
 
     {:ok, foreign} =
       Threads.append(Sanctum.Context.actor(here), elsewhere.id, %{
@@ -1142,12 +1429,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a launch's card names the account it binds and takes no standing answer", %{
-    conn: conn,
-    athanor: athanor,
-    here: here,
-    thread: thread
-  } do
+  test "a launch's card names the account it binds and takes no standing answer, one for a schedule neither",
+       %{
+         conn: conn,
+         athanor: athanor,
+         here: here,
+         thread: thread
+       } do
     proposal = %{
       "tool" => "execution",
       "action" => "run",
@@ -1159,17 +1447,20 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       "vault_entry" => "vlt_work-1"
     }
 
+    # A schedule to name, which a launch's card still does not offer.
+    schedule!(here, "Morning brief")
     card = card!(here, thread, proposal, %{"action_kind" => "execute", "standing" => false})
     pane = open_pane(conn, athanor, thread)
     card_dom = ~s([id$="-card-#{card.id}"])
 
     assert has_element?(pane, ~s(#{card_dom} [data-test="approval-account"]), "Work")
     refute has_element?(pane, ~s(#{card_dom} [data-test="approval-standing"]))
+    refute has_element?(pane, ~s(#{card_dom} [data-test="approval-for-schedule"]))
     refute render(pane) =~ "vlt_work-1"
     assert has_element?(pane, ~s(#{card_dom} button[phx-value-scope="once"]))
 
     # A launch that names no account says none.
-    {:ok, other} = Threads.create(Sanctum.Context.actor(here))
+    {:ok, other} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
 
     unnamed = %{
       "tool" => "execution",
@@ -1833,6 +2124,86 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "a request and the reply under it each draw what they hold, at their own message's address",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+
+      held = fn name ->
+        %{
+          "attachments" => [
+            %{
+              "filename" => "#{name}.png",
+              "stored_name" => "0-#{name}.png",
+              "media_type" => "image/png"
+            },
+            %{
+              "filename" => "#{name}.pdf",
+              "stored_name" => "1-#{name}.pdf",
+              "media_type" => "application/pdf"
+            }
+          ],
+          "links" => [%{"url" => "https://example.com/#{name}", "title" => "The #{name}"}]
+        }
+      end
+
+      {:ok, %{message: request}} =
+        Aqua.Tape.accept(here, room.id, %{
+          message: %{
+            author: here.user_id,
+            sent_by: "person",
+            addressee: "explorer",
+            status: "pending",
+            content: "Build the site",
+            payload: held.("brief")
+          }
+        })
+
+      {:ok, %{message: reply}} =
+        Aqua.Tape.accept(here, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "explorer",
+            addressee: "person",
+            reply_to: request.id,
+            outcome: "done",
+            content: "Built it",
+            payload:
+              Map.merge(held.("result"), %{"from_thread" => child.id, "answers" => [request.id]})
+          },
+          answers: [request.id]
+        })
+
+      pane = open_pane(conn, athanor, room)
+      href = &PrismWeb.Focus.path(route(athanor), "/attachments/#{&1}/#{&2}")
+      asked = ~s([id$="-m-#{request.id}"])
+      answered = ~s(#{asked} [id$="-reply-#{reply.id}"])
+
+      for {scope, row, name} <- [{asked, request, "brief"}, {answered, reply, "result"}] do
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} button img[src="#{href.(row.id, "0-#{name}.png")}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} [id$="-msg-#{row.id}-picture-0"].hidden img[src="#{href.(row.id, "0-#{name}.png")}"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} a[href="#{href.(row.id, "1-#{name}.pdf")}"][download="#{name}.pdf"])
+               )
+
+        assert has_element?(
+                 pane,
+                 ~s(#{scope} a[href="https://example.com/#{name}"]),
+                 "The #{name}"
+               )
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a reply heard on the room marks every request it answers answered, under the one it replies to",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
       {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
@@ -1875,12 +2246,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       # The pane asks the panel, which turns it to the member's thread.
       pane |> element(~s(#{shown} button[phx-click="open_thread"])) |> render_click()
       on_thread!(pane, child.id)
-
-      assert has_element?(
-               panel,
-               ~s(#aqua-panel-threads option[value="#{child.id}"][selected]),
-               "explorer's thread"
-             )
+      assert has_element?(panel, "#aqua-panel-day-name", "explorer's thread")
 
       Cyfr.Test.Sandbox.end_views()
     end
@@ -1930,7 +2296,17 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       strip = ~s([id$="-crew-thread"])
       assert has_element?(pane, strip, "explorer's thread")
-      assert has_element?(pane, ~s(#{strip} button[phx-click="open_thread"]), "Back to hello")
+
+      # The room, a daily thread, by its day's date in words, never the
+      # ISO date its row's title holds.
+      assert has_element?(
+               pane,
+               ~s(#{strip} button[phx-click="open_thread"]),
+               "Back to #{PrismWeb.DisplayHelpers.day_name(room.day)}"
+             )
+
+      refute pane |> element(strip) |> render() =~ room.title
+
       refute has_element?(pane, ~s([id$="-crew-#{explorer.id}"]))
 
       pane |> element(~s(#{strip} button[phx-click="archive"])) |> render_click()

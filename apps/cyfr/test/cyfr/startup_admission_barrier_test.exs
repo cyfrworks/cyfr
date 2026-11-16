@@ -975,7 +975,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
         cap: 1_000
       })
 
-    {:ok, thread} = Arca.ThreadStorage.create(actor)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{

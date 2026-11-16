@@ -374,6 +374,9 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     insert!(Schemas.Thread, %{
       id: id,
       athanor_id: athanor_id,
+      kind: "daily",
+      day: Arca.Test.Days.next(),
+      title: "a day",
       created_by: user_id,
       inserted_at: now(),
       updated_at: now()

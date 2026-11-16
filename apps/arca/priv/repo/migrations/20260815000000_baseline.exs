@@ -2058,6 +2058,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # for every other kind: part of the answer's identity, so each
       # program's standing answer stands on its own (`Arca.Schemas.ToolGrant`).
       add :program_row, :string, null: false, default: ""
+      # The schedule an allow ends with, empty for every other answer: part
+      # of the answer's identity as the program row is, so an answer for one
+      # schedule stands beside another's and beside one for no schedule.
+      add :schedule_id, :string, null: false, default: ""
     end
 
     # Each partial key is named for its scope, the name Postgres reports a
@@ -2065,14 +2069,14 @@ defmodule Arca.Repo.Migrations.Baseline do
     # `Arca.ToolGrantStorage` declares each constraint under both spellings.
     create unique_index(
              :tool_grants,
-             [:thread_id, :agent_name, :tool, :action, :program_row],
+             [:thread_id, :agent_name, :tool, :action, :program_row, :schedule_id],
              where: "scope = 'thread'",
              name: :tool_grants_thread_scope_index
            )
 
     create unique_index(
              :tool_grants,
-             [:athanor_id, :agent_name, :tool, :action, :program_row],
+             [:athanor_id, :agent_name, :tool, :action, :program_row, :schedule_id],
              where: "scope = 'agent'",
              name: :tool_grants_agent_scope_index
            )
@@ -2378,11 +2382,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :resolved_reference, :string, null: false
       add :athanor_id, :string, null: false
       add :profile_id, :string, check: if(sqlite?, do: profile_bound)
-      # The thread an Aqua line's turns run in, made on its first fire
-      # (`Arca.CronSchedule.thread/3`). No foreign key: the thread is the
-      # person's, kept when the schedule is deleted, and a thread deleted
-      # since is made again on the next fire.
-      add :thread_id, :string
       # forbid | allow: whether a due occurrence may be claimed while another
       # of the same schedule is still open.
       add :concurrency, :string, null: false, default: "forbid"
@@ -2524,7 +2523,25 @@ defmodule Arca.Repo.Migrations.Baseline do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
     # `Arca.Schemas.Thread.kinds/0`.
-    thread_kind = known("threads_kind_known", "kind", ~w(own crew))
+    thread_kind = known("threads_kind_known", "kind", ~w(daily workspace crew))
+
+    # Each kind holds its own fields and no other's: a day names its date,
+    # a workspace thread its state and the post that asked for it, and a
+    # crew member's thread the room it works under.
+    thread_whole = %{
+      name: "threads_kind_whole",
+      expr:
+        "(kind = 'daily') = (day IS NOT NULL) AND " <>
+          "(kind = 'workspace') = (workspace_state IS NOT NULL) AND " <>
+          "(kind = 'workspace' OR opened_from IS NULL) AND " <>
+          "(kind = 'crew') = (parent_id IS NOT NULL)"
+    }
+
+    # `Arca.Schemas.Thread.workspace_states/0`.
+    workspace_state =
+      known("threads_workspace_state_known", "workspace_state", ~w(open needs_you done failed))
+
+    read_mark = %{name: "threads_read_seq_counted", expr: "read_seq >= 0"}
 
     # `Arca.Schemas.Message.outcomes/0`.
     message_outcome =
@@ -2533,11 +2550,22 @@ defmodule Arca.Repo.Migrations.Baseline do
     create table(:threads, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
-      # `own` is a person's thread; `crew` a child thread a crew member
+      # `daily` is the person's thread of one day, `workspace` one Aqua
+      # opens for a piece of work, and `crew` a child thread a crew member
       # works in, under the room thread `parent_id` names.
-      add :kind, :string, null: false, default: "own", check: if(sqlite?, do: thread_kind)
+      add :kind, :string, null: false, check: if(sqlite?, do: thread_kind)
       # A plain string, like `active_turn_id`: this table references nothing.
-      add :parent_id, :string
+      # `Arca.ThreadStorage` names a room of the same athanor only.
+      add :parent_id, :string, check: if(sqlite?, do: thread_whole)
+      # A daily thread's date, in its person's own time zone.
+      add :day, :date
+      # A workspace thread's: the daily thread's post that asked for it, a
+      # plain string from which nothing cascades, and how its work stands.
+      add :opened_from, :string
+      add :workspace_state, :string, check: if(sqlite?, do: workspace_state)
+      # `seq` of the last message the person has seen: one mark per thread,
+      # since an athanor is one person's, moved forward only.
+      add :read_seq, :integer, null: false, default: 0, check: if(sqlite?, do: read_mark)
       # The brain's own session for the thread, opaque.
       add :brain_session, :text
       # Raised each time the session is forgotten (its program home reset or
@@ -2546,7 +2574,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       # When a child thread was retired: it admits nothing more, and the
       # next request to its member opens a new one.
       add :archived_at, :utc_datetime_usec
-      add :title, :string, null: false, default: "New thread"
+      add :title, :string, null: false
       # Attribution: the person who opened it. The athanor owns it.
       add :created_by, :string, null: false
       # The agent the last turn addressed.
@@ -2566,8 +2594,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :threads, [thread_kind])
+    checked(sqlite?, :threads, [thread_kind, thread_whole, workspace_state, read_mark])
     create unique_index(:threads, [:id, :athanor_id])
+
+    # One daily thread per date of an athanor: of two callers making the
+    # day at once, one writes it and the other finds it.
+    create unique_index(:threads, [:athanor_id, :day], where: "day IS NOT NULL")
     create index(:threads, [:athanor_id, :last_message_at])
     create index(:threads, [:athanor_id, :parent_id])
 
@@ -2623,6 +2655,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     checked(sqlite?, :messages, [message_outcome])
     create unique_index(:messages, [:thread_id, :seq])
     create unique_index(:messages, [:thread_id, :client_id], where: "client_id IS NOT NULL")
+    # A sender's retry found across the athanor's threads: a schedule's
+    # fire accepted in one daily thread is sent there again after midnight.
+    create index(:messages, [:athanor_id, :client_id], where: "client_id IS NOT NULL")
     create index(:messages, [:athanor_id, :inserted_at])
     create index(:messages, [:athanor_id, :turn_id])
     create index(:messages, [:athanor_id, :reply_to])

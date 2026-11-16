@@ -26,10 +26,9 @@ defmodule Arca.Schemas.CronSchedule do
 
   A schedule whose reference is Aqua's (`aqua_line/0`) holds a line for
   Aqua instead of a component: the line is its `input`, it binds no
-  profile (its turn runs under Aqua's own consent), and `thread_id` names
-  the person's thread its turns run in, written only by
-  `Arca.CronSchedule.thread/3`. Every other row binds a profile; the
-  table's CHECK holds both.
+  profile (its turn runs under Aqua's own consent), and each fire is a turn
+  of the person's daily thread current when it fires (`Aqua.ScheduleTurns`).
+  Every other row binds a profile; the table's CHECK holds both.
   """
 
   use Ecto.Schema
@@ -60,7 +59,6 @@ defmodule Arca.Schemas.CronSchedule do
     field :metadata, :string
     field :status, :string, default: "active"
     field :profile_id, :string
-    field :thread_id, :string
     field :athanor_id, :string
     field :last_run_at, :utc_datetime_usec
     field :next_run_at, :utc_datetime_usec

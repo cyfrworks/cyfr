@@ -28,9 +28,9 @@ defmodule Aqua.Loop do
 
   A turn a schedule's line started (origin `schedule`, `Aqua.ScheduleTurns`)
   does only what needs no asking: a call its agent's policy runs `auto`,
-  or one a standing allow already covers, as in any turn (an answer "for
-  this schedule" the person gave in the schedule's own thread among them,
-  since every fire of the schedule runs there, `Aqua.Standing`). It opens
+  or one a standing allow already covers, as in any turn (an answer "for a
+  schedule" the person gave naming this schedule among them, which
+  follows its fires onto any day's daily thread, `Aqua.Standing`). It opens
   no card. At the first call
   that would ask, that call is closed refused, nothing after it in the
   response starts, what was decided before it runs and what already ran
@@ -1400,18 +1400,18 @@ defmodule Aqua.Loop do
 
   # The one sentence a stopped schedule turn leaves: what it needed, and
   # how to allow it next time where the action's own declaration lets an
-  # answer stand for this thread (`Aqua.Standing.offered?/2`, the rule the
+  # answer stand for a schedule (`Aqua.Standing.offered?/2`, the rule the
   # card offers its answers by); otherwise, that it needs the person there.
   defp unasked(%Call{} = call) do
     needed =
       "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
         "was here to give it."
 
-    if Aqua.Standing.offered?(Policy.standing_rule(call), :thread),
+    if Aqua.Standing.offered?(Policy.standing_rule(call), :schedule),
       do:
         needed <>
-          " To allow it next time, ask Aqua for it once in this thread and choose " <>
-          "\"for this schedule\" when it asks.",
+          " To allow it next time, ask Aqua for it once on your daily thread and choose " <>
+          "\"for a schedule\", naming this one, when it asks.",
       else: needed <> " This cannot be allowed for a schedule: it needs you here."
   end
 

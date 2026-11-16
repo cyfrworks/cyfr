@@ -254,13 +254,15 @@ defmodule Aqua.Runner do
   row's) and `:receipt` (its receipt, written in the acceptance).
 
   A schedule's turn consumer (`Aqua.ScheduleTurns`) sends with
-  `:schedule` (`%{schedule_id, occurrence_id}`), as the schedule's person
-  under the `schedule` origin: the send is a turn of Aqua in the
-  schedule's own thread whatever its line names, it never steers a turn
-  already there, and the turn it opens carries the schedule and the
-  occurrence on its options, which its root's admission reads
-  (`Aqua.Loop`). No other caller passes it: the console and the thread
-  tool build their options by name.
+  `:schedule` (`%{schedule_id, occurrence_id}`) and the schedule's name
+  as `:payload`'s `"schedule"`, as the schedule's person under the
+  `schedule` origin, into a daily thread: the send is a turn of Aqua
+  whatever its line names, it never steers a turn already there, its line
+  is written in the server's voice, so the person's count counts it, and
+  the turn it opens carries the schedule and the occurrence on its
+  options, which its root's admission reads (`Aqua.Loop`). No other
+  caller passes it: the console and the thread tool build their options
+  by name.
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
@@ -300,9 +302,11 @@ defmodule Aqua.Runner do
   end
 
   @doc """
-  Stop auto-approving `{tool, action}` for `agent` in this thread: for an
-  action whose answer is one program's, that program's answer
-  (`program_row`), and none without it (`Sanctum.ToolGrants.revoke/2`).
+  Stop auto-approving `{tool, action}` for `agent` in this thread: the
+  answer `key` names, `%{program, schedule}`, each nil for none. For an
+  action whose answer is one program's, that program's answer, and none
+  without it (`Sanctum.ToolGrants.revoke/2`); for an answer that ends with
+  a schedule, that schedule's alone, which stands beside the others.
   """
   @spec revoke_grant(
           Context.t(),
@@ -310,12 +314,12 @@ defmodule Aqua.Runner do
           String.t(),
           String.t(),
           String.t(),
-          String.t() | nil
+          %{optional(:program) => String.t() | nil, optional(:schedule) => String.t() | nil}
         ) ::
           :ok | {:error, term()}
-  def revoke_grant(%Context{} = ctx, thread_id, agent, tool, action, program_row \\ nil)
-      when is_binary(agent) and is_binary(tool) and is_binary(action),
-      do: call(ctx, thread_id, {:revoke_grant, ctx, agent, tool, action, program_row})
+  def revoke_grant(%Context{} = ctx, thread_id, agent, tool, action, key \\ %{})
+      when is_binary(agent) and is_binary(tool) and is_binary(action) and is_map(key),
+      do: call(ctx, thread_id, {:revoke_grant, ctx, agent, tool, action, key})
 
   @doc "A consent granted mid-turn applies to future roots: the turn is cut and the sender asked to re-send."
   @spec restart_for_consent(Context.t(), String.t(), map()) :: :ok | {:error, term()}
@@ -501,7 +505,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp handle_owned_call({:revoke_grant, ctx, agent, tool, action, program_row}, _from, state) do
+  defp handle_owned_call({:revoke_grant, ctx, agent, tool, action, key}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
       :ok ->
         revoked =
@@ -512,7 +516,8 @@ defmodule Aqua.Runner do
               agent_name: agent,
               tool: tool,
               action: action,
-              program_row: program_row
+              program_row: Map.get(key, :program),
+              schedule_id: Map.get(key, :schedule)
             })
           end
 
@@ -822,13 +827,14 @@ defmodule Aqua.Runner do
     end
   end
 
-  # A person's line is theirs; anything an agent sends is the agent's.
+  # A person's line is theirs; anything an agent sends is the agent's; a
+  # schedule's line, sent for its person, is in the server's voice.
   defp message(ctx, text, opts, addressee) do
     sent_by = Keyword.get(opts, :sent_by, Admission.person())
     reply = Keyword.get(opts, :reply)
 
     %{
-      author: if(sent_by == Admission.person(), do: ctx.user_id, else: Prima.Author.agent()),
+      author: author(ctx, sent_by, opts),
       sent_by: sent_by,
       addressee: addressee,
       reply_to: reply && reply.request.id,
@@ -841,6 +847,14 @@ defmodule Aqua.Runner do
       client_id: Keyword.get(opts, :client_id),
       payload: payload(opts)
     }
+  end
+
+  defp author(ctx, sent_by, opts) do
+    cond do
+      Keyword.has_key?(opts, :schedule) -> Prima.Author.system()
+      sent_by == Admission.person() -> ctx.user_id
+      true -> Prima.Author.agent()
+    end
   end
 
   defp payload(opts) do

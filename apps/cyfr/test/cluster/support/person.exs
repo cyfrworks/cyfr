@@ -196,7 +196,7 @@ defmodule Cyfr.Cluster.Person do
   @doc "A room of the person's athanor."
   @spec thread!(String.t()) :: String.t()
   def thread!(token) do
-    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(context!(token)))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(context!(token)))
     thread.id
   end
 

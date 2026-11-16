@@ -47,8 +47,9 @@ defmodule Arca.ToolGrantStorage do
   Upsert rather than insert: a person flipping "always" to "never" is
   answering the same question again, not stacking a contradiction. The
   key holds the program row an answer is constrained to
-  (`Arca.Schemas.ToolGrant.key_row/1`), so an answer for one program
-  replaces that program's alone. The
+  (`Arca.Schemas.ToolGrant.key_row/1`) and the schedule it ends with
+  (`key_schedule/1`), so an answer for one program or one schedule
+  replaces that program's or that schedule's alone. The
   conflict target is the scope's own partial index — an agent-scope row
   carries no thread, and a nullable column in a composite unique
   index constrains nothing.
@@ -133,6 +134,10 @@ defmodule Arca.ToolGrantStorage do
   @doc "The program row an answer's key carries (`Arca.Schemas.ToolGrant.key_row/1`)."
   @spec key_row(map()) :: String.t()
   def key_row(attrs) when is_map(attrs), do: ToolGrant.key_row(attrs)
+
+  @doc "The schedule an answer's key carries (`Arca.Schemas.ToolGrant.key_schedule/1`)."
+  @spec key_schedule(map()) :: String.t()
+  def key_schedule(attrs) when is_map(attrs), do: ToolGrant.key_schedule(attrs)
 
   @doc "Drop one decision, by its identifying key. Idempotent."
   @spec delete(map()) :: :ok | {:error, term()}
@@ -278,8 +283,11 @@ defmodule Arca.ToolGrantStorage do
       |> Map.put(:constraint, ToolGrant.decode_constraint(constraint))
       |> Map.put(:sources, ToolGrant.decode_sources(sources))
 
-  defp conflict_columns("thread"), do: [:thread_id, :agent_name, :tool, :action, :program_row]
-  defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action, :program_row]
+  defp conflict_columns("thread"),
+    do: [:thread_id, :agent_name, :tool, :action, :program_row, :schedule_id]
+
+  defp conflict_columns("agent"),
+    do: [:athanor_id, :agent_name, :tool, :action, :program_row, :schedule_id]
 
   defp conflict_index("thread"), do: :tool_grants_thread_scope_index
   defp conflict_index("agent"), do: :tool_grants_agent_scope_index
@@ -300,7 +308,8 @@ defmodule Arca.ToolGrantStorage do
           g.scope == ^ToolGrant.agent_scope() and
           g.agent_name == ^attrs.agent_name and
           g.tool == ^attrs.tool and g.action == ^attrs.action and
-          g.program_row == ^ToolGrant.key_row(attrs)
+          g.program_row == ^ToolGrant.key_row(attrs) and
+          g.schedule_id == ^ToolGrant.key_schedule(attrs)
     )
     |> Arca.Repo.delete_all()
 
@@ -315,7 +324,8 @@ defmodule Arca.ToolGrantStorage do
           g.thread_id == ^attrs.thread_id and
           g.agent_name == ^attrs.agent_name and
           g.tool == ^attrs.tool and g.action == ^attrs.action and
-          g.program_row == ^ToolGrant.key_row(attrs)
+          g.program_row == ^ToolGrant.key_row(attrs) and
+          g.schedule_id == ^ToolGrant.key_schedule(attrs)
     )
     |> Arca.Repo.delete_all()
 

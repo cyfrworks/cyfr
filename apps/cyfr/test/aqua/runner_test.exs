@@ -88,7 +88,7 @@ defmodule Aqua.RunnerTest do
 
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, user: user, thread: thread}
   end
@@ -310,7 +310,7 @@ defmodule Aqua.RunnerTest do
     fresh_ctx = another_person!("fresh")
     # The refused send starts the athanor's fill, which writes its tree.
     remove_on_exit(own_tree!(fresh_ctx))
-    {:ok, fresh_thread} = Threads.create(Sanctum.Context.actor(fresh_ctx))
+    {:ok, fresh_thread} = Arca.Test.Days.thread(Sanctum.Context.actor(fresh_ctx))
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
              Runner.send_message(fresh_ctx, fresh_thread.id, "@aqua hi",
@@ -962,7 +962,7 @@ defmodule Aqua.RunnerTest do
     for {_id, pid, _, _} <- DynamicSupervisor.which_children(Aqua.RunnerSupervisor),
         do: DynamicSupervisor.terminate_child(Aqua.RunnerSupervisor, pid)
 
-    {:ok, other_thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, other_thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(other_thread.id, ctx.athanor_id)
 
     {:ok, %{turn: turn}} =

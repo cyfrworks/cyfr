@@ -475,6 +475,12 @@ defmodule PrismWeb.ShellLive do
 
         params = get_connect_params(socket) || %{}
 
+        # The browser's zone reads the person's day (`Aqua.Day`): kept when
+        # it is a zone and differs from the stored one. A refused one leaves
+        # the stored zone standing.
+        if Prima.PersonId.person?(ctx.user_id),
+          do: Aqua.put_time_zone(ctx.user_id, params["time_zone"])
+
         socket
         |> assign(:covered, covered_at?(params["_path"]))
         |> assign(:appearance, Prism.Appearance.block(params))
@@ -1625,10 +1631,10 @@ defmodule PrismWeb.ShellLive do
 
   # CYFR's own overlays on the desktop, which open in place, the canvas
   # running under them: `chat` the chat, at the shared thread `ref` names
-  # when the person sits in it, and `aqua` Aqua's panel, at the person's
-  # own thread `ref` names, where an approval waits (the attention
-  # stream's `aqua` destination). Each overlay reads the thread under the
-  # person's own seat.
+  # when the person sits in it, and `aqua` Aqua's panel, on today's daily
+  # thread, or at the thread of the person's athanor `ref` names, the one
+  # an approval waits in (the attention stream's `aqua` destination). Each
+  # overlay reads the thread under the person's own seat.
   defp settings(%{assigns: %{chat_overlay: pid}} = socket, "chat", ref) when is_pid(pid) do
     send(pid, if(ref, do: {:open, ref}, else: :open))
     socket

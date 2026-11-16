@@ -82,10 +82,10 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec actor(String.t()) :: struct()
   def actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
 
-  @doc "A thread of `athanor_id`, with no turn holding it."
-  @spec thread!(String.t(), String.t()) :: map()
-  def thread!(athanor_id, title) do
-    {:ok, thread} = Arca.ThreadStorage.create(actor(athanor_id), %{title: title})
+  @doc "A daily thread of `athanor_id`, of a date of its own, with no turn holding it."
+  @spec thread!(String.t()) :: map()
+  def thread!(athanor_id) do
+    {:ok, thread} = Arca.Test.Days.thread(actor(athanor_id))
     %{id: thread.id, athanor_id: athanor_id}
   end
 

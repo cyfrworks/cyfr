@@ -20,12 +20,12 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createAccount, landing, passkeys, setUp, signIn, usePasskey } from "../browser/account.mjs";
+import { beginAccount, createAccount, finishAccount, landing, passkeys, setUp, signIn, usePasskey } from "../browser/account.mjs";
 import {
   ask as askRunSh, homeOf, launchBrowser, readHomes, redact as redactKnown, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
-  ADMIN_HANDLE, HANDLE, LONG_AGO, OCI, PER, REGISTRY, b64url, check, classification, objectModels, otherId, passkeyKid,
+  ADMIN_HANDLE, HANDLE, LONG_AGO, OCI, PER, REGISTRY, b64url, check, classification, entryOf, objectModels, otherId, passkeyKid,
 } from "./models.mjs";
 
 const [homesFile, outDir, registryPort] = process.argv.slice(2);
@@ -111,8 +111,14 @@ async function claim(key, what, read, io = {}) {
 // A read filtered by `column` names it (`filter`): a tamper of that column
 // is refused by the row leaving the read.
 const filtered = (read, column) => Object.assign(read, { filter: column || null });
+// A read that answers no rows (the fixture's error, or none) fails, in
+// the fixture's words, never as an empty table.
+const rowsOf = (answer, what) => {
+  if (!Array.isArray(answer?.rows)) throw new Error(`${what}: ${answer?.error ?? "no rows were answered"}`);
+  return answer.rows;
+};
 const cyfrRows = (cell, tableName, column = "", value = "") => filtered(async () =>
-  (await ask({ op: "rows", cell, table: tableName, column, value })).rows, column);
+  rowsOf(await ask({ op: "rows", cell, table: tableName, column, value }), `${cell}.${tableName}`), column);
 // A cell's athanors once none is being filled: the fill runs after the
 // admission commits and ends by writing the row (`Sanctum.Provisioning`,
 // `provisioned_at` or `provisioning_failed_at`), so a row read before it
@@ -139,7 +145,7 @@ const cyfrIo = (cell, tableName, keyField = "id") => ({
   state: async () => ask({ op: "state", cell, table: tableName }),
 });
 const registryRows = (tableName, column = "", value = "") => filtered(async () =>
-  (await ask({ op: "registry_rows", table: tableName, column, value })).rows, column);
+  rowsOf(await ask({ op: "registry_rows", table: tableName, column, value }), `registry.${tableName}`), column);
 const registryWrite = async (tableName, key, keyValue, field, value, phase) => {
   const answer = await ask({ op: "registry_set", table: tableName, key, key_value: String(keyValue), field, value, phase });
   if (answer.set !== 1) throw new Error(`registry ${tableName}.${field}: the write changed ${JSON.stringify(answer)}`);
@@ -303,18 +309,66 @@ async function main(chromium) {
   await claim("setup:a.paired_clients", "A's one paired client: the passkey that signed in, by its kid", cyfrRows("a", "paired_clients"), cyfrIo("a", "paired_clients"));
 
   // 2. B's administrator, with an account of their own, sets B up and
-  // allows @proof in Settings.
+  // allows @proof in Settings. A third account is begun under the name
+  // the administrator then takes, free when it is chosen: its code is
+  // shown and nothing is sent until the administrator's account holds the
+  // name, so it is made without one. The administrator allows it by its
+  // identifier beside @proof; it signs in at B in step 4.
+  const collisionFrom = clock();
+  const namelessContext = await freshContext(chromium);
+  const namelessPage = await namelessContext.newPage();
+  const namelessKeys = passkeys();
+  const namelessBegun = await beginAccount(namelessPage, namelessKeys, { directory: REG, name: ADMIN_HANDLE, secrets });
+  record.nameless = { begun: namelessBegun.section, error: namelessBegun.error ?? null };
+  if (!row("allow", namelessBegun.section === "show-code", `a third account is begun at the pages under the name ${ADMIN_HANDLE}, free then: its code is shown and nothing is sent yet`, record.nameless)) return;
   const adminContext = await freshContext(chromium);
   const admin = await adminContext.newPage();
   const adminKeys = passkeys();
   from = clock();
   const adminMade = await createAccount(admin, adminKeys, { directory: REG, name: ADMIN_HANDLE, secrets });
+  const namelessFrom = clock();
+  const namelessMade = await finishAccount(namelessPage, namelessKeys, namelessBegun);
+  windowed("nameless_make", namelessFrom, "the nameless account's sending");
+  await park(namelessPage);
+  const namelessId = namelessMade.code?.identifier ?? "";
+  S.credentials.nameless = await heldKey(namelessKeys);
+  let namelessLog = [];
+  let namelessNamespaces = null;
+  let namelessRead = null;
+  try {
+    namelessLog = [...await registryRows("directory.entries", "identifier", namelessId)()].sort((x, y) => x.seq - y.seq);
+    namelessNamespaces = await registryRows("namespaces", "owner_identifier", namelessId)();
+  } catch (error) {
+    namelessRead = String(error.message);
+  }
+  S.nameless = {
+    identifier: namelessId,
+    head: namelessLog.at(-1)?.entry_hash ?? null,
+    genesis: namelessLog[0] ? entryOf(namelessLog[0].entry).raw?.toString("utf8") ?? null : null,
+  };
+  const namelessShown = {
+    ...record.nameless,
+    section: namelessMade.section, error: namelessMade.error ?? null, identifier: namelessId,
+    entries: namelessLog.map((e) => e.kind), namespaces: namelessNamespaces, read_error: namelessRead,
+  };
+  record.nameless = namelessShown;
+  if (!row("collision", namelessMade.section === "rename" && PER.test(namelessId) && namelessId !== id &&
+    namelessLog.map((e) => e.kind).join(",") === "genesis,add_key" && Array.isArray(namelessNamespaces) && namelessNamespaces.length === 0,
+  `the third account, sent once ${ADMIN_HANDLE} is the administrator's, is made without a name: its genesis and passkey are logged, the page says the name was taken meanwhile and asks for another, which is never given, and it holds no namespace`, namelessShown)) return;
+
   const atB = adminMade.section === "done" ? await setUpWith(admin, adminKeys, BHome, "b") : { landed: false };
   windowed("admin", from, "B's administrator's account and setup at B");
   S.credentials.b = await heldKey(adminKeys);
   S.cookies.admin = await cookieDigest(adminContext, B, "b");
-  const bSegment = `@${(await ask({ op: "rows", cell: "b", table: "athanors" })).rows[0]?.slug ?? "me"}`;
-  await admin.goto(`${B}/a/${encodeURIComponent(bSegment)}/settings`);
+  let bSlug;
+  let bRead = null;
+  try {
+    bSlug = (await cyfrRows("b", "athanors")())[0]?.slug;
+  } catch (error) {
+    bRead = String(error.message);
+  }
+  if (!row("allow", atB.landed && typeof bSlug === "string", "B's administrator lands at B with an athanor of their own", { setup: atB, slug: bSlug ?? null, read_error: bRead })) return;
+  await admin.goto(`${B}/a/${encodeURIComponent(`@${bSlug}`)}/settings`);
   await connected(admin);
   const entry = admin.locator('#door-entry-form input[name="value"]');
   await entry.fill(`@${HANDLE}`);
@@ -322,14 +376,26 @@ async function main(chromium) {
   await waitFor(async () => (await allow.getAttribute("phx-value-door")) === `@${HANDLE}`, { timeoutMs: 30_000, what: "the door form taking @proof" });
   from = clock();
   await allow.click();
-  const labelled = await admin.waitForSelector('[data-test="door-entry-label"]', { timeout: 60_000 }).then(() => true).catch(() => false);
+  // Each entry shows its name; @proof's is the allow just made.
+  const labelled = await admin.locator('[data-test="door-entry-name"]', { hasText: new RegExp(`^@${HANDLE}$`) })
+    .waitFor({ timeout: 60_000 }).then(() => true).catch(() => false);
   windowed("allow", from, "the allow");
-  await park(admin);
   row("allow", atB.landed && labelled, "B's administrator sets B up with their own account and allows @proof in Settings", { setup: atB, labelled });
+  await entry.fill(namelessId);
+  await waitFor(async () => (await allow.getAttribute("phx-value-door")) === namelessId, { timeoutMs: 30_000, what: "the door form taking the nameless account's identifier" });
+  from = clock();
+  await allow.click();
+  // An entry with no name shows its identifier.
+  const namelessListed = await admin.locator('[data-test="door-entry-name"]', { hasText: new RegExp(`^${namelessId}$`) })
+    .waitFor({ timeout: 60_000 }).then(() => true).catch(() => false);
+  windowed("nameless_allow", from, "the allow of the nameless account");
+  if (!row("collision", namelessListed, "B's administrator allows the nameless account by its identifier in Settings, whose row names it by that identifier", { listed: namelessListed })) return;
+
+  await park(admin);
   await claim("allow:b.users", "B's one person, its administrator", cyfrRows("b", "users"), cyfrIo("b", "users"));
   await claim("allow:b.athanors", "B's one athanor, the administrator's", athanorRows("b"), cyfrIo("b", "athanors"));
   await claim("allow:b.person_identities", "B's administrator is their account's identifier", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
-  await claim("allow:b.server_allowlist", "B's allowlist: setup's allow of the administrator, and @proof's identifier labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
+  await claim("allow:b.server_allowlist", "B's allowlist: setup's allow of the administrator, @proof's identifier labelled @proof, and the nameless account's identifier, unlabelled", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
 
   // 3. At B, a browser that never visited it, holding the person's passkey
   // as a synced passkey reaches another device, signs in with the account:
@@ -352,11 +418,32 @@ async function main(chromium) {
   await claim("sign_in:b.paired_clients", "B's paired clients: each passkey that signed in there, by its kid", cyfrRows("b", "paired_clients"), cyfrIo("b", "paired_clients"));
   await claim("sign_in:b.sessions", "B's sessions: each its browser cookie's token, bound to its passkey's kid and head", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
 
-  // 4. registry.sync at A, signed by the passkey, stores a push token; the
+  // 4. The third account, allowed at B by its identifier, signs in there
+  // with no namespace, so its athanor is the plain word Me, whose slug
+  // "me" the administrator's holds: it takes the next free one, "me-2".
+  const namelessSignContext = await freshContext(chromium);
+  const namelessSign = await namelessSignContext.newPage();
+  const namelessSignKeys = passkeys((await namelessKeys.list()).filter((c) => c.rpId === REGISTRY));
+  const namelessIn = await signIn(namelessSign, namelessSignKeys, BHome);
+  S.cookies.nameless = await cookieDigest(namelessSignContext, B, "b");
+  await park(namelessSign);
+  windowed("collision", collisionFrom, "the nameless account's making, allow and sign-in at B");
+  record.nameless.sign_in = namelessIn;
+  row("collision", namelessIn.landed && namelessIn.what === `Sign in to ${B}`,
+    "the nameless account signs in at B with its passkey: the sign page names B, and B admits it under its allow", namelessIn);
+  await claim("collision:b.person_identities", "B's identities: the two before, and the nameless account's", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
+  await claim("collision:b.users", "B's people: the two before, and the nameless person, with no namespace", cyfrRows("b", "users"), cyfrIo("b", "users"));
+  await claim("collision:b.athanors", "B's athanors: the two before, and the nameless person's Me, slugged me-2 since the administrator's holds me", athanorRows("b"), cyfrIo("b", "athanors"));
+  await claim("collision:b.directory_heads", "B's cached heads: the two before, and the nameless account's", cyfrRows("b", "directory_heads"), cyfrIo("b", "directory_heads", "identifier"));
+  await claim("collision:b.paired_clients", "B's paired clients: the two before, and the nameless account's passkey", cyfrRows("b", "paired_clients"), cyfrIo("b", "paired_clients"));
+  await claim("collision:b.sessions", "B's sessions: the two before, and the nameless person's", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
+
+  // 5. registry.sync at A, signed by the passkey, stores a push token; the
   // registry bans the identifier; the token is refused there, and A's next
   // sync answers banned.
-  const aSegment = `@${S.rows["setup:a.athanors"]?.[0]?.slug ?? "me"}`;
-  const registryPage = `${A}/a/${encodeURIComponent(aSegment)}/registry`;
+  const aSlug = S.rows["setup:a.athanors"]?.[0]?.slug;
+  if (!row("sync", typeof aSlug === "string", "A's person's athanor, read at setup, names the page the sync is on", { slug: aSlug ?? null })) return;
+  const registryPage = `${A}/a/${encodeURIComponent(`@${aSlug}`)}/registry`;
   from = clock();
   const synced = await sync(desk, keys, registryPage);
   windowed("sync", from, "the sync");
@@ -365,6 +452,33 @@ async function main(chromium) {
   row("sync", synced.landed && /^Create a publishing token named “.+” at registry\.test$/.test(synced.what ?? "") &&
     synced.flash.includes("Your push tokens are synced."),
   "Sync push tokens at A: the sign page shows the registry request in words, the passkey signs it, and A completes it", synced);
+
+  // The sign page's completion reads the registry's terms version inside
+  // the act, bounded at 3 s, and a person with none recorded has it
+  // written before the page answers (PrismWeb.LoginLive): after the
+  // return the version is there, or the read outlived its bound and the
+  // product, by design, recorded nothing. A's person is read once.
+  const aUsers = cyfrRows("a", "users");
+  let aUsersRead = null;
+  let aUsersError = null;
+  try {
+    aUsersRead = await aUsers();
+  } catch (error) {
+    aUsersError = String(error.message);
+  }
+  if (aUsersError) {
+    row("sync", false, `A's person, read after the sync: the read failed (${aUsersError})`, {});
+  } else if (aUsersRead.every((r) => r.prefs === "{}")) {
+    row("sync", false, "A's person holds no terms version after the sync: the registry's terms were not read within the sign page's 3 s, so CYFR recorded nothing, by design", { users: aUsersRead });
+  } else {
+    let first = aUsersRead;
+    await claim("sync:a.users", "A's person records the registry's terms version the sync's signature completed under", filtered(async () => {
+      if (!first) return aUsers();
+      const rows = first;
+      first = null;
+      return rows;
+    }, ""), cyfrIo("a", "users"));
+  }
 
   const aUserId = S.rows["setup:a.users"]?.[0]?.id;
   const credential = async () => (await ask({ op: "credential", user_id: aUserId, registry: OCI, slug: HANDLE })).credential;
@@ -502,7 +616,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["setup", "allow", "sign_in", "sync", "ban"];
+const STEPS = ["setup", "allow", "sign_in", "collision", "sync", "ban"];
 const outcome = (step) => {
   const found = rows.filter((r) => r.step === step);
   if (!found.length) return "not reached";

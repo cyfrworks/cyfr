@@ -720,7 +720,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     row = driven_row!(athanor)
     me = person(user, athanor)
     actor = Sanctum.Context.actor(me)
-    {:ok, thread} = Arca.ThreadStorage.create(actor)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{

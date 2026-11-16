@@ -22,7 +22,7 @@
 // anywhere, outside the window included, settles it. In the hand it is a
 // sheet whose handle (`data-aqua-handle`) pulls it to full height or down
 // to close. Escape from inside closes it and gives focus back to its
-// button.
+// button, unless it is pressed in a dialog the panel holds.
 //
 // The thread's menu (`#aqua-panel-pane-menu`, the thread pane's, opened by
 // the header's `data-aqua-menu-toggle`) is an element of the panel, under
@@ -40,7 +40,7 @@ const BUTTON = "aqua-panel-button"
 const PALETTE = "command-palette"
 
 // What a header press leaves alone: its own controls.
-const CONTROL = "button, select, input, textarea, a, [data-aqua-edge]"
+const CONTROL = "button, input, textarea, a, [data-aqua-edge]"
 
 // A pointer that travels less than this is a click, not a pull.
 const PULL_MIN_PX = 4
@@ -67,6 +67,10 @@ export const AquaPanel = {
     // keys no binding of the panel's view hears.
     this.onKey = (event) => {
       if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return
+      // A dialog inside the panel (a picture opened large) keeps its own
+      // Escape, and the panel stays open.
+      const dialog = event.target?.closest?.('[role="dialog"]')
+      if (dialog && dialog !== this.el) return
       event.preventDefault()
       // An open menu takes the Escape alone.
       if (this.menuOpen()) {

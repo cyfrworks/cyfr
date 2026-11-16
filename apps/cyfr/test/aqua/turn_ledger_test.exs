@@ -66,7 +66,7 @@ defmodule Aqua.TurnLedgerTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, @http, @files])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread, actor: Sanctum.Context.actor(ctx)}
   end

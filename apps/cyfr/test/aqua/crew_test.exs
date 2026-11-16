@@ -48,7 +48,7 @@ defmodule Aqua.CrewTest do
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
     member!(ctx, "planner")
 
-    {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, room} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(room.id, ctx.athanor_id)
     {:ok, ctx: ctx, room: room}
   end
@@ -185,8 +185,8 @@ defmodule Aqua.CrewTest do
     # The harnesses' catalysts ship, with no program row bound to their
     # needs, and the explorer's key is not bound: none is told of.
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:needs_program, "catalyst:local.claude-code:0.1.6"}
-    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.4"}
+    assert status["claude-code"] == {:needs_program, "catalyst:local.claude-code:0.1.7"}
+    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.5"}
     assert {:needs_key, _} = status["explorer"]
 
     assert Crew.index(ctx, roster) ==
@@ -308,8 +308,8 @@ defmodule Aqua.CrewTest do
 
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:needs_grant, "catalyst:local.claude-code:0.1.6"}
-    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.4"}
+    assert status["claude-code"] == {:needs_grant, "catalyst:local.claude-code:0.1.7"}
+    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.5"}
 
     for {member, reason, words} <- [
           {"claude-code", :no_grant, "claude-code's brain needs only your grant"},
@@ -1150,7 +1150,7 @@ defmodule Aqua.CrewTest do
   test "the admission rule refuses a member posting anywhere but the thread and request that asked it",
        %{ctx: ctx, room: room} do
     request = soul_request!(ctx, room, "planner", "go")
-    {:ok, elsewhere} = Threads.create(actor(ctx))
+    {:ok, elsewhere} = Arca.Test.Days.thread(actor(ctx))
 
     assert {:error, :not_addressable} =
              Runner.send_message(ctx, elsewhere.id, "posted elsewhere",

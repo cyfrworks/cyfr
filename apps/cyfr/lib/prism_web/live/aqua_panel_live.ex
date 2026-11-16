@@ -5,30 +5,52 @@ defmodule PrismWeb.AquaPanelLive do
   @moduledoc """
   The person's own Aqua, over the desktop and every page drawn over it: a
   button at the shelf's right end and, opened, a panel onto their own
-  athanor — the threads of You, one of them open as
-  `PrismWeb.ThreadPaneLive` focused on You.
+  athanor's daily thread, open as `PrismWeb.ThreadPaneLive`.
+
+  Opened, the panel shows today's daily thread, made through the tool a
+  headless client asks (`thread.today`). Only the person opening the
+  panel makes it, here: the button, Ctrl+J, a panel a reload finds open,
+  the desktop opening it on no thread, and its Today control; loading
+  the desktop makes nothing. Earlier days are one step back by date: the
+  header names the day shown by its date
+  (`PrismWeb.DisplayHelpers.day_name/1`), its back control goes to the nearest
+  earlier day that has a thread (`Arca.ThreadStorage.adjacent_day/3`),
+  and its forward control and Today return. There is no list of threads
+  to choose from.
+
+  The button carries how many of today's posts the person has not seen
+  (`Arca.ThreadStorage.unread/2`), none while today has no thread. It is
+  read without making the thread, today's date in the person's zone
+  (`Aqua.today/1`, `Arca.ThreadStorage.day/2`), and kept current from
+  their list's announcements (`Cyfr.Bus.ThreadListed`, on their
+  `Cyfr.Bus.threads/2` topic); the pane moves the read mark while it shows
+  a thread. The panel follows the person's day: at each announcement of a
+  daily thread it reads again the date now in their stored zone, so today
+  moves forwards past midnight and backwards after a change of zone, and
+  the thread of that date, made since by a send or a fire, is today's.
+  Following it makes no thread.
 
   Opened beside a shared thread (the chat overlay, `PrismWeb.ChatOverlayLive`,
   tells it what it has open through `PrismWeb.RoomFeed`), a send from here
   carries a bounded excerpt of what was said there as context for the
   turn when the person ticks the pane's box for it — read under the
-  person's own seat, into the private thread only, never kept — and an
+  person's own seat, into the daily thread only, never kept — and an
   answer can be pasted onto the shared thread, attributed to the person.
-  The pane does both and names the shared thread; the panel holds the
-  list: the athanor's own threads, and the requests still waiting on a
-  crew member, each with its member, who asked, how long ago and the
-  task's first line, which turn the panel to the thread it was asked in.
-  A crew member's thread is reached from its room. The thread open in the
-  panel is deleted from its header (`thread.delete`), and while the
-  athanor's seeding has not finished the panel says so and offers to try
-  it again (`athanor.provision`).
+  The pane does both and names the shared thread. The panel lists the
+  requests still waiting on a crew member, each with its member, who
+  asked, how long ago and the task's first line, which turn the panel to
+  the thread it was asked in. A crew member's thread is reached from its
+  room. While the athanor's seeding has not finished the panel says so
+  and offers to try it again (`athanor.provision`).
 
-  The desktop opens it for a canvas's `settings` of `aqua`, where the
-  attention stream's approvals send the person.
+  The desktop opens it for a canvas's `settings` of `aqua`, on today's
+  thread, or at the thread a `ref` names, where the attention stream's
+  approvals send the person: any thread of their athanor, an earlier
+  day's or a crew member's included.
 
   A page may ask it about something it shows (`Cyfr.Bus.AquaAsk`, on the
-  page's own topic the session names, `aqua_ask`): the panel opens on the
-  thread it keeps and its pane takes Prism's sentence after the draft the
+  page's own topic the session names, `aqua_ask`): a closed panel opens on
+  today's thread, and its pane takes Prism's sentence after the draft the
   person has, attaching and sending nothing.
 
   The panel is an overlay: it takes no room from the page. Its order among
@@ -47,18 +69,19 @@ defmodule PrismWeb.AquaPanelLive do
 
   Nested in the desktop (`PrismWeb.ShellLive`), which stays while the
   person moves between the pages drawn over it, so the panel stays open
-  across them; it remounts with the document. Whether it is open, which
-  thread it shows, where it stands, its size and whether it is docked are
-  kept per browser session (`Arca.Cache`, under a hash of the session
-  token), so the panel a person left open is the panel they find after a
-  reload. Nothing here reads the page's focus: the panel establishes the
+  across them; it remounts with the document. Whether it is open, where
+  it stands, its size and whether it is docked are kept per browser
+  session (`Arca.Cache`, under a hash of the session token), so the panel
+  a person left open is the panel they find after a reload, on today's
+  thread. Nothing here reads the page's focus: the panel establishes the
   session itself and narrows to the person's own athanor. A person with no
   athanor of their own has no panel.
 
-  The dead render is the button alone; the athanor and the kept state are
-  read on the connected mount, once. `CyfrWeb.ContextGuard` establishes
-  the session and keeps the panel's context current; the panel's move to
-  the person's own athanor goes back through it (`refocus/2`).
+  The dead render is the button alone; the athanor, today's count and the
+  kept state are read on the connected mount, once.
+  `CyfrWeb.ContextGuard` establishes the session and keeps the panel's
+  context current; the panel's move to the person's own athanor goes back
+  through it (`refocus/2`).
 
   A grant the pane's turn needs is asked in the panel's own system layer
   (`PrismWeb.SystemLayer`, DOM id `system-layer-panel`), under the
@@ -69,6 +92,7 @@ defmodule PrismWeb.AquaPanelLive do
   use PrismWeb, :live_view
 
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadListed
   alias Phoenix.LiveView.JS
   alias PrismWeb.SystemLayer
   alias Sanctum.Tenancy.Athanors
@@ -95,8 +119,11 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:open, false)
       |> assign(:place, nil)
       |> assign(:docked, false)
-      |> assign(:threads, [])
       |> assign(:thread, nil)
+      |> assign(:day, nil)
+      |> assign(:today, nil)
+      |> assign(:unread, 0)
+      |> assign(:earlier, false)
       |> assign(:pending, [])
       |> assign(:pane, nil)
       |> assign(:room, session["room"])
@@ -125,9 +152,11 @@ defmodule PrismWeb.AquaPanelLive do
          {:ok, focused} <- Sanctum.Context.focus(ctx, athanor),
          {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focused) do
       # The athanor's own notifications: its seeding ending, or a rename,
-      # read again so the line saying it is still being set up goes.
+      # read again so the line saying it is still being set up goes. And
+      # the person's list of threads, which keeps the button's count.
       actor = Sanctum.Context.actor(focused)
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.threads(actor, focused.user_id))
 
       refocused
       |> assign(:phase, :ready)
@@ -139,38 +168,31 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   # ============================================================================
-  # What the session keeps: open or not, which thread, where it stands and
-  # whether it is docked
+  # What the session keeps: open or not, where it stands and whether it is
+  # docked
   # ============================================================================
 
+  # Closed, the panel reads today's count alone; a panel the session left
+  # open is opened again.
   defp restore(%{assigns: %{phase: :ready, kept: key}} = socket) do
     case Arca.Cache.get(key) do
-      {:ok, %{open: open, thread_id: id} = kept} ->
+      {:ok, %{open: open} = kept} ->
         socket =
           socket
           |> assign(:place, kept[:place])
           |> assign(:docked, kept[:docked] == true)
 
-        if open, do: open_on(socket, id), else: assign(socket, :thread, kept_thread(id))
+        if open, do: open_on(socket, nil), else: count_today(socket)
 
       _ ->
-        socket
+        count_today(socket)
     end
   end
 
   defp restore(socket), do: socket
 
-  # Closed, the panel lists no threads; the kept id waits for the next open.
-  defp kept_thread(nil), do: nil
-  defp kept_thread(id), do: %{id: id}
-
   defp remember(%{assigns: %{kept: key} = assigns} = socket) do
-    kept = %{
-      open: assigns.open,
-      thread_id: assigns.thread && assigns.thread.id,
-      place: assigns.place,
-      docked: assigns.docked
-    }
+    kept = %{open: assigns.open, place: assigns.place, docked: assigns.docked}
 
     Arca.Cache.put(key, kept, @kept_ttl_ms)
     socket
@@ -198,31 +220,95 @@ defmodule PrismWeb.AquaPanelLive do
 
   defp placement(_params), do: :error
 
-  # The lists are read when the panel opens, not on every page: closed, the
-  # panel costs the page nothing. `nil` is the blank thread; an id the list
-  # no longer holds falls back to it.
-  defp open_on(socket, thread_id) do
-    actor = Sanctum.Context.actor(socket.assigns.context)
-    threads = Threads.list(actor)
-    thread = Enum.find(threads, &(&1.id == thread_id))
+  # ============================================================================
+  # Today, and the thread shown
+  # ============================================================================
 
+  # Today's daily thread as it stands, made by nothing here: its date in
+  # the person's zone, the thread of that date if there is one, and how
+  # many of its posts the person has not seen, none without one. Unread,
+  # what was held stands.
+  defp count_today(socket) do
+    day = Aqua.today(socket.assigns.context)
+
+    case Threads.day(actor(socket), day) do
+      {:ok, today} -> socket |> assign(:day, day) |> held_today(today)
+      {:error, :not_found} -> assign(socket, day: day, today: nil, unread: 0)
+      {:error, _unread} -> socket
+    end
+  end
+
+  # Today's daily thread, made if none: the person opened the panel on it.
+  # The day may have turned since it was last read, so it is read again
+  # whenever the panel opens or returns to today.
+  defp make_today(socket) do
+    with {:ok, %{id: id}} <- call_tool(socket, "thread/today", %{}),
+         {:ok, today} <- Threads.get(actor(socket), id) do
+      socket |> assign(:day, today.day) |> held_today(today)
+    else
+      _unmade -> socket
+    end
+  end
+
+  defp held_today(socket, today) do
+    case Threads.unread(actor(socket), today) do
+      {:ok, unread} -> assign(socket, today: today, unread: unread)
+      {:error, _unread} -> assign(socket, :today, today)
+    end
+  end
+
+  # The panel opens on the thread `thread_id` names in the person's
+  # athanor, reading today's as it stands, or on today's, made if none.
+  # The waiting requests are read when it opens and whenever it turns:
+  # closed, the panel costs the page nothing.
+  defp open_on(socket, thread_id) do
+    case own_thread(socket, thread_id) do
+      %{} = thread -> socket |> count_today() |> assign(:open, true) |> show(thread)
+      nil -> socket |> assign(:open, true) |> show_today()
+    end
+  end
+
+  defp show_today(socket) do
+    socket = make_today(socket)
+    show(socket, socket.assigns.today)
+  end
+
+  defp show(socket, thread) do
     pending =
-      case Threads.pending_requests(actor) do
+      case Threads.pending_requests(actor(socket)) do
         requests when is_list(requests) -> requests
         {:error, _} -> []
       end
 
     socket
-    |> assign(:open, true)
-    |> assign(:threads, Enum.filter(threads, &(&1.kind == "own")))
     |> assign(:thread, thread)
+    |> assign(:earlier, earlier?(socket, thread))
     |> assign(:pending, pending)
     |> switch_pane(thread)
   end
 
+  # Whether a daily thread has an earlier day to step back to.
+  defp earlier?(socket, %{kind: "daily", day: %Date{} = day}),
+    do: match?({:ok, _}, Threads.adjacent_day(actor(socket), day, :before))
+
+  defp earlier?(_socket, _thread), do: false
+
+  # A thread of the person's own athanor, read under the panel's context:
+  # an id another athanor holds names nothing here.
+  defp own_thread(socket, id) when is_binary(id) and id != "" do
+    case Threads.get(actor(socket), id) do
+      {:ok, thread} -> thread
+      {:error, _none} -> nil
+    end
+  end
+
+  defp own_thread(_socket, _id), do: nil
+
+  defp actor(socket), do: Sanctum.Context.actor(socket.assigns.context)
+
   # The pane is one, turned to a thread by message once it has reported
   # in; closed, the panel has no pane, and the next open mounts one on the
-  # kept thread.
+  # thread shown.
   defp switch_pane(%{assigns: %{pane: pid}} = socket, thread) when is_pid(pid) do
     send(pid, {:switch_thread, thread && thread.id})
     socket
@@ -236,9 +322,7 @@ defmodule PrismWeb.AquaPanelLive do
 
   @impl true
   def handle_event("open", _params, socket) do
-    id = socket.assigns.thread && socket.assigns.thread.id
-
-    {:noreply, socket |> open_on(id) |> remember()}
+    {:noreply, socket |> open_on(nil) |> remember()}
   end
 
   def handle_event("close", _params, socket) do
@@ -261,28 +345,35 @@ defmodule PrismWeb.AquaPanelLive do
     end
   end
 
-  def handle_event("select", %{"id" => id}, socket) do
-    {:noreply, socket |> open_on(blank_to_nil(id)) |> remember()}
-  end
-
-  # The open thread, one of the athanor's own: deleted through the tool
-  # the assistant's own delete goes through, and the panel turns to a
-  # blank thread. A crew member's thread is its room's and has no delete.
-  def handle_event(
-        "delete_thread",
-        _params,
-        %{assigns: %{thread: %{id: id, kind: "own"}}} = socket
-      ) do
-    case call_tool(socket, "thread/delete", %{"thread" => id}) do
-      {:ok, _} ->
-        {:noreply, socket |> assign(:notice, nil) |> open_on(nil) |> remember()}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, :notice, "Delete failed: #{error_message(reason)}")}
+  # One step back or forward by day, from a daily thread: to the nearest
+  # day that has a thread, forward to today's when none lies between.
+  def handle_event("day_before", _params, %{assigns: %{thread: %{kind: "daily"}}} = socket) do
+    case Threads.adjacent_day(actor(socket), socket.assigns.thread.day, :before) do
+      {:ok, thread} -> {:noreply, show(socket, thread)}
+      {:error, _none} -> {:noreply, socket}
     end
   end
 
-  def handle_event("delete_thread", _params, socket), do: {:noreply, socket}
+  def handle_event("day_after", _params, %{assigns: %{thread: %{kind: "daily"}}} = socket) do
+    case Threads.adjacent_day(actor(socket), socket.assigns.thread.day, :after) do
+      {:ok, thread} -> {:noreply, show(socket, thread)}
+      {:error, _none} -> {:noreply, show_today(socket)}
+    end
+  end
+
+  def handle_event(step, _params, socket) when step in ["day_before", "day_after"],
+    do: {:noreply, socket}
+
+  def handle_event("today", _params, socket), do: {:noreply, show_today(socket)}
+
+  # A request waiting on the crew turns the panel to the thread it was
+  # asked in.
+  def handle_event("show_thread", %{"id" => id}, socket) do
+    case own_thread(socket, id) do
+      %{} = thread -> {:noreply, show(socket, thread)}
+      nil -> {:noreply, socket}
+    end
+  end
 
   # A seeding that failed is tried again by the person; the line says how
   # it went.
@@ -316,9 +407,6 @@ defmodule PrismWeb.AquaPanelLive do
     end
   end
 
-  defp blank_to_nil(""), do: nil
-  defp blank_to_nil(id), do: id
-
   # ============================================================================
   # What the page shows, and what the pane tells the panel
   # ============================================================================
@@ -327,15 +415,15 @@ defmodule PrismWeb.AquaPanelLive do
   def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
     do: {:noreply, assign(socket, :room, room)}
 
-  # The page asked about something it shows: the panel opens on the
-  # thread it keeps, and the pane takes the sentence once it is live.
+  # The page asked about something it shows: a closed panel opens on
+  # today's thread, and the pane takes the sentence once it is live.
   def handle_info(%Cyfr.Bus.AquaAsk{sentence: sentence}, %{assigns: %{phase: :ready}} = socket) do
     socket = assign(socket, :asked, sentence)
 
     socket =
       if socket.assigns.open,
         do: socket,
-        else: socket |> open_on(socket.assigns.thread && socket.assigns.thread.id) |> remember()
+        else: socket |> open_on(nil) |> remember()
 
     {:noreply, pass_asked(socket)}
   end
@@ -353,15 +441,14 @@ defmodule PrismWeb.AquaPanelLive do
       else: {:noreply, socket}
   end
 
-  # The pane's first message created the thread: it is the open one now.
-  def handle_info({:pane, _pane, {:opened, thread}}, socket) do
-    {:noreply, socket |> open_on(thread.id) |> remember()}
-  end
-
-  # The assistant pointed at a thread of You: the panel turns to it rather
-  # than moving the page.
+  # The pane asked for a thread of the person's: a crew member's thread or
+  # its room, one the assistant pointed at, or the daily thread a send
+  # joined. The panel turns to it rather than moving the page.
   def handle_info({:pane, _pane, {:open_thread, thread_id}}, socket) do
-    {:noreply, socket |> open_on(thread_id) |> remember()}
+    case own_thread(socket, thread_id) do
+      %{} = thread -> {:noreply, show(socket, thread)}
+      nil -> {:noreply, socket}
+    end
   end
 
   # A grant the pane's turn needs: asked in the panel's own layer, under
@@ -372,32 +459,41 @@ defmodule PrismWeb.AquaPanelLive do
 
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
 
-  # The desktop opens the panel (a canvas's `settings` of `aqua`): on the
-  # thread it keeps, as the button does; once open, it stays as it is.
+  # The desktop opens the panel (a canvas's `settings` of `aqua`): on
+  # today's thread, as the button does; once open, it stays as it is.
   def handle_info(:open, %{assigns: %{phase: :ready, open: false}} = socket) do
-    id = socket.assigns.thread && socket.assigns.thread.id
-    {:noreply, socket |> open_on(id) |> remember()}
+    {:noreply, socket |> open_on(nil) |> remember()}
   end
 
   def handle_info(:open, socket), do: {:noreply, socket}
 
   # The desktop opens the panel at a thread (an attention item's `aqua`
-  # destination): one of the person's own, read under their context, or
-  # the thread it keeps when the id names none of theirs.
+  # destination, the thread an approval waits in): any thread of the
+  # person's athanor, read under their context, or today's when the id
+  # names none of theirs.
   def handle_info({:open, thread_id}, %{assigns: %{phase: :ready}} = socket)
       when is_binary(thread_id) do
-    own = Threads.list(Sanctum.Context.actor(socket.assigns.context))
-
-    id =
-      case Enum.find(own, &(&1.id == thread_id and &1.kind == "own")) do
-        %{id: id} -> id
-        nil -> socket.assigns.thread && socket.assigns.thread.id
-      end
-
-    {:noreply, socket |> open_on(id) |> remember()}
+    {:noreply, socket |> open_on(thread_id) |> remember()}
   end
 
   def handle_info({:open, _thread_id}, socket), do: {:noreply, socket}
+
+  # Today's count as the person's list announces it, a read mark moved
+  # among the changes, with the day read again (`follow_day/3`).
+  def handle_info(
+        %ThreadListed{kind: :daily, id: id, unread: unread},
+        %{assigns: %{phase: :ready}} = socket
+      ),
+      do: {:noreply, follow_day(socket, id, unread)}
+
+  # Today's thread deleted: the next open makes it again.
+  def handle_info(
+        %ThreadListed{kind: :removed, id: id},
+        %{assigns: %{today: %{id: id}}} = socket
+      ),
+      do: {:noreply, socket |> assign(:today, nil) |> assign(:unread, 0)}
+
+  def handle_info(%ThreadListed{}, socket), do: {:noreply, socket}
 
   # The athanor moved: its seeding ended or it was renamed; read it again.
   def handle_info(
@@ -422,6 +518,33 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   defp pass_asked(socket), do: socket
+
+  # The person's day, read again: the date now in their stored zone, and
+  # the thread of that date. An announced daily thread of that date is
+  # today's, with the count it carries; when the date moved and the
+  # announced thread is another day's, today's is read as it stands. A
+  # zone changed elsewhere, or midnight passed while the page stayed, moves
+  # today either way. Nothing here makes a thread.
+  defp follow_day(socket, id, unread) do
+    day = Aqua.today(socket.assigns.context)
+
+    case socket.assigns do
+      %{today: %{id: ^id}, day: ^day} ->
+        assign(socket, :unread, unread || 0)
+
+      %{day: held} ->
+        case own_thread(socket, id) do
+          %{kind: "daily", day: ^day} = thread ->
+            assign(socket, day: day, today: thread, unread: unread || 0)
+
+          _another_day when held == day ->
+            socket
+
+          _another_day ->
+            count_today(socket)
+        end
+    end
+  end
 
   # ============================================================================
   # Render
@@ -450,7 +573,16 @@ defmodule PrismWeb.AquaPanelLive do
         title="Your own Aqua, on your own athanor wherever you are (Ctrl+J)"
         class="shelf-end-button"
       >
-        <span class="aqua-panel-orb" aria-hidden="true"></span> Aqua
+        <span class="aqua-panel-orb" aria-hidden="true"></span>
+        Aqua
+        <span
+          :if={@unread > 0}
+          id="aqua-panel-unread"
+          class="shelf-end-count"
+          aria-label={"#{@unread} new today"}
+        >
+          {@unread}
+        </span>
       </button>
 
       <%!-- Escape from inside the sheet (the hook's: the thread's own view
@@ -502,60 +634,50 @@ defmodule PrismWeb.AquaPanelLive do
         >
           <span class="aqua-panel-orb" aria-hidden="true"></span>
           <span class="shrink-0 text-sm font-semibold">Aqua</span>
-          <%!-- A browser's LiveView sends a change only from an input inside
-               a form, so the change is the form's. --%>
-          <form
-            id="aqua-panel-thread-form"
-            phx-change="select"
-            class="relative ml-1 min-w-0 max-w-[13rem]"
-          >
-            <select
-              id="aqua-panel-threads"
-              name="id"
-              title="Your threads"
-              aria-label="Your threads"
-              class="w-full min-w-0 cursor-pointer appearance-none truncate rounded-[7px] border border-border-default bg-transparent py-[3px] pl-2 pr-6 text-xs text-text-secondary hover:text-text-primary focus:border-border-focus focus:outline-none"
+          <%!-- The day shown, a step back or forward by day, and Today. --%>
+          <nav id="aqua-panel-day" aria-label="Days" class="ml-1 flex min-w-0 items-center gap-0.5">
+            <button
+              :if={daily?(@thread)}
+              id="aqua-panel-day-before"
+              type="button"
+              phx-click="day_before"
+              disabled={not @earlier}
+              aria-label="The day before"
+              title="The day before"
+              class="aqua-panel-ghost text-sm disabled:opacity-30"
             >
-              <option value="" selected={is_nil(@thread)}>New thread</option>
-              <option
-                :for={thread <- @threads}
-                value={thread.id}
-                selected={@thread && thread.id == @thread.id}
-              >
-                {thread.title}
-              </option>
-              <option :if={match?(%{kind: "crew"}, @thread)} value={@thread.id} selected>
-                {@thread.agent}'s thread
-              </option>
-            </select>
+              ‹
+            </button>
             <span
-              class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[10px] text-text-muted"
-              aria-hidden="true"
+              :if={@thread}
+              id="aqua-panel-day-name"
+              class="min-w-0 truncate text-xs text-text-secondary"
             >
-              ▾
+              {thread_name(@thread)}
             </span>
-          </form>
-          <span class="flex-1"></span>
-          <button
-            :if={match?(%{kind: "own"}, @thread)}
-            id="aqua-panel-delete"
-            type="button"
-            phx-click="delete_thread"
-            data-confirm="Delete this thread?"
-            aria-label="Delete this thread"
-            title="Delete this thread"
-            class="aqua-panel-ghost text-sm hover:text-red-400"
-          >
-            <svg
-              class="h-3.5 w-3.5"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              aria-hidden="true"
+            <button
+              :if={daily?(@thread)}
+              id="aqua-panel-day-after"
+              type="button"
+              phx-click="day_after"
+              disabled={today?(@thread, @today)}
+              aria-label="The day after"
+              title="The day after"
+              class="aqua-panel-ghost text-sm disabled:opacity-30"
             >
-              <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5" />
-            </svg>
-          </button>
+              ›
+            </button>
+            <button
+              :if={not today?(@thread, @today)}
+              id="aqua-panel-today"
+              type="button"
+              phx-click="today"
+              class="ml-0.5 shrink-0 rounded-[7px] border border-border-default px-1.5 py-[2px] text-xs text-text-secondary hover:text-text-primary focus-visible:border-border-focus focus-visible:outline-none"
+            >
+              Today
+            </button>
+          </nav>
+          <span class="flex-1"></span>
           <%!-- The thread's model, soul or role and usage: the pane's menu,
                 which the panel's hook opens and closes. --%>
           <button
@@ -644,7 +766,7 @@ defmodule PrismWeb.AquaPanelLive do
           <li :for={request <- @pending} id={"aqua-panel-pending-" <> request.id}>
             <button
               type="button"
-              phx-click="select"
+              phx-click="show_thread"
               phx-value-id={request.thread_id}
               title={request.content}
               class="flex min-h-6 w-full min-w-0 items-center gap-1.5 px-3 text-left text-xs text-text-secondary hover:text-text-primary"
@@ -685,6 +807,17 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   defp close_and_return, do: JS.push("close") |> JS.focus(to: "#aqua-panel-button")
+
+  defp daily?(thread), do: match?(%{kind: "daily"}, thread)
+
+  defp today?(%{id: id}, %{id: id}), do: true
+  defp today?(_thread, _today), do: false
+
+  # A daily thread by its day's date, a crew member's by its member, a
+  # workspace thread by its title.
+  defp thread_name(%{kind: "daily", day: day}), do: day_name(day)
+  defp thread_name(%{kind: "crew", agent: agent}), do: "#{agent}'s thread"
+  defp thread_name(%{title: title}), do: title
 
   # Who asked: the person by the console's name for them, the soul as Aqua.
   defp asker(%{sent_by: "person", author: author}, ctx), do: PrismWeb.People.label(author, ctx)
