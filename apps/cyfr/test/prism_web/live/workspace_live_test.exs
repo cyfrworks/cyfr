@@ -4,7 +4,7 @@
 defmodule PrismWeb.WorkspaceLiveTest do
   # A workspace thread as its own layer over the desktop: its title and
   # state, its steps as Aqua words them, what it made with its pictures,
-  # files and links, and its conversation in the thread pane, whose sends
+  # files and links, and its posts in the thread pane, whose sends
   # go to that thread alone; two tabs in the hand. Only the person's own
   # workspace thread opens; anything else reads as not here and shows
   # nothing of it. The state follows the thread: a move its list
@@ -25,16 +25,10 @@ defmodule PrismWeb.WorkspaceLiveTest do
 
   setup %{conn: conn} do
     test_path = Path.join(System.tmp_dir!(), "workspace_live_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
-
-    on_exit(fn ->
-      File.rm_rf(test_path)
-
-      if original_base_path,
-        do: Application.put_env(:arca, :base_path, original_base_path),
-        else: Application.delete_env(:arca, :base_path)
-    end)
+    # Removed after the setting is restored: a turn the test left finishing
+    # may still write under the path, so the removal tolerates it.
+    on_exit(fn -> File.rm_rf(test_path) end)
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
 
     user = test_user()
     mine = Sanctum.Test.People.athanor!(user.user_id)
@@ -192,7 +186,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
       )
   end
 
-  test "a workspace thread opens as a full layer: its title and state, its steps as Aqua words them, what it made, and its conversation in the pane on it",
+  test "a workspace thread opens as a full layer: its title and state, its steps as Aqua words them, what it made, and its posts in the pane on it",
        %{conn: conn, mine: mine, me: me, daily: daily} do
     {workspace, chart, ref} = charted!(me, daily)
 
@@ -231,7 +225,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
              "The moon tonight"
            )
 
-    # Its conversation is the pane on the workspace thread itself.
+    # Its posts are the pane on the workspace thread itself.
     assert pane_thread(pane).id == workspace.id
     assert has_element?(pane, "#workspace-pane-thread[data-thread='#{workspace.id}']")
 
@@ -273,22 +267,22 @@ defmodule PrismWeb.WorkspaceLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "in the hand the conversation is the screen and the steps and results are a second tab",
+  test "in the hand the thread is the screen and the steps and results are a second tab",
        %{conn: conn, mine: mine, me: me, daily: daily} do
     {workspace, _chart, _ref} = charted!(me, daily)
     {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
 
-    assert has_element?(view, ~s(#workspace-tab-conversation[aria-selected="true"]))
+    assert has_element?(view, ~s(#workspace-tab-posts[aria-selected="true"]))
     assert has_element?(view, "#workspace-work.max-md\\:hidden")
-    refute has_element?(view, "#workspace-conversation.max-md\\:hidden")
+    refute has_element?(view, "#workspace-posts.max-md\\:hidden")
 
     view |> element("#workspace-tab-work") |> render_click()
 
     assert has_element?(view, ~s(#workspace-tab-work[aria-selected="true"]))
-    assert has_element?(view, "#workspace-conversation.max-md\\:hidden")
+    assert has_element?(view, "#workspace-posts.max-md\\:hidden")
     refute has_element?(view, "#workspace-work.max-md\\:hidden")
 
-    # The pane stays mounted behind its tab: the conversation is kept.
+    # The pane stays mounted behind its tab: the thread is kept.
     assert find_live_child(view, "workspace-pane")
 
     Cyfr.Test.Sandbox.end_views()
@@ -402,7 +396,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
       has_element?(view, ~s(#workspace-state[data-state="open"]), "Working on it")
     end)
 
-    # Deleted while open: nothing of it is left, the conversation included.
+    # Deleted while open: nothing of it is left, its posts included.
     {:ok, _} = Tape.delete_thread(me, workspace.id)
     wait_until(fn -> has_element?(view, "#workspace-missing") end)
     refute find_live_child(view, "workspace-pane")

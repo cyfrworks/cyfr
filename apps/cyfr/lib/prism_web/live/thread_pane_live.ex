@@ -84,7 +84,7 @@ defmodule PrismWeb.ThreadPaneLive do
   has no Open.
 
   What the thread made is told to the host as it is read, for a host that
-  shows it beside the conversation (`PrismWeb.WorkspaceLive`): Aqua's
+  shows it beside the thread's posts (`PrismWeb.WorkspaceLive`): Aqua's
   posts that hold a picture, a file or a link, `{:results, thread_id,
   results, window}` when a thread opens and `{:result, thread_id, result}`
   as each one lands, each `%{id, seq, content, attachments, links}` from

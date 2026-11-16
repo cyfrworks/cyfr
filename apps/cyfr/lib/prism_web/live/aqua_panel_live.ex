@@ -54,7 +54,7 @@ defmodule PrismWeb.AquaPanelLive do
   over the desktop (`PrismWeb.WorkspaceLive`). Asked for one, from the
   list, a card's Open in the pane, the desktop or the attention stream,
   the panel moves the page there through the desktop's `navigate`
-  (`assets/js/hooks/shell_page.js`) and closes, the conversation being
+  (`assets/js/hooks/shell_page.js`) and closes, the thread's posts being
   the layer's. A crew member's thread under a workspace thread moves the
   page to that layer and is shown here, over it, where its card is
   decided.

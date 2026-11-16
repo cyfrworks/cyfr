@@ -11,10 +11,9 @@ defmodule PrismWeb.WorkspaceLive do
   it. It opens from the thread's pointer or a report on the daily thread,
   and from the panel's list, and its close goes back to the desktop.
 
-  On the desk the conversation stands at the side and the thread's steps
-  and what it made stand in the middle; in the hand the conversation is
-  the screen and the steps and results are a second tab. The conversation
-  is the thread pane (`PrismWeb.ThreadPaneLive`) on this thread, so words
+  On the desk the thread's posts stand at the side and its steps and what
+  it made stand in the middle; in the hand the posts are the screen and
+  the steps and results are a second tab. The posts are the thread pane (`PrismWeb.ThreadPaneLive`) on this thread, so words
   typed there go to this thread's own soul, and a crew member's thread
   under it opens in that pane, which leads back. The steps are
   `Aqua.steps/3`'s, worded by Aqua (`Aqua.Steps`), read again as the
@@ -23,7 +22,7 @@ defmodule PrismWeb.WorkspaceLive do
   (`{:results, …}`, `{:result, …}`), drawn as the pane draws a post. The
   pane reads a thread's newest posts only, as many as it shows: when its
   read filled that window, the results say they are what the latest posts
-  hold, as the conversation shows them, and no earlier result is listed
+  hold, as the thread shows them, and no earlier result is listed
   as if there were none. The thread's title and state are `Aqua.workspace/2`'s, worded by
   `PrismWeb.DisplayHelpers.work_state/1`, read again when the person's
   list announces the thread (`Cyfr.Bus.ThreadListed`) and when a card
@@ -57,7 +56,7 @@ defmodule PrismWeb.WorkspaceLive do
     :approval_resolved
   ]
 
-  @tabs ~w(conversation work)
+  @tabs ~w(posts work)
 
   @doc "The address of workspace thread `id` in the athanor `route` names."
   @spec address(String.t() | nil, String.t()) :: String.t()
@@ -72,7 +71,7 @@ defmodule PrismWeb.WorkspaceLive do
       socket
       |> assign(:page_title, "Workspace thread")
       |> assign(:overlay, :full)
-      |> assign(:tab, "conversation")
+      |> assign(:tab, "posts")
       |> assign(:steps, [])
       |> assign(:results, [])
       |> assign(:window, nil)
@@ -138,7 +137,7 @@ defmodule PrismWeb.WorkspaceLive do
   # Events
   # ============================================================================
 
-  # In the hand: the conversation, or the steps and results.
+  # In the hand: the thread's posts, or the steps and results.
   @impl true
   def handle_event("tab", %{"tab" => tab}, socket) when tab in @tabs,
     do: {:noreply, assign(socket, :tab, tab)}
@@ -279,7 +278,7 @@ defmodule PrismWeb.WorkspaceLive do
         </span>
       </.close_row>
 
-      <%!-- In the hand, the conversation and the steps and results are two
+      <%!-- In the hand, the thread's posts and the steps and results are two
             tabs; on the desk both stand, and the tabs are not drawn. --%>
       <div
         id="workspace-tabs"
@@ -288,7 +287,7 @@ defmodule PrismWeb.WorkspaceLive do
         class="flex shrink-0 border-b border-gray-800/60 md:hidden"
       >
         <button
-          :for={{tab, words} <- [{"conversation", "Conversation"}, {"work", "Steps and results"}]}
+          :for={{tab, words} <- [{"posts", "Thread"}, {"work", "Steps and results"}]}
           id={"workspace-tab-" <> tab}
           type="button"
           role="tab"
@@ -347,7 +346,7 @@ defmodule PrismWeb.WorkspaceLive do
               Results
             </h2>
             <p :if={@window} id="workspace-results-window" class="mb-2 text-xs text-gray-500">
-              What the latest {@window} posts hold, as the conversation shows them.
+              What the latest {@window} posts hold, as the thread shows them.
             </p>
             <p :if={@results == []} id="workspace-no-results" class="text-sm text-gray-500">
               {if @window, do: "Nothing in them.", else: "Nothing made yet."}
@@ -367,14 +366,14 @@ defmodule PrismWeb.WorkspaceLive do
           </div>
         </section>
 
-        <%!-- The conversation, at the side on the desk: the thread pane on
+        <%!-- The thread's posts, at the side on the desk: the thread pane on
               this thread, whose sends go to its own soul. --%>
         <aside
-          id="workspace-conversation"
-          aria-label="Conversation"
+          id="workspace-posts"
+          aria-label="Thread"
           class={[
             "flex min-h-0 min-w-0 flex-col max-md:flex-1 md:w-[26rem] md:shrink-0 md:border-l md:border-gray-800/60",
-            @tab != "conversation" && "max-md:hidden"
+            @tab != "posts" && "max-md:hidden"
           ]}
         >
           {live_render(@socket, ThreadPaneLive,
