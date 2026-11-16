@@ -1136,6 +1136,7 @@ defmodule Aqua.LaunchTest do
       assert decide(ctx, turn, args) ==
                {:auto,
                 %{
+                  call: %{action: "run", args: args},
                   account: nil,
                   binding: %{sources: [], consent_id: consent_of(ctx, app), classes: []}
                 }}
@@ -1202,8 +1203,15 @@ defmodule Aqua.LaunchTest do
 
     ungranted = publish_app!(ctx)
 
-    assert decide(ctx, turn, %{"reference" => ungranted <> ":1.0.0", "input" => %{}}) ==
-             {:auto, %{account: nil, binding: %{sources: [], consent_id: nil, classes: []}}}
+    none = %{"reference" => ungranted <> ":1.0.0", "input" => %{}}
+
+    assert decide(ctx, turn, none) ==
+             {:auto,
+              %{
+                call: %{action: "run", args: none},
+                account: nil,
+                binding: %{sources: [], consent_id: nil, classes: []}
+              }}
   end
 
   test "a decided launch runs once as the turn's person, under its stored origin, with its " <>
@@ -1353,31 +1361,78 @@ defmodule Aqua.LaunchTest do
     ran_nothing!(ctx, other, decided, app, @decided_grant)
   end
 
-  test "a decided launch refuses an agent or a hand its recorded call names, and a step that " <>
+  # What the loop hands the dispatcher for a launch of `args` with no card:
+  # its decision, made on that call.
+  defp handed(decided, args), do: %{decided | call: %{action: "run", args: args}}
+
+  test "a decided launch refuses an agent or a hand its step's row names, and a step whose row " <>
          "records no launch",
        %{ctx: ctx, thread: thread, pins: pins} do
     %{args: args} = quiet_app!(ctx)
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
     assert {:auto, decided} = decide(ctx, turn, args)
 
-    agent = launch_step!(ctx, turn, %{"reference" => @soul, "input" => %{}})
-    assert {:refused, {:invalid_argument, said}} = Launch.run(ctx, agent, decided)
-    assert said =~ "an agent is never run"
+    soul = %{"reference" => @soul, "input" => %{}}
+    agent = launch_step!(ctx, turn, soul)
 
-    hand =
-      launch_step!(ctx, turn, %{
-        "reference" => "catalyst:local.files",
-        "input" => %{"action" => "read_lines", "path" => "notes.md"}
-      })
+    assert Launch.run(ctx, agent, handed(decided, soul)) ==
+             {:refused, {:invalid_argument, "an agent is not a tool to run"}}
 
-    assert Launch.run(ctx, hand, decided) ==
-             {:refused, {:invalid_argument, "the step's call is not a launch"}}
+    files = %{"reference" => "catalyst:local.files", "input" => %{}}
+    hand = launch_step!(ctx, turn, files)
 
-    assert Launch.run(ctx, %{agent | message_id: nil}, decided) ==
-             {:refused, {:invalid_argument, "the step records no launch"}}
+    assert Launch.run(ctx, hand, handed(decided, files)) ==
+             {:refused, {:invalid_argument, "catalyst:local.files is a hand, not a launch"}}
+
+    # A step recorded for anything but a launch, or naming no call, records
+    # none: nothing runs.
+    step = launch_step!(ctx, turn, args)
+
+    for unlaunched <- [
+          %{step | kind: "tool"},
+          %{step | action: "logs"},
+          %{step | message_id: nil}
+        ] do
+      assert Launch.run(ctx, unlaunched, decided) ==
+               {:refused, {:invalid_argument, "the step records no launch"}}
+    end
 
     # With no decision a step with no approval runs nothing, as before.
-    assert Launch.run(ctx, launch_step!(ctx, turn, args)) == {:refused, :not_approved}
+    assert Launch.run(ctx, step) == {:refused, :not_approved}
+  end
+
+  test "a decided launch runs what its step's row records: a decision made on another call runs " <>
+         "nothing and asks the gate nothing",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
+
+    %{app: app, args: args} = quiet_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    assert {:auto, decided} = decide(ctx, turn, args)
+    step = launch_step!(ctx, turn, args)
+
+    sentence =
+      "the call this run was decided on is not the one its step recorded, so nothing ran"
+
+    for other <- [
+          handed(decided, Map.put(args, "input", %{"n" => 1})),
+          %{decided | call: %{action: "run_stream", args: args}},
+          handed(decided, Map.put(args, "connection", "Work"))
+        ] do
+      attempts = attempts_of(ctx)
+      decisions = gate_runs(ctx)
+      assert Launch.run(ctx, step, other) == {:refused, {:invalid_argument, sentence}}
+      assert launched_of(ctx, app) == []
+      assert attempts_of(ctx) == attempts
+      assert gate_runs(ctx) == decisions
+    end
+
+    # The row's own action key, which a launch's action replaces, is no
+    # other call.
+    named = launch_step!(ctx, turn, Map.put(args, "action", "run"))
+    assert {:ok, %{execution_id: _}} = Launch.run(ctx, named, decided)
+    assert [_once] = launched_of(ctx, app)
   end
 
   # ---------------------------------------------------------------------------

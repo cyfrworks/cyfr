@@ -13,10 +13,9 @@ defmodule Aqua.Launch do
       the run to what the card bound.
     * **Decided**, with no card: one the agent's policy let run under
       `auto` because the grant its app roots at covered what the turn had
-      read (`Aqua.Loop.Policy`), as the turn's person, holding the run to
-      what that decision read (`t:decided/0`). A run stands on the grant
-      of the person it acts as, whoever started it; this is the
-      assistant starting one.
+      read, as the turn's person, holding the run to what that decision
+      read (`t:decided/0`). A run stands on the grant of the person it
+      acts as, whoever started it; this is the assistant starting one.
 
   The input is the durable step, with the decision for a decided one. The
   person's context is rebuilt from the approval's `decided_by`, or for a
@@ -31,13 +30,15 @@ defmodule Aqua.Launch do
   step dispatched before calling here, which is what makes a launch
   happen once.
 
-  What the launch runs is a proposal: the card's for an approved one, and
-  for a decided one the proposal its card would have carried, made from
-  the step's recorded call (the `tool_call` row the loop recalls a call
-  from) and the decision (`Aqua.Loop.Policy.proposal/3`). Its arguments
-  are held to the same rules either way: the assistant itself is never
-  launched, a wrapped catalyst is a hand, and a caller's lineage is
-  dropped.
+  What the launch runs is a proposal (`proposal/4`, its one definition):
+  the card's for an approved one, and for a decided one the proposal its
+  card would have carried, made from the step's own row and what the
+  decision read. The dispatcher reads the step's recorded call itself —
+  the action the step was recorded for and the arguments its `tool_call`
+  row holds — runs what the row says, and refuses, with nothing run, a
+  decision made on any other call. Its arguments are held to the same
+  rules either way: the assistant itself is never launched, a wrapped
+  catalyst is a hand, and a caller's lineage is dropped.
 
   A launch naming an account (`connection`) runs under the account its
   proposal bound, or not at all: the account its name resolved to when
@@ -96,17 +97,25 @@ defmodule Aqua.Launch do
         }
 
   @typedoc """
-  What the decision that let a launch run with no card read of it
-  (`Aqua.Loop.Policy.decide/3`'s `{:auto, decided}`), which the run is
-  held to as it dispatches: the account its call names as it resolved
-  then (nil for a launch naming none), and the binding the run stands on:
-  the turn's sources, the revision of the grant its app roots at, which
+  An account a proposal binds: the entry its name resolved to and the
+  name as its binding stores it.
+  """
+  @type account :: %{vault_entry: String.t(), name: String.t()}
+
+  @typedoc """
+  What the decision that let a launch run with no card read of it (the
+  assistant's policy's `{:auto, decided}`), which the run is held to as it
+  dispatches: the call it decided, its action and its arguments as the
+  model wrote them; the account that call names as it resolved then (nil
+  for a launch naming none); and the binding the run stands on: the
+  turn's sources, the revision of the grant its app roots at, which
   covered them (nil for a component with no grant), and no class let
   flow. It lives in the loop from the decision to the dispatch and is
   stored nowhere: a turn continued from its rows decides its steps again.
   """
   @type decided :: %{
-          account: %{vault_entry: String.t(), name: String.t()} | nil,
+          call: %{action: String.t(), args: map()},
+          account: account() | nil,
           binding: %{sources: [Prima.Source.t()], consent_id: String.t() | nil, classes: []}
         }
 
@@ -157,7 +166,7 @@ defmodule Aqua.Launch do
           | {:error, term()}
   def run(ctx, step, decided \\ nil)
 
-  def run(%Context{} = ctx, step, %{account: _, binding: %{classes: []}} = decided) do
+  def run(%Context{} = ctx, step, %{call: _, account: _, binding: %{classes: []}} = decided) do
     case decided_launch(ctx, step, decided) do
       {:ok, launcher, args} -> launch(launcher, args, :decided)
       {:error, reason} -> {:refused, reason}
@@ -173,6 +182,44 @@ defmodule Aqua.Launch do
   end
 
   def run(_ctx, _step, _decided), do: {:refused, :not_approved}
+
+  @doc """
+  The canonical proposal of a launch of `action` with `args`: what its
+  card shows and its digest hashes, and for a launch with no card what
+  its card would have carried. With `account` (`t:account/0`), what a
+  named account resolved to: its `connection` spelled as the binding
+  stores the name, when the call names that account in any case
+  (`Prima.Authority.Blob.same_account_name?/2`), and the entry beside the
+  call (`vault_entry`). It also carries what the launch binds of the run
+  (`bind/1`; none bound when nil): the turn's sources, the launched
+  grant's consent revision and the classes let flow, so its digest binds
+  them.
+  """
+  @spec proposal(String.t(), map(), account() | nil, binding() | nil) :: map()
+  def proposal(action, args, account, binding) when is_binary(action) and is_map(args) do
+    %{"tool" => "execution", "action" => action, "args" => account_args(args, account)}
+    |> put_account(account)
+    |> Map.merge(bind(binding))
+  end
+
+  defp account_args(args, %{name: stored}) do
+    case args["connection"] do
+      named when is_binary(named) ->
+        if Prima.Authority.Blob.same_account_name?(named, stored),
+          do: Map.put(args, "connection", stored),
+          else: args
+
+      _none ->
+        args
+    end
+  end
+
+  defp account_args(args, nil), do: args
+
+  defp put_account(proposal, %{vault_entry: entry_id}),
+    do: Map.put(proposal, "vault_entry", entry_id)
+
+  defp put_account(proposal, nil), do: proposal
 
   @doc """
   The proposal fields a launch's card binds `binding` under, its digest's
@@ -267,12 +314,14 @@ defmodule Aqua.Launch do
   end
 
   # What a decided launch is held to: the proposal its card would have
-  # carried, made from the step's recorded call and what the decision
-  # read, run as the turn's person.
-  defp decided_launch(ctx, step, %{account: account, binding: binding}) do
-    with {:ok, call} <- recorded_call(ctx, step),
+  # carried, made from the step's own row and what the decision read, run
+  # as the turn's person. The row is the last word on what runs: a
+  # decision made on another call runs nothing.
+  defp decided_launch(ctx, step, %{call: handed, account: account, binding: binding}) do
+    with {:ok, %{action: action, args: args} = recorded} <- recorded_call(ctx, step),
+         :ok <- decided_on(recorded, handed),
          {:ok, person, turn} <- person(ctx, step) do
-      held(person, turn, Aqua.Loop.Policy.proposal(call, account, binding), step, :decided)
+      held(person, turn, proposal(action, args, account, binding), step, :decided)
     end
   end
 
@@ -317,22 +366,42 @@ defmodule Aqua.Launch do
       else: {:error, {:invalid_argument, "the card no longer matches its approval"}}
   end
 
-  # The call a decided launch's step recorded, from its `tool_call` row,
-  # resolved as the loop resolves it: a launch, or nothing runs.
-  defp recorded_call(ctx, %{kind: "launch", message_id: message_id})
-       when is_binary(message_id) do
+  # The call a launch step records: the action the step was recorded for
+  # and the arguments its `tool_call` row holds, as the model wrote them.
+  # A step recorded for anything but a launch records none.
+  defp recorded_call(ctx, %{
+         kind: "launch",
+         tool: "execution",
+         action: action,
+         message_id: message_id
+       })
+       when action in @launch_actions and is_binary(message_id) do
     with {:ok, row} <- Tape.message(ctx, message_id) do
-      payload = Arca.ThreadStorage.payload(row)
-
-      case Aqua.Loop.Binding.resolve(payload["name"] || "", payload["arguments"] || %{}) do
-        {:ok, %Aqua.Loop.Binding.Call{kind: :launch} = call} -> {:ok, call}
-        {:ok, _not_a_launch} -> {:error, {:invalid_argument, "the step's call is not a launch"}}
-        {:error, message} -> {:error, {:invalid_argument, message}}
+      case Arca.ThreadStorage.payload(row)["arguments"] do
+        %{} = args -> {:ok, %{action: action, args: args}}
+        _none -> {:ok, %{action: action, args: %{}}}
       end
     end
   end
 
   defp recorded_call(_ctx, _step), do: {:error, {:invalid_argument, "the step records no launch"}}
+
+  # The call the run was decided on is the step's own, compared as data:
+  # the same action, and the same arguments but for an `action` key, which
+  # a launch's own action replaces (`launch_args/1`).
+  defp decided_on(%{action: action, args: recorded}, %{action: action, args: handed})
+       when is_map(handed) do
+    if Map.delete(recorded, "action") == Map.delete(handed, "action"),
+      do: :ok,
+      else: {:error, not_decided()}
+  end
+
+  defp decided_on(_recorded, _handed), do: {:error, not_decided()}
+
+  defp not_decided,
+    do:
+      {:invalid_argument,
+       "the call this run was decided on is not the one its step recorded, so nothing ran"}
 
   # The proposal, as the model wrote it and the person saw it or the
   # decision read it. The assistant itself is never launched, and a

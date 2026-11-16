@@ -407,7 +407,11 @@ defmodule Aqua.Loop.Policy do
       case granted(call, ctx, sources) do
         {:ok, consent_id} ->
           {:auto,
-           %{account: account, binding: %{sources: sources, consent_id: consent_id, classes: []}}}
+           %{
+             call: %{action: call.action, args: call.args},
+             account: account,
+             binding: %{sources: sources, consent_id: consent_id, classes: []}
+           }}
 
         :uncovered ->
           asks
@@ -751,48 +755,20 @@ defmodule Aqua.Loop.Policy do
       Sanctum.Annotations.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || ""))
 
   @doc """
-  The canonical proposal a card shows for `call`, and its digest hashes.
-  With `account` (`t:account/0`), what a launch's named account resolved
-  to when its card was drawn: its `connection` spelled as the binding
-  stores the name, when the call names that account in any case
-  (`Prima.Authority.Blob.same_account_name?/2`), and the entry beside
-  the call (`vault_entry`). A launch's proposal also carries what its
-  card binds of the run (`launch`, `Aqua.Launch.bind/1`; none bound
-  when nil): the turn's sources, the launched grant's consent revision
-  and the classes the approval lets flow, so its digest binds them.
+  The canonical proposal a card shows for `call`, and its digest hashes:
+  the call alone, and for a launch the launch's own proposal
+  (`Aqua.Launch.proposal/4`), with the account a named one resolved to
+  (`account`, `t:account/0`) and what its card binds of the run
+  (`launch`, `t:Aqua.Launch.binding/0`; none bound when nil).
   """
   @spec proposal(Call.t(), account() | nil, Aqua.Launch.binding() | nil) :: map()
   def proposal(call, account \\ nil, launch \\ nil)
 
-  def proposal(%Call{} = call, account, launch) do
-    %{"tool" => call.tool, "action" => call.action, "args" => account_args(call.args, account)}
-    |> put_account(account)
-    |> put_launch(call, launch)
-  end
+  def proposal(%Call{kind: :launch} = call, account, launch),
+    do: Aqua.Launch.proposal(call.action, call.args, account, launch)
 
-  defp account_args(args, %{name: stored}) do
-    case args["connection"] do
-      named when is_binary(named) ->
-        if Prima.Authority.Blob.same_account_name?(named, stored),
-          do: Map.put(args, "connection", stored),
-          else: args
-
-      _none ->
-        args
-    end
-  end
-
-  defp account_args(args, nil), do: args
-
-  defp put_account(proposal, %{vault_entry: entry_id}),
-    do: Map.put(proposal, "vault_entry", entry_id)
-
-  defp put_account(proposal, nil), do: proposal
-
-  defp put_launch(proposal, %Call{kind: :launch}, launch),
-    do: Map.merge(proposal, Aqua.Launch.bind(launch))
-
-  defp put_launch(proposal, %Call{}, _launch), do: proposal
+  def proposal(%Call{} = call, _account, _launch),
+    do: %{"tool" => call.tool, "action" => call.action, "args" => call.args}
 
   @doc "The digest a card is consumed by: the canonical proposal, hashed."
   @spec proposal_digest(map()) :: String.t()
