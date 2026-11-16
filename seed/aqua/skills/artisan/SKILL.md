@@ -68,6 +68,7 @@ Every library is bundled; nothing is imported from a remote URL.
 **Verify.** A tincture is not done until it loads and its requests succeed:
 - `component(action: "setup_plan", reference: "tincture:local.my-viewer")` — `ready: true`; for anything not ready, `request_setup(component_ref: "...")` and wait for the form
 - `execution(action: "run", reference: "f:local.my-api", input: {"operation": "...", "params": {...}})` — the backend formula answers what the tincture will ask
+- `browser(action: "page", tincture: "tincture:local.my-viewer:0.1.0")`, then `browser(action: "read")` or `browser(action: "screenshot")` — it loads in this thread's window as a plain site with no frame, a built template's from its last compile; its `cyfr.invoke` and `cyfr.action` are your own calls in this thread, held to its declaration, and its streams do not open there (the `browser` scroll)
 - Ask the person to open the tincture in the shell and say what they see; fix from there
 
 **If scaffold fails**, tell the person what it said and stop: the manifest that makes a directory a tincture comes from `component(action: "create")`, never from `source`.
