@@ -2112,43 +2112,147 @@ defmodule Aqua.LoopTest do
     Jason.decode!(text)["messages"]
   end
 
-  test "a launch the soul's own policy runs at once still asks, and never answers not approved",
+  # An app of the person's own with no exit at all, granted: its grant
+  # covers whatever the turn has read, so the soul's `auto` runs it with no
+  # card.
+  defp quiet_app!(ctx) do
+    # A root runs only in a filled athanor (`Sanctum.Provisioning.ready/1`),
+    # and a launch with no card starts at once.
+    Sanctum.TestContext.ready!(ctx.athanor_id)
+    name = "quiet-app-#{System.unique_integer([:positive])}"
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})
+      })
+
+    ref = "reagent:local." <> name
+    walk!(ctx, %{ref: ref, bindings: []})
+    ref
+  end
+
+  defp workspace!(ctx) do
+    %Arca.Schemas.Thread{}
+    |> Arca.Schemas.Thread.changeset(%{
+      id: Prima.UUID7.generate_id("thread"),
+      athanor_id: ctx.athanor_id,
+      kind: "workspace",
+      workspace_state: "open",
+      title: "Run the app",
+      created_by: ctx.user_id
+    })
+    |> Arca.Repo.insert!()
+  end
+
+  defp runs_of(ctx, ref) do
+    Arca.Repo.all(
+      from(e in Arca.Schemas.Execution,
+        where: e.athanor_id == ^ctx.athanor_id and like(e.reference, ^"#{ref}%"),
+        select: %{id: e.id, user_id: e.user_id, origin: e.origin, parent: e.parent_execution_id}
+      )
+    )
+  end
+
+  test "a launch of an app whose grant covers what the turn has read runs with no card, on the " <>
+         "daily thread and in a workspace thread: dispatched once, its step closed with the " <>
+         "run's result, the root let go and taken back around it",
+       %{ctx: ctx, thread: daily} do
+    app = quiet_app!(ctx)
+    {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
+    start_supervised!({ScriptedWorker, ref: [@model, app], script: []})
+
+    for room <- [daily, workspace!(ctx)] do
+      ScriptedWorker.script([
+        calls([{"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}]),
+        {:probe, self()},
+        %{"answered" => true},
+        reply("after the launch")
+      ])
+
+      before = runs_of(ctx, app)
+      turn = accept!(ctx, room, "@aqua run it")
+      task = run(ctx, turn)
+
+      # While the app runs, the turn's root is let go around it.
+      assert_receive {:scripted_probe, runner, root_id}, 30_000
+      assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, turn.id)
+      send(runner, :continue)
+
+      # Taken back, the turn asks its model again and ends.
+      assert :completed = Task.await(task, 60_000)
+      {:ok, ended} = Tape.turn(ctx, turn.id)
+      assert {:ok, []} = Tape.pending_approvals(ctx, ended)
+      {:ok, steps} = Tape.steps(ctx, ended)
+      assert Enum.count(steps, &(&1.kind == "model")) == 2
+
+      assert %{
+               dispatch_state: "closed",
+               outcome: "ok",
+               approval_id: nil,
+               child_execution_id: ^root_id,
+               result_message_id: result
+             } = Enum.find(steps, &(&1.kind == "launch"))
+
+      assert {:ok, %{content: content}} = Tape.message(ctx, result)
+      assert content =~ "answered"
+
+      # Dispatched once, as the turn's person under its own origin.
+      assert runs_of(ctx, app) -- before == [
+               %{id: root_id, user_id: ctx.user_id, origin: "interactive", parent: nil}
+             ]
+    end
+  end
+
+  test "a launch with no card whose run's outcome is not known stops the turn on it, and is " <>
+         "never run again",
        %{ctx: ctx, thread: thread} do
-    # The soul's own file says execution.run runs at once, written past
-    # the door that refuses it, and its grant is walked again for the
-    # shape that moved.
-    actor = Sanctum.Context.actor(ctx)
-    {:ok, binary} = Arca.get(actor, Compendium.AquaPath.soul_file())
-    {:ok, soul} = Compendium.AquaAgent.parse("aqua", binary)
-    soul = %{soul | tool_policy: Map.put(soul.tool_policy, "execution.run", "auto")}
-    :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), Compendium.AquaAgent.serialize(soul))
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    app = quiet_app!(ctx)
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, app],
+       script: [
+         calls([{"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}]),
+         {:probe, self()},
+         reply("never sent")
+       ]}
+    )
+
+    turn = accept!(ctx, thread, "@aqua run it")
+    task = run(ctx, turn)
+    assert_receive {:scripted_probe, runner, _root_id}, 30_000
+
+    # The app's runner ends while it holds the run.
+    Process.exit(runner, :kill)
+
+    assert {:paused, :uncertain} = Task.await(task, 60_000)
+    assert {:ok, %{status: "paused", paused_reason: "uncertain"}} = Tape.turn(ctx, turn.id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{dispatch_state: "uncertain", approval_id: nil} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert Enum.count(steps, &(&1.kind == "model")) == 1
+    assert [_once] = runs_of(ctx, app)
+  end
+
+  test "under ask, a standing allow on execution.run stored for the thread still asks before a " <>
+         "launch, as before every one",
+       %{ctx: ctx, thread: thread} do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tool_policy_patch" => %{"execution.run" => "ask"}
+      })
 
     walk!(ctx, %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]})
 
-    turn = accept!(ctx, thread, "@aqua launch the model")
-
-    # The model's catalyst is on the soul's own edge: consented and untouched.
-    script!([
-      calls([{"c1", "execution.run", %{"reference" => @model, "input" => %{}}}]),
-      reply("done")
-    ])
-
-    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
-    {:ok, paused} = Tape.turn(ctx, turn.id)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-    {:ok, steps} = Tape.steps(ctx, paused)
-
-    assert %{dispatch_state: "proposed", approval_id: approval_id} =
-             Enum.find(steps, &(&1.kind == "launch"))
-
-    assert approval_id == approval.id
-  end
-
-  test "a standing allow on execution.run stored for the thread still asks before a launch",
-       %{ctx: ctx, thread: thread} do
-    # A row written past the rule that now refuses it, as one written
-    # before execution.run declared it takes no standing answer.
+    # A row no card writes, since a launch's card offers no standing
+    # answer, stored all the same.
     {:ok, _} =
       Arca.ToolGrantStorage.put(%{
         athanor_id: ctx.athanor_id,

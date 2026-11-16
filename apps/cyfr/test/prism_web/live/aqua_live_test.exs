@@ -1626,6 +1626,25 @@ defmodule PrismWeb.AquaLiveTest do
       assert html =~ "runs under the soul&#39;s tool policy"
     end
 
+    test "the page sets a launch to ask, a card before every run, and back to auto, a run on the component's grant",
+         %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, "/aqua")
+      agents = with_target(view, "#aqua-agents")
+      assert {:ok, %{"tool_policy" => %{"execution.run" => "auto"}}} = get_agent(ctx, "aqua")
+
+      for mode <- ["ask", "auto"] do
+        html =
+          render_click(agents, "editor_set_capability_mode", %{
+            "name" => "aqua",
+            "key" => "execution.run",
+            "mode" => mode
+          })
+
+        refute html =~ "execution.run always asks"
+        assert {:ok, %{"tool_policy" => %{"execution.run" => ^mode}}} = get_agent(ctx, "aqua")
+      end
+    end
+
     # A brain's options are what its `describe` declares: the card offers
     # each by its kind and writes the value cast to that kind, and an empty
     # one takes the option off.

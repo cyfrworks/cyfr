@@ -14,9 +14,12 @@ defmodule Aqua.Loop do
   beside each other and everything else alone, each in a worker of its
   own. A round with no calls ends the turn. A card pauses it — the loop
   releases the root itself before it returns — and a continuation
-  resumes it from the rows. Every launch asks, and one a person approved
-  is consumed by `Aqua.Launch` while the root is paused around it, so the
-  application takes a root of its own. A launch naming an account its
+  resumes it from the rows. A launch stands on its component's grant: it
+  runs with no card where `execution.run` is `auto` and the grant covers
+  what the turn has read, and after its card otherwise; either way
+  `Aqua.Launch` consumes it while the root is paused around it, so the
+  application takes a root of its own, and holds it to what the card or
+  the decision read. A launch naming an account its
   app's own profile does not bind ends the turn as setup required, naming
   the app and the account: the person grants it there, and the retry is a
   new turn, since this one's authority never widens.
@@ -27,8 +30,9 @@ defmodule Aqua.Loop do
   ## A turn with nobody present
 
   A turn a schedule's line started (origin `schedule`, `Aqua.ScheduleTurns`)
-  does only what needs no asking: a call its agent's policy runs `auto`,
-  or one a standing allow already covers, as in any turn (an answer "for a
+  does only what needs no asking: a call its agent's policy runs `auto`, a
+  launch among them whose grant covers what the turn has read, or one a
+  standing allow already covers, as in any turn (an answer "for a
   schedule" the person gave naming this schedule among them, which
   follows its fires onto any day's daily thread, `Aqua.Standing`). It opens
   no card. At the first call
@@ -1342,6 +1346,11 @@ defmodule Aqua.Loop do
       :auto ->
         {[item | runnable], cards, setup}
 
+      # A launch with no card carries what its decision read to its
+      # dispatch, which holds the run to it (`Aqua.Launch.run/3`).
+      {:auto, decided} ->
+        {[Map.put(item, :decided, decided) | runnable], cards, setup}
+
       # Closed before it ran, as the policy closes a call it refuses.
       {:setup_required, app, {need, account}} ->
         close(state, step, call, {:error, {:denied, not_granted(app, account)}})
@@ -1462,7 +1471,7 @@ defmodule Aqua.Loop do
   # turn ends failed with the sentence, its root and its occurrence with
   # it.
   defp stop_unasked(%State{} = state, step, %Call{} = call) do
-    sentence = unasked(call)
+    sentence = unasked(state, call)
     _ = close(state, step, call, {:error, {:denied, sentence}})
     _ = Tape.skip_steps(guest(state), state.turn, "the turn stopped: nobody was asked")
     {:halt, {:failed, {:unasked, sentence}}, state}
@@ -1472,6 +1481,22 @@ defmodule Aqua.Loop do
   # how to allow it next time where the action's own declaration lets an
   # answer stand for a schedule (`Aqua.Standing.offered?/2`, the rule the
   # card offers its answers by); otherwise, that it needs the person there.
+  # A launch the agent runs on its grant that stopped for a flow the grant
+  # does not cover says that, since its grant is what lets it run with
+  # nobody here.
+  defp unasked(%State{spec: spec} = state, %Call{kind: :launch} = call) do
+    with "auto" <- Map.get(spec.policy, "execution.#{call.action}"),
+         %{classes: [_ | _]} <- Policy.launch_flow(call, spec.ctx, shown_sources(state)) do
+      "This scheduled run needed your approval to run #{call.target}: it would carry what " <>
+        "the run had read somewhere the component's grant does not let it go, and nobody was " <>
+        "here to give it. It runs with nobody here once the component's grant lets that through."
+    else
+      _another_need -> unasked(call)
+    end
+  end
+
+  defp unasked(%State{}, %Call{} = call), do: unasked(call)
+
   defp unasked(%Call{} = call) do
     needed =
       "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
@@ -1721,11 +1746,14 @@ defmodule Aqua.Loop do
           :auto ->
             :ok
 
+          {:auto, _decided} ->
+            :ok
+
           :ask ->
-            {:ask, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
+            {:ask, asks_now(call)}
 
           {:ask, _account} ->
-            {:ask, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
+            {:ask, asks_now(call)}
 
           {:deny, message} ->
             {:denied, message}
@@ -1743,6 +1771,16 @@ defmodule Aqua.Loop do
         {:denied, "#{call.tool}.#{call.action} could not be checked against the agent's grants"}
     end
   end
+
+  # A launch that would ask as it dispatches ran nothing and is proposed
+  # again, to be asked as it is decided; any other call is withdrawn.
+  defp asks_now(%Call{kind: :launch} = call),
+    do:
+      "#{call.tool}.#{call.action} needs the person's approval now, so nothing ran: propose " <>
+        "it again to ask them"
+
+  defp asks_now(%Call{} = call),
+    do: "#{call.tool}.#{call.action} is no longer allowed in this thread"
 
   # Where a call is made, as a standing allow is judged against it
   # (`Sanctum.ToolGrants.admits?/2`): the member's context its rows are
@@ -2103,27 +2141,45 @@ defmodule Aqua.Loop do
   # Launches: the root is let go around the application's own root
   # ---------------------------------------------------------------------------
 
-  # A launch outside the tools its job was narrowed to is refused as it
-  # dispatches, its approval notwithstanding.
-  defp run_launch(%State{spec: spec} = state, %{step: step, call: {:ok, %Call{} = launch}} = item) do
-    if Policy.within?(launch, spec.narrowed) do
-      launch_within(state, item)
-    else
-      close(state, step, launch, {:error, {:denied, Policy.outside(launch)}})
-      {:ok, state}
+  # A launch is asked again as it dispatches, as every call is
+  # (`still_granted/3`): one outside the tools its job was narrowed to is
+  # refused, its approval notwithstanding, and one its policy let run with
+  # no card is decided again on the live policy. One that would ask now
+  # runs nothing; in a schedule's turn the turn stops at it.
+  defp run_launch(%State{} = state, %{step: step, call: {:ok, %Call{} = launch}} = item) do
+    case still_granted(state, item, launch) do
+      :ok -> launch_within(state, item)
+      refused -> refuse_launch(state, step, launch, refused)
     end
   end
 
   defp run_launch(%State{} = state, item), do: launch_within(state, item)
 
-  defp launch_within(%State{} = state, %{step: step, call: call}) do
+  defp refuse_launch(%State{} = state, step, %Call{} = launch, refused) do
+    outcome =
+      case refused do
+        {:ask, message} -> asks_now(state, step, launch, message)
+        {:denied, message} -> settle_denied(state, step, launch, message)
+      end
+
+    case outcome do
+      :ok -> {:ok, state}
+      {:unasked, step, call} -> stop_unasked(state, step, call)
+      {:uncertain, step, reason} -> stop_uncertain(state, step, reason, [])
+    end
+  end
+
+  # What a launch with no card's decision read rides to `Aqua.Launch`,
+  # which holds the run to it; an approved one carries none.
+  defp launch_within(%State{} = state, %{step: step, call: call} = item) do
     guest = guest(state)
+    decided = Map.get(item, :decided)
 
     case Tape.mark_dispatched(guest, state.turn, step) do
       {:ok, step} ->
         case pause_root(state, :launch, step.id) do
           {:ok, state} ->
-            case worker(fn -> Aqua.Launch.run(ctx(state), step) end) do
+            case worker(fn -> Aqua.Launch.run(ctx(state), step, decided) end) do
               {:ok, {:ok, %{execution_id: id, result: result}}} ->
                 state |> close_launch(step, unwrap(call), {:ok, id, result}) |> resumed()
 

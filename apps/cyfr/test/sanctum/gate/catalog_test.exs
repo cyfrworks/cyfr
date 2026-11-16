@@ -314,6 +314,32 @@ defmodule Sanctum.Gate.CatalogTest do
           do: refute(Catalog.auto_permitted?("browser", action), action)
     end
 
+    # The actions declared to take no standing answer at all, as the
+    # table holds them: what an authored `auto` never reaches.
+    @never_standing ~w(
+      aqua.skill_create aqua.skill_update browser.turn_on canvas.write execution.retry
+      file.move notes.endorse notes.pin registry.appeal registry.claim_publisher
+      registry.members_add registry.members_remove registry.members_update registry.report
+      registry.sync registry.tokens_issue registry.tokens_revoke registry.verify_publisher
+      tincture.invoke_protected tincture.invoke_public
+    )
+
+    test "a launch takes an authored auto, and no other action gains one" do
+      assert Catalog.auto_permitted?("execution", "run")
+      assert {:ok, %{standing: nil}} = Catalog.action_declaration("execution.run")
+
+      never =
+        for key <- Catalog.tool_actions(),
+            match?({:ok, %{standing: false}}, Catalog.action_declaration(key)),
+            do: key
+
+      assert Enum.sort(never) == @never_standing
+
+      for key <- never,
+          [tool, action] = String.split(key, ".", parts: 2),
+          do: refute(Catalog.auto_permitted?(tool, action), key)
+    end
+
     test "a module that declares no tools cannot be planted" do
       assert_raise ArgumentError, ~r/does not export tools\/0/, fn ->
         Catalog.with_providers([Sanctum.Gate.CatalogTest.NoSuchProvider], fn -> :ok end)

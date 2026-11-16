@@ -326,10 +326,7 @@ defmodule Opus.Provider do
             host: :intercepted,
             kind: :execute,
             planes: [:external],
-            permission: :execute,
-            # A run started outside a chain is an external act: each one is
-            # decided when it is asked, and no standing answer stands for it.
-            standing: false
+            permission: :execute
           ),
           Operation.new(
             "execution",

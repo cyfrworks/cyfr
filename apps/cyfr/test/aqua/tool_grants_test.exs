@@ -213,6 +213,47 @@ defmodule Aqua.ToolGrantsTest do
       assert Aqua.Kinds.auto_permitted?("notes", "read")
     end
 
+    test "the ceiling admits an authored auto on a launch, and a stored allow never makes one run without its card" do
+      # A launch is decided by its line: an authored auto reaches the guest
+      # as auto, where the component's grant decides it.
+      assert {:ok, %{kind: :execute, standing: nil}} =
+               Sanctum.Catalog.action_declaration("execution.run")
+
+      assert Aqua.Kinds.auto_permitted?("execution", "run")
+
+      assert ToolGrants.resolve(%{"execution.run" => "auto"}, [], {:ok, true}) == %{
+               "execution.run" => "auto"
+             }
+
+      # A stored allow for execution.run, which no card writes, leaves an
+      # authored auto as it is and an authored ask asking, and the launch
+      # under it asks whatever the row covers.
+      allow = %{
+        scope: "agent",
+        effect: "allow",
+        agent_name: "aqua",
+        tool: "execution",
+        action: "run",
+        sources: []
+      }
+
+      launch = %Call{
+        kind: :launch,
+        tool: "execution",
+        action: "run",
+        args: %{"reference" => "reagent:local.app:1.0.0", "input" => %{}},
+        target: "reagent:local.app:1.0.0"
+      }
+
+      asks = ToolGrants.resolve(%{"execution.run" => "ask"}, [allow], {:ok, true})
+      assert asks == %{"execution.run" => "ask"}
+      assert Policy.decide(launch, asks, sources: []) == :ask
+      refute Policy.auto?(launch, asks, sources: [])
+
+      assert ToolGrants.resolve(%{"execution.run" => "auto"}, [allow], {:ok, true}) ==
+               %{"execution.run" => "auto"}
+    end
+
     test "an HTTP post, put or patch the author made automatic asks; a GET stays automatic" do
       # Each call resolves through the binding the loop uses, and its decision
       # reads the key the binding names, from the ceiling's own effective map.
@@ -907,7 +948,7 @@ defmodule Aqua.ToolGrantsTest do
       refute Sanctum.ToolGrants.admits?(ctx, write_call(run!(ctx, nil)))
     end
 
-    test "a thread-only action takes an agent-wide allow only when it ends with a schedule; a launch, a destructive and an external action take none",
+    test "a thread-only action takes an agent-wide allow only when it ends with a schedule; a destructive and an external action take none",
          %{ctx: ctx, a: a} do
       schedule = %{scope: "agent", lifecycle_kind: "schedule", lifecycle_id: a.id}
 
@@ -919,8 +960,9 @@ defmodule Aqua.ToolGrantsTest do
       assert {:error, {:scope_not_permitted, :thread_only}} =
                grant(ctx, %{scope: "agent", tool: "notes", action: "keep"})
 
+      # A launch's card offers no standing answer (`Aqua.Standing`); the
+      # store's own rule reads the declaration, which leaves it to the card.
       for {pair, reason} <- [
-            {%{tool: "execution", action: "run"}, :never_standing},
             {%{tool: "files", action: "delete"}, :destructive},
             {%{tool: "http", action: "post"}, :external}
           ] do

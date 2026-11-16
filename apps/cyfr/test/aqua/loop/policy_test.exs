@@ -4,9 +4,10 @@
 defmodule Aqua.Loop.PolicyTest do
   @moduledoc """
   A call runs, asks or is refused by the agent's effective policy; a
-  launch always asks, whatever the policy says, since only an approved
-  card launches; reads overlap and nothing else does; a card carries the
-  canonical proposal and the catalog's kind and standing.
+  launch is decided by its own line, on its component's grant under
+  `auto` (`Aqua.LaunchTest` decides it against grants), and its card
+  takes no standing answer; reads overlap and nothing else does; a card
+  carries the canonical proposal and the catalog's kind and standing.
   """
 
   use ExUnit.Case, async: true
@@ -72,14 +73,24 @@ defmodule Aqua.Loop.PolicyTest do
     assert Policy.within?(resolve!("request_setup.open", %{}), ["files.read"])
   end
 
-  test "a launch always asks, unless it is denied or names no component" do
+  test "a launch is decided by its own line: auto on its grant, ask asks, deny or no line denies" do
     launch =
       resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})
 
-    # Every launch asks, whatever the policy says: only an approved card
-    # launches.
+    # Under auto a launch runs on its component's grant where that covers
+    # what the turn has read; with no turn whose sources can be read, none
+    # can be said to, and it asks.
     assert :ask = Policy.decide(launch, @policy, [])
+    refute Policy.auto?(launch, Map.put(@policy, "execution.run", "ask"), [])
+    assert :ask = Policy.decide(launch, Map.put(@policy, "execution.run", "ask"), [])
     assert {:deny, _} = Policy.decide(launch, Map.put(@policy, "execution.run", "deny"), [])
+
+    # Its card offers no standing answer, for a thread, a schedule or the
+    # agent, whatever its declaration says.
+    assert %{"action_kind" => "execute", "standing" => false} = Policy.standing_rule(launch)
+
+    for scope <- [:thread, :always, :schedule],
+        do: refute(Aqua.Standing.offered?(Policy.standing_rule(launch), scope))
 
     # A policy that names no `execution.run` denies the launch: an agent
     # launches only what its own policy grants.

@@ -237,12 +237,12 @@ defmodule Compendium.AquaAgentTest do
     end
 
     test "an action declared to take no agent-wide standing allow is never auto" do
-      # A pin, an endorsement, a scroll's writes and a launch are asked at
-      # every call, and a kept note takes a standing allow for one thread
-      # only, so an authored auto, which holds in every thread, would be a
+      # A pin, an endorsement and a scroll's writes are asked at every
+      # call, and a kept note takes a standing allow for one thread only,
+      # so an authored auto, which holds in every thread, would be a
       # standing answer they never take.
       for key <-
-            ~w(notes.pin notes.endorse notes.keep aqua.skill_create aqua.skill_update execution.run) do
+            ~w(notes.pin notes.endorse notes.keep aqua.skill_create aqua.skill_update) do
         assert {:error, msg} =
                  AquaAgent.validate_tool_policy(%{key => "auto"})
 
@@ -257,6 +257,11 @@ defmodule Compendium.AquaAgentTest do
 
       assert :ok =
                AquaAgent.validate_tool_policy(%{"notes.read" => "auto"})
+    end
+
+    test "a launch takes auto: a run stands on the component's grant" do
+      assert :ok = AquaAgent.validate_tool_policy(%{"execution.run" => "auto"})
+      assert :ok = AquaAgent.validate_tool_policy(%{"execution.run" => "ask"})
     end
 
     test "a glob at auto that covers a destructive action is refused with the actions named" do

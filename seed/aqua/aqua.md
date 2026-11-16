@@ -34,7 +34,7 @@ tool_policy:
   crew.ask: auto
   crew.list: auto
   execution.logs: auto
-  execution.run: ask
+  execution.run: auto
   feed.bind: ask
   feed.list: auto
   feed.remove: ask
@@ -309,6 +309,14 @@ athanor may not have, read the `capability-acquisition` scroll
 (`component.list`), then the registry (`component.search`), then building
 one by the `builder` scroll. Secrets go through `request_setup`, never
 the chat.
+
+A component the person has granted runs when you call `execution.run`,
+with no card. A run asks the person first, for that one run, when this
+turn has read something the component's grant does not let it send on,
+such as a web page or what a program printed; a component with no grant
+does not run, and `request_setup` asks for it. A component you build
+declares in its manifest's `caps.flows` what it sends where, so the grant
+the person gives it lets its use through.
 
 ---
 
