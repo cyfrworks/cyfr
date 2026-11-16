@@ -52,8 +52,9 @@ container starts:
   is refused; a dedicated worker is delivered its window's files and makes
   no call, nor does a shared worker; a page of one file loads the same
   way; a window the driver did not put, of the page's own origin, opened
-  by the person's click, makes no call; a window with no put is answered
-  nothing for the reserved origin; a plain page with no head tag, handed
+  by the person's click, makes no call; a link between two pages of one
+  put keeps the put, and a link away from it ends it; a window with no put
+  is answered nothing for the reserved origin; a plain page with no head tag, handed
   as the host hands it (the vector file's plain_entry), has window.cyfr
   and loads a file named relative to its <base>; a put past its bound in
   bytes or files is refused; and over the session nothing left the box, no
@@ -893,6 +894,29 @@ def pages(stack, c, uid):
     p.drop_images()
     expect(opened == "rejected TypeError" and "popup" not in [json.loads(m["text"]).get("from") for m in seen],
            "a call from a window the driver did not put, of the reserved origin, is not passed up", [opened, seen])
+
+    # A put of two pages: a link between them keeps the put, whose files the second page loads; a link away from it
+    # ends the put, and the window is then answered nothing for it.
+    root = root_of("pages")
+    base = f"<base href='{root}/'>".encode()
+    two = [("index.html", "text/html", base + b"<title>first</title><a href='second.html'>Second</a>"),
+           ("second.html", "text/html", base + b"<title>loading</title><script src='second.js'></script>"
+                                        b"<a href='about:blank'>Away</a>"),
+           ("second.js", "text/javascript", b"window.loaded = 1; addEventListener('load', () => "
+                                            b"document.title = 'second ' + window.loaded)")]
+    ok(p.put(next(ids), "thr_pages", two, root), "a put of two pages loads")
+    first = ok(p.ask(next(ids), "thr_pages", "read"), "the first page is read")
+    ok(p.ask(next(ids), "thr_pages", "click", {"ref": ref_of(first["text"], "link", "Second")}), "its link is clicked")
+    second = titled(p, "thr_pages", "second ", ids, seen, 30)
+    expect(second == "1", "a link to the put's other page keeps the put: that page loads its script from it", second)
+    page = ok(p.ask(next(ids), "thr_pages", "read"), "the second page is read")
+    ok(p.ask(next(ids), "thr_pages", "click", {"ref": ref_of(page["text"], "link", "Away")}), "its link away is clicked")
+    eventually(lambda: ok(p.ask(next(ids), "thr_pages", "read"), "the page is read")["url"] == "about:blank",
+               "the window to leave the put")
+    gone = p.ask(next(ids), "thr_pages", "open", {"url": f"{RESERVED}{root}/second.html"})
+    refused(gone, "unreachable", "a window that left its put is answered nothing for it")
+    expect("net::ERR_BLOCKED_BY_CLIENT" in gone["error"]["message"], "the put's file was failed, with no response",
+           gone)
 
     # A window with no put is answered nothing for the reserved origin: its request fails, as no response would
     # (an empty 404 fails the open too, but as a response).

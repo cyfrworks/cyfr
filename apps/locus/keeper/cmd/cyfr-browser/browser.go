@@ -77,11 +77,16 @@ type window struct {
 	err                    error
 	// op runs the window's requests one at a time.
 	op sync.Mutex
-	// mu guards the window's put, the files its page is answered from, and
-	// gen, which moves on whenever it shows another page or closes.
-	mu  sync.Mutex
-	put *put
-	gen int64
+	// mu guards the window's put, the files its document is answered from;
+	// gen, which moves on whenever its main frame commits another document
+	// or it closes; next, the put a show is loading; and docs, by the
+	// network id of each main-frame navigation a put answered since the
+	// last commit, that put (page.go).
+	mu   sync.Mutex
+	put  *put
+	gen  int64
+	next *put
+	docs map[string]*put
 }
 
 func newBrowser() *browser {
@@ -208,7 +213,6 @@ func (b *browser) run(ctx context.Context, r request) (any, error) {
 			return nil, errBadURL
 		}
 		return b.in(ctx, r.Win, true, func(w *window) (any, error) {
-			b.replace(w, nil)
 			if err := b.navigate(ctx, w, address); err != nil {
 				return nil, err
 			}

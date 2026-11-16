@@ -28,6 +28,12 @@ import (
 // reserved name (quiet, main.go), so a request that no interception
 // pauses, such as a socket's or a shared worker's, fails inside Chrome and
 // reaches no network.
+//
+// A put stands from the commit of its entry in the window's main frame
+// until that frame commits a document that is not one of its files,
+// whoever navigated it, or the window closes; its files and the calls its
+// documents made end together then (replace). A navigation between its
+// own files keeps it.
 const (
 	reservedHost   = "cyfr.invalid"
 	reservedOrigin = "https://" + reservedHost
@@ -45,10 +51,12 @@ var fetchPatterns = map[string]any{"patterns": []map[string]string{{"urlPattern"
 var callOps = map[string]string{"/_f/v1/invoke": "invoke", "/_f/v1/action": "action"}
 
 // put is the files of one page, laid out under root: the entry at root and
-// root/, each file at root/path.
+// root/, each file at root/path. failed, guarded by its window's mu, marks
+// a put whose show failed: it serves nothing and never stands.
 type put struct {
 	root, entry string
 	files       map[string]putFile
+	failed      bool
 }
 
 type putFile struct {
@@ -210,22 +218,54 @@ func (ps *puts) expire() error {
 	return nil
 }
 
-// show puts p into w and loads its entry.
+// show loads p's entry in w. Until the main frame commits p's own entry,
+// p answers only that navigation and w keeps the put it had (serving);
+// the commit makes p w's put (committed). A show that fails leaves w as it
+// was, and p serves nothing after: one that failed after its entry
+// committed ends p there, and one whose commit comes late finds p failed.
 func (b *browser) show(ctx context.Context, w *window, p *put) (any, error) {
-	b.replace(w, p)
+	w.mu.Lock()
+	w.next = p
+	w.mu.Unlock()
 	entry := url.URL{Scheme: "https", Host: reservedHost, Path: p.root}
-	if err := b.navigate(ctx, w, entry.String()); err != nil {
+	err := b.navigate(ctx, w, entry.String())
+	w.mu.Lock()
+	w.next = nil
+	if err != nil {
+		p.failed = true
+	}
+	stands := w.put == p
+	w.mu.Unlock()
+	if err != nil {
+		if stands {
+			b.replace(w, nil)
+		}
 		return nil, err
 	}
 	return b.where(ctx, w)
 }
 
+// committed takes the document w's main frame committed under loader: the
+// put whose file answered its navigation stands, and none other.
+func (b *browser) committed(w *window, loader string) {
+	w.mu.Lock()
+	p := w.docs[loader]
+	w.mu.Unlock()
+	b.replace(w, p)
+}
+
 // replace makes p, or no put, w's files, and gives up every call w holds:
-// the window shows another page or has closed.
+// the window's main frame shows another document, or the window has
+// closed. Every end of a window's put and of its calls passes through
+// here; a failed put is never made w's.
 func (b *browser) replace(w *window, p *put) {
 	w.mu.Lock()
+	if p != nil && p.failed {
+		p = nil
+	}
 	w.gen++
 	w.put = p
+	w.docs = nil
 	w.mu.Unlock()
 	b.pages <- pageEvent{win: w}
 }
@@ -235,6 +275,30 @@ func (w *window) current() (*put, int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.put, w.gen
+}
+
+// serving answers the put a request for path is answered from, and w's
+// generation. A GET navigation of the main frame takes the put being
+// shown when that holds the file, else w's put, and is recorded by its
+// network id as that put's document: Chrome commits the document under a
+// loader of that id. Every other request takes w's put.
+func (w *window) serving(navigation bool, network, path string) (*put, int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	pt := w.put
+	if navigation && w.next != nil && w.next.lookup(path) != nil {
+		pt = w.next
+	}
+	if pt != nil && pt.failed {
+		return nil, w.gen
+	}
+	if navigation && pt != nil && network != "" && pt.lookup(path) != nil {
+		if w.docs == nil {
+			w.docs = map[string]*put{}
+		}
+		w.docs[network] = pt
+	}
+	return pt, w.gen
 }
 
 // Kinds of the sessions a window's requests are paused on: its page's, or
@@ -319,11 +383,12 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 				Frame struct {
 					ID       string `json:"id"`
 					ParentID string `json:"parentId"`
+					LoaderID string `json:"loaderId"`
 				} `json:"frame"`
 			}
 			if json.Unmarshal(ev.params, &navigated) == nil {
 				if navigated.Frame.ParentID == "" && kind == sessionPage {
-					b.pages <- pageEvent{win: w}
+					b.committed(w, navigated.Frame.LoaderID)
 				} else {
 					b.pages <- pageEvent{session: session, frame: navigated.Frame.ID}
 				}
@@ -392,9 +457,14 @@ func (b *browser) paused(w *window, session, kind string, events *watch, params 
 	if json.Unmarshal(params, &p) != nil || p.RequestID == "" {
 		return
 	}
-	pt, gen := w.current()
 	u, err := url.Parse(p.Request.URL)
-	if kind == sessionForeign || pt == nil || err != nil || u.Scheme+"://"+u.Host != reservedOrigin {
+	if kind == sessionForeign || err != nil || u.Scheme+"://"+u.Host != reservedOrigin {
+		go b.failPaused(session, p.RequestID)
+		return
+	}
+	navigation := kind == sessionPage && p.ResourceType == "Document" && p.Request.Method == "GET" && p.FrameID == w.frame
+	pt, gen := w.serving(navigation, p.NetworkID, u.Path)
+	if pt == nil {
 		go b.failPaused(session, p.RequestID)
 		return
 	}

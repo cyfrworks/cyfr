@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -48,12 +49,28 @@ type pageChrome struct {
 	// left holds the bodies a pause left out, by network id.
 	left map[string]string
 	runs chan string
+	// fails holds how a window's navigation to an address fails.
+	fails map[string]navFail
 }
 
 type navigation struct {
 	id      int64
 	session string
 	url     string
+	// link says the page navigated itself, so no command awaits an answer.
+	link bool
+	// loads says the commit is followed by its load; late, that the test
+	// commits it.
+	loads, late bool
+}
+
+// navFail is how a navigation fails: Chrome answers errorText, after
+// committing the error page commit when one is named; or, with hangs, the
+// navigation is paused and answered, and commits with no load after, or,
+// with late too, commits only when the test says.
+type navFail struct {
+	errorText, commit string
+	hangs, late       bool
 }
 
 type pageAnswer struct {
@@ -68,7 +85,7 @@ type pageAnswer struct {
 func newPageChrome(t *testing.T, commands io.Reader, answers io.Writer) *pageChrome {
 	f := &pageChrome{t: t, w: answers, origins: map[string]map[string][2]string{}, address: map[string]string{},
 		navs: map[string]navigation{}, open: map[string]bool{}, answers: make(chan pageAnswer, 64), runs: make(chan string, 16),
-		left: map[string]string{}}
+		left: map[string]string{}, fails: map[string]navFail{}}
 	go f.serve(commands)
 	return f
 }
@@ -125,6 +142,37 @@ func (f *pageChrome) pauseLeavingOut(session, address, frame, body string) strin
 		"requestId": id, "request": map[string]any{"url": address, "method": "POST", "headers": map[string]string{},
 			"hasPostData": true}, "frameId": frame, "resourceType": "Fetch", "networkId": "net-" + id}})
 	return id
+}
+
+// link navigates session's main frame to address as its own document
+// does, by a link, a script or the person: a navigation of the reserved
+// origin is paused and commits once the driver answers it, a fulfilment
+// with its document and a failure with Chrome's error page, and answers
+// its request id; any other commits at once, and answers "".
+func (f *pageChrome) link(session, address string) string {
+	main := "M" + strings.TrimPrefix(session, "S")
+	f.mu.Lock()
+	f.paused++
+	id := fmt.Sprintf("interception-%d", f.paused)
+	if !strings.HasPrefix(address, reservedOrigin+"/") {
+		f.mu.Unlock()
+		f.commit(session, address, "L"+id)
+		return ""
+	}
+	f.navs[id] = navigation{session: session, url: address, link: true, loads: true}
+	f.open[id] = true
+	f.mu.Unlock()
+	f.write(map[string]any{"method": "Fetch.requestPaused", "sessionId": session, "params": map[string]any{
+		"requestId": id, "request": map[string]any{"url": address, "method": "GET", "headers": map[string]string{}},
+		"frameId": main, "resourceType": "Document", "networkId": "L" + id}})
+	return id
+}
+
+// fail makes a window's navigation to address fail as how says.
+func (f *pageChrome) fail(address string, how navFail) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fails[address] = how
 }
 
 // frame sets a frame of session, with its parent and origin.
@@ -293,6 +341,17 @@ func (f *pageChrome) serve(commands io.Reader) {
 			}
 			reply(map[string]any{"postData": base64.StdEncoding.EncodeToString([]byte(body)), "base64Encoded": true})
 		case "Page.navigate":
+			main := "M" + strings.TrimPrefix(m.SessionID, "S")
+			f.mu.Lock()
+			how, failing := f.fails[p.URL]
+			f.mu.Unlock()
+			if failing && !how.hangs {
+				if how.commit != "" {
+					f.commit(m.SessionID, how.commit, "Lfailed-"+p.URL)
+				}
+				reply(map[string]any{"frameId": main, "errorText": how.errorText})
+				continue
+			}
 			// A navigation to a fragment of the page stays in its document:
 			// Chrome answers no loader and reports no commit.
 			if strings.Contains(p.URL, "#") {
@@ -303,7 +362,8 @@ func (f *pageChrome) serve(commands io.Reader) {
 			f.paused++
 			id := fmt.Sprintf("interception-%d", f.paused)
 			if strings.HasPrefix(p.URL, reservedOrigin+"/") {
-				f.navs[id] = navigation{m.ID, m.SessionID, p.URL}
+				f.navs[id] = navigation{id: m.ID, session: m.SessionID, url: p.URL, loads: !(failing && how.hangs),
+					late: failing && how.late}
 				f.open[id] = true
 				f.mu.Unlock()
 				f.write(map[string]any{"method": "Fetch.requestPaused", "sessionId": m.SessionID, "params": map[string]any{
@@ -337,7 +397,14 @@ func (f *pageChrome) serve(commands io.Reader) {
 				headers[h.Name] = h.Value
 			}
 			reply(map[string]any{})
-			if isNav {
+			switch {
+			case isNav && nav.link:
+				if m.Method == "Fetch.failRequest" {
+					f.commit(nav.session, "chrome-error://chromewebdata/", "L"+p.RequestID)
+				} else {
+					f.commit(nav.session, nav.url, "L"+p.RequestID)
+				}
+			case isNav:
 				frame := "M" + strings.TrimPrefix(nav.session, "S")
 				if m.Method == "Fetch.failRequest" {
 					f.write(map[string]any{"id": nav.id, "sessionId": nav.session, "result": map[string]any{
@@ -345,11 +412,17 @@ func (f *pageChrome) serve(commands io.Reader) {
 				} else {
 					f.write(map[string]any{"id": nav.id, "sessionId": nav.session, "result": map[string]any{
 						"frameId": frame, "loaderId": "L" + p.RequestID}})
-					f.commit(nav.session, nav.url, "L"+p.RequestID)
+					switch {
+					case nav.late:
+					case nav.loads:
+						f.commit(nav.session, nav.url, "L"+p.RequestID)
+					default:
+						f.commitOnly(nav.session, nav.url, "L"+p.RequestID)
+					}
 				}
 			}
 			f.answers <- pageAnswer{method: m.Method, session: m.SessionID, request: p.RequestID,
-				status: p.ResponseCode, headers: headers, body: body, nav: isNav}
+				status: p.ResponseCode, headers: headers, body: body, nav: isNav && !nav.link}
 		case "Target.closeTarget":
 			session := "S" + strings.TrimPrefix(p.TargetID, "T")
 			reply(map[string]any{"success": true})
@@ -364,6 +437,14 @@ func (f *pageChrome) serve(commands io.Reader) {
 // commit makes address the main frame's document: its origin, its
 // navigation reported and its load.
 func (f *pageChrome) commit(session, address, loader string) {
+	f.commitOnly(session, address, loader)
+	f.event(session, "Page.lifecycleEvent", map[string]any{"frameId": "M" + strings.TrimPrefix(session, "S"),
+		"loaderId": loader, "name": "load"})
+}
+
+// commitOnly makes address the main frame's document, its origin and its
+// navigation reported, with no load.
+func (f *pageChrome) commitOnly(session, address, loader string) {
 	main := "M" + strings.TrimPrefix(session, "S")
 	origin := "://"
 	if strings.HasPrefix(address, "https://") {
@@ -376,7 +457,6 @@ func (f *pageChrome) commit(session, address, loader string) {
 	f.mu.Unlock()
 	f.event(session, "Page.frameNavigated", map[string]any{"frame": map[string]any{
 		"id": main, "loaderId": loader, "url": address, "securityOrigin": origin}, "type": "Navigation"})
-	f.event(session, "Page.lifecycleEvent", map[string]any{"frameId": main, "loaderId": loader, "name": "load"})
 }
 
 func (f *pageChrome) tree(session string) map[string]any {
@@ -987,18 +1067,22 @@ func TestCallsEndWithTheirDocument(t *testing.T) {
 		"id": "M1", "url": "https://example.com/", "securityOrigin": "https://example.com"}})
 	ended(request, id, "its window navigated", false)
 
-	// An open shows another page even when the window's document stays.
-	r.f.frame("S1", "M1", "", reservedOrigin)
+	// An open that stays in the window's document, at a fragment of it,
+	// keeps the document, its put and its calls.
+	if shown := r.h.put(5, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
+		t.Fatalf("the put after the navigation answered %v", shown)
+	}
+	r.f.navigated()
 	request, id = call("M1")
-	r.h.send(map[string]any{"t": "req", "id": 4, "win": "thr_01", "op": "open", "args": map[string]any{"url": "https://example.com/#here"}})
+	r.h.send(map[string]any{"t": "req", "id": 4, "win": "thr_01", "op": "open", "args": map[string]any{"url": reservedOrigin + testRoot + "#here"}})
 	if got := r.h.response(4); got["ok"] == nil {
 		t.Fatalf("an open of a fragment answered %v", got)
 	}
-	ended(request, id, "its window showed another page in place", false)
-	if shown := r.h.put(5, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
-		t.Fatalf("the put after the open answered %v", shown)
+	r.h.quiet(func(m map[string]any) bool { return m["t"] == "callend" }, "an open that kept the document ended its call")
+	r.h.send(map[string]any{"t": "answer", "id": id, "status": 200, "body": "{}"})
+	if a := r.f.answer(request); a.status != 200 {
+		t.Fatalf("the call of a document an open kept was answered %+v", a)
 	}
-	r.f.navigated()
 
 	r.f.frame("S1", "M1", "", reservedOrigin)
 	request, id = call("M1")
@@ -1049,4 +1133,156 @@ func TestANavigationToACallPathIsNoCall(t *testing.T) {
 			t.Fatalf("a %s from a document of the put went up as %v", c.kind, call)
 		}
 	}
+}
+
+// A show that fails leaves its window as it was before it was tried: the
+// earlier put's page and files while the window still shows that page,
+// no put once it shows another, and nothing of the failed put either way.
+func TestAFailedShowLeavesItsWindowAsItWas(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	if got := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); got["ok"] == nil {
+		t.Fatal(got)
+	}
+	r.f.navigated()
+	fetched := func(path string) pageAnswer {
+		t.Helper()
+		return r.f.answer(r.f.pause("S1", "GET", reservedOrigin+path, "M1", true, ""))
+	}
+	replacement := []siteFile{{"index.html", "text/html", "NEW SECRET"}, {"app.js", "text/javascript", "window.ran = 2"}}
+
+	// Chrome gives the navigation up and the earlier page stays.
+	r.f.fail(reservedOrigin+testRoot+"/aborted", navFail{errorText: "net::ERR_ABORTED"})
+	if got := r.h.put(2, "thr_01", testRoot+"/aborted", "index.html", replacement, 64); got["error"] == nil {
+		t.Fatalf("a put whose navigation was given up answered %v", got)
+	}
+	if a := fetched(testRoot + "/aborted"); a.status != 404 {
+		t.Fatalf("the failed put's entry was answered %d %q", a.status, a.body)
+	}
+	if a := fetched(testRoot + "/app.js"); a.status != 200 || string(a.body) != "window.ran = 1" {
+		t.Fatalf("the earlier put's file was answered %+v after a failed show", a)
+	}
+
+	// A put of the same root as the page it replaces fails: the earlier
+	// files stay, not the failed put's of the same names.
+	r.f.fail(reservedOrigin+testRoot, navFail{errorText: "net::ERR_ABORTED"})
+	if got := r.h.put(3, "thr_01", testRoot, "index.html", replacement, 64); got["error"] == nil {
+		t.Fatalf("a put of the same root answered %v", got)
+	}
+	if a := fetched(testRoot + "/app.js"); a.status != 200 || string(a.body) != "window.ran = 1" {
+		t.Fatalf("a failed put of the same root left %+v", a)
+	}
+
+	// Chrome commits its error page: the window shows the earlier page no
+	// more, and has no put.
+	r.f.fail(reservedOrigin+testRoot, navFail{errorText: "net::ERR_FAILED", commit: "chrome-error://chromewebdata/"})
+	if got := r.h.put(4, "thr_01", testRoot, "index.html", replacement, 64); got["error"] == nil {
+		t.Fatalf("a put whose navigation ended at the error page answered %v", got)
+	}
+	if a := fetched(testRoot + "/app.js"); a.method != "Fetch.failRequest" {
+		t.Fatalf("a window showing the error page was answered %+v", a)
+	}
+}
+
+// A show that fails after its entry's navigation was answered, waiting for
+// its load, ends its put: the window serves nothing of it, whether its
+// commit was taken before the failure or after, and a call its document
+// made ends with it.
+func TestAShowThatFailsAfterItsCommitEndsItsPut(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		r := newPageRig(t)
+		if got := r.h.put(1, "thr_01", testRoot+"/first", "index.html", testSite, 64); got["ok"] == nil {
+			t.Fatal(got)
+		}
+		r.f.navigated()
+		r.f.fail(reservedOrigin+testRoot, navFail{hangs: true, late: late})
+		p := &put{root: testRoot, entry: "index.html", files: map[string]putFile{
+			"index.html": {typ: "text/html", data: []byte("<p>put")}, "app.js": {typ: "text/javascript", data: []byte("window.ran = 3")}}}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		shown := make(chan error, 1)
+		go func() {
+			_, err := r.b.run(ctx, request{Win: "thr_01", Op: "page", put: p})
+			shown <- err
+		}()
+		nav := r.f.navigated()
+		var id any
+		if !late {
+			r.f.pause("S1", "POST", reservedOrigin+"/_f/v1/invoke", "M1", true, `{}`)
+			id = r.h.take(func(m map[string]any) bool { return m["t"] == "call" }, "the committed document's call")["id"]
+		}
+		if err := <-shown; err == nil {
+			t.Fatal("a show whose load never came answered no error")
+		}
+		cancel()
+		if late {
+			r.f.commitOnly("S1", reservedOrigin+testRoot, "L"+nav.request)
+		} else if m := r.h.take(func(m map[string]any) bool { return m["t"] == "callend" }, "the failed put's callend"); m["id"] != id {
+			t.Errorf("the failed put's show ended call %v, want %v", m["id"], id)
+		}
+		if a := r.f.answer(r.f.pause("S1", "GET", reservedOrigin+testRoot+"/app.js", "M1", true, "")); a.method != "Fetch.failRequest" {
+			t.Errorf("a put whose show failed after its navigation was answered, its commit taken late %v, answered %+v", late, a)
+		}
+		r.close()
+	}
+}
+
+// A put ends when its window's main frame commits a document that is not
+// one of its files, whoever navigated it, with the calls of its documents;
+// a navigation between its own files keeps it.
+func TestAPutEndsWhenItsWindowLeavesIt(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	site := append([]siteFile{{"two.html", "text/html", "<title>Two</title><script src=app.js></script>"}}, testSite...)
+	if got := r.h.put(1, "thr_01", testRoot, "index.html", site, 64); got["ok"] == nil {
+		t.Fatal(got)
+	}
+	r.f.navigated()
+	isCall := func(m map[string]any) bool { return m["t"] == "call" }
+	isEnd := func(m map[string]any) bool { return m["t"] == "callend" }
+	fetched := func() pageAnswer {
+		t.Helper()
+		return r.f.answer(r.f.pause("S1", "GET", reservedOrigin+testRoot+"/app.js", "M1", true, ""))
+	}
+	call := func() int64 {
+		t.Helper()
+		r.f.pause("S1", "POST", reservedOrigin+"/_f/v1/invoke", "M1", true, `{}`)
+		return int64(r.h.take(isCall, "a call")["id"].(float64))
+	}
+
+	// A link to another of its pages: the put stands, and the calls of the
+	// document it left end.
+	id := call()
+	if a := r.f.answer(r.f.link("S1", reservedOrigin+testRoot+"/two.html")); a.status != 200 || string(a.body) != site[0].body {
+		t.Fatalf("a link to another page of the put was answered %+v", a)
+	}
+	if m := r.h.take(isEnd, "the left document's callend"); m["id"] != float64(id) {
+		t.Fatalf("the driver ended %v, want %d", m["id"], id)
+	}
+	if a := fetched(); a.status != 200 {
+		t.Fatalf("after a link within the put its file was answered %+v", a)
+	}
+
+	// A link to a path the put does not hold commits a document that is
+	// none of its files.
+	if a := r.f.answer(r.f.link("S1", reservedOrigin+testRoot+"/missing.html")); a.status != 404 {
+		t.Fatalf("a link to a path the put does not hold was answered %+v", a)
+	}
+	if a := fetched(); a.method != "Fetch.failRequest" {
+		t.Fatalf("after its window committed no file of it, the put was answered %+v", a)
+	}
+
+	// A link to another site.
+	if got := r.h.put(2, "thr_01", testRoot, "index.html", site, 64); got["ok"] == nil {
+		t.Fatal(got)
+	}
+	r.f.navigated()
+	id = call()
+	r.f.link("S1", "https://example.com/")
+	if m := r.h.take(isEnd, "the callend of the page left for another site"); m["id"] != float64(id) {
+		t.Fatalf("the driver ended %v, want %d", m["id"], id)
+	}
+	if a := fetched(); a.method != "Fetch.failRequest" {
+		t.Fatalf("after navigation to another site, the old put answered %d %q", a.status, a.body)
+	}
+	r.h.quiet(isCall, "a call went up after the put ended")
 }
