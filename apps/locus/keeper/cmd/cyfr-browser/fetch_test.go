@@ -21,36 +21,41 @@ import (
 	"time"
 )
 
-// source serves a list naming one stable version and the archive of its
-// chrome build, counting what it is asked for.
+// source serves a list naming one stable version, as Chrome for
+// Testing's does, and the archive of its chrome build where the storage
+// holds it, counting what it is asked for.
 type source struct {
-	mu       sync.Mutex
-	version  string
-	archive  []byte
-	cut      int // when set, the archive's body stops after this many bytes
-	asked    map[string]int
-	server   *httptest.Server
-	platform string
+	mu      sync.Mutex
+	version string
+	list    string // when set, the list says this in place of the version
+	archive []byte
+	cut     int // when set, the archive's body stops after this many bytes
+	asked   map[string]int
+	server  *httptest.Server
 }
 
 func newSource(t *testing.T, version string) *source {
 	t.Helper()
-	s := &source{version: version, archive: chromeArchive(t, "linux64"), asked: map[string]int{}, platform: "linux64"}
+	s := &source{version: version, archive: chromeArchive(t, "linux64"), asked: map[string]int{}}
 	s.server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.server.Close)
 	return s
 }
+
+func archivePath(version string) string { return "/" + version + "/linux64/chrome-linux64.zip" }
 
 func (s *source) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.asked[r.URL.Path]++
 	switch r.URL.Path {
-	case "/list.json":
-		fmt.Fprintf(w, `{"channels":{"Stable":{"version":%q,"downloads":{"chrome":[`+
-			`{"platform":"mac-arm64","url":"%s/mac.zip"},{"platform":%q,"url":"%s/%s/chrome.zip"}]}}}}`,
-			s.version, s.server.URL, s.platform, s.server.URL, s.version)
-	case "/" + s.version + "/chrome.zip":
+	case "/LATEST_RELEASE_STABLE":
+		if s.list != "" {
+			_, _ = io.WriteString(w, s.list)
+			return
+		}
+		_, _ = io.WriteString(w, s.version)
+	case archivePath(s.version):
 		body := s.archive
 		if s.cut > 0 {
 			// The length is the whole archive's; the body ends early, as a
@@ -100,9 +105,9 @@ func chromeArchive(t *testing.T, platform string) []byte {
 
 // homeStore is a store in a fresh home, fetched from list, on a clock the
 // test moves.
-func homeStore(t *testing.T, list string, now *time.Time) *store {
+func homeStore(t *testing.T, base string, now *time.Time) *store {
 	t.Helper()
-	s, err := newStore(t.TempDir(), list)
+	s, err := newStore(t.TempDir(), base+"/LATEST_RELEASE_STABLE", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +141,7 @@ func versions(t *testing.T, s *store) []string {
 func TestTheFirstStartFetchesAndPublishesAWholeChrome(t *testing.T) {
 	src := newSource(t, "157.0.8103.78")
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
-	s := homeStore(t, src.server.URL+"/list.json", &now)
+	s := homeStore(t, src.server.URL, &now)
 
 	path, err := s.chrome(context.Background(), io.Discard)
 	if err != nil {
@@ -151,7 +156,7 @@ func TestTheFirstStartFetchesAndPublishesAWholeChrome(t *testing.T) {
 	if left := staged(t, s); len(left) != 0 {
 		t.Fatalf("a fetch left %v", left)
 	}
-	if src.count("/list.json") != 1 || src.count("/157.0.8103.78/chrome.zip") != 1 {
+	if src.count("/LATEST_RELEASE_STABLE") != 1 || src.count(archivePath("157.0.8103.78")) != 1 {
 		t.Fatalf("the source was asked %v", src.asked)
 	}
 }
@@ -159,7 +164,7 @@ func TestTheFirstStartFetchesAndPublishesAWholeChrome(t *testing.T) {
 func TestARestartWithinADayFetchesNothing(t *testing.T) {
 	src := newSource(t, "157.0.8103.78")
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
-	s := homeStore(t, src.server.URL+"/list.json", &now)
+	s := homeStore(t, src.server.URL, &now)
 	first, err := s.chrome(context.Background(), io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +174,7 @@ func TestARestartWithinADayFetchesNothing(t *testing.T) {
 	if err != nil || again != first {
 		t.Fatalf("the restart starts %s (%v), want %s", again, err, first)
 	}
-	if src.count("/list.json") != 1 || src.count("/157.0.8103.78/chrome.zip") != 1 {
+	if src.count("/LATEST_RELEASE_STABLE") != 1 || src.count(archivePath("157.0.8103.78")) != 1 {
 		t.Fatalf("the restart asked the source: %v", src.asked)
 	}
 }
@@ -177,7 +182,7 @@ func TestARestartWithinADayFetchesNothing(t *testing.T) {
 func TestADayLaterANewerStableReplacesTheOldOnceWhole(t *testing.T) {
 	src := newSource(t, "157.0.8103.78")
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
-	s := homeStore(t, src.server.URL+"/list.json", &now)
+	s := homeStore(t, src.server.URL, &now)
 	if _, err := s.chrome(context.Background(), io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +192,7 @@ func TestADayLaterANewerStableReplacesTheOldOnceWhole(t *testing.T) {
 	if _, err := s.chrome(context.Background(), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if src.count("/list.json") != 2 || src.count("/157.0.8103.78/chrome.zip") != 1 {
+	if src.count("/LATEST_RELEASE_STABLE") != 2 || src.count(archivePath("157.0.8103.78")) != 1 {
 		t.Fatalf("an unchanged stable was fetched again: %v", src.asked)
 	}
 
@@ -210,10 +215,10 @@ func TestADayLaterANewerStableReplacesTheOldOnceWhole(t *testing.T) {
 
 func TestAnUnreachableSourceWithNoChromeIsNotDownloaded(t *testing.T) {
 	gone := httptest.NewServer(http.NotFoundHandler())
-	list := gone.URL + "/list.json"
+	base := gone.URL
 	gone.Close()
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
-	s := homeStore(t, list, &now)
+	s := homeStore(t, base, &now)
 
 	var said bytes.Buffer
 	_, err := s.chrome(context.Background(), &said)
@@ -231,7 +236,7 @@ func TestAnUnreachableSourceWithNoChromeIsNotDownloaded(t *testing.T) {
 func TestAnUnreachableSourceWithAChromeStartsIt(t *testing.T) {
 	src := newSource(t, "157.0.8103.78")
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
-	s := homeStore(t, src.server.URL+"/list.json", &now)
+	s := homeStore(t, src.server.URL, &now)
 	first, err := s.chrome(context.Background(), io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +257,7 @@ func TestATruncatedArchiveIsNeverPublished(t *testing.T) {
 	src := newSource(t, "157.0.8103.78")
 	src.cut = len(src.archive) / 2
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
-	s := homeStore(t, src.server.URL+"/list.json", &now)
+	s := homeStore(t, src.server.URL, &now)
 	if _, err := s.chrome(context.Background(), io.Discard); !errors.Is(err, errNotDownloaded) {
 		t.Fatalf("a cut download answers %v", err)
 	}
@@ -268,6 +273,69 @@ func TestATruncatedArchiveIsNeverPublished(t *testing.T) {
 	}
 	if left := staged(t, s); len(left) != 0 {
 		t.Fatalf("a failed fetch left %v", left)
+	}
+}
+
+func TestTheListDecidesAVersionNumberAndNothingElse(t *testing.T) {
+	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+
+	// What the list says is not followed and is no version: nothing is
+	// fetched, from the storage or from where the list points.
+	elsewhere := newSource(t, "157.0.8103.78")
+	for _, said := range []string{
+		`{"channels":{"Stable":{"version":"157.0.8103.78","downloads":{"chrome":[{"platform":"linux64","url":"` +
+			elsewhere.server.URL + archivePath("157.0.8103.78") + `"}]}}}}`,
+		"157.0.8103.78 " + elsewhere.server.URL + archivePath("157.0.8103.78"),
+		"157.0.8103.78a", "../../157.0.8103.78", "157.0.8103", " ", "157.0.8103.78\n\n",
+	} {
+		src := newSource(t, "157.0.8103.78")
+		src.list = said
+		s := homeStore(t, src.server.URL, &now)
+		if _, err := s.chrome(context.Background(), io.Discard); !errors.Is(err, errNotDownloaded) {
+			t.Fatalf("a list saying %q answers %v", said, err)
+		}
+		if src.count(archivePath("157.0.8103.78")) != 0 || elsewhere.count(archivePath("157.0.8103.78")) != 0 {
+			t.Fatalf("a list saying %q was followed: %v %v", said, src.asked, elsewhere.asked)
+		}
+	}
+
+	// The version, with the line's end the list may close it with: its
+	// archive is fetched from the address the driver builds on the storage.
+	src := newSource(t, "157.0.8103.78")
+	src.list = "157.0.8103.78\n"
+	s := homeStore(t, src.server.URL, &now)
+	if _, err := s.chrome(context.Background(), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if src.count(archivePath("157.0.8103.78")) != 1 {
+		t.Fatalf("the built address was not fetched: %v", src.asked)
+	}
+	if got, want := s.archive("157.0.8103.78"), src.server.URL+archivePath("157.0.8103.78"); got != want {
+		t.Fatalf("the archive is at %s, want %s", got, want)
+	}
+}
+
+func TestALowerVersionReplacesNothing(t *testing.T) {
+	src := newSource(t, "158.0.8200.10")
+	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	s := homeStore(t, src.server.URL, &now)
+	first, err := s.chrome(context.Background(), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.mu.Lock()
+	src.version = "157.0.8103.78"
+	src.mu.Unlock()
+	now = now.Add(48 * time.Hour)
+	again, err := s.chrome(context.Background(), io.Discard)
+	if err != nil || again != first {
+		t.Fatalf("a lower stable gave %s (%v), want %s", again, err, first)
+	}
+	if src.count(archivePath("157.0.8103.78")) != 0 || src.count("/LATEST_RELEASE_STABLE") != 2 {
+		t.Fatalf("a lower stable was fetched: %v", src.asked)
+	}
+	if got := versions(t, s); len(got) != 1 || got[0] != "158.0.8200.10" {
+		t.Fatalf("the home holds %v", got)
 	}
 }
 

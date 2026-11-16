@@ -93,8 +93,8 @@ PROGRAMS = [
      "home_max_bytes": HOME_MAX_BYTES},
     probe(home="kept"),
 ]
-# A list of builds no resolver answers for: .invalid never resolves.
-UNREACHABLE = "https://cyfr-browser-source.invalid/list.json"
+# A list no resolver answers for: .invalid never resolves.
+UNREACHABLE = "https://cyfr-browser-source.invalid/LATEST_RELEASE_STABLE"
 NOT_DOWNLOADED = "The browser could not be downloaded; try again in a moment."
 SHORT_KEEP_MS = 3000
 # The owner's lease is renewed this often, as CYFR's box renews it: the first start fetches Chrome, and the suite
@@ -725,16 +725,15 @@ def main():
                and not in_store(stack, FETCHLESS_HOME)["staging"], "it exits 1 and the home holds no Chrome",
                [f.exit_code, in_store(stack, FETCHLESS_HOME)])
 
-        # The same home, offered a truncated archive: never published.
-        archive = truncated_archive()
+        # The same home, offered a truncated archive where the storage would hold it: never published.
+        archive = base64.b64encode(truncated_archive()).decode()
         source = f"{KEPT_ROOT}/{FETCHLESS_HOME}/source"
-        builds = {"channels": {"Stable": {"version": "999.0.0.1", "downloads": {"chrome": [
-            {"platform": platform, "url": f"file://{source}/chrome.zip"} for platform in ("linux64", "linux-arm64")]}}}}
         as_home(stack, FETCHLESS_HOME,
-                f"mkdir {source} && echo {base64.b64encode(archive).decode()} | base64 -d > {source}/chrome.zip "
-                f"&& echo {base64.b64encode(json.dumps(builds).encode()).decode()} | base64 -d > {source}/list.json",
+                f"mkdir {source} && printf 999.0.0.1 > {source}/LATEST_RELEASE_STABLE && for p in linux64 linux-arm64; do "
+                f"mkdir -p {source}/999.0.0.1/$p && echo {archive} | base64 -d > {source}/999.0.0.1/$p/chrome-$p.zip; done",
                 "the truncated archive and its list written")
-        t = Host(stack, c, FETCHLESS_HOME, ["--source", f"file://{source}/list.json"])
+        t = Host(stack, c, FETCHLESS_HOME, ["--source", f"file://{source}/LATEST_RELEASE_STABLE",
+                                            "--storage", f"file://{source}"])
         said = t.hello()
         expect(said.get("error") == NOT_DOWNLOADED, "a truncated archive is not a Chrome: the same sentence", said)
         eventually(lambda: (t.read(1_000), not t.running)[1], "that driver's session to end")

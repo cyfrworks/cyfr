@@ -7,9 +7,16 @@ package main
 
 // The Chrome the driver starts is fetched as a program fetches itself:
 // Chrome for Testing's chrome build, the current stable for this
-// machine's architecture, from Google's list of its builds, into the kept
-// home. Nothing of it is in the image. No version is pinned and no
-// checksum is shipped: what the list names is what is fetched, over HTTPS.
+// machine's architecture, into the kept home. Nothing of it is in the
+// image. No version is pinned and no checksum is shipped. The list on
+// googlechromelabs.github.io decides one thing alone, the current
+// stable's version number, read as digits and dots and nothing else; the
+// driver builds that version's archive address itself, on
+// storage.googleapis.com, from the number and this machine's platform,
+// and follows no address a list gives. A version lower than the one the
+// home holds replaces nothing. So the worst a wrong list does is name a
+// version the storage does not hold, a failed check, or keep a home on the
+// Chrome it has.
 //
 // The home holds each Chrome as a version folder of its own,
 // $HOME/cyfr-browser/versions/<version>, and the start runs the newest.
@@ -24,7 +31,6 @@ package main
 import (
 	"archive/zip"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +46,8 @@ import (
 )
 
 const (
-	defaultSource = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+	defaultSource  = "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE"
+	defaultStorage = "https://storage.googleapis.com/chrome-for-testing-public"
 	// checkEvery is how often a start asks the list for a newer stable.
 	checkEvery = 24 * time.Hour
 	// firstWait bounds the first fetch, which the person's first open
@@ -49,8 +56,9 @@ const (
 	// updateWait bounds a fetch of a newer stable, after which the Chrome
 	// already in the home starts.
 	updateWait = 30 * time.Second
-	// The list and the archive are bounded, and so is what it unpacks to.
-	maxList     = 1 << 20
+	// The list is a version number, the archive is bounded, and so is what
+	// it unpacks to.
+	maxList     = 64
 	maxArchive  = 1 << 30
 	maxUnpacked = 3 << 29
 	// notDownloaded is what the person and Aqua read when the home holds
@@ -63,21 +71,22 @@ var (
 	versionName      = regexp.MustCompile(`^[0-9]{1,6}(\.[0-9]{1,6}){3}$`)
 )
 
-// store is the home's Chrome: its versions, its last check and where it
-// is fetched from.
+// store is the home's Chrome: its versions, its last check, the list
+// that names the current stable and the storage its archives are on.
 type store struct {
 	dir      string
 	source   string
+	storage  string
 	platform string
 	client   *http.Client
 	now      func() time.Time
 }
 
-// newStore is the store in home, fetched from source for this machine.
-// A source may be a file: address, which the image suite's archives are
-// served from; a person's row carries no argument, so it is always the
-// default.
-func newStore(home, source string) (*store, error) {
+// newStore is the store in home, its version read from source and its
+// archives fetched from storage, for this machine. Either may be a file:
+// address, which the image suite serves its own from; a person's row
+// carries no argument, so both are always the defaults.
+func newStore(home, source, storage string) (*store, error) {
 	if home == "" {
 		return nil, errors.New("HOME names no folder")
 	}
@@ -90,6 +99,7 @@ func newStore(home, source string) (*store, error) {
 	return &store{
 		dir:      filepath.Join(home, "cyfr-browser"),
 		source:   source,
+		storage:  strings.TrimRight(storage, "/"),
 		platform: platform,
 		client:   &http.Client{Transport: transport},
 		now:      time.Now,
@@ -149,14 +159,14 @@ func (s *store) update(ctx context.Context, have string) error {
 	if err := os.Chtimes(stamp, now, now); err != nil {
 		return err
 	}
-	version, address, err := s.latest(ctx)
+	version, err := s.latest(ctx)
 	if err != nil {
 		return err
 	}
 	if have != "" && !newer(version, have) {
 		return nil
 	}
-	if err := s.fetch(ctx, version, address); err != nil {
+	if err := s.fetch(ctx, version, s.archive(version)); err != nil {
 		return err
 	}
 	return s.keepOnly(version)
@@ -173,47 +183,29 @@ func (s *store) due() bool {
 	return now.Before(info.ModTime()) || now.Sub(info.ModTime()) >= checkEvery
 }
 
-// latest is the list's current stable and its chrome build's address for
-// this platform.
-func (s *store) latest(ctx context.Context) (string, string, error) {
+// latest is the current stable's version number, as the list says it:
+// digits and dots, and at most the line's end after them.
+func (s *store) latest(ctx context.Context) (string, error) {
 	body, _, err := s.get(ctx, s.source)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	defer body.Close()
 	data, err := io.ReadAll(io.LimitReader(body, maxList+1))
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	if len(data) > maxList {
-		return "", "", errors.New("the list of builds is too large")
+	version := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+	if len(data) > maxList || !versionName.MatchString(version) {
+		return "", fmt.Errorf("the list names no version: %.40q", data)
 	}
-	var list struct {
-		Channels struct {
-			Stable struct {
-				Version   string `json:"version"`
-				Downloads struct {
-					Chrome []struct {
-						Platform string `json:"platform"`
-						URL      string `json:"url"`
-					} `json:"chrome"`
-				} `json:"downloads"`
-			} `json:"Stable"`
-		} `json:"channels"`
-	}
-	if err := json.Unmarshal(data, &list); err != nil {
-		return "", "", fmt.Errorf("the list of builds does not read: %w", err)
-	}
-	stable := list.Channels.Stable
-	if !versionName.MatchString(stable.Version) {
-		return "", "", fmt.Errorf("the list names no stable version it can be kept under: %q", stable.Version)
-	}
-	for _, build := range stable.Downloads.Chrome {
-		if build.Platform == s.platform && build.URL != "" {
-			return stable.Version, build.URL, nil
-		}
-	}
-	return "", "", fmt.Errorf("the list has no chrome build of %s for %s", stable.Version, s.platform)
+	return version, nil
+}
+
+// archive is version's chrome build on the storage, for this platform: an
+// address the driver builds, never one a list gives.
+func (s *store) archive(version string) string {
+	return s.storage + "/" + version + "/" + s.platform + "/chrome-" + s.platform + ".zip"
 }
 
 // fetch downloads version's archive and unpacks it in a staging folder
