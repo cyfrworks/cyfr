@@ -91,7 +91,7 @@
 #             name under the gate's own namespace, test.yml's
 #             builder-image, locus-runtime-image and locus-backends-image
 #             jobs (every suite, the Compose proof's six cases, the setup
-#             proof and each image's trivy scan), the browser job's four
+#             proof and each image's trivy scan), the browser jobs' four
 #             shards on this host's pull of the Playwright image, and
 #             security.yml's repo-scan job (trivy's secret and
 #             misconfiguration scans of the tree git tracks or would add)
@@ -150,6 +150,7 @@
 #   test.yml static: The tag pipeline's graph
 #   test.yml static: The containerd image store switch's cases
 #   test.yml static: The tag pipeline's image publication
+#   test.yml self-test-scope
 #   test.yml harness-tests-host
 #   test.yml harness-tests-partitions
 #   test.yml harness-tests-gate
@@ -1105,7 +1106,7 @@ leg_boot() {
 # tool directory of the gate's ahead on PATH, both images built from the
 # tree, then test.yml's image jobs (each suite, the Compose proof's six
 # cases and the setup proof in the backends job, and each image's scan),
-# the browser job's four shards and security.yml's repository scans, each
+# the browser jobs' four shards and security.yml's repository scans, each
 # job as CI runs it, every image tag the jobs name under the gate's
 # namespace (--image-namespace). A job whose image did not build fails at
 # its first step that needs it. The image suites name every compose
@@ -1136,7 +1137,7 @@ leg_harness() {
   run_job harness backends_image test.yml locus-backends-image --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   harness_sweep || status=1
-  run_job harness browser_a test.yml browser shard=a --image-namespace "$ns" || status=1
+  run_job harness browser_a test.yml browser-tincture shard=a --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness browser_b test.yml browser shard=b --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1

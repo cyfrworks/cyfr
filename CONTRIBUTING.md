@@ -238,7 +238,11 @@ same worktree refuses, naming the run that holds it.
 
   The self-tests that need the whole machine, those a workflow runs and
   no handoff row does, and `go test ./... -race` are the pull request's
-  run's alone: a defect in one shows there. To have one's answer before
+  run's alone: a defect in one shows there. A pull request's run starts
+  the host and partitions harness self-test jobs only when it changes a
+  path their scripts read (`scripts/ci/self-test-scope.sh` holds each
+  job's paths), and shows a job it leaves out as skipped, not needed; a
+  push to main, a release and the nightly run both. To have one's answer before
   the pull request, run it here by name on all four quarters, as its
   workflow step runs it:
   `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or

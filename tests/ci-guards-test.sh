@@ -3,9 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # Regression cases for scripts/ci/seed-guard.sh, scripts/ci/config-seam.sh,
-# scripts/ci/retry.sh, scripts/ci/world-checks.sh and
-# scripts/ci/storage-diagrams.py, and for scripts/release.sh's use of the seed
-# guard.
+# scripts/ci/retry.sh, scripts/ci/world-checks.sh,
+# scripts/ci/self-test-scope.sh and scripts/ci/storage-diagrams.py, and for
+# scripts/release.sh's use of the seed guard.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -609,6 +609,209 @@ rm -f "$scratch/output"
 GITHUB_EVENT_NAME=pull_request GITHUB_OUTPUT="$scratch/output" bash "$world_checks" x > "$scratch/out" 2> "$scratch/err"
 code=$?
 if [ "$code" -eq 64 ] && [ ! -e "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+
+# --- self-test-scope ---
+
+self_test_scope="$root/scripts/ci/self-test-scope.sh"
+
+# A merge commit of a branch onto a base that moved, as a pull request's
+# run checks out: the branch writes each path given, or removes it given
+# as -PATH; the base writes moved.txt and each path given after --. The
+# branch's tip is $head_sha.
+scope_repo() {
+  local p side=change
+  new_repo
+  mkdir -p scripts/lib tests
+  printf 'x\n' > scripts/lib/contain.sh
+  printf 'x\n' > tests/contain-test.sh
+  printf 'x\n' > base.txt
+  commit base
+  git checkout -q -b change
+  for p in "$@"; do
+    if [ "$p" = -- ]; then
+      commit change
+      git checkout -q main
+      printf 'y\n' > moved.txt
+      side=main
+      continue
+    fi
+    case $p in
+      -*) git rm -q "${p#-}" ;;
+      *) mkdir -p "$(dirname "$p")" && printf '%s\n' "$side" >> "$p" ;;
+    esac
+  done
+  if [ "$side" = change ]; then
+    commit change
+    git checkout -q main
+    printf 'y\n' > moved.txt
+  fi
+  commit moved
+  git merge -q --no-ff -m merge change
+  head_sha=$(git rev-parse change)
+}
+run_scope() {
+  : > "$scratch/output"
+  env "$@" GITHUB_OUTPUT="$scratch/output" bash "$self_test_scope" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+}
+# The jobs skipped, as the output names them, on one line.
+skipped() { [ "$code" -eq 0 ] && [ "$(paste -sd ' ' "$scratch/output")" = "$1" ]; }
+pr() { run_scope GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha"; }
+
+# Each case: the paths a pull request changes, then the jobs it skips.
+while IFS='|' read -r changed want; do
+  label="self-test-scope: a pull request that changes $changed skips '$want'"
+  # shellcheck disable=SC2086 # each word is one path
+  scope_repo $changed
+  pr
+  if skipped "$want"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+src/app.ex README.md apps/arca/lib/arca.ex apps/cyfr/assets/js/app.js|host=false partitions=false
+scripts/lib/contain.sh|
+-scripts/lib/contain.sh|
+.github/workflows/test.yml|
+scripts/ci/self-test-scope.sh|
+tests/contain-test.sh|partitions=false
+-tests/contain-test.sh|partitions=false
+tests/load-check/run.sh|partitions=false
+scripts/stages.tsv|partitions=false
+.github/workflows/release.yml|partitions=false
+scripts/commit-gate.sh|partitions=false
+config/test.exs|host=false
+config/database_choice.exs|host=false
+scripts/test-partition-weights.tsv|host=false
+.github/actions/setup-elixir/action.yml|host=false
+tests/commit-gate-test.sh|host=false partitions=false
+CASES
+
+label="self-test-scope: what the base changed since the branch left it is not the pull request's"
+scope_repo README.md -- scripts/lib/contain.sh .github/workflows/test.yml
+pr
+if skipped 'host=false partitions=false'; then pass "$label"; else fail "$label"; fi
+
+label="self-test-scope: each job skipped is named not needed"
+scope_repo README.md
+pr
+if [ "$(grep -c '^harness-tests-[a-z]*: not needed, ' "$scratch/out")" = 2 ] && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
+
+for event in push schedule workflow_dispatch; do
+  label="self-test-scope: a $event runs every job"
+  scope_repo README.md
+  run_scope GITHUB_EVENT_NAME=$event PR_HEAD_SHA="$head_sha"
+  if skipped ''; then pass "$label"; else fail "$label"; fi
+done
+
+label="self-test-scope: no event, as on a host, runs every job"
+scope_repo README.md
+run_scope -u GITHUB_EVENT_NAME PR_HEAD_SHA="$head_sha"
+if skipped ''; then pass "$label"; else fail "$label"; fi
+
+label="self-test-scope: a pull request with no head named runs every job"
+scope_repo README.md
+run_scope -u PR_HEAD_SHA GITHUB_EVENT_NAME=pull_request
+if skipped ''; then pass "$label"; else fail "$label"; fi
+
+label="self-test-scope: a merge whose second parent is not the head runs every job"
+scope_repo README.md
+run_scope GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$(git rev-parse HEAD^1)"
+if skipped ''; then pass "$label"; else fail "$label"; fi
+
+label="self-test-scope: a checkout of the head itself, no merge, runs every job"
+scope_repo README.md
+git checkout -q change
+run_scope GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha"
+if skipped ''; then pass "$label"; else fail "$label"; fi
+
+label="self-test-scope: a checkout without the merge's parents runs every job"
+scope_repo README.md
+git clone -q --depth 1 "file://$repo" "$repo.shallow"
+cd "$repo.shallow" || exit 1
+run_scope GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha"
+if skipped ''; then pass "$label"; else fail "$label"; fi
+
+label="self-test-scope: a diff that cannot be read runs every job"
+scope_repo README.md
+mkdir -p "$scratch/broken-git"
+real_git=$(command -v git)
+printf '#!/bin/sh\n[ "$1" != diff ] || exit 128\nexec "%s" "$@"\n' "$real_git" > "$scratch/broken-git/git"
+chmod +x "$scratch/broken-git/git"
+run_scope PATH="$scratch/broken-git:$PATH" GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha"
+if skipped ''; then pass "$label"; else fail "$label"; fi
+
+label="self-test-scope: an argument is refused"
+scope_repo README.md
+rm -f "$scratch/output"
+GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha" GITHUB_OUTPUT="$scratch/output" bash "$self_test_scope" x > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 64 ] && [ ! -e "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+
+# GitHub keeps a failed job's outputs, so a run that fails after deciding
+# must leave none: here its log cannot be written.
+label="self-test-scope: a run that fails before its outputs leaves none"
+scope_repo README.md
+: > "$scratch/output"
+GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha" GITHUB_OUTPUT="$scratch/output" bash "$self_test_scope" > /dev/full 2> "$scratch/err"
+code=$?
+: > "$scratch/out"
+if [ "$code" -ne 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+
+# Each scoped job's `if:` in test.yml, evaluated for each result and
+# output the scope job can give it: skipped only when the scope job
+# succeeded and answered false, and never in a cancelled run.
+scope_conditions() {
+  python3 -I - "$root/.github/workflows/test.yml" <<'PY'
+import re, sys
+
+lines = open(sys.argv[1]).read().split("\n")
+def condition(job):
+    start = lines.index(f"  {job}:")
+    for line in lines[start + 1:]:
+        if re.match(r"  \S", line):
+            break
+        m = re.fullmatch(r"    if: (.*)", line)
+        if m:
+            return m[1]
+    return None
+
+TOKEN = re.compile(r"\s+|\$\{\{|\}\}|\(|\)|&&|\|\||!=|==|!|'[^']*'|[a-z][\w.-]*\(\)|needs\.self-test-scope\.(?:result|outputs\.[a-z]+)")
+def evaluate(expression, job, cancelled, result, output):
+    out, i = [], 0
+    while i < len(expression):
+        m = TOKEN.match(expression, i)
+        if not m:
+            raise SystemExit(f"{job}: cannot read its if: at {expression[i:]!r}")
+        t, i = m[0], m.end()
+        if t.isspace() or t in ("${{", "}}"):
+            continue
+        out.append({
+            "(": "(", ")": ")", "&&": " and ", "||": " or ", "!=": "!=", "==": "==", "!": " not ",
+            "cancelled()": repr(cancelled), "always()": "True",
+            "success()": repr(not cancelled and result == "success"),
+            "failure()": repr(not cancelled and result == "failure"),
+            "needs.self-test-scope.result": repr(result),
+            f"needs.self-test-scope.outputs.{job.removeprefix('harness-tests-')}": repr(output),
+        }.get(t, t if t.startswith("'") else None) or sys.exit(f"{job}: its if: names {t}, which this check does not read"))
+    return eval("".join(out), {"__builtins__": {}})
+
+for job in ("harness-tests-host", "harness-tests-partitions"):
+    expression = condition(job)
+    if expression is None:
+        print(f"{job}: no if:")
+        continue
+    for cancelled, result, output, want in [
+        (False, "success", "false", False), (False, "success", "", True), (False, "success", "true", True),
+        (False, "failure", "false", True), (False, "failure", "", True), (False, "cancelled", "false", True),
+        (False, "skipped", "", True), (True, "success", "", False), (True, "failure", "false", False),
+    ]:
+        if evaluate(expression, job, cancelled, result, output) != want:
+            state = "a cancelled run, " if cancelled else ""
+            print(f"{job}: {state}scope {result} with output {output!r} {'runs' if not want else 'skips'} it")
+PY
+}
+label="self-test-scope: test.yml skips a scoped job only after a scope job that succeeded and answered false"
+scope_conditions > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
 
 # --- retry ---
 
