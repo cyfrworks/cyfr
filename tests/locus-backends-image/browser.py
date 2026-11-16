@@ -45,8 +45,11 @@ container starts:
   a module and its import, a stylesheet, a WebAssembly file, an image and
   a frame's file each answered by the driver from the put; the page is a
   secure context; its POSTs to invoke and action arrive as calls with
-  their bodies' bytes in base64, named by their window, and the host's
-  answers are the page's; a frame of the reserved origin inside the page
+  their bodies' bytes in base64, named by their window, each call carrying
+  exactly the fields the vector file's messages name, and the host's
+  answers are the page's; a page that calls as it starts, before its load,
+  sends a call naming its put, on its window's first put and on the put
+  that replaces it; a frame of the reserved origin inside the page
   calls, and a frame of another origin (data:) does not; a socket and an
   event stream fail and the page goes on; a service worker's registration
   is refused; a dedicated worker is delivered its window's files and makes
@@ -124,9 +127,10 @@ MAX_TO_DRIVER = FRAMES["max_to_driver"]
 TAIL_BYTES = 256 * 1024
 # The bytes one terminal input carries at most.
 INPUT_BYTES = BOUNDS["max_chunk_bytes"]
-# A put's bound and the bytes one part carries, and a call's body's bound.
+# A put's bound and the bytes one part carries, a call's body's bound and a call's fields.
 PUT = FRAMES["put"]
 CALL = FRAMES["call"]
+CALL_FIELDS = FRAMES["messages"]["call"]["fields"]
 # Where a put's files sit: the reserved origin, under a public tincture's address.
 RESERVED = "https://cyfr.invalid"
 ATHANOR = "ath_browser"
@@ -742,6 +746,16 @@ POPUP_PAGE = ("<title>popup</title><body style='margin:0'><div id=d style='width
 ONE_PAGE = "<title>one</title><script>document.title = 'one ' + isSecureContext + ' ' + location.href</script>"
 
 
+def startup_site(n, root):
+    """A page that calls as it starts, from its head, saying the document's state then, and titles itself with the
+    answer; its load waits for an image of 4 MiB, so its put's answer, which waits for the load, likely comes after
+    the call."""
+    entry = ("<title>loading</title><script>fetch('/_f/v1/invoke', {method: 'POST', headers: {'content-type': "
+             "'application/json'}, body: JSON.stringify({from: 'startup " + str(n) + "', state: document.readyState})})"
+             ".then(r => r.text()).then(t => document.title = 'started ' + t)</script><img src='" + root + "/pad.png'>")
+    return [("index.html", "text/html", entry.encode()), ("pad.png", "image/png", os.urandom(4 << 20))]
+
+
 def measured_site(root, total):
     """A built site of `total` bytes in several files under `root`, raw bytes most of it, its entry fetching the
     largest and writing into its title its status, length, the milliseconds it took and its SHA-256."""
@@ -763,6 +777,7 @@ def answer_calls(p, seen):
     travel in base64, as `text`."""
     for m in [m for m in p.inbox if m["t"] == "call"]:
         p.inbox.remove(m)
+        expect(sorted(m) == sorted(CALL_FIELDS), "a call carries exactly the fields the vectors name", m)
         m["text"] = base64.b64decode(m["body"], validate=True).decode(errors="replace")
         seen.append(m)
         try:
@@ -867,6 +882,23 @@ def pages(stack, c, uid):
     shown = ok(p.put_html(next(ids), "thr_one", ONE_PAGE, "one"), "a page of one file is put")
     expect(shown["url"] == RESERVED + root_of("one") and shown["title"] == f"one true {RESERVED}{root_of('one')}",
            "a page of one file loads under the reserved origin, a secure context", shown)
+
+    # A page that calls as it starts, before its load, on its window's first put and on the put that replaces it:
+    # the call names the put its document belongs to, which the driver answers only after the load.
+    for n in (1, 2):
+        put = next(ids)
+        ok(p.put(put, "thr_startup", startup_site(n, root_of(f"startup{n}")), root_of(f"startup{n}")),
+           f"a page that calls as it starts is put, put {n} of its window")
+        before = any(m["t"] == "call" and m["put"] == put for m in p.inbox)
+        started = titled(p, "thr_startup", "started ", ids, seen, 30)
+        call = next((m for m in seen if json.loads(m["text"]).get("from") == f"startup {n}"), None)
+        expect(call is not None and call["put"] == put and call["win"] == "thr_startup" and call["op"] == "invoke"
+               and json.loads(call["text"]) == {"from": f"startup {n}", "state": "loading"}
+               and started == json.dumps({"echo": f"startup {n}"}),
+               f"a call the page of put {n} of its window makes as it starts, before its load, names that put",
+               [put, call, started])
+        print(f"measure: the call the page of put {n} made as it started came {'before' if before else 'after'} "
+              f"its put's answer", flush=True)
 
     # A plain page with no head tag, as the host hands it: its entry after Compendium.plain_entry/1 and
     # tincture_head_tags/3, the SDK's source in its script, has window.cyfr and loads a file named relative to its

@@ -51,9 +51,11 @@ var fetchPatterns = map[string]any{"patterns": []map[string]string{{"urlPattern"
 var callOps = map[string]string{"/_f/v1/invoke": "invoke", "/_f/v1/action": "action"}
 
 // put is the files of one page, laid out under root: the entry at root and
-// root/, each file at root/path. failed, guarded by its window's mu, marks
+// root/, each file at root/path; id is its `page` request's, which every
+// call its documents make names. failed, guarded by its window's mu, marks
 // a put whose show failed: it serves nothing and never stands.
 type put struct {
+	id          int64
 	root, entry string
 	files       map[string]putFile
 	failed      bool
@@ -193,7 +195,7 @@ func (ps *puts) done(a *assembly) error {
 	if int64(len(a.data)) != a.total {
 		return ps.s.ready(a.r.ID, answer(nil, badRequest("The page's parts do not add up to its files' sizes.")))
 	}
-	p := &put{root: *a.m.Root, entry: *a.m.Entry, files: make(map[string]putFile, len(a.m.Files))}
+	p := &put{id: a.r.ID, root: *a.m.Root, entry: *a.m.Entry, files: make(map[string]putFile, len(a.m.Files))}
 	at := int64(0)
 	for _, f := range a.m.Files {
 		p.files[*f.Path] = putFile{typ: *f.Type, data: a.data[at : at+*f.Size : at+*f.Size]}
@@ -503,7 +505,7 @@ func (b *browser) paused(w *window, session, kind string, events *watch, params 
 	case len(body) > maxCallBody:
 		go b.answerPaused(session, p.RequestID, 413, nil, nil)
 	default:
-		b.pages <- pageEvent{call: &heldCall{win: w, gen: gen, session: session, request: p.RequestID,
+		b.pages <- pageEvent{call: &heldCall{win: w, gen: gen, put: pt.id, session: session, request: p.RequestID,
 			frame: p.FrameID, op: op, body: body}}
 	}
 }
@@ -648,10 +650,12 @@ type pageEvent struct {
 	session, frame string
 }
 
-// heldCall is a page's call, its request paused until the host answers.
+// heldCall is a page's call, its request paused until the host answers;
+// put is the id of the put it was admitted by, the one its document
+// belongs to.
 type heldCall struct {
 	win                     *window
-	gen                     int64
+	gen, put                int64
 	session, request, frame string
 	op                      string
 	body                    []byte
@@ -661,6 +665,7 @@ type callMessage struct {
 	T    string `json:"t"`
 	ID   int64  `json:"id"`
 	Win  string `json:"win"`
+	Put  int64  `json:"put"`
 	Op   string `json:"op"`
 	Body string `json:"body"`
 }
@@ -683,9 +688,10 @@ func newCalls(b *browser, s *slot) *calls {
 	return &calls{b: b, s: s, held: map[int64]*heldCall{}}
 }
 
-// take passes a call up, its body's bytes in base64, or gives up the
-// calls an end names. A call whose window has shown another page since it
-// was admitted is given up at once: that window's end has gone by.
+// take passes a call up, naming its put, its body's bytes in base64, or
+// gives up the calls an end names. A call whose window has shown another
+// page since it was admitted is given up at once: that window's end has
+// gone by.
 func (cl *calls) take(e pageEvent) error {
 	if c := e.call; c != nil {
 		if _, gen := c.win.current(); gen != c.gen {
@@ -696,7 +702,7 @@ func (cl *calls) take(e pageEvent) error {
 		cl.held[cl.next] = c
 		body := base64.StdEncoding.EncodeToString(c.body)
 		c.body = nil
-		return cl.s.write(callMessage{T: "call", ID: cl.next, Win: c.win.name, Op: c.op, Body: body})
+		return cl.s.write(callMessage{T: "call", ID: cl.next, Win: c.win.name, Put: c.put, Op: c.op, Body: body})
 	}
 	for id, c := range cl.held {
 		if (e.win != nil && c.win == e.win) || (e.session != "" && c.session == e.session && (e.frame == "" || c.frame == e.frame)) {

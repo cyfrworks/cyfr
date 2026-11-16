@@ -9,9 +9,9 @@ defmodule Cyfr.Bus.PageCall do
 
   `call` is one call the browser holds paused: the window it came from
   (`thread_id`), the request the browser named it by, its `op`
-  (`invoke` or `action`), its body's bytes and the window's put, the
-  putting turn and the tincture reference it put, nil for a page that is
-  no tincture. `ended` names a request the browser no longer holds: the
+  (`invoke` or `action`), its body's bytes and the put the calling
+  document belongs to, the putting turn and the tincture reference it
+  put, nil for a page that is no tincture. `ended` names a request the browser no longer holds: the
   driver gave it up, the browser's session ended, the browser stopped or
   the process that held it died. A request is answered once, through
   `Opus.Browser.answer/5`.

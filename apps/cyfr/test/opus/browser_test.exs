@@ -12,9 +12,9 @@ defmodule Opus.BrowserTest do
   setting refuses every action while it is off and closes the browser
   when it goes off; a response arrives whole in acknowledged chunks, is
   asked for again after a tail and never run twice, and one the driver no
-  longer holds is refused. A page's call from a window with a put is held
-  and announced on the bus with that put, answered once, and its end
-  announced when it ends unanswered.
+  longer holds is refused. A page's call naming a put of its window,
+  answered or still on its way, is held and announced on the bus with
+  that put, answered once, and its end announced when it ends unanswered.
   """
   use ExUnit.Case, async: false
 
@@ -157,6 +157,14 @@ defmodule Opus.BrowserTest do
   end
 
   defp guest(ctx), do: Sanctum.Context.enter_guest(ctx)
+
+  # Put `args` into the caller's window: the id of the put's request, which
+  # the driver names in the calls of its documents.
+  defp put!(ctx, lineage, args) do
+    assert {:ok, _} = call(ctx, lineage, "page", args)
+    assert_receive {:driver, :put, _s, %{"id" => id}, _bytes}, 5_000
+    id
+  end
 
   defp call(ctx, lineage, action, args \\ %{}),
     do:
@@ -1446,11 +1454,15 @@ defmodule Opus.BrowserTest do
   end
 
   describe "a page's call" do
+    # The browser alone: the application's `Aqua.PageCalls`, which answers
+    # every call it hears, is stopped for each case and started after it.
     setup do
+      on_exit(&restart_page_calls/0)
+      :ok = Supervisor.terminate_child(Aqua.Supervisor, Aqua.PageCalls)
       :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.page_calls())
     end
 
-    test "from a window with a put is held and announced once, with its window, op, bytes and the put's turn and tincture",
+    test "naming its window's put is held and announced once, with its window, op, bytes and the put's turn and tincture",
          %{driver: driver, ctx: ctx, turn: turn, lineage: lineage} do
       win = lineage["thread_id"]
 
@@ -1458,11 +1470,24 @@ defmodule Opus.BrowserTest do
         {"dist/index.html", "<html><head></head><body>v</body></html>"}
       ])
 
-      assert {:ok, _} = call(ctx, lineage, "page", %{"tincture" => "tincture:local.viewer:1.0.0"})
+      put = put!(ctx, lineage, %{"tincture" => "tincture:local.viewer:1.0.0"})
       body = ~s({"v":1,"ref":"reagent:local.x:1.0.0","operation":"run","args":{}})
-      :ok = Driver.call(driver, 3, win, "invoke", body)
 
-      assert_receive %PageCall{kind: :call, request: "pcl_" <> _ = request} = page_call, 5_000
+      # The call as the vectors spell it, which the driver marshals to.
+      %{"fields" => fields, "example" => example} =
+        @vectors
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("messages")
+        |> Map.fetch!("call")
+
+      frame =
+        Map.merge(example, %{"id" => 3, "win" => win, "put" => put, "body" => Base.encode64(body)})
+
+      assert Enum.sort(Map.keys(frame)) == Enum.sort(fields)
+      :ok = Driver.write(driver, Opus.Browser.Frame.message(frame))
+
+      assert_receive %PageCall{kind: :call, request: "pgc_" <> _ = request} = page_call, 5_000
 
       assert page_call == %PageCall{
                kind: :call,
@@ -1477,8 +1502,8 @@ defmodule Opus.BrowserTest do
 
       # A page Aqua wrote, put by a turn of another thread, has no tincture.
       {other_turn, other} = turn!(ctx)
-      assert {:ok, _} = call(ctx, other, "page", %{"html" => "<p>hello</p>"})
-      :ok = Driver.call(driver, 4, other["thread_id"], "action", ~s({"v":1}))
+      other_put = put!(ctx, other, %{"html" => "<p>hello</p>"})
+      :ok = Driver.call(driver, 4, other["thread_id"], other_put, "action", ~s({"v":1}))
       assert_receive %PageCall{kind: :call, request: second} = plain, 5_000
       assert second != request
 
@@ -1498,25 +1523,36 @@ defmodule Opus.BrowserTest do
       win = lineage["thread_id"]
       unavailable = Prima.TinctureWire.refusal(Sanctum.Refusals.classify(:unavailable))
       assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      assert_receive {:driver, :req, _s, %{"op" => "open", "id" => opened}}, 5_000
 
+      # The open's request is no put.
       for {id, window} <- [{3, win}, {4, "thr_never_opened"}] do
-        :ok = Driver.call(driver, id, window, "invoke", ~s({"v":1}))
+        :ok = Driver.call(driver, id, window, opened, "invoke", ~s({"v":1}))
         assert_receive {:driver, :answer, _s, ^id, 503, body}, 5_000
         assert Jason.decode!(body) == unavailable
       end
 
-      assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>hello</p>"})
+      put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
       bound = Opus.Browser.Frame.call_max_body()
 
       for {id, call} <- [
-            {5, %{"win" => win, "op" => "delete", "body" => Base.encode64("{}")}},
-            {6, %{"win" => win, "op" => "invoke", "body" => "not base64!"}},
-            {7, %{"op" => "invoke", "body" => Base.encode64("{}")}},
+            {5, %{"win" => win, "put" => put, "op" => "delete", "body" => Base.encode64("{}")}},
+            {6, %{"win" => win, "put" => put, "op" => "invoke", "body" => "not base64!"}},
+            {7, %{"put" => put, "op" => "invoke", "body" => Base.encode64("{}")}},
             {8,
              %{
                "win" => win,
+               "put" => put,
                "op" => "invoke",
                "body" => Base.encode64(:binary.copy("a", bound + 1))
+             }},
+            {10, %{"win" => win, "op" => "invoke", "body" => Base.encode64("{}")}},
+            {11,
+             %{
+               "win" => win,
+               "put" => Integer.to_string(put),
+               "op" => "invoke",
+               "body" => Base.encode64("{}")
              }}
           ] do
         frame = Map.merge(call, %{"t" => "call", "id" => id})
@@ -1530,7 +1566,7 @@ defmodule Opus.BrowserTest do
       refute_received %PageCall{}
 
       # A body of the bound's bytes is held.
-      :ok = Driver.call(driver, 9, win, "invoke", :binary.copy("a", bound))
+      :ok = Driver.call(driver, 9, win, put, "invoke", :binary.copy("a", bound))
       assert_receive %PageCall{kind: :call, body: held}, 5_000
       assert byte_size(held) == bound
     end
@@ -1538,15 +1574,15 @@ defmodule Opus.BrowserTest do
     test "from a window whose put is gone, by its close or a window that does not stand, is answered unavailable",
          %{driver: driver, ctx: ctx, lineage: lineage} = context do
       win = lineage["thread_id"]
-      assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>hello</p>"})
+      put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
       assert {:ok, _} = call(ctx, lineage, "close")
-      :ok = Driver.call(driver, 3, win, "invoke", ~s({"v":1}))
+      :ok = Driver.call(driver, 3, win, put, "invoke", ~s({"v":1}))
       assert_receive {:driver, :answer, _s, 3, 503, _body}, 5_000
 
-      assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>again</p>"})
+      put = put!(ctx, lineage, %{"html" => "<p>again</p>"})
       answers(context, "read", {:error, "no_window", "The window is gone."})
       assert {:error, _} = call(ctx, lineage, "read")
-      :ok = Driver.call(driver, 4, win, "invoke", ~s({"v":1}))
+      :ok = Driver.call(driver, 4, win, put, "invoke", ~s({"v":1}))
       assert_receive {:driver, :answer, _s, 4, 503, _body}, 5_000
 
       refute_received %PageCall{}
@@ -1555,8 +1591,8 @@ defmodule Opus.BrowserTest do
     test "is answered once through answer/5; a second answer, or one for a request not held, writes nothing",
          %{driver: driver, ctx: ctx, lineage: lineage} do
       win = lineage["thread_id"]
-      assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>hello</p>"})
-      :ok = Driver.call(driver, 3, win, "invoke", ~s({"v":1}))
+      put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
+      :ok = Driver.call(driver, 3, win, put, "invoke", ~s({"v":1}))
       assert_receive %PageCall{kind: :call, request: request}, 5_000
 
       answer = Jason.encode!(Prima.TinctureWire.result(%{"n" => 1}))
@@ -1568,7 +1604,7 @@ defmodule Opus.BrowserTest do
       assert :ok = Opus.Browser.answer(ctx.athanor_id, "usr_another", request, 200, answer)
 
       # An answer one frame does not hold is answered with a refusal.
-      :ok = Driver.call(driver, 4, win, "invoke", ~s({"v":1}))
+      :ok = Driver.call(driver, 4, win, put, "invoke", ~s({"v":1}))
       assert_receive %PageCall{kind: :call, request: large}, 5_000
       huge = :binary.copy("a", Opus.Browser.Frame.max_to_driver())
       assert :ok = Opus.Browser.answer(ctx.athanor_id, ctx.user_id, large, 200, huge)
@@ -1585,8 +1621,8 @@ defmodule Opus.BrowserTest do
     test "held by a process that dies is answered unavailable and its end announced; a later answer writes nothing",
          %{driver: driver, ctx: ctx, lineage: lineage} do
       win = lineage["thread_id"]
-      assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>hello</p>"})
-      :ok = Driver.call(driver, 3, win, "invoke", ~s({"v":1}))
+      put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
+      :ok = Driver.call(driver, 3, win, put, "invoke", ~s({"v":1}))
       assert_receive %PageCall{kind: :call, request: request}, 5_000
 
       first = spawn(fn -> Process.sleep(:infinity) end)
@@ -1625,8 +1661,8 @@ defmodule Opus.BrowserTest do
     test "given up by the driver has its end announced once; its answer then writes nothing",
          %{driver: driver, ctx: ctx, lineage: lineage} do
       win = lineage["thread_id"]
-      assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>hello</p>"})
-      :ok = Driver.call(driver, 3, win, "invoke", ~s({"v":1}))
+      put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
+      :ok = Driver.call(driver, 3, win, put, "invoke", ~s({"v":1}))
       assert_receive %PageCall{kind: :call, request: request}, 5_000
 
       callend = &Opus.Browser.Frame.message(%{"t" => "callend", "id" => &1})
@@ -1649,8 +1685,8 @@ defmodule Opus.BrowserTest do
 
       held = fn ids ->
         for {id, lineage} <- ids do
-          assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>hello</p>"})
-          :ok = Driver.call(driver, id, lineage["thread_id"], "invoke", ~s({"v":1}))
+          put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
+          :ok = Driver.call(driver, id, lineage["thread_id"], put, "invoke", ~s({"v":1}))
           assert_receive %PageCall{kind: :call, request: request}, 5_000
           request
         end
@@ -1682,15 +1718,123 @@ defmodule Opus.BrowserTest do
       refute_receive %PageCall{}, 200
     end
 
+    test "naming a put sent and not yet answered is announced with it, the earlier put still its own; the later's success forgets the earlier",
+         %{driver: driver, ctx: ctx, turn: turn, lineage: lineage} = context do
+      win = lineage["thread_id"]
+      unavailable = Prima.TinctureWire.refusal(Sanctum.Refusals.classify(:unavailable))
+
+      tincture!(ctx, "viewer", %{"entry" => "dist/index.html", "build" => %{"tool" => "vite"}}, [
+        {"dist/index.html", "<html><head></head><body>v</body></html>"}
+      ])
+
+      earlier = put!(ctx, lineage, %{"tincture" => "tincture:local.viewer:1.0.0"})
+
+      # A later turn of the thread puts a page whose document calls before
+      # the driver answers the put, while the earlier document still calls.
+      set_status(turn, "completed")
+      {later_turn, later_lineage} = turn!(ctx, thread: %{id: win})
+      answers(context, "page", :hold)
+      putting = Task.async(fn -> call(ctx, later_lineage, "page", %{"html" => "<p>next</p>"}) end)
+      assert_receive {:driver, :holding, _s, later}, 5_000
+
+      :ok = Driver.call(driver, 3, win, later, "invoke", ~s({"v":"later"}))
+      :ok = Driver.call(driver, 4, win, earlier, "action", ~s({"v":"earlier"}))
+      assert_receive %PageCall{kind: :call, body: ~s({"v":"later"})} = from_later, 5_000
+      assert_receive %PageCall{kind: :call, body: ~s({"v":"earlier"})} = from_earlier, 5_000
+
+      assert from_later == %PageCall{
+               kind: :call,
+               athanor_id: ctx.athanor_id,
+               user_id: ctx.user_id,
+               thread_id: win,
+               request: from_later.request,
+               op: "invoke",
+               body: ~s({"v":"later"}),
+               put: %{turn_id: later_turn.id, tincture: nil}
+             }
+
+      assert from_earlier == %PageCall{
+               kind: :call,
+               athanor_id: ctx.athanor_id,
+               user_id: ctx.user_id,
+               thread_id: win,
+               request: from_earlier.request,
+               op: "action",
+               body: ~s({"v":"earlier"}),
+               put: %{turn_id: turn.id, tincture: "tincture:local.viewer:1.0.0"}
+             }
+
+      assert from_later.request != from_earlier.request
+
+      :ok = Driver.release(driver, later)
+      assert {:ok, _} = Task.await(putting)
+
+      :ok = Driver.call(driver, 5, win, earlier, "invoke", ~s({"v":"earlier"}))
+      assert_receive {:driver, :answer, _s, 5, 503, body}, 5_000
+      assert Jason.decode!(body) == unavailable
+
+      :ok = Driver.call(driver, 6, win, later, "invoke", ~s({"v":"after"}))
+      assert_receive %PageCall{kind: :call, body: ~s({"v":"after"})} = after_success, 5_000
+
+      assert after_success == %{
+               from_later
+               | request: after_success.request,
+                 body: ~s({"v":"after"})
+             }
+
+      # Calls 3, 4 and 6 are held: nothing answered them.
+      assert {:ok, _} = call(ctx, later_lineage, "read")
+      assert_receive {:driver, :req, _s, %{"op" => "read"}}, 5_000
+      refute_received {:driver, :answer, _s, _id, _status, _body}
+      refute_received %PageCall{}
+    end
+
+    test "naming a put that failed, a put of another window or a request never sent is answered unavailable and not announced",
+         %{driver: driver, ctx: ctx, lineage: lineage} = context do
+      win = lineage["thread_id"]
+      unavailable = Prima.TinctureWire.refusal(Sanctum.Refusals.classify(:unavailable))
+      {other_turn, other} = turn!(ctx)
+      theirs = put!(ctx, other, %{"html" => "<p>theirs</p>"})
+
+      answers(context, "page", {:error, "unreachable", "The page could not be loaded."})
+      assert {:error, _} = call(ctx, lineage, "page", %{"html" => "<p>failed</p>"})
+      assert_receive {:driver, :put, _s, %{"id" => failed}, _bytes}, 5_000
+
+      for {id, put} <- [{3, failed}, {4, theirs}, {5, 9_999}] do
+        :ok = Driver.call(driver, id, win, put, "invoke", ~s({"v":1}))
+        assert_receive {:driver, :answer, _s, ^id, 503, body}, 5_000
+        assert Jason.decode!(body) == unavailable
+      end
+
+      refute_received %PageCall{}
+
+      # The other window's call naming its own put is held.
+      :ok = Driver.call(driver, 6, other["thread_id"], theirs, "invoke", ~s({"v":1}))
+      assert_receive %PageCall{kind: :call} = held, 5_000
+
+      assert held == %PageCall{
+               kind: :call,
+               athanor_id: ctx.athanor_id,
+               user_id: ctx.user_id,
+               thread_id: other["thread_id"],
+               request: held.request,
+               op: "invoke",
+               body: ~s({"v":1}),
+               put: %{turn_id: other_turn.id, tincture: nil}
+             }
+    end
+
     test "its bytes and its answer's are in no inspect of its announcement and no status or debug log of the holder",
          %{driver: driver, ctx: ctx, lineage: lineage} do
       sent = "sent-#{System.unique_integer([:positive])}-private"
       answered = "answered-#{System.unique_integer([:positive])}-private"
-      assert {:ok, _} = call(ctx, lineage, "page", %{"html" => "<p>hello</p>"})
+      put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
       holder = holder(ctx)
       :ok = :sys.log(holder, true)
 
-      :ok = Driver.call(driver, 3, lineage["thread_id"], "invoke", ~s({"v":1,"note":"#{sent}"}))
+      :ok =
+        Driver.call(driver, 3, lineage["thread_id"], put, "invoke", ~s({"v":1,"note":"#{sent}"}))
+
       assert_receive %PageCall{kind: :call, request: request, body: body} = page_call, 5_000
       assert body =~ sent
       refute inspect(page_call, limit: :infinity, printable_limit: :infinity) =~ sent
@@ -2408,13 +2552,20 @@ defmodule Opus.BrowserTest do
     end
   end
 
-  # A workspace thread of the person's, opened from a post of their day.
+  defp restart_page_calls do
+    case Supervisor.restart_child(Aqua.Supervisor, Aqua.PageCalls) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
+
   # The request of the next end of a page's call announced.
   defp ended_request do
     assert_receive %PageCall{kind: :ended, request: request}, 5_000
     request
   end
 
+  # A workspace thread of the person's, opened from a post of their day.
   defp workspace!(ctx) do
     ctx = %{ctx | origin: :interactive}
     actor = Sanctum.Context.actor(ctx)

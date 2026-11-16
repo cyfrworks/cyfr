@@ -102,7 +102,7 @@ func TestPutAndCallBounds(t *testing.T) {
 	if body := len(must(json.Marshal(part))); body > maxToDriver {
 		t.Fatalf("a part of the largest size holds %d bytes, past the driver's %d", body, maxToDriver)
 	}
-	call := callMessage{T: "call", ID: 1 << 53, Win: strings.Repeat("w", 256), Op: "action",
+	call := callMessage{T: "call", ID: 1 << 53, Win: strings.Repeat("w", 256), Put: 1 << 53, Op: "action",
 		Body: base64.StdEncoding.EncodeToString(make([]byte, maxCallBody))}
 	if body := len(must(json.Marshal(call))); body > maxToHost {
 		t.Fatalf("a call of the largest body holds %d bytes, past the host's %d", body, maxToHost)
@@ -134,7 +134,7 @@ func TestPageMessages(t *testing.T) {
 		examples[name] = compact.String()
 	}
 	for name, message := range map[string]any{
-		"call": callMessage{T: "call", ID: 3, Win: "thr_01", Op: "invoke",
+		"call": callMessage{T: "call", ID: 3, Win: "thr_01", Put: 14, Op: "invoke",
 			Body: base64.StdEncoding.EncodeToString([]byte(`{"ref":"local.counter:0.1.0"}`))},
 		"callend": callendMessage{T: "callend", ID: 3},
 	} {
