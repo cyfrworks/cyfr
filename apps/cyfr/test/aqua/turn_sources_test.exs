@@ -437,6 +437,57 @@ defmodule Aqua.TurnSourcesTest do
       assert raised == generation + 1
     end
 
+    test "deletion blanks a long events result even when its thread id was clipped",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Private research")
+      for n <- 1..25, do: say!(ctx, work, "private-fact-#{n}: " <> String.duplicate("x", 12_000))
+      turn = accept!(ctx, daily, "@aqua read that research")
+
+      # A window the long answer fits, so no compaction summarizes it first.
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, @http, @files],
+         script: [
+           calls([{"e1", "thread", %{"action" => "events", "thread" => work.id}}]),
+           reply("Read it.")
+         ],
+         window: 1_000_000},
+        id: :script
+      )
+
+      assert :completed = run(ctx, turn)
+      read = result(ctx, turn, "e1")
+      assert read.content =~ "private-fact-1"
+      # The binding cut the answer, the thread's id with it.
+      refute String.contains?(read.content, work.id)
+      assert Source.thread(work.id) in sources(ctx, turn)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, work.id)
+      assert result(ctx, turn, "e1").content == Threads.forgotten_read()
+    end
+
+    test "a search answer that carried two threads is blanked whole when one of them is deleted",
+         %{ctx: ctx, thread: daily} do
+      gone = workspace!(ctx, "Fares, first")
+      kept = workspace!(ctx, "Fares, second")
+      say!(ctx, gone, "the fares rise on Monday")
+      say!(ctx, kept, "the fares fall on Friday")
+      turn = accept!(ctx, daily, "@aqua what about fares?")
+
+      script!([
+        calls([{"s1", "thread", %{"action" => "search", "q" => "the fares"}}]),
+        reply("Up Monday, down Friday.")
+      ])
+
+      assert :completed = run(ctx, turn)
+      read = result(ctx, turn, "s1")
+      assert read.content =~ "rise on Monday" and read.content =~ "fall on Friday"
+
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+      assert result(ctx, turn, "s1").content == Threads.forgotten_read()
+      assert {:ok, _} = Threads.get(Sanctum.Context.actor(ctx), kept.id)
+    end
+
     test "retention removing a thread a turn searched blanks that read the same way",
          %{ctx: ctx, thread: daily} do
       actor = Sanctum.Context.actor(ctx)

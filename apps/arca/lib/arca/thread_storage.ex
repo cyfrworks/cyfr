@@ -1059,37 +1059,36 @@ defmodule Arca.ThreadStorage do
   def forgotten_read,
     do: "What this read answered came from a thread that has since been deleted."
 
-  # The reads whose answers carried posts of the threads `ids` in the
-  # threads `reader_ids`: a `thread.search` or `thread.events` step's
-  # result row whose text names one of them, as every such answer names
-  # each thread it carries (its sources). Its text becomes
-  # `forgotten_read/0`; the row stays, so the call it answers still has
-  # its result.
+  # The answers that carried posts of the threads `ids`, in the threads
+  # `reader_ids`: a step's result row whose payload records, among the
+  # threads its answer carried, one of them, as the step's close recorded
+  # them from what the read joined (`Arca.TurnStorage.close_step/4`),
+  # never from the answer's text, which a binding may have cut. Its text
+  # becomes `forgotten_read/0`, whole, whatever else it carried; the row
+  # stays, so the call it answers still has its result.
   # arca:db-raise-ok inside the caller's transaction
   defp blank_reads!(_athanor_id, _ids, []), do: :ok
 
   defp blank_reads!(athanor_id, ids, reader_ids) do
-    named =
-      Enum.reduce(ids, dynamic(false), fn id, acc ->
-        dynamic(
-          [m],
-          ^acc or fragment("? LIKE ? ESCAPE '!'", m.content, ^("%" <> like_escape(id) <> "%"))
-        )
-      end)
+    forgotten = MapSet.new(ids)
 
-    reads =
-      from(s in Arca.Schemas.TurnStep,
-        where: s.athanor_id == ^athanor_id and s.tool == "thread",
-        where: s.action in ["search", "events"] and not is_nil(s.result_message_id),
-        select: s.result_message_id
-      )
-
-    {_, _} =
+    carried =
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.thread_id in ^reader_ids,
-        where: m.kind == "tool_result" and m.id in subquery(reads),
-        where: ^named
+        where: m.kind == "tool_result" and like(m.payload, ^"%\"threads\"%"),
+        select: {m.id, m.payload}
       )
+      |> Repo.all()
+      |> Enum.filter(fn {_id, payload} ->
+        case decode_map(payload, "payload")["threads"] do
+          threads when is_list(threads) -> Enum.any?(threads, &MapSet.member?(forgotten, &1))
+          _none -> false
+        end
+      end)
+      |> Enum.map(&elem(&1, 0))
+
+    {_, _} =
+      from(m in Message, where: m.athanor_id == ^athanor_id and m.id in ^carried)
       |> Repo.update_all(set: [content: forgotten_read()])
 
     :ok

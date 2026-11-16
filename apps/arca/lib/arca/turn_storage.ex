@@ -2003,7 +2003,8 @@ defmodule Arca.TurnStorage do
   one transaction. `attrs`: `:result` (`%{content, payload}` for the
   row; omitted for a step that produced none), `:execution_id`, `:error`,
   `:fence`, `:sources`, the `Prima.Source`s the result carries, joined
-  into the turn's in the same transaction, and `:session`, the brain's
+  into the turn's in the same transaction, the threads among them
+  recorded on the result row as its payload's `threads`, and `:session`, the brain's
   session a model step's refusal named, with `:generation`, kept on the
   thread as `record_response/4` keeps a response's. `:launched` (`%{reference, reached_outside}`, the
   latter from the launch's completion result) names a component the step
@@ -3206,7 +3207,7 @@ defmodule Arca.TurnStorage do
             sent_by: turn.agent,
             kind: "tool_result",
             content: Map.get(result, :content, ""),
-            payload: Map.merge(Map.get(result, :payload) || %{}, %{"step_id" => step.id}),
+            payload: result_payload(result, step, Map.get(attrs, :sources, [])),
             turn_id: turn.id,
             execution_id: Map.get(attrs, :execution_id)
           })
@@ -3242,6 +3243,19 @@ defmodule Arca.TurnStorage do
     })
 
     %{step: step!(athanor_id, step.id), result: result}
+  end
+
+  # A result row's payload: the call's own, the step it closes, and the
+  # threads its answer carried, by the thread sources the step joins
+  # (`Prima.Source.thread/1`), which a deletion of one of them finds the
+  # row by to blank it (`Arca.ThreadStorage.delete/3`).
+  defp result_payload(result, step, sources) do
+    payload = Map.merge(Map.get(result, :payload) || %{}, %{"step_id" => step.id})
+
+    case sources |> sources!() |> Prima.Source.threads() do
+      [] -> payload
+      threads -> Map.put(payload, "threads", threads)
+    end
   end
 
   # The turn's sources joined by `sources`, under the row lock `own!/3`
