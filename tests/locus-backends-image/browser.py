@@ -24,6 +24,15 @@ container starts:
   and gets the response whole. A driver started with a short --keep-ms
   answers `gone` for a response asked for again after that time, and for an
   id it never had.
+- A cast (C12) over the same session: a window's images one at a time, the
+  next only after the host's `seen`; with the host not acknowledging an
+  image, no further one comes and a read of over a megabyte still arrives
+  whole; a forced tail while the cast and a poured response share the
+  output takes no cut image or chunk as whole, wherever it cuts (a header,
+  an image's body, a chunk), and once the host ends the cast and asks for
+  another, and asks the response again, the cast goes on and the response
+  arrives whole; the person's mouse and keys land at the place of the image
+  they point at, at a phone's width and at 720p alike, and nowhere else.
 - Each operation once: open (a public page unless CYFR_TEST_OFFLINE=1, an
   address the guard refuses, and an address of another scheme), five
   failed opens that leave no window, page,
@@ -48,7 +57,9 @@ container starts:
 It prints, without gating, Chrome's memory with one, three and six windows
 (the summed PSS of its processes and the session cgroup's memory.current),
 the time and frame count of the megabyte read, the first start's time and
-the home's bytes.
+the home's bytes, and, at a phone's width (390 by 844) and at 720p, a
+cast's images a second on a page that changes every frame, their size, and
+the delay from a press to the first image that shows it.
 
 With --first-start it proves one thing alone, for an image of another
 architecture, which the release workflow's arm64 job starts: a first start
@@ -91,8 +102,11 @@ TAIL_BYTES = 256 * 1024
 INPUT_BYTES = BOUNDS["max_chunk_bytes"]
 
 OWNER = owner_of("browser")
-BROWSER_HOME, FETCHLESS_HOME, BROKEN_HOME, OTHER_HOME = (
-    f"mcp_browser-{name}" for name in ("chrome", "fetchless", "broken", "other"))
+# The browser's home is named as a real row's is, mcp_ and a UUID: Chrome's
+# profile lock is a socket in its temporary folder, and a home this long
+# leaves no room for it there unless the driver names that folder short.
+BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
+FETCHLESS_HOME, BROKEN_HOME, OTHER_HOME = (f"mcp_browser-{name}" for name in ("fetchless", "broken", "other"))
 # The bound Opus.Programs.Definition.browser/1 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
 PROGRAMS = [
@@ -293,6 +307,34 @@ class Host:
                 text = b"".join(parts[seq] for seq in range(m["of"]))
                 return json.loads(text), text, frames
 
+    def image(self, cast, what, timeout_s=30):
+        return self.take(lambda m: m["t"] == "image" and m["id"] == cast, what, timeout_s)
+
+    def quiet(self, seconds, want):
+        """Reads for `seconds`; the messages `want` accepts that came meanwhile."""
+        until = time.monotonic() + seconds
+        while time.monotonic() < until:
+            self.read(500)
+        came = [m for m in self.inbox if want(m)]
+        return came
+
+    def drop_images(self):
+        """Takes every image the inbox holds out of it, each acknowledged, so its cast goes on."""
+        for m in [m for m in self.inbox if m["t"] == "image"]:
+            self.inbox.remove(m)
+            self.send({"t": "seen", "id": m["id"], "seq": m["seq"]})
+
+    def settle(self, cast):
+        """Acknowledges every image of `cast` until none comes for 300 ms."""
+        while True:
+            self.read(300)
+            images = [m for m in self.inbox if m["t"] == "image" and m["id"] == cast]
+            if not images:
+                return
+            for m in images:
+                self.inbox.remove(m)
+                self.send({"t": "seen", "id": cast, "seq": m["seq"]})
+
     def ask(self, id, win, op, args=None):
         self.send({"t": "req", "id": id, "win": win, "op": op, "args": args or {}})
         return self.response(id)[0]
@@ -350,6 +392,20 @@ def article(n):
     parts.append("<footer>" + "".join(f"<a href='/about/{i}'>About {i}</a> " for i in range(15)) + "</footer>")
     return "".join(parts)
 
+
+# A page that changes every frame, so Chrome casts as fast as it is let.
+ANIMATED_PAGE = ("<title>Animated</title><body style='margin:0'><div id=b style='width:100vw;height:100vh'></div>"
+                 "<script>let n=0;(function f(){n++;document.getElementById('b').style.background="
+                 "'hsl('+(n%360)+',70%,50%)';document.getElementById('b').textContent=n;requestAnimationFrame(f)})()"
+                 "</script></body>")
+
+# A page that writes where a press landed, and its size, into its title, and changes its colour, under a field at
+# its top left; it changes nowhere else, so the first image after a press shows it.
+INPUT_PAGE = ("<title>input</title><body style='margin:0;background:#f80'>"
+              "<div style='position:fixed;left:0;top:0;width:100vw;height:100vh' "
+              "onmousedown=\"document.title='at '+event.clientX+','+event.clientY+' of '+innerWidth+'x'+innerHeight;"
+              "document.body.style.background=document.body.style.background=='rgb(0, 128, 255)'?'#f80':'#0080ff'\">"
+              "</div><input id=f aria-label=Field style='position:fixed;left:0;top:0;width:200px;height:40px'></body>")
 
 PROBE_PAGE = ("<title>Probe page</title><h1 id=h>Before</h1>"
               "<button onclick=\"document.getElementById('h').textContent='After'\">Change</button>"
@@ -643,6 +699,173 @@ def main():
         b.send({"t": "again", "id": 4, "seq": lacking})
         answer, text4, _frames = b.response(4, held)
         expect(lacking == 0 and text4 == reference, "asked again from the first chunk it lacks, the host gets it whole")
+
+        # ————— a cast over the same session —————
+        ok(b.ask(300, "thr_article", "page", {"html": article(0)}), "a realistic page is shown")
+        for size, (width, height), cast in (("a phone's width", (390, 844), 301), ("720p", (1280, 720), 302)):
+            ok(b.ask(cast, "thr_article", "cast", {"width": width, "height": height}), f"the realistic page cast at {size}")
+            shown = b.image(cast, f"the realistic page's image at {size}")
+            print(f"measure: a cast at {size} ({width}x{height}) of a realistic page: its image is "
+                  f"{len(base64.b64decode(shown['jpeg'], validate=True)) / 1024:.1f} KiB", flush=True)
+            b.send({"t": "uncast", "id": cast})
+        b.quiet(1, lambda m: False)
+        b.drop_images()
+        ok(b.ask(303, "thr_cast", "page", {"html": ANIMATED_PAGE}), "an animated page is shown")
+        for size, (width, height), cast in (("a phone's width", (390, 844), 304), ("720p", (1280, 720), 305)):
+            expect(ok(b.ask(cast, "thr_cast", "cast", {"width": width, "height": height}), f"a cast at {size}") == {},
+                   f"a cast at {size} answers that it casts")
+            started = time.monotonic()
+            sizes, seqs = [], []
+            while time.monotonic() - started < 5:
+                m = b.image(cast, f"an image of the cast at {size}")
+                sizes.append(len(base64.b64decode(m["jpeg"], validate=True)))
+                seqs.append(m["seq"])
+                b.send({"t": "seen", "id": cast, "seq": m["seq"]})
+            rate = len(sizes) / (time.monotonic() - started)
+            expect(len(sizes) > 5 and max(sizes) <= MAX_TO_HOST * 3 // 4 and seqs == list(range(1, len(seqs) + 1)),
+                   f"the cast at {size} sends images one at a time, in order, each within the bound",
+                   [len(sizes), max(sizes), seqs[:5]])
+            print(f"measure: a cast at {size} ({width}x{height}) of a page that changes every frame sent "
+                  f"{rate:.1f} images a second, each {sum(sizes) / len(sizes) / 1024:.1f} KiB on average "
+                  f"({max(sizes) / 1024:.1f} KiB at most)", flush=True)
+            if cast == 304:
+                b.send({"t": "uncast", "id": cast})
+                b.quiet(1, lambda m: False)
+                b.inbox = [m for m in b.inbox if not (m["t"] == "image" and m["id"] == cast)]
+
+        # With the host not acknowledging an image, no further image comes, and a read still arrives whole.
+        cast = 305
+        stalled = b.image(cast, "the image left unacknowledged")
+        b.inbox = [m for m in b.inbox if m["t"] != "image"]
+        b.send({"t": "req", "id": 306, "win": "thr_big", "op": "read", "args": {}})
+        answer, text43, _frames = b.response(306)
+        expect(text43 == reference, "a read beside an unacknowledged image arrives whole")
+        expect(not b.quiet(3, lambda m: m["t"] == "image"),
+               "with an image unacknowledged, the driver sends no further image", b.inbox[-3:])
+        b.send({"t": "seen", "id": cast, "seq": stalled["seq"]})
+        expect(b.image(cast, "the image after the stalled one was seen")["seq"] == stalled["seq"] + 1,
+               "acknowledged, the cast goes on with the next image")
+
+        # A forced tail with the cast and a poured response sharing the output: the host acknowledges every image
+        # as it reads it and every chunk but the last blindly, then keeps only the last 256 KiB of what it read.
+        b.inbox = [m for m in b.inbox if m["t"] != "image"]
+        b.send({"t": "seen", "id": cast, "seq": stalled["seq"] + 1})
+        b.send({"t": "req", "id": 307, "win": "thr_big", "op": "read", "args": {}})
+        poured, scan = bytearray(), Reader(MAX_TO_HOST)
+        acked = False
+        while True:
+            more = b.raw(2_000)
+            poured.extend(more)
+            done = False
+            for body in scan.feed(more):
+                m = json.loads(body)
+                if m["t"] == "image" and m["id"] == cast:
+                    b.send({"t": "seen", "id": cast, "seq": m["seq"]})
+                elif m["t"] == "res" and m["id"] == 307 and not acked:
+                    b.write(b"".join(encode(wire({"t": "ack", "id": 307, "seq": seq})) for seq in range(of - 1)))
+                    acked = True
+                elif m["t"] == "res" and m["id"] == 307 and m["seq"] == of - 1:
+                    done = True
+            if done:
+                break
+        starts = [i for i in range(len(poured)) if poured[i:i + len(START)] == START]
+        kinds = {}
+        for at in starts:
+            body_at = at + HEADER_BYTES
+            kind = json.loads(Reader(MAX_TO_HOST).feed(bytes(poured[at:]))[0])["t"]
+            kinds.setdefault(kind, at)
+        expect("image" in kinds and "res" in kinds, "images and chunks share the poured output", sorted(kinds))
+        # Wherever a tail begins, in a header, in an image's body or in a chunk's, the host takes exactly the
+        # frames that begin after it.
+        for name, cut in (("an image's header", kinds["image"] + 5), ("an image's body", kinds["image"] + HEADER_BYTES + 40),
+                          ("a chunk's body", kinds["res"] + HEADER_BYTES + 40)):
+            taken = Reader(MAX_TO_HOST).feed(bytes(poured[cut:]))
+            expect(len(taken) == len([at for at in starts if at >= cut]),
+                   f"a tail beginning in {name} takes every frame after the cut and not the one cut",
+                   [len(taken), len([at for at in starts if at >= cut])])
+        tail = bytes(poured[-TAIL_BYTES:])
+        taken = [json.loads(body) for body in Reader(MAX_TO_HOST).feed(tail)]
+        expect(len(poured) > TAIL_BYTES and len(taken) == tail.count(START),
+               "of the shared output's last 256 KiB the host takes the frames whole there and no cut one",
+               [len(poured), len(taken), tail.count(START)])
+        cut_kind = json.loads(Reader(MAX_TO_HOST).feed(bytes(poured[max(at for at in starts if at < len(poured) - TAIL_BYTES):]))[0])["t"]
+        # The host ends the cast and asks for another, and asks the response again from the first chunk it lacks.
+        b.inbox = []
+        b.send({"t": "uncast", "id": cast})
+        held = {m["seq"]: base64.b64decode(m["part"], validate=True) for m in taken if m["t"] == "res" and m["id"] == 307}
+        lacking = min(set(range(of)) - set(held))
+        b.send({"t": "again", "id": 307, "seq": lacking})
+        answer, text44, _frames = b.response(307, held)
+        expect(text44 == reference, "asked again from the first chunk it lacks, the response arrives whole")
+        expect(ok(b.ask(308, "thr_cast", "cast", {"width": 1280, "height": 720}), "a cast anew") == {},
+               "the cast asked for anew answers that it casts")
+        expect(b.image(308, "the new cast's first image")["seq"] == 1, "the new cast goes on with its first image")
+        print(f"measure: the tail of a shared output of {len(poured)} bytes began in a {cut_kind} frame", flush=True)
+        b.send({"t": "uncast", "id": 308})
+
+        # The person's input lands where the image they point at shows, at a phone's width and at 720p alike.
+        ok(b.ask(309, "thr_input", "page", {"html": INPUT_PAGE}), "a page that writes where a press lands is shown")
+        # A window made after it takes Chrome's focus: the keys sent to this one still reach its page.
+        ok(b.ask(316, "thr_focus", "page", {"html": PROBE_PAGE}), "a window made after it is shown")
+        read_ids = iter(range(1000, 2000))
+        for size, (width, height), cast in (("a phone's width", (390, 844), 310), ("720p", (1280, 720), 311)):
+            ok(b.ask(cast, "thr_input", "cast", {"width": width, "height": height}), f"the input page cast at {size}")
+            first = b.image(cast, f"the input page's image at {size}")
+            b.send({"t": "seen", "id": cast, "seq": first["seq"]})
+            press = [{"k": "mouse", "type": t, "x": 0.25, "y": 0.5, "button": "left", "clicks": 1, "mods": 0}
+                     for t in ("down", "up")]
+            b.send({"t": "input", "id": cast, "evs": press})
+            title = ""
+            deadline = time.monotonic() + 10
+            while not title.startswith("at ") and time.monotonic() < deadline:
+                title = ok(b.ask(next(read_ids), "thr_input", "read"), "the input page is read")["title"]
+                b.drop_images()
+                time.sleep(0.2)
+            place, _, viewport = title[3:].partition(" of ")
+            x, y = (int(float(v)) for v in place.split(","))
+            vw, vh = (int(v) for v in viewport.split("x"))
+            expect(abs(x - vw * 0.25) <= 1 and abs(y - vh * 0.5) <= 1,
+                   f"at {size} a press at a quarter across and half down lands there on the page", [title])
+            field = [{"k": "mouse", "type": t, "x": 100 / vw, "y": 20 / vh, "button": "left", "clicks": 1, "mods": 0}
+                     for t in ("down", "up")]
+            keys = [{"k": "key", "type": t, "key": c, "code": f"Key{c.upper()}", "text": c if t == "down" else "",
+                     "vk": ord(c.upper()), "mods": 0} for c in ("h", "i") for t in ("down", "up")]
+            b.send({"t": "input", "id": cast, "evs": field + keys})
+            want = 'textbox "Field" = "hi"' if cast == 310 else 'textbox "Field" = "hihi"'
+            deadline = time.monotonic() + 10
+            text = ""
+            while want not in text and time.monotonic() < deadline:
+                text = ok(b.ask(next(read_ids), "thr_input", "read"), "the field is read")["text"]
+                b.drop_images()
+                time.sleep(0.2)
+            expect(want in text, f"at {size} the keys typed into the field the press focused", text)
+            # The delay from a press to the first image that shows it: the page changes only on a press.
+            b.drop_images()
+            b.settle(cast)
+            delays = []
+            for _ in range(10):
+                pad = [{"k": "mouse", "type": t, "x": 0.75, "y": 0.75, "button": "left", "clicks": 1, "mods": 0}
+                       for t in ("down", "up")]
+                pressed = time.monotonic()
+                b.send({"t": "input", "id": cast, "evs": pad})
+                m = b.image(cast, f"the image after a press at {size}", 10)
+                delays.append((time.monotonic() - pressed) * 1000)
+                b.send({"t": "seen", "id": cast, "seq": m["seq"]})
+                b.settle(cast)
+            delays.sort()
+            print(f"measure: at {size} ({width}x{height}) the first image after a press arrived in "
+                  f"{delays[len(delays) // 2]:.0f} ms (median of {len(delays)}), {delays[-1]:.0f} ms at most, "
+                  "the press's input and the image both carried over the session", flush=True)
+            b.send({"t": "uncast", "id": cast})
+        # Input for a cast that ended goes nowhere.
+        b.send({"t": "input", "id": 311, "evs": keys})
+        time.sleep(1)
+        expect('textbox "Field" = "hihi"' in ok(b.ask(312, "thr_input", "read"), "the field is read again")["text"],
+               "input for a cast that ended reaches no window")
+        b.drop_images()
+        for n, win in enumerate(("thr_article", "thr_cast", "thr_input", "thr_focus")):
+            expect(ok(b.ask(320 + n, win, "close"), f"the window {win} is closed") == {"closed": True},
+                   f"the cast's window {win} is closed, so the windows counted below are the operations' own")
 
         # ————— each operation —————
         refused(b.ask(10, "thr_ops", "read"), "no_window", "a read before any page has no window")

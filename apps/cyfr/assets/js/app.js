@@ -15,6 +15,7 @@ import {AquaPanel, AquaPanelKeys} from "./aqua_panel"
 import MarkdownContent from "./hooks/markdown_content"
 import FlashAutoHide from "./hooks/flash_auto_hide"
 import Terminal from "./hooks/terminal"
+import WorkspaceStream from "./hooks/workspace_stream"
 import Canvas from "./canvas/index"
 import SystemLayer from "./system_layer/index"
 import {completeUnlock} from "./device_unlock"
@@ -46,6 +47,7 @@ Hooks.SystemLayer = SystemLayer
 
 Hooks.FlashAutoHide = FlashAutoHide
 Hooks.Terminal = Terminal
+Hooks.WorkspaceStream = WorkspaceStream
 
 // A tape that follows its newest line — but only while the person is
 // reading the end of it. Someone scrolled up into the history stays where

@@ -15,9 +15,12 @@ defmodule Prima.Origin do
 
   The wire spelling of each is its name. Children inherit their root's
   origin. Origin records how a run started, for the record and the screens
-  that show runs; it admits or refuses nothing, since a run stands on the
+  that show runs; it admits or refuses no run, since a run stands on the
   grant of the person it acts as whatever started it, and it does not
-  record that a person stays present.
+  record that a person stays present. The few acts that only a person's
+  own surface may make read the path from it: an Aqua line of a schedule
+  (`Opus.Schedules.Provider`) and a watch of Aqua's browser, a page's
+  alone (`Opus.Browser.watch/4`).
   """
 
   @origins [:interactive, :programmatic, :schedule, :webhook]

@@ -77,8 +77,9 @@ defmodule Opus.BrowserTest do
     {:ok, user} = Sanctum.Test.People.linked(%{id: key, provider: "local", verified: true})
     athanor = Sanctum.Test.People.athanor!(user)
 
+    # A person on a page of theirs, as the console admits one.
     ctx = %{
-      Sanctum.TestContext.local()
+      Sanctum.TestContext.local(:prism)
       | user_id: user.id,
         athanor_id: athanor.id,
         permissions: MapSet.new([:*])
@@ -1100,6 +1101,739 @@ defmodule Opus.BrowserTest do
       refute_received {:session, "open", _open, _fields}
     end
   end
+
+  describe "the person's watch" do
+    test "a window's images go to the page that asked, one at a time, the driver told only once each was drawn",
+         %{ctx: ctx, driver: driver, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      win = lineage["thread_id"]
+      watch = watch!(ctx, win, %{width: 390, height: 844})
+
+      assert_receive {:driver, :req, _session,
+                      %{"op" => "cast", "id" => cast, "win" => ^win, "args" => args}},
+                     5_000
+
+      assert args == %{"width" => 390, "height" => 844}
+
+      first = jpeg()
+      :ok = Driver.image(driver, cast, 1, first)
+      assert_receive {Opus.Browser, _ref, {:image, 1, %Programs.Output{bytes: ^first}}}, 5_000
+      refute_receive {:driver, :seen, _s, ^cast, _seq}, 200
+
+      :ok = Opus.Browser.seen(watch, 1)
+      assert_receive {:driver, :seen, _s, ^cast, 1}, 5_000
+
+      second = jpeg()
+      :ok = Driver.image(driver, cast, 2, second)
+      assert_receive {Opus.Browser, _ref, {:image, 2, %Programs.Output{bytes: ^second}}}, 5_000
+
+      # A stale acknowledgement, of the first again, tells the driver nothing.
+      :ok = Opus.Browser.seen(watch, 1)
+      refute_receive {:driver, :seen, _s, ^cast, _seq}, 200
+    end
+
+    test "a viewer that does not say it drew an image is handed no further one, and an action's response arrives whole beside it",
+         %{ctx: ctx, driver: driver, lineage: lineage} = context do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      _watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+
+      :ok = Driver.image(driver, cast, 1, jpeg())
+      assert_receive {Opus.Browser, _ref, {:image, 1, _first}}, 5_000
+
+      # A driver that sends past the one unacknowledged image has it held,
+      # not handed; the newest replaces the one held before it.
+      :ok = Driver.image(driver, cast, 2, jpeg())
+      :ok = Driver.image(driver, cast, 3, jpeg())
+
+      text = :crypto.strong_rand_bytes(600_000) |> Base.encode64()
+      answers(context, "read", {:ok, %{"text" => text}})
+
+      assert {:ok, %{"text" => ^text}} =
+               Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
+                 true
+               end)
+
+      refute_received {Opus.Browser, _ref, {:image, _n, _held}}
+      refute_received {:driver, :seen, _s, _cast, _seq}
+      assert {_cast, 3, %Programs.Output{}} = only_watch(ctx).held
+    end
+
+    test "a second workspace thread's page receives nothing of the first's window",
+         %{ctx: ctx, driver: driver, lineage: lineage} do
+      {_other_turn, other} = turn!(ctx)
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      assert {:ok, _} = call(ctx, other, "open", %{"url" => "https://example.org/"})
+
+      _mine = watch!(ctx, lineage["thread_id"])
+      mine_win = lineage["thread_id"]
+
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => mine, "win" => ^mine_win}},
+                     5_000
+
+      theirs = viewer(ctx, other["thread_id"])
+      other_win = other["thread_id"]
+
+      assert_receive {:driver, :req, _s,
+                      %{"op" => "cast", "id" => their_cast, "win" => ^other_win}},
+                     5_000
+
+      shown = jpeg()
+      :ok = Driver.image(driver, mine, 1, shown)
+      assert_receive {Opus.Browser, _ref, {:image, 1, %Programs.Output{bytes: ^shown}}}, 5_000
+      refute_receive {:viewer, ^theirs, {:image, _n, _image}}, 200
+
+      theirs_shown = jpeg()
+      :ok = Driver.image(driver, their_cast, 1, theirs_shown)
+
+      assert_receive {:viewer, ^theirs, {:image, 1, %Programs.Output{bytes: ^theirs_shown}}},
+                     5_000
+
+      refute_received {Opus.Browser, _ref, {:image, _n, _theirs}}
+    end
+
+    test "a turn's, a component's or a key's watch is refused; the person is proved at a screen",
+         %{ctx: ctx, lineage: lineage} do
+      key = %{guest(ctx) | auth_method: :api_key, api_key_id: "key_1"}
+      size = %{width: 1280, height: 720}
+
+      for caller <- [guest(ctx), key],
+          do:
+            assert(
+              {:error, :not_owned} =
+                Opus.Browser.watch(caller, lineage["thread_id"], size, fn -> true end)
+            )
+
+      assert {:error, :not_owned} =
+               Opus.Browser.watch(ctx, lineage["thread_id"], %{width: 1280, height: 9000}, fn ->
+                 true
+               end)
+
+      refute_received {:session, "open", _open, _fields}
+      assert holder(ctx) == nil
+    end
+
+    test "it opens with no turn running, starting the browser when none runs",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      win = lineage["thread_id"]
+      set_status(turn, "completed")
+      :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+      assert holder(ctx) == nil
+
+      _watch = watch!(ctx, win)
+      assert_receive {:driver, :opened, session}, 5_000
+      assert_receive {:driver, :req, ^session, %{"op" => "cast", "win" => ^win}}, 5_000
+      assert [%{by: :browser}] = browser_sessions(ctx)
+    end
+
+    test "it goes on after the turn that started the browser ended",
+         %{ctx: ctx, driver: driver, turn: turn, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      [%{session: session}] = browser_sessions(ctx)
+      set_status(turn, "completed")
+      :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+      :ok = Driver.image(driver, cast, 1, jpeg())
+      assert_receive {Opus.Browser, _ref, {:image, 1, _image}}, 5_000
+      :ok = Opus.Browser.seen(watch, 1)
+      assert_receive {:driver, :seen, _s, ^cast, 1}, 5_000
+      assert [%{session: ^session}] = browser_sessions(ctx)
+    end
+
+    test "a window that does not stand waits, and its cast is asked again once an action opens it",
+         %{ctx: ctx, driver: driver, lineage: lineage} = context do
+      win = lineage["thread_id"]
+
+      answers(
+        context,
+        "cast",
+        {:error, "no_window", "There is no browser window for this thread; open a page first."}
+      )
+
+      _watch = watch!(ctx, win)
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => first}}, 5_000
+      assert_receive {Opus.Browser, _ref, :waiting}, 5_000
+
+      answers(context, "cast", {:ok, %{}})
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => again, "win" => ^win}}, 5_000
+      assert again != first
+
+      # The driver ended the cast, its window closed: it waits again.
+      :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "uncast", "id" => again}))
+      assert_receive {Opus.Browser, _ref, :waiting}, 5_000
+      :ok = Driver.image(driver, again, 1, jpeg())
+      refute_receive {Opus.Browser, _ref, {:image, _n, _image}}, 200
+    end
+
+    test "the person's input reaches the window they watch and no other, beside an action of Aqua's that holds it",
+         %{ctx: ctx, lineage: lineage} = context do
+      {_other_turn, other} = turn!(ctx)
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      assert {:ok, _} = call(ctx, other, "open", %{"url" => "https://example.org/"})
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+
+      answers(context, "read", :hold)
+      read = Task.async(fn -> call(ctx, lineage, "read") end)
+      assert_receive {:driver, :holding, _s, held}, 5_000
+
+      events = [
+        %{
+          "k" => "mouse",
+          "type" => "down",
+          "x" => 0.25,
+          "y" => 0.5,
+          "button" => "left",
+          "clicks" => 1,
+          "mods" => 0
+        },
+        %{
+          "k" => "key",
+          "type" => "down",
+          "key" => "a",
+          "code" => "KeyA",
+          "text" => "a",
+          "vk" => 65,
+          "mods" => 0
+        }
+      ]
+
+      assert :ok = Opus.Browser.input(watch, events)
+      assert_receive {:driver, :input, _s, ^cast, ^events}, 5_000
+
+      :ok = Driver.release(context.driver, held)
+      assert {:ok, _} = Task.await(read, 5_000)
+    end
+
+    test "input that does not read is refused, and input from a page with no watch standing is dropped",
+         %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast"}}, 5_000
+
+      move = %{
+        "k" => "mouse",
+        "type" => "move",
+        "x" => 0.5,
+        "y" => 0.5,
+        "button" => "none",
+        "clicks" => 0,
+        "mods" => 0
+      }
+
+      assert {:error, :bad_input} = Opus.Browser.input(watch, [%{move | "x" => 1.5}])
+      assert {:error, :bad_input} = Opus.Browser.input(watch, List.duplicate(move, 65))
+
+      # Another process with the watch's handle is not its viewer.
+      Task.await(Task.async(fn -> Opus.Browser.input(watch, [move]) end))
+      refute_receive {:driver, :input, _s, _cast, _events}, 200
+
+      :ok = Opus.Browser.unwatch(watch)
+      assert_receive {:driver, :uncast, _s, _cast}, 5_000
+      :ok = Opus.Browser.input(watch, [move])
+      refute_receive {:driver, :input, _s, _cast, _events}, 200
+    end
+
+    test "input waiting for the writer when its watch ends is not written",
+         %{fake: fake, ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast"}}, 5_000
+
+      move = %{
+        "k" => "mouse",
+        "type" => "move",
+        "x" => 0.5,
+        "y" => 0.5,
+        "button" => "none",
+        "clicks" => 0,
+        "mods" => 0
+      }
+
+      Scripted.hold(fake, "input", 30_000)
+      first = Task.async(fn -> call(ctx, lineage, "read") end)
+      assert_receive {:held, "input", held}, 5_000
+
+      :ok = Opus.Browser.input(watch, [move])
+      eventually(fn -> only_watch(ctx).writing end, "the input to wait for the writer")
+      :ok = Opus.Browser.unwatch(watch)
+      eventually(fn -> :sys.get_state(holder(ctx)).watches == %{} end, "the watch to end")
+      send(held, :go)
+
+      assert {:ok, _} = Task.await(first, 10_000)
+      assert_receive {:driver, :uncast, _s, _cast}, 5_000
+      refute_received {:driver, :input, _s, _cast, _events}
+    end
+
+    test "a cast waiting for the writer when its watch ends is not written, and one not answered in time ends its watch",
+         %{fake: fake, ctx: ctx, lineage: lineage} = context do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+
+      Scripted.hold(fake, "input", 30_000)
+      first = Task.async(fn -> call(ctx, lineage, "read") end)
+      assert_receive {:held, "input", held}, 5_000
+
+      watch = watch!(ctx, lineage["thread_id"])
+
+      eventually(
+        fn -> map_size(:sys.get_state(holder(ctx)).pending) == 2 end,
+        "the cast to wait for the writer"
+      )
+
+      :ok = Opus.Browser.unwatch(watch)
+      eventually(fn -> :sys.get_state(holder(ctx)).watches == %{} end, "the watch to end")
+      send(held, :go)
+
+      assert {:ok, _} = Task.await(first, 10_000)
+      assert_receive {:driver, :uncast, _s, _cast}, 5_000
+      refute_received {:driver, :req, _s, %{"op" => "cast"}}
+
+      answers(context, "cast", :hold)
+      _watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :holding, _s, cast}, 5_000
+      send(holder(ctx), {:expired, cast})
+      assert_receive {Opus.Browser, _ref, {:ended, :unavailable}}, 5_000
+      assert_receive {:driver, :uncast, _s, ^cast}, 5_000
+    end
+
+    test "a holder that dies with a watch open takes the session with it", %{
+      ctx: ctx,
+      lineage: lineage
+    } do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      _watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast"}}, 5_000
+      holder = holder(ctx)
+      [%{session: session}] = browser_sessions(ctx)
+      monitor = Process.monitor(holder)
+
+      Process.exit(holder, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^holder, :killed}, 5_000
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^session, reason: :closed}, 5_000
+    end
+
+    test "a watch ends with its page, with a newer watch of its window, and when the setting goes off; a late image goes nowhere",
+         %{ctx: ctx, driver: driver, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      win = lineage["thread_id"]
+
+      page = viewer(ctx, win)
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => gone_cast}}, 5_000
+      Process.exit(page, :kill)
+      assert_receive {:driver, :uncast, _s, ^gone_cast}, 5_000
+      :ok = Driver.image(driver, gone_cast, 1, jpeg())
+
+      older = watch!(ctx, win)
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => older_cast}}, 5_000
+      newer = viewer(ctx, win)
+      assert_receive {Opus.Browser, _ref, {:ended, :replaced}}, 5_000
+      assert_receive {:driver, :uncast, _s, ^older_cast}, 5_000
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => newer_cast}}, 5_000
+      :ok = Opus.Browser.seen(older, 1)
+      refute_receive {:driver, :seen, _s, _cast, _seq}, 200
+      :ok = Driver.image(driver, older_cast, 1, jpeg())
+      refute_receive {Opus.Browser, _ref, {:image, _n, _late}}, 200
+
+      :ok = Driver.image(driver, newer_cast, 1, jpeg())
+      assert_receive {:viewer, ^newer, {:image, 1, _image}}, 5_000
+
+      assert {:ok, %{on: false}} = Provider.handle("browser", ctx, %{"action" => "turn_off"})
+      assert_receive {:viewer, ^newer, {:ended, :turned_off}}, 5_000
+      eventually(fn -> holder(ctx) == nil end, "the holder to stop")
+      refute_received {:viewer, _page, {:image, _n, _late}}
+    end
+
+    test "an open watch keeps the browser from its idle stop", %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast"}}, 5_000
+      holder = holder(ctx)
+      eventually(fn -> :sys.get_state(holder).pending == %{} end, "the cast to be answered")
+
+      # Nothing waits, and long past the idle time, yet no idle stop is armed,
+      # and one that comes finds the watch and stops nothing.
+      :sys.replace_state(holder, &%{&1 | last_act: &1.last_act - 86_400_000})
+      assert :sys.get_state(holder).idle == nil
+      token = make_ref()
+      :sys.replace_state(holder, &%{&1 | idle: {make_ref(), token}})
+      send(holder, {:idle, token})
+      Process.sleep(100)
+      assert [_running] = browser_sessions(ctx)
+      assert Process.alive?(holder)
+
+      :ok = Opus.Browser.unwatch(watch)
+
+      eventually(
+        fn -> :sys.get_state(holder).idle != nil end,
+        "the idle clock to run once it ended"
+      )
+    end
+
+    test "after a tail an image cut there is never shown, the cast goes on anew, and a response cut by it is asked again",
+         %{ctx: ctx, driver: driver, lineage: lineage} = context do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      _watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+
+      text = :crypto.strong_rand_bytes(150_000) |> Base.encode64()
+      answers(context, "read", :hold)
+
+      task =
+        Task.async(fn ->
+          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn -> true end)
+        end)
+
+      assert_receive {:driver, :holding, _session, id}, 5_000
+
+      # The holder takes nothing while the driver pours out an image, the
+      # whole answer and a second image: the last 256 KiB of it arrive as
+      # the tail, cut inside the first image.
+      holder = holder(ctx)
+      :sys.suspend(holder)
+      :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "noise"}))
+      eventually(fn -> outstanding?(ctx) end, "a delivery outstanding")
+
+      cut = :crypto.strong_rand_bytes(90_000)
+      whole = jpeg()
+      :ok = Driver.image(driver, cast, 1, cut)
+      answers(context, "read", {:ok, %{"text" => text}})
+      :ok = Driver.flood(driver)
+      :ok = Driver.release(driver, id)
+      :ok = Driver.image(driver, cast, 2, whole)
+      eventually(fn -> lost?(ctx) end, "the tail")
+      :sys.resume(holder)
+
+      assert {:ok, %{"text" => ^text}} = Task.await(task, 20_000)
+      assert_receive {:driver, :again, _session, ^id, _seq}, 5_000
+      assert_receive {:driver, :uncast, _s, ^cast}, 5_000
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => anew}}, 5_000
+
+      assert_receive {Opus.Browser, _ref, {:image, 1, %Programs.Output{bytes: ^whole}}}, 5_000
+      refute_received {Opus.Browser, _ref, {:image, _n, %Programs.Output{bytes: ^cut}}}
+
+      # The old cast's images go nowhere; the new cast's are handed once
+      # the last was drawn.
+      :ok = Driver.image(driver, cast, 3, jpeg())
+      next = jpeg()
+      :ok = Opus.Browser.seen(only_watch_handle(ctx), 1)
+      :ok = Driver.image(driver, anew, 1, next)
+      assert_receive {Opus.Browser, _ref, {:image, 2, %Programs.Output{bytes: ^next}}}, 5_000
+      refute_received {Opus.Browser, _ref, {:image, _n, _old}}
+    end
+
+    test "an image the viewer is handed and what the person types are in no status or debug log of the holder",
+         %{ctx: ctx, driver: driver, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+      holder = holder(ctx)
+      :ok = :sys.log(holder, true)
+
+      shown = "shown-#{System.unique_integer([:positive])}-private"
+      typed = "t#{rem(System.unique_integer([:positive]), 1_000_000)}"
+      :ok = Driver.image(driver, cast, 1, shown)
+      assert_receive {Opus.Browser, _ref, {:image, 1, _image}}, 5_000
+      :ok = Driver.image(driver, cast, 2, shown)
+
+      key = %{
+        "k" => "key",
+        "type" => "down",
+        "key" => typed,
+        "code" => "",
+        "text" => typed,
+        "vk" => 0,
+        "mods" => 0
+      }
+
+      :ok = Opus.Browser.input(watch, [key])
+      assert_receive {:driver, :input, _s, ^cast, _events}, 5_000
+
+      status = inspect(:sys.get_status(holder), limit: :infinity, printable_limit: :infinity)
+      :ok = :sys.log(holder, false)
+      refute status =~ shown
+      refute status =~ Base.encode64(shown)
+      refute status =~ typed
+    end
+  end
+
+  describe "the watch's review, round one" do
+    # Finding 2: a watch asked of a holder that answers only after its
+    # caller stopped waiting is admitted for no one.
+    test "a watch whose caller stopped waiting is not admitted, and no cast is asked for it",
+         %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      pid = holder(ctx)
+      :ok = :sys.suspend(pid)
+
+      result =
+        try do
+          Opus.Browser.watch(ctx, lineage["thread_id"], %{width: 1280, height: 720}, fn ->
+            true
+          end)
+        after
+          :sys.resume(pid)
+        end
+
+      assert result == {:error, :unavailable}
+      refute_receive {:driver, :req, _s, %{"op" => "cast"}}, 500
+      assert :sys.get_state(pid).watches == %{}
+      refute_received {Opus.Browser, _watch, :watching}
+    end
+
+    # Finding 3: input is bounded where it enters: one batch of a watch's
+    # on its way to the holder, the next only once the holder took it.
+    test "a viewer hands one batch of input at a time; the rest is dropped, never queued",
+         %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast"}}, 5_000
+      pid = holder(ctx)
+
+      move = %{
+        "k" => "mouse",
+        "type" => "move",
+        "x" => 0.5,
+        "y" => 0.5,
+        "button" => "none",
+        "clicks" => 0,
+        "mods" => 0
+      }
+
+      :ok = :sys.suspend(pid)
+
+      {results, waiting} =
+        try do
+          results = for _ <- 1..500, do: Opus.Browser.input(watch, List.duplicate(move, 64))
+          {:messages, messages} = Process.info(pid, :messages)
+
+          waiting =
+            Enum.sum(
+              for {:"$gen_cast", {:input, _ref, _viewer, events}} <- messages,
+                  do: length(events)
+            )
+
+          {results, waiting}
+        after
+          :sys.resume(pid)
+        end
+
+      assert waiting <= Opus.Browser.Input.max_events()
+      assert Enum.frequencies(results) == %{:ok => 1, {:error, :busy} => 499}
+
+      assert_receive {Opus.Browser, ^watch, :input_taken}, 5_000
+      :ok = Opus.Browser.input_taken(watch)
+      assert :ok = Opus.Browser.input(watch, [move])
+    end
+  end
+
+  describe "browser.watch" do
+    test "the person watches a workspace thread of their own from the process that asked, starting the browser",
+         %{ctx: ctx} do
+      work = workspace!(ctx)
+      args = %{"action" => "watch", "thread" => work, "width" => 390, "height" => 390}
+
+      assert {:ok, %{watching: ^work}} = Sanctum.Gate.call_external("browser", ctx, args)
+      assert_receive {Opus.Browser, _watch, :watching}, 5_000
+      assert_receive {:driver, :opened, session}, 5_000
+
+      assert_receive {:driver, :req, ^session,
+                      %{
+                        "op" => "cast",
+                        "win" => ^work,
+                        "args" => %{"width" => 390, "height" => 390}
+                      }},
+                     5_000
+    end
+
+    test "a thread that is no workspace thread of the person's is not found, and nothing starts",
+         %{ctx: ctx, lineage: lineage} do
+      {other, _user} = person!("watch-elsewhere")
+      browser_row!(other)
+      theirs = workspace!(other)
+
+      for thread <- [lineage["thread_id"], theirs, "thr_none"] do
+        assert {:error, {:not_found, "thread", ^thread}} =
+                 Provider.handle("browser", ctx, %{
+                   "action" => "watch",
+                   "thread" => thread,
+                   "width" => 640,
+                   "height" => 640
+                 })
+      end
+
+      refute_received {Opus.Browser, _watch, _message}
+      assert holder(ctx) == nil
+    end
+
+    test "while the setting is off it is refused with the turned-off sentence and starts no browser",
+         %{ctx: ctx} do
+      work = workspace!(ctx)
+      assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+
+      assert refusal(
+               Provider.handle("browser", ctx, %{
+                 "action" => "watch",
+                 "thread" => work,
+                 "width" => 640,
+                 "height" => 640
+               })
+             ) == Provider.turned_off()
+
+      refute_received {:session, "open", _open, _fields}
+      assert holder(ctx) == nil
+    end
+
+    test "a key, a turn or a component reaches no watch, and the console's plane alone offers it",
+         %{ctx: ctx, lineage: lineage} do
+      work = workspace!(ctx)
+      key = %{guest(ctx) | auth_method: :api_key, api_key_id: "key_1"}
+      args = %{"action" => "watch", "thread" => work, "width" => 640, "height" => 640}
+
+      for caller <- [key, guest(ctx)] do
+        assert refusal(Provider.handle("browser", caller, Map.merge(args, lineage))) ==
+                 "Aqua's browser shows only on a page of yours in CYFR."
+      end
+
+      [watch] = for %{action: "watch"} = op <- Provider.definition().operations, do: op
+      assert watch.planes == [:external] and watch.consent == :interactive and watch.kind == :read
+      refute_received {Opus.Browser, _watch, _message}
+      assert holder(ctx) == nil
+    end
+  end
+
+  # Review round two, finding 8: a watch is a page's alone.
+  describe "a watch from no page" do
+    test "a paired device's call is refused, admits no watch and starts nothing", %{ctx: ctx} do
+      work = workspace!(ctx)
+      paired = Sanctum.Test.Devices.paired!(ctx.user_id, "127.0.0.1")
+      channel = Emissary.Web.DeviceChannel
+      peer = %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}
+      {:ok, state} = channel.connect(%{connect_info: %{peer_data: peer}})
+      {:ok, state} = channel.init(state)
+
+      send_frame = fn state, message ->
+        channel.handle_in({Jason.encode!(Prima.Device.encode(message)), [opcode: :text]}, state)
+      end
+
+      {:reply, :ok, {:text, json}, state} =
+        send_frame.(
+          state,
+          {:connect, %{client_id: paired.client_id, certificate: paired.certificate}}
+        )
+
+      {:ok, {:challenge, %{challenge: challenge}}} =
+        Prima.Device.decode(Jason.decode!(json), :home)
+
+      {_public, private} = paired.key
+      proof = Prima.DeviceCert.Proof.sign(challenge, private)
+      {:push, [_standing], state} = send_frame.(state, {:proof, %{proof: proof}})
+
+      intent =
+        {:intent,
+         %{
+           id: "watch-from-a-device",
+           operation: "browser.watch",
+           args: %{"thread" => work, "width" => 640, "height" => 640}
+         }}
+
+      {:reply, :ok, {:text, answer}, _state} = send_frame.(state, intent)
+      answer = Jason.decode!(answer)
+      assert %{"type" => "answer", "id" => "watch-from-a-device", "error" => _refused} = answer
+      refute Map.has_key?(answer, "result")
+
+      refute_receive {Opus.Browser, _watch, _message}, 200
+      refute_received {:driver, :req, _session, %{"op" => "cast"}}
+      refute_received {:session, "open", _open, _fields}
+      assert holder(ctx) == nil
+    end
+
+    test "the command line's call is refused and starts nothing; the page's is admitted",
+         %{ctx: ctx} do
+      work = workspace!(ctx)
+      args = %{"action" => "watch", "thread" => work, "width" => 640, "height" => 640}
+
+      for path <- [:api, :mcp, nil] do
+        assert refusal(
+                 Sanctum.Gate.call_external("browser", Sanctum.TestContext.via(ctx, path), args)
+               ) ==
+                 "Aqua's browser shows only on a page of yours in CYFR."
+      end
+
+      refute_receive {Opus.Browser, _watch, _message}, 200
+      refute_received {:session, "open", _open, _fields}
+      assert holder(ctx) == nil
+
+      assert {:ok, %{watching: ^work}} = Sanctum.Gate.call_external("browser", ctx, args)
+      assert_receive {Opus.Browser, _watch, :watching}, 5_000
+      assert_receive {:driver, :req, _session, %{"op" => "cast", "win" => ^work}}, 5_000
+    end
+  end
+
+  # A workspace thread of the person's, opened from a post of their day.
+  defp workspace!(ctx) do
+    ctx = %{ctx | origin: :interactive}
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, daily} = Aqua.Day.current(ctx)
+
+    {:ok, %{message: asked}} =
+      TurnStorage.accept_message(actor, daily.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "please look it up"}
+      })
+
+    {:ok, %{workspace: id}} =
+      Aqua.Providers.Workspace.handle("workspace", ctx, %{
+        "action" => "open",
+        "thread" => daily.id,
+        "refs" => [asked.id],
+        "title" => "Look it up",
+        "ask" => "Look it up"
+      })
+
+    id
+  end
+
+  defp watch!(ctx, window, size \\ %{width: 1280, height: 720}) do
+    assert {:ok, watch} = Opus.Browser.watch(ctx, window, size, fn -> true end)
+    watch
+  end
+
+  # A page watching `window` in a process of its own, which tells the test
+  # each message of its watch as `{:viewer, pid, message}`.
+  defp viewer(ctx, window) do
+    test = self()
+
+    pid =
+      spawn(fn ->
+        {:ok, _watch} =
+          Opus.Browser.watch(ctx, window, %{width: 1280, height: 720}, fn -> true end)
+
+        send(test, {:watching, self()})
+        forward(test)
+      end)
+
+    assert_receive {:watching, ^pid}, 5_000
+    pid
+  end
+
+  defp forward(test) do
+    receive do
+      {Opus.Browser, _ref, message} -> send(test, {:viewer, self(), message})
+    end
+
+    forward(test)
+  end
+
+  defp only_watch(ctx) do
+    [watch] = Map.values(:sys.get_state(holder(ctx)).watches)
+    watch
+  end
+
+  defp only_watch_handle(ctx), do: {holder(ctx), only_watch(ctx).ref}
+
+  defp jpeg, do: <<0xFF, 0xD8>> <> :crypto.strong_rand_bytes(2_000) <> <<0xFF, 0xD9>>
 
   # Whether the browser's terminal holds a delivery its holder has not
   # taken, and whether it let some of what came meanwhile go.

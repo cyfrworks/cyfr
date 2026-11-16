@@ -208,6 +208,10 @@ defmodule Aqua do
   @spec workspace(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   defdelegate workspace(ctx, thread_id), to: Aqua.Providers.Workspace, as: :record
 
+  @doc "What a person reads while their browser setting is off. See `Aqua.Providers.Browser.turned_off/0`."
+  @spec browser_turned_off() :: String.t()
+  defdelegate browser_turned_off(), to: Aqua.Providers.Browser, as: :turned_off
+
   @doc """
   A thread's steps across its turns, newest first, each a sentence of
   what Aqua did (`Aqua.Steps.steps/3`).

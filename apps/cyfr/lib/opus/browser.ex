@@ -34,15 +34,16 @@ defmodule Opus.Browser do
   ## Its life
 
   One holder process per person, found by name, starts the session when
-  a turn first needs it and is its one attached process. The holder is
-  registered under its name before it reads the setting, and it reads
-  the setting, through the check `act/4` was handed, before it starts
-  anything; turning the setting off writes it before it stops the holder
-  it finds by that name (`stop/2`). So a holder the stop did not find
-  registered after the write, reads the setting off, starts nothing and
-  ends, answering what it holds `:turned_off`. It ends the
-  session at its idle stop (no action for the `browser_idle_ms` platform
-  setting's time), on `stop/2` (the browser setting went off), and the
+  a turn first needs it, or when the person watches a window, and is its
+  one attached process. The holder is registered under its name before
+  it reads the setting, and it reads the setting, through the check
+  `act/4` or `watch/4` was handed, before it starts anything; turning the
+  setting off writes it before it stops the holder it finds by that name
+  (`stop/2`). So a holder the stop did not find registered after the
+  write, reads the setting off, starts nothing and ends, answering what
+  it holds `:turned_off`. It ends the session at its idle stop (no action
+  and no watch for the `browser_idle_ms` platform setting's time), on
+  `stop/2` (the browser setting went off), and the
   session ends as any does: its program exits, the person closes it from
   what is running, its row changes, its person no longer stands. Every
   request waiting then is answered, and the profile stays in its folder.
@@ -71,6 +72,40 @@ defmodule Opus.Browser do
   missing chunk (`again`), never sent again as a request, so no action
   runs twice; one the driver no longer holds is refused `:unavailable`,
   as is one not answered in time.
+
+  ## The person's watch
+
+  `watch/4` is the person watching one window on a page of their own
+  (C12): a browser's session on the console's admission path, proved by
+  the session owner as a person, and no other caller, a paired device's
+  channel and the command line among them: it starts the
+  browser when none runs, as an action does, and asks the driver for that
+  window's cast, a request of op `cast` whose id names the cast from then
+  on. Its messages go to the process that asked, the viewer, as
+  `{Opus.Browser, watch, message}`, `watch` the handle `seen/2`,
+  `input/2` and `unwatch/1` take, the first `:watching` once it is
+  admitted. Each image of it is `{:image, n, output}`, its JPEG an
+  `Opus.Programs.Output`, handed to no other process; the next is handed
+  only once the viewer said it drew this one (`seen/2`), and only then is
+  the driver told, so a viewer that does not say so is sent no further
+  image, while every action's response still arrives whole beside it. A
+  window that does not stand, or that closed, is `:waiting`, and its
+  cast is asked again once an action opens it. The
+  viewer's input (`input/2`, events `Opus.Browser.Input` reads) goes to
+  that window alone, one batch in flight (`Opus.Browser.Input.in_flight/0`):
+  the viewer hands the next only once the holder took the last, and what
+  comes meanwhile is dropped, never queued; each write is decided by the
+  writer as a request is, just before its first byte. A watch is asked
+  with the moment its caller stops waiting, and the holder admits nothing
+  past it; a caller whose wait ran out withdraws it. A watch ends with
+  `{:ended, reason}` once, and nothing after: on
+  `unwatch/1`, the viewer's exit, a newer watch of its window
+  (`:replaced`), `stop/2`, or the session's end. Once it ended, no image
+  of its cast and no input of its viewer goes anywhere. After a
+  replacement tail every cast is ended and asked for anew, so an image
+  cut there is never shown and the cast goes on with the next. A watch
+  keeps the browser from its idle stop. At most `max_windows/0` windows
+  are watched at once (`:too_many_watches`).
   """
 
   use GenServer, restart: :temporary
@@ -89,6 +124,9 @@ defmodule Opus.Browser do
   @answer_margin_ms 5_000
   @rows 50
   @cols 200
+  # How long a watch's caller waits for its holder, which answers at once:
+  # past it the holder admits nothing for that caller.
+  @watch_ms 5_000
 
   @doc "The most windows one browser holds at once."
   @spec max_windows() :: pos_integer()
@@ -180,6 +218,119 @@ defmodule Opus.Browser do
 
   def act(_caller, _op, _args, _allowed?), do: {:error, :not_owned}
 
+  @typedoc """
+  A watch of a window: its holder, which the viewer may monitor, and the
+  reference its messages carry.
+  """
+  @type watch :: {pid(), reference()}
+
+  @doc """
+  Watch `window` of the person's browser as `ctx`, a person on a page of
+  their own, from the calling process, which is that page's view and the
+  viewer: the context a browser's session has on the console's admission
+  path (`auth_method: :oidc`, origin `interactive`, no frame; it is
+  `CyfrWeb.ContextGuard`'s), whose person the session owner proves. The
+  browser starts when none runs, after `allowed?` (as `act/4`'s) says it
+  may, and the window's images are scaled to fit `size`. Answers the
+  watch, whose messages carry its reference (moduledoc), or `:not_owned`
+  for any other caller, which starts nothing: a key, a frame, a paired
+  device's channel, the command line's session (origin `programmatic`), a
+  person who no longer stands; `:too_many_watches`, `:turned_off`,
+  `:unavailable`.
+  """
+  @spec watch(
+          Sanctum.Context.t(),
+          String.t(),
+          %{width: pos_integer(), height: pos_integer()},
+          (-> boolean())
+        ) ::
+          {:ok, watch()} | {:error, term()}
+  def watch(
+        %Sanctum.Context{auth_method: :oidc, origin: :interactive, frame: nil} = ctx,
+        window,
+        %{width: width, height: height},
+        allowed?
+      )
+      when is_binary(window) and window != "" and width in 16..4096 and height in 16..4096 and
+             is_function(allowed?, 0) do
+    with {:ok, {athanor_id, user_id}} <- person_of(ctx),
+         {:ok, pid} <- holder(athanor_id, user_id) do
+      ask(pid, window, %{width: width, height: height}, allowed?)
+    end
+  end
+
+  def watch(_ctx, _window, _size, _allowed?), do: {:error, :not_owned}
+
+  # The watch is asked with the moment its caller stops waiting: the holder
+  # admits nothing past it. A caller whose wait ran out withdraws the ask,
+  # which reaches the holder after it, so a watch it was not told of is
+  # ended as soon as it was admitted.
+  defp ask(pid, window, size, allowed?) do
+    ask = make_ref()
+    deadline = now() + @watch_ms
+
+    try do
+      GenServer.call(
+        pid,
+        {:watch, self(), ask, deadline, window, size, allowed?},
+        @watch_ms + @answer_margin_ms
+      )
+    catch
+      :exit, _ ->
+        GenServer.cast(pid, {:withdraw, ask, self()})
+        {:error, :unavailable}
+    end
+  end
+
+  @doc "The viewer drew image `n` of its watch; the next may come."
+  @spec seen(watch(), pos_integer()) :: :ok
+  def seen({pid, ref}, n) when is_pid(pid) and is_reference(ref) and is_integer(n),
+    do: GenServer.cast(pid, {:seen, ref, self(), n})
+
+  @doc """
+  The viewer's input for the window it watches, one batch in flight: a
+  batch is handed to the holder only once the holder took the last, which
+  it says as `{Opus.Browser, watch, :input_taken}` and the viewer passes
+  to `input_taken/1`. Answers `:ok` once it is handed, `:busy` while the
+  last is in flight (the batch is dropped, not queued), or `:bad_input`
+  for events `Opus.Browser.Input` does not read. So at most one batch of
+  a watch's, `Opus.Browser.Input.max_events/0` events, ever waits for the
+  holder (`Opus.Browser.Input.in_flight/0`).
+  """
+  @spec input(watch(), [map()]) :: :ok | {:error, :busy | :bad_input}
+  def input({pid, ref}, events) when is_pid(pid) and is_reference(ref) do
+    with :ok <- if(Process.get(in_flight(ref)), do: {:error, :busy}, else: :ok),
+         {:ok, events} <- Opus.Browser.Input.events(events) |> bad_input() do
+      Process.put(in_flight(ref), true)
+
+      # What the person types travels as its JSON in an
+      # `Opus.Programs.Output`, which shows its size alone.
+      GenServer.cast(
+        pid,
+        {:input, ref, self(), Enum.map(events, &Programs.Output.new(Jason.encode!(&1)))}
+      )
+    end
+  end
+
+  @doc "The holder took the watch's last batch of input: the next may go."
+  @spec input_taken(watch()) :: :ok
+  def input_taken({_pid, ref}) when is_reference(ref) do
+    Process.delete(in_flight(ref))
+    :ok
+  end
+
+  defp in_flight(ref), do: {__MODULE__, :input_in_flight, ref}
+
+  defp bad_input({:ok, events}), do: {:ok, events}
+  defp bad_input(:error), do: {:error, :bad_input}
+
+  @doc "End the watch; the browser goes on."
+  @spec unwatch(watch()) :: :ok
+  def unwatch({pid, ref}) when is_pid(pid) and is_reference(ref) do
+    Process.delete(in_flight(ref))
+    GenServer.cast(pid, {:unwatch, ref, self()})
+  end
+
   @doc """
   The caller a call of the browser tool in a turn's chain is: its context
   and the lineage the gate stamped on its arguments
@@ -195,8 +346,12 @@ defmodule Opus.Browser do
   """
   @spec person(Sanctum.Context.t()) :: :ok | {:error, :not_owned | :unavailable}
   def person(%Sanctum.Context{} = ctx) do
+    with {:ok, _person} <- person_of(ctx), do: :ok
+  end
+
+  defp person_of(ctx) do
     case Programs.caller(ctx) do
-      {:ok, {_athanor_id, _user_id}} -> :ok
+      {:ok, {_athanor_id, _user_id} = person} -> {:ok, person}
       {:error, :unavailable} -> {:error, :unavailable}
       _not_a_person -> {:error, :not_owned}
     end
@@ -235,6 +390,20 @@ defmodule Opus.Browser do
     :ok
   catch
     :exit, _ -> close_running(Programs.browser(athanor_id, user_id))
+  end
+
+  @doc """
+  The windows the person's browser holds now, each named by its thread;
+  none when no browser of theirs runs.
+  """
+  @spec windows(String.t(), String.t()) :: [String.t()]
+  def windows(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do
+    case lookup(athanor_id, user_id) do
+      nil -> []
+      pid -> GenServer.call(pid, :windows, @watch_ms)
+    end
+  catch
+    :exit, _ -> []
   end
 
   @doc "Whether the person's browser holds a session now."
@@ -307,6 +476,7 @@ defmodule Opus.Browser do
        pending: %{},
        queued: [],
        windows: MapSet.new(),
+       watches: %{},
        last_act: now(),
        idle: nil,
        stopping: false,
@@ -321,7 +491,16 @@ defmodule Opus.Browser do
         state
       ) do
     state = %{state | last_act: now()}
-    request = %{from: from, caller: caller, turn_id: turn_id, window: window, op: op, args: args}
+
+    request = %{
+      kind: :act,
+      from: from,
+      caller: caller,
+      turn_id: turn_id,
+      window: window,
+      op: op,
+      args: args
+    }
 
     cond do
       state.stopping ->
@@ -353,6 +532,12 @@ defmodule Opus.Browser do
       :error ->
         {:reply, false, state}
 
+      # A cast is wanted while its watch stands on it.
+      {:ok, %{kind: :cast} = request} ->
+        if watching?(state, request.watch, id),
+          do: {:reply, true, state},
+          else: {:reply, false, unwanted(state, id, request, nil)}
+
       {:ok, %{from: {caller_pid, _tag}} = request} ->
         cond do
           not Process.alive?(caller_pid) ->
@@ -367,6 +552,55 @@ defmodule Opus.Browser do
     end
   end
 
+  def handle_call(:windows, _from, state), do: {:reply, MapSet.to_list(state.windows), state}
+
+  # Input is wanted while its watch stands on the cast it was given for.
+  def handle_call({:wanted_input, ref, cast}, _from, state),
+    do: {:reply, watching?(state, ref, cast), state}
+
+  def handle_call({:watch, viewer, ask, deadline, window, size, allowed?}, _from, state) do
+    cond do
+      # Its caller has stopped waiting: nothing is admitted for it.
+      now() > deadline ->
+        {:reply, {:error, :unavailable}, state}
+
+      state.stopping ->
+        {:reply, {:error, :turned_off}, state}
+
+      not Map.has_key?(watched(state), window) and map_size(watched(state)) >= @max_windows ->
+        {:reply, {:error, :too_many_watches}, state}
+
+      true ->
+        state =
+          case watched(state)[window] do
+            nil -> state
+            older -> end_watch(state, older, :replaced)
+          end
+
+        ref = make_ref()
+
+        watch = %{
+          ref: ref,
+          ask: ask,
+          viewer: viewer,
+          monitor: Process.monitor(viewer),
+          window: window,
+          size: size,
+          cast: nil,
+          reopened: false,
+          shown: nil,
+          held: nil,
+          n: 0,
+          input: [],
+          writing: false
+        }
+
+        state = %{state | watches: Map.put(state.watches, ref, watch), last_act: now()}
+        tell(watch, :watching)
+        {:reply, {:ok, {self(), ref}}, state |> cast(ref, allowed?) |> idle()}
+    end
+  end
+
   # A stop during a start closes what the start opens once it answers.
   def handle_call(:stop, _from, %{starting: %Task{}} = state),
     do: {:reply, :ok, %{answer_all(state, {:error, :turned_off}) | stopping: true}}
@@ -374,6 +608,69 @@ defmodule Opus.Browser do
   def handle_call(:stop, _from, state) do
     state = answer_all(state, {:error, :turned_off})
     {:stop, :normal, :ok, close_session(state)}
+  end
+
+  # The viewer drew image n: the driver is told, when it is of the cast
+  # the watch stands on, and the image held since is handed.
+  @impl true
+  def handle_cast({:seen, ref, viewer, n}, state) do
+    case state.watches[ref] do
+      %{viewer: ^viewer, shown: {^n, cast, seq}} = watch ->
+        if cast == watch.cast,
+          do: write(state, Frame.message(%{"t" => "seen", "id" => cast, "seq" => seq}), :seen)
+
+        watch = %{watch | shown: nil}
+
+        case watch.held do
+          {held_cast, held_seq, image} when held_cast == watch.cast ->
+            {:noreply, hand(state, %{watch | held: nil}, held_seq, image)}
+
+          _none_or_stale ->
+            {:noreply, put_watch(state, %{watch | held: nil})}
+        end
+
+      _stale_or_another ->
+        {:noreply, state}
+    end
+  end
+
+  # A batch of the viewer's input is taken off the mailbox, kept for the
+  # watch's window (`Opus.Browser.Input.max_events/0` at most, the rest
+  # dropped), or dropped while the window waits, and the viewer is told it
+  # was taken, so it may hand the next.
+  def handle_cast({:input, ref, viewer, events}, state) do
+    case state.watches[ref] do
+      %{viewer: ^viewer} = watch ->
+        tell(watch, :input_taken)
+
+        case watch do
+          %{cast: cast} when is_integer(cast) ->
+            room = Opus.Browser.Input.max_events() - length(watch.input)
+            watch = %{watch | input: watch.input ++ Enum.take(events, max(room, 0))}
+            {:noreply, state |> put_watch(watch) |> pump_input(ref)}
+
+          _waiting ->
+            {:noreply, state}
+        end
+
+      _ended_or_another ->
+        {:noreply, state}
+    end
+  end
+
+  # A caller that stopped waiting for its watch withdraws it.
+  def handle_cast({:withdraw, ask, viewer}, state) do
+    case Enum.find(Map.values(state.watches), &(&1.ask == ask and &1.viewer == viewer)) do
+      nil -> {:noreply, state}
+      watch -> {:noreply, end_watch(state, watch, nil)}
+    end
+  end
+
+  def handle_cast({:unwatch, ref, viewer}, state) do
+    case state.watches[ref] do
+      %{viewer: ^viewer} = watch -> {:noreply, end_watch(state, watch, nil)}
+      _ended_or_another -> {:noreply, state}
+    end
   end
 
   # The session's start, made off the holder so a slow service never
@@ -386,6 +683,24 @@ defmodule Opus.Browser do
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{starting: %Task{ref: ref}} = state),
     do: {:stop, :normal, answer_all(%{state | starting: nil}, {:error, :unavailable})}
+
+  def handle_info({:DOWN, monitor, :process, _viewer, _reason} = message, state) do
+    case Enum.find(Map.values(state.watches), &(&1.monitor == monitor)) do
+      nil ->
+        Prima.LoggerContext.unexpected(__MODULE__, message)
+        {:noreply, state}
+
+      watch ->
+        {:noreply, end_watch(state, watch, nil)}
+    end
+  end
+
+  def handle_info({:written, {:input, ref, _cast}}, state) do
+    case state.watches[ref] do
+      nil -> {:noreply, state}
+      watch -> {:noreply, state |> put_watch(%{watch | writing: false}) |> pump_input(ref)}
+    end
+  end
 
   def handle_info({:EXIT, writer, reason}, %{writer: writer} = state),
     do: {:stop, reason, answer_all(state, {:error, :unavailable})}
@@ -415,8 +730,8 @@ defmodule Opus.Browser do
         {:noreply, state}
 
       {request, pending} ->
-        GenServer.reply(request.from, {:error, :unavailable})
-        {:noreply, idle(%{state | pending: pending})}
+        {:noreply,
+         %{state | pending: pending} |> settle(request, {:error, :unavailable}) |> idle()}
     end
   end
 
@@ -434,8 +749,7 @@ defmodule Opus.Browser do
 
       {request, pending} ->
         Process.cancel_timer(request.timer)
-        GenServer.reply(request.from, {:error, :unavailable})
-        {:noreply, %{state | pending: pending}}
+        {:noreply, settle(%{state | pending: pending}, request, {:error, :unavailable})}
     end
   end
 
@@ -444,7 +758,7 @@ defmodule Opus.Browser do
   def handle_info({:idle, token}, %{idle: {_timer, token}} = state) do
     left = idle_ms() - (now() - state.last_act)
 
-    if state.pending == %{} and state.queued == [] and left <= 0,
+    if state.pending == %{} and state.queued == [] and state.watches == %{} and left <= 0,
       do: {:stop, :normal, close_session(%{state | idle: nil})},
       else: {:noreply, idle(%{state | idle: nil})}
   end
@@ -460,6 +774,7 @@ defmodule Opus.Browser do
   @impl true
   def terminate(_reason, state) do
     _ = close_session(state)
+    for watch <- Map.values(state.watches), do: tell(watch, {:ended, :unavailable})
     :ok
   end
 
@@ -551,6 +866,8 @@ defmodule Opus.Browser do
       {:ok, %{"t" => "hello"} = hello} -> hello(hello, state)
       {:ok, %{"t" => "res"} = res} -> response(res, state)
       {:ok, %{"t" => "gone", "id" => id}} -> gone(id, state)
+      {:ok, %{"t" => "image"} = image} -> image(image, state)
+      {:ok, %{"t" => "uncast", "id" => cast}} -> uncast(cast, state)
       _unknown -> state
     end
   end
@@ -591,13 +908,17 @@ defmodule Opus.Browser do
       )
 
     if byte_size(frame) > Frame.max_to_driver() do
-      GenServer.reply(request.from, {:error, :too_large})
-      state
+      settle(state, Map.merge(request, %{id: id, timer: nil}), {:error, :too_large})
     else
       timer = Process.send_after(self(), {:expired, id}, @request_ms)
-      request = Map.merge(request, %{timer: timer, parts: %{}, of: nil, size: 0})
+      request = Map.merge(request, %{id: id, timer: timer, parts: %{}, of: nil, size: 0})
       write(state, frame, {:request, id})
-      %{state | next_id: id + 1, pending: Map.put(state.pending, id, request)}
+      state = %{state | next_id: id + 1, pending: Map.put(state.pending, id, request)}
+
+      case request do
+        %{kind: :cast, watch: ref} -> update_watch(state, ref, &%{&1 | cast: id, reopened: false})
+        _action -> state
+      end
     end
   end
 
@@ -660,8 +981,16 @@ defmodule Opus.Browser do
 
   defp refuse(state, id, request, reply) do
     Process.cancel_timer(request.timer)
+    settle(%{state | pending: Map.delete(state.pending, id)}, request, reply)
+  end
+
+  # A request's answer: an action's caller is replied to; a cast's watch
+  # takes it, if it still stands on that cast.
+  defp settle(state, %{kind: :cast} = request, reply), do: cast_answered(state, request, reply)
+
+  defp settle(state, request, reply) do
     GenServer.reply(request.from, reply)
-    %{state | pending: Map.delete(state.pending, id)}
+    state
   end
 
   defp gone(id, state) do
@@ -671,8 +1000,7 @@ defmodule Opus.Browser do
 
       {request, pending} ->
         Process.cancel_timer(request.timer)
-        GenServer.reply(request.from, {:error, :unavailable})
-        %{state | pending: pending}
+        settle(%{state | pending: pending}, request, {:error, :unavailable})
     end
   end
 
@@ -693,8 +1021,12 @@ defmodule Opus.Browser do
           {{:error, :unavailable}, state}
       end
 
-    GenServer.reply(request.from, reply)
-    state
+    state = settle(state, request, reply)
+
+    case {request, reply} do
+      {%{op: op, window: window}, {:ok, _answer}} when op in @openers -> opened(state, window)
+      _other -> state
+    end
   end
 
   defp windows(state, %{op: op, window: window}, :ok) when op in @openers,
@@ -710,13 +1042,21 @@ defmodule Opus.Browser do
 
   # After a tail: each response still incomplete is asked for again from
   # its first missing chunk.
+  # Every cast is ended and asked for anew, so an image or an end cut by
+  # the tail never stalls it.
   defp recover(state) do
-    for {id, request} <- state.pending do
+    for {id, %{kind: :act} = request} <- state.pending do
       first = Enum.find(0..map_size(request.parts), &(not Map.has_key?(request.parts, &1)))
       write(state, Frame.message(%{"t" => "again", "id" => id, "seq" => first}), :again)
     end
 
-    state
+    state.watches
+    |> Map.values()
+    |> Enum.filter(& &1.cast)
+    |> Enum.reduce(state, fn watch, state ->
+      state = stop_cast(state, watch)
+      state |> update_watch(watch.ref, &%{&1 | cast: nil, held: nil}) |> cast(watch.ref, nil)
+    end)
   end
 
   defp acknowledge(state, id, seq) do
@@ -724,14 +1064,22 @@ defmodule Opus.Browser do
     state
   end
 
-  defp answer_all(state, reply) do
+  # Every action waiting is answered `reply` and every watch ends with its
+  # reason.
+  defp answer_all(state, {:error, reason} = reply) do
     for request <- Map.values(state.pending) do
       Process.cancel_timer(request.timer)
-      GenServer.reply(request.from, reply)
+      if request.kind == :act, do: GenServer.reply(request.from, reply)
     end
 
-    for request <- state.queued, do: GenServer.reply(request.from, reply)
-    %{state | pending: %{}, queued: []}
+    for %{kind: :act} = request <- state.queued, do: GenServer.reply(request.from, reply)
+
+    for watch <- Map.values(state.watches) do
+      Process.demonitor(watch.monitor, [:flush])
+      tell(watch, {:ended, reason})
+    end
+
+    %{state | pending: %{}, queued: [], watches: %{}}
   end
 
   defp close_session(%{session: nil} = state), do: state
@@ -741,11 +1089,195 @@ defmodule Opus.Browser do
     %{state | session: nil, phase: :idle, windows: MapSet.new()}
   end
 
+  # ---------------------------------------------------------------------------
+  # Watches
+
+  # The watches by the window each watches.
+  defp watched(state), do: Map.new(state.watches, fn {_ref, w} -> {w.window, w} end)
+
+  defp watching?(state, ref, cast) do
+    case state.watches[ref] do
+      %{cast: ^cast, viewer: viewer} -> Process.alive?(viewer)
+      _ended_or_moved_on -> false
+    end
+  end
+
+  defp put_watch(state, watch), do: %{state | watches: Map.put(state.watches, watch.ref, watch)}
+
+  defp update_watch(state, ref, fun) do
+    case state.watches[ref] do
+      nil -> state
+      watch -> put_watch(state, fun.(watch))
+    end
+  end
+
+  defp tell(watch, message), do: send(watch.viewer, {__MODULE__, {self(), watch.ref}, message})
+
+  # Ask the driver for the watch's cast, starting the browser first when
+  # none runs (`allowed?` as an action's): only a new watch may find none,
+  # and only it is handed `allowed?`.
+  defp cast(state, ref, allowed?) do
+    watch = state.watches[ref]
+
+    request = %{
+      kind: :cast,
+      watch: ref,
+      window: watch.window,
+      op: "cast",
+      args: Programs.Output.new(Jason.encode!(watch.size)),
+      from: nil
+    }
+
+    case state.phase do
+      :ready -> send_request(state, request)
+      :starting -> %{state | queued: state.queued ++ [request]}
+      :idle when is_function(allowed?, 0) -> start_session(%{state | queued: [request]}, allowed?)
+    end
+  end
+
+  # The driver's answer to a cast, taken by its watch while it stands on
+  # that cast: a window that does not stand waits, unless an action opened
+  # it meanwhile; any other refusal ends the watch.
+  defp cast_answered(state, request, reply) do
+    case state.watches[request.watch] do
+      %{cast: id} = watch when id == request.id ->
+        case reply do
+          {:ok, _casting} -> state
+          {:error, {:driver, "no_window", _sentence}} -> waiting(state, watch)
+          {:error, reason} -> end_watch(state, watch, reason)
+        end
+
+      _ended_or_moved_on ->
+        state
+    end
+  end
+
+  defp waiting(state, watch) do
+    watch = %{watch | cast: nil, held: nil}
+
+    if watch.reopened do
+      state |> put_watch(%{watch | reopened: false}) |> cast(watch.ref, nil)
+    else
+      tell(watch, :waiting)
+      put_watch(state, watch)
+    end
+  end
+
+  # An action opened a window: a watch waiting for it asks for its cast,
+  # and one whose cast is under way remembers it.
+  defp opened(state, window) do
+    case watched(state)[window] do
+      %{cast: nil} = watch -> cast(state, watch.ref, nil)
+      %{} = watch -> put_watch(state, %{watch | reopened: true})
+      nil -> state
+    end
+  end
+
+  # The driver ended a cast, its window closed.
+  defp uncast(cast, state) when is_integer(cast) do
+    case Enum.find(Map.values(state.watches), &(&1.cast == cast)) do
+      nil -> state
+      watch -> waiting(state, watch)
+    end
+  end
+
+  defp uncast(_malformed, state), do: state
+
+  # One image of a cast: handed to its watch's viewer when it holds none
+  # unacknowledged, else held as the newest; one of a cast no watch stands
+  # on is dropped. An image whose JPEG does not read is not shown, and the
+  # driver is told it was seen so the cast goes on.
+  defp image(%{"id" => cast, "seq" => seq, "jpeg" => jpeg}, state)
+       when is_integer(cast) and is_integer(seq) and is_binary(jpeg) do
+    case Enum.find(Map.values(state.watches), &(&1.cast == cast)) do
+      nil ->
+        state
+
+      watch ->
+        case Base.decode64(jpeg) do
+          {:ok, bytes} when watch.shown == nil ->
+            hand(state, watch, seq, Programs.Output.new(bytes))
+
+          {:ok, bytes} ->
+            put_watch(state, %{watch | held: {cast, seq, Programs.Output.new(bytes)}})
+
+          :error ->
+            write(state, Frame.message(%{"t" => "seen", "id" => cast, "seq" => seq}), :seen)
+            state
+        end
+    end
+  end
+
+  defp image(_malformed, state), do: state
+
+  defp hand(state, watch, seq, image) do
+    n = watch.n + 1
+    tell(watch, {:image, n, image})
+    put_watch(state, %{watch | n: n, shown: {n, watch.cast, seq}})
+  end
+
+  # The next input of a watch goes to the writer once the last is done.
+  defp pump_input(state, ref) do
+    case state.watches[ref] do
+      %{writing: false, input: [_ | _] = events, cast: cast} = watch when is_integer(cast) ->
+        frame =
+          Frame.encode(
+            IO.iodata_to_binary([
+              ~s({"t":"input","id":),
+              Integer.to_string(cast),
+              ~s(,"evs":[),
+              Enum.map_intersperse(events, ",", & &1.bytes),
+              "]}"
+            ])
+          )
+
+        write(state, frame, {:input, ref, cast})
+        put_watch(state, %{watch | writing: true, input: []})
+
+      _nothing_or_busy ->
+        state
+    end
+  end
+
+  defp stop_cast(state, %{cast: nil}), do: state
+
+  defp stop_cast(state, watch) do
+    write(state, Frame.message(%{"t" => "uncast", "id" => watch.cast}), :uncast)
+
+    case Map.pop(state.pending, watch.cast) do
+      {%{kind: :cast, timer: timer}, pending} ->
+        Process.cancel_timer(timer)
+        %{state | pending: pending}
+
+      {_none_or_action, _pending} ->
+        state
+    end
+  end
+
+  # A watch ends: its viewer is told `reason` (nothing when it asked or
+  # is gone), the driver ends its cast, and the browser's idle clock runs
+  # from now.
+  defp end_watch(state, watch, reason) do
+    Process.demonitor(watch.monitor, [:flush])
+    if reason, do: tell(watch, {:ended, reason})
+    state = stop_cast(state, watch)
+
+    queued = Enum.reject(state.queued, &(&1.kind == :cast and &1.watch == watch.ref))
+
+    idle(%{
+      state
+      | watches: Map.delete(state.watches, watch.ref),
+        queued: queued,
+        last_act: now()
+    })
+  end
+
   # The idle clock runs from the last action while nothing waits.
   defp idle(state) do
     with {timer, _token} <- state.idle, do: Process.cancel_timer(timer)
 
-    if state.phase == :ready and state.pending == %{} and state.queued == [] do
+    if state.phase == :ready and state.pending == %{} and state.queued == [] and
+         state.watches == %{} do
       token = make_ref()
       left = max(idle_ms() - (now() - state.last_act), 0)
       %{state | idle: {Process.send_after(self(), {:idle, token}, left), token}}
@@ -781,6 +1313,8 @@ defmodule Opus.Browser do
           end
         end
 
+        # The holder sends a watch's next input once this one is done with.
+        with {:input, _ref, _cast} <- tag, do: send(owner, {:written, tag})
         write_loop(watch, owner, browser)
 
       {:DOWN, ^watch, :process, _owner, _reason} ->
@@ -794,7 +1328,13 @@ defmodule Opus.Browser do
     :exit, _holder_gone -> false
   end
 
-  defp wanted?(_owner, _ack_or_again), do: true
+  defp wanted?(owner, {:input, ref, cast}) do
+    GenServer.call(owner, {:wanted_input, ref, cast}, @request_ms)
+  catch
+    :exit, _holder_gone -> false
+  end
+
+  defp wanted?(_owner, _control), do: true
 
   defp write_all(_browser, _session, ""), do: :ok
 

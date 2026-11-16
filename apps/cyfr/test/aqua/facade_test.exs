@@ -19,6 +19,7 @@ defmodule Aqua.FacadeTest do
     auto_permitted?: 2,
     brain_options: 2,
     brain_signs_in?: 1,
+    browser_turned_off: 0,
     describe_note_result: 1,
     mark_read: 3,
     model_status: 2,
