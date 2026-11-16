@@ -19,6 +19,7 @@ type frameVectors struct {
 	MaxToHost   int    `json:"max_to_host"`
 	MaxToDriver int    `json:"max_to_driver"`
 	MaxResponse int    `json:"max_response"`
+	InFlight    int    `json:"input_in_flight"`
 	Encode      []struct {
 		Name, Body, Frame string
 	} `json:"encode"`
@@ -137,7 +138,11 @@ func must[T any](value T, err error) T {
 // holds; every event they refuse is refused, and takes the message it is
 // in with it; a message of no event, or of one past the bound, is refused.
 func TestInputVectors(t *testing.T) {
-	v := loadFrameVectors(t).Input
+	all := loadFrameVectors(t)
+	if all.InFlight != castInputs {
+		t.Fatalf("the vectors hold %d input messages of a cast on their way; the driver %d", all.InFlight, castInputs)
+	}
+	v := all.Input
 	if v.MaxEvents != maxInputEvents || len(v.Accept) == 0 || len(v.Refuse) == 0 {
 		t.Fatalf("the vectors bound a message at %d events, the driver at %d; %d accepted, %d refused",
 			v.MaxEvents, maxInputEvents, len(v.Accept), len(v.Refuse))

@@ -25,6 +25,17 @@ defmodule Opus.Browser.Input do
   def max_events, do: @max_events
 
   @doc """
+  The input messages of one watch on their way at once, at every hop: the
+  viewer hands the next only once the holder took the last
+  (`Opus.Browser.input/2`), the holder writes the next only once its writer
+  is done with the last, and the driver holds no more than this many
+  waiting behind the one it dispatches. What comes beyond it is dropped,
+  never queued.
+  """
+  @spec in_flight() :: pos_integer()
+  def in_flight, do: 1
+
+  @doc """
   The events, each as the driver reads it, or `:error` when any is not
   an event or there are none or more than `max_events/0`.
   """

@@ -1366,6 +1366,51 @@ defmodule Opus.BrowserTest do
       assert :sys.get_state(pid).watches == %{}
       refute_received {Opus.Browser, _watch, :watching}
     end
+
+    # Finding 3: input is bounded where it enters: one batch of a watch's
+    # on its way to the holder, the next only once the holder took it.
+    test "a viewer hands one batch of input at a time; the rest is dropped, never queued",
+         %{ctx: ctx, lineage: lineage} do
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      watch = watch!(ctx, lineage["thread_id"])
+      assert_receive {:driver, :req, _s, %{"op" => "cast"}}, 5_000
+      pid = holder(ctx)
+
+      move = %{
+        "k" => "mouse",
+        "type" => "move",
+        "x" => 0.5,
+        "y" => 0.5,
+        "button" => "none",
+        "clicks" => 0,
+        "mods" => 0
+      }
+
+      :ok = :sys.suspend(pid)
+
+      {results, waiting} =
+        try do
+          results = for _ <- 1..500, do: Opus.Browser.input(watch, List.duplicate(move, 64))
+          {:messages, messages} = Process.info(pid, :messages)
+
+          waiting =
+            Enum.sum(
+              for {:"$gen_cast", {:input, _ref, _viewer, events}} <- messages,
+                  do: length(events)
+            )
+
+          {results, waiting}
+        after
+          :sys.resume(pid)
+        end
+
+      assert waiting <= Opus.Browser.Input.max_events()
+      assert Enum.frequencies(results) == %{:ok => 1, {:error, :busy} => 499}
+
+      assert_receive {Opus.Browser, ^watch, :input_taken}, 5_000
+      :ok = Opus.Browser.input_taken(watch)
+      assert :ok = Opus.Browser.input(watch, [move])
+    end
   end
 
   defp watch!(ctx, window, size \\ %{width: 1280, height: 720}) do

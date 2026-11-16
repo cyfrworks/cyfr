@@ -36,9 +36,10 @@ const (
 	maxCasts = 8
 	// The bounds of the box a cast's images are scaled to fit.
 	minCastSide, maxCastSide = 16, 4096
-	// castInputs bounds the input messages a cast holds while its window
-	// takes the last; past it they are dropped.
-	castInputs = 8
+	// castInputs bounds the input messages a cast holds waiting behind the
+	// one its window takes now, the vectors' input_in_flight; past it they
+	// are dropped.
+	castInputs = 1
 )
 
 type imageMessage struct {

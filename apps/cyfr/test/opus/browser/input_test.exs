@@ -17,11 +17,13 @@ defmodule Opus.Browser.InputTest do
   @external_resource @vectors
 
   setup_all do
-    {:ok, input: (@vectors |> File.read!() |> Jason.decode!())["input"]}
+    vectors = @vectors |> File.read!() |> Jason.decode!()
+    {:ok, input: vectors["input"], in_flight: vectors["input_in_flight"]}
   end
 
-  test "the bound is the vectors'", %{input: input} do
+  test "the bounds are the vectors'", %{input: input, in_flight: in_flight} do
     assert Input.max_events() == input["max_events"]
+    assert Input.in_flight() == in_flight
   end
 
   test "every event the vectors accept is read, and none beside a refused one",

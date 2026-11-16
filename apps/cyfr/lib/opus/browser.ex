@@ -90,9 +90,10 @@ defmodule Opus.Browser do
   window that does not stand, or that closed, is `:waiting`, and its
   cast is asked again once an action opens it. The
   viewer's input (`input/2`, events `Opus.Browser.Input` reads) goes to
-  that window alone, at most `Opus.Browser.Input.max_events/0` events
-  waiting, the rest dropped, each write decided by the writer as a
-  request is, just before its first byte. A watch is asked
+  that window alone, one batch in flight (`Opus.Browser.Input.in_flight/0`):
+  the viewer hands the next only once the holder took the last, and what
+  comes meanwhile is dropped, never queued; each write is decided by the
+  writer as a request is, just before its first byte. A watch is asked
   with the moment its caller stops waiting, and the holder admits nothing
   past it; a caller whose wait ran out withdraws it. A watch ends with
   `{:ended, reason}` once, and nothing after: on
@@ -272,30 +273,48 @@ defmodule Opus.Browser do
     do: GenServer.cast(pid, {:seen, ref, self(), n})
 
   @doc """
-  The viewer's input for the window it watches: `:ok` once it is handed
-  to the holder, which drops it when the watch ended or too much waits,
-  or `:bad_input` for events `Opus.Browser.Input` does not read.
+  The viewer's input for the window it watches, one batch in flight: a
+  batch is handed to the holder only once the holder took the last, which
+  it says as `{Opus.Browser, watch, :input_taken}` and the viewer passes
+  to `input_taken/1`. Answers `:ok` once it is handed, `:busy` while the
+  last is in flight (the batch is dropped, not queued), or `:bad_input`
+  for events `Opus.Browser.Input` does not read. So at most one batch of
+  a watch's, `Opus.Browser.Input.max_events/0` events, ever waits for the
+  holder (`Opus.Browser.Input.in_flight/0`).
   """
-  @spec input(watch(), [map()]) :: :ok | {:error, :bad_input}
+  @spec input(watch(), [map()]) :: :ok | {:error, :busy | :bad_input}
   def input({pid, ref}, events) when is_pid(pid) and is_reference(ref) do
-    case Opus.Browser.Input.events(events) do
+    with :ok <- if(Process.get(in_flight(ref)), do: {:error, :busy}, else: :ok),
+         {:ok, events} <- Opus.Browser.Input.events(events) |> bad_input() do
+      Process.put(in_flight(ref), true)
+
       # What the person types travels as its JSON in an
       # `Opus.Programs.Output`, which shows its size alone.
-      {:ok, events} ->
-        GenServer.cast(
-          pid,
-          {:input, ref, self(), Enum.map(events, &Programs.Output.new(Jason.encode!(&1)))}
-        )
-
-      :error ->
-        {:error, :bad_input}
+      GenServer.cast(
+        pid,
+        {:input, ref, self(), Enum.map(events, &Programs.Output.new(Jason.encode!(&1)))}
+      )
     end
   end
 
+  @doc "The holder took the watch's last batch of input: the next may go."
+  @spec input_taken(watch()) :: :ok
+  def input_taken({_pid, ref}) when is_reference(ref) do
+    Process.delete(in_flight(ref))
+    :ok
+  end
+
+  defp in_flight(ref), do: {__MODULE__, :input_in_flight, ref}
+
+  defp bad_input({:ok, events}), do: {:ok, events}
+  defp bad_input(:error), do: {:error, :bad_input}
+
   @doc "End the watch; the browser goes on."
   @spec unwatch(watch()) :: :ok
-  def unwatch({pid, ref}) when is_pid(pid) and is_reference(ref),
-    do: GenServer.cast(pid, {:unwatch, ref, self()})
+  def unwatch({pid, ref}) when is_pid(pid) and is_reference(ref) do
+    Process.delete(in_flight(ref))
+    GenServer.cast(pid, {:unwatch, ref, self()})
+  end
 
   @doc """
   The caller a call of the browser tool in a turn's chain is: its context
@@ -600,14 +619,26 @@ defmodule Opus.Browser do
     end
   end
 
+  # A batch of the viewer's input is taken off the mailbox, kept for the
+  # watch's window (`Opus.Browser.Input.max_events/0` at most, the rest
+  # dropped), or dropped while the window waits, and the viewer is told it
+  # was taken, so it may hand the next.
   def handle_cast({:input, ref, viewer, events}, state) do
     case state.watches[ref] do
-      %{viewer: ^viewer, cast: cast} = watch when is_integer(cast) ->
-        room = Opus.Browser.Input.max_events() - length(watch.input)
-        watch = %{watch | input: watch.input ++ Enum.take(events, max(room, 0))}
-        {:noreply, state |> put_watch(watch) |> pump_input(ref)}
+      %{viewer: ^viewer} = watch ->
+        tell(watch, :input_taken)
 
-      _ended_waiting_or_another ->
+        case watch do
+          %{cast: cast} when is_integer(cast) ->
+            room = Opus.Browser.Input.max_events() - length(watch.input)
+            watch = %{watch | input: watch.input ++ Enum.take(events, max(room, 0))}
+            {:noreply, state |> put_watch(watch) |> pump_input(ref)}
+
+          _waiting ->
+            {:noreply, state}
+        end
+
+      _ended_or_another ->
         {:noreply, state}
     end
   end
