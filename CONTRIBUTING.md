@@ -220,7 +220,12 @@ same worktree refuses, naming the run that holds it.
   - `pull-request`: the pull request's run on GitHub is the check, and it
     runs every check in parallel. `scripts/stage.sh pull-request` runs
     `scripts/commit-gate.sh`, CI's checks on this host, for working
-    offline or reproducing a failing CI job;
+    offline or reproducing a failing CI job. Whoever merges reads the
+    push runs on main that cover the merge with
+    `python3 -I scripts/ci/main-run.py [-n] [COMMIT]`, again until it
+    exits 0: it reruns a red run's failed jobs once, and its exit status
+    says whether every run is green, one still runs, a rerun started, or
+    one is red twice, which opens a regression job;
   - `release`: the gate's close, which holds the host for over an hour,
     run by `scripts/release.sh --gate` for a HEAD with no run on GitHub;
   - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
