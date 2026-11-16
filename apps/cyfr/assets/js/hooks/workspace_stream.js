@@ -6,17 +6,18 @@
 // presses a [data-browser-watch] button, which asks with the size the
 // window is drawn at. Each image comes as "browser_image", JPEG in base64,
 // and is drawn on the canvas, never through an address, before the hook
-// says it drew it ("browser_drawn"), so the next comes only then. The
-// person's pointer, wheel and keys on the canvas go back as
-// "browser_input": the events tests/fixtures/browser_frames.json's `input`
-// defines, a place being a fraction of the image from its top left, at
-// most MAX_EVENTS a push, the moves since the last push folded into one,
-// and IN_FLIGHT pushes on their way: the next goes only once the server
-// says it took the last ("browser_input_taken"); what comes meanwhile
-// waits here, within MAX_EVENTS. The view names the watch the page holds
-// (data-watch), and each input push and its answer name it too: what the
-// hook holds for a watch, the push on its way and the events waiting, ends
-// with that watch, and an answer for another watch is passed over.
+// says it drew it ("browser_drawn", naming the image's watch), so the next
+// comes only then. The person's pointer, wheel and keys on the canvas go
+// back as "browser_input": the events tests/fixtures/browser_frames.json's
+// `input` defines, a place being a fraction of the image from its top
+// left, at most MAX_EVENTS a push, the moves since the last push folded
+// into one, and IN_FLIGHT pushes on their way: the next goes only once the
+// server says it took the last ("browser_input_taken"); what comes
+// meanwhile waits here, within MAX_EVENTS. The view names the watch the
+// page holds (data-watch), and each input push and its answer name it
+// too: what the hook holds for a watch, the push on its way and the
+// events waiting, ends with that watch, and an answer for another watch
+// is passed over.
 
 export const MAX_EVENTS = 64
 export const IN_FLIGHT = 1
@@ -124,7 +125,7 @@ export const WorkspaceStream = ({createImageBitmap, requestAnimationFrame, devic
       this.pushEvent("browser_watch", size(width, devicePixelRatio()))
     }
     this.el.addEventListener("click", this.onClick)
-    this.handleEvent("browser_image", ({n, jpeg}) => this.draw(n, jpeg))
+    this.handleEvent("browser_image", ({watch, n, jpeg}) => this.draw(watch, n, jpeg))
     this.handleEvent("browser_input_taken", ({watch}) => {
       if (watch !== this.watch) return
       this.inFlight = Math.max(0, this.inFlight - 1)
@@ -155,7 +156,9 @@ export const WorkspaceStream = ({createImageBitmap, requestAnimationFrame, devic
     return this.el.querySelector("canvas")
   },
 
-  async draw(n, jpeg) {
+  // The image's watch is named back with it, as it came: an image a closed
+  // watch sent may finish drawing after the next watch began.
+  async draw(watch, n, jpeg) {
     const canvas = this.canvas()
     try {
       const image = await createImageBitmap(new Blob([decode(jpeg)], {type: "image/jpeg"}))
@@ -166,7 +169,7 @@ export const WorkspaceStream = ({createImageBitmap, requestAnimationFrame, devic
     } catch {
       // An image that does not decode is passed over; the next replaces it.
     }
-    this.pushEvent("browser_drawn", {n})
+    this.pushEvent("browser_drawn", {watch, n})
   },
 
   send(event) {

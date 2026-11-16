@@ -86,12 +86,19 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
 
   def handle_event("browser_watch", _params, socket), do: {:noreply, socket}
 
-  # The page drew image n: the next may come.
-  def handle_event("browser_drawn", %{"n" => n}, %{assigns: %{watch: watch}} = socket)
+  # The page drew image n of the watch it names: the next may come. One
+  # drawn for a watch this page no longer holds is dropped.
+  def handle_event(
+        "browser_drawn",
+        %{"watch" => id, "n" => n},
+        %{assigns: %{watch: watch}} = socket
+      )
       when is_integer(n) and watch != nil do
-    :ok = Opus.Browser.seen(watch, n)
+    if id == watch_id(watch), do: :ok = Opus.Browser.seen(watch, n)
     {:noreply, socket}
   end
+
+  def handle_event("browser_drawn", _params, socket), do: {:noreply, socket}
 
   # The person's clicks and keys, for the window this page watches, one
   # batch on its way at a time: the hook sends the next once it hears the
@@ -150,7 +157,7 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
     {:noreply,
      socket
      |> assign(:stream, :showing)
-     |> push_event("browser_image", %{n: n, jpeg: Base.encode64(jpeg)})}
+     |> push_event("browser_image", %{watch: watch_id(watch), n: n, jpeg: Base.encode64(jpeg)})}
   end
 
   def handle_info({Opus.Browser, watch, :waiting}, %{assigns: %{watch: watch}} = socket),

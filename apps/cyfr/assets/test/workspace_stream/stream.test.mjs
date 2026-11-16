@@ -147,10 +147,10 @@ test("nothing is asked until a watch button is pressed, then the canvas's size i
 
 test("an image is drawn before the hook says it drew it", async () => {
   const {handlers, pushed, drawn, canvas} = mount()
-  await handlers.browser_image({n: 4, jpeg: Buffer.from([0xff, 0xd8, 1, 2]).toString("base64")})
+  await handlers.browser_image({watch: "w1", n: 4, jpeg: Buffer.from([0xff, 0xd8, 1, 2]).toString("base64")})
   assert.equal(drawn.length, 1)
   assert.deepEqual([canvas.width, canvas.height, drawn[0].size], [780, 548, 4])
-  assert.deepEqual(pushed, [{event: "browser_drawn", payload: {n: 4}}])
+  assert.deepEqual(pushed, [{event: "browser_drawn", payload: {watch: "w1", n: 4}}])
 })
 
 test("the person's input goes in one push a frame, each event one the vectors accept", () => {

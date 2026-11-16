@@ -495,11 +495,11 @@ defmodule PrismWeb.WorkspaceLiveTest do
       jpeg = <<0xFF, 0xD8, "first", 0xFF, 0xD9>>
       :ok = Driver.image(driver, cast, 1, jpeg)
       encoded = Base.encode64(jpeg)
-      assert_push_event(browser, "browser_image", %{n: 1, jpeg: ^encoded}, 5_000)
+      assert_push_event(browser, "browser_image", %{watch: watch, n: 1, jpeg: ^encoded}, 5_000)
       assert has_element?(browser, "#workspace-browser[data-stream=showing]")
       refute_received {:driver, :seen, _s, ^cast, _seq}
 
-      render_hook(browser, "browser_drawn", %{"n" => 1})
+      render_hook(browser, "browser_drawn", %{"watch" => watch, "n" => 1})
       assert_receive {:driver, :seen, _s, ^cast, 1}, 5_000
 
       press = %{
@@ -512,7 +512,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
         "mods" => 0
       }
 
-      watch = watch_of(browser)
+      assert watch == watch_of(browser)
       render_hook(browser, "browser_input", %{"watch" => watch, "browser_input" => [press]})
       assert_receive {:driver, :input, _s, ^cast, [^press]}, 5_000
       assert_push_event(browser, "browser_input_taken", %{watch: ^watch}, 5_000)
@@ -647,6 +647,34 @@ defmodule PrismWeb.WorkspaceLiveTest do
 
       render_hook(browser, "browser_input", %{"watch" => now, "browser_input" => [key]})
       assert_receive {:driver, :input, _s, ^new, [^key]}, 5_000
+    end
+
+    # Review round two, finding 7: an image's acknowledgement names its watch.
+    test "an old image's acknowledgement does not acknowledge the image of the watch after it",
+         %{conn: conn, mine: mine, me: me, daily: daily, driver: driver} do
+      work = open!(me, daily, "Replaced image")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => old}}, 5_000
+      :ok = Driver.image(driver, old, 1, <<0xFF, 0xD8, "old", 0xFF, 0xD9>>)
+      assert_push_event(browser, "browser_image", %{watch: before, n: 1}, 5_000)
+
+      browser |> element("#workspace-browser-close") |> render_click()
+      assert_receive {:driver, :uncast, _s, ^old}, 5_000
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => new}}, 5_000
+      :ok = Driver.image(driver, new, 1, <<0xFF, 0xD8, "new", 0xFF, 0xD9>>)
+      assert_push_event(browser, "browser_image", %{watch: now, n: 1}, 5_000)
+      assert now != before
+
+      # The first watch's image finishes drawing only now.
+      render_hook(browser, "browser_drawn", %{"watch" => before, "n" => 1})
+      refute_receive {:driver, :seen, _s, ^new, 1}, 500
+
+      render_hook(browser, "browser_drawn", %{"watch" => now, "n" => 1})
+      assert_receive {:driver, :seen, _s, ^new, 1}, 5_000
     end
 
     test "leaving the page ends its stream", %{conn: conn, mine: mine, me: me, daily: daily} do
