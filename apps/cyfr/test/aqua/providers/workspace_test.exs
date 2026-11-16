@@ -147,6 +147,22 @@ defmodule Aqua.Providers.WorkspaceTest do
     {:ok, _} = Tape.finish(ctx, current, "cancelled", %{error: "stopped"})
   end
 
+  # The turn a workspace thread's first opening still waiting opens, as
+  # its delivery opens it, accepted and never run.
+  defp work!(ctx, workspace) do
+    [opening | _] =
+      Enum.filter(rows(ctx, workspace.id), &(&1.kind == "opening" and is_nil(&1.turn_id)))
+
+    {:ok, %{turn: turn}} =
+      TurnStorage.accept_message(actor(ctx), workspace.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: opening.content},
+        opening_id: opening.id,
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+      })
+
+    turn
+  end
+
   defp outcome(ctx, %Prima.OutboxRecord{} = record) do
     Arca.ConsumerReceipts.outcome(actor(ctx), "crew_delivery", Prima.OutboxRecord.source(record))
   end
@@ -415,7 +431,7 @@ defmodule Aqua.Providers.WorkspaceTest do
                Tape.report_workspace(ctx, daily_turn, "done", %{summary: "x"})
 
       workspace = open!(ctx, daily)
-      turn = turn!(ctx, workspace.id)
+      turn = work!(ctx, workspace)
 
       assert {:ok, %{workspace_state: "done"}} =
                Tape.report_workspace(ctx, turn, "done", %{summary: "Done."})
@@ -462,7 +478,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert thread(ctx, workspace.id).workspace_state == "open"
       assert records(ctx, "workspace_report") == []
 
-      {:ok, _} = Tape.finish(ctx, turn!(ctx, workspace.id), "failed", %{error: "the build broke"})
+      {:ok, _} = Tape.finish(ctx, work!(ctx, workspace), "failed", %{error: "the build broke"})
       assert thread(ctx, workspace.id).workspace_state == "failed"
 
       assert [%{snapshot: %{"outcome" => "failed", "summary" => "the build broke"}}] =
@@ -472,8 +488,10 @@ defmodule Aqua.Providers.WorkspaceTest do
     test "a finished one opens again when the person writes in it, or when an ask is sent there, and reports nothing",
          %{ctx: ctx, daily: daily} do
       workspace = open!(ctx, daily)
-      {:ok, _} = Tape.report_workspace(ctx, turn!(ctx, workspace.id), "done", %{summary: "Done."})
+      first = work!(ctx, workspace)
+      {:ok, _} = Tape.report_workspace(ctx, first, "done", %{summary: "Done."})
       assert thread(ctx, workspace.id).workspace_state == "done"
+      stop!(ctx, first)
 
       post!(ctx, workspace, "one more thing")
       assert thread(ctx, workspace.id).workspace_state == "open"
@@ -675,6 +693,51 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert Base.decode64!(data) == "PNG-chart"
     end
 
+    # Every opening accepted reports once.
+    test "two openings sent before either runs each report once, in order, and the thread is done after the second",
+         %{ctx: ctx, daily: daily} do
+      script!([
+        call("r1", "workspace", %{
+          "action" => "report",
+          "outcome" => "done",
+          "summary" => "First done"
+        }),
+        reply("Reported the first."),
+        call("r2", "workspace", %{
+          "action" => "report",
+          "outcome" => "done",
+          "summary" => "Second done"
+        }),
+        reply("Reported the second."),
+        reply("The first is done."),
+        reply("The second is done.")
+      ])
+
+      workspace = open!(ctx, daily)
+
+      {:ok, _} =
+        open(ctx, daily, %{"title" => nil, "workspace" => workspace.id, "ask" => "and a second"})
+
+      assert {:ok, %{"applied" => 2}} = drain(ctx)
+
+      for %{kind: "opening", turn_id: turn_id} <- rows(ctx, workspace.id),
+          do: await_status(ctx, turn_id, "completed")
+
+      assert [
+               %{snapshot: %{"outcome" => "done", "summary" => "First done"}},
+               %{snapshot: %{"outcome" => "done", "summary" => "Second done"}}
+             ] = records(ctx, "workspace_report")
+
+      assert thread(ctx, workspace.id).workspace_state == "done"
+
+      # The person reads two reports on the daily thread, in order.
+      assert %{} = Crew.drain_all()
+      {:ok, today} = Aqua.Day.current(ctx)
+
+      assert ["First done", "Second done"] =
+               for(%{kind: "report", content: text} <- rows(ctx, today.id), do: text)
+    end
+
     test "a report tried again discards what the earlier try stored under its row",
          %{ctx: ctx, daily: daily} do
       script!([reply("Working."), reply("Here it is.")])
@@ -801,7 +864,7 @@ defmodule Aqua.Providers.WorkspaceTest do
          %{ctx: ctx, daily: daily} do
       working = open!(ctx, daily, %{"title" => "Working"})
       finished = open!(ctx, daily, %{"title" => "Finished"})
-      {:ok, _} = Tape.report_workspace(ctx, turn!(ctx, finished.id), "done", %{summary: "Done."})
+      {:ok, _} = Tape.report_workspace(ctx, work!(ctx, finished), "done", %{summary: "Done."})
 
       for turn <-
             Arca.Repo.all(from(t in Arca.Schemas.Turn, where: t.athanor_id == ^ctx.athanor_id)),
@@ -828,7 +891,7 @@ defmodule Aqua.Providers.WorkspaceTest do
          %{ctx: ctx, daily: daily} do
       working = open!(ctx, daily, %{"title" => "Working"})
       finished = open!(ctx, daily, %{"title" => "Finished"})
-      turn = turn!(ctx, finished.id)
+      turn = work!(ctx, finished)
 
       {:ok, _} =
         Tape.post(ctx, turn, %{

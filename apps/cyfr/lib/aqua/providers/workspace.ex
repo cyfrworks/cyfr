@@ -587,6 +587,9 @@ defmodule Aqua.Providers.Workspace do
   defp refusal(:refs_required),
     do: {:invalid_argument, "workspace.open names at least one post of that daily thread"}
 
+  defp refusal(:reported),
+    do: {:conflict, "this turn has reported its work already"}
+
   defp refusal({:workspace_state, state}),
     do: {:conflict, "this workspace thread is #{state}, so there is nothing to report"}
 

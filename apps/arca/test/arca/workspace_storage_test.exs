@@ -152,6 +152,28 @@ defmodule Arca.WorkspaceStorageTest do
     approval
   end
 
+  # The turn an opening's delivery opens on it, accepted and never run.
+  defp opening_turn!(actor, workspace, opening) do
+    {:ok, %{turn: turn}} =
+      TurnStorage.accept_message(actor, workspace.id, %{
+        message: %{author: actor.user_id, sent_by: "person", content: opening.content},
+        opening_id: opening.id,
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+      })
+
+    turn
+  end
+
+  defp finish!(actor, turn) do
+    {:ok, _} =
+      TurnStorage.finish(actor, turn.id, "cancelled", %{
+        fence: turn.fence,
+        error: "stopped",
+        grant: :stored,
+        verify: &Arca.Test.Actor.admits/1
+      })
+  end
+
   defp decline!(actor, turn, approval) do
     {:ok, _} =
       TurnStorage.resolve_approval(actor, approval.id, "declined", %{
@@ -302,6 +324,49 @@ defmodule Arca.WorkspaceStorageTest do
     assert {:ok, removed} = Threads.delete_before(actor, future)
     assert removed >= 1
     assert {:error, :not_found} = Threads.get(actor, workspace.id)
+  end
+
+  # Every opening accepted reports once.
+  test "a report ends its own turn's work, and the thread's only when nothing else it accepted remains to run",
+       %{actor: actor, daily: daily} do
+    workspace = open!(actor, daily)
+
+    {:ok, _again} =
+      TurnStorage.open_workspace(actor, opening(actor, daily, %{workspace_id: workspace.id}))
+
+    [first, second] =
+      for %{kind: "opening"} = row <- Threads.messages(actor, workspace.id), do: row
+
+    one = opening_turn!(actor, workspace, first)
+
+    {:ok, %{workspace_state: "open"}} =
+      TurnStorage.report_workspace(actor, one.id, "done", %{
+        fence: one.fence,
+        summary: "First done"
+      })
+
+    assert state(actor, workspace.id) == "open"
+
+    # The first turn reports its own work once.
+    assert {:error, :reported} =
+             TurnStorage.report_workspace(actor, one.id, "failed", %{
+               fence: one.fence,
+               summary: "again"
+             })
+
+    finish!(actor, one)
+    two = opening_turn!(actor, workspace, second)
+
+    {:ok, %{workspace_state: "done"}} =
+      TurnStorage.report_workspace(actor, two.id, "done", %{
+        fence: two.fence,
+        summary: "Second done"
+      })
+
+    assert ["First done", "Second done"] =
+             for(record <- records(actor, "workspace_report"), do: record.snapshot["summary"])
+
+    assert state(actor, workspace.id) == "done"
   end
 
   # Retention decides under the rows it deletes.

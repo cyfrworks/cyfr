@@ -77,9 +77,11 @@ defmodule Arca.TurnStorage do
     * a card opened there moves `open` to `needs_you` (`open_approval/3`);
     * the last card waiting there, decided, skipped or invalidated,
       moves `needs_you` back to `open`, reporting nothing;
-    * the turn's own report moves `open` to `done` or `failed`
-      (`report_workspace/4`), and a turn there that ends failed or
-      uncertain moves it to `failed` (`finish/4`);
+    * a turn's own report of its work as `done` or `failed`
+      (`report_workspace/4`), once a turn, or a turn there that ends
+      failed or uncertain without one (`finish/4`), records the report
+      and moves the thread to that outcome when nothing else it accepted
+      remains to run, and leaves it as it is otherwise;
     * a person's message there, or a further opening, moves `done` or
       `failed` back to `open`, reporting nothing.
 
@@ -629,15 +631,18 @@ defmodule Arca.TurnStorage do
   defp reopened!(_athanor_id, %Thread{} = thread), do: thread
 
   @doc """
-  Move the workspace thread a running turn works in from `open` to
-  `outcome` (`done` or `failed`) under the turn's fence, with its
-  `workspace_report` record in the same transaction (the moduledoc's
-  "Workspace threads"). `attrs`: `:fence`, `:summary`, `:attachments`
-  (`[%{"message_id", "stored_name"}]`, files of the thread's own posts).
-  A turn whose fence moved is `{:error, :superseded}`, one that is over
-  `{:error, :not_open}`, a turn of any other kind of thread
-  `{:error, :not_a_workspace}`, and a thread not `open`
-  `{:error, {:workspace_state, state}}`, each with nothing written.
+  Report the work of a running turn of a workspace thread as `outcome`
+  (`done` or `failed`) under the turn's fence, with its
+  `workspace_report` record in the same transaction, under the thread's
+  row: the thread moves to `outcome` only when nothing else it accepted
+  remains to run (the moduledoc's "Workspace threads"). `attrs`:
+  `:fence`, `:summary`, `:attachments` (`[%{"message_id",
+  "stored_name"}]`, files of the thread's own posts). A turn whose fence
+  moved is `{:error, :superseded}`, one that is over `{:error,
+  :not_open}`, a turn of any other kind of thread `{:error,
+  :not_a_workspace}`, a turn that reported already `{:error,
+  :reported}`, and a thread already `done` or `failed` `{:error,
+  {:workspace_state, state}}`, each with nothing written.
   """
   @spec report_workspace(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, map()} | {:error, term()}
@@ -649,7 +654,10 @@ defmodule Arca.TurnStorage do
         turn = open!(own!(athanor_id, turn_id, attrs))
 
         case locked_thread!(athanor_id, turn.thread_id) do
-          %Thread{kind: "workspace", workspace_state: "open"} = thread ->
+          %Thread{kind: "workspace", workspace_state: state} = thread
+          when state in ["open", "needs_you"] ->
+            if reported?(athanor_id, thread.id, turn.id), do: Arca.Repo.rollback(:reported)
+
             moved!(athanor_id, thread, turn, outcome, %{
               summary: Map.get(attrs, :summary) || "",
               attachments: Map.get(attrs, :attachments, [])
@@ -668,16 +676,18 @@ defmodule Arca.TurnStorage do
 
   def report_workspace(%Prima.Actor{}, _turn_id, _outcome, _attrs), do: {:error, :no_athanor}
 
-  # A workspace thread's state moved to `outcome` by `turn`, with the
-  # `workspace_report` that tells the daily thread, recorded under the
-  # identity of the turn's person and origin. Answers the thread as moved.
+  # A report of `outcome` by `turn`, the `workspace_report` that tells the
+  # daily thread, recorded under the identity of the turn's person and
+  # origin, with the thread's state moved as it derives (`state_after/4`).
+  # Answers the thread as moved.
   # arca:db-raise-ok inside the caller's transaction
   defp moved!(athanor_id, %Thread{} = thread, %Turn{} = turn, outcome, report) do
     now = DateTime.utc_now()
+    state = state_after(athanor_id, thread, turn, outcome)
 
     {1, _} =
       from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread.id)
-      |> Arca.Repo.update_all(set: [workspace_state: outcome])
+      |> Arca.Repo.update_all(set: [workspace_state: state])
 
     with {:ok, origin} <- Prima.Origin.from_wire(turn.origin) do
       record =
@@ -701,7 +711,51 @@ defmodule Arca.TurnStorage do
       _no_origin -> Arca.Repo.rollback(:no_origin)
     end
 
-    %{thread | workspace_state: outcome}
+    %{thread | workspace_state: state}
+  end
+
+  # A card waits on the person whatever else runs. A report of `done` or
+  # `failed` ends the reporting turn's own work, and the thread's with it
+  # only when nothing else it accepted remains to run: no other open turn
+  # of it, and no opening still waiting for its turn. Until then the
+  # thread keeps the state it has, and the report still lands.
+  # arca:db-raise-ok inside the caller's transaction
+  defp state_after(_athanor_id, %Thread{}, %Turn{}, "needs_you"), do: "needs_you"
+
+  defp state_after(athanor_id, %Thread{} = thread, %Turn{} = turn, outcome) do
+    other_turns =
+      from(t in Turn,
+        where: t.athanor_id == ^athanor_id and t.thread_id == ^thread.id,
+        where: t.status in ^@open and t.id != ^turn.id
+      )
+
+    waiting_openings =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id == ^thread.id,
+        where: m.kind == "opening" and is_nil(m.turn_id)
+      )
+
+    if Arca.Repo.exists?(other_turns) or Arca.Repo.exists?(waiting_openings),
+      do: thread.workspace_state,
+      else: outcome
+  end
+
+  # Whether `turn` has reported its work done or failed already: each
+  # turn of a workspace thread reports its own work once.
+  # arca:db-raise-ok inside the caller's transaction
+  defp reported?(athanor_id, workspace_id, turn_id) do
+    from(r in Arca.Schemas.OutboxRecord,
+      where: r.athanor_id == ^athanor_id and r.kind == "workspace_report",
+      where: r.source_kind == "thread" and r.source_id == ^workspace_id,
+      select: r.snapshot
+    )
+    |> Arca.Repo.all()
+    |> Enum.any?(fn text ->
+      match?(
+        {:ok, %{"turn_id" => ^turn_id, "outcome" => outcome}} when outcome in ["done", "failed"],
+        Prima.Json.decode(text)
+      )
+    end)
   end
 
   # The host's moves, each in the transaction of the write
@@ -771,7 +825,8 @@ defmodule Arca.TurnStorage do
     case thread!(athanor_id, turn.thread_id) do
       %Thread{kind: "workspace", workspace_state: state} = thread
       when state in ["open", "needs_you"] ->
-        moved!(athanor_id, thread, turn, "failed", %{summary: Map.get(attrs, :error) || ""})
+        unless reported?(athanor_id, thread.id, turn.id),
+          do: moved!(athanor_id, thread, turn, "failed", %{summary: Map.get(attrs, :error) || ""})
 
       %Thread{} ->
         :ok
