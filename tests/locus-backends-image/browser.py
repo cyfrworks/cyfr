@@ -34,6 +34,8 @@ container starts:
   browser's profile, nothing of the browser's uid listens on a TCP port,
   and Chrome runs on its debugging pipe with no debugging port.
 - A driver whose Chrome cannot start says hello with an error and exits 1.
+- Chrome reaches nothing by itself: its own network log over a start with
+  nothing asked shows no URL requested, no host resolved and no connection.
 - Its Chrome is fetched as a program fetches itself, and the image holds
   none: the first start in a fresh home fetches Chrome for Testing's
   current stable from Google and runs it, published whole in one version
@@ -101,6 +103,8 @@ PROGRAMS = [
 # A list no resolver answers for: .invalid never resolves.
 UNREACHABLE = "https://cyfr-browser-source.invalid/LATEST_RELEASE_STABLE"
 NOT_DOWNLOADED = "The browser could not be downloaded; try again in a moment."
+# How long a start with nothing asked is watched for traffic of Chrome's own.
+QUIET_S = 30
 SHORT_KEEP_MS = 3000
 # The owner's lease is renewed this often, as CYFR's box renews it: the first start fetches Chrome, and the suite
 # outlasts one lease (at most 60 s).
@@ -483,6 +487,30 @@ def truncated_archive():
     return data[:len(data) // 2]
 
 
+def net_log_leaving(text):
+    """What a Chrome network log shows leaving: the URLs requested, the hosts resolved and the addresses connected to.
+
+    A log Chrome did not close is read up to its last whole event.
+    """
+    text = text.rstrip()
+    try:
+        log = json.loads(text)
+    except json.JSONDecodeError:
+        log = json.loads(text.rstrip(",") + "]}")
+    names = {number: name for name, number in log["constants"]["logEventTypes"].items()}
+    found = set()
+    for event in log.get("events", []):
+        kind, params = names.get(event.get("type")), event.get("params") or {}
+        if kind == "URL_REQUEST_START_JOB" and "url" in params:
+            found.add(("url", params["url"]))
+        elif kind in ("HOST_RESOLVER_MANAGER_REQUEST", "HOST_RESOLVER_MANAGER_JOB", "HOST_RESOLVER_DNS_TASK") \
+                and "host" in params:
+            found.add(("host", params["host"]))
+        elif kind in ("TCP_CONNECT_ATTEMPT", "TCP_CONNECT") and "address" in params:
+            found.add(("connect", params["address"]))
+    return sorted(found)
+
+
 def tcp_listeners(stack):
     """Every listening TCP socket of the box's namespace, both families: (port, uid)."""
     table = imagesuite.read_output(stack.exec("cat /proc/net/tcp /proc/net/tcp6"), "the TCP tables")
@@ -763,6 +791,21 @@ def main():
             expect(not holding(written), "a later start reopens none of the last session's pages", sorted(written))
             again.close()
             eventually(lambda: not stack.under_uid(uid), "the later session's processes to end")
+
+        # ————— it reaches nothing by itself —————
+        # Chrome's own network log over a start with nothing asked of it: no request leaves.
+        net_log = f"{KEPT_ROOT}/{BROWSER_HOME}/netlog.json"
+        n = Host(stack, c, BROWSER_HOME, ["--net-log", net_log])
+        expect("error" not in n.hello(), "a start that logs Chrome's network says hello")
+        idle_until = time.monotonic() + QUIET_S
+        while time.monotonic() < idle_until:
+            n.read(1_000)
+        n.close()
+        eventually(lambda: not stack.under_uid(uid), "that session's processes to end")
+        leaving = net_log_leaving(as_home(stack, BROWSER_HOME, f"cat {net_log}", "Chrome's network log"))
+        expect(leaving == [], f"over {QUIET_S} s with nothing asked, Chrome reaches nothing by itself", leaving)
+        as_home(stack, BROWSER_HOME, f"rm {net_log}", "the network log removed")
+        print(f"measure: Chrome's network log over {QUIET_S} s of a start with nothing asked: no request", flush=True)
 
         # ————— its Chrome, fetched —————
         # A day after the last check, with a list that cannot be reached: the home's Chrome starts.

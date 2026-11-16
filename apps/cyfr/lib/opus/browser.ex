@@ -222,7 +222,8 @@ defmodule Opus.Browser do
   its profile kept. A session of the person's browser that no holder
   holds is closed too. Answers once the close was asked, without waiting
   for a start under way: the session that start brings up is sent
-  nothing and is closed as soon as the start answers.
+  nothing and is closed as soon as the start answers, and its Chrome,
+  started so that it reaches nothing by itself, has reached nothing.
   """
   @spec stop(String.t(), String.t()) :: :ok
   def stop(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do

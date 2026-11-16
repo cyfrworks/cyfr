@@ -11,13 +11,14 @@
 // over Chrome's debugging pipe, which never leaves the box. No debugging
 // port is ever opened.
 //
-//	cyfr-browser [--chrome PATH | --source URL --storage URL] [--chunk BYTES] [--keep-ms MS]
+//	cyfr-browser [--chrome PATH | --source URL --storage URL] [--net-log PATH] [--chunk BYTES] [--keep-ms MS]
 //
 // Chrome is not in the image: the driver fetches it into the kept home
 // and starts the one there (fetch.go), the version Chrome for Testing's
 // list names, from Google's storage; --source and --storage name another
 // list and storage, which only tests pass. --chrome starts the Chrome at
-// PATH and fetches nothing. A home
+// PATH and fetches nothing. --net-log has Chrome log its network to PATH,
+// which only tests pass. A home
 // that holds no Chrome and cannot fetch one says hello with the error
 // that the browser could not be downloaded.
 //
@@ -76,6 +77,7 @@ func run(args []string) int {
 	storage := flags.String("storage", defaultStorage, "the storage Chrome for Testing's archives are fetched from")
 	chunk := flags.Int("chunk", defaultChunk, "bytes of response text one res frame carries")
 	keepMS := flags.Int64("keep-ms", defaultKeepMS, "milliseconds an unacknowledged response is kept")
+	netLog := flags.String("net-log", "", "a file Chrome logs its network to")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -102,7 +104,11 @@ func run(args []string) int {
 		return 1
 	}
 	defer release()
-	chromium, err := startChrome(path, b)
+	var logging []string
+	if *netLog != "" {
+		logging = []string{"--log-net-log=" + *netLog, "--net-log-capture-mode=Default"}
+	}
+	chromium, err := startChrome(path, b, logging)
 	if err != nil {
 		hello.Error = "The browser could not start: " + err.Error() + "."
 		_ = s.write(hello)
@@ -161,12 +167,33 @@ type chromeProcess struct {
 	exited chan struct{}
 }
 
+// quiet is how Chrome is started so that it reaches nothing by itself:
+// no window of its own at start, so neither the pages of the profile's
+// last session nor its startup pages load until a request asks for a
+// window; and none of the traffic a browser makes on its own: update and
+// component checks, sync, the time and spelling services, field trials,
+// domain reliability, safe-browsing and phishing models, metrics and
+// pings, the cast and translate services, the server checks of autofill,
+// optimization hints, the new tab's feed and lens, and the AI Mode
+// eligibility check (AimEnabled), which no narrower switch stops. Measured
+// with Chrome's own network log over a start with nothing asked
+// (tests/locus-backends-image/browser.py), it makes no request.
+var quiet = []string{
+	"--no-startup-window", "--no-first-run", "--no-default-browser-check",
+	"--disable-background-networking", "--disable-component-update", "--disable-sync",
+	"--disable-domain-reliability", "--disable-client-side-phishing-detection", "--disable-default-apps",
+	"--disable-component-extensions-with-background-pages", "--no-pings", "--metrics-recording-only",
+	"--disable-breakpad", "--no-service-autorun", "--disable-search-engine-choice-screen",
+	"--disable-features=Translate,OptimizationHints,OptimizationHintsFetching,OptimizationGuideModelDownloading," +
+		"OptimizationTargetPrediction,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication," +
+		"CertificateTransparencyComponentUpdater,NetworkTimeServiceQuerying,InterestFeedContentSuggestions," +
+		"LensOverlay,AimEnabled",
+}
+
 // startChrome starts Chrome on its debugging pipe with its profile in
-// $HOME/chrome, waits for its first answer, and gives b its pipe. Chrome
-// opens no window of its own at start (--no-startup-window): it loads
-// nothing on its own account, neither the pages of the profile's last
-// session nor its startup pages, until a request asks for a window.
-func startChrome(path string, b *browser) (*chromeProcess, error) {
+// $HOME/chrome, reaching nothing by itself (quiet), waits for its first
+// answer, and gives b its pipe; logging is added to its flags.
+func startChrome(path string, b *browser, logging []string) (*chromeProcess, error) {
 	home := os.Getenv("HOME")
 	if home == "" {
 		return nil, errors.New("HOME names no folder")
@@ -190,9 +217,9 @@ func startChrome(path string, b *browser) (*chromeProcess, error) {
 		commandsOut.Close()
 		return nil, err
 	}
-	cmd := exec.Command(path, "--headless", "--no-sandbox", "--remote-debugging-pipe", "--no-startup-window",
-		"--user-data-dir="+profile, "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
-		"--password-store=basic", "--window-size=1280,900")
+	args := append([]string{"--headless", "--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
+		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900"}, quiet...)
+	cmd := exec.Command(path, append(args, logging...)...)
 	cmd.Env = append(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "DBUS_SESSION_BUS_ADDRESS=disabled:")
 	// Chrome reads its commands on fd 3 and writes its answers on fd 4. Its
 	// standard streams are the null device, so nothing it prints reaches

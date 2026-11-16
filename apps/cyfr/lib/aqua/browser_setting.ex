@@ -7,10 +7,11 @@ defmodule Aqua.BrowserSetting do
   (`Opus.Browser`). There is no yes per thread and no card for the
   browser's own actions: with it on, every action of the browser tool
   runs without one; with it off, every one is refused and Aqua says so.
-  Turning it off holds at once: from then on nothing new starts and
-  nothing reaches the browser, no action and no page, and a browser that
-  a start already under way brings up is sent nothing and closed as soon
-  as that start answers; its profile is kept.
+  Turning it off holds at once: from then on CYFR starts no browser and
+  sends it nothing, no action and no page, and a browser that a start
+  already under way brings up is sent nothing and closed as soon as that
+  start answers; its profile is kept. The browser is started so that it
+  reaches nothing by itself (the driver, `cyfr-browser`).
 
   It is one value of the person's preferences, `aqua_browser`, read and
   written here and nowhere else. An absent value reads as the default,
