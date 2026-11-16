@@ -411,16 +411,68 @@ func TestTwoStartsAtOnceDoNotWriteOnePartial(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("the first start answers %v", err)
 	}
-	// With a Chrome in the home, a start that finds the lock held starts
-	// it and fetches nothing.
-	release, held, err := first.lock()
-	if err != nil || !held {
-		t.Fatalf("the lock: %v %v", held, err)
+	// With a Chrome in the home and a driver running from it, a start
+	// beside it starts that Chrome and fetches nothing.
+	running, release, err := first.chrome(context.Background(), io.Discard)
+	if err != nil {
+		t.Fatal(err)
 	}
 	path, err := start(second, io.Discard)
 	release()
-	if err != nil || !executable(path) || len(src.ranges) != 1 {
-		t.Fatalf("a start beside a held lock gave %s (%v), the archive asked %v", path, err, src.ranges)
+	if err != nil || path != running || len(src.ranges) != 1 {
+		t.Fatalf("a start beside a running one gave %s (%v), the archive asked %v", path, err, src.ranges)
+	}
+}
+
+// Astra's three starts: a version folder a driver runs from is never
+// removed, whatever starts after it.
+func TestNoVersionIsRemovedWhileADriverRunsFromTheHome(t *testing.T) {
+	src := newSource(t, "157.0.8103.78")
+	now := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	store := func() *store {
+		s := homeStore(t, src.server.URL, &now)
+		s.dir = filepath.Join(home, "cyfr-browser")
+		return s
+	}
+	first, second, third, fourth := store(), store(), store(), store()
+
+	pathA, releaseA, err := first.chrome(context.Background(), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathB, releaseB, err := second.chrome(context.Background(), io.Discard)
+	if err != nil || pathB != pathA {
+		t.Fatalf("the second start beside the first gave %s (%v), want %s", pathB, err, pathA)
+	}
+	releaseA()
+
+	// A newer stable, a day later: the second still runs from the home, so
+	// the third starts the Chrome that is there and fetches nothing.
+	src.mu.Lock()
+	src.version = "158.0.8200.10"
+	src.mu.Unlock()
+	now = now.Add(48 * time.Hour)
+	pathC, releaseC, err := third.chrome(context.Background(), io.Discard)
+	if err != nil || pathC != pathB {
+		t.Fatalf("the third start gave %s (%v), want %s", pathC, err, pathB)
+	}
+	if !executable(pathB) || src.count(archivePath("158.0.8200.10")) != 0 {
+		t.Fatalf("the second's Chrome was replaced while it ran: %v, %v", executable(pathB), src.asked)
+	}
+	releaseB()
+	releaseC()
+
+	// Nothing runs from the home: the next start updates it.
+	pathD, releaseD, err := fourth.chrome(context.Background(), io.Discard)
+	if releaseD != nil {
+		releaseD()
+	}
+	if err != nil || pathD != filepath.Join(fourth.dir, "versions", "158.0.8200.10", "chrome") {
+		t.Fatalf("the start with nothing running gave %s (%v)", pathD, err)
+	}
+	if executable(pathA) {
+		t.Fatal("the old version stands beside the new")
 	}
 }
 

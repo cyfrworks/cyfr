@@ -30,11 +30,14 @@ package main
 // is discarded. Everything is in the home, so its bound counts it. The
 // list is read at a start at most once a day ($HOME/cyfr-browser/checked
 // records the last time it was asked), and a partial is taken up at any
-// start, always before Chrome starts; the home's lock, held by the driver
-// that has it until that driver ends, keeps a second start from
-// writing the partial or fetching while a Chrome runs. A check or a
-// download that fails never keeps a Chrome already in the home from
-// starting.
+// start, always before Chrome starts. The home has one lock with two
+// holds: every driver holds it shared for as long as its Chrome runs, and
+// asking, fetching, publishing and removing versions take it alone,
+// without waiting, and are skipped when it cannot be had. So no version
+// folder is removed while any driver runs from the home, a start beside a
+// running one starts the Chrome that is there and holds its share, and an
+// update waits for a start when nothing else runs. A check or a download
+// that fails never keeps a Chrome already in the home from starting.
 
 import (
 	"archive/zip"
@@ -147,13 +150,27 @@ func (s *store) chrome(ctx context.Context, log io.Writer) (string, func(), erro
 	if err := os.MkdirAll(filepath.Join(s.dir, "versions"), 0o700); err != nil {
 		return "", nil, err
 	}
-	release, held, err := s.lock()
+	lock, err := os.OpenFile(filepath.Join(s.dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return "", nil, err
 	}
-	if !held {
-		if have := s.newest(); have != "" {
-			return s.path(have), func() {}, nil
+	release := func() { lock.Close() }
+	alone, err := s.hold(lock, unix.LOCK_EX)
+	if err != nil {
+		release()
+		return "", nil, err
+	}
+	if !alone {
+		// Another driver runs from the home, or a start of another fetches:
+		// beside a running one, start the Chrome that is there and hold its
+		// share; fetch nothing.
+		shared, err := s.hold(lock, unix.LOCK_SH)
+		if have := s.newest(); err == nil && shared && have != "" {
+			return s.path(have), release, nil
+		}
+		release()
+		if err != nil {
+			return "", nil, err
 		}
 		return "", nil, errStillDownloading
 	}
@@ -174,6 +191,15 @@ func (s *store) chrome(ctx context.Context, log io.Writer) (string, func(), erro
 		progressed = gained > 0 && s.partial(want) != ""
 		have = s.newest()
 	}
+	// The home is held shared from here on, for as long as its Chrome runs.
+	if shared, err := s.hold(lock, unix.LOCK_SH); err != nil || !shared {
+		release()
+		if err != nil {
+			return "", nil, err
+		}
+		return "", nil, errStillDownloading
+	}
+	have = s.newest()
 	switch {
 	case have != "":
 		return s.path(have), release, nil
@@ -431,21 +457,19 @@ func (s *store) sweep() {
 	}
 }
 
-// lock takes the home's lock if no other start holds it: held, and the
-// release that lets it go.
-func (s *store) lock() (func(), bool, error) {
-	file, err := os.OpenFile(filepath.Join(s.dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, false, err
-	}
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		file.Close()
+// hold takes the home's lock on file as how says, alone (LOCK_EX) or
+// shared (LOCK_SH), without waiting: whether it was had. Turning an alone
+// hold into a shared one lets it go first, so a start of another may take
+// it alone between; the caller reads the home's versions again once it is
+// held.
+func (s *store) hold(file *os.File, how int) (bool, error) {
+	if err := unix.Flock(int(file.Fd()), how|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) {
-			return nil, false, nil
+			return false, nil
 		}
-		return nil, false, err
+		return false, err
 	}
-	return func() { file.Close() }, true, nil
+	return true, nil
 }
 
 // partial is version's partial download, or "".
