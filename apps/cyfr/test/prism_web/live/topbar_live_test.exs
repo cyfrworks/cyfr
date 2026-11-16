@@ -40,6 +40,8 @@ defmodule PrismWeb.TopbarLiveTest do
     bar = topbar(view)
 
     assert has_element?(bar, ~s(#aqua-link[href="/a/@#{seated_athanor().slug}/aqua"]), "Aqua")
+    # The assistant's name reads as it is written: no style upper-cases it.
+    refute has_element?(bar, ~s(#aqua-link[class~="uppercase"]))
     refute has_element?(bar, ~s([phx-value-name="athanors"]))
   end
 
