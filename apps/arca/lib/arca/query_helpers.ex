@@ -51,6 +51,13 @@ defmodule Arca.QueryHelpers do
   them under one view lock them, inside `Arca.Repo.locking_transaction/2`
   and through `for_update/1`, so the adapter difference is spelled in
   exactly those two places.
+
+  ## Text compared by its bytes
+
+  An order or a cursor over text that must answer alike on both adapters
+  compares it by its bytes (`by_bytes/1`, `bytes_before/2`): SQLite's
+  default collation already does, and PostgreSQL's database collation
+  does not, so there it is told `COLLATE "C"`.
   """
 
   import Ecto.Query
@@ -156,6 +163,34 @@ defmodule Arca.QueryHelpers do
   @spec where_before(Ecto.Queryable.t(), atom(), DateTime.t()) :: Ecto.Query.t()
   def where_before(query, field, %DateTime{} = cutoff) when is_atom(field) do
     from(r in query, where: field(r, ^field) < ^cutoff)
+  end
+
+  @doc """
+  The text column `field` of the query's first binding as both adapters
+  compare it by its bytes (the moduledoc's), for an `order_by`.
+  """
+  @spec by_bytes(atom()) :: Ecto.Query.dynamic_expr()
+  def by_bytes(field) when is_atom(field) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres -> dynamic([q], fragment("? COLLATE \"C\"", field(q, ^field)))
+      _sqlite -> dynamic([q], field(q, ^field))
+    end
+  end
+
+  @doc """
+  Whether the text column `field` of the query's first binding sorts
+  before `value` by its bytes, the same on both adapters (`by_bytes/1`):
+  a cursor's comparison beside that order.
+  """
+  @spec bytes_before(atom(), String.t()) :: Ecto.Query.dynamic_expr()
+  def bytes_before(field, value) when is_atom(field) and is_binary(value) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres ->
+        dynamic([q], fragment("? COLLATE \"C\" < ?", field(q, ^field), ^value))
+
+      _sqlite ->
+        dynamic([q], field(q, ^field) < ^value)
+    end
   end
 
   @doc """

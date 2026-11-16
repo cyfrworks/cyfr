@@ -7,6 +7,8 @@ defmodule Aqua.Providers.ThreadTest do
   # credential may not.
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Providers.Thread, as: Tool
   alias Sanctum.Visibility
@@ -1331,6 +1333,26 @@ defmodule Aqua.Providers.ThreadTest do
 
       assert {:error, {:invalid_argument, _}} =
                search(ctx, %{"q" => "log", "before" => "msg_not_here"})
+    end
+
+    test "equal-time posts use the same id order on both adapters", %{ctx: ctx, thread: daily} do
+      a = say!(ctx, daily, "tie search", %{id: "msg_a"})
+      b = say!(ctx, daily, "tie search", %{id: "msg_B"})
+      at = ~U[2026-01-01 01:02:03.123456Z]
+
+      {2, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(m in Arca.Schemas.Message, where: m.id in ^[a.id, b.id]),
+          set: [inserted_at: at]
+        )
+
+      assert {:ok, %{results: first, next: cursor}} =
+               search(ctx, %{"q" => "tie search", "limit" => 1})
+
+      assert {:ok, %{results: second}} = search(ctx, %{"q" => "tie search", "before" => cursor})
+
+      # By their bytes, newest first: "msg_a" after "msg_B".
+      assert Enum.map(first ++ second, & &1.message) == Enum.sort([a.id, b.id], :desc)
     end
 
     test "a crew member's thread and another athanor's are neither searched nor read",

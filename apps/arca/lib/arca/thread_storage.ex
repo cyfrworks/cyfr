@@ -1343,7 +1343,8 @@ defmodule Arca.ThreadStorage do
 
   # One page of the athanor's posts older than `cursor`, newest first,
   # until the answer is full or the rows run out. Ordered by when each
-  # was written and then by id, which both adapters compare alike.
+  # was written and then by id, compared by its bytes on both adapters
+  # (`Arca.QueryHelpers.by_bytes/1`), as the cursor's comparison is.
   # arca:db-raise-ok inside the caller's rescue.
   defp search_pages(_actor, _needle, _cursor, limit, found, scanned)
        when length(found) >= limit,
@@ -1363,7 +1364,7 @@ defmodule Arca.ThreadStorage do
         on: c.id == m.thread_id and c.athanor_id == m.athanor_id,
         where: m.athanor_id == ^athanor_id and c.kind in ^@room_kinds,
         where: m.kind in ^@post_kinds,
-        order_by: [desc: m.inserted_at, desc: m.id],
+        order_by: ^[desc: dynamic([m], m.inserted_at), desc: QueryHelpers.by_bytes(:id)],
         limit: ^@search_batch,
         select: {m, %{id: c.id, kind: c.kind, day: c.day, title: c.title}}
       )
@@ -1374,9 +1375,9 @@ defmodule Arca.ThreadStorage do
           query
 
         {at, id} ->
-          from([m, _c] in query,
-            where: m.inserted_at < ^at or (m.inserted_at == ^at and m.id < ^id)
-          )
+          before = QueryHelpers.bytes_before(:id, id)
+          older = dynamic([m], m.inserted_at < ^at or (m.inserted_at == ^at and ^before))
+          from(query, where: ^older)
       end
 
     rows = query |> QueryHelpers.where_tenant(actor) |> Repo.all()
