@@ -287,6 +287,38 @@ defmodule Arca.OutboxTest do
     end
   end
 
+  describe "a try's place" do
+    test "is its athanor's own: another athanor's for the same consumer, source and revision is a row of its own, and a receipt clears its athanor's alone",
+         %{athanor: athanor, neighbour: neighbour} do
+      source = %{source_kind: "thread", source_id: "thread_placed", source_revision: "r1"}
+      ours = %{thread_id: "thread_ours", message_id: "msg_rpt_1"}
+      theirs = %{thread_id: "thread_theirs", message_id: "msg_rpt_1"}
+
+      assert :ok = ConsumerReceipts.place(actor(athanor), "crew_delivery", source, ours)
+      assert :ok = ConsumerReceipts.place(actor(neighbour), "crew_delivery", source, theirs)
+
+      assert {:ok, ^ours} = ConsumerReceipts.placed(actor(athanor), "crew_delivery", source)
+      assert {:ok, ^theirs} = ConsumerReceipts.placed(actor(neighbour), "crew_delivery", source)
+
+      # A later try in one athanor replaces that athanor's place alone.
+      again = %{thread_id: "thread_ours_today", message_id: "msg_rpt_1"}
+      assert :ok = ConsumerReceipts.place(actor(athanor), "crew_delivery", source, again)
+      assert {:ok, ^again} = ConsumerReceipts.placed(actor(athanor), "crew_delivery", source)
+      assert {:ok, ^theirs} = ConsumerReceipts.placed(actor(neighbour), "crew_delivery", source)
+
+      {:ok, :ok} =
+        Arca.Repo.transaction(fn ->
+          ConsumerReceipts.put!(
+            actor(athanor),
+            Map.merge(source, %{consumer: "crew_delivery", outcome: "applied"})
+          )
+        end)
+
+      assert :none = ConsumerReceipts.placed(actor(athanor), "crew_delivery", source)
+      assert {:ok, ^theirs} = ConsumerReceipts.placed(actor(neighbour), "crew_delivery", source)
+    end
+  end
+
   describe "retention" do
     test "a crew request is pruned once the consumer that delivers it has its receipt", %{
       athanor: athanor

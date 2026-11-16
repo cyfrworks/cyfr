@@ -2512,22 +2512,21 @@ defmodule Arca.Repo.Migrations.Baseline do
     checked(sqlite?, :consumer_receipts, [receipt_outcome])
     create index(:consumer_receipts, [:athanor_id, :inserted_at])
 
-    # Where a consumer's try of one source revision is putting bytes,
-    # written and committed before the first byte and gone with its
-    # receipt: a later try discards there first, whatever became of the
-    # thread the place is under.
+    # Where a consumer's try of one source revision is putting bytes in
+    # an athanor, written and committed before the first byte and gone
+    # with its receipt: a later try discards there first, whatever became
+    # of the thread the place is under. The athanor leads the key, so
+    # another athanor's place is a row of its own.
     create table(:delivery_copies, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
       add :consumer, :string, primary_key: true, null: false
       add :source_kind, :string, primary_key: true, null: false
       add :source_id, :string, primary_key: true, null: false
       add :source_revision, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
       add :thread_id, :string, null: false
       add :message_id, :string, null: false
       add :inserted_at, :utc_datetime_usec, null: false
     end
-
-    create index(:delivery_copies, [:athanor_id])
   end
 
   # ==========================================================================

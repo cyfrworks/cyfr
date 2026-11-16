@@ -196,10 +196,10 @@ defmodule Arca.ConsumerReceipts do
   @type place :: %{thread_id: String.t(), message_id: String.t()}
 
   @doc """
-  Record that `consumer`'s try of `source` is putting bytes under
-  `thread_id`'s message `message_id`, in a transaction of its own that
-  commits before the caller writes a byte, replacing an earlier try's
-  place.
+  Record that `consumer`'s try of `source` in the actor's athanor is
+  putting bytes under `thread_id`'s message `message_id`, in a
+  transaction of its own that commits before the caller writes a byte,
+  replacing an earlier try's place in that athanor and no other's.
   """
   @spec place(Prima.Actor.t(), String.t(), Prima.OutboxRecord.source(), place()) ::
           :ok | {:error, :no_athanor | :database_error}
@@ -226,7 +226,7 @@ defmodule Arca.ConsumerReceipts do
       {1, _} =
         Arca.Repo.insert_all(DeliveryCopy, [row],
           on_conflict: {:replace, [:thread_id, :message_id, :inserted_at]},
-          conflict_target: [:consumer, :source_kind, :source_id, :source_revision]
+          conflict_target: [:athanor_id, :consumer, :source_kind, :source_id, :source_revision]
         )
 
       :ok
