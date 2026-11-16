@@ -273,10 +273,18 @@ func (cs *casts) stop() {
 
 // runCast casts window win until ctx ends or the window closes, reporting
 // its start, each frame and its window's end on events. A cast that
-// replaces another of its window starts once that one has stopped (after).
+// replaces another of its window starts once that one has stopped (after),
+// and its own end (done) comes only after that one's too, however soon it
+// was cancelled: a window's casts are one chain, each waiting on the cast
+// before it, so the newest waits on the one that holds the screencast.
 func (b *browser) runCast(ctx context.Context, id int64, win string, done chan<- struct{}, after <-chan struct{},
 	width, height int, events chan<- event) {
-	defer close(done)
+	defer func() {
+		if after != nil {
+			<-after
+		}
+		close(done)
+	}()
 	// A cast's start is always answered, so its request is never left
 	// running; an image or an end of a cast that has ended is not sent.
 	casting := func(e event) { events <- e }

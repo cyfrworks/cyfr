@@ -607,3 +607,29 @@ func TestAnEndedCastWritesNothingOfItsQueuedInput(t *testing.T) {
 		t.Fatalf("an ended cast still wrote %d input commands", bytes.Count(wire.Bytes(), []byte{0}))
 	}
 }
+
+// Review round one, finding 4: two replacements of a window's cast still
+// wait for the first cast's stop before the newest starts.
+func TestTwoReplacementsStillWaitForTheFirstCastsStop(t *testing.T) {
+	h := newCaster(t)
+	h.chrome.mu.Lock()
+	h.chrome.stopWait = 500 * time.Millisecond
+	h.chrome.mu.Unlock()
+	h.open(1, "thr_01")
+	h.cast(2, "thr_01")
+	h.response(2)
+	h.image("the first cast's image")
+	h.send(map[string]any{"t": "uncast", "id": 2})
+	waitFor(t, func() bool { return len(h.chrome.stoppedCasts()) == 1 }, "the first cast's stop under way")
+	h.cast(3, "thr_01")
+	h.send(map[string]any{"t": "uncast", "id": 3})
+	h.cast(4, "thr_01")
+	h.response(3)
+	h.response(4)
+	h.chrome.mu.Lock()
+	order := strings.Join(h.chrome.order, ", ")
+	h.chrome.mu.Unlock()
+	if order != "start S1, stop S1, stopped S1, start S1" {
+		t.Fatalf("the newest cast did not wait for the first one's stop: %s", order)
+	}
+}
