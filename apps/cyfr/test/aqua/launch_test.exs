@@ -1101,13 +1101,25 @@ defmodule Aqua.LaunchTest do
   @decided_work "The account \"Work\" is not the one this run was decided on, so nothing " <>
                   "ran: propose it again to run it on the account as it stands now"
 
-  # The decided launch `step` runs nothing: refused with `sentence`, no
-  # execution row and no attempt.
+  # The decided launch `step` runs nothing: refused with `sentence` by the
+  # dispatcher's own check, before the gate is asked — no decision of the
+  # gate's, no execution row and no attempt.
   defp ran_nothing!(ctx, step, decided, app, sentence) do
     attempts = attempts_of(ctx)
+    decisions = gate_runs(ctx)
     assert Launch.run(ctx, step, decided) == {:refused, {:conflict, sentence}}
     assert launched_of(ctx, app) == []
     assert attempts_of(ctx) == attempts
+    assert gate_runs(ctx) == decisions
+  end
+
+  defp gate_runs(ctx) do
+    Arca.Repo.aggregate(
+      from(d in Arca.Schemas.DecisionLog,
+        where: d.athanor_id == ^ctx.athanor_id and d.tool == "execution" and d.action == "run"
+      ),
+      :count
+    )
   end
 
   test "under auto a launch is decided on its app's grant: with no card where the grant covers " <>
