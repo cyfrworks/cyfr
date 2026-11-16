@@ -113,10 +113,12 @@ defmodule Opus.Browser do
   `answer/5` answers a held call once and forgets it; an answer that one
   frame to the driver does not hold is answered with a refusal in its
   place. `held/4` names the process that holds a call, which the holder
-  monitors: its death answers the call `unavailable`. Every held call
-  that ends unanswered is announced once, kind `ended`: when the driver
-  gives it up (`callend`), the session ends, the browser stops or the
-  process that held it dies.
+  monitors: its death answers the call `unavailable`. It answers that
+  process the holder's own pid, which it monitors in turn: the holder's
+  end, however it comes, ends every call it holds, and a holder killed
+  outright announces nothing. A held call that ends unanswered while the
+  holder lives is announced once, kind `ended`: when the driver gives it
+  up (`callend`) or the process that held it dies.
 
   ## The person's watch
 
@@ -573,17 +575,19 @@ defmodule Opus.Browser do
   The process `pid` now holds the page's call `request`, as a thread's
   runner does. The browser monitors it: should it die before the call is
   answered, the call is answered the wire's `unavailable` refusal and its
-  end is announced. A request the browser does not hold is passed over.
+  end is announced. Answers the browser's holder, which `pid` monitors:
+  the call ends with it. A request the browser does not hold is passed
+  over, answered `:gone`.
   """
-  @spec held(String.t(), String.t(), String.t(), pid()) :: :ok
+  @spec held(String.t(), String.t(), String.t(), pid()) :: {:ok, pid()} | :gone
   def held(athanor_id, user_id, request, pid)
       when is_binary(athanor_id) and is_binary(user_id) and is_binary(request) and is_pid(pid) do
     case lookup(athanor_id, user_id) do
-      nil -> :ok
+      nil -> :gone
       holder -> GenServer.call(holder, {:held, request, pid}, @watch_ms)
     end
   catch
-    :exit, _ -> :ok
+    :exit, _ -> :gone
   end
 
   defp lookup(athanor_id, user_id) do
@@ -746,10 +750,10 @@ defmodule Opus.Browser do
       %{^request => call} ->
         if call.monitor, do: Process.demonitor(call.monitor, [:flush])
         call = %{call | monitor: Process.monitor(pid)}
-        {:reply, :ok, %{state | calls: Map.put(state.calls, request, call)}}
+        {:reply, {:ok, self()}, %{state | calls: Map.put(state.calls, request, call)}}
 
       _not_held ->
-        {:reply, :ok, state}
+        {:reply, :gone, state}
     end
   end
 
@@ -975,13 +979,13 @@ defmodule Opus.Browser do
     {:noreply, state}
   end
 
-  # A holder that stops for any reason leaves no session it held running,
-  # and every call it held ends unanswered.
+  # A holder that stops for any reason leaves no session it held running.
+  # Every call it held ends with it, which their holders hear by their
+  # monitors of it (`held/4`), a holder killed outright as well.
   @impl true
   def terminate(_reason, state) do
     _ = close_session(state)
     for watch <- Map.values(state.watches), do: tell(watch, {:ended, :unavailable})
-    for {request, call} <- state.calls, do: announce(state, :ended, call.window, request)
     :ok
   end
 

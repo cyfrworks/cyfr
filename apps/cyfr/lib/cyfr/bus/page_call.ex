@@ -11,10 +11,11 @@ defmodule Cyfr.Bus.PageCall do
   (`thread_id`), the request the browser named it by, its `op`
   (`invoke` or `action`), its body's bytes and the put the calling
   document belongs to, the putting turn and the tincture reference it
-  put, nil for a page that is no tincture. `ended` names a request the browser no longer holds: the
-  driver gave it up, the browser's session ended, the browser stopped or
-  the process that held it died. A request is answered once, through
-  `Opus.Browser.answer/5`.
+  put, nil for a page that is no tincture. `ended` names a request the browser no longer holds
+  while it runs on: the driver gave it up or the process that held it
+  died. A browser that stops announces nothing, since whoever holds its
+  calls monitors it (`Opus.Browser.held/4`). A request is answered once,
+  through `Opus.Browser.answer/5`.
 
   The body is the page's own bytes: no inspect of this struct shows it.
   """

@@ -39,7 +39,10 @@ defmodule Aqua.PageCalls do
 
   This process holds it from the moment it is heard until its runner has
   it (`Opus.Browser.held/4`), so a call this process or that runner dies
-  holding is answered `unavailable` and never left waiting.
+  holding is answered `unavailable` and never left waiting. The browser's
+  holder answers who it is, and the runner monitors it: a call whose
+  browser is gone, however it went, ends as one whose request ended. A
+  call the browser no longer holds when it is heard is passed over.
   """
 
   use GenServer
@@ -75,16 +78,18 @@ defmodule Aqua.PageCalls do
   end
 
   defp take(%PageCall{} = call) do
-    :ok = Opus.Browser.held(call.athanor_id, call.user_id, call.request, self())
-
-    with {:ok, kind, request} <- decode(call),
+    with {:ok, browser} <- Opus.Browser.held(call.athanor_id, call.user_id, call.request, self()),
+         {:ok, kind, request} <- decode(call),
          :ok <- declared(call, kind, request),
          :ok <- charge(call) do
-      case Aqua.Runner.page_call(call.thread_id, call.athanor_id, call_of(call, kind, request)) do
+      taken = call_of(call, kind, request, browser)
+
+      case Aqua.Runner.page_call(call.thread_id, call.athanor_id, taken) do
         {:ok, runner} -> Opus.Browser.held(call.athanor_id, call.user_id, call.request, runner)
         {:error, reason} -> refuse(call, Sanctum.Refusals.classify(reason))
       end
     else
+      :gone -> :gone
       {:error, %Prima.Refusal{} = refusal} -> refuse(call, refusal)
     end
   end
@@ -165,23 +170,24 @@ defmodule Aqua.PageCalls do
   end
 
   # The call a model would make for it: a component's run, or the action.
-  defp call_of(%PageCall{} = call, :invoke, %{ref: ref, operation: operation, args: args}) do
-    named(call, "execution.run", %{
+  defp call_of(call, :invoke, %{ref: ref, operation: operation, args: args}, browser) do
+    named(call, browser, "execution.run", %{
       "reference" => ref,
       "input" => %{"operation" => operation, "params" => args}
     })
   end
 
-  defp call_of(%PageCall{} = call, :action, %{operation: operation, args: args}),
-    do: named(call, operation, args)
+  defp call_of(call, :action, %{operation: operation, args: args}, browser),
+    do: named(call, browser, operation, args)
 
-  defp named(%PageCall{} = call, name, arguments) do
+  defp named(%PageCall{} = call, browser, name, arguments) do
     %{
       request: call.request,
       name: name,
       arguments: arguments,
       user_id: call.user_id,
-      put_turn_id: call.put.turn_id
+      put_turn_id: call.put.turn_id,
+      browser: browser
     }
   end
 

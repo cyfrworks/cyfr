@@ -109,14 +109,15 @@ defmodule Aqua.RunnerRecoveryTest do
 
   # A call a page in the workspace thread's window makes, as
   # `Aqua.PageCalls` hands it to the runner, `put_turn_id` naming the turn
-  # that put the page.
+  # that put the page, its browser this test, which outlives it.
   defp page_call(ctx, put_turn_id, name, arguments),
     do: %{
       request: Prima.UUID7.generate_id("pgc"),
       name: name,
       arguments: arguments,
       user_id: ctx.user_id,
-      put_turn_id: put_turn_id
+      put_turn_id: put_turn_id,
+      browser: self()
     }
 
   defp ended?(ctx, turn_id), do: match?({:ok, %{ended_at: %DateTime{}}}, Tape.turn(ctx, turn_id))

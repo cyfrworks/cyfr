@@ -65,7 +65,9 @@ defmodule Aqua.Runner do
   topic and handed back through `Opus.Browser.answer/5`; a call whose
   turn ended without answering it is answered as cancelled. A
   call whose request ended is dropped while it waits, and its step
-  skipped, its card withdrawn, while the step is still proposed. A runner
+  skipped, its card withdrawn, while the step is still proposed; so is
+  every call of a browser that is gone, which the runner monitors from
+  the moment it takes a call of it. A runner
   that recovers a thread's turns holds no call of its predecessor, whose
   requests were answered unavailable when it died: their steps still
   proposed are skipped, and a turn one opened that never ran is
@@ -304,9 +306,10 @@ defmodule Aqua.Runner do
 
   @doc """
   Hand a page's call to the thread's runner (moduledoc): `call` is
-  `%{request, name, arguments, user_id, put_turn_id}`, the call a model
-  would make for it, the browser's person and the turn that put the
-  page. Answers the runner that holds it, or why it was refused.
+  `%{request, name, arguments, user_id, put_turn_id, browser}`, the call
+  a model would make for it, the browser's person, the turn that put the
+  page and the browser's holder (`Opus.Browser.held/4`). Answers the
+  runner that holds it, or why it was refused.
   """
   @spec page_call(String.t(), String.t(), map()) :: {:ok, pid()} | {:error, term()}
   def page_call(thread_id, athanor_id, %{request: _} = call)
@@ -497,7 +500,8 @@ defmodule Aqua.Runner do
           # A page's calls waiting to become steps, oldest first.
           pages: [],
           # Every page's call handed here and not yet answered: its
-          # request => the browser's person, whom the answer goes to.
+          # request => the browser's person, whom the answer goes to, and
+          # the monitor of the browser that holds its request.
           answering: %{}
         })
 
@@ -553,18 +557,8 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp handle_owned_call({:page_call_ended, request}, _from, state) do
-    case Enum.split_with(state.pages, &(&1.request == request)) do
-      {[_ended], pages} ->
-        {:reply, :ok, unanswering(%{state | pages: pages}, request)}
-
-      {[], _pages} ->
-        state =
-          if Map.has_key?(state.answering, request), do: withdraw(state, request), else: state
-
-        {:reply, :ok, unanswering(state, request)}
-    end
-  end
+  defp handle_owned_call({:page_call_ended, request}, _from, state),
+    do: {:reply, :ok, ended_call(state, request)}
 
   defp handle_owned_call({:stop, ctx}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
@@ -1146,18 +1140,22 @@ defmodule Aqua.Runner do
     end
   end
 
-  # The process that held a turn is gone: the turn is recovered now.
+  # The browser that holds a page's call is gone: the call's request
+  # ended. The process that held a turn is gone: the turn is recovered now.
   defp handle_owned_info({:DOWN, ref, :process, _pid, _reason} = msg, state) do
-    case Enum.find(state.held, fn {_turn_id, held} -> match?(%{ref: ^ref}, held) end) do
+    with nil <- Enum.find(state.answering, &match?({_request, %{monitor: ^ref}}, &1)),
+         nil <- Enum.find(state.held, fn {_turn_id, held} -> match?(%{ref: ^ref}, held) end) do
+      Prima.LoggerContext.unexpected(__MODULE__, msg)
+      {:noreply, state}
+    else
+      {request, %{monitor: ^ref}} ->
+        {:noreply, ended_call(state, request)}
+
       {turn_id, %{pid: holder}} ->
         case Aqua.Loop.Worker.stop(holder) do
           :ok -> {:noreply, recover_held(state, turn_id)}
           {:error, _} -> {:stop, :normal, retire_runtime(state)}
         end
-
-      nil ->
-        Prima.LoggerContext.unexpected(__MODULE__, msg)
-        {:noreply, state}
     end
   end
 
@@ -1675,11 +1673,36 @@ defmodule Aqua.Runner do
   # A page's calls
   # ---------------------------------------------------------------------------
 
-  defp answering(state, call),
-    do: %{state | answering: Map.put(state.answering, call.request, call.user_id)}
+  defp answering(state, call) do
+    answering = %{user_id: call.user_id, monitor: Process.monitor(call.browser)}
+    %{state | answering: Map.put(state.answering, call.request, answering)}
+  end
 
-  defp unanswering(state, request),
-    do: %{state | answering: Map.delete(state.answering, request)}
+  defp unanswering(state, request) do
+    case Map.pop(state.answering, request) do
+      {nil, _answering} ->
+        state
+
+      {%{monitor: monitor}, answering} ->
+        Process.demonitor(monitor, [:flush])
+        %{state | answering: answering}
+    end
+  end
+
+  # A page's call whose request ended, or whose browser is gone: dropped
+  # while it waits, its step withdrawn while still proposed.
+  defp ended_call(state, request) do
+    case Enum.split_with(state.pages, &(&1.request == request)) do
+      {[_ended], pages} ->
+        unanswering(%{state | pages: pages}, request)
+
+      {[], _pages} ->
+        state =
+          if Map.has_key?(state.answering, request), do: withdraw(state, request), else: state
+
+        unanswering(state, request)
+    end
+  end
 
   # The waiting calls become steps of the running turn, in order, and its
   # loop is told. A turn that is not running takes none, nor one whose
@@ -1783,7 +1806,7 @@ defmodule Aqua.Runner do
     request = payload["tool_call_id"]
 
     case Map.fetch(state.answering, request) do
-      {:ok, user_id} ->
+      {:ok, %{user_id: user_id}} ->
         {status, body} = Aqua.PageCalls.answered(%{content: row.content, payload: payload})
         Opus.Browser.answer(state.athanor_id, user_id, request, status, body)
         unanswering(state, request)
@@ -1798,7 +1821,7 @@ defmodule Aqua.Runner do
   defp answer_ended(state) do
     waiting = MapSet.new(state.pages, & &1.request)
 
-    Enum.reduce(state.answering, state, fn {request, user_id}, state ->
+    Enum.reduce(state.answering, state, fn {request, %{user_id: user_id}}, state ->
       if MapSet.member?(waiting, request) or state.paused != nil do
         state
       else

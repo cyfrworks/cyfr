@@ -1627,9 +1627,10 @@ defmodule Opus.BrowserTest do
 
       first = spawn(fn -> Process.sleep(:infinity) end)
       runner = spawn(fn -> Process.sleep(:infinity) end)
-      assert :ok = Opus.Browser.held(ctx.athanor_id, ctx.user_id, request, first)
-      assert :ok = Opus.Browser.held(ctx.athanor_id, ctx.user_id, request, runner)
-      assert :ok = Opus.Browser.held(ctx.athanor_id, ctx.user_id, "pcl_unknown", first)
+      holder = holder(ctx)
+      assert {:ok, ^holder} = Opus.Browser.held(ctx.athanor_id, ctx.user_id, request, first)
+      assert {:ok, ^holder} = Opus.Browser.held(ctx.athanor_id, ctx.user_id, request, runner)
+      assert :gone = Opus.Browser.held(ctx.athanor_id, ctx.user_id, "pcl_unknown", first)
 
       # The process that held it before the runner no longer does.
       Process.exit(first, :kill)
@@ -1679,41 +1680,48 @@ defmodule Opus.BrowserTest do
       refute_received %PageCall{}
     end
 
-    test "held when the session ends, the browser stops or it stops at its idle time, each ends, announced once",
+    test "held when the session ends, the browser stops or it stops at its idle time, each ends with its holder, " <>
+           "which its holder's monitor hears and nothing announces",
          %{driver: driver, ctx: ctx, lineage: lineage} do
       {_other_turn, other} = turn!(ctx)
 
+      # Each call held here, as its runner holds it, monitoring the
+      # browser's holder that `held/4` answers.
       held = fn ids ->
         for {id, lineage} <- ids do
           put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
           :ok = Driver.call(driver, id, lineage["thread_id"], put, "invoke", ~s({"v":1}))
           assert_receive %PageCall{kind: :call, request: request}, 5_000
-          request
+          {:ok, holder} = Opus.Browser.held(ctx.athanor_id, ctx.user_id, request, self())
+          Process.monitor(holder)
         end
       end
 
+      ends = fn monitors ->
+        for monitor <- monitors,
+            do: assert_receive({:DOWN, ^monitor, :process, _pid, _reason}, 5_000)
+
+        eventually(fn -> holder(ctx) == nil end, "the holder to stop")
+      end
+
       # The session ends.
-      requests = held.([{3, lineage}, {4, other}])
+      monitors = held.([{3, lineage}, {4, other}])
       [%{session: session}] = browser_sessions(ctx)
       assert {:ok, :closed} = Programs.close(ctx, session)
-
-      assert Enum.sort(for _ <- requests, do: ended_request()) == Enum.sort(requests)
-      eventually(fn -> holder(ctx) == nil end, "the holder to stop")
+      ends.(monitors)
 
       # The browser stops, its setting off.
-      requests = held.([{5, lineage}])
+      monitors = held.([{5, lineage}])
       :ok = Opus.Browser.stop(ctx.athanor_id, ctx.user_id)
-      assert [ended_request()] == requests
-      eventually(fn -> holder(ctx) == nil end, "the holder to stop")
+      ends.(monitors)
 
       # Its idle stop.
-      requests = held.([{6, lineage}])
+      monitors = held.([{6, lineage}])
       holder = holder(ctx)
       :sys.replace_state(holder, &%{&1 | last_act: &1.last_act - 86_400_000})
       {_timer, token} = :sys.get_state(holder).idle
       send(holder, {:idle, token})
-      assert [ended_request()] == requests
-      eventually(fn -> holder(ctx) == nil end, "the holder to stop")
+      ends.(monitors)
 
       refute_receive %PageCall{}, 200
     end
@@ -2557,12 +2565,6 @@ defmodule Opus.BrowserTest do
       {:ok, _pid} -> :ok
       {:error, :running} -> :ok
     end
-  end
-
-  # The request of the next end of a page's call announced.
-  defp ended_request do
-    assert_receive %PageCall{kind: :ended, request: request}, 5_000
-    request
   end
 
   # A workspace thread of the person's, opened from a post of their day.

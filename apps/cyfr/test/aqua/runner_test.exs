@@ -2465,14 +2465,16 @@ defmodule Aqua.RunnerTest do
     put
   end
 
-  # A call the page makes, as `Aqua.PageCalls` hands it to the runner.
+  # A call the page makes, as `Aqua.PageCalls` hands it to the runner,
+  # its browser this test, which outlives it.
   defp page_call(ctx, put, name, arguments \\ %{}),
     do: %{
       request: Prima.UUID7.generate_id("pgc"),
       name: name,
       arguments: arguments,
       user_id: ctx.user_id,
-      put_turn_id: put.id
+      put_turn_id: put.id,
+      browser: self()
     }
 
   # The turn has ended, and the runner has taken its end.
