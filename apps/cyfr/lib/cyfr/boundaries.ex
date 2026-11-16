@@ -1591,11 +1591,20 @@ defmodule Cyfr.Boundaries do
     %{
       from: "PrismWeb.ThreadPaneLive",
       into: "Arca.ThreadStorage",
-      functions: [:children, :get, :get_message, :latest_messages, :payload, :resolution],
+      functions: [
+        :children,
+        :get,
+        :get_message,
+        :latest_messages,
+        :payload,
+        :post?,
+        :resolution
+      ],
       reason:
         "the pane opens a thread, its latest messages and a room's crew threads under the " <>
-          "pane's actor, and decodes a message's stored payload and resolution with the " <>
-          "store's own projections, which read no row; the assistant owns every thread write."
+          "pane's actor, and decodes a message's stored payload and resolution, and whether " <>
+          "a row is a post, with the store's own projections, which read no row; the " <>
+          "assistant owns every thread write."
     },
     # --- the MCP surface's web adapters ---
     %{
