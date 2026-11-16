@@ -278,6 +278,15 @@
     border: 1px solid var(--color-border-default);
     box-shadow: 0 30px 80px rgb(0 0 0 / 0.6);
   }
+  /* A page drawn full (a workspace thread): the whole apps' area on the
+   * desk as in the hand. */
+  .settings-overlay.settings-overlay-full {
+    inset: 3rem 0 var(--canvas-shelf-height) 0;
+    border-radius: 0;
+    border: 0;
+    border-top: 1px solid var(--color-border-default);
+    box-shadow: none;
+  }
 }
 
 #canvas-switcher { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }

@@ -502,7 +502,7 @@ defmodule PrismWeb.LoginLive do
             class="h-10 w-10 rounded-full shrink-0 mt-1 ring-2 ring-indigo-400/30"
           />
           <div class="flex-1 min-w-0">
-            <div class="text-[10px] text-indigo-300/60 uppercase tracking-wider mb-1.5">Aqua</div>
+            <div class="text-[10px] text-indigo-300/60 tracking-wider mb-1.5">Aqua</div>
             <div class="relative bg-gray-900 rounded-lg rounded-tl-none px-4 py-3">
               <div class="absolute -left-2 top-3 w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-r-[8px] border-r-gray-900">
               </div>

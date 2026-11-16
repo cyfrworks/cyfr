@@ -221,6 +221,11 @@ defmodule Prism.Router do
           scope "/a/:athanor" do
             live "/", DesktopLive, :index, metadata: %{auth: :browser_authenticated}
             live "/aqua", AquaLive, :index, metadata: %{auth: :browser_authenticated}
+
+            # One of the person's workspace threads, drawn as a full layer
+            # over the desktop, under Aqua's panel and the system layer.
+            live "/workspace/:id", WorkspaceLive, :show, metadata: %{auth: :browser_authenticated}
+
             live "/files", FilesLive, :index, metadata: %{auth: :browser_authenticated}
             # /activities: unified activities feed (mcp_log + execution fan-out).
             live "/activities", ActivitiesLive, :index, metadata: %{auth: :browser_authenticated}

@@ -498,7 +498,7 @@ defmodule PrismWeb.TopbarLive do
           :if={@authenticated}
           id="aqua-link"
           navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-          class="rounded-md px-2 py-1 text-xs font-medium uppercase tracking-wider text-gray-300 hover:bg-gray-800/60 hover:text-gray-200"
+          class="rounded-md px-2 py-1 text-xs font-medium tracking-wider text-gray-300 hover:bg-gray-800/60 hover:text-gray-200"
         >
           Aqua
         </.link>

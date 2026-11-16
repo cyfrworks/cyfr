@@ -59,7 +59,8 @@ defmodule PrismWeb do
       ShellLive,
       TipsLive,
       VaultLive,
-      WebhooksLive
+      WebhooksLive,
+      WorkspaceLive
     ],
     dirty_xrefs: [CyfrWeb.Endpoint, CyfrWeb.Router],
     check: [aliases: true]
