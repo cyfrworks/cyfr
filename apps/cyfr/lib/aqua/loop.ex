@@ -1579,6 +1579,7 @@ defmodule Aqua.Loop do
         [id: Prima.UUID7.generate_id("apr"), sources: sources] ++ launch ++ program ++ card_opts
       )
       |> Map.put("tool_call_id", call.tool_call_id)
+      |> Map.put("purpose", step.purpose)
 
     case Tape.open_approval(guest(state), state.turn, step, %{
            id: intent["id"],

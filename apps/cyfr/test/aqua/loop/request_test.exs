@@ -12,7 +12,7 @@ defmodule Aqua.Loop.RequestTest do
 
   use ExUnit.Case, async: true
 
-  alias Aqua.Loop.Request
+  alias Aqua.Loop.{Planner, Request}
   alias Arca.Schemas.Message
 
   defp row(seq, kind, author, content, payload \\ nil) do
@@ -225,6 +225,87 @@ defmodule Aqua.Loop.RequestTest do
              "content" => "line 1",
              "is_error" => false
            }
+  end
+
+  test "a page's call and its answer, a host's step, are in no model's request, ordinary or " <>
+         "compaction, beside a model's own call that is" do
+    model_call =
+      row(2, "tool_call", @agent, "files", %{
+        "tool_call_id" => "call_1",
+        "name" => "files",
+        "tool" => "files",
+        "action" => "read",
+        "arguments" => %{"action" => "read", "path" => "a.txt"},
+        "step_id" => "s1"
+      })
+
+    # The rows a page's step writes (`Aqua.PageCalls.row/1`, and its close).
+    page_call =
+      row(4, "page_call", @agent, "execution.run", %{
+        "tool_call_id" => "pcl_page",
+        "name" => "execution.run",
+        "arguments" => %{"reference" => "reagent:local.app:1.0.0", "input" => %{}},
+        "tool" => "execution",
+        "action" => "run",
+        "kind" => "execute",
+        "user_id" => "usr_a"
+      })
+
+    page_result =
+      row(5, "page_result", @system, ~s({"v":1,"ok":true,"result":"from-the-page"}), %{
+        "tool_call_id" => "pcl_page",
+        "name" => "execution.run",
+        "status" => 200,
+        "is_error" => false,
+        "step_id" => "s_page"
+      })
+
+    rows = [
+      row(1, "text", "usr_a", "@aqua read a.txt"),
+      model_call,
+      row(3, "tool_result", @system, "line 1", %{
+        "tool_call_id" => "call_1",
+        "name" => "files",
+        "step_id" => "s1"
+      }),
+      page_call,
+      page_result,
+      row(6, "text", @agent, "Done.", %{"step_id" => "s2"}),
+      row(7, "text", "usr_a", "and now?")
+    ]
+
+    without = rows -- [page_call, page_result]
+
+    # The ordinary request, from the projection as the loop prunes it.
+    ordinary = Request.messages(Planner.prune(rows), %{})
+    assert ordinary == Request.messages(Planner.prune(without), %{})
+
+    assert [
+             %{"role" => "user"},
+             %{"role" => "assistant", "content" => [%{"id" => "call_1"}]},
+             %{"role" => "tool", "content" => [%{"tool_call_id" => "call_1"}]},
+             %{"role" => "assistant"},
+             %{"role" => "user"}
+           ] = ordinary
+
+    # The compaction's request, of the rows before a boundary that keeps
+    # only the newest, as the loop summarizes them.
+    %{first_kept_seq: kept} = Planner.boundary(rows, 1)
+    assert kept > page_result.seq
+    older = Enum.filter(rows, &(&1.seq < kept))
+    summary = Planner.summary_request(Request.messages(older, %{}), model: "m")
+
+    assert summary ==
+             Planner.summary_request(Request.messages(older -- [page_call, page_result], %{}),
+               model: "m"
+             )
+
+    for request <- [ordinary, summary] do
+      sent = Jason.encode!(request)
+      assert sent =~ "call_1"
+      refute sent =~ "pcl_page"
+      refute sent =~ "from-the-page"
+    end
   end
 
   describe "a schedule's fire" do
