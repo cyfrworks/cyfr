@@ -541,7 +541,7 @@ defmodule Aqua.Loop.Policy do
     %{
       "kind" => "request_approval",
       "id" => Keyword.get(opts, :id) || Prima.UUID7.generate_id("apr"),
-      "title" => Keyword.get(opts, :title) || "#{call.tool}.#{call.action}",
+      "title" => Keyword.get(opts, :title) || title(call),
       "summary" => Keyword.get(opts, :summary) || "",
       "proposal" => proposal,
       "sources" => Prima.Source.to_json_list(sources)
@@ -549,6 +549,18 @@ defmodule Aqua.Loop.Policy do
     |> Map.merge(standing_rule(call))
     |> Prima.MapUtil.put_present("program", program)
   end
+
+  # A launch's card names the app it runs, as the person knows it, never
+  # the operation that runs it; a model's launch and a page's alike.
+  defp title(%Call{kind: :launch, target: target}) when is_binary(target) do
+    case Prima.ComponentRef.parse(target) do
+      {:ok, %{name: name}} when is_binary(name) -> "Run the app #{name}"
+      _unread -> "Run an app"
+    end
+  end
+
+  defp title(%Call{kind: :launch}), do: "Run an app"
+  defp title(%Call{} = call), do: "#{call.tool}.#{call.action}"
 
   @doc """
   What decides the standing answers a card for `call` may offer: its
