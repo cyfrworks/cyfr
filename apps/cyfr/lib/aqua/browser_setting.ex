@@ -44,7 +44,9 @@ defmodule Aqua.BrowserSetting do
   @doc """
   Set the context's person's browser setting to `on`. Turning it off
   ends their browser (`Opus.Browser.stop/2`): every request waiting is
-  answered, and its session closes, its profile kept.
+  answered, and its session closes, its profile kept. The setting is
+  written before the browser is stopped, so a holder the stop does not
+  find reads it off before it starts anything (`Opus.Browser.act/4`).
   """
   @spec put(Context.t(), boolean()) :: {:ok, boolean()} | {:error, term()}
   def put(%Context{athanor_id: athanor_id, user_id: user_id}, on)

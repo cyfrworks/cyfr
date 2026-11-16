@@ -249,7 +249,10 @@ defmodule Aqua.Providers.Browser do
     with {:ok, true} <- Aqua.BrowserSetting.allowed?(ctx) |> unavailable() |> on(),
          {:ok, _turn} <- Opus.Browser.turn(caller) |> refused(),
          {:ok, answer} <-
-           Opus.Browser.act(caller, action, Map.take(args, @driver_args[action])) |> refused() do
+           Opus.Browser.act(caller, action, Map.take(args, @driver_args[action]), fn ->
+             Aqua.BrowserSetting.allowed?(ctx) == {:ok, true}
+           end)
+           |> refused() do
       answered(action, ctx, caller, args, answer)
     end
   end

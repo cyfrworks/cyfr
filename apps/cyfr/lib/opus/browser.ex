@@ -27,12 +27,20 @@ defmodule Opus.Browser do
   A request whose time ran out, whose turn was cancelled or superseded,
   or whose caller died while it waited sends nothing. Whether Aqua may
   use the browser at all is the person's browser setting, which the
-  tool's provider reads before it calls here (`Aqua.BrowserSetting`).
+  tool's provider reads before it calls here (`Aqua.BrowserSetting`) and
+  hands to `act/4` as a check, which the holder reads again before it
+  starts the browser (below).
 
   ## Its life
 
   One holder process per person, found by name, starts the session when
-  a turn first needs it and is its one attached process. It ends the
+  a turn first needs it and is its one attached process. The holder is
+  registered under its name before it reads the setting, and it reads
+  the setting, through the check `act/4` was handed, before it starts
+  anything; turning the setting off writes it before it stops the holder
+  it finds by that name (`stop/2`). So a holder the stop did not find
+  registered after the write, reads the setting off, starts nothing and
+  ends, answering what it holds `:turned_off`. It ends the
   session at its idle stop (no action for the `browser_idle_ms` platform
   setting's time), on `stop/2` (the browser setting went off), and the
   session ends as any does: its program exits, the person closes it from
@@ -141,9 +149,16 @@ defmodule Opus.Browser do
   response is gone or did not come in time), `{:ended, reason}` (the
   session ended under the request), `:turned_off` (`stop/2` meanwhile),
   `:too_large`, or a start's refusal.
+
+  `allowed?` answers, when it is called, whether the person's browser
+  setting lets Aqua use the browser now. The holder calls it before it
+  starts the browser for this request, after it is registered; with it
+  `false` the request is answered `:turned_off` and nothing starts.
   """
-  @spec act(Programs.caller(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def act({:turn, _ctx, lineage} = caller, op, args) when op in @ops and is_map(args) do
+  @spec act(Programs.caller(), String.t(), map(), (-> boolean())) ::
+          {:ok, map()} | {:error, term()}
+  def act({:turn, _ctx, lineage} = caller, op, args, allowed?)
+      when op in @ops and is_map(args) and is_function(allowed?, 0) do
     with {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
          window when is_binary(window) <- Map.get(lineage, "thread_id"),
          {:ok, pid} <- holder(athanor_id, user_id) do
@@ -152,7 +167,7 @@ defmodule Opus.Browser do
       # alone, so no debug log, status or crash report prints them.
       GenServer.call(
         pid,
-        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args))},
+        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args)), allowed?},
         @start_ms + @request_ms + @answer_margin_ms
       )
     else
@@ -163,7 +178,7 @@ defmodule Opus.Browser do
     :exit, _ -> {:error, :unavailable}
   end
 
-  def act(_caller, _op, _args), do: {:error, :not_owned}
+  def act(_caller, _op, _args, _allowed?), do: {:error, :not_owned}
 
   @doc """
   The caller a call of the browser tool in a turn's chain is: its context
@@ -297,7 +312,11 @@ defmodule Opus.Browser do
   end
 
   @impl true
-  def handle_call({:act, caller, turn_id, window, op, %Programs.Output{} = args}, from, state) do
+  def handle_call(
+        {:act, caller, turn_id, window, op, %Programs.Output{} = args, allowed?},
+        from,
+        state
+      ) do
     state = %{state | last_act: now()}
     request = %{from: from, caller: caller, turn_id: turn_id, window: window, op: op, args: args}
 
@@ -315,7 +334,7 @@ defmodule Opus.Browser do
         {:noreply, %{state | queued: state.queued ++ [request]}}
 
       true ->
-        {:noreply, start_session(%{state | queued: [request]})}
+        {:noreply, start_session(%{state | queued: [request]}, allowed?)}
     end
   end
 
@@ -484,17 +503,19 @@ defmodule Opus.Browser do
     MapSet.union(state.windows, MapSet.new(on_the_way))
   end
 
-  defp start_session(state) do
+  defp start_session(state, allowed?) do
     %{athanor_id: athanor_id, browser: browser} = state
     Process.send_after(self(), :hello_expired, @start_ms)
     holder = self()
 
     # The session is held by this process from the moment it is asked for,
     # not by the task that asks: it ends with this holder, however either
-    # ends.
+    # ends. The setting is read here, by a holder already registered, before
+    # anything starts: one `stop/2` did not find reads it off.
     task =
       Task.async(fn ->
-        with {:ok, row} <- row(athanor_id),
+        with :ok <- if(allowed?.(), do: :ok, else: {:error, :turned_off}),
+             {:ok, row} <- row(athanor_id),
              :ok <- close_running(browser) do
           Programs.start(browser, row.id, %{rows: @rows, cols: @cols, args: [], held_by: holder})
         end

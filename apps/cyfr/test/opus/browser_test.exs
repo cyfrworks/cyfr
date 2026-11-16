@@ -448,7 +448,9 @@ defmodule Opus.BrowserTest do
       answers(context, "read", {:ok, %{"text" => text}})
 
       assert {:ok, %{"text" => ^text}} =
-               Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{})
+               Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
+                 true
+               end)
     end
 
     test "after a replacement tail it asks again from the first missing chunk, takes the answer whole and runs the action once",
@@ -459,7 +461,7 @@ defmodule Opus.BrowserTest do
 
       task =
         Task.async(fn ->
-          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{})
+          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn -> true end)
         end)
 
       assert_receive {:driver, :holding, _session, id}, 5_000
@@ -492,7 +494,7 @@ defmodule Opus.BrowserTest do
 
       task =
         Task.async(fn ->
-          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{})
+          Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn -> true end)
         end)
 
       assert_receive {:driver, :holding, _session, id}, 5_000
@@ -617,7 +619,9 @@ defmodule Opus.BrowserTest do
       assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
 
       assert {:error, :response_too_large} =
-               Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{})
+               Opus.Browser.act(Opus.Browser.caller(guest(ctx), lineage), "read", %{}, fn ->
+                 true
+               end)
 
       assert :sys.get_state(holder(ctx)).pending == %{}
 
@@ -776,6 +780,45 @@ defmodule Opus.BrowserTest do
 
       clicks = for {:driver, :req, _s, %{"op" => "click"} = request} <- drain(), do: request
       assert clicks == []
+    end
+  end
+
+  describe "review round four" do
+    # Finding 11: once turning the setting off has returned, nothing
+    # reaches Chrome, even for an action whose holder had not yet been
+    # started when the stop looked for it.
+    test "an action whose holder waited to start while the setting went off sends nothing and starts no browser",
+         %{ctx: ctx, lineage: lineage} do
+      holders = Process.whereis(Opus.Browser.Holders)
+      :ok = :sys.suspend(holders)
+
+      on_exit(fn ->
+        try do
+          :sys.resume(holders)
+        catch
+          :exit, _resumed_or_gone -> :ok
+        end
+      end)
+
+      open = Task.async(fn -> call(ctx, lineage, "open", %{"url" => "https://example.com/"}) end)
+
+      eventually(
+        fn ->
+          {:messages, messages} = Process.info(holders, :messages)
+          Enum.any?(messages, &match?({:"$gen_call", _from, {:start_child, _spec}}, &1))
+        end,
+        "the holder's start to wait in its supervisor's mailbox"
+      )
+
+      assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+      assert {:ok, false} = Aqua.BrowserSetting.allowed?(ctx)
+      :ok = :sys.resume(holders)
+
+      assert refusal(Task.await(open, 10_000)) == "The browser is turned off."
+      refute_received {:session, "open", _open, _fields}
+      refute_received {:driver, :req, _session, %{"op" => "open"}}
+      assert browser_sessions(ctx) == []
+      eventually(fn -> holder(ctx) == nil end, "the holder to end")
     end
   end
 
