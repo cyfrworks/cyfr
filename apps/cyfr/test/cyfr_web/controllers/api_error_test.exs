@@ -54,17 +54,17 @@ defmodule CyfrWeb.ApiErrorTest do
 
   defp body(conn), do: Jason.decode!(conn.resp_body)
 
-  # A refusal rendered at its class's status (`status/1`) through
+  # A refusal rendered at its class's status (`Prima.Refusal.http_status/1`) through
   # `send/4`, the renderer's entry every route calls.
   defp answer(conn, reason) do
     refusal = Sanctum.Refusals.classify(reason)
-    ApiError.send(conn, ApiError.status(refusal.class), refusal, nil)
+    ApiError.send(conn, Prima.Refusal.http_status(refusal.class), refusal, nil)
   end
 
   test "every class has its status" do
     assert Map.keys(@statuses) |> Enum.sort() == Enum.sort(Prima.Refusal.classes())
 
-    for {class, status} <- @statuses, do: assert(ApiError.status(class) == status)
+    for {class, status} <- @statuses, do: assert(Prima.Refusal.http_status(class) == status)
   end
 
   # The SDK rejects a subscription refused with a class a request is
@@ -77,7 +77,7 @@ defmodule CyfrWeb.ApiErrorTest do
 
     for class <- Prima.Refusal.classes() do
       name = Atom.to_string(class)
-      assert ApiError.status(class) >= 500 == name in no_answer, name
+      assert Prima.Refusal.http_status(class) >= 500 == name in no_answer, name
     end
 
     # Each rejection the socket answers is at its class's status here, a
@@ -87,7 +87,7 @@ defmodule CyfrWeb.ApiErrorTest do
     assert Enum.any?(refused, fn {%{"class" => class}, _} -> class not in no_answer end)
 
     for {%{"class" => class, "message" => message}, rejects} <- refused do
-      assert ApiError.status(String.to_existing_atom(class)) >= 500 ==
+      assert Prima.Refusal.http_status(String.to_existing_atom(class)) >= 500 ==
                (rejects == %{"class" => "unavailable", "message" => message}),
              class
     end

@@ -54,7 +54,7 @@ defmodule Emissary.Web.OAuthCallbackController do
       {:error, :not_owner} ->
         error_page(
           conn,
-          CyfrWeb.ApiError.status(:not_owner),
+          Prima.Refusal.http_status(:not_owner),
           :not_owner,
           "Authorization failed",
           Prima.Refusal.message(:not_owner)

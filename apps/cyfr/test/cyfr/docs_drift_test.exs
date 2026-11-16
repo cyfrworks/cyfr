@@ -1741,8 +1741,8 @@ defmodule Cyfr.DocsDriftTest do
       Regex.run(~r/`confirmation_required` at `(\d{3}) /, paragraph) ||
         flunk("the paragraph names no HTTP status for confirmation_required")
 
-    assert String.to_integer(status) == CyfrWeb.ApiError.status(:confirmation_required),
-           "the paragraph's HTTP status for confirmation_required is not CyfrWeb.ApiError's"
+    assert String.to_integer(status) == Prima.Refusal.http_status(:confirmation_required),
+           "the paragraph's HTTP status for confirmation_required is not Prima.Refusal's"
   end
 
   defp split_keys(keys), do: keys |> String.split(",", trim: true) |> Enum.map(&String.trim/1)

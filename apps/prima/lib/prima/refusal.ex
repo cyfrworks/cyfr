@@ -298,6 +298,36 @@ defmodule Prima.Refusal do
   @spec classes() :: [class()]
   def classes, do: @classes
 
+  @http_statuses %{
+    invalid_argument: 400,
+    unauthenticated: 401,
+    forbidden: 403,
+    consent_required: 403,
+    # RFC 6585 §3: the request stands and needs its confirmation first —
+    # neither a denial (403) nor a conflict (409).
+    confirmation_required: 428,
+    not_found: 404,
+    conflict: 409,
+    not_owner: 409,
+    rate_limited: 429,
+    setup_required: 503,
+    unavailable: 503,
+    timeout: 504,
+    corrupt: 500,
+    cancelled: 500,
+    uncertain: 500,
+    internal: 500
+  }
+
+  @doc """
+  The HTTP status a refusal of `class` answers with on every surface that
+  answers over HTTP: a plain endpoint's rejection, and the tincture
+  wire's refusal (`Prima.TinctureWire.refusal/1`) wherever a page's call
+  is answered.
+  """
+  @spec http_status(class()) :: pos_integer()
+  def http_status(class), do: Map.fetch!(@http_statuses, class)
+
   @doc """
   The credential refusals' reasons, each a typed reason of this table and
   a guest error `type` a host call may answer: where a credential may go,
