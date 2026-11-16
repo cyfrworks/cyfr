@@ -298,6 +298,12 @@ defmodule Aqua.PageCalls do
 
   defp refusal(_outcome, {:error, %Prima.Refusal{} = refusal}, _text), do: refusal
 
+  # A launch that did not run (`Aqua.Loop`'s close of one) answers its own
+  # refusal: a component not granted is `consent_required`, as the
+  # endpoint answers a frame's call of one.
+  defp refusal(_outcome, {:error, {:launch, reason}}, _text),
+    do: Sanctum.Refusals.classify(reason)
+
   defp refusal(outcome, _result, text),
     do: %Prima.Refusal{class: class_of(outcome), reason: :page_call, message: text}
 

@@ -60,6 +60,28 @@ defmodule PrismWeb.AquaApprovalCardTest do
     end
   end
 
+  test "a card for a page's call says the page in the thread's window asks; any other, the agent" do
+    asker = fn html ->
+      [said] =
+        Regex.run(~r/data-test="approval-asker"[^>]*>(.*?)<\/span>/s, html,
+          capture: :all_but_first
+        )
+
+      String.trim(said)
+    end
+
+    page = card(%{"action_kind" => "execute", "purpose" => "page"}, agent_label: "Aqua")
+    assert asker.(page) == "The page in this thread&#39;s window asks to"
+    refute page =~ "wants to"
+
+    for intent <- [%{"purpose" => "chat"}, %{}] do
+      assert asker.(card(Map.put(intent, "action_kind", "execute"), agent_label: "Aqua")) ==
+               "Aqua wants to"
+    end
+
+    assert asker.(card(%{"action_kind" => "execute"})) == "Aqua wants to"
+  end
+
   test "an action declared standing: false offers no standing answer" do
     assert %{once: true, run: false, until: false, always: false, schedule: false} =
              offers(card(%{"action_kind" => "write", "standing" => false}))

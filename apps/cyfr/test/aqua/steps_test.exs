@@ -117,6 +117,35 @@ defmodule Aqua.StepsTest do
     assert {:ok, []} = Aqua.steps(other, thread.id)
   end
 
+  test "a page's step reads as the page's, by its purpose; a model's call's as before",
+       %{ctx: ctx, thread: thread} do
+    turn = turn!(ctx, thread)
+
+    [launch, listed, shown, read] =
+      steps!(ctx, turn, [
+        %{kind: "launch", purpose: "page", tool: "execution", action: "run", outcome: "ok"},
+        %{purpose: "page", tool: "component", action: "list", outcome: "denied"},
+        %{kind: "ui", purpose: "page", tool: "ui", action: "show"},
+        %{tool: "files", action: "read", outcome: "ok"}
+      ])
+
+    assert {:ok,
+            [
+              %{id: ^read, sentence: "Read a file", status: :done},
+              %{
+                id: ^shown,
+                sentence: "The page showed something on the screen",
+                status: :running
+              },
+              %{id: ^listed, sentence: "The page used a tool", status: :refused},
+              %{id: ^launch, sentence: "The page ran an app", status: :done}
+            ]} = Aqua.steps(ctx, thread.id)
+
+    assert Steps.sentence("notes", "keep", "page") == "The page kept a note"
+    assert Steps.sentence("notes", "keep", "chat") == "Kept a note"
+    assert Steps.sentence(nil, nil, "page") == "The page used a tool"
+  end
+
   test "a page holds a hundred steps at most", %{ctx: ctx, thread: thread} do
     turn = turn!(ctx, thread)
     ids = steps!(ctx, turn, for(_ <- 1..105, do: %{tool: "files", action: "read", outcome: "ok"}))
