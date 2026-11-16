@@ -2612,4 +2612,273 @@ defmodule Aqua.LoopTest do
     assert [_proposed_the_launch] =
              Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
   end
+
+  describe "a page's call the host proposes" do
+    # What the runner does for a page's call while a turn runs
+    # (`Aqua.Runner`): the step proposed into the running turn, and, with
+    # `notify`, the loop told of it.
+    defp page!(ctx, turn, name, args, notify \\ true) do
+      {:ok, running} = Tape.turn(ctx, turn.id)
+      request = Prima.UUID7.generate_id("pcl")
+
+      call = %{
+        request: request,
+        name: name,
+        arguments: args,
+        user_id: ctx.user_id,
+        put_turn_id: turn.id
+      }
+
+      proposal = Aqua.PageCalls.proposal(running, Aqua.PageCalls.row(call))
+      {:ok, step} = Tape.propose_call(ctx, running, proposal)
+      if notify, do: send(Aqua.Loop.holder(turn.id), {:page_call, turn.id})
+      step
+    end
+
+    defp step!(ctx, turn, id) do
+      {:ok, steps} = Tape.steps(ctx, turn)
+      Enum.find(steps, &(&1.id == id))
+    end
+
+    # A bounded wait on what the rows show.
+    defp until!(fun, tries \\ 200) do
+      cond do
+        fun.() -> :ok
+        tries == 0 -> flunk("the rows never showed it")
+        true -> Process.sleep(50) && until!(fun, tries - 1)
+      end
+    end
+
+    defp chats, do: Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+
+    defp page_rows(ctx, thread),
+      do:
+        ctx
+        |> Sanctum.Context.actor()
+        |> Threads.messages(thread.id)
+        |> Enum.filter(&(&1.kind in ["page_call", "page_result"]))
+
+    test "proposed while the model answers, with no word to the loop, it runs once the model " <>
+           "has answered, before the round's own calls and before the next round asks, and " <>
+           "no model's request carries it",
+         %{ctx: ctx, thread: thread} do
+      turn = accept!(ctx, thread, "@aqua look around")
+
+      script!([
+        {:probe, self()},
+        calls([{"c1", "component", %{"action" => "list"}}]),
+        reply("done")
+      ])
+
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      page = page!(ctx, turn, "component.list", %{}, false)
+      send(model, :continue)
+      assert :completed = Task.await(task, 60_000)
+
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert [
+               %{kind: "model", outcome: "ok"} = first,
+               %{id: page_id, purpose: "page", outcome: "ok"},
+               %{tool: "component", purpose: "chat", outcome: "ok"},
+               %{kind: "model", outcome: "ok"} = second
+             ] = steps
+
+      assert page_id == page.id
+      closed = step!(ctx, turn, page.id)
+      assert DateTime.compare(closed.ended_at, second.started_at) != :gt
+      assert DateTime.compare(first.ended_at, closed.started_at) != :gt
+
+      # Its call and its answer are rows of their own, and the wire's answer.
+      assert [%{kind: "page_call"}, %{kind: "page_result", content: body}] =
+               page_rows(ctx, thread)
+
+      assert %{"ok" => true} = Jason.decode!(body)
+
+      # The second round's request carries the component call, not the page's.
+      [_first, %{input: %{"params" => %{"messages" => messages}}}] = chats()
+      sent = Jason.encode!(messages)
+      [%{payload: call} | _] = page_rows(ctx, thread)
+      assert sent =~ "c1"
+      refute sent =~ Jason.decode!(call)["tool_call_id"]
+    end
+
+    test "told while the model answers, it runs at once beside the model, once, and a " <>
+           "continuation does not dispatch it again",
+         %{ctx: ctx, thread: thread} do
+      turn = accept!(ctx, thread, "@aqua keep a note")
+
+      script!([
+        {:probe, self()},
+        calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "kept"}}])
+      ])
+
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      page = page!(ctx, turn, "component.list", %{})
+
+      # It closes while the model's step is still open, with no answer.
+      until!(fn -> step!(ctx, turn, page.id).dispatch_state == "closed" end)
+      {:ok, [%{kind: "model", dispatch_state: "dispatched"} | _]} = Tape.steps(ctx, turn)
+      send(model, :continue)
+
+      assert {:paused, :approval} = Task.await(task, 60_000)
+      {:ok, paused} = Tape.turn(ctx, turn.id)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      ScriptedWorker.script([reply("kept it")])
+
+      assert :completed =
+               Task.await(
+                 Task.async(fn ->
+                   Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+                 end),
+                 60_000
+               )
+
+      assert %{outcome: "ok", generation: 0} = step!(ctx, turn, page.id)
+      assert [%{kind: "page_call"}, %{kind: "page_result"}] = page_rows(ctx, thread)
+    end
+
+    test "a page's launch told while the model answers waits for that answer, then runs " <>
+           "before the round's own calls with the root let go and taken back around it",
+         %{ctx: ctx, thread: thread} do
+      app = quiet_app!(ctx)
+      start_supervised!({ScriptedWorker, ref: [@model, app], script: []})
+      ScriptedWorker.script([{:probe, self()}, reply("done"), {:output, %{"answered" => true}}])
+
+      turn = accept!(ctx, thread, "@aqua show it")
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+
+      launch =
+        page!(ctx, turn, "execution.run", %{
+          "reference" => app <> ":1.0.0",
+          "input" => %{"operation" => "go", "params" => %{}}
+        })
+
+      read = page!(ctx, turn, "component.list", %{})
+
+      # The loop took the notice: the read ran, the launch did not, and
+      # the root was never let go under the model's run.
+      until!(fn -> step!(ctx, turn, read.id).dispatch_state == "closed" end)
+      assert %{dispatch_state: "proposed"} = step!(ctx, turn, launch.id)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      send(model, :continue)
+
+      assert :completed = Task.await(task, 60_000)
+      assert %{outcome: "ok", kind: "launch", result_message_id: result} = step!(ctx, turn, launch.id)
+      assert {:ok, %{kind: "page_result", content: body}} = Tape.message(ctx, result)
+      assert %{"ok" => true, "result" => %{"answered" => true}} = Jason.decode!(body)
+
+      # The model's answer called nothing: it is not asked again.
+      assert [_one] = chats()
+    end
+
+    test "a card a page's call raises while the model answers pauses the turn only once the " <>
+           "model has answered, and the yes runs it once without asking the model again",
+         %{ctx: ctx, thread: thread} do
+      turn = accept!(ctx, thread, "@aqua wait")
+      script!([{:probe, self()}, reply("done")])
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+
+      page = page!(ctx, turn, "notes.keep", %{"name" => "from-page", "content" => "x"})
+
+      until!(fn -> match?({:ok, [_]}, Tape.pending_approvals(ctx, turn)) end)
+
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      send(model, :continue)
+      assert {:paused, :approval} = Task.await(task, 60_000)
+
+      {:ok, paused} = Tape.turn(ctx, turn.id)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      assert approval.id == step!(ctx, turn, page.id).approval_id
+      {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+      assert :completed =
+               Task.await(
+                 Task.async(fn ->
+                   Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+                 end),
+                 60_000
+               )
+
+      assert %{outcome: "ok", generation: 0} = step!(ctx, turn, page.id)
+      assert {:ok, %{content: "x"}} = Aqua.Notes.read(ctx, "from-page")
+      assert [_one] = chats()
+    end
+
+    test "a page's call whose outcome is unknown while the model answers stops the turn at " <>
+           "once: the model's worker is stopped, its step closed, and no round follows",
+         %{ctx: ctx, thread: thread} do
+      start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
+      # Items are taken as each run plays: the model's run holds at the
+      # first probe, and the page's call's run takes the second.
+      ScriptedWorker.script([{:probe, self()}, {:probe, self()}, reply("never read")])
+
+      turn = accept!(ctx, thread, "@aqua fetch")
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, model_child}, 30_000
+      page = page!(ctx, turn, "http.get", %{"url" => "https://example.test/x"})
+      assert_receive {:scripted_probe, runner, _child}, 30_000
+      Process.exit(runner, :kill)
+
+      assert {:paused, :uncertain} = Task.await(task, 60_000)
+      assert {:ok, %{status: "paused", paused_reason: "uncertain"}} = Tape.turn(ctx, turn.id)
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert [%{kind: "model", dispatch_state: "closed", outcome: "error"} = model, _page] =
+               steps
+
+      assert model.child_execution_id == model_child
+      assert %{dispatch_state: "uncertain"} = step!(ctx, turn, page.id)
+      assert [_one] = chats()
+    end
+
+    test "with the model's last answer given, a page's call proposed between the steps runs " <>
+           "before the turn ends, and the model is not asked again",
+         %{ctx: ctx, thread: thread} do
+      start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
+
+      ScriptedWorker.script([
+        calls([{"c1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
+        {:probe, self()},
+        %{"status" => 200, "body" => "x"},
+        reply("done")
+      ])
+
+      turn = accept!(ctx, thread, "@aqua fetch")
+      task = run(ctx, turn)
+
+      # The loop waits on the round's own call, not on its model: the page's
+      # call waits for the next round's start.
+      assert_receive {:scripted_probe, runner, _child}, 30_000
+      page = page!(ctx, turn, "component.list", %{})
+      assert %{dispatch_state: "proposed"} = step!(ctx, turn, page.id)
+      send(runner, :continue)
+
+      assert :completed = Task.await(task, 60_000)
+      {:ok, steps} = Tape.steps(ctx, turn)
+      [_, _, closed, second] = steps
+      assert closed.id == page.id and closed.outcome == "ok"
+      assert DateTime.compare(closed.ended_at, second.started_at) != :gt
+    end
+
+    test "a turn completes only once no page's call is still proposed in it",
+         %{ctx: ctx, thread: thread} do
+      turn = accept!(ctx, thread, "@aqua hello")
+      script!([{:probe, self()}, reply("hi")])
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      {:ok, running} = Tape.turn(ctx, turn.id)
+      page = page!(ctx, turn, "component.list", %{}, false)
+      assert {:error, :call_pending} = Tape.finish(ctx, running, "completed")
+
+      send(model, :continue)
+      assert :completed = Task.await(task, 60_000)
+      assert %{outcome: "ok"} = step!(ctx, turn, page.id)
+    end
+  end
 end
