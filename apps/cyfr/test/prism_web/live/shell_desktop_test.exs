@@ -1232,6 +1232,52 @@ defmodule PrismWeb.ShellDesktopTest do
       assert today_id == today.id
     end
 
+    test "settings of aqua at a workspace thread opens its layer over the canvas, and the panel stays closed",
+         %{conn: conn, ctx: ctx, user: user} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, daily} = Arca.Test.Days.thread(actor)
+
+      {:ok, %{workspace: workspace}} =
+        Arca.TurnStorage.open_workspace(actor, %{
+          daily_id: daily.id,
+          id: Prima.UUID7.generate_id("thread"),
+          title: "Moon report",
+          opening: %{
+            id: Prima.UUID7.generate_id("msg"),
+            author: user.user_id,
+            content: "write the moon report",
+            payload: %{"ask" => "write the moon report"}
+          },
+          pointer: %{
+            author: user.user_id,
+            sent_by: "person",
+            content: "Moon report",
+            payload: %{"title" => "Moon report"}
+          },
+          files: fn _thread, _message -> {:ok, []} end,
+          person_id: user.user_id,
+          origin: :interactive
+        })
+
+      view = shell!(conn)
+      main = canvas(view).id
+      panel = find_live_child(view, "aqua-panel")
+      render(panel)
+      _ = render(view)
+
+      verb!(view, main, :settings, %{"page" => "aqua", "ref" => workspace.id})
+      _ = render(view)
+
+      assert_push_event(panel, "navigate", %{to: to})
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+      route = Sanctum.Tenancy.Athanors.route_slug(athanor)
+      assert to == PrismWeb.WorkspaceLive.address(route, workspace.id)
+
+      refute has_element?(panel, "#aqua-panel-sheet")
+      assert %{id: ^main, state: :live} = canvas(view)
+    end
+
     test "the desktop keeps the zone the browser reports as the person's, and one that is no zone leaves it",
          %{conn: conn, user: user} do
       zone = fn ->

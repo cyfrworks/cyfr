@@ -70,6 +70,30 @@ defmodule PrismWeb.ThreadPaneLive do
   included, goes to their model provider; dismissing it writes
   `users.prefs`' `aqua_reads_threads_seen`, so it is said once.
 
+  A workspace thread's pointer and each of its reports on a daily thread
+  is a card: the post as it was written (a report's summary with its
+  pictures, files and links), the workspace thread's state as it is now
+  (`Aqua.workspace/2`, worded by `PrismWeb.DisplayHelpers.work_state/1`,
+  never the outcome the report was written with), and Open, which asks
+  the host to open that thread, `{:open_thread, id}`. The state is read
+  again when the person's list announces the thread (`Cyfr.Bus.ThreadListed`,
+  on their `Cyfr.Bus.threads/2` topic) and when a card opens or is
+  decided anywhere in the athanor (`Cyfr.Bus.Notify`), since a card in a
+  crew member's thread under it moves it too; a thread the list says
+  left takes its cards with it. A thread that cannot be found any more
+  has no Open.
+
+  What the thread made is told to the host as it is read, for a host that
+  shows it beside the thread's posts (`PrismWeb.WorkspaceLive`): Aqua's
+  posts that hold a picture, a file or a link, `{:results, thread_id,
+  results, window}` when a thread opens and `{:result, thread_id, result}`
+  as each one lands, each `%{id, seq, content, attachments, links}` from
+  the rows the pane reads under its own context. The pane reads a thread's
+  newest posts only, `@window` of them, and has no way to earlier ones:
+  `window` is that number when the read filled it, so earlier posts and
+  what they hold may exist and are shown nowhere here, and nil when the
+  pane holds the whole thread.
+
   What a turn asks of the browser is its sender's alone: a page the
   assistant points at is offered as a link under the thread
   (`<dom>-links`), never followed, so the page the person is reading
@@ -88,7 +112,7 @@ defmodule PrismWeb.ThreadPaneLive do
   require Logger
 
   alias Arca.ThreadStorage, as: Threads
-  alias Cyfr.Bus.ThreadEvent
+  alias Cyfr.Bus.{ThreadEvent, ThreadListed}
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
 
@@ -99,6 +123,9 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
+
+  # How many of a thread's newest rows the pane reads when it opens one.
+  @window 500
 
   # The threads that hold crew threads.
   @rooms Threads.room_kinds()
@@ -222,11 +249,16 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The athanor's own topic. `Sanctum.Provisioning` broadcasts
   # `:athanor_changed` when a fill completes, which is what clears the
-  # preparing state without a reload.
+  # preparing state without a reload; a card opened or decided there moves
+  # the workspace thread it waits under. And the person's list of threads,
+  # which says when a workspace thread a card names moved or left.
   defp subscribe_athanor(%Sanctum.Context{athanor_id: id} = ctx)
        when is_binary(id) and id != "" do
     actor = Sanctum.Context.actor(ctx)
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
+
+    if is_binary(ctx.user_id),
+      do: Cyfr.Bus.subscribe(actor, Cyfr.Bus.threads(actor, ctx.user_id))
   end
 
   defp subscribe_athanor(_ctx), do: :ok
@@ -265,6 +297,8 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:pending_approvals, [])
       |> assign(:seen, thread && thread.read_seq)
       |> assign(:any_messages, false)
+      |> assign(:cards, %{})
+      |> assign(:works, %{})
       |> reset_live()
 
     case {connected?(socket), thread} do
@@ -279,7 +313,7 @@ defmodule PrismWeb.ThreadPaneLive do
           case Threads.latest_messages(
                  Sanctum.Context.actor(socket.assigns.context),
                  thread.id,
-                 500
+                 @window
                ) do
             rows when is_list(rows) -> rows
             {:error, _} -> []
@@ -287,7 +321,14 @@ defmodule PrismWeb.ThreadPaneLive do
 
         {shown, requests} = file_replies(rows)
 
+        tell_host(
+          socket,
+          {:results, thread.id, rows |> Enum.map(&result/1) |> Enum.reject(&is_nil/1),
+           if(length(rows) >= @window, do: @window)}
+        )
+
         socket
+        |> hold_cards(rows)
         |> stream(:messages, shown, reset: true)
         |> assign(:decided_notices, decided_notices(rows))
         |> assign(:requests, requests)
@@ -322,6 +363,76 @@ defmodule PrismWeb.ThreadPaneLive do
 
     {shown, for(row <- shown, crew(row) == :request, into: %{}, do: {row.id, row})}
   end
+
+  # A workspace thread's pointer and reports on this thread, kept by id so
+  # a move of that thread draws them again, and each workspace thread they
+  # name as it is now.
+  defp hold_cards(socket, rows), do: Enum.reduce(rows, socket, &hold_card(&2, &1))
+
+  defp hold_card(socket, %{kind: kind, workspace_id: id} = row)
+       when kind in ["pointer", "report"] and is_binary(id) do
+    socket = assign(socket, :cards, Map.put(socket.assigns.cards, row.id, row))
+    if Map.has_key?(socket.assigns.works, id), do: socket, else: read_work(socket, id)
+  end
+
+  defp hold_card(socket, _row), do: socket
+
+  # The workspace thread as it is now, under the pane's own context: one
+  # that cannot be found is gone, and one that cannot be read right now
+  # keeps what was held.
+  defp read_work(socket, id) do
+    work =
+      case Aqua.workspace(socket.assigns.context, id) do
+        {:ok, record} -> record
+        {:error, :not_found} -> :gone
+        {:error, _unread} -> Map.get(socket.assigns.works, id, :gone)
+      end
+
+    assign(socket, :works, Map.put(socket.assigns.works, id, work))
+  end
+
+  # Each workspace thread `ids` names read again, and its cards drawn again
+  # with it (the stream draws a row once, so each is put back).
+  defp reread_works(socket, ids) do
+    ids = Enum.filter(ids, &Map.has_key?(socket.assigns.works, &1))
+    socket = Enum.reduce(ids, socket, &read_work(&2, &1))
+
+    socket.assigns.cards
+    |> Map.values()
+    |> Enum.filter(&(&1.workspace_id in ids))
+    |> Enum.reduce(socket, &stream_insert(&2, :messages, &1))
+  end
+
+  # A workspace thread that left the list takes its cards with it: its
+  # pointer and reports were deleted with it.
+  defp drop_work(socket, id) do
+    {gone, kept} =
+      Enum.split_with(socket.assigns.cards, fn {_id, row} -> row.workspace_id == id end)
+
+    gone
+    |> Enum.reduce(socket, fn {_id, row}, socket -> stream_delete(socket, :messages, row) end)
+    |> assign(:cards, Map.new(kept))
+    |> assign(:works, Map.delete(socket.assigns.works, id))
+  end
+
+  # What the thread made: a post of Aqua's that holds a picture, a file or
+  # a link, as a host draws it; nil for any other row.
+  defp result(%{author: @agent_author} = row) do
+    payload = Threads.payload(row)
+    attachments = payload["attachments"] || []
+    links = payload["links"] || []
+
+    if attachments != [] or links != [],
+      do: %{
+        id: row.id,
+        seq: row.seq,
+        content: row.content,
+        attachments: attachments,
+        links: links
+      }
+  end
+
+  defp result(_row), do: nil
 
   # A room's crew threads, or a crew thread's room.
   defp relatives(socket, %{kind: "crew", parent_id: room_id}),
@@ -652,6 +763,26 @@ defmodule PrismWeb.ThreadPaneLive do
 
   def handle_info(%ThreadEvent{}, socket), do: {:noreply, socket}
 
+  # A workspace thread a card names, as the person's list announces it:
+  # moved, read again; gone, its cards with it.
+  def handle_info(%ThreadListed{kind: :workspace, id: id}, socket),
+    do: {:noreply, reread_works(socket, [id])}
+
+  def handle_info(%ThreadListed{kind: :removed, id: id}, socket) do
+    if Map.has_key?(socket.assigns.works, id),
+      do: {:noreply, drop_work(socket, id)},
+      else: {:noreply, socket}
+  end
+
+  def handle_info(%ThreadListed{}, socket), do: {:noreply, socket}
+
+  # A card opened or decided in the athanor may have moved a workspace
+  # thread a card names, a crew member's card under it among them: each
+  # is read again.
+  def handle_info(%Cyfr.Bus.Notify{kind: kind}, socket)
+      when kind in [:approval_pending, :approval_resolved],
+      do: {:noreply, reread_works(socket, Map.keys(socket.assigns.works))}
+
   # Approval cards dispatch the decision to their LiveView — this one; a
   # refusal reaches the person who clicked.
   def handle_info({:approval_approve, _id, _scope} = decision, socket) do
@@ -860,7 +991,10 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # A step's text row replaces the answer that streamed for it.
   defp handle_thread_event(socket, :message, row) do
+    if result = result(row), do: tell_host(socket, {:result, row.thread_id, result})
+
     socket
+    |> hold_card(row)
     |> upsert_message(row)
     |> assign(:partials, Aqua.stream_landed(socket.assigns.partials, row))
     |> assign(:turn_replied, socket.assigns.turn_replied or replied?(row, socket))
@@ -1518,7 +1652,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # the thread is on, or the roster's first — the athanor's soul — before
   # any turn has run.
   defp assistant_handle(%{"name" => name} = o, _athanor) when is_binary(name) and name != "",
-    do: {name, o["title"] || name}
+    do: {name, agent_title(o)}
 
   # No roster entry at all: teach nothing rather than a handle that does
   # not resolve — the "no assistant" note in the header is the honest
@@ -1528,8 +1662,17 @@ defmodule PrismWeb.ThreadPaneLive do
   defp current_assistant(nil, roster), do: List.first(roster)
   defp current_assistant(%{} = assistant, _roster), do: assistant
 
-  defp assistant_label(%{} = o), do: o["title"] || o["name"]
+  defp assistant_label(%{"name" => name} = o) when is_binary(name), do: agent_title(o)
+  defp assistant_label(%{} = o), do: o["title"]
   defp assistant_label(_), do: "your Aqua"
+
+  # An agent by its title; a title that only repeats its name (the
+  # runner's live state carries the name in both) reads as the name does
+  # to a person, the soul as Aqua (`agent_name/1`).
+  defp agent_title(%{"name" => name, "title" => title}) when is_binary(title) and title != name,
+    do: title
+
+  defp agent_title(%{"name" => name}), do: agent_name(name)
 
   # Every message addresses the agent, so the placeholder names it.
   defp composer_placeholder({_handle, label}),
@@ -1538,8 +1681,13 @@ defmodule PrismWeb.ThreadPaneLive do
   defp composer_placeholder(nil),
     do: "Say something…  (Enter to send · Shift+Enter for newline)"
 
-  # The route a second device reads an attachment's bytes from.
-  defp attachment_path(athanor_route, message_id, filename) do
+  @doc """
+  The route a second device reads an attachment's bytes from: the stored
+  file `filename` of message `message_id`, in the athanor `athanor_route`
+  names.
+  """
+  @spec attachment_path(String.t() | nil, String.t(), String.t()) :: String.t()
+  def attachment_path(athanor_route, message_id, filename) do
     PrismWeb.Focus.path(
       athanor_route,
       "/attachments/#{URI.encode(message_id, &URI.char_unreserved?/1)}/#{URI.encode(filename, &URI.char_unreserved?/1)}"
@@ -1609,12 +1757,14 @@ defmodule PrismWeb.ThreadPaneLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <%!-- Focusable so a click anywhere in the pane makes it the one ⌘. halts. --%>
+    <%!-- Focusable so a click anywhere in the pane makes it the one ⌘. halts.
+          `min-h-0`: a column flex item no taller than its host, so a tall
+          thread scrolls inside it and the composer stays in view. --%>
     <section
       id={@dom <> "-pane"}
       phx-hook="Thread"
       tabindex="-1"
-      class="flex flex-1 min-w-0 flex-col focus:outline-none"
+      class="flex min-h-0 flex-1 min-w-0 flex-col focus:outline-none"
     >
       <header
         :if={status?(assigns)}
@@ -1967,7 +2117,15 @@ defmodule PrismWeb.ThreadPaneLive do
                     result_summary={resolution["summary"]}
                     scope={scope_atom(resolution["scope"])}
                     resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
-                    agent_label={@assistant && @assistant["title"]}
+                    agent_label={@assistant && assistant_label(@assistant)}
+                  />
+                <% Map.has_key?(@cards, msg.id) -> %>
+                  <.work_card
+                    id={@dom <> "-msg-" <> msg.id}
+                    msg={msg}
+                    work={@works[msg.workspace_id]}
+                    author={author_label(msg, @members, @context)}
+                    athanor_route={@athanor_route}
                   />
                 <% true -> %>
                   <div class="group/aloud">
@@ -2262,10 +2420,14 @@ defmodule PrismWeb.ThreadPaneLive do
   attr :attachment_href, :any, default: nil
   attr :links, :list, default: []
 
-  # A post draws what it holds, whoever wrote it: a picture in place, which
-  # opens large over the page; any other file a chip that downloads; a link
-  # a link, never fetched.
-  defp message_bubble(assigns) do
+  @doc """
+  A post as the pane draws it, by its `role` and `author`: it draws what it
+  holds, whoever wrote it, a picture in place, which opens large over the
+  page, any other file a chip that downloads (`attachment_href`, a
+  function of the stored name), and a link a link, never fetched. The
+  workspace layer draws a thread's results with it.
+  """
+  def message_bubble(assigns) do
     # The model's surrounding whitespace would inflate the bubble.
     display = String.trim(assigns.content || "")
 
@@ -2448,6 +2610,57 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
+  attr :id, :string, required: true
+  attr :msg, :map, required: true
+  attr :work, :any, required: true
+  attr :author, :string, default: nil
+  attr :athanor_route, :any, required: true
+
+  # A workspace thread's pointer or report: the post as it was written, then
+  # its thread's state as it is now and Open, or that it is gone.
+  defp work_card(assigns) do
+    assigns = assign(assigns, :payload, Threads.payload(assigns.msg))
+
+    ~H"""
+    <div id={@id <> "-card"}>
+      <.message_bubble
+        id={@id}
+        role={role_of(@msg)}
+        content={@msg.content}
+        author={@author}
+        attachments={@payload["attachments"] || []}
+        attachment_href={&attachment_path(@athanor_route, @msg.id, &1)}
+        links={@payload["links"] || []}
+      />
+      <div class={["mt-0.5 flex items-center gap-2 px-1 text-xs", role_align_row(role_of(@msg))]}>
+        <%= case @work do %>
+          <% %{id: id, state: state} -> %>
+            <span id={@id <> "-state"} data-state={state} class="text-gray-400">
+              {work_state(state)}
+            </span>
+            <span :if={@work.unread > 0} class="text-gray-500">· {@work.unread} new</span>
+            <button
+              id={@id <> "-open"}
+              type="button"
+              phx-click="open_thread"
+              phx-value-id={id}
+              class="min-h-6 text-blue-400 hover:text-blue-300"
+            >
+              Open
+            </button>
+          <% _gone -> %>
+            <span id={@id <> "-state"} class="text-gray-500">
+              This workspace thread was deleted
+            </span>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  defp role_align_row("user"), do: "justify-end"
+  defp role_align_row(_role), do: "justify-start"
+
   # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
   # crew member, a reply to one, a notice that a member needs the person,
   # or none of these.
@@ -2530,9 +2743,9 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system"], do: nil
 
-  # A workspace thread's pointer and report, plain posts that name it.
-  defp author_label(%{kind: "pointer"} = msg, _members, _ctx),
-    do: "Workspace thread · #{Threads.payload(msg)["title"]}"
+  # A workspace thread's pointer, whose post is its title, and its report,
+  # which names it.
+  defp author_label(%{kind: "pointer"}, _members, _ctx), do: "Workspace thread"
 
   defp author_label(%{kind: "report"} = msg, _members, _ctx),
     do: "Report · #{Threads.payload(msg)["title"]}"

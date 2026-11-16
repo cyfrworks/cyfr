@@ -19,6 +19,10 @@ defmodule PrismWeb.Layouts do
   reach: a panel inset on the desk, the whole area in the hand, with the
   page list (a sidebar in `dev` on wide screens, the drawer in both UI
   modes) and a close that returns to the desktop (`PrismWeb.DesktopLive`).
+  A page drawn full (`overlay: :full`, a workspace thread,
+  `PrismWeb.WorkspaceLive`) takes the whole area on the desk too, with no
+  page list and no close row: it draws its own close, and its own scroll.
+  Either way the shelf, Aqua's panel and the system layer stand above it.
   A page that draws nothing over the desktop (`overlay: false`, the
   desktop's own address and the forwards to it) has no overlay. The layer
   takes no pointer where it draws nothing, so the desktop under it stays

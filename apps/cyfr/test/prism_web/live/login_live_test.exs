@@ -82,6 +82,10 @@ defmodule PrismWeb.LoginLiveTest do
     assert has_element?(view, ~s([data-test="not-set-up"]))
     refute has_element?(view, ~s([data-test="sign-in"]))
     refute_vocabulary(html)
+
+    # The welcome's speaker reads Aqua as written: no style upper-cases it.
+    assert html =~ ~r/>\s*Aqua\s*</
+    refute html =~ ~r/class="[^"]*\buppercase\b[^"]*"[^>]*>\s*Aqua\s*</
   end
 
   test "the one button sends the browser to the account pages with a request bound to it", %{
