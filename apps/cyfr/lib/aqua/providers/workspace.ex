@@ -475,7 +475,7 @@ defmodule Aqua.Providers.Workspace do
   each one `open` or `needs_you`, and each finished one with posts the
   person has not seen; a finished one they have seen leaves the list by
   itself and is found from the daily thread. `waits_on_you` is whether a
-  card in it waits on the person.
+  card waits on the person there or in a crew member's thread under it.
   """
   @spec records(Context.t()) :: {:ok, [entry()]} | {:error, term()}
   def records(%Context{} = ctx) do
@@ -523,9 +523,10 @@ defmodule Aqua.Providers.Workspace do
     end
   end
 
+  # It waits on the person while a card waits there or in a crew member's
+  # thread under it, which its state says (`needs_you`).
   defp record_of(actor, thread) do
-    with {:ok, unread} <- Arca.ThreadStorage.unread(actor, thread),
-         waiting when is_list(waiting) <- Arca.ThreadStorage.pending_approvals(actor, thread.id) do
+    with {:ok, unread} <- Arca.ThreadStorage.unread(actor, thread) do
       {:ok,
        %{
          id: thread.id,
@@ -534,7 +535,7 @@ defmodule Aqua.Providers.Workspace do
          opened_at: thread.inserted_at,
          last_activity: thread.last_message_at || thread.inserted_at,
          unread: unread,
-         waits_on_you: waiting != []
+         waits_on_you: thread.workspace_state == "needs_you"
        }}
     end
   end

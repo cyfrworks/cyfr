@@ -705,34 +705,62 @@ defmodule Arca.TurnStorage do
   end
 
   # The host's moves, each in the transaction of the write
-  # that causes it. A card opened in a workspace thread at work: it waits
+  # that causes it. A card opened in a workspace thread at work, or in a
+  # crew member's thread under it, whose job is part of its work: it waits
   # on its person, and the daily thread is told.
   # arca:db-raise-ok inside the caller's transaction
-  defp waits!(athanor_id, %Thread{kind: "workspace", workspace_state: "open"} = thread, turn, id),
-    do: moved!(athanor_id, thread, turn, "needs_you", %{approval_id: id})
+  defp waits!(athanor_id, %Thread{} = thread, turn, approval_id) do
+    case work_of(athanor_id, thread) do
+      %Thread{workspace_state: "open"} = workspace ->
+        moved!(athanor_id, workspace, turn, "needs_you", %{approval_id: approval_id})
 
-  defp waits!(_athanor_id, %Thread{}, _turn, _approval_id), do: :ok
+      _none_or_not_at_work ->
+        :ok
+    end
+  end
 
-  # The last card waiting in a workspace thread decided, by any way a card
-  # leaves `pending`: it is at work again, and nothing is reported.
+  # The last card waiting in a workspace thread and its crew members'
+  # threads decided, by any way a card leaves `pending`: it is at work
+  # again, and nothing is reported.
   # arca:db-raise-ok inside the caller's transaction
   defp settled!(athanor_id, thread_id) do
-    waiting =
-      from(a in Approval,
-        where: a.athanor_id == ^athanor_id and a.thread_id == ^thread_id,
-        where: a.status == "pending"
-      )
+    with %Thread{workspace_state: "needs_you"} = workspace <-
+           work_of(athanor_id, thread!(athanor_id, thread_id)) do
+      threads =
+        from(c in Thread,
+          where: c.athanor_id == ^athanor_id,
+          where: c.id == ^workspace.id or (c.kind == "crew" and c.parent_id == ^workspace.id),
+          select: c.id
+        )
 
-    unless Arca.Repo.exists?(waiting) do
-      from(c in Thread,
-        where: c.athanor_id == ^athanor_id and c.id == ^thread_id,
-        where: c.kind == "workspace" and c.workspace_state == "needs_you"
-      )
-      |> Arca.Repo.update_all(set: [workspace_state: "open"])
+      waiting =
+        from(a in Approval,
+          where: a.athanor_id == ^athanor_id and a.thread_id in subquery(threads),
+          where: a.status == "pending"
+        )
+
+      unless Arca.Repo.exists?(waiting) do
+        from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
+        |> Arca.Repo.update_all(set: [workspace_state: "open"])
+      end
     end
 
     :ok
   end
+
+  # The workspace thread whose work a thread is: itself, or the room a
+  # crew member's thread works under when that room is one.
+  # arca:db-raise-ok inside the caller's transaction
+  defp work_of(_athanor_id, %Thread{kind: "workspace"} = thread), do: thread
+
+  defp work_of(athanor_id, %Thread{kind: "crew", parent_id: room_id}) when is_binary(room_id) do
+    case Arca.Repo.get_by(Thread, id: room_id, athanor_id: athanor_id) do
+      %Thread{kind: "workspace"} = workspace -> workspace
+      _other -> nil
+    end
+  end
+
+  defp work_of(_athanor_id, %Thread{}), do: nil
 
   # A turn of a workspace thread that ended failed or uncertain fails the
   # work, with its error as the report's summary; a cancel or a completion

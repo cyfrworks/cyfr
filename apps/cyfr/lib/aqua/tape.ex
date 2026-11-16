@@ -890,7 +890,7 @@ defmodule Aqua.Tape do
     with {:ok, turn} <- calling_turn(ctx, args) do
       case args do
         %{"parent_execution_id" => root, "root_execution_id" => root, "attempt" => attempt}
-        when is_integer(attempt) and attempt != turn.attempt ->
+        when is_binary(attempt) and attempt != turn.attempt ->
           {:error, :superseded}
 
         _held ->

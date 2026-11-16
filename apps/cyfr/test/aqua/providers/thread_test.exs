@@ -1176,7 +1176,7 @@ defmodule Aqua.Providers.ThreadTest do
       # turn no longer runs.
       stale = %{
         "parent_execution_id" => turn.root_execution_id,
-        "attempt" => turn.attempt + 1,
+        "attempt" => "att_replaced",
         "text" => "late",
         "files" => [@png]
       }

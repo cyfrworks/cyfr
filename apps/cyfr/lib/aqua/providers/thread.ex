@@ -1218,7 +1218,7 @@ defmodule Aqua.Providers.Thread do
     case Tape.held_turn(ctx, args) do
       {:ok, turn} -> {:ok, turn}
       {:error, :not_addressable} -> {:error, :not_in_a_turn}
-      {:error, _} = refused -> refused
+      {:error, reason} -> {:error, post_refusal(reason)}
     end
   end
 
