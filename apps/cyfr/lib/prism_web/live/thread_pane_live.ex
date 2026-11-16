@@ -1644,7 +1644,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # the thread is on, or the roster's first — the athanor's soul — before
   # any turn has run.
   defp assistant_handle(%{"name" => name} = o, _athanor) when is_binary(name) and name != "",
-    do: {name, o["title"] || name}
+    do: {name, agent_title(o)}
 
   # No roster entry at all: teach nothing rather than a handle that does
   # not resolve — the "no assistant" note in the header is the honest
@@ -1654,8 +1654,17 @@ defmodule PrismWeb.ThreadPaneLive do
   defp current_assistant(nil, roster), do: List.first(roster)
   defp current_assistant(%{} = assistant, _roster), do: assistant
 
-  defp assistant_label(%{} = o), do: o["title"] || o["name"]
+  defp assistant_label(%{"name" => name} = o) when is_binary(name), do: agent_title(o)
+  defp assistant_label(%{} = o), do: o["title"]
   defp assistant_label(_), do: "your Aqua"
+
+  # An agent by its title; a title that only repeats its name (the
+  # runner's live state carries the name in both) reads as the name does
+  # to a person, the soul as Aqua (`agent_name/1`).
+  defp agent_title(%{"name" => name, "title" => title}) when is_binary(title) and title != name,
+    do: title
+
+  defp agent_title(%{"name" => name}), do: agent_name(name)
 
   # Every message addresses the agent, so the placeholder names it.
   defp composer_placeholder({_handle, label}),
@@ -1740,12 +1749,14 @@ defmodule PrismWeb.ThreadPaneLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <%!-- Focusable so a click anywhere in the pane makes it the one ⌘. halts. --%>
+    <%!-- Focusable so a click anywhere in the pane makes it the one ⌘. halts.
+          `min-h-0`: a column flex item no taller than its host, so a tall
+          thread scrolls inside it and the composer stays in view. --%>
     <section
       id={@dom <> "-pane"}
       phx-hook="Thread"
       tabindex="-1"
-      class="flex flex-1 min-w-0 flex-col focus:outline-none"
+      class="flex min-h-0 flex-1 min-w-0 flex-col focus:outline-none"
     >
       <header
         :if={status?(assigns)}

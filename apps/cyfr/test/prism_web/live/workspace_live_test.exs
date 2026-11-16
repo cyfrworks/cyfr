@@ -289,6 +289,11 @@ defmodule PrismWeb.WorkspaceLiveTest do
     # New work opened it again.
     wait_until(fn -> has_element?(view, ~s(#workspace-state[data-state="open"])) end)
 
+    # Once a turn has run there, the composer still names the soul as a
+    # person reads it, never by its handle.
+    assert has_element?(pane, ~s(textarea[placeholder^="Ask Aqua…"]))
+    refute render(pane) =~ "Ask aqua…"
+
     Cyfr.Test.Sandbox.end_views()
   end
 
