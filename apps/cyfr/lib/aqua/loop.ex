@@ -2007,7 +2007,7 @@ defmodule Aqua.Loop do
 
     Tape.close_step(guest(state), state.turn, step, outcome, %{
       result:
-        result_row(step, outcome, result, text, %{
+        result_row(step, outcome, page_value(call, result), text, %{
           "tool_call_id" => call && call.tool_call_id,
           "name" => call && call.model_name,
           "is_error" => error?
@@ -2026,6 +2026,12 @@ defmodule Aqua.Loop do
   end
 
   defp result_row(_step, _outcome, _result, text, payload), do: %{content: text, payload: payload}
+
+  defp page_value(%Call{kind: :hand}, {:ok, %{output: output}}),
+    do: {:ok, Aqua.PageCalls.data(output)}
+
+  defp page_value(%Call{kind: :hand}, {:ok, output}), do: {:ok, Aqua.PageCalls.data(output)}
+  defp page_value(_call, result), do: result
 
   defp render(nil, {:error, reason}), do: %{text: describe(reason), is_error: true}
 

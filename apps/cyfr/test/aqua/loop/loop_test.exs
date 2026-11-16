@@ -2870,6 +2870,31 @@ defmodule Aqua.LoopTest do
       assert DateTime.compare(closed.ended_at, second.started_at) != :gt
     end
 
+    test "a hand a page calls answers it with its contract's data, as the endpoint would",
+         %{ctx: ctx, thread: thread} do
+      start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
+
+      ScriptedWorker.script([
+        {:probe, self()},
+        {:output, %{"status" => 200, "data" => %{"body" => "x", "status" => 200}}},
+        reply("done")
+      ])
+
+      turn = accept!(ctx, thread, "@aqua fetch")
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      page = page!(ctx, turn, "http.get", %{"url" => "https://example.test/x"})
+      until!(fn -> step!(ctx, turn, page.id).dispatch_state == "closed" end)
+      send(model, :continue)
+      assert :completed = Task.await(task, 60_000)
+
+      %{result_message_id: result} = step!(ctx, turn, page.id)
+      assert {:ok, %{content: body}} = Tape.message(ctx, result)
+
+      assert %{"v" => 1, "ok" => true, "result" => %{"body" => "x", "status" => 200}} ==
+               Jason.decode!(body)
+    end
+
     test "a turn completes only once no page's call is still proposed in it",
          %{ctx: ctx, thread: thread} do
       turn = accept!(ctx, thread, "@aqua hello")

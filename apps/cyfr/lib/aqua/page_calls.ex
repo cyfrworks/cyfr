@@ -267,6 +267,22 @@ defmodule Aqua.PageCalls do
   def answer(outcome, result, text), do: refusal_answer(refusal(outcome, result, text))
 
   @doc """
+  What a hand answered, as a page is handed it: the data of its
+  contract's envelope, as the gate hands an endpoint's call of it, where
+  the model reads it as text (`Aqua.Loop.Binding.render/2`).
+  """
+  @spec data(term()) :: term()
+  def data(output) when is_binary(output) do
+    case Jason.decode(output) do
+      {:ok, decoded} -> data(decoded)
+      {:error, _} -> output
+    end
+  end
+
+  def data(%{"data" => data}), do: data
+  def data(output), do: output
+
+  @doc """
   The answer a page's result row holds (`answer/3`), or, for a row a
   call was closed with where no answer was made (a step skipped, or
   withdrawn with its card), the refusal its sentence says.
