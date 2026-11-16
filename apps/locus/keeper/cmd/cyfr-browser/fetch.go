@@ -20,13 +20,21 @@ package main
 //
 // The home holds each Chrome as a version folder of its own,
 // $HOME/cyfr-browser/versions/<version>, and the start runs the newest.
-// A fetch downloads and unpacks in a staging folder inside the home and
-// publishes the finished folder with one rename, so a folder under
-// versions is always whole; only then are older versions removed. The
+// A download is kept as it arrives, in $HOME/cyfr-browser/.partial-<version>.zip:
+// one that is cut off, at the start's bound or by the link, is taken up at
+// the next start with a range request, and is unpacked only once it is
+// whole, at the length the server said, in a staging folder inside the
+// home; the finished folder is published with one rename, so a folder
+// under versions is always whole, and only then are older versions
+// removed. A partial for a version that is no longer the current stable
+// is discarded. Everything is in the home, so its bound counts it. The
 // list is read at a start at most once a day ($HOME/cyfr-browser/checked
-// records the last time it was asked), always before Chrome starts, so
-// nothing is fetched while a Chrome runs; a check or a download that
-// fails never keeps a Chrome already in the home from starting.
+// records the last time it was asked), and a partial is taken up at any
+// start, always before Chrome starts; the home's lock, held by the driver
+// that has it until that driver ends, keeps a second start from
+// writing the partial or fetching while a Chrome runs. A check or a
+// download that fails never keeps a Chrome already in the home from
+// starting.
 
 import (
 	"archive/zip"
@@ -43,6 +51,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -61,14 +71,20 @@ const (
 	maxList     = 64
 	maxArchive  = 1 << 30
 	maxUnpacked = 3 << 29
-	// notDownloaded is what the person and Aqua read when the home holds
-	// no Chrome and none could be fetched.
-	notDownloaded = "The browser could not be downloaded; try again in a moment."
+	// listWait bounds asking the list.
+	listWait = 15 * time.Second
+	// What the person and Aqua read when the home holds no Chrome: one
+	// that could not be fetched at all, or one whose download went on and
+	// is not whole yet.
+	notDownloaded    = "The browser could not be downloaded; try again in a moment."
+	stillDownloading = "The browser is still downloading; try again in a moment."
 )
 
 var (
-	errNotDownloaded = errors.New(notDownloaded)
-	versionName      = regexp.MustCompile(`^[0-9]{1,6}(\.[0-9]{1,6}){3}$`)
+	errNotDownloaded    = errors.New(notDownloaded)
+	errStillDownloading = errors.New(stillDownloading)
+	versionName         = regexp.MustCompile(`^[0-9]{1,6}(\.[0-9]{1,6}){3}$`)
+	contentRange        = regexp.MustCompile(`^bytes ([0-9]+)-([0-9]+)/([0-9]+)$`)
 )
 
 // store is the home's Chrome: its versions, its last check, the list
@@ -118,58 +134,97 @@ func platformOf(arch string) (string, error) {
 }
 
 // chrome answers the Chrome to start, fetching one first when the home
-// holds none or a day has passed since the list was last asked. A failed
-// check or fetch is said on log; with no Chrome in the home it is
-// errNotDownloaded.
-func (s *store) chrome(ctx context.Context, log io.Writer) (string, error) {
+// holds none, a day has passed since the list was last asked, or a
+// download a start cut off waits to be taken up, and release, which lets
+// the home's lock go: the caller holds it until its Chrome has ended, so no
+// other start fetches meanwhile. A failed check or fetch is said on log.
+// With no Chrome in the home it is errStillDownloading when this start's
+// download went on but is not whole, and errNotDownloaded when it made no
+// progress; a start that finds another holding the lock fetches nothing.
+func (s *store) chrome(ctx context.Context, log io.Writer) (string, func(), error) {
 	if err := os.MkdirAll(filepath.Join(s.dir, "versions"), 0o700); err != nil {
-		return "", err
+		return "", nil, err
+	}
+	release, held, err := s.lock()
+	if err != nil {
+		return "", nil, err
+	}
+	if !held {
+		if have := s.newest(); have != "" {
+			return s.path(have), func() {}, nil
+		}
+		return "", nil, errStillDownloading
 	}
 	s.sweep()
 	have := s.newest()
-	if have == "" || s.due() {
+	progressed := false
+	if want := s.wanted(ctx, have, log); want != "" {
 		wait := updateWait
 		if have == "" {
 			wait = firstWait
 		}
 		fetchCtx, cancel := context.WithTimeout(ctx, wait)
-		err := s.update(fetchCtx, have)
+		gained, err := s.fetch(fetchCtx, want)
 		cancel()
 		if err != nil {
-			fmt.Fprintln(log, "cyfr-browser: fetching Chrome:", err)
+			fmt.Fprintf(log, "cyfr-browser: fetching Chrome %s: %v\n", want, err)
 		}
+		progressed = gained > 0 && s.partial(want) != ""
 		have = s.newest()
 	}
-	if have == "" {
-		return "", errNotDownloaded
+	switch {
+	case have != "":
+		return s.path(have), release, nil
+	case progressed:
+		release()
+		return "", nil, errStillDownloading
+	default:
+		release()
+		return "", nil, errNotDownloaded
 	}
-	return filepath.Join(s.dir, "versions", have, "chrome"), nil
 }
 
-// update asks the list for the current stable and, when it is newer than
-// have, fetches and publishes it and removes every other version. The
-// asking is recorded whether or not it is answered, so a list that does
-// not answer is asked again only a day later.
-func (s *store) update(ctx context.Context, have string) error {
+func (s *store) path(version string) string {
+	return filepath.Join(s.dir, "versions", version, "chrome")
+}
+
+// wanted is the version to fetch at this start, or "": the current stable
+// when the list is due to be asked and names one newer than have, every
+// partial of another version then discarded; else a partial newer than
+// have, taken up where it stopped.
+func (s *store) wanted(ctx context.Context, have string, log io.Writer) string {
+	if have == "" || s.due() {
+		listCtx, cancel := context.WithTimeout(ctx, listWait)
+		version, err := s.ask(listCtx)
+		cancel()
+		if err == nil {
+			s.dropPartials(version)
+			if have == "" || newer(version, have) {
+				return version
+			}
+			return ""
+		}
+		fmt.Fprintln(log, "cyfr-browser: asking for the current Chrome:", err)
+	}
+	if partial := s.newestPartial(); partial != "" && (have == "" || newer(partial, have)) {
+		return partial
+	}
+	return ""
+}
+
+// ask reads the current stable's version from the list. The asking is
+// recorded whether or not it is answered, so a list that does not answer
+// is asked again only a day later.
+func (s *store) ask(ctx context.Context) (string, error) {
 	now := s.now()
 	stamp := filepath.Join(s.dir, "checked")
 	if err := os.WriteFile(stamp, nil, 0o600); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Chtimes(stamp, now, now); err != nil {
-		return err
+		return "", err
 	}
-	version, err := s.latest(ctx)
-	if err != nil {
-		return err
-	}
-	if have != "" && !newer(version, have) {
-		return nil
-	}
-	if err := s.fetch(ctx, version, s.archive(version)); err != nil {
-		return err
-	}
-	return s.keepOnly(version)
+	return s.latest(ctx)
 }
 
 // due says whether a day has passed since the list was last asked, or the
@@ -208,62 +263,111 @@ func (s *store) archive(version string) string {
 	return s.storage + "/" + version + "/" + s.platform + "/chrome-" + s.platform + ".zip"
 }
 
-// fetch downloads version's archive and unpacks it in a staging folder
-// inside the home, then publishes the finished Chrome with one rename. A
-// fetch that fails, or an archive that does not read whole, publishes
-// nothing and leaves nothing behind.
-func (s *store) fetch(ctx context.Context, version, address string) error {
+// fetch downloads version's archive into its partial, from where an
+// earlier start left it, and once it is whole unpacks it in a staging
+// folder inside the home and publishes the finished Chrome with one rename,
+// removing every other version. It answers the bytes this start added. A
+// download that is cut off keeps its partial for the next start; an
+// archive that is whole but does not read is discarded, and nothing is
+// published.
+func (s *store) fetch(ctx context.Context, version string) (int64, error) {
+	partial := filepath.Join(s.dir, ".partial-"+version+".zip")
+	gained, err := s.download(ctx, s.archive(version), partial)
+	if err != nil {
+		return gained, err
+	}
 	staging, err := os.MkdirTemp(s.dir, ".staging-")
 	if err != nil {
-		return err
+		return gained, err
 	}
 	defer os.RemoveAll(staging)
-	archive := filepath.Join(staging, "chrome.zip")
-	if err := s.download(ctx, address, archive); err != nil {
-		return err
-	}
 	unpacked := filepath.Join(staging, "unpacked")
-	if err := unzip(archive, unpacked); err != nil {
-		return err
+	if err := unzip(partial, unpacked); err != nil {
+		_ = os.Remove(partial)
+		return gained, err
 	}
 	// The archive's room is given back before the version is published.
-	if err := os.Remove(archive); err != nil {
-		return err
+	if err := os.Remove(partial); err != nil {
+		return gained, err
 	}
 	built := filepath.Join(unpacked, "chrome-"+s.platform)
 	if !executable(filepath.Join(built, "chrome")) {
-		return fmt.Errorf("the archive of %s holds no chrome-%s/chrome", version, s.platform)
+		return gained, fmt.Errorf("the archive of %s holds no chrome-%s/chrome", version, s.platform)
 	}
-	return os.Rename(built, filepath.Join(s.dir, "versions", version))
+	if err := os.Rename(built, filepath.Join(s.dir, "versions", version)); err != nil {
+		return gained, err
+	}
+	return gained, s.keepOnly(version)
 }
 
-// download writes address to path, all of it or an error.
-func (s *store) download(ctx context.Context, address, path string) error {
-	body, length, err := s.get(ctx, address)
+// download brings path to the whole of address: from the byte it holds,
+// by a range request, or from the first byte when the server answers the
+// whole archive. It is whole only at the length the server said, the
+// whole archive's length or the range's total, and answers the bytes it
+// added, which stay in path when it is cut off.
+func (s *store) download(ctx context.Context, address, path string) (int64, error) {
+	var have int64
+	if info, err := os.Stat(path); err == nil {
+		have = info.Size()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	defer body.Close()
-	if length > maxArchive {
-		return fmt.Errorf("the archive is %d bytes, past %d", length, maxArchive)
+	if have > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	response, err := s.client.Do(request)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	written, err := io.Copy(file, io.LimitReader(body, maxArchive+1))
+	defer response.Body.Close()
+	var total int64
+	flags := os.O_WRONLY | os.O_CREATE
+	switch response.StatusCode {
+	case http.StatusOK:
+		// The whole archive, a range asked for or not: from its first byte.
+		have, total = 0, response.ContentLength
+		flags |= os.O_TRUNC
+	case http.StatusPartialContent:
+		m := contentRange.FindStringSubmatch(response.Header.Get("Content-Range"))
+		if m == nil {
+			return 0, fmt.Errorf("the archive's range reads %q", response.Header.Get("Content-Range"))
+		}
+		first, _ := strconv.ParseInt(m[1], 10, 64)
+		total, _ = strconv.ParseInt(m[3], 10, 64)
+		if first != have {
+			return 0, fmt.Errorf("the archive's range starts at %d, not at the %d bytes kept", first, have)
+		}
+		flags |= os.O_APPEND
+	case http.StatusRequestedRangeNotSatisfiable:
+		// What was kept is no part of the archive as it stands: start again.
+		_ = os.Remove(path)
+		return 0, errors.New("what was kept of the archive is past its length, so it starts again")
+	default:
+		return 0, fmt.Errorf("%s answered %s", address, response.Status)
+	}
+	switch {
+	case total < 0:
+		return 0, errors.New("the archive's length is not said, so it cannot be known whole")
+	case total > maxArchive:
+		return 0, fmt.Errorf("the archive is %d bytes, past %d", total, maxArchive)
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	written, err := io.Copy(file, io.LimitReader(response.Body, total-have))
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}
-	switch {
-	case err != nil:
-		return err
-	case written > maxArchive:
-		return fmt.Errorf("the archive runs past %d bytes", maxArchive)
-	case length >= 0 && written != length:
-		return fmt.Errorf("the archive ended after %d of its %d bytes", written, length)
+	if err != nil {
+		return written, err
 	}
-	return nil
+	if have+written != total {
+		return written, fmt.Errorf("the archive holds %d of its %d bytes", have+written, total)
+	}
+	return written, nil
 }
 
 // get opens address, answered 200, with its length (-1 when unknown).
@@ -316,12 +420,70 @@ func (s *store) keepOnly(keep string) error {
 	return nil
 }
 
-// sweep removes the staging folders a start that was ended mid-fetch
-// left; none of them was published.
+// sweep removes the staging folders a start that was ended mid-unpack
+// left; none of them was published. Only the lock's holder sweeps.
 func (s *store) sweep() {
 	matches, _ := filepath.Glob(filepath.Join(s.dir, ".staging-*"))
 	for _, path := range matches {
 		_ = os.RemoveAll(path)
+	}
+}
+
+// lock takes the home's lock if no other start holds it: held, and the
+// release that lets it go.
+func (s *store) lock() (func(), bool, error) {
+	file, err := os.OpenFile(filepath.Join(s.dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return func() { file.Close() }, true, nil
+}
+
+// partial is version's partial download, or "".
+func (s *store) partial(version string) string {
+	path := filepath.Join(s.dir, ".partial-"+version+".zip")
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
+}
+
+// partials are the versions of the partial downloads the home holds.
+func (s *store) partials() []string {
+	matches, _ := filepath.Glob(filepath.Join(s.dir, ".partial-*.zip"))
+	var versions []string
+	for _, path := range matches {
+		version := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), ".partial-"), ".zip")
+		if versionName.MatchString(version) {
+			versions = append(versions, version)
+		}
+	}
+	return versions
+}
+
+func (s *store) newestPartial() string {
+	best := ""
+	for _, version := range s.partials() {
+		if best == "" || newer(version, best) {
+			best = version
+		}
+	}
+	return best
+}
+
+// dropPartials discards every partial download but current's.
+func (s *store) dropPartials(current string) {
+	for _, version := range s.partials() {
+		if version != current {
+			_ = os.Remove(filepath.Join(s.dir, ".partial-"+version+".zip"))
+		}
 	}
 }
 

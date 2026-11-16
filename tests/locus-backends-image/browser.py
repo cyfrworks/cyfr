@@ -410,12 +410,12 @@ def as_home(stack, home, script, what):
 
 def in_store(stack, home):
     """What a home's store holds, as its uid reads it: its versions with each one's inode, the last check's mtime, and
-    any staging folder."""
+    any staging folder or partial download."""
     listing = as_home(stack, home, (
         f"cd {store(home)} 2>/dev/null || exit 0; for v in versions/*; do [ -e \"$v\" ] && "
         f"echo \"version ${{v#versions/}} $(stat -c %i \"$v\") $([ -x \"$v/chrome\" ] && echo runs)\"; done; "
         f"[ -e checked ] && echo \"checked $(stat -c %Y checked)\"; "
-        f"for d in .staging-*; do [ -e \"$d\" ] && echo \"staging $d\"; done; true"), f"{home}'s store")
+        f"for d in .staging-* .partial-*; do [ -e \"$d\" ] && echo \"staging $d\"; done; true"), f"{home}'s store")
     found = {"versions": {}, "checked": None, "staging": []}
     for line in listing.splitlines():
         kind, *rest = line.split()

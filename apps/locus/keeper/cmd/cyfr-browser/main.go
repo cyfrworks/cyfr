@@ -90,15 +90,18 @@ func run(args []string) int {
 	s := newSlot(os.Stdout, *chunk, time.Duration(*keepMS)*time.Millisecond)
 	hello := helloMessage{T: "hello", V: 1, Chunk: *chunk, KeepMS: *keepMS}
 	b := newBrowser()
-	path, err := chromePath(*chrome, *source, *storage)
+	path, release, err := chromePath(*chrome, *source, *storage)
 	if err != nil {
-		hello.Error = notDownloaded
-		if !errors.Is(err, errNotDownloaded) {
+		switch {
+		case errors.Is(err, errNotDownloaded), errors.Is(err, errStillDownloading):
+			hello.Error = err.Error()
+		default:
 			hello.Error = "The browser could not start: " + err.Error() + "."
 		}
 		_ = s.write(hello)
 		return 1
 	}
+	defer release()
 	chromium, err := startChrome(path, b)
 	if err != nil {
 		hello.Error = "The browser could not start: " + err.Error() + "."
@@ -121,14 +124,16 @@ func run(args []string) int {
 }
 
 // chromePath is the Chrome to start: the one --chrome names, else the
-// home's, fetched first when it holds none or a day has passed.
-func chromePath(chrome, source, storage string) (string, error) {
+// home's, fetched first when it holds none, a day has passed or a download
+// waits to be taken up; and the release of the home's lock, which the
+// driver holds until it ends.
+func chromePath(chrome, source, storage string) (string, func(), error) {
 	if chrome != "" {
-		return chrome, nil
+		return chrome, func() {}, nil
 	}
 	s, err := newStore(os.Getenv("HOME"), source, storage)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	return s.chrome(context.Background(), os.Stderr)
 }
