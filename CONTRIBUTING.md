@@ -225,7 +225,9 @@ same worktree refuses, naming the run that holds it.
     `python3 -I scripts/ci/main-run.py [-n] [COMMIT]`, again until it
     exits 0: it reruns a red run's failed jobs once, and its exit status
     says whether every run is green, one still runs, a rerun started, or
-    one is red twice, which opens a regression job;
+    one is red twice, which opens a regression job. It reads only the
+    runs GitHub made, so a run that was due and never made is not
+    detected;
   - `release`: the gate's close, which holds the host for over an hour,
     run by `scripts/release.sh --gate` for a HEAD with no run on GitHub;
   - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
