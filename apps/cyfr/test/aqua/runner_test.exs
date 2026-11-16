@@ -2222,7 +2222,7 @@ defmodule Aqua.RunnerTest do
       assert map_size(by_key) == 8
 
       for call <- waiting do
-        step = Map.fetch!(by_key, "page:#{id}:#{call.request}")
+        step = Map.fetch!(by_key, "page_call:#{id}:#{call.request}")
         assert step == page_step(step.seq, id, call, "ok")
       end
 
@@ -2231,9 +2231,6 @@ defmodule Aqua.RunnerTest do
       refute Enum.any?(rows, &(Tape.payload(&1)["tool_call_id"] == refused.request))
     end
 
-    @tag skip:
-           "Arca.ThreadStorage.delete/3 answers no cancelled turn of the deleted thread " <>
-             "itself, so its runner is never told and keeps the work"
     test "deleting the thread stops the work: the turn is cancelled, its card withdrawn, the " <>
            "waiting call dropped and the runner gone",
          %{ctx: ctx, workspace: ws} do
@@ -2427,7 +2424,7 @@ defmodule Aqua.RunnerTest do
   # A call the page makes, as `Aqua.PageCalls` hands it to the runner.
   defp page_call(ctx, put, name, arguments \\ %{}),
     do: %{
-      request: Prima.UUID7.generate_id("pcl"),
+      request: Prima.UUID7.generate_id("pgc"),
       name: name,
       arguments: arguments,
       user_id: ctx.user_id,
@@ -2535,7 +2532,7 @@ defmodule Aqua.RunnerTest do
       outcome: outcome,
       generation: 0,
       recovery: if(call.name == "component.list", do: "replay_safe"),
-      idempotency_key: "page:#{turn_id}:#{call.request}",
+      idempotency_key: "page_call:#{turn_id}:#{call.request}",
       error: nil,
       cancel_requested?: false,
       carried: "page_call",
@@ -2578,7 +2575,7 @@ defmodule Aqua.RunnerTest do
   defp answered(ctx, turn_id, call, status, body) do
     [%{id: step_id}] =
       for %{idempotency_key: key} = step <- raw_steps!(ctx, turn_id),
-          key == "page:#{turn_id}:#{call.request}",
+          key == "page_call:#{turn_id}:#{call.request}",
           do: step
 
     %{

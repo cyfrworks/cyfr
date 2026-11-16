@@ -878,10 +878,11 @@ defmodule Arca.ThreadStorage do
   Delete a thread and its messages, and with a room its crew members'
   child threads, read under the athanor's lock a child's creation takes
   (`crew_thread/3`), so a child made during the deletion is in it or made
-  after it, when its room is gone. The children's open turns are
-  cancelled in the same transaction, recording no reply since the room
-  they would answer is going (`Arca.TurnStorage.cancel_open!/4`, under the
-  root's grant `attrs` carry). While a child's turn waits on a card the
+  after it, when its room is gone. Its open turns and the children's
+  are cancelled in the same transaction, recording no reply since the
+  room they would answer is going (`Arca.TurnStorage.cancel_open!/4`,
+  under the root's grant `attrs` carry), and answered for the caller's
+  runtime to stop: a turn of the thread paused on a card is one. While a child's turn waits on a card the
   deletion is refused `{:error, {:child_awaits_card, member}}`, so the
   person decides there first.
 
@@ -985,7 +986,7 @@ defmodule Arca.ThreadStorage do
       cancel = Map.put_new(attrs, :error, "the room was deleted")
 
       cancelled =
-        Enum.flat_map(children, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
+        Enum.flat_map(ids, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
 
       stopped = forget!(actor, ids, readers, attrs)
 

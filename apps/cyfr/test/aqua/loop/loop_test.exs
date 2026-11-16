@@ -2619,7 +2619,7 @@ defmodule Aqua.LoopTest do
     # `notify`, the loop told of it.
     defp page!(ctx, turn, name, args, notify \\ true) do
       {:ok, running} = Tape.turn(ctx, turn.id)
-      request = Prima.UUID7.generate_id("pcl")
+      request = Prima.UUID7.generate_id("pgc")
 
       call = %{
         request: request,

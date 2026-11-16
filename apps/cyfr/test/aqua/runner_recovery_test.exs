@@ -112,7 +112,7 @@ defmodule Aqua.RunnerRecoveryTest do
   # that put the page.
   defp page_call(ctx, put_turn_id, name, arguments),
     do: %{
-      request: Prima.UUID7.generate_id("pcl"),
+      request: Prima.UUID7.generate_id("pgc"),
       name: name,
       arguments: arguments,
       user_id: ctx.user_id,
