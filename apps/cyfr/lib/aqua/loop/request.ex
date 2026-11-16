@@ -30,8 +30,14 @@ defmodule Aqua.Loop.Request do
   happened, and a call that never got its result carries a synthetic one
   saying so. The room excerpt is a transient block on this request's
   last `user` message; the turn's attachments are typed blocks on its
-  initiating message. Cards, notes in the server's voice and errors are
-  not the model's to read.
+  initiating message. A workspace thread's rows read as their writer
+  words them: an opening as the ask, attributed to the person who asked,
+  then each daily-thread post it refers to as it reads now (`:refs`), then
+  the files it carries; a pointer as one line naming its workspace thread
+  and title; a report as one block naming its workspace thread, outcome
+  and summary. A post the reading agent made with `thread.post` is its
+  call's to show. Cards, notes in the server's voice and errors are not
+  the model's to read.
   """
 
   alias Aqua.Tape
@@ -369,7 +375,8 @@ defmodule Aqua.Loop.Request do
   `:excerpt` (the room excerpt, a transient block), `:attachments` (typed
   blocks for the initiating message), `:task_message_id` (which message
   those blocks belong to; without it they land on the first user message,
-  which is only the right one in a transcript of one).
+  which is only the right one in a transcript of one), `:refs` (the
+  daily-thread posts an opening refers to, by id, as they read now).
   """
   @spec messages([Aqua.Tape.row()], keyword()) :: [map()]
   def messages(rows, opts \\ []) when is_list(rows) do
@@ -500,11 +507,17 @@ defmodule Aqua.Loop.Request do
     )
   end
 
+  defp shape(%{kind: "opening"} = row, acc, opts), do: said(opening_text(row, opts), row, acc)
+  defp shape(%{kind: "pointer"} = row, acc, _opts), do: said(pointer_text(row), row, acc)
+  defp shape(%{kind: "report"} = row, acc, _opts), do: said(report_text(row), row, acc)
+
   defp shape(%{kind: "text"} = row, acc, opts) do
     me = Keyword.get(opts, :me)
 
     cond do
       decided_notice?(row) -> acc
+      # The reader's own post is its call's to show (`thread.post`).
+      posted?(row) and own?(row, me) -> acc
       is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
       request?(row) and own?(row, me) -> acc
       request?(row) -> said(request_text(row, opts), row, acc)
@@ -624,6 +637,53 @@ defmodule Aqua.Loop.Request do
 
   defp request?(row),
     do: is_binary(Map.get(row, :addressee)) and Map.get(row, :status) in ["pending", "answered"]
+
+  defp posted?(row), do: Tape.payload(row)["post"] == true
+
+  # A workspace thread's opening: the ask, attributed to the person
+  # who asked, then each daily-thread post it refers to as that post reads
+  # now (`:refs`, read by the loop and never copied), then the files it
+  # carries, which ride as blocks on the turn it opened.
+  defp opening_text(row, opts) do
+    payload = Tape.payload(row)
+    title = payload["title"] || ""
+    asker = display(payload["asked_by"] || row.author, opts)
+
+    refs =
+      for id <- List.wrap(payload["refs"]),
+          %{} = cited <- [Map.get(Keyword.get(opts, :refs, %{}), id)] do
+        "\n\n[Post #{cited.id} of the daily thread, by #{sender(cited, opts)}]\n#{cited.content}"
+      end
+
+    files =
+      case Aqua.Attachments.refs_of(row) do
+        [] -> ""
+        refs -> "\n\n[Files carried in: #{Enum.map_join(refs, ", ", & &1["filename"])}]"
+      end
+
+    "[#{asker} asked, in this workspace thread \"#{title}\" (#{row.thread_id})]\n" <>
+      (row.content || "") <> Enum.join(refs) <> files
+  end
+
+  # A pointer: one line naming the workspace thread and its title.
+  defp pointer_text(row) do
+    payload = Tape.payload(row)
+
+    "[The workspace thread \"#{payload["title"] || ""}\" (#{row.workspace_id}) was opened or asked again from here]"
+  end
+
+  # A report: one block naming the workspace thread, its outcome and
+  # its summary.
+  defp report_text(row) do
+    payload = Tape.payload(row)
+
+    "[Report from the workspace thread \"#{payload["title"] || ""}\" (#{row.workspace_id}): " <>
+      "#{payload["outcome"] || "done"}]\n" <> (row.content || "")
+  end
+
+  defp sender(%{sent_by: "person"} = row, opts), do: display(row.author, opts)
+  defp sender(%{sent_by: sent_by}, _opts) when is_binary(sent_by), do: sent_by
+  defp sender(row, opts), do: display(row.author, opts)
 
   defp request_text(row, opts) do
     asker = if row.sent_by == "person", do: display(row.author, opts), else: row.sent_by

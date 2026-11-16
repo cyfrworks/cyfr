@@ -53,7 +53,7 @@ defmodule Arca.ThreadStorage do
 
   # The rows a person reads as posts: what a turn writes for itself
   # (`tool_call`, `tool_result`, `compaction`, `turn_aborted`) is none.
-  @post_kinds ~w(text approval error system)
+  @post_kinds ~w(text approval error system opening pointer report)
 
   # ---------------------------------------------------------------------------
   # Threads
@@ -306,6 +306,21 @@ defmodule Arca.ThreadStorage do
 
   def unread(%Prima.Actor{}, _thread), do: {:error, :no_athanor}
 
+  @doc false
+  # A thread inserted inside the caller's locking transaction, counted
+  # against the athanor's ceiling under the athanor's row lock as
+  # `daily/2` counts a day: a refusal rolls the caller back. An
+  # in-transaction helper for Arca's own writers (`Arca.TurnStorage`'s
+  # workspace opening), answering the schema row.
+  @spec insert_thread!(Prima.Actor.t(), map()) :: Thread.t()
+  # arca:db-raise-ok inside the caller's transaction
+  def insert_thread!(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs),
+      do: insert_thread(actor, attrs)
+
+  def insert_thread!(%Prima.Actor{}, _attrs),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.insert_thread!/2")
+
   # In the caller's locking transaction, which has taken the athanor's row
   # before the count, so creates into one athanor count and insert one at
   # a time.
@@ -324,6 +339,8 @@ defmodule Arca.ThreadStorage do
              kind: attrs.kind,
              parent_id: attrs[:parent_id],
              day: attrs[:day],
+             opened_from: attrs[:opened_from],
+             workspace_state: attrs[:workspace_state],
              agent: attrs[:agent],
              title: attrs.title,
              created_by: actor.user_id || @system_author
@@ -334,6 +351,58 @@ defmodule Arca.ThreadStorage do
       {:error, reason} -> Repo.rollback(reason)
     end
   end
+
+  @doc false
+  # The athanor's row, held until the caller's transaction ends: what
+  # every create of a thread, every write that takes more than one thread
+  # row (`lock_threads!/2`) and the blob sweep take first, so they run one
+  # at a time in an athanor. An in-transaction helper.
+  @spec lock_athanor!(Prima.Actor.t()) :: String.t() | nil
+  # arca:db-raise-ok inside the caller's transaction
+  def lock_athanor!(%Prima.Actor{athanor_id: athanor_id} = actor)
+      when is_binary(athanor_id) and athanor_id != "",
+      do: lock_athanor(actor)
+
+  def lock_athanor!(%Prima.Actor{}),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.lock_athanor!/1")
+
+  @doc false
+  # The one order of the rows a write takes among turns, the athanor's row
+  # and thread rows, which every write keeps:
+  #
+  #   * its turns first. A turn's writers take the turn before its thread;
+  #     a write that takes more than one turn takes them through one
+  #     function, by when each was accepted and then by id
+  #     (`Arca.TurnStorage.hold_turns!/2`); a write that stops or removes
+  #     turns (a deletion, retention) chooses them and holds them so
+  #     before anything else, then asks again under its locks.
+  #   * then the athanor's row: shared by the standing check
+  #     (`Arca.ExecutionStanding.locked/2`), after the turn; taken for
+  #     update, before any standing check of its own, by every create of a
+  #     thread and by a write that takes more than one thread row, by a
+  #     lock, an update, a delete or a row it adds that names one.
+  #   * then the thread rows, those it holds together in id order, which
+  #     this function takes after the athanor's row.
+  #
+  # A write that takes one thread row takes no second, and no athanor lock
+  # for it. Nothing takes the athanor's row before a turn's, so no two
+  # writes wait on each other across the three. Answers the rows of `ids`
+  # that stand, held until the caller's transaction ends. An
+  # in-transaction helper.
+  @spec lock_threads!(Prima.Actor.t(), [String.t()]) :: [Thread.t()]
+  # arca:db-raise-ok inside the caller's transaction
+  def lock_threads!(%Prima.Actor{athanor_id: athanor_id} = actor, ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(ids) do
+    lock_athanor(actor)
+
+    from(c in Thread, where: c.id in ^ids, order_by: [asc: c.id])
+    |> QueryHelpers.where_tenant(actor)
+    |> QueryHelpers.for_update()
+    |> Repo.all()
+  end
+
+  def lock_threads!(%Prima.Actor{}, _ids),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.lock_threads!/2")
 
   # `threads.athanor_id` names no foreign key, so a create in an athanor
   # with no row lands with nothing locked; only an athanor with a row has
@@ -459,7 +528,9 @@ defmodule Arca.ThreadStorage do
   carry), so a crash after the commit leaves nothing to recover. Answers
   the thread and the cancelled turns with the steps their holders'
   runtime cancels; archiving one already archived answers it unchanged
-  with none; a thread of the person's own is `{:error, :not_crew}`.
+  with none; a thread of the person's own is `{:error, :not_crew}`; one a
+  deletion removed while the archive waited on its turns is
+  `{:error, :not_found}`, with nothing written.
   """
   @spec archive(Prima.Actor.t(), String.t(), map()) ::
           {:ok, %{thread: map(), cancelled: [map()]}}
@@ -477,12 +548,22 @@ defmodule Arca.ThreadStorage do
           {:ok, %Thread{kind: "crew", archived_at: nil}} ->
             cancel = Map.put_new(attrs, :error, "the thread was archived")
             cancelled = Arca.TurnStorage.cancel_open!(actor, id, cancel, :reply)
-            {:ok, thread} = thread_row(actor, id)
 
-            archived =
-              thread |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
+            # Read again under the thread's own lock: a deletion that went
+            # while the archive waited on the thread's turns leaves nothing
+            # to archive, which is a refusal with nothing written.
+            case held_row(actor, id) do
+              %Thread{} = thread ->
+                archived =
+                  thread
+                  |> Ecto.Changeset.change(archived_at: DateTime.utc_now())
+                  |> Repo.update!()
 
-            %{thread: archived, cancelled: cancelled}
+                %{thread: archived, cancelled: cancelled}
+
+              nil ->
+                Repo.rollback(:not_found)
+            end
 
           {:ok, %Thread{kind: "crew"} = thread} ->
             %{thread: thread, cancelled: []}
@@ -499,6 +580,16 @@ defmodule Arca.ThreadStorage do
   end
 
   def archive(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
+
+  # The thread's row, held until the caller's transaction ends, or nil
+  # when it is gone.
+  # arca:db-raise-ok inside the caller's transaction
+  defp held_row(actor, id) do
+    from(c in Thread, where: c.id == ^id)
+    |> QueryHelpers.where_tenant(actor)
+    |> QueryHelpers.for_update()
+    |> Repo.one()
+  end
 
   @doc """
   Forget the brain session (`brain_session`) of every thread of the
@@ -793,6 +884,21 @@ defmodule Arca.ThreadStorage do
   deletion is refused `{:error, {:child_awaits_card, member}}`, so the
   person decides there first.
 
+  What other threads kept of it goes in the same transaction: the
+  pointers and reports that name it, on every daily thread, and in each
+  thread a turn of which read it (a `thread` source on the turn,
+  `Prima.Source.thread/1`) the compactions written since the first such
+  turn was accepted and the brain's session, whose generation is raised;
+  an open turn that read it is cancelled as a stop cancels it, its reply
+  recorded, and answered with the others. The turns it stops or
+  removes are chosen and held first, then the athanor's row and the
+  thread's (`lock_threads!/2`), and the turns asked again under those
+  locks: one that opened or read the thread in between sends the
+  deletion round again, at most three times, and then it is
+  `{:error, :thread_in_use}`. So a delivery from it
+  (`Arca.TurnStorage.accept_message/3` for a row naming it) lands before
+  the deletion and goes with it, or finds it gone.
+
   The attachment blobs (`blob_root/1` under the athanor's storage) go
   after the commit, never before the transaction that decides: a refused
   deletion keeps every byte, and a crash or a failed blob delete after the
@@ -803,7 +909,11 @@ defmodule Arca.ThreadStorage do
   @spec delete(Prima.Actor.t(), String.t(), map()) ::
           {:ok, %{cancelled: [map()]}}
           | {:error,
-             :no_athanor | :not_found | {:child_awaits_card, String.t()} | :database_error}
+             :no_athanor
+             | :not_found
+             | {:child_awaits_card, String.t()}
+             | :thread_in_use
+             | :database_error}
   def delete(actor, id, attrs \\ %{})
 
   def delete(%Prima.Actor{athanor_id: athanor_id} = actor, id, attrs)
@@ -814,31 +924,69 @@ defmodule Arca.ThreadStorage do
 
   def delete(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
-  defp do_delete(actor, id, attrs) do
-    case Repo.locking_transaction(fn -> delete_rows(actor, id, attrs) end) do
-      {:ok, %{ids: ids, cancelled: cancelled}} ->
-        Enum.each(ids, &delete_blobs_after(actor, &1))
-        {:ok, %{cancelled: cancelled}}
+  defp do_delete(actor, id, attrs, tries \\ 3) do
+    with {:ok, thread} <- thread_row(actor, id) do
+      chosen = stopped_turns(actor, thread)
 
-      {:error, reason} ->
-        {:error, reason}
+      case Repo.locking_transaction(fn -> delete_rows(actor, id, attrs, chosen) end) do
+        {:ok, %{ids: ids, cancelled: cancelled}} ->
+          Enum.each(ids, &delete_blobs_after(actor, &1))
+          {:ok, %{cancelled: cancelled}}
+
+        {:error, :turns_moved} when tries > 1 ->
+          do_delete(actor, id, attrs, tries - 1)
+
+        {:error, :turns_moved} ->
+          {:error, :thread_in_use}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
+  # The turns a deletion of `thread` stops or removes: every turn of the
+  # thread and of its children, which go with them, and the open turns of
+  # other threads that read one of them, which it stops.
+  defp stopped_turns(%Prima.Actor{athanor_id: athanor_id} = actor, %Thread{} = thread) do
+    ids = [thread.id | child_ids(actor, thread)]
+    removed_turns(athanor_id, ids, readers(athanor_id, ids))
+  end
+
+  defp removed_turns(athanor_id, ids, readers) do
+    own =
+      from(t in Arca.Schemas.Turn,
+        where: t.athanor_id == ^athanor_id and t.thread_id in ^ids,
+        select: t.id
+      )
+      |> Repo.all()
+
+    Enum.uniq(own ++ for({_thread_id, _since, open} <- readers, turn_id <- open, do: turn_id))
+  end
+
+  # The turns chosen before the locks still cover those under them; a turn
+  # that opened or read the thread in between sends the deletion round
+  # again, choosing it first.
+  defp still_chosen!(open, chosen),
+    do: if(open -- chosen == [], do: :ok, else: Repo.rollback(:turns_moved))
+
   # arca:unscoped-ok thread_row(actor, id) establishes the thread's
   # ownership, and every child id is read from it under the actor.
-  defp delete_rows(actor, id, attrs) do
-    lock_athanor(actor)
+  defp delete_rows(%Prima.Actor{athanor_id: athanor_id} = actor, id, attrs, chosen) do
+    _held = Arca.TurnStorage.hold_turns!(actor, chosen)
 
-    with {:ok, thread} <- thread_row(actor, id),
+    with [thread] <- lock_threads!(actor, [id]),
          children = child_ids(actor, thread),
+         ids = [thread.id | children],
+         readers = readers(athanor_id, ids),
+         :ok <- still_chosen!(removed_turns(athanor_id, ids, readers), chosen),
          [] <- Arca.TurnStorage.awaiting_card!(actor, children) do
       cancel = Map.put_new(attrs, :error, "the room was deleted")
 
       cancelled =
         Enum.flat_map(children, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
 
-      ids = [thread.id | children]
+      stopped = forget!(actor, ids, readers, attrs)
 
       # Explicit message deletion also covers SQLite connections without
       # foreign_keys=ON.
@@ -850,12 +998,88 @@ defmodule Arca.ThreadStorage do
         |> QueryHelpers.where_tenant(actor)
         |> Repo.delete_all()
 
-      %{ids: ids, cancelled: cancelled}
+      %{ids: ids, cancelled: cancelled ++ stopped}
     else
-      {:error, reason} -> Repo.rollback(reason)
+      # No such thread: the athanor's row and none of its threads held.
+      [] -> Repo.rollback(:not_found)
       [member | _] -> Repo.rollback({:child_awaits_card, member})
     end
   end
+
+  # What other threads kept of the threads `ids` a deletion removes,
+  # undone in the deleting transaction: the pointers and reports that
+  # name one, on every daily thread; and in every thread a turn of which
+  # read one (a `thread` source on the turn, `Prima.Source.thread/1`),
+  # the compactions written since its first such turn was accepted, which
+  # may summarize what was read, and the brain's session, which may hold
+  # it, its generation raised so no turn keeps the old one. A turn still
+  # open there is cancelled as a stop cancels it, its reply recorded;
+  # answers those, for the caller's runtime to stop after the commit.
+  # `readers` (`readers/2`) is what the caller read under its locks, whose
+  # open turns it already holds.
+  # arca:db-raise-ok inside the caller's transaction
+  # arca:unscoped-ok every statement names the actor's athanor.
+  defp forget!(%Prima.Actor{athanor_id: athanor_id} = actor, ids, readers, attrs) do
+    {_, _} =
+      Repo.delete_all(
+        from(m in Message, where: m.athanor_id == ^athanor_id and m.workspace_id in ^ids)
+      )
+
+    for {thread_id, since, _open} <- readers do
+      Repo.delete_all(
+        from(m in Message,
+          where: m.athanor_id == ^athanor_id and m.thread_id == ^thread_id,
+          where: m.kind == "compaction" and m.inserted_at >= ^since
+        )
+      )
+
+      from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread_id)
+      |> Repo.update_all(set: [brain_session: nil], inc: [brain_generation: 1])
+    end
+
+    stop = Map.put(attrs, :error, "what this thread read was deleted")
+
+    Enum.flat_map(readers, fn
+      {_thread_id, _since, []} ->
+        []
+
+      {thread_id, _since, open} ->
+        Arca.TurnStorage.cancel_open!(actor, thread_id, Map.put(stop, :only, open), :reply)
+    end)
+  end
+
+  # Each thread outside `ids` with a turn whose sources name one of them:
+  # when its first such turn was accepted, and those of them still open. A
+  # source set is canonical JSON (`Prima.Source.encode/1`), so a thread
+  # source reads as one exact object in the text.
+  # arca:db-raise-ok inside the caller's transaction
+  defp readers(_athanor_id, []), do: []
+
+  defp readers(athanor_id, ids) do
+    named =
+      Enum.reduce(ids, dynamic(false), fn id, acc ->
+        pattern = "%" <> like_escape(thread_source(id)) <> "%"
+        dynamic([t], ^acc or fragment("? LIKE ? ESCAPE '!'", t.sources, ^pattern))
+      end)
+
+    from(t in Arca.Schemas.Turn,
+      where: t.athanor_id == ^athanor_id and t.thread_id not in ^ids,
+      where: ^named,
+      select: {t.thread_id, t.id, t.accepted_at, t.status}
+    )
+    |> Repo.all()
+    |> Enum.group_by(&elem(&1, 0))
+    |> Enum.map(fn {thread_id, turns} ->
+      since = turns |> Enum.map(&elem(&1, 2)) |> Enum.min(DateTime)
+      open = for {_, id, _, status} <- turns, status in Prima.TurnState.open_statuses(), do: id
+      {thread_id, since, open}
+    end)
+  end
+
+  defp thread_source(id),
+    do: id |> Prima.Source.thread() |> Prima.Source.to_json() |> Jason.encode!()
+
+  defp like_escape(text), do: String.replace(text, ["!", "%", "_"], &("!" <> &1))
 
   defp child_ids(actor, %Thread{kind: kind, id: room_id}) when kind in @room_kinds do
     from(c in Thread, where: c.kind == "crew" and c.parent_id == ^room_id, select: c.id)
@@ -909,10 +1133,13 @@ defmodule Arca.ThreadStorage do
   @doc """
   Reclaim thread blob directories no row backs — the retention
   sweep's leg. The directories are snapshotted FIRST, then the surviving
-  rows: blobs are only ever written under an existing thread row
-  (`Aqua.Attachments`), so a snapshotted directory either has a row
-  (kept) or is a genuine orphan — a concurrent create can never lose its
-  bytes to this sweep.
+  rows are read and the orphans removed under the athanor's row lock:
+  blobs are written under an existing thread row (`Aqua.Attachments`), or
+  under a workspace thread's id inside the transaction that makes its
+  row, which holds that lock from before its first byte to its commit
+  (`Arca.TurnStorage.open_workspace/2`). So a snapshotted directory
+  either has a row (kept) or is a genuine orphan — a concurrent create
+  can never lose its bytes to this sweep.
   """
   @spec sweep_orphaned_blobs(Prima.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep_orphaned_blobs(%Prima.Actor{athanor_id: athanor_id} = actor)
@@ -929,21 +1156,29 @@ defmodule Arca.ThreadStorage do
     with {:ok, entries} <- Arca.list_typed(actor, ["threads"]) do
       dirs = for {name, :dir} <- entries, do: name
 
-      alive =
-        from(c in Thread, select: c.id)
-        |> QueryHelpers.where_tenant(actor)
-        |> Repo.all()
-        |> MapSet.new()
+      Repo.locking_transaction(fn ->
+        lock_athanor(actor)
 
-      dirs
-      |> Enum.reject(&MapSet.member?(alive, &1))
-      |> Enum.reduce_while({:ok, 0}, fn id, {:ok, reclaimed} ->
-        case Arca.delete_tree(actor, blob_root(id)) do
-          :ok -> {:cont, {:ok, reclaimed + 1}}
-          {:error, :not_found} -> {:cont, {:ok, reclaimed}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
+        alive =
+          from(c in Thread, select: c.id)
+          |> QueryHelpers.where_tenant(actor)
+          |> Repo.all()
+          |> MapSet.new()
+
+        dirs
+        |> Enum.reject(&MapSet.member?(alive, &1))
+        |> Enum.reduce_while({:ok, 0}, fn id, {:ok, reclaimed} ->
+          case Arca.delete_tree(actor, blob_root(id)) do
+            :ok -> {:cont, {:ok, reclaimed + 1}}
+            {:error, :not_found} -> {:cont, {:ok, reclaimed}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
       end)
+      |> case do
+        {:ok, answer} -> answer
+        {:error, _} = refused -> refused
+      end
     end
   end
 
@@ -1256,6 +1491,7 @@ defmodule Arca.ThreadStorage do
       turn_id: attrs[:turn_id],
       approval_id: attrs[:approval_id],
       client_id: attrs[:client_id],
+      workspace_id: attrs[:workspace_id],
       inserted_at: now
     }
   end
@@ -1359,8 +1595,14 @@ defmodule Arca.ThreadStorage do
 
   @doc """
   Delete the athanor's threads whose last activity is older than
-  `cutoff` — messages and attachment blobs included. The context is the
-  athanor's (retention walks each with an internal context).
+  `cutoff` — messages and attachment blobs included, the blobs after the
+  rows' transaction has committed — and with each what
+  other threads kept of it, as a deletion forgets it: the pointers and
+  reports that name it, and in the threads that read it their later
+  compactions and the brain's session. A thread with an open turn, one an
+  open turn has read, and a workspace thread still `open` or `needs_you`
+  are never among them. The context is the athanor's (retention walks
+  each with an internal context).
   """
   @spec delete_before(Prima.Actor.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
@@ -1374,34 +1616,51 @@ defmodule Arca.ThreadStorage do
 
   def delete_before(%Prima.Actor{}, _cutoff), do: {:error, :no_athanor}
 
+  # Which threads go is decided in the transaction that deletes them, and
+  # their bytes go only once it has committed. The candidates are read,
+  # their rows taken in the one order of a write that takes more than one
+  # (`lock_threads!/2`), and the window
+  # asked again over the rows as they then stand: a thread that a post
+  # landed in, that was opened again, or that a turn began in meanwhile
+  # is left, and counted as kept. Every kind of thread retention removes
+  # goes this one way. A blob delete that fails after the commit leaves
+  # bytes no row backs, which the sweep reclaims
+  # (`sweep_orphaned_blobs/1`), as a hand delete does.
   defp delete_before_rows(actor, cutoff) do
-    ids = Repo.all(from(c in stale_before(actor, cutoff), select: c.id))
+    case stale_ids(actor, cutoff) do
+      [] ->
+        {:ok, 0}
 
-    # Bytes before rows, per thread: an id whose blob delete fails
-    # keeps its rows and retries next cycle — never an orphaned tree the
-    # DB has already forgotten.
-    deletable =
-      Enum.filter(ids, fn id ->
-        case delete_blobs(actor, id) do
-          :ok ->
-            true
+      candidates ->
+        Repo.locking_transaction(fn ->
+          # The turns of the threads it may remove, which go with them,
+          # before the athanor's row and the threads (`lock_threads!/2`).
+          held =
+            Arca.TurnStorage.hold_turns!(
+              actor,
+              from(t in Arca.Schemas.Turn, where: t.thread_id in ^candidates)
+            )
 
-          {:error, reason} ->
-            Logger.warning("[ThreadStorage] keeping #{id} this cycle: #{inspect(reason)}")
+          _threads = lock_threads!(actor, candidates)
+          stale = MapSet.new(stale_ids(actor, cutoff))
+          deletable = Enum.filter(candidates, &MapSet.member?(stale, &1))
 
-            false
-        end
-      end)
+          # A turn a removed thread took after the turns were held keeps
+          # the threads for the next cycle.
+          if removed_turns(actor.athanor_id, deletable, []) -- held != [],
+            do: Repo.rollback(:turns_moved)
 
-    if deletable == [] do
-      {:ok, 0}
-    else
-      # One transaction, like `do_delete/2`: a crash between the two
-      # deletes otherwise left an empty thread row behind. The
-      # satellites (follows, thread-scope grants) sweep with the
-      # rows, same as a hand delete.
-      {:ok, count} =
-        Repo.transaction(fn ->
+          # No open turn had read these (`stale_ids/2`); one that read
+          # them since keeps them for the next cycle. That is asked before
+          # anything is forgotten, so retention stops no turn and takes no
+          # turn's row after the athanor's.
+          readers = readers(actor.athanor_id, deletable)
+
+          if Enum.any?(readers, fn {_thread_id, _since, open} -> open != [] end),
+            do: Repo.rollback(:read_by_an_open_turn)
+
+          [] = forget!(actor, deletable, readers, %{})
+
           Repo.delete_all(from(m in Message, where: m.thread_id in ^deletable))
           delete_thread_satellites(deletable)
 
@@ -1410,27 +1669,46 @@ defmodule Arca.ThreadStorage do
             |> QueryHelpers.where_tenant(actor)
             |> Repo.delete_all()
 
-          count
+          {count, deletable}
         end)
+        |> case do
+          {:ok, {count, deleted}} ->
+            Enum.each(deleted, &delete_blobs_after(actor, &1))
+            {:ok, count}
 
-      {:ok, count}
+          {:error, reason} when reason in [:read_by_an_open_turn, :turns_moved] ->
+            {:ok, 0}
+        end
     end
   end
 
   # The retention window both verbs speak, scoped the one way this module
   # scopes: the athanor's threads whose last activity is older than
-  # `cutoff`, a thread holding an open turn never among them.
-  defp stale_before(%Prima.Actor{athanor_id: athanor_id} = actor, cutoff) do
+  # `cutoff`, never one holding an open turn, one a workspace thread still
+  # at work or waiting on its person, or one an open turn has read (its
+  # `thread` sources, `Prima.Source.thread/1`), whose forgetting would
+  # have to stop that turn.
+  defp stale_ids(%Prima.Actor{athanor_id: athanor_id} = actor, cutoff) do
     open =
       from(t in Arca.Schemas.Turn,
-        where: t.athanor_id == ^athanor_id and t.status in ^Prima.TurnState.open_statuses(),
-        select: t.thread_id
+        where: t.athanor_id == ^athanor_id and t.status in ^Prima.TurnState.open_statuses()
       )
 
+    read =
+      from(t in open, select: t.sources)
+      |> Repo.all()
+      |> Enum.flat_map(&(&1 |> Prima.Source.decode() |> Prima.Source.threads()))
+      |> MapSet.new()
+
     from(c in Thread,
-      where: c.id not in subquery(open) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff
+      where: c.id not in subquery(from(t in open, select: t.thread_id)),
+      where: is_nil(c.workspace_state) or c.workspace_state not in ^["open", "needs_you"],
+      where: coalesce(c.last_message_at, c.inserted_at) < ^cutoff,
+      select: c.id
     )
     |> QueryHelpers.where_tenant(actor)
+    |> Repo.all()
+    |> Enum.reject(&MapSet.member?(read, &1))
   end
 
   @doc """
@@ -1443,7 +1721,7 @@ defmodule Arca.ThreadStorage do
   def count_before(%Prima.Actor{athanor_id: athanor_id} = actor, %DateTime{} = cutoff)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadStorage.count_before", fn ->
-      {:ok, Repo.aggregate(stale_before(actor, cutoff), :count)}
+      {:ok, length(stale_ids(actor, cutoff))}
     end)
     |> Arca.Data.project()
   end

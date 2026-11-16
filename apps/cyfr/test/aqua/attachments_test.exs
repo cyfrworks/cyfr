@@ -205,4 +205,95 @@ defmodule Aqua.AttachmentsTest do
     files = [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "12345"}]
     assert {:error, :storage_unverifiable} = Attachments.store(ctx, "c", "m", files)
   end
+
+  describe "copies" do
+    setup %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, thread} = Arca.Test.Days.thread(actor)
+      {:ok, other} = Arca.Test.Days.thread(actor)
+      {:ok, thread: thread, other: other}
+    end
+
+    defp posted!(ctx, thread, files) do
+      id = Prima.UUID7.generate_id("msg")
+      {:ok, refs} = Attachments.store(ctx, thread.id, id, files)
+
+      {:ok, _} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
+          message: %{
+            id: id,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "with files",
+            payload: %{"attachments" => refs}
+          }
+        })
+
+      {id, refs}
+    end
+
+    test "a file of a post is carried into another row's own blobs, and read back there",
+         %{ctx: ctx, thread: thread, other: other} do
+      {post, [ref]} =
+        posted!(ctx, thread, [
+          %{"filename" => "a.png", "media_type" => "image/png", "bytes" => "A"}
+        ])
+
+      assert {:ok, [file]} =
+               Attachments.carried(ctx, thread.id, [
+                 %{"message_id" => post, "stored_name" => ref["stored_name"]}
+               ])
+
+      target = Prima.UUID7.generate_id("msg")
+      assert {:ok, [copied]} = Attachments.copy(ctx, other.id, target, [file])
+      assert {:ok, path} = Attachments.blob_path(other.id, target, copied)
+      assert {:ok, "A"} = Arca.get(Sanctum.Context.actor(ctx), path)
+
+      # Discarded before its row is written, nothing of it stays.
+      assert :ok = Attachments.discard(ctx, other.id, target)
+      assert {:error, :not_found} = Arca.get(Sanctum.Context.actor(ctx), path)
+
+      # A row that was written keeps its files.
+      assert {:error, :message_sent} = Attachments.discard(ctx, thread.id, post)
+    end
+
+    test "only a file of a post of the named thread is carried",
+         %{ctx: ctx, thread: thread, other: other} do
+      {post, [ref]} =
+        posted!(ctx, thread, [
+          %{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "A"}
+        ])
+
+      named = %{"message_id" => post, "stored_name" => ref["stored_name"]}
+      assert {:error, :not_a_post} = Attachments.carried(ctx, other.id, [named])
+
+      assert {:error, :not_a_post} =
+               Attachments.carried(ctx, thread.id, [%{named | "stored_name" => "9-nope"}])
+
+      assert {:error, :not_a_post} = Attachments.carried(ctx, thread.id, [%{"path" => "notes/x"}])
+
+      assert {:error, :too_many_attachments} =
+               Attachments.carried(ctx, thread.id, List.duplicate(named, 11))
+
+      {:ok, path} = Attachments.blob_path(thread.id, post, ref)
+      :ok = Arca.delete(Sanctum.Context.actor(ctx), path)
+      assert {:error, :attachment_missing} = Attachments.carried(ctx, thread.id, [named])
+    end
+
+    test "a copy is held to the storage cap before its first byte", %{ctx: ctx, other: other} do
+      installed = Prima.Caps.impl!()
+      Prima.Caps.install!(Aqua.AttachmentsTest.PlantedCaps)
+      on_exit(fn -> Prima.Caps.install!(installed) end)
+
+      target = Prima.UUID7.generate_id("msg")
+
+      assert {:error, :storage_full} =
+               Attachments.copy(ctx, other.id, target, [
+                 %{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "AB"}
+               ])
+
+      assert_received {:check_storage, _actor, 2}
+      assert {:ok, []} = Arca.list(Sanctum.Context.actor(ctx), ["threads", other.id])
+    end
+  end
 end

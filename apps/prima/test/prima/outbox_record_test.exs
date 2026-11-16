@@ -14,6 +14,7 @@ defmodule Prima.OutboxRecordTest do
   use ExUnit.Case, async: true
 
   alias Prima.OutboxRecord
+  alias Prima.Source
 
   @at ~U[2026-11-05 12:00:00.000001Z]
 
@@ -54,11 +55,115 @@ defmodule Prima.OutboxRecordTest do
   end
 
   test "the rosters are closed" do
-    assert OutboxRecord.kinds() == ~w(schedule_outcome crew_request crew_reply)
-    assert OutboxRecord.source_kinds() == ~w(schedule_occurrence message turn)
+    assert OutboxRecord.kinds() ==
+             ~w(schedule_outcome crew_request crew_reply workspace_open workspace_report)
+
+    assert OutboxRecord.source_kinds() == ~w(schedule_occurrence message turn thread)
     assert OutboxRecord.reply_outcomes() == ~w(done failed cancelled uncertain needs_you)
+    assert OutboxRecord.report_outcomes() == ~w(done failed needs_you)
+    assert OutboxRecord.max_report_files() == 10
     assert OutboxRecord.max_output_bytes() == 64 * 1024
     assert OutboxRecord.max_reply_bytes() == 32 * 1024
+  end
+
+  test "an opening is a record of its workspace thread at the opening's instant" do
+    assert %OutboxRecord{
+             source_kind: "thread",
+             source_id: "thr_work",
+             source_revision: "2026-11-05T12:00:00.000001Z",
+             athanor_id: "ath_1",
+             kind: "workspace_open",
+             snapshot:
+               %{
+                 "workspace_id" => "thr_work",
+                 "opening_id" => "msg_open",
+                 "person_id" => "usr_1",
+                 "origin" => "interactive"
+               } = snapshot
+           } =
+             OutboxRecord.workspace_open(%{
+               athanor_id: "ath_1",
+               workspace_id: "thr_work",
+               opening_id: "msg_open",
+               inserted_at: @at,
+               person_id: "usr_1",
+               origin: :interactive
+             })
+
+    assert map_size(snapshot) == 4
+  end
+
+  defp report(attrs) do
+    Map.merge(
+      %{
+        athanor_id: "ath_1",
+        workspace_id: "thr_work",
+        title: "Moon report",
+        turn_id: "turn_1",
+        moved_at: @at,
+        outcome: "done",
+        summary: "written",
+        attachments: [%{"message_id" => "msg_post", "stored_name" => "0-chart.png"}],
+        sources: [Source.outside("moon.example"), Source.thread("thr_daily")],
+        person_id: "usr_1",
+        origin: :interactive
+      },
+      attrs
+    )
+  end
+
+  test "a report is a record of its workspace thread at the move, with the turn's sources" do
+    for outcome <- OutboxRecord.report_outcomes() do
+      assert %OutboxRecord{
+               source_kind: "thread",
+               source_id: "thr_work",
+               source_revision: "2026-11-05T12:00:00.000001Z",
+               kind: "workspace_report",
+               snapshot:
+                 %{
+                   "workspace_id" => "thr_work",
+                   "title" => "Moon report",
+                   "turn_id" => "turn_1",
+                   "outcome" => ^outcome,
+                   "summary" => "written",
+                   "truncated" => false,
+                   "attachments" => [
+                     %{"message_id" => "msg_post", "stored_name" => "0-chart.png"}
+                   ],
+                   "person_id" => "usr_1",
+                   "origin" => "interactive"
+                 } = snapshot
+             } = record = OutboxRecord.workspace_report(report(%{outcome: outcome}))
+
+      assert OutboxRecord.report_sources(record) ==
+               [Source.outside("moon.example"), Source.thread("thr_daily")]
+
+      refute Map.has_key?(snapshot, "approval_id")
+    end
+
+    assert %{snapshot: %{"approval_id" => "apr_1"}} =
+             OutboxRecord.workspace_report(report(%{outcome: "needs_you", approval_id: "apr_1"}))
+
+    assert %{snapshot: %{"truncated" => true, "summary" => cut}} =
+             OutboxRecord.workspace_report(report(%{summary: String.duplicate("é", 20_000)}))
+
+    assert byte_size(cut) <= 32 * 1024 and String.valid?(cut)
+  end
+
+  test "a report carries only files of posts, ten at most" do
+    assert_raise ArgumentError, fn ->
+      OutboxRecord.workspace_report(report(%{attachments: [%{"path" => "notes/x.md"}]}))
+    end
+
+    eleven = for n <- 1..11, do: %{"message_id" => "msg_#{n}", "stored_name" => "0-x"}
+
+    assert_raise FunctionClauseError, fn ->
+      OutboxRecord.workspace_report(report(%{attachments: eleven}))
+    end
+
+    assert_raise FunctionClauseError, fn ->
+      OutboxRecord.workspace_report(report(%{outcome: "cancelled"}))
+    end
   end
 
   test "a hand-off is a record of its request row, with the snapshot its kind names" do

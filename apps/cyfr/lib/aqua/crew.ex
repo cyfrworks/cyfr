@@ -67,6 +67,27 @@ defmodule Aqua.Crew do
       card (`Arca.TurnStorage.resolve_approval/4`); a card decided before
       its notice lands writes none (`:card_decided`).
 
+  The same consumer delivers what a workspace thread sends
+  (`Aqua.Providers.Workspace`):
+
+    * An opening (`workspace_open`) starts the workspace thread's turn
+      on the opening row its transaction wrote, as the person who asked,
+      narrowed to the tools the opening names and to the means of posting
+      and reporting there (`thread.post`, `workspace.report`).
+    * A report (`workspace_report`) lands on the daily thread current
+      when it is delivered (`Aqua.Day`), sent by the soul, with the files
+      it carries copied from the workspace thread's posts into its own
+      row first, under an id its record decides. Where a try copies is
+      recorded before its first byte (`Arca.ConsumerReceipts.place/4`),
+      so a delivery tried again first discards what an earlier try
+      stored there, whatever day or thread that was, and the receipt
+      clears it. It opens or waits as a turn of the soul on the daily
+      thread, which tells the person.
+
+  A record whose workspace thread is gone is receipted `refused` and
+  delivers nothing; a delivery in flight when it goes lands nothing
+  (`Arca.TurnStorage.accept_message/3`).
+
   A refusal that may pass (`:busy`, `:held_elsewhere`, `:unavailable`,
   and any other but those below) leaves the record pending for the next
   drain, and the records after it for the same thread wait behind it. A
@@ -94,7 +115,10 @@ defmodule Aqua.Crew do
   alias Sanctum.Context
 
   @consumer "crew_delivery"
-  @kinds ["crew_request", "crew_reply"]
+  @kinds ["crew_request", "crew_reply", "workspace_open", "workspace_report"]
+  # What an opening narrowed to named tools keeps whatever it names: the
+  # soul's means of posting in its thread and of reporting it.
+  @workspace_means ["thread.post", "workspace.report"]
   @lease_ms 30_000
   @tick_ms 30_000
   @max_task_bytes 32 * 1024
@@ -115,7 +139,12 @@ defmodule Aqua.Crew do
     :not_a_room,
     :empty,
     :message_too_long,
-    :card_decided
+    :card_decided,
+    :workspace_gone,
+    :not_a_workspace,
+    :not_a_post,
+    :attachment_missing,
+    :turn_exists
   ]
 
   @typedoc "What one drain of an athanor did."
@@ -145,8 +174,8 @@ defmodule Aqua.Crew do
     task = String.trim(task)
 
     with :ok <- task(task),
-         {:ok, title} <- title(args["title"]),
-         {:ok, tools} <- tools(args["tools"]),
+         {:ok, title} <- parse_title(args["title"], "crew.ask"),
+         {:ok, tools} <- parse_tools(args["tools"], "crew.ask"),
          {:ok, options} <- options(args["options"]),
          {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
@@ -368,9 +397,16 @@ defmodule Aqua.Crew do
 
   defp task(_task), do: :ok
 
-  defp title(nil), do: {:ok, nil}
+  @doc """
+  A job's or a workspace thread's title as `operation` takes it: trimmed,
+  1 to `title_max/0` code points of plain text on one line, and nil when
+  absent or blank. The one rule both a hand-off and an opening hold a
+  title to.
+  """
+  @spec parse_title(term(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def parse_title(nil, _operation), do: {:ok, nil}
 
-  defp title(title) when is_binary(title) do
+  def parse_title(title, operation) when is_binary(title) do
     trimmed = if String.valid?(title), do: String.trim(title)
 
     cond do
@@ -378,31 +414,39 @@ defmodule Aqua.Crew do
         {:ok, nil}
 
       is_nil(trimmed) or Regex.match?(@title_control, trimmed) ->
-        {:error, {:invalid_argument, "crew.ask takes a 'title' of plain text on one line"}}
+        {:error, {:invalid_argument, "#{operation} takes a 'title' of plain text on one line"}}
 
       length(String.codepoints(trimmed)) > @title_max ->
         {:error,
-         {:invalid_argument, "crew.ask takes a 'title' of at most #{@title_max} characters"}}
+         {:invalid_argument, "#{operation} takes a 'title' of at most #{@title_max} characters"}}
 
       true ->
         {:ok, trimmed}
     end
   end
 
-  defp title(_title), do: {:error, {:invalid_argument, "crew.ask takes 'title' as text"}}
+  def parse_title(_title, operation),
+    do: {:error, {:invalid_argument, "#{operation} takes 'title' as text"}}
 
   defp titled(payload, nil), do: payload
   defp titled(payload, title), do: Map.put(payload, "title", title)
 
-  defp tools(nil), do: {:ok, nil}
+  @doc """
+  The tool names a job or a workspace thread's opening is narrowed to, as
+  `operation` takes them: nil for all its agent holds, else a non-empty
+  list of names (a tool, or `tool.action`), each once.
+  """
+  @spec parse_tools(term(), String.t()) :: {:ok, [String.t()] | nil} | {:error, term()}
+  def parse_tools(nil, _operation), do: {:ok, nil}
 
-  defp tools(names) when is_list(names) do
+  def parse_tools(names, operation) when is_list(names) do
     if names != [] and Enum.all?(names, &(is_binary(&1) and &1 != "")),
       do: {:ok, Enum.uniq(names)},
-      else: {:error, {:invalid_argument, "crew.ask takes 'tools' as tool names"}}
+      else: {:error, {:invalid_argument, "#{operation} takes 'tools' as tool names"}}
   end
 
-  defp tools(_names), do: {:error, {:invalid_argument, "crew.ask takes 'tools' as tool names"}}
+  def parse_tools(_names, operation),
+    do: {:error, {:invalid_argument, "#{operation} takes 'tools' as tool names"}}
 
   # A brain option is a named value of one of the kinds a brain declares
   # (`Prima.Model`); which names and values the member's brain takes is
@@ -600,6 +644,13 @@ defmodule Aqua.Crew do
   defp lane(%Prima.OutboxRecord{kind: "crew_reply", snapshot: snapshot}),
     do: {:reply, snapshot["asking_thread_id"]}
 
+  # A workspace thread's openings in order, and every report to the daily
+  # thread in order.
+  defp lane(%Prima.OutboxRecord{kind: "workspace_open", snapshot: snapshot}),
+    do: {:opening, snapshot["workspace_id"]}
+
+  defp lane(%Prima.OutboxRecord{kind: "workspace_report"}), do: :report
+
   # ---- one record ------------------------------------------------------------
 
   # `{:ok, outcome}` once its receipt is written, `{:wait, reason}` for a
@@ -656,6 +707,165 @@ defmodule Aqua.Crew do
     else
       {:error, reason} -> refused(record, reason, held)
     end
+  end
+
+  defp work(%Prima.OutboxRecord{kind: "workspace_open", snapshot: snapshot} = record, held) do
+    with {:ok, ctx} <- continuation(record),
+         {:ok, opening} <- opening_row(ctx, snapshot) do
+      tools =
+        case Tape.payload(opening)["tools"] do
+          [_ | _] = names -> Enum.uniq(names ++ @workspace_means)
+          _all -> nil
+        end
+
+      ctx
+      |> Runner.send_message(opening.thread_id, opening.content,
+        opening: opening,
+        crew: %{tools: tools, options: %{}},
+        receipt: receipt(record, held, "applied")
+      )
+      |> delivered("applied", fn reason -> refused(record, reason, held) end)
+    else
+      {:error, reason} -> refused(record, reason, held)
+    end
+  end
+
+  defp work(%Prima.OutboxRecord{kind: "workspace_report"} = record, held) do
+    with {:ok, ctx} <- continuation(record),
+         {:ok, daily} <- Aqua.Day.current(ctx) do
+      report(ctx, daily, record, held)
+    else
+      {:error, reason} -> refused(record, reason, held)
+    end
+  end
+
+  # The report's files copied under its row on today's daily thread, an
+  # earlier try's discarded first, then the row landed with its receipt;
+  # a landing that fails leaves no copy.
+  defp report(ctx, daily, %Prima.OutboxRecord{snapshot: snapshot} = record, held) do
+    id = report_id(record)
+
+    with :ok <- place_copy(ctx, record, daily.id, id),
+         {:ok, files} <-
+           Aqua.Attachments.carried(ctx, snapshot["workspace_id"], snapshot["attachments"] || []),
+         {:ok, refs} <- Aqua.Attachments.copy(ctx, daily.id, id, files) do
+      ctx
+      |> Runner.send_message(daily.id, report_text(snapshot),
+        id: id,
+        sent_by: Prima.AgentRef.soul_name(),
+        report: snapshot,
+        kind: "report",
+        workspace_id: snapshot["workspace_id"],
+        attachments: refs,
+        payload: report_payload(snapshot),
+        receipt: receipt(record, held, "applied")
+      )
+      |> tap(&unlanded(&1, ctx, daily.id, id))
+      |> delivered("applied", fn reason -> refused(record, reason, held) end)
+    else
+      {:error, reason} ->
+        _ = Aqua.Attachments.discard(ctx, daily.id, id)
+        refused(record, reason, held)
+    end
+  end
+
+  defp unlanded({:ok, _landed}, _ctx, _thread_id, _id), do: :ok
+  defp unlanded(_refused, ctx, thread_id, id), do: Aqua.Attachments.discard(ctx, thread_id, id)
+
+  # The opening a record names, which must still be its workspace
+  # thread's: a thread gone is a record with nothing to deliver.
+  defp opening_row(ctx, %{"opening_id" => id, "workspace_id" => workspace_id})
+       when is_binary(id) do
+    case Tape.message(ctx, id) do
+      {:ok, %{kind: "opening", thread_id: ^workspace_id} = row} -> {:ok, row}
+      {:ok, _other} -> {:error, :not_a_workspace}
+      {:error, :not_found} -> {:error, :workspace_gone}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp opening_row(_ctx, _snapshot), do: {:error, :not_a_workspace}
+
+  # What an earlier try of this report stored goes before this try
+  # copies: its place is recorded, and committed, before its first byte
+  # (`Arca.ConsumerReceipts.place/4`), so a try that died leaves it
+  # known, and its bytes are discarded there whatever became of the
+  # thread that place was under. Then this try records its own place,
+  # today's thread.
+  defp place_copy(ctx, record, thread_id, id) do
+    actor = Sanctum.Context.actor(ctx)
+    source = Prima.OutboxRecord.source(record)
+
+    with :ok <- discard_earlier(ctx, Arca.ConsumerReceipts.placed(actor, @consumer, source)),
+         :ok <- Aqua.Attachments.discard(ctx, thread_id, id) do
+      Arca.ConsumerReceipts.place(actor, @consumer, source, %{
+        thread_id: thread_id,
+        message_id: id
+      })
+    end
+  end
+
+  defp discard_earlier(ctx, {:ok, %{thread_id: thread_id, message_id: id}}),
+    do: Aqua.Attachments.discard(ctx, thread_id, id)
+
+  defp discard_earlier(_ctx, :none), do: :ok
+  defp discard_earlier(_ctx, {:error, _} = refused), do: refused
+
+  @doc false
+  # The report's row id, decided by its record: every try of one delivery
+  # stores its copies under the same id, so a later try finds and
+  # discards an earlier one's on the same daily thread.
+  @spec report_id(Prima.OutboxRecord.t()) :: String.t()
+  def report_id(%Prima.OutboxRecord{} = record) do
+    %{source_kind: kind, source_id: id, source_revision: revision} =
+      Prima.OutboxRecord.source(record)
+
+    digest =
+      :crypto.hash(:sha256, Enum.join([record.kind, kind, id, revision], "\n"))
+      |> Base.url_encode64(padding: false)
+      |> binary_part(0, 26)
+
+    "msg_rpt_" <> digest
+  end
+
+  # What a report says: the summary the soul wrote in the workspace thread, or for a move the host made, which carries none, one sentence
+  # of what happened.
+  defp report_text(%{"summary" => summary} = snapshot) when is_binary(summary) do
+    case String.trim(summary) do
+      "" -> moved(snapshot)
+      text -> text
+    end
+  end
+
+  defp report_text(snapshot), do: moved(snapshot)
+
+  defp moved(%{"outcome" => "needs_you", "title" => title}),
+    do: "The workspace thread \"#{title}\" needs you."
+
+  defp moved(%{"outcome" => "failed", "title" => title}),
+    do: "The workspace thread \"#{title}\" failed."
+
+  defp moved(%{"title" => title}), do: "The workspace thread \"#{title}\" is done."
+
+  # What a report row names beside its text: the workspace thread and its
+  # title, the outcome, the turn it came from, whose sources a turn
+  # reading it joins (`from_turn`), the sources the record kept, whether
+  # its summary was cut, and for a card the approval that waits.
+  defp report_payload(snapshot) do
+    %{
+      "workspace" => snapshot["workspace_id"],
+      "title" => snapshot["title"],
+      "outcome" => snapshot["outcome"],
+      "from_turn" => snapshot["turn_id"],
+      "sources" => snapshot["sources"] || [],
+      "truncated" => snapshot["truncated"] == true
+    }
+    |> then(fn payload ->
+      case snapshot["approval_id"] do
+        id when is_binary(id) -> Map.put(payload, "approval_id", id)
+        _none -> payload
+      end
+    end)
   end
 
   # A send's answer: landed with its receipt, a receipt already there, a

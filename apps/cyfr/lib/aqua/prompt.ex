@@ -18,11 +18,15 @@ defmodule Aqua.Prompt do
       is good at and what to avoid; none for a crew member's own turn.
     * `requests` — the thread's requests still waiting on a reply, which
       are listed with their age.
+    * `where` — where the turn is (`where/2`): on the person's daily
+      thread, or in a workspace thread, with its title and what the
+      person asked, read from its first opening; none for a crew
+      member's thread.
 
   Orders stable sections before the clock to preserve a reusable prompt
   prefix: authored prompt, granted capabilities, tool prelude, scroll
-  index, athanor notes and the crew index; then the open requests, whose ages
-  move. A room excerpt is never part of it: the request carries it as a
+  index, athanor notes, the crew index and where the turn is; then the
+  open requests, whose ages move. A room excerpt is never part of it: the request carries it as a
   transient block (`Aqua.Loop.Request`).
 
   ## What the prompt read
@@ -46,8 +50,12 @@ defmodule Aqua.Prompt do
           agent: map(),
           authority: term() | nil,
           crew: [map()],
-          requests: [map()]
+          requests: [map()],
+          where: where() | nil
         ]
+
+  @typedoc "Where a turn is, for its prompt's \"Where you are\"."
+  @type where :: %{kind: :daily} | %{kind: :workspace, title: String.t(), ask: String.t()}
 
   @typedoc "A composed prompt: its text and the sources it read."
   @type composed :: %{text: String.t(), sources: [Prima.Source.t()]}
@@ -75,6 +83,7 @@ defmodule Aqua.Prompt do
         scrolls(ctx),
         notes,
         crew(Keyword.get(opts, :crew, [])),
+        where(Keyword.get(opts, :where)),
         requests(Keyword.get(opts, :requests, [])),
         clock()
       ])
@@ -101,6 +110,52 @@ defmodule Aqua.Prompt do
       Calendar.strftime(now, "%H:%M UTC")
     ]
   end
+
+  @doc """
+  Where a turn of `thread` is, for its prompt's "Where you are": the
+  person's daily thread, or a workspace thread with its title and the ask
+  of its first opening, read as the thread stands; nil for a crew
+  member's thread, and for a workspace thread whose opening cannot be
+  read.
+  """
+  @spec where(Context.t(), map()) :: where() | nil
+  def where(%Context{}, %{kind: "daily"}), do: %{kind: :daily}
+
+  def where(%Context{} = ctx, %{kind: "workspace", id: thread_id, title: title}) do
+    case Arca.ThreadStorage.messages(Context.actor(ctx), thread_id, limit: 1) do
+      [%{kind: "opening", content: ask}] -> %{kind: :workspace, title: title, ask: ask || ""}
+      _ -> nil
+    end
+  end
+
+  def where(%Context{}, _thread), do: nil
+
+  # The host section that says where the turn is: the daily thread, where
+  # the person talks and real work is opened elsewhere, or a workspace
+  # thread, whose work this is and how it ends.
+  defp where(nil), do: []
+
+  defp where(%{kind: :daily}) do
+    [
+      "\n\n---\n\n## Where you are\n\nYou are on the person's daily thread, where they talk " <>
+        "to you. Answer quick things here; open a workspace thread for real work " <>
+        "(`workspace.open`), and its report comes back here."
+    ]
+  end
+
+  defp where(%{kind: :workspace, title: title, ask: ask}) do
+    [
+      "\n\n---\n\n## Where you are\n\nYou are working the workspace thread \"",
+      title,
+      "\", which the person's daily thread opened for one piece of work. They asked:\n\n",
+      quoted(ask),
+      "\n\nDo the work here and post what you make with `thread.post`. When it is done or " <>
+        "has failed, say so with `workspace.report`: the report lands on the daily thread."
+    ]
+  end
+
+  defp quoted(text),
+    do: text |> String.trim() |> String.split("\n") |> Enum.map_join("\n", &("> " <> &1))
 
   # Who the soul may hand a job to: the crew index, one line a member.
   defp crew([]), do: []

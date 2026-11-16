@@ -32,6 +32,12 @@ defmodule Aqua.Runner.Admission do
       thread, sent as the person under the `schedule` origin, whatever
       names its text holds: a line with nobody present asks no crew
       member. No other kind of thread admits one.
+    * A workspace thread's opening (`:opening`, the row its opening's
+      transaction wrote there) is a turn of the soul in that workspace
+      thread, which works it, sent by the person who asked.
+    * A workspace thread's report (`:report`) is a turn of the soul in a
+      daily thread, sent by the soul that worked it. No other kind of
+      thread admits one.
 
   Anything else is refused `:not_addressable`.
   """
@@ -74,7 +80,9 @@ defmodule Aqua.Runner.Admission do
   `:not_member`, `:no_agent`, `:not_addressable`. `opts`:
   `:attachments`, `:agents` (the sender's roster), `:agent` (an explicit
   pick), `:last` (the agent of the thread's last turn), `:schedule` (a
-  schedule's line, admitted only under the `schedule` origin), `:sent_by`
+  schedule's line, admitted only under the `schedule` origin), `:opening`
+  (the opening row a workspace thread's delivery starts), `:report` (a
+  workspace thread's report delivered to a daily thread), `:sent_by`
   (`"person"` when absent), `:request` (the request row a delivery
   carries into a child thread) and `:reply` (`%{request: row, ...}`, the
   request a member's reply answers). Answers the decision and the
@@ -154,6 +162,8 @@ defmodule Aqua.Runner.Admission do
 
   defp address(thread, sent_by, text, opts) do
     cond do
+      opening = Keyword.get(opts, :opening) -> opening(thread, sent_by, opening)
+      Keyword.has_key?(opts, :report) -> report(thread, sent_by)
       reply = Keyword.get(opts, :reply) -> reply(thread, sent_by, reply)
       request = Keyword.get(opts, :request) -> delivered(thread, sent_by, request)
       sent_by == @person -> persons(thread, text, opts)
@@ -165,6 +175,23 @@ defmodule Aqua.Runner.Admission do
     do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
 
   defp scheduled(_thread, _sent_by, _origin), do: {:error, :not_addressable}
+
+  # An opening, delivered into the workspace thread that holds it, sent by
+  # the person who asked.
+  defp opening(%{kind: "workspace", id: thread_id}, @person, %{thread_id: thread_id}),
+    do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
+
+  defp opening(_thread, _sent_by, _opening), do: {:error, :not_addressable}
+
+  # A report, delivered into a daily thread by the soul whose workspace
+  # thread it reports.
+  defp report(%{kind: "daily"}, sent_by) when is_binary(sent_by) do
+    if Prima.AgentRef.soul?(sent_by),
+      do: {:ok, {:turn, sent_by}},
+      else: {:error, :not_addressable}
+  end
+
+  defp report(_thread, _sent_by), do: {:error, :not_addressable}
 
   # A member's reply: on the thread of the request it answers, which was
   # addressed to it, to whoever sent that request.

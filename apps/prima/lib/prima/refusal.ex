@@ -665,6 +665,12 @@ defmodule Prima.Refusal do
       {:conflict,
        "#{member}'s thread waits on a card — decide it there before deleting this thread"}
 
+  # A deletion that turns kept starting or reading while it chose the
+  # ones it stops (`Arca.ThreadStorage.delete/3`): the thread is in use,
+  # and nothing about the queue or a send caused it.
+  defp row(:thread_in_use),
+    do: {:conflict, "This thread is in use — try deleting it again in a moment"}
+
   # A shared thread's rules (`Sanctum.SharedThreads`).
   defp row({:shared_thread, :archived}),
     do: {:forbidden, "This thread is archived — reopen it to talk or add people"}

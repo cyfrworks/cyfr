@@ -34,6 +34,9 @@ config :sanctum,
     # `aqua`: chat on the wire, so Prism is a client of the agent runtime
     # rather than the only way to reach it.
     Aqua.Providers.Thread,
+    # Workspace threads: opened from a daily thread for one piece of work,
+    # reporting back to it.
+    Aqua.Providers.Workspace,
     # A card decided from the wire: the same door the console's buttons use.
     Aqua.Providers.Approval,
     # What was kept out of a thread — a separate object from the tape,

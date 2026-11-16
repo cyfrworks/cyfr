@@ -616,4 +616,86 @@ defmodule Aqua.Loop.RequestTest do
       assert Aqua.Loop.Request.without_excerpt(plain) == plain
     end
   end
+
+  describe "a workspace thread's rows" do
+    test "an opening reads as the ask by who asked, then each post it refers to as it reads now, then its files" do
+      opening = %{
+        row(1, "opening", "usr_1", "write the moon report", %{
+          "ask" => "write the moon report",
+          "asked_by" => "usr_1",
+          "from" => %{"thread" => "thr_daily", "message" => "msg_ask"},
+          "refs" => ["msg_ref", "msg_gone"],
+          "title" => "Moon report",
+          "attachments" => [
+            %{
+              "filename" => "moon.png",
+              "stored_name" => "0-moon.png",
+              "media_type" => "image/png",
+              "size" => 4
+            }
+          ]
+        })
+        | sent_by: "person",
+          thread_id: "thr_work"
+      }
+
+      cited = %{
+        row(9, "text", "usr_1", "the moon is full tonight")
+        | id: "msg_ref",
+          sent_by: "person"
+      }
+
+      [%{"role" => "user", "content" => [%{"text" => text}]}] =
+        Request.messages([opening],
+          me: "aqua",
+          names: %{"usr_1" => "Ada"},
+          refs: %{"msg_ref" => cited}
+        )
+
+      assert text =~ ~s|[Ada asked, in this workspace thread "Moon report" (thr_work)]|
+      assert text =~ "write the moon report"
+      assert text =~ "[Post msg_ref of the daily thread, by Ada]\nthe moon is full tonight"
+      refute text =~ "msg_gone"
+      assert text =~ "[Files carried in: moon.png]"
+    end
+
+    test "a pointer is one line naming its workspace thread; a report names it, its outcome and summary" do
+      pointer = %{
+        row(1, "pointer", @agent, "Moon report", %{
+          "workspace" => "thr_work",
+          "title" => "Moon report"
+        })
+        | sent_by: "aqua",
+          workspace_id: "thr_work"
+      }
+
+      report = %{
+        row(2, "report", @agent, "The report is written.", %{
+          "workspace" => "thr_work",
+          "title" => "Moon report",
+          "outcome" => "done"
+        })
+        | sent_by: "aqua",
+          workspace_id: "thr_work"
+      }
+
+      # Each is another thread's word to the reader, never its own speech.
+      [%{"role" => "user", "content" => [%{"text" => pointed}, %{"text" => reported}]}] =
+        Request.messages([pointer, report], me: "aqua")
+
+      assert pointed ==
+               ~s|[The workspace thread "Moon report" (thr_work) was opened or asked again from here]|
+
+      assert reported ==
+               ~s|[Report from the workspace thread "Moon report" (thr_work): done]\nThe report is written.|
+    end
+
+    test "the reader's own post is its call's to show; another agent's post reads under its name" do
+      mine = %{row(1, "text", @agent, "the chart", %{"post" => true}) | sent_by: "aqua"}
+      theirs = %{row(2, "text", @agent, "their chart", %{"post" => true}) | sent_by: "planner"}
+
+      assert [%{"role" => "user", "content" => [%{"text" => "[planner]\ntheir chart"}]}] =
+               Request.messages([mine, theirs], me: "aqua")
+    end
+  end
 end

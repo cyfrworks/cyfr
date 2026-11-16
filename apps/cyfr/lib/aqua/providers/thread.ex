@@ -8,6 +8,12 @@ defmodule Aqua.Providers.Thread do
   Exposes Aqua thread addressing, queuing, history and approvals to
   MCP clients through the thread runner.
 
+  `thread.post` is the one action of `thread` a running turn calls: a
+  post into the thread its turn runs in, under its fence, with text, the
+  files it hands (stored under the post's own row first) and links, which
+  are shown and never fetched. The lineage the gate stamps names the
+  thread and the turn; no argument does.
+
   `crew` is the second tool this provider serves: `ask` and `list`, the
   soul's hand-off to a crew member from inside its turn (`Aqua.Crew`).
   `threads` is the third: `list` and `read`, the person's shared threads
@@ -196,13 +202,19 @@ defmodule Aqua.Providers.Thread do
     normalized
   end
 
+  # The most links one post shows.
+  @links_max 20
+  @url_max 2048
+  @link_title_max 200
+
   @doc false
   def definition do
     alias Prima.{Arg, Operation}
-    # `:external` on every action: a running agent must not be able to
-    # read or post into threads, its own included. And
-    # `:interactive` on every action: only a person's own session may
-    # speak, decide, or read as them — never a standing credential.
+    # `:external` on every action but `post`: a running agent must not be
+    # able to read or post into a thread but its own, and `post` reaches
+    # only that one, named by the lineage. And `:interactive` on every
+    # other action: only a person's own session may speak, decide, or
+    # read as them — never a standing credential.
     # Advisory: maxLength counts graphemes; the governing bound is
     # the runner's 32 KiB byte check, which every sender passes
     # through (the console included).
@@ -241,7 +253,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               description:
-                "send: a crew member's thread; with none, or a daily thread, the send joins today's daily thread"
+                "send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread"
             ),
             Arg.new("message", :string,
               required: true,
@@ -521,6 +533,48 @@ defmodule Aqua.Providers.Thread do
         ),
         Operation.new(
           "thread",
+          "post",
+          "Post in thread",
+          [
+            Arg.new("text", :string,
+              description: "post: the post's text (at most 32 KiB)",
+              max: 32768
+            ),
+            Arg.new(
+              "files",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("filename", :string, required: true),
+                    Arg.new("media_type", :string, required: true),
+                    Arg.new("data", :string, required: true, bulk: true)
+                  ]}
+               )},
+              description:
+                "post: files the post carries, as {filename, media_type, data} with base64 data"
+            ),
+            Arg.new(
+              "links",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("url", :string, required: true),
+                    Arg.new("title", :string)
+                  ]}
+               )},
+              description: "post: links the post shows, each {url, title}; never fetched"
+            )
+          ],
+          kind: :write,
+          sources: [],
+          planes: [:in_chain]
+        ),
+        Operation.new(
+          "thread",
           "delete",
           "Delete thread",
           [
@@ -535,7 +589,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -631,6 +685,7 @@ defmodule Aqua.Providers.Thread do
   end
 
   @impl true
+  def handle("thread", %Context{} = ctx, %{"action" => "post"} = args), do: post(ctx, args)
   def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle("crew", %Context{} = ctx, %{"action" => "ask"} = args), do: Aqua.Crew.ask(ctx, args)
 
@@ -1127,6 +1182,100 @@ defmodule Aqua.Providers.Thread do
   # generically, which is the visible cue that a new refusal needs a row
   # above.
   defp translate(other, _id), do: other
+
+  # ---------------------------------------------------------------------------
+  # A turn's post
+  # ---------------------------------------------------------------------------
+
+  # Into the thread the turn runs in, which the lineage names, under the
+  # turn's fence: its files stored under the post's own id first, and
+  # discarded when the post is not written. A chain with no turn behind it
+  # posts nothing.
+  defp post(%Context{plane: :guest} = ctx, args) do
+    text = String.trim(args["text"] || "")
+
+    with {:ok, files} <- decode_files(args["files"] || []),
+         {:ok, links} <- links(args["links"]),
+         :ok <- something(text, files, links),
+         {:ok, turn} <- calling(ctx, args) do
+      id = Prima.UUID7.generate_id("msg")
+
+      with {:ok, refs} <- Aqua.Attachments.copy(ctx, turn.thread_id, id, files),
+           {:ok, row} <-
+             Tape.post(ctx, turn, %{id: id, content: text, payload: posted(refs, links)}) do
+        {:ok, %{posted: row.id, thread: turn.thread_id, seq: row.seq, files: length(refs)}}
+      else
+        {:error, reason} ->
+          _ = Aqua.Attachments.discard(ctx, turn.thread_id, id)
+          {:error, post_refusal(reason)}
+      end
+    end
+  end
+
+  defp post(%Context{}, _args), do: {:error, :not_in_a_turn}
+
+  defp calling(ctx, args) do
+    case Tape.held_turn(ctx, args) do
+      {:ok, turn} -> {:ok, turn}
+      {:error, :not_addressable} -> {:error, :not_in_a_turn}
+      {:error, reason} -> {:error, post_refusal(reason)}
+    end
+  end
+
+  defp something("", [], []),
+    do: {:error, {:invalid_argument, "post requires a 'text', 'files' or 'links'"}}
+
+  defp something(text, _files, _links) when byte_size(text) > 32 * 1024,
+    do: {:error, :message_too_long}
+
+  defp something(_text, _files, _links), do: :ok
+
+  # A post the turn wrote through `post`: the model reads it from its own
+  # call (`Aqua.Loop.Request`), never twice.
+  defp posted(refs, links) do
+    %{"post" => true}
+    |> then(fn p -> if refs == [], do: p, else: Map.put(p, "attachments", refs) end)
+    |> then(fn p -> if links == [], do: p, else: Map.put(p, "links", links) end)
+  end
+
+  # A link is an http or https address with a host, shown and never
+  # fetched, with a title of plain text.
+  defp links(nil), do: {:ok, []}
+
+  defp links(links) when is_list(links) and length(links) > @links_max,
+    do: {:error, {:invalid_argument, "post shows at most #{@links_max} links"}}
+
+  defp links(links) when is_list(links) do
+    Enum.reduce_while(links, {:ok, []}, fn link, {:ok, acc} ->
+      case link(link) do
+        {:ok, link} -> {:cont, {:ok, acc ++ [link]}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  defp links(_links), do: {:error, {:invalid_argument, "post takes 'links' as {url, title}"}}
+
+  defp link(%{"url" => url} = link) when is_binary(url) and byte_size(url) <= @url_max do
+    title = String.trim(link["title"] || "")
+
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host}}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        {:ok, %{"url" => url, "title" => String.slice(title, 0, @link_title_max)}}
+
+      _ ->
+        {:error, {:invalid_argument, "post shows only http and https links"}}
+    end
+  end
+
+  defp link(_link), do: {:error, {:invalid_argument, "post takes 'links' as {url, title}"}}
+
+  defp post_refusal(reason)
+       when reason in [:too_many_attachments, :attachment_too_large, :storage_full],
+       do: {:invalid_argument, "post refused: " <> Sanctum.Refusals.render(reason)}
+
+  defp post_refusal(reason), do: refusal(reason, nil)
 
   # ---------------------------------------------------------------------------
   # Shared threads, read for the person

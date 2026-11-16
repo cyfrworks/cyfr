@@ -284,4 +284,69 @@ defmodule Aqua.PromptTest do
       assert notes =~ "… and 3 more — find one with `notes.search`"
     end
   end
+
+  describe "where the turn is" do
+    test "a workspace thread's turn is told where it is, from the ask of its first opening",
+         %{ctx: ctx} do
+      prompt =
+        Prompt.compose(ctx,
+          agent: agent(),
+          authority: nil,
+          where: %{
+            kind: :workspace,
+            title: "Moon report",
+            ask: "write the moon report\nwith a chart"
+          }
+        ).text
+
+      [_, where] = String.split(prompt, "## Where you are", parts: 2)
+      assert where =~ ~s(the workspace thread "Moon report")
+      assert where =~ "> write the moon report\n> with a chart"
+      assert where =~ "`workspace.report`"
+
+      # Before the clock, which moves by the minute.
+      [before_clock, _] = String.split(prompt, "## Now", parts: 2)
+      assert before_clock =~ "## Where you are"
+    end
+
+    test "a daily thread's turn is told it is on the daily thread; a crew member's, nothing",
+         %{ctx: ctx} do
+      assert Prompt.where(ctx, %{kind: "daily", id: "thr_1", title: "2026-11-16"}) ==
+               %{kind: :daily}
+
+      prompt = Prompt.compose(ctx, agent: agent(), authority: nil, where: %{kind: :daily}).text
+      [_, where] = String.split(prompt, "## Where you are", parts: 2)
+      assert where =~ "on the person's daily thread"
+      assert where =~ "`workspace.open`"
+
+      assert Prompt.where(ctx, %{kind: "crew", id: "thr_2", title: "planner"}) == nil
+      refute Prompt.compose(ctx, agent: agent(), authority: nil).text =~ "Where you are"
+    end
+
+    test "where/2 reads a workspace thread's first opening", %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, daily} = Arca.Test.Days.thread(actor)
+      id = Prima.UUID7.generate_id("thread")
+
+      {:ok, %{workspace: workspace}} =
+        Arca.TurnStorage.open_workspace(actor, %{
+          daily_id: daily.id,
+          id: id,
+          title: "Moon report",
+          opening: %{
+            id: Prima.UUID7.generate_id("msg"),
+            author: ctx.user_id,
+            content: "write the moon report",
+            payload: %{"ask" => "write the moon report"}
+          },
+          pointer: %{author: ctx.user_id, sent_by: "person", content: "Moon report", payload: %{}},
+          files: fn _thread, _message -> {:ok, []} end,
+          person_id: ctx.user_id,
+          origin: :interactive
+        })
+
+      assert Prompt.where(ctx, workspace) ==
+               %{kind: :workspace, title: "Moon report", ask: "write the moon report"}
+    end
+  end
 end

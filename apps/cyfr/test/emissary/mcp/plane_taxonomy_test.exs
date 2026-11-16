@@ -149,7 +149,9 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       # `program`: Aqua's own runs of a program, a turn's alone; `browser`:
       # Aqua's acts in its browser, a turn's alone, beside the setting the
-      # person also reads and sets from a screen.
+      # person also reads and sets from a screen; `thread.post` and
+      # `workspace.report`: a turn's post into its own thread and its
+      # report of a workspace thread's work, under its fence.
       assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
                                             source.write source.edit source.delete
                                             crew.ask crew.list threads.list threads.read
@@ -157,7 +159,8 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                                             program.read program.wait program.stop
                                             browser.open browser.read browser.click
                                             browser.type browser.key browser.page
-                                            browser.screenshot browser.close))
+                                            browser.screenshot browser.close
+                                            thread.post workspace.report))
 
       external =
         MapSet.new(

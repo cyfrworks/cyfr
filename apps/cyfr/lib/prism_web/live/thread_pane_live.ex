@@ -2530,6 +2530,13 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system"], do: nil
 
+  # A workspace thread's pointer and report, plain posts that name it.
+  defp author_label(%{kind: "pointer"} = msg, _members, _ctx),
+    do: "Workspace thread · #{Threads.payload(msg)["title"]}"
+
+  defp author_label(%{kind: "report"} = msg, _members, _ctx),
+    do: "Report · #{Threads.payload(msg)["title"]}"
+
   # A copy of an assistant's line is the person's, and says so.
   defp author_label(msg, members, ctx) do
     label = speaker(msg, members, ctx)

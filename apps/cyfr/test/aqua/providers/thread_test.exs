@@ -271,15 +271,18 @@ defmodule Aqua.Providers.ThreadTest do
                })
     end
 
-    test "every action is external-plane only and interactive-only" do
+    test "every action but post is external-plane only and interactive-only; post is a chain's alone" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 15
+      assert map_size(actions) == 16
 
-      for {name, spec} <- actions do
+      for {name, spec} <- Map.delete(actions, "post") do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
         assert spec.consent == :interactive, "#{name} is reachable by a standing credential"
       end
+
+      assert %{planes: [:in_chain], kind: :write} = post = actions["post"]
+      refute Map.has_key?(post, :consent)
     end
 
     test "the message schema declares its advisory bound; the runner's byte check governs", %{
@@ -1071,6 +1074,152 @@ defmodule Aqua.Providers.ThreadTest do
         |> Prima.Arg.schema()
         |> put_in(["properties", "action"], %{"type" => "string", "const" => action})
         |> Map.update!("required", &["action" | &1])
+    end
+  end
+
+  describe "post" do
+    # A running turn with its root, as the loop starts one; its chain's
+    # calls carry the lineage the gate stamps.
+    defp running!(ctx, thread) do
+      alias Aqua.Tape
+
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "draw the moon"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      {:ok, %{execution: execution, attempt: attempt}} =
+        Arca.Execution.admit(
+          %{
+            id: "exec_tool_#{System.unique_integer([:positive])}",
+            reference: "agent:local.aqua",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "agent",
+            kind: "turn",
+            turn_id: turn.id,
+            origin: :interactive
+          },
+          reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
+          grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+          verify: &Sanctum.ExecutionStanding.verify/1
+        )
+
+      {:ok, turn} =
+        Tape.start_turn(ctx, turn, %{
+          root_execution_id: execution.id,
+          attempt: attempt.attempt,
+          profile_id: "prof_x",
+          consent_id: "consent_x",
+          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+        })
+
+      turn
+    end
+
+    defp post(ctx, turn, args) do
+      call(
+        Sanctum.Context.enter_guest(ctx),
+        Map.merge(
+          %{
+            "action" => "post",
+            "thread_id" => turn.thread_id,
+            "root_execution_id" => turn.root_execution_id
+          },
+          args
+        )
+      )
+    end
+
+    @png %{
+      "filename" => "moon.png",
+      "media_type" => "image/png",
+      "data" => Base.encode64("PNG-moon")
+    }
+
+    test "a turn posts text, files and links into its own thread, its files under the post's own row",
+         %{ctx: ctx, thread: thread} do
+      turn = running!(ctx, thread)
+
+      assert {:ok, %{posted: id, thread: posted_in, files: 1}} =
+               post(ctx, turn, %{
+                 "text" => "The moon tonight.",
+                 "files" => [@png],
+                 "links" => [%{"url" => "https://moon.example/tonight", "title" => " Tonight "}]
+               })
+
+      assert posted_in == thread.id
+
+      {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), id)
+      assert %{author: "aqua", sent_by: "aqua", kind: "text", content: "The moon tonight."} = row
+      assert row.turn_id == turn.id
+
+      assert %{
+               "post" => true,
+               "attachments" => [%{"filename" => "moon.png"} = ref],
+               "links" => [%{"url" => "https://moon.example/tonight", "title" => "Tonight"}]
+             } = Threads.payload(row)
+
+      assert [%{"data" => data}] =
+               Aqua.Attachments.load(ctx, thread.id, [%{message_id: id, ref: ref}])
+
+      assert Base.decode64!(data) == "PNG-moon"
+    end
+
+    test "a holder a takeover replaced posts nothing and leaves none of its files",
+         %{ctx: ctx, thread: thread} do
+      turn = running!(ctx, thread)
+      before = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
+
+      # The root's own call names the attempt that made it, which the
+      # turn no longer runs.
+      stale = %{
+        "parent_execution_id" => turn.root_execution_id,
+        "attempt" => "att_replaced",
+        "text" => "late",
+        "files" => [@png]
+      }
+
+      assert {:error, {:conflict, _}} = post(ctx, turn, stale)
+      assert Threads.messages(Sanctum.Context.actor(ctx), thread.id) == before
+
+      {:ok, entries} = Arca.list_typed(Sanctum.Context.actor(ctx), ["threads", thread.id])
+
+      assert for({_name, :dir} = entry <- entries, do: entry)
+             |> Enum.all?(&empty_dir?(ctx, thread, &1))
+    end
+
+    test "nothing posts outside a turn, and a post holds text, files or links, and only http links",
+         %{ctx: ctx, thread: thread} do
+      turn = running!(ctx, thread)
+
+      assert {:error, :not_in_a_turn} =
+               call(ctx, %{"action" => "post", "text" => "from outside"})
+
+      assert {:error, :not_in_a_turn} =
+               post(ctx, %{turn | root_execution_id: "exec_forged"}, %{"text" => "forged"})
+
+      assert {:error, {:invalid_argument, _}} = post(ctx, turn, %{"text" => "  "})
+
+      assert {:error, {:invalid_argument, _}} =
+               post(ctx, turn, %{"links" => [%{"url" => "javascript:alert(1)"}]})
+
+      assert {:error, {:invalid_argument, _}} =
+               post(ctx, turn, %{
+                 "links" => for(n <- 1..21, do: %{"url" => "https://x.example/#{n}"})
+               })
+
+      assert {:error, :message_too_long} =
+               post(ctx, turn, %{"text" => String.duplicate("a", 33_000)})
+    end
+  end
+
+  defp empty_dir?(ctx, thread, {name, :dir}) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), ["threads", thread.id, name]) do
+      {:ok, []} -> true
+      {:error, :not_found} -> true
+      _ -> false
     end
   end
 end

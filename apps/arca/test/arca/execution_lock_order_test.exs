@@ -9,6 +9,16 @@ defmodule Arca.ExecutionLockOrderTest do
   lapse of a turn's root against the turn's end. A turn's writers take
   the turn before its thread, an archive of the thread among them, and a
   room's deletion holds the athanor's lock a child's creation waits on.
+  Turns, then the athanor's row, then thread rows
+  (`Arca.ThreadStorage.lock_threads!/2` states the order): a write that
+  takes more than one thread row takes the athanor's row before them,
+  retention and a report landing on its daily thread among them; the
+  standing check reads the athanor's row after a turn, so an opening
+  takes its asking turn first and a deletion the turns it stops; a step
+  write, which takes no second thread row, takes no athanor lock. A write
+  that takes more than one turn takes them by when each was accepted,
+  then by id (`Arca.TurnStorage.hold_turns!/2`), an archive and a
+  deletion alike.
   These run outside the sandbox, on connections of their own, with the
   run's attempt held by a third transaction so both writes are seen
   waiting before either goes on; a PostgreSQL deadlock would abort one of
@@ -73,6 +83,204 @@ defmodule Arca.ExecutionLockOrderTest do
             from(a in ExecutionAttempt, where: a.attempt == ^attempt)
             |> Arca.QueryHelpers.for_update()
             |> Arca.Repo.one!()
+
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> Arca.Repo.rollback(:timeout)
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
+    assert_receive :held, 5_000
+    blocker
+  end
+
+  # The thread `id` held by a transaction of its own until it is released.
+  defp hold_thread(id) do
+    test = self()
+
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            from(c in Thread, where: c.id == ^id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> Arca.Repo.rollback(:timeout)
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
+    assert_receive :held, 5_000
+    blocker
+  end
+
+  # The turn `id` held by a transaction of its own until it is released.
+  defp hold_turn(id) do
+    test = self()
+
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            from(t in Turn, where: t.id == ^id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> Arca.Repo.rollback(:timeout)
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
+    assert_receive :held, 5_000
+    blocker
+  end
+
+  # A turn of the member's in `thread`, accepted and never run.
+  defp accepted!(actor, thread) do
+    unboxed(fn ->
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      turn
+    end)
+  end
+
+  # An athanor no other case names, its row committed, whose rows go with
+  # it when the case ends: the athanor's row lock is the one in question.
+  defp committed_athanor! do
+    athanor_id = "ath_lock_order_#{System.unique_integer([:positive])}"
+    actor = Arca.Test.Actor.local(athanor_id: athanor_id)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id))
+      end)
+    end)
+
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
+    actor
+  end
+
+  # An opening of a workspace thread from `daily`.
+  defp opening(actor, daily, attrs) do
+    Map.merge(
+      %{
+        daily_id: daily.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Moon report",
+        opened_from: "msg_ask",
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: actor.user_id,
+          content: "write the moon report",
+          payload: %{}
+        },
+        pointer: %{author: "aqua", sent_by: "aqua", content: "Moon report", payload: %{}},
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: actor.user_id,
+        origin: :interactive
+      },
+      attrs
+    )
+  end
+
+  # A running turn of `agent` in `thread`, its root admitted and started,
+  # committed in an athanor whose rows go with it (`committed_athanor!/0`).
+  defp running!(actor, thread, agent) do
+    unboxed(fn ->
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: agent, requested_by: actor.user_id, origin: :interactive}
+        })
+
+      root_id = "exec_lock_order_#{System.unique_integer([:positive])}"
+      budget_id = "bgt_lock_order_#{System.unique_integer([:positive])}"
+
+      {:ok, %{attempt: attempt}} =
+        Arca.Execution.admit(
+          %{
+            id: root_id,
+            reference: "agent:local.#{agent}",
+            user_id: actor.user_id,
+            athanor_id: actor.athanor_id,
+            component_type: "agent",
+            kind: "turn",
+            turn_id: turn.id,
+            origin: :interactive
+          },
+          reservation: %{budget_id: budget_id, cap: 4},
+          grant: Arca.Test.Actor.grant(actor.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
+        )
+
+      {:ok, started} =
+        TurnStorage.start(actor, turn.id, %{
+          root_execution_id: root_id,
+          attempt: attempt.attempt,
+          budget_id: budget_id,
+          recovery_limit: 3,
+          fence: turn.fence
+        })
+
+      started
+    end)
+  end
+
+  # The standing check a write runs (`attrs[:verify]`), paused: it tells
+  # the test that made it (the calling process) it is about to read the
+  # athanor's row, and once let go reads it shared, as the identity
+  # domain's check does (`Arca.Test.Actor.verify/1`).
+  defp paused_verify do
+    test = self()
+
+    fn grant ->
+      send(test, {:verifying, self()})
+
+      receive do
+        :verify -> Arca.Test.Actor.verify(grant)
+      after
+        10_000 -> {:error, :unavailable}
+      end
+    end
+  end
+
+  # The athanor's row held shared by a transaction of its own, as a
+  # standing check holds it, until it is released.
+  defp hold_standing(athanor_id) do
+    test = self()
+
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            {:ok, %{}} =
+              Arca.ExecutionStanding.locked(Prima.Actor.in_athanor(athanor_id), athanor_id)
 
             send(test, :held)
 
@@ -373,6 +581,64 @@ defmodule Arca.ExecutionLockOrderTest do
     refute log =~ "deadlock", log
   end
 
+  test "retention and a report landing on its daily thread take the athanor first and never deadlock" do
+    actor = committed_athanor!()
+
+    {daily, workspace} =
+      unboxed(fn ->
+        {:ok, daily} = Arca.Test.Days.thread(actor)
+
+        {:ok, %{workspace: workspace}} =
+          TurnStorage.open_workspace(actor, opening(actor, daily, %{}))
+
+        # Finished, so both are retention's to remove.
+        {1, _} =
+          Arca.Repo.update_all(from(c in Thread, where: c.id == ^workspace.id),
+            set: [workspace_state: "done", workspace_outcome: "done"]
+          )
+
+        {daily, workspace}
+      end)
+
+    # The daily thread's id first, as retention takes its candidates.
+    assert daily.id < workspace.id
+    cutoff = DateTime.add(DateTime.utc_now(), 3600)
+
+    report = %{
+      author: "aqua",
+      sent_by: "aqua",
+      kind: "report",
+      workspace_id: workspace.id,
+      content: "Done."
+    }
+
+    log =
+      capture_log(fn ->
+        blocker = hold_thread(daily.id)
+
+        # Retention holds the athanor and waits on the daily thread.
+        {retention, retention_backend} =
+          waiting(:retention, fn -> Threads.delete_before(actor, cutoff) end)
+
+        Arca.Test.LockWait.await_lock_wait!(retention_backend, ["threads"])
+
+        {landing, landing_backend} =
+          waiting(:landing, fn ->
+            TurnStorage.accept_message(actor, daily.id, %{message: report})
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(landing_backend)
+        release(blocker)
+
+        # Retention went first, so the report finds its workspace thread gone.
+        assert {:ok, 2} = Task.await(retention, 10_000)
+        assert {:error, :workspace_gone} = Task.await(landing, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, daily.id) end)
+  end
+
   test "a child made while its room is deleted waits for the deletion and finds no room" do
     actor = Arca.Test.Actor.local()
     %{room: room, turn: turn, attempt: attempt} = running_child_turn!(actor)
@@ -400,5 +666,219 @@ defmodule Arca.ExecutionLockOrderTest do
 
     refute log =~ "deadlock", log
     assert unboxed(fn -> Threads.children(actor, room.id) end) == []
+  end
+
+  test "an opening takes its asking turn before the athanor's row, so a takeover of that turn never deadlocks it" do
+    actor = committed_athanor!()
+    {:ok, daily} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    turn = running!(actor, daily, "aqua")
+
+    verify = paused_verify()
+
+    log =
+      capture_log(fn ->
+        # The takeover holds the turn and is about to read the standing.
+        {takeover, _backend} =
+          waiting(:takeover, fn ->
+            TurnStorage.takeover(actor, turn.id, %{
+              fence: turn.fence,
+              grant: :stored,
+              verify: verify
+            })
+          end)
+
+        assert_receive {:verifying, verifier}, 5_000
+
+        {opening, opening_backend} =
+          waiting(:opening, fn ->
+            TurnStorage.open_workspace(
+              actor,
+              opening(actor, daily, %{turn: %{id: turn.id, fence: turn.fence}})
+            )
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(opening_backend, ["turns"])
+        send(verifier, :verify)
+
+        # The takeover moved the fence, so the opening it held off finds
+        # its turn superseded.
+        assert {:ok, %{fence: fence}} = Task.await(takeover, 10_000)
+        assert fence == turn.fence + 1
+        assert {:error, :superseded} = Task.await(opening, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+  end
+
+  test "a step write in a crew member's thread under a workspace thread takes no lock on the athanor's row" do
+    actor = committed_athanor!()
+    {:ok, daily} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+
+    {:ok, %{workspace: workspace}} =
+      unboxed(fn -> TurnStorage.open_workspace(actor, opening(actor, daily, %{})) end)
+
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, workspace.id, "planner") end)
+    turn = running!(actor, child, "planner")
+    standing = hold_standing(actor.athanor_id)
+
+    step =
+      Task.async(fn ->
+        unboxed(fn ->
+          TurnStorage.put_step(actor, turn.id, %{
+            kind: "model",
+            idempotency_key: "model:lock-order",
+            fence: turn.fence
+          })
+        end)
+      end)
+
+    # It lands while the athanor's row is held, so it never asked for it.
+    assert {:ok, {:ok, %{kind: "model"}}} = Task.yield(step, 5_000)
+    release(standing)
+  end
+
+  test "a deletion takes the turns it stops before the athanor's row, so a completion's standing check never deadlocks it" do
+    actor = committed_athanor!()
+    {:ok, room} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, room.id, "planner") end)
+    turn = running!(actor, child, "planner")
+
+    verify = paused_verify()
+
+    log =
+      capture_log(fn ->
+        # The completion holds the child's turn and is about to read the
+        # standing.
+        {completion, _backend} =
+          waiting(:completion, fn ->
+            TurnStorage.finish(actor, turn.id, "completed", %{
+              fence: turn.fence,
+              grant: :stored,
+              verify: verify
+            })
+          end)
+
+        assert_receive {:verifying, verifier}, 5_000
+
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+        send(verifier, :verify)
+
+        # The deletion waited on the turn without the athanor's row, so
+        # the completion read its standing and ended the turn first.
+        assert {:ok, %{status: "completed"}} = Task.await(completion, 10_000)
+        assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, room.id) end)
+  end
+
+  test "an archive and a deletion take a crew thread's turns in one order, by when each was accepted" do
+    actor = committed_athanor!()
+    {:ok, room} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, room.id, "planner") end)
+    [lower, higher] = Enum.sort_by([accepted!(actor, child), accepted!(actor, child)], & &1.id)
+
+    # The lower id accepted later: by id and by acceptance the two turns
+    # stand in opposite orders.
+    unboxed(fn ->
+      {1, _} =
+        Arca.Repo.update_all(from(t in Turn, where: t.id == ^lower.id),
+          set: [accepted_at: DateTime.add(higher.accepted_at, 1, :second)]
+        )
+    end)
+
+    log =
+      capture_log(fn ->
+        blocker = hold_turn(higher.id)
+
+        # The archive waits on the earlier-accepted turn, holding none.
+        {archive, archive_backend} =
+          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+        release(blocker)
+
+        # Both took the earlier-accepted turn first, so the archive went
+        # first with both and the deletion followed with nothing to cancel.
+        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: cancelled}} =
+                 Task.await(archive, 10_000)
+
+        assert length(cancelled) == 2
+        assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+  end
+
+  # A room with a crew member's thread holding one accepted turn, that
+  # turn held by a third transaction.
+  defp member_turn_held! do
+    actor = committed_athanor!()
+    {:ok, room} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
+    {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, room.id, "planner") end)
+    turn = accepted!(actor, child)
+    %{actor: actor, room: room, child: child, turn: turn, blocker: hold_turn(turn.id)}
+  end
+
+  test "an archive that a deletion of its room goes before finds no thread, and writes nothing" do
+    %{actor: actor, room: room, child: child, turn: turn, blocker: blocker} = member_turn_held!()
+    turn_id = turn.id
+
+    log =
+      capture_log(fn ->
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+
+        {archive, archive_backend} =
+          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+        release(blocker)
+
+        assert {:ok, %{cancelled: [%{turn_id: ^turn_id}]}} = Task.await(deletion, 10_000)
+        assert {:error, :not_found} = Task.await(archive, 10_000)
+      end)
+
+    refute log =~ "MatchError", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, child.id) end)
+  end
+
+  test "a deletion that an archive of its member's thread goes before removes the archived thread" do
+    %{actor: actor, room: room, child: child, turn: turn, blocker: blocker} = member_turn_held!()
+    turn_id = turn.id
+
+    log =
+      capture_log(fn ->
+        {archive, archive_backend} =
+          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+
+        {deletion, deletion_backend} =
+          waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
+
+        Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
+        release(blocker)
+
+        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: [%{turn_id: ^turn_id}]}} =
+                 Task.await(archive, 10_000)
+
+        assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, child.id) end)
+    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, room.id) end)
   end
 end

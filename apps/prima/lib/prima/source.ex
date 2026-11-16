@@ -14,9 +14,18 @@ defmodule Prima.Source do
       network, a webhook payload or a feed. Its `name` says which tool,
       host or feed; the other classes carry none.
 
+  A `thread` source is no class of material: it names a thread of the
+  athanor whose posts a turn read from another thread (a workspace
+  thread's report or pointer on a daily thread, a daily thread's posts a
+  workspace thread's opening refers to), so that forgetting that thread
+  finds the turns that read it (`thread/1`). Those posts' own material
+  joins by the sources of the turns that wrote them, so a thread source
+  never stands in for an outside one, and no flow, launch or standing
+  answer reads it: `classes/0` and `classes_of/1` leave it out.
+
   The canonical JSON of a source is `{"class", "name"}`, `name` null but
-  for an outside source, and a set is a sorted, duplicate-free list of
-  them. A source whose class is unknown or absent reads as `outside`,
+  for an outside or a thread source, and a set is a sorted,
+  duplicate-free list of them, thread sources after every class. A source whose class is unknown or absent reads as `outside`,
   keeping whatever name it carried, and a set that does not decode reads
   as one unnamed outside source: provenance that cannot be read is never
   read as the athanor's own. Model outputs carry no source: what a model
@@ -28,11 +37,11 @@ defmodule Prima.Source do
 
   @classes ~w(pinned filed files_by_grant vault_disclosed outside)a
   @by_spelling Map.new(@classes, &{Atom.to_string(&1), &1})
-  @order @classes |> Enum.with_index() |> Map.new()
+  @order (@classes ++ [:thread]) |> Enum.with_index() |> Map.new()
 
   @type class :: :pinned | :filed | :files_by_grant | :vault_disclosed | :outside
 
-  @type t :: %__MODULE__{class: class(), name: String.t() | nil}
+  @type t :: %__MODULE__{class: class() | :thread, name: String.t() | nil}
 
   @enforce_keys [:class]
   defstruct [:class, :name]
@@ -55,6 +64,29 @@ defmodule Prima.Source do
   @spec outside(String.t() | nil) :: t()
   def outside(name), do: new(:outside, name)
 
+  @doc """
+  The source that names the thread `thread_id` a turn read from another
+  thread (the moduledoc's): no class of material, never covered or
+  refused by a flow.
+  """
+  @spec thread(String.t()) :: t()
+  def thread(thread_id) when is_binary(thread_id) and thread_id != "",
+    do: %__MODULE__{class: :thread, name: thread_id}
+
+  @doc "Whether `source` names a thread read (`thread/1`)."
+  @spec thread?(t()) :: boolean()
+  def thread?(%__MODULE__{class: :thread}), do: true
+  def thread?(%__MODULE__{}), do: false
+
+  @doc "The ids of the threads a set's thread sources name, in order."
+  @spec threads([t()]) :: [String.t()]
+  def threads(sources) when is_list(sources),
+    do: for(%__MODULE__{class: :thread, name: id} <- set(sources), do: id)
+
+  @doc "The sources of a set that are material of a class: every one but its thread sources."
+  @spec material([t()]) :: [t()]
+  def material(sources) when is_list(sources), do: Enum.reject(sources, &thread?/1)
+
   @doc "Whether `source` is an outside source."
   @spec outside?(t()) :: boolean()
   def outside?(%__MODULE__{class: :outside}), do: true
@@ -73,9 +105,15 @@ defmodule Prima.Source do
   def from_json(%{} = json) do
     name = Map.get(json, "name", Map.get(json, :name))
 
-    case Map.fetch(@by_spelling, to_spelling(Map.get(json, "class", Map.get(json, :class)))) do
-      {:ok, class} -> new(class, name)
-      :error -> outside(name)
+    case to_spelling(Map.get(json, "class", Map.get(json, :class))) do
+      "thread" when is_binary(name) and name != "" ->
+        thread(name)
+
+      spelling ->
+        case Map.fetch(@by_spelling, spelling) do
+          {:ok, class} -> new(class, name)
+          :error -> outside(name)
+        end
     end
   end
 
@@ -119,10 +157,15 @@ defmodule Prima.Source do
   @spec union([t()], [t()]) :: [t()]
   def union(left, right) when is_list(left) and is_list(right), do: set(left ++ right)
 
-  @doc "The classes a set holds, in their fixed order."
+  @doc "The classes a set holds, in their fixed order; a thread source holds none."
   @spec classes_of([t()]) :: [class()]
   def classes_of(sources) when is_list(sources),
-    do: sources |> Enum.map(& &1.class) |> Enum.uniq() |> Enum.sort_by(&Map.fetch!(@order, &1))
+    do:
+      sources
+      |> material()
+      |> Enum.map(& &1.class)
+      |> Enum.uniq()
+      |> Enum.sort_by(&Map.fetch!(@order, &1))
 
   @doc """
   The outside sources of `sources` that `covered` does not name. An

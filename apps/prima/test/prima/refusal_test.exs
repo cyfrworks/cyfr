@@ -238,6 +238,7 @@ defmodule Prima.RefusalTest do
     {:archived, :forbidden},
     {:thread_archived, :forbidden},
     {{:child_awaits_card, "planner"}, :conflict},
+    {:thread_in_use, :conflict},
     {:not_addressable, :forbidden},
     {:not_in_a_turn, :forbidden},
     {:aqua_line_by_person, :forbidden},
@@ -794,6 +795,7 @@ defmodule Prima.RefusalTest do
 
     test "the split atoms read apart" do
       refute Refusal.message(:busy) == Refusal.message(:held_elsewhere)
+      refute Refusal.message(:thread_in_use) == Refusal.message(:busy)
       refute Refusal.message(:unavailable) == Refusal.message(:outcome_unknown)
       assert Refusal.message(:outcome_unknown) =~ "check before asking again"
       refute Refusal.message({:held_elsewhere, "turn_secret_id"}) =~ "turn_secret_id"

@@ -109,7 +109,8 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
              # A shared thread the person sits in, read again: what it says
              # now, and no read mark moved.
              "threads.list",
-             "threads.read"
+             "threads.read",
+             "workspace.list"
            ]
 
     assert replay_safe(Carrier.tools()) == ["carrier.peek"]

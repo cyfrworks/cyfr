@@ -38,7 +38,9 @@ defmodule Arca.Outbox do
   @consumers %{
     "schedule_outcome" => ["schedule_notes"],
     "crew_request" => ["crew_delivery"],
-    "crew_reply" => ["crew_delivery"]
+    "crew_reply" => ["crew_delivery"],
+    "workspace_open" => ["crew_delivery"],
+    "workspace_report" => ["crew_delivery"]
   }
 
   # Every kind a record may carry has its consumers declared.

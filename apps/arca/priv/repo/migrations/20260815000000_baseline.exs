@@ -2511,6 +2511,22 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     checked(sqlite?, :consumer_receipts, [receipt_outcome])
     create index(:consumer_receipts, [:athanor_id, :inserted_at])
+
+    # Where a consumer's try of one source revision is putting bytes in
+    # an athanor, written and committed before the first byte and gone
+    # with its receipt: a later try discards there first, whatever became
+    # of the thread the place is under. The athanor leads the key, so
+    # another athanor's place is a row of its own.
+    create table(:delivery_copies, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :consumer, :string, primary_key: true, null: false
+      add :source_kind, :string, primary_key: true, null: false
+      add :source_id, :string, primary_key: true, null: false
+      add :source_revision, :string, primary_key: true, null: false
+      add :thread_id, :string, null: false
+      add :message_id, :string, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
   end
 
   # ==========================================================================
@@ -2534,12 +2550,18 @@ defmodule Arca.Repo.Migrations.Baseline do
         "(kind = 'daily') = (day IS NOT NULL) AND " <>
           "(kind = 'workspace') = (workspace_state IS NOT NULL) AND " <>
           "(kind = 'workspace' OR opened_from IS NULL) AND " <>
+          "(kind = 'workspace' OR workspace_outcome IS NULL) AND " <>
           "(kind = 'crew') = (parent_id IS NOT NULL)"
     }
 
     # `Arca.Schemas.Thread.workspace_states/0`.
     workspace_state =
       known("threads_workspace_state_known", "workspace_state", ~w(open needs_you done failed))
+
+    # What a workspace thread's last report said, which it becomes once
+    # its work is finished.
+    workspace_outcome =
+      known("threads_workspace_outcome_known", "workspace_outcome", ~w(done failed))
 
     read_mark = %{name: "threads_read_seq_counted", expr: "read_seq >= 0"}
 
@@ -2563,6 +2585,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # plain string from which nothing cascades, and how its work stands.
       add :opened_from, :string
       add :workspace_state, :string, check: if(sqlite?, do: workspace_state)
+      # What its last report said, done or failed, since it last took new
+      # work: what it becomes once nothing it accepted remains to run and
+      # no card waits.
+      add :workspace_outcome, :string, check: if(sqlite?, do: workspace_outcome)
       # `seq` of the last message the person has seen: one mark per thread,
       # since an athanor is one person's, moved forward only.
       add :read_seq, :integer, null: false, default: 0, check: if(sqlite?, do: read_mark)
@@ -2594,7 +2620,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :threads, [thread_kind, thread_whole, workspace_state, read_mark])
+    checked(sqlite?, :threads, [
+      thread_kind,
+      thread_whole,
+      workspace_state,
+      workspace_outcome,
+      read_mark
+    ])
+
     create unique_index(:threads, [:id, :athanor_id])
 
     # One daily thread per date of an athanor: of two callers making the
@@ -2620,7 +2653,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Who wrote it: a user id, an agent, or "system".
       add :author, :string, null: false
       # text | approval | error | system | tool_call | tool_result |
-      # compaction | turn_aborted
+      # compaction | turn_aborted | opening | pointer | report
       add :kind, :string, null: false, default: "text"
       add :content, :text, null: false, default: ""
       # Kind-specific JSON: an approval's intent and proposal, a text
@@ -2649,6 +2682,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :reply_to, :string
       # A reply's or notice's outcome.
       add :outcome, :string, check: if(sqlite?, do: message_outcome)
+      # The workspace thread a daily thread's pointer or report names,
+      # with which it is deleted. A plain string, from which nothing
+      # cascades.
+      add :workspace_id, :string
       add :inserted_at, :utc_datetime_usec, null: false
     end
 
@@ -2661,6 +2698,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:messages, [:athanor_id, :inserted_at])
     create index(:messages, [:athanor_id, :turn_id])
     create index(:messages, [:athanor_id, :reply_to])
+    create index(:messages, [:athanor_id, :workspace_id], where: "workspace_id IS NOT NULL")
     create index(:messages, [:thread_id, :status])
   end
 

@@ -52,6 +52,7 @@ const (
 	Tools              = "tools"
 	Vault              = "vault"
 	Webhook            = "webhook"
+	Workspace          = "workspace"
 )
 
 // Actions, as tool then action.
@@ -300,6 +301,8 @@ const (
 	WebhookRevoke           = "revoke"
 	WebhookRotate           = "rotate"
 	WebhookUpdate           = "update"
+	WorkspaceList           = "list"
+	WorkspaceOpen           = "open"
 )
 
 // Actions lists every action the catalog serves, per tool.
@@ -344,6 +347,7 @@ var Actions = map[string][]string{
 	"tools":               {"list"},
 	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "set_default", "status"},
 	"webhook":             {"create", "get", "list", "reenable", "revoke", "rotate", "update"},
+	"workspace":           {"list", "open"},
 }
 
 // BindingKinds lists every need kind a consent binds: the credential kinds, and login, which binds a program.
@@ -4903,7 +4907,7 @@ func (args ThreadRevokeGrantArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadSendArgs carries arguments for thread.send.
 type ThreadSendArgs struct {
-	// send: a crew member's thread; with none, or a daily thread, the send joins today's daily thread
+	// send: a workspace thread or a crew member's thread; with none, or a daily thread, the send joins today's daily thread
 	Thread Field[string] `json:"thread,omitzero"`
 	// send: the text to say (at most 32 KiB of text)
 	Message string `json:"message"`
@@ -5500,4 +5504,62 @@ func (args WebhookUpdateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: WebhookUpdate, fields: fields(args)})
+}
+
+// WorkspaceListArgs carries arguments for workspace.list.
+type WorkspaceListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args WorkspaceListArgs) MarshalJSON() ([]byte, error) {
+	type fields WorkspaceListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: WorkspaceList, fields: fields(args)})
+}
+
+// WorkspaceOpenArgs carries arguments for workspace.open.
+type WorkspaceOpenArgs struct {
+	// open: a short title for a new workspace thread, plain text on one line of at most 64 characters
+	Title Field[string] `json:"title,omitzero"`
+	// open: what the person asked, in their words (at most 32 KiB)
+	Ask string `json:"ask"`
+	// open: an existing workspace thread to send this ask to, in place of a title
+	Workspace Field[string] `json:"workspace,omitzero"`
+	// open: the daily thread the posts are of, when the person opens one; a turn opens from its own
+	Thread Field[string] `json:"thread,omitzero"`
+	// open: up to 20 ids of that daily thread's posts the work refers to, read as they are when the work starts
+	Refs Field[[]string] `json:"refs,omitzero"`
+	// open: files of that daily thread's posts to carry into the workspace thread, each {message_id, stored_name}
+	Attachments Field[[]WorkspaceOpenArgsAttachmentsItem] `json:"attachments,omitzero"`
+	// open: narrow the work's tools to these (a tool, or tool.action); posting and reporting stay; omit for all
+	Tools Field[[]string] `json:"tools,omitzero"`
+	// open: keep this work's browser apart from the person's other work
+	Apart Field[bool] `json:"apart,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args WorkspaceOpenArgs) MarshalJSON() ([]byte, error) {
+	type fields WorkspaceOpenArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: WorkspaceOpen, fields: fields(args)})
+}
+
+type WorkspaceOpenArgsAttachmentsItem struct {
+	MessageId  string `json:"message_id"`
+	StoredName string `json:"stored_name"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *WorkspaceOpenArgsAttachmentsItem) UnmarshalJSON(data []byte) error {
+	type fields WorkspaceOpenArgsAttachmentsItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = WorkspaceOpenArgsAttachmentsItem(value)
+	return nil
 }

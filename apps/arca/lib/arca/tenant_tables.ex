@@ -81,6 +81,7 @@ defmodule Arca.TenantTables do
     "file_receipts",
     "mcp_servers",
     "consumer_receipts",
+    "delivery_copies",
     "outbox_records",
     "schedule_occurrences",
     "cron_schedules",

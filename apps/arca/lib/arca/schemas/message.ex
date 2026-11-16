@@ -20,6 +20,14 @@ defmodule Arca.Schemas.Message do
   `reply_to`, its `outcome` (`outcomes/0`) and, in `addressee`, who the
   request came from; a notice is a reply row whose outcome is
   `needs_you`, which answers nothing.
+
+  A workspace thread's rows: an `opening` is the first message of a
+  workspace thread and each further ask sent there (its envelope in
+  `payload`), a `pointer` the daily thread's post that points at a
+  workspace thread opened or asked again, and a `report` the daily
+  thread's post of a workspace thread's outcome. A pointer and a report
+  name their workspace thread in `workspace_id`, by which they go with it
+  when it is deleted; no other row names one.
   """
 
   use Ecto.Schema
@@ -30,7 +38,8 @@ defmodule Arca.Schemas.Message do
   @type t :: %__MODULE__{}
   # `tool_call`, `tool_result`, `compaction` and `turn_aborted` are the
   # turn's own rows: the loop writes them through `Aqua.Tape`.
-  @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted)
+  @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted
+             opening pointer report)
   @statuses ~w(pending running approved declined error expired answered)
 
   @doc """
@@ -76,6 +85,7 @@ defmodule Arca.Schemas.Message do
     field :addressee, :string
     field :reply_to, :string
     field :outcome, :string
+    field :workspace_id, :string
   end
 
   @fields [
@@ -99,7 +109,8 @@ defmodule Arca.Schemas.Message do
     :sent_by,
     :addressee,
     :reply_to,
-    :outcome
+    :outcome,
+    :workspace_id
   ]
 
   def changeset(row, attrs) do

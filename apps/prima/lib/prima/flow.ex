@@ -44,8 +44,10 @@ defmodule Prima.Flow do
       exactly: bytes that came from a host may go back to it. A wildcard
       pattern never covers by name.
 
-  A ledger that holds nothing is covered whatever the flows, so a grant
-  that declares none keeps working until its run reads a source.
+  A thread source (`Prima.Source.thread/1`) is no material and needs
+  nothing to cover it. A ledger that holds nothing else is covered
+  whatever the flows, so a grant that declares none keeps working until
+  its run reads a source.
 
   Nothing here narrows a declaration: a component whose egress domains
   include `*` and whose flows let every class reach it is held to
@@ -224,6 +226,7 @@ defmodule Prima.Flow do
     launch = Keyword.get(opts, :launch_classes, [])
 
     ledger
+    |> Source.material()
     |> Source.set()
     |> Enum.reject(fn source ->
       source.class in launch or own_host?(source, exit) or
