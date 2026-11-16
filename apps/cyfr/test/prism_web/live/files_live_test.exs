@@ -338,6 +338,53 @@ defmodule PrismWeb.FilesLiveTest do
     refute html =~ "files-upload"
   end
 
+  test "threads/ offers Delete with its confirmation and nothing that writes", %{
+    conn: conn,
+    ctx: ctx
+  } do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["threads", "t1", "m1", "0-a.png"], @png)
+    :ok = Arca.put(actor, ["threads", "t1", "m2", "0-b.txt"], "b")
+
+    {view, html} = mount_athanor(conn, "/files?p=threads/t1/m1")
+    assert html =~ ~r/>\s*read and delete\s*</
+    assert html =~ "the post then says the file was removed"
+    refute html =~ "files-upload"
+    refute has_element?(view, "#files-new-folder")
+    refute has_element?(view, "#files-entries button", "Rename")
+    refute has_element?(view, "#files-entries button", "Move")
+
+    assert has_element?(
+             view,
+             ~s(#files-entries button[phx-value-path="threads/t1/m1/0-a.png"][data-confirm="Delete threads/t1/m1/0-a.png?"]),
+             "Delete"
+           )
+
+    # An open file has no Edit.
+    view |> element("#files-entries button", "0-a.png") |> render_click()
+    assert has_element?(view, "#files-open")
+    refute has_element?(view, "#files-open button", "Edit")
+
+    view |> element("#files-entries button", "Delete") |> render_click()
+    refute Arca.exists?(actor, ["threads", "t1", "m1", "0-a.png"])
+    refute has_element?(view, "#files-open")
+
+    # A thread's whole folder goes from its parent.
+    {view, _html} = mount_athanor(conn, "/files?p=threads")
+    assert has_element?(view, ~s(#files-entries button[phx-value-path="threads/t1"]), "Delete")
+
+    view
+    |> element(~s(#files-entries button[phx-value-path="threads/t1"]), "Delete")
+    |> render_click()
+
+    refute Arca.exists?(actor, ["threads", "t1", "m2", "0-b.txt"])
+    refute has_element?(view, "#files-entries")
+
+    # The folder itself is a place, not something listed to delete.
+    {view, _html} = mount_athanor(conn, "/files")
+    refute has_element?(view, ~s(#files-entries button[phx-value-path="threads"]), "Delete")
+  end
+
   # ---------------------------------------------------------------------------
   # Sending a copy
   # ---------------------------------------------------------------------------

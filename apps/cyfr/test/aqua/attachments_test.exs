@@ -280,6 +280,137 @@ defmodule Aqua.AttachmentsTest do
       assert {:error, :attachment_missing} = Attachments.carried(ctx, thread.id, [named])
     end
 
+    test "a file deleted from Files before a carry refuses it whole; one deleted after it was " <>
+           "read lands in the copy; a copy made stays when its source goes",
+         %{ctx: ctx, thread: thread, other: other} do
+      actor = Sanctum.Context.actor(ctx)
+
+      files = [
+        %{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "A"},
+        %{"filename" => "b.txt", "media_type" => "text/plain", "bytes" => "B"}
+      ]
+
+      {post, [a, b]} = posted!(ctx, thread, files)
+      named = for ref <- [a, b], do: %{"message_id" => post, "stored_name" => ref["stored_name"]}
+
+      # Before the carry reads it: the carry refuses, and nothing is copied.
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{post}/#{b["stored_name"]}")
+      assert {:error, :attachment_missing} = Attachments.carried(ctx, thread.id, named)
+      assert {:ok, []} = Arca.list(actor, ["threads", other.id])
+
+      # After the carry read the bytes, before the copy: the copy holds them.
+      {post, [a, _b]} = posted!(ctx, thread, files)
+      named = for ref <- [a], do: %{"message_id" => post, "stored_name" => ref["stored_name"]}
+      assert {:ok, [file]} = Attachments.carried(ctx, thread.id, named)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{post}")
+
+      target = Prima.UUID7.generate_id("msg")
+      assert {:ok, [copied]} = Attachments.copy(ctx, other.id, target, [file])
+      {:ok, path} = Attachments.blob_path(other.id, target, copied)
+      assert {:ok, "A"} = Arca.get(actor, path)
+
+      # After the copy: the source thread's whole folder goes, the copy stays.
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}")
+      assert {:ok, "A"} = Arca.get(actor, path)
+    end
+
+    test "a message's folder deleted from Files before its files are stored, or after, " <>
+           "leaves an upload whole or its post with refs whose bytes are gone",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      id = Prima.UUID7.generate_id("msg")
+      file = [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "A"}]
+
+      # Before: the folder is gone and the upload lays it again.
+      assert {:error, {:not_found, _, _}} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}")
+      assert {:ok, [ref]} = Attachments.store(ctx, thread.id, id, file)
+      {:ok, path} = Attachments.blob_path(thread.id, id, ref)
+      assert {:ok, "A"} = Arca.get(actor, path)
+
+      # After the bytes landed, before the post: the post keeps its ref and
+      # no bytes, which is what the pane draws as removed.
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}")
+
+      {:ok, _} =
+        Arca.TurnStorage.accept_message(actor, thread.id, %{
+          message: %{
+            id: id,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "with a file",
+            payload: %{"attachments" => [ref]}
+          }
+        })
+
+      {:ok, row} = Arca.ThreadStorage.get_message(actor, id)
+      assert [%{"stored_name" => stored}] = Attachments.refs_of(row)
+      assert stored == ref["stored_name"]
+      refute Arca.exists?(actor, path)
+    end
+
+    test "a screenshot's draft deleted from Files cannot be posted; a claim marker deleted " <>
+           "while it is held lets the same turn claim it again",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      turn = %{id: "turn_shot", attempt: 1, thread_id: thread.id}
+      file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => "PNG"}
+      sources = [Prima.Source.outside("moon.example")]
+
+      # Its facts deleted: the draft is no draft.
+      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, sources)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/draft")
+      assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
+
+      # Its picture deleted: nothing to post either.
+      {:ok, id, ref} = Attachments.draft(ctx, turn, file, sources)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/#{ref["stored_name"]}")
+      assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
+
+      # The claim marker deleted while a publication holds it: the case the
+      # slice accepts, the same turn may claim the same screenshot again.
+      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, sources)
+      assert {:ok, %{"bytes" => "PNG"}} = Attachments.drafted(ctx, turn, id)
+      assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/published")
+      assert {:ok, %{"bytes" => "PNG"}} = Attachments.drafted(ctx, turn, id)
+    end
+
+    test "deleting a copy's bytes leaves the sources its ref recorded", %{
+      ctx: ctx,
+      other: other
+    } do
+      actor = Sanctum.Context.actor(ctx)
+      outside = Prima.Source.outside("moon.example")
+      target = Prima.UUID7.generate_id("msg")
+
+      {:ok, [copied]} =
+        Attachments.copy(ctx, other.id, target, [
+          %{
+            "filename" => "a.txt",
+            "media_type" => "text/plain",
+            "bytes" => "A",
+            "sources" => Prima.Source.to_json_list([outside])
+          }
+        ])
+
+      {:ok, _} =
+        Arca.TurnStorage.accept_message(actor, other.id, %{
+          message: %{
+            id: target,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "copied",
+            payload: %{"attachments" => [copied]}
+          }
+        })
+
+      {:ok, _} = Arca.Files.delete(actor, "threads/#{other.id}/#{target}")
+      {:ok, row} = Arca.ThreadStorage.get_message(actor, target)
+
+      assert [%{"removed" => true} = gone] = Attachments.as_kept(ctx, row)
+      assert outside in Attachments.copied_sources(gone)
+    end
+
     test "a copy is held to the storage cap before its first byte", %{ctx: ctx, other: other} do
       installed = Prima.Caps.impl!()
       Prima.Caps.install!(Aqua.AttachmentsTest.PlantedCaps)

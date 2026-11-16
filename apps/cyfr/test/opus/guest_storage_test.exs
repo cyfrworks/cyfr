@@ -441,7 +441,12 @@ defmodule Opus.GuestStorageTest do
         Arca.put(Sanctum.Context.actor(ctx), ["threads", "thread_1", "msg_1.txt"], "host bytes")
 
       for path <- ["aqua/agent.json", "aqua", "threads/thread_1/msg_1.txt", "threads"],
-          request <- [%{"action" => "read"}, %{"action" => "list"}, write(path, "guest bytes")] do
+          request <- [
+            %{"action" => "read"},
+            %{"action" => "list"},
+            %{"action" => "delete"},
+            write(path, "guest bytes")
+          ] do
         assert {"storage_path_denied", _} =
                  refused(run(ctx, edge(["*"]), Map.put(request, "path", path)))
       end

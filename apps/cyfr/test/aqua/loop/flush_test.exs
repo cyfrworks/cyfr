@@ -477,6 +477,47 @@ defmodule Aqua.Loop.FlushTest do
     end
   end
 
+  # Astra's probe (#4163): the post a compaction summarises names the file
+  # the person deleted, as the round's own request does.
+  test "a compaction request tells its model that the carried post lost its file", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    id = Prima.UUID7.generate_id("msg")
+
+    {:ok, refs} =
+      Aqua.Attachments.store(ctx, thread.id, id, [
+        %{"filename" => "gone.png", "media_type" => "image/png", "bytes" => "PNG"}
+      ])
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{
+          id: id,
+          author: ctx.user_id,
+          sent_by: "person",
+          content: "@aqua summarize the picture\n" <> String.duplicate("lorem ipsum ", 7_000),
+          payload: %{"attachments" => refs}
+        },
+        turn: %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
+      })
+
+    {:ok, _} = Arca.Files.delete(Sanctum.Context.actor(ctx), "threads/#{thread.id}/#{id}")
+    script!([round_one(), %{"entries" => []}, reply("the story so far"), reply("done")])
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert ["chat", "compaction", "chat"] =
+             for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
+
+    [first, summary, _last] = chat_requests()
+    first_text = Jason.encode!(first["messages"])
+    summary_text = Jason.encode!(summary["messages"])
+    assert first_text =~ "they can no longer be read: gone.png"
+    assert summary_text =~ "summarize the picture"
+    assert summary_text =~ "they can no longer be read: gone.png"
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------

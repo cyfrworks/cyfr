@@ -226,6 +226,8 @@ defmodule Arca.Storage do
   #   to a person (`Arca.Files`). `:open` is theirs to fill and clear;
   #   `:shaped` holds units a grammar shapes — files are edited in
   #   place, units are made and removed by the domain's own verbs;
+  #   `:removable` is shown, downloaded and deleted here, written only by
+  #   its own surface;
   #   `:read` is shown and downloaded here, managed on its own page;
   #   `:system` is the server's own and is not shown at all.
   #
@@ -237,7 +239,7 @@ defmodule Arca.Storage do
   @layout [
     {"aqua", :tenant, nil, :overlay, :shaped},
     {"components", :tenant, "components", :overlay, :shaped},
-    {"threads", :tenant, nil, nil, :read},
+    {"threads", :tenant, nil, nil, :removable},
     # Host-only notes belong to the athanor in focus and survive thread
     # deletion. Guests have no direct storage scope for this root.
     {"notes", :tenant, nil, nil, :read},
@@ -383,7 +385,7 @@ defmodule Arca.Storage do
 
   # What a person sees of the tree: the roots of the open, shaped and read
   # tiers, by name; the system tier is not a folder at all.
-  @tier_order [:open, :shaped, :read]
+  @tier_order [:open, :shaped, :removable, :read]
   @console_folders for tier <- @tier_order,
                        {root, class, _guest, _seed, ^tier} <- @layout,
                        class in [:tenant, :tenant_reserved],
@@ -394,10 +396,11 @@ defmodule Arca.Storage do
 
   @typedoc """
   How a root is shown to a person: `:open` (theirs to fill and clear),
-  `:shaped` (units a grammar shapes, edited in place), `:read` (shown and
-  downloaded, managed on its own page), `:system` (not shown).
+  `:shaped` (units a grammar shapes, edited in place), `:removable` (shown,
+  downloaded and deleted, written only by its own surface), `:read` (shown
+  and downloaded, managed on its own page), `:system` (not shown).
   """
-  @type tier :: :open | :shaped | :read | :system
+  @type tier :: :open | :shaped | :removable | :read | :system
 
   @doc """
   The folders the Files page and the `file` tool show, in tier order:

@@ -374,6 +374,37 @@ defmodule Aqua.Providers.WorkspaceTest do
              |> Enum.all?(&tree_empty?(ctx, &1))
     end
 
+    test "an opening from a post whose file was deleted from Files says the file is no longer " <>
+           "kept, and writes nothing",
+         %{ctx: ctx, daily: daily} do
+      blob = %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG!"}
+      shot = Prima.UUID7.generate_id("msg")
+      {:ok, [ref]} = Aqua.Attachments.store(ctx, daily.id, shot, [blob])
+
+      {:ok, _} =
+        Tape.accept(ctx, daily.id, %{
+          message: %{
+            id: shot,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "this one",
+            payload: %{"attachments" => [ref]}
+          }
+        })
+
+      {:ok, _} = Arca.Files.delete(actor(ctx), "threads/#{daily.id}/#{shot}")
+
+      assert {:error, reason} =
+               open(ctx, daily, %{
+                 "attachments" => [%{"message_id" => shot, "stored_name" => ref["stored_name"]}]
+               })
+
+      assert Prima.Refusal.message(reason) == "A file it carried is no longer kept"
+      assert Threads.list(actor(ctx), kind: "workspace") == []
+      refute Enum.any?(rows(ctx, daily.id), &(&1.kind == "pointer"))
+      assert records(ctx, "workspace_open") == []
+    end
+
     test "two openings at once make two workspace threads, each with its pointer and record",
          %{ctx: ctx, daily: daily} do
       opened =
