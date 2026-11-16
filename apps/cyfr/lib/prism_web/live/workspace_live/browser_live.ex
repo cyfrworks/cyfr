@@ -139,7 +139,7 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
   end
 
   def handle_info(
-        {Opus.Browser, watch, {:image, n, %Opus.Programs.Output{bytes: jpeg}}},
+        {Opus.Browser, watch, {:image, n, %{bytes: jpeg}}},
         %{assigns: %{watch: watch}} = socket
       ) do
     {:noreply,
@@ -205,7 +205,7 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
 
   # What the page says when the stream ended.
   defp ended(:replaced), do: :taken
-  defp ended(:turned_off), do: {:ended, Aqua.Providers.Browser.turned_off()}
+  defp ended(:turned_off), do: {:ended, Aqua.browser_turned_off()}
 
   defp ended(_stopped),
     do: {:ended, "Aqua's browser stopped. It starts again when Aqua next uses it."}

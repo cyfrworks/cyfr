@@ -216,8 +216,11 @@ defmodule Opus.Browser do
 
   def act(_caller, _op, _args, _allowed?), do: {:error, :not_owned}
 
-  @typedoc "A watch of a window: its holder and the reference its messages carry."
-  @opaque watch :: {pid(), reference()}
+  @typedoc """
+  A watch of a window: its holder, which the viewer may monitor, and the
+  reference its messages carry.
+  """
+  @type watch :: {pid(), reference()}
 
   @doc """
   Watch `window` of the person's browser as `ctx`, a person at a screen
