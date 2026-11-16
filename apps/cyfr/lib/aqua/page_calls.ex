@@ -199,11 +199,12 @@ defmodule Aqua.PageCalls do
 
   @doc """
   The row a page's call is carried in: its request, its name and
-  arguments as a model's call names them, what they bind to, and the
-  browser's person, whom its answer goes back to.
+  arguments as a model's call names them, what they bind to, the
+  browser's person, whom its answer goes back to, and the turn that put
+  the page.
   """
   @spec row(map()) :: map()
-  def row(%{request: request, name: name, arguments: arguments, user_id: user_id}) do
+  def row(%{request: request, name: name, arguments: arguments, user_id: user_id} = call) do
     recorded = Aqua.Loop.recorded(name, arguments, bind(request, name, arguments))
 
     %{
@@ -213,7 +214,8 @@ defmodule Aqua.PageCalls do
       "tool" => recorded.tool,
       "action" => recorded.action,
       "kind" => recorded.kind,
-      "user_id" => user_id
+      "user_id" => user_id,
+      "put_turn" => call[:put_turn_id]
     }
   end
 
@@ -239,6 +241,8 @@ defmodule Aqua.PageCalls do
       sources: [Prima.Source.outside("browser")]
     }
 
+    # A turn opened on the call, which asks no model, starts with the
+    # sources of the turn that put the page, whose words the page holds.
     case Keyword.get(opts, :message_id) do
       nil ->
         Map.put(step, :call, %{
@@ -249,7 +253,9 @@ defmodule Aqua.PageCalls do
         })
 
       message_id ->
-        Map.put(step, :message_id, message_id)
+        step
+        |> Map.put(:message_id, message_id)
+        |> Map.put(:sources_from, List.wrap(payload["put_turn"]))
     end
   end
 

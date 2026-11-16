@@ -156,6 +156,10 @@ defmodule Aqua.PageCallsTest do
 
     args = page |> Map.merge(lineage) |> Map.put("action", "page")
     assert {:ok, _shown} = Provider.handle("browser", Sanctum.Context.enter_guest(ctx), args)
+    # The page's calls name the put they belong to, as the driver names it.
+    assert_receive {:driver, :put, _session, %{"id" => put, "win" => win}, _bytes}, 5_000
+    assert win == thread.id
+    Process.put({:put, thread.id}, put)
     send(model, :continue)
     assert %{status: "completed"} = ended!(ctx, turn_id)
   end
@@ -190,7 +194,13 @@ defmodule Aqua.PageCallsTest do
   # One exit; a grant of it covers outside material only where the
   # manifest declares that flow.
   @exit %{"egress" => %{"domains" => ["api.example.com"]}}
-  @flowing Map.put(@exit, "flows", [%{"from" => "outside", "to" => "api.example.com"}])
+  # A turn that asked a model holds what its model's key disclosed, and
+  # work with no model starts with the putting turn's sources: a grant
+  # lets the page out only where it lets both flow.
+  @flowing Map.put(@exit, "flows", [
+             %{"from" => "outside", "to" => "api.example.com"},
+             %{"from" => "vault_disclosed", "to" => "api.example.com"}
+           ])
 
   # A grant through the consent walk, as a person makes it.
   defp walk!(ctx, decisions) do
@@ -252,13 +262,15 @@ defmodule Aqua.PageCallsTest do
   # `operation`, as its SDK posts the call; `id` is the driver's.
   defp invoke(driver, thread, id, ref, args \\ %{}) do
     body = Prima.TinctureWire.request(:invoke, %{ref: ref, operation: "go", args: args})
-    :ok = Driver.call(driver, id, thread.id, "invoke", Jason.encode!(body))
+    :ok = Driver.call(driver, id, thread.id, put_of(thread), "invoke", Jason.encode!(body))
   end
 
   defp action(driver, thread, id, operation, args \\ %{}) do
     body = Prima.TinctureWire.request(:action, %{operation: operation, args: args})
-    :ok = Driver.call(driver, id, thread.id, "action", Jason.encode!(body))
+    :ok = Driver.call(driver, id, thread.id, put_of(thread), "action", Jason.encode!(body))
   end
+
+  defp put_of(thread), do: Process.get({:put, thread.id})
 
   # What the page was answered for its call `id`: the status and the
   # wire's answer, decoded.
@@ -523,7 +535,7 @@ defmodule Aqua.PageCallsTest do
                  "proposal" => %{
                    "tool" => "execution",
                    "action" => "run",
-                   "lets_flow" => ["outside"]
+                   "lets_flow" => ["vault_disclosed", "outside"]
                  }
                } = intent!(ctx, approval)
 
@@ -892,6 +904,11 @@ defmodule Aqua.PageCallsTest do
 
     assert %{status: "completed"} = ended!(ctx, turn.id)
     assert {:ok, [%{outcome: "skipped"}]} = Tape.steps(ctx, turn)
-    assert %{running: false, paused: false} = Runner.state(room.id, ctx.athanor_id)
+    # The runner hears the loop's end after the rows say it.
+    wait_until(
+      fn -> match?(%{running: false, paused: false}, Runner.state(room.id, ctx.athanor_id)) end,
+      10_000,
+      "the runner hears the turn end"
+    )
   end
 end

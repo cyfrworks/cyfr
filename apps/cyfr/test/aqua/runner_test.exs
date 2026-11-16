@@ -2129,17 +2129,23 @@ defmodule Aqua.RunnerTest do
       send(http, :continue)
       await_ended!(ctx, id)
 
-      assert {:ok, %{status: "completed", error: nil}} = Tape.turn(ctx, id)
+      assert {:ok, %{status: "completed", error: nil} = ended} = Tape.turn(ctx, id)
       assert [page_step(1, id, call, "ok")] == steps!(ctx, id)
+
+      # It started with the sources of the turn that put the page, and the
+      # page's own.
+      {:ok, put} = Tape.turn(ctx, call.put_turn_id)
+      held = Jason.decode!(ended.sources)
+      assert [_ | _] = Jason.decode!(put.sources)
+      assert Jason.decode!(put.sources) -- held == []
+      assert %{"class" => "outside", "name" => "browser"} in held
       [carried, answered] = page_rows!(ctx, ws.id)
       assert carried == called(id, call)
       assert answered == answered(ctx, id, call, 200, answered.content)
 
-      # The page is answered what the call answers Aqua: the fetch, as text.
+      # The page is answered the fetch's data, as the endpoint answers it.
       assert Jason.decode!(answered.content) ==
-               Prima.TinctureWire.result(
-                 Jason.encode!(%{"body" => "x", "status" => 200}, pretty: true)
-               )
+               Prima.TinctureWire.result(%{"body" => "x", "status" => 200})
 
       assert {:ok, %{turn_id: nil}} = Tape.claim_holder(ctx, ws.id)
       # The put's model run is the only one.
@@ -2252,7 +2258,8 @@ defmodule Aqua.RunnerTest do
                })
 
       await_retired(runner, watched)
-      assert Runner.whereis(ws.id) == nil
+      # The registry lets a name go on its own monitor of the runner.
+      wait_until(fn -> Runner.whereis(ws.id) == nil end)
       assert {:error, :not_found} = Tape.thread(ctx, ws.id)
       assert {:error, :not_found} = Tape.turn(ctx, work)
       assert [] = Threads.messages(Sanctum.Context.actor(ctx), ws.id)

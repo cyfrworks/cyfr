@@ -1992,6 +1992,9 @@ defmodule Aqua.Loop do
         {:error, %Prima.Refusal{stage: :admission, reason: {:invoke_denied, _}} = refusal} ->
           {"denied", refusal.message, true}
 
+        {:error, {:launch, reason}} ->
+          {"error", describe(reason), true}
+
         {:error, message} when is_binary(message) ->
           {"error", message, true}
 
@@ -2310,19 +2313,22 @@ defmodule Aqua.Loop do
     state
   end
 
-  defp close_launch(state, step, call, {:refused, reason}) do
-    close(state, step, call, {:error, describe(reason)})
-    state
-  end
+  defp close_launch(state, step, call, {:refused, reason}),
+    do: failed_launch(state, step, call, reason, [])
 
-  defp close_launch(state, step, call, {:error, reason}) do
-    close(
-      state,
-      step,
-      call,
-      {:error, describe(reason)},
-      read_ledger(state, step.child_execution_id)
-    )
+  defp close_launch(state, step, call, {:error, reason}),
+    do: failed_launch(state, step, call, reason, read_ledger(state, step.child_execution_id))
+
+  # A launch that did not run is closed in its sentence, its reason kept
+  # for a page's answer. A page's call of a component that is not granted
+  # asks the person for the grant, as a model's asks with request_setup.
+  defp failed_launch(state, step, call, reason, sources) do
+    close(state, step, call, {:error, {:launch, reason}}, sources)
+
+    with "page" <- step.purpose,
+         %Call{target: ref} <- call,
+         %Prima.Refusal{class: :consent_required} <- Sanctum.Refusals.classify(reason),
+         do: announce(state, :consent_required, %{ref: ref, user_id: ctx(state).user_id})
 
     state
   end
@@ -2753,7 +2759,13 @@ defmodule Aqua.Loop do
     guest = guest(state)
 
     with {:ok, steps} <- Tape.steps(guest, state.turn) do
-      for %{dispatch_state: "proposed", kind: kind} = step <- steps, kind != "model" do
+      # A page's call not yet asked waits for the next page round, after
+      # what the person already approved has run: decided now, its card
+      # would bind the turn's sources before an approved launch's ledger
+      # joins them, and that launch would find it stale.
+      for %{dispatch_state: "proposed", kind: kind} = step <- steps,
+          kind != "model",
+          step.purpose != "page" or is_binary(step.approval_id) do
         %{step: step, call: recall(state, step), approval: approved(state, step)}
       end
     else
@@ -3122,10 +3134,12 @@ defmodule Aqua.Loop do
   # it, from the one table a kept step is worded by too (`Aqua.Steps`).
   defp activity(%State{} = state, items, status) do
     named =
-      Enum.map(items, fn %{call: call} ->
+      Enum.map(items, fn %{call: call} = item ->
+        purpose = item[:step] && item.step.purpose
+
         case call do
-          {:ok, call} -> {call.model_name, Aqua.Steps.sentence(call.tool, call.action)}
-          _unbound -> {"tool", Aqua.Steps.sentence(nil, nil)}
+          {:ok, call} -> {call.model_name, Aqua.Steps.sentence(call.tool, call.action, purpose)}
+          _unbound -> {"tool", Aqua.Steps.sentence(nil, nil, purpose)}
         end
       end)
 
