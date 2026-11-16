@@ -445,15 +445,17 @@ jobs:
   # runs. They run stand-in gates and queues with real deadlines, so they
   # take jobs of their own beside the others, split three ways by how long
   # each script takes, each job with only the setup its scripts need.
-  # The host and partitions jobs run unless self-test-scope answered false
-  # for them, so a scope job that failed runs both.
+  # The host and partitions jobs are skipped only when self-test-scope
+  # succeeded and answered false for them: a scope job that failed, even
+  # after writing an answer (GitHub keeps a failed job's outputs), runs
+  # both. tests/ci-guards-test.sh holds both conditions to that.
   #
   # The containment library and the host queue need Bash, flock, perl and
   # Python, which the runner ships.
   harness-tests-host:
     name: Harness self-tests (containment, host queue)
     needs: self-test-scope
-    if: ${{ !cancelled() && needs.self-test-scope.outputs.host != 'false' }}
+    if: ${{ !cancelled() && (needs.self-test-scope.result != 'success' || needs.self-test-scope.outputs.host != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -486,7 +488,7 @@ jobs:
   harness-tests-partitions:
     name: Harness self-tests (partitions)
     needs: self-test-scope
-    if: ${{ !cancelled() && needs.self-test-scope.outputs.partitions != 'false' }}
+    if: ${{ !cancelled() && (needs.self-test-scope.result != 'success' || needs.self-test-scope.outputs.partitions != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

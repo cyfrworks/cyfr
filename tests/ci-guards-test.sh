@@ -745,6 +745,74 @@ GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha" GITHUB_OUTPUT="$scratch/o
 code=$?
 if [ "$code" -eq 64 ] && [ ! -e "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
 
+# GitHub keeps a failed job's outputs, so a run that fails after deciding
+# must leave none: here its log cannot be written.
+label="self-test-scope: a run that fails before its outputs leaves none"
+scope_repo README.md
+: > "$scratch/output"
+GITHUB_EVENT_NAME=pull_request PR_HEAD_SHA="$head_sha" GITHUB_OUTPUT="$scratch/output" bash "$self_test_scope" > /dev/full 2> "$scratch/err"
+code=$?
+: > "$scratch/out"
+if [ "$code" -ne 0 ] && [ ! -s "$scratch/output" ]; then pass "$label"; else fail "$label"; fi
+
+# Each scoped job's `if:` in test.yml, evaluated for each result and
+# output the scope job can give it: skipped only when the scope job
+# succeeded and answered false, and never in a cancelled run.
+scope_conditions() {
+  python3 -I - "$root/.github/workflows/test.yml" <<'PY'
+import re, sys
+
+lines = open(sys.argv[1]).read().split("\n")
+def condition(job):
+    start = lines.index(f"  {job}:")
+    for line in lines[start + 1:]:
+        if re.match(r"  \S", line):
+            break
+        m = re.fullmatch(r"    if: (.*)", line)
+        if m:
+            return m[1]
+    return None
+
+TOKEN = re.compile(r"\s+|\$\{\{|\}\}|\(|\)|&&|\|\||!=|==|!|'[^']*'|[a-z][\w.-]*\(\)|needs\.self-test-scope\.(?:result|outputs\.[a-z]+)")
+def evaluate(expression, job, cancelled, result, output):
+    out, i = [], 0
+    while i < len(expression):
+        m = TOKEN.match(expression, i)
+        if not m:
+            raise SystemExit(f"{job}: cannot read its if: at {expression[i:]!r}")
+        t, i = m[0], m.end()
+        if t.isspace() or t in ("${{", "}}"):
+            continue
+        out.append({
+            "(": "(", ")": ")", "&&": " and ", "||": " or ", "!=": "!=", "==": "==", "!": " not ",
+            "cancelled()": repr(cancelled), "always()": "True",
+            "success()": repr(not cancelled and result == "success"),
+            "failure()": repr(not cancelled and result == "failure"),
+            "needs.self-test-scope.result": repr(result),
+            f"needs.self-test-scope.outputs.{job.removeprefix('harness-tests-')}": repr(output),
+        }.get(t, t if t.startswith("'") else None) or sys.exit(f"{job}: its if: names {t}, which this check does not read"))
+    return eval("".join(out), {"__builtins__": {}})
+
+for job in ("harness-tests-host", "harness-tests-partitions"):
+    expression = condition(job)
+    if expression is None:
+        print(f"{job}: no if:")
+        continue
+    for cancelled, result, output, want in [
+        (False, "success", "false", False), (False, "success", "", True), (False, "success", "true", True),
+        (False, "failure", "false", True), (False, "failure", "", True), (False, "cancelled", "false", True),
+        (False, "skipped", "", True), (True, "success", "", False), (True, "failure", "false", False),
+    ]:
+        if evaluate(expression, job, cancelled, result, output) != want:
+            state = "a cancelled run, " if cancelled else ""
+            print(f"{job}: {state}scope {result} with output {output!r} {'runs' if not want else 'skips'} it")
+PY
+}
+label="self-test-scope: test.yml skips a scoped job only after a scope job that succeeded and answered false"
+scope_conditions > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+
 # --- retry ---
 
 retry="$root/scripts/ci/retry.sh"

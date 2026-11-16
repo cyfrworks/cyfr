@@ -8,8 +8,10 @@
 # CI and host scripts against stand-ins, so a pull request that changes no
 # file their scripts read cannot turn them red. For each job whose paths
 # below a pull request leaves as its base has them, this writes JOB=false
-# (host, partitions) to GITHUB_OUTPUT, and test.yml skips that job. It writes nothing, and every
-# job runs, everywhere else: a push to main, a release or the nightly
+# (host, partitions) to GITHUB_OUTPUT, and test.yml skips that job, once
+# this has succeeded. Its outputs are written last, in one write, after
+# everything else that can fail. It writes nothing, and every job runs,
+# everywhere else: a push to main, a release or the nightly
 # (test.yml called from release.yml or nightly.yml carries the caller's
 # event), a run with no event, and a diff that cannot be read.
 #
@@ -68,13 +70,15 @@ second=$(git rev-parse -q --verify 'HEAD^2^{commit}') || exit 0
 [ "$second" = "$PR_HEAD_SHA" ] || exit 0
 git rev-parse -q --verify 'HEAD^1^{commit}' >/dev/null || exit 0
 
+outputs=
 for job in host partitions; do
   declare -n paths=$job
   # 0 is no change; 1 a change and anything else a diff that cannot be
   # read, and both run the job.
   if git diff --quiet HEAD^1 HEAD -- "${always[@]}" "${paths[@]}"; then
-    echo "$job=false" >>"$GITHUB_OUTPUT"
+    outputs+="$job=false"$'\n'
     echo "harness-tests-$job: not needed, this pull request changes none of the paths its scripts read"
   fi
   unset -n paths
 done
+[ -z "$outputs" ] || printf '%s' "$outputs" >>"$GITHUB_OUTPUT"
