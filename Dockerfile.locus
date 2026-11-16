@@ -140,10 +140,14 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # Aqua's browser fetches its Chrome into its kept home, as a program
 # fetches itself (cyfr-browser, below); the image holds no Chrome, only
 # the shared libraries Chrome links and a font for the pages it renders.
-# libgbm is linked but never used by a headless Chrome, which allocates no
-# GPU buffer, so its one library is taken from its package without the
-# Mesa drivers, LLVM and Z3 the package depends on (about 190 MiB). It is
-# then in no package's list: the image scans do not see it.
+# libgbm is linked but not used by a headless Chrome, which allocates no
+# GPU buffer: libgbm1 is installed as a package, which the image scans
+# list, and then what it alone pulled in for its Mesa drivers
+# (mesa-libgallium, LLVM, Z3 and theirs, about 194 MiB) is purged past the
+# dependency check, so none of it is present or listed. libgbm1's own
+# dependencies on everything else stay met. Its one unmet dependency is
+# mesa-libgallium: no later layer and nothing at run time calls apt, and
+# one that did would have to install mesa-libgallium first.
 ARG APT_REFRESH=0
 RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
@@ -177,13 +181,17 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     libxfixes3 \
     libxkbcommon0 \
     libxrandr2 \
-    && cd /tmp && apt-get download libgbm1 \
-    && dpkg-deb -x libgbm1_*.deb /tmp/libgbm1 \
-    && cp -a /tmp/libgbm1/usr/lib/. /usr/lib/ \
-    && rm -rf /tmp/libgbm1 /tmp/libgbm1_*.deb \
+    && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-libgbm \
+    && apt-get install -y --no-install-recommends libgbm1 \
+    && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before-libgbm - > /tmp/libgbm-brought \
+    && dpkg-query -W -f '${Depends}' libgbm1 | tr ',' '\n' | sed 's/ *(.*//; s/^ *//' \
+       | grep -vx mesa-libgallium > /tmp/libgbm-needs \
+    && grep -vxF -e libgbm1 -f /tmp/libgbm-needs /tmp/libgbm-brought > /tmp/libgbm-purged \
+    && grep -qx mesa-libgallium /tmp/libgbm-purged \
+    && dpkg --purge --force-depends $(cat /tmp/libgbm-purged) \
+    && rm /tmp/before-libgbm /tmp/libgbm-brought /tmp/libgbm-needs /tmp/libgbm-purged \
     && ldconfig \
     && ! ldd /usr/lib/*/libgbm.so.1 | grep -q 'not found' \
-    && cd / \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
