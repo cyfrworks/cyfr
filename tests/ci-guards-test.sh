@@ -1044,6 +1044,23 @@ runs "test.yml E completed failure 2" "test.yml D completed success 1" "codex.ym
 main_run_at "$C"
 if [ "$code" -eq 0 ] && line 'Test: green, run 102 on [0-9a-f]{9} \(1 commit later on main\), .*' && line 'Codex: green, run 103 .*\(the commit\).*' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
 
+# A push that left main's first-parent line: C on main, then D (a child of
+# C) pushed, then main fast-forwarded to X, a merge of D into E, a branch
+# commit from C. Main's first-parent line is X, E, C, and D's runs still
+# cover C, before X's.
+label="main-run: a pushed commit off main's first-parent line still covers it"
+main_run_repo
+git reset -q --hard "$C"
+printf 'd\n' > d2.txt; commit D2; D=$(git rev-parse HEAD)
+git push -q -f origin main
+git checkout -q -b branch "$C"; printf 'e\n' > e2.txt; commit E2; E=$(git rev-parse HEAD)
+git merge -q --no-ff -m merge "$D"; X=$(git rev-parse HEAD)
+git checkout -q main; git merge -q --ff-only "$X"; git push -q origin main
+runs "test.yml D completed failure 2" "test.yml X completed success 1"
+main_run_at "$C"
+if [ "$code" -eq 4 ] && [ "$(git rev-list --first-parent "$X" | grep -c "$D")" = 0 ] &&
+  line "Test: red twice \\(failure\\), run 101 on ${D:0:9} \\([0-9]+ commits? later on main\\), .*"; then pass "$label"; else fail "$label"; fi
+
 label="main-run: a commit's run made long before its commit time still covers it"
 main_run_repo
 runs "test.yml C completed failure 2 2026-01-01T10:00:00Z" "test.yml D completed success 1"

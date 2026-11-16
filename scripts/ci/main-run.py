@@ -7,11 +7,14 @@
 
 COMMIT is a commit on origin's main, origin/main's head by default, after
 fetching main from origin. The script reads every push run on main GitHub
-made for the commit and for each later commit on main's first-parent line,
-asking for each commit's runs by its sha. For each workflow with such a
-run, the run that covers the commit is the one on the commit or the
-nearest later commit: a waiting push run gives way to a newer push's, so a
-merge's run is often a later commit's. A cancelled run covers nothing
+made for the commit and for each commit of main that contains it (its
+descendants that origin/main's head holds, on every line, since a push can
+leave main's first-parent line), asking for each commit's runs by its sha.
+For each workflow with such a run, the run that covers the commit is the
+one on the earliest of those commits, in git's topological order (every
+commit after its parents; between two lines that both descend from the
+commit, git's order decides), that holds a run of it: a waiting push run
+gives way to a newer push's, so a merge's run is often a later commit's. A cancelled run covers nothing
 while another run does. It decides nothing about runs GitHub did not make:
 a workflow with no such run is not listed, so a run that was due and never
 made is not detected. One line per workflow:
@@ -94,9 +97,9 @@ def main(argv):
     if subprocess.run(["git", "merge-base", "--is-ancestor", commit, head]).returncode != 0:
         print(f"main-run: {commit} is not on origin's main", file=sys.stderr)
         return USAGE
-    # The commit, then each later commit on main's first-parent line, nearest
-    # first: a push run's head is one of these.
-    line = [commit] + run("git", "rev-list", "--reverse", "--first-parent", "--ancestry-path", f"{commit}..{head}").split()
+    # The commit, then each commit of main that contains it, nearest first in
+    # topological order: a push run's head is one of these.
+    line = [commit] + run("git", "rev-list", "--reverse", "--topo-order", "--ancestry-path", f"{commit}..{head}").split()
     later = {sha: n for n, sha in enumerate(line)}
     runs = [r for sha in line for r in runs_of(root, sha) if r.get("head_sha") == sha]
 
