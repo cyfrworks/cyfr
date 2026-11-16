@@ -114,7 +114,7 @@ defmodule Opus.BrowserTest do
 
     thread =
       Keyword.get_lazy(opts, :thread, fn ->
-        {:ok, thread} = Threads.create(actor)
+        {:ok, thread} = Arca.Test.Days.thread(actor)
         thread
       end)
 
