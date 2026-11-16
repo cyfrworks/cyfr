@@ -78,12 +78,11 @@ defmodule Aqua.Crew do
       when it is delivered (`Aqua.Day`), sent by the soul, with the files
       it carries copied from the workspace thread's posts into its own
       row first, under an id its record decides. Where a try copies is
-      recorded before its first byte (`Arca.DeliveryCopies`), so a
-      delivery tried again first discards what an earlier try stored
-      there, whatever day or thread that was, and the receipt clears it.
-      It
-      opens or waits as a turn of the soul on the daily thread, which
-      tells the person.
+      recorded before its first byte (`Arca.ConsumerReceipts.place/4`),
+      so a delivery tried again first discards what an earlier try
+      stored there, whatever day or thread that was, and the receipt
+      clears it. It opens or waits as a turn of the soul on the daily
+      thread, which tells the person.
 
   A record whose workspace thread is gone is receipted `refused` and
   delivers nothing; a delivery in flight when it goes lands nothing
@@ -789,16 +788,20 @@ defmodule Aqua.Crew do
 
   # What an earlier try of this report stored goes before this try
   # copies: its place is recorded, and committed, before its first byte
-  # (`Arca.DeliveryCopies`), so a try that died leaves it known, and its
-  # bytes are discarded there whatever became of the thread that place
-  # was under. Then this try records its own place, today's thread.
+  # (`Arca.ConsumerReceipts.place/4`), so a try that died leaves it
+  # known, and its bytes are discarded there whatever became of the
+  # thread that place was under. Then this try records its own place,
+  # today's thread.
   defp place_copy(ctx, record, thread_id, id) do
     actor = Sanctum.Context.actor(ctx)
     source = Prima.OutboxRecord.source(record)
 
-    with :ok <- discard_earlier(ctx, Arca.DeliveryCopies.placed(actor, @consumer, source)),
+    with :ok <- discard_earlier(ctx, Arca.ConsumerReceipts.placed(actor, @consumer, source)),
          :ok <- Aqua.Attachments.discard(ctx, thread_id, id) do
-      Arca.DeliveryCopies.put(actor, @consumer, source, %{thread_id: thread_id, message_id: id})
+      Arca.ConsumerReceipts.place(actor, @consumer, source, %{
+        thread_id: thread_id,
+        message_id: id
+      })
     end
   end
 

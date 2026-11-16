@@ -16,6 +16,14 @@ defmodule Arca.ConsumerReceipts do
       would have replaced since the source read it, and it was kept;
     * `refused` — the authority the record was recorded under is gone.
 
+  Until its receipt, a consumer's try of a record that puts bytes
+  records where (`place/4`, `Arca.Schemas.DeliveryCopy`), written and
+  committed before the first byte, so a try that dies leaves its place
+  known and a later try discards there first (`placed/3`). A place is
+  where the bytes are, under `threads/<thread_id>/<message_id>` of the
+  athanor's storage, not a thread row: it stays known whatever became of
+  that thread. The receipt clears it in its own transaction (`put!/2`).
+
   A receipt is written by a consumer that holds its job claim
   (`Arca.JobClaims`) and its member slot: `put!/2` inside a transaction
   that already holds both, `record/4` in a transaction of its own that
@@ -30,7 +38,7 @@ defmodule Arca.ConsumerReceipts do
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Repo.Errors
-  alias Arca.Schemas.ConsumerReceipt
+  alias Arca.Schemas.{ConsumerReceipt, DeliveryCopy}
 
   @outcomes ~w(applied superseded conflict refused)
 
@@ -50,8 +58,8 @@ defmodule Arca.ConsumerReceipts do
   @doc """
   Write `receipt` in the actor's athanor, inside the caller's transaction
   — the one that did the work, under the consumer's claim — and clear the
-  place the consumer's tries of that record put bytes under
-  (`Arca.DeliveryCopies`), which a receipted record no longer has. Answers `:ok`,
+  place its tries of that record put bytes under (`place/4`), which a
+  receipted record no longer has. Answers `:ok`,
   or `{:error, :receipted}` when the consumer already holds a receipt for
   that source and revision, which writes nothing and is the caller's to
   roll back on.
@@ -83,7 +91,7 @@ defmodule Arca.ConsumerReceipts do
     }
 
     case Arca.Repo.insert_all(ConsumerReceipt, [row], on_conflict: :nothing) do
-      {1, _} -> Arca.DeliveryCopies.clear!(%Prima.Actor{athanor_id: athanor_id}, row)
+      {1, _} -> unplaced!(athanor_id, row)
       {0, _} -> {:error, :receipted}
     end
   end
@@ -183,4 +191,86 @@ defmodule Arca.ConsumerReceipts do
   end
 
   def outcome(%Prima.Actor{}, _consumer, _source), do: {:error, :no_athanor}
+
+  @typedoc "Where a try puts bytes."
+  @type place :: %{thread_id: String.t(), message_id: String.t()}
+
+  @doc """
+  Record that `consumer`'s try of `source` is putting bytes under
+  `thread_id`'s message `message_id`, in a transaction of its own that
+  commits before the caller writes a byte, replacing an earlier try's
+  place.
+  """
+  @spec place(Prima.Actor.t(), String.t(), Prima.OutboxRecord.source(), place()) ::
+          :ok | {:error, :no_athanor | :database_error}
+  def place(
+        %Prima.Actor{athanor_id: athanor_id},
+        consumer,
+        %{source_kind: kind, source_id: id, source_revision: revision},
+        %{thread_id: thread_id, message_id: message_id}
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(consumer) and
+             is_binary(thread_id) and is_binary(message_id) do
+    Errors.with_db_rescue("Arca.ConsumerReceipts.place", fn ->
+      row = %{
+        consumer: consumer,
+        source_kind: kind,
+        source_id: id,
+        source_revision: revision,
+        athanor_id: athanor_id,
+        thread_id: thread_id,
+        message_id: message_id,
+        inserted_at: DateTime.utc_now()
+      }
+
+      {1, _} =
+        Arca.Repo.insert_all(DeliveryCopy, [row],
+          on_conflict: {:replace, [:thread_id, :message_id, :inserted_at]},
+          conflict_target: [:consumer, :source_kind, :source_id, :source_revision]
+        )
+
+      :ok
+    end)
+  end
+
+  def place(%Prima.Actor{}, _consumer, _source, _place), do: {:error, :no_athanor}
+
+  @doc "Where an earlier try of `consumer` for `source` put bytes, or `:none`."
+  @spec placed(Prima.Actor.t(), String.t(), Prima.OutboxRecord.source()) ::
+          {:ok, place()} | :none | {:error, :no_athanor | :database_error}
+  def placed(
+        %Prima.Actor{athanor_id: athanor_id},
+        consumer,
+        %{source_kind: kind, source_id: id, source_revision: revision}
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(consumer) do
+    Errors.with_db_rescue("Arca.ConsumerReceipts.placed", fn ->
+      from(c in DeliveryCopy,
+        where: c.athanor_id == ^athanor_id and c.consumer == ^consumer,
+        where: c.source_kind == ^kind and c.source_id == ^id and c.source_revision == ^revision,
+        select: %{thread_id: c.thread_id, message_id: c.message_id}
+      )
+      |> Arca.Repo.one()
+      |> case do
+        nil -> :none
+        place -> {:ok, place}
+      end
+    end)
+  end
+
+  def placed(%Prima.Actor{}, _consumer, _source), do: {:error, :no_athanor}
+
+  # The place of the record a receipt names, cleared in the receipt's
+  # transaction.
+  # arca:db-raise-ok inside the caller's transaction
+  defp unplaced!(athanor_id, %{consumer: consumer} = row) do
+    from(c in DeliveryCopy,
+      where: c.athanor_id == ^athanor_id and c.consumer == ^consumer,
+      where: c.source_kind == ^row.source_kind and c.source_id == ^row.source_id,
+      where: c.source_revision == ^row.source_revision
+    )
+    |> Arca.Repo.delete_all()
+
+    :ok
+  end
 end

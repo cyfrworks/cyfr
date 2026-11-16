@@ -3,7 +3,7 @@
 
 defmodule Arca.Schemas.DeliveryCopy do
   @moduledoc """
-  Ecto schema for the `delivery_copies` table (`Arca.DeliveryCopies`):
+  Ecto schema for the `delivery_copies` table (`Arca.ConsumerReceipts.place/4`):
   where one consumer's try of one source revision is putting bytes, the
   thread and message whose blobs it copies under.
   """
