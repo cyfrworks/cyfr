@@ -17,6 +17,12 @@ defmodule Aqua.NotesTest do
     assert Notes.describe(%{pinned: "about-you", athanor_id: "ath_1"}) == "📝 Pinned about-you"
     assert Notes.describe(%{cleared: "about-you", athanor_id: "ath_1"}) == "📝 Cleared about-you"
     assert Notes.describe(%{forgot: "flight", athanor_id: "ath_1"}) == "📝 Forgot the note: flight"
+
+    assert Notes.describe(%{workspace_notes: "thr_1"}) ==
+             "📝 Wrote this workspace thread's notes"
+
+    assert Notes.describe(%{cleared_workspace_notes: "thr_1"}) ==
+             "📝 Cleared this workspace thread's notes"
   end
 
   test "describe/1 is nil for anything that is not a write's answer" do
@@ -345,11 +351,14 @@ defmodule Aqua.NotesStoreTest do
       assert {:ok, %{content: "Fares fall, corrected", sources: []}} = Notes.read(ctx, "clip")
     end
 
-    test "a keep in a chain that read outside material is marked, whatever allowed it; a pin is not",
+    test "a keep and a pin in a chain that read outside material are marked, whatever allowed " <>
+           "them, and keep no thread the chain read",
          %{ctx: ctx, actor: actor} do
       member!()
       host = Prima.Source.outside("news.example")
-      {thread, root} = chain!(ctx, actor, [Prima.Source.new(:filed), host])
+
+      {thread, root} =
+        chain!(ctx, actor, [Prima.Source.new(:filed), host, Prima.Source.thread("thr_read")])
 
       # A standing allow naming the source covers the keep; it admits the
       # action and endorses nothing.
@@ -381,10 +390,20 @@ defmodule Aqua.NotesStoreTest do
                Aqua.Providers.Notes.handle(
                  "notes",
                  guest,
-                 Map.merge(lineage, %{"action" => "pin", "name" => "about-you", "content" => "y"})
+                 Map.merge(lineage, %{
+                   "action" => "pin",
+                   "name" => "about-you",
+                   "content" => "y",
+                   "revision" => 0
+                 })
                )
 
-      assert {:ok, %{sources: []}} = Notes.pinned(ctx)
+      # Aqua's own page: kept by Aqua, naming the thread it was written in,
+      # with what the chain read, and never endorsed by being written.
+      assert {:ok, %{sources: [%Prima.Source{class: :filed}, ^host], thread: ^thread} = page} =
+               Notes.pinned(ctx)
+
+      assert page.kept_by == Prima.Author.agent()
 
       # The same keep at the door carries none; one from a chain that read
       # only the athanor's own material carries what it read, and is no
@@ -411,6 +430,80 @@ defmodule Aqua.NotesStoreTest do
                Notes.read(ctx, "own")
 
       refute Enum.any?(own_sources, &Prima.Source.outside?/1)
+    end
+  end
+
+  describe "the about-you page Aqua wrote" do
+    test "learned in a thread since deleted, it is marked and stays as it was, until removed " <>
+           "over the revision read",
+         %{ctx: ctx, actor: actor} do
+      member!()
+      host = Prima.Source.outside("news.example")
+      {:ok, work} = Arca.Test.Days.thread(actor)
+      by_aqua = [kept_by: Prima.Author.agent(), thread: work.id, sources: [host]]
+      assert {:ok, _} = Notes.pin(ctx, "about-you", "Likes ramen.", by_aqua)
+
+      assert {:ok, %{revision: revision, from_deleted_thread: false}} =
+               Notes.read(ctx, "about-you")
+
+      # A kept note from the same thread survives it, and is no mark.
+      assert {:ok, _} = Notes.keep(ctx, "ramen", "Menya Kouji", thread: work.id)
+      assert {:ok, _} = Arca.ThreadStorage.delete(actor, work.id)
+
+      assert {:ok, %{content: "Likes ramen.", revision: ^revision, from_deleted_thread: true}} =
+               Notes.read(ctx, "about-you")
+
+      assert {:ok, %{content: "Menya Kouji", from_deleted_thread: false}} =
+               Notes.read(ctx, "ramen")
+
+      # Remove names the revision read: a page written since stays.
+      assert {:ok, _} = Notes.pin(ctx, "about-you", "Likes ramen and Lisbon.", by_aqua)
+      assert {:error, {:conflict, _}} = Notes.pin(ctx, "about-you", "", [], revision: revision)
+
+      assert {:ok, %{content: "Likes ramen and Lisbon.", revision: newer}} =
+               Notes.read(ctx, "about-you")
+
+      # Another athanor's Remove reaches no page of this one.
+      n = System.unique_integer([:positive])
+      someone = "local|idp|theirs-#{n}"
+
+      {:ok, theirs} =
+        Sanctum.Tenancy.Athanors.create_personal(
+          %{name: "Theirs #{n}", owner_user_id: someone, created_by: someone},
+          ["theirs-#{n}"]
+        )
+
+      elsewhere = %{ctx | user_id: someone, athanor_id: theirs.id}
+      assert {:error, {:conflict, _}} = Notes.pin(elsewhere, "about-you", "", [], revision: newer)
+      assert {:ok, %{revision: ^newer}} = Notes.read(ctx, "about-you")
+
+      # The person's own write is theirs: no mark, no sources.
+      assert {:ok, _} = Notes.pin(ctx, "about-you", "Likes ramen.", [], revision: newer)
+
+      assert {:ok, %{from_deleted_thread: false, sources: [], kept_by: by}} =
+               Notes.read(ctx, "about-you")
+
+      assert by == ctx.user_id
+
+      # A page written from a thread already deleted reads marked at once.
+      assert {:ok, _} =
+               Notes.pin(ctx, "about-you", "Likes ramen.", Keyword.put(by_aqua, :thread, work.id))
+
+      assert {:ok, %{from_deleted_thread: true}} = Notes.read(ctx, "about-you")
+      assert {:ok, %{revision: last}} = Notes.read(ctx, "about-you")
+      assert {:ok, %{cleared: "about-you"}} = Notes.pin(ctx, "about-you", "", [], revision: last)
+      assert :none = Notes.pinned(ctx)
+    end
+
+    test "a stale writer of the page is refused and writes nothing", %{ctx: ctx} do
+      member!()
+      assert {:ok, _} = Notes.pin(ctx, "about-you", "first")
+      assert {:ok, %{revision: read}} = Notes.read(ctx, "about-you")
+      assert {:ok, _} = Notes.pin(ctx, "about-you", "second")
+
+      assert {:error, {:conflict, _}} = Notes.pin(ctx, "about-you", "third", [], revision: read)
+      assert {:ok, %{content: "second", revision: now}} = Notes.read(ctx, "about-you")
+      assert now == read + 1
     end
   end
 

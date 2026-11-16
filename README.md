@@ -180,8 +180,9 @@ your-project/
 > Every folder exists from the moment the athanor is provisioned. The Files
 > page (and the `file` tool) shows the tree the way a phone shows its files:
 > `data/` is yours to fill and clear, `components/` and `aqua/` hold shaped
-> units whose files you edit in place, `notes/` and `threads/` are read
-> there and managed on their own pages, and the server's own storage
+> units whose files you edit in place, `threads/` holds the files of Aqua's
+> threads, which you may read and delete there, `notes/` is read there and
+> managed on its own page, and the server's own storage
 > (`payloads/`, `staging/`, `objects/`, the seed, the cache) is not a folder at all.
 
 On **Files**, pick files under `data/` and choose **Send a copy** to offer
@@ -1190,7 +1191,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get/status/skills` | Read the Aqua soul, crew, guides and scrolls, and see which files are shipped, edited or yours; Aqua's restore puts the shipped files back `[i]` |
 | `file offer/offers/accept/decline/withdraw` (MCP) | Offer a snapshot of a file to someone you share a thread with, list the offers, and accept, decline or withdraw them |
-| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |
+| `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `threads/` read and delete, `notes/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |
 | `cyfr registry tokens list <ns>` | List a namespace's push tokens; the **Registry** page issues and revokes them |

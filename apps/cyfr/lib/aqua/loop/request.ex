@@ -369,7 +369,11 @@ defmodule Aqua.Loop.Request do
   end
 
   @doc """
-  The projection shaped for the contract. `opts`: `:me` (the agent the
+  The projection shaped for the contract. `removed`, by row id, the refs
+  of a row's files the person deleted, is every caller's to give, so none
+  can leave a deleted file unnamed: every row the request carries that
+  holds one is named in one block beside the initiating message's own,
+  and an opening never names one as carried. `opts`: `:me` (the agent the
   turn runs, whose rows are its own speech), `:names` (a map of
   user id to display name, used when `:multi_author?` is true),
   `:excerpt` (the room excerpt, a transient block), `:attachments` (typed
@@ -378,18 +382,35 @@ defmodule Aqua.Loop.Request do
   which is only the right one in a transcript of one), `:refs` (the
   daily-thread posts an opening refers to, by id, as they read now).
   """
-  @spec messages([Aqua.Tape.row()], keyword()) :: [map()]
-  def messages(rows, opts \\ []) when is_list(rows) do
-    rows
-    |> apply_compaction()
+  @spec messages([Aqua.Tape.row()], %{String.t() => [map()]}, keyword()) :: [map()]
+  def messages(rows, removed, opts \\ []) when is_list(rows) and is_map(removed) do
+    opts = Keyword.put(opts, :removed, removed)
+    items = apply_compaction(rows)
+    blocks = List.wrap(Keyword.get(opts, :attachments)) ++ removed_note(items, removed)
+
+    items
     |> Enum.reduce([], fn row, acc -> shape(row, acc, opts) end)
     |> Enum.reverse()
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
     |> merge_same_role()
-    |> attach_blocks(Keyword.get(opts, :attachments), Keyword.get(opts, :task_message_id))
+    |> attach_blocks(blocks, Keyword.get(opts, :task_message_id))
     |> attach(:excerpt, Keyword.get(opts, :excerpt))
   end
+
+  @doc """
+  The rows a request made of `rows` carries to the model: those the
+  latest compaction keeps, and the older ones it pins. What a round reads
+  of storage for its request it reads for these alone.
+  """
+  @spec carried([Aqua.Tape.row()]) :: [Aqua.Tape.row()]
+  def carried(rows) when is_list(rows) do
+    for item <- apply_compaction(rows), row = carried_row(item), do: row
+  end
+
+  defp carried_row({:pinned, row}), do: row
+  defp carried_row({:shaped, _summary}), do: nil
+  defp carried_row(row), do: row
 
   # ---------------------------------------------------------------------------
   # Tools
@@ -513,6 +534,27 @@ defmodule Aqua.Loop.Request do
         }
 
         [{:shaped, summary} | pinned ++ kept]
+    end
+  end
+
+  # The files the person deleted of every row the request carries, named in
+  # one block, whatever the row is and however it is shown.
+  defp removed_note(items, removed) do
+    case for(item <- items, row = carried_row(item), ref <- Map.get(removed, row.id, []), do: ref) do
+      [] ->
+        []
+
+      refs ->
+        names = Enum.map_join(refs, ", ", & &1["filename"])
+
+        [
+          %{
+            "type" => "text",
+            "text" =>
+              "[The person deleted these files of posts in this thread; they can no longer " <>
+                "be read: #{names}]"
+          }
+        ]
     end
   end
 
@@ -674,8 +716,11 @@ defmodule Aqua.Loop.Request do
         "\n\n[Post #{cited.id} of the daily thread, by #{sender(cited, opts)}]\n#{cited.content}"
       end
 
+    gone =
+      for ref <- Map.get(Keyword.fetch!(opts, :removed), row.id, []), do: ref["stored_name"]
+
     files =
-      case Aqua.Attachments.refs_of(row) do
+      case Enum.reject(Aqua.Attachments.refs_of(row), &(&1["stored_name"] in gone)) do
         [] -> ""
         refs -> "\n\n[Files carried in: #{Enum.map_join(refs, ", ", & &1["filename"])}]"
       end
@@ -815,7 +860,6 @@ defmodule Aqua.Loop.Request do
 
   def without_excerpt(request), do: request
 
-  defp attach_blocks(messages, nil, _task_message_id), do: strip_ids(messages)
   defp attach_blocks(messages, [], _task_message_id), do: strip_ids(messages)
 
   defp attach_blocks(messages, blocks, task_message_id) when is_list(blocks) do

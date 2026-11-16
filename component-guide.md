@@ -39,8 +39,8 @@ your-project/
 
 Every folder is laid when the athanor is provisioned. The Files page in the
 console, and the `file` tool behind it, show this tree by tier: `data/` is
-open, `components/` and `aqua/` are shaped, `notes/` and
-`threads/` are read-only there, and `payloads/`, `staging/` and `objects/`
+open, `components/` and `aqua/` are shaped, `threads/` is read and
+deleted there, `notes/` is read-only there, and `payloads/`, `staging/` and `objects/`
 are the server's own and have no name on the page. Inside `components/` and
 `aqua/`, the server keeps every unit's revisions in a `.staging/` folder the
 page never lists; a write, edit or delete there is refused, and a unit is
@@ -1309,7 +1309,7 @@ one scroll.
 
 The console's Files page is the tree above, browsed like a phone's files
 rather than a desktop's disk: you see the athanor's folders and nothing of
-the server's, and each folder is one of three tiers.
+the server's, and each folder is one of four tiers.
 
 - **Open** — `data/`. Upload, download, edit, rename, move and delete
   anything, and make folders. Every component with a `data/` grant reads
@@ -1324,8 +1324,14 @@ the server's, and each folder is one of three tiers.
   (scaffold, pull, fork, the Aqua page), and one the server ships is reset,
   never deleted. An edit inside a component re-registers its row; an edit
   under `aqua/` rewrites the agent index.
-- **Read-only** — `notes/` and `threads/`. Shown and downloaded here,
-  written by their own surfaces.
+- **Read and delete** — `threads/`, the files of Aqua's threads, one folder
+  per thread and one per post under it. Shown, downloaded and deleted here
+  (a file, a post's folder or a thread's folder, never `threads/` itself),
+  written only by the threads, and nothing moves into it. A post whose
+  file was deleted says the file was removed; deleting frees its space
+  against the athanor's storage limit.
+- **Read-only** — `notes/`. Shown and downloaded here, written by its own
+  surface.
 
 The `file` tool (`list`, `read`, `write`, `delete`, `move`, and `offer`,
 `offers`, `accept`, `decline`, `withdraw` to send a person a copy) is the

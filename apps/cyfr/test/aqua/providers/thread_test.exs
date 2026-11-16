@@ -7,6 +7,8 @@ defmodule Aqua.Providers.ThreadTest do
   # credential may not.
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Providers.Thread, as: Tool
   alias Sanctum.Visibility
@@ -271,18 +273,24 @@ defmodule Aqua.Providers.ThreadTest do
                })
     end
 
-    test "every action but post is external-plane only and interactive-only; post is a chain's alone" do
+    test "every action but post, search and events is external-plane only and interactive-only; " <>
+           "post is a chain's alone, and the two reads are the person's and a chain's" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 16
+      assert map_size(actions) == 17
 
-      for {name, spec} <- Map.delete(actions, "post") do
+      for {name, spec} <- Map.drop(actions, ["post", "search", "events"]) do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
         assert spec.consent == :interactive, "#{name} is reachable by a standing credential"
       end
 
       assert %{planes: [:in_chain], kind: :write} = post = actions["post"]
       refute Map.has_key?(post, :consent)
+
+      for read <- ["search", "events"] do
+        assert %{planes: [:external, :in_chain], kind: :read, consent: :interactive} =
+                 actions[read]
+      end
     end
 
     test "the message schema declares its advisory bound; the runner's byte check governs", %{
@@ -440,10 +448,10 @@ defmodule Aqua.Providers.ThreadTest do
       one_click =
         card!(ctx, second, %{
           "kind" => "request_approval",
-          "title" => "Pin it",
+          "title" => "Endorse it",
           "action_kind" => "write",
           "standing" => false,
-          "proposal" => %{"tool" => "notes", "action" => "pin", "args" => %{}}
+          "proposal" => %{"tool" => "notes", "action" => "endorse", "args" => %{}}
         })
 
       assert {:error, {:invalid_argument, msg}} =
@@ -1212,6 +1220,271 @@ defmodule Aqua.Providers.ThreadTest do
 
       assert {:error, :message_too_long} =
                post(ctx, turn, %{"text" => String.duplicate("a", 33_000)})
+    end
+  end
+
+  describe "recall" do
+    # A workspace thread of the context's athanor, as `workspace.open`
+    # leaves its row.
+    defp workspace!(ctx, title) do
+      %Arca.Schemas.Thread{}
+      |> Arca.Schemas.Thread.changeset(%{
+        id: Prima.UUID7.generate_id("thread"),
+        athanor_id: ctx.athanor_id,
+        kind: "workspace",
+        workspace_state: "open",
+        title: title,
+        created_by: ctx.user_id
+      })
+      |> Arca.Repo.insert!()
+      |> Map.from_struct()
+    end
+
+    defp say!(ctx, thread, content, attrs \\ %{}) do
+      {:ok, row} =
+        Threads.append(
+          Sanctum.Context.actor(ctx),
+          thread.id,
+          Map.merge(%{author: ctx.user_id, sent_by: "person", content: content}, attrs)
+        )
+
+      row
+    end
+
+    defp search(ctx, args), do: call(ctx, Map.put(args, "action", "search"))
+
+    # A turn's call, with the lineage the gate stamps.
+    defp in_turn(ctx, turn, args) do
+      call(
+        Sanctum.Context.enter_guest(ctx),
+        Map.merge(
+          %{"thread_id" => turn.thread_id, "root_execution_id" => turn.root_execution_id},
+          args
+        )
+      )
+    end
+
+    defp turn_sources(ctx, turn) do
+      {:ok, %{sources: sources}} = Aqua.Tape.turn(ctx, turn.id)
+      Prima.Source.decode(sources)
+    end
+
+    test "a search finds posts of the daily and workspace threads, newest first, each a pointer",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "NVDA technical analysis")
+      old = say!(ctx, daily, "Look at Nvidia's CHART for me")
+      _other = say!(ctx, daily, "Remind me to call the plumber")
+      rsi = say!(ctx, work, "RSI is 71 on the daily chart", %{author: "aqua", sent_by: "aqua"})
+
+      assert {:ok, %{results: [first, second], count: 2, next: nil} = answer} =
+               search(ctx, %{"q" => "  ChaRT  "})
+
+      # The person's own read at the door joins no turn and names nothing.
+      refute Map.has_key?(answer, :sources)
+
+      assert %{message: id, kind: "workspace", title: "NVDA technical analysis", by: "aqua"} =
+               first
+
+      assert id == rsi.id and first.thread == work.id and first.seq == rsi.seq
+      refute Map.has_key?(first, :day)
+      assert %{message: id, kind: "daily", day: day, by: "person", seq: seq} = second
+      assert id == old.id and day == daily.day and seq == old.seq
+      assert second.snippet == "Look at Nvidia's CHART for me"
+    end
+
+    test "a query is held to its bytes and is no pattern: % and _ are literal, and case folds " <>
+           "beyond ASCII",
+         %{ctx: ctx, thread: daily} do
+      say!(ctx, daily, "Été à SÃO JORGE")
+      say!(ctx, daily, "100% done")
+      say!(ctx, daily, "a_b and anything else")
+
+      assert {:ok, %{count: 1}} = search(ctx, %{"q" => "été à são"})
+      assert {:ok, %{count: 1}} = search(ctx, %{"q" => "%"})
+      assert {:ok, %{count: 1}} = search(ctx, %{"q" => "_"})
+      assert {:ok, %{count: 0}} = search(ctx, %{"q" => "a%b"})
+
+      assert {:error, {:invalid_argument, _}} = search(ctx, %{"q" => "   "})
+      assert {:error, {:invalid_argument, _}} = search(ctx, %{"q" => String.duplicate("é", 101)})
+      assert {:ok, %{count: 0}} = search(ctx, %{"q" => String.duplicate("a", 200)})
+    end
+
+    test "a snippet is whole characters around the match, on one line, within its bytes",
+         %{ctx: ctx, thread: daily} do
+      lead = String.duplicate("ñandú ", 60)
+      say!(ctx, daily, lead <> "\nthe NEEDLE is here\n" <> String.duplicate("文字 ", 80))
+
+      assert {:ok, %{results: [%{snippet: snippet}]}} = search(ctx, %{"q" => "needle"})
+      assert byte_size(snippet) <= 240 and String.valid?(snippet)
+      assert snippet =~ "the NEEDLE is here"
+      assert String.starts_with?(snippet, "…") and String.ends_with?(snippet, "…")
+      refute snippet =~ "\n"
+    end
+
+    test "twenty posts at most a page, and the next page goes on with no post twice or missed",
+         %{ctx: ctx, thread: daily} do
+      ids = for n <- 1..25, do: say!(ctx, daily, "entry #{n} of the log").id
+
+      assert {:ok, %{results: page, count: 20, next: next}} = search(ctx, %{"q" => "LOG"})
+      assert {:ok, %{results: rest, count: 5}} = search(ctx, %{"q" => "log", "before" => next})
+      assert {:ok, %{count: 5}} = search(ctx, %{"q" => "log", "limit" => 5})
+
+      assert Enum.map(page ++ rest, & &1.message) == Enum.reverse(ids)
+
+      assert {:error, {:invalid_argument, _}} =
+               search(ctx, %{"q" => "log", "before" => "msg_not_here"})
+    end
+
+    test "equal-time posts use the same id order on both adapters", %{ctx: ctx, thread: daily} do
+      a = say!(ctx, daily, "tie search", %{id: "msg_a"})
+      b = say!(ctx, daily, "tie search", %{id: "msg_B"})
+      at = ~U[2026-01-01 01:02:03.123456Z]
+
+      {2, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(m in Arca.Schemas.Message, where: m.id in ^[a.id, b.id]),
+          set: [inserted_at: at]
+        )
+
+      assert {:ok, %{results: first, next: cursor}} =
+               search(ctx, %{"q" => "tie search", "limit" => 1})
+
+      assert {:ok, %{results: second}} = search(ctx, %{"q" => "tie search", "before" => cursor})
+
+      # By their bytes, newest first: "msg_a" after "msg_B".
+      assert Enum.map(first ++ second, & &1.message) == Enum.sort([a.id, b.id], :desc)
+    end
+
+    test "a crew member's thread and another athanor's are neither searched nor read",
+         %{ctx: ctx, thread: daily} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, crew} = Threads.crew_thread(actor, daily.id, "coder")
+      say!(ctx, crew, "the crew's secret plan", %{author: "coder", sent_by: "coder"})
+
+      other = %{ctx | athanor_id: "ath_elsewhere"}
+      {:ok, theirs} = Arca.Test.Days.thread(Sanctum.Context.actor(other))
+      say!(other, theirs, "their secret plan")
+
+      assert {:ok, %{count: 0}} = search(ctx, %{"q" => "secret plan"})
+
+      turn = running!(ctx, daily)
+
+      for id <- [crew.id, theirs.id] do
+        assert {:error, {:not_found, "thread", ^id}} =
+                 in_turn(ctx, turn, %{"action" => "events", "thread" => id})
+      end
+
+      assert turn_sources(ctx, turn) == []
+    end
+
+    test "a turn reads a daily or workspace thread's posts, fifty at most, after a seq",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "A long one")
+      for n <- 1..60, do: say!(ctx, work, "step #{n}")
+      turn = running!(ctx, daily)
+
+      assert {:ok, %{messages: page, cursor: cursor}} =
+               in_turn(ctx, turn, %{"action" => "events", "thread" => work.id, "limit" => 500})
+
+      assert length(page) == 50 and hd(page).content == "step 1"
+
+      assert {:ok, %{messages: rest}} =
+               in_turn(ctx, turn, %{
+                 "action" => "events",
+                 "thread" => work.id,
+                 "after_seq" => cursor
+               })
+
+      assert Enum.map(rest, & &1.content) == for(n <- 51..60, do: "step #{n}")
+
+      # The person's own read keeps its bound of 500 rows.
+      assert {:ok, %{messages: all}} = call(ctx, %{"action" => "events", "thread" => work.id})
+      assert length(all) == 60
+    end
+
+    test "a turn's search and read join every thread they carry and what their posts carry " <>
+           "into the turn, before they answer",
+         %{ctx: ctx, thread: daily} do
+      work = workspace!(ctx, "Fares")
+      news = Prima.Source.outside("news.example")
+
+      # A turn of the workspace thread read the news, and wrote a post there.
+      writer = running!(ctx, work)
+      {:ok, _} = Aqua.Tape.record_model_intent(ctx, writer, %{sources: [news]})
+
+      say!(ctx, work, "fares rise on Monday", %{
+        author: "aqua",
+        sent_by: "aqua",
+        turn_id: writer.id
+      })
+
+      # The daily thread's report of it keeps what that turn read.
+      say!(ctx, daily, "Fares: fares rise on Monday", %{
+        author: "aqua",
+        sent_by: "aqua",
+        kind: "report",
+        workspace_id: work.id,
+        payload: %{"sources" => Prima.Source.to_json_list([Prima.Source.outside("feed.example")])}
+      })
+
+      reader = running!(ctx, daily)
+
+      assert {:ok, %{results: [_report, _post], sources: carried}} =
+               in_turn(ctx, reader, %{"action" => "search", "q" => "fares rise"})
+
+      expected = [
+        Prima.Source.outside("feed.example"),
+        news,
+        Prima.Source.thread(daily.id),
+        Prima.Source.thread(work.id)
+      ]
+
+      assert Prima.Source.set(Enum.map(carried, &Prima.Source.from_json/1)) ==
+               Prima.Source.set(expected)
+
+      assert Prima.Source.set(expected) -- turn_sources(ctx, reader) == []
+
+      # A read of the workspace thread joins it and its writer's sources.
+      other = running!(ctx, workspace!(ctx, "Elsewhere"))
+
+      assert {:ok, %{messages: read, sources: _}} =
+               in_turn(ctx, other, %{"action" => "events", "thread" => work.id})
+
+      assert "fares rise on Monday" in Enum.map(read, & &1.content)
+
+      assert [news, Prima.Source.thread(work.id)] -- turn_sources(ctx, other) == []
+    end
+
+    test "a holder a takeover replaced, a forged lineage and a chain with no turn read nothing",
+         %{ctx: ctx, thread: daily} do
+      say!(ctx, daily, "a private plan")
+      turn = running!(ctx, daily)
+
+      stale = %{
+        "parent_execution_id" => turn.root_execution_id,
+        "attempt" => "att_replaced",
+        "action" => "search",
+        "q" => "private"
+      }
+
+      assert {:error, {:conflict, _}} = in_turn(ctx, turn, stale)
+
+      assert {:error, :not_in_a_turn} =
+               in_turn(ctx, %{turn | root_execution_id: "exec_forged"}, %{
+                 "action" => "search",
+                 "q" => "private"
+               })
+
+      assert {:error, :not_in_a_turn} =
+               call(Sanctum.Context.enter_guest(ctx), %{"action" => "search", "q" => "private"})
+
+      assert {:error, :not_in_a_turn} =
+               call(Sanctum.Context.enter_guest(ctx), %{
+                 "action" => "events",
+                 "thread" => daily.id
+               })
+
+      assert turn_sources(ctx, turn) == []
     end
   end
 

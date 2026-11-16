@@ -109,6 +109,13 @@ defmodule Aqua do
           {:ok, [String.t()]} | :error
   defdelegate attachment_blob_path(thread_id, message_id, ref), to: Attachments, as: :blob_path
 
+  @doc """
+  A message row's attachment refs, each whose bytes the person deleted
+  marked removed (`Aqua.Attachments.as_kept/2`).
+  """
+  @spec attachments_as_kept(Sanctum.Context.t(), Aqua.Tape.row()) :: [Attachments.ref()]
+  defdelegate attachments_as_kept(ctx, message), to: Attachments, as: :as_kept
+
   @doc "The attachment refs a message row carries (`Aqua.Attachments.refs_of/1`)."
   @spec attachment_refs(Aqua.Tape.row()) :: [Attachments.ref()]
   defdelegate attachment_refs(message), to: Attachments, as: :refs_of

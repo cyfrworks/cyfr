@@ -1,6 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Aqua.LoopTest.CountStore do
+  @moduledoc false
+  # The local adapter, telling the process `observer/0` names of every
+  # listing of a post's folder (`threads/<thread>/<message>`).
+  use Arca.Storage.TestDouble
+
+  @observer {__MODULE__, :observer}
+
+  def observer, do: @observer
+
+  def list_typed(actor, ["threads", _thread, _message] = path) do
+    send(:persistent_term.get(@observer), {:listed, path})
+    Arca.Adapters.Local.list_typed(actor, path)
+  end
+
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+end
+
 defmodule Aqua.LoopTest do
   @moduledoc """
   The loop against the real root, the real hands and a scripted model:
@@ -360,6 +378,121 @@ defmodule Aqua.LoopTest do
 
     {:ok, steps} = Tape.steps(ctx, turn)
     assert %{outcome: "ok"} = Enum.find(steps, &(&1.kind == "ui"))
+  end
+
+  test "a later turn reads that a file of an earlier post was deleted from Files, and runs",
+       %{ctx: ctx, thread: thread} do
+    id = Prima.UUID7.generate_id("msg")
+
+    {:ok, refs} =
+      Aqua.Attachments.store(ctx, thread.id, id, [
+        %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG"},
+        %{"filename" => "notes.txt", "media_type" => "text/plain", "bytes" => "notes"}
+      ])
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{
+          id: id,
+          author: ctx.user_id,
+          sent_by: "person",
+          content: "the moon tonight",
+          payload: %{"attachments" => refs}
+        }
+      })
+
+    [moon, _notes] = refs
+
+    {:ok, _} =
+      Arca.Files.delete(
+        Sanctum.Context.actor(ctx),
+        "threads/#{thread.id}/#{id}/#{moon["stored_name"]}"
+      )
+
+    script!([reply("noted")])
+    turn = accept!(ctx, thread, "what did I send?")
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    %{input: %{"params" => %{"messages" => messages}}} =
+      Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+
+    texts = for m <- messages, b <- List.wrap(m["content"]), is_binary(b["text"]), do: b["text"]
+
+    assert Enum.filter(texts, &(&1 =~ "can no longer be read")) == [
+             "[The person deleted these files of posts in this thread; they can no longer " <>
+               "be read: moon.png]"
+           ]
+
+    refute Enum.any?(texts, &(&1 =~ "notes.txt"))
+  end
+
+  # Astra's cost probe (#4046): what a round reads of storage for the files
+  # of the posts its request carries, and none for those it does not.
+  describe "the listings a model round makes" do
+    setup %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+
+      for n <- 1..50 do
+        id = Prima.UUID7.generate_id("msg")
+        file = %{"filename" => "old.txt", "media_type" => "text/plain", "bytes" => "old"}
+        {:ok, refs} = Aqua.Attachments.store(ctx, thread.id, id, [file])
+
+        {:ok, _} =
+          Threads.append(actor, thread.id, %{
+            id: id,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "old-post-#{n}",
+            payload: %{"attachments" => refs}
+          })
+      end
+
+      :ok
+    end
+
+    test "fifty posts the request carries are each listed once", %{ctx: ctx, thread: thread} do
+      count_listings!()
+      script!([reply("done")])
+      turn = accept!(ctx, thread, "continue")
+      assert :completed = Task.await(run(ctx, turn), 30_000)
+      assert [_one] = Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+      assert listings() == 50
+    end
+
+    test "fifty posts behind a compaction are not listed", %{ctx: ctx, thread: thread} do
+      {:ok, _} =
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: Prima.Author.system(),
+          sent_by: "aqua",
+          kind: "compaction",
+          content: "Earlier posts summarized",
+          payload: %{"first_kept_seq" => 52, "summarized_through_seq" => 50}
+        })
+
+      count_listings!()
+      script!([reply("done")])
+      turn = accept!(ctx, thread, "continue")
+      assert :completed = Task.await(run(ctx, turn), 30_000)
+
+      %{input: %{"params" => %{"messages" => messages}}} =
+        Enum.find(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+
+      refute Jason.encode!(messages) =~ "old-post-"
+      assert listings() == 0
+    end
+  end
+
+  defp count_listings! do
+    Prima.Test.Env.put_app_env(:arca, :storage_adapter, Aqua.LoopTest.CountStore)
+    Prima.Test.Env.put_persistent_term(Aqua.LoopTest.CountStore.observer(), self())
+  end
+
+  defp listings(n \\ 0) do
+    receive do
+      {:listed, _path} -> listings(n + 1)
+    after
+      0 -> n
+    end
   end
 
   test "a reply lands as rows before the turn ends, and the root is let go", %{

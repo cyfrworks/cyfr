@@ -312,7 +312,7 @@ defmodule Arca.StorageTest do
                %{name: "data", root: "data", tier: :open},
                %{name: "aqua", root: "aqua", tier: :shaped},
                %{name: "components", root: "components", tier: :shaped},
-               %{name: "threads", root: "threads", tier: :read},
+               %{name: "threads", root: "threads", tier: :removable},
                %{name: "notes", root: "notes", tier: :read}
              ]
 
@@ -329,6 +329,8 @@ defmodule Arca.StorageTest do
       assert Storage.tier("cache") == :system
       assert Storage.tier("shared") == :system
       assert Storage.tier("data") == :open
+      assert Storage.tier("threads") == :removable
+      assert Storage.tier("notes") == :read
       assert Storage.tier("guest") == nil
       assert Storage.tier("nope") == nil
       assert Enum.all?(Storage.console_folders(), &(&1.root in Storage.tenant_roots()))

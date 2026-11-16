@@ -346,6 +346,121 @@ defmodule Arca.Providers.FilesTest do
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "gone.txt"])
   end
 
+  test "a key deletes under threads/ as under data/: storage_write deletes, storage_read does not",
+       %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["threads", "t1", "m1", "0-a.txt"], "a")
+    :ok = Arca.put(actor, ["threads", "t1", "m2", "0-b.txt"], "b")
+
+    reader = %{ctx | auth_method: :api_key, permissions: MapSet.new([:storage_read])}
+
+    assert {:ok, %{entries: [%{name: "t1"}]}} =
+             Sanctum.Gate.call_external("file", reader, %{"action" => "list", "path" => "threads"})
+
+    assert {:error, _refused} =
+             Sanctum.Gate.call_external("file", reader, %{
+               "action" => "delete",
+               "path" => "threads/t1/m1/0-a.txt"
+             })
+
+    assert Arca.exists?(actor, ["threads", "t1", "m1", "0-a.txt"])
+
+    writer = %{ctx | auth_method: :api_key, permissions: MapSet.new([:storage_write])}
+
+    assert {:ok, %{deleted: "threads/t1/m1/0-a.txt"}} =
+             Sanctum.Gate.call_external("file", writer, %{
+               "action" => "delete",
+               "path" => "threads/t1/m1/0-a.txt"
+             })
+
+    assert {:ok, %{deleted: "threads/t1"}} =
+             Sanctum.Gate.call_external("file", writer, %{
+               "action" => "delete",
+               "path" => "threads/t1"
+             })
+
+    refute Arca.exists?(actor, ["threads", "t1", "m2", "0-b.txt"])
+
+    # Writing stays the threads' own, for a key as for anyone.
+    assert {:error, _refused} =
+             Sanctum.Gate.call_external("file", writer, %{
+               "action" => "write",
+               "path" => "threads/t1/m1/new.txt",
+               "content" => "x"
+             })
+
+    refute Arca.exists?(actor, ["threads", "t1", "m1", "new.txt"])
+  end
+
+  test "a chain reaches no delete under threads/, whatever its authority grants", %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["threads", "t1", "m1", "0-a.txt"], "a")
+
+    guest =
+      Sanctum.Context.enter_guest(%{
+        ctx
+        | origin: :programmatic,
+          permissions: MapSet.new([:*]),
+          authenticated: true
+      })
+
+    assert {:error, refused} =
+             Sanctum.Gate.call_in_chain(
+               "file",
+               guest,
+               %{"action" => "delete", "path" => "threads/t1/m1/0-a.txt"},
+               granting_authority(["file.delete"]),
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(guest)
+             )
+
+    # Refused at admission, by the plane: the action is external-only.
+    assert %Prima.Refusal{stage: :admission, message: message} = refused
+    assert message == "Tool action 'file.delete' is not reachable from a running chain"
+    assert Arca.exists?(actor, ["threads", "t1", "m1", "0-a.txt"])
+  end
+
+  # An owner authority whose ingress edge names `tools`, under the platform
+  # ceiling: everything a chain could be granted.
+  defp granting_authority(tools) do
+    node = "formula:local.files-test"
+
+    graph = %{
+      "canonical" => "jcs-1",
+      "nodes" => %{
+        node => %{
+          "limits" => %{
+            "timeout" => "1m",
+            "max_memory_bytes" => 67_108_864,
+            "max_request_size" => 1_048_576,
+            "max_response_size" => 5_242_880,
+            "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+            "max_concurrent_tasks" => 10,
+            "batch_timeout" => "1m"
+          },
+          "edges" => %{"@ingress" => %{"tools" => tools}}
+        }
+      }
+    }
+
+    {:ok, blob} = Prima.Authority.Blob.parse(graph)
+
+    {:ok, auth} =
+      Prima.Authority.root(
+        %{
+          profile_id: "prof-files",
+          consent_id: "consent-files",
+          source_ref: node,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: %{node => "sha256:files"}
+        },
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+      )
+
+    auth
+  end
+
   # ---------------------------------------------------------------------------
   # Sending a copy
   # ---------------------------------------------------------------------------

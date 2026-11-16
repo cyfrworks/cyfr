@@ -54,7 +54,7 @@ defmodule Arca.OneFenceTest do
       "an admission: the athanor's standing and the execution-then-attempt locks first, the slot checked within (`slot_held!/0`)",
     {"arca/fenced_publication.ex", "publish/4"} =>
       "a publication under the writer's slot inside the publication step, with its declared refusals (`:stale`, `:budget`)",
-    {"arca/fenced_publication.ex", "remove/3"} =>
+    {"arca/fenced_publication.ex", "remove/4"} =>
       "a removal under the writer's slot inside the publication step, with its declared refusals (`:stale`, `:budget`)",
     {"arca/file_offers.ex", "commit_acceptance/5"} =>
       "an acceptance's second step, under the slot its first step read, beside the offer's own turn",

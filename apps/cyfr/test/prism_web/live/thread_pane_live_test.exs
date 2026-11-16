@@ -76,6 +76,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   defp route(athanor), do: Athanors.route_slug(athanor)
 
+  # A post's files stored where its refs name them, so the pane draws them
+  # as kept: a file whose bytes are gone is drawn as removed.
+  defp kept!(actor, row) do
+    for ref <- Aqua.Attachments.refs_of(row),
+        {:ok, path} <- [Aqua.attachment_blob_path(row.thread_id, row.id, ref)],
+        do: :ok = Arca.put(actor, path, "bytes")
+
+    row
+  end
+
   # A card as the loop opens it: a turn with its root, the model step,
   # the call, and the approval on the tape.
   defp card!(ctx, thread, proposal, intent_over \\ %{}) do
@@ -258,7 +268,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     card =
       card!(here, thread, %{
         "tool" => "notes",
-        "action" => "pin",
+        "action" => "endorse",
         "args" => %{"name" => "plan"}
       })
 
@@ -637,6 +647,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         }
       })
 
+    kept!(actor, report)
     [pointer] = Enum.filter(Threads.messages(actor, thread.id), &(&1.kind == "pointer"))
     {panel, pane} = panel_pane(conn, thread)
 
@@ -990,7 +1001,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     assert source =~ ~r/phx-click="toggle_read_room"[^>]*class="h-6 w-6/
 
-    {:ok, _} =
+    {:ok, two} =
       Threads.append(Sanctum.Context.actor(here), thread.id, %{
         author: user.user_id,
         sent_by: "person",
@@ -1002,6 +1013,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           ]
         }
       })
+
+    kept!(Sanctum.Context.actor(here), two)
 
     pane = open_pane(conn, athanor, thread)
 
@@ -1157,6 +1170,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           content: "",
           payload: %{"attachments" => pictures.(2), "links" => links}
         })
+
+      Enum.each([mine, aquas], &kept!(Sanctum.Context.actor(here), &1))
 
       {:ok, posts: [mine, aquas]}
     end
@@ -2357,6 +2372,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           },
           answers: [request.id]
         })
+
+      Enum.each([request, reply], &kept!(Sanctum.Context.actor(here), &1))
 
       pane = open_pane(conn, athanor, room)
       href = &PrismWeb.Focus.path(route(athanor), "/attachments/#{&1}/#{&2}")

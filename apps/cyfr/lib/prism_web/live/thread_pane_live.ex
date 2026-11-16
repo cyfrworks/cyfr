@@ -124,6 +124,10 @@ defmodule PrismWeb.ThreadPaneLive do
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
 
+  # The thread events that carry a row the pane draws, each with its files
+  # as they stand when it arrives (`files_kept/2`).
+  @row_events [:message, :request, :reply, :notice]
+
   # How many of a thread's newest rows the pane reads when it opens one.
   @window 500
 
@@ -309,13 +313,11 @@ defmodule PrismWeb.ThreadPaneLive do
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived thread into every viewer's socket. The runner's
         # own turn assembly stays windowed separately.
+        ctx = socket.assigns.context
+
         rows =
-          case Threads.latest_messages(
-                 Sanctum.Context.actor(socket.assigns.context),
-                 thread.id,
-                 @window
-               ) do
-            rows when is_list(rows) -> rows
+          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window) do
+            rows when is_list(rows) -> Enum.map(rows, &files_kept(&1, ctx))
             {:error, _} -> []
           end
 
@@ -415,11 +417,26 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:works, Map.delete(socket.assigns.works, id))
   end
 
+  # A post's files as the pane draws them, each one whose bytes the person
+  # deleted from Files marked removed (`Aqua.attachments_as_kept/2`), read
+  # when the thread opens and when a row arrives. A post already drawn
+  # changes at the next read.
+  defp files_kept(row, ctx) do
+    case Aqua.attachment_refs(row) do
+      [] -> row
+      _refs -> Map.put(row, :attachments, Aqua.attachments_as_kept(ctx, row))
+    end
+  end
+
+  # A row's files: those `files_kept/2` read, else the stored refs.
+  defp attachments(row),
+    do: Map.get(row, :attachments) || Threads.payload(row)["attachments"] || []
+
   # What the thread made: a post of Aqua's that holds a picture, a file or
   # a link, as a host draws it; nil for any other row.
   defp result(%{author: @agent_author} = row) do
     payload = Threads.payload(row)
-    attachments = payload["attachments"] || []
+    attachments = attachments(row)
     links = payload["links"] || []
 
     if attachments != [] or links != [],
@@ -758,6 +775,7 @@ defmodule PrismWeb.ThreadPaneLive do
         %ThreadEvent{thread_id: id, kind: kind, data: data},
         %{assigns: %{thread: %{id: id}}} = socket
       ) do
+    data = if kind in @row_events, do: files_kept(data, socket.assigns.context), else: data
     {:noreply, socket |> handle_thread_event(kind, data) |> seen(landed(kind, data))}
   end
 
@@ -2065,7 +2083,7 @@ defmodule PrismWeb.ThreadPaneLive do
                     role={role_of(msg)}
                     content={msg.content}
                     author={"#{speaker(msg, @members, @context)} asked #{msg.addressee} · #{msg.status}"}
-                    attachments={Threads.payload(msg)["attachments"] || []}
+                    attachments={attachments(msg)}
                     attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                     links={Threads.payload(msg)["links"] || []}
                   />
@@ -2134,7 +2152,7 @@ defmodule PrismWeb.ThreadPaneLive do
                       role={role_of(msg)}
                       content={msg.content}
                       author={author_label(msg, @members, @context)}
-                      attachments={Threads.payload(msg)["attachments"] || []}
+                      attachments={attachments(msg)}
                       attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                       links={Threads.payload(msg)["links"] || []}
                     />
@@ -2424,15 +2442,18 @@ defmodule PrismWeb.ThreadPaneLive do
   A post as the pane draws it, by its `role` and `author`: it draws what it
   holds, whoever wrote it, a picture in place, which opens large over the
   page, any other file a chip that downloads (`attachment_href`, a
-  function of the stored name), and a link a link, never fetched. The
+  function of the stored name), a file marked `"removed"` (deleted from
+  Files) a line saying so, and a link a link, never fetched. The
   workspace layer draws a thread's results with it.
   """
   def message_bubble(assigns) do
     # The model's surrounding whitespace would inflate the bubble.
     display = String.trim(assigns.content || "")
 
+    {removed, kept} = Enum.split_with(assigns.attachments, &(&1["removed"] == true))
+
     {pictures, files} =
-      assigns.attachments
+      kept
       |> Enum.with_index()
       |> Enum.split_with(fn {a, _} -> picture?(a, assigns.attachment_href) end)
 
@@ -2443,6 +2464,7 @@ defmodule PrismWeb.ThreadPaneLive do
         display_content: display,
         pictures: pictures,
         files: Enum.map(files, &elem(&1, 0)),
+        removed: removed,
         shown_links: shown_links(assigns.links)
       )
 
@@ -2527,6 +2549,15 @@ defmodule PrismWeb.ThreadPaneLive do
             </span>
           <% end %>
         </div>
+        <div :if={@removed != []} class="mt-1 flex flex-wrap gap-1">
+          <span
+            :for={a <- @removed}
+            data-removed
+            class="inline-flex min-h-6 items-center rounded bg-black/20 px-1.5 py-0.5 text-xs text-gray-400 italic"
+          >
+            {a["filename"]} was removed
+          </span>
+        </div>
         <div :if={@shown_links != []} class="mt-1 flex flex-col items-start gap-0.5">
           <a
             :for={link <- @shown_links}
@@ -2593,7 +2624,7 @@ defmodule PrismWeb.ThreadPaneLive do
         role="assistant"
         content={@reply.content}
         author={"#{agent_name(@reply.sent_by)} · #{@reply.outcome}"}
-        attachments={@payload["attachments"] || []}
+        attachments={attachments(@reply)}
         attachment_href={&attachment_path(@athanor_route, @reply.id, &1)}
         links={@payload["links"] || []}
       />
@@ -2628,7 +2659,7 @@ defmodule PrismWeb.ThreadPaneLive do
         role={role_of(@msg)}
         content={@msg.content}
         author={@author}
-        attachments={@payload["attachments"] || []}
+        attachments={attachments(@msg)}
         attachment_href={&attachment_path(@athanor_route, @msg.id, &1)}
         links={@payload["links"] || []}
       />
