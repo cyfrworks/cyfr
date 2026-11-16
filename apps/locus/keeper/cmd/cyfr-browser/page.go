@@ -220,28 +220,31 @@ func (ps *puts) expire() error {
 	return nil
 }
 
-// show loads p's entry in w. Until the main frame commits p's own entry,
-// p answers only that navigation and w keeps the put it had (serving);
-// the commit makes p w's put (committed). A show that fails leaves w as it
-// was, and p serves nothing after: one that failed after its entry
-// committed ends p there, and one whose commit comes late finds p failed.
-func (b *browser) show(ctx context.Context, w *window, p *put) (any, error) {
+// show loads p's entry in w. Until the show ends, p answers only the
+// main frame's navigations to its files and w keeps the put it had
+// (serving); a commit of p's own entry makes p w's put (committed). A
+// show that fails leaves w as it was, and p serves nothing after: one
+// that failed after its entry committed ends p there, and one whose
+// commit comes late finds p failed. Every return passes through the one
+// deferred end, so no way of failing after p was staged misses it.
+func (b *browser) show(ctx context.Context, w *window, p *put) (shown any, err error) {
 	w.mu.Lock()
 	w.next = p
 	w.mu.Unlock()
-	entry := url.URL{Scheme: "https", Host: reservedHost, Path: p.root}
-	err := b.navigate(ctx, w, entry.String())
-	w.mu.Lock()
-	w.next = nil
-	if err != nil {
-		p.failed = true
-	}
-	stands := w.put == p
-	w.mu.Unlock()
-	if err != nil {
-		if stands {
+	defer func() {
+		w.mu.Lock()
+		w.next = nil
+		if err != nil {
+			p.failed = true
+		}
+		stands := w.put == p
+		w.mu.Unlock()
+		if err != nil && stands {
 			b.replace(w, nil)
 		}
+	}()
+	entry := url.URL{Scheme: "https", Host: reservedHost, Path: p.root}
+	if err = b.navigate(ctx, w, entry.String()); err != nil {
 		return nil, err
 	}
 	return b.where(ctx, w)

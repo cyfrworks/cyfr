@@ -51,6 +51,8 @@ type pageChrome struct {
 	runs chan string
 	// fails holds how a window's navigation to an address fails.
 	fails map[string]navFail
+	// historyError fails every read of a window's navigation history.
+	historyError bool
 }
 
 type navigation struct {
@@ -377,7 +379,13 @@ func (f *pageChrome) serve(commands io.Reader) {
 		case "Page.getNavigationHistory":
 			f.mu.Lock()
 			address := f.address[m.SessionID]
+			historyError := f.historyError
 			f.mu.Unlock()
+			if historyError {
+				f.write(map[string]any{"id": m.ID, "sessionId": m.SessionID,
+					"error": map[string]any{"code": -32000, "message": "history unavailable"}})
+				continue
+			}
 			reply(map[string]any{"currentIndex": 0, "entries": []any{map[string]any{"url": address, "title": "Put"}}})
 		case "Fetch.fulfillRequest", "Fetch.failRequest":
 			f.mu.Lock()
@@ -1229,6 +1237,29 @@ func TestAShowThatFailsAfterItsCommitEndsItsPut(t *testing.T) {
 			t.Errorf("a put whose show failed after its navigation was answered, its commit taken late %v, answered %+v", late, a)
 		}
 		r.close()
+	}
+}
+
+// A show that fails after its put committed, on the read of where its
+// window is, ends its put as a failed load does: the window serves
+// nothing of it.
+func TestAShowWhoseHistoryReadFailsEndsItsPut(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	if got := r.h.put(1, "thr_01", testRoot+"/first", "index.html", testSite, 64); got["ok"] == nil {
+		t.Fatal(got)
+	}
+	r.f.navigated()
+	r.f.mu.Lock()
+	r.f.historyError = true
+	r.f.mu.Unlock()
+	if got := r.h.put(2, "thr_01", testRoot, "index.html", testSite, 64); got["error"] == nil {
+		t.Fatalf("a put whose history read failed answered %v", got)
+	}
+	r.f.navigated()
+	a := r.f.answer(r.f.pause("S1", "GET", reservedOrigin+testRoot+"/app.js", "M1", true, ""))
+	if a.method != "Fetch.failRequest" {
+		t.Fatalf("a put whose history read failed served its file: %+v", a)
 	}
 }
 
