@@ -263,3 +263,32 @@ func decodeObject(text string) (map[string]any, error) {
 	var value map[string]any
 	return value, json.Unmarshal([]byte(text), &value)
 }
+
+// Chrome's temporary folder is made in its home, and a dead Chrome's lock
+// folders there are removed; anything else in it is kept.
+func TestChromeTempIsMadeAndClearedOfADeadChromesLocks(t *testing.T) {
+	home := t.TempDir()
+	if err := chromeTemp(home); err != nil {
+		t.Fatal(err)
+	}
+	dir := home + "/" + chromeTmp
+	stale := dir + "/org.chromium.Chromium.ZcmaaZ"
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale+"/SingletonSocket", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/kept", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := chromeTemp(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("a dead Chrome's lock folder was left: %v", err)
+	}
+	if _, err := os.Stat(dir + "/kept"); err != nil {
+		t.Fatalf("a file of the home's temporary folder was removed: %v", err)
+	}
+}

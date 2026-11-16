@@ -209,6 +209,9 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 			return nil, err
 		}
 	}
+	if err := chromeTemp(home); err != nil {
+		return nil, err
+	}
 	commandsIn, commandsOut, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -222,7 +225,12 @@ func startChrome(path string, b *browser, logging []string) (*chromeProcess, err
 	args := append([]string{"--headless", "--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
 		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900"}, quiet...)
 	cmd := exec.Command(path, append(args, logging...)...)
-	cmd.Env = append(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "DBUS_SESSION_BUS_ADDRESS=disabled:")
+	// Chrome runs in its home with its temporary folder named relative to
+	// it (chromeTemp), so the socket that locks its profile has a short path
+	// whatever the home's.
+	cmd.Dir = home
+	cmd.Env = append(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"),
+		"DBUS_SESSION_BUS_ADDRESS=disabled:", "TMPDIR="+chromeTmp)
 	// Chrome reads its commands on fd 3 and writes its answers on fd 4. Its
 	// standard streams are the null device, so nothing it prints reaches
 	// the terminal. A process group of its own keeps the terminal's hangup
@@ -287,6 +295,35 @@ func ready(ctx context.Context, c *cdp) error {
 			if err := c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": t.TargetID}, nil); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// chromeTmp is Chrome's temporary folder, relative to the home it runs in.
+// Chrome locks its profile with a socket in a folder it makes there, and a
+// socket's path holds at most 107 bytes: a kept home's absolute path with
+// a row's id leaves too little for Chrome's own names
+// (/var/lib/locus/kept/mcp_<uuid>/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket
+// is 109), and Chrome aborts. Named relative to the home, the path it
+// binds is short however long the home's.
+const chromeTmp = "tmp"
+
+// chromeTemp makes Chrome's temporary folder in home, and removes the
+// lock folders a dead Chrome left there: the host runs one session per
+// person, so none is a live Chrome's.
+func chromeTemp(home string) error {
+	dir := filepath.Join(home, chromeTmp)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	stale, err := filepath.Glob(filepath.Join(dir, "org.chromium.Chromium.*"))
+	if err != nil {
+		return err
+	}
+	for _, path := range stale {
+		if err := os.RemoveAll(path); err != nil {
+			return err
 		}
 	}
 	return nil

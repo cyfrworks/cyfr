@@ -102,8 +102,11 @@ TAIL_BYTES = 256 * 1024
 INPUT_BYTES = BOUNDS["max_chunk_bytes"]
 
 OWNER = owner_of("browser")
-BROWSER_HOME, FETCHLESS_HOME, BROKEN_HOME, OTHER_HOME = (
-    f"mcp_browser-{name}" for name in ("chrome", "fetchless", "broken", "other"))
+# The browser's home is named as a real row's is, mcp_ and a UUID: Chrome's
+# profile lock is a socket in its temporary folder, and a home this long
+# leaves no room for it there unless the driver names that folder short.
+BROWSER_HOME = "mcp_01890000-0000-7000-8000-00000000b005"
+FETCHLESS_HOME, BROKEN_HOME, OTHER_HOME = (f"mcp_browser-{name}" for name in ("fetchless", "broken", "other"))
 # The bound Opus.Programs.Definition.browser/1 gives the browser's home.
 HOME_MAX_BYTES = 2 << 30
 PROGRAMS = [
