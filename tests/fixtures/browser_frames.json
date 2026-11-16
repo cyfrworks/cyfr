@@ -1,0 +1,284 @@
+{
+  "comment": "The driver's framing (C10): the frames the browser driver (apps/locus/keeper/cmd/cyfr-browser, Go) and its one host (Opus.Browser.Frame, Elixir) carry over the driver's terminal session, each way. A frame is 0x1E, \"B1\", the body's length in bytes as 8 lowercase hex digits, the first 8 bytes of the body's SHA-256 as 16 lowercase hex digits, the body, and 0x0A. The body is one JSON object, UTF-8, holding no byte below 0x20 (JSON escapes them), so 0x1E never appears inside a body and a reader that loses its place takes up again at the next one. `encode` gives a body and the exact frame every side writes for it. `decode` gives the pieces of a stream as they arrive, in order, with the reader's bound on a body's length (`max`): the bodies it takes, in order, and the bytes it still holds waiting at the end (`rest`). A reader drops every byte before a 0x1E; it skips a 0x1E whose header does not read (a byte that is not a lowercase hex digit, or a length of 0 or past `max`), whose body's digest differs, or whose body is not followed by 0x0A, or whose claimed body holds a 0x1E (the frame was cut), and takes up at the next 0x1E after it; and it holds an incomplete frame until more bytes come. `messages` names each message, with the fields it carries. A response's text, its chunks put together, is at most `max_response` bytes: a driver sends none longer, and a host keeps no more of one than that as it assembles it, whatever the driver sends.",
+  "start": "\u001eB1",
+  "max_to_host": 131072,
+  "max_to_driver": 8388608,
+  "max_response": 16777216,
+  "encode": [
+    {
+      "name": "hello",
+      "body": "{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}",
+      "frame": "\u001eB100000032b97eb28d20fdf43f{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n"
+    },
+    {
+      "name": "a request",
+      "body": "{\"t\":\"req\",\"id\":7,\"win\":\"thr_01\",\"op\":\"open\",\"args\":{\"url\":\"https://example.com/\"}}",
+      "frame": "\u001eB100000053efc1d346c9cddfde{\"t\":\"req\",\"id\":7,\"win\":\"thr_01\",\"op\":\"open\",\"args\":{\"url\":\"https://example.com/\"}}\n"
+    },
+    {
+      "name": "a response chunk",
+      "body": "{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}",
+      "frame": "\u001eB10000004ffe15bb3f7ae2a679{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}\n"
+    },
+    {
+      "name": "an acknowledgement",
+      "body": "{\"t\":\"ack\",\"id\":7,\"seq\":0}",
+      "frame": "\u001eB10000001adefdd34d37959518{\"t\":\"ack\",\"id\":7,\"seq\":0}\n"
+    },
+    {
+      "name": "again",
+      "body": "{\"t\":\"again\",\"id\":7,\"seq\":1}",
+      "frame": "\u001eB10000001c65db5d1b2944f397{\"t\":\"again\",\"id\":7,\"seq\":1}\n"
+    },
+    {
+      "name": "gone",
+      "body": "{\"t\":\"gone\",\"id\":7}",
+      "frame": "\u001eB100000013c05ca0ca9416d7e5{\"t\":\"gone\",\"id\":7}\n"
+    },
+    {
+      "name": "a body with non-ASCII text and an escaped control byte",
+      "body": "{\"t\":\"req\",\"id\":8,\"win\":\"thr_01\",\"op\":\"type\",\"args\":{\"ref\":\"12\",\"text\":\"caf\u00e9 \u2603 \\u001e\"}}",
+      "frame": "\u001eB10000005b342d758e3cf4ee4f{\"t\":\"req\",\"id\":8,\"win\":\"thr_01\",\"op\":\"type\",\"args\":{\"ref\":\"12\",\"text\":\"caf\u00e9 \u2603 \\u001e\"}}\n"
+    }
+  ],
+  "decode": [
+    {
+      "name": "one whole frame",
+      "max": 131072,
+      "stream": [
+        "\u001eB100000032b97eb28d20fdf43f{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n"
+      ],
+      "frames": [
+        "{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "two frames in one piece",
+      "max": 131072,
+      "stream": [
+        "\u001eB100000032b97eb28d20fdf43f{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n\u001eB10000004ffe15bb3f7ae2a679{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}",
+        "{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a frame split across three pieces",
+      "max": 131072,
+      "stream": [
+        "\u001eB100",
+        "000032b97eb28d20fdf43f{\"t",
+        "\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n"
+      ],
+      "frames": [
+        "{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "bytes before the first frame are dropped",
+      "max": 131072,
+      "stream": [
+        "ls -la\r\nnoise",
+        "\u001eB100000032b97eb28d20fdf43f{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n"
+      ],
+      "frames": [
+        "{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a frame cut at its start by a tail: the cut rest is skipped, the next whole frame is taken",
+      "max": 131072,
+      "stream": [
+        "\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n\u001eB10000004ffe15bb3f7ae2a679{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a frame cut in its middle and followed by a whole one is not taken",
+      "max": 131072,
+      "stream": [
+        "\u001eB100000032b97eb28d20fdf43f{\"t\":\"hello\",\"v\":1,\"chu\u001eB10000004ffe15bb3f7ae2a679{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a wrong digest is not a frame",
+      "max": 131072,
+      "stream": [
+        "\u001eB1000000320000000000000000{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n\u001eB10000001adefdd34d37959518{\"t\":\"ack\",\"id\":7,\"seq\":0}\n"
+      ],
+      "frames": [
+        "{\"t\":\"ack\",\"id\":7,\"seq\":0}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "upper-case hex is not a frame",
+      "max": 131072,
+      "stream": [
+        "\u001eB100000032B97EB28D20FDF43F{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n\u001eB10000001adefdd34d37959518{\"t\":\"ack\",\"id\":7,\"seq\":0}\n"
+      ],
+      "frames": [
+        "{\"t\":\"ack\",\"id\":7,\"seq\":0}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a length past the bound is not a frame",
+      "max": 131072,
+      "stream": [
+        "\u001eB1000200010000000000000000{}\n\u001eB10000001adefdd34d37959518{\"t\":\"ack\",\"id\":7,\"seq\":0}\n"
+      ],
+      "frames": [
+        "{\"t\":\"ack\",\"id\":7,\"seq\":0}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a body not ended by a newline is not a frame",
+      "max": 131072,
+      "stream": [
+        "\u001eB100000032b97eb28d20fdf43f{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}x\u001eB10000001adefdd34d37959518{\"t\":\"ack\",\"id\":7,\"seq\":0}\n"
+      ],
+      "frames": [
+        "{\"t\":\"ack\",\"id\":7,\"seq\":0}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a 0x1E inside a claimed body proves the frame cut: the whole frame after it is taken at once",
+      "max": 131072,
+      "stream": [
+        "\u001eB1000002980a7ad6b7acb26ba9{\"t\":\"req\",\"id\":9,\"win\":\"thr_01\",\u001eB10000001adefdd34d37959518{\"t\":\"ack\",\"id\":7,\"seq\":0}\n"
+      ],
+      "frames": [
+        "{\"t\":\"ack\",\"id\":7,\"seq\":0}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "an incomplete frame waits for more bytes",
+      "max": 131072,
+      "stream": [
+        "\u001eB100000032b97eb28d20fdf43f{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}\n\u001eB10000004ffe15bb3f7"
+      ],
+      "frames": [
+        "{\"t\":\"hello\",\"v\":1,\"chunk\":49152,\"keep_ms\":120000}"
+      ],
+      "rest": "\u001eB10000004ffe15bb3f7"
+    },
+    {
+      "name": "an incomplete header waits for more bytes",
+      "max": 131072,
+      "stream": [
+        "\u001eB1000"
+      ],
+      "frames": [],
+      "rest": "\u001eB1000"
+    }
+  ],
+  "messages": {
+    "hello": {
+      "from": "driver",
+      "fields": [
+        "t",
+        "v",
+        "chunk",
+        "keep_ms"
+      ],
+      "optional": [
+        "error"
+      ],
+      "example": {
+        "t": "hello",
+        "v": 1,
+        "chunk": 49152,
+        "keep_ms": 120000
+      }
+    },
+    "req": {
+      "from": "host",
+      "fields": [
+        "t",
+        "id",
+        "win",
+        "op",
+        "args"
+      ],
+      "example": {
+        "t": "req",
+        "id": 7,
+        "win": "thr_01",
+        "op": "open",
+        "args": {
+          "url": "https://example.com/"
+        }
+      }
+    },
+    "res": {
+      "from": "driver",
+      "fields": [
+        "t",
+        "id",
+        "seq",
+        "of",
+        "part"
+      ],
+      "example": {
+        "t": "res",
+        "id": 7,
+        "seq": 0,
+        "of": 1,
+        "part": "eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0="
+      }
+    },
+    "ack": {
+      "from": "host",
+      "fields": [
+        "t",
+        "id",
+        "seq"
+      ],
+      "example": {
+        "t": "ack",
+        "id": 7,
+        "seq": 0
+      }
+    },
+    "again": {
+      "from": "host",
+      "fields": [
+        "t",
+        "id",
+        "seq"
+      ],
+      "example": {
+        "t": "again",
+        "id": 7,
+        "seq": 1
+      }
+    },
+    "gone": {
+      "from": "driver",
+      "fields": [
+        "t",
+        "id"
+      ],
+      "example": {
+        "t": "gone",
+        "id": 7
+      }
+    }
+  }
+}

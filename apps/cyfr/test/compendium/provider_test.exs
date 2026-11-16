@@ -2063,13 +2063,14 @@ defmodule Compendium.ProviderTest do
       # The shipped scrolls are read in place from the seed.
       {:ok, shipped} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
 
-      assert ~w(artisan builder canvas capability-acquisition planner web) ==
+      assert ~w(artisan browser builder canvas capability-acquisition planner web) ==
                Enum.map(shipped.skills, & &1.name)
 
       by_name = Map.new(shipped.skills, &{&1.name, &1.description})
       assert by_name["canvas"] =~ "canvas"
       assert by_name["capability-acquisition"] =~ "registry"
       assert by_name["builder"] =~ "WASM component"
+      assert by_name["browser"] =~ "your own Chrome"
       refute Map.has_key?(shipped, :hint)
 
       {:ok, %{created: "pdf"}} =
@@ -2091,7 +2092,7 @@ defmodule Compendium.ProviderTest do
       {:ok, listing} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
 
       assert Enum.map(listing.skills, & &1.name) ==
-               ~w(artisan builder canvas capability-acquisition pdf planner web)
+               ~w(artisan browser builder canvas capability-acquisition pdf planner web)
 
       {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
       assert skill.description == "fills PDF forms"

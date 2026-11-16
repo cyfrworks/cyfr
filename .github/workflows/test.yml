@@ -1556,6 +1556,19 @@ jobs:
       - name: Kept homes
         run: python3 tests/locus-backends-image/kept_home.py cyfr-locus:backends
 
+      # Aqua's browser: cyfr-browser on a terminal in a kept home, driving
+      # the Chrome it fetches there from Google on the runner (the image
+      # holds none) over its debugging pipe, framed as
+      # tests/fixtures/browser_frames.json says: a megabyte read whole in
+      # acknowledged chunks, no output past an unacknowledged chunk, a forced
+      # tail asked again and a short keep answered gone, each operation once,
+      # a profile another kept uid cannot read and no TCP listener; a restart
+      # that fetches nothing, an unreachable list with and without a Chrome,
+      # a truncated archive never published and the home's bound. It prints
+      # Chrome's memory with one, three and six windows and the first start's time.
+      - name: Aqua's browser
+        run: python3 tests/locus-backends-image/browser.py cyfr-locus:backends
+
       # A program's pipe: a pipe row's cat in a kept home under the home's
       # uid, attached to by its key, a read replayed by its after, retired
       # once idle and started again (resumed: false), its oldest lines

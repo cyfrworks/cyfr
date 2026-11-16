@@ -9,7 +9,7 @@ defmodule Arca.Schemas.ToolGrant do
   Distinct from the agent's markdown `tool_policy`, which is **authored**
   policy — what the agent's author says it may do. A grant is what a human
   answered when asked, and the two are composed at use time by
-  `Aqua.ToolGrants.effective/2`.
+  `Aqua.ToolGrants.effective/3`.
 
   `scope` says how far the answer reaches: `"thread"` — this thread
   only, surviving a runner restart — or `"agent"` — every thread

@@ -31,8 +31,10 @@ defmodule Aqua.Kinds do
   whose kind is unknown is refused too — "not known" and "not yet
   loaded" read the same here, and only the second could otherwise run
   something destructive with no card. The one rule the Aqua page and the
-  runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it
-  admits are `Sanctum.VirtualTools.auto_permitted_kind?/1`'s.
+  runtime ceiling (`Aqua.ToolGrants.effective/3`) read; the kinds it
+  admits are `Sanctum.VirtualTools.auto_permitted_kind?/1`'s. The browser
+  tool's own actions are decided over it by the person's browser setting,
+  in that ceiling alone.
   """
   @spec auto_permitted?(String.t(), String.t()) :: boolean()
   defdelegate auto_permitted?(tool, action), to: Sanctum.Catalog

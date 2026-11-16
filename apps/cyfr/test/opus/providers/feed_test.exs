@@ -319,8 +319,11 @@ defmodule Opus.Providers.FeedTest do
       assert {:error, _not_standing} =
                Sanctum.ToolGrants.check_standing(allow, DateTime.utc_now())
 
-      assert Aqua.ToolGrants.resolve(%{"feed.bind" => "auto"}, [])["feed.bind"] == "ask"
-      assert Aqua.ToolGrants.resolve(%{"feed.*" => "auto"}, [allow])["feed.bind"] == "ask"
+      assert Aqua.ToolGrants.resolve(%{"feed.bind" => "auto"}, [], {:ok, true})["feed.bind"] ==
+               "ask"
+
+      assert Aqua.ToolGrants.resolve(%{"feed.*" => "auto"}, [allow], {:ok, true})["feed.bind"] ==
+               "ask"
     end
 
     test "refuses an uninstalled reference, an operation with no declared result, and a binding " <>

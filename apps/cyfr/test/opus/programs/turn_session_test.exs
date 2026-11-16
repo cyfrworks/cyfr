@@ -694,4 +694,50 @@ defmodule Opus.Programs.TurnSessionTest do
       assert_receive {:session, "close", %{"session" => ^session}, _}, 2_000
     end
   end
+
+  describe "the person's browser" do
+    test "is nothing of a turn's: it lists it not, may not start its row, reads nothing of it, and no turn's end ends it",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      {:ok, browser} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: Programs.Definition.browser_name(),
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          memory_bytes: 1_073_741_824,
+          config_json: Jason.encode!(%{"command" => "cyfr-browser", "env" => %{}})
+        })
+
+      assert {:ok, id} =
+               Programs.start(Programs.browser(ctx.athanor_id, ctx.user_id), browser.id, %{
+                 rows: 50,
+                 cols: 200,
+                 args: [],
+                 held_by: self()
+               })
+
+      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+
+      assert {:ok, %{programs: programs}} = call(ctx, lineage, "list", %{})
+      refute Enum.any?(programs, &(&1.id == browser.id))
+
+      assert {:error, {:invalid_argument, sentence}} =
+               call(ctx, lineage, "start", %{"program" => browser.id, "epoch" => browser.epoch})
+
+      assert sentence =~ "Aqua's browser"
+
+      caller = turn_caller(ctx, lineage)
+      assert {:ok, []} = Programs.running(caller)
+      assert {:error, :not_found} = Programs.read(caller, id, 0)
+      assert {:error, :not_found} = Programs.input(caller, id, "typed")
+      assert {:ok, :already_gone} = Programs.close(caller, id)
+
+      set_status(turn, "completed")
+      :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+      Process.sleep(100)
+      assert {:ok, [%{session: ^id, by: :browser}]} = Programs.running(ctx)
+    end
+  end
 end

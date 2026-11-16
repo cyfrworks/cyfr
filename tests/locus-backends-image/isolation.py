@@ -405,7 +405,7 @@ def main():
             # PWD is set by the backend's own `sh -c`.
             expect(who["env_names"] == ["HOME", "LOGNAME", "PATH", "PROBE_SECRET", "PWD", "TMPDIR", "USER"],
                    f"{name}'s environment is its sealed block and the keeper's own variables", who["env_names"])
-            expect(who["limits"] == {"nofile": {"soft": "1024", "hard": "1024"}, "nproc": {"soft": "128", "hard": "128"},
+            expect(who["limits"] == {"nofile": {"soft": "1024", "hard": "1024"}, "nproc": {"soft": "1024", "hard": "1024"},
                                      "core": {"soft": "0", "hard": "0"},
                                      "fsize": {"soft": "268435456", "hard": "268435456"}},
                    f"{name} runs under the keeper's resource limits", who["limits"])

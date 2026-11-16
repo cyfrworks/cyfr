@@ -107,18 +107,36 @@ defmodule Aqua.SeedContractTest do
     # The soul hands a job to a crew member with `crew.ask` and reads who
     # there is with `crew.list`, both without a card; no glob stands in for
     # them. `native_search` is not a tool action and passes through
-    # `Aqua.ToolGrants.effective/2` untouched.
+    # `Aqua.ToolGrants.effective/3` untouched.
     {:ok, soul} =
       Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
 
-    composed = Aqua.ToolGrants.resolve(soul.tool_policy, [])
+    composed = Aqua.ToolGrants.resolve(soul.tool_policy, [], {:ok, true})
     assert composed["crew.ask"] == "auto" and composed["crew.list"] == "auto"
     assert Enum.filter(Map.keys(soul.tool_policy), &String.ends_with?(&1, ".*")) == []
 
     for {name, key, mode} <- seed_policy(), key == "native_search" do
       {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(seed_file(name)))
-      assert Aqua.ToolGrants.resolve(agent.tool_policy, [])["native_search"] == mode
+      assert Aqua.ToolGrants.resolve(agent.tool_policy, [], {:ok, true})["native_search"] == mode
     end
+  end
+
+  test "the shipped soul names every browser action, and the person's setting, not its lines, decides how they run" do
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
+
+    family =
+      for action <- Aqua.Kinds.actions_of("browser"),
+          Sanctum.Catalog.follows_setting?("browser", action),
+          do: "browser." <> action
+
+    assert length(family) == 8
+    assert Enum.reject(family, &Map.has_key?(soul.tool_policy, &1)) == []
+
+    on = Aqua.ToolGrants.resolve(soul.tool_policy, [], {:ok, true})
+    off = Aqua.ToolGrants.resolve(soul.tool_policy, [], {:ok, false})
+    assert Map.take(on, family) == Map.new(family, &{&1, "auto"})
+    assert Map.take(off, family) == Map.new(family, &{&1, "deny"})
+    assert Map.drop(on, family) == Map.drop(off, family)
   end
 
   # A grant a person signs for that no shipped prose ever exercises is a

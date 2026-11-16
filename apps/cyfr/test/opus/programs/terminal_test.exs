@@ -1011,4 +1011,131 @@ defmodule Opus.Programs.TerminalTest do
       refute inspect(stack, limit: :infinity, printable_limit: :infinity) =~ secret
     end
   end
+
+  defp browser_row(ctx),
+    do:
+      program_row(ctx, Programs.Definition.browser_name(), %{
+        memory_bytes: 1_073_741_824,
+        home_max_bytes: nil,
+        config_json: Jason.encode!(%{"command" => "cyfr-browser", "env" => %{}})
+      })
+
+  defp browser_start(ctx, row_id, held_by \\ self()),
+    do:
+      Programs.start(
+        Programs.browser(ctx.athanor_id, ctx.user_id),
+        row_id,
+        Map.merge(@size, %{args: [], held_by: held_by})
+      )
+
+  describe "the person's browser, a third owner" do
+    test "starts the row of the browser's own definition alone, one at a time, and that row for no one else",
+         %{ctx: ctx, row: row} do
+      browser = browser_row(ctx)
+
+      assert {:error, :not_browser} = browser_start(ctx, row.id)
+      refute_received {:session, "open", _message, _fields}
+
+      assert {:ok, id} = browser_start(ctx, browser.id)
+      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+
+      assert [{_pid, {athanor, user, :browser}}] =
+               Registry.lookup(Opus.Programs.Registry, {:terminal, id})
+
+      assert {athanor, user} == {ctx.athanor_id, ctx.user_id}
+
+      assert {:error, :already_running} = browser_start(ctx, browser.id)
+
+      # Not the person's own terminal: the row of the browser starts for
+      # its owner alone.
+      assert {:error, {:invalid_argument, sentence}} =
+               Programs.start(ctx, browser.id, Map.merge(@size, %{args: []}))
+
+      assert sentence =~ "Aqua's browser"
+
+      # Nor as a catalyst's pipe.
+      assert {:error, {:invalid_argument, _sentence}} =
+               Programs.pipe_open(
+                 browser,
+                 "key",
+                 [],
+                 "opener",
+                 System.system_time(:millisecond) + 5_000
+               )
+
+      refute_received {:session, "open", _message, _fields}
+    end
+
+    test "it is held by one process from its start: one that names none starts nothing, and the session ends when it is gone, a person's own detaching as before",
+         %{ctx: ctx, row: row} do
+      browser = browser_row(ctx)
+
+      assert {:error, :invalid_args} =
+               Programs.start(
+                 Programs.browser(ctx.athanor_id, ctx.user_id),
+                 browser.id,
+                 Map.merge(@size, %{args: []})
+               )
+
+      refute_received {:session, "open", _message, _fields}
+
+      holder = spawn(fn -> Process.sleep(:infinity) end)
+      {:ok, id} = browser_start(ctx, browser.id, holder)
+      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+      Process.exit(holder, :kill)
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, by: :browser, reason: :closed},
+                     5_000
+
+      # A person's own session outlives a process that attached to it.
+      {mine, _session} = start!(ctx, row)
+      test = self()
+
+      watcher =
+        spawn(fn ->
+          send(test, {:attached, Programs.attach(ctx, mine)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:attached, {:ok, _tail}}, 2_000
+      Process.exit(watcher, :kill)
+      Process.sleep(100)
+      refute gone?(mine)
+    end
+
+    test "the person lists it as the browser's and closes it, and reaches nothing else of it",
+         %{ctx: ctx} do
+      browser = browser_row(ctx)
+      {:ok, id} = browser_start(ctx, browser.id)
+      assert_receive {:session, "open", %{"key" => ^id}, _fields}, 2_000
+
+      assert {:ok, [%{session: ^id, by: :browser, name: "aqua-browser"}]} = Programs.running(ctx)
+      assert {:error, :not_found} = Programs.attach(ctx, id)
+      assert {:error, :not_found} = Programs.input(ctx, id, "typed")
+
+      # Another person finds nothing of it.
+      {other, _user} = person!("someone-else")
+      assert {:ok, []} = Programs.running(other)
+      assert {:ok, :already_gone} = Programs.close(other, id)
+
+      assert {:ok, :closed} = Programs.close(ctx, id)
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, by: :browser, reason: :closed},
+                     2_000
+    end
+
+    test "its owner stands only while its person does", %{ctx: ctx, user: user} do
+      browser = browser_row(ctx)
+      owner = Programs.browser(ctx.athanor_id, ctx.user_id)
+      assert {:ok, {athanor, user_id, :browser}} = Programs.caller(owner)
+      assert {athanor, user_id} == {ctx.athanor_id, ctx.user_id}
+
+      {:ok, id} = browser_start(ctx, browser.id)
+      assert {:ok, _attached} = Programs.attach(owner, id)
+
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      assert_receive {Opus.Programs, ^id, {:ended, :standing}}, 3_000
+      assert {:error, :not_standing} = Programs.caller(owner)
+    end
+  end
 end

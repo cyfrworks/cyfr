@@ -267,14 +267,15 @@ defmodule Sanctum.Tenancy.Users do
     end
   end
 
-  @doc "Merge `patch` into the person's preferences; a key patched to `nil` is removed."
+  @doc """
+  Merge `patch` into the person's preferences as the store holds them
+  now, not as `user` was read, a key patched to `nil` removed: one locked
+  read and write (`Arca.Users.merge_prefs/3`), so a concurrent write of
+  another key is kept.
+  """
   @spec put_prefs(user(), map()) :: {:ok, user()} | {:error, term()}
-  def put_prefs(%{id: _} = user, patch) when is_map(patch) do
-    prefs =
-      user |> prefs() |> Map.merge(patch) |> Map.reject(fn {_key, value} -> is_nil(value) end)
-
-    update(user, %{prefs: Jason.encode!(prefs)})
-  end
+  def put_prefs(%{id: user_id}, patch) when is_map(patch),
+    do: Arca.Users.merge_prefs(server(), user_id, patch)
 
   @doc """
   Eject a person from this server, as one transaction
@@ -365,8 +366,6 @@ defmodule Sanctum.Tenancy.Users do
 
   # The row the person's id names is reread below and written as it
   # stands: nothing else the caller's map carries reaches the write.
-  defp update(%{id: user_id}, attrs), do: Arca.Users.update(server(), user_id, attrs)
-
   # A person is not a row inside an athanor: the row is written before any
   # athanor exists and read from every one the person sits in.
   defp server, do: Prima.Actor.system()

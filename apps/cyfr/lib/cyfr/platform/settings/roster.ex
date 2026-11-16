@@ -372,6 +372,10 @@ defmodule Cyfr.Platform.Settings.Roster do
       "How long the backends service runs a program's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it.",
     "athanor_program_memory_bytes" =>
       "Bytes the program sessions of one athanor may hold on one backends box together, each session counted at its memory bound from its start until its process is gone; an open past it is refused until one ends. Unset, the box's own budget (`LOCUS_BACKENDS_MEMORY_BUDGET`); 0 is refused.",
+    "browser_idle_ms" =>
+      "How long Aqua's browser runs with no action of Aqua's before it stops, in milliseconds; its profile stays in its folder, and Aqua's next action starts it again.",
+    "browser_memory_bytes" =>
+      "The memory bound Aqua's browser is added with, for its Chrome and its four windows at most; the person changes the bound of the row on the Programs page. The backends service's default total (`LOCUS_BACKENDS_MEMORY_BUDGET`, 1792 MiB) does not hold a 1 GiB browser beside a 1 GiB program: to run both, raise `LOCUS_BACKENDS_MEMORY_BUDGET` in `.env.locus` and `LOCUS_BACKENDS_MEMORY_LIMIT` in `.env` with it, the budget plus 256 MiB. Measured with the image suite's pages, one, three and six windows held 1058, 1154 and 1273 MiB with the file cache of the Chrome the first start fetched, which the kernel gives back first, and 573, 641 and 734 MiB without it; all six fit in the 1 GiB default, the cache giving way. A heavy page can still reach the bound: the browser then ends, every window with it, and the next action starts it again. Its folder, bounded at 2 GiB, holds its profile and the Chrome it fetches at its first start, about 430 MB, looking for a newer one at most once a day: `googlechromelabs.github.io` answers the current stable's version number, and `storage.googleapis.com` holds that version's archive, so the backends service reaches both.",
     "locus_backends_idle_ms" =>
       "How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again.",
     "log_level" =>
@@ -650,6 +654,23 @@ defmodule Cyfr.Platform.Settings.Roster do
         "CYFR_ATHANOR_PROGRAM_MEMORY_BYTES",
         nil,
         byte_count(1..@max_bytes),
+        :backends
+      ),
+      # Read by `Opus.Browser` on each use.
+      limit(
+        :browser_idle_ms,
+        "CYFR_BROWSER_IDLE_MS",
+        1_800_000,
+        whole(60_000..86_400_000, "milliseconds"),
+        :backends
+      ),
+      limit(
+        :browser_memory_bytes,
+        "CYFR_BROWSER_MEMORY_BYTES",
+        1_073_741_824,
+        byte_count(
+          Prima.KeeperProtocol.min_memory_bytes()..Prima.KeeperProtocol.max_memory_bytes()
+        ),
         :backends
       ),
       %Entry{

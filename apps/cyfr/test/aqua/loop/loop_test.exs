@@ -1039,7 +1039,9 @@ defmodule Aqua.LoopTest do
       refute Aqua.Loop.Policy.auto?(call, policy, place)
 
       {:ok, rows} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
-      assert Aqua.ToolGrants.resolve(%{"files.write" => "auto"}, rows)["files.write"] == "deny"
+
+      assert Aqua.ToolGrants.resolve(%{"files.write" => "auto"}, rows, {:ok, true})["files.write"] ==
+               "deny"
     end
   end
 

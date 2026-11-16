@@ -12,6 +12,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   that changes a file's provenance asks the page to re-read it
   (`{:refresh, :agents}`), since the chips and the removal verbs come off
   that read.
+
+  Beside the soul's capabilities stands the person's browser setting,
+  read and written through the `browser` tool as the person: the
+  browser's own actions follow it rather than a policy line, so the
+  capability list leaves them out. While Aqua's browser is not added, the
+  section offers to add it on the Programs page, where its definition is
+  confirmed as any program's is.
   """
 
   use PrismWeb, :live_component
@@ -37,6 +44,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:agents_unread, false)
      |> assign(:crew, [])
      |> assign(:tool_actions, nil)
+     |> assign(:browser, nil)
      |> assign(:model_status, %{})
      |> assign(:brain_options, %{})
      |> assign(:program_offers, %{})
@@ -255,6 +263,24 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
         true ->
           {:noreply, update_tool_policy(socket, name, fn _policy -> {:ok, %{key => mode}} end)}
+      end
+    end)
+  end
+
+  # The person's browser setting, set through the gate as the person:
+  # turning it on or off on this page is their own act, which asks
+  # nothing more.
+  def handle_event("browser_set", %{"on" => on}, socket) when on in ["true", "false"] do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
+      action = if on == "true", do: "browser/turn_on", else: "browser/turn_off"
+
+      case PrismWeb.Ops.call_tool(ctx, action, %{}) do
+        {:ok, _set} ->
+          {:noreply, assign(socket, :browser, browser_status(ctx))}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, Sanctum.Refusals.render(reason))}
       end
     end)
   end
@@ -517,6 +543,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign_plans(ctx, agents)
     |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
+    |> assign(:browser, browser_status(ctx))
+  end
+
+  # The browser setting, whether Aqua's browser is added and whether it
+  # runs, as `browser.status` answers them; nil when it cannot be read.
+  defp browser_status(ctx) do
+    case PrismWeb.Ops.call_tool(ctx, "browser/status", %{}) do
+      {:ok, status} -> status
+      {:error, _unread} -> nil
+    end
   end
 
   defp brains_read(soul, crew, status) do
@@ -650,7 +686,23 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     if socket.assigns[:tool_actions] do
       socket
     else
-      assign(socket, :tool_actions, Catalog.enumerate_tool_actions())
+      assign(socket, :tool_actions, without_setting(Catalog.enumerate_tool_actions()))
+    end
+  end
+
+  # The actions that follow the person's browser setting have no policy
+  # line to choose: the browser section stands for them.
+  defp without_setting(tool_actions) do
+    for {tool, actions} <- tool_actions do
+      kept =
+        if is_list(actions),
+          do:
+            Enum.reject(actions, fn {action, _kind} ->
+              Sanctum.Catalog.follows_setting?(tool, action)
+            end),
+          else: actions
+
+      {tool, kept}
     end
   end
 
@@ -901,6 +953,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         athanor={@athanor}
         offers={Map.get(@program_offers, @soul["catalyst_ref"], [])}
         signs_in?={MapSet.member?(@signs_in, @soul["catalyst_ref"])}
+        browser={@browser}
       />
 
       <div :if={@crew != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
@@ -988,6 +1041,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :athanor, :any, default: nil
   attr :offers, :list, default: []
   attr :signs_in?, :boolean, default: false
+  attr :browser, :map, default: nil
 
   defp agent_card(assigns) do
     assigns =
@@ -1390,7 +1444,72 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             class="rounded bg-gray-900 border-gray-600"
           /> Native search (model-side web grounding) — runs inside the provider without asking
         </label>
+        <.browser_setting :if={@browser} myself={@myself} athanor={@athanor} browser={@browser} />
       </div>
+    </div>
+    """
+  end
+
+  attr :myself, :any, required: true
+  attr :athanor, :any, default: nil
+  attr :browser, :map, required: true
+
+  # The person's browser setting, and adding Aqua's browser while it is
+  # not added.
+  defp browser_setting(assigns) do
+    ~H"""
+    <div
+      id="aqua-browser"
+      data-test="aqua-browser"
+      class="mt-3 border border-gray-800 rounded p-3 space-y-2"
+    >
+      <div class="flex items-center justify-between gap-3">
+        <p class="text-[11px] text-gray-400">
+          <span class="text-gray-200">Browser</span>
+          — Aqua has a Chrome of its own that is yours alone, with a window for each thread. While this is on, Aqua opens, reads and acts on sites in it without asking. Off, Aqua cannot use it and its windows close; your sign-ins in it stay.
+        </p>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={to_string(@browser[:on] == true)}
+          data-test="aqua-browser-switch"
+          phx-click="browser_set"
+          phx-value-on={to_string(@browser[:on] != true)}
+          phx-target={@myself}
+          class={[
+            "shrink-0 rounded px-3 py-1 text-xs font-medium",
+            if(@browser[:on] == true,
+              do: "bg-emerald-700 text-white hover:bg-emerald-600",
+              else: "bg-gray-800 text-gray-300 hover:bg-gray-700"
+            )
+          ]}
+        >
+          {if @browser[:on] == true, do: "On", else: "Off"}
+        </button>
+      </div>
+      <p class="text-[11px] text-gray-500">
+        Aqua is told never to send, submit, buy or publish on a site without your word; that is its instruction, not a lock. A site you sign in to in this Chrome is open to Aqua too.
+      </p>
+      <p
+        :if={@browser[:browser] == "not_added"}
+        class="text-[11px] text-gray-400"
+        data-test="aqua-browser-add"
+      >
+        Aqua's browser is not added yet.
+        <.link
+          :if={@athanor}
+          navigate={PrismWeb.Focus.path(@athanor, "/programs?add=browser&from=aqua")}
+          class="text-blue-400 hover:underline"
+        >
+          Add Aqua's browser
+        </.link>
+      </p>
+      <p :if={@browser[:browser] == "disabled"} class="text-[11px] text-amber-300">
+        Aqua's browser is disabled on the Programs page; enable it there.
+      </p>
+      <p :if={@browser[:browser] == "not_browser"} class="text-[11px] text-amber-300">
+        A program named aqua-browser is not Aqua's browser; rename or remove it on the Programs page.
+      </p>
     </div>
     """
   end

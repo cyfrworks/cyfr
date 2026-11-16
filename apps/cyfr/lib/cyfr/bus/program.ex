@@ -32,7 +32,7 @@ defmodule Cyfr.Bus.Program do
           started_at: DateTime.t() | nil,
           kept: boolean() | nil,
           attached: boolean() | nil,
-          by: :person | :aqua | nil,
+          by: :person | :aqua | :browser | nil,
           reason: :exited | :closed | :idle | :row_changed | :standing | nil
         }
 

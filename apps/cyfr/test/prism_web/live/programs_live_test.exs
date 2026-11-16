@@ -1062,6 +1062,43 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute has_element?(view, ~s([data-test="terminal"]))
   end
 
+  test "Aqua's browser is added from its own definition, prefilled, and confirmed as any program is",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    {view, _html} = mount_athanor(conn, "/programs?add=browser&from=aqua", athanor)
+    render(view)
+
+    assert has_element?(view, ~s([data-test="add-browser"]), "asks you to confirm the program")
+    assert has_element?(view, ~s(form#add-program input[name="name"][value="aqua-browser"]))
+    assert has_element?(view, ~s(form#add-program input[name="command"][value="cyfr-browser"]))
+    assert has_element?(view, ~s(form#add-program input[name="memory_mib"][value="1024"]))
+    assert has_element?(view, ~s(form#add-program input[name="disk_mib"][value="2048"]))
+
+    view |> form("form#add-program", %{}) |> render_submit()
+    answered(view)
+
+    assert %{
+             "details" => %{
+               "command" => "cyfr-browser",
+               "mark" => "driven",
+               "folder" => "new",
+               "hosts" => "every public host",
+               "memory_bytes" => "1073741824",
+               "home_max_bytes" => "2147483648",
+               "environment" => "none"
+             }
+           } = asked(user, athanor, "mcp_servers.create")
+
+    confirm!(view, user, athanor, "mcp_servers.create")
+
+    assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "aqua-browser")
+    assert Opus.Programs.Definition.browser?(row)
+    # Its folder holds a Chrome, a second being fetched beside it, and the profile.
+    assert row.home_max_bytes == 2 * 1024 * 1_048_576
+    assert open_confirmations(user, athanor) == []
+    refute_received {:session, "open", _message, _fields}
+  end
+
   test "an install from a component's need asks once, then opens its terminal in the row's folder",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()

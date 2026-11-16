@@ -18,9 +18,10 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   # one's own ended, a command line withdrawing its sign-in, revoking (a command line's session and a
   # shared key among them), withdrawing consent, leaving or removing
   # someone from a shared thread, withdrawing its invitation, denying
-  # someone at a door, taking an administrator's mark away and archiving a
-  # shared thread.
+  # someone at a door, taking an administrator's mark away, archiving a
+  # shared thread and stopping Aqua using the person's browser.
   @roster ~w(
+    browser.turn_off
     door.clear_admin
     door.deny
     invitation.revoke

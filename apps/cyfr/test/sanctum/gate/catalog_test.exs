@@ -291,6 +291,29 @@ defmodule Sanctum.Gate.CatalogTest do
       assert Catalog.operations() == before
     end
 
+    test "only the browser tool's own actions follow the person's setting, the rest of every tool none" do
+      following = Enum.filter(Catalog.tool_actions(), &following?/1)
+
+      assert Enum.sort(following) ==
+               Enum.sort(
+                 for(
+                   action <- ~w(open read click type key page screenshot close),
+                   do: "browser." <> action
+                 )
+               )
+
+      # The setting's own operations are decided as any other: turning it
+      # on asks every time, turning it off may run at once.
+      refute following?("browser.turn_on")
+      refute Catalog.auto_permitted?("browser", "turn_on")
+      assert Catalog.auto_permitted?("browser", "turn_off")
+
+      # The external ones among the browser's own actions take no
+      # authored `auto` by the standing rule: the setting decides them.
+      for action <- ~w(open click type key page),
+          do: refute(Catalog.auto_permitted?("browser", action), action)
+    end
+
     test "a module that declares no tools cannot be planted" do
       assert_raise ArgumentError, ~r/does not export tools\/0/, fn ->
         Catalog.with_providers([Sanctum.Gate.CatalogTest.NoSuchProvider], fn -> :ok end)
@@ -1278,5 +1301,10 @@ defmodule Sanctum.Gate.CatalogTest do
     assert {:monitored_by, by} = Process.info(pid, :monitored_by)
     assert self() in by
     ref
+  end
+
+  defp following?(name) do
+    [tool, action] = String.split(name, ".", parts: 2)
+    Catalog.follows_setting?(tool, action)
   end
 end

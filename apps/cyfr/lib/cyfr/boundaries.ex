@@ -760,14 +760,17 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Opus",
-      allow: ~w(Opus),
+      allow: ~w(Opus Opus.Browser),
       reason:
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
           "model listing or a consent status derives an authority there; nothing of " <>
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
-          "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
-          "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
+          "Its browser tool acts through Aqua's browser's holder (`Opus.Browser`), which " <>
+          "proves the caller and holds the person's browser session, and stops it when " <>
+          "the person's browser setting goes off. " <>
+          "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
+          "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
           "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
@@ -826,8 +829,8 @@ defmodule Cyfr.Boundaries do
           "sessions through the programs controller (`Opus.Programs`, its session " <>
           "client and the row definition it syncs), and the provider asks it for a " <>
           "row's status, a person's start of it on a terminal and a kept home's reset. " <>
-          "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
-          "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
+          "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
+          "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
           "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
@@ -840,16 +843,18 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web.ex"
       ],
       into: "Opus",
-      allow: ~w(Opus Opus.Programs),
+      allow: ~w(Opus Opus.Browser Opus.Programs),
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
           "shows the person's program terminals through the programs controller's facade " <>
           "(`Opus.Programs.attach/2`, `taken/3`, `detach/2`, `input/3`, `resize/4`, `keep/3`, " <>
-          "`close/2`, `running/1`) under the person's own context, and names none of " <>
+          "`close/2`, `running/1`) under the person's own context, prefills the program " <>
+          "form with Aqua's browser's definition and its memory setting " <>
+          "(`Opus.Browser.memory_bytes/0`), and names none of " <>
           "either's internals. " <>
-          "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
-          "`Programs`, `Programs.Definition`, `Programs.Session`, " <>
+          "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
+          "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
           "`Supervisor` beside its " <>
           "root to every boundary that lists it, so no declaration can say it."
@@ -1866,13 +1871,17 @@ defmodule Cyfr.Boundaries do
     # stream's open would be (`Compendium.Desktop`). `validate_arguments/2`:
     # a frame's request is held to its operation's declaration before the
     # person is asked, so an approval never meets a refusal the request
-    # could have had.
+    # could have had. `follows_setting?/2`: the actions that follow the
+    # person's browser setting are decided by it in the turn's policy
+    # (`Aqua.ToolGrants.effective/3`), and the Aqua page leaves them out
+    # of the capability list.
     "Sanctum.Catalog" => [
       action_declaration: 1,
       authorize_stream: 2,
       auto_permitted?: 2,
       chain_reachable?: 2,
       configured_providers: 0,
+      follows_setting?: 2,
       get_tool: 1,
       host_intercepted_actions: 0,
       list_tools: 0,
