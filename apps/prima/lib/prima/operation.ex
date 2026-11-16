@@ -59,12 +59,13 @@ defmodule Prima.Operation do
   no other external action takes a standing allow. It is metadata for
   the gate, absent from the annotation view and from discovery.
 
-  `stored_answers: false` marks an action no standing answer a person
+  `stored_answers: false` marks an action no standing allow a person
   gives is ever kept for, though its `standing` lets an author make it
   automatic: whether an author may write `auto` for an action and whether
-  a stored standing answer may exist for it are two facts, and this is
+  a stored standing allow may exist for it are two facts, and this is
   the second. `Sanctum.ToolGrants`' one rule refuses such a row when it
-  is written and counts none when it reads one back. It is declared only
+  is written and counts none when it reads one back; a standing deny
+  stands as for every action. It is declared only
   beside a `standing` of nil, since `false` and `:thread` already say how
   far an answer reaches. It is metadata for the gate, absent from the
   annotation view and from discovery.
