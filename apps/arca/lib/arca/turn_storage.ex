@@ -3577,6 +3577,7 @@ defmodule Arca.TurnStorage do
   def hold_turns!(%Prima.Actor{} = actor, turn_ids) when is_list(turn_ids),
     do: hold_turns!(actor, from(t in Turn, where: t.id in ^turn_ids))
 
+  # arca:db-raise-ok inside the caller's transaction
   def hold_turns!(%Prima.Actor{athanor_id: athanor_id}, %Ecto.Query{} = turns)
       when is_binary(athanor_id) and athanor_id != "" do
     from(t in turns,
