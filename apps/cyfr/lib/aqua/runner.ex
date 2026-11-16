@@ -60,9 +60,10 @@ defmodule Aqua.Runner do
   turn ends; with no turn, it opens a turn that asks no model, which runs
   as the person whose turn put the page, under that turn's origin, and
   is queued as any turn. At most `@queue_max` wait; past that a call is
-  refused `:busy`. Its answer is its step's `page_result` row, heard on
-  the thread's topic and handed back through `Opus.Browser.answer/5`; a
-  call whose turn ended without answering it is answered as cancelled. A
+  refused `:busy`, and a stop drops those waiting as it drops the queue.
+  Its answer is its step's `page_result` row, heard on the thread's
+  topic and handed back through `Opus.Browser.answer/5`; a call whose
+  turn ended without answering it is answered as cancelled. A
   call whose request ended is dropped while it waits, and its step
   skipped, its card withdrawn, while the step is still proposed. A runner
   that recovers a thread's turns holds no call of its predecessor, whose
@@ -329,7 +330,10 @@ defmodule Aqua.Runner do
     :ok
   end
 
-  @doc "Cancel the current running, paused or held turn and the turns queued behind it."
+  @doc """
+  Cancel the current running, paused or held turn and the turns and a
+  page's calls queued behind it.
+  """
   @spec stop_turn(Context.t(), String.t()) :: :ok | {:error, term()}
   def stop_turn(%Context{} = ctx, thread_id), do: call(ctx, thread_id, {:stop, ctx})
 
@@ -555,7 +559,9 @@ defmodule Aqua.Runner do
         {:reply, :ok, unanswering(%{state | pages: pages}, request)}
 
       {[], _pages} ->
-        if Map.has_key?(state.answering, request), do: withdraw(state, request)
+        state =
+          if Map.has_key?(state.answering, request), do: withdraw(state, request), else: state
+
         {:reply, :ok, unanswering(state, request)}
     end
   end
@@ -1074,8 +1080,10 @@ defmodule Aqua.Runner do
 
   defp start_next(%{queue: [], pages: []} = state), do: touch(answer_ended(state))
 
+  # The call is still waiting when the ended turn's calls are answered,
+  # so that end does not answer it.
   defp start_next(%{queue: [], pages: [call | pages]} = state) do
-    case open_call(answer_ended(%{state | pages: pages}), call) do
+    case open_call(%{answer_ended(state) | pages: pages}, call) do
       {:ok, state} -> touch(state)
       {:error, reason, state} -> state |> refuse_call(call, reason) |> start_next()
     end
@@ -1174,8 +1182,7 @@ defmodule Aqua.Runner do
          %{live: %{turn_id: turn_id}} = state
        ),
        do:
-         {:noreply,
-          propose(%{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)})}
+         {:noreply, propose(%{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)})}
 
   defp handle_owned_info(
          %ThreadEvent{kind: :delta_abandoned, data: %{turn_id: turn_id} = marker},
@@ -1392,6 +1399,10 @@ defmodule Aqua.Runner do
         {:error, error} -> {:halt, {:error, error, state}}
       end
     end)
+    |> case do
+      {:ok, state} -> {:ok, drop_pages(state, reason)}
+      error -> error
+    end
   end
 
   defp cancel_turn(state, id, reason, status) do
@@ -1507,7 +1518,8 @@ defmodule Aqua.Runner do
 
   defp orphaned({mode, turn}, state) when mode in [:wait, :continue, :adopt] do
     with {:ok, steps} <- Tape.steps(state.ctx, turn),
-         [_ | _] = ids <- for(%{purpose: "page", dispatch_state: "proposed", id: id} <- steps, do: id) do
+         [_ | _] = ids <-
+           for(%{purpose: "page", dispatch_state: "proposed", id: id} <- steps, do: id) do
       _ = Tape.skip_steps(state.ctx, turn, @orphaned, ids)
     end
 
@@ -1670,12 +1682,17 @@ defmodule Aqua.Runner do
     do: %{state | answering: Map.delete(state.answering, request)}
 
   # The waiting calls become steps of the running turn, in order, and its
-  # loop is told. A turn that is not running takes none: they wait.
-  defp propose(%{live: %{turn_id: turn_id}, pages: [_ | _]} = state) do
+  # loop is told. A turn that is not running takes none, nor one whose
+  # loop has not announced its fence yet: they wait. A step is written
+  # under the fence the loop announced, never one read since, so a turn
+  # another holder took writes none.
+  defp propose(%{live: %{turn_id: turn_id}, partials: %{fence: fence}, pages: [_ | _]} = state)
+       when is_integer(fence) do
     with {:ok, %{status: "running"} = turn} <- Tape.turn(state.ctx, turn_id) do
-      {pages, proposed?, state} = propose_all(state, turn, state.pages, false)
+      {pages, proposed?, state} = propose_all(state, %{turn | fence: fence}, state.pages, false)
 
-      with true <- proposed?, pid when is_pid(pid) <- Aqua.Loop.holder(turn.id),
+      with true <- proposed?,
+           pid when is_pid(pid) <- Aqua.Loop.holder(turn.id),
            do: send(pid, {:page_call, turn.id})
 
       %{state | pages: pages}
@@ -1704,7 +1721,8 @@ defmodule Aqua.Runner do
   defp open_call(state, call) do
     with true <- Opus.available?() || {:error, :execution_unavailable},
          {:ok, put} <- Tape.turn(state.ctx, call.put_turn_id),
-         {:ok, actor} <- Sanctum.Tenancy.continuation(put.requested_by, state.athanor_id, put.origin),
+         {:ok, actor} <-
+           Sanctum.Tenancy.continuation(put.requested_by, state.athanor_id, put.origin),
          {:ok, %{turn: turn}} <-
            Tape.accept(actor, state.id, %{
              message: %{
@@ -1747,6 +1765,11 @@ defmodule Aqua.Runner do
 
   defp options_of(_turn), do: %{}
 
+  # A page's calls waiting here are queued work like any turn: what cuts
+  # the turns drops them, each answered with its reason.
+  defp drop_pages(state, reason),
+    do: %{Enum.reduce(state.pages, state, &refuse_call(&2, &1, reason)) | pages: []}
+
   defp refuse_call(state, call, reason) do
     {status, body} =
       Aqua.PageCalls.answered(%{content: describe(reason), payload: %{"skipped" => true}})
@@ -1779,19 +1802,31 @@ defmodule Aqua.Runner do
       if MapSet.member?(waiting, request) or state.paused != nil do
         state
       else
-        refuse_call(state, %{request: request, user_id: user_id}, "the turn ended before the call ran")
+        refuse_call(
+          state,
+          %{request: request, user_id: user_id},
+          "the turn ended before the call ran"
+        )
       end
     end)
   end
 
   # A request that ended: its step, while still proposed, is skipped and
-  # its card withdrawn, so a late yes runs nothing.
+  # its card withdrawn, so a late yes runs nothing. Withdrawing a card is
+  # no decision the tape announces: a turn paused on it is settled here,
+  # and goes on once no other card is pending.
   defp withdraw(state, request) do
-    with {:ok, %{message: row, turn: %{id: turn_id}}} <- Tape.accepted(state.ctx, state.id, request),
+    with {:ok, %{message: row, turn: %{id: turn_id}}} <-
+           Tape.accepted(state.ctx, state.id, request),
          {:ok, turn} <- Tape.turn(state.ctx, turn_id),
          {:ok, steps} <- Tape.steps(state.ctx, turn),
-         %{id: id} <- Enum.find(steps, &(&1.message_id == row.id and &1.dispatch_state == "proposed")) do
-      Tape.skip_steps(state.ctx, turn, "the page's request ended", [id])
+         %{id: id} <-
+           Enum.find(steps, &(&1.message_id == row.id and &1.dispatch_state == "proposed")),
+         {:ok, [_skipped]} <- Tape.skip_steps(state.ctx, turn, "the page's request ended", [id]),
+         %{paused: %{turn_id: ^turn_id}} <- state do
+      settle_paused(state)
+    else
+      _ -> state
     end
   end
 

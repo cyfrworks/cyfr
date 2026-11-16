@@ -23,12 +23,14 @@ defmodule Aqua.RunnerRecoveryTest do
   import ExUnit.CaptureLog
   import Prima.Test.Wait
 
-  alias Aqua.{Runner, Tape}
+  alias Aqua.{Approvals, Runner, Tape}
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.Bootstrap
 
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
+  @orphaned "the page's request ended with the runner that held it"
 
   setup do
     Arca.Cache.init()
@@ -89,6 +91,40 @@ defmodule Aqua.RunnerRecoveryTest do
 
     assert Runner.whereis(thread.id) == nil
     turn
+  end
+
+  # A workspace thread of the person's, as a workspace's opening makes one.
+  defp workspace!(ctx) do
+    %Arca.Schemas.Thread{}
+    |> Arca.Schemas.Thread.changeset(%{
+      id: Prima.UUID7.generate_id("thread"),
+      athanor_id: ctx.athanor_id,
+      kind: "workspace",
+      workspace_state: "open",
+      title: "Show the page",
+      created_by: ctx.user_id
+    })
+    |> Arca.Repo.insert!()
+  end
+
+  # A call a page in the workspace thread's window makes, as
+  # `Aqua.PageCalls` hands it to the runner, `put_turn_id` naming the turn
+  # that put the page.
+  defp page_call(ctx, put_turn_id, name, arguments),
+    do: %{
+      request: Prima.UUID7.generate_id("pcl"),
+      name: name,
+      arguments: arguments,
+      user_id: ctx.user_id,
+      put_turn_id: put_turn_id
+    }
+
+  defp ended?(ctx, turn_id), do: match?({:ok, %{ended_at: %DateTime{}}}, Tape.turn(ctx, turn_id))
+
+  defp steps!(ctx, turn_id) do
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    steps
   end
 
   # The store stops answering the scan: its table is gone until `restore!/0`.
@@ -216,5 +252,105 @@ defmodule Aqua.RunnerRecoveryTest do
     refute_received {:abandoned, _}
     assert Runner.whereis(thread.id) == nil
     assert {:ok, %{status: "accepted"}} = Tape.turn(ctx, turn.id)
+  end
+
+  describe "a page's calls a runner recovers" do
+    test "its predecessor's proposed page steps are skipped, their cards withdrawn, and the " <>
+           "turn goes on: a late yes runs nothing",
+         %{ctx: ctx} do
+      start_supervised!({ScriptedWorker, ref: @model, script: [reply("put")]})
+      ws = workspace!(ctx)
+      :ok = Runner.subscribe(ws.id, ctx.athanor_id)
+      # The turn that put the page, run by a runner the recovery starts.
+      put = open_turn!(ctx, ws).id
+      assert Runner.recover_all(wait_reported()) == :ok
+      wait_until(fn -> ended?(ctx, put) end, 60_000, "the put ends")
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, put)
+
+      call = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, predecessor} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work}}, 60_000
+      {:ok, paused} = Tape.turn(ctx, work)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      [%{id: step_id, dispatch_state: "proposed", approval_id: card}] = steps!(ctx, work)
+      assert card == approval.id
+
+      # The runner dies holding the call; the supervisor starts its successor.
+      watched = Process.monitor(predecessor)
+      Process.exit(predecessor, :kill)
+      assert_receive {:DOWN, ^watched, :process, ^predecessor, :killed}, 5_000
+      wait_until(fn -> Runner.whereis(ws.id) not in [nil, predecessor] end, 30_000, "a successor")
+      wait_until(fn -> ended?(ctx, work) end, 60_000, "the work ends")
+
+      assert {:ok, %{status: "completed", error: nil}} = Tape.turn(ctx, work)
+      assert {:ok, %{status: "invalidated"}} = Tape.approval(ctx, approval.id)
+
+      assert [
+               %{
+                 id: ^step_id,
+                 purpose: "page",
+                 tool: "notes",
+                 action: "keep",
+                 dispatch_state: "closed",
+                 outcome: "skipped",
+                 error: nil,
+                 generation: 0,
+                 result_message_id: result
+               }
+             ] = steps!(ctx, work)
+
+      assert {:ok, %{kind: "page_result", content: @orphaned, turn_id: ^work}} =
+               Tape.message(ctx, result)
+
+      assert {:ok, %{decision: "invalidated", replayed: true}} =
+               Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+      assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
+      assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat")) == 1
+    end
+
+    test "a turn opened on a page's call that never ran is cancelled, and the turn behind it runs",
+         %{ctx: ctx} do
+      start_supervised!({ScriptedWorker, ref: @model, script: [reply("recovered")]})
+      ws = workspace!(ctx)
+      :ok = Runner.subscribe(ws.id, ctx.athanor_id)
+
+      # A runner that is gone opened a turn on a page's call, and a person's
+      # turn waits behind it.
+      call = page_call(ctx, nil, "component.list", %{})
+
+      {:ok, %{turn: opened}} =
+        Tape.accept(ctx, ws.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "page_call",
+            content: call.name,
+            payload: Aqua.PageCalls.row(call),
+            client_id: call.request
+          },
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      behind = open_turn!(ctx, ws)
+
+      assert Runner.recover_all(wait_reported()) == :ok
+      assert waits() == []
+      wait_until(fn -> ended?(ctx, behind.id) end, 60_000, "the turn behind it ends")
+
+      assert {:ok, %{status: "cancelled", error: @orphaned}} = Tape.turn(ctx, opened.id)
+      assert [] = steps!(ctx, opened.id)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, behind.id)
+      assert [%{kind: "model", outcome: "ok"}] = steps!(ctx, behind.id)
+
+      assert [%{kind: "page_call", client_id: request}] =
+               ctx
+               |> Sanctum.Context.actor()
+               |> Arca.ThreadStorage.messages(ws.id)
+               |> Enum.filter(&(&1.kind in ["page_call", "page_result"]))
+
+      assert request == call.request
+      assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat")) == 1
+    end
   end
 end
