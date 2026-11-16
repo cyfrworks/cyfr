@@ -21,6 +21,8 @@ defmodule PrismWeb.WorkspaceLiveTest do
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
+  alias Cyfr.Test.ScriptedBackends, as: Scripted
+  alias Cyfr.Test.ScriptedDriver, as: Driver
   alias Sanctum.Tenancy.Athanors
 
   setup %{conn: conn} do
@@ -431,5 +433,219 @@ defmodule PrismWeb.WorkspaceLiveTest do
     on_thread!(pane, workspace.id)
 
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  describe "Aqua's browser in the layer" do
+    setup %{me: me} do
+      root = :crypto.strong_rand_bytes(32)
+      fake = Scripted.start(self(), root)
+      _controller = Scripted.supervise_controller(url: fake.url, root: root, tick_ms: 3_600_000)
+      assert_receive {:control, "reconcile", _message, _fields}, 2_000
+
+      answers = :ets.new(:answers, [:public])
+      driver = Driver.start(self(), answer: &browser_answer(answers, &1))
+      Scripted.set(fake, :terminal, driver)
+
+      {:ok, _row} =
+        Arca.McpServerStorage.insert(actor(me), %{
+          cap: 0,
+          name: Opus.Programs.Definition.browser_name(),
+          transport: "program",
+          mark: "driven",
+          url: nil,
+          home: "kept",
+          memory_bytes: 1_073_741_824,
+          config_json: Jason.encode!(%{"command" => "cyfr-browser", "env" => %{}})
+        })
+
+      {:ok, driver: driver, answers: answers}
+    end
+
+    test "a thread whose work uses the browser offers its window, and nothing streams before it is asked",
+         %{conn: conn, mine: mine, me: me, daily: daily} do
+      bare = open!(me, daily, "Nothing browsed")
+      {:ok, view, _html} = live(conn, layer_path(mine, bare.id))
+      browser = child!(view, "workspace-browser-view")
+      refute has_element?(browser, "#workspace-browser-watch")
+
+      work = open!(me, daily, "Look it up")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      assert has_element?(browser, "#workspace-browser-watch", "Show Aqua's browser")
+      refute_received {:driver, :req, _session, %{"op" => "cast"}}
+    end
+
+    test "asked, the window shows in the middle, each image drawn before the next, the person's input goes to it, and closing ends it",
+         %{conn: conn, mine: mine, me: me, daily: daily, driver: driver} do
+      work = open!(me, daily, "Look it up")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      work_id = work.id
+
+      render_hook(browser, "browser_watch", %{"width" => 780, "height" => 780})
+
+      assert_receive {:driver, :req, _s,
+                      %{"op" => "cast", "id" => cast, "win" => ^work_id, "args" => args}},
+                     5_000
+
+      assert args == %{"width" => 780, "height" => 780}
+
+      jpeg = <<0xFF, 0xD8, "first", 0xFF, 0xD9>>
+      :ok = Driver.image(driver, cast, 1, jpeg)
+      encoded = Base.encode64(jpeg)
+      assert_push_event(browser, "browser_image", %{n: 1, jpeg: ^encoded}, 5_000)
+      assert has_element?(browser, "#workspace-browser[data-stream=showing]")
+      refute_received {:driver, :seen, _s, ^cast, _seq}
+
+      render_hook(browser, "browser_drawn", %{"n" => 1})
+      assert_receive {:driver, :seen, _s, ^cast, 1}, 5_000
+
+      press = %{
+        "k" => "mouse",
+        "type" => "down",
+        "x" => 0.5,
+        "y" => 0.25,
+        "button" => "left",
+        "clicks" => 1,
+        "mods" => 0
+      }
+
+      render_hook(browser, "browser_input", %{"browser_input" => [press]})
+      assert_receive {:driver, :input, _s, ^cast, [^press]}, 5_000
+
+      # What does not read as events is dropped.
+      render_hook(browser, "browser_input", %{"browser_input" => [%{press | "x" => 7}]})
+      refute_receive {:driver, :input, _s, ^cast, _events}, 200
+
+      browser |> element("#workspace-browser-close") |> render_click()
+      assert_receive {:driver, :uncast, _s, ^cast}, 5_000
+      assert has_element?(browser, "#workspace-browser-watch")
+    end
+
+    test "a window Aqua has no page open in says so in words, and shows once Aqua opens one",
+         %{conn: conn, mine: mine, me: me, daily: daily, answers: answers} do
+      work = open!(me, daily, "Look it up")
+      browse!(me, work)
+
+      :ets.insert(
+        answers,
+        {"cast",
+         {:error, "no_window", "There is no browser window for this thread; open a page first."}}
+      )
+
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+
+      wait_until(
+        fn -> has_element?(browser, "#workspace-browser-waiting") end,
+        2_000,
+        "the waiting words"
+      )
+
+      assert render(browser) =~ "Aqua has no page open in this thread yet."
+    end
+
+    test "while the setting is off the stream is refused in the provider's words; turned off while it runs, it ends in them",
+         %{conn: conn, mine: mine, me: me, daily: daily} do
+      work = open!(me, daily, "Look it up")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast"}}, 5_000
+
+      assert {:ok, %{on: false}} =
+               Aqua.Providers.Browser.handle("browser", me, %{"action" => "turn_off"})
+
+      wait_until(
+        fn -> render(browser) =~ Aqua.Providers.Browser.turned_off() end,
+        2_000,
+        "the stream to end in the turned-off sentence"
+      )
+
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+
+      assert has_element?(
+               browser,
+               "#workspace-browser-refused",
+               Aqua.Providers.Browser.turned_off()
+             )
+
+      refute_receive {:driver, :req, _s, %{"op" => "cast"}}, 200
+    end
+
+    test "another page of the person's takes the window; this one says so and offers to take it back",
+         %{conn: conn, mine: mine, me: me, daily: daily, user: user} do
+      work = open!(me, daily, "Look it up")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => first}}, 5_000
+
+      other = log_in_user(Phoenix.ConnTest.build_conn(), user)
+      {:ok, second, _html} = live(other, layer_path(mine, work.id))
+      elsewhere = child!(second, "workspace-browser-view")
+      render_hook(elsewhere, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :uncast, _s, ^first}, 5_000
+
+      wait_until(
+        fn -> has_element?(browser, "#workspace-browser-taken") end,
+        2_000,
+        "the first page to say the window went elsewhere"
+      )
+
+      assert render(browser) =~ "showing on another page of yours now"
+      assert has_element?(browser, "#workspace-browser-taken button", "Show it here instead")
+    end
+
+    test "leaving the page ends its stream", %{conn: conn, mine: mine, me: me, daily: daily} do
+      work = open!(me, daily, "Look it up")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+      assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+
+      GenServer.stop(view.pid)
+      assert_receive {:driver, :uncast, _s, ^cast}, 5_000
+    end
+  end
+
+  defp browser_answer(answers, %{"op" => op}) do
+    case :ets.lookup(answers, op) do
+      [{^op, answer}] -> answer
+      [] -> {:ok, %{"url" => "https://example.com/", "title" => "Example"}}
+    end
+  end
+
+  # A turn of the workspace thread opens a page in Aqua's browser, so the
+  # person's browser holds a window for it.
+  defp browse!(me, workspace) do
+    turn = work!(me, workspace)
+    root = "exe_turn_root_#{System.unique_integer([:positive])}"
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [root_execution_id: root, status: "running"]
+      )
+
+    lineage = %{
+      "thread_id" => workspace.id,
+      "root_execution_id" => root,
+      "parent_execution_id" => root
+    }
+
+    assert {:ok, _} =
+             Aqua.Providers.Browser.handle(
+               "browser",
+               Sanctum.Context.enter_guest(me),
+               Map.merge(lineage, %{"action" => "open", "url" => "https://example.com/"})
+             )
+
+    assert_receive {:driver, :req, _session, %{"op" => "open"}}, 5_000
   end
 end

@@ -32,6 +32,10 @@ defmodule Prima.Sanitizer do
   # password too; the name is the open action's own, so listing it hides
   # no other `args`.
   #
+  # `browser_input` is what a person types and clicks into the window of
+  # Aqua's browser they watch (`PrismWeb.WorkspaceLive.BrowserLive`), which
+  # may be a password a site asks for.
+  #
   # `confirmation_id` and `confirmationId` are a pending confirmation's
   # secret, which only the asking client holds, under the names it travels
   # by: a context's `confirmation_id` and the MCP request metadata key
@@ -51,6 +55,7 @@ defmodule Prima.Sanitizer do
     proof ticket confirmation_id confirmationId recovery_code
     keyring crypto_keyring master_key encryption_key hmac_key
     derived_key key_material keystore passphrase terminal_input terminal_args
+    browser_input
   )
 
   # Match code, state, key, fields, invitation_url and fragment only as

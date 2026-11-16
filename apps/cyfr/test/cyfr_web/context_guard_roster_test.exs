@@ -37,7 +37,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
 
   # Rendered by a layout or a view with `live_render/3`; each mounts the guard itself.
   # The desktop is the `:athanor` session's root layout's, beside the page.
-  @nested ~w(ShellLive TopbarLive AquaPanelLive ChatOverlayLive ThreadPaneLive SharedThreadLive)
+  @nested ~w(
+    ShellLive TopbarLive AquaPanelLive ChatOverlayLive ThreadPaneLive SharedThreadLive
+    WorkspaceLive.BrowserLive
+  )
 
   # Each `handle_event` and `update` that acts on the context runs inside `guard/2`.
   @components ~w(
