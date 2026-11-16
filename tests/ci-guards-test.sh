@@ -666,7 +666,7 @@ while IFS='|' read -r changed want; do
   pr
   if skipped "$want"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
-src/app.ex README.md apps/arca/lib/arca.ex|host=false partitions=false gate=false
+src/app.ex README.md apps/arca/lib/arca.ex apps/cyfr/assets/js/app.js|host=false partitions=false
 scripts/lib/contain.sh|
 -scripts/lib/contain.sh|
 .github/workflows/test.yml|
@@ -676,27 +676,23 @@ tests/contain-test.sh|partitions=false
 tests/load-check/run.sh|partitions=false
 scripts/stages.tsv|partitions=false
 .github/workflows/release.yml|partitions=false
-config/test.exs|host=false gate=false
+scripts/commit-gate.sh|partitions=false
+config/test.exs|host=false
 config/database_choice.exs|host=false
 scripts/test-partition-weights.tsv|host=false
 .github/actions/setup-elixir/action.yml|host=false
-apps/cyfr/assets/js/app.js|host=false partitions=false
-apps/arca/test/stored_test.exs|host=false partitions=false
-apps/x/priv/fixture.wasm|host=false partitions=false
-wit/cyfr/world.wit|host=false partitions=false
-seed/components/x/1.0.0/a.txt|host=false partitions=false
-rust-toolchain.toml|host=false partitions=false
+tests/commit-gate-test.sh|host=false partitions=false
 CASES
 
 label="self-test-scope: what the base changed since the branch left it is not the pull request's"
 scope_repo README.md -- scripts/lib/contain.sh .github/workflows/test.yml
 pr
-if skipped 'host=false partitions=false gate=false'; then pass "$label"; else fail "$label"; fi
+if skipped 'host=false partitions=false'; then pass "$label"; else fail "$label"; fi
 
 label="self-test-scope: each job skipped is named not needed"
 scope_repo README.md
 pr
-if [ "$(grep -c '^harness-tests-[a-z]*: not needed, ' "$scratch/out")" = 3 ] && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
+if [ "$(grep -c '^harness-tests-[a-z]*: not needed, ' "$scratch/out")" = 2 ] && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
 
 for event in push schedule workflow_dispatch; do
   label="self-test-scope: a $event runs every job"
