@@ -161,6 +161,24 @@ defmodule Aqua.Providers.WorkspaceTest do
     turn
   end
 
+  # A turn a page's call opens in a thread, on the call's own row, as the
+  # runner opens one (`Aqua.Runner`), accepted and never run.
+  defp page_turn!(ctx, thread) do
+    {:ok, %{turn: turn}} =
+      TurnStorage.accept_message(actor(ctx), thread.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "page_call",
+          content: "component.list",
+          client_id: Prima.UUID7.generate_id("pgc")
+        },
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+      })
+
+    turn
+  end
+
   # What a turn has read, as its row records it.
   defp read!(turn, sources) do
     {1, _} =
@@ -590,6 +608,40 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       assert [%{snapshot: %{"outcome" => "failed", "summary" => "the build broke"}}] =
                records(ctx, "workspace_report")
+    end
+
+    test "a turn a page's call opened is no work of the thread: it keeps no thread at work, " <>
+           "ends no thread failed or done, and reports nothing",
+         %{ctx: ctx, daily: daily} do
+      workspace = open!(ctx, daily)
+      first = work!(ctx, workspace)
+      {:ok, _} = Tape.report_workspace(ctx, first, "done", %{summary: "Done."})
+      stop!(ctx, first)
+      assert thread(ctx, workspace.id).workspace_state == "done"
+      reported = records(ctx, "workspace_report")
+
+      # Accepted and running, then failed: the thread stays done.
+      call = page_turn!(ctx, workspace)
+      assert thread(ctx, workspace.id).workspace_state == "done"
+      {:ok, _} = Tape.finish(ctx, call, "failed", %{error: "the brain could not be described"})
+      assert thread(ctx, workspace.id).workspace_state == "done"
+      assert records(ctx, "workspace_report") == reported
+
+      # At work, a page's turn that ends uncertain leaves it at work.
+      post!(ctx, workspace, "one more thing")
+      work = turn!(ctx, workspace.id)
+      assert thread(ctx, workspace.id).workspace_state == "open"
+      {:ok, _} = Tape.finish(ctx, page_turn!(ctx, workspace), "uncertain", %{error: "lost"})
+      assert thread(ctx, workspace.id).workspace_state == "open"
+      assert records(ctx, "workspace_report") == reported
+
+      # Failed by Aqua's own work, it stays failed when a page's turn completes.
+      {:ok, _} = Tape.report_workspace(ctx, work, "failed", %{summary: "No."})
+      stop!(ctx, work)
+      assert thread(ctx, workspace.id).workspace_state == "failed"
+      {:ok, _} = Tape.finish(ctx, page_turn!(ctx, workspace), "completed")
+      assert thread(ctx, workspace.id).workspace_state == "failed"
+      assert length(records(ctx, "workspace_report")) == length(reported) + 1
     end
 
     test "a finished one opens again when the person writes in it, or when an ask is sent there, and reports nothing",

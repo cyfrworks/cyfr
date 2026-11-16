@@ -730,7 +730,11 @@ defmodule Arca.TurnStorage do
   # work when none said anything; until then it waits on its person while
   # a card waits, and is at work otherwise. A turn that reported its work
   # done or failed has none left to run, though its row stays open until
-  # it ends; a request it asked a crew member is left until answered.
+  # it ends; a request it asked a crew member is left until answered. A
+  # turn a page's call opened (`page_call`), which asks no model, is not
+  # the thread's work and never speaks for it: it keeps the thread at
+  # work no more than it records an outcome, while a card it raises waits
+  # on the person as any card does.
   # arca:db-raise-ok inside the caller's transaction
   defp work_state!(athanor_id, %Thread{kind: "workspace"} = workspace) do
     threads =
@@ -746,10 +750,18 @@ defmodule Arca.TurnStorage do
         where: a.status == "pending"
       )
 
+    pages =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace.id,
+        where: m.kind == "page_call",
+        select: m.id
+      )
+
     turns_run =
       from(t in Turn,
         where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
-        where: t.status in ^@open and t.id not in ^reported_turns(athanor_id, workspace.id)
+        where: t.status in ^@open and t.id not in ^reported_turns(athanor_id, workspace.id),
+        where: is_nil(t.message_id) or t.message_id not in subquery(pages)
       )
 
     asked =
@@ -876,12 +888,18 @@ defmodule Arca.TurnStorage do
       %Thread{id: id, workspace_state: state} = workspace
       when id == turn.thread_id and status in ["failed", "uncertain"] and
              state in ["open", "needs_you"] ->
-        if reported?(athanor_id, workspace.id, turn.id),
-          do: settle_work!(athanor_id, workspace),
-          else:
+        cond do
+          page_call?(athanor_id, turn) ->
+            settle_work!(athanor_id, workspace)
+
+          reported?(athanor_id, workspace.id, turn.id) ->
+            settle_work!(athanor_id, workspace)
+
+          true ->
             report!(athanor_id, workspace, turn, "failed", %{
               summary: Map.get(attrs, :error) || ""
             })
+        end
 
       %Thread{workspace_state: state} = workspace when state in ["open", "needs_you"] ->
         settle_work!(athanor_id, workspace)
@@ -890,6 +908,19 @@ defmodule Arca.TurnStorage do
         :ok
     end
   end
+
+  # A turn a page's call opened: no work of the thread's, which reports
+  # nothing of it (`work_state!/2`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp page_call?(athanor_id, %Turn{message_id: id}) when is_binary(id),
+    do:
+      Arca.Repo.exists?(
+        from(m in Message,
+          where: m.athanor_id == ^athanor_id and m.id == ^id and m.kind == "page_call"
+        )
+      )
+
+  defp page_call?(_athanor_id, %Turn{}), do: false
 
   # A person's post in a finished workspace thread opens it again.
   # arca:db-raise-ok inside the caller's transaction

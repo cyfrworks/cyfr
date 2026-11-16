@@ -2244,6 +2244,36 @@ defmodule Aqua.RunnerTest do
       refute Enum.any?(rows, &(Tape.payload(&1)["tool_call_id"] == refused.request))
     end
 
+    test "a card a page's call raises makes its workspace thread wait on the person, and the " <>
+           "decision settles it back to what Aqua's work left",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put")])
+      put = put!(ctx, ws)
+
+      # Aqua's own work left the thread done.
+      {:ok, %{turn: done}} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(ctx), ws.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "and report"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+        })
+
+      {:ok, _} = Tape.report_workspace(ctx, done, "done", %{summary: "Done."})
+      {:ok, _} = Tape.finish(ctx, done, "cancelled", %{error: "stopped"})
+      before = thread_state(ctx, ws.id)
+      assert before == "done"
+
+      keep = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, keep)
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work}}, 60_000
+      wait_until(fn -> thread_state(ctx, ws.id) == "needs_you" end)
+
+      {:ok, paused} = Tape.turn(ctx, work)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :declined})
+      wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, work)) end)
+      assert thread_state(ctx, ws.id) == before
+    end
+
     test "deleting the thread stops the work: the turn is cancelled, its card withdrawn, the " <>
            "waiting call dropped and the runner gone",
          %{ctx: ctx, workspace: ws} do
@@ -2607,5 +2637,10 @@ defmodule Aqua.RunnerTest do
         "step_id" => step_id
       }
     }
+  end
+
+  defp thread_state(ctx, id) do
+    {:ok, thread} = Threads.get(Sanctum.Context.actor(ctx), id)
+    thread.workspace_state
   end
 end
