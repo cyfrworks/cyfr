@@ -142,6 +142,15 @@ defmodule Aqua.Providers.WorkspaceTest do
     turn
   end
 
+  # What a turn has read, as its row records it.
+  defp read!(turn, sources) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [sources: Prima.Source.encode(sources)]
+      )
+  end
+
   defp stop!(ctx, turn) do
     {:ok, current} = Tape.turn(ctx, turn.id)
     {:ok, _} = Tape.finish(ctx, current, "cancelled", %{error: "stopped"})
@@ -773,6 +782,94 @@ defmodule Aqua.Providers.WorkspaceTest do
       [report] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
       assert report.id == id
       assert [_one] = Aqua.Attachments.refs_of(report)
+    end
+  end
+
+  describe "a copied file's provenance" do
+    # A file copied into an opening or a report carries the sources of
+    # the post that held it.
+    test "an opening's file carries the sources of the daily post it was copied from, refs or none",
+         %{ctx: ctx, daily: daily} do
+      script!([reply("Working on it."), reply("More.")])
+      outside = Prima.Source.outside("moon.example")
+
+      # A daily turn that read a page outside the athanor posts a file.
+      reader = turn!(ctx, daily.id, "draw the moon")
+      read!(reader, [outside])
+      {:ok, reader} = Tape.turn(ctx, reader.id)
+      post_id = Prima.UUID7.generate_id("msg")
+      png = %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG-moon"}
+      {:ok, [ref]} = Aqua.Attachments.copy(ctx, daily.id, post_id, [png])
+
+      {:ok, _} =
+        Tape.post(ctx, reader, %{
+          id: post_id,
+          content: "the moon",
+          payload: %{"post" => true, "attachments" => [ref]}
+        })
+
+      stop!(ctx, reader)
+
+      # Opened with that file and without that post among its refs.
+      workspace =
+        open!(ctx, daily, %{
+          "attachments" => [%{"message_id" => post_id, "stored_name" => ref["stored_name"]}]
+        })
+
+      [opening] = rows(ctx, workspace.id)
+      assert [%{"sources" => [_ | _]}] = Aqua.Attachments.refs_of(opening)
+
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      %{turn_id: turn_id} = Enum.find(rows(ctx, workspace.id), &(&1.id == opening.id))
+      await_status(ctx, turn_id, "completed")
+
+      {:ok, %{sources: sources}} = Tape.turn(ctx, turn_id)
+      assert outside in Prima.Source.decode(sources)
+    end
+
+    test "a report's file carries the sources of the post that held it, not only the reporting turn's",
+         %{ctx: ctx, daily: daily} do
+      script!([reply("Here is the chart."), reply("More.")])
+      outside = Prima.Source.outside("moon.example")
+      workspace = open!(ctx, daily)
+
+      # One turn of the workspace thread read outside material and posted
+      # a chart; another, which read none, reports it.
+      poster = turn!(ctx, workspace.id, "chart it")
+      read!(poster, [outside])
+      {:ok, poster} = Tape.turn(ctx, poster.id)
+      chart = Prima.UUID7.generate_id("msg")
+      png = %{"filename" => "chart.png", "media_type" => "image/png", "bytes" => "PNG-chart"}
+      {:ok, [ref]} = Aqua.Attachments.copy(ctx, workspace.id, chart, [png])
+
+      {:ok, _} =
+        Tape.post(ctx, poster, %{
+          id: chart,
+          content: "",
+          payload: %{"post" => true, "attachments" => [ref]}
+        })
+
+      stop!(ctx, poster)
+      reporter = work!(ctx, workspace)
+
+      {:ok, _} =
+        Tape.report_workspace(ctx, reporter, "done", %{
+          summary: "Charted.",
+          attachments: [%{"message_id" => chart, "stored_name" => ref["stored_name"]}]
+        })
+
+      stop!(ctx, reporter)
+      {:ok, %{sources: reporter_sources}} = Tape.turn(ctx, reporter.id)
+      refute outside in Prima.Source.decode(reporter_sources)
+
+      assert %{} = Crew.drain_all()
+      {:ok, today} = Aqua.Day.current(ctx)
+      [report] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
+      assert [%{"sources" => [_ | _]}] = Aqua.Attachments.refs_of(report)
+      await_status(ctx, report.turn_id, "completed")
+
+      {:ok, %{sources: sources}} = Tape.turn(ctx, report.turn_id)
+      assert outside in Prima.Source.decode(sources)
     end
   end
 

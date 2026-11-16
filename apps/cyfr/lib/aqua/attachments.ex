@@ -19,7 +19,12 @@ defmodule Aqua.Attachments do
   into a workspace thread's opening, a workspace thread's post into the
   report on a daily thread — is copied into the destination message's
   own blobs before that message is written (`carried/3`, then `copy/4`),
-  and a write that fails discards the copies (`discard/3`). A turn's
+  and a write that fails discards the copies (`discard/3`). A copied file
+  carries the sources of the post that held it (`Prima.Source`), in its
+  ref's `"sources"`: those of the turn that wrote the post, of the turn
+  whose words it carries, and those the file came with when it was a copy
+  itself. So a turn that reads the copy reads that material's provenance
+  with it, wherever the copy went (`Aqua.Loop`). A turn's
   agent stores the files of its own posts the same way, under the thread
   its turn runs in (`Aqua.Providers.Thread`'s `post`); only a person's
   session stores under a message of their choosing (`store/4`).
@@ -95,6 +100,11 @@ defmodule Aqua.Attachments do
   def copy(%Context{} = ctx, thread_id, message_id, files) when is_list(files),
     do: write(ctx, thread_id, message_id, files)
 
+  # A copy keeps the sources of the post it came from; a file a person or
+  # a turn hands has none of its own.
+  defp with_sources(ref, [_ | _] = sources), do: Map.put(ref, "sources", sources)
+  defp with_sources(ref, _none), do: ref
+
   @doc """
   Remove every file stored under a message that was never written: the
   copies a failed write leaves, or an earlier try's of a delivery tried
@@ -146,8 +156,12 @@ defmodule Aqua.Attachments do
     case Arca.ThreadStorage.get_message(actor, message_id) do
       {:ok, %{thread_id: ^thread_id} = row} ->
         case Enum.find(refs_of(row), &(&1["stored_name"] == name)) do
-          nil -> {:error, :not_a_post}
-          ref -> bytes_of(actor, thread_id, message_id, ref)
+          nil ->
+            {:error, :not_a_post}
+
+          ref ->
+            with {:ok, file} <- bytes_of(actor, thread_id, message_id, ref),
+                 do: {:ok, Map.put(file, "sources", post_sources(ctx, row, ref))}
         end
 
       {:ok, _another_threads} ->
@@ -162,6 +176,34 @@ defmodule Aqua.Attachments do
   end
 
   defp carry(_ctx, _thread_id, _file), do: {:error, :not_a_post}
+
+  # The sources of the post that holds a file, as canonical JSON objects:
+  # the turn that wrote it, the turn whose words it carries (`from_turn`),
+  # and what the file came with when it was itself a copy. A turn that
+  # cannot be read is an unnamed outside source, never none.
+  defp post_sources(ctx, row, ref) do
+    turns =
+      [Map.get(row, :turn_id), Arca.ThreadStorage.payload(row)["from_turn"]]
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.uniq()
+
+    read =
+      Enum.flat_map(turns, fn id ->
+        case Aqua.Tape.turn(ctx, id) do
+          {:ok, turn} -> Prima.Source.decode(turn.sources)
+          {:error, _unread} -> [Prima.Source.outside(nil)]
+        end
+      end)
+
+    Prima.Source.to_json_list(read ++ copied_sources(ref))
+  end
+
+  @doc "The sources a copied file came with (`[]` for a file that is no copy)."
+  @spec copied_sources(ref()) :: [Prima.Source.t()]
+  def copied_sources(%{"sources" => sources}) when is_list(sources),
+    do: Enum.map(sources, &Prima.Source.from_json/1)
+
+  def copied_sources(_ref), do: []
 
   defp bytes_of(actor, thread_id, message_id, ref) do
     with {:ok, path} <- blob_path(thread_id, message_id, ref),
@@ -193,12 +235,14 @@ defmodule Aqua.Attachments do
         # over the other's bytes, sent or not.
         case Arca.put_if_none_match(Sanctum.Context.actor(ctx), path, bytes) do
           :ok ->
-            ref = %{
-              "filename" => safe_filename(file["filename"]),
-              "stored_name" => stored_name,
-              "media_type" => file["media_type"] || Prima.MediaType.binary(),
-              "size" => byte_size(bytes)
-            }
+            ref =
+              %{
+                "filename" => safe_filename(file["filename"]),
+                "stored_name" => stored_name,
+                "media_type" => file["media_type"] || Prima.MediaType.binary(),
+                "size" => byte_size(bytes)
+              }
+              |> with_sources(file["sources"])
 
             {:cont, {:ok, [ref | refs]}}
 

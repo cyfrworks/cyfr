@@ -50,8 +50,9 @@ defmodule Aqua.Loop do
   it, and a `thread` source for each other thread whose posts its rows
   bring in (a workspace thread's pointer or report, the daily thread an
   opening refers to), with the sources a report kept of the turn that
-  reported and those of the turns that wrote the posts an opening refers
-  to; a call's result closes with the sources it carries
+  reported, those of the turns that wrote the posts an opening refers
+  to, and those every copied file carries from the post it came from; a
+  call's result closes with the sources it carries
   (`Aqua.Loop.Policy.sources_of/3`), and a launched component's with an
   outside source named by its reference unless its completion result says
   no run of its tree was admitted with egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
@@ -791,24 +792,29 @@ defmodule Aqua.Loop do
   # carries the sources its record kept of the turn that reported, so its
   # outside material joins even once that turn's row is gone.
   defp thread_sources(rows) do
-    Enum.flat_map(rows, fn
-      %{kind: kind, workspace_id: id} = row
-      when kind in ["pointer", "report"] and is_binary(id) ->
-        [Prima.Source.thread(id) | kept_sources(row)]
-
-      %{kind: "opening"} = row ->
-        case Tape.payload(row) do
-          %{"from" => %{"thread" => id}} when is_binary(id) and id != "" ->
-            [Prima.Source.thread(id)]
-
-          _ ->
-            []
-        end
-
-      _row ->
-        []
-    end)
+    Enum.flat_map(rows, &(row_sources(&1) ++ files_sources(&1)))
   end
+
+  defp row_sources(%{kind: kind, workspace_id: id} = row)
+       when kind in ["pointer", "report"] and is_binary(id),
+       do: [Prima.Source.thread(id) | kept_sources(row)]
+
+  defp row_sources(%{kind: "opening"} = row) do
+    case Tape.payload(row) do
+      %{"from" => %{"thread" => id}} when is_binary(id) and id != "" ->
+        [Prima.Source.thread(id)]
+
+      _ ->
+        []
+    end
+  end
+
+  defp row_sources(_row), do: []
+
+  # A copied file carries the sources of the post it was copied from
+  # (`Aqua.Attachments`), which a request that shows it reads too.
+  defp files_sources(row),
+    do: Enum.flat_map(Aqua.Attachments.refs_of(row), &Aqua.Attachments.copied_sources/1)
 
   defp kept_sources(%{kind: "report"} = row) do
     case Tape.payload(row)["sources"] do
