@@ -677,6 +677,25 @@ defmodule PrismWeb.WorkspaceLiveTest do
       assert_receive {:driver, :seen, _s, ^new, 1}, 5_000
     end
 
+    # Review round two, a note: a closed watch's monitor of its holder goes.
+    test "closing the stream leaves no monitor of the browser behind",
+         %{conn: conn, mine: mine, me: me, daily: daily} do
+      work = open!(me, daily, "Stop monitoring")
+      browse!(me, work)
+      {:ok, view, _html} = live(conn, layer_path(mine, work.id))
+      browser = child!(view, "workspace-browser-view")
+      {:monitors, before} = Process.info(browser.pid, :monitors)
+
+      for _ <- 1..3 do
+        render_hook(browser, "browser_watch", %{"width" => 640, "height" => 640})
+        assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => cast}}, 5_000
+        browser |> element("#workspace-browser-close") |> render_click()
+        assert_receive {:driver, :uncast, _s, ^cast}, 5_000
+      end
+
+      assert {:monitors, ^before} = Process.info(browser.pid, :monitors)
+    end
+
     test "leaving the page ends its stream", %{conn: conn, mine: mine, me: me, daily: daily} do
       work = open!(me, daily, "Look it up")
       browse!(me, work)

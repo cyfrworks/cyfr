@@ -43,7 +43,7 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
       |> assign(:thread_id, thread_id)
       |> assign(:stream, nil)
       |> assign(:watch, nil)
-      |> assign(:holder, nil)
+      |> assign(:monitor, nil)
       |> assign(:dropped, 0)
       |> assign(:window?, false)
 
@@ -140,8 +140,7 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
   def handle_info({Opus.Browser, {holder, _ref} = watch, :watching}, socket) do
     case socket.assigns do
       %{stream: :starting, watch: nil} ->
-        Process.monitor(holder)
-        {:noreply, socket |> assign(:watch, watch) |> assign(:holder, holder)}
+        {:noreply, socket |> assign(:watch, watch) |> assign(:monitor, Process.monitor(holder))}
 
       # The person closed it before it was admitted: it ends at once.
       _closed_meanwhile ->
@@ -185,8 +184,8 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
   def handle_info({Opus.Browser, _another, _message}, socket), do: {:noreply, socket}
 
   def handle_info(
-        {:DOWN, _monitor, :process, holder, _reason},
-        %{assigns: %{holder: holder}} = socket
+        {:DOWN, monitor, :process, _holder, _reason},
+        %{assigns: %{monitor: monitor}} = socket
       ),
       do:
         {:noreply,
@@ -207,10 +206,12 @@ defmodule PrismWeb.WorkspaceLive.BrowserLive do
     socket |> forget() |> assign(:stream, nil) |> read_window()
   end
 
-  defp forget(%{assigns: %{watch: watch}} = socket) do
-    # A watch that ended leaves nothing of its input behind in this process.
+  defp forget(%{assigns: %{watch: watch, monitor: monitor}} = socket) do
+    # A watch that ended leaves nothing of its input behind in this process,
+    # nor its monitor of the holder.
     if watch, do: :ok = Opus.Browser.input_taken(watch)
-    socket |> assign(:watch, nil) |> assign(:holder, nil)
+    if monitor, do: Process.demonitor(monitor, [:flush])
+    socket |> assign(:watch, nil) |> assign(:monitor, nil)
   end
 
   defp clamp(side), do: side |> max(16) |> min(4096)
