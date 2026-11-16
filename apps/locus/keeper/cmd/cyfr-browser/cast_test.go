@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -605,6 +606,32 @@ func TestAnEndedCastWritesNothingOfItsQueuedInput(t *testing.T) {
 	b.runInput(ctx, c.input)
 	if wire.Len() != 0 {
 		t.Fatalf("an ended cast still wrote %d input commands", bytes.Count(wire.Bytes(), []byte{0}))
+	}
+}
+
+// Review round two, finding 5: input cancelled while it waits for the
+// write lock is not written once the lock is free.
+func TestInputCancelledWhileWaitingToBeWrittenIsNotWritten(t *testing.T) {
+	var wire bytes.Buffer
+	c := &cdp{w: &wire, calls: map[int64]*pending{}}
+	c.wmu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- c.call(ctx, "S1", "Input.insertText", map[string]string{"text": "old-watch"}, nil)
+	}()
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.calls) == 1
+	}, "the input waiting for the write lock")
+	cancel()
+	c.wmu.Unlock()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the cancelled input answered %v", err)
+	}
+	if wire.Len() != 0 {
+		t.Fatalf("cancelled input was still written: %s", wire.String())
 	}
 }
 
