@@ -487,25 +487,119 @@ func TestALowerVersionReplacesNothing(t *testing.T) {
 	}
 }
 
-func TestAnArchiveReachingOutsideItsFolderIsRefused(t *testing.T) {
-	for _, name := range []string{"../escaped", "/etc/escaped", "chrome-linux64/../../escaped"} {
-		var buf bytes.Buffer
-		z := zip.NewWriter(&buf)
-		if _, err := z.Create(name); err != nil {
+// entry is one archive entry: a folder (name ending in /), a file, or a
+// link whose body is its target.
+type entry struct {
+	name string
+	mode os.FileMode
+	body string
+}
+
+func archiveOf(t *testing.T, entries []entry) string {
+	t.Helper()
+	var buf bytes.Buffer
+	z := zip.NewWriter(&buf)
+	for _, e := range entries {
+		h := &zip.FileHeader{Name: e.name, Method: zip.Store}
+		h.SetMode(e.mode)
+		w, err := z.CreateHeader(h)
+		if err != nil {
 			t.Fatal(err)
 		}
-		_ = z.Close()
-		dir := t.TempDir()
-		archive := filepath.Join(dir, "a.zip")
-		if err := os.WriteFile(archive, buf.Bytes(), 0o600); err != nil {
+		_, _ = io.WriteString(w, e.body)
+	}
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "a.zip")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestUnpackingCannotLeaveItsFolderByAnyNameOrLink(t *testing.T) {
+	cases := map[string][]entry{
+		// Astra's chain: a link to a sibling, a link through it climbing out,
+		// and a file through both, beside an existing folder outside.
+		"a chain of links": {
+			{"a/", os.ModeDir | 0o755, ""}, {"c/", os.ModeDir | 0o755, ""},
+			{"a/b", os.ModeSymlink | 0o777, "../c"},
+			{"a/b/up", os.ModeSymlink | 0o777, "../../outside"},
+			{"a/b/up/escaped", 0o644, "out"},
+		},
+		"a name climbing out":       {{"../escaped", 0o644, "out"}},
+		"an absolute name":          {{"/escaped", 0o644, "out"}},
+		"a climb inside a name":     {{"x/../../escaped", 0o644, "out"}},
+		"an absolute link":          {{"l", os.ModeSymlink | 0o777, "/etc"}, {"l/escaped", 0o644, "out"}},
+		"a link that climbs":        {{"l", os.ModeSymlink | 0o777, "../outside"}, {"l/escaped", 0o644, "out"}},
+		"a link over a file":        {{"f", 0o644, "in"}, {"f", os.ModeSymlink | 0o777, "g"}},
+		"a file over a link":        {{"g", 0o644, "in"}, {"l", os.ModeSymlink | 0o777, "g"}, {"l", 0o644, "over"}},
+		"an entry of another kind":  {{"p", os.ModeNamedPipe | 0o644, ""}},
+		"a device beside the files": {{"ok", 0o644, "in"}, {"d", os.ModeDevice | 0o644, ""}},
+	}
+	for name, entries := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			outside := filepath.Join(dir, "outside")
+			if err := os.Mkdir(outside, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := unzip(archiveOf(t, entries), filepath.Join(dir, "root")); err == nil {
+				t.Fatal("the archive was unpacked")
+			}
+			for _, escaped := range []string{filepath.Join(dir, "escaped"), filepath.Join(outside, "escaped")} {
+				if _, err := os.Lstat(escaped); err == nil {
+					t.Fatalf("%s was written outside the folder", escaped)
+				}
+			}
+			if got, _ := os.ReadFile(filepath.Join(dir, "root", "g")); string(got) == "over" {
+				t.Fatal("a file was written through a link")
+			}
+		})
+	}
+
+	// The folder's handle, not the text of the names, keeps every write in:
+	// a link already in the folder that leads out is not followed.
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside")
+	staged := filepath.Join(dir, "root")
+	for _, d := range []string{outside, staged} {
+		if err := os.Mkdir(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := unzip(archive, filepath.Join(dir, "root")); err == nil {
-			t.Fatalf("%s was unpacked", name)
-		}
-		if _, err := os.Stat(filepath.Join(dir, "escaped")); err == nil {
-			t.Fatalf("%s reached outside the folder", name)
-		}
+	}
+	if err := os.Symlink("../outside", filepath.Join(staged, "pre")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	r, err := zip.OpenReader(archiveOf(t, []entry{{"pre/escaped", 0o644, "out"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := extract(root, r.File); err == nil {
+		t.Fatal("a write through a link that leads out succeeded")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "escaped")); err == nil {
+		t.Fatal("the handle let a write leave its folder")
+	}
+
+	// What Chrome for Testing's archive holds unpacks: folders, files and a
+	// link below its own folder.
+	ok := filepath.Join(t.TempDir(), "root")
+	if err := unzip(archiveOf(t, []entry{
+		{"chrome-linux64/", os.ModeDir | 0o755, ""}, {"chrome-linux64/chrome", 0o755, "#!/bin/sh\n"},
+		{"chrome-linux64/locales/en-US.pak", 0o644, "pak"}, {"chrome-linux64/wrapper", os.ModeSymlink | 0o777, "chrome"},
+	}), ok); err != nil {
+		t.Fatalf("a whole archive does not unpack: %v", err)
+	}
+	if !executable(filepath.Join(ok, "chrome-linux64", "chrome")) {
+		t.Fatal("its chrome is not executable")
 	}
 }
 

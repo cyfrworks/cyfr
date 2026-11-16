@@ -45,9 +45,11 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -505,51 +507,66 @@ func executable(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o100 != 0
 }
 
-// unzip unpacks archive into root, which it makes: every entry inside
-// root, a link only to a place inside it, and no more than maxUnpacked
-// bytes in all.
-func unzip(archive, root string) error {
+// unzip unpacks archive into dir, which it makes, through a handle
+// confined to dir (os.Root): every folder, file and link is made there,
+// and nothing that would lead out of dir, by any chain of names and links,
+// is followed. A link may name only a place below its own folder, never an
+// absolute path and never a climb, and no entry is made over another.
+// Chrome for Testing's archive holds no link. At most maxUnpacked bytes
+// are written in all.
+func unzip(archive, dir string) error {
 	r, err := zip.OpenReader(archive)
 	if err != nil {
 		return fmt.Errorf("the archive does not read: %w", err)
 	}
 	defer r.Close()
-	if err := os.Mkdir(root, 0o700); err != nil {
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return extract(root, r.File)
+}
+
+// extract makes files in root, which is all it reaches.
+func extract(root *os.Root, files []*zip.File) error {
 	left := int64(maxUnpacked)
-	for _, f := range r.File {
-		path, err := inside(root, f.Name)
+	for _, f := range files {
+		name, err := entryName(f.Name)
 		if err != nil {
 			return err
 		}
 		mode := f.Mode()
 		switch {
 		case mode.IsDir():
-			err = os.MkdirAll(path, 0o755)
+			err = root.MkdirAll(name, 0o755)
 		case mode&fs.ModeSymlink != 0:
-			err = unzipLink(root, path, f)
+			err = extractLink(root, name, f)
 		case mode.IsRegular():
-			left, err = unzipFile(path, f, left)
+			left, err = extractFile(root, name, f, left)
 		default:
 			err = fmt.Errorf("the archive holds %s, which is no file, folder or link", f.Name)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("the archive's %s: %w", f.Name, err)
 		}
 	}
 	return nil
 }
 
-func inside(root, name string) (string, error) {
-	clean := filepath.Clean(name)
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+// entryName is an archive entry's name as a path below the folder.
+func entryName(name string) (string, error) {
+	clean := path.Clean(strings.TrimSuffix(name, "/"))
+	if clean == "." || clean == ".." || path.IsAbs(clean) || strings.HasPrefix(clean, "../") {
 		return "", fmt.Errorf("the archive names %s, outside its folder", name)
 	}
-	return filepath.Join(root, clean), nil
+	return clean, nil
 }
 
-func unzipLink(root, path string, f *zip.File) error {
+func extractLink(root *os.Root, name string, f *zip.File) error {
 	rc, err := f.Open()
 	if err != nil {
 		return err
@@ -559,18 +576,18 @@ func unzipLink(root, path string, f *zip.File) error {
 	if err != nil {
 		return err
 	}
-	resolved := filepath.Join(filepath.Dir(path), string(target))
-	if filepath.IsAbs(string(target)) || !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
-		return fmt.Errorf("the archive's link %s leads outside its folder", f.Name)
+	link := string(target)
+	if link == "" || path.IsAbs(link) || slices.Contains(strings.Split(link, "/"), "..") {
+		return fmt.Errorf("its link names %q, which is not a place below its own folder", link)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := parent(root, name); err != nil {
 		return err
 	}
-	return os.Symlink(string(target), path)
+	return root.Symlink(link, name)
 }
 
-func unzipFile(path string, f *zip.File, left int64) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func extractFile(root *os.Root, name string, f *zip.File, left int64) (int64, error) {
+	if err := parent(root, name); err != nil {
 		return left, err
 	}
 	rc, err := f.Open()
@@ -578,7 +595,7 @@ func unzipFile(path string, f *zip.File, left int64) (int64, error) {
 		return left, err
 	}
 	defer rc.Close()
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, f.Mode().Perm()|0o600)
+	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, f.Mode().Perm()|0o600)
 	if err != nil {
 		return left, err
 	}
@@ -587,10 +604,17 @@ func unzipFile(path string, f *zip.File, left int64) (int64, error) {
 		err = closeErr
 	}
 	if err != nil {
-		return left, fmt.Errorf("the archive's %s does not read whole: %w", f.Name, err)
+		return left, fmt.Errorf("it does not read whole: %w", err)
 	}
 	if written > left {
 		return left, fmt.Errorf("the archive unpacks past %d bytes", maxUnpacked)
 	}
 	return left - written, nil
+}
+
+func parent(root *os.Root, name string) error {
+	if dir := path.Dir(name); dir != "." {
+		return root.MkdirAll(dir, 0o755)
+	}
+	return nil
 }
