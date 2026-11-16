@@ -30,7 +30,8 @@ defmodule Aqua.Providers.Browser do
   message id of its own that has not been sent, in the turn's thread,
   with the sources of what it shows beside it
   (`Aqua.Attachments.draft/4`), and answers that id: that attempt's
-  `thread.post` publishes it (its `screenshot`), or it expires unsent.
+  `thread.post` publishes it (its `screenshot`); one never posted stays
+  unsent, its bytes kept until its thread is deleted.
   The turn is proved again before the image is stored, so a turn
   superseded meanwhile writes nothing.
 

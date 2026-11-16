@@ -1,6 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# A store whose every read of one file fails for now, as a store that
+# cannot be reached answers.
+defmodule Aqua.CrewTest.ReadOutage do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  def get(actor, path) do
+    if List.last(path) == "0-square.png",
+      do: {:error, :timeout},
+      else: Arca.Adapters.Local.get(actor, path)
+  end
+end
+
 defmodule Aqua.CrewTest do
   @moduledoc """
   The crew on the thread layer: a request in a room is delivered into its
@@ -1302,6 +1315,33 @@ defmodule Aqua.CrewTest do
     assert [] = Threads.children(actor(ctx), room.id) |> Enum.flat_map(&rows(ctx, &1.id))
   end
 
+  test "a request whose file cannot be read for now waits, and is delivered once it can",
+       %{ctx: ctx, room: room} do
+    script!([reply("I see a square.")])
+    message_id = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "square.png", "media_type" => "image/png", "bytes" => "PNGBYTES"}
+    {:ok, refs} = Aqua.Attachments.store(ctx, room.id, message_id, [png])
+
+    {:ok, %{admitted: :request}} =
+      Runner.send_message(ctx, room.id, "@planner what is this?",
+        id: message_id,
+        attachments: refs
+      )
+
+    Prima.Test.Env.with_app_env(:arca, :storage_adapter, __MODULE__.ReadOutage, fn ->
+      assert {:ok, outcome} = drain(ctx)
+      refute Map.has_key?(outcome, "refused")
+      assert [_waits] = pending(ctx, "crew_request")
+      assert [] = Enum.filter(rows(ctx, room.id), &(&1.reply_to == message_id))
+    end)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    await_status(ctx, delivered_turn(ctx, child, message_id), "completed")
+    [delivered | _] = rows(ctx, child.id)
+    assert [%{"filename" => "square.png"}] = refs_of(delivered)
+  end
+
   test "a request whose files the athanor's storage cannot hold ends with the reply saying so",
        %{ctx: ctx, room: room} do
     message_id = Prima.UUID7.generate_id("msg")
@@ -1357,22 +1397,16 @@ defmodule Aqua.CrewTest do
 
     :ok = Tape.join_sources(ctx, asker, [outside])
 
+    # The request's file stored under its row first, as `crew.ask` stores it.
+    id = Prima.UUID7.generate_id("msg")
+    note = %{"filename" => "moon.txt", "media_type" => "text/plain", "bytes" => "the moon"}
+    {:ok, refs} = Aqua.Attachments.copy(ctx, room.id, id, [note])
+
     request =
       soul_request!(ctx, room, "planner", "read this", %{}, fn message ->
-        Cyfr.Test.StoredFiles.message!(
-          actor(ctx),
-          room.id,
-          Map.put(message, :payload, %{
-            "from_turn" => asker.id,
-            "attachments" => [
-              %{
-                "filename" => "moon.txt",
-                "stored_name" => "0-moon.txt",
-                "media_type" => "text/plain"
-              }
-            ]
-          })
-        )
+        message
+        |> Map.put(:id, id)
+        |> Map.put(:payload, %{"from_turn" => asker.id, "attachments" => refs})
       end)
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)

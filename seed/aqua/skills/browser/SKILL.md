@@ -23,7 +23,7 @@ quicker.
 - `page` shows a page you wrote, as one html file, in the window: use it
   to show the person a result. `screenshot` answers the message id the
   picture is kept under: to show it, post it in this turn with
-  `thread.post`'s `screenshot`; one never posted expires.
+  `thread.post`'s `screenshot`.
 - `close` this thread's window when you are done with it: the browser
   holds four windows at most.
 

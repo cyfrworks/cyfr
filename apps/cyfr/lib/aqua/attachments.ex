@@ -132,7 +132,8 @@ defmodule Aqua.Attachments do
   of a post of `thread_id`, read with their names and types for a copy
   (`copy/4`). A message of another thread, or a name its post does not
   carry, is `{:error, :not_a_post}`; a file whose bytes are gone
-  `{:error, :attachment_missing}`; more than a message holds
+  `{:error, :attachment_missing}`, and one that could not be read for now
+  `{:error, :storage_error}`, a refusal that may pass; more than a message holds
   `{:error, :too_many_attachments}`.
   """
   @spec carried(Context.t(), String.t(), [map()]) :: {:ok, [file()]} | {:error, term()}
@@ -261,9 +262,13 @@ defmodule Aqua.Attachments do
         {:ok, file} ->
           {:ok, Map.put(file, "sources", facts["sources"])}
 
-        {:error, _gone} ->
+        {:error, :attachment_missing} ->
           release(ctx, thread_id, id)
           {:error, :not_a_draft}
+
+        {:error, _for_now} = refused ->
+          release(ctx, thread_id, id)
+          refused
       end
     end
   end
@@ -322,12 +327,18 @@ defmodule Aqua.Attachments do
 
   def copied_sources(_ref), do: []
 
+  # A file whose bytes the store says are not there is gone; a read that
+  # failed for now (a timeout, a store that cannot be reached) is
+  # `:storage_error`, a refusal that may pass, so no caller takes it for
+  # a file that is gone.
   defp bytes_of(actor, thread_id, message_id, ref) do
     with {:ok, path} <- blob_path(thread_id, message_id, ref),
          {:ok, bytes} <- Arca.get(actor, path) do
       {:ok, %{"filename" => ref["filename"], "media_type" => ref["media_type"], "bytes" => bytes}}
     else
-      _gone -> {:error, :attachment_missing}
+      :error -> {:error, :attachment_missing}
+      {:error, :not_found} -> {:error, :attachment_missing}
+      {:error, _for_now} -> {:error, :storage_error}
     end
   end
 
