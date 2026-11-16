@@ -1,6 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Aqua.Providers.WorkspaceTest.DyingCopy do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  # A report's copy (`Aqua.Crew` names a report's row `msg_rpt_…`): the
+  # hook the delivering process holds runs before the bytes are written,
+  # and the try dies once they are, as a node that goes down
+  # mid-delivery does.
+  def put(actor, path, content) do
+    if Enum.any?(path, &String.starts_with?(&1, "msg_rpt_")) do
+      if hook = Process.get(:before_report_copy), do: hook.()
+      :ok = Arca.Adapters.Local.put(actor, path, content)
+      raise "the node went down mid-delivery"
+    else
+      Arca.Adapters.Local.put(actor, path, content)
+    end
+  end
+end
+
 defmodule Aqua.Providers.WorkspaceTest do
   @moduledoc """
   Workspace threads: opened from a daily thread in one transaction with
@@ -184,6 +203,54 @@ defmodule Aqua.Providers.WorkspaceTest do
   end
 
   defp sent(call), do: Jason.encode!(call.input["params"]["messages"])
+
+  # A workspace thread whose turn reported done with a chart it posted,
+  # the turn stopped: the `workspace_report` record waiting for its
+  # delivery.
+  defp charted!(ctx, daily) do
+    script!([reply("Working."), reply("Here it is.")])
+    workspace = open!(ctx, daily)
+    turn = work!(ctx, workspace)
+    chart = Prima.UUID7.generate_id("msg")
+    png = %{"filename" => "chart.png", "media_type" => "image/png", "bytes" => "PNG-chart"}
+    {:ok, [ref]} = Aqua.Attachments.copy(ctx, workspace.id, chart, [png])
+
+    {:ok, _} =
+      Tape.post(ctx, turn, %{
+        id: chart,
+        content: "",
+        payload: %{"post" => true, "attachments" => [ref]}
+      })
+
+    {:ok, _} =
+      Tape.report_workspace(ctx, turn, "done", %{
+        summary: "Charted.",
+        attachments: [%{"message_id" => chart, "stored_name" => ref["stored_name"]}]
+      })
+
+    stop!(ctx, turn)
+    [record] = records(ctx, "workspace_report")
+    record
+  end
+
+  # `fun` under the double whose report copy dies once written: a
+  # delivery try in it dies there.
+  defp dying_try(fun) do
+    {answer, _log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Prima.Test.Env.with_app_env(:arca, :storage_adapter, __MODULE__.DyingCopy, fun)
+      end)
+
+    answer
+  end
+
+  # The files stored under the message `id` of `thread_id`.
+  defp copies(ctx, thread_id, id) do
+    case Arca.list_recursive(actor(ctx), Arca.ThreadStorage.blob_root(thread_id) ++ [id]) do
+      {:ok, files} -> files
+      {:error, :not_found} -> []
+    end
+  end
 
   describe "opening" do
     test "the soul opens one from its daily turn: the thread, its opening and the daily thread's pointer land with one record, and the turn goes on",
@@ -747,38 +814,37 @@ defmodule Aqua.Providers.WorkspaceTest do
                for(%{kind: "report", content: text} <- rows(ctx, today.id), do: text)
     end
 
-    # An earlier try's copies are discarded on the day it made them.
-    test "a report tried again after midnight discards the copies an earlier try left under the earlier day",
+    # A try that dies after its copy leaves the place it recorded first;
+    # the next try discards there, behind any number of daily threads and
+    # across midnight.
+    test "a report tried again after midnight discards what a try that died copied, behind 200 more recently active daily threads",
          %{ctx: ctx, daily: daily} do
-      script!([reply("Working."), reply("Here it is.")])
       :ok = Aqua.Day.put_zone(ctx.user_id, @west)
-      workspace = open!(ctx, daily)
-      turn = work!(ctx, workspace)
-      chart = Prima.UUID7.generate_id("msg")
-      png = %{"filename" => "chart.png", "media_type" => "image/png", "bytes" => "PNG-chart"}
-      {:ok, [ref]} = Aqua.Attachments.copy(ctx, workspace.id, chart, [png])
-
-      {:ok, _} =
-        Tape.post(ctx, turn, %{
-          id: chart,
-          content: "",
-          payload: %{"post" => true, "attachments" => [ref]}
-        })
-
-      {:ok, _} =
-        Tape.report_workspace(ctx, turn, "done", %{
-          summary: "Charted.",
-          attachments: [%{"message_id" => chart, "stored_name" => ref["stored_name"]}]
-        })
-
-      stop!(ctx, turn)
-
-      # An earlier try copied under the day current then, and stopped.
-      [record] = records(ctx, "workspace_report")
+      record = charted!(ctx, daily)
       id = Crew.report_id(record)
       {:ok, earlier} = Aqua.Day.current(ctx)
-      {:ok, [residue]} = Aqua.Attachments.copy(ctx, earlier.id, id, [png])
-      {:ok, residue_path} = Aqua.Attachments.blob_path(earlier.id, id, residue)
+
+      assert {:error, :crashed} = dying_try(fn -> drain(ctx) end)
+      assert [_residue] = copies(ctx, earlier.id, id)
+
+      now = DateTime.utc_now()
+
+      rows =
+        for _ <- 1..200 do
+          %{
+            id: Prima.UUID7.generate_id("thread"),
+            athanor_id: ctx.athanor_id,
+            kind: "daily",
+            day: Arca.Test.Days.next(),
+            title: "a day",
+            created_by: ctx.user_id,
+            inserted_at: now,
+            updated_at: now,
+            last_message_at: DateTime.add(now, 60)
+          }
+        end
+
+      {200, _} = Arca.Repo.insert_all(Arca.Schemas.Thread, rows)
 
       :ok = Aqua.Day.put_zone(ctx.user_id, @east)
       {:ok, today} = Aqua.Day.current(ctx)
@@ -786,8 +852,46 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       assert %{} = Crew.drain_all()
       assert {:ok, "applied"} = outcome(ctx, record)
+      assert [%{id: ^id} = report] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
+      assert [_one] = Aqua.Attachments.refs_of(report)
+      assert copies(ctx, earlier.id, id) == []
+    end
+
+    test "a report tried again discards what a try copied under a daily thread deleted while it copied",
+         %{ctx: ctx, daily: daily} do
+      record = charted!(ctx, daily)
+      id = Crew.report_id(record)
+      {:ok, earlier} = Aqua.Day.current(ctx)
+      test = self()
+
+      # The try has read its day and starts to copy; the person deletes
+      # that day's thread; then the copy writes and the try dies.
+      dying_try(fn ->
+        try =
+          Task.async(fn ->
+            Process.put(:before_report_copy, fn ->
+              send(test, :copying)
+              assert_receive :go, 10_000
+            end)
+
+            drain(ctx)
+          end)
+
+        assert_receive :copying, 10_000
+        assert {:ok, _} = Threads.delete(actor(ctx), earlier.id)
+        send(try.pid, :go)
+        assert {:error, :crashed} = Task.await(try, 15_000)
+      end)
+
+      assert [_residue] = copies(ctx, earlier.id, id)
+
+      {:ok, today} = Aqua.Day.current(ctx)
+      assert today.id != earlier.id
+
+      assert %{} = Crew.drain_all()
+      assert {:ok, "applied"} = outcome(ctx, record)
       assert [%{id: ^id}] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
-      assert {:error, :not_found} = Arca.get(actor(ctx), residue_path)
+      assert copies(ctx, earlier.id, id) == []
     end
 
     test "a report tried again discards what the earlier try stored under its row",

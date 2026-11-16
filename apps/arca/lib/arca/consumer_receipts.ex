@@ -49,7 +49,9 @@ defmodule Arca.ConsumerReceipts do
 
   @doc """
   Write `receipt` in the actor's athanor, inside the caller's transaction
-  — the one that did the work, under the consumer's claim. Answers `:ok`,
+  — the one that did the work, under the consumer's claim — and clear the
+  place the consumer's tries of that record put bytes under
+  (`Arca.DeliveryCopies`), which a receipted record no longer has. Answers `:ok`,
   or `{:error, :receipted}` when the consumer already holds a receipt for
   that source and revision, which writes nothing and is the caller's to
   roll back on.
@@ -81,7 +83,7 @@ defmodule Arca.ConsumerReceipts do
     }
 
     case Arca.Repo.insert_all(ConsumerReceipt, [row], on_conflict: :nothing) do
-      {1, _} -> :ok
+      {1, _} -> Arca.DeliveryCopies.clear!(%Prima.Actor{athanor_id: athanor_id}, row)
       {0, _} -> {:error, :receipted}
     end
   end

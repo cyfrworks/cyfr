@@ -77,10 +77,11 @@ defmodule Aqua.Crew do
     * A report (`workspace_report`) lands on the daily thread current
       when it is delivered (`Aqua.Day`), sent by the soul, with the files
       it carries copied from the workspace thread's posts into its own
-      row first, under an id its record decides, so a delivery tried
-      again first discards what an earlier try stored, on any daily
-      thread one could have stored it under, the day's turning
-      notwithstanding. It
+      row first, under an id its record decides. Where a try copies is
+      recorded before its first byte (`Arca.DeliveryCopies`), so a
+      delivery tried again first discards what an earlier try stored
+      there, whatever day or thread that was, and the receipt clears it.
+      It
       opens or waits as a turn of the soul on the daily thread, which
       tells the person.
 
@@ -745,7 +746,7 @@ defmodule Aqua.Crew do
   defp report(ctx, daily, %Prima.OutboxRecord{snapshot: snapshot} = record, held) do
     id = report_id(record)
 
-    with :ok <- discard_tries(ctx, record, id),
+    with :ok <- place_copy(ctx, record, daily.id, id),
          {:ok, files} <-
            Aqua.Attachments.carried(ctx, snapshot["workspace_id"], snapshot["attachments"] || []),
          {:ok, refs} <- Aqua.Attachments.copy(ctx, daily.id, id, files) do
@@ -786,32 +787,26 @@ defmodule Aqua.Crew do
 
   defp opening_row(_ctx, _snapshot), do: {:error, :not_a_workspace}
 
-  # What every earlier try of a report stored under its id, on whichever
-  # daily thread was current then: a try came after the record's move and
-  # before now, and its day was that instant's date in a zone of the
-  # person's, which is never more than 12 hours behind UTC or 14 ahead.
-  # So the daily threads whose date falls in that span are every thread an
-  # earlier try could have copied under, today's among them; none holds a
-  # row of that id, since a landed try is receipted and never tried again.
-  defp discard_tries(ctx, %Prima.OutboxRecord{source_revision: revision}, id) do
-    with {:ok, moved_at, _offset} <- DateTime.from_iso8601(revision),
-         dailies when is_list(dailies) <-
-           Arca.ThreadStorage.list(Sanctum.Context.actor(ctx), kind: "daily") do
-      first = moved_at |> DateTime.add(-12 * 3600) |> DateTime.to_date()
-      last = DateTime.utc_now() |> DateTime.add(14 * 3600) |> DateTime.to_date()
+  # What an earlier try of this report stored goes before this try
+  # copies: its place is recorded, and committed, before its first byte
+  # (`Arca.DeliveryCopies`), so a try that died leaves it known, and its
+  # bytes are discarded there whatever became of the thread that place
+  # was under. Then this try records its own place, today's thread.
+  defp place_copy(ctx, record, thread_id, id) do
+    actor = Sanctum.Context.actor(ctx)
+    source = Prima.OutboxRecord.source(record)
 
-      dailies
-      |> Enum.filter(&(Date.compare(&1.day, first) != :lt and Date.compare(&1.day, last) != :gt))
-      |> Enum.reduce_while(:ok, fn thread, :ok ->
-        case Aqua.Attachments.discard(ctx, thread.id, id) do
-          :ok -> {:cont, :ok}
-          {:error, _} = refused -> {:halt, refused}
-        end
-      end)
-    else
-      {:error, _} = refused -> refused
+    with :ok <- discard_earlier(ctx, Arca.DeliveryCopies.placed(actor, @consumer, source)),
+         :ok <- Aqua.Attachments.discard(ctx, thread_id, id) do
+      Arca.DeliveryCopies.put(actor, @consumer, source, %{thread_id: thread_id, message_id: id})
     end
   end
+
+  defp discard_earlier(ctx, {:ok, %{thread_id: thread_id, message_id: id}}),
+    do: Aqua.Attachments.discard(ctx, thread_id, id)
+
+  defp discard_earlier(_ctx, :none), do: :ok
+  defp discard_earlier(_ctx, {:error, _} = refused), do: refused
 
   @doc false
   # The report's row id, decided by its record: every try of one delivery
