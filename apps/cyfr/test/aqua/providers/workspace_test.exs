@@ -747,6 +747,49 @@ defmodule Aqua.Providers.WorkspaceTest do
                for(%{kind: "report", content: text} <- rows(ctx, today.id), do: text)
     end
 
+    # An earlier try's copies are discarded on the day it made them.
+    test "a report tried again after midnight discards the copies an earlier try left under the earlier day",
+         %{ctx: ctx, daily: daily} do
+      script!([reply("Working."), reply("Here it is.")])
+      :ok = Aqua.Day.put_zone(ctx.user_id, @west)
+      workspace = open!(ctx, daily)
+      turn = work!(ctx, workspace)
+      chart = Prima.UUID7.generate_id("msg")
+      png = %{"filename" => "chart.png", "media_type" => "image/png", "bytes" => "PNG-chart"}
+      {:ok, [ref]} = Aqua.Attachments.copy(ctx, workspace.id, chart, [png])
+
+      {:ok, _} =
+        Tape.post(ctx, turn, %{
+          id: chart,
+          content: "",
+          payload: %{"post" => true, "attachments" => [ref]}
+        })
+
+      {:ok, _} =
+        Tape.report_workspace(ctx, turn, "done", %{
+          summary: "Charted.",
+          attachments: [%{"message_id" => chart, "stored_name" => ref["stored_name"]}]
+        })
+
+      stop!(ctx, turn)
+
+      # An earlier try copied under the day current then, and stopped.
+      [record] = records(ctx, "workspace_report")
+      id = Crew.report_id(record)
+      {:ok, earlier} = Aqua.Day.current(ctx)
+      {:ok, [residue]} = Aqua.Attachments.copy(ctx, earlier.id, id, [png])
+      {:ok, residue_path} = Aqua.Attachments.blob_path(earlier.id, id, residue)
+
+      :ok = Aqua.Day.put_zone(ctx.user_id, @east)
+      {:ok, today} = Aqua.Day.current(ctx)
+      assert today.id != earlier.id
+
+      assert %{} = Crew.drain_all()
+      assert {:ok, "applied"} = outcome(ctx, record)
+      assert [%{id: ^id}] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
+      assert {:error, :not_found} = Arca.get(actor(ctx), residue_path)
+    end
+
     test "a report tried again discards what the earlier try stored under its row",
          %{ctx: ctx, daily: daily} do
       script!([reply("Working."), reply("Here it is.")])

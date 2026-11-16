@@ -78,7 +78,9 @@ defmodule Aqua.Crew do
       when it is delivered (`Aqua.Day`), sent by the soul, with the files
       it carries copied from the workspace thread's posts into its own
       row first, under an id its record decides, so a delivery tried
-      again first discards what an earlier try stored on that thread. It
+      again first discards what an earlier try stored, on any daily
+      thread one could have stored it under, the day's turning
+      notwithstanding. It
       opens or waits as a turn of the soul on the daily thread, which
       tells the person.
 
@@ -743,7 +745,7 @@ defmodule Aqua.Crew do
   defp report(ctx, daily, %Prima.OutboxRecord{snapshot: snapshot} = record, held) do
     id = report_id(record)
 
-    with :ok <- Aqua.Attachments.discard(ctx, daily.id, id),
+    with :ok <- discard_tries(ctx, record, id),
          {:ok, files} <-
            Aqua.Attachments.carried(ctx, snapshot["workspace_id"], snapshot["attachments"] || []),
          {:ok, refs} <- Aqua.Attachments.copy(ctx, daily.id, id, files) do
@@ -783,6 +785,33 @@ defmodule Aqua.Crew do
   end
 
   defp opening_row(_ctx, _snapshot), do: {:error, :not_a_workspace}
+
+  # What every earlier try of a report stored under its id, on whichever
+  # daily thread was current then: a try came after the record's move and
+  # before now, and its day was that instant's date in a zone of the
+  # person's, which is never more than 12 hours behind UTC or 14 ahead.
+  # So the daily threads whose date falls in that span are every thread an
+  # earlier try could have copied under, today's among them; none holds a
+  # row of that id, since a landed try is receipted and never tried again.
+  defp discard_tries(ctx, %Prima.OutboxRecord{source_revision: revision}, id) do
+    with {:ok, moved_at, _offset} <- DateTime.from_iso8601(revision),
+         dailies when is_list(dailies) <-
+           Arca.ThreadStorage.list(Sanctum.Context.actor(ctx), kind: "daily") do
+      first = moved_at |> DateTime.add(-12 * 3600) |> DateTime.to_date()
+      last = DateTime.utc_now() |> DateTime.add(14 * 3600) |> DateTime.to_date()
+
+      dailies
+      |> Enum.filter(&(Date.compare(&1.day, first) != :lt and Date.compare(&1.day, last) != :gt))
+      |> Enum.reduce_while(:ok, fn thread, :ok ->
+        case Aqua.Attachments.discard(ctx, thread.id, id) do
+          :ok -> {:cont, :ok}
+          {:error, _} = refused -> {:halt, refused}
+        end
+      end)
+    else
+      {:error, _} = refused -> refused
+    end
+  end
 
   @doc false
   # The report's row id, decided by its record: every try of one delivery
