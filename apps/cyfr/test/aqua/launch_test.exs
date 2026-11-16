@@ -1185,9 +1185,8 @@ defmodule Aqua.LaunchTest do
     assert decide(ctx, turn, args) == :ask
   end
 
-  test "under auto a launch naming an account decides on the entry it resolves to; a name its " <>
-         "app does not bind is setup required, and an app with no grant runs for the gate to " <>
-         "answer",
+  test "under auto a launch naming an account decides on the entry it resolves to, and a name " <>
+         "its app does not bind is setup required",
        %{ctx: ctx, thread: thread, pins: pins} do
     %{app: app, work: work, args: args} = work_app!(ctx)
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
@@ -1200,18 +1199,6 @@ defmodule Aqua.LaunchTest do
 
     assert decide(ctx, turn, %{args | "connection" => "Home"}) ==
              {:setup_required, versioned, {nil, "Home"}}
-
-    ungranted = publish_app!(ctx)
-
-    none = %{"reference" => ungranted <> ":1.0.0", "input" => %{}}
-
-    assert decide(ctx, turn, none) ==
-             {:auto,
-              %{
-                call: %{action: "run", args: none},
-                account: nil,
-                binding: %{sources: [], consent_id: nil, classes: []}
-              }}
   end
 
   test "a decided launch runs once as the turn's person, under its stored origin, with its " <>
@@ -1392,8 +1379,9 @@ defmodule Aqua.LaunchTest do
            })
   end
 
-  test "a decided launch of an app with no grant is answered consent_required by the gate; one " <>
-         "granted since its decision runs nothing",
+  # Review round one, finding 2 (#3464): no grant is no cover.
+  test "under auto a launch of an app with no grant asks on its card, as a launch always did, " <>
+         "and a decision that carries no revision runs nothing, whatever grant then appears",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
@@ -1401,17 +1389,44 @@ defmodule Aqua.LaunchTest do
     app = publish_app!(ctx)
     args = %{"reference" => app <> ":1.0.0", "input" => %{}}
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    read!(ctx, turn, [@news])
+    assert decide(ctx, turn, args) == :ask
 
+    # A decision with no revision, handed to the dispatcher anyway, runs
+    # nothing and asks the gate nothing, though a first grant whose one
+    # exit does not cover the turn's source would appear at the gate's
+    # admission.
     step = launch_step!(ctx, turn, args)
-    assert {:auto, %{binding: %{consent_id: nil}} = decided} = decide(ctx, turn, args)
-    assert {_ended, refused} = Launch.run(ctx, step, decided)
-    assert Sanctum.Refusals.classify(refused).class == :consent_required
-    assert launched_of(ctx, app) == []
 
-    other = launch_step!(ctx, turn, args)
-    assert {:auto, decided} = decide(ctx, turn, args)
-    grant!(ctx, app, [%{need: "api_key", entry_id: disclosed_entry!(ctx, "default").id}])
-    ran_nothing!(ctx, other, decided, app, @decided_grant)
+    unpinned = %{
+      call: %{action: "run", args: args},
+      account: nil,
+      binding: %{sources: [@news], consent_id: nil, classes: []}
+    }
+
+    regrant_at_admission!(ctx, app, [%{need: "api_key", entry_id: disclosed_entry!(ctx, "d").id}])
+    decisions = gate_runs(ctx)
+    assert Launch.run(ctx, step, unpinned) == {:refused, :not_approved}
+    refute_received :regranted
+    assert gate_runs(ctx) == decisions
+    assert launched_of(ctx, app) == []
+  end
+
+  test "a launch of an app with no grant, approved on its card, is answered by the gate that " <>
+         "the app is not granted, and nothing of it runs",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
+
+    app = publish_app!(ctx)
+    args = %{"reference" => app <> ":1.0.0", "input" => %{}}
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    assert decide(ctx, turn, args) == :ask
+
+    step = approved_named_launch!(ctx, turn, approver, args, nil)
+    assert {:error, refused} = Launch.dispatch(ctx, step)
+    assert %Prima.Refusal{class: :consent_required} = Sanctum.Refusals.classify(refused)
+    assert launched_of(ctx, app) == []
   end
 
   # What the loop hands the dispatcher for a launch of `args` with no card:

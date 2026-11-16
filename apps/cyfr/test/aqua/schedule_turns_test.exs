@@ -733,21 +733,7 @@ defmodule Aqua.ScheduleTurnsTest do
     # exit its grant covers whatever a turn has read; with `egress` its one
     # exit declares no flow of any.
     defp app!(ctx, caps \\ nil) do
-      name = "sched-app-#{System.unique_integer([:positive])}"
-
-      manifest =
-        %{"name" => name, "version" => "1.0.0", "type" => "reagent"}
-        |> Prima.MapUtil.put_present("caps", caps)
-
-      {:ok, _component} =
-        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
-          name: name,
-          version: "1.0.0",
-          type: "reagent",
-          manifest: Jason.encode!(manifest)
-        })
-
-      ref = "reagent:local." <> name
+      ref = published!(ctx, caps)
       {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
       decisions = %{ref: ref, bindings: []}
       {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
@@ -762,6 +748,24 @@ defmodule Aqua.ScheduleTurnsTest do
         })
 
       ref
+    end
+
+    defp published!(ctx, caps \\ nil) do
+      name = "sched-app-#{System.unique_integer([:positive])}"
+
+      manifest =
+        %{"name" => name, "version" => "1.0.0", "type" => "reagent"}
+        |> Prima.MapUtil.put_present("caps", caps)
+
+      {:ok, _component} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: name,
+          version: "1.0.0",
+          type: "reagent",
+          manifest: Jason.encode!(manifest)
+        })
+
+      "reagent:local." <> name
     end
 
     defp launches(ctx, turn) do
@@ -836,6 +840,34 @@ defmodule Aqua.ScheduleTurnsTest do
       assert waiting_cards(ctx) == []
       assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
       assert row!(ctx, id).last_error == "Last run failed: " <> said
+    end
+
+    test "a run of a component nobody has granted opens no card, and the turn ends failed saying it is not granted",
+         %{ctx: ctx} do
+      app = published!(ctx)
+
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, app],
+         script: [call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})]}
+      )
+
+      id = schedule!(ctx, "Ungranted", "run the new app")
+      occurrence = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+
+      turn = await_status(ctx, turn_of(ctx, occurrence).id, "failed")
+
+      said =
+        "This scheduled run needed your approval to run #{app}:1.0.0, which is not granted, " <>
+          "and nobody was here to give it. It runs with nobody here once the component is " <>
+          "granted and its grant lets through what the run reads."
+
+      assert turn.error == said
+      assert [%{outcome: "denied", approval_id: nil, error: ^said}] = launches(ctx, turn)
+      assert runs_of(ctx, app) == []
+      assert waiting_cards(ctx) == []
+      assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
     end
 
     test "a call that ran before the one that asks keeps its result, and the asking call never runs",

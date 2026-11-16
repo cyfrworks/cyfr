@@ -1481,17 +1481,28 @@ defmodule Aqua.Loop do
   # how to allow it next time where the action's own declaration lets an
   # answer stand for a schedule (`Aqua.Standing.offered?/2`, the rule the
   # card offers its answers by); otherwise, that it needs the person there.
-  # A launch the agent runs on its grant that stopped for a flow the grant
-  # does not cover says that, since its grant is what lets it run with
-  # nobody here.
+  # A launch the agent runs on its grant that stopped for want of one, or
+  # for a flow the grant does not cover, says that, since its grant is what
+  # lets it run with nobody here.
   defp unasked(%State{spec: spec} = state, %Call{kind: :launch} = call) do
-    with "auto" <- Map.get(spec.policy, "execution.#{call.action}"),
-         %{classes: [_ | _]} <- Policy.launch_flow(call, spec.ctx, shown_sources(state)) do
-      "This scheduled run needed your approval to run #{call.target}: it would carry what " <>
-        "the run had read somewhere the component's grant does not let it go, and nobody was " <>
-        "here to give it. It runs with nobody here once the component's grant lets that through."
+    if Map.get(spec.policy, "execution.#{call.action}") == "auto" do
+      case Policy.launch_flow(call, spec.ctx, shown_sources(state)) do
+        %{consent_id: nil} ->
+          "This scheduled run needed your approval to run #{call.target}, which is not " <>
+            "granted, and nobody was here to give it. It runs with nobody here once the " <>
+            "component is granted and its grant lets through what the run reads."
+
+        %{classes: [_ | _]} ->
+          "This scheduled run needed your approval to run #{call.target}: it would carry " <>
+            "what the run had read somewhere the component's grant does not let it go, and " <>
+            "nobody was here to give it. It runs with nobody here once the component's grant " <>
+            "lets that through."
+
+        _covered ->
+          unasked(call)
+      end
     else
-      _another_need -> unasked(call)
+      unasked(call)
     end
   end
 

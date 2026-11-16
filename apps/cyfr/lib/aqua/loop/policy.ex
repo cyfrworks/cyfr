@@ -25,9 +25,11 @@ defmodule Aqua.Loop.Policy do
   app roots at covers what the turn has read: every exit of that grant's
   tree, each egress domain and tool server, declares a flow for every
   source of the turn (`lets_flow/2` names none). It asks, with today's
-  card, where some source is not covered or the turn's sources cannot be
-  read, and is refused where the grant cannot be read. A component with
-  no grant runs no card either: the gate answers it `consent_required`.
+  card, where some source is not covered, the turn's sources cannot be
+  read or the component has no grant at all — no grant is no cover, and
+  approved, the gate answers it `consent_required` as before — and is
+  refused where the grant cannot be read. Every launch that runs with no
+  card is pinned to the grant's revision the decision read.
   Under `ask` every launch asks, the person's own choice on the Aqua page.
   It is denied when the policy denies `execution.run` or names it not at
   all, and refused when its reference is no component.
@@ -389,14 +391,14 @@ defmodule Aqua.Loop.Policy do
     end
   end
 
-  # A launch under `auto` runs with no card where the grant its app roots
-  # at covers every source the turn has read, decided on what it read: the
-  # account, the turn's sources, and the grant's revision, letting no class
-  # flow. A component with no grant runs too, to be answered
-  # `consent_required` by the gate, which names what to grant; a grant that
-  # cannot be read is refused, never read as a grant. Sources that cannot
-  # be read, or one the grant does not cover, ask: the card is where the
-  # person lets them through for that one run.
+  # A launch under `auto` runs with no card where a grant its app roots at
+  # exists and covers every source the turn has read, decided on what it
+  # read: the account, the turn's sources, and the grant's revision,
+  # letting no class flow. A grant that cannot be read is refused, never
+  # read as a grant. Sources that cannot be read, one the grant does not
+  # cover, or no grant at all ask: the card is where the person lets them
+  # through for that one run, and a component with no grant is then
+  # answered `consent_required` by the gate.
   defp granted_launch(%Call{} = call, opts) do
     ctx = Keyword.get(opts, :ctx)
 
@@ -422,8 +424,7 @@ defmodule Aqua.Loop.Policy do
     end
   end
 
-  # The revision of the grant `call` roots at when it covers `sources`;
-  # nil for a component with no grant.
+  # The revision of the grant `call` roots at when it covers `sources`.
   defp granted(%Call{} = call, %Sanctum.Context{} = ctx, sources) when is_list(sources) do
     case Aqua.Launch.authority(ctx, call.target, call.action, call.args) do
       {:ok, %Prima.Authority{consent_id: consent_id, policy: policy}}
@@ -434,7 +435,7 @@ defmodule Aqua.Loop.Policy do
         :uncovered
 
       {:error, :no_profile} ->
-        {:ok, nil}
+        :uncovered
 
       {:error, reason} ->
         {:refuse,
