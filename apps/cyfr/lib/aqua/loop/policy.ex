@@ -12,7 +12,8 @@ defmodule Aqua.Loop.Policy do
   ceiling: a destructive or external action, or one declared to take no
   standing allow at agent scope, is never `auto`, and the others only by
   the author's `auto` or a standing grant; the browser tool's own actions
-  are `auto` or `deny` as the person's browser setting says. A hand or
+  are `auto` or `deny` as the person's browser setting says, one it
+  denies refused in the browser's own words. A hand or
   catalog call reads its own key; the `ui` event runs at once; an
   external server's tool always asks; a
   launch asks, whatever the agent's own policy or a standing answer
@@ -253,8 +254,18 @@ defmodule Aqua.Loop.Policy do
     case Map.get(policy, key(call)) do
       "auto" -> :auto
       "ask" -> if admitted?(call, opts), do: :auto, else: :ask
+      "deny" -> denied(call)
       _ -> deny(call)
     end
+  end
+
+  # A browser action the agent's author named is denied by the person's
+  # browser setting alone (`Aqua.ToolGrants.effective/3`), so it is refused
+  # in the browser's own words.
+  defp denied(%Call{tool: tool, action: action} = call) do
+    if Sanctum.Catalog.follows_setting?(tool, action),
+      do: {:deny, Aqua.Providers.Browser.turned_off()},
+      else: deny(call)
   end
 
   # Whether a standing allow covers this very call, read fresh. Only a

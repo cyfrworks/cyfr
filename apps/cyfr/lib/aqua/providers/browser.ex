@@ -203,6 +203,15 @@ defmodule Aqua.Providers.Browser do
   end
 
   @doc """
+  What Aqua and the person read for an action of the browser while the
+  person's browser setting is off, whoever refuses it: this provider, or
+  the turn's policy, which the setting decides for an action the agent's
+  author named (`Aqua.Loop.Policy`).
+  """
+  @spec turned_off() :: String.t()
+  def turned_off, do: "The browser is turned off."
+
+  @doc """
   What an answer carries: outside material, named by the page's host,
   or by the browser for an answer that names no page.
   """
@@ -333,7 +342,7 @@ defmodule Aqua.Providers.Browser do
   end
 
   defp on({:ok, true}), do: {:ok, true}
-  defp on({:ok, false}), do: {:error, conflict("The browser is turned off.")}
+  defp on({:ok, false}), do: {:error, conflict(turned_off())}
   defp on(other), do: other
 
   defp unavailable({:error, :unavailable}), do: {:error, {:unavailable, "The browser setting"}}
@@ -344,7 +353,7 @@ defmodule Aqua.Providers.Browser do
   defp refused({:error, reason}), do: {:error, refusal(reason)}
 
   defp refusal(:not_owned), do: conflict("This turn no longer owns the work.")
-  defp refusal(:turned_off), do: conflict("The browser is turned off.")
+  defp refusal(:turned_off), do: conflict(turned_off())
 
   defp refusal(:not_added),
     do:

@@ -858,7 +858,18 @@ defmodule Aqua.CrewTest do
     assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
     {:ok, %{turn_id: off}} = Runner.send_message(ctx, room.id, "open it")
     await_status(ctx, off, "completed")
-    assert %{dispatch_state: "closed", outcome: "denied", approval_id: nil} = step.(off)
+
+    assert %{
+             dispatch_state: "closed",
+             outcome: "denied",
+             approval_id: nil,
+             result_message_id: denied
+           } =
+             step.(off)
+
+    # The tool result the model reads next and the person sees in the
+    # thread says why, in the browser's own words.
+    assert %{content: "The browser is turned off."} = row(ctx, denied)
 
     assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
     {:ok, %{turn_id: on}} = Runner.send_message(ctx, room.id, "open it now")
