@@ -1,5 +1,5 @@
 {
-  "comment": "The driver's framing (C10): the frames the browser driver (apps/locus/keeper/cmd/cyfr-browser, Go) and its one host (Opus.Browser.Frame, Elixir) carry over the driver's terminal session, each way. A frame is 0x1E, \"B1\", the body's length in bytes as 8 lowercase hex digits, the first 8 bytes of the body's SHA-256 as 16 lowercase hex digits, the body, and 0x0A. The body is one JSON object, UTF-8, holding no byte below 0x20 (JSON escapes them), so 0x1E never appears inside a body and a reader that loses its place takes up again at the next one. `encode` gives a body and the exact frame every side writes for it. `decode` gives the pieces of a stream as they arrive, in order, with the reader's bound on a body's length (`max`): the bodies it takes, in order, and the bytes it still holds waiting at the end (`rest`). A reader drops every byte before a 0x1E; it skips a 0x1E whose header does not read (a byte that is not a lowercase hex digit, or a length of 0 or past `max`), whose body's digest differs, or whose body is not followed by 0x0A, or whose claimed body holds a 0x1E (the frame was cut), and takes up at the next 0x1E after it; and it holds an incomplete frame until more bytes come. `messages` names each message, with the fields it carries. A response's text, its chunks put together, is at most `max_response` bytes: a driver sends none longer, and a host keeps no more of one than that as it assembles it, whatever the driver sends.",
+  "comment": "The driver's framing (C10): the frames the browser driver (apps/locus/keeper/cmd/cyfr-browser, Go) and its one host (Opus.Browser.Frame, Elixir) carry over the driver's terminal session, each way. A frame is 0x1E, \"B1\", the body's length in bytes as 8 lowercase hex digits, the first 8 bytes of the body's SHA-256 as 16 lowercase hex digits, the body, and 0x0A. The body is one JSON object, UTF-8, holding no byte below 0x20 (JSON escapes them), so 0x1E never appears inside a body and a reader that loses its place takes up again at the next one. `encode` gives a body and the exact frame every side writes for it. `decode` gives the pieces of a stream as they arrive, in order, with the reader's bound on a body's length (`max`): the bodies it takes, in order, and the bytes it still holds waiting at the end (`rest`). A reader drops every byte before a 0x1E; it skips a 0x1E whose header does not read (a byte that is not a lowercase hex digit, or a length of 0 or past `max`), whose body's digest differs, or whose body is not followed by 0x0A, or whose claimed body holds a 0x1E (the frame was cut), and takes up at the next 0x1E after it; and it holds an incomplete frame until more bytes come. `messages` names each message, with the fields it carries. A cast (C12) is one window's screencast: a `req` of op `cast` asks for it, with the width and height its images are scaled to fit, and its id names the cast from then on. Each `image` is one JPEG in base64, in one message, never chunked, so an image is bounded by `max_to_host`; the driver sends the next only once the host has said `seen` of the last, and an image lost in a tail is never sent again. `uncast` ends a cast, from the host, or from the driver when its window closed. `input` carries the person's events to the cast's window, at most `input.max_events` in one message, each an event `input.accept` shows and none `input.refuse` shows: a mouse button or move, a wheel or a key, with exactly its kind's fields, its place a fraction of the image from its top left. A response's text, its chunks put together, is at most `max_response` bytes: a driver sends none longer, and a host keeps no more of one than that as it assembles it, whatever the driver sends.",
   "start": "\u001eB1",
   "max_to_host": 131072,
   "max_to_driver": 8388608,
@@ -39,6 +39,31 @@
       "name": "a body with non-ASCII text and an escaped control byte",
       "body": "{\"t\":\"req\",\"id\":8,\"win\":\"thr_01\",\"op\":\"type\",\"args\":{\"ref\":\"12\",\"text\":\"caf\u00e9 \u2603 \\u001e\"}}",
       "frame": "\u001eB10000005b342d758e3cf4ee4f{\"t\":\"req\",\"id\":8,\"win\":\"thr_01\",\"op\":\"type\",\"args\":{\"ref\":\"12\",\"text\":\"caf\u00e9 \u2603 \\u001e\"}}\n"
+    },
+    {
+      "name": "a cast request",
+      "body": "{\"t\":\"req\",\"id\":12,\"win\":\"thr_01\",\"op\":\"cast\",\"args\":{\"width\":1280,\"height\":720}}",
+      "frame": "\u001eB10000005199b96fccda5ebb2a{\"t\":\"req\",\"id\":12,\"win\":\"thr_01\",\"op\":\"cast\",\"args\":{\"width\":1280,\"height\":720}}\n"
+    },
+    {
+      "name": "an image",
+      "body": "{\"t\":\"image\",\"id\":12,\"seq\":3,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}",
+      "frame": "\u001eB1000000ff77d96200d6a87740{\"t\":\"image\",\"id\":12,\"seq\":3,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}\n"
+    },
+    {
+      "name": "seen",
+      "body": "{\"t\":\"seen\",\"id\":12,\"seq\":3}",
+      "frame": "\u001eB10000001c37a7380e22af6963{\"t\":\"seen\",\"id\":12,\"seq\":3}\n"
+    },
+    {
+      "name": "uncast",
+      "body": "{\"t\":\"uncast\",\"id\":12}",
+      "frame": "\u001eB100000016f24dbafab0c3ae19{\"t\":\"uncast\",\"id\":12}\n"
+    },
+    {
+      "name": "input",
+      "body": "{\"t\":\"input\",\"id\":12,\"evs\":[{\"k\":\"mouse\",\"type\":\"down\",\"x\":0.5,\"y\":0.25,\"button\":\"left\",\"clicks\":1,\"mods\":0},{\"k\":\"key\",\"type\":\"down\",\"key\":\"a\",\"code\":\"KeyA\",\"text\":\"a\",\"vk\":65,\"mods\":0}]}",
+      "frame": "\u001eB1000000bca2f7d63f93a6e096{\"t\":\"input\",\"id\":12,\"evs\":[{\"k\":\"mouse\",\"type\":\"down\",\"x\":0.5,\"y\":0.25,\"button\":\"left\",\"clicks\":1,\"mods\":0},{\"k\":\"key\",\"type\":\"down\",\"key\":\"a\",\"code\":\"KeyA\",\"text\":\"a\",\"vk\":65,\"mods\":0}]}\n"
     }
   ],
   "decode": [
@@ -186,6 +211,61 @@
       ],
       "frames": [],
       "rest": "\u001eB1000"
+    },
+    {
+      "name": "a tail through an image's header: the cut header is passed over and the next whole frame taken",
+      "max": 131072,
+      "stream": [
+        "0000ff77d96200d6a87740{\"t\":\"image\",\"id\":12,\"seq\":3,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}\n\u001eB10000004ffe15bb3f7ae2a679{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a tail through an image's body: the cut image is never taken, the next image is",
+      "max": 131072,
+      "stream": [
+        "BwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}\n\u001eB1000000ff9db6c2d0fc0ec0f2{\"t\":\"image\",\"id\":12,\"seq\":4,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"image\",\"id\":12,\"seq\":4,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a tail through a response chunk, an image after it: the image is taken, the chunk is not",
+      "max": 131072,
+      "stream": [
+        "d\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}\n\u001eB1000000ff77d96200d6a87740{\"t\":\"image\",\"id\":12,\"seq\":3,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"image\",\"id\":12,\"seq\":3,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "a tail at an image's last byte: the newline alone is passed over",
+      "max": 131072,
+      "stream": [
+        "\n\u001eB10000004ffe15bb3f7ae2a679{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"res\",\"id\":7,\"seq\":0,\"of\":1,\"part\":\"eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0=\"}"
+      ],
+      "rest": ""
+    },
+    {
+      "name": "an image cut short by its writer's end, then a whole one: only the whole one is taken",
+      "max": 131072,
+      "stream": [
+        "\u001eB1000000ff77d96200d6a87740{\"t\":\"image\",\"id\":12,\"seq\":3,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAA\u001eB1000000ff9db6c2d0fc0ec0f2{\"t\":\"image\",\"id\":12,\"seq\":4,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}\n"
+      ],
+      "frames": [
+        "{\"t\":\"image\",\"id\":12,\"seq\":4,\"jpeg\":\"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==\"}"
+      ],
+      "rest": ""
     }
   ],
   "messages": {
@@ -279,6 +359,398 @@
         "t": "gone",
         "id": 7
       }
+    },
+    "image": {
+      "from": "driver",
+      "fields": [
+        "t",
+        "id",
+        "seq",
+        "jpeg"
+      ],
+      "example": {
+        "t": "image",
+        "id": 12,
+        "seq": 3,
+        "jpeg": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=="
+      }
+    },
+    "seen": {
+      "from": "host",
+      "fields": [
+        "t",
+        "id",
+        "seq"
+      ],
+      "example": {
+        "t": "seen",
+        "id": 12,
+        "seq": 3
+      }
+    },
+    "uncast": {
+      "from": "host and driver",
+      "fields": [
+        "t",
+        "id"
+      ],
+      "example": {
+        "t": "uncast",
+        "id": 12
+      }
+    },
+    "input": {
+      "from": "host",
+      "fields": [
+        "t",
+        "id",
+        "evs"
+      ],
+      "example": {
+        "t": "input",
+        "id": 12,
+        "evs": [
+          {
+            "k": "mouse",
+            "type": "down",
+            "x": 0.5,
+            "y": 0.25,
+            "button": "left",
+            "clicks": 1,
+            "mods": 0
+          },
+          {
+            "k": "key",
+            "type": "down",
+            "key": "a",
+            "code": "KeyA",
+            "text": "a",
+            "vk": 65,
+            "mods": 0
+          }
+        ]
+      }
     }
+  },
+  "input": {
+    "max_events": 64,
+    "accept": [
+      {
+        "name": "a left press at a place in the image",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "left",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a move at the image's corner with a modifier",
+        "event": {
+          "k": "mouse",
+          "type": "move",
+          "x": 0,
+          "y": 1,
+          "button": "none",
+          "clicks": 0,
+          "mods": 8
+        }
+      },
+      {
+        "name": "a release of the right button",
+        "event": {
+          "k": "mouse",
+          "type": "up",
+          "x": 1,
+          "y": 0,
+          "button": "right",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a wheel",
+        "event": {
+          "k": "wheel",
+          "x": 0.5,
+          "y": 0.5,
+          "dx": 0,
+          "dy": -120.5,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a key with its text",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "a",
+          "code": "KeyA",
+          "text": "a",
+          "vk": 65,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a key let go, with no text",
+        "event": {
+          "k": "key",
+          "type": "up",
+          "key": "Enter",
+          "code": "Enter",
+          "text": "",
+          "vk": 13,
+          "mods": 2
+        }
+      },
+      {
+        "name": "a key of a letter no code names",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "\u00e9",
+          "code": "",
+          "text": "\u00e9",
+          "vk": 0,
+          "mods": 0
+        }
+      }
+    ],
+    "refuse": [
+      {
+        "name": "a place past the image's right edge",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 1.5,
+          "y": 0.25,
+          "button": "left",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a place above the image",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 0.5,
+          "y": -0.1,
+          "button": "left",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a place that is not a number",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": "0.5",
+          "y": 0.25,
+          "button": "left",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a kind no event is",
+        "event": {
+          "k": "touch",
+          "type": "down",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "left",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a mouse event missing its clicks",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "left",
+          "mods": 0
+        }
+      },
+      {
+        "name": "a mouse event naming a window",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "left",
+          "clicks": 1,
+          "mods": 0,
+          "win": "thr_02"
+        }
+      },
+      {
+        "name": "four clicks",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "left",
+          "clicks": 4,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a click count that is not whole",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "left",
+          "clicks": 1.5,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a button the mouse has not",
+        "event": {
+          "k": "mouse",
+          "type": "down",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "back",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a mouse event of no mouse type",
+        "event": {
+          "k": "mouse",
+          "type": "char",
+          "x": 0.5,
+          "y": 0.25,
+          "button": "left",
+          "clicks": 1,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a wheel past its bound",
+        "event": {
+          "k": "wheel",
+          "x": 0.5,
+          "y": 0.5,
+          "dx": 0,
+          "dy": 20000,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a wheel with a button",
+        "event": {
+          "k": "wheel",
+          "x": 0.5,
+          "y": 0.5,
+          "dx": 0,
+          "dy": -120.5,
+          "mods": 0,
+          "button": "left"
+        }
+      },
+      {
+        "name": "a key of no name",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "",
+          "code": "KeyA",
+          "text": "a",
+          "vk": 65,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a key name of 33 bytes",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "code": "KeyA",
+          "text": "a",
+          "vk": 65,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a key's text of 17 bytes",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "a",
+          "code": "KeyA",
+          "text": "yyyyyyyyyyyyyyyyy",
+          "vk": 65,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a key's code with a dash",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "a",
+          "code": "Key-A",
+          "text": "a",
+          "vk": 65,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a key code past 255",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "a",
+          "code": "KeyA",
+          "text": "a",
+          "vk": 256,
+          "mods": 0
+        }
+      },
+      {
+        "name": "a key of no key type",
+        "event": {
+          "k": "key",
+          "type": "press",
+          "key": "a",
+          "code": "KeyA",
+          "text": "a",
+          "vk": 65,
+          "mods": 0
+        }
+      },
+      {
+        "name": "modifiers past the four",
+        "event": {
+          "k": "key",
+          "type": "down",
+          "key": "a",
+          "code": "KeyA",
+          "text": "a",
+          "vk": 65,
+          "mods": 16
+        }
+      },
+      {
+        "name": "an event that is no object",
+        "event": 7
+      }
+    ]
   }
 }

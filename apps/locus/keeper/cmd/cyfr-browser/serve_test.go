@@ -166,7 +166,7 @@ func TestOpenAndReadOverFakeChrome(t *testing.T) {
 	driverIn, hostOut := io.Pipe()
 	s := newSlot(driverOut, 9, time.Minute)
 	served := make(chan error, 1)
-	go func() { served <- serve(driverIn, s, b.do, nil, make(chan os.Signal)) }()
+	go func() { served <- serve(driverIn, s, b, nil, make(chan os.Signal)) }()
 	h := &host{t: t, in: hostOut, out: bufio.NewReader(hostIn), r: reader{max: maxToHost}}
 
 	h.send(map[string]any{"t": "req", "id": 1, "win": "thr_01", "op": "read", "args": map[string]any{}})
@@ -209,7 +209,7 @@ func TestFailedOpenLeavesNoWindow(t *testing.T) {
 	driverIn, hostOut := io.Pipe()
 	s := newSlot(driverOut, 9, time.Minute)
 	served := make(chan error, 1)
-	go func() { served <- serve(driverIn, s, b.do, nil, make(chan os.Signal)) }()
+	go func() { served <- serve(driverIn, s, b, nil, make(chan os.Signal)) }()
 	h := &host{t: t, in: hostOut, out: bufio.NewReader(hostIn), r: reader{max: maxToHost}}
 
 	h.send(map[string]any{"t": "req", "id": 1, "win": "thr_01", "op": "open", "args": map[string]any{"url": unreachableURL}})

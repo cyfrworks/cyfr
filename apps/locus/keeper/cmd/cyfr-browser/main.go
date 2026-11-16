@@ -31,9 +31,11 @@
 // Each `req` runs once, in a goroutine of its own. Its response text,
 // `{"ok": …}` or `{"error": {"code", "message"}}`, goes out as `res`
 // chunks through the one send slot (slot.go), which the host acknowledges
-// chunk by chunk and may ask to send again. Chrome exiting ends the driver
-// with 1; its input ending, a hangup or a TERM closes Chrome, which then
-// writes its profile, and ends it with 0.
+// chunk by chunk and may ask to send again. A `req` of op `cast` starts a
+// window's cast, whose images go out one at a time beside the responses
+// and whose window takes the person's input (cast.go, input.go). Chrome
+// exiting ends the driver with 1; its input ending, a hangup or a TERM
+// closes Chrome, which then writes its profile, and ends it with 0.
 package main
 
 import (
@@ -120,7 +122,7 @@ func run(args []string) int {
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)
-	if err := serve(os.Stdin, s, b.do, chromium.exited, stop); err != nil {
+	if err := serve(os.Stdin, s, b, chromium.exited, stop); err != nil {
 		if !errors.Is(err, errChromeExited) {
 			fmt.Fprintln(os.Stderr, "cyfr-browser:", err)
 		}
@@ -324,19 +326,26 @@ func (p *chromeProcess) kill() {
 }
 
 // event is what the serve loop acts on: a host message, a request's
-// response made ready, or the end of the host's input.
+// response made ready, a cast's start, frame or end, or the end of the
+// host's input.
 type event struct {
-	kind string
-	id   int64
-	seq  int
-	req  request
-	text []byte
+	kind    string
+	id      int64
+	seq     int64
+	req     request
+	text    []byte
+	failed  bool
+	session string
+	frame   chromeFrame
+	input   []inputEvent
 }
 
 // serve answers the host until its input ends (nil), Chrome exits
 // (errChromeExited), a stop signal arrives (nil) or the output fails.
-func serve(in io.Reader, s *slot, do func(request) []byte, exited <-chan struct{}, stop <-chan os.Signal) error {
+func serve(in io.Reader, s *slot, b *browser, exited <-chan struct{}, stop <-chan os.Signal) error {
 	events := make(chan event, 64)
+	cs := newCasts(b, s, events)
+	defer cs.stop()
 	go readFrames(in, events)
 	tick := time.NewTicker(min(max(s.keep/4, 10*time.Millisecond), time.Second))
 	defer tick.Stop()
@@ -355,15 +364,29 @@ func serve(in io.Reader, s *slot, do func(request) []byte, exited <-chan struct{
 				return nil
 			case "req":
 				var run bool
-				if run, err = s.take(e.req.ID); run {
-					go func(r request) { events <- event{kind: "ready", id: r.ID, text: do(r)} }(e.req)
+				if run, err = s.take(e.req.ID); run && e.req.Op == "cast" {
+					cs.start(e.req)
+				} else if run {
+					go func(r request) { events <- event{kind: "ready", id: r.ID, text: b.do(r)} }(e.req)
 				}
 			case "ready":
 				err = s.ready(e.id, e.text)
 			case "ack":
-				err = s.ack(e.id, e.seq)
+				err = s.ack(e.id, int(e.seq))
 			case "again":
-				err = s.again(e.id, e.seq)
+				err = s.again(e.id, int(e.seq))
+			case "casting":
+				err = cs.casting(e)
+			case "image":
+				err = cs.image(e.id, e.frame)
+			case "castend":
+				err = cs.ended(e.id)
+			case "seen":
+				err = cs.seen(e.id, e.seq)
+			case "uncast":
+				cs.uncast(e.id)
+			case "input":
+				cs.input(e.id, e.input)
 			}
 		}
 		if err != nil {
@@ -395,10 +418,11 @@ func parse(body []byte) (event, bool) {
 	var m struct {
 		T    string          `json:"t"`
 		ID   *int64          `json:"id"`
-		Seq  *int            `json:"seq"`
+		Seq  *int64          `json:"seq"`
 		Win  string          `json:"win"`
 		Op   string          `json:"op"`
 		Args json.RawMessage `json:"args"`
+		Evs  json.RawMessage `json:"evs"`
 	}
 	if json.Unmarshal(body, &m) != nil || m.ID == nil {
 		return event{}, false
@@ -406,11 +430,19 @@ func parse(body []byte) (event, bool) {
 	switch m.T {
 	case "req":
 		return event{kind: "req", req: request{ID: *m.ID, Win: m.Win, Op: m.Op, Args: m.Args}}, true
-	case "ack", "again":
+	case "ack", "again", "seen":
 		if m.Seq == nil {
 			return event{}, false
 		}
 		return event{kind: m.T, id: *m.ID, seq: *m.Seq}, true
+	case "uncast":
+		return event{kind: "uncast", id: *m.ID}, true
+	case "input":
+		events, ok := parseInput(m.Evs)
+		if !ok {
+			return event{}, false
+		}
+		return event{kind: "input", id: *m.ID, input: events}, true
 	}
 	return event{}, false
 }

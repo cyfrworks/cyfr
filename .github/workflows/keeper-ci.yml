@@ -15,15 +15,18 @@ on:
     branches: [main]
     paths:
       - 'apps/locus/keeper/**'
-      # The keeper-protocol vectors the suite reproduces, and the residue
-      # canary, which the gofmt step checks with them.
+      # The keeper-protocol and browser-framing vectors the suite
+      # reproduces, and the residue canary, which the gofmt step checks
+      # with them.
       - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
   pull_request:
     paths:
       - 'apps/locus/keeper/**'
       - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/browser_frames.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
   workflow_call:

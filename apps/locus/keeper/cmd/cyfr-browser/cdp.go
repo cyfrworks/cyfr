@@ -288,6 +288,15 @@ func (w *watch) wake() {
 	}
 }
 
+// drain takes every event the watch holds now.
+func (w *watch) drain() []cdpEvent {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	events := w.events
+	w.events = nil
+	return events
+}
+
 // next answers the next matching event, the error that ended the
 // session, or ctx's error.
 func (w *watch) next(ctx context.Context) (cdpEvent, error) {

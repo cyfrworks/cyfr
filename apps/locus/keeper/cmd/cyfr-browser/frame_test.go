@@ -29,6 +29,17 @@ type frameVectors struct {
 		Frames []string `json:"frames"`
 		Rest   string   `json:"rest"`
 	} `json:"decode"`
+	Input struct {
+		MaxEvents int `json:"max_events"`
+		Accept    []struct {
+			Name  string          `json:"name"`
+			Event json.RawMessage `json:"event"`
+		} `json:"accept"`
+		Refuse []struct {
+			Name  string          `json:"name"`
+			Event json.RawMessage `json:"event"`
+		} `json:"refuse"`
+	} `json:"input"`
 }
 
 func loadFrameVectors(t *testing.T) frameVectors {
@@ -56,6 +67,9 @@ func TestFrameBounds(t *testing.T) {
 	if body := len(must(json.Marshal(resMessage{"res", 1 << 53, 1 << 30, 1 << 30, strings.Repeat("A", 4*((maxChunk+2)/3))}))); body > maxToHost {
 		t.Fatalf("a res frame of the largest chunk holds %d bytes, past the host's %d", body, maxToHost)
 	}
+	if body := len(must(json.Marshal(imageMessage{"image", 1 << 53, 1 << 53, strings.Repeat("A", maxImage)}))); body > maxToHost {
+		t.Fatalf("an image of the largest size holds %d bytes, past the host's %d", body, maxToHost)
+	}
 }
 
 func TestEncodeVectors(t *testing.T) {
@@ -77,6 +91,9 @@ func TestMessageBodies(t *testing.T) {
 		"hello":            helloMessage{T: "hello", V: 1, Chunk: defaultChunk, KeepMS: defaultKeepMS},
 		"a response chunk": resMessage{T: "res", ID: 7, Seq: 0, Of: 1, Part: "eyJvayI6eyJ0aXRsZSI6IkV4YW1wbGUifX0="},
 		"gone":             goneMessage{T: "gone", ID: 7},
+		"an image": imageMessage{T: "image", ID: 12, Seq: 3,
+			JPEG: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=="},
+		"uncast": uncastMessage{T: "uncast", ID: 12},
 	} {
 		if got := string(must(json.Marshal(message))); got != bodies[name] {
 			t.Errorf("%s: marshals to %s, want %s", name, got, bodies[name])
@@ -114,4 +131,42 @@ func must[T any](value T, err error) T {
 		panic(err)
 	}
 	return value
+}
+
+// Every event the vectors accept is read, alone and as many as one message
+// holds; every event they refuse is refused, and takes the message it is
+// in with it; a message of no event, or of one past the bound, is refused.
+func TestInputVectors(t *testing.T) {
+	v := loadFrameVectors(t).Input
+	if v.MaxEvents != maxInputEvents || len(v.Accept) == 0 || len(v.Refuse) == 0 {
+		t.Fatalf("the vectors bound a message at %d events, the driver at %d; %d accepted, %d refused",
+			v.MaxEvents, maxInputEvents, len(v.Accept), len(v.Refuse))
+	}
+	list := func(events ...json.RawMessage) json.RawMessage { return must(json.Marshal(events)) }
+	for _, c := range v.Accept {
+		if _, ok := parseInput(list(c.Event)); !ok {
+			t.Errorf("%s: refused, want accepted: %s", c.Name, c.Event)
+		}
+		if _, ok := parseInput(list(c.Event, v.Refuse[0].Event)); ok {
+			t.Errorf("%s: a message with a refused event beside it was accepted", c.Name)
+		}
+	}
+	for _, c := range v.Refuse {
+		if _, ok := parseInput(list(c.Event)); ok {
+			t.Errorf("%s: accepted, want refused: %s", c.Name, c.Event)
+		}
+	}
+	most := make([]json.RawMessage, maxInputEvents+1)
+	for i := range most {
+		most[i] = v.Accept[i%len(v.Accept)].Event
+	}
+	if events, ok := parseInput(list(most[:maxInputEvents]...)); !ok || len(events) != maxInputEvents {
+		t.Errorf("a message of %d events was refused", maxInputEvents)
+	}
+	if _, ok := parseInput(list(most...)); ok {
+		t.Errorf("a message of %d events was accepted", maxInputEvents+1)
+	}
+	if _, ok := parseInput(list()); ok {
+		t.Error("a message of no event was accepted")
+	}
 }
