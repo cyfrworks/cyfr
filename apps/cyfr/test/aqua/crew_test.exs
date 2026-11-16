@@ -961,6 +961,96 @@ defmodule Aqua.CrewTest do
     assert %{"tools" => ["files.read"]} = Jason.decode!(options)
   end
 
+  # An app of the person's own with no exit at all, granted with nothing to
+  # bind: its grant covers whatever a turn has read.
+  defp quiet_app!(ctx) do
+    name = "crew-app-#{System.unique_integer([:positive])}"
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})
+      })
+
+    ref = "reagent:local." <> name
+    decisions = %{ref: ref, bindings: []}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    ref
+  end
+
+  defp runs_of(ctx, ref) do
+    Arca.Repo.all(
+      from(e in Arca.Schemas.Execution,
+        where: e.athanor_id == ^ctx.athanor_id and like(e.reference, ^"#{ref}%"),
+        select: e.id
+      )
+    )
+  end
+
+  test "a member's turn runs a granted component under the soul's tools with no card, and a job narrowed away from it runs none",
+       %{ctx: ctx, room: room} do
+    app = quiet_app!(ctx)
+    run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, app],
+       script: [
+         run,
+         {:probe, self()},
+         %{"answered" => true},
+         reply("ran it"),
+         run,
+         reply("not run")
+       ]}
+    )
+
+    request = soul_request!(ctx, room, "planner", "run the app")
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+
+    # The app runs, held, while a job narrowed away from it queues behind.
+    assert_receive {:scripted_probe, worker, root}, 60_000
+    child = child!(ctx, room, "planner")
+    first = delivered_turn(ctx, child, request.id)
+    narrowed = soul_request!(ctx, room, "planner", "read only", %{tools: ["files.read"]})
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    second = delivered_turn(ctx, child, narrowed.id)
+    send(worker, :continue)
+    await_status(ctx, first, "completed")
+    await_status(ctx, second, "completed")
+
+    {:ok, turn} = Tape.turn(ctx, first)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{outcome: "ok", approval_id: nil, child_execution_id: ^root} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
+
+    {:ok, turn} = Tape.turn(ctx, second)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{outcome: "denied", approval_id: nil, error: said} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert said == "execution.run is outside the tools this job was narrowed to"
+    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
+    assert runs_of(ctx, app) == [root]
+  end
+
   test "a narrowed job is refused a call outside its tools before any card, and goes on",
        %{ctx: ctx, room: room} do
     script!([

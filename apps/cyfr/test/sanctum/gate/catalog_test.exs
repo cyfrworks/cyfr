@@ -314,6 +314,43 @@ defmodule Sanctum.Gate.CatalogTest do
           do: refute(Catalog.auto_permitted?("browser", action), action)
     end
 
+    # The actions declared to take no standing answer at all, as the
+    # table holds them: by their `standing`, which no authored `auto`
+    # reaches either, or, for a launch alone, by `stored_answers`.
+    @never_standing ~w(
+      aqua.skill_create aqua.skill_update browser.turn_on canvas.write execution.retry
+      execution.run file.move notes.endorse notes.pin registry.appeal registry.claim_publisher
+      registry.members_add registry.members_remove registry.members_update registry.report
+      registry.sync registry.tokens_issue registry.tokens_revoke registry.verify_publisher
+      tincture.invoke_protected tincture.invoke_public
+    )
+
+    test "a launch takes an authored auto and no standing answer, and no other action gains an auto" do
+      assert {:ok, %{standing: nil, stored_answers: false}} =
+               Catalog.action_declaration("execution.run")
+
+      never =
+        for key <- Catalog.tool_actions(),
+            {:ok, declared} = Catalog.action_declaration(key),
+            declared.standing == false or not declared.stored_answers,
+            do: key
+
+      assert Enum.sort(never) == @never_standing
+
+      # The store refuses an answer for each, and the launch alone takes an
+      # authored auto.
+      for key <- never, [tool, action] = String.split(key, ".", parts: 2) do
+        assert {:error, {:scope_not_permitted, _by_kind_or_declaration}} =
+                 Sanctum.ToolGrants.check_standing(
+                   %{scope: "thread", effect: "allow", tool: tool, action: action},
+                   DateTime.utc_now()
+                 ),
+               key
+
+        assert Catalog.auto_permitted?(tool, action) == (key == "execution.run"), key
+      end
+    end
+
     test "a module that declares no tools cannot be planted" do
       assert_raise ArgumentError, ~r/does not export tools\/0/, fn ->
         Catalog.with_providers([Sanctum.Gate.CatalogTest.NoSuchProvider], fn -> :ok end)

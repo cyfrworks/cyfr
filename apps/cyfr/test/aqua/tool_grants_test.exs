@@ -213,6 +213,50 @@ defmodule Aqua.ToolGrantsTest do
       assert Aqua.Kinds.auto_permitted?("notes", "read")
     end
 
+    test "the ceiling admits an authored auto on a launch, and a stored allow never makes one run without its card" do
+      # A launch is decided by its line: an authored auto reaches the guest
+      # as auto, where the component's grant decides it. No answer a person
+      # gives is ever kept for it.
+      assert {:ok, %{kind: :execute, standing: nil, stored_answers: false}} =
+               Sanctum.Catalog.action_declaration("execution.run")
+
+      assert Aqua.Kinds.auto_permitted?("execution", "run")
+
+      assert ToolGrants.resolve(%{"execution.run" => "auto"}, [], {:ok, true}) == %{
+               "execution.run" => "auto"
+             }
+
+      # A stored allow for execution.run, which the store refuses, counts
+      # for nothing however it was written: it leaves an authored auto as
+      # it is, an authored ask asking, and no line no line.
+      allow = %{
+        scope: "agent",
+        effect: "allow",
+        agent_name: "aqua",
+        tool: "execution",
+        action: "run",
+        sources: []
+      }
+
+      launch = %Call{
+        kind: :launch,
+        tool: "execution",
+        action: "run",
+        args: %{"reference" => "reagent:local.app:1.0.0", "input" => %{}},
+        target: "reagent:local.app:1.0.0"
+      }
+
+      asks = ToolGrants.resolve(%{"execution.run" => "ask"}, [allow], {:ok, true})
+      assert asks == %{"execution.run" => "ask"}
+      assert Policy.decide(launch, asks, sources: []) == :ask
+      refute Policy.auto?(launch, asks, sources: [])
+
+      assert ToolGrants.resolve(%{"execution.run" => "auto"}, [allow], {:ok, true}) ==
+               %{"execution.run" => "auto"}
+
+      assert ToolGrants.resolve(%{}, [allow], {:ok, true}) == %{}
+    end
+
     test "an HTTP post, put or patch the author made automatic asks; a GET stays automatic" do
       # Each call resolves through the binding the loop uses, and its decision
       # reads the key the binding names, from the ceiling's own effective map.

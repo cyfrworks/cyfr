@@ -65,6 +65,7 @@ defmodule Sanctum.Catalog do
   @type action_declaration :: %{
           kind: atom(),
           standing: term(),
+          stored_answers: boolean(),
           resource: {String.t(), Prima.Operation.resource_kind()} | nil
         }
 
@@ -1179,20 +1180,31 @@ defmodule Sanctum.Catalog do
       Sanctum.VirtualTools.tool?(tool) ->
         case Sanctum.VirtualTools.action(tool, action) do
           %{kind: kind} = declared ->
-            {:ok, %{kind: kind, standing: nil, resource: Map.get(declared, :resource)}}
+            {:ok,
+             %{
+               kind: kind,
+               standing: nil,
+               stored_answers: true,
+               resource: Map.get(declared, :resource)
+             }}
 
           nil ->
             {:error, :not_found}
         end
 
       String.contains?(tool, ":") ->
-        {:ok, %{kind: :external, standing: nil, resource: nil}}
+        {:ok, %{kind: :external, standing: nil, stored_answers: true, resource: nil}}
 
       true ->
         with {:ok, {_module, %{operations: operations}}} <- lookup(tool),
              %Operation{} = operation <- Enum.find(operations, &(&1.action == action)) do
           {:ok,
-           %{kind: operation.kind, standing: operation.standing, resource: operation.resource}}
+           %{
+             kind: operation.kind,
+             standing: operation.standing,
+             stored_answers: operation.stored_answers,
+             resource: operation.resource
+           }}
         else
           _ -> {:error, :not_found}
         end

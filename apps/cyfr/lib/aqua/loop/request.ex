@@ -452,14 +452,33 @@ defmodule Aqua.Loop.Request do
   end
 
   defp asks(tool, actions, policy) do
-    case Enum.filter(actions, &(Map.get(policy, "#{tool}.#{&1}") == "ask")) do
-      [] ->
-        ""
+    asking = Enum.filter(actions, &(Map.get(policy, "#{tool}.#{&1}") == "ask"))
 
-      asking ->
-        " Actions #{Enum.join(asking, ", ")} need the person's approval; calling one pauses the turn until they decide."
-    end
+    granted =
+      Enum.filter(
+        actions,
+        &(Aqua.Launch.launch_action?(tool, &1) and Map.get(policy, "#{tool}.#{&1}") == "auto")
+      )
+
+    asking_sentence(asking) <> granted_sentence(granted)
   end
+
+  defp asking_sentence([]), do: ""
+
+  defp asking_sentence(asking),
+    do:
+      " Actions #{Enum.join(asking, ", ")} need the person's approval; calling one pauses the turn until they decide."
+
+  # A launch the policy runs `auto` runs on the component's grant, and
+  # still asks when the turn has read what that grant does not let
+  # through (`Aqua.Loop.Policy`).
+  defp granted_sentence([]), do: ""
+
+  defp granted_sentence(granted),
+    do:
+      " A component the person has granted runs at once through #{Enum.join(granted, " and ")};" <>
+        " a run still needs the person's approval, and pauses the turn until they decide, when " <>
+        "this turn has read something that component's grant does not let it send on."
 
   # ---------------------------------------------------------------------------
   # Messages

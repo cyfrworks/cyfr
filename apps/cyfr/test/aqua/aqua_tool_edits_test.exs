@@ -142,13 +142,24 @@ defmodule Aqua.AquaToolEditsTest do
     before = policy(ctx, @soul)
 
     # The kind ceiling holds for a patched key exactly as for a replaced map.
-    for key <- ["files.delete", "execution.run"] do
-      assert {:error, {:invalid_argument, _}} =
+    assert {:error, {:invalid_argument, _}} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => @soul,
+               "tool_policy_patch" => %{"files.delete" => "auto"}
+             })
+
+    # A launch is patched to ask and back to auto, the person's choice of
+    # a card before every run.
+    for mode <- ["ask", "auto"] do
+      assert {:ok, %{"updated" => "aqua"}} =
                call(ctx, %{
                  "action" => "update",
                  "name" => @soul,
-                 "tool_policy_patch" => %{key => "auto"}
+                 "tool_policy_patch" => %{"execution.run" => mode}
                })
+
+      assert policy(ctx, @soul)["execution.run"] == mode
     end
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
