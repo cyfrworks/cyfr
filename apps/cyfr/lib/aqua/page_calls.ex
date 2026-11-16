@@ -235,7 +235,7 @@ defmodule Aqua.PageCalls do
       recovery: recorded.recovery,
       child_execution_id: recorded.child_execution_id,
       proposal_digest: recorded.proposal_digest,
-      idempotency_key: "page:#{turn_id}:#{request}",
+      idempotency_key: "page_call:#{turn_id}:#{request}",
       sources: [Prima.Source.outside("browser")]
     }
 

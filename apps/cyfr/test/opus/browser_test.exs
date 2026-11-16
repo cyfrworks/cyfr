@@ -1446,7 +1446,12 @@ defmodule Opus.BrowserTest do
   end
 
   describe "a page's call" do
+    # These hear the announcements themselves: the process that takes a
+    # page's call to its thread (`Aqua.PageCalls`) is stopped while they
+    # run and started again after.
     setup do
+      on_exit(fn -> {:ok, _} = Supervisor.restart_child(Aqua.Supervisor, Aqua.PageCalls) end)
+      :ok = Supervisor.terminate_child(Aqua.Supervisor, Aqua.PageCalls)
       :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.page_calls())
     end
 
