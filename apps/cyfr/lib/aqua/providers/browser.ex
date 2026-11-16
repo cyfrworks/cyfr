@@ -196,7 +196,7 @@ defmodule Aqua.Providers.Browser do
             Arg.new("html", :string,
               max: @max_html,
               description:
-                "page: a page of one file to show in this thread's window, as html; give exactly one of html, files and tincture"
+                "for page, a page of one file to show in this thread's window, as html; give exactly one of html, files and tincture"
             ),
             Arg.new(
               "files",
@@ -224,7 +224,7 @@ defmodule Aqua.Providers.Browser do
               min: 1,
               max: Opus.Browser.put_bound().files,
               description:
-                "page: a page of several files to show in this thread's window, each {path, content, encoding}, with name and entry"
+                "for page, a page of several files to show in this thread's window, each {path, content, encoding}, with name and entry"
             ),
             Arg.new("name", :string,
               description: "page with files: the page's name, the last segment of its address"
@@ -235,7 +235,7 @@ defmodule Aqua.Providers.Browser do
             ),
             Arg.new("tincture", :string,
               description:
-                "page: a tincture version of yours to show as it is served, as tincture:local.<name>:<version>"
+                "for page, a tincture version of yours to show as it is served, as tincture:local.<name>:<version>"
             )
           ],
           family
