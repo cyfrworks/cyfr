@@ -90,22 +90,22 @@ defmodule Aqua.ToolGrantsTest do
     end
   end
 
-  describe "resolve/2" do
+  describe "resolve/3" do
     test "an allow with no other bound is bounded by its sources: a declared 'ask' still asks" do
       declared = %{"component.pull" => "ask"}
       grants = [%{scope: "thread", effect: "allow", tool: "component", action: "pull"}]
 
       # Each call is decided as it is made (`Sanctum.ToolGrants.admits?/2`),
       # never by a plain `auto` for the whole turn.
-      assert ToolGrants.resolve(declared, grants) == %{"component.pull" => "ask"}
+      assert ToolGrants.resolve(declared, grants, {:ok, true}) == %{"component.pull" => "ask"}
 
       assert {:auto, {:bounded, [%{lifecycle_kind: nil, expires_at: nil, constraint: nil}]}} =
-               ToolGrants.effective(declared, grants)["component.pull"]
+               ToolGrants.effective(declared, grants, {:ok, true})["component.pull"]
 
       named = [Map.put(hd(grants), :sources, [Prima.Source.outside("registry.example")])]
 
       assert {:auto, {:bounded, [%{sources: [%Prima.Source{name: "registry.example"}]}]}} =
-               ToolGrants.effective(declared, named)["component.pull"]
+               ToolGrants.effective(declared, named, {:ok, true})["component.pull"]
     end
 
     test "a deny beats a declared 'auto' and pins the pair as denied" do
@@ -116,7 +116,7 @@ defmodule Aqua.ToolGrantsTest do
       # to a `tool.*` glob only for an ABSENT key, so a dropped pair would
       # let a surviving glob answer for it. A present "deny" is uncallable
       # and not proposable, so a person who said "never" is not asked again.
-      assert ToolGrants.resolve(declared, grants) ==
+      assert ToolGrants.resolve(declared, grants, {:ok, true}) ==
                %{"component.pull" => "deny", "files.read" => "auto"}
     end
 
@@ -128,35 +128,47 @@ defmodule Aqua.ToolGrantsTest do
         %{scope: "thread", effect: "deny", tool: "component", action: "pull"}
       ]
 
-      assert ToolGrants.resolve(declared, grants) == %{"component.pull" => "deny"}
+      assert ToolGrants.resolve(declared, grants, {:ok, true}) == %{"component.pull" => "deny"}
     end
 
     test "a deny is not defeated, or inverted, by a glob" do
       # Standing denies must override both exact and globbed ask/auto policies.
       deny = [%{scope: "thread", effect: "deny", tool: "component", action: "pull"}]
 
-      composed = ToolGrants.resolve(%{"component.*" => "ask"}, deny)
+      composed = ToolGrants.resolve(%{"component.*" => "ask"}, deny, {:ok, true})
       assert composed["component.pull"] == "deny"
       refute Map.has_key?(composed, "component.*")
       assert composed["component.search"] == "ask"
 
-      inverted = ToolGrants.resolve(%{"component.pull" => "ask", "component.*" => "auto"}, deny)
+      inverted =
+        ToolGrants.resolve(
+          %{"component.pull" => "ask", "component.*" => "auto"},
+          deny,
+          {:ok, true}
+        )
+
       assert inverted["component.pull"] == "deny"
       assert inverted["component.search"] == "auto"
     end
 
     test "a key for a tool nobody catalogues and the search gate pass through composition untouched" do
-      composed = ToolGrants.resolve(%{"builder.*" => "auto", "native_search" => "auto"}, [])
+      composed =
+        ToolGrants.resolve(%{"builder.*" => "auto", "native_search" => "auto"}, [], {:ok, true})
+
       assert composed == %{"builder.*" => "auto", "native_search" => "auto"}
     end
 
     test "the kind ceiling demotes an automatic destructive action, wherever it came from" do
       # A hand-edited file, or a row written before the rule: neither
       # reaches the guest as auto.
-      assert ToolGrants.resolve(%{"files.delete" => "auto", "files.read" => "auto"}, []) ==
+      assert ToolGrants.resolve(
+               %{"files.delete" => "auto", "files.read" => "auto"},
+               [],
+               {:ok, true}
+             ) ==
                %{"files.delete" => "ask", "files.read" => "auto"}
 
-      assert ToolGrants.resolve(%{"http.*" => "auto"}, [])["http.delete"] == "ask"
+      assert ToolGrants.resolve(%{"http.*" => "auto"}, [], {:ok, true})["http.delete"] == "ask"
     end
 
     test "the ceiling demotes an automatic action declared to take no agent-wide standing allow, written or globbed" do
@@ -172,7 +184,7 @@ defmodule Aqua.ToolGrantsTest do
         "notes.read" => "auto"
       }
 
-      assert ToolGrants.resolve(authored, []) == %{
+      assert ToolGrants.resolve(authored, [], {:ok, true}) == %{
                "notes.pin" => "ask",
                "notes.keep" => "ask",
                "notes.endorse" => "ask",
@@ -181,7 +193,7 @@ defmodule Aqua.ToolGrantsTest do
                "notes.read" => "auto"
              }
 
-      globbed = ToolGrants.resolve(%{"notes.*" => "auto"}, [])
+      globbed = ToolGrants.resolve(%{"notes.*" => "auto"}, [], {:ok, true})
       assert globbed["notes.pin"] == "ask"
       assert globbed["notes.endorse"] == "ask"
       assert globbed["notes.keep"] == "ask"
@@ -213,7 +225,7 @@ defmodule Aqua.ToolGrantsTest do
         "http.patch" => "auto"
       }
 
-      effective = ToolGrants.effective(authored, [])
+      effective = ToolGrants.effective(authored, [], {:ok, true})
       guest = ToolGrants.to_guest(effective)
 
       for name <- ~w(http.post http.put http.patch) do
@@ -239,7 +251,114 @@ defmodule Aqua.ToolGrantsTest do
 
     test "no grants leaves the declared policy exactly as written" do
       declared = %{"component.pull" => "ask", "files.read" => "auto"}
-      assert ToolGrants.resolve(declared, []) == declared
+      assert ToolGrants.resolve(declared, [], {:ok, true}) == declared
+    end
+  end
+
+  describe "the person's browser setting" do
+    # The browser tool's actions, each following the person's setting, and
+    # its three of the setting itself, which follow their policy lines.
+    @family ~w(open read click type key page screenshot close)
+    @authored %{
+      "browser.open" => "ask",
+      "browser.read" => "auto",
+      "browser.click" => "ask",
+      "browser.type" => "ask",
+      "browser.key" => "ask",
+      "browser.page" => "ask",
+      "browser.screenshot" => "auto",
+      "browser.close" => "ask",
+      "browser.status" => "auto",
+      "browser.turn_on" => "ask",
+      "browser.turn_off" => "auto"
+    }
+    @setting_lines %{
+      "browser.status" => "auto",
+      "browser.turn_on" => "ask",
+      "browser.turn_off" => "auto"
+    }
+
+    defp family(mode), do: Map.new(@family, &{"browser.#{&1}", mode})
+
+    test "decides every action that follows it, on as auto and off as deny, whatever the author wrote; its own three keep their lines" do
+      assert Enum.filter(
+               Aqua.Kinds.actions_of("browser"),
+               &Sanctum.Catalog.follows_setting?("browser", &1)
+             )
+             |> Enum.sort() == Enum.sort(@family)
+
+      assert ToolGrants.resolve(@authored, [], {:ok, true}) ==
+               Map.merge(family("auto"), @setting_lines)
+
+      assert ToolGrants.resolve(@authored, [], {:ok, false}) ==
+               Map.merge(family("deny"), @setting_lines)
+
+      # A store that could not answer reads as off.
+      assert ToolGrants.resolve(@authored, [], {:error, :unavailable}) ==
+               ToolGrants.resolve(@authored, [], {:ok, false})
+
+      # A glob names the family as its exact lines do; the setting's own
+      # turn_on still asks, since it takes no standing answer.
+      assert ToolGrants.resolve(%{"browser.*" => "auto"}, [], {:ok, true}) ==
+               Map.merge(family("auto"), %{@setting_lines | "browser.turn_on" => "ask"})
+
+      assert ToolGrants.effective(%{"browser.open" => "ask"}, [], {:ok, false}) ==
+               %{"browser.open" => {:deny, :setting}}
+    end
+
+    test "counts no standing answer for the family, and gives the browser to no agent whose author named it nowhere",
+         %{ctx: ctx} do
+      # A deny for one, and an allow for another written past the rule, as
+      # a row stored before the rule would be.
+      {:ok, _} = grant(ctx, %{tool: "browser", action: "click", effect: "deny"})
+
+      {:ok, _} =
+        Arca.ToolGrantStorage.put(%{
+          athanor_id: ctx.athanor_id,
+          scope: "thread",
+          effect: "allow",
+          thread_id: "thread_1",
+          agent_name: "aqua",
+          tool: "browser",
+          action: "open",
+          granted_by: ctx.user_id
+        })
+
+      rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
+      assert length(rows) == 2
+
+      assert ToolGrants.resolve(@authored, rows, {:ok, true}) ==
+               Map.merge(family("auto"), @setting_lines)
+
+      assert ToolGrants.resolve(@authored, rows, {:ok, false}) ==
+               Map.merge(family("deny"), @setting_lines)
+
+      assert ToolGrants.resolve(%{"files.read" => "auto"}, rows, {:ok, true}) ==
+               %{"files.read" => "auto"}
+    end
+
+    test "makes no other action automatic: an outward or destructive one the author made auto still asks" do
+      tools =
+        Sanctum.VirtualTools.tools() ++
+          for tool_def <- Sanctum.Catalog.list_tools(),
+              not String.contains?(tool_def["name"], ":"),
+              do: tool_def["name"]
+
+      outward =
+        for tool <- Enum.uniq(tools),
+            action <- Aqua.Kinds.actions_of(tool),
+            Aqua.Kinds.kind_for(tool, action) in [:external, :destructive],
+            not Sanctum.Catalog.follows_setting?(tool, action),
+            do: "#{tool}.#{action}"
+
+      assert "http.post" in outward and "files.delete" in outward
+      authored = Map.new(outward, &{&1, "auto"})
+
+      for setting <- [{:ok, true}, {:ok, false}] do
+        policy = ToolGrants.resolve(authored, [], setting)
+        assert Enum.reject(policy, fn {_key, mode} -> mode == "ask" end) == []
+        assert map_size(policy) == length(outward)
+      end
     end
   end
 
@@ -263,7 +382,7 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "keeps its bounds on its pair, and the guest reads it as ask" do
-      effective = ToolGrants.effective(%{"files.write" => "ask"}, [bounded(%{})])
+      effective = ToolGrants.effective(%{"files.write" => "ask"}, [bounded(%{})], {:ok, true})
 
       assert {:auto, {:bounded, [bounds]}} = effective["files.write"]
       assert %{scope: "thread", lifecycle_kind: "turn", lifecycle_id: "turn_1"} = bounds
@@ -273,31 +392,48 @@ defmodule Aqua.ToolGrantsTest do
 
       # One the author never listed joins the policy as a question, never
       # as an automatic pair.
-      assert ToolGrants.resolve(%{}, [bounded(%{})]) == %{"files.write" => "ask"}
+      assert ToolGrants.resolve(%{}, [bounded(%{})], {:ok, true}) == %{"files.write" => "ask"}
     end
 
     test "never narrows an authored auto, and gives way to a deny; no allow becomes a plain auto" do
-      assert ToolGrants.resolve(%{"files.write" => "auto"}, [bounded(%{})]) ==
+      assert ToolGrants.resolve(%{"files.write" => "auto"}, [bounded(%{})], {:ok, true}) ==
                %{"files.write" => "auto"}
 
-      assert ToolGrants.resolve(%{}, [
-               bounded(%{}),
-               bounded(%{scope: "agent", lifecycle_kind: nil, lifecycle_id: nil, constraint: nil})
-             ]) ==
+      assert ToolGrants.resolve(
+               %{},
+               [
+                 bounded(%{}),
+                 bounded(%{
+                   scope: "agent",
+                   lifecycle_kind: nil,
+                   lifecycle_id: nil,
+                   constraint: nil
+                 })
+               ],
+               {:ok, true}
+             ) ==
                %{"files.write" => "ask"}
 
-      assert ToolGrants.resolve(%{"files.write" => "auto"}, [
-               bounded(%{}),
-               %{effect: "deny", scope: "agent", tool: "files", action: "write"}
-             ]) == %{"files.write" => "deny"}
+      assert ToolGrants.resolve(
+               %{"files.write" => "auto"},
+               [
+                 bounded(%{}),
+                 %{effect: "deny", scope: "agent", tool: "files", action: "write"}
+               ],
+               {:ok, true}
+             ) == %{"files.write" => "deny"}
     end
 
     test "keeps every bounded allow for its pair" do
       effective =
-        ToolGrants.effective(%{}, [
-          bounded(%{}),
-          bounded(%{scope: "agent", lifecycle_kind: "execution", lifecycle_id: "exec_1"})
-        ])
+        ToolGrants.effective(
+          %{},
+          [
+            bounded(%{}),
+            bounded(%{scope: "agent", lifecycle_kind: "execution", lifecycle_id: "exec_1"})
+          ],
+          {:ok, true}
+        )
 
       assert {:auto, {:bounded, [_, _] = kept}} = effective["files.write"]
       assert Enum.map(kept, & &1.scope) |> Enum.sort() == ["agent", "thread"]
@@ -312,7 +448,7 @@ defmodule Aqua.ToolGrantsTest do
              ]) == MapSet.new([{"component", "list", nil, nil}, {"files", "write", nil, nil}])
 
       # Listed is not automatic: the guest still asks for it.
-      assert ToolGrants.resolve(%{}, [bounded(%{})]) == %{"files.write" => "ask"}
+      assert ToolGrants.resolve(%{}, [bounded(%{})], {:ok, true}) == %{"files.write" => "ask"}
 
       # A deny for the pair subtracts, and an allow the action's current
       # declaration refuses (a deadline gone) no longer stands.
@@ -329,13 +465,17 @@ defmodule Aqua.ToolGrantsTest do
     test "that the action's current declaration refuses counts for nothing" do
       # A constraint on an action that names no resource, and a deadline
       # already gone: neither reaches the policy as a question.
-      assert ToolGrants.resolve(%{}, [
-               bounded(%{tool: "notes", action: "keep"}),
-               bounded(%{
-                 constraint: nil,
-                 expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
-               })
-             ]) == %{}
+      assert ToolGrants.resolve(
+               %{},
+               [
+                 bounded(%{tool: "notes", action: "keep"}),
+                 bounded(%{
+                   constraint: nil,
+                   expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
+                 })
+               ],
+               {:ok, true}
+             ) == %{}
     end
   end
 
@@ -453,7 +593,10 @@ defmodule Aqua.ToolGrantsTest do
       rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
       assert [_] = rows
       assert ToolGrants.allowed_keys(rows) == MapSet.new()
-      assert ToolGrants.resolve(%{"http.post" => "auto"}, rows) == %{"http.post" => "ask"}
+
+      assert ToolGrants.resolve(%{"http.post" => "auto"}, rows, {:ok, true}) == %{
+               "http.post" => "ask"
+             }
     end
 
     test "an action that never stands takes no standing allow at any scope, and a deny stands",
@@ -490,7 +633,7 @@ defmodule Aqua.ToolGrantsTest do
       # a surface that never went through `put/2`). It must not auto-run
       # anything — neither by being listed as a standing answer
       # (`allowed_keys/1`) nor by becoming `auto` in the policy the formula
-      # is handed (`resolve/2`). A deny still counts.
+      # is handed (`resolve/3`). A deny still counts.
       stale =
         %{
           athanor_id: ctx.athanor_id,
@@ -511,7 +654,11 @@ defmodule Aqua.ToolGrantsTest do
 
       assert ToolGrants.allowed_keys(rows) == MapSet.new()
 
-      assert ToolGrants.resolve(%{"notes.pin" => "ask", "notes.forget" => "auto"}, rows) ==
+      assert ToolGrants.resolve(
+               %{"notes.pin" => "ask", "notes.forget" => "auto"},
+               rows,
+               {:ok, true}
+             ) ==
                %{"notes.pin" => "ask", "notes.forget" => "deny"}
     end
 
@@ -570,7 +717,9 @@ defmodule Aqua.ToolGrantsTest do
       assert is_nil(deny.expires_at) and is_nil(deny.lifecycle_kind)
 
       rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
-      assert ToolGrants.resolve(%{"files.delete" => "auto"}, rows)["files.delete"] == "deny"
+
+      assert ToolGrants.resolve(%{"files.delete" => "auto"}, rows, {:ok, true})["files.delete"] ==
+               "deny"
     end
 
     test "virtual tools are classified by the catalog, not the registry", %{ctx: ctx} do
@@ -710,6 +859,52 @@ defmodule Aqua.ToolGrantsTest do
       assert :ok = ToolGrants.revoke(ctx, key)
       assert listed(ctx) == MapSet.new()
       assert covered.() == [false, false, false]
+    end
+
+    test "the browser setting decides the browser's actions over an answer for a schedule, and makes the schedule's other answers no more than they were",
+         %{ctx: ctx, a: a} do
+      for_a = %{
+        scope: "agent",
+        effect: "allow",
+        agent_name: "aqua",
+        lifecycle_kind: "schedule",
+        lifecycle_id: a.id
+      }
+
+      {:ok, %{schedule_id: id}} =
+        Sanctum.ToolGrants.put(ctx, Map.merge(for_a, %{tool: "browser", action: "read"}))
+
+      assert id == a.id
+      {:ok, _} = Sanctum.ToolGrants.put(ctx, Map.merge(for_a, %{tool: "files", action: "write"}))
+      run_a = run!(ctx, a.id)
+      rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
+      authored = %{"browser.read" => "ask", "browser.open" => "ask", "files.write" => "ask"}
+
+      read = %Call{kind: :catalog, tool: "browser", action: "read", args: %{}}
+      place = [ctx: ctx, agent: "aqua", thread_id: "thread_1", execution_id: run_a, sources: []]
+
+      on = ToolGrants.resolve(authored, rows, {:ok, true})
+      assert on == %{"browser.read" => "auto", "browser.open" => "auto", "files.write" => "ask"}
+      assert Policy.decide(read, on, place) == :auto
+
+      assert Policy.decide(
+               %Call{
+                 kind: :catalog,
+                 tool: "files",
+                 action: "write",
+                 args: write_call(run_a).args
+               },
+               on,
+               place
+             ) == :auto
+
+      # Off, the schedule's answer for the read covers nothing; its answer
+      # for files.write still covers the schedule's own runs.
+      off = ToolGrants.resolve(authored, rows, {:ok, false})
+      assert off == %{"browser.read" => "deny", "browser.open" => "deny", "files.write" => "ask"}
+      assert {:deny, _sentence} = Policy.decide(read, off, place)
+      assert Sanctum.ToolGrants.admits?(ctx, write_call(run_a))
+      refute Sanctum.ToolGrants.admits?(ctx, write_call(run!(ctx, nil)))
     end
 
     test "a thread-only action takes an agent-wide allow only when it ends with a schedule; a launch, a destructive and an external action take none",

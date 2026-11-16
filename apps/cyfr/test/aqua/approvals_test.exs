@@ -129,7 +129,7 @@ defmodule Aqua.ApprovalsTest do
         text: nil,
         tool_calls: [
           %{
-            tool_call_id: "c1",
+            tool_call_id: Keyword.get(opts, :call_id, "c1"),
             name: "#{call.tool}.#{call.action}",
             tool: call.tool,
             action: call.action,
@@ -145,7 +145,7 @@ defmodule Aqua.ApprovalsTest do
       "title" => "#{call.tool}.#{call.action}",
       "action_kind" => Keyword.get(opts, :kind, "write"),
       "standing" => Keyword.get(opts, :standing),
-      "tool_call_id" => "c1",
+      "tool_call_id" => Keyword.get(opts, :call_id, "c1"),
       "proposal" => proposal,
       "sources" => Prima.Source.to_json_list(Keyword.get(opts, :sources, []))
     }
@@ -733,6 +733,39 @@ defmodule Aqua.ApprovalsTest do
       assert schedule_rows(keeper.id) == []
       assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
     end
+  end
+
+  # Only a card raised before the setting went off can name one of the
+  # browser's actions: while the setting is on they run without one.
+  test "a card for a browser action holds while the setting is on, and once it went off is no longer current and runs nothing",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    {ctx, _person} = Sanctum.TestContext.person!(ctx)
+    open = %{tool: "browser", action: "open", args: %{"url" => "https://example.com/"}}
+    turn = started!(ctx, thread, pins)
+    %{approval: held, step: held_step} = card!(ctx, turn, open, kind: "external")
+    %{approval: raised, step: step} = card!(ctx, turn, open, kind: "external", call_id: "c2")
+
+    assert {:ok, true} = Aqua.BrowserSetting.allowed?(ctx)
+
+    assert {:ok, %{decision: "approved", resolution_kind: "continue"}} =
+             Approvals.resolve(ctx, held.id, %{decision: :approved})
+
+    assert {:ok, %{dispatch_state: "proposed"}} = Tape.step(ctx, held_step.id)
+
+    assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+
+    assert {:ok, %{decision: "error", resolution_kind: "denied"}} =
+             Approvals.resolve(ctx, raised.id, %{decision: :approved})
+
+    assert {:ok, %{dispatch_state: "closed", outcome: "denied", result_message_id: rid}} =
+             Tape.step(ctx, step.id)
+
+    assert {:ok, %{kind: "tool_result", content: "This confirmation is no longer current."} = row} =
+             Tape.message(ctx, rid)
+
+    assert Threads.payload(row)["is_error"] == true
+    assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+    assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
   end
 
   test "declining closes the step denied with a tool result, and never records a deny", %{

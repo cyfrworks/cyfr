@@ -7,12 +7,14 @@ defmodule Aqua.Loop.Policy do
   once, ask the person first, or be refused — and whether it may run
   beside others.
 
-  The policy is `Aqua.ToolGrants.resolve/2`'s guest spelling
+  The policy is `Aqua.ToolGrants.resolve/3`'s guest spelling
   (`"tool.action" => "auto" | "ask" | "deny"`), already under the kind
   ceiling: a destructive or external action, or one declared to take no
   standing allow at agent scope, is never `auto`, and the others only by
-  the author's `auto` or a standing grant. A hand or catalog call reads
-  its own key; the `ui` event runs at once; an external server's tool always asks; a
+  the author's `auto` or a standing grant; the browser tool's own actions
+  are `auto` or `deny` as the person's browser setting says. A hand or
+  catalog call reads its own key; the `ui` event runs at once; an
+  external server's tool always asks; a
   launch asks, whatever the agent's own policy or a standing answer
   says, since `Aqua.Launch` runs only a launch a person approved on its
   card: it is refused when its reference is no component, and denied

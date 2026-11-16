@@ -16,8 +16,17 @@ defmodule Aqua.ToolGrants do
       a declared `"auto"`** — a person who said "never" outranks a default
       they did not write.
 
-  `resolve/2` is the composition, and it is the only thing that should
+  `resolve/3` is the composition, and it is the only thing that should
   ever be handed to a turn as its policy.
+
+  ## The browser follows the person's setting
+
+  The browser tool's own actions (`Sanctum.Catalog.follows_setting?/2`)
+  are decided by the person's browser setting (`Aqua.BrowserSetting`),
+  not by a policy line or a standing answer: with it on they run without
+  a card, the external ones among them, and with it off they are denied.
+  The author's line says only whether the agent has the action at all.
+  It is the one place an external action is ever `auto`.
 
   ## An agent's answers live in its athanor
 
@@ -45,7 +54,7 @@ defmodule Aqua.ToolGrants do
   An allow carries bounds: the outside sources it covers (none, unless
   the person named some), and may carry the execution, turn or schedule
   it ends with, a deadline, and the resources it covers. Its sources are
-  a bound even when empty, so every allow is bounded: `effective/2` keeps
+  a bound even when empty, so every allow is bounded: `effective/3` keeps
   the bounds on the pair's decision, and the guest reads the pair as
   `"ask"`, so no allow is automatic for a whole turn. Each call is
   decided as it is made, and again as it dispatches, by
@@ -93,18 +102,27 @@ defmodule Aqua.ToolGrants do
 
   @typedoc """
   One effective decision: the mode, and who made it — the author, a
-  standing deny, or allows, whose bounds it keeps.
+  standing deny, allows, whose bounds it keeps, or the person's browser
+  setting.
   """
-  @type decision :: {:auto | :ask | :deny, :authored | :grant | {:bounded, [bounds()]}}
+  @type decision ::
+          {:auto | :ask | :deny, :authored | :grant | {:bounded, [bounds()]} | :setting}
+
+  @typedoc """
+  The person's browser setting as `Aqua.BrowserSetting.allowed?/1` read it
+  under the caller's context. Only `{:ok, true}` is on: a store that could
+  not answer reads as off.
+  """
+  @type setting :: {:ok, boolean()} | {:error, :unavailable}
 
   @doc """
-  The effective policy for a turn, as the guest reads it: `effective/2`
+  The effective policy for a turn, as the guest reads it: `effective/3`
   projected to `"auto" | "ask" | "deny"`. The only thing that should ever
   be handed to a turn — the soul's or a crew member's — as its policy.
   """
-  @spec resolve(map(), [grant()]) :: map()
-  def resolve(declared, grants) when is_map(declared) and is_list(grants) do
-    declared |> effective(grants) |> to_guest()
+  @spec resolve(map(), [grant()], setting()) :: map()
+  def resolve(declared, grants, setting) when is_map(declared) and is_list(grants) do
+    declared |> effective(grants, setting) |> to_guest()
   end
 
   @doc """
@@ -132,20 +150,28 @@ defmodule Aqua.ToolGrants do
   (`Aqua.Kinds.auto_permitted?/2`); an action a catalogued
   tool does not have is dropped. A hand-edited file reaches the guest
   already within the rule.
-  """
-  @spec effective(map(), [grant()]) :: %{String.t() => decision()}
-  def effective(authored, grants) when is_map(authored) and is_list(grants) do
-    {denied, allowed} = Enum.split_with(grants, &(&1.effect == "deny"))
 
-    authored
-    |> expand_globs()
+  Over all of it, the person's browser `setting`: an action that follows
+  it is `{:auto, :setting}` with it on and `{:deny, :setting}` with it
+  off, whatever the author's line says and whatever standing answer
+  stands for it, a schedule's among them, and is absent when the author
+  named it nowhere, so a standing answer alone never gives an agent the
+  browser. No other action is decided by the setting.
+  """
+  @spec effective(map(), [grant()], setting()) :: %{String.t() => decision()}
+  def effective(authored, grants, setting) when is_map(authored) and is_list(grants) do
+    {denied, allowed} = Enum.split_with(grants, &(&1.effect == "deny"))
+    expanded = expand_globs(authored)
+
+    expanded
     |> with_bounded(standing_allows(allowed))
     |> Map.merge(Map.new(denied, fn g -> {key_string(g), {:deny, :grant}} end))
     |> ceiling()
+    |> by_setting(expanded, setting == {:ok, true})
   end
 
   @doc """
-  The guest's spelling of `effective/2`: `"auto" | "ask" | "deny"` per
+  The guest's spelling of `effective/3`: `"auto" | "ask" | "deny"` per
   key. An allow is `"ask"`: it covers only the calls its bounds admit,
   each decided as it is made.
   """
@@ -235,6 +261,30 @@ defmodule Aqua.ToolGrants do
       end
     end)
     |> Map.new()
+  end
+
+  # The actions that follow the person's browser setting take its mode
+  # where the author named them, and are dropped where only a standing
+  # answer did.
+  defp by_setting(decisions, authored, on?) do
+    mode = if on?, do: :auto, else: :deny
+
+    decisions
+    |> Enum.flat_map(fn {key, _decision} = decision ->
+      cond do
+        not follows_setting?(key) -> [decision]
+        Map.has_key?(authored, key) -> [{key, {mode, :setting}}]
+        true -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp follows_setting?(key) do
+    case String.split(key, ".", parts: 2) do
+      [tool, action] -> Sanctum.Catalog.follows_setting?(tool, action)
+      _ -> false
+    end
   end
 
   # An allow row is honoured only while the action's current declaration
@@ -371,7 +421,7 @@ defmodule Aqua.ToolGrants do
   schedule for answers that end with one — what the chat shows as its
   standing answers, each
   revocable there. An allow covers only the calls its bounds admit (each
-  decided as it is made, `effective/2`), and every one is listed, so
+  decided as it is made, `effective/3`), and every one is listed, so
   every standing answer a person gave can be seen and withdrawn. An
   authored `auto` never mints a card, so it is never here; an allow the
   action's current declaration would refuse no longer stands and is not

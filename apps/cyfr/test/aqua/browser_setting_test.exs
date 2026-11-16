@@ -81,4 +81,23 @@ defmodule Aqua.BrowserSettingTest do
 
     assert {:ok, false} = BrowserSetting.allowed?(ctx)
   end
+
+  # Every writer of the preferences takes the one locked read and write
+  # (`Sanctum.Tenancy.Users.put_prefs/2`), the zone the daily thread is read
+  # in among them (`Aqua.put_time_zone/2`).
+  test "a zone write and a browser-setting write made in the same instant both land", %{ctx: ctx} do
+    for round <- 1..20 do
+      on = rem(round, 2) == 0
+      zone = if on, do: "Europe/Lisbon", else: "Asia/Tokyo"
+
+      writers = [
+        Task.async(fn -> receive(do: (:go -> Aqua.put_time_zone(ctx.user_id, zone))) end),
+        Task.async(fn -> receive(do: (:go -> BrowserSetting.put(ctx, on))) end)
+      ]
+
+      Enum.each(writers, &send(&1.pid, :go))
+      assert [:ok, {:ok, ^on}] = Task.await_many(writers, 15_000)
+      assert %{"time_zone" => ^zone, "aqua_browser" => ^on} = prefs(ctx.user_id), "round #{round}"
+    end
+  end
 end

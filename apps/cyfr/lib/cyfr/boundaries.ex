@@ -1871,9 +1871,10 @@ defmodule Cyfr.Boundaries do
     # stream's open would be (`Compendium.Desktop`). `validate_arguments/2`:
     # a frame's request is held to its operation's declaration before the
     # person is asked, so an approval never meets a refusal the request
-    # could have had. `follows_setting?/2`: the Aqua page leaves the
-    # actions that follow the person's browser setting out of the
-    # capability list, since the setting decides them.
+    # could have had. `follows_setting?/2`: the actions that follow the
+    # person's browser setting are decided by it in the turn's policy
+    # (`Aqua.ToolGrants.effective/3`), and the Aqua page leaves them out
+    # of the capability list.
     "Sanctum.Catalog" => [
       action_declaration: 1,
       authorize_stream: 2,

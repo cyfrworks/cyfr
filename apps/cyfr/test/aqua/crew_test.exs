@@ -789,6 +789,94 @@ defmodule Aqua.CrewTest do
     await_status(ctx, delivered_turn(ctx, child, last), "completed")
   end
 
+  # The browser's actions follow the person's browser setting, not the
+  # soul's lines the crew holds too: a turn is handed them as the setting
+  # says when it is built and again whenever its policy is read again,
+  # each call decided by that.
+  test "a turn of the soul and of a crew member is handed the browser's actions as the person's setting says, and its policy read again follows the setting",
+       %{ctx: ctx, room: room} do
+    script!([reply("for the soul"), reply("for the planner")])
+    {:ok, %{turn_id: soul_turn}} = Runner.send_message(ctx, room.id, "hello")
+    await_status(ctx, soul_turn, "completed")
+    {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
+    {:ok, %{turn_id: member_turn}} = Runner.send_message(ctx, child.id, "plan it")
+    await_status(ctx, member_turn, "completed")
+
+    family =
+      for action <- ~w(open read click type key page screenshot close), do: "browser." <> action
+
+    on = Map.new(family, &{&1, "auto"})
+    off = Map.new(family, &{&1, "deny"})
+    own = %{"browser.status" => "auto", "browser.turn_on" => "ask", "browser.turn_off" => "auto"}
+    browser = &Map.filter(&1, fn {key, _mode} -> String.starts_with?(key, "browser.") end)
+
+    for {turn_id, agent} <- [{soul_turn, "aqua"}, {member_turn, "planner"}] do
+      {:ok, pinned} = Tape.turn(ctx, turn_id)
+      assert pinned.agent == agent
+      {:ok, authority} = Opus.authority_for(ctx, :default, Prima.AgentRef.ref(agent))
+      build = fn -> Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false) end
+
+      assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
+      assert {:ok, built_on} = build.()
+      assert browser.(built_on.policy) == Map.merge(on, own), agent
+
+      # Turned off while the turn runs: its policy read again, as each call
+      # is decided at its dispatch, denies the browser.
+      assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+      assert {:ok, refreshed} = Aqua.Loop.Turn.current_policy(built_on)
+      assert browser.(refreshed) == Map.merge(off, own), agent
+      # Nothing else of the policy moves with the setting.
+      assert Map.drop(refreshed, family) == Map.drop(built_on.policy, family)
+
+      assert {:ok, built_off} = build.()
+      assert browser.(built_off.policy) == Map.merge(off, own), agent
+
+      # And on again, the refresh follows.
+      assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
+      assert {:ok, again} = Aqua.Loop.Turn.current_policy(built_off)
+      assert browser.(again) == Map.merge(on, own), agent
+    end
+  end
+
+  test "the soul's browser call is refused without a card while the setting is off, and goes to the browser without one while it is on",
+       %{ctx: ctx, room: room} do
+    open = %{"action" => "open", "url" => "https://example.com/"}
+
+    script!([
+      call("o1", "browser", open),
+      reply("it is off"),
+      call("o1", "browser", open),
+      reply("no browser yet")
+    ])
+
+    step = fn turn_id ->
+      {:ok, turn} = Tape.turn(ctx, turn_id)
+      {:ok, steps} = Tape.steps(ctx, turn)
+      Enum.find(steps, &String.ends_with?(&1.idempotency_key || "", ":o1"))
+    end
+
+    assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+    {:ok, %{turn_id: off}} = Runner.send_message(ctx, room.id, "open it")
+    await_status(ctx, off, "completed")
+    assert %{dispatch_state: "closed", outcome: "denied", approval_id: nil} = step.(off)
+
+    assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
+    {:ok, %{turn_id: on}} = Runner.send_message(ctx, room.id, "open it now")
+    await_status(ctx, on, "completed")
+
+    # Run by the browser, which proved the turn and found no browser added.
+    assert %{dispatch_state: "closed", outcome: "error", approval_id: nil, result_message_id: rid} =
+             step.(on)
+
+    assert %{content: content} = row(ctx, rid)
+    assert content =~ "The browser was not found."
+
+    for turn_id <- [off, on] do
+      {:ok, turn} = Tape.turn(ctx, turn_id)
+      assert {:ok, []} = Tape.pending_approvals(ctx, turn)
+    end
+  end
+
   describe "a delivery that steers a turn a direct post opened" do
     test "gives the running turn its reply address, and the turn's end answers it",
          %{ctx: ctx, room: room} do
