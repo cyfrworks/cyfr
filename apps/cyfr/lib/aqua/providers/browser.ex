@@ -37,12 +37,14 @@ defmodule Aqua.Providers.Browser do
 
   `watch` shows the person one workspace thread's window, live, on the
   page that asked (C12), and takes their clicks and keys into it: the
-  person at a screen and no one else (`planes: [:external]`, `consent:
-  :interactive`, proved again by the session owner, `Opus.Browser.person/1`),
-  for a workspace thread of their own (`Aqua.workspace/2`). It is
-  refused with the turned-off sentence while the setting is off, and
-  starts no browser then: off, no browser of the person's runs. The
-  watch belongs to the calling process, the page's view, which the gate
+  person on a page of their own and no one else (`planes: [:external]`,
+  `consent: :interactive`, proved again by the session owner,
+  `Opus.Browser.person/1`, and admitted on the console's path alone,
+  `Opus.Browser.watch/4`, so a paired device's channel and the command
+  line are refused and start nothing), for a workspace thread of their
+  own (`Aqua.workspace/2`). It is refused with the turned-off sentence
+  while the setting is off, and starts no browser then: off, no browser
+  of the person's runs. The watch belongs to the calling process, the page's view, which the gate
   runs the handler on (`Opus.Browser.watch/4`): its images and its end
   come to it, it says when it drew an image and hands the person's input
   under that watch alone, and it ends with that process. A stream open
@@ -411,7 +413,7 @@ defmodule Aqua.Providers.Browser do
   defp watcher({:ok, _} = ok), do: ok
 
   defp watcher({:error, :not_owned}),
-    do: {:error, conflict("Only you, at your own screen, can watch Aqua's browser.")}
+    do: {:error, conflict("Aqua's browser shows only on a page of yours in CYFR.")}
 
   defp watcher({:error, :too_many_watches}),
     do:

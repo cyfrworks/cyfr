@@ -75,8 +75,10 @@ defmodule Opus.Browser do
 
   ## The person's watch
 
-  `watch/4` is the person at a screen watching one window (C12), proved
-  by the session owner as a person and no other caller: it starts the
+  `watch/4` is the person watching one window on a page of their own
+  (C12): a browser's session on the console's admission path, proved by
+  the session owner as a person, and no other caller, a paired device's
+  channel and the command line among them: it starts the
   browser when none runs, as an action does, and asks the driver for that
   window's cast, a request of op `cast` whose id names the cast from then
   on. Its messages go to the process that asked, the viewer, as
@@ -223,13 +225,18 @@ defmodule Opus.Browser do
   @type watch :: {pid(), reference()}
 
   @doc """
-  Watch `window` of the person's browser as `ctx`, a person at a screen
-  whom the session owner proves, from the calling process, which is the
-  viewer: the browser starts when none runs, after `allowed?` (as
-  `act/4`'s) says it may, and the window's images are scaled to fit
-  `size`. Answers the watch, whose messages carry its reference
-  (moduledoc), or `:not_owned` for any caller that is not a person at a
-  screen, `:too_many_watches`, `:turned_off`, `:unavailable`.
+  Watch `window` of the person's browser as `ctx`, a person on a page of
+  their own, from the calling process, which is that page's view and the
+  viewer: the context a browser's session has on the console's admission
+  path (`auth_method: :oidc`, origin `interactive`, no frame; it is
+  `CyfrWeb.ContextGuard`'s), whose person the session owner proves. The
+  browser starts when none runs, after `allowed?` (as `act/4`'s) says it
+  may, and the window's images are scaled to fit `size`. Answers the
+  watch, whose messages carry its reference (moduledoc), or `:not_owned`
+  for any other caller, which starts nothing: a key, a frame, a paired
+  device's channel, the command line's session (origin `programmatic`), a
+  person who no longer stands; `:too_many_watches`, `:turned_off`,
+  `:unavailable`.
   """
   @spec watch(
           Sanctum.Context.t(),
@@ -238,7 +245,12 @@ defmodule Opus.Browser do
           (-> boolean())
         ) ::
           {:ok, watch()} | {:error, term()}
-  def watch(%Sanctum.Context{} = ctx, window, %{width: width, height: height}, allowed?)
+  def watch(
+        %Sanctum.Context{auth_method: :oidc, origin: :interactive, frame: nil} = ctx,
+        window,
+        %{width: width, height: height},
+        allowed?
+      )
       when is_binary(window) and window != "" and width in 16..4096 and height in 16..4096 and
              is_function(allowed?, 0) do
     with {:ok, {athanor_id, user_id}} <- person_of(ctx),

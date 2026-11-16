@@ -77,8 +77,9 @@ defmodule Opus.BrowserTest do
     {:ok, user} = Sanctum.Test.People.linked(%{id: key, provider: "local", verified: true})
     athanor = Sanctum.Test.People.athanor!(user)
 
+    # A person on a page of theirs, as the console admits one.
     ctx = %{
-      Sanctum.TestContext.local()
+      Sanctum.TestContext.local(:prism)
       | user_id: user.id,
         athanor_id: athanor.id,
         permissions: MapSet.new([:*])
@@ -1478,13 +1479,81 @@ defmodule Opus.BrowserTest do
 
       for caller <- [key, guest(ctx)] do
         assert refusal(Provider.handle("browser", caller, Map.merge(args, lineage))) ==
-                 "Only you, at your own screen, can watch Aqua's browser."
+                 "Aqua's browser shows only on a page of yours in CYFR."
       end
 
       [watch] = for %{action: "watch"} = op <- Provider.definition().operations, do: op
       assert watch.planes == [:external] and watch.consent == :interactive and watch.kind == :read
       refute_received {Opus.Browser, _watch, _message}
       assert holder(ctx) == nil
+    end
+  end
+
+  # Review round two, finding 8: a watch is a page's alone.
+  describe "a watch from no page" do
+    test "a paired device's call is refused, admits no watch and starts nothing", %{ctx: ctx} do
+      work = workspace!(ctx)
+      paired = Sanctum.Test.Devices.paired!(ctx.user_id, "127.0.0.1")
+      channel = Emissary.Web.DeviceChannel
+      peer = %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}
+      {:ok, state} = channel.connect(%{connect_info: %{peer_data: peer}})
+      {:ok, state} = channel.init(state)
+
+      send_frame = fn state, message ->
+        channel.handle_in({Jason.encode!(Prima.Device.encode(message)), [opcode: :text]}, state)
+      end
+
+      {:reply, :ok, {:text, json}, state} =
+        send_frame.(
+          state,
+          {:connect, %{client_id: paired.client_id, certificate: paired.certificate}}
+        )
+
+      {:ok, {:challenge, %{challenge: challenge}}} =
+        Prima.Device.decode(Jason.decode!(json), :home)
+
+      {_public, private} = paired.key
+      proof = Prima.DeviceCert.Proof.sign(challenge, private)
+      {:push, [_standing], state} = send_frame.(state, {:proof, %{proof: proof}})
+
+      intent =
+        {:intent,
+         %{
+           id: "watch-from-a-device",
+           operation: "browser.watch",
+           args: %{"thread" => work, "width" => 640, "height" => 640}
+         }}
+
+      {:reply, :ok, {:text, answer}, _state} = send_frame.(state, intent)
+      answer = Jason.decode!(answer)
+      assert %{"type" => "answer", "id" => "watch-from-a-device", "error" => _refused} = answer
+      refute Map.has_key?(answer, "result")
+
+      refute_receive {Opus.Browser, _watch, _message}, 200
+      refute_received {:driver, :req, _session, %{"op" => "cast"}}
+      refute_received {:session, "open", _open, _fields}
+      assert holder(ctx) == nil
+    end
+
+    test "the command line's call is refused and starts nothing; the page's is admitted",
+         %{ctx: ctx} do
+      work = workspace!(ctx)
+      args = %{"action" => "watch", "thread" => work, "width" => 640, "height" => 640}
+
+      for path <- [:api, :mcp, nil] do
+        assert refusal(
+                 Sanctum.Gate.call_external("browser", Sanctum.TestContext.via(ctx, path), args)
+               ) ==
+                 "Aqua's browser shows only on a page of yours in CYFR."
+      end
+
+      refute_receive {Opus.Browser, _watch, _message}, 200
+      refute_received {:session, "open", _open, _fields}
+      assert holder(ctx) == nil
+
+      assert {:ok, %{watching: ^work}} = Sanctum.Gate.call_external("browser", ctx, args)
+      assert_receive {Opus.Browser, _watch, :watching}, 5_000
+      assert_receive {:driver, :req, _session, %{"op" => "cast", "win" => ^work}}, 5_000
     end
   end
 
