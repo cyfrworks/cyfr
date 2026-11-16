@@ -278,7 +278,7 @@ defmodule Aqua.Tape do
       Opus.end_turn_programs(finished.athanor_id, finished.id)
       announce_lists(ctx, turn.thread_id, {:ended, finished})
       broadcast(ctx, turn.thread_id, :turn_finished, nil)
-      if finished.asking_thread_id, do: wake_crew(ctx)
+      if finished.asking_thread_id || workspace?(ctx, turn.thread_id), do: wake_crew(ctx)
       end_fire(ctx, finished)
       {:ok, finished}
     end
@@ -581,7 +581,7 @@ defmodule Aqua.Tape do
         approval_id: approval.id
       })
 
-      if turn.asking_thread_id, do: wake_crew(ctx)
+      if turn.asking_thread_id || workspace?(ctx, turn.thread_id), do: wake_crew(ctx)
       {:ok, opened}
     end
   end
@@ -738,6 +738,82 @@ defmodule Aqua.Tape do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Workspace threads
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Open a workspace thread, or ask an existing one again: the thread, its
+  opening and the daily thread's pointer, with the `workspace_open`
+  record, in one transaction (`Arca.TurnStorage.open_workspace/2`, whose
+  `attrs` these are). The opening and the pointer are broadcast on their
+  threads after the commit, both threads' places in the person's list
+  are announced, and the crew's delivery consumer is woken.
+  """
+  @spec open_workspace(Context.t(), map()) ::
+          {:ok, %{workspace: map(), opening: row(), pointer: row()}} | {:error, term()}
+  def open_workspace(%Context{} = ctx, attrs) when is_map(attrs) do
+    with {:ok, %{workspace: workspace, opening: opening, pointer: pointer}} = opened <-
+           TurnStorage.open_workspace(Sanctum.Context.actor(ctx), attrs) do
+      announce_lists(ctx, workspace.id, nil)
+      announce_lists(ctx, pointer.thread_id, nil)
+      broadcast(ctx, workspace.id, :message, opening)
+      broadcast(ctx, pointer.thread_id, :message, pointer)
+      wake_crew(ctx)
+      opened
+    end
+  end
+
+  @doc """
+  Report the outcome of the workspace thread `turn` runs in, under its
+  fence (`Arca.TurnStorage.report_workspace/4`): the thread moved and its
+  `workspace_report` recorded. The thread's place in the person's list is
+  announced and the crew's delivery consumer woken after the commit.
+  """
+  @spec report_workspace(Context.t(), turn(), String.t(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def report_workspace(%Context{} = ctx, turn, outcome, attrs) when is_map(attrs) do
+    with {:ok, thread} <-
+           TurnStorage.report_workspace(
+             Sanctum.Context.actor(ctx),
+             turn.id,
+             outcome,
+             Map.put_new(attrs, :fence, turn.fence)
+           ) do
+      announce_lists(ctx, thread.id, nil)
+      wake_crew(ctx)
+      {:ok, thread}
+    end
+  end
+
+  @doc """
+  A post of `turn` into the thread it runs in, under its fence
+  (`Arca.TurnStorage.append_turn_row/3`): its text, and in `:payload` the
+  files stored under its `:id` and its links. Broadcast after the commit.
+  """
+  @spec post(Context.t(), turn(), map()) :: {:ok, row()} | {:error, term()}
+  def post(%Context{} = ctx, turn, attrs) when is_map(attrs) do
+    with {:ok, row} <-
+           turn_row(ctx, turn, %{
+             id: Map.fetch!(attrs, :id),
+             author: Prima.Author.agent(),
+             kind: "text",
+             content: Map.get(attrs, :content, ""),
+             payload: Map.get(attrs, :payload)
+           }) do
+      announce_lists(ctx, turn.thread_id, nil)
+      {:ok, row}
+    end
+  end
+
+  @doc """
+  A thread's steps across its turns, newest first, by cursor
+  (`Arca.TurnStorage.thread_steps/3`).
+  """
+  @spec thread_steps(Context.t(), String.t(), keyword()) :: {:ok, [step()]} | {:error, term()}
+  def thread_steps(%Context{} = ctx, thread_id, opts \\ []),
+    do: TurnStorage.thread_steps(Sanctum.Context.actor(ctx), thread_id, opts)
+
   @doc "The requests of a thread still waiting on a crew member's reply, oldest first."
   @spec pending_requests(Context.t(), String.t()) :: [row()] | {:error, term()}
   def pending_requests(%Context{} = ctx, thread_id),
@@ -799,6 +875,29 @@ defmodule Aqua.Tape do
   end
 
   def calling_turn(%Context{}, _args), do: {:error, :not_addressable}
+
+  @doc """
+  The open turn a chain's call comes from (`calling_turn/2`), held by the
+  holder that made the call: a call the turn's root made itself names
+  the root's attempt in its lineage (`args["attempt"]`, stamped by the
+  host), and one whose attempt the turn no longer runs, a holder a
+  takeover replaced, is `{:error, :superseded}`. What a write under the
+  turn's fence takes it from, so a writer that lost the turn writes
+  nothing (`post/3`, `report_workspace/4`).
+  """
+  @spec held_turn(Context.t(), map()) :: {:ok, turn()} | {:error, term()}
+  def held_turn(%Context{} = ctx, args) do
+    with {:ok, turn} <- calling_turn(ctx, args) do
+      case args do
+        %{"parent_execution_id" => root, "root_execution_id" => root, "attempt" => attempt}
+        when is_integer(attempt) and attempt != turn.attempt ->
+          {:error, :superseded}
+
+        _held ->
+          {:ok, turn}
+      end
+    end
+  end
 
   @doc """
   Every thread with an open root turn, across tenants — the boot's
@@ -896,6 +995,12 @@ defmodule Aqua.Tape do
        do: :request
 
   defp row_kind(_row), do: :message
+
+  # A workspace thread's turn ending or opening a card may have recorded a
+  # report (`Arca.TurnStorage`'s host moves); a read that fails wakes
+  # nobody, and the consumer's tick delivers it.
+  defp workspace?(ctx, thread_id),
+    do: match?({:ok, %{kind: "workspace"}}, Threads.get(Sanctum.Context.actor(ctx), thread_id))
 
   # A wake-up for the delivery consumer, after the commit that recorded
   # its work; a lost one is delivered by its tick.

@@ -47,7 +47,11 @@ defmodule Aqua.Loop do
   the sources of every earlier turn whose rows the request sends,
   compaction summaries among them, an outside source for a turn a webhook
   started and one for the model's own web search when the request offers
-  it; a call's result closes with the sources it carries
+  it, and a `thread` source for each other thread whose posts its rows
+  bring in (a workspace thread's pointer or report, the daily thread an
+  opening refers to), with the sources a report kept of the turn that
+  reported and those of the turns that wrote the posts an opening refers
+  to; a call's result closes with the sources it carries
   (`Aqua.Loop.Policy.sources_of/3`), and a launched component's with an
   outside source named by its reference unless its completion result says
   no run of its tree was admitted with egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
@@ -673,9 +677,10 @@ defmodule Aqua.Loop do
          {:ok, rows} <- Tape.projection(guest(state), state.turn),
          {:ok, planned, rows} <- compact(state, rows),
          first? = planned.steps == 0,
-         {:ok, step, planned} <- open_model_step(planned, "chat", rows) do
+         cited = cited(planned, rows),
+         {:ok, step, planned} <- open_model_step(planned, "chat", rows, cited) do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
-      request = request(planned, rows, excerpt, first?)
+      request = request(planned, rows, excerpt, first?, cited)
       planned = %{planned | sent_upto: highest_seq(rows)}
 
       if excerpt do
@@ -696,7 +701,7 @@ defmodule Aqua.Loop do
   # Every round carries the sender's attachments: the projection renders
   # text, and an image or a document exists only as these typed blocks, so
   # a round without them would not show the model what it was asked about.
-  defp request(%State{spec: spec} = state, rows, excerpt, _first?) do
+  defp request(%State{spec: spec} = state, rows, excerpt, _first?, cited) do
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
     multi? = length(authors) > 1
@@ -711,7 +716,8 @@ defmodule Aqua.Loop do
         multi_author?: multi?,
         excerpt: excerpt,
         attachments: spec.attachments,
-        task_message_id: state.turn.message_id
+        task_message_id: state.turn.message_id,
+        refs: Map.new(cited, &{&1.id, &1})
       )
 
     Request.build(
@@ -738,12 +744,12 @@ defmodule Aqua.Loop do
   # The step opens with what the request reads (`opening_sources/1`), and
   # with the sources of the earlier turns whose rows it sends, joined in
   # the step's own transaction.
-  defp open_model_step(state, purpose, rows \\ [])
+  defp open_model_step(state, purpose, rows \\ [], cited \\ [])
 
-  defp open_model_step(%State{steps: steps}, _purpose, _rows) when steps >= @max_steps,
+  defp open_model_step(%State{steps: steps}, _purpose, _rows, _cited) when steps >= @max_steps,
     do: {:error, :step_cap}
 
-  defp open_model_step(%State{} = state, purpose, rows) do
+  defp open_model_step(%State{} = state, purpose, rows, cited) do
     with {:ok, step} <-
            Tape.record_model_intent(guest(state), state.turn, %{
              idempotency_key:
@@ -752,8 +758,8 @@ defmodule Aqua.Loop do
              tool: state.spec.catalyst,
              action: "chat",
              purpose: purpose,
-             sources: opening_sources(state),
-             sources_from: earlier_turns(state, rows)
+             sources: opening_sources(state) ++ thread_sources(rows),
+             sources_from: earlier_turns(state, rows ++ cited)
            }),
          {:ok, step} <- Tape.mark_dispatched(guest(state), state.turn, step) do
       {:ok, step, %{state | steps: state.steps + 1}}
@@ -777,6 +783,64 @@ defmodule Aqua.Loop do
   # the model has the tool.
   defp offers_search?(spec),
     do: Request.offers_search?(spec.policy, spec.authority, spec.capabilities)
+
+  # What a request reads of the athanor's other threads, by the rows that
+  # bring it in: a pointer or a report names its workspace thread, and an
+  # opening the daily thread its refs are posts of; each is a `thread`
+  # source, by which forgetting that thread finds this turn. A report also
+  # carries the sources its record kept of the turn that reported, so its
+  # outside material joins even once that turn's row is gone.
+  defp thread_sources(rows) do
+    Enum.flat_map(rows, fn
+      %{kind: kind, workspace_id: id} = row
+      when kind in ["pointer", "report"] and is_binary(id) ->
+        [Prima.Source.thread(id) | kept_sources(row)]
+
+      %{kind: "opening"} = row ->
+        case Tape.payload(row) do
+          %{"from" => %{"thread" => id}} when is_binary(id) and id != "" ->
+            [Prima.Source.thread(id)]
+
+          _ ->
+            []
+        end
+
+      _row ->
+        []
+    end)
+  end
+
+  defp kept_sources(%{kind: "report"} = row) do
+    case Tape.payload(row)["sources"] do
+      sources when is_list(sources) -> Enum.map(sources, &Prima.Source.from_json/1)
+      _ -> []
+    end
+  end
+
+  defp kept_sources(_row), do: []
+
+  # The daily thread's posts the openings among `rows` refer to, read as
+  # they stand now and never copied: a post of another thread, or one
+  # deleted since, reads as nothing.
+  defp cited(%State{} = state, rows) do
+    rows
+    |> Enum.filter(&(&1.kind == "opening"))
+    |> Enum.flat_map(fn row ->
+      case Tape.payload(row) do
+        %{"from" => %{"thread" => daily}, "refs" => [_ | _] = ids} when is_binary(daily) ->
+          Enum.flat_map(Enum.uniq(ids), fn id ->
+            case is_binary(id) && Tape.message(guest(state), id) do
+              {:ok, %{thread_id: ^daily} = cited} -> [cited]
+              _gone -> []
+            end
+          end)
+
+        _no_refs ->
+          []
+      end
+    end)
+    |> Enum.uniq_by(& &1.id)
+  end
 
   # The earlier turns whose rows a request sends: every row's turn but
   # this one's, and the turn a crew row came from — a delivered request's
@@ -2373,7 +2437,7 @@ defmodule Aqua.Loop do
     # a model call is the catalyst, not the agent. Without this the turn
     # fails at admission on a request compaction could have made fit.
     excerpt = if state.excerpt_sent?, do: nil, else: spec.excerpt
-    probe = request(state, rows, excerpt, state.steps == 0)
+    probe = request(state, rows, excerpt, state.steps == 0, cited(state, rows))
 
     case Planner.plan(rows,
            capabilities: spec.capabilities,
@@ -2693,19 +2757,27 @@ defmodule Aqua.Loop do
 
   defp over_deadline?(_state), do: false
 
+  # Each entry names the call's tool and the sentence a person reads for
+  # it, from the one table a kept step is worded by too (`Aqua.Steps`).
   defp activity(%State{} = state, items, status) do
-    names =
+    named =
       Enum.map(items, fn %{call: call} ->
-        if(match?({:ok, _}, call), do: elem(call, 1).model_name, else: "tool")
+        case call do
+          {:ok, call} -> {call.model_name, Aqua.Steps.sentence(call.tool, call.action)}
+          _unbound -> {"tool", Aqua.Steps.sentence(nil, nil)}
+        end
       end)
 
     activity =
       case status do
         :running ->
-          state.activity ++ Enum.map(names, &%{tool: &1, status: :running, preview: nil})
+          state.activity ++
+            Enum.map(named, fn {tool, sentence} ->
+              %{tool: tool, sentence: sentence, status: :running, preview: nil}
+            end)
 
         :done ->
-          Enum.reduce(names, state.activity, &mark_done(&2, &1))
+          Enum.reduce(named, state.activity, &mark_done(&2, &1))
       end
 
     announce(state, :tool_activity, activity)
@@ -2713,7 +2785,7 @@ defmodule Aqua.Loop do
   end
 
   # The newest running entry for `tool` is done; none running adds a done one.
-  defp mark_done(activity, tool) do
+  defp mark_done(activity, {tool, sentence}) do
     index =
       activity
       |> Enum.with_index()
@@ -2723,7 +2795,7 @@ defmodule Aqua.Loop do
       end)
 
     case index do
-      nil -> activity ++ [%{tool: tool, status: :done, preview: nil}]
+      nil -> activity ++ [%{tool: tool, sentence: sentence, status: :done, preview: nil}]
       i -> List.update_at(activity, i, &%{&1 | status: :done})
     end
   end

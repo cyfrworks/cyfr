@@ -34,6 +34,10 @@ defmodule Aqua do
     schedule asked for it; `Aqua.ScheduleTurns` — a schedule's line for
     Aqua, each fire a turn of the daily thread current when it fires.
   - `Aqua.Day` — the person's day, and the daily thread that holds it.
+  - `Aqua.Providers.Workspace` — workspace threads, opened from a daily
+    thread for one piece of work, with an orchestrator of their own,
+    reporting back to it; `Aqua.Steps` — what Aqua did in a thread, one
+    sentence a step.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into a
     shared thread you sit in.
   - `Aqua.Notes` — what somebody chose to keep out of a thread: the
@@ -187,6 +191,30 @@ defmodule Aqua do
   """
   @spec mark_read(Context.t(), String.t(), non_neg_integer()) :: :ok | {:error, term()}
   defdelegate mark_read(ctx, thread_id, seq), to: Aqua.ThreadList
+
+  @doc """
+  The person's workspace threads a view lists, the latest activity
+  first: each at work or waiting on them, and each finished one with
+  posts they have not seen (`Aqua.Providers.Workspace.records/1`).
+  """
+  @spec workspaces(Context.t()) ::
+          {:ok, [Aqua.Providers.Workspace.entry()]} | {:error, term()}
+  defdelegate workspaces(ctx), to: Aqua.Providers.Workspace, as: :records
+
+  @doc """
+  One workspace thread as a view reads it, with the daily thread's post it
+  was opened from (`Aqua.Providers.Workspace.record/2`).
+  """
+  @spec workspace(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  defdelegate workspace(ctx, thread_id), to: Aqua.Providers.Workspace, as: :record
+
+  @doc """
+  A thread's steps across its turns, newest first, each a sentence of
+  what Aqua did (`Aqua.Steps.steps/3`).
+  """
+  @spec steps(Context.t(), String.t(), keyword()) ::
+          {:ok, [Aqua.Steps.step()]} | {:error, term()}
+  defdelegate steps(ctx, thread_id, opts \\ []), to: Aqua.Steps
 
   @doc "An empty stream of a running turn's answers (`Aqua.Loop.Stream.new/0`)."
   @spec stream_new() :: Aqua.Loop.Stream.t()

@@ -584,6 +584,70 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, ~s(button[phx-click="paste"]), "Paste to Plans")
   end
 
+  test "a workspace thread's pointer and report are drawn as posts that name it, with the report's files",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, %{workspace: workspace}} =
+      Arca.TurnStorage.open_workspace(actor, %{
+        daily_id: thread.id,
+        id: Prima.UUID7.generate_id("thread"),
+        title: "Moon report",
+        opening: %{
+          id: Prima.UUID7.generate_id("msg"),
+          author: here.user_id,
+          content: "write the moon report",
+          payload: %{"ask" => "write the moon report"}
+        },
+        pointer: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          content: "Moon report",
+          payload: %{"workspace" => "w", "title" => "Moon report"}
+        },
+        files: fn _thread, _message -> {:ok, []} end,
+        person_id: here.user_id,
+        origin: :interactive
+      })
+
+    {:ok, %{message: report}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "report",
+          workspace_id: workspace.id,
+          content: "The moon report is written.",
+          payload: %{
+            "workspace" => workspace.id,
+            "title" => "Moon report",
+            "outcome" => "done",
+            "attachments" => [
+              %{
+                "filename" => "moon.png",
+                "stored_name" => "0-moon.png",
+                "media_type" => "image/png",
+                "size" => 4
+              }
+            ]
+          }
+        }
+      })
+
+    [pointer] = Enum.filter(Threads.messages(actor, thread.id), &(&1.kind == "pointer"))
+    pane = open_pane(conn, athanor, thread)
+
+    assert has_element?(pane, ~s([id$="-m-#{pointer.id}"]), "Workspace thread · Moon report")
+    assert has_element?(pane, ~s([id$="-m-#{report.id}"]), "Report · Moon report")
+
+    assert has_element?(
+             pane,
+             ~s([id$="-m-#{report.id}"] [data-raw-content="The moon report is written."])
+           )
+
+    assert has_element?(pane, ~s([id$="-m-#{report.id}"] img))
+  end
+
   test "the thread shown is read to its newest row as it opens and as each row lands, never back",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)

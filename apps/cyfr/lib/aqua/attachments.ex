@@ -14,6 +14,16 @@ defmodule Aqua.Attachments do
   back through `PrismWeb.AttachmentController`, and the model call
   receives them base64-encoded from `load/3`.
 
+  A message's files are its own: a reader resolves a ref under the row
+  that holds it, so a file carried from elsewhere — a daily thread's post
+  into a workspace thread's opening, a workspace thread's post into the
+  report on a daily thread — is copied into the destination message's
+  own blobs before that message is written (`carried/3`, then `copy/4`),
+  and a write that fails discards the copies (`discard/3`). A turn's
+  agent stores the files of its own posts the same way, under the thread
+  its turn runs in (`Aqua.Providers.Thread`'s `post`); only a person's
+  session stores under a message of their choosing (`store/4`).
+
   Filenames are the uploader's and are reduced to a safe basename: `Prima.PathSafety`
   refuses traversal but not an embedded `/`, and the local adapter would turn one
   into a subdirectory. Two uploads with the same name in one message get
@@ -65,6 +75,105 @@ defmodule Aqua.Attachments do
   def store(_ctx, _thread_id, _message_id, []), do: {:ok, []}
 
   def store(%Context{} = ctx, thread_id, message_id, files) when is_list(files) do
+    with {:ok, refs} <- write(ctx, thread_id, message_id, files) do
+      remember(ctx, thread_id, message_id, refs)
+      {:ok, refs}
+    end
+  end
+
+  @doc """
+  Store `files` as `store/4` does, held to the same bounds and the
+  athanor's storage cap before the first byte, under a message that has
+  not been written, and remember nothing: the caller that writes the
+  message discards the copies itself when the write fails
+  (`discard/3`). What a copy and an agent's post store.
+  """
+  @spec copy(Context.t(), String.t(), String.t(), [file()]) ::
+          {:ok, [ref()]} | {:error, term()}
+  def copy(_ctx, _thread_id, _message_id, []), do: {:ok, []}
+
+  def copy(%Context{} = ctx, thread_id, message_id, files) when is_list(files),
+    do: write(ctx, thread_id, message_id, files)
+
+  @doc """
+  Remove every file stored under a message that was never written: the
+  copies a failed write leaves, or an earlier try's of a delivery tried
+  again. A message that was written keeps its files (`:message_sent`).
+  """
+  @spec discard(Context.t(), String.t(), String.t()) ::
+          :ok | {:error, :message_sent | :database_error | term()}
+  def discard(%Context{} = ctx, thread_id, message_id)
+      when is_binary(thread_id) and is_binary(message_id) do
+    with :ok <- unsent(ctx, message_id) do
+      case Arca.delete_tree(
+             Sanctum.Context.actor(ctx),
+             Arca.ThreadStorage.blob_root(thread_id) ++ [message_id]
+           ) do
+        :ok -> :ok
+        {:error, :not_found} -> :ok
+        {:error, _} = refused -> refused
+      end
+    end
+  end
+
+  @doc """
+  The files `files` name (`[%{"message_id", "stored_name"}]`), each a file
+  of a post of `thread_id`, read with their names and types for a copy
+  (`copy/4`). A message of another thread, or a name its post does not
+  carry, is `{:error, :not_a_post}`; a file whose bytes are gone
+  `{:error, :attachment_missing}`; more than a message holds
+  `{:error, :too_many_attachments}`.
+  """
+  @spec carried(Context.t(), String.t(), [map()]) :: {:ok, [file()]} | {:error, term()}
+  def carried(_ctx, _thread_id, []), do: {:ok, []}
+
+  def carried(_ctx, _thread_id, files) when length(files) > @max_files,
+    do: {:error, :too_many_attachments}
+
+  def carried(%Context{} = ctx, thread_id, files) when is_list(files) do
+    Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
+      case carry(ctx, thread_id, file) do
+        {:ok, loaded} -> {:cont, {:ok, acc ++ [loaded]}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  defp carry(ctx, thread_id, %{"message_id" => message_id, "stored_name" => name})
+       when is_binary(message_id) and is_binary(name) do
+    actor = Sanctum.Context.actor(ctx)
+
+    case Arca.ThreadStorage.get_message(actor, message_id) do
+      {:ok, %{thread_id: ^thread_id} = row} ->
+        case Enum.find(refs_of(row), &(&1["stored_name"] == name)) do
+          nil -> {:error, :not_a_post}
+          ref -> bytes_of(actor, thread_id, message_id, ref)
+        end
+
+      {:ok, _another_threads} ->
+        {:error, :not_a_post}
+
+      {:error, :not_found} ->
+        {:error, :not_a_post}
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
+
+  defp carry(_ctx, _thread_id, _file), do: {:error, :not_a_post}
+
+  defp bytes_of(actor, thread_id, message_id, ref) do
+    with {:ok, path} <- blob_path(thread_id, message_id, ref),
+         {:ok, bytes} <- Arca.get(actor, path) do
+      {:ok, %{"filename" => ref["filename"], "media_type" => ref["media_type"], "bytes" => bytes}}
+    else
+      _gone -> {:error, :attachment_missing}
+    end
+  end
+
+  # The files written under a message, all of them or none.
+  defp write(%Context{} = ctx, thread_id, message_id, files) do
     with :ok <- check_count(files),
          :ok <- check_sizes(files),
          :ok <- check_quota(ctx, files),
@@ -109,13 +218,8 @@ defmodule Aqua.Attachments do
         end
       end)
       |> case do
-        {:ok, refs} ->
-          refs = Enum.reverse(refs)
-          remember(ctx, thread_id, message_id, refs)
-          {:ok, refs}
-
-        error ->
-          error
+        {:ok, refs} -> {:ok, Enum.reverse(refs)}
+        error -> error
       end
     end
   end

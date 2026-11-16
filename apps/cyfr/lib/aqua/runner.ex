@@ -253,6 +253,13 @@ defmodule Aqua.Runner do
   outcome, answers}` for a member's reply), `:payload` (merged into the
   row's) and `:receipt` (its receipt, written in the acceptance).
 
+  The same consumer delivers a workspace thread's opening with
+  `:opening` (the opening row its transaction wrote, on which the turn
+  opens, in place of a new row) and the tools `:crew` narrows it to, and
+  a workspace thread's report into a daily thread with `:report`,
+  `:kind` (`"report"`) and `:workspace_id` (the thread it reports, which
+  must still stand when it lands). Neither steers a turn already there.
+
   A schedule's turn consumer (`Aqua.ScheduleTurns`) sends with
   `:schedule` (`%{schedule_id, occurrence_id}`) and the schedule's name
   as `:payload`'s `"schedule"`, as the schedule's person under the
@@ -566,8 +573,9 @@ defmodule Aqua.Runner do
       opened_before?(state, ctx, opts) ->
         accept_turn(state, ctx, name, text, opts)
 
-      # A schedule's fire is a turn of its own, never a steer of another.
-      not Keyword.has_key?(opts, :schedule) and steer?(state, ctx, name, opts) ->
+      # A schedule's fire, an opening and a report are each a turn of
+      # their own, never a steer of another.
+      not own_turn?(opts) and steer?(state, ctx, name, opts) ->
         steer(state, ctx, name, text, opts)
 
       Sanctum.Provisioning.ready(ctx) != :ok ->
@@ -583,6 +591,8 @@ defmodule Aqua.Runner do
         accept_turn(state, ctx, name, text, opts)
     end
   end
+
+  defp own_turn?(opts), do: Enum.any?([:schedule, :opening, :report], &Keyword.has_key?(opts, &1))
 
   # A `client_id` that already opened a turn is offered as that turn's
   # opener again, never as a steer of it or a turn behind it: the tape
@@ -723,18 +733,17 @@ defmodule Aqua.Runner do
 
   defp accept_turn(state, ctx, name, text, opts) do
     attrs =
-      crew_attrs(
-        %{
-          message: message(ctx, text, opts, name),
-          turn: %{
-            agent: name,
-            requested_by: ctx.user_id,
-            model: Keyword.get(opts, :model),
-            options: options(name, opts)
-          }
-        },
-        opts
-      )
+      %{
+        message: message(ctx, text, opts, name),
+        turn: %{
+          agent: name,
+          requested_by: ctx.user_id,
+          model: Keyword.get(opts, :model),
+          options: options(name, opts)
+        }
+      }
+      |> crew_attrs(opts)
+      |> put_present(:opening_id, opts |> Keyword.get(:opening) |> opening_id())
 
     case Tape.accept(ctx, state.id, attrs) do
       {:ok, %{message: row, turn: turn, replayed: true}} ->
@@ -847,6 +856,8 @@ defmodule Aqua.Runner do
       client_id: Keyword.get(opts, :client_id),
       payload: payload(opts)
     }
+    |> put_present(:kind, Keyword.get(opts, :kind))
+    |> put_present(:workspace_id, Keyword.get(opts, :workspace_id))
   end
 
   defp author(ctx, sent_by, opts) do
@@ -887,6 +898,9 @@ defmodule Aqua.Runner do
     do: %{asking_thread_id: room, request_id: request_id}
 
   defp reply_address(_request), do: nil
+
+  defp opening_id(%{id: id}), do: id
+  defp opening_id(nil), do: nil
 
   defp put_present(attrs, _key, nil), do: attrs
   defp put_present(attrs, key, value), do: Map.put(attrs, key, value)

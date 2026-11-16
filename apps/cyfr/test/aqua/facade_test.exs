@@ -34,6 +34,8 @@ defmodule Aqua.FacadeTest do
     roster: 1,
     stale_consent_refs: 1,
     standing_offered?: 2,
+    steps: 2,
+    steps: 3,
     stream_abandoned: 2,
     stream_add: 2,
     stream_advance: 2,
@@ -44,7 +46,9 @@ defmodule Aqua.FacadeTest do
     thread_state: 2,
     today: 1,
     tool_kind: 2,
-    virtual_tool_catalog: 0
+    virtual_tool_catalog: 0,
+    workspace: 2,
+    workspaces: 1
   ]
 
   test "the root answers exactly its roster" do

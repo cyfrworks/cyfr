@@ -18,11 +18,14 @@ defmodule Aqua.Prompt do
       is good at and what to avoid; none for a crew member's own turn.
     * `requests` — the thread's requests still waiting on a reply, which
       are listed with their age.
+    * `where` — for a turn of a workspace thread, where it is, read from
+      the thread's first opening (`where/2`): the thread's title and what
+      the person asked; none for any other thread.
 
   Orders stable sections before the clock to preserve a reusable prompt
   prefix: authored prompt, granted capabilities, tool prelude, scroll
-  index, athanor notes and the crew index; then the open requests, whose ages
-  move. A room excerpt is never part of it: the request carries it as a
+  index, athanor notes, the crew index and where the turn is; then the
+  open requests, whose ages move. A room excerpt is never part of it: the request carries it as a
   transient block (`Aqua.Loop.Request`).
 
   ## What the prompt read
@@ -46,7 +49,8 @@ defmodule Aqua.Prompt do
           agent: map(),
           authority: term() | nil,
           crew: [map()],
-          requests: [map()]
+          requests: [map()],
+          where: %{title: String.t(), ask: String.t()} | nil
         ]
 
   @typedoc "A composed prompt: its text and the sources it read."
@@ -75,6 +79,7 @@ defmodule Aqua.Prompt do
         scrolls(ctx),
         notes,
         crew(Keyword.get(opts, :crew, [])),
+        where(Keyword.get(opts, :where)),
         requests(Keyword.get(opts, :requests, [])),
         clock()
       ])
@@ -101,6 +106,39 @@ defmodule Aqua.Prompt do
       Calendar.strftime(now, "%H:%M UTC")
     ]
   end
+
+  @doc """
+  Where a turn of `thread` is, for its prompt's "Where you are": a
+  workspace thread's title and the ask of its first opening, read as the
+  thread stands; nil for any other kind of thread, or one whose opening
+  cannot be read.
+  """
+  @spec where(Context.t(), map()) :: %{title: String.t(), ask: String.t()} | nil
+  def where(%Context{} = ctx, %{kind: "workspace", id: thread_id, title: title}) do
+    case Arca.ThreadStorage.messages(Context.actor(ctx), thread_id, limit: 1) do
+      [%{kind: "opening", content: ask}] -> %{title: title, ask: ask || ""}
+      _ -> nil
+    end
+  end
+
+  def where(%Context{}, _thread), do: nil
+
+  # A workspace thread's host section: whose work this is, and how it ends.
+  defp where(nil), do: []
+
+  defp where(%{title: title, ask: ask}) do
+    [
+      "\n\n---\n\n## Where you are\n\nYou are the orchestrator of the workspace thread \"",
+      title,
+      "\", which the person's daily thread opened for one piece of work. They asked:\n\n",
+      quoted(ask),
+      "\n\nDo the work here and post what you make with `thread.post`. When it is done or " <>
+        "has failed, say so with `workspace.report`: the report lands on the daily thread."
+    ]
+  end
+
+  defp quoted(text),
+    do: text |> String.trim() |> String.split("\n") |> Enum.map_join("\n", &("> " <> &1))
 
   # Who the soul may hand a job to: the crew index, one line a member.
   defp crew([]), do: []
