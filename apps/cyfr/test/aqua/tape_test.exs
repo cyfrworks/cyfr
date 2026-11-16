@@ -19,7 +19,7 @@ defmodule Aqua.TapeTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local(:prism)
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
@@ -242,5 +242,28 @@ defmodule Aqua.TapeTest do
     assert_receive %Cyfr.Bus.Notify{kind: :approval_resolved, payload: %{decision: "approved"}}
     assert {:ok, []} = Tape.pending_approvals(ctx, turn)
     assert {:ok, %{status: "approved"}} = Tape.approval(ctx, approval.id)
+  end
+
+  test "a daily thread deleted takes its crew members' threads, leaves the other days, and frees its date",
+       %{ctx: ctx, thread: thread} do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, other_day} = Arca.Test.Days.thread(actor)
+    {:ok, child} = Threads.crew_thread(actor, thread.id, "planner")
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "bye"}
+      })
+
+    assert {:ok, %{cancelled: []}} = Tape.delete_thread(ctx, thread.id)
+
+    for gone <- [thread.id, child.id], do: assert({:error, :not_found} = Tape.thread(ctx, gone))
+    assert {:ok, %{id: kept}} = Tape.thread(ctx, other_day.id)
+    assert kept == other_day.id
+
+    # The date is free again: the day is made anew, holding nothing.
+    assert {:ok, again} = Threads.daily(actor, thread.day)
+    refute again.id == thread.id
+    assert Threads.messages(actor, again.id) == []
   end
 end

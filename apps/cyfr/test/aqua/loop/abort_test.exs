@@ -18,7 +18,7 @@ defmodule Aqua.Loop.AbortTest do
   setup do
     Cyfr.Test.Sandbox.setup!()
     ctx = Sanctum.TestContext.local(:prism)
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{

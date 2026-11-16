@@ -4,7 +4,8 @@
 defmodule Aqua.ScheduleTurns do
   @moduledoc """
   A schedule that holds a line for Aqua: each of its fires becomes a turn
-  of Aqua, as the schedule's person, in the schedule's own thread.
+  of Aqua, as the schedule's person, in their daily thread current when it
+  fires. No thread is made for a schedule.
 
   ## Who can make, change and fire one
 
@@ -28,20 +29,33 @@ defmodule Aqua.ScheduleTurns do
 
   Each is sent through the thread's runner (`Aqua.Runner.send_message/4`)
   as the schedule's person under the `schedule` origin
-  (`Sanctum.Tenancy.continuation/3`), in the schedule's thread
-  (`Arca.CronSchedule.thread/3`, made on the first fire and titled with
-  the schedule's name), with the occurrence's id and its claimant as the
-  message's `client_id`: a second send of the same claim answers the turn
-  the first opened, so one claim opens one turn however often it is read.
-  The turn carries the schedule and the occurrence, and its root's
+  (`Sanctum.Tenancy.continuation/3`), with the occurrence's id and its
+  claimant as the message's `client_id`: a second send of the same claim
+  answers the turn the first opened, so one claim opens one turn however
+  often it is read. It is an ordinary turn of that thread, queued behind
+  whatever runs there, its message the schedule's line in the server's
+  voice naming the schedule by id and name, which the person's count
+  counts. The turn carries the schedule and the occurrence, and its root's
   admission starts the occurrence (`Opus.TurnRoot`).
+
+  ## Which daily thread
+
+  A claim is sent again at every drain until its turn's root starts the
+  occurrence, and an acceptance is found again only in the thread it is
+  looked up in. So before today's thread is chosen, the claim's client id
+  is looked up in every daily thread of the athanor
+  (`Arca.ThreadStorage.daily_message/2`): a claim accepted behind busy work
+  before midnight is sent again into the thread that accepted it, which
+  answers the turn its first send opened. Only a claim with no such
+  message joins the daily thread current when it is sent (`Aqua.Day`).
+  Nothing is stored for it: the message is the record.
 
   ## What the turn may do
 
   Only what Aqua may do without asking, and what a standing allow already
-  covers: among them an answer "for this schedule" the person gave on a
-  card in the schedule's thread, which holds for this schedule's turns
-  there and ends with the schedule or the thread (`Aqua.Standing`). At the
+  covers: among them an answer "for a schedule" the person gave on a card
+  naming this schedule, which holds for this schedule's turns on any day's
+  thread and ends with the schedule (`Aqua.Standing`). At the
   first call that would ask, it opens no card and ends failed, saying
   what it needed and how to allow it next time (`Aqua.Loop`).
 
@@ -177,7 +191,8 @@ defmodule Aqua.ScheduleTurns do
       ctx
       |> Runner.send_message(thread_id, line,
         client_id: client_id(claim),
-        schedule: %{schedule_id: claim.schedule_id, occurrence_id: claim.id}
+        schedule: %{schedule_id: claim.schedule_id, occurrence_id: claim.id},
+        payload: %{"schedule" => %{"id" => claim.schedule_id, "name" => claim.name}}
       )
       |> sent(ctx, thread_id, claim)
     else
@@ -207,12 +222,19 @@ defmodule Aqua.ScheduleTurns do
 
   defp line(_claim), do: {:error, :no_line}
 
+  # The daily thread that already holds this claim's message, else the one
+  # current now.
   defp thread(ctx, claim) do
-    Arca.CronSchedule.thread(
-      Sanctum.Context.actor(ctx),
-      claim.schedule_id,
-      Prima.AgentRef.soul_name()
-    )
+    case Arca.ThreadStorage.daily_message(Sanctum.Context.actor(ctx), client_id(claim)) do
+      {:ok, %{thread_id: thread_id}} ->
+        {:ok, thread_id}
+
+      {:error, :not_found} ->
+        with {:ok, thread} <- Aqua.Day.current(ctx), do: {:ok, thread.id}
+
+      {:error, _} = unread ->
+        unread
+    end
   end
 
   # A new turn waits for its root; a turn this occurrence opened before is

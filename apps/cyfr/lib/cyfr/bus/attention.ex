@@ -7,9 +7,11 @@ defmodule Cyfr.Bus.Attention do
   `Cyfr.Bus.attention/2` topic, for the stream a canvas reads
   (`attention.changes`). The kind is the waiting record's kind, or
   `removed` once it stops waiting. It references a record its owner
-  keeps, by its `id`, with the record's own `label`, the time it began
-  waiting (`since`) and the trusted `destination` where the person acts
-  on it; it is never a second record of its own, and never an operator's
+  keeps, by its `id`, with the record's own `label`, the `day` an
+  approval in a daily thread waits on (that thread's date, ISO 8601, which
+  the surface that draws it words; nil for any other item), the time it
+  began waiting (`since`) and the trusted `destination` where the person
+  acts on it; it is never a second record of its own, and never an operator's
   item. A `removed` names how the item left (`outcome`, one of
   `outcomes/0`); a waiting item's is nil.
   """
@@ -26,7 +28,7 @@ defmodule Cyfr.Bus.Attention do
     :removed
   ]
   @outcomes [:resolved, :expired, :withdrawn]
-  @fields [:id, :label, :since, :destination, :outcome]
+  @fields [:id, :label, :day, :since, :destination, :outcome]
 
   @enforce_keys [:athanor_id, :kind]
   defstruct [:athanor_id, :kind, :revision, :at | @fields]
@@ -49,6 +51,7 @@ defmodule Cyfr.Bus.Attention do
           at: DateTime.t(),
           id: String.t() | nil,
           label: String.t() | nil,
+          day: String.t() | nil,
           since: DateTime.t() | nil,
           destination: map() | nil,
           outcome: outcome() | nil

@@ -237,7 +237,7 @@ defmodule PrismWeb.ShellProgramsTest do
     require Ecto.Query
     me = person(user, athanor)
     actor = Sanctum.Context.actor(me)
-    {:ok, thread} = Arca.ThreadStorage.create(actor)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
 
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{

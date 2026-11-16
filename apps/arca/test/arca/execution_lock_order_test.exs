@@ -195,7 +195,7 @@ defmodule Arca.ExecutionLockOrderTest do
 
     {thread, turn} =
       unboxed(fn ->
-        {:ok, thread} = Threads.create(actor)
+        {:ok, thread} = Arca.Test.Days.thread(actor)
 
         {:ok, %{turn: turn}} =
           TurnStorage.accept_message(actor, thread.id, %{
@@ -289,7 +289,7 @@ defmodule Arca.ExecutionLockOrderTest do
 
     {room, child, turn} =
       unboxed(fn ->
-        {:ok, room} = Threads.create(actor)
+        {:ok, room} = Arca.Test.Days.thread(actor)
         {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
 
         {:ok, %{turn: turn}} =

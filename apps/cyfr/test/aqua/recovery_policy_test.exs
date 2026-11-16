@@ -13,7 +13,6 @@ defmodule Aqua.Runner.RecoveryPolicyTest do
 
   alias Aqua.Runner.RecoveryPolicy
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -23,7 +22,7 @@ defmodule Aqua.Runner.RecoveryPolicyTest do
   end
 
   defp started!(ctx) do
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{

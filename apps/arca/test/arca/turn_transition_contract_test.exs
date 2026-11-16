@@ -16,7 +16,6 @@ defmodule Arca.TurnTransitionContractTest do
 
   alias Arca.ExecutionAttempts
   alias Arca.Schemas.{Execution, ExecutionAttempt, Turn, TurnStep}
-  alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
 
   @standing %{grant: :stored, verify: &Arca.Test.Actor.admits/1}
@@ -32,7 +31,7 @@ defmodule Arca.TurnTransitionContractTest do
     else
       Arca.Test.Actor.athanor!()
       actor = Arca.Test.Actor.local()
-      {:ok, thread} = Threads.create(actor)
+      {:ok, thread} = Arca.Test.Days.thread(actor)
       {:ok, actor: actor, thread: thread}
     end
   end
@@ -752,7 +751,7 @@ defmodule Arca.TurnTransitionContractTest do
     test "a failure's event is named by how its attempt was retired, never by the caller",
          %{actor: actor, thread: thread} do
       {_turn, a} = started!(actor, thread)
-      {:ok, other_thread} = Threads.create(actor)
+      {:ok, other_thread} = Arca.Test.Days.thread(actor)
       {_turn, b} = started!(actor, other_thread)
       fail = %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "gone"}
       lease = ExecutionAttempts.get(actor, a.attempt.attempt).lease_until
@@ -873,7 +872,7 @@ defmodule Arca.TurnTransitionContractTest do
     @tag :own_connections
     test "of two takeovers racing on one fence, one lands and one recovery is spent" do
       actor = unboxed_athanor!()
-      {turn, _root} = unboxed(fn -> started!(actor, elem(Threads.create(actor), 1)) end)
+      {turn, _root} = unboxed(fn -> started!(actor, elem(Arca.Test.Days.thread(actor), 1)) end)
       attrs = Map.put(@standing, :fence, turn.fence)
 
       results =

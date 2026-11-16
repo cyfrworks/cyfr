@@ -65,7 +65,7 @@ defmodule Aqua.LoopTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
@@ -222,6 +222,59 @@ defmodule Aqua.LoopTest do
 
     assert {:error, :no_pin} =
              Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
+  end
+
+  test "a daily and a workspace thread's prompt lists the requests still waiting in it, and no other's",
+       %{ctx: ctx, thread: daily} do
+    workspace =
+      %Arca.Schemas.Thread{}
+      |> Arca.Schemas.Thread.changeset(%{
+        id: Prima.UUID7.generate_id("thread"),
+        athanor_id: ctx.athanor_id,
+        kind: "workspace",
+        workspace_state: "open",
+        title: "Book the trip",
+        created_by: ctx.user_id
+      })
+      |> Arca.Repo.insert!()
+
+    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
+    script!([reply("one"), reply("two")])
+
+    asked =
+      for {room, task} <- [{daily, "Weigh the daily risks"}, {workspace, "Price the flights"}] do
+        turn = accept!(ctx, room, "hello")
+        assert :completed = Task.await(run(ctx, turn), 30_000)
+
+        # The soul's request to a crew member, still waiting on its reply.
+        {:ok, %{message: request}} =
+          Tape.accept(ctx, room.id, %{
+            message: %{
+              author: Prima.Author.agent(),
+              sent_by: "aqua",
+              addressee: "planner",
+              status: "pending",
+              content: task
+            }
+          })
+
+        {turn, request, task}
+      end
+
+    # Each room's prompt, read once both requests wait, lists its own.
+    for {turn, request, task} <- asked do
+      {:ok, pinned} = Tape.turn(ctx, turn.id)
+      {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
+
+      assert spec.system =~ "## Open requests"
+      assert spec.system =~ "- #{request.id} to planner, asked by aqua"
+      assert spec.system =~ task
+
+      for {_turn, other, other_task} <- asked, other.id != request.id do
+        refute spec.system =~ other.id
+        refute spec.system =~ other_task
+      end
+    end
   end
 
   defp accept!(ctx, thread, text) do
@@ -1064,7 +1117,7 @@ defmodule Aqua.LoopTest do
 
   test "a steer names an open turn of its own thread", %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")
-    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     assert {:error, :turn_over} =
              Tape.accept(ctx, elsewhere.id, %{
@@ -1556,7 +1609,7 @@ defmodule Aqua.LoopTest do
     commit_soul!(ctx, ingress.tools -- ["native_search"])
 
     # A thread of its own, so nothing the first turn read is carried in.
-    {:ok, fresh} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, fresh} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     kept = accept!(ctx, fresh, "@aqua again")
     assert :completed = Task.await(run(ctx, kept), 30_000)
     assert chat_provider_tools() == [["web_search"], []]

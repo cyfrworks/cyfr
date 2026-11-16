@@ -15,6 +15,7 @@ end
 defmodule Arca.ThreadStorageTest do
   use ExUnit.Case, async: false
 
+  alias Arca.Test.Days
   alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Context
 
@@ -37,8 +38,26 @@ defmodule Arca.ThreadStorageTest do
     )
   end
 
+  defp post!(actor, thread, attrs) do
+    {:ok, msg} =
+      Threads.append(actor, thread.id, Map.merge(%{author: "aqua", sent_by: "aqua"}, attrs))
+
+    msg
+  end
+
+  defp mark(actor, thread) do
+    {:ok, %{read_seq: read_seq}} = Threads.get(actor, thread.id)
+    read_seq
+  end
+
+  defp unread(actor, thread) do
+    {:ok, thread} = Threads.get(actor, thread.id)
+    {:ok, count} = Threads.unread(actor, thread)
+    count
+  end
+
   test "a thread belongs to the athanor; another athanor cannot see it", %{ctx: ctx} do
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Days.thread(ctx)
     assert thread.athanor_id == "ath_a"
     assert thread.created_by == ctx.user_id
     assert [%{id: id}] = Threads.list(ctx)
@@ -53,8 +72,16 @@ defmodule Arca.ThreadStorageTest do
   end
 
   test "an athanor-less actor is refused before any query, nil and empty alike", %{ctx: ctx} do
-    assert {:error, :no_athanor} = Threads.list(%{ctx | athanor_id: nil})
-    assert {:error, :no_athanor} = Threads.list(%{ctx | athanor_id: ""})
+    day = Days.next()
+
+    for actor <- [%{ctx | athanor_id: nil}, %{ctx | athanor_id: ""}] do
+      assert {:error, :no_athanor} = Threads.list(actor)
+      assert {:error, :no_athanor} = Threads.daily(actor, day)
+      assert {:error, :no_athanor} = Threads.adjacent_day(actor, day, :before)
+      assert {:error, :no_athanor} = Threads.mark_read(actor, "thread_x", 1)
+      assert {:error, :no_athanor} = Threads.unread(actor, %{id: "thread_x", read_seq: 0})
+      assert {:error, :no_athanor} = Threads.daily_message(actor, "client-x")
+    end
 
     # Not an actor at all: no head matches, so a context cannot be read as
     # an athanor with no threads.
@@ -62,12 +89,208 @@ defmodule Arca.ThreadStorageTest do
     assert_raise FunctionClauseError, fn -> Threads.list(context) end
   end
 
-  test "messages append in seq order and the first user text titles the thread", %{
-    ctx: ctx,
-    bob: bob
-  } do
-    {:ok, thread} = Threads.create(ctx)
-    assert thread.title == "New thread"
+  describe "the daily thread" do
+    test "is one per date of an athanor, titled with its date, and a person's text renames it not",
+         %{ctx: ctx, bob: bob} do
+      day = Days.next()
+      {:ok, thread} = Threads.daily(ctx, day)
+
+      assert %{kind: "daily", day: ^day, parent_id: nil, workspace_state: nil, read_seq: 0} =
+               thread
+
+      assert thread.title == Date.to_iso8601(day)
+      assert thread.created_by == ctx.user_id
+
+      # Asked again, by anyone of the athanor, the date answers the same row.
+      assert {:ok, %{id: same}} = Threads.daily(bob, day)
+      assert same == thread.id
+
+      {:ok, %{id: next}} = Threads.daily(ctx, Date.add(day, 1))
+      refute next == thread.id
+
+      post!(ctx, thread, %{author: ctx.user_id, sent_by: "person", content: "Plan my week"})
+      assert {:ok, %{title: title}} = Threads.get(ctx, thread.id)
+      assert title == Date.to_iso8601(day)
+
+      assert Threads.list(ctx, kind: "daily") |> Enum.map(& &1.id) |> Enum.sort() ==
+               Enum.sort([thread.id, next])
+    end
+
+    test "of another athanor is its own, the same date notwithstanding", %{ctx: ctx} do
+      day = Days.next()
+      {:ok, mine} = Threads.daily(ctx, day)
+      other = user_actor("local|idp|carol", "ath_b")
+      {:ok, theirs} = Threads.daily(other, day)
+
+      refute theirs.id == mine.id
+      assert theirs.athanor_id == "ath_b"
+      assert {:ok, %{id: id}} = Threads.daily(ctx, day)
+      assert id == mine.id
+      assert {:error, :not_found} = Threads.get(other, mine.id)
+    end
+
+    test "nearest a date on either side is the athanor's own daily thread, and none is not found",
+         %{ctx: ctx} do
+      first = Days.next()
+      middle = Date.add(first, 3)
+      last = Date.add(first, 9)
+      {:ok, before} = Threads.daily(ctx, first)
+      {:ok, after_} = Threads.daily(ctx, last)
+
+      # Another athanor's days between them, and a child thread, are no
+      # neighbours of this athanor's.
+      other = user_actor("local|idp|carol", "ath_b")
+      {:ok, _theirs} = Threads.daily(other, Date.add(first, 1))
+      {:ok, _theirs} = Threads.daily(other, Date.add(first, 5))
+      {:ok, _child} = Threads.crew_thread(ctx, before.id, "planner")
+
+      assert {:ok, %{id: id}} = Threads.adjacent_day(ctx, middle, :before)
+      assert id == before.id
+      assert {:ok, %{id: id}} = Threads.adjacent_day(ctx, middle, :after)
+      assert id == after_.id
+
+      # The day itself is no neighbour of its own.
+      assert {:ok, %{id: id}} = Threads.adjacent_day(ctx, last, :before)
+      assert id == before.id
+
+      assert {:error, :not_found} = Threads.adjacent_day(ctx, first, :before)
+      assert {:error, :not_found} = Threads.adjacent_day(ctx, last, :after)
+    end
+  end
+
+  describe "the read mark" do
+    test "moves forward only, never past the last message, and answers where it stands", %{
+      ctx: ctx
+    } do
+      {:ok, thread} = Days.thread(ctx)
+
+      # Nothing to read: the mark stays at 0.
+      assert {:ok, 0} = Threads.mark_read(ctx, thread.id, 5)
+
+      for n <- 1..4, do: post!(ctx, thread, %{content: "m#{n}"})
+
+      assert {:ok, 2} = Threads.mark_read(ctx, thread.id, 2)
+      assert mark(ctx, thread) == 2
+
+      # A lower mark leaves it.
+      assert {:ok, 2} = Threads.mark_read(ctx, thread.id, 1)
+      assert {:ok, 2} = Threads.mark_read(ctx, thread.id, 0)
+      assert mark(ctx, thread) == 2
+
+      # A mark past the last message marks the last.
+      assert {:ok, 4} = Threads.mark_read(ctx, thread.id, 100)
+      assert mark(ctx, thread) == 4
+    end
+
+    test "of another athanor's thread is not found and moves nothing", %{ctx: ctx} do
+      {:ok, thread} = Days.thread(ctx)
+      for n <- 1..3, do: post!(ctx, thread, %{content: "m#{n}"})
+      {:ok, 1} = Threads.mark_read(ctx, thread.id, 1)
+
+      other = user_actor("local|idp|carol", "ath_b")
+      assert {:error, :not_found} = Threads.mark_read(other, thread.id, 3)
+      assert mark(ctx, thread) == 1
+
+      assert {:error, :not_found} = Threads.mark_read(ctx, "thread_nothing", 1)
+    end
+  end
+
+  describe "the unread count" do
+    test "counts the posts past the mark the person did not send, a server-voiced line among them",
+         %{ctx: ctx} do
+      {:ok, thread} = Days.thread(ctx)
+
+      # The person's own line is read by its sender.
+      post!(ctx, thread, %{author: ctx.user_id, sent_by: "person", content: "@aqua plan"})
+      assert unread(ctx, thread) == 0
+
+      # A turn's own rows are no posts, whoever wrote them.
+      for kind <- ~w(tool_call tool_result compaction turn_aborted),
+          do: post!(ctx, thread, %{kind: kind, content: kind})
+
+      assert unread(ctx, thread) == 0
+
+      # The agent's reply, its card and its error.
+      post!(ctx, thread, %{content: "Here is the plan."})
+      post!(ctx, thread, %{kind: "approval", status: "pending", content: "Send it?"})
+      post!(ctx, thread, %{kind: "error", content: "It failed."})
+      assert unread(ctx, thread) == 3
+
+      # A schedule's line is sent for its person in the server's voice: the
+      # person did not write it, so it counts.
+      line =
+        post!(ctx, thread, %{
+          author: Prima.Author.system(),
+          sent_by: "person",
+          kind: "text",
+          content: "Morning summary"
+        })
+
+      assert unread(ctx, thread) == 4
+
+      # A crew member's reply is not the person's either.
+      post!(ctx, thread, %{author: "planner", sent_by: "planner", content: "Done."})
+      assert unread(ctx, thread) == 5
+
+      {:ok, _} = Threads.mark_read(ctx, thread.id, line.seq)
+      assert unread(ctx, thread) == 1
+
+      {:ok, _} = Threads.mark_read(ctx, thread.id, line.seq + 1)
+      assert unread(ctx, thread) == 0
+    end
+
+    test "is the athanor's own: another athanor counts none of it", %{ctx: ctx} do
+      {:ok, thread} = Days.thread(ctx)
+      post!(ctx, thread, %{content: "Here is the plan."})
+      assert unread(ctx, thread) == 1
+
+      other = user_actor("local|idp|carol", "ath_b")
+      assert {:ok, 0} = Threads.unread(other, %{id: thread.id, read_seq: 0})
+    end
+  end
+
+  describe "a message by its client id across the daily threads" do
+    test "is found in whichever daily thread of the athanor holds it, and nowhere else", %{
+      ctx: ctx
+    } do
+      {:ok, yesterday} = Days.thread(ctx)
+      {:ok, today} = Days.thread(ctx)
+      {:ok, child} = Threads.crew_thread(ctx, today.id, "planner")
+
+      held = post!(ctx, yesterday, %{client_id: "c-yesterday", content: "late"})
+      post!(ctx, today, %{client_id: "c-today", content: "now"})
+      post!(ctx, child, %{client_id: "c-crew", content: "in the crew's"})
+
+      assert {:ok, %{id: id, thread_id: thread_id}} = Threads.daily_message(ctx, "c-yesterday")
+      assert {id, thread_id} == {held.id, yesterday.id}
+      assert {:ok, %{thread_id: thread_id}} = Threads.daily_message(ctx, "c-today")
+      assert thread_id == today.id
+
+      # A child thread is no daily thread.
+      assert {:error, :not_found} = Threads.daily_message(ctx, "c-crew")
+      assert {:error, :not_found} = Threads.daily_message(ctx, "c-nothing")
+
+      # Another athanor finds none of it, even holding the same client id.
+      other = user_actor("local|idp|carol", "ath_b")
+      assert {:error, :not_found} = Threads.daily_message(other, "c-yesterday")
+      {:ok, theirs} = Days.thread(other)
+      post!(other, theirs, %{client_id: "c-today", content: "theirs"})
+      assert {:ok, %{thread_id: thread_id}} = Threads.daily_message(ctx, "c-today")
+      assert thread_id == today.id
+    end
+
+    test "held by two daily threads names no one message", %{ctx: ctx} do
+      {:ok, one} = Days.thread(ctx)
+      {:ok, two} = Days.thread(ctx)
+      post!(ctx, one, %{client_id: "c-twice", content: "a"})
+      post!(ctx, two, %{client_id: "c-twice", content: "b"})
+
+      assert {:error, :not_found} = Threads.daily_message(ctx, "c-twice")
+    end
+  end
+
+  test "messages append in seq order", %{ctx: ctx, bob: bob} do
+    {:ok, thread} = Days.thread(ctx)
 
     {:ok, m1} =
       Threads.append(ctx, thread.id, %{
@@ -91,12 +314,11 @@ defmodule Arca.ThreadStorageTest do
            ]
 
     {:ok, thread} = Threads.get(ctx, thread.id)
-    assert thread.title == "Plan my week"
     assert thread.last_message_at
   end
 
   test "a payload round-trips as JSON", %{ctx: ctx} do
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Days.thread(ctx)
 
     {:ok, msg} =
       Threads.append(ctx, thread.id, %{
@@ -112,7 +334,7 @@ defmodule Arca.ThreadStorageTest do
     ctx: ctx,
     bob: bob
   } do
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Days.thread(ctx)
 
     {:ok, apr} =
       Threads.append(ctx, thread.id, %{
@@ -169,7 +391,7 @@ defmodule Arca.ThreadStorageTest do
   end
 
   test "delete removes the messages and the attachment blobs too", %{ctx: ctx} do
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Days.thread(ctx)
 
     {:ok, msg} =
       Threads.append(ctx, thread.id, %{author: "aqua", sent_by: "aqua", content: "x"})
@@ -183,9 +405,21 @@ defmodule Arca.ThreadStorageTest do
     refute Arca.exists?(ctx, blob)
   end
 
+  test "a deleted daily thread frees its date: the next call makes the day anew", %{ctx: ctx} do
+    day = Days.next()
+    {:ok, gone} = Threads.daily(ctx, day)
+    post!(ctx, gone, %{content: "x"})
+    {:ok, %{cancelled: []}} = Threads.delete(ctx, gone.id)
+
+    assert {:ok, again} = Threads.daily(ctx, day)
+    refute again.id == gone.id
+    assert again.day == day
+    assert Threads.messages(ctx, again.id) == []
+  end
+
   test "delete commits the rows before the bytes: a failed blob delete leaves them to the sweep",
        %{ctx: ctx} do
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Days.thread(ctx)
 
     {:ok, msg} =
       Threads.append(ctx, thread.id, %{author: "aqua", sent_by: "aqua", content: "x"})
@@ -213,7 +447,7 @@ defmodule Arca.ThreadStorageTest do
   end
 
   test "sweep_orphaned_blobs/1 reclaims rowless dirs and keeps live ones", %{ctx: ctx} do
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Days.thread(ctx)
     live = Threads.blob_root(thread.id) ++ ["msg", "keep.txt"]
     :ok = Arca.put(ctx, live, "keep")
 
@@ -229,7 +463,7 @@ defmodule Arca.ThreadStorageTest do
   end
 
   test "messages/3 windows the thread by seq, and the turn cursor round-trips", %{ctx: ctx} do
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Days.thread(ctx)
 
     for n <- 1..4,
         do:
@@ -253,48 +487,17 @@ defmodule Arca.ThreadStorageTest do
     assert updated.turn_seq == 3 and updated.agent == "aqua"
   end
 
-  test "the reserved authors are the schema's, and neither titles a thread", %{ctx: ctx} do
+  test "the reserved authors are the schema's" do
     # Rows persist with these values, so the spelling is pinned as well as
     # the fact that every writer reads it from one place.
     assert Arca.Schemas.Message.agent_author() == "aqua"
     assert Arca.Schemas.Message.system_author() == "system"
-
-    {:ok, thread} = Threads.create(ctx)
-
-    for author <- [Arca.Schemas.Message.agent_author(), Arca.Schemas.Message.system_author()] do
-      {:ok, _} =
-        Threads.append(ctx, thread.id, %{
-          author: author,
-          sent_by: "aqua",
-          kind: "text",
-          content: "not a title"
-        })
-    end
-
-    {:ok, still} = Threads.get(ctx, thread.id)
-    refute still.title == "not a title"
-  end
-
-  test "the title drops a leading @mention but the row keeps the text as typed", %{ctx: ctx} do
-    {:ok, thread} = Threads.create(ctx)
-
-    {:ok, msg} =
-      Threads.append(ctx, thread.id, %{
-        author: "u",
-        sent_by: "person",
-        content: "@aqua what's the plan?"
-      })
-
-    assert msg.content == "@aqua what's the plan?"
-
-    assert {:ok, %{title: "what's the plan?"}} =
-             Threads.get(ctx, thread.id)
   end
 
   test "retention drops stale idle threads and keeps one holding an open turn", %{ctx: ctx} do
-    {:ok, stale} = Threads.create(ctx)
-    {:ok, running} = Threads.create(ctx)
-    {:ok, fresh} = Threads.create(ctx)
+    {:ok, stale} = Days.thread(ctx)
+    {:ok, running} = Days.thread(ctx)
+    {:ok, fresh} = Days.thread(ctx)
 
     {:ok, _} =
       Threads.append(ctx, fresh.id, %{author: "aqua", sent_by: "aqua", content: "recent"})
@@ -319,6 +522,7 @@ defmodule Arca.ThreadStorageTest do
       )
 
     cutoff = DateTime.add(DateTime.utc_now(), -365 * 86_400, :second)
+    assert {:ok, 1} = Threads.count_before(ctx, cutoff)
     assert {:ok, 1} = Threads.delete_before(ctx, cutoff)
 
     refute Arca.exists?(
@@ -330,9 +534,9 @@ defmodule Arca.ThreadStorageTest do
     assert ids == Enum.sort([running.id, fresh.id])
   end
 
-  test "a create over the athanor's thread cap is refused through the port, and commits nothing",
+  test "a new day over the athanor's thread cap is refused through the port and commits nothing, and a day it holds is answered",
        %{ctx: ctx} do
-    {:ok, _first} = Threads.create(ctx, %{title: "One"})
+    {:ok, first} = Days.thread(ctx)
     before = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
 
     Cyfr.Test.Settings.put("max_threads_per_athanor", 1)
@@ -340,30 +544,37 @@ defmodule Arca.ThreadStorageTest do
     # The refusal is the port's vocabulary (`Prima.Caps`), not the tenancy
     # domain named from below it, and the row it refused is not there.
     assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
-             Threads.create(ctx, %{title: "One too many"})
+             Threads.daily(ctx, Days.next())
+
+    assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
+             Threads.crew_thread(ctx, first.id, "planner")
 
     assert Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort() == before
 
+    # A day already made is no new thread: the cap does not stand in its way.
+    assert {:ok, %{id: id}} = Threads.daily(ctx, first.day)
+    assert id == first.id
+
     # Another athanor's count is its own.
     other = Prima.Actor.in_athanor("ath_b")
-    assert {:ok, _} = Threads.create(other, %{title: "Theirs"})
+    assert {:ok, _} = Threads.daily(other, Days.next())
   end
 end
 
 defmodule Arca.ThreadStorageRaceTest do
   @moduledoc """
-  Creates racing for an athanor's last thread places, on connections of
-  their own: inside the sandbox one shared connection would serialize
-  them. On PostgreSQL every create is held behind a transaction that locks
-  the athanor's row until each is seen waiting, so all of them race when
-  it is let go; SQLite's one write lock admits one transaction at a time,
-  so there they run as concurrent processes. The case works in an athanor
+  Callers racing for an athanor's daily threads, on connections of their
+  own: inside the sandbox one shared connection would serialize them. On
+  PostgreSQL every caller is held behind a transaction that holds a lock
+  it must pass until each is seen waiting, so all of them race when it is
+  let go; SQLite's one write lock admits one transaction at a time, so
+  there they run as concurrent processes. Each case works in an athanor
   of its own, whose rows it deletes when it ends.
 
   The ceiling is a stored setting, and a row written in a test's sandbox
-  transaction is invisible to the creates' own connections, so it is
+  transaction is invisible to the callers' own connections, so it is
   written outside the sandbox too, with the node's cached value dropped
-  so the creates read it, and deleted again when the case ends.
+  so the callers read it, and deleted again when the case ends.
   """
 
   use ExUnit.Case, async: false
@@ -381,10 +592,14 @@ defmodule Arca.ThreadStorageRaceTest do
 
   @key "max_threads_per_athanor"
   @cap 4
-  @creates 12
+  @callers 12
 
   setup do
-    athanor = "ath_threads_race_#{System.unique_integer([:positive])}"
+    n = System.unique_integer([:positive])
+    athanor = "ath_threads_race_#{n}"
+    # An athanor no row stands for: nothing to lock, so the index alone
+    # holds its days.
+    rowless = "ath_threads_race_rowless_#{n}"
 
     unboxed(fn ->
       Actor.ensure_athanor_row(athanor)
@@ -402,66 +617,108 @@ defmodule Arca.ThreadStorageRaceTest do
         {:ok, %{revision: revision}} = Store.all()
         {:ok, _} = Store.delete(@key, revision)
 
-        Arca.Repo.delete_all(from(t in Thread, where: t.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(t in Thread, where: t.athanor_id in ^[athanor, rowless]))
         Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor))
       end)
 
       Store.invalidate(@key)
     end)
 
-    {:ok, actor: Actor.local(athanor_id: athanor)}
+    {:ok, actor: Actor.local(athanor_id: athanor), rowless: Actor.local(athanor_id: rowless)}
   end
 
-  test "concurrent creates stop at the athanor's thread cap", %{actor: actor} do
+  test "concurrent new days stop at the athanor's thread cap", %{actor: actor} do
+    first = Arca.Test.Days.next()
+
+    answers =
+      race(fn i -> Threads.daily(actor, Date.add(first, i)) end, fn ->
+        lock_athanor_row(actor)
+        lock_thread_inserts()
+      end)
+
+    refused = {:error, {:limit_reached, :max_threads_per_athanor, @cap}}
+    assert Enum.count(answers, &match?({:ok, _}, &1)) == @cap
+    assert Enum.count(answers, &(&1 == refused)) == @callers - @cap
+    assert rows(actor) == @cap
+  end
+
+  test "concurrent callers of one day make one daily thread, and every one is answered it", %{
+    actor: actor
+  } do
+    day = Arca.Test.Days.next()
+
+    answers =
+      race(fn _i -> Threads.daily(actor, day) end, fn ->
+        lock_athanor_row(actor)
+        lock_thread_inserts()
+      end)
+
+    assert [{:ok, %{id: id, day: ^day}} | _] = answers
+    assert Enum.all?(answers, &match?({:ok, %{id: ^id}}, &1)), inspect(answers)
+    assert rows(actor) == 1
+  end
+
+  test "in an athanor with no row to lock, the callers that lose a day's index read the winner's",
+       %{rowless: actor} do
+    day = Arca.Test.Days.next()
+
+    # Each caller has looked for the day and found none before the holder
+    # lets its insert go, so on PostgreSQL every one but the first meets
+    # the index.
+    answers = race(fn _i -> Threads.daily(actor, day) end, &lock_thread_inserts/0, ["INSERT"])
+
+    assert [{:ok, %{id: id, day: ^day}} | _] = answers
+    assert Enum.all?(answers, &match?({:ok, %{id: ^id}}, &1)), inspect(answers)
+    assert rows(actor) == 1
+  end
+
+  # `@callers` calls of `call`, each on a connection of its own. On
+  # PostgreSQL they wait behind `hold`, taken first in a transaction of its
+  # own, until every caller is seen waiting on a lock in a statement
+  # holding `fragments`, and are let go together.
+  defp race(call, hold, fragments \\ []) do
     test = self()
 
-    create = fn i ->
+    start = fn i ->
       Task.async(fn ->
         unboxed(fn ->
           if postgres?(), do: send(test, {:backend, backend_pid()})
-          Threads.create(actor, %{title: "Race #{i}"})
+          call.(i)
         end)
       end)
     end
 
-    answers =
-      if postgres?() do
-        # The holder also holds the threads table against inserts, so a
-        # create that counted without waiting for the athanor's row still
-        # waits before its row lands: every create is held, whichever
-        # statement holds it, until all of them are.
-        holder =
-          holding(fn ->
-            from(a in Athanor, where: a.id == ^actor.athanor_id)
-            |> QueryHelpers.for_update()
-            |> Arca.Repo.one()
+    if postgres?() do
+      holder = holding(hold)
+      callers = for i <- 1..@callers, do: start.(i)
 
-            Arca.Repo.query!("LOCK TABLE threads IN SHARE MODE")
-          end)
-
-        creators = for i <- 1..@creates, do: create.(i)
-
-        for _ <- creators do
-          assert_receive {:backend, backend}, 15_000
-          LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
-        end
-
-        release(holder)
-        Enum.map(creators, &Task.await(&1, 30_000))
-      else
-        for(i <- 1..@creates, do: create.(i)) |> Enum.map(&Task.await(&1, 30_000))
+      for _ <- callers do
+        assert_receive {:backend, backend}, 15_000
+        LockWait.await_lock_wait!(backend, fragments, timeout_ms: 10_000)
       end
 
-    refused = {:error, {:limit_reached, :max_threads_per_athanor, @cap}}
-    assert Enum.count(answers, &match?({:ok, _}, &1)) == @cap
-    assert Enum.count(answers, &(&1 == refused)) == @creates - @cap
+      release(holder)
+      Enum.map(callers, &Task.await(&1, 30_000))
+    else
+      for(i <- 1..@callers, do: start.(i)) |> Enum.map(&Task.await(&1, 30_000))
+    end
+  end
 
-    assert unboxed(fn ->
-             Arca.Repo.aggregate(
-               from(t in Thread, where: t.athanor_id == ^actor.athanor_id),
-               :count
-             )
-           end) == @cap
+  defp lock_athanor_row(actor) do
+    from(a in Athanor, where: a.id == ^actor.athanor_id)
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
+
+  # Reads pass the table's SHARE lock and inserts wait on it, so a caller
+  # that counted or looked without waiting for the athanor's row still
+  # waits before its row lands.
+  defp lock_thread_inserts, do: Arca.Repo.query!("LOCK TABLE threads IN SHARE MODE")
+
+  defp rows(actor) do
+    unboxed(fn ->
+      Arca.Repo.aggregate(from(t in Thread, where: t.athanor_id == ^actor.athanor_id), :count)
+    end)
   end
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)

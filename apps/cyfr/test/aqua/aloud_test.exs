@@ -30,7 +30,7 @@ defmodule Aqua.AloudTest do
     alice = Cyfr.Test.ShareFixtures.person!("Alice")
     bob = Cyfr.Test.ShareFixtures.person!("Bob")
 
-    {:ok, private} = Threads.create(Sanctum.Context.actor(alice.ctx))
+    {:ok, private} = Arca.Test.Days.thread(Sanctum.Context.actor(alice.ctx))
     {:ok, trip} = SharedThreads.create(alice.user.id, "Trip")
     {:ok, :added} = SharedThreads.add(alice.user.id, trip.id, user_id: bob.user.id)
     {:ok, theirs} = SharedThreads.create(bob.user.id, "Theirs")
@@ -140,7 +140,7 @@ defmodule Aqua.AloudTest do
     bob: bob,
     trip: trip
   } do
-    {:ok, bobs} = Threads.create(Sanctum.Context.actor(bob.ctx))
+    {:ok, bobs} = Arca.Test.Days.thread(Sanctum.Context.actor(bob.ctx))
     line = said(bob.ctx, bobs, "bob's own")
 
     assert {:error, :not_a_member} =
@@ -190,7 +190,7 @@ defmodule Aqua.AloudTest do
     # spoke to its person, not to her, and a line under her name there is
     # still not carried out of an athanor that is not hers.
     %{athanor: other, actor: owner} = Arca.Test.Shares.owner!()
-    {:ok, thread} = Threads.create(owner)
+    {:ok, thread} = Arca.Test.Days.thread(owner)
 
     {:ok, answer} =
       Threads.append(owner, thread.id, %{

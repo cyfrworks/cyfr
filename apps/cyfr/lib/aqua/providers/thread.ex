@@ -24,9 +24,12 @@ defmodule Aqua.Providers.Thread do
   Every turn-shaped action here **wraps `Aqua.Runner`** — there
   is no second implementation of a turn, and no path that starts one
   without the runner's gates. The rest wrap the domain verbs the console
-  itself uses: `create`/`list` are `Arca.ThreadStorage` (how a
-  headless client gets an id at all), and `aloud` is
-  `Aqua.Aloud.post/4` with every rule decided there.
+  itself uses: `today` is `Aqua.Day.current/1`, the person's daily thread
+  of today, made when there is none (how a headless client gets an id at
+  all), `list` is `Arca.ThreadStorage`, and `aloud` is
+  `Aqua.Aloud.post/4` with every rule decided there. A `send` that names
+  no thread, or names a daily thread, joins the daily thread current when
+  it is accepted (`Aqua.Day`).
 
   It lives beside the runner because the assistant owns its providers,
   as every domain does. `Aqua.ToolSeamTest` keeps the other arrow
@@ -65,8 +68,8 @@ defmodule Aqua.Providers.Thread do
 
     * `threads.changes` is one person's list of threads, on their own
       topic, so its subject is the grant holder's own id, which the gate
-      binds: their athanor's own threads and the active shared threads
-      they sit in (`Aqua.ThreadList`).
+      binds: their athanor's daily and workspace threads and the active
+      shared threads they sit in (`Aqua.ThreadList`).
     * `activity.changes` is the athanor's crew at work, a job's start and
       end, and takes no subject (`Aqua.Crew.Activity`). It is declared
       here, beside the `crew` tool, as the assistant's one provider.
@@ -150,7 +153,10 @@ defmodule Aqua.Providers.Thread do
     normalized(%{
       "type" => "object",
       "fields" => %{
-        "kind" => %{"type" => "enum", "values" => ["own", "shared", "removed"]},
+        "kind" => %{
+          "type" => "enum",
+          "values" => Enum.map(Cyfr.Bus.ThreadListed.kinds(), &Atom.to_string/1)
+        },
         "id" => %{"type" => "string"},
         "title" => %{"type" => "string", "max" => 200, "nullable" => true},
         "people" => %{
@@ -202,11 +208,7 @@ defmodule Aqua.Providers.Thread do
     # through (the console included).
     Operation.tool(
       [
-        Operation.new(
-          "thread",
-          "create",
-          "Create thread",
-          [Arg.new("title", :string, description: "create: the thread's title")],
+        Operation.new("thread", "today", "Today's thread", [],
           kind: :write,
           planes: [:external],
           consent: :interactive
@@ -224,7 +226,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             )
           ],
           kind: :read,
@@ -238,8 +240,8 @@ defmodule Aqua.Providers.Thread do
           "Send thread",
           [
             Arg.new("thread", :string,
-              required: true,
-              description: "Thread id (all actions except create and list)"
+              description:
+                "send: a crew member's thread; with none, or a daily thread, the send joins today's daily thread"
             ),
             Arg.new("message", :string,
               required: true,
@@ -295,7 +297,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("message_id", :string,
               required: true,
@@ -329,7 +331,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("message_id", :string,
               required: true,
@@ -348,7 +350,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             )
           ],
           kind: :write,
@@ -362,7 +364,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("message_id", :string,
               required: true,
@@ -386,7 +388,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("message_id", :string,
               required: true,
@@ -411,7 +413,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("agent_name", :string,
               required: true,
@@ -425,6 +427,10 @@ defmodule Aqua.Providers.Thread do
             Arg.new("program", :string,
               description:
                 "revoke_grant: for an answer that is one program's, the program's row id; required for program.start"
+            ),
+            Arg.new("schedule", :string,
+              description:
+                "revoke_grant: for an answer that is one schedule's, the schedule's id; none for any other"
             )
           ],
           kind: :write,
@@ -438,7 +444,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("profile_id", :string,
               nullable: true,
@@ -460,7 +466,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("after_seq", :integer,
               description:
@@ -483,7 +489,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             ),
             Arg.new("message_ids", {:array, Arg.new(nil, :string)},
               required: true,
@@ -506,7 +512,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             )
           ],
           kind: :write,
@@ -520,7 +526,7 @@ defmodule Aqua.Providers.Thread do
           [
             Arg.new("thread", :string,
               required: true,
-              description: "Thread id (all actions except create and list)"
+              description: "Thread id (all actions except today and list)"
             )
           ],
           kind: :destructive,
@@ -529,7 +535,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in. A send in your own thread starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under yours and replies here; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -652,21 +658,17 @@ defmodule Aqua.Providers.Thread do
   # :interactive` declaration on every action, enforced by the registry
   # before the handler runs.
 
-  # `create` and `list` name no thread — they are how a headless
-  # client gets an id in the first place, which is what makes this the
-  # same surface the console has rather than one that assumes it.
-  defp dispatch(ctx, %{"action" => "create"} = args) do
-    attrs =
-      case args["title"] do
-        title when is_binary(title) and title != "" -> %{title: title}
-        _ -> %{}
-      end
+  # `today` and `list` name no thread — they are how a headless client
+  # gets an id in the first place, which is what makes this the same
+  # surface the console has rather than one that assumes it.
+  defp dispatch(ctx, %{"action" => "today"}) do
+    case Aqua.Day.current(ctx) do
+      {:ok, thread} ->
+        Aqua.ThreadList.changed(ctx, thread.id)
+        {:ok, render_thread(thread)}
 
-    actor = Sanctum.Context.actor(ctx)
-
-    with {:ok, thread} <- Arca.ThreadStorage.create(actor, attrs) do
-      Aqua.ThreadList.changed(actor, thread.id)
-      {:ok, render_thread(thread)}
+      {:error, reason} ->
+        {:error, refusal(reason, nil)}
     end
   end
 
@@ -680,6 +682,28 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
+  # A send joins the daily thread current when it is accepted: one that
+  # names no thread, or names a daily thread, of today or another day. Its
+  # files are stored under the thread they were attached to, so a send
+  # that carries files names that thread: a crew member's, or a daily
+  # thread that is still today's. One whose day has turned since is
+  # refused and leaves nothing behind: no row, no new day's thread, and
+  # none of the files this caller stored under the message, so a message
+  # never names files another thread holds.
+  defp dispatch(ctx, %{"action" => "send"} = args) do
+    case sends_to(ctx, args["thread"], args["attachments"] || []) do
+      {:ok, id} ->
+        act("send", ctx, id, args)
+
+      {:error, :day_turned} ->
+        _ = discard_files(ctx, args)
+        {:error, refusal(:day_turned, args["thread"])}
+
+      {:error, reason} ->
+        {:error, refusal(reason, args["thread"])}
+    end
+  end
+
   defp dispatch(ctx, %{"action" => action, "thread" => id} = args)
        when is_binary(id) and id != "" do
     act(action, ctx, id, args)
@@ -687,6 +711,37 @@ defmodule Aqua.Providers.Thread do
 
   defp dispatch(_ctx, _args),
     do: {:error, {:invalid_argument, "thread requires an 'action' and a 'thread'"}}
+
+  defp sends_to(ctx, id, files) when is_binary(id) and id != "" do
+    case Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id) do
+      {:ok, %{kind: "daily", day: day}} when files != [] ->
+        if day == Aqua.Day.today(ctx), do: {:ok, id}, else: {:error, :day_turned}
+
+      {:ok, %{kind: "daily"}} ->
+        today_id(ctx)
+
+      {:ok, %{id: id}} ->
+        {:ok, id}
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
+
+  defp sends_to(_ctx, _none, [_ | _]), do: {:error, :files_need_thread}
+  defp sends_to(ctx, _none, []), do: today_id(ctx)
+
+  # What this caller's own session stored under the refused message, and
+  # nothing anyone else stored (`Aqua.Attachments.discard_unsent/3`).
+  defp discard_files(ctx, %{"thread" => thread_id, "id" => message_id})
+       when is_binary(thread_id) and is_binary(message_id),
+       do: Aqua.Attachments.discard_unsent(ctx, thread_id, message_id)
+
+  defp discard_files(_ctx, _args), do: :ok
+
+  defp today_id(ctx) do
+    with {:ok, thread} <- Aqua.Day.current(ctx), do: {:ok, thread.id}
+  end
 
   # The whole send envelope: the text, a pre-minted id and the refs
   # attached under it, the agent and model, the sender's client id, and
@@ -715,7 +770,7 @@ defmodule Aqua.Providers.Thread do
         |> put_opt(:room, args["room"])
 
       case Runner.send_message(ctx, id, text, opts) do
-        {:ok, accepted} -> {:ok, Map.merge(accepted, waiting(ctx, id))}
+        {:ok, accepted} -> {:ok, accepted |> Map.merge(waiting(ctx, id)) |> Map.put(:thread, id)}
         {:error, reason} -> {:error, refusal(reason, id)}
       end
     end
@@ -772,7 +827,9 @@ defmodule Aqua.Providers.Thread do
          %{"agent_name" => agent, "tool" => tool, "tool_action" => action} = args
        )
        when is_binary(agent) and is_binary(tool) and is_binary(action) do
-    case Runner.revoke_grant(ctx, id, agent, tool, action, args["program"]) do
+    key = %{program: args["program"], schedule: args["schedule"]}
+
+    case Runner.revoke_grant(ctx, id, agent, tool, action, key) do
       :ok -> {:ok, %{revoked: true, agent: agent, tool: tool, action: action}}
       {:error, reason} -> {:error, refusal(reason, id)}
     end
@@ -1039,6 +1096,14 @@ defmodule Aqua.Providers.Thread do
 
   defp translate(:empty, _id), do: {:invalid_argument, "send requires a non-empty 'message'"}
 
+  defp translate(:day_turned, _id),
+    do:
+      {:conflict,
+       "The day has turned since these files were attached. Attach them again and send."}
+
+  defp translate(:files_need_thread, _id),
+    do: {:invalid_argument, "A send with files names the thread they were attached to."}
+
   defp translate(:unavailable, _id), do: {:unavailable, "Threads"}
   defp translate(:database_error, _id), do: {:unavailable, "Storage"}
 
@@ -1115,6 +1180,7 @@ defmodule Aqua.Providers.Thread do
       id: thread.id,
       title: thread.title,
       kind: thread.kind,
+      day: thread.day,
       parent_id: thread.parent_id,
       agent: if(thread.kind == "crew", do: thread.agent),
       archived_at: thread.archived_at,

@@ -78,7 +78,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     own = Sanctum.Test.People.athanor!(user)
     ctx = %{Sanctum.TestContext.local() | user_id: user.id, athanor_id: own.id}
-    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =

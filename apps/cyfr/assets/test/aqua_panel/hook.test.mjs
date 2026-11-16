@@ -102,7 +102,7 @@ describe("on the desk", () => {
 
   test("a press on a header control is not a drag", () => {
     const p = panel({x: "100", y: "100", w: "400", h: "500"})
-    gesture(p, target("[data-aqua-grip]", "select"), [200, 120], [260, 150])
+    gesture(p, target("[data-aqua-grip]", "button"), [200, 120], [260, 150])
     assert.deepEqual(p.drawn(), {x: 100, y: 100, w: 400, h: 500})
     assert.deepEqual(p.pushed, [])
   })

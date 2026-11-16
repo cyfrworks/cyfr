@@ -29,7 +29,8 @@ defmodule Sanctum.ToolGrants do
     * a destructive or external action, or one whose kind is unknown,
       takes no standing allow;
     * `standing: false` takes none at all, and `standing: :thread` none
-      at agent scope;
+      at agent scope but one that ends with a schedule, which covers that
+      schedule's runs alone in whatever thread they run;
     * an allow may carry bounds: the lifecycle it ends with (an
       execution, a turn or a schedule, and that row's id), a deadline
       still to come, and a constraint, a resource kind and its patterns,
@@ -339,7 +340,7 @@ defmodule Sanctum.ToolGrants do
     with :ok <- known_scope(scope),
          {:ok, declaration} <- declaration(tool, action),
          :ok <- standing_kind(declaration.kind),
-         :ok <- declared_standing(declaration.standing, scope),
+         :ok <- declared_standing(declaration.standing, scope, attrs),
          :ok <- lifecycle(attrs),
          :ok <- deadline(attrs, now),
          :ok <- constraint(attrs, declaration.resource),
@@ -368,12 +369,20 @@ defmodule Sanctum.ToolGrants do
   defp standing_kind(kind) when kind in @standing_kinds, do: :ok
   defp standing_kind(_kind), do: refuse(:unknown_kind)
 
-  # `false` takes no standing allow, `:thread` none at agent scope, and no
-  # declaration either scope; any other value is read as the narrowest.
-  defp declared_standing(nil, _scope), do: :ok
-  defp declared_standing(:thread, "thread"), do: :ok
-  defp declared_standing(:thread, _scope), do: refuse(:thread_only)
-  defp declared_standing(_standing, _scope), do: refuse(:never_standing)
+  # `false` takes no standing allow, `:thread` none at agent scope but one
+  # that ends with a schedule, and no declaration either scope; any other
+  # value is read as the narrowest. A schedule's answer reaches across
+  # threads for that schedule's runs and no further: the lifecycle check
+  # holds a call to the schedule that started its execution.
+  defp declared_standing(nil, _scope, _attrs), do: :ok
+  defp declared_standing(:thread, "thread", _attrs), do: :ok
+
+  defp declared_standing(:thread, "agent", %{lifecycle_kind: "schedule", lifecycle_id: id})
+       when is_binary(id) and id != "",
+       do: :ok
+
+  defp declared_standing(:thread, _scope, _attrs), do: refuse(:thread_only)
+  defp declared_standing(_standing, _scope, _attrs), do: refuse(:never_standing)
 
   # A lifecycle names its kind and the row it ends with, together.
   defp lifecycle(attrs) do
@@ -608,7 +617,10 @@ defmodule Sanctum.ToolGrants do
         # The program row the answer is one program's, `""` for any other
         # (`Arca.Schemas.ToolGrant.key_row/1`): a decision's from its
         # constraint, a key's as it names it.
-        program_row: Arca.ToolGrantStorage.key_row(attrs)
+        program_row: Arca.ToolGrantStorage.key_row(attrs),
+        # The schedule the answer ends with, `""` for any other: a
+        # decision's from its lifecycle, a key's as it names it.
+        schedule_id: Arca.ToolGrantStorage.key_schedule(attrs)
       }
 
       case kind do

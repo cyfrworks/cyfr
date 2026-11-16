@@ -5,9 +5,10 @@ defmodule PrismWeb.AquaApprovalCardTest do
   # The card offers only the standing answers the action's own declaration
   # would accept — the same rule the runner and the grant store enforce —
   # so a visible button is never a button that can only fail: once, for
-  # this run, for this thread until a time, always, for this schedule only
-  # in a schedule's own thread, and a limit to the paths the call names
-  # only for an action that declares which argument names one.
+  # this run, for this thread until a time, always, for a schedule only
+  # with one of the person's schedules to name, and a limit to the paths
+  # the call names only for an action that declares which argument names
+  # one.
   use ExUnit.Case, async: true
 
   import Phoenix.LiveViewTest
@@ -123,6 +124,77 @@ defmodule PrismWeb.AquaApprovalCardTest do
                  }
                })
              )
+  end
+
+  @schedules [%{id: "sch_morning", name: "Morning brief"}, %{id: "sch_evening", name: "Evening"}]
+
+  test "for a schedule is offered with a schedule to name, one choice for each, and never without one" do
+    html = card(%{"action_kind" => "write"}, schedules: @schedules)
+    assert %{schedule: true, always: true} = offers(html)
+
+    choices =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="approval-for-schedule"] button))
+
+    assert Enum.map(choices, &String.trim(LazyHTML.text(&1))) == ["Morning brief", "Evening"]
+
+    for {choice, id} <- Enum.zip(choices, ["sch_morning", "sch_evening"]) do
+      assert LazyHTML.attribute(choice, "phx-value-scope") == ["always"]
+      assert LazyHTML.attribute(choice, "phx-value-lifecycle") == ["schedule"]
+      assert LazyHTML.attribute(choice, "phx-value-schedule") == [id]
+    end
+
+    assert %{schedule: false} = offers(card(%{"action_kind" => "write"}, schedules: []))
+  end
+
+  test "for a schedule follows the rule of an answer for one thread: offered where that is, refused where it is not" do
+    assert %{schedule: true, always: false} =
+             offers(
+               card(%{"action_kind" => "write", "standing" => "thread"}, schedules: @schedules)
+             )
+
+    for intent <- [
+          %{"action_kind" => "write", "standing" => false},
+          %{"action_kind" => "destructive"},
+          %{"action_kind" => "external"}
+        ] do
+      assert %{schedule: false} = offers(card(intent, schedules: @schedules)), inspect(intent)
+    end
+  end
+
+  test "a launch's card never offers an answer for a schedule" do
+    launch = %{
+      "action_kind" => "execute",
+      "standing" => false,
+      "proposal" => %{
+        "tool" => "execution",
+        "action" => "run",
+        "args" => %{"reference" => "reagent:local.mailer:1.0.0", "input" => %{}}
+      }
+    }
+
+    html = card(launch, schedules: @schedules)
+    assert %{once: true, schedule: false} = offers(html)
+    refute html =~ "Morning brief"
+  end
+
+  test "a decided answer for a schedule names the schedule, or says a schedule once it is gone" do
+    decided = fn schedules ->
+      card(%{"action_kind" => "write"},
+        status: "approved",
+        scope: :always,
+        schedules: schedules,
+        bounds: %{"lifecycle" => "schedule", "schedule" => "sch_evening"}
+      )
+    end
+
+    html = decided.(@schedules)
+    assert html =~ "for the runs of Evening, until it is deleted"
+    refute html =~ "won't ask again"
+    refute html =~ "ending with its schedule"
+
+    assert decided.([]) =~ "for the runs of a schedule, until it is deleted"
   end
 
   test "a decided standing answer says what it ends with" do

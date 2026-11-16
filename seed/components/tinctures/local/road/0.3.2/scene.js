@@ -30,7 +30,7 @@ window.RoadScene = function () {
   const schedules = () => R.values(S.schedules).sort((a, b) => (a.next ?? Infinity) - (b.next ?? Infinity));
   const sched = (id) => { const h = S.schedules.get(id); return h ? h.value : null; };
   const run = (id) => { const h = id && S.runs.get(id); return h ? h.value : null; };
-  const threads = () => R.values(S.threads).sort((a, b) => (b.waits - a.waits) || (b.last ?? 0) - (a.last ?? 0));
+  const threads = () => R.threads().sort((a, b) => (b.waits - a.waits) || (b.last ?? 0) - (a.last ?? 0));
   const jobs = () => R.values(S.activity).sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
   const vault = () => R.values(S.vault).sort((a, b) => a.fine - b.fine || a.name.localeCompare(b.name));
   const sys = () => R.values(S.system)[0] || null;
@@ -373,8 +373,8 @@ window.RoadScene = function () {
         rows: list.map((a) => ({ text: attLabel(a), sub: a.untimed ? 'now' : when(a.since), dot: lookOf(a.kind).bc, run: () => openCard('att:' + a.id) })), choices: [] };
     }
     if (kind === 'threads') return { title: 'Threads', portrait: 'post', lines: S.threads.size ? [] : ['No threads yet.'],
-      rows: threads().map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.own ? 'with Aqua' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
-        run: () => (t.own ? settings('aqua', 'Aqua', t.id) : settings('chat', 'the chat', t.id)) })), choices: [ask('threads')] };
+      rows: threads().map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.aqua ? 'with Aqua' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
+        run: () => (t.aqua ? settings('aqua', 'Aqua', t.id) : settings('chat', 'the chat', t.id)) })), choices: [ask('threads')] };
     if (kind === 'crew') {
       const list = jobs(), s = sys();
       return { title: 'Crew', portrait: 'crew', lines: [...(list.length ? list.map((j) => j.member + ' is at work' + (j.title ? ': ' + j.title : '') + (j.askedBy ? ', asked by ' + j.askedBy : '') + ', since ' + when(j.since) + (j.status ? ' (' + j.status + ')' : '') + '.') : ['Nobody is out on a job.']),
@@ -659,7 +659,7 @@ window.RoadScene = function () {
   function buildingState(id, T, ts) {
     const blink = Math.floor(ts * 2) % 2 === 0;
     if (id === 'house') return { name: fit(S.person || 'your place', 54) };
-    if (id === 'post') return { threads: threads().map((t) => { const then = t.last == null || t.last <= T; return { kind: t.own ? 'own' : 'shared', unread: then ? t.unread : 0, people: t.people, waits_on_you: t.waits && then }; }) };
+    if (id === 'post') return { threads: threads().map((t) => { const then = t.last == null || t.last <= T; return { kind: t.aqua ? 'aqua' : 'shared', unread: then ? t.unread : 0, people: t.people, waits_on_you: t.waits && then }; }) };
     if (id === 'crew') { const n = jobs().filter((j) => j.since == null || j.since <= T).length, s = sys(); return { out: n > 0, ready: s ? s.ready || 0 : 0, total: s ? s.total || 0 : 0 }; }
     if (id === 'market') return { apps: S.installed.map((a) => { const c = R.component(a.ref); return { letter: (Array.from(a.name)[0] || '?').toUpperCase(), open: a.open, update: !!(c && c.update) }; }) };
     if (id === 'silo') { const s = sys() || {}; return { used: s.used || 0, cap: s.cap || 0, model: !!s.model, update: !!s.update }; }
@@ -1232,7 +1232,7 @@ window.RoadScene = function () {
     const list = attention();
     if (on('attention')) add('queue', 'house', list.length + ' waiting at your house' + noteOf('attention') + '. Open the list.');
     else add('queue', 'house', 'Your house');
-    if (on('threads')) add('threads', 'post', 'Post boxes: ' + S.threads.size + (S.threads.size === 1 ? ' thread, ' : ' threads, ') + threads().filter((t) => t.waits).length + ' waiting on you, ' + threads().reduce((n, t) => n + t.unread, 0) + ' unread' + noteOf('threads'));
+    if (on('threads')) add('threads', 'post', 'Post boxes: ' + threads().length + (threads().length === 1 ? ' thread, ' : ' threads, ') + threads().filter((t) => t.waits).length + ' waiting on you, ' + threads().reduce((n, t) => n + t.unread, 0) + ' unread' + noteOf('threads'));
     if (on('activity')) { const s = sys(); add('crew', 'crew', 'Crew house: ' + S.activity.size + ' at work' + (s && s.total != null ? ', ' + (s.ready ?? 0) + ' of ' + s.total + ' ready' : '') + noteOf('activity')); }
     if (on('components')) { const ups = S.installed.filter((a) => { const c = R.component(a.ref); return c && c.update; }).length; add('market', 'market', 'Market: ' + S.installed.length + ' apps' + (ups ? ', ' + ups + ' with an update' : '') + noteOf('components')); }
     if (on('schedules')) { const nt = noteOf('schedules'); add('tower', 'tower', 'Bell tower: ' + S.schedules.size + (S.schedules.size === 1 ? ' schedule' : ' schedules') + nt); add('press', 'press', 'Press: runs that failed' + nt); add('barn', 'barn', 'Barn: paused schedules' + nt); }

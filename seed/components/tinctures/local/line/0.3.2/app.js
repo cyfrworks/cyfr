@@ -166,6 +166,23 @@
   const human = (key) => capital(String(key).replace(/[_-]+/g, " "));
   const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
 
+  // A daily thread (one a day) and a workspace thread are Aqua's; a shared
+  // thread is people's.
+  const isAqua = (t) => t.kind === "daily" || t.kind === "workspace";
+  // A day by its ISO date, a daily thread's title or a waiting item's `day`:
+  // "Today" or "Yesterday" in the person's zone, else the date.
+  function dayName(s) {
+    const day = Date.parse(s);
+    if (Number.isNaN(day)) return s;
+    const ago = Math.round((Date.parse(parts(new Date()).day) - day) / 86400000);
+    if (ago === 0) return "Today";
+    if (ago === 1) return "Yesterday";
+    return new Intl.DateTimeFormat(zone().locale, { timeZone: "UTC", day: "numeric", month: "short" }).format(day);
+  }
+  function threadTitle(t) {
+    return (t.kind === "daily" ? dayName(text(t.title)) : text(t.title)) || "Untitled";
+  }
+
   // "formula:local.digest:1.0.0" without its version.
   function componentRef(reference) {
     const p = String(reference).split(":");
@@ -231,6 +248,13 @@
   const held = (name) => BY[name].items;
   const items = (name) => [...BY[name].items.values()];
   const one = (name) => items(name)[0] || null;
+  // The threads listed: the newest daily thread stands for Aqua's days, the
+  // earlier ones a step back in Aqua's panel.
+  function listedThreads() {
+    const all = items("threads.changes");
+    const newest = all.reduce((n, t) => (t.kind === "daily" && (!n || text(t.title) > text(n.title)) ? t : n), null);
+    return all.filter((t) => t.kind !== "daily" || t === newest);
+  }
   // A feed's latest result: one binding in practice, the newest if more.
   const feed = (name) => items(`feed.results:${name}`).sort((a, b) => (date(b.at) || 0) - (date(a.at) || 0))[0] || null;
 
@@ -449,9 +473,11 @@
     return offer ? text(offer.from) : "";
   }
   const PAGE_ACT = { aqua: "Open in Aqua", chat: "Open chat", executions: "Open runs", schedules: "Open schedules", files: "Open files" };
+  // An item that carries a `day` (an approval in a daily thread) is named by
+  // that day; any other by its label as given.
   function about(a) {
     if (a.kind === "failed_run") return itemRun(a) ? runName(itemRun(a)) : refName(text(a.id));
-    return text(a.label) || { approval: "An approval", confirmation: "A confirmation", file_offer: "A file", failed_schedule: "A schedule" }[a.kind] || "Something";
+    return (typeof a.day === "string" ? dayName(a.day) : text(a.label)) || { approval: "An approval", confirmation: "A confirmation", file_offer: "A file", failed_schedule: "A schedule" }[a.kind] || "Something";
   }
   function settledWhat(kind, outcome) {
     if (outcome === "expired") return "Its time ran out";
@@ -527,7 +553,7 @@
       return { meta, body, kept: "Updates" };
     },
     threads() {
-      const all = items("threads.changes")
+      const all = listedThreads()
         .sort((a, b) => (date(b.last_activity) || 0) - (date(a.last_activity) || 0));
       const list = all.slice(0, 4);
       return {
@@ -535,14 +561,14 @@
         tools: `<button class="btn sm" data-act="page" data-page="chat" data-key="all-threads">All threads</button>`,
         body: list.length === 0 ? `<p class="empty">No threads yet.</p>` : `<ul class="rows">${list.map((t) => {
           const people = Array.isArray(t.people) ? t.people.length : 0;
-          const shared = t.kind === "shared";
-          const who = shared ? `${people} ${plural(people, "person", "people")}` : "With Aqua";
+          const aqua = isAqua(t);
+          const who = aqua ? "With Aqua" : `${people} ${plural(people, "person", "people")}`;
           const unread = count(t.unread);
           const flag = t.waits_on_you === true ? ` · <span class="mark">waits on you</span>`
             : unread ? ` · <b class="unread">${unread} unread</b>` : "";
-          // A shared thread is in the chat; an own thread is Aqua's.
-          return `<li class="row"><button class="row-btn" data-act="page" data-page="${shared ? "chat" : "aqua"}" data-ref="${esc(text(t.id))}" data-key="th-${esc(t.id)}">
-            <span class="row-t">${esc(text(t.title) || "Untitled")}</span><span class="row-s">${who}${flag}</span></button>
+          // Aqua's thread opens in its panel; a shared thread in the chat.
+          return `<li class="row"><button class="row-btn" data-act="page" data-page="${aqua ? "aqua" : "chat"}" data-ref="${esc(text(t.id))}" data-key="th-${esc(t.id)}">
+            <span class="row-t">${esc(threadTitle(t))}</span><span class="row-s">${who}${flag}</span></button>
             <span class="row-r num">${esc(when(t.last_activity))}</span></li>`;
         }).join("")}</ul>`,
       };
@@ -946,8 +972,8 @@
     if (!b || !sdk || b.getAttribute("aria-disabled") === "true") return;
     const { act, id } = b.dataset;
     switch (act) {
-      // A page at its record when the control names one: Aqua's panel at an
-      // own thread, the chat at a shared one, a Dashboard page at its top.
+      // A page at its record when the control names one: Aqua's panel at a
+      // thread of Aqua's, the chat at a shared one, a Dashboard page at its top.
       case "page": return b.dataset.ref ? sdk.settings(b.dataset.page, b.dataset.ref) : sdk.settings(b.dataset.page);
       case "grant": return sdk.grant(b.dataset.ref);
       case "open": return sdk.open(b.dataset.ref);

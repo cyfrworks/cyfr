@@ -60,7 +60,7 @@ defmodule Aqua.TurnSourcesTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     ScriptedWorker.fresh_limits!(ctx, [@model, @http, @files])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     {:ok, conn: conn, ctx: ctx, own: own, thread: thread, host: Source.outside("news.example")}
   end
 
@@ -294,7 +294,7 @@ defmodule Aqua.TurnSourcesTest do
 
       # Another thread shares no history: only the note's provenance can
       # bring the host into its turn.
-      {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(ctx))
+      {:ok, elsewhere} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
       later = accept!(ctx, elsewhere, "@aqua what was the plan?")
 
       script!([

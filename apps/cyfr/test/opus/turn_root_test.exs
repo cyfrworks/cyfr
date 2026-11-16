@@ -52,7 +52,7 @@ defmodule Opus.TurnRootTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
 
-    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{

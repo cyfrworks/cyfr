@@ -96,7 +96,9 @@ defmodule Aqua.AttachmentWriteRaceTest do
         |> Map.put(:session_token_hash, :crypto.hash(:sha256, session <> person.id))
       end
 
-    {:ok, thread} = Arca.ThreadStorage.create(Context.actor(a))
+    # Today's thread: a send carries its files only into the day they were
+    # attached on.
+    {:ok, thread} = Aqua.Day.current(a)
     {:ok, a: a, b: b, thread: thread}
   end
 

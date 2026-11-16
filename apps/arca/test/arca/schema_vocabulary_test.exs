@@ -97,7 +97,7 @@ defmodule Arca.SchemaVocabularyTest do
       assert Arca.Schemas.Profile.statuses() == Arca.StatusTransitions.statuses(:profiles)
     end
 
-    test "a message's status takes answered, and a thread's kind is its own or a crew member's" do
+    test "a message's status takes answered, and a thread's kind holds its own fields alone" do
       message = %{
         id: "msg_vocab",
         thread_id: "thread_vocab",
@@ -135,6 +135,7 @@ defmodule Arca.SchemaVocabularyTest do
         created_by: "user_vocab",
         kind: "crew",
         parent_id: "thread_room",
+        title: "planner",
         brain_session: "session"
       }
 
@@ -145,6 +146,29 @@ defmodule Arca.SchemaVocabularyTest do
                Ecto.Changeset.apply_changes(changeset)
 
       refute Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, %{thread | kind: "bogus"}).valid?
+
+      daily = %{thread | kind: "daily", parent_id: nil} |> Map.put(:day, ~D[2026-11-16])
+
+      workspace =
+        %{thread | kind: "workspace", parent_id: nil} |> Map.put(:workspace_state, "open")
+
+      for row <- [daily, Map.put(workspace, :opened_from, "msg_asked")] do
+        assert Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, row).valid?
+      end
+
+      # Each kind's own fields, on it and on no other kind.
+      for row <- [
+            Map.delete(daily, :day),
+            Map.put(daily, :workspace_state, "open"),
+            Map.put(daily, :opened_from, "msg_asked"),
+            Map.put(daily, :parent_id, "thread_room"),
+            Map.delete(workspace, :workspace_state),
+            %{workspace | workspace_state: "bogus"},
+            Map.put(thread, :day, ~D[2026-11-16]),
+            %{thread | parent_id: nil}
+          ] do
+        refute Arca.Schemas.Thread.changeset(%Arca.Schemas.Thread{}, row).valid?, inspect(row)
+      end
     end
   end
 
@@ -247,16 +271,49 @@ defmodule Arca.SchemaVocabularyTest do
       refused!("mcp_servers", mcp_server(ctx, %{home: "bogus"}), "mcp_servers_home_known")
     end
 
-    test "lands every thread kind, own by default, and refuses any other", ctx do
-      for kind <- ~w(own crew) do
-        assert {1, _} = insert!("threads", thread(ctx, %{kind: kind}))
+    test "lands every thread kind with its own fields, and refuses any other", ctx do
+      room = thread(ctx, %{})
+
+      for row <- [
+            room,
+            thread(ctx, %{kind: "workspace", day: nil, workspace_state: "needs_you"}),
+            thread(ctx, %{kind: "crew", day: nil, parent_id: room.id})
+          ] do
+        assert {1, _} = insert!("threads", row)
+        assert column!("threads", "kind", row.id) == row.kind
       end
 
-      row = thread(ctx, %{})
-      assert {1, _} = insert!("threads", row)
-      assert column!("threads", "kind", row.id) == "own"
-
       refused!("threads", thread(ctx, %{kind: "bogus"}), "threads_kind_known")
+
+      refused!(
+        "threads",
+        thread(ctx, %{kind: "workspace", day: nil, workspace_state: "bogus"}),
+        "threads_workspace_state_known"
+      )
+
+      for row <- [
+            thread(ctx, %{day: nil}),
+            thread(ctx, %{workspace_state: "open"}),
+            thread(ctx, %{opened_from: "msg_asked"}),
+            thread(ctx, %{parent_id: room.id}),
+            thread(ctx, %{kind: "workspace", day: nil}),
+            thread(ctx, %{kind: "crew"}),
+            thread(ctx, %{kind: "crew", day: nil})
+          ] do
+        refused!("threads", row, "threads_kind_whole")
+      end
+
+      refused!("threads", thread(ctx, %{read_seq: -1}), "threads_read_seq_counted")
+    end
+
+    test "holds an athanor to one daily thread per date", ctx do
+      first = thread(ctx, %{})
+      assert {1, _} = insert!("threads", first)
+
+      refused!("threads", thread(ctx, %{day: first.day}), [
+        "threads_athanor_id_day_index",
+        "UNIQUE"
+      ])
     end
 
     test "lands every message outcome and NULL, and refuses any other", ctx do
@@ -674,11 +731,15 @@ defmodule Arca.SchemaVocabularyTest do
     }
   end
 
+  # A daily thread of a date of its own unless `attrs` says otherwise.
   defp thread(%{athanor: athanor}, attrs) do
     Map.merge(
       %{
         id: id("thread"),
         athanor_id: athanor,
+        kind: "daily",
+        day: Arca.Test.Days.next(),
+        title: "a day",
         created_by: "user_vocab",
         inserted_at: now(),
         updated_at: now()

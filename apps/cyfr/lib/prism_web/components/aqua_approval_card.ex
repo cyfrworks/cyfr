@@ -23,11 +23,12 @@ defmodule PrismWeb.AquaApprovalCard do
       the click (`:thread`, `until` computed here in UTC);
     - always — a standing allow for the agent wherever it works (an
       agent-scope row in its home athanor);
-    - for this schedule, in a schedule's own thread — a standing allow
-      for the same `tool.action` in this thread, ending with the schedule
-      whose thread it is (`:thread`, lifecycle `:schedule`), offered only
-      there (`schedule_thread`); that schedule's next fires run in this
-      thread and are allowed it, nothing else is;
+    - for a schedule — a standing allow for the agent that covers the
+      runs of the one schedule the person picks among the card's
+      `schedules` (their schedules of Aqua's, `Aqua.answer_schedules/1`)
+      and ends with it (`:always`, lifecycle `:schedule`, `schedule` its
+      id); offered only with a schedule to name and where
+      `Aqua.standing_offered?/2` offers it, so never on a launch's card;
     - limit to these paths — for an action that declares which argument
       names a storage path (`Sanctum.Catalog.action_declaration/1`), a
       standing choice may carry the path the call names, in the storage
@@ -316,18 +317,26 @@ defmodule PrismWeb.AquaApprovalCard do
                   {text}
                 </button>
               </span>
-              <button
-                :if={@schedule_thread}
-                type="button"
-                phx-click="approval:approve"
-                phx-value-scope="thread"
-                phx-value-lifecycle="schedule"
-                phx-target={@myself}
+              <span
+                :if={@schedules != [] and Aqua.standing_offered?(@payload, :schedule)}
+                class="inline-flex flex-wrap items-center gap-1"
                 data-test="approval-for-schedule"
-                class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
               >
-                for this schedule
-              </button>
+                for a schedule:
+                <button
+                  :for={schedule <- @schedules}
+                  type="button"
+                  phx-click="approval:approve"
+                  phx-value-scope="always"
+                  phx-value-lifecycle="schedule"
+                  phx-value-schedule={schedule.id}
+                  phx-target={@myself}
+                  title={"Allow this whenever #{schedule.name} runs, until it is deleted"}
+                  class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
+                >
+                  {schedule.name}
+                </button>
+              </span>
               <button
                 :if={Aqua.standing_offered?(@payload, :always)}
                 type="button"
@@ -373,7 +382,7 @@ defmodule PrismWeb.AquaApprovalCard do
               — standing for this chat{bounds_label(@bounds)}
             </span>
             <span :if={@scope == :always} class="text-gray-500">
-              — won't ask again{bounds_label(@bounds)}
+              {always_label(@bounds, @schedules)}
             </span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
             <span :if={@result_summary} class="text-gray-400 ml-2 truncate">— {@result_summary}</span>
@@ -417,7 +426,7 @@ defmodule PrismWeb.AquaApprovalCard do
       |> assign_new(:bounds, fn -> %{} end)
       |> assign_new(:resolved_by, fn -> nil end)
       |> assign_new(:decided_at, fn -> nil end)
-      |> assign_new(:schedule_thread, fn -> false end)
+      |> assign_new(:schedules, fn -> [] end)
       |> assign_new(:limited, fn -> false end)
       |> assign_new(:follows, fn -> false end)
       |> assign(:deadlines, @deadlines)
@@ -540,18 +549,15 @@ defmodule PrismWeb.AquaApprovalCard do
   end
 
   # The choice an offer stands for: once; this thread, ending with the
-  # card's own run, at a deadline computed here, in UTC, or with the
-  # schedule whose thread it is; or the agent
-  # everywhere. A standing
-  # choice carries the paths it is limited to when the person ticked it.
-  # An offer the card does not make chooses nothing.
+  # card's own run or at a deadline computed here, in UTC; the agent
+  # everywhere; or the agent for one of the card's schedules, ending with
+  # it. A standing choice carries the paths it is limited to when the
+  # person ticked it. An offer the card does not make, a schedule among
+  # them, chooses nothing.
   defp choice("once", _params, _assigns), do: {:ok, %{scope: :once}}
 
   defp choice("thread", %{"lifecycle" => "execution"}, assigns),
     do: {:ok, limited(%{scope: :thread, lifecycle: :execution}, assigns)}
-
-  defp choice("thread", %{"lifecycle" => "schedule"}, %{schedule_thread: true} = assigns),
-    do: {:ok, limited(%{scope: :thread, lifecycle: :schedule}, assigns)}
 
   defp choice("thread", %{"hours" => hours}, assigns) do
     case List.keyfind(@deadlines, hours, 0) do
@@ -566,6 +572,13 @@ defmodule PrismWeb.AquaApprovalCard do
 
   defp choice("always", params, assigns) when not is_map_key(params, "lifecycle"),
     do: {:ok, limited(%{scope: :always}, assigns)}
+
+  defp choice("always", %{"lifecycle" => "schedule", "schedule" => id}, assigns) do
+    if Aqua.standing_offered?(assigns.payload, :schedule) and
+         Enum.any?(assigns.schedules, &(&1.id == id)),
+       do: {:ok, limited(%{scope: :always, lifecycle: :schedule, schedule: id}, assigns)},
+       else: :error
+  end
 
   defp choice(_scope, _params, _assigns), do: :error
 
@@ -673,6 +686,22 @@ defmodule PrismWeb.AquaApprovalCard do
   end
 
   defp bounds_label(_bounds), do: ""
+
+  # What a decided agent-wide answer stands for: everywhere, or the runs
+  # of the schedule it ends with, by the name the card's schedules hold
+  # for it.
+  defp always_label(%{"schedule" => id} = bounds, schedules) when is_binary(id) do
+    name =
+      case Enum.find(schedules, &(&1.id == id)) do
+        %{name: name} -> name
+        nil -> "a schedule"
+      end
+
+    "— for the runs of #{name}, until it is deleted" <>
+      bounds_label(Map.delete(bounds, "lifecycle"))
+  end
+
+  defp always_label(bounds, _schedules), do: "— won't ask again" <> bounds_label(bounds)
 
   defp followed(sources),
     do:

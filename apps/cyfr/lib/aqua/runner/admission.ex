@@ -11,8 +11,9 @@ defmodule Aqua.Runner.Admission do
   ## Who may post where
 
   Every message carries `sent_by` (`"person"` or an agent name) and an
-  addressee. The thread is the person's own (`kind: "own"`, a room) or a
-  crew member's child thread (`kind: "crew"`, its `agent` the member):
+  addressee. The thread is a room of the person's, a daily or a workspace
+  thread (`kind: "daily"` or `"workspace"`), or a crew member's child
+  thread (`kind: "crew"`, its `agent` the member):
 
     * A person's message in a room addresses the soul, or the crew
       member it names (an `@name`, else an explicit pick): the soul's is
@@ -27,10 +28,10 @@ defmodule Aqua.Runner.Admission do
       that asked it: its reply lands on the request's thread, addressed
       to the request's sender, and opens the soul's turn when that sender
       is the soul, or is room content when it is the person.
-    * A schedule's line (`:schedule`) is a turn of the soul in the
-      person's own thread, sent as the person under the `schedule`
-      origin, whatever names its text holds: a line with nobody present
-      asks no crew member.
+    * A schedule's line (`:schedule`) is a turn of the soul in a daily
+      thread, sent as the person under the `schedule` origin, whatever
+      names its text holds: a line with nobody present asks no crew
+      member. No other kind of thread admits one.
 
   Anything else is refused `:not_addressable`.
   """
@@ -38,6 +39,9 @@ defmodule Aqua.Runner.Admission do
   alias Aqua.Roster
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
+
+  # A person's rooms: the threads a crew member's child thread works under.
+  @rooms Aqua.Tape.room_kinds()
 
   # One human line, in bytes: the one bound every sender passes through.
   @max_message_bytes 32 * 1024
@@ -118,7 +122,7 @@ defmodule Aqua.Runner.Admission do
   athanor's agents, the soul first) is asked.
   """
   @spec request(thread(), String.t(), String.t(), [map()]) :: :ok | {:error, :not_addressable}
-  def request(%{kind: "own"}, agent, member, roster) do
+  def request(%{kind: kind}, agent, member, roster) when kind in @rooms do
     if Prima.AgentRef.soul?(agent) and member?(roster, member),
       do: :ok,
       else: {:error, :not_addressable}
@@ -157,7 +161,7 @@ defmodule Aqua.Runner.Admission do
     end
   end
 
-  defp scheduled(%{kind: "own"}, @person, :schedule),
+  defp scheduled(%{kind: "daily"}, @person, :schedule),
     do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
 
   defp scheduled(_thread, _sent_by, _origin), do: {:error, :not_addressable}
@@ -165,11 +169,11 @@ defmodule Aqua.Runner.Admission do
   # A member's reply: on the thread of the request it answers, which was
   # addressed to it, to whoever sent that request.
   defp reply(
-         %{kind: "own", id: thread_id},
+         %{kind: kind, id: thread_id},
          member,
          %{request: %{thread_id: thread_id, addressee: member, sent_by: asker}}
        )
-       when is_binary(member) and member != @person do
+       when kind in @rooms and is_binary(member) and member != @person do
     cond do
       asker == @person -> {:ok, :content}
       Prima.AgentRef.soul?(asker) -> {:ok, {:turn, asker}}
@@ -195,7 +199,7 @@ defmodule Aqua.Runner.Admission do
   # pick, then the agent of the previous turn, then the athanor's first
   # (the roster lists the soul first). The soul's is a turn, a member's a
   # request.
-  defp persons(%{kind: "own"}, text, opts) do
+  defp persons(%{kind: kind}, text, opts) when kind in @rooms do
     roster = Keyword.get(opts, :agents, [])
     {_stripped, mentioned} = Roster.parse_mention(text, roster)
 

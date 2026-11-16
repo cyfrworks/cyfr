@@ -28,7 +28,7 @@ defmodule Arca.TurnFenceRaceTest do
 
     {thread, turn} =
       unboxed(fn ->
-        {:ok, thread} = Threads.create(actor)
+        {:ok, thread} = Arca.Test.Days.thread(actor)
 
         {:ok, %{turn: turn}} =
           TurnStorage.accept_message(actor, thread.id, %{

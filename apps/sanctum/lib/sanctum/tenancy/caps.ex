@@ -31,8 +31,8 @@ defmodule Sanctum.Tenancy.Caps do
 
   The athanors ship at 10,000 and an athanor's threads at 1000 (`0` turns
   either off). A thread is a row a person — or any headless client of
-  theirs — can mint from the wire (`thread.create`), so an athanor's
-  thread count needs a ceiling. The pairs a person holds, the
+  theirs — can mint from the wire (a new day's thread, `thread.today` or
+  `thread.send`), so an athanor's thread count needs a ceiling. The pairs a person holds, the
   shared threads a person creates, the people in one shared thread and
   the bytes ship off, absent meaning no limit, for an administrator to
   set. The pair cap counts the ACTIVE pairs a person sits in — an ended

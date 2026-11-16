@@ -1471,17 +1471,18 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Cache",
       functions: [:get],
       reason:
-        "the panel's open state, thread and placement are kept per browser session " <>
+        "the panel's open state and placement are kept per browser session " <>
           "under a hash of its token; a read answers them or a miss, and drops an expired entry as " <>
           "it finds it, which is the cache's own housekeeping."
     },
     %{
       from: "PrismWeb.AquaPanelLive",
       into: "Arca.ThreadStorage",
-      functions: [:list, :pending_requests],
+      functions: [:adjacent_day, :day, :get, :pending_requests, :unread],
       reason:
-        "the panel lists the caller's athanor's threads and the crew requests still " <>
-          "waiting under the caller's actor; the assistant owns every thread write."
+        "the panel reads today's daily thread without making it, the day a step either " <>
+          "way, the thread a destination names, today's unread count and the crew requests " <>
+          "still waiting, all under the caller's actor; the assistant owns every thread write."
     },
     %{
       from: "PrismWeb.AttachmentController",
@@ -1695,7 +1696,7 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Cache",
       functions: [:put],
       reason:
-        "the panel keeps its open state, thread and placement per browser session, under " <>
+        "the panel keeps its open state and placement per browser session, under " <>
           "a hash of its token, for a bounded time: server-local memory, never a row."
     },
     %{

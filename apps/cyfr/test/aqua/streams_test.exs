@@ -4,10 +4,10 @@
 defmodule Aqua.StreamsTest do
   @moduledoc """
   The assistant's two canvas streams. `threads.changes` is one person's
-  list of threads, on that person's own topic: their athanor's own threads
-  and the active shared threads they sit in, first as the refresh reads
-  them and then each change, a shared thread with what is unread to the
-  person and an own thread with no read mark. `activity.changes` is the
+  list of threads, on that person's own topic: their athanor's daily and
+  workspace threads and the active shared threads they sit in, first as
+  the refresh reads them and then each change, each with how many of its
+  posts are unread to the person. `activity.changes` is the
   athanor's crew at work: every member's open job first, then each start
   and end. Every refresh item and live payload is checked as a canvas
   reads it: projected, passed through JSON and held to the declared
@@ -70,11 +70,13 @@ defmodule Aqua.StreamsTest do
       assert {threads.key, threads.removal, threads.reread, threads.stale_after} ==
                {"id", "removed", [], 900}
 
-      assert threads.shape["fields"]["kind"]["values"] == ["own", "shared", "removed"]
+      assert threads.shape["fields"]["kind"]["values"] ==
+               ["daily", "workspace", "shared", "removed"]
+
       assert Prima.Provider.Stream.admits?(threads, ada.user.id)
       refute Prima.Provider.Stream.admits?(threads, nil)
 
-      # A removal carries its kind and id alone, and an own thread keeps no read mark.
+      # A removal carries its kind and id alone.
       for field <- ~w(title people last_activity waits_on_you unread),
           do: assert(threads.shape["fields"][field]["nullable"], field)
 
@@ -100,25 +102,28 @@ defmodule Aqua.StreamsTest do
   end
 
   describe "a person's own threads" do
-    test "a create, a message that titles it and a delete each reach the person's list",
-         %{ada: ada} do
+    test "today's thread, a post in it and its delete each reach the person's list", %{
+      ada: ada
+    } do
       listen(ada)
 
-      {:ok, %{id: id}} = call(ada.ctx, %{"action" => "create"})
+      {:ok, %{id: id, day: day}} = call(ada.ctx, %{"action" => "today"})
+      title = Date.to_iso8601(day)
 
       assert %{
-               "kind" => "own",
+               "kind" => "daily",
                "id" => ^id,
-               "title" => "New thread",
+               "title" => ^title,
                "people" => ["Ada"],
                "waits_on_you" => false,
-               "unread" => nil,
-               "last_activity" => created
+               "unread" => 0,
+               "last_activity" => made
              } = heard(ada, id)
 
+      # The person's own line moves the thread and is no post unread to them.
       {:ok, _} = say(ada, id, "Ship the plan\n" <> @said)
-      assert %{"title" => "Ship the plan", "last_activity" => moved} = said = heard(ada, id)
-      assert later_or_same?(moved, created)
+      assert %{"title" => ^title, "unread" => 0, "last_activity" => moved} = said = heard(ada, id)
+      assert later_or_same?(moved, made)
       refute inspect(said) =~ @said
 
       {:ok, %{deleted: true}} = call(ada.ctx, %{"action" => "delete", "thread" => id})
@@ -139,8 +144,43 @@ defmodule Aqua.StreamsTest do
       refute_receive %ThreadListed{}, 200
     end
 
+    test "what the person did not send is unread until their mark moves past it, told to them alone",
+         %{ada: ada, bob: bob} do
+      {:ok, room} = Arca.Test.Days.thread(ada.actor)
+      id = room.id
+      listen(ada)
+      listen(bob)
+
+      {:ok, %{message: reply}} = post(ada, id, Prima.Author.agent(), "aqua", "Here is the plan.")
+      assert %{"kind" => "daily", "unread" => 1} = heard(ada, id)
+
+      # A schedule's line is written in the server's voice for the person.
+      {:ok, %{message: line}} = post(ada, id, Prima.Author.system(), "person", "Morning summary")
+      assert %{"unread" => 2} = heard(ada, id)
+
+      assert :ok = Aqua.mark_read(ada.ctx, id, reply.seq)
+      assert %{"unread" => 1} = heard(ada, id)
+
+      # A mark that would move back stands, and is told as it stands.
+      assert :ok = Aqua.mark_read(ada.ctx, id, 0)
+      assert %{"unread" => 1} = heard(ada, id)
+
+      assert :ok = Aqua.mark_read(ada.ctx, id, line.seq)
+      assert %{"unread" => 0} = read = heard(ada, id)
+
+      text = inspect(read)
+      for secret <- [@said, ada.user.id, ada.user.email], do: refute(text =~ secret)
+
+      bobs_athanor = bob.athanor.id
+      refute_receive %ThreadListed{athanor_id: ^bobs_athanor}, 200
+
+      # Another person's mark moves nothing of hers.
+      assert {:error, :not_found} = Aqua.mark_read(bob.ctx, id, line.seq)
+      refute_receive %ThreadListed{}, 200
+    end
+
     test "a card opened and decided moves whether the thread waits on its person", %{ada: ada} do
-      {:ok, room} = Threads.create(ada.actor)
+      {:ok, room} = Arca.Test.Days.thread(ada.actor)
       listen(ada)
 
       room_id = room.id
@@ -153,7 +193,7 @@ defmodule Aqua.StreamsTest do
     end
 
     test "a crew member's child thread is never on the list", %{ada: ada} do
-      {:ok, room} = Threads.create(ada.actor)
+      {:ok, room} = Arca.Test.Days.thread(ada.actor)
       {:ok, child} = Threads.crew_thread(ada.actor, room.id, "planner")
       listen(ada)
 
@@ -251,15 +291,16 @@ defmodule Aqua.StreamsTest do
   @wire Path.expand("../../../../tests/fixtures/tincture_wire.json", __DIR__)
 
   describe "the wire's thread events" do
-    test "are a shared thread's and an own thread's payloads, read back whole as a canvas reads them",
+    test "are a shared thread's and a daily thread's payloads, read back whole as a canvas reads them",
          %{ada: ada} do
       vectors = @wire |> File.read!() |> Jason.decode!()
       events = for %{"event" => event} <- vectors["stream_events"]["threads.changes"], do: event
 
-      assert [%{"kind" => "shared", "unread" => unread}, %{"kind" => "own", "unread" => nil}] =
+      assert [%{"kind" => "shared", "unread" => shared}, %{"kind" => "daily", "unread" => daily}] =
                events
 
-      assert is_integer(unread) and unread > 0
+      assert is_integer(shared) and shared > 0
+      assert is_integer(daily) and daily >= 0
 
       actor = Prima.Actor.in_athanor(ada.athanor.id)
 
@@ -288,7 +329,7 @@ defmodule Aqua.StreamsTest do
     test "a second person never hears another's list", %{ada: ada, bob: bob} do
       listen(bob)
 
-      {:ok, %{id: own}} = call(ada.ctx, %{"action" => "create", "title" => "Mine"})
+      {:ok, %{id: own}} = call(ada.ctx, %{"action" => "today"})
       {:ok, _} = say(ada, own, "hello")
       {:ok, alone} = SharedThreads.create(ada.user.id, "Alone")
       {:ok, _} = SharedThreads.post(ada.user.id, alone.id, "hi")
@@ -301,7 +342,7 @@ defmodule Aqua.StreamsTest do
   end
 
   describe "the threads' refresh" do
-    test "is the athanor's own threads and the active shared ones, the latest first",
+    test "is the athanor's daily and workspace threads and the active shared ones, the latest first",
          %{ada: ada, bob: bob} do
       carol = ShareFixtures.person!("Carol")
 
@@ -311,8 +352,8 @@ defmodule Aqua.StreamsTest do
           namespace: "carol-#{System.unique_integer([:positive])}"
         })
 
-      {:ok, %{id: plans}} = call(ada.ctx, %{"action" => "create", "title" => "Plans"})
-      {:ok, %{id: waiting}} = call(ada.ctx, %{"action" => "create", "title" => "Waiting"})
+      {:ok, %{id: plans, title: plans_title}} = Arca.Test.Days.thread(ada.actor)
+      {:ok, %{id: waiting, title: waiting_title}} = Arca.Test.Days.thread(ada.actor)
 
       {:ok, _card} =
         Threads.append(ada.actor, waiting, %{
@@ -323,6 +364,7 @@ defmodule Aqua.StreamsTest do
           content: "Run it?"
         })
 
+      work = workspace!(ada.actor, "Book the trip")
       {:ok, child} = Threads.crew_thread(ada.actor, plans, "planner")
 
       {:ok, trip} = SharedThreads.create(ada.user.id, "Trip")
@@ -333,23 +375,30 @@ defmodule Aqua.StreamsTest do
       {:ok, old} = SharedThreads.create(ada.user.id, "Old")
       {:ok, _} = SharedThreads.archive(ada.user.id, old.id)
 
-      {:ok, %{id: bobs}} = call(bob.ctx, %{"action" => "create", "title" => "Bob's"})
+      {:ok, %{id: bobs}} = call(bob.ctx, %{"action" => "today"})
 
       assert {:ok, items} = ThreadList.listed(ada.ctx, ada.user.id)
       wired = Enum.map(items, &read_as/1)
 
-      assert Enum.map(wired, & &1["id"]) == [trip.id, waiting, plans]
+      assert Enum.map(wired, & &1["id"]) == [trip.id, work.id, waiting, plans]
       ids = Enum.map(wired, & &1["id"])
       refute child.id in ids
       refute old.id in ids
       refute bobs in ids
 
-      [shared, card, own] = wired
+      [shared, workspace, card, own] = wired
 
       assert %{"kind" => "shared", "title" => "Trip", "waits_on_you" => false} = shared
       assert ["Ada", "Bob", "@" <> _handle] = shared["people"]
-      assert %{"kind" => "own", "title" => "Waiting", "waits_on_you" => true} = card
-      assert %{"kind" => "own", "title" => "Plans", "people" => ["Ada"]} = own
+
+      assert %{"kind" => "workspace", "title" => "Book the trip", "unread" => 0} = workspace
+
+      assert %{"kind" => "daily", "title" => ^waiting_title, "waits_on_you" => true} = card
+      # The card is not the person's own line, so it is unread to them.
+      assert card["unread"] == 1
+
+      assert %{"kind" => "daily", "title" => ^plans_title, "people" => ["Ada"], "unread" => 0} =
+               own
 
       times = Enum.map(wired, &elem(DateTime.from_iso8601(&1["last_activity"]), 1))
       assert times == Enum.sort(times, {:desc, DateTime})
@@ -368,7 +417,7 @@ defmodule Aqua.StreamsTest do
 
   describe "the crew's activity" do
     setup %{ada: ada} do
-      {:ok, room} = Threads.create(ada.actor)
+      {:ok, room} = Arca.Test.Days.thread(ada.actor)
       {:ok, planner} = Threads.crew_thread(ada.actor, room.id, "planner")
       {:ok, scout} = Threads.crew_thread(ada.actor, room.id, "scout")
       actor = Sanctum.Context.actor(ada.ctx)
@@ -484,7 +533,7 @@ defmodule Aqua.StreamsTest do
     end
 
     test "the documented activity key preserves simultaneous jobs", %{ada: ada, planner: planner} do
-      {:ok, other_room} = Threads.create(ada.actor)
+      {:ok, other_room} = Arca.Test.Days.thread(ada.actor)
       {:ok, other_planner} = Threads.crew_thread(ada.actor, other_room.id, "planner")
       {:ok, %{turn: first}} = job!(ada, planner, "planner")
       {:ok, %{turn: second}} = job!(ada, other_planner, "planner")
@@ -562,6 +611,29 @@ defmodule Aqua.StreamsTest do
     after
       0 -> :ok
     end
+  end
+
+  # A line into a thread of the person's, opening no turn, as `author`
+  # writes it for `sent_by`.
+  defp post(person, thread_id, author, sent_by, text) do
+    Tape.accept(person.ctx, thread_id, %{
+      message: %{author: author, sent_by: sent_by, content: text}
+    })
+  end
+
+  # A workspace thread of the athanor, as Aqua opens one for a piece of
+  # work, its last activity after every thread made before it.
+  defp workspace!(actor, title) do
+    %Arca.Schemas.Thread{}
+    |> Arca.Schemas.Thread.changeset(%{
+      id: Prima.UUID7.generate_id("thread"),
+      athanor_id: actor.athanor_id,
+      kind: "workspace",
+      workspace_state: "open",
+      title: title,
+      created_by: Prima.Author.system()
+    })
+    |> Arca.Repo.insert!()
   end
 
   # A person's line into their own thread, opening no turn.

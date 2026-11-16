@@ -417,8 +417,7 @@ defmodule PrismWeb.SchedulesLiveTest do
               :input,
               :status,
               :missed_runs,
-              :catch_up_limit,
-              :thread_id
+              :catch_up_limit
             ] -- fields do
         assert Map.fetch!(now, key) == Map.fetch!(before, key), "#{key} moved"
       end

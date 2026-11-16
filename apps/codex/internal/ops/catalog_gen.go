@@ -264,7 +264,6 @@ const (
 	ThreadApprove           = "approve"
 	ThreadArchive           = "archive"
 	ThreadAttach            = "attach"
-	ThreadCreate            = "create"
 	ThreadDecline           = "decline"
 	ThreadDelete            = "delete"
 	ThreadDiscard           = "discard"
@@ -275,6 +274,7 @@ const (
 	ThreadRevokeGrant       = "revoke_grant"
 	ThreadSend              = "send"
 	ThreadStop              = "stop"
+	ThreadToday             = "today"
 	TinctureInvokeProtected = "invoke_protected"
 	TinctureInvokePublic    = "invoke_public"
 	TinctureVisibilityGet   = "get"
@@ -333,7 +333,7 @@ var Actions = map[string][]string{
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
 	"system":              {"notify", "status"},
-	"thread":              {"aloud", "approve", "archive", "attach", "create", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop"},
+	"thread":              {"aloud", "approve", "archive", "attach", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "today"},
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
@@ -371,6 +371,8 @@ type ApprovalResolveArgs struct {
 	Reason Field[string] `json:"reason,omitzero"`
 	// resolve: the run a standing approval ends with — its execution, turn or schedule
 	Lifecycle Field[string] `json:"lifecycle,omitzero"`
+	// resolve: with scope always and lifecycle schedule, the id of the person's schedule of Aqua's the approval stands for and ends with
+	Schedule Field[string] `json:"schedule,omitzero"`
 	// resolve: an ISO 8601 UTC time a standing approval ends at, a bound beside its lifecycle
 	Until Field[string] `json:"until,omitzero"`
 	// resolve: the resources a standing approval covers, for an action that declares which argument names one
@@ -4624,7 +4626,7 @@ func (args SystemStatusArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadAloudArgs carries arguments for thread.aloud.
 type ThreadAloudArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor
 	MessageIds []string `json:"message_ids"`
@@ -4643,7 +4645,7 @@ func (args ThreadAloudArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadApproveArgs carries arguments for thread.approve.
 type ThreadApproveArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// approve/decline: the approval card; attach: the message the files belong to
 	MessageId string `json:"message_id"`
@@ -4662,7 +4664,7 @@ func (args ThreadApproveArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadArchiveArgs carries arguments for thread.archive.
 type ThreadArchiveArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 }
 
@@ -4677,7 +4679,7 @@ func (args ThreadArchiveArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadAttachArgs carries arguments for thread.attach.
 type ThreadAttachArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// approve/decline: the approval card; attach: the message the files belong to
 	MessageId string `json:"message_id"`
@@ -4711,24 +4713,9 @@ func (args *ThreadAttachArgsFilesItem) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ThreadCreateArgs carries arguments for thread.create.
-type ThreadCreateArgs struct {
-	// create: the thread's title
-	Title Field[string] `json:"title,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ThreadCreateArgs) MarshalJSON() ([]byte, error) {
-	type fields ThreadCreateArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ThreadCreate, fields: fields(args)})
-}
-
 // ThreadDeclineArgs carries arguments for thread.decline.
 type ThreadDeclineArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// approve/decline: the approval card; attach: the message the files belong to
 	MessageId string `json:"message_id"`
@@ -4749,7 +4736,7 @@ func (args ThreadDeclineArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadDeleteArgs carries arguments for thread.delete.
 type ThreadDeleteArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 }
 
@@ -4764,7 +4751,7 @@ func (args ThreadDeleteArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadDiscardArgs carries arguments for thread.discard.
 type ThreadDiscardArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// discard: the unsent message whose files this session attached, which go
 	MessageId string `json:"message_id"`
@@ -4781,7 +4768,7 @@ func (args ThreadDiscardArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadEventsArgs carries arguments for thread.events.
 type ThreadEventsArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// events: replay messages after this seq. Omit to start from the beginning.
 	AfterSeq Field[int] `json:"after_seq,omitzero"`
@@ -4800,7 +4787,7 @@ func (args ThreadEventsArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadGetArgs carries arguments for thread.get.
 type ThreadGetArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 }
 
@@ -4828,7 +4815,7 @@ func (args ThreadListArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadRestartForConsentArgs carries arguments for thread.restart_for_consent.
 type ThreadRestartForConsentArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// restart_for_consent: the profile the consent was granted on
 	ProfileId Field[*string] `json:"profile_id,omitzero"`
@@ -4847,7 +4834,7 @@ func (args ThreadRestartForConsentArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadRevokeGrantArgs carries arguments for thread.revoke_grant.
 type ThreadRevokeGrantArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 	// revoke_grant: the agent the standing answer was given for
 	AgentName string `json:"agent_name"`
@@ -4857,6 +4844,8 @@ type ThreadRevokeGrantArgs struct {
 	ToolAction string `json:"tool_action"`
 	// revoke_grant: for an answer that is one program's, the program's row id; required for program.start
 	Program Field[string] `json:"program,omitzero"`
+	// revoke_grant: for an answer that is one schedule's, the schedule's id; none for any other
+	Schedule Field[string] `json:"schedule,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4870,8 +4859,8 @@ func (args ThreadRevokeGrantArgs) MarshalJSON() ([]byte, error) {
 
 // ThreadSendArgs carries arguments for thread.send.
 type ThreadSendArgs struct {
-	// Thread id (all actions except create and list)
-	Thread string `json:"thread"`
+	// send: a crew member's thread; with none, or a daily thread, the send joins today's daily thread
+	Thread Field[string] `json:"thread,omitzero"`
 	// send: the text to say (at most 32 KiB of text)
 	Message string `json:"message"`
 	// send: the agent to address when the text names none
@@ -4933,7 +4922,7 @@ func (args *ThreadSendArgsRoom) UnmarshalJSON(data []byte) error {
 
 // ThreadStopArgs carries arguments for thread.stop.
 type ThreadStopArgs struct {
-	// Thread id (all actions except create and list)
+	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
 }
 
@@ -4944,6 +4933,19 @@ func (args ThreadStopArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadStop, fields: fields(args)})
+}
+
+// ThreadTodayArgs carries arguments for thread.today.
+type ThreadTodayArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ThreadTodayArgs) MarshalJSON() ([]byte, error) {
+	type fields ThreadTodayArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ThreadToday, fields: fields(args)})
 }
 
 // TinctureInvokeProtectedArgs carries arguments for tincture.invoke_protected.

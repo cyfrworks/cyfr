@@ -852,7 +852,7 @@ function rebuild() {
   const phone = L.posture === 'phone';
   const add = (e) => { ents.push(e); return e; };
   if (on('houses')) {
-    for (const th of all('threads.changes')) {
+    for (const th of listedThreads()) {
       const t = mins(th.last_activity);
       if (t == null) continue;
       add({ id: 'thread-' + th.id, kind: 'thread', part: 'houses', t, th, x: X(t), w: phone ? 16 : 22 });
@@ -1058,8 +1058,10 @@ function offerOf(a) {
   const f = one('files.changes', text(destOf(a).ref) || text(a.id));
   return f && f.kind === 'offer' ? f : null;
 }
+// An item that carries a `day` (an approval in a daily thread) is named by that day; any
+// other by its label as given.
 function waitingWords(a) {
-  const label = text(a.label);
+  const label = typeof a.day === 'string' ? dayTitle(a.day) : text(a.label);
   switch (a.kind) {
     case 'failed_run': {
       const run = one('runs.changes', text(destOf(a).ref));
@@ -1073,11 +1075,36 @@ function waitingWords(a) {
     default: return { head: 'Waiting', tail: label };
   }
 }
+// A daily thread (one a day) and a workspace thread are Aqua's; a shared thread is people's.
+function isAqua(th) { return th.kind === 'daily' || th.kind === 'workspace'; }
+// The threads the street shows: the newest daily thread stands for Aqua's days, the earlier
+// ones a step back in Aqua's panel.
+function listedThreads() {
+  const threads = all('threads.changes');
+  const newest = threads.reduce((n, th) => (th.kind === 'daily' && (!n || text(th.title) > text(n.title)) ? th : n), null);
+  return threads.filter((th) => th.kind !== 'daily' || th === newest);
+}
+// The day `d` days from today in the person's zone, as an ISO date.
+function isoDay(d) {
+  const at = new Date(midnight + (d * DAY + 720) * MINUTE), p = {};
+  try { for (const x of new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(at)) p[x.type] = x.value; }
+  catch (err) { return at.toISOString().slice(0, 10); }
+  return `${p.year}-${p.month}-${p.day}`;
+}
+// A day by its ISO date, a daily thread's title or a waiting item's `day`: "Today" or
+// "Yesterday", else the date.
+function dayTitle(s) {
+  if (Number.isNaN(Date.parse(s))) return s;
+  if (s === isoDay(0)) return 'Today';
+  if (s === isoDay(-1)) return 'Yesterday';
+  try { return new Date(Date.parse(s)).toLocaleDateString(LOCALE, { timeZone: 'UTC', day: 'numeric', month: 'short' }); } catch (err) { return s; }
+}
+function threadTitle(th) { return th.kind === 'daily' ? dayTitle(text(th.title)) : text(th.title); }
 function threadSub(th) {
   const people = Array.isArray(th.people) ? th.people.length : 0;
   if (th.waits_on_you) return 'waits on you';
   const many = `${people} ${people === 1 ? 'person' : 'people'}`;
-  if (th.unread > 0) return `${th.unread} unread · ${many}`;
+  if (th.unread > 0) return `${th.unread} unread · ${isAqua(th) ? 'with Aqua' : many}`;
   if (th.kind === 'shared') return people === 2 ? 'a pair' : many;
   return 'with Aqua';
 }
@@ -1095,7 +1122,7 @@ function labelFor(e) {
   switch (e.kind) {
     case 'thread': {
       if (phone || e.t < L.dayStart || e.t > L.dayEnd) return null;
-      return { cls: 'quiet onwall', band: 'house', html: `<b>${esc(text(e.th.title) || 'A thread')}</b><small>${esc(threadSub(e.th))}</small>` };
+      return { cls: 'quiet onwall', band: 'house', html: `<b>${esc(threadTitle(e.th) || 'A thread')}</b><small>${esc(threadSub(e.th))}</small>` };
     }
     case 'ask': {
       if (phone || leaving.has(e.id)) return null;
@@ -1154,7 +1181,7 @@ function labelFor(e) {
 }
 function ariaFor(e) {
   switch (e.kind) {
-    case 'thread': return `Thread ${text(e.th.title)}, ${e.th.kind}, last active ${when(e.t)}${e.th.unread > 0 ? `, ${e.th.unread} unread` : ''}${e.th.waits_on_you ? ', waits on you' : ''}`;
+    case 'thread': return `Thread ${threadTitle(e.th)}, ${isAqua(e.th) ? 'with Aqua' : 'shared'}, last active ${when(e.t)}${e.th.unread > 0 ? `, ${e.th.unread} unread` : ''}${e.th.waits_on_you ? ', waits on you' : ''}`;
     case 'ask': { const w = waitingWords(e.a); return `Waiting on you: ${KIND_WORD[e.a.kind] || 'an item'}, ${w.head} ${w.tail}, since ${when(e.t)}`; }
     case 'lamp': return 'Runs at ' + e.runs.map((r) => `${when(r.t)} ${componentName(r.ref)} ${r.state}`).join('; ');
     case 'stop': return `Schedule ${text(e.sched.name)}, ${e.sched.status}${e.untold ? ', never ran' : `, ${e.sched.status === 'paused' ? 'last ' : 'next '}${when(e.t)}`}`;
@@ -1273,7 +1300,7 @@ function placePlates() {
   }
 }
 function itemText(e) {
-  if (e.kind === 'thread') return text(e.th.title) || 'A thread';
+  if (e.kind === 'thread') return threadTitle(e.th) || 'A thread';
   if (e.kind === 'file') return text(e.file.name) || 'a file';
   if (e.kind === 'stop') return (text(e.sched.name) || componentName(text(e.sched.reference))) + (e.sched.status === 'paused' ? ' (paused)' : '');
   if (e.kind === 'ask') { const w = waitingWords(e.a); return `${w.head} ${w.tail}`; }
@@ -1347,7 +1374,7 @@ function select(id) {
 }
 const act = (label, fn, cls = '') => ({ label, fn, cls });
 const ask = (widget) => act('Ask Aqua', () => sdk && sdk.ask(widget));
-// A page by its key, at `ref` when one is given: Aqua's panel at an own thread, the chat at a shared one.
+// A page by its key, at `ref` when one is given: Aqua's panel at a thread of Aqua's, the chat at a shared one.
 const page = (label, key, cls = '', ref = null) => act(label, () => sdk && (ref == null ? sdk.settings(key) : sdk.settings(key, ref)), cls);
 const PAGE_LABEL = { aqua: 'Open Aqua', chat: 'Open the chat', executions: 'Open runs', schedules: 'Open schedules', files: 'Open files' };
 
@@ -1440,13 +1467,13 @@ function signFor(e) {
       return base;
     }
     case 'thread': {
-      const th = e.th, own = th.kind === 'own';
+      const th = e.th, aqua = isAqua(th);
       const people = Array.isArray(th.people) ? th.people : [];
       return {
-        title: text(th.title) || 'A thread',
-        facts: [['kind', own ? 'own, with Aqua' : `shared, ${people.length} ${people.length === 1 ? 'person' : 'people'}`], ['last', when(e.t)], ...(th.unread > 0 ? [['unread', String(th.unread)]] : []), ...(th.waits_on_you ? [['', 'waits on you']] : [])],
-        // An own thread is Aqua's, in its panel; a shared one is in the chat.
-        acts: [page(own ? 'Open Aqua' : 'Open the chat', own ? 'aqua' : 'chat', 'go', th.id), ask('houses')],
+        title: threadTitle(th) || 'A thread',
+        facts: [['kind', aqua ? 'with Aqua' : `shared, ${people.length} ${people.length === 1 ? 'person' : 'people'}`], ['last', when(e.t)], ...(th.unread > 0 ? [['unread', String(th.unread)]] : []), ...(th.waits_on_you ? [['', 'waits on you']] : [])],
+        // A thread of Aqua's is in its panel; a shared one is in the chat.
+        acts: [page(aqua ? 'Open Aqua' : 'Open the chat', aqua ? 'aqua' : 'chat', 'go', th.id), ask('houses')],
       };
     }
     case 'lamp': {
@@ -1597,7 +1624,7 @@ function phoneList() {
   ].join('');
   return `<ul class="list" aria-label="Waiting on you">${rows || '<li class="empty">Nothing waits on you.</li>'}</ul>
   ${cards ? `<div class="row2" style="margin-top:6px">${cards}</div>` : ''}
-  <ul class="list">${crew.map((e) => row(e, text(e.job.title) ? `${text(e.job.member)}: ${text(e.job.title)}` : `${text(e.job.member)} at work`, text(e.job.title) ? 'since ' + when(e.t) : text(e.job.status))).join('')}${stops.map((e) => row(e, text(e.sched.name), e.sched.status)).join('')}${houses.map((e) => row(e, text(e.th.title), threadSub(e.th))).join('')}</ul>`;
+  <ul class="list">${crew.map((e) => row(e, text(e.job.title) ? `${text(e.job.member)}: ${text(e.job.title)}` : `${text(e.job.member)} at work`, text(e.job.title) ? 'since ' + when(e.t) : text(e.job.status))).join('')}${stops.map((e) => row(e, text(e.sched.name), e.sched.status)).join('')}${houses.map((e) => row(e, threadTitle(e.th), threadSub(e.th))).join('')}</ul>`;
 }
 
 /* ================= scrubbing the day ================= */
@@ -1698,7 +1725,7 @@ function renderFallback() {
   const section = (title, part, items, empty) => `<section><h2>${esc(title)}</h2>${notes[part] ? `<p class="note">${esc(notes[part].words)}</p>` : ''}${items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : `<p class="empty">${esc(empty)}</p>`}</section>`;
   const at = (iso, word = '') => { const t = mins(iso); return t == null ? '' : `, ${word}${when(t)}`; };
   const waiting = all('attention.changes').map((item) => { const w = waitingWords(item); return `${w.head} ${w.tail}${at(item.since)}`; });
-  const threads = all('threads.changes').map((item) => `${text(item.title) || 'A thread'} (${threadSub(item)})${at(item.last_activity)}`);
+  const threads = listedThreads().map((item) => `${threadTitle(item) || 'A thread'} (${threadSub(item)})${at(item.last_activity)}`);
   const runs = lampRuns().map((r) => `${componentName(r.ref)} ${r.state}${r.t == null ? '' : ', ' + when(r.t)}${r.state === 'failed' && r.cause && r.cause !== 'failed' ? ' (' + shortReason(r.cause) + ')' : ''}`);
   const schedules = all('schedules.changes').map((s) => `${text(s.name) || text(s.reference)}, ${s.status}${s.status === 'paused' ? '' : at(s.next_run_at, 'next ')}`);
   const crew = all('activity.changes').map((j) => `${text(j.member)}, ${text(j.title) || text(j.status)}${at(j.since, 'since ')}`);

@@ -167,7 +167,7 @@ button:disabled { cursor: default; opacity: .6; }
 .hang::before { left: 24%; }
 .hang::after { right: 24%; }
 .plaque { height: 100%; padding: .2rem .9rem; display: flex; flex-direction: column; justify-content: center; gap: .1rem; transform-origin: 50% -9px; }
-.plaque--own { border-radius: 999px; padding-inline: 1.15rem; }
+.plaque--aqua { border-radius: 999px; padding-inline: 1.15rem; }
 .plaque--shared { border-radius: 5px; }
 .plaque__title { font-size: 1.15rem; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .plaque .meta { display: flex; align-items: center; gap: .3rem; white-space: nowrap; }

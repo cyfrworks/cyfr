@@ -21,7 +21,6 @@ defmodule Aqua.ProgramToolTest do
   use PrismWeb.ConnCase, async: false
 
   alias Aqua.Tape
-  alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Source
@@ -46,7 +45,7 @@ defmodule Aqua.ProgramToolTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     ScriptedWorker.fresh_limits!(ctx, [@model, @http])
 
-    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
 
     {:ok,
      conn: conn,

@@ -668,6 +668,13 @@ defmodule Aqua.Tape do
   end
 
   @doc """
+  The kinds of a person's rooms, the threads a crew member's child thread
+  works under: daily and workspace threads (`Arca.ThreadStorage.room_kinds/0`).
+  """
+  @spec room_kinds() :: [String.t()]
+  defdelegate room_kinds(), to: Threads
+
+  @doc """
   Delete a thread, and with a room its crew members' child threads, their
   open turns cancelled in the same transaction (`Arca.ThreadStorage.delete/3`)
   under the stamp each root's attempt stores; the runtime still holding
@@ -689,28 +696,10 @@ defmodule Aqua.Tape do
 
     with {:ok, %{cancelled: cancelled}} = deleted <-
            Threads.delete(actor, thread_id, standing(%{}, :retiring)) do
-      forget_schedules(actor, thread_id)
       ThreadList.removed(ctx, thread_id)
       Activity.cancelled(ctx, open, cancelled)
       withdrawn(ctx, waiting)
       deleted
-    end
-  end
-
-  # A schedule holding a line for Aqua that ran in the deleted thread
-  # names it no longer, so its next fire makes a new one. A schedule this
-  # misses (a lost slot, an unreadable store) finds the thread gone at its
-  # next fire all the same (`Arca.CronSchedule.thread/3`).
-  defp forget_schedules(actor, thread_id) do
-    case Arca.CronSchedule.forget_thread(actor, thread_id) do
-      {:ok, _count} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Aqua.Tape] the schedules of deleted thread #{thread_id} were not told: " <>
-            inspect(reason)
-        )
     end
   end
 

@@ -165,7 +165,13 @@ defmodule PrismWeb.ToolSeamTest do
     # written only by the shell's `prefs` verb on the person's input
     # (docs/plans/prism-desktop.md): no agent writes them, so there is no
     # tool for them.
-    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Compendium.put_desktop_prefs"}
+    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Compendium.put_desktop_prefs"},
+    # The person's own time zone, as their browser reports it when the
+    # shell connects, a preference of the same kind: written to the
+    # session's own person under their own session when it differs, held
+    # to the zone database, and read only to name their day (`Aqua.Day`).
+    # No agent has a reason to write it.
+    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Aqua.put_time_zone"}
   ]
 
   # The namespaces whose state the console must not change behind the tool
@@ -290,9 +296,9 @@ defmodule PrismWeb.ToolSeamTest do
   # and no write of the thread's.
   @chat_verbs %{
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
-      ~w(thread/create thread/attach thread/send thread/discard thread/stop approval/resolve
+      ~w(thread/today thread/attach thread/send thread/discard thread/stop approval/resolve
          thread/revoke_grant thread/restart_for_consent),
-    "apps/cyfr/lib/prism_web/live/aqua_panel_live.ex" => ~w(thread/delete),
+    "apps/cyfr/lib/prism_web/live/aqua_panel_live.ex" => ~w(thread/today),
     "apps/cyfr/lib/prism_web/live/chat_overlay_live.ex" =>
       ~w(shared_thread/create shared_thread/add shared_thread/pair),
     "apps/cyfr/lib/prism_web/live/shared_thread_live.ex" =>
@@ -305,7 +311,7 @@ defmodule PrismWeb.ToolSeamTest do
   # writes, or a thread store's.
   @bypass [
     ~r/SharedThreads\.(create|pair|add|post|rename|archive|unarchive|leave|remove|withdraw)\(/,
-    ~r/(Threads|ThreadStorage|SharedThreadMembers|SharedMessages)\.(create|append|delete|seat|invite|leave|remove|withdraw)\(/
+    ~r/(Threads|ThreadStorage|SharedThreadMembers|SharedMessages)\.(create|daily|append|delete|seat|invite|leave|remove|withdraw)\(/
   ]
 
   test "the chat's turn writes go through the thread tool" do

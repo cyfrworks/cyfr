@@ -113,7 +113,7 @@
       case 'attention.changes': {
         const dest = isItem(d.destination) ? d.destination : {};
         const label = d.kind === 'failed_run' ? refName(str(d.label)) : str(d.label);
-        return { id: str(d.id), kind: str(d.kind), label: label || 'Something', since: timeOf(d.since), page: dest.kind === 'page' ? str(dest.page) || null : null, ref: str(dest.ref) };
+        return { id: str(d.id), kind: str(d.kind), label: label || 'Something', day: typeof d.day === 'string' && d.day ? d.day : null, since: timeOf(d.since), page: dest.kind === 'page' ? str(dest.page) || null : null, ref: str(dest.ref) };
       }
       case 'schedules.changes':
         return {
@@ -130,7 +130,8 @@
         return { id: str(d.execution_id), kind: str(d.kind), parent: str(d.parent_execution_id), name: refName(str(d.reference)) || 'A run', started: timeOf(d.started_at), ended: timeOf(d.ended_at), cause: error ? str(error.cause) : '' };
       }
       case 'threads.changes':
-        return { id: str(d.id), own: d.kind === 'own', title: str(d.title) || 'Untitled thread', people: Array.isArray(d.people) ? d.people.length : 0, last: timeOf(d.last_activity), waits: d.waits_on_you === true, unread: num(d.unread) || 0 };
+        // a daily thread (one a day) and a workspace thread are Aqua's; a shared thread is people's
+        return { id: str(d.id), aqua: d.kind === 'daily' || d.kind === 'workspace', daily: d.kind === 'daily', title: str(d.title) || 'Untitled thread', people: Array.isArray(d.people) ? d.people.length : 0, last: timeOf(d.last_activity), waits: d.waits_on_you === true, unread: num(d.unread) || 0 };
       case 'activity.changes':
         return { id: str(d.id), member: str(d.member) || 'crew', askedBy: str(d.asked_by), title: str(d.title), since: timeOf(d.since), status: str(d.status) };
       case 'components.changes':
@@ -266,12 +267,13 @@
   }
 
   // What waits on the person: the attention items, and an installed app whose grant is not
-  // current, a porter at the house. An offer names its sender when the files stream holds it.
+  // current, a porter at the house. An offer names its sender when the files stream holds it;
+  // an item that carries a `day` (an approval in a daily thread) is named by that day.
   function waiting() {
     const out = [];
     for (const { value: a } of state.attention.values()) {
       const offer = a.kind === 'file_offer' && state.files.get(a.ref);
-      out.push(offer && offer.value.from ? { ...a, from: offer.value.from } : a);
+      out.push(offer && offer.value.from ? { ...a, from: offer.value.from } : a.day ? { ...a, label: dayTitle(a.day) } : a);
     }
     for (const app of state.installed) {
       const c = state.components.get(bare(app.ref));
@@ -349,6 +351,23 @@
     return Promise.race([Promise.allSettled(firsts), new Promise((r) => setTimeout(r, 3000))]);
   }
 
+  // The threads listed: the newest daily thread stands for Aqua's days, the earlier ones a step
+  // back in Aqua's panel. A day by its ISO date, a daily thread's title or a waiting item's
+  // `day`, reads "Today" or "Yesterday" on the person's clock, else the date.
+  function threads() {
+    const all = [...state.threads.values()].map((held) => held.value);
+    const newest = all.reduce((n, t) => (t.daily && (!n || t.title > n.title) ? t : n), null);
+    return all.filter((t) => !t.daily || t === newest).map((t) => (t.daily ? { ...t, title: dayTitle(t.title) } : t));
+  }
+  function dayTitle(iso) {
+    const d = Date.parse(iso);
+    if (Number.isNaN(d)) return iso;
+    const ago = Math.floor(nowLocal() / 1440) - Math.round(d / 86400000);
+    if (ago === 0) return 'Today';
+    if (ago === 1) return 'Yesterday';
+    try { return new Intl.DateTimeFormat((state.appearance || {}).locale || undefined, { timeZone: 'UTC', day: 'numeric', month: 'short' }).format(d); } catch (e) { return iso; }
+  }
+
   // What a press of `retry-run` answers, in the village's words.
   const REFUSED = {
     conflict: 'This run cannot be run again: only a run a schedule or a feed started, known to have failed, runs again.',
@@ -371,7 +390,7 @@
 
   window.Road = {
     state, PARTS, PAUSE, RESUME, subscribe: (f) => listeners.add(f), start,
-    nowLocal, utcOf, localOf, partOn, units, order, entry, write, note, waiting, component, retryable, retry,
+    nowLocal, utcOf, localOf, partOn, units, order, entry, write, note, waiting, component, retryable, retry, threads,
     values: (map) => [...map.values()].map((held) => held.value),
     // What a press of a control answers, as a sentence when it did not run.
     async press(control, value) {
@@ -385,7 +404,7 @@
     pressFeed(feed, action) { const f = state.feeds[feed]; if (sdk && f && f.binding) sdk.press(f.binding, action); },
     open: (ref) => sdk && sdk.open(ref),
     ask: (widget) => sdk && sdk.ask(widget),
-    // a page, at `ref` when there is one: Aqua's panel at an own thread, the chat at a shared one
+    // a page, at `ref` when there is one: Aqua's panel at a thread of Aqua's, the chat at a shared one
     settings: (page, ref) => sdk && (ref ? sdk.settings(page, ref) : sdk.settings(page)),
     grant: (ref) => sdk && sdk.grant(ref),
     ready: () => sdk && sdk.ready(),

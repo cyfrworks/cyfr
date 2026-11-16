@@ -2254,7 +2254,7 @@ defmodule Opus.ProgramsTest do
       entry = row.id
       ctx = harness_member!(ctx, entry)
       actor = Sanctum.Context.actor(ctx)
-      {:ok, room} = Arca.ThreadStorage.create(actor)
+      {:ok, room} = Arca.Test.Days.thread(actor)
       {:ok, member} = Arca.ThreadStorage.crew_thread(actor, room.id, "harness")
       {:ok, other} = Arca.ThreadStorage.crew_thread(actor, room.id, "elsewhere")
       keep_session!(member, "claude-session-1")

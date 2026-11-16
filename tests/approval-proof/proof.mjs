@@ -1219,14 +1219,13 @@ async function main() {
     // named_prompt
     // -----------------------------------------------------------------------
     const thread = await ask({ op: "thread" });
-    // The desktop, and Aqua's panel on the shelf turned to the thread: the
-    // pane is the panel's, and a grant its turn needs is asked in the
-    // panel's own layer. The panel draws the thread chosen once it has
-    // kept it, and the desktop opened again finds the panel open on it.
+    // The desktop, and Aqua's panel on the shelf, which opens on today's
+    // daily thread, the fixture's: the pane is the panel's, and a grant its
+    // turn needs is asked in the panel's own layer. The panel keeps that it
+    // is open, so the desktop opened again finds it open on today's.
     await open(page, pagePath(""));
     await page.locator("#aqua-panel-button").click({ timeout: 30_000 });
-    await page.locator("#aqua-panel-threads").selectOption(thread.thread_id, { timeout: 30_000 });
-    await page.waitForSelector(`#aqua-panel-threads option[value="${thread.thread_id}"][selected]`,
+    await page.waitForSelector(`#aqua-panel-pane-thread[data-thread="${thread.thread_id}"]`,
       { state: "attached", timeout: 30_000 });
     await open(page, pagePath(""));
     layer = "#system-layer-panel-dialog";
@@ -1243,21 +1242,21 @@ async function main() {
     // such sign, so the proof does not announce to one.
     await page.waitForFunction((id) => {
       const pane = document.getElementById("aqua-panel-pane");
-      const select = document.getElementById("aqua-panel-threads");
-      return pane && pane.querySelector("#aqua-panel-pane-thread") &&
-        !pane.querySelector('[data-test="model-pending"]') && select && select.value === id;
+      const shown = pane && pane.querySelector("#aqua-panel-pane-thread");
+      return shown && !pane.querySelector('[data-test="model-pending"]') &&
+        shown.dataset.thread === id;
     }, thread.thread_id, { timeout: 30_000 }).catch(async (error) => {
       // What the page showed when the wait ran out, in the record a failed
       // run leaves: which half of the wait did not arrive, and what stood
       // over the desktop.
       const shown = await page.evaluate((id) => {
         const pane = document.getElementById("aqua-panel-pane");
-        const select = document.getElementById("aqua-panel-threads");
+        const shown = pane && pane.querySelector("#aqua-panel-pane-thread");
         return {
           panel_open: !!document.getElementById("aqua-panel-sheet"),
           pane_classes: pane ? pane.className : null,
           pane_reading_model: pane ? !!pane.querySelector('[data-test="model-pending"]') : null,
-          thread_chosen: select ? select.value === id : null,
+          thread_shown: shown ? shown.dataset.thread === id : null,
           dialogs_open: Array.from(document.querySelectorAll("dialog[open]"), (d) => d.id),
         };
       }, thread.thread_id).catch(() => null);
