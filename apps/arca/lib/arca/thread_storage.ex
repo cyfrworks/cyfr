@@ -1503,7 +1503,8 @@ defmodule Arca.ThreadStorage do
 
   @doc """
   Delete the athanor's threads whose last activity is older than
-  `cutoff` — messages and attachment blobs included — and with each what
+  `cutoff` — messages and attachment blobs included, the blobs after the
+  rows' transaction has committed — and with each what
   other threads kept of it, as a deletion forgets it: the pointers and
   reports that name it, and in the threads that read it their later
   compactions and the brain's session. A thread with an open turn, one an
@@ -1523,55 +1524,62 @@ defmodule Arca.ThreadStorage do
 
   def delete_before(%Prima.Actor{}, _cutoff), do: {:error, :no_athanor}
 
+  # Which threads go is decided in the transaction that deletes them, and
+  # their bytes go only once it has committed. The candidates are read,
+  # their rows taken as a person's post takes them (`Arca.TurnStorage`'s
+  # acceptance holds the thread's row before it writes), and the window
+  # asked again over the rows as they then stand: a thread that a post
+  # landed in, that was opened again, or that a turn began in meanwhile
+  # is left, and counted as kept. Every kind of thread retention removes
+  # goes this one way. A blob delete that fails after the commit leaves
+  # bytes no row backs, which the sweep reclaims
+  # (`sweep_orphaned_blobs/1`), as a hand delete does.
   defp delete_before_rows(actor, cutoff) do
-    ids = stale_ids(actor, cutoff)
+    case stale_ids(actor, cutoff) do
+      [] ->
+        {:ok, 0}
 
-    # Bytes before rows, per thread: an id whose blob delete fails
-    # keeps its rows and retries next cycle — never an orphaned tree the
-    # DB has already forgotten.
-    deletable =
-      Enum.filter(ids, fn id ->
-        case delete_blobs(actor, id) do
-          :ok ->
-            true
+      candidates ->
+        Repo.locking_transaction(fn ->
+          lock_athanor(actor)
+          _held = lock_rows(actor, candidates)
+          stale = MapSet.new(stale_ids(actor, cutoff))
+          deletable = Enum.filter(candidates, &MapSet.member?(stale, &1))
 
-          {:error, reason} ->
-            Logger.warning("[ThreadStorage] keeping #{id} this cycle: #{inspect(reason)}")
+          # No open turn had read these (`stale_ids/2`); one that read
+          # them since keeps them for the next cycle, and nothing is
+          # stopped here.
+          if forget!(actor, deletable, %{}) != [], do: Repo.rollback(:read_by_an_open_turn)
 
-            false
+          Repo.delete_all(from(m in Message, where: m.thread_id in ^deletable))
+          delete_thread_satellites(deletable)
+
+          {count, _} =
+            from(c in Thread, where: c.id in ^deletable)
+            |> QueryHelpers.where_tenant(actor)
+            |> Repo.delete_all()
+
+          {count, deletable}
+        end)
+        |> case do
+          {:ok, {count, deleted}} ->
+            Enum.each(deleted, &delete_blobs_after(actor, &1))
+            {:ok, count}
+
+          {:error, :read_by_an_open_turn} ->
+            {:ok, 0}
         end
-      end)
-
-    if deletable == [] do
-      {:ok, 0}
-    else
-      # One transaction, like `do_delete/2`: a crash between the two
-      # deletes otherwise left an empty thread row behind. The
-      # satellites (follows, thread-scope grants) sweep with the
-      # rows, same as a hand delete.
-      Repo.locking_transaction(fn ->
-        lock_athanor(actor)
-
-        # No open turn had read these (`stale_ids/2`); one that read
-        # them since keeps them for the next cycle, and nothing is
-        # stopped here.
-        if forget!(actor, deletable, %{}) != [], do: Repo.rollback(:read_by_an_open_turn)
-
-        Repo.delete_all(from(m in Message, where: m.thread_id in ^deletable))
-        delete_thread_satellites(deletable)
-
-        {count, _} =
-          from(c in Thread, where: c.id in ^deletable)
-          |> QueryHelpers.where_tenant(actor)
-          |> Repo.delete_all()
-
-        count
-      end)
-      |> case do
-        {:ok, count} -> {:ok, count}
-        {:error, :read_by_an_open_turn} -> {:ok, 0}
-      end
     end
+  end
+
+  # The rows of `ids`, held until the caller's transaction ends, in one
+  # order so two holders never wait on each other.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_rows(actor, ids) do
+    from(c in Thread, where: c.id in ^ids, order_by: [asc: c.id], select: c.id)
+    |> QueryHelpers.where_tenant(actor)
+    |> QueryHelpers.for_update()
+    |> Repo.all()
   end
 
   # The retention window both verbs speak, scoped the one way this module

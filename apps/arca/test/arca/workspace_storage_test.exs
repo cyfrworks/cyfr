@@ -1,6 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Arca.WorkspaceStorageTest.PausingDelete do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  # The first thread tree this process deletes runs the test's hook first:
+  # what a person does the moment retention's bytes start to go.
+  def delete_tree(actor, ["threads", _id] = path) do
+    if hook = Process.delete(:on_blob_delete), do: hook.()
+    Arca.Adapters.Local.delete_tree(actor, path)
+  end
+
+  def delete_tree(actor, path), do: Arca.Adapters.Local.delete_tree(actor, path)
+end
+
 defmodule Arca.WorkspaceStorageTest do
   @moduledoc """
   A workspace thread's rows: opened in one transaction with its opening,
@@ -288,6 +302,51 @@ defmodule Arca.WorkspaceStorageTest do
     assert {:ok, removed} = Threads.delete_before(actor, future)
     assert removed >= 1
     assert {:error, :not_found} = Threads.get(actor, workspace.id)
+  end
+
+  # Retention decides under the rows it deletes.
+  test "a person's post that lands as retention removes a thread keeps the thread, or finds it gone",
+       %{actor: actor, daily: daily} do
+    workspace = open!(actor, daily)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.Thread, where: c.id == ^workspace.id),
+        set: [workspace_state: "done"]
+      )
+
+    # The daily thread stays by a turn still open there.
+    _open = running!(actor, daily)
+    future = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+    me = self()
+
+    Process.put(:on_blob_delete, fn ->
+      posted =
+        TurnStorage.accept_message(actor, workspace.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "one more thing"}
+        })
+
+      send(me, {:posted, posted})
+    end)
+
+    assert {:ok, _removed} =
+             Prima.Test.Env.with_app_env(
+               :arca,
+               :storage_adapter,
+               Arca.WorkspaceStorageTest.PausingDelete,
+               fn -> Threads.delete_before(actor, future) end
+             )
+
+    assert_received {:posted, posted}
+
+    case posted do
+      {:ok, _landed} ->
+        assert {:ok, %{workspace_state: "open"}} = Threads.get(actor, workspace.id)
+
+      {:error, _gone} ->
+        assert {:error, :not_found} = Threads.get(actor, workspace.id)
+    end
   end
 
   test "a row naming a workspace thread lands only while it stands", %{actor: actor, daily: daily} do
