@@ -2206,6 +2206,66 @@ defmodule Aqua.LoopTest do
     end
   end
 
+  test "a launch with no card is decided again on the person's answers as it dispatches: a " <>
+         "never given since its decision runs nothing",
+       %{ctx: ctx, thread: thread} do
+    app = quiet_app!(ctx)
+    test = self()
+    handler = {__MODULE__, make_ref()}
+    {:ok, once} = Agent.start_link(fn -> false end)
+
+    # The person answers never on execution.run while the read decided
+    # beside the launch is admitted: after the launch's decision, before
+    # its dispatch.
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :sanctum, :decision, :admitted],
+        fn _event, _measurements, %{tool: tool, action: action}, _config ->
+          if {tool, action} == {"crew", "list"} and not Agent.get_and_update(once, &{&1, true}) do
+            {:ok, _} =
+              Arca.ToolGrantStorage.put(%{
+                athanor_id: ctx.athanor_id,
+                scope: "agent",
+                effect: "deny",
+                agent_name: "aqua",
+                tool: "execution",
+                action: "run",
+                granted_by: ctx.user_id
+              })
+
+            send(test, :never)
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, app],
+       script: [
+         calls([
+           {"c0", "crew", %{"action" => "list"}},
+           {"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}
+         ]),
+         reply("not run")
+       ]}
+    )
+
+    turn = accept!(ctx, thread, "@aqua look, then run it")
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    assert_received :never
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{dispatch_state: "closed", outcome: "denied", approval_id: nil, error: said} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert said == "execution.run is not in the agent's policy"
+    assert runs_of(ctx, app) == []
+  end
+
   test "a launch with no card whose run's outcome is not known stops the turn on it, and is " <>
          "never run again",
        %{ctx: ctx, thread: thread} do
