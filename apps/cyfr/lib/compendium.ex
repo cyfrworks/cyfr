@@ -81,6 +81,32 @@ defmodule Compendium do
   @spec tincture_asset_rules() :: Tincture.asset_rules()
   defdelegate tincture_asset_rules(), to: Tincture, as: :asset_rules
 
+  @doc "The type a version's file is served as (`Compendium.Tincture.served_type/1`)."
+  @spec tincture_served_type([String.t()]) :: {:ok, String.t()} | :error
+  defdelegate tincture_served_type(file), to: Tincture, as: :served_type
+
+  @doc """
+  A tincture version's files as the endpoint reads them, admitted as
+  `source` admits a path and held to a bound before they are read
+  (`Compendium.Tincture.files/3`).
+  """
+  @spec tincture_files(Context.t(), String.t(), Tincture.bound()) ::
+          {:ok, %{name: String.t(), entry: String.t(), files: [Tincture.file()]}}
+          | {:error, term()}
+  defdelegate tincture_files(ctx, reference, bound), to: Tincture, as: :files
+
+  @doc "The SDK's bytes, the bundle every page CYFR hands over holds (`Compendium.Tincture.sdk/0`)."
+  @spec tincture_sdk() :: binary()
+  defdelegate tincture_sdk(), to: Tincture, as: :sdk
+
+  @doc "An entry page given the `<base>` and the SDK (`Compendium.Tincture.head_tags/3`)."
+  @spec tincture_head_tags(binary(), String.t(), String.t()) :: binary()
+  defdelegate tincture_head_tags(html, href, nonce), to: Tincture, as: :head_tags
+
+  @doc "A plain page's entry given a head first (`Compendium.Tincture.plain_entry/1`)."
+  @spec plain_entry(binary()) :: binary()
+  defdelegate plain_entry(document), to: Tincture
+
   # ---------------------------------------------------------------------------
   # The tincture frame's rules (`Compendium.Tincture.Rules`)
   # ---------------------------------------------------------------------------

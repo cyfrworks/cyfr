@@ -10,8 +10,10 @@ defmodule Compendium.TinctureTest do
   a react canvas's once its build is, and only streams a canvas reads),
   and a stream that declares
   a shape refused at the registry in any other tincture, which registers
-  nothing; and the connect-domain grammar, which is the shared manifest
-  contract's.
+  nothing; the connect-domain grammar, which is the shared manifest
+  contract's; the head a plain page is given before the SDK and the
+  `<base>`, and a tincture version's files as the endpoint reads them,
+  its entry never given one.
   """
 
   # The registry's case points the storage root at a directory of its own
@@ -109,6 +111,155 @@ defmodule Compendium.TinctureTest do
       assert rules.preview_count == Tincture.preview_count()
     end
   end
+
+  describe "a page's head" do
+    @base "/t/@home/local/page/"
+    @nonce "n0nce"
+
+    # The tags as the endpoint's entry page carries them.
+    defp injected,
+      do:
+        "\n<base href=\"#{@base}\">\n<script nonce=\"#{@nonce}\">#{Compendium.tincture_sdk()}</script>"
+
+    test "a plain entry given a head gets the SDK and the <base>, with a head of its own, a body alone or no tag at all" do
+      for document <- [
+            "<html><head><title>Mine</title></head><body>x</body></html>",
+            "<body>only a body</body>",
+            "no tags at all"
+          ] do
+        handed = Compendium.tincture_head_tags(Compendium.plain_entry(document), @base, @nonce)
+
+        # The tags follow the head put first, and the document is whole after it.
+        assert handed == "<!doctype html><head>" <> injected() <> "</head>" <> document, document
+        assert [_once] = :binary.matches(handed, Compendium.tincture_sdk())
+      end
+    end
+
+    test "without a head given first, a body alone or no tag at all gets neither" do
+      for document <- ["<body>only a body</body>", "no tags at all"],
+          do: assert(Compendium.tincture_head_tags(document, @base, @nonce) == document)
+    end
+  end
+
+  describe "a tincture version's files" do
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+
+      base = Path.join(System.tmp_dir!(), "tincture_files_#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(base) end)
+      Prima.Test.Env.put_app_env(:arca, :base_path, base)
+
+      {:ok, ctx: Sanctum.TestContext.local()}
+    end
+
+    @bound %{files: 10, bytes: 1_000}
+
+    # A local tincture version of `files`, laid and registered as a
+    # publish would: its unit.
+    defp version!(ctx, name, files) do
+      manifest = %{
+        "name" => name,
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{}
+      }
+
+      unit =
+        Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
+          manifest: manifest,
+          files: files
+        )
+
+      {:ok, _registered} = Registry.register_from_arca(ctx, unit)
+      unit
+    end
+
+    test "are read as the endpoint reads them, the entry as it was written, never given a head",
+         %{ctx: ctx} do
+      entry = "<p>no head of its own</p>"
+      version!(ctx, "plain", [{"index.html", entry}, {"app.js", "1"}, {"src/notes.txt", "n"}])
+
+      assert {:ok, %{name: "plain", entry: "index.html", files: files}} =
+               Compendium.tincture_files(ctx, "tincture:local.plain:1.0.0", @bound)
+
+      assert files == [
+               %{path: "app.js", type: "text/javascript", bytes: "1"},
+               %{path: "index.html", type: "text/html", bytes: entry}
+             ]
+
+      refute Enum.any?(files, &String.starts_with?(&1.bytes, Compendium.plain_entry("")))
+    end
+
+    test "past the bound in files or bytes are refused before one of them is read",
+         %{ctx: ctx} do
+      unit =
+        version!(ctx, "sized", [{"index.html", "<p>12345</p>"}, {"a.js", "1234"}, {"b.js", "12"}])
+
+      reads = fn bound ->
+        {answer, calls} =
+          traced([{Arca, :get, 2}], fn ->
+            Compendium.tincture_files(ctx, "tincture:local.sized:1.0.0", bound)
+          end)
+
+        {answer,
+         for(
+           [_actor, path] <- args_of(calls, {Arca, :get, 2}),
+           List.starts_with?(path, unit),
+           do: Enum.drop(path, length(unit))
+         )}
+      end
+
+      # The served files are 18 bytes in three files; the manifest is none of them.
+      assert {{:error, :over_bound}, []} = reads.(%{files: 2, bytes: 1_000})
+      assert {{:error, :over_bound}, []} = reads.(%{files: 3, bytes: 17})
+
+      # At the bound every served file is read, once each.
+      assert {{:ok, %{files: [_, _, _]}}, read} = reads.(%{files: 3, bytes: 18})
+      assert Enum.sort(read) == [["a.js"], ["b.js"], ["index.html"]]
+    end
+  end
+
+  # `fun`'s answer, and the calls this process made to `mfas` while it ran,
+  # in order. A process's call trace is not delivered to itself, so a
+  # collector takes it; every trace message is delivered before the
+  # collector is asked for what it holds.
+  defp traced(mfas, fun) do
+    test = self()
+    collector = spawn_link(fn -> collect(test, []) end)
+
+    on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+    for {module, _function, _arity} = mfa <- mfas do
+      Code.ensure_loaded!(module)
+      assert :erlang.trace_pattern(mfa, true, [:global]) == 1
+    end
+
+    :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+    answer =
+      try do
+        fun.()
+      after
+        :erlang.trace(test, false, [:call])
+      end
+
+    delivered = :erlang.trace_delivered(test)
+    assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+    send(collector, {:done, delivered})
+    assert_receive {:collected, ^delivered, calls}, 5_000
+    {answer, calls}
+  end
+
+  defp collect(test, calls) do
+    receive do
+      {:trace, ^test, :call, call} -> collect(test, [call | calls])
+      {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+    end
+  end
+
+  defp args_of(calls, {module, function, _arity}),
+    do: for({^module, ^function, args} <- calls, do: args)
 
   describe "the publish check" do
     test "states the version's size, and names the first file of another type" do

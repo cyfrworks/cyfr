@@ -22,9 +22,10 @@ defmodule Compendium.Providers.Source do
     * the compiled artifact (`{type}.wasm`) and a tincture's `dist/`, which
       a build writes.
 
-  `scoped/2` is the one decision. It validates the segments with
-  `Prima.PathSafety`, reads the component they name with the layout's one
-  parser (`Compendium.ComponentPath.parse/1`), and compares names below
+  `scoped/2` is the one decision. It admits the path (`admit/1`): it
+  validates the segments with `Prima.PathSafety`, reads the component
+  they name with the layout's one parser (`Compendium.ComponentPath.parse/1`)
+  and holds it to the `local` publisher; then it compares names below
   the version directory after Unicode compatibility normalisation and case
   folding, so no spelling a case-insensitive filesystem resolves to a
   refused file reaches `Arca.Files`.
@@ -208,14 +209,34 @@ defmodule Compendium.Providers.Source do
   # Scope
   # ---------------------------------------------------------------------------
 
-  # Refusals are worded, so an agent is told what it may edit rather than
-  # being handed a storage error.
-  defp scoped(path, action) when is_binary(path) do
+  @doc """
+  The component a path names, admitted as this tool admits every path it
+  acts on: segments `Prima.PathSafety` holds safe, read by the layout's
+  one parser (`Compendium.ComponentPath.parse/1`), of the `local`
+  publisher. Whatever is then read under it is read under the caller's
+  actor, so no path reaches another athanor's tree (`Arca.Files`).
+  Answers the path's segments and what the parser read of them, or the
+  refusal in this tool's words. Aqua's browser admits the tincture
+  version it shows by it (`Compendium.Tincture.files/3`).
+  """
+  @spec admit(String.t()) ::
+          {:ok, [String.t()], map()} | {:error, {:invalid_argument, String.t()}}
+  def admit(path) when is_binary(path), do: admit(path, nil)
+
+  defp admit(path, action) do
     segments = String.split(path, "/", trim: true)
 
     with :ok <- safe(segments),
          {:ok, parts} <- component(segments, action, path),
-         :ok <- local_publisher(parts.publisher),
+         :ok <- local_publisher(parts.publisher) do
+      {:ok, segments, parts}
+    end
+  end
+
+  # Refusals are worded, so an agent is told what it may edit rather than
+  # being handed a storage error.
+  defp scoped(path, action) when is_binary(path) do
+    with {:ok, segments, parts} <- admit(path, action),
          :ok <- source_file(parts.type, Enum.map(parts.rest, &fold/1), action) do
       {:ok, Enum.join(segments, "/")}
     end

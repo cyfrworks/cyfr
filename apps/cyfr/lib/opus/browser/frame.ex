@@ -27,6 +27,9 @@ defmodule Opus.Browser.Frame do
   @max_to_host 131_072
   @max_to_driver 8_388_608
   @max_response 16_777_216
+  @put_max_bytes 33_554_432
+  @put_max_files 1_024
+  @put_part_bytes 1_048_576
 
   @doc "The most bytes a body the driver sends may hold."
   @spec max_to_host() :: pos_integer()
@@ -42,6 +45,22 @@ defmodule Opus.Browser.Frame do
   """
   @spec max_response() :: pos_integer()
   def max_response, do: @max_response
+
+  @doc """
+  The most bytes one put hands the driver, its files' together: the
+  driver takes no more, and the host refuses a larger put before it
+  writes any of it.
+  """
+  @spec put_max_bytes() :: pos_integer()
+  def put_max_bytes, do: @put_max_bytes
+
+  @doc "The most files one put hands the driver."
+  @spec put_max_files() :: pos_integer()
+  def put_max_files, do: @put_max_files
+
+  @doc "The most of a put's bytes one `part` message carries, before base64."
+  @spec put_part_bytes() :: pos_integer()
+  def put_part_bytes, do: @put_part_bytes
 
   @doc "The frame of one message, its body `map` as JSON."
   @spec message(map()) :: binary()

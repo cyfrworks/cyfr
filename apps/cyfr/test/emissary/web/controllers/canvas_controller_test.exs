@@ -668,7 +668,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       assert get_resp_header(conn, "cache-control") == ["public, max-age=31536000, immutable"]
       assert get_resp_header(conn, "location") == []
       assert get_resp_header(conn, "connection-allowlist") == []
-      assert TinctureAssets.canvas_sdk() == bundle
+      assert Compendium.tincture_sdk() == bundle
     end
 
     test "no other name under its prefix is served", %{credential: credential, open: open} do

@@ -81,7 +81,7 @@ defmodule Emissary.Web.CanvasController do
     |> put_resp_header("cache-control", @sdk_cache)
     |> put_resp_header("access-control-allow-origin", "*")
     |> put_resp_header("content-type", "text/javascript; charset=utf-8")
-    |> send_resp(200, TinctureAssets.canvas_sdk())
+    |> send_resp(200, Compendium.tincture_sdk())
   end
 
   @doc "The page of the canvas open the path's frame id names."

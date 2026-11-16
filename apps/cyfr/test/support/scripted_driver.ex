@@ -27,6 +27,15 @@ defmodule Cyfr.Test.ScriptedDriver do
   host's `seen`, `uncast` and `input` are reported as `{:driver, :seen,
   session, cast, seq}`, `{:driver, :uncast, session, cast}` and
   `{:driver, :input, session, cast, events}`.
+
+  A put (C15) is a request of op `page` that says how many `part`
+  messages follow it (`of`): each part is reported as `{:driver, :part,
+  session, id, seq, bytes}`, its base64 read, and once the last is in the
+  put is reported as `{:driver, :put, session, request, bytes}`, the
+  files' bytes laid end to end, and answered as any request is. A page's
+  call is the test's to write (`call/5`, its body's bytes carried in
+  base64 as the driver carries them), and the host's `answer` is reported
+  as `{:driver, :answer, session, id, status, body}`.
   """
 
   use GenServer
@@ -60,6 +69,20 @@ defmodule Cyfr.Test.ScriptedDriver do
 
   @doc "Write image `seq` of cast `cast` on every session."
   def image(driver, cast, seq, jpeg), do: write(driver, image_frame(cast, seq, jpeg))
+
+  @doc "Pass up a page's call `id` from window `win` on every session: its `op` and its `body`'s bytes."
+  def call(driver, id, win, op, body),
+    do:
+      write(
+        driver,
+        Frame.message(%{
+          "t" => "call",
+          "id" => id,
+          "win" => win,
+          "op" => op,
+          "body" => Base.encode64(body)
+        })
+      )
 
   @impl true
   def init({test, opts}) do
@@ -104,7 +127,15 @@ defmodule Cyfr.Test.ScriptedDriver do
 
   @impl true
   def handle_info({:terminal_opened, fake, session}, state) do
-    session_state = %{buffer: "", responses: %{}, order: [], outstanding: nil, held: %{}}
+    session_state = %{
+      buffer: "",
+      responses: %{},
+      order: [],
+      outstanding: nil,
+      held: %{},
+      puts: %{}
+    }
+
     state = %{state | fake: fake, sessions: Map.put(state.sessions, session, session_state)}
 
     hello =
@@ -139,17 +170,38 @@ defmodule Cyfr.Test.ScriptedDriver do
 
   # ---------------------------------------------------------------------------
 
+  # A put waits for its parts; the last of them lets it be answered.
+  defp message(state, session, %{"t" => "req", "id" => id, "of" => of} = request) when of > 0 do
+    send(state.test, {:driver, :req, session, request})
+    put_in(state.sessions[session].puts[id], %{request: request, parts: []})
+  end
+
   defp message(state, session, %{"t" => "req", "id" => id} = request) do
     send(state.test, {:driver, :req, session, request})
+    answer_request(state, session, id, request)
+  end
 
-    case answer_of(state, request, :arrived) do
-      :hold ->
-        send(state.test, {:driver, :holding, session, id})
-        update_in(state.sessions[session].held, &Map.put(&1, id, request))
+  defp message(state, session, %{"t" => "part", "id" => id, "seq" => seq, "part" => part}) do
+    bytes = Base.decode64!(part)
+    send(state.test, {:driver, :part, session, id, seq, bytes})
 
-      answered ->
-        respond(state, session, id, answered)
+    case state.sessions[session].puts[id] do
+      %{request: %{"of" => of} = request, parts: parts} when length(parts) + 1 == of ->
+        state = update_in(state.sessions[session].puts, &Map.delete(&1, id))
+        send(state.test, {:driver, :put, session, request, IO.iodata_to_binary(parts ++ [bytes])})
+        answer_request(state, session, id, request)
+
+      %{parts: parts} = put ->
+        put_in(state.sessions[session].puts[id], %{put | parts: parts ++ [bytes]})
+
+      nil ->
+        state
     end
+  end
+
+  defp message(state, session, %{"t" => "answer", "id" => id, "status" => status, "body" => body}) do
+    send(state.test, {:driver, :answer, session, id, status, body})
+    state
   end
 
   # An acknowledgement names the last chunk of the unbroken run the host
@@ -221,6 +273,17 @@ defmodule Cyfr.Test.ScriptedDriver do
   end
 
   defp message(state, _session, _other), do: state
+
+  defp answer_request(state, session, id, request) do
+    case answer_of(state, request, :arrived) do
+      :hold ->
+        send(state.test, {:driver, :holding, session, id})
+        update_in(state.sessions[session].held, &Map.put(&1, id, request))
+
+      answered ->
+        respond(state, session, id, answered)
+    end
+  end
 
   defp answer_of(state, request, moment) do
     case {state.answer.(request), moment} do

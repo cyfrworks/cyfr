@@ -89,6 +89,7 @@ defmodule Sanctum.Gate.BulkArgumentLogTest do
                "aqua.skill_create content",
                "aqua.skill_update content",
                "aqua.update content",
+               "browser.page files[].content",
                "build.validate wasm_base64",
                "canvas.write files{}",
                "file.write content",

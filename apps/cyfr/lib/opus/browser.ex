@@ -73,6 +73,31 @@ defmodule Opus.Browser do
   runs twice; one the driver no longer holds is refused `:unavailable`,
   as is one not answered in time.
 
+  ## A put
+
+  `put/3` shows a page in the window: one request of op `page` whose
+  arguments are the page's manifest (its `root`, the address's path, its
+  `entry` and each file's `path`, `type` and `size`) and whose `of`
+  says how many `part` messages follow it, each the next at most
+  `Opus.Browser.Frame.put_part_bytes/0` bytes of the files' bytes laid
+  end to end in the manifest's order, in base64. The request and its
+  parts are one write, decided once before its first byte as every
+  request is, so a turn that lost the work hands over none of it and
+  nothing of another write lands between them. A put is bounded in files
+  and bytes (`put_bound/0`, the vector file's `put`): one past the bound
+  is refused before anything starts or is written.
+
+  ## A page's call
+
+  The driver passes up a page's call to CYFR (`call`, a `POST` of the
+  tincture wire from a page it put, its body's bytes in base64), and the
+  holder answers it (`answer`) with an HTTP status and a body. Nothing
+  here takes a call yet: each is answered at once with the wire's refusal
+  for `unavailable` (`Prima.TinctureWire.refusal/1` at the status its
+  class answers with, `Prima.Refusal.http_status/1`), its body read for
+  nothing. A `callend`, the driver giving up a call it passed up, needs
+  nothing then.
+
   ## The person's watch
 
   `watch/4` is the person watching one window on a page of their own
@@ -116,7 +141,8 @@ defmodule Opus.Browser do
   @registry Opus.Browser.Registry
   @holders Opus.Browser.Holders
   @max_windows 4
-  @ops ~w(open read click type key page screenshot close)
+  # What `act/4` runs; a page is put (`put/3`).
+  @ops ~w(open read click type key screenshot close)
   @openers ~w(open page)
   @request_ms 90_000
   # How long a start and the driver's hello may take, together.
@@ -136,9 +162,16 @@ defmodule Opus.Browser do
   @spec max_response() :: pos_integer()
   def max_response, do: Frame.max_response()
 
-  @doc "The operations `act/3` runs."
+  @doc "The operations `act/4` runs; a page is shown by `put/3`."
   @spec ops() :: [String.t()]
   def ops, do: @ops
+
+  @doc """
+  The most files and bytes one put hands over (`Opus.Browser.Frame.put_max_files/0`,
+  `put_max_bytes/0`).
+  """
+  @spec put_bound() :: %{files: pos_integer(), bytes: pos_integer()}
+  def put_bound, do: %{files: Frame.put_max_files(), bytes: Frame.put_max_bytes()}
 
   @doc """
   The bound a newly added browser's row is given (the `browser_memory_bytes`
@@ -205,7 +238,8 @@ defmodule Opus.Browser do
       # alone, so no debug log, status or crash report prints them.
       GenServer.call(
         pid,
-        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args)), allowed?},
+        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args)), allowed?,
+         nil},
         @start_ms + @request_ms + @answer_margin_ms
       )
     else
@@ -217,6 +251,81 @@ defmodule Opus.Browser do
   end
 
   def act(_caller, _op, _args, _allowed?), do: {:error, :not_owned}
+
+  @typedoc """
+  A page to put into a window: `root`, the path of its address
+  (`/t/<athanor>/local/<name>`); `entry`, the path among `files` of the
+  page it opens at; and `files` in the order they are handed, each its
+  `path` below the root, with no leading slash, its `type` and its
+  `bytes`.
+  """
+  @type put :: %{
+          root: String.t(),
+          entry: String.t(),
+          files: [%{path: String.t(), type: String.t(), bytes: binary()}]
+        }
+
+  @doc """
+  Put `put` into the window of the caller's thread and show its entry
+  (moduledoc), for a caller proved as `act/4` proves one. Refused
+  `:put_too_large` when it holds more files or bytes than `put_bound/0`,
+  before anything starts or is written; otherwise answered as `act/4`
+  answers.
+  """
+  @spec put(Programs.caller(), put(), (-> boolean())) :: {:ok, map()} | {:error, term()}
+  def put(
+        {:turn, _ctx, lineage} = caller,
+        %{root: root, entry: entry, files: [_ | _] = files},
+        allowed?
+      )
+      when is_binary(root) and is_binary(entry) and is_function(allowed?, 0) do
+    with :ok <- within_bound(files),
+         {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
+         window when is_binary(window) <- Map.get(lineage, "thread_id"),
+         {:ok, pid} <- holder(athanor_id, user_id) do
+      manifest = %{
+        "root" => root,
+        "entry" => entry,
+        "files" =>
+          Enum.map(files, &%{"path" => &1.path, "type" => &1.type, "size" => byte_size(&1.bytes)})
+      }
+
+      # The files' bytes, like a page's html, travel in
+      # `Opus.Programs.Output`s, which show their size alone.
+      parts = files |> Enum.map(& &1.bytes) |> IO.iodata_to_binary() |> parts()
+
+      GenServer.call(
+        pid,
+        {:act, caller, turn_id, window, "page", Programs.Output.new(Jason.encode!(manifest)),
+         allowed?, parts},
+        @start_ms + @request_ms + @answer_margin_ms
+      )
+    else
+      {:error, reason} -> {:error, reason}
+      _no_thread -> {:error, :not_owned}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  def put(_caller, _put, _allowed?), do: {:error, :not_owned}
+
+  defp within_bound(files) do
+    bytes = Enum.reduce(files, 0, &(&2 + byte_size(&1.bytes)))
+
+    if length(files) <= Frame.put_max_files() and bytes <= Frame.put_max_bytes(),
+      do: :ok,
+      else: {:error, :put_too_large}
+  end
+
+  # The bytes of a put's `part` messages, in order, each in base64.
+  defp parts(<<>>), do: []
+
+  defp parts(bytes) do
+    size = min(byte_size(bytes), Frame.put_part_bytes())
+    <<part::binary-size(^size), rest::binary>> = bytes
+    [Programs.Output.new(Base.encode64(part)) | parts(rest)]
+  end
 
   @typedoc """
   A watch of a window: its holder, which the viewer may monitor, and the
@@ -486,7 +595,7 @@ defmodule Opus.Browser do
 
   @impl true
   def handle_call(
-        {:act, caller, turn_id, window, op, %Programs.Output{} = args, allowed?},
+        {:act, caller, turn_id, window, op, %Programs.Output{} = args, allowed?, upload},
         from,
         state
       ) do
@@ -499,7 +608,8 @@ defmodule Opus.Browser do
       turn_id: turn_id,
       window: window,
       op: op,
-      args: args
+      args: args,
+      upload: upload
     }
 
     cond do
@@ -868,8 +978,24 @@ defmodule Opus.Browser do
       {:ok, %{"t" => "gone", "id" => id}} -> gone(id, state)
       {:ok, %{"t" => "image"} = image} -> image(image, state)
       {:ok, %{"t" => "uncast", "id" => cast}} -> uncast(cast, state)
+      {:ok, %{"t" => "call", "id" => call}} when is_integer(call) -> call(call, state)
       _unknown -> state
     end
+  end
+
+  # A page's call, answered at once: nothing takes one yet.
+  defp call(call, state) do
+    refusal = Sanctum.Refusals.classify(:unavailable)
+
+    answer = %{
+      "t" => "answer",
+      "id" => call,
+      "status" => Prima.Refusal.http_status(refusal.class),
+      "body" => Jason.encode!(Prima.TinctureWire.refusal(refusal))
+    }
+
+    write(state, Frame.message(answer), :answer)
+    state
   end
 
   # A driver that could not start Chrome is closed; its end, which names
@@ -890,8 +1016,10 @@ defmodule Opus.Browser do
 
   defp send_request(state, request) do
     id = state.next_id
+    {upload, request} = Map.pop(request, :upload)
 
-    # The arguments' JSON, as the caller encoded it, is the frame's `args`.
+    # The arguments' JSON, as the caller encoded it, is the frame's `args`;
+    # a put says how many parts follow it.
     frame =
       Frame.encode(
         IO.iodata_to_binary([
@@ -903,6 +1031,7 @@ defmodule Opus.Browser do
           Jason.encode!(request.op),
           ~s(,"args":),
           request.args.bytes,
+          if(upload, do: [~s(,"of":), Integer.to_string(length(upload))], else: []),
           "}"
         ])
       )
@@ -912,7 +1041,24 @@ defmodule Opus.Browser do
     else
       timer = Process.send_after(self(), {:expired, id}, @request_ms)
       request = Map.merge(request, %{id: id, timer: timer, parts: %{}, of: nil, size: 0})
-      write(state, frame, {:request, id})
+      # A put's parts follow its request in the same write, under its one
+      # decision. A part's base64 needs no escaping in JSON.
+      parts =
+        for {part, seq} <- Enum.with_index(upload || []) do
+          Frame.encode(
+            IO.iodata_to_binary([
+              ~s({"t":"part","id":),
+              Integer.to_string(id),
+              ~s(,"seq":),
+              Integer.to_string(seq),
+              ~s(,"part":"),
+              part.bytes,
+              ~s("})
+            ])
+          )
+        end
+
+      write(state, IO.iodata_to_binary([frame | parts]), {:request, id})
       state = %{state | next_id: id + 1, pending: Map.put(state.pending, id, request)}
 
       case request do
