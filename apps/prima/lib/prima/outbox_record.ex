@@ -83,7 +83,9 @@ defmodule Prima.OutboxRecord do
   # to the one bound every message passes (`Aqua.Runner.Admission`).
   @max_reply_bytes 32 * 1024
   @reply_outcomes ~w(done failed cancelled uncertain needs_you)
-  @report_outcomes ~w(done failed needs_you)
+  # Aqua reports `done` or `needs_you`; `error` is the server's, when Aqua
+  # could not run. A `needs_you` record naming a card is the card's notice.
+  @report_outcomes ~w(done needs_you error)
   # The files one report carries, as a message carries at most.
   @max_report_files 10
   @origins Prima.Origin.values()
@@ -315,10 +317,12 @@ defmodule Prima.OutboxRecord do
   @doc """
   The record of a workspace thread's state moved to an outcome, from what
   the moving transaction read: `athanor_id`, `workspace_id`, `title`,
-  `turn_id`, `moved_at`, `outcome` (one of `report_outcomes/0`),
-  `summary`, `attachments` (`[%{"message_id", "stored_name"}]`, at most
-  `max_report_files/0`), `sources` (`Prima.Source`), `person_id` and
-  `origin`; a `needs_you` record also names the card's `approval_id`.
+  `turn_id` (the reporting turn; nil only for the server's `error`
+  report of an opening refused before any turn started), `moved_at`,
+  `outcome` (one of `report_outcomes/0`), `summary`, `attachments`
+  (`[%{"message_id", "stored_name"}]`, at most `max_report_files/0`),
+  `sources` (`Prima.Source`), `person_id` and `origin`; a card's notice,
+  a `needs_you` record, also names the card's `approval_id`.
   """
   @spec workspace_report(map()) :: t()
   def workspace_report(
@@ -337,7 +341,8 @@ defmodule Prima.OutboxRecord do
         } = attrs
       )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
-             workspace_id != "" and is_binary(title) and is_binary(turn_id) and turn_id != "" and
+             workspace_id != "" and is_binary(title) and
+             ((is_binary(turn_id) and turn_id != "") or (is_nil(turn_id) and outcome == "error")) and
              outcome in @report_outcomes and is_binary(summary) and is_list(attachments) and
              length(attachments) <= @max_report_files and is_list(sources) and
              is_binary(person_id) and person_id != "" and origin in @origins do

@@ -21,8 +21,9 @@ defmodule Arca.Schemas.Thread do
   date of the athanor. A workspace thread is one Aqua opens for a piece of
   work, with its `workspace_state` (`workspace_states/0`), the daily
   thread's post it was `opened_from`, and its `workspace_outcome`
-  (`workspace_outcomes/0`): what its last report since it last took new
-  work said, which it becomes once that work is finished
+  (`workspace_outcomes/0`): how its work last ended since it last took
+  new work (Aqua's report, the person's stop, or the server's error),
+  which it becomes once nothing of it remains to run
   (`Arca.TurnStorage`'s "Workspace threads"). A crew thread is a child
   thread a crew member (`agent`) works in under the room thread
   `parent_id` names, a daily or a workspace thread, one per member per
@@ -52,8 +53,8 @@ defmodule Arca.Schemas.Thread do
   @type t :: %__MODULE__{}
 
   @kinds ~w(daily workspace crew)
-  @workspace_states ~w(open needs_you done failed)
-  @workspace_outcomes ~w(done failed)
+  @workspace_states ~w(open needs_you done stopped error)
+  @workspace_outcomes ~w(done needs_you stopped error)
 
   @doc "The `kind` vocabulary, the `threads_kind_known` check's."
   @spec kinds() :: [String.t()]
@@ -67,7 +68,7 @@ defmodule Arca.Schemas.Thread do
   @spec workspace_states() :: [String.t()]
   def workspace_states, do: @workspace_states
 
-  @doc "What a workspace thread's report says, the `threads_workspace_outcome_known` check's."
+  @doc "How a workspace thread's work last ended, the `threads_workspace_outcome_known` check's."
   @spec workspace_outcomes() :: [String.t()]
   def workspace_outcomes, do: @workspace_outcomes
 

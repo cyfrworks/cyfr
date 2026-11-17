@@ -74,26 +74,42 @@ defmodule Arca.TurnStorage do
 
   One rule decides its state (`work_state!/2`), and every write that may
   move it asks the rule in its own transaction: a workspace thread is
-  finished when nothing it accepted remains to run, in it or in a crew
-  thread under it, and no card waits in any of them. Finished, it is what
-  its last report said (`workspace_outcome`), or `open` when none did
-  since it last took new work; until then it is `needs_you` while a card
-  waits and `open` otherwise. A turn that reported has no work left to
-  run, and a request asked of a crew member is left until its answer
-  lands. The writes that ask it:
+  `needs_you` while a card waits in it or in a crew thread under it;
+  otherwise `open` while anything it accepted remains to run there; and
+  once nothing does, how its work last ended since it last took new work
+  (`workspace_outcome`): `done` or `needs_you` as Aqua reported it,
+  `stopped` by the person, `error` when Aqua could not run, or `open`
+  when nothing ended it. A turn that reported has no work left to run,
+  a request asked of a crew member is left until its answer lands, and
+  an opening until its turn starts. The writes that ask it:
 
-    * a turn's report of its work as `done` or `failed`
-      (`report_workspace/4`), once a turn, or a turn there that ends
-      failed or uncertain without one (`finish/4`), which records the
-      `workspace_report` and its outcome, landing whatever else remains;
+    * a turn's report of its work as `done` or `needs_you`
+      (`report_workspace/4`), once a turn, which records the
+      `workspace_report` and its outcome;
+    * a turn there that ends without a report of its own (`finish/4`):
+      failed or uncertain, or cancelled because the server could neither
+      resume nor start it (`:ended_by` `:recovery`), records an `error` report with
+      the error as its summary; cancelled by an act of the person
+      (`:ended_by` `:person`: a stop, a deletion of what it read, the
+      consent restart, the athanor's archive) records `stopped` and no
+      report; any other end records nothing;
+    * the person's stop of the thread (`stop_work/3`), which ends all
+      that remains to run there and in its crew threads and records
+      `stopped`, and an opening whose delivery is refused for good
+      (`refuse_opening/4`), which records an `error` report with no turn;
     * a card opened there or in a crew thread under it (`open_approval/3`),
-      which records a `needs_you` report when the thread comes to wait;
+      which records a `needs_you` report, a notice naming the card, when
+      the thread comes to wait; a notice is no report of the turn's work;
     * a card left `pending` by a decision, a skip or an invalidation, a
       turn's end there or in a crew thread under it, and a row landing
       there (a crew member's answer among them), reporting nothing;
     * a person's message there, or a further opening, which is new work:
-      what an earlier report said no longer ends it, and `done` or
-      `failed` is `open` again.
+      how its work ended no longer ends it.
+
+  A turn of a page's call (`page_call`) is never the thread's work and
+  never speaks for it (`work_state!/2`). A crew member's answer that
+  lands after the person stopped the thread is a row and opens no turn
+  (`accept_message/3`).
 
   A row that names a workspace thread (a report delivered to a daily
   thread) lands only while that thread stands. Taking more than one
@@ -154,6 +170,11 @@ defmodule Arca.TurnStorage do
   # at compile time so guards can test membership.
   @open Prima.TurnState.open_statuses()
   @terminal Prima.TurnState.terminal_statuses()
+  # What Aqua reports of a workspace thread's work; `error` and `stopped`
+  # are the server's (the moduledoc's "Workspace threads").
+  @reported ~w(done needs_you)
+  # Who cancelled a turn, as its end names it (`finish/4`'s `:ended_by`).
+  @ended_by [:person, :recovery]
   @step_kinds Prima.TurnState.step_kinds()
   @outcomes Prima.TurnState.outcomes()
   @decisions Prima.TurnState.decisions()
@@ -206,9 +227,16 @@ defmodule Arca.TurnStorage do
     `{:error, :receipted}`, with nothing written.
 
   An archived thread admits nothing (`{:error, :thread_archived}`). A
-  person's message in a workspace thread that is `done` or `failed` opens
-  it again. A row naming a workspace thread (`:workspace_id`, a report's)
-  lands only while that thread stands (`{:error, :workspace_gone}`).
+  person's message in a workspace thread is new work there: how its work
+  ended no longer ends it. A crew member's answer (`:answers`) landing
+  in a workspace thread the person stopped opens no turn: it lands as a
+  row, and the acceptance answers `turn: nil`. A request delivered into
+  its member's thread (`:reply_address`) lands only while the request
+  still waits for its answer (`{:error, :request_ended}`), and a
+  workspace thread's opening only while it waits for its turn
+  (`{:error, :opening_ended}`). A row naming a workspace thread
+  (`:workspace_id`, a report's) lands only while that thread stands
+  (`{:error, :workspace_gone}`).
 
   A card's notice (a `needs_you` row naming its `:approval_id`, written
   `pending`) is written only while its approval waits: read under a lock
@@ -245,6 +273,8 @@ defmodule Arca.TurnStorage do
           thread = locked_thread!(athanor_id, thread_id)
           if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
           card_waits!(athanor_id, message)
+          still_asked!(athanor_id, Map.get(attrs, :reply_address))
+          opens = if stopped_answer?(thread, attrs), do: nil, else: opens
           thread = posted!(athanor_id, thread, message)
 
           row =
@@ -305,13 +335,41 @@ defmodule Arca.TurnStorage do
     )
     |> Arca.Repo.one()
     |> case do
-      %Message{turn_id: nil} = row -> row
+      %Message{turn_id: nil, status: nil} = row -> row
+      %Message{turn_id: nil} -> Arca.Repo.rollback(:opening_ended)
       %Message{} -> Arca.Repo.rollback(:turn_exists)
       nil -> Arca.Repo.rollback(:not_found)
     end
   end
 
   defp opening!(_athanor_id, %Thread{}, _opening_id), do: Arca.Repo.rollback(:not_a_workspace)
+
+  # A request delivered into its member's thread lands only while it
+  # still waits for its answer: one the person's stop ended is not
+  # delivered. Read under a lock the stop's write waits on.
+  # arca:db-raise-ok inside the caller's transaction
+  defp still_asked!(athanor_id, %{asking_thread_id: room, request_id: id})
+       when is_binary(room) and is_binary(id) do
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.thread_id == ^room and m.id == ^id,
+      select: m.status
+    )
+    |> Arca.QueryHelpers.for_share()
+    |> Arca.Repo.one()
+    |> case do
+      "pending" -> :ok
+      _answered_ended_or_gone -> Arca.Repo.rollback(:request_ended)
+    end
+  end
+
+  defp still_asked!(_athanor_id, _reply_address), do: :ok
+
+  # A crew member's answer landing in a workspace thread the person
+  # stopped: what it would start the person stopped, so it opens nothing.
+  defp stopped_answer?(%Thread{kind: "workspace", workspace_state: "stopped"}, attrs),
+    do: Map.get(attrs, :answers, []) != []
+
+  defp stopped_answer?(%Thread{}, _attrs), do: false
 
   # arca:db-raise-ok inside the caller's transaction
   defp card_waits!(athanor_id, %{outcome: "needs_you", approval_id: id}) when is_binary(id) do
@@ -491,7 +549,7 @@ defmodule Arca.TurnStorage do
   - `:daily_id` — the daily thread whose post asked, where the pointer
     goes.
   - `:workspace_id` — an existing workspace thread to send the ask to,
-    which opens again when it was `done` or `failed`; absent for a new
+    which is new work there whatever its state; absent for a new
     one, made with `:id` (minted by the caller, which may have files to
     store under it), `:title` and `:opened_from` (the asking post).
   - `:turn` — `%{id, fence}` of the daily thread's turn that opens it, a
@@ -620,6 +678,7 @@ defmodule Arca.TurnStorage do
       })
 
     :ok = Arca.Outbox.put!(actor, record)
+    _settled = settle_work!(athanor_id, workspace)
 
     %{workspace: thread!(athanor_id, workspace.id), opening: opening_row, pointer: pointer_row}
   end
@@ -635,37 +694,37 @@ defmodule Arca.TurnStorage do
   end
 
   # New work in a workspace thread, a person's post or a further opening:
-  # what an earlier report said no longer ends it, and a finished one is
-  # at work again; one waiting on its person still waits.
+  # how its work ended no longer ends it. The caller's transaction asks
+  # the rule once the new work's row is written (`settle_work!/2`).
   # arca:db-raise-ok inside the caller's transaction
-  defp reopened!(athanor_id, %Thread{kind: "workspace", workspace_state: state} = thread) do
-    state = if state in ["done", "failed"], do: "open", else: state
-
+  defp reopened!(athanor_id, %Thread{kind: "workspace"} = thread) do
     {1, _} =
       from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^thread.id)
-      |> Arca.Repo.update_all(set: [workspace_state: state, workspace_outcome: nil])
+      |> Arca.Repo.update_all(set: [workspace_outcome: nil])
 
-    %{thread | workspace_state: state, workspace_outcome: nil}
+    %{thread | workspace_outcome: nil}
   end
 
   @doc """
   Report the work of a running turn of a workspace thread as `outcome`
-  (`done` or `failed`) under the turn's fence, with its
-  `workspace_report` record in the same transaction, under the thread's
-  row: the thread is `outcome` once nothing else it accepted remains to
-  run and no card waits (the moduledoc's "Workspace threads"). `attrs`:
+  (`done`, or `needs_you` for work that waits on its person's input)
+  under the turn's fence, with its `workspace_report` record in the same
+  transaction, under the thread's row: the thread is `outcome` once
+  nothing else it accepted remains to run and no card waits (the
+  moduledoc's "Workspace threads"). `attrs`:
   `:fence`, `:summary`, `:attachments` (`[%{"message_id",
   "stored_name"}]`, files of the thread's own posts). A turn whose fence
   moved is `{:error, :superseded}`, one that is over `{:error,
   :not_open}`, a turn of any other kind of thread `{:error,
   :not_a_workspace}`, a turn that reported already `{:error,
-  :reported}`, and a thread already `done` or `failed` `{:error,
-  {:workspace_state, state}}`, each with nothing written.
+  :reported}`, a thread whose work has ended `{:error,
+  {:workspace_state, state}}`, and any other outcome `{:error,
+  :illegal_transition}`, each with nothing written.
   """
   @spec report_workspace(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, map()} | {:error, term()}
   def report_workspace(%Prima.Actor{athanor_id: athanor_id}, turn_id, outcome, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and outcome in ["done", "failed"] and
+      when is_binary(athanor_id) and athanor_id != "" and outcome in @reported and
              is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.report_workspace", fn ->
       Arca.Repo.locking_transaction(fn ->
@@ -692,26 +751,215 @@ defmodule Arca.TurnStorage do
     |> Arca.Data.project()
   end
 
+  def report_workspace(%Prima.Actor{athanor_id: athanor_id}, _turn_id, _outcome, _attrs)
+      when is_binary(athanor_id) and athanor_id != "",
+      do: {:error, :illegal_transition}
+
   def report_workspace(%Prima.Actor{}, _turn_id, _outcome, _attrs), do: {:error, :no_athanor}
 
-  # The workspace_report that tells the daily thread, recorded under the
-  # identity of the reporting turn's person and origin.
+  @doc """
+  The person's stop of a workspace thread: everything of its work ends,
+  in it and in the crew threads under it, in one transaction. Every open
+  turn there is cancelled (`cancel_open!/4`, ended by the person), the
+  workspace thread's own with their replies and the crew threads'
+  silently, as a deletion cancels a room's; each request there still
+  waiting for a crew member's answer, and each opening still waiting for
+  its turn, is `expired`, so its delivery lands nothing
+  (`accept_message/3`); and the thread is `stopped` with no report (the
+  moduledoc's "Workspace threads"). A stop that finds nothing to end
+  changes nothing.
+
+  The turns are chosen before the locks and asked again under them, in
+  the one order (`Arca.ThreadStorage.lock_threads!/2`): the turns, then
+  the athanor's row, then the workspace thread's and its crew threads'
+  rows together; a turn that opened in between sends the stop round
+  again, at most three times, and then it is `{:error, :thread_in_use}`.
+  `attrs` carry the root's grant as `finish/4` takes it and `:error`,
+  the cancelled turns' error. Answers the cancelled turns with the steps
+  their holders' runtime stops after the commit (`cancel_open!/4`); a
+  thread that is no workspace thread is `{:error, :not_a_workspace}`.
+  """
+  @spec stop_work(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, %{cancelled: [map()]}} | {:error, term()}
+  def stop_work(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
+             is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.stop_work", fn ->
+      stop_round(actor, workspace_id, Map.put(attrs, :ended_by, :person), 3)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def stop_work(%Prima.Actor{}, _workspace_id, _attrs), do: {:error, :no_athanor}
+
+  defp stop_round(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, tries) do
+    chosen = Arca.Repo.all(work_turns(athanor_id, workspace_id))
+
+    case Arca.Repo.locking_transaction(fn -> stopped!(actor, workspace_id, attrs, chosen) end) do
+      {:ok, cancelled} -> {:ok, %{cancelled: cancelled}}
+      {:error, :turns_moved} when tries > 1 -> stop_round(actor, workspace_id, attrs, tries - 1)
+      {:error, :turns_moved} -> {:error, :thread_in_use}
+      {:error, _} = refused -> refused
+    end
+  end
+
   # arca:db-raise-ok inside the caller's transaction
-  defp reported!(athanor_id, %Thread{} = thread, %Turn{} = turn, outcome, report) do
-    with {:ok, origin} <- Prima.Origin.from_wire(turn.origin) do
+  defp stopped!(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, chosen) do
+    _held = hold_turns!(actor, chosen)
+
+    crew =
+      from(c in Thread,
+        where: c.athanor_id == ^athanor_id and c.kind == "crew",
+        where: c.parent_id == ^workspace_id,
+        select: c.id
+      )
+      |> Arca.Repo.all()
+
+    case actor
+         |> Arca.ThreadStorage.lock_threads!([workspace_id | crew])
+         |> by_id(workspace_id) do
+      %Thread{kind: "workspace"} ->
+        if Arca.Repo.all(work_turns(athanor_id, workspace_id)) -- chosen != [],
+          do: Arca.Repo.rollback(:turns_moved)
+
+        cancelled =
+          cancel_open!(actor, workspace_id, attrs, :reply) ++
+            Enum.flat_map(crew, &cancel_open!(actor, &1, attrs, :silent))
+
+        expired = expire_waiting!(athanor_id, workspace_id)
+
+        if cancelled != [] or expired > 0 do
+          workspace = thread!(athanor_id, workspace_id)
+          settle_work!(athanor_id, ended_as!(athanor_id, workspace, "stopped"))
+        end
+
+        cancelled
+
+      %Thread{} ->
+        Arca.Repo.rollback(:not_a_workspace)
+
+      nil ->
+        Arca.Repo.rollback(:thread_not_found)
+    end
+  end
+
+  defp by_id(threads, id), do: Enum.find(threads, &(&1.id == id))
+
+  # The open turns of a workspace thread and of the crew threads under it.
+  defp work_turns(athanor_id, workspace_id) do
+    from(t in Turn,
+      join: c in Thread,
+      on: c.id == t.thread_id and c.athanor_id == t.athanor_id,
+      where: t.athanor_id == ^athanor_id and t.status in ^@open,
+      where: c.id == ^workspace_id or (c.kind == "crew" and c.parent_id == ^workspace_id),
+      select: t.id
+    )
+  end
+
+  # The requests of a workspace thread still waiting for a crew member's
+  # answer (`Arca.ThreadStorage.pending_requests/2`'s; a notice, which
+  # answers one, waits with its card instead), and its openings still
+  # waiting for their turn, ended by the person's stop. Answers how many.
+  # arca:db-raise-ok inside the caller's transaction
+  defp expire_waiting!(athanor_id, workspace_id) do
+    rows =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace_id,
+        where:
+          (m.kind == "opening" and is_nil(m.turn_id) and is_nil(m.status)) or
+            (not is_nil(m.addressee) and m.status == "pending" and is_nil(m.reply_to))
+      )
+
+    {expired, _} =
+      Arca.Repo.update_all(rows, set: [status: "expired", resolved_at: DateTime.utc_now()])
+
+    expired
+  end
+
+  @doc """
+  An opening of a workspace thread whose delivery is refused for good
+  (`Aqua.Crew`), with the delivering consumer's `:receipt` (`%{receipt,
+  claim, slot}`) in the same transaction: the opening is `error`, so it
+  waits for no turn, and the server's `error` report, with no turn,
+  tells the daily thread why the work could not start (`:summary`),
+  under the identity the opening was asked with (`:person_id`,
+  `:origin`); the thread is `error` once nothing else of it remains to
+  run. An opening that has its turn or ended already is `{:error,
+  :opening_ended}`, a thread gone `{:error, :thread_not_found}`, each
+  with nothing written.
+  """
+  @spec refuse_opening(Prima.Actor.t(), String.t(), String.t(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def refuse_opening(
+        %Prima.Actor{athanor_id: athanor_id} = actor,
+        workspace_id,
+        opening_id,
+        attrs
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
+             is_binary(opening_id) and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.refuse_opening", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        case locked_thread!(athanor_id, workspace_id) do
+          %Thread{kind: "workspace"} = workspace ->
+            {ended, _} =
+              from(m in Message,
+                where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace_id,
+                where: m.id == ^opening_id and m.kind == "opening",
+                where: is_nil(m.turn_id) and is_nil(m.status)
+              )
+              |> Arca.Repo.update_all(set: [status: "error", resolved_at: DateTime.utc_now()])
+
+            if ended != 1, do: Arca.Repo.rollback(:opening_ended)
+            receipted!(actor, Map.get(attrs, :receipt))
+
+            report!(athanor_id, workspace, nil, "error", %{
+              summary: Map.get(attrs, :summary) || "",
+              person_id: Map.fetch!(attrs, :person_id),
+              origin: Map.fetch!(attrs, :origin)
+            })
+
+          %Thread{} ->
+            Arca.Repo.rollback(:not_a_workspace)
+        end
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def refuse_opening(%Prima.Actor{}, _workspace_id, _opening_id, _attrs),
+    do: {:error, :no_athanor}
+
+  # The workspace_report that tells the daily thread, recorded under the
+  # identity of the reporting turn's person and origin, with the turn's
+  # sources; one with no turn (an opening refused before any started) is
+  # the server's, under the identity the opening was asked with, and
+  # carries no sources.
+  # arca:db-raise-ok inside the caller's transaction
+  defp reported!(athanor_id, %Thread{} = thread, turn, outcome, report) do
+    {turn_id, person_id, wire, sources} =
+      case turn do
+        %Turn{} ->
+          {turn.id, turn.requested_by, turn.origin, Prima.Source.decode(turn.sources)}
+
+        nil ->
+          {nil, Map.fetch!(report, :person_id), Map.fetch!(report, :origin), []}
+      end
+
+    with {:ok, origin} <- Prima.Origin.from_wire(wire) do
       record =
         Prima.OutboxRecord.workspace_report(%{
           approval_id: Map.get(report, :approval_id),
           athanor_id: athanor_id,
           workspace_id: thread.id,
           title: thread.title,
-          turn_id: turn.id,
+          turn_id: turn_id,
           moved_at: DateTime.utc_now(),
           outcome: outcome,
           summary: Map.get(report, :summary) || "",
           attachments: Map.get(report, :attachments, []),
-          sources: Prima.Source.decode(turn.sources),
-          person_id: turn.requested_by,
+          sources: sources,
+          person_id: person_id,
           origin: origin
         })
 
@@ -723,18 +971,18 @@ defmodule Arca.TurnStorage do
 
   # The one rule of a workspace thread's state, which every write that may
   # move it asks (a report, a card opened or settled, a turn's end, a
-  # crew member's answer, new work): a workspace thread is finished when
-  # nothing it accepted remains to run, in it or in a crew thread under
-  # it, and no card waits in any of them. Finished, it is what its last
-  # report since it last took new work said (`workspace_outcome`), or at
-  # work when none said anything; until then it waits on its person while
-  # a card waits, and is at work otherwise. A turn that reported its work
-  # done or failed has none left to run, though its row stays open until
-  # it ends; a request it asked a crew member is left until answered. A
-  # turn a page's call opened (`page_call`), which asks no model, is not
-  # the thread's work and never speaks for it: it keeps the thread at
-  # work no more than it records an outcome, while a card it raises waits
-  # on the person as any card does.
+  # stop, a crew member's answer, new work): it waits on its person while
+  # a card waits in it or in a crew thread under it; otherwise it is at
+  # work while anything it accepted remains to run in any of them; once
+  # nothing does, it is how its work last ended since it last took new
+  # work (`workspace_outcome`), or at work when nothing ended it. A turn
+  # that reported its work has none left to run, though its row stays
+  # open until it ends; a request it asked a crew member is left until
+  # answered, and an opening until its turn starts. A turn a page's call
+  # opened (`page_call`), which asks no model, is not the thread's work
+  # and never speaks for it: it keeps the thread at work no more than it
+  # records an outcome, while a card it raises waits on the person as any
+  # card does.
   # arca:db-raise-ok inside the caller's transaction
   defp work_state!(athanor_id, %Thread{kind: "workspace"} = workspace) do
     threads =
@@ -768,14 +1016,14 @@ defmodule Arca.TurnStorage do
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace.id,
         where:
-          (m.kind == "opening" and is_nil(m.turn_id)) or
+          (m.kind == "opening" and is_nil(m.turn_id) and is_nil(m.status)) or
             (not is_nil(m.addressee) and m.status == "pending")
       )
 
     cond do
       Arca.Repo.exists?(card_waits) -> "needs_you"
       Arca.Repo.exists?(turns_run) or Arca.Repo.exists?(asked) -> "open"
-      workspace.workspace_outcome in ["done", "failed"] -> workspace.workspace_outcome
+      workspace.workspace_outcome in Thread.workspace_outcomes() -> workspace.workspace_outcome
       true -> "open"
     end
   end
@@ -797,25 +1045,37 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # A turn's report of its work: what the thread becomes once its work is
-  # finished, recorded, and the thread's state asked again.
+  # A report of the thread's work, Aqua's or the server's: how its work
+  # ended, recorded, its record written, and the thread's state asked
+  # again. `turn` is nil for the server's report of an opening refused
+  # before any turn started.
   # arca:db-raise-ok inside the caller's transaction
-  defp report!(athanor_id, %Thread{} = workspace, %Turn{} = turn, outcome, report) do
+  defp report!(athanor_id, %Thread{} = workspace, turn, outcome, report) do
+    workspace = ended_as!(athanor_id, workspace, outcome)
+    reported!(athanor_id, workspace, turn, outcome, report)
+    settle_work!(athanor_id, workspace)
+  end
+
+  # How the thread's work ended, recorded with no report: what it becomes
+  # once nothing of it remains to run.
+  # arca:db-raise-ok inside the caller's transaction
+  defp ended_as!(athanor_id, %Thread{} = workspace, outcome) do
     {1, _} =
       from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
       |> Arca.Repo.update_all(set: [workspace_outcome: outcome])
 
-    reported!(athanor_id, workspace, turn, outcome, report)
-    settle_work!(athanor_id, %{workspace | workspace_outcome: outcome})
+    %{workspace | workspace_outcome: outcome}
   end
 
-  # Whether `turn` has reported its work done or failed already: each
-  # turn of a workspace thread reports its own work once.
+  # Whether `turn` has reported its work already: each turn of a
+  # workspace thread reports its own work once.
   # arca:db-raise-ok inside the caller's transaction
   defp reported?(athanor_id, workspace_id, turn_id),
     do: turn_id in reported_turns(athanor_id, workspace_id)
 
-  # The turns of a workspace thread that reported its work done or failed.
+  # The turns of a workspace thread whose work a report ended: Aqua's
+  # `done` or `needs_you`, or the server's `error`. A card's notice (a
+  # `needs_you` record naming its approval) reports no turn's work.
   # arca:db-raise-ok inside the caller's transaction
   defp reported_turns(athanor_id, workspace_id) do
     from(r in Arca.Schemas.OutboxRecord,
@@ -826,10 +1086,13 @@ defmodule Arca.TurnStorage do
     |> Arca.Repo.all()
     |> Enum.flat_map(fn text ->
       case Prima.Json.decode(text) do
-        {:ok, %{"turn_id" => turn_id, "outcome" => outcome}} when outcome in ["done", "failed"] ->
+        {:ok, %{"approval_id" => _card}} ->
+          []
+
+        {:ok, %{"turn_id" => turn_id}} when is_binary(turn_id) ->
           [turn_id]
 
-        _needs_you ->
+        _no_turn ->
           []
       end
     end)
@@ -880,25 +1143,36 @@ defmodule Arca.TurnStorage do
 
   # A turn of a workspace thread, or of a crew member's thread under it,
   # ended: the thread's state asked again. A turn of the workspace thread
-  # itself that ended failed or uncertain without a report of its own
-  # fails its work first, with its error as the report's summary.
+  # itself that ended without a report of its own records how its work
+  # ended first (`ending/2`): an `error` report with its error as the
+  # summary, or `stopped` with none.
   # arca:db-raise-ok inside the caller's transaction
   defp ended_work!(athanor_id, %Turn{} = turn, status, attrs) do
     case work_of(athanor_id, thread!(athanor_id, turn.thread_id)) do
       %Thread{id: id, workspace_state: state} = workspace
-      when id == turn.thread_id and status in ["failed", "uncertain"] and
-             state in ["open", "needs_you"] ->
-        cond do
-          page_call?(athanor_id, turn) ->
+      when id == turn.thread_id and state in ["open", "needs_you"] ->
+        ending =
+          if page_call?(athanor_id, turn) or reported?(athanor_id, workspace.id, turn.id),
+            do: :none,
+            else: ending(status, attrs)
+
+        case ending do
+          :none ->
             settle_work!(athanor_id, workspace)
 
-          reported?(athanor_id, workspace.id, turn.id) ->
-            settle_work!(athanor_id, workspace)
+          "stopped" ->
+            settle_work!(athanor_id, ended_as!(athanor_id, workspace, "stopped"))
 
-          true ->
-            report!(athanor_id, workspace, turn, "failed", %{
-              summary: Map.get(attrs, :error) || ""
-            })
+          # A turn whose stored origin reads as none has no identity a
+          # report could be delivered under: nobody to tell, and the end
+          # still lands.
+          "error" ->
+            if match?({:ok, _}, Prima.Origin.from_wire(turn.origin)),
+              do:
+                report!(athanor_id, workspace, turn, "error", %{
+                  summary: Map.get(attrs, :error) || ""
+                }),
+              else: settle_work!(athanor_id, ended_as!(athanor_id, workspace, "error"))
         end
 
       %Thread{workspace_state: state} = workspace when state in ["open", "needs_you"] ->
@@ -908,6 +1182,23 @@ defmodule Arca.TurnStorage do
         :ok
     end
   end
+
+  # How a workspace thread's own turn that did not report ended its work:
+  # Aqua could not run it (failed, uncertain, or cancelled because a
+  # recovery could not resume it), the person stopped it (cancelled by an
+  # act of theirs), or nothing it says (completed, or cancelled by
+  # anything else, such as a fence the turn lost).
+  defp ending(status, _attrs) when status in ["failed", "uncertain"], do: "error"
+
+  defp ending("cancelled", attrs) do
+    case Map.get(attrs, :ended_by) do
+      :person -> "stopped"
+      :recovery -> "error"
+      nil -> :none
+    end
+  end
+
+  defp ending(_status, _attrs), do: :none
 
   # A turn a page's call opened: no work of the thread's, which reports
   # nothing of it (`work_state!/2`).
@@ -1183,7 +1474,14 @@ defmodule Arca.TurnStorage do
   @doc """
   End a turn: the one terminal transaction. `status` is
   `completed | failed | cancelled | uncertain`; `attrs`: `:fence`,
-  `:error`. A turn with a reply address records its `crew_reply` here
+  `:error`, and on a cancel `:ended_by`, who cancelled it: `:person`
+  for an act of the person's (a stop, a deletion of what it read, the
+  consent restart, the athanor's archive) or `:recovery` for a turn the
+  server could neither resume nor start for its sender, which a
+  workspace thread's state reads (the
+  moduledoc's "Workspace threads"); any other value, or one on another
+  end, is `{:error, :illegal_transition}`. A turn with a reply address
+  records its `crew_reply` here
   (the moduledoc's "Crew requests and replies"): outcome `done`,
   `failed`, `cancelled` or `uncertain`, the text its last own reply
   said, or for any end but a completion the error that ended it. The
@@ -1244,6 +1542,7 @@ defmodule Arca.TurnStorage do
   # arca:db-raise-ok inside the caller's transaction
   defp ended!(athanor_id, %Turn{} = turn, status, grant, attrs, reply)
        when reply in [:reply, :silent] do
+    ended_by!(status, Map.get(attrs, :ended_by))
     ended_at = DateTime.utc_now()
 
     ran =
@@ -1308,6 +1607,12 @@ defmodule Arca.TurnStorage do
     turn
   end
 
+  # Who cancelled a turn is named on a cancel only (`finish/4`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp ended_by!(_status, nil), do: :ok
+  defp ended_by!("cancelled", by) when by in @ended_by, do: :ok
+  defp ended_by!(_status, _by), do: Arca.Repo.rollback(:illegal_transition)
+
   @doc """
   Cancel every open turn of `thread_id` — accepted, running and paused
   alike — inside the caller's locking transaction, the way a
@@ -1320,8 +1625,9 @@ defmodule Arca.TurnStorage do
   cards invalidated, and the turn ended `cancelled` with `attrs[:error]`
   by the one terminal write, its reply recorded (`:reply`) or not
   (`:silent`, for a room that is going). `attrs` carry the root's grant
-  as `finish/4` takes it, and `:only`, when given, the ids of the open
-  turns to cancel, the others left as they are.
+  as `finish/4` takes it, `:ended_by` as `finish/4` takes it, and
+  `:only`, when given, the ids of the open turns to cancel, the others
+  left as they are.
 
   Answers each cancelled turn with the steps that were dispatched: what
   its holder's runtime cancels after the commit — the loop, an

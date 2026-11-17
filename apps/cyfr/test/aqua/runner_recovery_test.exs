@@ -8,7 +8,9 @@ defmodule Aqua.RunnerRecoveryTest do
   a thread holding an open turn starts once the store answers. A scan that
   never answers is abandoned with a log line and
   `[:cyfr, :aqua, :recovery, :abandoned]`, recovering nothing, and the
-  recovery still ends normally.
+  recovery still ends normally. A workspace thread's turn the recovery
+  can neither resume nor start for its sender leaves the thread in error,
+  with one report saying why.
 
   The outage is the real store's: the turns table is renamed inside the
   test's sandbox transaction, so the scan's own query fails as it would
@@ -20,6 +22,7 @@ defmodule Aqua.RunnerRecoveryTest do
 
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
   import Prima.Test.Wait
 
@@ -121,6 +124,35 @@ defmodule Aqua.RunnerRecoveryTest do
     }
 
   defp ended?(ctx, turn_id), do: match?({:ok, %{ended_at: %DateTime{}}}, Tape.turn(ctx, turn_id))
+
+  # The recovery starts the thread's runner, whose start does what the
+  # thread's rows say before it answers a call.
+  defp recovered!(ctx, ws) do
+    assert Runner.recover_all(wait_reported()) == :ok
+    wait_until(fn -> is_pid(Runner.whereis(ws.id)) end, 30_000, "the recovered runner starts")
+    assert %{running: false, queued: 0} = Runner.state(ws.id, ctx.athanor_id)
+  end
+
+  # The turn's row as a hand edit or a restored row leaves it.
+  defp stored!(turn, fields) do
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id), set: fields)
+
+    :ok
+  end
+
+  defp workspace_state(ctx, id),
+    do: elem(Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id), 1).workspace_state
+
+  # Every workspace_report the athanor recorded, delivered or not.
+  defp reports(ctx) do
+    from(r in Arca.Schemas.OutboxRecord,
+      where: r.athanor_id == ^ctx.athanor_id and r.kind == "workspace_report",
+      select: r.snapshot
+    )
+    |> Arca.Repo.all()
+    |> Enum.map(&Jason.decode!/1)
+  end
 
   defp steps!(ctx, turn_id) do
     {:ok, turn} = Tape.turn(ctx, turn_id)
@@ -253,6 +285,52 @@ defmodule Aqua.RunnerRecoveryTest do
     refute_received {:abandoned, _}
     assert Runner.whereis(thread.id) == nil
     assert {:ok, %{status: "accepted"}} = Tape.turn(ctx, turn.id)
+  end
+
+  # A workspace thread's turn the recovery can neither resume nor start
+  # for its sender is Aqua that could not run there: the thread reads
+  # error, with one report saying why, unless the turn's stored origin
+  # reads as none, under which no report could be delivered.
+  describe "a workspace thread's turn a runner cannot recover" do
+    test "whose stored origin names none", %{ctx: ctx} do
+      start_supervised!({ScriptedWorker, ref: @model, script: []})
+      ws = workspace!(ctx)
+      turn = open_turn!(ctx, ws)
+      stored!(turn, origin: "hand-edited")
+
+      recovered!(ctx, ws)
+
+      assert {:ok, %{status: "cancelled", error: error}} = Tape.turn(ctx, turn.id)
+
+      assert error ==
+               "the turn's stored origin is outside the vocabulary, nothing to resume under " <>
+                 "(no_origin)"
+
+      assert workspace_state(ctx, ws.id) == "error"
+      assert reports(ctx) == []
+      assert ScriptedWorker.calls() == []
+    end
+
+    test "whose sender the athanor is no longer", %{ctx: ctx} do
+      start_supervised!({ScriptedWorker, ref: @model, script: []})
+      ws = workspace!(ctx)
+      turn = open_turn!(ctx, ws)
+      # Its sender, as its row names it, is another person.
+      local = Sanctum.TestContext.local(:prism)
+      label = "local|local|sender-#{System.unique_integer([:positive])}"
+      {other, _user} = Sanctum.TestContext.person!(%{local | user_id: label})
+      refute other.user_id == ctx.user_id
+      stored!(turn, requested_by: other.user_id)
+
+      recovered!(ctx, ws)
+
+      assert {:ok, %{status: "cancelled", error: error}} = Tape.turn(ctx, turn.id)
+      assert error == "the athanor is no longer the sender's (not_member)"
+      assert workspace_state(ctx, ws.id) == "error"
+      assert [%{"outcome" => "error", "summary" => ^error, "turn_id" => turn_id}] = reports(ctx)
+      assert turn_id == turn.id
+      assert ScriptedWorker.calls() == []
+    end
   end
 
   describe "a page's calls a runner recovers" do

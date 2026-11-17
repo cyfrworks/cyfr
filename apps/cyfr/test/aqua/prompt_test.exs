@@ -391,6 +391,15 @@ defmodule Aqua.PromptTest do
       assert where =~ "> write the moon report\n> with a chart"
       assert where =~ "`workspace.report`"
 
+      # Done says what worked and what did not; needs_you says what is
+      # needed; a wait on something outside is said in a post.
+      [cue | _] = String.split(where, "\n\n---\n\n", parts: 2)
+      assert cue =~ "as `done`, saying what worked and what did not"
+      assert cue =~ "report `needs_you` and say what you need"
+      refute cue =~ "failed"
+      assert cue =~ "While you wait on something outside, such as a build or a run elsewhere"
+      assert cue =~ "say so in a post here"
+
       # Before the clock, which moves by the minute.
       [before_clock, _] = String.split(prompt, "## Now", parts: 2)
       assert before_clock =~ "## Where you are"

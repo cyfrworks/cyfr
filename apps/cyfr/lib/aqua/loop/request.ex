@@ -742,8 +742,17 @@ defmodule Aqua.Loop.Request do
     payload = Tape.payload(row)
 
     "[Report from the workspace thread \"#{payload["title"] || ""}\" (#{row.workspace_id}): " <>
-      "#{payload["outcome"] || "done"}]\n" <> (row.content || "")
+      "#{reported(payload)}]\n" <> (row.content || "")
   end
+
+  # The outcome as the reading model is told it: Aqua's `done` or
+  # `needs_you`, the server's `error`, or a card's notice.
+  defp reported(%{"outcome" => "needs_you", "approval_id" => _card}),
+    do: "a card waits on the person"
+
+  defp reported(%{"outcome" => "needs_you"}), do: "needs the person"
+  defp reported(%{"outcome" => "error"}), do: "error, Aqua could not run it"
+  defp reported(_payload), do: "done"
 
   defp sender(%{sent_by: "person"} = row, opts), do: display(row.author, opts)
   defp sender(%{sent_by: sent_by}, _opts) when is_binary(sent_by), do: sent_by

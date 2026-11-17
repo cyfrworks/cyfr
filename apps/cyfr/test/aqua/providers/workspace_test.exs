@@ -562,7 +562,7 @@ defmodule Aqua.Providers.WorkspaceTest do
                Tape.report_workspace(ctx, turn, "done", %{summary: "Done."})
 
       assert {:error, {:workspace_state, "done"}} =
-               Tape.report_workspace(ctx, turn, "failed", %{summary: "again"})
+               Tape.report_workspace(ctx, turn, "needs_you", %{summary: "again"})
 
       assert [%{snapshot: %{"outcome" => "done", "summary" => "Done."}}] =
                records(ctx, "workspace_report")
@@ -596,7 +596,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert thread(ctx, workspace.id).workspace_state == "open"
     end
 
-    test "a turn that ends failed fails the work and reports; a cancel moves nothing",
+    test "a turn that ends failed with no report is the server's error, reported; a cancel nobody named moves nothing",
          %{ctx: ctx, daily: daily} do
       workspace = open!(ctx, daily)
       {:ok, _} = Tape.finish(ctx, turn!(ctx, workspace.id), "cancelled", %{error: "stopped"})
@@ -604,14 +604,67 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert records(ctx, "workspace_report") == []
 
       {:ok, _} = Tape.finish(ctx, work!(ctx, workspace), "failed", %{error: "the build broke"})
-      assert thread(ctx, workspace.id).workspace_state == "failed"
+      assert thread(ctx, workspace.id).workspace_state == "error"
 
-      assert [%{snapshot: %{"outcome" => "failed", "summary" => "the build broke"}}] =
+      assert [%{snapshot: %{"outcome" => "error", "summary" => "the build broke"} = snapshot}] =
                records(ctx, "workspace_report")
+
+      refute Map.has_key?(snapshot, "approval_id")
+    end
+
+    test "Aqua reports its work needs the person: once its turn ends the thread needs them, " <>
+           "until the person writes there",
+         %{ctx: ctx, daily: daily} do
+      script!([
+        call("r1", "workspace", %{
+          "action" => "report",
+          "outcome" => "needs_you",
+          "summary" => "Which account should the report go to?"
+        }),
+        reply("Asked.")
+      ])
+
+      workspace = open!(ctx, daily)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      [%{turn_id: turn_id}] = Enum.filter(rows(ctx, workspace.id), &(&1.kind == "opening"))
+      await_status(ctx, turn_id, "completed")
+      assert thread(ctx, workspace.id).workspace_state == "needs_you"
+
+      assert [%{snapshot: %{"outcome" => "needs_you", "turn_id" => ^turn_id} = snapshot}] =
+               records(ctx, "workspace_report")
+
+      assert snapshot["summary"] == "Which account should the report go to?"
+      refute Map.has_key?(snapshot, "approval_id")
+
+      # Only new work clears it: the person's post.
+      post!(ctx, workspace, "the work account")
+      assert thread(ctx, workspace.id).workspace_state == "open"
+    end
+
+    test "workspace.report takes done or needs_you; failed is refused, and nothing is written",
+         %{ctx: ctx, daily: daily} do
+      workspace = open!(ctx, daily)
+      turn = work!(ctx, workspace)
+
+      assert {:error,
+              {:invalid_argument, "workspace.report takes an 'outcome' of done or needs_you"}} =
+               Workspace.handle("workspace", Sanctum.Context.enter_guest(ctx), %{
+                 "action" => "report",
+                 "outcome" => "failed",
+                 "summary" => "It broke.",
+                 "thread_id" => workspace.id,
+                 "root_execution_id" => "exe_root"
+               })
+
+      assert {:error, :illegal_transition} =
+               Tape.report_workspace(ctx, turn, "failed", %{summary: "It broke."})
+
+      assert records(ctx, "workspace_report") == []
+      assert thread(ctx, workspace.id).workspace_state == "open"
     end
 
     test "a turn a page's call opened is no work of the thread: it keeps no thread at work, " <>
-           "ends no thread failed or done, and reports nothing",
+           "ends no thread in error or done, and reports nothing",
          %{ctx: ctx, daily: daily} do
       workspace = open!(ctx, daily)
       first = work!(ctx, workspace)
@@ -635,16 +688,17 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert thread(ctx, workspace.id).workspace_state == "open"
       assert records(ctx, "workspace_report") == reported
 
-      # Failed by Aqua's own work, it stays failed when a page's turn completes.
-      {:ok, _} = Tape.report_workspace(ctx, work, "failed", %{summary: "No."})
-      stop!(ctx, work)
-      assert thread(ctx, workspace.id).workspace_state == "failed"
+      # In error by Aqua's own turn, it stays in error when a page's turn
+      # completes.
+      {:ok, current} = Tape.turn(ctx, work.id)
+      {:ok, _} = Tape.finish(ctx, current, "failed", %{error: "the build broke"})
+      assert thread(ctx, workspace.id).workspace_state == "error"
       {:ok, _} = Tape.finish(ctx, page_turn!(ctx, workspace), "completed")
-      assert thread(ctx, workspace.id).workspace_state == "failed"
+      assert thread(ctx, workspace.id).workspace_state == "error"
       assert length(records(ctx, "workspace_report")) == length(reported) + 1
     end
 
-    test "a finished one opens again when the person writes in it, or when an ask is sent there, and reports nothing",
+    test "a finished one, or one that needs the person, opens again when the person writes in it, or when an ask is sent there, and reports nothing",
          %{ctx: ctx, daily: daily} do
       workspace = open!(ctx, daily)
       first = work!(ctx, workspace)
@@ -655,8 +709,10 @@ defmodule Aqua.Providers.WorkspaceTest do
       post!(ctx, workspace, "one more thing")
       assert thread(ctx, workspace.id).workspace_state == "open"
 
-      {:ok, _} = Tape.report_workspace(ctx, turn!(ctx, workspace.id), "failed", %{summary: "No."})
-      assert thread(ctx, workspace.id).workspace_state == "failed"
+      {:ok, _} =
+        Tape.report_workspace(ctx, turn!(ctx, workspace.id), "needs_you", %{summary: "Which?"})
+
+      assert thread(ctx, workspace.id).workspace_state == "needs_you"
 
       assert {:ok, %{workspace: id, state: "open"}} =
                open(ctx, daily, %{
@@ -1248,6 +1304,55 @@ defmodule Aqua.Providers.WorkspaceTest do
                Workspace.handle("workspace", ctx, %{"action" => "list"})
 
       assert listed_id == working.id
+    end
+
+    test "one that needs the person stays listed as waiting on them, read or not; one stopped " <>
+           "or in error leaves once its posts are seen",
+         %{ctx: ctx, daily: daily} do
+      waiting = open!(ctx, daily, %{"title" => "Waiting"})
+      stopped = open!(ctx, daily, %{"title" => "Stopped"})
+      broken = open!(ctx, daily, %{"title" => "Broken"})
+
+      result = fn workspace ->
+        turn = work!(ctx, workspace)
+
+        {:ok, _} =
+          Tape.post(ctx, turn, %{
+            id: Prima.UUID7.generate_id("msg"),
+            content: "a result",
+            payload: %{"post" => true}
+          })
+
+        turn
+      end
+
+      asks = result.(waiting)
+      {:ok, _} = Tape.report_workspace(ctx, asks, "needs_you", %{summary: "Which account?"})
+      stop!(ctx, asks)
+
+      _stopping = result.(stopped)
+      {:ok, %{cancelled: [_one]}} = Tape.stop_work(ctx, stopped.id)
+
+      failing = result.(broken)
+      {:ok, current} = Tape.turn(ctx, failing.id)
+      {:ok, _} = Tape.finish(ctx, current, "failed", %{error: "the build broke"})
+
+      {:ok, listed} = Aqua.workspaces(ctx)
+      by_id = Map.new(listed, &{&1.id, &1})
+
+      assert %{state: "needs_you", waits_on_you: true, unread: 1} = by_id[waiting.id]
+      assert %{state: "stopped", waits_on_you: false, unread: 1} = by_id[stopped.id]
+      assert %{state: "error", waits_on_you: false, unread: 1} = by_id[broken.id]
+
+      for workspace <- [waiting, stopped, broken] do
+        [last | _] = Enum.reverse(rows(ctx, workspace.id))
+        :ok = Aqua.mark_read(ctx, workspace.id, last.seq)
+      end
+
+      {:ok, listed} = Aqua.workspaces(ctx)
+
+      assert [%{id: id, state: "needs_you", waits_on_you: true, unread: 0}] = listed
+      assert id == waiting.id
     end
   end
 

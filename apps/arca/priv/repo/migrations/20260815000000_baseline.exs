@@ -2557,12 +2557,20 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # `Arca.Schemas.Thread.workspace_states/0`.
     workspace_state =
-      known("threads_workspace_state_known", "workspace_state", ~w(open needs_you done failed))
+      known(
+        "threads_workspace_state_known",
+        "workspace_state",
+        ~w(open needs_you done stopped error)
+      )
 
-    # What a workspace thread's last report said, which it becomes once
-    # its work is finished.
+    # How a workspace thread's work last ended, which it becomes once
+    # nothing of it remains to run.
     workspace_outcome =
-      known("threads_workspace_outcome_known", "workspace_outcome", ~w(done failed))
+      known(
+        "threads_workspace_outcome_known",
+        "workspace_outcome",
+        ~w(done needs_you stopped error)
+      )
 
     read_mark = %{name: "threads_read_seq_counted", expr: "read_seq >= 0"}
 
@@ -2586,9 +2594,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # plain string from which nothing cascades, and how its work stands.
       add :opened_from, :string
       add :workspace_state, :string, check: if(sqlite?, do: workspace_state)
-      # What its last report said, done or failed, since it last took new
-      # work: what it becomes once nothing it accepted remains to run and
-      # no card waits.
+      # How its work last ended since it last took new work (Aqua's report,
+      # the person's stop, the server's error): what it becomes once
+      # nothing it accepted remains to run and no card waits.
       add :workspace_outcome, :string, check: if(sqlite?, do: workspace_outcome)
       # A workspace thread's notes, its own turns' to write: the note's
       # bytes with the provenance it was written with. They go with the row.

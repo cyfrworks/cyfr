@@ -144,7 +144,23 @@ defmodule Aqua.Crew do
     :not_a_workspace,
     :not_a_post,
     :attachment_missing,
-    :turn_exists
+    :turn_exists,
+    :request_ended,
+    :opening_ended
+  ]
+  # The refusals of an opening that leave nobody to tell (the thread is
+  # gone, or the person no longer stands there) or that are no refusal of
+  # the work (it started already, or the person stopped it first).
+  @untold [
+    :workspace_gone,
+    :not_found,
+    :thread_not_found,
+    :not_member,
+    :denied,
+    :archived,
+    :no_origin,
+    :turn_exists,
+    :opening_ended
   ]
 
   @typedoc "What one drain of an athanor did."
@@ -657,7 +673,8 @@ defmodule Aqua.Crew do
   # refusal that may pass, or `{:stop, reason}`: the claim is lost.
   defp work(%Prima.OutboxRecord{kind: "crew_request", snapshot: snapshot} = record, held) do
     with {:ok, ctx} <- continuation(record),
-         {:ok, request} <- request_row(ctx, snapshot["request_id"]) do
+         {:ok, request} <- request_row(ctx, snapshot["request_id"]),
+         :ok <- still_waiting(request) do
       # The member is held to readiness again: one that became unready
       # while the request waited answers it failed, before any child
       # thread or turn is made for it.
@@ -715,7 +732,7 @@ defmodule Aqua.Crew do
         crew: %{tools: tools, options: %{}},
         receipt: receipt(record, held, "applied")
       )
-      |> delivered("applied", fn reason -> refused(record, reason, held) end)
+      |> delivered("applied", fn reason -> opening_refused(ctx, record, reason, held) end)
     else
       {:error, reason} -> refused(record, reason, held)
     end
@@ -879,8 +896,17 @@ defmodule Aqua.Crew do
     prefix <> digest
   end
 
-  # What a report says: the summary the soul wrote in the workspace thread, or for a move the host made, which carries none, one sentence
-  # of what happened.
+  # What a report says: the summary the soul wrote in the workspace
+  # thread; the server's `error` report says Aqua could not run there, and
+  # why; a card's notice, which carries no summary, says the thread needs
+  # the person, naming no card it does not have.
+  defp report_text(%{"outcome" => "error", "title" => title} = snapshot) do
+    case String.trim(snapshot["summary"] || "") do
+      "" -> "Aqua could not run the workspace thread \"#{title}\"."
+      why -> "Aqua could not run the workspace thread \"#{title}\": #{why}"
+    end
+  end
+
   defp report_text(%{"summary" => summary} = snapshot) when is_binary(summary) do
     case String.trim(summary) do
       "" -> moved(snapshot)
@@ -892,9 +918,6 @@ defmodule Aqua.Crew do
 
   defp moved(%{"outcome" => "needs_you", "title" => title}),
     do: "The workspace thread \"#{title}\" needs you."
-
-  defp moved(%{"outcome" => "failed", "title" => title}),
-    do: "The workspace thread \"#{title}\" failed."
 
   defp moved(%{"title" => title}), do: "The workspace thread \"#{title}\" is done."
 
@@ -934,7 +957,11 @@ defmodule Aqua.Crew do
   # A request that cannot be delivered answers itself on its room: a
   # `failed` reply from the member saying why, with the `refused` receipt
   # in its transaction; a room that takes none any more leaves the
-  # receipt alone.
+  # receipt alone, as does a request the person's stop of its room ended,
+  # which nothing answers.
+  defp failed(_ctx, record, _request, :request_ended, held),
+    do: refused(record, :request_ended, held)
+
   defp failed(ctx, %Prima.OutboxRecord{snapshot: snapshot} = record, request, reason, held) do
     member = snapshot["member"]
 
@@ -948,6 +975,31 @@ defmodule Aqua.Crew do
       receipt: receipt(record, held, "refused")
     )
     |> delivered("refused", fn cannot -> refused(record, cannot, held) end)
+  end
+
+  # An opening whose delivery is refused for good: the daily thread is
+  # told why its work could not start, by the server's `error` report
+  # with the refused receipt in its transaction (`Aqua.Tape.refuse_opening/4`),
+  # unless nobody is left to tell or the work was never refused
+  # (`@untold`), when the receipt alone is written.
+  defp opening_refused(ctx, %Prima.OutboxRecord{snapshot: snapshot} = record, reason, held) do
+    if reason in @untold or not undeliverable?(reason) do
+      refused(record, reason, held)
+    else
+      ctx
+      |> Tape.refuse_opening(snapshot["workspace_id"], snapshot["opening_id"], %{
+        receipt: receipt(record, held, "refused"),
+        summary: "the work could not start (#{Aqua.Ops.render_refusal(reason)})",
+        person_id: snapshot["person_id"],
+        origin: snapshot["origin"]
+      })
+      |> case do
+        {:ok, _thread} -> {:ok, "refused"}
+        {:error, :receipted} -> {:ok, "refused"}
+        {:error, lost} when lost in [:taken, :lapsed] -> {:stop, lost}
+        {:error, untold} -> refused(record, untold, held)
+      end
+    end
   end
 
   # The receipt alone, under the claim and this member's slot.
@@ -984,6 +1036,12 @@ defmodule Aqua.Crew do
 
   defp continuation(%Prima.OutboxRecord{athanor_id: athanor_id, snapshot: snapshot}),
     do: Sanctum.Tenancy.continuation(snapshot["person_id"], athanor_id, snapshot["origin"])
+
+  # A request the person's stop of its room ended is delivered nowhere,
+  # before its member's thread is made; the acceptance asks again under
+  # its lock (`Arca.TurnStorage.accept_message/3`).
+  defp still_waiting(%{status: "pending"}), do: :ok
+  defp still_waiting(_request), do: {:error, :request_ended}
 
   # The request row a record names, which must still be a request.
   defp request_row(ctx, request_id) when is_binary(request_id) do

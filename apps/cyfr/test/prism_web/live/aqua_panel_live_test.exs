@@ -573,6 +573,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   defp layer(mine, workspace), do: PrismWeb.WorkspaceLive.address(route(mine), workspace.id)
 
+  # The state a listed workspace thread's row reads, beside its title.
+  defp row_state(workspace), do: "#aqua-panel-work-#{workspace.id} button > span:nth-child(2)"
+
   test "the panel lists the workspace threads going, waiting on the person and finished but unread; one opens at its layer, and a finished one leaves once read",
        %{conn: conn, mine: mine, me: me} do
     going = workspace!(me, "Going")
@@ -587,9 +590,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
     {panel, _html} = open_panel(desktop!(conn))
 
     assert has_element?(panel, ~s(#aqua-panel-work-#{going.id}[data-state="open"]), "Going")
-    assert has_element?(panel, "#aqua-panel-work-#{going.id}", "Working on it")
-    assert has_element?(panel, "#aqua-panel-work-#{waiting.id}", "Needs you")
-    assert has_element?(panel, "#aqua-panel-work-#{unread.id}", "Done")
+    assert has_element?(panel, row_state(going), "Working")
+    assert has_element?(panel, row_state(waiting), "Needs you")
+    assert has_element?(panel, row_state(unread), "Finished")
     assert has_element?(panel, ~s(#aqua-panel-work-#{unread.id} [aria-label="1 new"]))
     refute has_element?(panel, "#aqua-panel-work-#{read.id}")
 
@@ -605,13 +608,106 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # announcement of its own: the athanor's notice reads the list again.
     state!(going, "needs_you")
     Sanctum.Notify.broadcast(me.athanor_id, :approval_pending, %{thread_id: "thr_crew"})
-    wait_until(fn -> has_element?(panel, "#aqua-panel-work-#{going.id}", "Needs you") end)
+    wait_until(fn -> has_element?(panel, row_state(going), "Needs you") end)
 
     # One opens at its layer: the page moves there and the panel gives way.
     panel |> element("#aqua-panel-work-#{waiting.id} button") |> render_click()
     assert_push_event(panel, "navigate", %{to: to})
     assert to == layer(mine, waiting)
     refute has_element?(panel, "#aqua-panel-sheet")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the panel keeps one Aqua says needs the person listed as waiting on them, and one stopped or in error until it is read",
+       %{conn: conn, me: me} do
+    me = %{me | origin: :interactive}
+    actor = Sanctum.Context.actor(me)
+    waiting = workspace!(me, "Account")
+    stopped = workspace!(me, "Halted")
+    broken = workspace!(me, "Broken")
+
+    # Each one's turn posts a result, then: Aqua reports it needs the
+    # person; the person stops it; it fails with no report.
+    turns =
+      for workspace <- [waiting, stopped, broken], into: %{} do
+        [opening | _] =
+          Enum.filter(Threads.messages(actor, workspace.id), &(&1.kind == "opening"))
+
+        {:ok, %{turn: turn}} =
+          Arca.TurnStorage.accept_message(actor, workspace.id, %{
+            message: %{author: me.user_id, sent_by: "person", content: opening.content},
+            opening_id: opening.id,
+            turn: %{agent: "aqua", requested_by: me.user_id, origin: :interactive}
+          })
+
+        {:ok, _} =
+          Aqua.Tape.post(me, turn, %{
+            id: Prima.UUID7.generate_id("msg"),
+            content: "A result",
+            payload: %{"post" => true}
+          })
+
+        {workspace.id, turn}
+      end
+
+    asks = turns[waiting.id]
+    {:ok, _} = Aqua.Tape.report_workspace(me, asks, "needs_you", %{summary: "Which account?"})
+    {:ok, current} = Aqua.Tape.turn(me, asks.id)
+    {:ok, _} = Aqua.Tape.finish(me, current, "cancelled", %{error: "stopped"})
+    {:ok, _} = Aqua.Tape.stop_work(me, stopped.id)
+    {:ok, current} = Aqua.Tape.turn(me, turns[broken.id].id)
+    {:ok, _} = Aqua.Tape.finish(me, current, "failed", %{error: "the build broke"})
+
+    {panel, _html} = open_panel(desktop!(conn))
+
+    assert has_element?(panel, ~s(#aqua-panel-work-#{waiting.id}[data-state="needs_you"]))
+    assert has_element?(panel, row_state(waiting) <> ".text-amber-300", "Needs you")
+    assert has_element?(panel, ~s(#aqua-panel-work-#{stopped.id}[data-state="stopped"]))
+    assert has_element?(panel, row_state(stopped), "Stopped")
+    assert has_element?(panel, ~s(#aqua-panel-work-#{broken.id}[data-state="error"]))
+    assert has_element?(panel, row_state(broken), "Error")
+
+    # Read, the stopped and the broken one leave; the one that needs the
+    # person stays.
+    for workspace <- [waiting, stopped, broken] do
+      [last | _] = Enum.reverse(Threads.messages(actor, workspace.id))
+      :ok = Aqua.mark_read(me, workspace.id, last.seq)
+    end
+
+    wait_until(fn ->
+      not has_element?(panel, "#aqua-panel-work-#{stopped.id}") and
+        not has_element?(panel, "#aqua-panel-work-#{broken.id}")
+    end)
+
+    assert has_element?(panel, row_state(waiting), "Needs you")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a crew member's turn ending under a workspace thread moves its row in the panel",
+       %{conn: conn, me: me} do
+    me = %{me | origin: :interactive}
+    actor = Sanctum.Context.actor(me)
+    workspace = workspace!(me, "Crew work")
+    {:ok, crew} = Threads.crew_thread(actor, workspace.id, "planner")
+
+    {:ok, %{turn: planner}} =
+      Arca.TurnStorage.accept_message(actor, crew.id, %{
+        message: %{author: me.user_id, sent_by: "person", content: "plan it"},
+        turn: %{agent: "planner", requested_by: me.user_id, origin: :interactive}
+      })
+
+    # Aqua's own turn reports its work done while the planner's runs.
+    _post = finished!(me, workspace)
+
+    {panel, _html} = open_panel(desktop!(conn))
+    assert has_element?(panel, row_state(workspace), "Working")
+
+    {:ok, current} = Aqua.Tape.turn(me, planner.id)
+    {:ok, _} = Aqua.Tape.finish(me, current, "cancelled", %{error: "stopped"})
+
+    wait_until(fn -> has_element?(panel, row_state(workspace), "Finished") end)
 
     Cyfr.Test.Sandbox.end_views()
   end

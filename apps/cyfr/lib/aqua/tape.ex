@@ -787,6 +787,64 @@ defmodule Aqua.Tape do
     end
   end
 
+  @doc """
+  The person's stop of a workspace thread: everything of its work ends
+  in one transaction, in it and in its crew members' threads
+  (`Arca.TurnStorage.stop_work/3`), under the stamp each root's attempt
+  stores, and the thread is `stopped`; the runtime still holding the
+  cancelled turns is the caller's to stop (`Aqua.Runner.stop_cancelled/1`).
+  The thread's place in the person's list is announced after the commit.
+  """
+  @spec stop_work(Context.t(), String.t()) ::
+          {:ok, %{cancelled: [map()]}} | {:error, term()}
+  def stop_work(%Context{} = ctx, thread_id) do
+    actor = Sanctum.Context.actor(ctx)
+
+    children =
+      case Threads.children(actor, thread_id) do
+        children when is_list(children) -> Enum.map(children, & &1.id)
+        {:error, _unread} -> []
+      end
+
+    open = open_jobs(ctx, children)
+
+    with {:ok, %{cancelled: cancelled}} = stopped <-
+           TurnStorage.stop_work(actor, thread_id, standing(%{error: "stopped"}, :retiring)) do
+      # What a turn's own end does after its commit (`finish/4`), for each
+      # turn the stop ended, and the deliveries it left nothing to land
+      # woken to say so.
+      Enum.each(cancelled, &Opus.end_turn_programs(ctx.athanor_id, &1.turn_id))
+      announce_lists(ctx, thread_id, nil)
+      Activity.cancelled(ctx, open, cancelled)
+
+      cancelled
+      |> Enum.map(& &1.thread_id)
+      |> Enum.uniq()
+      |> Enum.each(&broadcast(ctx, &1, :turn_finished, nil))
+
+      wake_crew(ctx)
+      stopped
+    end
+  end
+
+  @doc """
+  An opening whose delivery is refused for good, with the consumer's
+  receipt (`Arca.TurnStorage.refuse_opening/4`): the opening ends, and
+  the server's `error` report tells the daily thread why the work could
+  not start. The thread's place in the person's list is announced and
+  the crew's delivery consumer woken after the commit.
+  """
+  @spec refuse_opening(Context.t(), String.t(), String.t(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def refuse_opening(%Context{} = ctx, workspace_id, opening_id, attrs) when is_map(attrs) do
+    with {:ok, thread} <-
+           TurnStorage.refuse_opening(Sanctum.Context.actor(ctx), workspace_id, opening_id, attrs) do
+      announce_lists(ctx, workspace_id, nil)
+      wake_crew(ctx)
+      {:ok, thread}
+    end
+  end
+
   # The approvals still waiting in the threads a delete removes, read
   # before it: their rows go with the threads, so nothing can be read of
   # them after. A read that fails announces none of them.

@@ -77,10 +77,11 @@ defmodule PrismWeb.DisplayHelpers do
   the panel's list share. A state it does not know reads as none.
   """
   @spec work_state(String.t() | nil) :: String.t() | nil
-  def work_state("open"), do: "Working on it"
+  def work_state("open"), do: "Working"
   def work_state("needs_you"), do: "Needs you"
-  def work_state("done"), do: "Done"
-  def work_state("failed"), do: "Failed"
+  def work_state("done"), do: "Finished"
+  def work_state("stopped"), do: "Stopped"
+  def work_state("error"), do: "Error"
   def work_state(_state), do: nil
 
   @doc """

@@ -18,14 +18,17 @@ defmodule Aqua.Providers.Workspace do
       whose delivery starts the soul's turn there
       (`Arca.TurnStorage.open_workspace/2`, `Aqua.Crew`). It answers the
       thread's id at once, and the calling turn goes on, as `crew.ask`'s
-      does. A thread asked again that had finished opens again.
+      does. A thread asked again is new work there, whatever its state.
     * `report` is the soul's there: from a turn of the workspace thread
-      it reports, under that turn's fence, `done` or `failed` with a
-      summary and the files of the thread's posts it carries, which the
-      thread becomes once nothing else it accepted remains to run and no
-      card waits, and the `workspace_report` record lands the report on
-      the daily thread current when it is delivered. The host makes the
-      other moves (`Arca.TurnStorage`'s "Workspace threads").
+      it reports, under that turn's fence, `done` (with what worked and
+      what did not in its summary) or `needs_you` (the work waits on
+      something only the person can give), with the files of the
+      thread's posts it carries, which the thread becomes once nothing
+      else it accepted remains to run and no card waits, and the
+      `workspace_report` record lands the report on the daily thread
+      current when it is delivered. The host makes the other moves, and
+      alone says a thread is `stopped` or in `error`
+      (`Arca.TurnStorage`'s "Workspace threads").
     * `list` answers the records a view reads (`records/1`).
 
   ## Who calls
@@ -54,6 +57,8 @@ defmodule Aqua.Providers.Workspace do
   # The most daily-thread posts an opening refers to.
   @refs_max 20
   @ask_max 32 * 1024
+  # What Aqua reports of its work; `stopped` and `error` are the host's.
+  @outcomes ~w(done needs_you)
 
   @impl true
   def service, do: "aqua"
@@ -131,13 +136,14 @@ defmodule Aqua.Providers.Workspace do
           [
             Arg.new("outcome", :string,
               required: true,
-              description: "report: done or failed",
-              enum: ["done", "failed"]
+              description:
+                "report: done when the work is finished, needs_you when it waits on the person",
+              enum: @outcomes
             ),
             Arg.new("summary", :string,
               required: true,
               description:
-                "report: what was done or why it failed, for the daily thread (at most 32 KiB)",
+                "report: what worked and what did not, or what the person must give or decide, for the daily thread (at most 32 KiB)",
               max: @ask_max
             ),
             Arg.new("attachments", {:array, file},
@@ -158,7 +164,7 @@ defmodule Aqua.Providers.Workspace do
         )
       ],
       description:
-        "Workspace threads: open one for a piece of real work from the daily thread, which shows a post pointing at it, or send a further ask to one already open; the work goes on there and its report comes back to the daily thread when it is done, has failed or needs the person. report, from a turn of a workspace thread, says it is done or failed. list names the workspace threads at work, waiting on the person or with posts not yet seen.",
+        "Workspace threads: open one for a piece of real work from the daily thread, which shows a post pointing at it, or send a further ask to one already open; the work goes on there and its report comes back to the daily thread when it is done or needs the person. report, from a turn of a workspace thread, says it is done, with what worked and what did not, or that it needs something from the person. list names the workspace threads at work, waiting on the person or with posts not yet seen.",
       title: "Workspace threads"
     )
   end
@@ -394,7 +400,7 @@ defmodule Aqua.Providers.Workspace do
   # ---------------------------------------------------------------------------
 
   defp report(%Context{plane: :guest} = ctx, %{"outcome" => outcome} = args)
-       when outcome in ["done", "failed"] do
+       when outcome in @outcomes do
     with {:ok, summary} <- summary(args["summary"]),
          {:ok, turn} <- Tape.held_turn(ctx, args),
          {:ok, attachments} <- reported_files(ctx, turn.thread_id, args["attachments"]),
@@ -412,7 +418,7 @@ defmodule Aqua.Providers.Workspace do
   end
 
   defp report(%Context{plane: :guest}, _args),
-    do: {:error, {:invalid_argument, "workspace.report takes an 'outcome' of done or failed"}}
+    do: {:error, {:invalid_argument, "workspace.report takes an 'outcome' of done or needs_you"}}
 
   defp report(%Context{}, _args), do: {:error, :not_in_a_turn}
 
@@ -472,10 +478,11 @@ defmodule Aqua.Providers.Workspace do
 
   @doc """
   The person's workspace threads a view lists, the latest activity first:
-  each one `open` or `needs_you`, and each finished one with posts the
-  person has not seen; a finished one they have seen leaves the list by
-  itself and is found from the daily thread. `waits_on_you` is whether a
-  card waits on the person there or in a crew member's thread under it.
+  each one `open` or `needs_you`, and each one whose work ended (`done`,
+  `stopped`, `error`) with posts the person has not seen; one they have
+  seen leaves the list by itself and is found from the daily thread.
+  `waits_on_you` is whether it needs the person: a card waits there or
+  in a crew member's thread under it, or Aqua reported it needs them.
   """
   @spec records(Context.t()) :: {:ok, [entry()]} | {:error, term()}
   def records(%Context{} = ctx) do
@@ -523,8 +530,9 @@ defmodule Aqua.Providers.Workspace do
     end
   end
 
-  # It waits on the person while a card waits there or in a crew member's
-  # thread under it, which its state says (`needs_you`).
+  # It needs the person while a card waits there or in a crew member's
+  # thread under it, or once Aqua reported so, which its state says
+  # (`needs_you`).
   defp record_of(actor, thread) do
     with {:ok, unread} <- Arca.ThreadStorage.unread(actor, thread) do
       {:ok,

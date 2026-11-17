@@ -625,7 +625,9 @@ defmodule Arca.ThreadStorage do
 
   @doc """
   The requests still waiting on a crew member's reply, oldest first: of
-  the thread `opts[:thread_id]` names, else of the whole athanor.
+  the thread `opts[:thread_id]` names, else of the whole athanor; with
+  `opts[:unstarted]`, only those no turn of the member has opened for
+  yet, whose delivery is still to come.
   """
   @spec pending_requests(Prima.Actor.t(), keyword()) ::
           [map()] | {:error, :no_athanor | :database_error}
@@ -644,6 +646,19 @@ defmodule Arca.ThreadStorage do
         case Keyword.get(opts, :thread_id) do
           nil -> query
           thread_id -> from(m in query, where: m.thread_id == ^thread_id)
+        end
+
+      query =
+        if Keyword.get(opts, :unstarted, false) do
+          started =
+            from(t in Arca.Schemas.Turn,
+              where: t.athanor_id == ^athanor_id and not is_nil(t.request_id),
+              select: t.request_id
+            )
+
+          from(m in query, where: m.id not in subquery(started))
+        else
+          query
         end
 
       query
@@ -1049,7 +1064,8 @@ defmodule Arca.ThreadStorage do
       |> Repo.update_all(set: [brain_session: nil], inc: [brain_generation: 1])
     end
 
-    stop = Map.put(attrs, :error, "what this thread read was deleted")
+    # The person's deletion stops what read it, as their stop would.
+    stop = Map.merge(attrs, %{error: "what this thread read was deleted", ended_by: :person})
 
     Enum.flat_map(readers, fn
       {_thread_id, _since, []} ->

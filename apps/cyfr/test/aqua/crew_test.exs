@@ -18,9 +18,12 @@ defmodule Aqua.CrewTest do
   @moduledoc """
   The crew on the thread layer: a request in a room is delivered into its
   member's child thread, the member's turn there replies on the room on
-  every exit, and who may post where is the admission rule's. The
-  delivery consumer is off in the suite (`:crew_delivery_enabled`), so
-  each case drains by hand, which is what its wake and its tick do.
+  every exit, and who may post where is the admission rule's. In a
+  workspace thread the person stopped, a delivery lands nothing that
+  would start work again; an opening refused for good is told to the
+  daily thread by the server's error report. The delivery consumer is
+  off in the suite (`:crew_delivery_enabled`), so each case drains by
+  hand, which is what its wake and its tick do.
   """
 
   use ExUnit.Case, async: false
@@ -1608,6 +1611,191 @@ defmodule Aqua.CrewTest do
     [_old, new] = Threads.children(actor(ctx), room.id)
     assert new.id != old.id and is_nil(new.archived_at)
     await_status(ctx, delivered_turn(ctx, new, request.id), "completed")
+  end
+
+  describe "a workspace thread's deliveries" do
+    test "after the person's stop, a request waiting for its delivery opens no turn in the " <>
+           "member's thread and writes no reply",
+         %{ctx: ctx, room: daily} do
+      script!([ask("plan it"), reply("Asked the planner.")])
+      workspace = workspace!(ctx, daily)
+      {_aqua, request} = asked!(ctx, workspace)
+
+      assert :ok = Runner.stop_turn(ctx, workspace.id)
+      assert %{status: "expired"} = row(ctx, request.id)
+
+      # The delivery is refused with its receipt alone: nothing answers a
+      # request the person's stop ended.
+      assert {:ok, %{"refused" => 1}} = drain(ctx)
+      assert {:ok, "refused"} = outcome(ctx, "message", request.id)
+
+      # Nor is the member's thread made for it.
+      assert Threads.children(actor(ctx), workspace.id) == []
+      refute Enum.any?(rows(ctx, workspace.id), &(&1.reply_to == request.id))
+      assert pending_records(ctx) == []
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert work_state(ctx, workspace.id) == "stopped"
+      assert reports(ctx) == []
+    end
+
+    test "after the person's stop, a member's answer on its way lands as a row and opens no " <>
+           "turn of Aqua's",
+         %{ctx: ctx, room: daily} do
+      script!([ask("plan it"), reply("Asked the planner."), reply("The plan.")])
+      workspace = workspace!(ctx, daily)
+      {aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      child = child!(ctx, workspace, "planner")
+      await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
+      assert [_answer] = pending(ctx, "crew_reply")
+      assert work_state(ctx, workspace.id) == "open"
+
+      assert :ok = Runner.stop_turn(ctx, workspace.id)
+      assert work_state(ctx, workspace.id) == "stopped"
+
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      reply = Enum.find(rows(ctx, workspace.id), &(&1.reply_to == request.id))
+      assert %{sent_by: "planner", outcome: "done", content: "The plan.", turn_id: nil} = reply
+      assert Enum.map(room_turns(ctx, workspace), & &1.id) == [aqua]
+      assert {:ok, []} = Tape.open_turns(ctx, workspace.id)
+      # The request stays as the stop left it.
+      assert %{status: "expired"} = row(ctx, request.id)
+      assert work_state(ctx, workspace.id) == "stopped"
+      assert reports(ctx) == []
+    end
+
+    test "an opening refused for good tells the daily thread by the server's error report, and " <>
+           "the workspace thread reads error",
+         %{ctx: ctx, room: daily} do
+      # The report's delivery starts Aqua's turn on the daily thread.
+      script!([reply("I will tell the person.")])
+      workspace = workspace!(ctx, daily)
+      [opening] = rows(ctx, workspace.id)
+
+      # An ask longer than a message may be, which admission refuses for
+      # good; the provider bounds an ask by the same measure, so the row is
+      # lengthened here.
+      {1, _} =
+        Arca.Repo.update_all(from(m in Arca.Schemas.Message, where: m.id == ^opening.id),
+          set: [content: String.duplicate("x", 32 * 1024 + 1)]
+        )
+
+      assert {:ok, %{"refused" => 1}} = drain(ctx)
+
+      why = "the work could not start (The message is longer than the 32 KiB bound)"
+      assert %{status: "error", turn_id: nil} = row(ctx, opening.id)
+      assert room_turns(ctx, workspace) == []
+      assert work_state(ctx, workspace.id) == "error"
+      # The server's report, of no turn.
+      assert [%{"outcome" => "error", "summary" => ^why} = snapshot] = reports(ctx)
+      assert snapshot["turn_id"] == nil
+
+      # Delivered, it lands on the daily thread current then.
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      {:ok, today} = Aqua.Day.current(ctx)
+      report = Enum.find(rows(ctx, today.id), &(&1.kind == "report"))
+      assert report.content == "Aqua could not run the workspace thread \"Moon report\": " <> why
+      assert %{sent_by: "aqua", workspace_id: workspace_id} = report
+      assert workspace_id == workspace.id
+      assert %{"outcome" => "error", "from_turn" => nil} = Tape.payload(report)
+      await_status(ctx, report.turn_id, "completed")
+      assert pending(ctx, "workspace_report") == []
+    end
+
+    test "an opening whose workspace thread the person deleted before its delivery posts nothing",
+         %{ctx: ctx, room: daily} do
+      workspace = workspace!(ctx, daily)
+
+      assert {:ok, %{deleted: true}} =
+               Aqua.Providers.Thread.handle("thread", ctx, %{
+                 "action" => "delete",
+                 "thread" => workspace.id
+               })
+
+      assert {:ok, %{"refused" => 1}} = drain(ctx)
+      assert pending(ctx, "workspace_open") == []
+      assert reports(ctx) == []
+      {:ok, today} = Aqua.Day.current(ctx)
+
+      for thread <- [daily, today],
+          do: refute(Enum.any?(rows(ctx, thread.id), &(&1.kind in ["pointer", "report"])))
+    end
+
+    test "a crew member's failed reply wakes Aqua there, and the workspace thread stays at " <>
+           "work, not in error",
+         %{ctx: ctx, room: daily} do
+      script!([
+        ask("think hard", %{"options" => %{"effort" => "high"}}),
+        reply("Asked the planner."),
+        reply("The planner could not; I will do it myself.")
+      ])
+
+      workspace = workspace!(ctx, daily)
+      {aqua, request} = asked!(ctx, workspace)
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      child = child!(ctx, workspace, "planner")
+      await_status(ctx, delivered_turn(ctx, child, request.id), "failed")
+      assert work_state(ctx, workspace.id) == "open"
+
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      reply = Enum.find(rows(ctx, workspace.id), &(&1.reply_to == request.id))
+      assert %{sent_by: "planner", outcome: "failed", turn_id: woken} = reply
+      refute woken in [nil, aqua]
+      await_status(ctx, woken, "completed")
+      assert work_state(ctx, workspace.id) == "open"
+      assert reports(ctx) == []
+    end
+  end
+
+  # Aqua's model asks the planner from its turn.
+  defp ask(task, args \\ %{}),
+    do:
+      call(
+        "a1",
+        "crew",
+        Map.merge(%{"action" => "ask", "member" => "planner", "task" => task}, args)
+      )
+
+  # The person opens a workspace thread from a post of the daily thread;
+  # its opening waits for its delivery.
+  defp workspace!(ctx, daily) do
+    {:ok, %{message: asked}} =
+      TurnStorage.accept_message(actor(ctx), daily.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "please write the report"}
+      })
+
+    {:ok, %{workspace: id}} =
+      Aqua.Providers.Workspace.handle("workspace", ctx, %{
+        "action" => "open",
+        "thread" => daily.id,
+        "refs" => [asked.id],
+        "title" => "Moon report",
+        "ask" => "write the moon report"
+      })
+
+    elem(Threads.get(actor(ctx), id), 1)
+  end
+
+  # The opening's delivery starts Aqua's turn there, which asks the planner
+  # and ends: the turn, and the request waiting for its delivery.
+  defp asked!(ctx, workspace) do
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    %{turn_id: aqua} = Enum.find(rows(ctx, workspace.id), &(&1.kind == "opening"))
+    await_status(ctx, aqua, "completed")
+    [request] = Tape.pending_requests(ctx, workspace.id)
+    {aqua, request}
+  end
+
+  defp work_state(ctx, id), do: elem(Threads.get(actor(ctx), id), 1).workspace_state
+
+  # Every workspace_report the athanor recorded, delivered or not.
+  defp reports(ctx) do
+    from(r in Arca.Schemas.OutboxRecord,
+      where: r.athanor_id == ^ctx.athanor_id and r.kind == "workspace_report",
+      select: r.snapshot
+    )
+    |> Arca.Repo.all()
+    |> Enum.map(&Jason.decode!/1)
   end
 
   defp outcome(ctx, source_kind, source_id) do

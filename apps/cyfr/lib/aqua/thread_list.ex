@@ -23,8 +23,10 @@ defmodule Aqua.ThreadList do
   `changed/2` follows the writes that move a listed thread's row as the
   list shows it: its creation, a message accepted into it, a turn's end, a
   card opened or decided, its read mark moved (`mark_read/3`). It reads
-  the thread again rather than trusting the write's answer, and a thread
-  gone or a child thread announces nothing. `removed/2` follows a
+  the thread again rather than trusting the write's answer; a thread
+  gone announces nothing, and a child thread announces its room, whose
+  state what moved there may move (a workspace thread's, by its crew's
+  work: `Arca.TurnStorage`'s "Workspace threads"). `removed/2` follows a
   committed delete. Both
   run under the thread's lock on this node, so once `removed` has left, a
   later `changed` reads the thread gone and says nothing. The person is
@@ -92,10 +94,15 @@ defmodule Aqua.ThreadList do
            {:ok, item} <- item(actor, Users.public_name(person), thread) do
         broadcast(actor, person, item)
       else
+        {:ok, %{kind: "crew", parent_id: room}} when is_binary(room) -> {:room, room}
         {:ok, _child} -> :ok
         {:error, reason} -> unannounced(thread_id, reason)
       end
     end)
+    |> case do
+      {:room, room} -> changed(actor, room)
+      _announced -> :ok
+    end
   end
 
   @doc "The thread `thread_id`, which a committed delete removed, leaving its person's list."
