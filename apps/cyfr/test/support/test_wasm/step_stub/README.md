@@ -45,7 +45,8 @@ writes their text and never reads them.
 ## Rebuilding
 
 The binary is checked in; rebuild whenever `src/lib.rs` or `Cargo.lock`
-changes, and record the digests the build prints below: the step bench's
+changes, or the `catalyst` world it is built against (`wit/catalyst`,
+`Prima.CargoToml`'s catalyst scaffold), and record the digests the build prints below: the step bench's
 test holds `src/lib.rs`, `Cargo.lock` and `step_stub.wasm` to them, so a
 source change without a rebuild fails.
 
@@ -71,5 +72,5 @@ It reads crates.io for the crates `Cargo.lock` names.
 ```
 src/lib.rs     sha256:8de6c09c8f0707a18480d61a273a041b65b81e1765d186cb97d79c775cb9d794
 Cargo.lock     sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-step_stub.wasm sha256:f13c95ec32b249f554d4166202c57c36f5d09ae649f6215e62cb84f0cc587180
+step_stub.wasm sha256:ec2a805b9efcada8808eb36c418912666bac386f4bbd08736e45bbd8fece56f8
 ```
