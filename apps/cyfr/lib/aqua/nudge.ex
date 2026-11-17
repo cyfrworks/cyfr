@@ -188,7 +188,7 @@ defmodule Aqua.Nudge do
             {rows, {last.athanor_id, last.id}}
 
           {:error, reason} ->
-            raise "candidates not read: #{inspect(reason)}"
+            raise "candidates not read: #{Prima.LoggerContext.shape(reason)}"
         end
     end)
     |> Stream.concat()
