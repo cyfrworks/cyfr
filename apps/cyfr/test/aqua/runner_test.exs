@@ -2349,7 +2349,7 @@ defmodule Aqua.RunnerTest do
 
       # The page's answer goes to the person's browser, which this test
       # stands in for while the stop runs.
-      browser = {ctx.athanor_id, ctx.user_id}
+      browser = {ctx.athanor_id, ctx.user_id, :person}
       {:ok, _owner} = Registry.register(Opus.Browser.Registry, browser, nil)
       stop = Task.async(fn -> Runner.stop_turn(ctx, ws.id) end)
       request = call.request
