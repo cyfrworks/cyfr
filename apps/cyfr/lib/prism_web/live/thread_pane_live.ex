@@ -2758,8 +2758,9 @@ defmodule PrismWeb.ThreadPaneLive do
   defp role_of(%{kind: kind}) when kind in ["system", "nudge"], do: "system"
   defp role_of(%{author: @agent_author}), do: "assistant"
 
-  defp role_of(%{author: @system_author} = msg),
-    do: if(fired_by(msg), do: "schedule", else: "user")
+  # A post in the server's voice: a schedule's line, or a post of the
+  # server's own (`Aqua.Nudge`), never the person's.
+  defp role_of(%{kind: "text", author: @system_author}), do: "server"
 
   defp role_of(_), do: "user"
 
@@ -2813,6 +2814,6 @@ defmodule PrismWeb.ThreadPaneLive do
   defp role_class("user"), do: "bg-indigo-600 text-white"
   defp role_class("error"), do: "bg-red-900/40 text-red-300 border border-red-800"
   defp role_class("system"), do: "bg-gray-800/60 text-gray-400 border border-gray-800 italic"
-  defp role_class("schedule"), do: "bg-sky-950/50 text-sky-100 border border-sky-900/60"
+  defp role_class("server"), do: "bg-sky-950/50 text-sky-100 border border-sky-900/60"
   defp role_class(_), do: "bg-gray-800 text-gray-200"
 end

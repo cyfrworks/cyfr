@@ -167,33 +167,6 @@ defmodule Aqua.Tape do
     end
   end
 
-  @doc """
-  The daily thread's reminder of the waits `attrs[:waits]` names
-  (`[%{workspace_id, waits_since, content}]`), one row each, opening one
-  turn of Aqua's as the context's person under its origin
-  (`Arca.TurnStorage.remind/3`). `attrs`: `:waits`, `:claim`, `:slot`. The rows are
-  broadcast after the commit.
-  """
-  @spec remind(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def remind(%Context{} = ctx, daily_id, attrs) when is_map(attrs) do
-    storage = %{
-      waits: Map.fetch!(attrs, :waits),
-      turn: line_turn(ctx, %{}),
-      claim: Map.fetch!(attrs, :claim),
-      slot: Map.fetch!(attrs, :slot)
-    }
-
-    case TurnStorage.remind(Sanctum.Context.actor(ctx), daily_id, storage) do
-      {:ok, %{rows: rows, turn: turn} = accepted} ->
-        announce_lists(ctx, daily_id, {:started, turn})
-        Enum.each(rows, &broadcast(ctx, daily_id, :message, &1))
-        {:ok, accepted}
-
-      other ->
-        other
-    end
-  end
-
   # The turn a server's line opens: Aqua's, as the context's person under
   # its origin, with the options of the work it is bound to.
   defp line_turn(%Context{} = ctx, options) do
@@ -1179,8 +1152,9 @@ defmodule Aqua.Tape do
   def payload(row), do: Threads.payload(row)
 
   @doc """
-  What `rows` carry of the athanor's other threads, as sources: a pointer,
-  a report or a reminder names its workspace thread, and an opening the daily
+  What `rows` carry of the athanor's other threads, as sources: a row
+  naming a workspace thread (a pointer, a report, the server's post of
+  its wait) names it, and an opening the daily
   thread its refs are posts of, each a `thread` source
   (`Prima.Source.thread/1`) by which forgetting that thread finds the
   turn that read it; a report the sources its record kept of the turn
@@ -1193,9 +1167,8 @@ defmodule Aqua.Tape do
   def carried_sources(rows) when is_list(rows),
     do: Enum.flat_map(rows, &(carried(&1) ++ files_carried(&1)))
 
-  defp carried(%{kind: kind, workspace_id: id} = row)
-       when kind in ["pointer", "report", "nudge"] and is_binary(id),
-       do: [Prima.Source.thread(id) | kept(row)]
+  defp carried(%{workspace_id: id} = row) when is_binary(id),
+    do: [Prima.Source.thread(id) | kept(row)]
 
   defp carried(%{kind: "opening"} = row) do
     case payload(row) do

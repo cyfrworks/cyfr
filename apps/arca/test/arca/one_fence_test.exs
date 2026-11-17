@@ -50,10 +50,8 @@ defmodule Arca.OneFenceTest do
       "an opening refused for good carries the consumer's refused receipt, judged under its job claim and slot as `record/4` judges one (`Arca.ConsumerReceipts.record!/4`), so the receipt lands exactly when the server's error report does",
     {"arca/turn_storage.ex", "nudge_round/4"} =>
       "the server's nudge of a quiet workspace thread is accepted under the nudging job's claim and the member's slot, judged last in its writing transaction as `record/4` judges a receipt's, so a claim or slot lost admits no turn and writes no row",
-    {"arca/turn_storage.ex", "remind/3"} =>
-      "the daily thread's reminder of a waiting workspace thread is accepted under the nudging job's claim and the member's slot, judged last in its writing transaction as `record/4` judges a receipt's, so a claim or slot lost admits no turn and writes no row",
     {"arca/turn_storage.ex", "accept_message/3"} =>
-      "a crew delivery's acceptance carries the consumer's receipt, judged under its job claim and slot as `record/4` judges one (`Arca.ConsumerReceipts.record!/4`), so the receipt lands exactly when the row does; any other acceptance checks no slot",
+      "a crew delivery's acceptance carries the consumer's receipt, judged under its job claim and slot as `record/4` judges one (`Arca.ConsumerReceipts.record!/4`), so the receipt lands exactly when the row does; the server's post of a wait carries the nudging job's claim and the member's slot, judged last in the same transaction, so a claim or slot lost lands no post; any other acceptance checks no slot",
     {"arca/cron_schedule.ex", "guarded/4"} =>
       "a generic schedule writer: the row locked tenant-scoped first, then the slot checked (`slot_fence/0`)",
     {"arca/execution.ex", "admit/4"} =>

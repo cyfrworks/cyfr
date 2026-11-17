@@ -28,10 +28,12 @@ defmodule Aqua.Runner.Admission do
       that asked it: its reply lands on the request's thread, addressed
       to the request's sender, and opens the soul's turn when that sender
       is the soul, or is room content when it is the person.
-    * A schedule's line (`:schedule`) is a turn of the soul in a daily
-      thread, sent as the person under the `schedule` origin, whatever
-      names its text holds: a line with nobody present asks no crew
-      member. No other kind of thread admits one.
+    * A line of the server's is a turn of the soul in a daily thread under
+      the `schedule` origin, whatever names its text holds: a line with
+      nobody present asks no crew member. A schedule's line
+      (`:schedule`) is sent as the person, and a post of the server's own
+      (`:server`) by the server (`Prima.Author.system/0`). No other kind
+      of thread admits one.
     * A workspace thread's opening (`:opening`, the row its opening's
       transaction wrote there) is a turn of the soul in that workspace
       thread, which works it, sent by the person who asked.
@@ -52,6 +54,7 @@ defmodule Aqua.Runner.Admission do
   # One human line, in bytes: the one bound every sender passes through.
   @max_message_bytes 32 * 1024
   @person "person"
+  @server Prima.Author.system()
 
   @typedoc """
   What a send is: a turn of the named agent (opened, or a steer of one),
@@ -80,7 +83,8 @@ defmodule Aqua.Runner.Admission do
   `:not_member`, `:no_agent`, `:not_addressable`. `opts`:
   `:attachments`, `:agents` (the sender's roster), `:agent` (an explicit
   pick), `:last` (the agent of the thread's last turn), `:schedule` (a
-  schedule's line, admitted only under the `schedule` origin), `:opening`
+  schedule's line) and `:server` (a post of the server's own), each
+  admitted only under the `schedule` origin, `:opening`
   (the opening row a workspace thread's delivery starts), `:report` (a
   workspace thread's report delivered to a daily thread), `:sent_by`
   (`"person"` when absent), `:request` (the request row a delivery
@@ -150,9 +154,11 @@ defmodule Aqua.Runner.Admission do
     sent_by = Keyword.get(opts, :sent_by, @person)
 
     decided =
-      if Keyword.has_key?(opts, :schedule),
-        do: scheduled(thread, sent_by, ctx.origin),
-        else: address(thread, sent_by, text, opts)
+      cond do
+        Keyword.has_key?(opts, :schedule) -> servers(thread, sent_by, @person, ctx.origin)
+        Keyword.get(opts, :server) == true -> servers(thread, sent_by, @server, ctx.origin)
+        true -> address(thread, sent_by, text, opts)
+      end
 
     case decided do
       {:ok, decision} -> {:ok, decision, text}
@@ -171,10 +177,12 @@ defmodule Aqua.Runner.Admission do
     end
   end
 
-  defp scheduled(%{kind: "daily"}, @person, :schedule),
+  # A line of the server's on a daily thread, sent by whom its kind is sent
+  # by: the soul's turn, whatever names its text holds.
+  defp servers(%{kind: "daily"}, sent_by, sent_by, :schedule),
     do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
 
-  defp scheduled(_thread, _sent_by, _origin), do: {:error, :not_addressable}
+  defp servers(_thread, _sent_by, _expected, _origin), do: {:error, :not_addressable}
 
   # An opening, delivered into the workspace thread that holds it, sent by
   # the person who asked.

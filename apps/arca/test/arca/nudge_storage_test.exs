@@ -3,8 +3,8 @@
 
 defmodule Arca.NudgeStorageTest do
   @moduledoc """
-  The nudge of a quiet workspace thread and the reminder of one that
-  waits on its person, at their owner: each decided afresh under the
+  The nudge of a quiet workspace thread and the server's post of one
+  that waits on its person, at their owner: each decided afresh under the
   thread's lock from the rows and the database's clock, each write placed
   before and after the one it races. Quiet periods are made by moving the
   rows' stamps back, never by waiting.
@@ -676,38 +676,6 @@ defmodule Arca.NudgeStorageTest do
 
   defp thread_row(row), do: Arca.Repo.get!(Message, row.id)
 
-  # The reminder rows a turn reads now, by id.
-  defp reminders(actor, turn) do
-    {:ok, rows} = TurnStorage.projection(actor, turn.id)
-    for %{kind: "nudge", id: id} <- rows, do: id
-  end
-
-  # Every write that would mark a reminder's row refused by the store, as
-  # a store that cannot take it refuses it. The sandbox's rollback removes
-  # it.
-  defp refuse_reminder_writes! do
-    statements =
-      if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
-        [
-          "CREATE TEMP TRIGGER nudge_test_refused BEFORE UPDATE OF status ON messages " <>
-            "WHEN NEW.kind = 'nudge' " <>
-            "BEGIN SELECT RAISE(ABORT, 'the store refuses the write'); END"
-        ]
-      else
-        [
-          "CREATE FUNCTION nudge_test_refused() RETURNS trigger LANGUAGE plpgsql AS $$ " <>
-            "BEGIN IF NEW.kind = 'nudge' THEN " <>
-            "RAISE EXCEPTION 'the store refuses the write'; " <>
-            "END IF; RETURN NEW; END $$",
-          "CREATE TRIGGER nudge_test_refused BEFORE UPDATE OF status ON messages " <>
-            "FOR EACH ROW EXECUTE FUNCTION nudge_test_refused()"
-        ]
-      end
-
-    for statement <- statements, do: Arca.Repo.query!(statement, [])
-    :ok
-  end
-
   # ---- the wait ------------------------------------------------------------
 
   describe "the wait a reminder names" do
@@ -747,9 +715,9 @@ defmodule Arca.NudgeStorageTest do
     end
   end
 
-  # ---- the reminder --------------------------------------------------------
+  # ---- the post of a wait --------------------------------------------------
 
-  describe "the reminder" do
+  describe "the server's post of a wait" do
     defp waiting!(actor, daily) do
       workspace = at_rest!(actor, daily)
       turn = running!(actor, workspace)
@@ -757,199 +725,221 @@ defmodule Arca.NudgeStorageTest do
       {thread(actor, workspace.id), turn, card}
     end
 
-    defp remind(actor, daily, waits, held) do
-      TurnStorage.remind(
+    # A wait begun past the quiet period: its stamp moved back, as the
+    # period passes without a wait.
+    defp waited!(actor, daily) do
+      {waiting, turn, card} = waiting!(actor, daily)
+      past = DateTime.add(waiting.waits_since, -(@quiet + 60), :second)
+
+      from(c in Thread, where: c.id == ^waiting.id)
+      |> Arca.Repo.update_all(set: [waits_since: past])
+
+      {thread(actor, waiting.id), turn, card}
+    end
+
+    # The post as the tick sends it (`Aqua.Nudge`): an ordinary post of the
+    # server's on `day`, opening a turn of Aqua's under the `schedule`
+    # origin unless `extra` steers it, named by its wait on that day.
+    defp post(actor, day, wait, held, extra \\ %{}) do
+      since = Map.get(extra, :waits_since, wait.waits_since)
+
+      TurnStorage.accept_message(
         actor,
-        daily.id,
-        Map.merge(held, %{
-          waits:
-            for(
-              w <- waits,
-              do: %{workspace_id: w.id, waits_since: w.waits_since, content: "#{w.title} waits"}
-            ),
-          turn: %{
-            agent: "aqua",
-            requested_by: actor.user_id,
-            origin: :schedule,
-            options: %{"agent" => "aqua"}
-          }
-        })
+        day.id,
+        Map.merge(
+          %{
+            message: %{
+              author: "system",
+              sent_by: "system",
+              addressee: "aqua",
+              content: Map.get(extra, :content, "Needs your attention: #{wait.title}"),
+              workspace_id: wait.id,
+              client_id: "wait:#{wait.id}:#{DateTime.to_iso8601(since)}:#{day.day}"
+            },
+            turn: %{
+              agent: "aqua",
+              requested_by: actor.user_id,
+              origin: :schedule,
+              options: %{"agent" => "aqua"}
+            },
+            wait: %{waits_since: since, quiet: @quiet},
+            claim: held
+          },
+          Map.drop(extra, [:waits_since, :content])
+        )
       )
     end
 
-    test "one row per wait, naming its thread, opening one turn of Aqua's; a daily thread reminds of a wait once, the next day's again",
+    defp posts(actor, day),
+      do:
+        for(
+          %{kind: "text", sent_by: "system"} = row <- Threads.messages(actor, day.id),
+          do: row.id
+        )
+
+    test "lands as an ordinary post of the server's, opening a turn of Aqua's under the schedule origin; it counts as unread, keeps its wait, moves none, and is its own receipt on its day",
          %{actor: actor, daily: daily, held: held} do
-      {one, _, _} = waiting!(actor, daily)
-      {two, _, _} = waiting!(actor, daily)
+      {wait, _, _} = waited!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)
+      {:ok, unread} = Threads.unread(actor, thread(actor, today.id))
 
-      assert {:ok, %{rows: [a, b], turn: turn}} = remind(actor, today, [one, two], held)
-      assert Enum.map([a, b], & &1.workspace_id) == [one.id, two.id]
+      assert {:ok, %{message: row, turn: turn}} = post(actor, today, wait, held)
 
-      assert Enum.all?(
-               [a, b],
-               &(&1.kind == "nudge" and &1.sent_by == "system" and &1.turn_id == turn.id)
-             )
+      assert %{kind: "text", author: "system", sent_by: "system", workspace_id: named} = row
+      assert named == wait.id and row.turn_id == turn.id
+      assert Jason.decode!(row.payload)["waits_since"] == DateTime.to_iso8601(wait.waits_since)
+      assert %{status: "accepted", origin: "schedule", sent_by: "system", agent: "aqua"} = turn
+      assert Jason.decode!(turn.options) == %{"agent" => "aqua"}
+      assert {:ok, count} = Threads.unread(actor, thread(actor, today.id))
+      assert count == unread + 1
 
-      assert %{status: "accepted", origin: "schedule", sent_by: "system"} = turn
+      # The post moves no wait: the thread waits as it did, since the stamp.
+      assert %{workspace_state: "needs_you", waits_since: since} = thread(actor, wait.id)
+      assert since == wait.waits_since
 
-      assert {:error, :reminded} = remind(actor, today, [one], held)
+      # The same wait on the same day is the same post, whatever its words
+      # have become since.
+      assert {:error, :duplicate_client_id} = post(actor, today, wait, held)
 
-      assert {:ok, [_two]} =
-               TurnStorage.unreminded(actor, today.day, [
-                 %{workspace_id: one.id, waits_since: one.waits_since},
-                 %{
-                   workspace_id: two.id,
-                   waits_since: DateTime.add(two.waits_since, 1, :microsecond)
-                 }
-               ])
+      assert {:error, :duplicate_client_id} =
+               post(actor, today, wait, held, %{content: "Needs your attention: renamed"})
 
+      assert posts(actor, today) == [row.id]
+
+      # The next day's thread takes the wait's post again.
       {:ok, tomorrow} = Arca.Test.Days.thread(actor)
-      assert {:ok, %{rows: [_]}} = remind(actor, tomorrow, [one], held)
+      assert {:ok, %{message: again}} = post(actor, tomorrow, wait, held)
+      assert posts(actor, tomorrow) == [again.id]
     end
 
-    test "a wait that ended or began again refuses the whole reminder, before; after, the turn finds no wait of its own standing",
+    test "a wait decided, moved, too young or archived, a workspace thread gone or a daily thread archived lands no post",
          %{actor: actor, daily: daily, held: held} do
-      {thread, turn, card} = waiting!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)
 
-      # Before: the decision ends the wait first.
+      {decided, turn, card} = waited!(actor, daily)
       decline!(actor, turn, card)
-      assert {:error, :wait_moved} = remind(actor, today, [thread], held)
-      assert Enum.filter(Threads.messages(actor, today.id), &(&1.kind == "nudge")) == []
+      assert {:error, :wait_moved} = post(actor, today, decided, held)
 
-      # After: the reminder lands first and its turn starts late.
-      {waiting, turn, card} = waiting!(actor, daily)
-      {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
-      assert {:ok, true} = TurnStorage.line_stands(actor, reminding)
-      decline!(actor, turn, card)
-      assert {:ok, false} = TurnStorage.line_stands(actor, reminding)
+      {young, _, _} = waiting!(actor, daily)
+      assert {:error, :not_quiet} = post(actor, today, young, held)
 
-      # A wait of another stamp is another wait.
-      {other, _, _} = waiting!(actor, daily)
-      stale = %{other | waits_since: DateTime.add(other.waits_since, -1, :second)}
-      assert {:error, :wait_moved} = remind(actor, today, [stale], held)
+      {moved, _, _} = waited!(actor, daily)
+      earlier = DateTime.add(moved.waits_since, -1, :second)
+      assert {:error, :wait_moved} = post(actor, today, moved, held, %{waits_since: earlier})
+
+      {archived, _, _} = waited!(actor, daily)
+      archive!(archived.id)
+      assert {:error, :thread_archived} = post(actor, today, archived, held)
+      assert thread(actor, archived.id).archived_at
+
+      {gone, _, _} = waited!(actor, daily)
+      assert {:ok, _} = Threads.delete(actor, gone.id, Map.put(@grant, :error, "deleted"))
+      assert {:error, :workspace_gone} = post(actor, today, gone, held)
+
+      {kept, _, _} = waited!(actor, daily)
+      {:ok, archived_day} = Arca.Test.Days.thread(actor)
+      archive!(archived_day.id)
+      assert {:error, :thread_archived} = post(actor, archived_day, kept, held)
+
+      assert posts(actor, today) == [] and posts(actor, archived_day) == []
+      assert {:ok, []} = TurnStorage.open_turns(actor, today.id)
+      assert {:ok, []} = TurnStorage.open_turns(actor, archived_day.id)
     end
 
-    test "deleting a workspace thread takes its reminders with it", %{
+    test "a wait decided, archived or taken out of the archive after its post leaves the post as it was, read as any post, and admits no second that day",
+         %{actor: actor, daily: daily, held: held} do
+      {:ok, today} = Arca.Test.Days.thread(actor)
+      {wait, turn, card} = waited!(actor, daily)
+      {:ok, %{message: row, turn: posting}} = post(actor, today, wait, held)
+
+      decline!(actor, turn, card)
+      archive!(wait.id)
+      assert posts(actor, today) == [row.id]
+      started = start!(actor, posting)
+      assert {:ok, rows} = TurnStorage.projection(actor, started.id)
+      assert row.id in Enum.map(rows, & &1.id)
+      assert {:ok, true} = TurnStorage.line_stands(actor, started)
+
+      # Archived and taken out again with its stamp unchanged: the same
+      # wait, whose post this day already holds.
+      {again, _, _} = waited!(actor, daily)
+      {:ok, %{message: first}} = post(actor, today, again, held)
+      archive!(again.id)
+
+      from(c in Thread, where: c.id == ^again.id)
+      |> Arca.Repo.update_all(set: [archived_at: nil])
+
+      assert thread(actor, again.id).waits_since == again.waits_since
+      assert {:error, :duplicate_client_id} = post(actor, today, again, held)
+      assert posts(actor, today) == [row.id, first.id]
+    end
+
+    test "a claim lost lands no post", %{actor: actor, daily: daily, held: held} do
+      {wait, _, _} = waited!(actor, daily)
+      {:ok, today} = Arca.Test.Days.thread(actor)
+
+      # Its lease ran out: still this holder's row, and nobody's to act on.
+      from(c in Arca.Schemas.JobClaim,
+        where: c.kind == "aqua_nudge" and c.key == ^actor.athanor_id
+      )
+      |> Arca.Repo.update_all(set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)])
+
+      assert {:error, :lapsed} = post(actor, today, wait, held)
+
+      # A peer took it over.
+      {:ok, _taken} = Arca.JobClaims.claim("aqua_nudge", actor.athanor_id, "boot_other", 60_000)
+      assert {:error, :taken} = post(actor, today, wait, held)
+
+      assert posts(actor, today) == []
+      assert {:ok, []} = TurnStorage.open_turns(actor, today.id)
+    end
+
+    test "a post steers a turn of its own sender and origin: one before the turn's finish holds it open to be answered, one after is refused for ordinary admission",
+         %{actor: actor, daily: daily, held: held} do
+      {one, _, _} = waited!(actor, daily)
+      {two, _, _} = waited!(actor, daily)
+      {three, _, _} = waited!(actor, daily)
+      {:ok, today} = Arca.Test.Days.thread(actor)
+
+      {:ok, %{turn: accepted}} = post(actor, today, one, held)
+      running = start!(actor, accepted)
+
+      assert {:ok, %{message: steered, turn: %{id: steered_turn}}} =
+               post(actor, today, two, held, %{turn: nil, steer_turn_id: running.id})
+
+      assert steered_turn == running.id and steered.turn_id == running.id
+
+      # Before the finish: the steer waits for its answer.
+      assert {:error, :steer_pending} =
+               TurnStorage.finish(
+                 actor,
+                 running.id,
+                 "completed",
+                 Map.merge(@grant, %{fence: running.fence})
+               )
+
+      # After the finish: refused, for the runner to admit it as a turn of
+      # its own.
+      cancel!(actor, running)
+
+      assert {:error, :turn_over} =
+               post(actor, today, three, held, %{turn: nil, steer_turn_id: running.id})
+
+      assert {:ok, %{turn: %{id: own}}} = post(actor, today, three, held)
+      assert own != running.id
+    end
+
+    test "deleting a workspace thread takes its posts with it", %{
       actor: actor,
       daily: daily,
       held: held
     } do
-      {thread, _, _} = waiting!(actor, daily)
+      {wait, _, _} = waited!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)
-      {:ok, %{turn: reminding}} = remind(actor, today, [thread], held)
+      {:ok, %{message: row}} = post(actor, today, wait, held)
 
-      assert [%{workspace_id: id}] =
-               Enum.filter(Threads.messages(actor, today.id), &(&1.kind == "nudge"))
-
-      assert id == thread.id
-      assert {:ok, _} = Threads.delete(actor, thread.id, Map.put(@grant, :error, "deleted"))
-      assert Enum.filter(Threads.messages(actor, today.id), &(&1.kind == "nudge")) == []
-
-      # Its turn, starting late, finds no line of its own left to answer.
-      assert {:ok, false} = TurnStorage.line_stands(actor, reminding)
-    end
-
-    test "every read of the reminder's turn leaves out the waits that no longer stand, and marks no row",
-         %{actor: actor, daily: daily, held: held} do
-      {kept, _, _} = waiting!(actor, daily)
-      {archived, _, _} = waiting!(actor, daily)
-      {:ok, today} = Arca.Test.Days.thread(actor)
-      {:ok, %{rows: [one, two], turn: reminding}} = remind(actor, today, [kept, archived], held)
-
-      archive!(archived.id)
-      assert {:ok, true} = TurnStorage.line_stands(actor, reminding)
-      started = start!(actor, reminding)
-      assert reminders(actor, started) == [one.id]
-
-      # A wait that ends after the turn started is gone from its next read,
-      # as a resumed or taken-over turn reads it.
-      archive!(kept.id)
-      assert reminders(actor, started) == []
-      assert {:ok, false} = TurnStorage.line_stands(actor, started)
-      assert %{status: nil} = thread_row(one)
-      assert %{status: nil} = thread_row(two)
-    end
-
-    test "a reminder none of whose waits stands completes with no model round, two waits gone or three",
-         %{actor: actor, daily: daily, held: held} do
-      for count <- [2, 3] do
-        waits = for _ <- 1..count, do: elem(waiting!(actor, daily), 0)
-        {:ok, today} = Arca.Test.Days.thread(actor)
-        {:ok, %{turn: reminding}} = remind(actor, today, waits, held)
-        Enum.each(waits, &archive!(&1.id))
-        started = start!(actor, reminding)
-
-        assert {:ok, false} = TurnStorage.line_stands(actor, started)
-        refute TurnStorage.steer_pending?(actor, started.id)
-
-        assert {:ok, _} =
-                 TurnStorage.finish(
-                   actor,
-                   started.id,
-                   "completed",
-                   Map.merge(@grant, %{fence: started.fence})
-                 )
-
-        assert {:ok, %{status: "completed"}} = TurnStorage.get(actor, started.id)
-      end
-    end
-
-    test "a reminder some of whose waits stand reads those alone, every line inside its first read",
-         %{actor: actor, daily: daily, held: held} do
-      [kept, gone, also_gone] = for _ <- 1..3, do: elem(waiting!(actor, daily), 0)
-      {:ok, today} = Arca.Test.Days.thread(actor)
-
-      {:ok, %{rows: [row | _], turn: reminding}} =
-        remind(actor, today, [kept, gone, also_gone], held)
-
-      archive!(gone.id)
-      archive!(also_gone.id)
-      started = start!(actor, reminding)
-
-      assert {:ok, true} = TurnStorage.line_stands(actor, started)
-      refute TurnStorage.steer_pending?(actor, started.id)
-      assert reminders(actor, started) == [row.id]
-    end
-
-    test "the check as a reminder's turn starts writes nothing, so a superseded turn's changes no row",
-         %{actor: actor, daily: daily, held: held} do
-      {waiting, _, _} = waiting!(actor, daily)
-      {:ok, today} = Arca.Test.Days.thread(actor)
-      {:ok, %{turn: reminding, rows: [row]}} = remind(actor, today, [waiting], held)
-      started = start!(actor, reminding)
-      {:ok, successor} = TurnStorage.supersede(actor, started.id, %{fence: started.fence})
-      assert successor.fence > started.fence
-      archive!(waiting.id)
-
-      assert {:ok, false} = TurnStorage.line_stands(actor, started)
-      assert thread_row(row).status == nil
-    end
-
-    @tag :capture_log
-    test "the check as a reminder's turn starts writes no row a refused write could leave standing",
-         %{actor: actor, daily: daily, held: held} do
-      {waiting, _, _} = waiting!(actor, daily)
-      {:ok, today} = Arca.Test.Days.thread(actor)
-      {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
-      started = start!(actor, reminding)
-      archive!(waiting.id)
-      refuse_reminder_writes!()
-
-      assert {:ok, false} = TurnStorage.line_stands(actor, started)
-    end
-
-    @tag :capture_log
-    test "a store that cannot answer the check refuses it, and the line is not taken to stand",
-         %{actor: actor, daily: daily, held: held} do
-      {waiting, _, _} = waiting!(actor, daily)
-      {:ok, today} = Arca.Test.Days.thread(actor)
-      {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
-      started = start!(actor, reminding)
-      Arca.Repo.query!("ALTER TABLE threads RENAME TO threads_away")
-
-      assert {:error, :database_error} = TurnStorage.line_stands(actor, started)
+      assert {:ok, _} = Threads.delete(actor, wait.id, Map.put(@grant, :error, "deleted"))
+      refute row.id in Enum.map(Threads.messages(actor, today.id), & &1.id)
     end
   end
 
@@ -982,24 +972,6 @@ defmodule Arca.NudgeStorageTest do
                TurnStorage.nudge_view(actor, archived.id, @quiet)
 
       assert thread(actor, archived.id).archived_at
-    end
-
-    test "is not reminded of, and an archived daily thread takes no reminder",
-         %{actor: actor, daily: daily, held: held} do
-      {waiting, _, _} = waiting!(actor, daily)
-      {:ok, today} = Arca.Test.Days.thread(actor)
-      {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
-
-      archive!(waiting.id)
-      {:ok, tomorrow} = Arca.Test.Days.thread(actor)
-      assert {:error, :wait_moved} = remind(actor, tomorrow, [waiting], held)
-      assert {:ok, false} = TurnStorage.line_stands(actor, reminding)
-
-      {other, _, _} = waiting!(actor, daily)
-      {:ok, archived_day} = Arca.Test.Days.thread(actor)
-      archive!(archived_day.id)
-      assert {:error, :thread_archived} = remind(actor, archived_day, [other], held)
-      assert Enum.filter(Threads.messages(actor, archived_day.id), &(&1.kind == "nudge")) == []
     end
   end
 
