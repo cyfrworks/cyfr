@@ -402,6 +402,66 @@ defmodule Aqua.Loop.RequestTest do
     assert synthetic["content"] =~ "partially executed"
   end
 
+  test "a post between a call and its result leaves the call answered by its own result, " <>
+         "and a later round's reused id answers no earlier call" do
+    call = fn seq, step ->
+      row(seq, "tool_call", @agent, "files", %{
+        "tool_call_id" => "call_1",
+        "name" => "files",
+        "arguments" => %{},
+        "step_id" => step
+      })
+    end
+
+    result = fn seq, content ->
+      row(seq, "tool_result", @system, content, %{"tool_call_id" => "call_1", "name" => "files"})
+    end
+
+    # A post landed while the call waited; its result came after it. Rows
+    # keep their places.
+    assert [
+             %{"role" => "user"},
+             %{"role" => "assistant"},
+             %{"role" => "user", "content" => [%{"text" => "never mind"}]},
+             %{
+               "role" => "tool",
+               "content" => [%{"tool_call_id" => "call_1", "content" => "skipped"}]
+             }
+           ] =
+             Request.messages(
+               [
+                 row(1, "text", "usr_a", "go"),
+                 call.(2, "s1"),
+                 row(3, "text", "usr_a", "never mind"),
+                 result.(4, "skipped")
+               ],
+               %{}
+             )
+
+    # The first call has no result; the next round's call reuses its id and
+    # is answered. The first is answered as unknown, right after it.
+    assert [
+             %{"role" => "user"},
+             %{"role" => "assistant"},
+             %{"role" => "tool", "content" => [synthetic]},
+             %{"role" => "user"},
+             %{"role" => "assistant"},
+             %{"role" => "tool", "content" => [%{"content" => "ok"}]}
+           ] =
+             Request.messages(
+               [
+                 row(1, "text", "usr_a", "go"),
+                 call.(2, "s1"),
+                 row(3, "turn_aborted", @system, "restart"),
+                 call.(4, "s2"),
+                 result.(5, "ok")
+               ],
+               %{}
+             )
+
+    assert synthetic["tool_call_id"] == "call_1" and synthetic["content"] =~ "outcome is unknown"
+  end
+
   describe "crew rows" do
     defp crew(seq, sent_by, content, fields) do
       struct(row(seq, "text", if(sent_by == "person", do: "usr_a", else: @agent), content), [

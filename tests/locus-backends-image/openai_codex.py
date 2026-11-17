@@ -30,7 +30,8 @@ fake-openai-codex.mjs, a stand-in for Codex speaking the app-server lines Codex
 - A held call: a message that makes Codex call one of CYFR's tools answers
   a `tool_call` named as the request named the tool, carrying Codex's
   request and turn, and leaves the call held in the running program; the
-  next chat, carrying the `tool_result`, attaches and sends only the
+  next chat, carrying the `tool_result` after a post that landed while the
+  call waited, as Aqua's request keeps the rows' places, attaches and sends only the
   call's answer, which Codex's reply quotes; its usage is the one model
   call's, though Codex sent the thread's total twice.
 - An interruption: when the read after the next call's answer is answered
@@ -319,6 +320,7 @@ def main():
         body = "line one of notes.txt " + secrets.token_hex(8)
         answered = {**ask, "messages": history + [
             {"role": "assistant", "content": data["content"]},
+            {"role": "user", "content": "actually, never mind"},
             {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": call["id"], "name": "files", "content": body}]},
         ]}
         bridge.calls.clear()

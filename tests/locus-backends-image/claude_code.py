@@ -33,7 +33,8 @@ CYFR's tools as the harness starts an MCP server.
 - A held ask: a message that makes the harness call one of CYFR's tools
   answers a `tool_call` named as the request named the tool, carrying the
   ask's id, and leaves the ask pending in the running session; the next
-  chat, carrying the `tool_result`, attaches to that session and sends only
+  chat, carrying the `tool_result` after a post that landed while the ask
+  waited, as Aqua's request keeps the rows' places, attaches to that session and sends only
   the ask's allow, with the result in its input, and the harness's call
   through `cyfr-stub` returns that result, which its reply quotes.
 - A rate limit the harness reports after an allow answers provider_error
@@ -320,6 +321,7 @@ def main():
         body = "line one of notes.txt " + secrets.token_hex(8)
         answered = {**ask, "messages": history + [
             {"role": "assistant", "content": data["content"]},
+            {"role": "user", "content": "actually, never mind"},
             {"role": "tool", "content": [{"type": "tool_result", "tool_call_id": call["id"], "name": "files", "content": body}]},
         ]}
         bridge.calls.clear()

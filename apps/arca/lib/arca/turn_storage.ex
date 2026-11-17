@@ -3093,7 +3093,9 @@ defmodule Arca.TurnStorage do
   Close a step with its result: the `tool_result` row, the step's
   `outcome`, `execution_id` and error, and the `step.closed` event, in
   one transaction. `attrs`: `:result` (`%{content, payload}` for the
-  row; omitted for a step that produced none), `:execution_id`, `:error`,
+  row, which names the call it answers, its `tool_call_id` and `name`,
+  as the call's row does where the payload gives none; omitted for a
+  step that produced none), `:execution_id`, `:error`,
   `:fence`, `:sources`, the `Prima.Source`s the result carries, joined
   into the turn's in the same transaction, the threads among them
   recorded on the result row as its payload's `threads`, and `:session`, the brain's
@@ -4395,7 +4397,7 @@ defmodule Arca.TurnStorage do
             sent_by: turn.agent,
             kind: result_kind(step),
             content: Map.get(result, :content, ""),
-            payload: result_payload(result, step, Map.get(attrs, :sources, [])),
+            payload: result_payload(athanor_id, result, step, Map.get(attrs, :sources, [])),
             turn_id: turn.id,
             execution_id: Map.get(attrs, :execution_id)
           })
@@ -4441,13 +4443,34 @@ defmodule Arca.TurnStorage do
   # A result row's payload: the call's own, the step it closes, and the
   # threads its answer carried, by the thread sources the step joins
   # (`Prima.Source.thread/1`), which a deletion of one of them finds the
-  # row by to blank it (`Arca.ThreadStorage.delete/3`).
-  defp result_payload(result, step, sources) do
-    payload = Map.merge(Map.get(result, :payload) || %{}, %{"step_id" => step.id})
+  # row by to blank it (`Arca.ThreadStorage.delete/3`). The wire's id and
+  # name of the call it answers come from the call's row where the caller
+  # gives none, as a step skipped before it ran has no call in hand: a
+  # result that names no call is one no brain can pair with its call.
+  # arca:db-raise-ok inside the caller's transaction
+  defp result_payload(athanor_id, result, step, sources) do
+    payload =
+      athanor_id
+      |> call_identity(step)
+      |> Map.merge(Map.get(result, :payload) || %{}, fn _key, row, given -> given || row end)
+      |> Map.put("step_id", step.id)
 
     case sources |> sources!() |> Prima.Source.threads() do
       [] -> payload
       threads -> Map.put(payload, "threads", threads)
+    end
+  end
+
+  # The wire's id and name of the call a step's row records.
+  # arca:db-raise-ok inside the caller's transaction
+  defp call_identity(_athanor_id, %TurnStep{message_id: nil}), do: %{}
+
+  defp call_identity(athanor_id, %TurnStep{message_id: id}) do
+    from(m in Message, where: m.athanor_id == ^athanor_id and m.id == ^id)
+    |> Arca.Repo.one()
+    |> case do
+      nil -> %{}
+      row -> row |> Arca.ThreadStorage.payload() |> Map.take(["tool_call_id", "name"])
     end
   end
 
