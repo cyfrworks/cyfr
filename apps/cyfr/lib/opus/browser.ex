@@ -20,7 +20,8 @@ defmodule Opus.Browser do
   own kept folder, profile and hosts, and its own session of the same
   owner; they share no cookie and no storage. A thread's window is in
   the second when the thread is a workspace thread whose first opening
-  was made apart, and in the person's otherwise (`chrome/2`), read from
+  was made apart, or a crew member's thread under one, and in the
+  person's otherwise (`chrome/2`), read from
   the store for every action, put and watch, so a thread kept apart never
   has a window in the person's Chrome. Everything below holds of each
   alike: its holder, its setting, its idle stop, its puts and their calls.
@@ -617,11 +618,31 @@ defmodule Opus.Browser do
 
   # The Chrome the window of thread `thread_id` is in: the second
   # (`:apart`) for a workspace thread whose first opening was made apart
-  # (its envelope's `apart`), and the person's (`:person`) for every other
-  # thread, read from the store each time; `:unavailable` when it cannot
-  # be read, so no window of a thread kept apart opens in the person's.
+  # (its envelope's `apart`), and for a crew member's thread that works
+  # under one, whose work it is; the person's (`:person`) for every other
+  # thread. Read from the store each time; `:unavailable` when it cannot
+  # be read, so no window of work kept apart opens in the person's.
   defp chrome(athanor_id, thread_id) when is_binary(athanor_id) and is_binary(thread_id) do
-    case Arca.ThreadStorage.messages(Prima.Actor.in_athanor(athanor_id), thread_id, limit: 1) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    case Arca.ThreadStorage.get(actor, thread_id) do
+      {:ok, %{kind: "crew", parent_id: parent}} when is_binary(parent) ->
+        opened_apart(actor, parent)
+
+      {:ok, _thread} ->
+        opened_apart(actor, thread_id)
+
+      {:error, :not_found} ->
+        {:ok, :person}
+
+      {:error, _unread} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # Whether the first row of thread `thread_id` is an opening made apart.
+  defp opened_apart(actor, thread_id) do
+    case Arca.ThreadStorage.messages(actor, thread_id, limit: 1) do
       [%{kind: "opening"} = opening] ->
         if Arca.ThreadStorage.payload(opening)["apart"] == true,
           do: {:ok, :apart},

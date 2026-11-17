@@ -186,6 +186,20 @@ defmodule Opus.BrowserTest do
   defp session_of(ctx, row),
     do: Enum.find_value(browser_sessions(ctx), &(&1.row_id == row.id && &1.session))
 
+  # A running turn of crew member planner, in its thread under workspace
+  # thread `room`: its lineage.
+  defp crew!(ctx, room) do
+    {:ok, thread} = Threads.crew_thread(Sanctum.Context.actor(ctx), room, "planner")
+    {turn, lineage} = turn!(ctx, thread: thread)
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [agent: "planner"]
+      )
+
+    lineage
+  end
+
   # The names of the browser rows whose sessions run now, in order.
   defp running_rows(ctx), do: ctx |> browser_sessions() |> Enum.map(& &1.name) |> Enum.sort()
 
@@ -1947,6 +1961,32 @@ defmodule Opus.BrowserTest do
 
       assert {:ok, %{browser: "added", apart: "not_added"}} =
                Provider.handle("browser", ctx, %{"action" => "status"})
+    end
+
+    test "a crew member working under a thread opened apart has its window in the second Chrome alone",
+         %{ctx: ctx} do
+      crew = crew!(ctx, workspace!(ctx, true))
+      assert {:ok, _} = call(ctx, crew, "open", %{"url" => "https://example.com/"})
+      win = crew["thread_id"]
+      assert_receive {:driver, :req, _session, %{"op" => "open", "win" => ^win}}, 5_000
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+    end
+
+    test "without the second browser's row, a crew member under a thread opened apart is refused as that thread is",
+         %{ctx: ctx, apart: apart, apart_row: apart_row} do
+      {:ok, _} =
+        Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), apart_row.name, %{
+          id: apart_row.id,
+          epoch: apart_row.epoch
+        })
+
+      crew = crew!(ctx, workspace!(ctx, true))
+      refused = refusal(call(ctx, crew, "open", %{"url" => "https://example.com/"}))
+      assert refused == refusal(call(ctx, apart, "open", %{"url" => "https://example.com/"}))
+      assert refused =~ "kept apart, in Aqua's second browser, which was not found"
+      refute_received {:driver, :req, _session, %{"op" => "open"}}
+      refute_received {:session, "open", _open, _fields}
+      assert browser_sessions(ctx) == []
     end
 
     test "the person watches a window kept apart and acts in it, in the second Chrome",
