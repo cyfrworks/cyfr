@@ -314,6 +314,43 @@ defmodule Aqua.Runner do
   end
 
   @doc """
+  The server's nudge of a quiet workspace thread (`Aqua.Nudge`), as the
+  context's person under its origin, which are the thread's current
+  work's (`attrs`: `:content`, `:options`, `:quiet`, `:claim`). It is
+  decided and accepted in storage under the thread's lock
+  (`Aqua.Tape.nudge/3`): it joins the turn that holds the thread when that
+  turn is Aqua's and asks a model, whose next model round reads it from
+  storage, or with no turn open there opens one, which this runner starts.
+  It never acknowledges a stopped turn for its person, never queues, and
+  carries no authority of its own. A thread whose turn a live peer holds
+  is joined there in storage alone, since that turn reads it from storage
+  wherever it runs.
+  """
+  @spec nudge(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def nudge(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    with :ok <- held() do
+      case call(ctx, thread_id, {:nudge, ctx, attrs}) do
+        {:error, :held_elsewhere} -> Tape.nudge(ctx, thread_id, Map.put(attrs, :join_only, true))
+        answer -> answer
+      end
+    end
+  end
+
+  @doc """
+  The daily thread's reminder of workspace threads that wait on their
+  person (`Aqua.Nudge`), as the context's person under the `schedule`
+  origin, which borrows no schedule's occurrence or grants: one row per
+  wait (`attrs`: `:waits`, `:claim`) opening one turn of Aqua's
+  (`Aqua.Tape.remind/3`). It never joins or queues behind another turn: a
+  thread at work refuses it `{:error, :busy}`, and the next tick asks
+  again.
+  """
+  @spec remind(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def remind(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    with :ok <- held(), do: call(ctx, thread_id, {:remind, ctx, attrs})
+  end
+
+  @doc """
   Hand a page's call to the thread's runner (moduledoc): `call` is
   `%{request, name, arguments, user_id, put_turn_id, browser}`, the call
   a model would make for it, the browser's person, the turn that put the
@@ -555,6 +592,27 @@ defmodule Aqua.Runner do
       end
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp handle_owned_call({:nudge, ctx, attrs}, _from, state) do
+    with :ok <- line_admitted(ctx),
+         {:ok, accepted} <- Tape.nudge(ctx, state.id, attrs) do
+      state = if accepted.turn, do: admitted(state, ctx, accepted.turn), else: state
+      {:reply, {:ok, accepted}, touch(state)}
+    else
+      {:error, _} = refused -> {:reply, refused, state}
+    end
+  end
+
+  defp handle_owned_call({:remind, ctx, attrs}, _from, state) do
+    with false <- busy?(state) or state.queue != [] or state.pages != [],
+         :ok <- line_admitted(ctx),
+         {:ok, accepted} <- Tape.remind(ctx, state.id, attrs) do
+      {:reply, {:ok, accepted}, touch(admitted(state, ctx, accepted.turn))}
+    else
+      true -> {:reply, {:error, :busy}, state}
+      {:error, _} = refused -> {:reply, refused, state}
     end
   end
 
@@ -858,33 +916,45 @@ defmodule Aqua.Runner do
         {:reply, {:ok, result(row, nil, false, :content)}, touch(state)}
 
       {:ok, %{message: row, turn: turn}} ->
-        entry = %{
-          turn_id: turn.id,
-          user_id: ctx.user_id,
-          sent_by: turn.sent_by,
-          job: job_of(turn),
-          ctx: ctx,
-          agent: name,
-          # What a continuation of this turn resumes under: the origin its
-          # row stores, never the context's as it stands later.
-          origin: turn.origin
-        }
-
-        state = %{state | agent: name}
-
-        state =
-          if busy?(state) do
-            state = %{state | queue: state.queue ++ [entry]}
-            broadcast(state, :queued, length(state.queue))
-            state
-          else
-            start(state, entry)
-          end
-
+        state = admitted(%{state | agent: name}, ctx, turn)
         {:reply, {:ok, result(row, turn.id, false, :turn)}, touch(state)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  # A turn accepted for this thread, started now or queued behind the one
+  # that runs.
+  defp admitted(state, ctx, turn) do
+    entry = %{
+      turn_id: turn.id,
+      user_id: ctx.user_id,
+      sent_by: turn.sent_by,
+      job: job_of(turn),
+      ctx: ctx,
+      agent: turn.agent,
+      # What a continuation of this turn resumes under: the origin its
+      # row stores, never the context's as it stands later.
+      origin: turn.origin
+    }
+
+    if busy?(state) do
+      state = %{state | queue: state.queue ++ [entry]}
+      broadcast(state, :queued, length(state.queue))
+      state
+    else
+      start(state, entry)
+    end
+  end
+
+  # What a server's line asks before it opens a turn: the athanor filled
+  # and the engine up, as a send's turn asks (`admit_turn/5`).
+  defp line_admitted(ctx) do
+    cond do
+      Sanctum.Provisioning.ready(ctx) != :ok -> {:error, :not_provisioned}
+      not Opus.available?() -> {:error, :execution_unavailable}
+      true -> :ok
     end
   end
 

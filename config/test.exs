@@ -197,6 +197,10 @@ config :cyfr, schedule_turns_enabled: false
 # the same reason runs only where a test drains it by hand.
 config :cyfr, crew_delivery_enabled: false
 
+# The nudge of quiet workspace threads ticks on a timer too, and for the
+# same reason runs only where a test ticks it by hand.
+config :cyfr, nudge_enabled: false
+
 # The status watch reads the athanors it keeps on a timer, so it too runs
 # only where a test starts one.
 config :cyfr, status_watch_enabled: false

@@ -571,6 +571,7 @@ defmodule Aqua.Loop.Request do
   defp shape(%{kind: "opening"} = row, acc, opts), do: said(opening_text(row, opts), row, acc)
   defp shape(%{kind: "pointer"} = row, acc, _opts), do: said(pointer_text(row), row, acc)
   defp shape(%{kind: "report"} = row, acc, _opts), do: said(report_text(row), row, acc)
+  defp shape(%{kind: "nudge"} = row, acc, _opts), do: said(nudge_text(row), row, acc)
 
   defp shape(%{kind: "text"} = row, acc, opts) do
     me = Keyword.get(opts, :me)
@@ -744,6 +745,16 @@ defmodule Aqua.Loop.Request do
     "[Report from the workspace thread \"#{payload["title"] || ""}\" (#{row.workspace_id}): " <>
       "#{reported(payload)}]\n" <> (row.content || "")
   end
+
+  # A line of the server's (`Aqua.Nudge`), never the person's: a quiet
+  # workspace thread's ask to say where it stands, or a daily thread's
+  # reminder of a workspace thread that waits on the person.
+  defp nudge_text(%{workspace_id: id} = row) when is_binary(id),
+    do:
+      "[A reminder from the server, not the person, of the workspace thread #{id}]\n" <>
+        row.content
+
+  defp nudge_text(row), do: "[A line from the server, not the person]\n" <> row.content
 
   # The outcome as the reading model is told it: Aqua's `done` or
   # `needs_you`, the server's `error`, or a card's notice.

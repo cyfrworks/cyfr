@@ -514,14 +514,18 @@ defmodule Aqua.Loop do
                agent_capability_digest: snapshot.capability_digest,
                recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
              }),
+           # A server's line that no longer stands as its turn first starts
+           # asks no model: the turn ends with nothing run.
+           stands? = Tape.line_stands?(ctx, started),
            {:ok, spec} <-
              Turn.build(ctx, started,
                authority: claim.authority,
-               asks_model?: asks_model?(ctx, started)
+               asks_model?: stands? and asks_model?(ctx, started)
              ),
            {:ok, started} <- Tape.pin_catalyst(ctx, started, spec.catalyst) do
         {:ok,
          %State{
+           model?: stands?,
            spec: Turn.with_turn(spec, started),
            claim: claim,
            turn: started,

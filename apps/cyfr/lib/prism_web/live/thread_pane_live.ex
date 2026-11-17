@@ -1015,7 +1015,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
     socket
     |> hold_card(row)
-    |> then(&if(Threads.post?(row), do: upsert_message(&1, row), else: &1))
+    |> then(&if(drawn?(row), do: upsert_message(&1, row), else: &1))
     |> assign(:partials, Aqua.stream_landed(socket.assigns.partials, row))
     |> assign(:turn_replied, socket.assigns.turn_replied or replied?(row, socket))
   end
@@ -2750,8 +2750,12 @@ defmodule PrismWeb.ThreadPaneLive do
       "focus-visible:opacity-100 max-md:opacity-100 min-h-6 text-xs text-gray-500 hover:text-gray-300 px-1"
   end
 
+  # A post, and a line of the server's to the thread's Aqua (`Aqua.Nudge`),
+  # which is drawn as the server's and is no post.
+  defp drawn?(row), do: Threads.post?(row) or row.kind == "nudge"
+
   defp role_of(%{kind: "error"}), do: "error"
-  defp role_of(%{kind: "system"}), do: "system"
+  defp role_of(%{kind: kind}) when kind in ["system", "nudge"], do: "system"
   defp role_of(%{author: @agent_author}), do: "assistant"
 
   defp role_of(%{author: @system_author} = msg),
@@ -2774,7 +2778,8 @@ defmodule PrismWeb.ThreadPaneLive do
     if name = fired_by(msg), do: "Schedule · #{name}"
   end
 
-  defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system"], do: nil
+  defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system", "nudge"],
+    do: nil
 
   # A workspace thread's pointer, whose post is its title, and its report,
   # which names it.
