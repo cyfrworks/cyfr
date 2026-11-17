@@ -46,7 +46,6 @@ defmodule Opus do
     exports: [
       Browser,
       Host.Children,
-      Inputs,
       Keys,
       Programs,
       Programs.Definition,
