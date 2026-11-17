@@ -7,8 +7,9 @@ defmodule Arca.ThreadArchiveTest do
   "Archive"): by the person or by the setting, never while work remains
   in it or in a crew thread under it; an ordinary thread behind a filter
   that new work takes out again, each write that starts work placed
-  before and after the archive at its owner; and the setting that
-  replaced deletion by age.
+  before and after the archive at its owner, and on PostgreSQL held just
+  after its clear while an archive asks for the same thread; and the
+  setting that replaced deletion by age.
   """
 
   use ExUnit.Case, async: false
@@ -322,6 +323,25 @@ defmodule Arca.ThreadArchiveTest do
     refute archived?(actor, room.id)
   end
 
+  test "a page's call in a crew member's thread is no work: the room is archived by hand and by the setting",
+       %{actor: actor, daily: daily} do
+    page_call = %{
+      message: %{author: "aqua", sent_by: "aqua", kind: "page_call", content: "invoke"}
+    }
+
+    [by_hand, by_setting] =
+      for _ <- 1..2 do
+        room = daily |> then(&open!(actor, &1)) |> finished!()
+        {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
+        assert {:ok, %{turn: %{}}} = post(actor, child, page_call)
+        room
+      end
+
+    assert {:ok, %{archived_at: %DateTime{}}} = Threads.archive(actor, by_hand.id)
+    assert {:ok, _} = Threads.archive_idle(actor, DateTime.add(DateTime.utc_now(), 3600))
+    assert archived?(actor, by_setting.id)
+  end
+
   test "a page's call and a row that starts no work leave the thread archived", %{
     actor: actor,
     daily: daily
@@ -514,5 +534,177 @@ defmodule Arca.ThreadArchiveTest do
     {:ok, 1} = Threads.archive_idle(actor, cutoff())
     assert_received {:archived, %{thread_id: id}}
     assert id == by_setting.id
+  end
+
+  # ---------------------------------------------------------------------------
+  # New work and an archive at once (PostgreSQL)
+  #
+  # Each write that starts new work is held just after its clear, inside
+  # its transaction, while the person's archive or the setting's asks for
+  # the same thread: the archive waits on a lock the write holds, the
+  # thread's row (or the athanor's, which a write that takes two thread
+  # rows holds before them), and once the write commits it finds the work
+  # and leaves the thread as it is. On committed rows and connections of
+  # their own, so a deadlock would abort one of them.
+
+  @writes [
+    post: "a person's post in the thread",
+    crew_post: "a post in a crew member's thread under it",
+    opening: "a further opening of the workspace thread",
+    decision: "a decision in the daily thread",
+    workspace_decision: "a decision in the workspace thread",
+    crew_decision: "a decision in a crew member's thread under it"
+  ]
+
+  for {write, words} <- @writes,
+      {archive, by} <- [hand: "the person's", setting: "the setting's"] do
+    @tag :postgres
+    test "new work held after its clear, #{words}, against #{by} archive: the archive waits, " <>
+           "then finds the work" do
+      raced!(unquote(write), unquote(archive))
+    end
+  end
+
+  defp raced!(write, archive) do
+    athanor = "ath_archive_race_#{System.unique_integer([:positive])}"
+    actor = Arca.Test.Actor.local(athanor_id: athanor)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, _} = Arca.Test.TenantTables.delete_all_for(actor)
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
+      end)
+    end)
+
+    {thread, writes} =
+      unboxed(fn ->
+        Arca.Test.Actor.ensure_athanor_row(athanor)
+        {:ok, daily} = Arca.Test.Days.thread(actor)
+        racing(write, actor, daily)
+      end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        held = held_after_clear!(writes)
+
+        {archiving, backend} =
+          waiting(fn ->
+            case archive do
+              :hand -> Threads.archive(actor, thread.id)
+              :setting -> Threads.archive_idle(actor, DateTime.add(DateTime.utc_now(), 3600))
+            end
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(backend)
+        send(held.pid, :go)
+        assert {:ok, _} = Task.await(held, 15_000)
+
+        case archive do
+          :hand -> assert {:error, :working} = Task.await(archiving, 15_000)
+          :setting -> assert {:ok, _} = Task.await(archiving, 15_000)
+        end
+      end)
+
+    refute log =~ "deadlock", log
+    refute unboxed(fn -> archived?(actor, thread.id) end), "resumed work was left archived"
+  end
+
+  # The thread an archive asks for, and the write that starts new work in
+  # it or in a crew member's thread under it, which finds no work there
+  # yet.
+  defp racing(:post, actor, daily), do: {daily, fn -> post(actor, daily) end}
+
+  defp racing(:crew_post, actor, daily) do
+    {:ok, crew} = Threads.crew_thread(actor, daily.id, "planner")
+    {daily, fn -> post(actor, crew) end}
+  end
+
+  defp racing(:opening, actor, daily) do
+    workspace = daily |> then(&open!(actor, &1)) |> finished!()
+
+    {workspace,
+     fn ->
+       TurnStorage.open_workspace(actor, opening(actor, daily, %{workspace_id: workspace.id}))
+     end}
+  end
+
+  defp racing(:decision, actor, daily) do
+    turn = running!(actor, daily)
+    card = card!(actor, turn, "race")
+    {daily, fn -> decline!(actor, turn, card) end}
+  end
+
+  defp racing(:workspace_decision, actor, daily) do
+    {workspace, turn, card} = needs_you!(actor, daily)
+    {workspace, fn -> decline!(actor, turn, card) end}
+  end
+
+  defp racing(:crew_decision, actor, daily) do
+    {:ok, crew} = Threads.crew_thread(actor, daily.id, "planner")
+    turn = running!(actor, crew)
+    card = card!(actor, turn, "race")
+    {daily, fn -> decline!(actor, turn, card) end}
+  end
+
+  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
+
+  # `writes` on a connection of its own, held inside its transaction just
+  # after the statement that clears the archive, until it is sent `:go`.
+  defp held_after_clear!(writes) do
+    test = self()
+    handler = "archive-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if Process.get(:archive_race_writer) == true and is_binary(meta.query) and
+               String.contains?(meta.query, ~s(SET "archived_at")) do
+            Process.delete(:archive_race_writer)
+            send(test, {:cleared, self()})
+
+            receive do
+              :go -> :ok
+            after
+              15_000 -> raise "the write held after its clear was never let go"
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    held =
+      Task.async(fn ->
+        unboxed(fn ->
+          Process.put(:archive_race_writer, true)
+          writes.()
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(held.pid), do: Process.exit(held.pid, :kill) end)
+    assert_receive {:cleared, pid}, 5_000
+    assert pid == held.pid
+    held
+  end
+
+  # `fun` on a connection of its own, its backend told first.
+  defp waiting(fun) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+          send(test, {:backend, backend})
+          fun.()
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(task.pid), do: Process.exit(task.pid, :kill) end)
+    assert_receive {:backend, backend}, 5_000
+    {task, backend}
   end
 end

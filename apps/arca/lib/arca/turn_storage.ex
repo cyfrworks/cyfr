@@ -125,14 +125,18 @@ defmodule Arca.TurnStorage do
   it or in a crew thread under it (`work_remains?/2`, the one rule's
   shared reading, `Arca.ThreadStorage.archive/2`), and new work there
   takes it out again, each write clearing it by its own statement in its
-  own transaction (`Arca.ThreadStorage.unarchive!/2`): an acceptance that
+  own transaction, which holds the thread's row, archived or not, until
+  the work commits, so an archive and new work there wait on each other
+  (`Arca.ThreadStorage.unarchive!/2`): an acceptance that
   opens or steers a turn there or in a crew thread under it, a person's
   post, a report or a card's notice that starts work among them, and not
   a page's call (`accept_message/3`); a further opening
   (`open_workspace/2`); and a decision that resumes a turn there or in a
   crew thread under it (`resolve_approval/4`). A write in a crew thread
-  takes the athanor's row before the thread rows (`work_lock!/2`), as a
-  write that may move a workspace thread's state does. A retired crew
+  takes the athanor's row before the thread rows (`work_lock!/2`; an
+  acceptance there takes its room's row and its own together,
+  `work_rows!/2`), as a write that may move a workspace thread's state
+  does. A retired crew
   thread is another fact (`retired_at`): it admits nothing.
 
   ## The root's grant
@@ -288,8 +292,8 @@ defmodule Arca.TurnStorage do
               do: steered!(athanor_id, thread_id, steer_id, Map.get(attrs, :reply_address))
 
           # Work it may start in a crew member's thread takes its room out
-          # of the archive, a second thread row: the athanor's first.
-          if opens || steered, do: work_lock!(athanor_id, thread_id)
+          # of the archive, a second thread row (`work_rows!/2`).
+          if opens || steered, do: work_rows!(actor, thread_id)
           from_workspace!(actor, thread_id, message)
           thread = locked_thread!(athanor_id, thread_id)
           if thread.retired_at, do: Arca.Repo.rollback(:thread_retired)
@@ -1074,11 +1078,11 @@ defmodule Arca.TurnStorage do
   # whether work remains there. Work remains while a turn of any of them
   # is open, unless it waits on a card that waits, it has reported its
   # work (a workspace thread's turn reports once, and its row stays open
-  # until it ends) or a page's call opened it (`page_call`, which asks no
-  # model and is no work of the thread's, while a card it raises waits on
-  # the person as any card does); while a request it asked a crew member
-  # is left until its answer lands; and while an opening waits for its
-  # turn to start.
+  # until it ends) or a page's call in any of them opened it (`page_call`,
+  # which asks no model and is no work of the thread's, while a card it
+  # raises waits on the person as any card does); while a request it
+  # asked a crew member is left until its answer lands; and while an
+  # opening waits for its turn to start.
   # arca:db-raise-ok inside the caller's transaction
   defp work!(athanor_id, %Thread{} = room) do
     threads =
@@ -1096,7 +1100,7 @@ defmodule Arca.TurnStorage do
 
     pages =
       from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.thread_id == ^room.id,
+        where: m.athanor_id == ^athanor_id and m.thread_id in subquery(threads),
         where: m.kind == "page_call",
         select: m.id
       )
@@ -4286,11 +4290,11 @@ defmodule Arca.TurnStorage do
   # row after its turn and before any thread row: the order
   # `Arca.ThreadStorage.lock_threads!/2` states. Its callers are those
   # writes alone, a card opened, decided or skipped, a turn's end, its
-  # cancel and its set-downs, and an acceptance that opens or steers a
-  # turn there; any other write of a turn takes no second thread row and
-  # no athanor lock, nor does a write of a turn that is over, which skips
-  # and ends nothing. A thread's kind and room never change, so they are
-  # read unlocked.
+  # cancel and its set-downs (an acceptance that opens or steers a turn
+  # there takes `work_rows!/2`); any other write of a turn takes no second
+  # thread row and no athanor lock, nor does a write of a turn that is
+  # over, which skips and ends nothing. A thread's kind and room never
+  # change, so they are read unlocked.
   # arca:db-raise-ok inside the caller's transaction
   defp work_lock!(athanor_id, %Turn{status: status, thread_id: thread_id}),
     do: if(status in @open, do: work_lock!(athanor_id, thread_id), else: :ok)
@@ -4304,6 +4308,25 @@ defmodule Arca.TurnStorage do
     if Arca.Repo.exists?(crew),
       do: Arca.ThreadStorage.lock_athanor!(Prima.Actor.in_athanor(athanor_id))
 
+    :ok
+  end
+
+  # An acceptance that may start work in a crew member's thread clears its
+  # room's archive (`new_work!/2`), a second thread row: it takes the
+  # athanor's row, then the room's row and its own together, in the one
+  # order (`Arca.ThreadStorage.lock_threads!/2`). Any other thread takes
+  # only its own row, which the acceptance reads under its lock. A
+  # thread's kind and room never change, so they are read unlocked.
+  # arca:db-raise-ok inside the caller's transaction
+  defp work_rows!(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id) do
+    room =
+      from(c in Thread,
+        where: c.athanor_id == ^athanor_id and c.id == ^thread_id and c.kind == "crew",
+        select: c.parent_id
+      )
+      |> Arca.Repo.one()
+
+    if is_binary(room), do: Arca.ThreadStorage.lock_threads!(actor, [room, thread_id])
     :ok
   end
 

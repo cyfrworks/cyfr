@@ -298,47 +298,6 @@ defmodule Arca.ExecutionLockOrderTest do
     blocker
   end
 
-  # A message row `id` in `thread`, inserted by a transaction of its own
-  # and left uncommitted until it is released, then rolled back: a write
-  # of a message of that id, in any thread, waits on it at its insert.
-  defp hold_message_id(actor, thread, id) do
-    test = self()
-
-    blocker =
-      Task.async(fn ->
-        unboxed(fn ->
-          Arca.Repo.locking_transaction(fn ->
-            {1, _} =
-              Arca.Repo.insert_all(Message, [
-                %{
-                  id: id,
-                  thread_id: thread.id,
-                  athanor_id: actor.athanor_id,
-                  seq: 1_000_000,
-                  author: "held",
-                  sent_by: "person",
-                  kind: "text",
-                  content: "",
-                  inserted_at: DateTime.utc_now()
-                }
-              ])
-
-            send(test, :held)
-
-            receive do
-              :release -> Arca.Repo.rollback(:released)
-            after
-              30_000 -> Arca.Repo.rollback(:timeout)
-            end
-          end)
-        end)
-      end)
-
-    on_exit(fn -> if Process.alive?(blocker.pid), do: Process.exit(blocker.pid, :kill) end)
-    assert_receive :held, 5_000
-    blocker
-  end
-
   defp release(blocker) do
     send(blocker.pid, :release)
     assert {:ok, :ok} = Task.await(blocker, 10_000)
@@ -689,53 +648,6 @@ defmodule Arca.ExecutionLockOrderTest do
 
     assert {:ok, %{archived_at: %DateTime{}}} =
              unboxed(fn -> Threads.get(actor, workspace.id) end)
-  end
-
-  test "a person's archive of a room waits at the athanor's row for new work in a crew " <>
-         "member's thread under it, and is refused once that work has landed" do
-    actor = committed_athanor!()
-
-    {room, crew, other} =
-      unboxed(fn ->
-        {:ok, room} = Arca.Test.Days.thread(actor)
-        {:ok, crew} = Threads.crew_thread(actor, room.id, "planner")
-        {:ok, other} = Arca.Test.Days.thread(actor)
-        {room, crew, other}
-      end)
-
-    id = Prima.UUID7.generate_id("msg")
-
-    log =
-      capture_log(fn ->
-        # In a thread of its own: a message row holds its thread's row
-        # against an update, which the member's work takes first.
-        blocker = hold_message_id(actor, other, id)
-
-        # The member's new work holds the athanor's row and has cleared its
-        # room's archive, which was not there to clear, and waits at its
-        # message's insert, its turn not yet written.
-        {work, work_backend} =
-          waiting(:work, fn ->
-            TurnStorage.accept_message(actor, crew.id, %{
-              message: %{id: id, author: actor.user_id, sent_by: "person", content: "go"},
-              turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
-            })
-          end)
-
-        Arca.Test.LockWait.await_lock_wait!(work_backend, ["messages"])
-
-        {archive, archive_backend} = waiting(:archive, fn -> Threads.archive(actor, room.id) end)
-        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["athanors"])
-
-        send(blocker.pid, :release)
-        assert {:error, :released} = Task.await(blocker, 10_000)
-
-        assert {:ok, %{turn: %{status: "accepted"}}} = Task.await(work, 10_000)
-        assert {:error, :working} = Task.await(archive, 10_000)
-      end)
-
-    refute log =~ "deadlock", log
-    assert {:ok, %{archived_at: nil}} = unboxed(fn -> Threads.get(actor, room.id) end)
   end
 
   test "a child made while its room is deleted waits for the deletion and finds no room" do
