@@ -785,6 +785,45 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         do: refute(has_element?(pane, ~s([id$="-m-msg_#{kind}"])))
   end
 
+  test "a nudge, the server's line to the thread's Aqua, is drawn as the server's as it lands",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, %{message: said}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: Prima.Author.agent(), sent_by: "aqua", content: "a post"}
+      })
+
+    pane = open_pane(conn, athanor, thread)
+
+    line = %{
+      said
+      | id: "msg_nudge",
+        kind: "nudge",
+        author: Prima.Author.system(),
+        sent_by: Prima.Author.system(),
+        content: "Nothing has happened in this workspace thread."
+    }
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: athanor.id,
+      thread_id: thread.id,
+      kind: :message,
+      data: line
+    })
+
+    Prima.Test.Wait.wait_until(fn ->
+      has_element?(
+        pane,
+        ~s([id$="-m-msg_nudge"]),
+        "Nothing has happened in this workspace thread."
+      )
+    end)
+
+    assert has_element?(pane, ~s([id$="-m-msg_nudge"] .italic))
+    refute has_element?(pane, ~s([id$="-m-msg_nudge"] .bg-indigo-600))
+  end
+
   test "the thread shown is read to its newest row as it opens and as each row lands, never back",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)

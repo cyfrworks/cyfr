@@ -82,7 +82,7 @@ defmodule Aqua.Nudge do
   @lease_ms 30_000
   @page 100
 
-  @nudge "Nothing has happened in this workspace thread for fifteen minutes, " <>
+  @nudge "Nothing has happened in this workspace thread for #{div(@quiet_seconds, 60)} minutes, " <>
            "and its work is not finished. Say where it stands: report it done, " <>
            "report that it needs the person, or post what you are waiting for."
 
@@ -164,9 +164,8 @@ defmodule Aqua.Nudge do
           rows
           |> Enum.chunk_by(& &1.athanor_id)
           |> Enum.reduce(done, fn [%{athanor_id: athanor_id} | _] = threads, done ->
-            Map.update(done, athanor_id, athanor(athanor_id, threads), fn earlier ->
-              merge(earlier, athanor(athanor_id, threads))
-            end)
+            worked = athanor(athanor_id, threads)
+            Map.update(done, athanor_id, worked, &merge(&1, worked))
           end)
 
         last = List.last(rows)

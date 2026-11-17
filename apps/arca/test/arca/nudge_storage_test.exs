@@ -289,6 +289,14 @@ defmodule Arca.NudgeStorageTest do
       :ok = aged!(actor)
       assert {:error, :unanswered} = nudge(actor, workspace, held)
 
+      # A round whose drain ran before the row landed opens its step after
+      # it: its request does not carry the row, so it answers nothing.
+      raced = model_step!(actor, turn, "raced")
+      assert thread_row(row).resolved_by == nil
+      answered!(actor, turn, raced)
+      :ok = aged!(actor)
+      assert {:error, :unanswered} = nudge(actor, workspace, held)
+
       # The next round drains it and carries it; until that round's answer
       # lands it is still being answered.
       {:ok, drained} = TurnStorage.drain_steer(actor, turn.id, %{fence: turn.fence})

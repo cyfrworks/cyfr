@@ -152,8 +152,7 @@ defmodule Aqua.NudgeTest do
 
     assert List.last(sent()) =~ "A line from the server, not the person"
 
-    assert List.last(sent()) =~
-             "Nothing has happened in this workspace thread for fifteen minutes"
+    assert List.last(sent()) =~ Nudge.nudge_line()
 
     # It ended with no report: the thread still works, and is not quiet
     # again until the quiet period has passed since that end.
