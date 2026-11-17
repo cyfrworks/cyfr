@@ -898,10 +898,11 @@ defmodule Arca.TurnStorage do
   tells the daily thread why the work could not start (`:summary`),
   under the identity the opening was asked with (`:person_id`,
   `:origin`); the thread is `error` once nothing else of it remains to
-  run. An opening the thread's work has moved past since it was written
-  (a person's post or a further opening after it, or a report of the
-  thread's work since) ends on its own row alone: how the thread's work
-  last ended stays as the newer word said it, and nothing is posted. An
+  run. An opening that is no longer the thread's newest word, by the
+  thread's own order under its row lock and by no clock (a person's post
+  or a further opening after it in the thread's sequence, or how its
+  work ended recorded since: Aqua's report, a stop, an error), ends on
+  its own row alone: the newer word stands, and nothing is posted. An
   opening that has its turn or ended already is `{:error,
   :opening_ended}`, a thread gone `{:error, :thread_not_found}`, each
   with nothing written.
@@ -955,31 +956,23 @@ defmodule Arca.TurnStorage do
   def refuse_opening(%Prima.Actor{}, _workspace_id, _opening_id, _attrs),
     do: {:error, :no_athanor}
 
-  # Whether the thread's work has moved past `opening` since it was
-  # written: new work after it (a person's post or a further opening,
-  # later in the thread's sequence), or a report of the thread's work
-  # recorded after it, Aqua's or the server's (a card's notice is no
-  # report of its work). The newer word stands over the older opening's
-  # refusal.
+  # Whether `opening` is no longer the workspace thread's newest word,
+  # read under the thread's row lock the caller holds, in the thread's own
+  # serialized order and by no clock: a person's post or a further opening
+  # stands after it in the thread's sequence, or the thread holds how its
+  # work ended (`workspace_outcome`). Each opening and each post of the
+  # person's clears that (`reopened!/2`), so one present now was written
+  # after the latest of them: Aqua's report, a stop or an error since. A
+  # card's notice writes none.
   # arca:db-raise-ok inside the caller's transaction
-  defp moved_past?(athanor_id, %Thread{id: workspace_id}, %Message{} = opening) do
-    newer_work =
-      from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace_id,
-        where: m.seq > ^opening.seq and (m.kind == "opening" or m.sent_by == "person")
+  defp moved_past?(athanor_id, %Thread{id: workspace_id} = workspace, %Message{} = opening) do
+    not is_nil(workspace.workspace_outcome) or
+      Arca.Repo.exists?(
+        from(m in Message,
+          where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace_id,
+          where: m.seq > ^opening.seq and (m.kind == "opening" or m.sent_by == "person")
+        )
       )
-
-    Arca.Repo.exists?(newer_work) or
-      from(r in Arca.Schemas.OutboxRecord,
-        where: r.athanor_id == ^athanor_id and r.kind == "workspace_report",
-        where: r.source_kind == "thread" and r.source_id == ^workspace_id,
-        where: r.inserted_at > ^opening.inserted_at,
-        select: r.snapshot
-      )
-      |> Arca.Repo.all()
-      |> Enum.any?(fn text ->
-        not match?({:ok, %{"approval_id" => _}}, Prima.Json.decode(text))
-      end)
   end
 
   # The workspace_report that tells the daily thread, recorded under the

@@ -1005,4 +1005,201 @@ defmodule Arca.WorkspaceStorageTest do
     assert {:ok, %{message: row, turn: nil}} = answer(actor, workspace, request)
     assert row.reply_to == request.id
   end
+
+  test "an opening stamped ahead of the report written after it leaves that report the thread's word",
+       %{actor: actor, daily: daily} do
+    {workspace, turn} = at_work!(actor, daily)
+
+    {:ok, _} =
+      TurnStorage.open_workspace(actor, opening(actor, daily, %{workspace_id: workspace.id}))
+
+    opening =
+      Enum.find(
+        Threads.messages(actor, workspace.id),
+        &(&1.kind == "opening" and is_nil(&1.turn_id))
+      )
+
+    # The opening's writer's clock ahead of the database's.
+    from(m in Arca.Schemas.Message,
+      where: m.athanor_id == ^actor.athanor_id and m.id == ^opening.id
+    )
+    |> Arca.Repo.update_all(set: [inserted_at: DateTime.add(opening.inserted_at, 300, :second)])
+
+    {:ok, _} =
+      TurnStorage.report_workspace(actor, turn.id, "done", %{
+        fence: turn.fence,
+        summary: "Done after the opening."
+      })
+
+    {:ok, _} = ended!(actor, turn, "completed")
+    assert outcome(actor, workspace.id) == "done"
+
+    {:ok, _} =
+      TurnStorage.refuse_opening(actor, workspace.id, opening.id, %{
+        summary: "old opening refused",
+        person_id: actor.user_id,
+        origin: "interactive"
+      })
+
+    assert outcome(actor, workspace.id) == "done"
+    assert state(actor, workspace.id) == "done"
+    assert report_outcomes(actor) == ["done"]
+  end
+
+  test "an opening stamped behind the report written before it is refused with its error", %{
+    actor: actor,
+    daily: daily
+  } do
+    {workspace, turn} = at_work!(actor, daily)
+
+    {:ok, _} =
+      TurnStorage.report_workspace(actor, turn.id, "done", %{
+        fence: turn.fence,
+        summary: "Old work done."
+      })
+
+    {:ok, _} = ended!(actor, turn, "completed")
+
+    {:ok, _} =
+      TurnStorage.open_workspace(actor, opening(actor, daily, %{workspace_id: workspace.id}))
+
+    opening =
+      Enum.find(
+        Threads.messages(actor, workspace.id),
+        &(&1.kind == "opening" and is_nil(&1.turn_id))
+      )
+
+    # The opening's writer's clock behind the database's.
+    from(m in Arca.Schemas.Message,
+      where: m.athanor_id == ^actor.athanor_id and m.id == ^opening.id
+    )
+    |> Arca.Repo.update_all(set: [inserted_at: DateTime.add(opening.inserted_at, -300, :second)])
+
+    assert outcome(actor, workspace.id) == nil
+
+    {:ok, _} =
+      TurnStorage.refuse_opening(actor, workspace.id, opening.id, %{
+        summary: "new work could not start",
+        person_id: actor.user_id,
+        origin: "interactive"
+      })
+
+    assert outcome(actor, workspace.id) == "error"
+    assert state(actor, workspace.id) == "error"
+    assert report_outcomes(actor) == ["done", "error"]
+  end
+
+  describe "an opening refused for good, by the thread's own order" do
+    defp refuse(actor, workspace, opening) do
+      TurnStorage.refuse_opening(actor, workspace.id, opening.id, %{
+        summary: "the work could not start",
+        person_id: actor.user_id,
+        origin: "interactive"
+      })
+    end
+
+    defp asked_again!(actor, daily, workspace) do
+      {:ok, _} =
+        TurnStorage.open_workspace(actor, opening(actor, daily, %{workspace_id: workspace.id}))
+
+      workspace.id
+      |> then(&Threads.messages(actor, &1))
+      |> Enum.filter(&(&1.kind == "opening" and is_nil(&1.turn_id) and is_nil(&1.status)))
+      |> List.last()
+    end
+
+    test "of several openings, only the newest that is still the newest word speaks, in either order",
+         %{actor: actor, daily: daily} do
+      # The older refused first, then the newer.
+      {first, turn} = at_work!(actor, daily)
+      older = asked_again!(actor, daily, first)
+      newer = asked_again!(actor, daily, first)
+      {:ok, _} = ended!(actor, turn, "cancelled")
+
+      {:ok, _} = refuse(actor, first, older)
+      assert outcome(actor, first.id) == nil
+      assert records(actor, "workspace_report") == []
+      {:ok, _} = refuse(actor, first, newer)
+      assert outcome(actor, first.id) == "error"
+      assert report_outcomes(actor) == ["error"]
+
+      # The newer refused first, then the older: its refusal is past.
+      {:ok, other} = Arca.Test.Days.thread(actor)
+      {second, turn} = at_work!(actor, other)
+      older = asked_again!(actor, other, second)
+      newer = asked_again!(actor, other, second)
+      {:ok, _} = ended!(actor, turn, "cancelled")
+
+      {:ok, _} = refuse(actor, second, newer)
+      {:ok, _} = refuse(actor, second, older)
+      assert {:ok, %{status: "error"}} = Threads.get_message(actor, older.id)
+      assert state(actor, second.id) == "error"
+      assert report_outcomes(actor) == ["error", "error"]
+    end
+
+    test "a card's notice alone leaves the refusal its error", %{actor: actor, daily: daily} do
+      {workspace, turn} = at_work!(actor, daily)
+      waiting = asked_again!(actor, daily, workspace)
+      _card = card!(actor, turn, "k1")
+      assert outcome(actor, workspace.id) == nil
+
+      {:ok, _} = refuse(actor, workspace, waiting)
+      assert outcome(actor, workspace.id) == "error"
+      assert report_outcomes(actor) == ["needs_you", "error"]
+    end
+
+    test "a stop or an error written with no report since the opening is the thread's later word",
+         %{actor: actor, daily: daily} do
+      # The person's stop of the running turn, after the opening.
+      {stopped, turn} = at_work!(actor, daily)
+      waiting = asked_again!(actor, daily, stopped)
+      {:ok, _} = ended!(actor, turn, "cancelled", %{ended_by: :person})
+      assert outcome(actor, stopped.id) == "stopped"
+
+      {:ok, _} = refuse(actor, stopped, waiting)
+      assert outcome(actor, stopped.id) == "stopped"
+      assert records(actor, "workspace_report") == []
+
+      # An error no report could tell: its turn's stored origin reads as none.
+      {:ok, other} = Arca.Test.Days.thread(actor)
+      {failed, turn} = at_work!(actor, other)
+      waiting = asked_again!(actor, other, failed)
+
+      {1, _} =
+        from(t in Arca.Schemas.Turn, where: t.id == ^turn.id)
+        |> Arca.Repo.update_all(set: [origin: "hand-edited"])
+
+      {:ok, _} = ended!(actor, turn, "cancelled", %{ended_by: :recovery})
+      assert outcome(actor, failed.id) == "error"
+      assert records(actor, "workspace_report") == []
+
+      {:ok, _} = refuse(actor, failed, waiting)
+      assert outcome(actor, failed.id) == "error"
+      assert records(actor, "workspace_report") == []
+    end
+
+    test "a report or a person's post either side of the refusal: the later word stands",
+         %{actor: actor, daily: daily} do
+      # The refusal first, then the running turn's report: the report stands.
+      {first, turn} = at_work!(actor, daily)
+      waiting = asked_again!(actor, daily, first)
+      {:ok, _} = refuse(actor, first, waiting)
+      assert outcome(actor, first.id) == "error"
+      {:ok, _} = TurnStorage.report_workspace(actor, turn.id, "done", %{fence: turn.fence})
+      {:ok, _} = ended!(actor, turn, "completed")
+      assert state(actor, first.id) == "done"
+      assert report_outcomes(actor) == ["error", "done"]
+
+      # The refusal first, then the person's post: new work clears it.
+      {:ok, other} = Arca.Test.Days.thread(actor)
+      {second, turn} = at_work!(actor, other)
+      waiting = asked_again!(actor, other, second)
+      {:ok, _} = ended!(actor, turn, "cancelled")
+      {:ok, _} = refuse(actor, second, waiting)
+      assert state(actor, second.id) == "error"
+      _post = running!(actor, second)
+      assert outcome(actor, second.id) == nil
+      assert state(actor, second.id) == "open"
+    end
+  end
 end
