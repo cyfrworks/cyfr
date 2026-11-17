@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+//go:build linux
+
+// Command cyfr-claude-code drives Claude Code as a brain of CYFR's. It is
+// the start of a `driven` program row's command, before the harness's own:
+//
+//	cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.318
+//
+// On a terminal it runs the harness's command unchanged, in its place, so
+// the person signs in to Claude Code on the same row. Otherwise its one
+// host, Opus.Brain, speaks the brain wire to it over the `run` session's
+// standard input and output (tests/fixtures/brain_wire.json, its
+// "comment"), and it speaks Claude Code's own stream-json protocol, with
+// control requests, to the harness it starts (harness.go). It writes
+// nothing to its output but the wire's lines, and nothing of the
+// harness's standard error, its folder or its sign-in reaches them: the
+// harness's errors are said in the driver's own words.
+//
+// It says `hello` first, naming the wire's version and its boot, fresh
+// for each process. A `start` starts the harness for a new session under
+// an id the driver draws, or resuming the session it names; the harness's
+// answer to `initialize` answers `started`, and a harness that holds no
+// transcript of the session named says so and ends, which answers
+// `gone`. A `work` sets CYFR's tools on the stub (`mcp_set_servers`), a
+// `post` writes a user line under a uuid derived from the post's id, an
+// `answer` allows the ask it names with CYFR's answer in its input; each
+// is `accepted` once the harness's input took it. The harness's own tools
+// run in its box: their asks are allowed and they are shown by name. The
+// driver keeps no account of calls: which post a result answers is the
+// result's own naming of the posts' uuids, which `idle` passes on.
+//
+// The driver ends when its input ends (the session is closed), when the
+// harness ends but after `gone`, with the harness's status, and on a
+// hangup or a TERM, each time closing the harness first.
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
+
+	"golang.org/x/sys/unix"
+)
+
+func main() {
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(command []string) int {
+	if len(command) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: cyfr-claude-code HARNESS [ARG]...")
+		return 2
+	}
+	if isTerminal(int(os.Stdin.Fd())) {
+		return runUnchanged(command)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cyfr-claude-code: no home:", err)
+		return 1
+	}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)
+	d := newDriver(command, os.Stdout, os.Stderr, home)
+	return d.serve(os.Stdin, stop)
+}
+
+func isTerminal(fd int) bool {
+	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	return err == nil
+}
+
+// runUnchanged replaces the driver with the harness's command, as it was
+// given, so the terminal is the harness's.
+func runUnchanged(command []string) int {
+	path, err := exec.LookPath(command[0])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cyfr-claude-code:", err)
+		return 127
+	}
+	err = syscall.Exec(path, command, os.Environ())
+	fmt.Fprintln(os.Stderr, "cyfr-claude-code:", err)
+	if errors.Is(err, syscall.ENOENT) {
+		return 127
+	}
+	return 126
+}
+
+// readCommands hands each line of `in` to `lines`, closing it at the end;
+// a line past the wire's bound is handed as one of nil bytes.
+func readCommands(in io.Reader, lines chan<- []byte) {
+	defer close(lines)
+	reader := newLineReader(in, maxLineBytes)
+	for {
+		line, err := reader.next()
+		if line != nil || errors.Is(err, errLineTooLong) {
+			lines <- line
+		}
+		if err != nil {
+			return
+		}
+	}
+}

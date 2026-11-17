@@ -1585,6 +1585,17 @@ jobs:
       - name: The Claude Code catalyst over a program's pipe
         run: python3 tests/locus-backends-image/claude_code.py cyfr-locus:backends
 
+      # Claude Code's brain driver beside a fake harness in a kept folder,
+      # spoken to over the brain wire as its holder speaks it: hello, the
+      # harness's listing, a start with its flags, a work's tools on the
+      # stub, a post's turn naming the post, an ask answered through
+      # cyfr-stub, a resume that holds the session and names what its
+      # transcript holds, gone, forget of one session alone, nothing of
+      # stderr, the folder or the sign-in on the wire, and the harness
+      # unchanged on a terminal.
+      - name: Claude Code's brain driver
+        run: python3 tests/locus-backends-image/brain_claude_code.py cyfr-locus:backends
+
       # The OpenAI Codex catalyst, run by the runtime under a scripted host,
       # driving a fake app-server over the pipe in a kept folder: describe's
       # options from its model listing, a chat round trip on a new thread

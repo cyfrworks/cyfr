@@ -1,0 +1,807 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Opus.Brain do
+  @moduledoc """
+  The holder of a program used as a brain: one session of a brain's
+  driver (`apps/locus/keeper/cmd/cyfr-claude-code`) for one thread and
+  agent, kept open for as long as the work needs it, as `Opus.Browser`
+  keeps the person's browser. The driver runs beside the harness in its
+  program row's box and speaks the harness's own protocol to it; this
+  process speaks the brain wire (`Opus.Brain.Wire`) to the driver over a
+  `run` session (`Opus.Programs.Session`), and holds nothing else of the
+  harness's.
+
+  ## One attendant
+
+  The process that opens the session (`open/1`) is its one attached
+  process, the attendant: it alone writes (`write/4`), it is handed what
+  the driver says, and its exit ends the session. A later `open/1` for
+  the same thread and agent, for work that proves itself, ends this one
+  first (`:replaced`), so a take-over never shares a session with the work
+  it took over: its next start resumes the native session in a new
+  process.
+
+  ## Reading
+
+  The driver's lines are read in order, each read past the last line the
+  attendant said it took. Each batch is decoded whole and handed to the
+  attendant as `{Opus.Brain, ref, {:lines, boot, lines}}`, `boot` the
+  driver process's (its `hello`'s) and each line `{seq, event}`, its
+  number in the session and the event it reads as; the next is read only
+  once the attendant has said, by `read_on/3`, the last line whose effects
+  it committed. A line at or before that one is never handed again, and
+  the first line of a session is its driver's `hello`. Every line is the
+  program's word: the harness runs under the driver's uid and can write as
+  it does, so a line that does not read, one past a bound, a `hello` of
+  another version, or a line lost unread ends the session.
+
+  ## Writing
+
+  One command is written at a time, after the driver's `hello`: the next
+  only once the driver has answered the last (`started` or `gone`,
+  `accepted` or `refused`). Whether a command reaches the driver is decided
+  once, as it is about to be written, by the binding it is written under
+  (below). A write the service did not answer may have reached the driver,
+  and is never written again: the session ends `:interrupted`, and the
+  next start resumes the native session, whose transcript says what it
+  holds (`started.held`).
+
+  A `work` names the configuration its turn runs with. One that differs
+  from the configuration the running harness was started with writes
+  nothing: the driver's process is closed and a new one opened in the same
+  holder, `{:ok, :restarted}`, and the attendant starts it again, resuming.
+
+  ## The binding to admitted work
+
+  Each write names the work it is written for (`t:binding/0`): the turn,
+  its person, its origin, its fence, the step that admitted the program's
+  start, the program row and its epoch and the thread's session generation.
+  As the command is about to be written it is read again from the store:
+
+    * the person stands, and is the turn's;
+    * the turn is the thread's and agent's, of that origin, at that fence,
+      and running; a paused turn may be written only a `post` or an
+      `answer` (the narrow proof below);
+    * the step is that turn's `program.start`, and was decided allow;
+    * the row is the holder's, a driven program with a kept folder,
+      enabled and at that epoch;
+    * the thread is at that session generation;
+    * and the binding's own check of the decision that admitted the start
+      (`admits?`, the attendant's reading of the policy and its standing
+      answers now) still says yes.
+
+  A `work` and a `post` name the binding's turn as their work; an `answer`
+  answers an ask the driver showed for the binding's turn and that has
+  not been answered.
+
+  A paused turn's proof is narrow: it delivers a `post` or an `answer` of
+  its own work and nothing else, so a paused turn never starts the harness
+  or sets its tools. A turn the store reads as anything but running or
+  paused writes nothing.
+
+  ## Its end
+
+  It ends, telling the attendant `{Opus.Brain, ref, {:ended, reason}}`
+  once, when it is told (`close/1`, `:closed`), when a later open replaces
+  it (`:replaced`), on a line lost unread (`:dropped`), on a line that does
+  not read or past a bound (`:unreadable`, `:too_large`), on its row's
+  change (`:row_changed`, `Opus.Programs.end_mounts/2` or the box telling
+  it to stand down), when the driver's process ends (`:exited`), when the
+  service could not be read for a minute (`:unavailable`), and after a
+  write whose answer did not come (`:interrupted`). Its attendant's exit
+  ends it too. However it ends, killed included, the box closes its
+  session (`Opus.Programs.box_open/4`), and on its way out it asks so
+  itself.
+  """
+
+  use GenServer, restart: :temporary
+
+  alias Opus.Brain.Wire
+  alias Opus.Programs
+  alias Opus.Programs.Session
+
+  @registry Opus.Brain.Registry
+  @holders Opus.Brain.Holders
+  @open_ms 60_000
+  @answer_margin_ms 5_000
+  @write_ms 30_000
+  @recv_wait_ms 20_000
+  @read_retries 60
+  @read_retry_ms 1_000
+  # The refusals of a session route that say the session is not on the
+  # service any more.
+  @gone [:unknown_session, :stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
+  # What a send's failure says of its line: these may follow its writing.
+  @uncertain [:backends_unavailable]
+
+  @typedoc """
+  The work a write is made for, as the attendant holds it: the turn's
+  context (its athanor and person), the thread and agent the session is
+  kept for, the turn, its origin as the row stores it and the fence its
+  runner holds, the step that admitted the program's start, the program
+  row and the epoch the start showed, the thread's session generation,
+  and `admits?`, which answers whether the decision that admitted the
+  start still stands now.
+  """
+  @type binding :: %{
+          required(:ctx) => Sanctum.Context.t(),
+          required(:thread_id) => String.t(),
+          required(:agent) => String.t(),
+          required(:turn_id) => String.t(),
+          required(:origin) => String.t(),
+          required(:fence) => non_neg_integer(),
+          required(:step) => String.t(),
+          required(:row_id) => String.t(),
+          required(:epoch) => pos_integer(),
+          required(:generation) => non_neg_integer(),
+          required(:admits?) => (-> boolean())
+        }
+
+  @typedoc "A held session: its holder and the reference its messages carry."
+  @type brain :: {pid(), reference()}
+
+  @doc """
+  The most milliseconds of a program's own silence a job runs before it
+  ends (the `program_silence_ms` platform setting).
+  """
+  @spec silence_ms() :: pos_integer()
+  def silence_ms do
+    case Arca.PlatformSettings.effective("program_silence_ms") do
+      {:ok, value} when is_integer(value) and value > 0 -> value
+    end
+  end
+
+  @doc """
+  Open the session of `binding`'s thread and agent on its program row, for
+  the calling process, which becomes its attendant: a new process of the
+  row's driver, after `binding` is read again and proves a running turn
+  (moduledoc). A holder of the same thread and agent is ended first
+  (`:replaced`). Answers the held session, whose first line is the
+  driver's `hello`; `{:error, {:not_admitted, reason}}` for a binding that
+  does not prove, or the refusal of the owner's hold or the session's open.
+  """
+  @spec open(binding()) :: {:ok, brain()} | {:error, term()}
+  def open(%{ctx: %Sanctum.Context{athanor_id: athanor_id}} = binding)
+      when is_binary(athanor_id) do
+    key = {athanor_id, binding.thread_id, binding.agent}
+
+    with :ok <- admitted(binding, "start", running_only: true),
+         :ok <- replace(key) do
+      case DynamicSupervisor.start_child(@holders, {__MODULE__, key}) do
+        {:ok, pid} -> call(pid, {:open, self(), binding}, @open_ms + @answer_margin_ms)
+        {:error, {:already_started, _pid}} -> {:error, :busy}
+        {:error, _reason} -> {:error, :unavailable}
+      end
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  @doc """
+  Write `command` (a brain wire command: `start`, `work`, `post` or
+  `answer`) under `binding`, read again from the store just before it is
+  written (moduledoc). `opts`: `config`, the configuration a `work`'s turn
+  runs with. Answers `:ok` once the service took it, `{:ok, :restarted}`
+  for a `work` whose configuration differs from the running harness's
+  (nothing written; a new process runs), or `{:error, reason}` with
+  nothing written: `:busy` (before the `hello`, or while the last
+  command's answer is outstanding), `:not_attached`, `:unreadable`,
+  `:running` (a `start` while a harness runs), `:not_started`,
+  `:not_this_work`, `{:not_admitted, reason}`; or `{:error, :uncertain}`,
+  a write that may have reached the driver, after which the session ends.
+  """
+  @spec write(brain(), binding(), Wire.message(), keyword()) ::
+          :ok | {:ok, :restarted} | {:error, term()}
+  def write({pid, ref}, binding, %{} = command, opts \\ []) when is_reference(ref) do
+    call(pid, {:write, ref, binding, command, opts}, @write_ms + @open_ms + @answer_margin_ms)
+  end
+
+  @doc """
+  The attendant committed the effects of the session's lines through
+  `seq` of the driver process `boot`: the next lines are read past it. A
+  `boot` that is not the running driver's says nothing.
+  """
+  @spec read_on(brain(), String.t(), non_neg_integer()) :: :ok
+  def read_on({pid, ref}, boot, seq) when is_binary(boot) and is_integer(seq) and seq >= 0,
+    do: GenServer.cast(pid, {:read_on, ref, self(), boot, seq})
+
+  @doc "End the session: its driver's process is closed, the attendant told `:closed`."
+  @spec close(brain()) :: :ok
+  def close({pid, ref}) when is_reference(ref) do
+    _ = call(pid, {:close, ref}, Programs.Box.close_timeout_ms() + @answer_margin_ms)
+    :ok
+  end
+
+  @doc "The held session of a thread and agent, if one runs."
+  @spec whereis(String.t(), String.t(), String.t()) :: pid() | nil
+  def whereis(athanor_id, thread_id, agent) do
+    if Process.whereis(@registry) do
+      case Registry.lookup(@registry, {athanor_id, thread_id, agent}) do
+        [{pid, _}] -> pid
+        [] -> nil
+      end
+    end
+  end
+
+  # A holder of the key is ended, and gone, before a new one starts.
+  defp replace({athanor_id, thread_id, agent}) do
+    case whereis(athanor_id, thread_id, agent) do
+      nil ->
+        :ok
+
+      pid ->
+        monitor = Process.monitor(pid)
+        wait = Programs.Box.close_timeout_ms() + @answer_margin_ms
+        _ = call(pid, :replace, wait)
+
+        receive do
+          {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+        after
+          wait -> {:error, :busy}
+        end
+    end
+  end
+
+  defp call(pid, message, timeout) do
+    GenServer.call(pid, message, timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :unavailable}
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  # ===========================================================================
+  # The binding
+  # ===========================================================================
+
+  # Whether `binding` proves work a command of type `t` may be written
+  # for, read from the store now (moduledoc). Every read is scoped to the
+  # binding's athanor, so a turn, step, thread or row of another athanor
+  # is not found.
+  defp admitted(binding, t, opts \\ []) do
+    actor = Sanctum.Context.actor(binding.ctx)
+    user_id = binding.ctx.user_id
+
+    with :ok <- person(binding.ctx.athanor_id, user_id),
+         {:ok, turn} <- read(Arca.TurnStorage.get(actor, binding.turn_id), :turn_not_found),
+         :ok <- turn(turn, binding, user_id),
+         :ok <- proof(turn.status, t, Keyword.get(opts, :running_only, false)),
+         {:ok, step} <- read(Arca.TurnStorage.step(actor, binding.step), :step_not_found),
+         :ok <- start_step(step, turn),
+         {:ok, row} <-
+           read(Arca.McpServerStorage.get_by_id(actor, binding.row_id), :row_not_found),
+         :ok <- row(row, binding),
+         {:ok, thread} <-
+           read(Arca.ThreadStorage.get(actor, binding.thread_id), :thread_not_found),
+         :ok <- generation(thread, binding),
+         :ok <- decision(binding.admits?) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:not_admitted, reason}}
+    end
+  end
+
+  defp person(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do
+    case Programs.stands(athanor_id, user_id) do
+      {:ok, true} -> :ok
+      {:ok, false} -> {:error, :not_standing}
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
+
+  defp person(_athanor_id, _user_id), do: {:error, :not_standing}
+
+  defp read({:ok, found}, _not_found), do: {:ok, found}
+  defp read({:error, :not_found}, not_found), do: {:error, not_found}
+  defp read({:error, _unanswered}, _not_found), do: {:error, :unavailable}
+
+  defp turn(turn, binding, user_id) do
+    cond do
+      turn.thread_id != binding.thread_id or turn.agent != binding.agent -> {:error, :wrong_turn}
+      turn.requested_by != user_id -> {:error, :wrong_person}
+      turn.origin != binding.origin -> {:error, :wrong_origin}
+      turn.fence != binding.fence -> {:error, :superseded}
+      true -> :ok
+    end
+  end
+
+  # A running turn proves any delivery; a paused one only a post or an
+  # answer of its own work, and none when the caller asks for a running
+  # turn's proof alone.
+  defp proof("running", _t, _running_only), do: :ok
+  defp proof("paused", t, false) when t in ["post", "answer"], do: :ok
+  defp proof("paused", _t, _running_only), do: {:error, :paused}
+  defp proof(_over_or_accepted, _t, _running_only), do: {:error, :not_running}
+
+  # The step that admitted the start: the turn's own `program.start`,
+  # dispatched or closed as it ran, not denied, skipped or cancelled, and
+  # not asked to stop (a Stop or a supersede marks it so).
+  defp start_step(step, turn) do
+    cond do
+      step.turn_id != turn.id -> {:error, :wrong_step}
+      step.tool != "program" or step.action != "start" -> {:error, :wrong_step}
+      step.dispatch_state not in ["dispatched", "closed"] -> {:error, :not_decided}
+      step.outcome not in [nil, "ok"] -> {:error, :not_allowed}
+      step.cancel_requested_at != nil -> {:error, :stopped}
+      true -> :ok
+    end
+  end
+
+  defp row(row, binding) do
+    cond do
+      row.transport != "program" or row.mark != "driven" or row.home != "kept" ->
+        {:error, :not_a_brain_row}
+
+      Programs.Definition.browser?(row) ->
+        {:error, :not_a_brain_row}
+
+      row.enabled != true ->
+        {:error, :disabled}
+
+      row.epoch != binding.epoch ->
+        {:error, :row_changed}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp generation(%{brain_generation: generation}, %{generation: generation}), do: :ok
+  defp generation(_thread, _binding), do: {:error, :generation_moved}
+
+  defp decision(admits?) when is_function(admits?, 0) do
+    if admits?.() == true, do: :ok, else: {:error, :withdrawn}
+  end
+
+  # ===========================================================================
+  # The holder
+  # ===========================================================================
+
+  @doc false
+  def start_link({_athanor_id, _thread_id, _agent} = key),
+    do: GenServer.start_link(__MODULE__, key, name: {:via, Registry, {@registry, key}})
+
+  @impl true
+  def init({athanor_id, thread_id, agent}) do
+    Process.flag(:trap_exit, true)
+
+    {:ok,
+     %{
+       athanor_id: athanor_id,
+       thread_id: thread_id,
+       agent: agent,
+       ref: make_ref(),
+       attendant: nil,
+       owner: nil,
+       grant: nil,
+       session: nil,
+       reader: nil,
+       boot: nil,
+       after: 0,
+       applied: 0,
+       handed: nil,
+       outstanding: nil,
+       harness: :none,
+       starting: nil,
+       config: nil,
+       asks: %{}
+     }}
+  end
+
+  @impl true
+  def handle_call({:open, attendant, binding}, _from, %{attendant: nil} = state) do
+    owner = %{athanor_id: state.athanor_id, server_id: binding.row_id, epoch: binding.epoch}
+    Process.monitor(attendant)
+    state = %{state | attendant: attendant, owner: owner}
+
+    case connect(state) do
+      {:ok, state} -> {:reply, {:ok, {self(), state.ref}}, state}
+      {:error, reason} -> {:stop, :normal, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:open, _attendant, _binding}, _from, state),
+    do: {:reply, {:error, :busy}, state}
+
+  def handle_call({:write, ref, binding, command, opts}, {pid, _tag}, %{ref: ref} = state) do
+    cond do
+      pid != state.attendant -> {:reply, {:error, :not_attached}, state}
+      state.boot == nil or state.outstanding != nil -> {:reply, {:error, :busy}, state}
+      true -> deliver(state, binding, command, opts)
+    end
+  end
+
+  def handle_call({:write, _ref, _binding, _command, _opts}, _from, state),
+    do: {:reply, {:error, :not_attached}, state}
+
+  def handle_call({:close, ref}, _from, %{ref: ref} = state),
+    do: {:stop, :normal, :ok, ended(state, :closed)}
+
+  def handle_call({:close, _ref}, _from, state), do: {:reply, :ok, state}
+  def handle_call(:replace, _from, state), do: {:stop, :normal, :ok, ended(state, :replaced)}
+
+  @impl true
+  def handle_cast(
+        {:read_on, ref, pid, boot, seq},
+        %{ref: ref, attendant: pid, boot: boot} = state
+      )
+      when is_integer(state.handed) do
+    after_seq = min(max(seq, state.after), state.handed)
+    send(state.reader, {:go, after_seq})
+    {:noreply, %{state | after: after_seq, handed: nil}}
+  end
+
+  def handle_cast({:read_on, _ref, _pid, _boot, _seq}, state), do: {:noreply, state}
+
+  def handle_cast({:row_ended, athanor_id, row_id}, %{owner: %{server_id: row_id}} = state)
+      when athanor_id == state.athanor_id,
+      do: {:stop, :normal, ended(state, :row_changed)}
+
+  def handle_cast({:row_ended, _athanor_id, _row_id}, state), do: {:noreply, state}
+
+  @impl true
+  def handle_info({:read, reader, answer}, %{reader: reader} = state), do: lines(state, answer)
+  def handle_info({:read, _stale_reader, _answer}, state), do: {:noreply, state}
+
+  def handle_info({:read_failed, reader, reason}, %{reader: reader} = state) do
+    reason =
+      case reason do
+        {:refused, code, _boot} when code in @gone -> :exited
+        _unanswered -> :unavailable
+      end
+
+    {:stop, :normal, ended(state, reason)}
+  end
+
+  def handle_info({:read_failed, _stale_reader, _reason}, state), do: {:noreply, state}
+
+  def handle_info({:DOWN, _monitor, :process, pid, _reason}, %{attendant: pid} = state),
+    do: {:stop, :normal, %{state | attendant: nil}}
+
+  def handle_info({Opus.Programs, :stand_down, _key}, state),
+    do: {:stop, :normal, ended(state, :row_changed)}
+
+  # A new grant means the box synced the owner again: the service the
+  # session ran on is not the one it runs on now.
+  def handle_info({Opus.Programs, :owner, _grant}, state),
+    do: {:stop, :normal, ended(state, :exited)}
+
+  def handle_info({:EXIT, reader, _reason}, %{reader: reader} = state),
+    do: {:stop, :normal, ended(state, :unavailable)}
+
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
+  def handle_info(message, state) do
+    Prima.LoggerContext.unexpected(__MODULE__, message)
+    {:noreply, state}
+  end
+
+  # The fast path: the box closes what a holder leaves however it ends.
+  @impl true
+  def terminate(_reason, state) do
+    disconnect(state)
+    :ok
+  end
+
+  # What the person posts and what the program says pass through here, in
+  # its state, its messages and its replies, beside the grant's key: no
+  # status, debug log or crash report prints a byte of any, each binary
+  # showing its size alone.
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {key, value} when key in [:state, :message, :reason, :log] -> {key, scrub(value)}
+      other -> other
+    end)
+  end
+
+  defp scrub(binary) when is_binary(binary), do: "#{byte_size(binary)} bytes"
+  defp scrub(%module{} = struct), do: {module, struct |> Map.from_struct() |> scrub()}
+  defp scrub(map) when is_map(map), do: Map.new(map, fn {key, value} -> {key, scrub(value)} end)
+  defp scrub([head | tail]), do: [scrub(head) | scrub(tail)]
+
+  defp scrub(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> scrub() |> List.to_tuple()
+
+  defp scrub(other), do: other
+
+  # ---------------------------------------------------------------------------
+  # The session
+
+  # The owner is held for this process and a new process of the driver is
+  # opened under the thread's and agent's key. One that was still running
+  # (a close the box still owes) is closed and opened again, so every
+  # holder speaks to a driver that has heard nothing.
+  defp connect(state) do
+    with {:ok, state} <- hold(state),
+         {:ok, session} <- fresh(state, 1) do
+      {:ok, read_from(%{state | session: session}, 0)}
+    end
+  end
+
+  defp hold(%{grant: nil} = state) do
+    with {:ok, grant} <- Programs.hold(state.owner), do: {:ok, %{state | grant: grant}}
+  end
+
+  defp hold(state), do: {:ok, state}
+
+  defp fresh(state, tries) do
+    deadline = System.system_time(:millisecond) + @open_ms
+
+    params = %{
+      program: Programs.Definition.program_name(),
+      home_id: state.owner.server_id,
+      key: key(state),
+      mode: :run,
+      argv: Programs.Words.new([])
+    }
+
+    case Programs.box_open(state.owner, self(), params, deadline) do
+      {:ok, %{session: session, resumed: false}} ->
+        {:ok, session}
+
+      {:ok, %{resumed: true}} when tries > 0 ->
+        _ = Programs.box_close(state.owner, state.owner.server_id, key(state))
+        fresh(state, tries - 1)
+
+      {:ok, %{resumed: true}} ->
+        {:error, :unavailable}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The service's key of the thread's and agent's session.
+  defp key(state) do
+    digest =
+      :crypto.hash(:sha256, [state.thread_id, 0, state.agent]) |> Base.encode16(case: :lower)
+
+    "brain-" <> binary_part(digest, 0, 40)
+  end
+
+  defp disconnect(state) do
+    if state.reader, do: Process.exit(state.reader, :kill)
+
+    if state.grant do
+      if state.session, do: Programs.box_close(state.owner, state.owner.server_id, key(state))
+      Programs.release(state.owner)
+    end
+
+    :ok
+  end
+
+  # A new process of the driver in the same holder: the last is closed,
+  # and what it held is forgotten.
+  defp restart(state) do
+    if state.reader, do: Process.exit(state.reader, :kill)
+    _ = Programs.box_close(state.owner, state.owner.server_id, key(state))
+    state = reset(%{state | session: nil, reader: nil})
+
+    case fresh(state, 1) do
+      {:ok, session} -> {:ok, read_from(%{state | session: session}, 0)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp reset(state) do
+    %{
+      state
+      | boot: nil,
+        after: 0,
+        applied: 0,
+        handed: nil,
+        outstanding: nil,
+        harness: :none,
+        starting: nil,
+        config: nil,
+        asks: %{}
+    }
+  end
+
+  defp read_from(state, after_seq) do
+    holder = self()
+    grant = state.grant
+    session = state.session
+    reader = spawn_link(fn -> reader(holder, grant, session, after_seq, 0) end)
+    %{state | reader: reader}
+  end
+
+  # The reader: one read at a time, each past the last line the attendant
+  # took, so a lost answer is read again by the same `after`, and the next
+  # only once the holder says. A service that does not answer is asked
+  # again each second for a minute.
+  defp reader(holder, grant, session, after_seq, failures) do
+    case Session.recv(grant, session, after_seq, @recv_wait_ms) do
+      {:ok, answer} ->
+        send(holder, {:read, self(), answer})
+
+        receive do
+          {:go, after_seq} -> reader(holder, grant, session, after_seq, 0)
+        end
+
+      {:error, {:refused, _code, _boot} = refused} ->
+        send(holder, {:read_failed, self(), refused})
+
+      {:error, reason} when failures >= @read_retries ->
+        send(holder, {:read_failed, self(), reason})
+
+      {:error, _unanswered} ->
+        Process.sleep(@read_retry_ms)
+        reader(holder, grant, session, after_seq, failures + 1)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Lines
+
+  defp lines(state, %{dropped: dropped}) when dropped > 0,
+    do: {:stop, :normal, ended(state, :dropped)}
+
+  defp lines(state, %{lines: [], running: false}), do: {:stop, :normal, ended(state, :exited)}
+
+  # Nothing came within the wait: read on from the same place.
+  defp lines(state, %{lines: []}) do
+    send(state.reader, {:go, state.after})
+    {:noreply, state}
+  end
+
+  defp lines(state, %{lines: lines}) do
+    case decode(lines, state, []) do
+      {:ok, events, state} ->
+        last = elem(List.last(events), 0)
+        send(state.attendant, {__MODULE__, state.ref, {:lines, state.boot, events}})
+        {:noreply, %{state | handed: last}}
+
+      {:error, reason, state} ->
+        {:stop, :normal, ended(state, reason)}
+    end
+  end
+
+  defp decode([], state, events), do: {:ok, Enum.reverse(events), state}
+
+  defp decode([%{seq: seq, text: text} | rest], state, events) do
+    with {:ok, event} <- Wire.decode(text),
+         {:ok, state} <- apply_event(state, seq, event) do
+      decode(rest, state, [{seq, event} | events])
+    else
+      {:error, :too_large} -> {:error, :too_large, state}
+      {:error, _unreadable_or_unknown} -> {:error, :unreadable, state}
+    end
+  end
+
+  # What the holder keeps of an event, once: the driver's boot from its
+  # hello, which is the session's first line and its only one; the
+  # answer to the command it waits on; and the asks it may answer. A line
+  # read again after the attendant asked for it again changes nothing.
+  defp apply_event(state, seq, _event) when seq <= state.applied, do: {:ok, state}
+
+  defp apply_event(%{boot: nil} = state, seq, %{"t" => "hello", "v" => v, "boot" => boot}) do
+    if v == Wire.version(),
+      do: {:ok, %{state | boot: boot, applied: seq}},
+      else: {:error, :unreadable}
+  end
+
+  defp apply_event(%{boot: nil}, _seq, _not_hello), do: {:error, :unreadable}
+  defp apply_event(_state, _seq, %{"t" => "hello"}), do: {:error, :unreadable}
+
+  defp apply_event(state, seq, event), do: {:ok, %{answered(state, event) | applied: seq}}
+
+  defp answered(%{outstanding: {"start", _}} = state, %{"t" => "started"}),
+    do: %{state | outstanding: nil, harness: :started, config: state.starting, starting: nil}
+
+  defp answered(%{outstanding: {"start", _}} = state, %{"t" => "gone"}),
+    do: %{state | outstanding: nil, harness: :none, starting: nil}
+
+  defp answered(%{outstanding: {_t, id}} = state, %{"t" => t, "id" => id})
+       when t in ["accepted", "refused"],
+       do: %{state | outstanding: nil}
+
+  defp answered(state, %{"t" => "ask", "ask" => ask} = event),
+    do: %{state | asks: Map.put(state.asks, ask, Map.get(event, "work"))}
+
+  defp answered(state, _event), do: state
+
+  # ---------------------------------------------------------------------------
+  # Writing
+
+  defp deliver(state, binding, %{"t" => t} = command, opts) when is_binary(t) do
+    with :ok <- this_place(state, binding),
+         {:ok, line} <- encode(command),
+         :ok <- in_turn(state, binding, command),
+         :ok <- admitted(binding, t) do
+      if t == "work" and state.config != Keyword.get(opts, :config, state.config),
+        do: restarted(state),
+        else: send_line(state, command, line)
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp deliver(state, _binding, _command, _opts), do: {:reply, {:error, :unreadable}, state}
+
+  # A binding is of this holder's athanor, thread, agent and row.
+  defp this_place(state, binding) do
+    if binding.ctx.athanor_id == state.athanor_id and binding.thread_id == state.thread_id and
+         binding.agent == state.agent and binding.row_id == state.owner.server_id and
+         binding.epoch == state.owner.epoch,
+       do: :ok,
+       else: {:error, {:not_admitted, :wrong_place}}
+  end
+
+  defp encode(command) do
+    case Wire.encode(command) do
+      {:ok, line} -> {:ok, line}
+      {:error, _refusal} -> {:error, :unreadable}
+    end
+  end
+
+  # A command fits what the session holds now: a start only while no
+  # harness runs, every delivery once one does, a work and a post of the
+  # binding's turn, an answer to an ask shown for it and not yet answered.
+  defp in_turn(state, _binding, %{"t" => "start"}),
+    do: if(state.harness == :none, do: :ok, else: {:error, :running})
+
+  defp in_turn(%{harness: harness}, _binding, _delivery) when harness != :started,
+    do: {:error, :not_started}
+
+  defp in_turn(_state, binding, %{"t" => t, "work" => work}) when t in ["work", "post"],
+    do: if(work == binding.turn_id, do: :ok, else: {:error, :not_this_work})
+
+  defp in_turn(state, binding, %{"t" => "answer", "ask" => ask}) do
+    case state.asks do
+      %{^ask => work} when work == binding.turn_id -> :ok
+      _not_shown_answered_or_another_work -> {:error, :not_this_work}
+    end
+  end
+
+  defp in_turn(_state, _binding, _not_a_delivery), do: {:error, :unreadable}
+
+  defp restarted(state) do
+    case restart(state) do
+      {:ok, state} -> {:reply, {:ok, :restarted}, state}
+      {:error, reason} -> {:stop, :normal, {:error, reason}, ended(state, :unavailable)}
+    end
+  end
+
+  defp send_line(state, command, line) do
+    case Session.send(state.grant, state.session, [line], @write_ms) do
+      {:ok, :running} ->
+        {:reply, :ok, written(state, command)}
+
+      {:ok, :ended} ->
+        {:stop, :normal, {:error, :ended}, ended(state, :exited)}
+
+      {:error, {:refused, code, _boot}} when code in @gone ->
+        {:stop, :normal, {:error, :ended}, ended(state, :exited)}
+
+      {:error, reason} ->
+        if uncertain?(reason),
+          do: {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)},
+          else: {:stop, :normal, {:error, :not_written}, ended(state, :exited)}
+    end
+  end
+
+  # A send whose answer did not arrive, did not read, or says the service
+  # failed inside, may follow its writing.
+  defp uncertain?(reason) when reason in @uncertain, do: true
+  defp uncertain?({:unreadable, _error}), do: true
+  defp uncertain?({:refused, :internal, _boot}), do: true
+  defp uncertain?(_refused_before_writing), do: false
+
+  defp written(state, %{"t" => "start"} = command),
+    do: %{state | outstanding: {"start", nil}, harness: :starting, starting: command["config"]}
+
+  defp written(state, %{"t" => "answer", "id" => id, "ask" => ask}),
+    do: %{state | outstanding: {"answer", id}, asks: Map.delete(state.asks, ask)}
+
+  defp written(state, %{"t" => t, "id" => id}), do: %{state | outstanding: {t, id}}
+
+  # The attendant is told once how the session ended.
+  defp ended(%{attendant: pid} = state, reason) when is_pid(pid) do
+    send(pid, {__MODULE__, state.ref, {:ended, reason}})
+    %{state | attendant: nil}
+  end
+
+  defp ended(state, _reason), do: state
+end
