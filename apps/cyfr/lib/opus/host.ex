@@ -7,8 +7,8 @@ defmodule Opus.Host do
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
   `fetch_artifact`, `record_denial`, `admit_child`, `tool_call`,
   `release_child`, `egress_pin`, `attached_fetch`, `pipe_open`,
-  `pipe_send`, `pipe_recv` and `pipe_close`, as `Prima.HostAPI` describes
-  them.
+  `pipe_send`, `pipe_recv`, `pipe_close`, `input_next` and `input_sent`,
+  as `Prima.HostAPI` describes them.
 
   `call/3` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`), its JSON body,
@@ -64,9 +64,10 @@ defmodule Opus.Host do
        the attempt before, and the attempt row is held by the header's
        runner under a grant that stands, before the attempt runs it
        (`Opus.Attempt.call/3`); `fail` needs the hold alone.
-       `admit_child`, `tool_call`, `egress_pin`, `attached_fetch` and the
-       pipe calls act under what the attempt holds (`Opus.Host.Children`,
-       `Opus.Host.Egress`, `Opus.Host.AttachedFetch`, `Opus.Host.Pipe`),
+       `admit_child`, `tool_call`, `egress_pin`, `attached_fetch`, the
+       pipe calls and the input calls act under what the attempt holds
+       (`Opus.Host.Children`, `Opus.Host.Egress`,
+       `Opus.Host.AttachedFetch`, `Opus.Host.Pipe`, `Opus.Host.Inputs`),
        and need the row live as well: no cancel asked of it and its
        execution running.
 
@@ -133,11 +134,14 @@ defmodule Opus.Host do
   | `pipe_send` | `session`, `lines` (strings) | `true` |
   | `pipe_recv` | `session`, `after` (a sequence number), `max_wait_ms` (at most `Prima.HostAPI.max_pipe_wait_ms/0`) | `lines` (each `seq`, `text`), `dropped`, `running` |
   | `pipe_close` | `session` | `true` |
+  | `input_next` | none | the next input (`id`, `content`), or `null` |
+  | `input_sent` | `id` (`Prima.Model.valid_input_id?/1`) | `true` |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Opus.Host.Storage`'s;
   `admit_child`, `tool_call` and `release_child` are
-  `Opus.Host.Children`'s; the pipe calls are `Opus.Host.Pipe`'s. `admit_child` is keyed: a repeat with
+  `Opus.Host.Children`'s; the pipe calls are `Opus.Host.Pipe`'s and the
+  input calls `Opus.Host.Inputs`'s. `admit_child` is keyed: a repeat with
   the same `child_key` answers the child already admitted under it, and
   one naming another `connection` than that child was admitted with is
   refused `invalid_request`.
@@ -173,7 +177,7 @@ defmodule Opus.Host do
   alias Prima.{AttachedRequest, Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
   alias Opus.{Attempt, Keys, Lapse}
   alias Prima.Outcome
-  alias Opus.Host.{AttachedFetch, Children, Egress, Pipe}
+  alias Opus.Host.{AttachedFetch, Children, Egress, Inputs, Pipe}
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
   @refusals [
@@ -364,6 +368,8 @@ defmodule Opus.Host do
     do: pipe_recv(caller, session, after_seq, max_wait_ms)
 
   defp dispatch(caller, {:pipe_close, session}), do: pipe_close(caller, session)
+  defp dispatch(caller, :input_next), do: input_next(caller)
+  defp dispatch(caller, {:input_sent, id}), do: input_sent(caller, id)
 
   defp dispatch(_caller, {:attached_refusal, call_id, refusal}),
     do: {:attached, call_id, {:error, refusal}}
@@ -465,6 +471,12 @@ defmodule Opus.Host do
 
   @impl HostAPI
   def pipe_close(caller, session), do: Pipe.close(caller, session)
+
+  @impl HostAPI
+  def input_next(caller), do: Inputs.next(caller)
+
+  @impl HostAPI
+  def input_sent(caller, id), do: Inputs.sent(caller, id)
 
   @doc """
   The needs the running node's manifest declares, read through
@@ -675,6 +687,12 @@ defmodule Opus.Host do
 
   defp operation("pipe_close", %{"session" => session}) do
     if name?(session), do: {:ok, {:pipe_close, session}}, else: {:error, :lost}
+  end
+
+  defp operation("input_next", args) when map_size(args) == 0, do: {:ok, :input_next}
+
+  defp operation("input_sent", %{"id" => id}) do
+    if Prima.Model.valid_input_id?(id), do: {:ok, {:input_sent, id}}, else: {:error, :lost}
   end
 
   defp operation(_op, _args), do: {:error, :lost}
