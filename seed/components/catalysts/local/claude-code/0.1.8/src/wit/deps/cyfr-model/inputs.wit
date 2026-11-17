@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+package cyfr:model@0.1.0;
+
+/// Further input for the invocation under way, which whoever started it
+/// supplies while it runs: for a `model/chat@1` call, a message that
+/// arrived after the call began, which the catalyst writes into its
+/// harness's running session itself. Only this invocation's inputs are
+/// read and reported here; a stopped, replaced or cancelled invocation
+/// gets none. An error is a code: `lost`, `unavailable` or
+/// `invalid_request`.
+interface inputs {
+    /// One input: the id its supplier knows it by, and its content, the
+    /// JSON of a user message's content (a string, or `text`, `image` and
+    /// `document` blocks, each attachment's data in base64).
+    record input {
+        id: string,
+        content: string,
+    }
+
+    /// The next input not yet reported sent, or none. Until it is
+    /// reported, every call answers the same input: a read moves nothing.
+    next: func() -> result<option<input>, string>;
+
+    /// Report that the input `id` was handed on, once the harness accepted
+    /// it. A report repeated after a lost answer marks it once; `ok` means
+    /// the report was recorded.
+    sent: func(id: string) -> result<_, string>;
+}

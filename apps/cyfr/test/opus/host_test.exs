@@ -1515,6 +1515,20 @@ defmodule Opus.HostTest do
     )
   end
 
+  # The input calls are answered by a supplier holding the vector's input,
+  # offered to the attempt before its report.
+  defp vector_fixture(op) when op in ~w(input_next input_sent) do
+    [next] = for %{"callback" => "input_next"} = call <- @vectors["calls"], do: call
+    %{"ok" => input} = Jason.decode!(next["answer"])
+    supplier = Cyfr.Test.InputSupplier.start!([input])
+    fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), inputs: supplier)
+
+    if op == "input_sent",
+      do: %{"ok" => ^input} = AttemptFixtures.call(fixture, "input_next", %{})
+
+    fixture
+  end
+
   defp vector_fixture(_op), do: AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
   # The vector's args, with the attempt and the execution they name bound to
@@ -1559,7 +1573,7 @@ defmodule Opus.HostTest do
   defp expected("release_child"), do: "lost"
   defp expected("pipe_open"), do: "denied"
   defp expected("pipe_send"), do: "guest_error"
-  defp expected(op) when op in ~w(pipe_recv pipe_close), do: "ok"
+  defp expected(op) when op in ~w(pipe_recv pipe_close input_next input_sent), do: "ok"
 
   defp expected(op) when op in ~w(oauth_token storage admit_child tool_call attached_fetch),
     do: "guest_error"
@@ -1568,7 +1582,7 @@ defmodule Opus.HostTest do
   defp answer_name(%{"error" => name}), do: name
 
   defp answered(op, answer, vector, _fixture, _before)
-       when op in ~w(attach complete take_rate record_denial),
+       when op in ~w(attach complete take_rate record_denial input_next input_sent),
        do: assert(answer == vector, op)
 
   defp answered("renew", %{"ok" => renewals}, %{"ok" => wire}, fixture, _before) do

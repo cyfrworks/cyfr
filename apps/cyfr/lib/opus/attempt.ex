@@ -227,6 +227,7 @@ defmodule Opus.Attempt do
                 :charge,
                 :assignment,
                 :grant,
+                :inputs,
                 declared_needs: [],
                 roster: [],
                 held_invoke: false,
@@ -243,6 +244,7 @@ defmodule Opus.Attempt do
   @typedoc "An operation a runner calls on its attempt once it has attached."
   @type op ::
           :chain
+          | :inputs
           | {:complete, Outcome.t()}
           | {:fail, Outcome.t()}
           | {:push_deltas, [Delta.t()]}
@@ -300,9 +302,10 @@ defmodule Opus.Attempt do
   budget, which the attempt takes over), `:charge` (the charge row that
   slot holds, `%{id: charge_id}`) and `:assignment` (what the run's
   assignment is signed from, `t:Opus.Assignments.admitted/0`,
-  which `admitted/2` answers to the runner holding the claim) and `:grant`
+  which `admitted/2` answers to the runner holding the claim), `:grant`
   (the `Prima.ExecutionGrant` the run was admitted under; without one,
-  every effect is refused).
+  every effect is refused) and `:inputs` (the process that supplies the
+  run's further inputs, `Opus.Inputs`; none by default).
 
   Answers `{:error, {:already_started, pid}}` when the execution already
   has an open attempt.
@@ -466,6 +469,10 @@ defmodule Opus.Attempt do
     (`Arca.ExecutionAttempts.live?/4`): a row with a cancel asked of it, or
     whose execution is no longer running, is `:lost` without stopping the
     attempt.
+  - `:inputs` answers `{:ok, supplier, invocation}`: the process that
+    supplies the run's further inputs (nil when none was named) and the
+    run's trusted identity (`t:Opus.Inputs.invocation/0`), under the same
+    live row `:chain` needs.
   - `{:complete, outcome}` closes the run with the outcome's output:
     `{:ok, masked_output}`, or `{:error, {:failed, message}}` when the close
     recorded a failure instead.
@@ -656,6 +663,7 @@ defmodule Opus.Attempt do
       charge: Keyword.get(opts, :charge),
       assignment: Keyword.get(opts, :assignment),
       grant: Keyword.get(opts, :grant),
+      inputs: supplier(Keyword.get(opts, :inputs)),
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
     }
 
@@ -669,6 +677,10 @@ defmodule Opus.Attempt do
     do: Sanctum.Authority.take_over_invoke(authority, owner) == :ok
 
   defp take_over_invoke(false, _authority, _owner), do: false
+
+  # A supplier is a process (`Opus.Inputs`); anything else names none.
+  defp supplier(pid) when is_pid(pid), do: pid
+  defp supplier(nil), do: nil
 
   # A row can end before its attempt is registered, where no `stop_ended/1`
   # finds it: a parent's cascade waits on the lock its child's admission
@@ -1292,7 +1304,7 @@ defmodule Opus.Attempt do
   # Every effect but a failure is admitted under the run's grant, in the
   # same transaction as the hold: a grant that no longer stands is a hold
   # that is gone.
-  defp held(state, caller, :chain) do
+  defp held(state, caller, op) when op in [:chain, :inputs] do
     case Arca.ExecutionAttempts.live?(
            Prima.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
@@ -1369,6 +1381,18 @@ defmodule Opus.Attempt do
     }
 
     {:reply, {:ok, chain}, state}
+  end
+
+  defp run(:inputs, state) do
+    invocation = %{
+      athanor_id: state.ctx.athanor_id,
+      execution_id: state.execution_id,
+      attempt: state.attempt,
+      fence: state.fence,
+      grant: state.grant
+    }
+
+    {:reply, {:ok, state.inputs, invocation}, state}
   end
 
   defp run({:complete, %Outcome{status: :completed} = outcome}, state) do

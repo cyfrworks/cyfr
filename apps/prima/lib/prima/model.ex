@@ -41,6 +41,16 @@ defmodule Prima.Model do
   arguments}`, `tool_call.end {index}`, `usage {usage}`, `stop
   {stop_reason}`, `error {error}` — and still answers the whole response.
 
+  While `chat` runs, the catalyst may ask for the call's further messages
+  (`cyfr:model/inputs`, `c:Prima.HostAPI.input_next/1`): each an input
+  (`t:input/0`), a message that arrived after the call began, which the
+  catalyst writes into its harness's running session and reports sent
+  once the harness accepted it (`c:Prima.HostAPI.input_sent/2`). When the
+  harness's model reads it is the harness's business: a report promises
+  neither an answer nor that a tool under way stops. An input is held to
+  `check_input/1` before the catalyst is handed it, and the catalyst
+  writes only the block kinds its harness takes.
+
   A refusal is `{"status": N, "error": {"type", "message", "provider"?,
   "session"?}}` with `type` one of `invalid_request`, `secret_denied`,
   `authentication`, `rate_limited`, `overloaded`, `provider_error`,
@@ -69,6 +79,27 @@ defmodule Prima.Model do
   @chat "model/chat@1"
   @option_kinds ~w(enum string integer boolean)
   @option_members ~w(name kind values default)
+
+  @input_id ~r/\A[A-Za-z0-9_.:-]{1,128}\z/
+  # The most blocks one input carries: a bound of the input's own meaning
+  # (ARCHITECTURE.md §5.8), beside the line bound its bytes are held to.
+  @max_input_blocks 32
+  @media_types %{
+    "image" => ~w(image/jpeg image/png image/gif image/webp),
+    "document" => ~w(application/pdf)
+  }
+
+  @typedoc """
+  A further message of a running `chat` (`c:Prima.HostAPI.input_next/1`):
+  its `id`, which its supplier knows it by (`valid_input_id?/1`), and its
+  `content`, a user message's content: a non-empty string, or 1 to
+  `max_input_blocks/0` blocks, each `{"type": "text", "text"}` or an
+  attachment `{"type": "image" | "document", "media_type", "data"}` whose
+  data is base64 of a media type `input_media_types/0` names. A block
+  carries no other member, so nothing in it is a path or an address to
+  fetch, and the input's JSON is at most `max_input_bytes/0`.
+  """
+  @type input :: %{String.t() => String.t() | [map()]}
 
   @typedoc """
   One option `describe` declares, as the wire carries it: `"name"` (a
@@ -242,6 +273,117 @@ defmodule Prima.Model do
 
   def response_session(%{"session" => _other}), do: invalid("session")
   def response_session(%{}), do: {:ok, nil}
+
+  @doc "Whether `id` is an input's id: 1 to 128 characters of `[A-Za-z0-9_.:-]`."
+  @spec valid_input_id?(term()) :: boolean()
+  def valid_input_id?(id) when is_binary(id), do: Regex.match?(@input_id, id)
+  def valid_input_id?(_id), do: false
+
+  @doc """
+  The most bytes an input's JSON may be: one line to a program's session
+  (`Prima.LocusBackends.max_line_bytes/0`), which the catalyst writes it
+  into; the catalyst holds the line it writes to the same bound.
+  """
+  @spec max_input_bytes() :: pos_integer()
+  def max_input_bytes, do: Prima.LocusBackends.max_line_bytes()
+
+  @doc "The most blocks an input's content carries."
+  @spec max_input_blocks() :: pos_integer()
+  def max_input_blocks, do: @max_input_blocks
+
+  @doc "The media types an input's attachment may be, by block kind."
+  @spec input_media_types() :: %{String.t() => [String.t()]}
+  def input_media_types, do: @media_types
+
+  @doc """
+  Whether `input` holds to `t:input/0`, or the member that breaks it:
+  `id`, `content`, `content[i]` for a block, `content[i].<member>` for one
+  of its members (an unknown one by its own name), an unknown member of
+  the input by its name, and `content` for an input whose JSON, or whose
+  attachments' decoded bytes, are past `max_input_bytes/0`. What a member
+  holds is never named.
+  """
+  @spec check_input(term()) :: :ok | {:error, invalid()}
+  def check_input(%{} = input) when not is_struct(input) do
+    cond do
+      (unknown = Map.keys(input) -- ["id", "content"]) != [] ->
+        invalid(unknown |> Enum.map(&to_string/1) |> Enum.sort() |> hd())
+
+      not valid_input_id?(input["id"]) ->
+        invalid("id")
+
+      true ->
+        with :ok <- content(input["content"]), do: sized(input)
+    end
+  end
+
+  def check_input(_input), do: invalid("input")
+
+  defp content(text) when is_binary(text) and text != "", do: :ok
+
+  defp content([_ | _] = blocks) when length(blocks) <= @max_input_blocks do
+    blocks
+    |> Enum.with_index()
+    |> Enum.find_value(:ok, fn {block, index} ->
+      case block(block, "content[#{index}]") do
+        :ok -> nil
+        refused -> refused
+      end
+    end)
+  end
+
+  defp content(_other), do: invalid("content")
+
+  defp block(%{"type" => "text"} = block, at), do: members(block, at, %{"text" => &text?/1})
+
+  defp block(%{"type" => kind} = block, at) when is_map_key(@media_types, kind) do
+    members(block, at, %{
+      "media_type" => &(&1 in Map.fetch!(@media_types, kind)),
+      "data" => &base64?/1
+    })
+  end
+
+  defp block(%{"type" => _other}, at), do: invalid(at <> ".type")
+  defp block(_other, at), do: invalid(at)
+
+  # A block's members are exactly `type` and its kind's, each held to its
+  # check, in the order of their names.
+  defp members(block, at, checks) do
+    case Enum.sort(Map.keys(block) -- ["type" | Map.keys(checks)]) do
+      [unknown | _] ->
+        invalid("#{at}.#{unknown}")
+
+      [] ->
+        checks
+        |> Enum.sort()
+        |> Enum.find_value(:ok, fn {name, check?} ->
+          if Map.has_key?(block, name) and check?.(block[name]),
+            do: nil,
+            else: invalid("#{at}.#{name}")
+        end)
+    end
+  end
+
+  defp text?(text), do: is_binary(text) and text != ""
+
+  defp base64?(data) when is_binary(data) and data != "",
+    do: match?({:ok, _bytes}, Base.decode64(data))
+
+  defp base64?(_data), do: false
+
+  defp sized(%{"content" => content} = input) do
+    decoded =
+      if is_list(content),
+        do: Enum.reduce(content, 0, &(&2 + decoded_bytes(&1))),
+        else: 0
+
+    if byte_size(Jason.encode!(input)) <= max_input_bytes() and decoded <= max_input_bytes(),
+      do: :ok,
+      else: invalid("content")
+  end
+
+  defp decoded_bytes(%{"data" => data}), do: data |> Base.decode64!() |> byte_size()
+  defp decoded_bytes(_text), do: 0
 
   defp invalid(member), do: {:error, {:invalid, member}}
 

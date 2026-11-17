@@ -69,6 +69,21 @@ defmodule Prima.HostAPI do
   attaches to it while its program runs. Each attempt opens before it
   sends, reads or closes, and a session its attempt did not open is
   refused `:denied` (`t:pipe_refusal/0`).
+
+  ## A running invocation's inputs
+
+  `c:input_next/1` and `c:input_sent/2` carry further input to an
+  invocation while it runs: for a `model/chat@1` call, a message that
+  arrived after the call began (`Prima.Model`'s `t:Prima.Model.input/0`),
+  which the catalyst hands its harness itself. Whoever started the
+  invocation supplies it; with nobody supplying, `input_next` answers
+  none. `input_next` answers the next input not yet reported sent, the
+  same one again until it is, so a read is repeated freely; `input_sent`
+  reports that the catalyst handed that input on, and a report repeated
+  after a lost answer marks it once. Neither names its invocation: the
+  caller is the one the header names, at its attempt and fence, and an
+  invocation that is stopped, replaced or cancelled is `:lost`. What an
+  input carries is never logged.
   """
 
   @typedoc """
@@ -129,6 +144,8 @@ defmodule Prima.HostAPI do
     :pipe_send,
     :pipe_recv,
     :pipe_close,
+    :input_next,
+    :input_sent,
     :runner_exited
   ]
 
@@ -152,6 +169,8 @@ defmodule Prima.HostAPI do
     pipe_send: :never,
     pipe_recv: :idempotent,
     pipe_close: :idempotent,
+    input_next: :idempotent,
+    input_sent: :idempotent,
     runner_exited: :idempotent
   }
 
@@ -563,6 +582,30 @@ defmodule Prima.HostAPI do
   """
   @callback pipe_close(caller(), session :: String.t()) ::
               :ok | {:error, refusal() | pipe_refusal()}
+
+  @doc """
+  The next input of the caller's invocation not yet reported sent
+  (`t:Prima.Model.input/0`), or `nil` when there is none, nobody supplies
+  the invocation, or its supplier did not answer in time. Until it is
+  reported, every call answers the same input: a read moves nothing. An
+  input whose supplier answered something `Prima.Model.check_input/1`
+  refuses is the guest error `invalid_request` naming the member, never
+  its content. The invocation must be live: no cancel asked of it and its
+  execution running.
+  """
+  @callback input_next(caller()) ::
+              {:ok, Prima.Model.input() | nil} | {:error, refusal() | guest_error()}
+
+  @doc """
+  Report that the caller's guest handed the input `id`
+  (`Prima.Model.valid_input_id?/1`) on, once its harness accepted it. `:ok`
+  means the invocation's supplier recorded the report; with no supplier,
+  or one that did not answer, it is `:unavailable`, and a report repeated
+  after a lost answer marks the input once. The invocation must be live,
+  so a stopped, replaced or cancelled invocation marks nothing. An id
+  that is not an input id is `:lost`.
+  """
+  @callback input_sent(caller(), id :: String.t()) :: :ok | {:error, refusal()}
 
   @doc """
   Report that the runner `runner` of the reporting worker service exited,
