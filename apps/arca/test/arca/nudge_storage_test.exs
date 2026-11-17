@@ -417,6 +417,25 @@ defmodule Arca.NudgeStorageTest do
       assert {:ok, _} = nudge(actor, workspace, held)
     end
 
+    test "a page's call in a crew thread under it, and the turn it opens there, are no activity, as they are no work of the thread's",
+         %{actor: actor, daily: daily, held: held} do
+      workspace = at_rest!(actor, daily)
+      {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
+      :ok = aged!(actor)
+      assert {:ok, %{due?: true}} = TurnStorage.nudge_view(actor, workspace.id, @quiet)
+
+      {:ok, %{turn: page}} =
+        TurnStorage.accept_message(actor, child.id, %{
+          message: %{author: "system", sent_by: "system", kind: "page_call", content: "{}"},
+          turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      assert page.status == "accepted"
+      assert {:ok, %{workspace_state: "open"}} = Threads.get(actor, workspace.id)
+      assert {:ok, %{due?: true}} = TurnStorage.nudge_view(actor, workspace.id, @quiet)
+      assert {:ok, _} = nudge(actor, workspace, held)
+    end
+
     test "a step starting and a card decided are activity; a card waiting is the person's, not the thread's quiet",
          %{actor: actor, daily: daily, held: held} do
       workspace = at_rest!(actor, daily)

@@ -43,7 +43,8 @@ defmodule Aqua.Nudge do
   ## The reminder
 
   A workspace thread that reads needs you or error gets a post of the
-  server's on its person's daily thread, saying what needs their
+  server's on its person's daily thread, the one current as that post is
+  delivered (`Aqua.Day.current/1`), saying what needs their
   attention: once the quiet period after its wait began (`waits_since`:
   when it came to read so, or the person last acted on it while it still
   waited), then once on each new day of the person's while it still
@@ -116,7 +117,7 @@ defmodule Aqua.Nudge do
   def reminder_post(title, "error"),
     do:
       "Needs your attention: the workspace thread \"#{title}\" ran into an error " <>
-        "and has not been looked at since."
+        "and has not been acted on since."
 
   def reminder_post(title, _needs_you),
     do:
@@ -271,8 +272,10 @@ defmodule Aqua.Nudge do
     end)
   end
 
-  # Each wait due, one post each on the daily thread current now, unless
-  # that thread holds the wait's post already.
+  # Each wait due, one post each on the daily thread current as it is
+  # delivered, as a schedule's fire finds it (`Aqua.Day.current/1`): a
+  # date that turns between two posts takes the later one to the new
+  # day's thread. A wait whose thread holds its post already is passed.
   defp reminders(actor, views, claim, slot, counts) do
     waits =
       for %{state: state, waits_since: %DateTime{} = since, archived?: false} = view <- views,
@@ -281,23 +284,22 @@ defmodule Aqua.Nudge do
           do: %{view | waits_since: since}
 
     with [_ | _] <- waits,
-         {:ok, ctx} <- person(actor),
-         {:ok, daily} <- Aqua.Day.current(ctx) do
+         {:ok, ctx} <- person(actor) do
       Enum.reduce_while(waits, {:ok, counts, claim}, fn view, {:ok, counts, claim} ->
         wait = %{workspace_id: view.id, waits_since: view.waits_since}
         client_id = client_id(wait)
 
-        case Tape.accepted(ctx, daily.id, client_id) do
-          {:error, :not_found} ->
-            case renewed(claim) do
-              {:ok, fresh} ->
-                outcome = posted(ctx, daily.id, view, client_id, fresh, slot)
-                {:cont, {:ok, count(counts, "reminded:" <> outcome), fresh}}
+        with {:ok, daily} <- Aqua.Day.current(ctx),
+             {:error, :not_found} <- Tape.accepted(ctx, daily.id, client_id) do
+          case renewed(claim) do
+            {:ok, fresh} ->
+              outcome = posted(ctx, daily.id, view, client_id, fresh, slot)
+              {:cont, {:ok, count(counts, "reminded:" <> outcome), fresh}}
 
-              {:lost, reason} ->
-                {:halt, {:stopped, reason, claim}}
-            end
-
+            {:lost, reason} ->
+              {:halt, {:stopped, reason, claim}}
+          end
+        else
           # Posted already on this day, whatever its words were then.
           {:ok, _accepted} ->
             {:cont, {:ok, counts, claim}}

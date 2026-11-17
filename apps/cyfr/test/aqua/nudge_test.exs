@@ -605,6 +605,35 @@ defmodule Aqua.NudgeTest do
     assert Enum.sort(ids(all_posts(ctx))) == Enum.sort([post.id, again.id])
   end
 
+  test "a date that turns between two posts of one tick takes the later post to the new date's " <>
+         "daily thread, and leaves the earlier on its own",
+       %{ctx: ctx} do
+    script!([reply("One waits on you."), reply("The other too.")])
+    waits = [waiting!(ctx, "First wait"), waiting!(ctx, "Second wait")]
+    :ok = Aqua.Day.put_zone(ctx.user_id, @west)
+    {:ok, west} = Aqua.Day.current(ctx)
+
+    # The tick's first post waits at the earlier date's runner while the
+    # person's zone moves to a later date.
+    holder = suspended!(ctx, west)
+    ticking = Task.async(fn -> tick(ctx) end)
+    first_id = await_send!(holder)
+    [second] = Enum.reject(waits, &(&1.id == first_id))
+
+    :ok = Aqua.Day.put_zone(ctx.user_id, @east)
+    {:ok, east} = Aqua.Day.current(ctx)
+    refute west.id == east.id
+    :sys.resume(holder)
+    assert Task.await(ticking, 30_000) == %{"reminded:opened" => 2}
+
+    for turn_id <- all_posts(ctx) |> Enum.map(& &1.turn_id) |> Enum.uniq(),
+        do: await_status(ctx, turn_id, "completed")
+
+    assert [%{workspace_id: ^first_id}] = posts(ctx, west.id)
+    assert [%{workspace_id: second_id}] = posts(ctx, east.id)
+    assert second_id == second.id
+  end
+
   test "a post whose workspace thread's title names a crew member opens Aqua's turn " <>
          "and asks that member nothing",
        %{ctx: ctx} do

@@ -1111,12 +1111,7 @@ defmodule Arca.TurnStorage do
   # as though it were not there.
   # arca:db-raise-ok inside the caller's transaction
   defp work!(athanor_id, %Thread{} = room, except \\ nil) do
-    threads =
-      from(c in Thread,
-        where: c.athanor_id == ^athanor_id,
-        where: c.id == ^room.id or (c.kind == "crew" and c.parent_id == ^room.id),
-        select: c.id
-      )
+    threads = room_threads(athanor_id, room.id)
 
     card_waits =
       from(a in Approval,
@@ -1124,20 +1119,11 @@ defmodule Arca.TurnStorage do
         where: a.status == "pending"
       )
 
-    pages =
-      from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.thread_id in subquery(threads),
-        where: m.kind == "page_call",
-        select: m.id
-      )
-
     turns_run =
-      from(t in Turn,
-        where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
+      from(t in room_turns(athanor_id, threads),
         where:
           t.status in ^@open and
             t.id not in ^Enum.reject([except | reported_turns(athanor_id, room.id)], &is_nil/1),
-        where: is_nil(t.message_id) or t.message_id not in subquery(pages),
         where:
           t.id not in subquery(
             from(a in card_waits, where: not is_nil(a.turn_id), select: a.turn_id)
@@ -1156,6 +1142,34 @@ defmodule Arca.TurnStorage do
       card_waits: Arca.Repo.exists?(card_waits),
       work_remains: Arca.Repo.exists?(turns_run) or Arca.Repo.exists?(asked)
     }
+  end
+
+  # The threads of a room, a daily or a workspace thread, and the crew
+  # threads under it: the scope of its work (`work!/3`) and of a workspace
+  # thread's quiet (`quiet?/3`).
+  defp room_threads(athanor_id, room_id) do
+    from(c in Thread,
+      where: c.athanor_id == ^athanor_id,
+      where: c.id == ^room_id or (c.kind == "crew" and c.parent_id == ^room_id),
+      select: c.id
+    )
+  end
+
+  # The turns of a room's `threads` that no page's call in any of them
+  # opened (`page_call`): such a turn asks no model, and is neither work
+  # of the room's (`work!/3`) nor activity there (`quiet?/3`).
+  defp room_turns(athanor_id, threads) do
+    pages =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id in subquery(threads),
+        where: m.kind == "page_call",
+        select: m.id
+      )
+
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
+      where: is_nil(t.message_id) or t.message_id not in subquery(pages)
+    )
   end
 
   # The workspace thread's state as the rule now has it, written when it
@@ -1723,33 +1737,16 @@ defmodule Arca.TurnStorage do
   # under it for `seconds`, by the database's clock: no post, no step
   # starting or ending, no card made or decided and no turn accepted or
   # ended there since. A nudge, a page's call and its result, a page's
-  # steps and a turn a page's call opened are no activity of the thread's
-  # (`page_call?/2`), and neither is what is read, a read mark, the
-  # timer's own reads, a delivery's receipt or output streamed and not
-  # recorded, none of which is a row here.
+  # steps and a turn a page's call opened in any of them are no activity
+  # of the thread's, as they are no work of it (`room_turns/2`), and
+  # neither is what is read, a read mark, the timer's own reads, a
+  # delivery's receipt or output streamed and not recorded, none of which
+  # is a row here.
   # arca:db-raise-ok inside the caller's transaction
   defp quiet?(athanor_id, workspace_id, seconds) when is_integer(seconds) and seconds > 0 do
     since = DateTime.add(Arca.ServerMetaStorage.now!(), -seconds, :second)
-
-    threads =
-      from(c in Thread,
-        where: c.athanor_id == ^athanor_id,
-        where: c.id == ^workspace_id or (c.kind == "crew" and c.parent_id == ^workspace_id),
-        select: c.id
-      )
-
-    pages =
-      from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace_id,
-        where: m.kind == "page_call",
-        select: m.id
-      )
-
-    turns =
-      from(t in Turn,
-        where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
-        where: is_nil(t.message_id) or t.message_id not in subquery(pages)
-      )
+    threads = room_threads(athanor_id, workspace_id)
+    turns = room_turns(athanor_id, threads)
 
     not Enum.any?(
       [
