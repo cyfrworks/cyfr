@@ -28,8 +28,9 @@ defmodule Aqua.Nudge do
   (`Sanctum.Tenancy.continuation/3`); while an opening waits for its turn
   the opening is the work and no nudge opens a turn. Anything else open
   there (a page's call's turn, a turn paused on a card or an uncertain
-  call, a queued one) leaves it to the next tick. No second nudge comes
-  while one is unanswered: until a model round of its turn has carried it
+  call, a queued one) leaves it to the next tick. An archived thread is
+  neither nudged nor reminded, and no line of this process's takes one
+  out of the archive. No second nudge comes while one is unanswered: until a model round of its turn has carried it
   and closed, or its turn ended. A nudge's turn is the thread's work as
   any turn is; one that ends with no report leaves the thread working,
   and the next quiet period runs from its end.
@@ -225,20 +226,28 @@ defmodule Aqua.Nudge do
     views
     |> Enum.filter(&(&1.due? and is_map(&1.work)))
     |> Enum.reduce_while({:ok, %{}, claim}, fn view, {:ok, counts, claim} ->
-      with {:ok, claim} <- renewed(claim),
-           {:ok, ctx} <- bound(actor, view.work) do
-        outcome = landed(Aqua.Runner.nudge(ctx, view.id, nudge_attrs(view.work, claim, slot)))
-        {:cont, {:ok, count(counts, outcome), claim}}
-      else
-        {:lost, reason} -> {:halt, {:stopped, reason, claim}}
-        {:error, _unbound} -> {:cont, {:ok, count(counts, "refused"), claim}}
+      case renewed(claim) do
+        {:ok, fresh} ->
+          outcome =
+            case bound(actor, view.work) do
+              {:ok, ctx} ->
+                landed(Aqua.Runner.nudge(ctx, view.id, nudge_attrs(view.work, fresh, slot)))
+
+              {:error, _unbound} ->
+                "refused"
+            end
+
+          {:cont, {:ok, count(counts, outcome), fresh}}
+
+        {:lost, reason} ->
+          {:halt, {:stopped, reason, claim}}
       end
     end)
   end
 
   defp reminders(actor, views, claim, slot, counts) do
     waits =
-      for %{state: state, waits_since: %DateTime{} = since} = view <- views,
+      for %{state: state, waits_since: %DateTime{} = since, archived?: false} = view <- views,
           state in ["needs_you", "error"],
           TurnStorage.waited?(since, @quiet_seconds) == true,
           do: %{
@@ -248,14 +257,19 @@ defmodule Aqua.Nudge do
           }
 
     with [_ | _] <- waits,
-         {:ok, claim} <- renewed(claim),
          {:ok, ctx} <- person(actor),
          {:ok, [_ | _] = due} <- TurnStorage.unreminded(actor, Aqua.Day.today(ctx), waits),
          {:ok, daily} <- Aqua.Day.current(ctx) do
-      outcome = landed(Aqua.Runner.remind(ctx, daily.id, %{waits: due, claim: claim, slot: slot}))
-      {:ok, count(counts, "reminded:" <> outcome), claim}
+      case renewed(claim) do
+        {:ok, fresh} ->
+          attrs = %{waits: due, claim: fresh, slot: slot}
+          outcome = landed(Aqua.Runner.remind(ctx, daily.id, attrs))
+          {:ok, count(counts, "reminded:" <> outcome), fresh}
+
+        {:lost, reason} ->
+          {:stopped, reason, claim}
+      end
     else
-      {:lost, reason} -> {:stopped, reason, claim}
       _nothing_due_or_refused -> {:ok, counts, claim}
     end
   end

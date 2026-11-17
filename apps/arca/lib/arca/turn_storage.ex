@@ -1638,7 +1638,8 @@ defmodule Arca.TurnStorage do
   every named workspace thread are taken together in the one order
   (`Arca.ThreadStorage.lock_threads!/2`), and each wait must stand under
   its own thread's lock: the thread reads `needs_you` or `error` with that
-  `waits_since`, and no reminder of that wait is on this daily thread
+  `waits_since` and is not archived, and no reminder of that wait is on
+  this daily thread, which is not archived either,
   yet, so a wait is reminded at most once a day, the day being the daily
   thread's. A wait that ended or moved, or that this day already reminded
   of, refuses the whole reminder `{:error, :wait_moved}` or `{:error,
@@ -1669,13 +1670,14 @@ defmodule Arca.TurnStorage do
     daily =
       case by_id(locked, daily_id) do
         %Thread{kind: "daily", archived_at: nil} = daily -> daily
+        %Thread{kind: "daily"} -> Arca.Repo.rollback(:thread_archived)
         %Thread{} -> Arca.Repo.rollback(:not_a_daily_thread)
         nil -> Arca.Repo.rollback(:thread_not_found)
       end
 
     Enum.each(waits, fn wait ->
       case by_id(locked, wait.workspace_id) do
-        %Thread{kind: "workspace", workspace_state: state, waits_since: since}
+        %Thread{kind: "workspace", workspace_state: state, waits_since: since, archived_at: nil}
         when state in @waiting ->
           if since == nil or DateTime.compare(since, wait.waits_since) != :eq,
             do: Arca.Repo.rollback(:wait_moved)
@@ -1733,8 +1735,9 @@ defmodule Arca.TurnStorage do
   @doc """
   Whether a turn a server's line opened still has its line to answer when
   it starts (`Aqua.Loop`): a workspace thread's nudge while the thread,
-  read without this turn, still reads `open`; a reminder while one wait
-  it names still stands. Any other turn has: answers true.
+  read without this turn, still reads `open` and is not archived; a
+  reminder while its daily thread is not archived and one wait it names
+  still stands outside the archive. Any other turn has: answers true.
   """
   @spec line_stands?(Prima.Actor.t(), map()) :: boolean()
   def line_stands?(%Prima.Actor{athanor_id: athanor_id}, %{id: turn_id, message_id: id})
@@ -1743,23 +1746,27 @@ defmodule Arca.TurnStorage do
       case Arca.Repo.get_by(Message, athanor_id: athanor_id, id: id) do
         %Message{kind: "nudge", workspace_id: nil, thread_id: thread_id} ->
           case thread!(athanor_id, thread_id) do
-            %Thread{kind: "workspace"} = workspace ->
+            %Thread{kind: "workspace", archived_at: nil} = workspace ->
               work_state!(athanor_id, workspace, turn_id) == "open"
+
+            %Thread{kind: "workspace"} ->
+              false
 
             %Thread{} ->
               true
           end
 
-        %Message{kind: "nudge"} ->
-          from(m in Message,
-            where: m.athanor_id == ^athanor_id and m.turn_id == ^turn_id and m.kind == "nudge",
-            join: c in Thread,
-            on: c.id == m.workspace_id and c.athanor_id == m.athanor_id,
-            where: c.workspace_state in ^@waiting,
-            select: {m.payload, c.waits_since}
-          )
-          |> Arca.Repo.all()
-          |> Enum.any?(fn {payload, since} -> wait_of(payload) == since end)
+        %Message{kind: "nudge", thread_id: daily_id} ->
+          daily_stands?(athanor_id, daily_id) and
+            from(m in Message,
+              where: m.athanor_id == ^athanor_id and m.turn_id == ^turn_id and m.kind == "nudge",
+              join: c in Thread,
+              on: c.id == m.workspace_id and c.athanor_id == m.athanor_id,
+              where: c.workspace_state in ^@waiting and is_nil(c.archived_at),
+              select: {m.payload, c.waits_since}
+            )
+            |> Arca.Repo.all()
+            |> Enum.any?(fn {payload, since} -> wait_of(payload) == since end)
 
         _other ->
           true
@@ -1773,11 +1780,17 @@ defmodule Arca.TurnStorage do
 
   def line_stands?(%Prima.Actor{}, _turn), do: true
 
+  # A reminder's daily thread still stands outside the archive.
+  # arca:db-raise-ok inside the caller's rescue
+  defp daily_stands?(athanor_id, daily_id),
+    do: match?(%Thread{archived_at: nil}, thread!(athanor_id, daily_id))
+
   @doc """
   A page of the cell's workspace threads a quiet period or a wait can
   make due, after `cursor` (`{athanor_id, id}`, or nil for the first),
   `limit` at most, in athanor and id order: the ones that read `open`,
-  `needs_you` or `error`. Each is `%{athanor_id, id}`.
+  `needs_you` or `error` and are not archived. Each is `%{athanor_id,
+  id}`.
   """
   @spec nudge_candidates({String.t(), String.t()} | nil, pos_integer()) ::
           {:ok, [map()]} | {:error, :database_error}
@@ -1787,7 +1800,7 @@ defmodule Arca.TurnStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.nudge_candidates", fn ->
       query =
         from(c in Thread,
-          where: c.workspace_state in ["open", "needs_you", "error"],
+          where: c.workspace_state in ["open", "needs_you", "error"] and is_nil(c.archived_at),
           order_by: [asc: c.athanor_id, asc: c.id],
           limit: ^limit,
           select: %{athanor_id: c.athanor_id, id: c.id}
@@ -1810,7 +1823,8 @@ defmodule Arca.TurnStorage do
 
   @doc """
   What the nudging job reads of one workspace thread: its `state`, its
-  `title`, its wait (`waits_since`), whether it is quiet for `seconds`
+  `title`, its wait (`waits_since`), whether it is archived (`archived?`,
+  which is neither nudged nor reminded), whether it is quiet for `seconds`
   and has no nudge unanswered (`due?`, for a thread that reads `open`),
   and the current work a nudge's turn is bound to (`work`): an opening
   still waiting for its turn is the work, and no nudge opens a turn
@@ -1827,7 +1841,8 @@ defmodule Arca.TurnStorage do
       case Arca.Repo.get_by(Thread, athanor_id: athanor_id, id: workspace_id, kind: "workspace") do
         %Thread{} = thread ->
           due? =
-            thread.workspace_state == "open" and not unanswered_nudge?(athanor_id, thread.id) and
+            is_nil(thread.archived_at) and thread.workspace_state == "open" and
+              not unanswered_nudge?(athanor_id, thread.id) and
               quiet?(athanor_id, thread.id, seconds)
 
           {:ok,
@@ -1836,6 +1851,7 @@ defmodule Arca.TurnStorage do
              title: thread.title,
              state: thread.workspace_state,
              waits_since: thread.waits_since,
+             archived?: not is_nil(thread.archived_at),
              due?: due?,
              work: if(due?, do: current_work(athanor_id, thread.id))
            }}

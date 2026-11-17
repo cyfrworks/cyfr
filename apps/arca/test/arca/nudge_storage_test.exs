@@ -673,6 +673,56 @@ defmodule Arca.NudgeStorageTest do
     end
   end
 
+  # ---- the archive ---------------------------------------------------------
+
+  describe "an archived thread" do
+    defp archive!(id) do
+      from(c in Thread, where: c.id == ^id)
+      |> Arca.Repo.update_all(set: [archived_at: DateTime.utc_now()])
+    end
+
+    test "is neither a candidate nor nudged, and a nudge's turn that starts late does not stand",
+         %{actor: actor, daily: daily, held: held} do
+      archived = at_rest!(actor, daily)
+      kept = at_rest!(actor, daily)
+      :ok = aged!(actor)
+      {:ok, %{turn: turn}} = nudge(actor, kept, held)
+
+      archive!(archived.id)
+      archive!(kept.id)
+
+      assert {:error, :thread_archived} = nudge(actor, archived, held)
+      assert nudges(actor, archived.id) == []
+      refute TurnStorage.line_stands?(actor, turn)
+
+      {:ok, rows} = TurnStorage.nudge_candidates({actor.athanor_id, ""}, 100)
+      refute Enum.any?(rows, &(&1.id in [archived.id, kept.id]))
+
+      assert {:ok, %{archived?: true, due?: false}} =
+               TurnStorage.nudge_view(actor, archived.id, @quiet)
+
+      assert thread(actor, archived.id).archived_at
+    end
+
+    test "is not reminded of, and an archived daily thread takes no reminder",
+         %{actor: actor, daily: daily, held: held} do
+      {waiting, _, _} = waiting!(actor, daily)
+      {:ok, today} = Arca.Test.Days.thread(actor)
+      {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
+
+      archive!(waiting.id)
+      {:ok, tomorrow} = Arca.Test.Days.thread(actor)
+      assert {:error, :wait_moved} = remind(actor, tomorrow, [waiting], held)
+      refute TurnStorage.line_stands?(actor, reminding)
+
+      {other, _, _} = waiting!(actor, daily)
+      {:ok, archived_day} = Arca.Test.Days.thread(actor)
+      archive!(archived_day.id)
+      assert {:error, :thread_archived} = remind(actor, archived_day, [other], held)
+      assert Enum.filter(Threads.messages(actor, archived_day.id), &(&1.kind == "nudge")) == []
+    end
+  end
+
   # ---- the reads -----------------------------------------------------------
 
   test "the candidates are the cell's working and waiting workspace threads, a page at a time",
