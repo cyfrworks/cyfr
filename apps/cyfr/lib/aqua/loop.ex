@@ -515,8 +515,9 @@ defmodule Aqua.Loop do
                recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
              }),
            # A server's line that no longer stands as its turn first starts
-           # asks no model: the turn ends with nothing run.
-           stands? = Tape.settle_lines(ctx, started),
+           # asks no model: the turn ends with nothing run. A store that
+           # cannot say ends it as any store failure after the claim does.
+           {:ok, stands?} <- Tape.line_stands(ctx, started),
            {:ok, spec} <-
              Turn.build(ctx, started,
                authority: claim.authority,

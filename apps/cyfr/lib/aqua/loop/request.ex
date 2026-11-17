@@ -571,9 +571,6 @@ defmodule Aqua.Loop.Request do
   defp shape(%{kind: "opening"} = row, acc, opts), do: said(opening_text(row, opts), row, acc)
   defp shape(%{kind: "pointer"} = row, acc, _opts), do: said(pointer_text(row), row, acc)
   defp shape(%{kind: "report"} = row, acc, _opts), do: said(report_text(row), row, acc)
-  # A reminder's row whose wait no longer stood as its turn started
-  # (`Arca.TurnStorage.settle_lines/2`) is not said.
-  defp shape(%{kind: "nudge", status: "expired"}, acc, _opts), do: acc
   defp shape(%{kind: "nudge"} = row, acc, _opts), do: said(nudge_text(row), row, acc)
 
   defp shape(%{kind: "text"} = row, acc, opts) do

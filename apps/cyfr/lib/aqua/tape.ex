@@ -210,13 +210,12 @@ defmodule Aqua.Tape do
 
   @doc """
   As a turn a server's line opened first starts, whether its line still
-  stands to be answered, a reminder's rows of waits that no longer stand
-  left out of every request (`Arca.TurnStorage.settle_lines/2`); any
-  other turn's line stands.
+  stands to be answered (`Arca.TurnStorage.line_stands/2`); any other
+  turn's line stands. A store that cannot answer is `{:error, _}`.
   """
-  @spec settle_lines(Context.t(), turn()) :: boolean()
-  def settle_lines(%Context{} = ctx, turn),
-    do: TurnStorage.settle_lines(Sanctum.Context.actor(ctx), turn)
+  @spec line_stands(Context.t(), turn()) :: {:ok, boolean()} | {:error, term()}
+  def line_stands(%Context{} = ctx, turn),
+    do: TurnStorage.line_stands(Sanctum.Context.actor(ctx), turn)
 
   @doc """
   The acceptance a `client_id` already produced in this thread:

@@ -41,8 +41,8 @@ defmodule Arca.Schemas.Message do
   `waits_since`. It is no post: it counts as nothing unread and reopens
   nothing. A workspace thread's nudge is answered once a model step of
   its turn carried it, and that step's id is its `resolved_by`; a
-  reminder's row whose wait no longer stood when its turn started is
-  `expired`, and no request carries it.
+  reminder of a wait that no longer stands is read by no turn
+  (`Arca.TurnStorage.projection/2`).
   """
 
   use Ecto.Schema

@@ -387,4 +387,109 @@ defmodule Aqua.NudgeTest do
     assert List.last(sent()) =~ "CURRENT_WAIT"
     refute List.last(sent()) =~ "ARCHIVED_WAIT"
   end
+
+  # SQLite's temporary trigger is the connection's own; on PostgreSQL a
+  # refused write ends the sandbox's transaction, and with it the run.
+  @tag :sqlite
+  @tag :capture_log
+  test "a reminder's turn writes nothing as it starts, so a write the store refuses passes no archived wait",
+       %{ctx: ctx, daily: daily} do
+    script!([reply("On it one."), reply("On it two."), reply("These need you.")])
+    [one, two] = errored!(ctx, daily, 2)
+    turn = reminded!(ctx, [{one, "ARCHIVED_WAIT"}, {two, "CURRENT_WAIT"}])
+    archive!([one])
+
+    Arca.Repo.query!(
+      "CREATE TEMP TRIGGER nudge_test_refused BEFORE UPDATE OF status ON messages " <>
+        "WHEN NEW.kind = 'nudge' BEGIN SELECT RAISE(ABORT, 'the store refuses the write'); END",
+      []
+    )
+
+    {:ok, _} = Aqua.Runner.ensure(turn.thread_id, ctx.athanor_id)
+    await_status(ctx, turn.id, "completed")
+    refute Enum.any?(Enum.drop(sent(), 2), &String.contains?(&1, "ARCHIVED_WAIT"))
+    assert List.last(sent()) =~ "CURRENT_WAIT"
+  end
+
+  test "a reminder none of whose waits stands as its turn starts completes with no model call",
+       %{ctx: ctx, daily: daily} do
+    script!([reply("On it one."), reply("On it two."), reply("These need you.")])
+    waits = errored!(ctx, daily, 2)
+    turn = reminded!(ctx, Enum.map(waits, &{&1, "GONE_WAIT"}))
+    archive!(waits)
+
+    {:ok, _} = Aqua.Runner.ensure(turn.thread_id, ctx.athanor_id)
+    await_status(ctx, turn.id, "completed")
+    assert length(sent()) == 2
+  end
+
+  test "the running turn a nudge joined never reads an opening still waiting for its own turn",
+       %{ctx: ctx, daily: daily} do
+    script!([{:probe, self()}, reply("Still waiting."), reply("Checked.")])
+    {workspace, active} = open!(ctx, daily)
+    assert_receive {:scripted_probe, player, _}, 60_000
+    on_exit(fn -> send(player, :continue) end)
+    assert {:ok, _} = further!(ctx, daily, workspace)
+    :ok = aged!(ctx)
+
+    assert %{"joined" => 1} = tick(ctx)
+    send(player, :continue)
+    await_status(ctx, active, "completed")
+
+    [first, second] = Enum.take(sent(), 2)
+    assert second =~ Nudge.nudge_line()
+    refute first =~ "only read the thread"
+    refute second =~ "only read the thread"
+  end
+
+  # `count` workspace threads whose turns ended, each then reading error
+  # with a wait begun past the quiet period.
+  defp errored!(ctx, daily, count) do
+    threads =
+      for _ <- 1..count do
+        {thread, turn} = open!(ctx, daily)
+        await_status(ctx, turn, "completed")
+        thread
+      end
+
+    ids = Enum.map(threads, & &1.id)
+
+    from(t in Thread, where: t.id in ^ids)
+    |> Arca.Repo.update_all(
+      set: [workspace_state: "error", workspace_outcome: "error", waits_since: past()]
+    )
+
+    Enum.map(threads, &elem(Threads.get(actor(ctx), &1.id), 1))
+  end
+
+  # The reminder of `waits` (`[{thread, word}]`) accepted on today's daily
+  # thread and left for its runner to start.
+  defp reminded!(ctx, waits) do
+    {:ok, today} = Aqua.Day.current(ctx)
+    {:ok, claim} = Arca.JobClaims.claim("aqua_nudge", ctx.athanor_id, Prima.Boot.id(), 60_000)
+    {:ok, slot} = Arca.ControlPlane.member_slot()
+
+    {:ok, %{turn: turn}} =
+      Tape.remind(%{ctx | origin: :schedule}, today.id, %{
+        claim: claim,
+        slot: slot,
+        waits:
+          for {thread, word} <- waits do
+            %{
+              workspace_id: thread.id,
+              waits_since: thread.waits_since,
+              content: "#{word} needs you."
+            }
+          end
+      })
+
+    turn
+  end
+
+  defp archive!(threads) do
+    ids = Enum.map(threads, & &1.id)
+
+    from(t in Thread, where: t.id in ^ids)
+    |> Arca.Repo.update_all(set: [archived_at: DateTime.utc_now()])
+  end
 end

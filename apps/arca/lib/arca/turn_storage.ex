@@ -1657,8 +1657,8 @@ defmodule Arca.TurnStorage do
   person (`Aqua.Nudge`): one `nudge` row per wait on `daily_id`, sent by
   `system` in the server's voice and naming its workspace thread
   (`workspace_id`, by which it goes when that thread is deleted) and the
-  wait (`waits_since`), the first opening a turn of Aqua's under `:turn`
-  and the rest attached to it, in one transaction. The daily thread and
+  wait (`waits_since`), all of them the lines of one turn of Aqua's it
+  opens under `:turn`, in one transaction. The daily thread and
   every named workspace thread are taken together in the one order
   (`Arca.ThreadStorage.lock_threads!/2`), and each wait must stand under
   its own thread's lock: the thread reads `needs_you` or `error` with that
@@ -1669,8 +1669,7 @@ defmodule Arca.TurnStorage do
   of, refuses the whole reminder `{:error, :wait_moved}` or `{:error,
   :reminded}` with nothing written. `attrs`: `:waits` (`[%{workspace_id,
   waits_since, content}]`, at least one), `:turn`, `:claim` and `:slot`
-  as `nudge/3` takes them. Answers `{:ok, %{message: row, rows: [row], turn:
-  row}}`.
+  as `nudge/3` takes them. Answers `{:ok, %{rows: [row], turn: row}}`.
   """
   @spec remind(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def remind(%Prima.Actor{athanor_id: athanor_id} = actor, daily_id, %{waits: [_ | _]} = attrs)
@@ -1713,26 +1712,32 @@ defmodule Arca.TurnStorage do
       if reminded?(athanor_id, daily_id, wait), do: Arca.Repo.rollback(:reminded)
     end)
 
-    [first | rest] =
+    written =
       Enum.map(waits, fn wait ->
-        fn turn_id ->
-          Arca.ThreadStorage.insert_message!(actor, daily, %{
-            author: Message.system_author(),
-            sent_by: Message.system_author(),
-            kind: "nudge",
-            content: wait.content,
-            workspace_id: wait.workspace_id,
-            payload: %{"waits_since" => DateTime.to_iso8601(wait.waits_since)},
-            turn_id: turn_id
-          })
-        end
+        Arca.ThreadStorage.insert_message!(actor, daily, %{
+          author: Message.system_author(),
+          sent_by: Message.system_author(),
+          kind: "nudge",
+          content: wait.content,
+          workspace_id: wait.workspace_id,
+          payload: %{"waits_since" => DateTime.to_iso8601(wait.waits_since)}
+        })
       end)
 
-    message = first.(nil)
-    turn = open_turn!(athanor_id, daily, message, Map.fetch!(attrs, :turn), nil)
-    rows = [%{message | turn_id: turn.id} | Enum.map(rest, & &1.(turn.id))]
+    # The turn opens on the newest row and the rest are attached to it, so
+    # the boundary it starts with (`boundary/2`) holds every line: none is
+    # a steer, which would hold a turn that asks no model open to answer
+    # it (`finish/4`).
+    turn = open_turn!(athanor_id, daily, List.last(written), Map.fetch!(attrs, :turn), nil)
+
+    {_, _} =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.id in ^Enum.map(written, & &1.id)
+      )
+      |> Arca.Repo.update_all(set: [turn_id: turn.id])
+
     claimed!(attrs)
-    %{message: hd(rows), rows: rows, turn: turn}
+    %{rows: Enum.map(written, &%{&1 | turn_id: turn.id}), turn: turn}
   end
 
   # Whether this daily thread already reminds of the wait.
@@ -1758,79 +1763,88 @@ defmodule Arca.TurnStorage do
 
   @doc """
   As a turn a server's line opened first starts (`Aqua.Loop`), whether
-  its line still stands to be answered, its rows settled to what stands:
-  a workspace thread's nudge while the thread, read without this turn,
+  its line still stands to be answered, read and never written: a
+  workspace thread's nudge while the thread, read without this turn,
   still reads `open` and is not archived; a reminder while its daily
-  thread is not archived and a wait it names still stands, each row of a
-  wait that no longer does (its thread archived, deleted, no longer
-  waiting, or waiting since another stamp) marked `expired`, which no
-  request carries (`Aqua.Loop.Request`). The server's lines are the only
-  rows a turn is opened on sent by `system`; any other turn's line
-  stands: answers true.
+  thread is not archived and a wait it names still stands
+  (`standing_reminders/2`). The server's lines are the only rows a turn
+  is opened on sent by `system`; any other turn's line stands. Answers
+  `{:ok, boolean}`, or `{:error, :database_error}` when the store cannot
+  answer, on which the turn asks no model.
   """
-  @spec settle_lines(Prima.Actor.t(), map()) :: boolean()
-  def settle_lines(%Prima.Actor{athanor_id: athanor_id}, %{
+  @spec line_stands(Prima.Actor.t(), map()) :: {:ok, boolean()} | {:error, term()}
+  def line_stands(%Prima.Actor{athanor_id: athanor_id}, %{
         id: turn_id,
         sent_by: "system",
         thread_id: thread_id
       })
       when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.settle_lines", fn ->
-      case thread!(athanor_id, thread_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.line_stands", fn ->
+      case Arca.Repo.get_by(Thread, athanor_id: athanor_id, id: thread_id) do
         %Thread{kind: "workspace", archived_at: nil} = workspace ->
-          work_state!(athanor_id, workspace, turn_id) == "open"
+          {:ok, work_state!(athanor_id, workspace, turn_id) == "open"}
 
         %Thread{kind: "daily", archived_at: nil} ->
-          reminder_stands!(athanor_id, turn_id)
+          lines =
+            from(m in Message,
+              where: m.athanor_id == ^athanor_id and m.turn_id == ^turn_id and m.kind == "nudge"
+            )
+            |> Arca.Repo.all()
+
+          {:ok, standing_reminders(athanor_id, lines) != []}
 
         %Thread{kind: kind} when kind in ["workspace", "daily"] ->
-          false
+          {:ok, false}
 
         %Thread{} ->
-          true
+          {:ok, true}
+
+        nil ->
+          {:ok, false}
       end
     end)
-    |> case do
-      {:error, _} -> true
-      stands -> stands
-    end
   end
 
-  def settle_lines(%Prima.Actor{}, _turn), do: true
+  def line_stands(%Prima.Actor{athanor_id: athanor_id}, %{})
+      when is_binary(athanor_id) and athanor_id != "",
+      do: {:ok, true}
 
-  # A reminder's rows whose wait no longer stands are marked `expired`;
-  # answers whether one still stands. A row of a deleted thread went with
-  # it.
+  def line_stands(%Prima.Actor{}, _turn), do: {:error, :no_athanor}
+
+  # Of `rows`, every one but a daily thread's reminder of a wait that no
+  # longer stands: its workspace thread archived, deleted, no longer
+  # waiting, or waiting since another stamp. A wait gone never stands
+  # again under its stamp, since `waits_since` only moves later, so each
+  # read leaves out what an earlier one did and Aqua is never told of a
+  # wait that ended, whenever its turn starts or resumes.
   # arca:db-raise-ok inside the caller's rescue
-  defp reminder_stands!(athanor_id, turn_id) do
-    {standing, fallen} =
-      from(m in Message,
-        left_join: c in Thread,
-        on: c.id == m.workspace_id and c.athanor_id == m.athanor_id,
-        where: m.athanor_id == ^athanor_id and m.turn_id == ^turn_id and m.kind == "nudge",
-        select: {m.id, m.payload, c.workspace_state, c.waits_since, c.archived_at}
-      )
-      |> Arca.Repo.all()
-      |> Enum.split_with(fn {_id, payload, state, since, archived_at} ->
-        state in @waiting and is_nil(archived_at) and same_wait?(wait_of(payload), since)
-      end)
+  defp standing_reminders(athanor_id, rows) do
+    named = for %{kind: "nudge", workspace_id: id} when is_binary(id) <- rows, uniq: true, do: id
 
-    case for {id, _, _, _, _} <- fallen, do: id do
-      [] ->
-        :ok
+    waits =
+      if named == [] do
+        %{}
+      else
+        from(c in Thread,
+          where: c.athanor_id == ^athanor_id and c.id in ^named,
+          where: c.workspace_state in ^@waiting and is_nil(c.archived_at),
+          select: {c.id, c.waits_since}
+        )
+        |> Arca.Repo.all()
+        |> Map.new()
+      end
 
-      ids ->
-        from(m in Message, where: m.athanor_id == ^athanor_id and m.id in ^ids)
-        |> Arca.Repo.update_all(set: [status: "expired"])
-    end
+    Enum.filter(rows, fn
+      %{kind: "nudge", workspace_id: id, payload: payload} when is_binary(id) ->
+        case {Map.get(waits, id), wait_of(payload)} do
+          {%DateTime{} = since, %DateTime{} = named} -> DateTime.compare(since, named) == :eq
+          _gone -> false
+        end
 
-    standing != []
+      _row ->
+        true
+    end)
   end
-
-  defp same_wait?(%DateTime{} = named, %DateTime{} = since),
-    do: DateTime.compare(named, since) == :eq
-
-  defp same_wait?(_named, _since), do: false
 
   @doc """
   A page of the cell's workspace threads a quiet period or a wait can
@@ -4054,7 +4068,9 @@ defmodule Arca.TurnStorage do
   The rows a turn may read, in `seq` order: its own rows except an
   undrained steer, plus — behind its boundary — unattached rows and the
   rows of terminal turns of the thread. Rows attached to other open
-  turns are never read.
+  turns are never read, nor an opening still waiting for its own turn,
+  whose ask is read under that turn's person, origin and restrictions
+  alone, nor a daily thread's reminder of a wait that no longer stands.
   """
   @spec projection(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def projection(%Prima.Actor{athanor_id: athanor_id}, turn_id)
@@ -4071,11 +4087,12 @@ defmodule Arca.TurnStorage do
             where:
               (m.turn_id == ^turn_id and (m.sent_by == ^turn.agent or m.seq <= ^window)) or
                 (m.seq <= ^window and (is_nil(m.turn_id) or m.turn_id in subquery(settled))),
+            where: not (m.kind == "opening" and is_nil(m.turn_id) and is_nil(m.status)),
             order_by: [asc: m.seq]
           )
         )
 
-      {:ok, rows}
+      {:ok, standing_reminders(athanor_id, rows)}
     end)
     |> Arca.Data.project()
   end

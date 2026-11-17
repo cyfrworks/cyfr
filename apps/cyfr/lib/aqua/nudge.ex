@@ -53,8 +53,9 @@ defmodule Aqua.Nudge do
   card and borrows no schedule's occurrence or grants. A daily thread
   reminds of a wait at most once (`Arca.TurnStorage.remind/3`), and one
   tick's reminder names every wait then due. A wait that no longer stands
-  when the reminder's turn starts is left out of what Aqua reads
-  (`Arca.TurnStorage.settle_lines/2`). The report that lands on the daily
+  is left out of what Aqua reads whenever the reminder's turn reads, and
+  a turn none of whose waits stands as it starts asks no model
+  (`Arca.TurnStorage.line_stands/2`). The report that lands on the daily
   thread and the count stay as they are.
 
   ## The tick

@@ -264,6 +264,17 @@ defmodule Arca.NudgeStorageTest do
     })
   end
 
+  # The further opening, landed and waiting for its own turn.
+  defp waiting_opening!(actor, daily, workspace) do
+    {:ok, _} = further_opening!(actor, daily, workspace)
+
+    %{turn_id: nil, status: nil} =
+      Enum.find(
+        Threads.messages(actor, workspace.id),
+        &(&1.kind == "opening" and &1.content == "do the next task")
+      )
+  end
+
   defp thread(actor, id), do: elem(Threads.get(actor, id), 1)
 
   defp nudges(actor, thread_id),
@@ -483,6 +494,45 @@ defmodule Arca.NudgeStorageTest do
       assert {:ok, %{joined: true, message: %{turn_id: ^work}}} = nudge(actor, workspace, held)
     end
 
+    test "an opening still waiting for its own turn stays out of what the turn a nudge joined reads",
+         %{actor: actor, daily: daily, held: held} do
+      workspace = at_rest!(actor, daily)
+      active = running!(actor, workspace)
+      assert active.origin == "interactive"
+      opening = waiting_opening!(actor, daily, workspace)
+      :ok = aged!(actor)
+
+      assert {:ok, %{joined: true, message: nudged}} = nudge(actor, workspace, held)
+
+      assert {:ok, [%{id: drained}]} =
+               TurnStorage.drain_steer(actor, active.id, %{fence: active.fence})
+
+      assert drained == nudged.id
+      assert {:ok, rows} = TurnStorage.projection(actor, active.id)
+      assert nudged.id in Enum.map(rows, & &1.id)
+      refute opening.id in Enum.map(rows, & &1.id)
+    end
+
+    test "an opening still waiting for its own turn stays out of what a turn a person's post steered reads",
+         %{actor: actor, daily: daily} do
+      workspace = at_rest!(actor, daily)
+      active = running!(actor, workspace)
+      opening = waiting_opening!(actor, daily, workspace)
+
+      {:ok, %{message: post}} =
+        TurnStorage.accept_message(actor, workspace.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "and also this"},
+          steer_turn_id: active.id
+        })
+
+      assert {:ok, [%{id: drained}]} =
+               TurnStorage.drain_steer(actor, active.id, %{fence: active.fence})
+
+      assert drained == post.id
+      assert {:ok, rows} = TurnStorage.projection(actor, active.id)
+      refute opening.id in Enum.map(rows, & &1.id)
+    end
+
     test "the acceptance binds a nudge's turn only to the work the thread's lock finds",
          %{actor: actor, daily: daily, held: held} do
       # A narrower opening lands after the tick read the work, written by a
@@ -612,19 +662,51 @@ defmodule Arca.NudgeStorageTest do
       workspace = at_rest!(actor, daily)
       :ok = aged!(actor)
       {:ok, %{turn: turn}} = nudge(actor, workspace, held)
-      assert TurnStorage.settle_lines(actor, turn)
+      assert {:ok, true} = TurnStorage.line_stands(actor, turn)
 
       # How its work ended, recorded while it waited to start: what the
       # rule reads once nothing else runs.
       from(c in Thread, where: c.id == ^workspace.id)
       |> Arca.Repo.update_all(set: [workspace_outcome: "done"])
 
-      refute TurnStorage.settle_lines(actor, turn)
-      assert TurnStorage.settle_lines(actor, running!(actor, daily))
+      assert {:ok, false} = TurnStorage.line_stands(actor, turn)
+      assert {:ok, true} = TurnStorage.line_stands(actor, running!(actor, daily))
     end
   end
 
   defp thread_row(row), do: Arca.Repo.get!(Message, row.id)
+
+  # The reminder rows a turn reads now, by id.
+  defp reminders(actor, turn) do
+    {:ok, rows} = TurnStorage.projection(actor, turn.id)
+    for %{kind: "nudge", id: id} <- rows, do: id
+  end
+
+  # Every write that would mark a reminder's row refused by the store, as
+  # a store that cannot take it refuses it. The sandbox's rollback removes
+  # it.
+  defp refuse_reminder_writes! do
+    statements =
+      if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
+        [
+          "CREATE TEMP TRIGGER nudge_test_refused BEFORE UPDATE OF status ON messages " <>
+            "WHEN NEW.kind = 'nudge' " <>
+            "BEGIN SELECT RAISE(ABORT, 'the store refuses the write'); END"
+        ]
+      else
+        [
+          "CREATE FUNCTION nudge_test_refused() RETURNS trigger LANGUAGE plpgsql AS $$ " <>
+            "BEGIN IF NEW.kind = 'nudge' THEN " <>
+            "RAISE EXCEPTION 'the store refuses the write'; " <>
+            "END IF; RETURN NEW; END $$",
+          "CREATE TRIGGER nudge_test_refused BEFORE UPDATE OF status ON messages " <>
+            "FOR EACH ROW EXECUTE FUNCTION nudge_test_refused()"
+        ]
+      end
+
+    for statement <- statements, do: Arca.Repo.query!(statement, [])
+    :ok
+  end
 
   # ---- the wait ------------------------------------------------------------
 
@@ -739,9 +821,9 @@ defmodule Arca.NudgeStorageTest do
       # After: the reminder lands first and its turn starts late.
       {waiting, turn, card} = waiting!(actor, daily)
       {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
-      assert TurnStorage.settle_lines(actor, reminding)
+      assert {:ok, true} = TurnStorage.line_stands(actor, reminding)
       decline!(actor, turn, card)
-      refute TurnStorage.settle_lines(actor, reminding)
+      assert {:ok, false} = TurnStorage.line_stands(actor, reminding)
 
       # A wait of another stamp is another wait.
       {other, _, _} = waiting!(actor, daily)
@@ -766,10 +848,10 @@ defmodule Arca.NudgeStorageTest do
       assert Enum.filter(Threads.messages(actor, today.id), &(&1.kind == "nudge")) == []
 
       # Its turn, starting late, finds no line of its own left to answer.
-      refute TurnStorage.settle_lines(actor, reminding)
+      assert {:ok, false} = TurnStorage.line_stands(actor, reminding)
     end
 
-    test "a turn starting late leaves out the rows of waits that no longer stand",
+    test "every read of the reminder's turn leaves out the waits that no longer stand, and marks no row",
          %{actor: actor, daily: daily, held: held} do
       {kept, _, _} = waiting!(actor, daily)
       {archived, _, _} = waiting!(actor, daily)
@@ -777,13 +859,97 @@ defmodule Arca.NudgeStorageTest do
       {:ok, %{rows: [one, two], turn: reminding}} = remind(actor, today, [kept, archived], held)
 
       archive!(archived.id)
-      assert TurnStorage.settle_lines(actor, reminding)
-      assert %{status: nil} = thread_row(one)
-      assert %{status: "expired"} = thread_row(two)
+      assert {:ok, true} = TurnStorage.line_stands(actor, reminding)
+      started = start!(actor, reminding)
+      assert reminders(actor, started) == [one.id]
 
+      # A wait that ends after the turn started is gone from its next read,
+      # as a resumed or taken-over turn reads it.
       archive!(kept.id)
-      refute TurnStorage.settle_lines(actor, reminding)
-      assert %{status: "expired"} = thread_row(one)
+      assert reminders(actor, started) == []
+      assert {:ok, false} = TurnStorage.line_stands(actor, started)
+      assert %{status: nil} = thread_row(one)
+      assert %{status: nil} = thread_row(two)
+    end
+
+    test "a reminder none of whose waits stands completes with no model round, two waits gone or three",
+         %{actor: actor, daily: daily, held: held} do
+      for count <- [2, 3] do
+        waits = for _ <- 1..count, do: elem(waiting!(actor, daily), 0)
+        {:ok, today} = Arca.Test.Days.thread(actor)
+        {:ok, %{turn: reminding}} = remind(actor, today, waits, held)
+        Enum.each(waits, &archive!(&1.id))
+        started = start!(actor, reminding)
+
+        assert {:ok, false} = TurnStorage.line_stands(actor, started)
+        refute TurnStorage.steer_pending?(actor, started.id)
+
+        assert {:ok, _} =
+                 TurnStorage.finish(
+                   actor,
+                   started.id,
+                   "completed",
+                   Map.merge(@grant, %{fence: started.fence})
+                 )
+
+        assert {:ok, %{status: "completed"}} = TurnStorage.get(actor, started.id)
+      end
+    end
+
+    test "a reminder some of whose waits stand reads those alone, every line inside its first read",
+         %{actor: actor, daily: daily, held: held} do
+      [kept, gone, also_gone] = for _ <- 1..3, do: elem(waiting!(actor, daily), 0)
+      {:ok, today} = Arca.Test.Days.thread(actor)
+
+      {:ok, %{rows: [row | _], turn: reminding}} =
+        remind(actor, today, [kept, gone, also_gone], held)
+
+      archive!(gone.id)
+      archive!(also_gone.id)
+      started = start!(actor, reminding)
+
+      assert {:ok, true} = TurnStorage.line_stands(actor, started)
+      refute TurnStorage.steer_pending?(actor, started.id)
+      assert reminders(actor, started) == [row.id]
+    end
+
+    test "the check as a reminder's turn starts writes nothing, so a superseded turn's changes no row",
+         %{actor: actor, daily: daily, held: held} do
+      {waiting, _, _} = waiting!(actor, daily)
+      {:ok, today} = Arca.Test.Days.thread(actor)
+      {:ok, %{turn: reminding, rows: [row]}} = remind(actor, today, [waiting], held)
+      started = start!(actor, reminding)
+      {:ok, successor} = TurnStorage.supersede(actor, started.id, %{fence: started.fence})
+      assert successor.fence > started.fence
+      archive!(waiting.id)
+
+      assert {:ok, false} = TurnStorage.line_stands(actor, started)
+      assert thread_row(row).status == nil
+    end
+
+    @tag :capture_log
+    test "the check as a reminder's turn starts writes no row a refused write could leave standing",
+         %{actor: actor, daily: daily, held: held} do
+      {waiting, _, _} = waiting!(actor, daily)
+      {:ok, today} = Arca.Test.Days.thread(actor)
+      {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
+      started = start!(actor, reminding)
+      archive!(waiting.id)
+      refuse_reminder_writes!()
+
+      assert {:ok, false} = TurnStorage.line_stands(actor, started)
+    end
+
+    @tag :capture_log
+    test "a store that cannot answer the check refuses it, and the line is not taken to stand",
+         %{actor: actor, daily: daily, held: held} do
+      {waiting, _, _} = waiting!(actor, daily)
+      {:ok, today} = Arca.Test.Days.thread(actor)
+      {:ok, %{turn: reminding}} = remind(actor, today, [waiting], held)
+      started = start!(actor, reminding)
+      Arca.Repo.query!("ALTER TABLE threads RENAME TO threads_away")
+
+      assert {:error, :database_error} = TurnStorage.line_stands(actor, started)
     end
   end
 
@@ -807,7 +973,7 @@ defmodule Arca.NudgeStorageTest do
 
       assert {:error, :thread_archived} = nudge(actor, archived, held)
       assert nudges(actor, archived.id) == []
-      refute TurnStorage.settle_lines(actor, turn)
+      assert {:ok, false} = TurnStorage.line_stands(actor, turn)
 
       {:ok, rows} = TurnStorage.nudge_candidates({actor.athanor_id, ""}, 100)
       refute Enum.any?(rows, &(&1.id in [archived.id, kept.id]))
@@ -827,7 +993,7 @@ defmodule Arca.NudgeStorageTest do
       archive!(waiting.id)
       {:ok, tomorrow} = Arca.Test.Days.thread(actor)
       assert {:error, :wait_moved} = remind(actor, tomorrow, [waiting], held)
-      refute TurnStorage.settle_lines(actor, reminding)
+      assert {:ok, false} = TurnStorage.line_stands(actor, reminding)
 
       {other, _, _} = waiting!(actor, daily)
       {:ok, archived_day} = Arca.Test.Days.thread(actor)
