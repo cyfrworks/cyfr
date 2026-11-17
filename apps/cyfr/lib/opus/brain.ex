@@ -554,9 +554,7 @@ defmodule Opus.Brain do
 
   # The service's key of the thread's and agent's session.
   defp key(state) do
-    digest =
-      :crypto.hash(:sha256, [state.thread_id, 0, state.agent]) |> Base.encode16(case: :lower)
-
+    digest = Prima.Digest.sha256_hex(IO.iodata_to_binary([state.thread_id, 0, state.agent]))
     "brain-" <> binary_part(digest, 0, 40)
   end
 
@@ -662,8 +660,8 @@ defmodule Opus.Brain do
 
   defp decode([%{seq: seq, text: text} | rest], state, events) do
     with {:ok, event} <- Wire.decode(text),
-         {:ok, state} <- apply_event(state, seq, event) do
-      decode(rest, state, [{seq, event} | events])
+         {:ok, applied} <- apply_event(state, seq, event) do
+      decode(rest, applied, [{seq, event} | events])
     else
       {:error, :too_large} -> {:error, :too_large, state}
       {:error, _unreadable_or_unknown} -> {:error, :unreadable, state}
