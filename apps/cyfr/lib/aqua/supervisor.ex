@@ -41,6 +41,11 @@ defmodule Aqua.Supervisor do
         # draining at boot and on a tick. 5 s for the same reason: a
         # delivery cut short rolls its row and receipt back together.
         Supervisor.child_spec(Aqua.Crew, shutdown: 5_000),
+        # Nudges quiet workspace threads and reminds of those that wait on
+        # their person (`Aqua.Nudge`), on a tick from the rows. 5 s: an
+        # acceptance cut short rolls back whole, and the next tick asks
+        # again.
+        Supervisor.child_spec(Aqua.Nudge, shutdown: 5_000),
         # The loop worker's 5 s is its stop, which holds no work in flight;
         # the task supervisor's 30 s the longest loop step it lets finish.
         group(Aqua.WorkerTree, [

@@ -194,6 +194,9 @@ defmodule Arca.TurnStorage do
   # What Aqua reports of a workspace thread's work; `error` and `stopped`
   # are the server's (the moduledoc's "Workspace threads").
   @reported ~w(done needs_you)
+  # The states in which a workspace thread waits on its person, whose wait
+  # its reminders name (`waits_since`).
+  @waiting ~w(needs_you error)
   # Who cancelled a turn, as its end names it (`finish/4`'s `:ended_by`).
   @ended_by [:person, :recovery]
   @step_kinds Prima.TurnState.step_kinds()
@@ -246,6 +249,19 @@ defmodule Arca.TurnStorage do
     exactly when its row lands; a claim lost answers `{:error, :taken}`
     or `{:error, :lapsed}` and a receipt already written
     `{:error, :receipted}`, with nothing written.
+  - `:wait` — `%{waits_since, quiet}`: the row is the server's post of a
+    workspace thread's wait on its person (`Aqua.Nudge`), naming it in
+    `:workspace_id`. It lands only while that wait stands under the
+    workspace thread's lock: not archived (`{:error, :thread_archived}`),
+    reading `needs_you` or `error` since exactly `waits_since`
+    (`{:error, :wait_moved}`), for at least `quiet` seconds by the
+    database's clock (`{:error, :not_quiet}`). The row's payload keeps the
+    stamp. Its `client_id` names the wait, and a daily thread is one day's,
+    so the row is its own receipt.
+  - `:claim` — `%{claim, slot}`: the sending job's claim and this
+    member's slot, judged last in the transaction as a receipt's are, so
+    a claim or slot lost lands nothing (`{:error, :taken}`, `{:error,
+    :lapsed}` or `{:error, :not_owner}`).
 
   A retired crew thread admits nothing (`{:error, :thread_retired}`). A
   person's message in a workspace thread is new work there: how its work
@@ -257,7 +273,8 @@ defmodule Arca.TurnStorage do
   still waits for its answer (`{:error, :request_ended}`), and a
   workspace thread's opening only while it waits for its turn
   (`{:error, :opening_ended}`). A row naming a workspace thread
-  (`:workspace_id`, a report's) lands only while that thread stands
+  (`:workspace_id`, a report's or a wait's post) lands only while that
+  thread stands
   (`{:error, :workspace_gone}`).
 
   A card's notice (a `needs_you` row naming its `:approval_id`, written
@@ -294,9 +311,10 @@ defmodule Arca.TurnStorage do
           # Work it may start in a crew member's thread takes its room out
           # of the archive, a second thread row (`work_rows!/2`).
           if opens || steered, do: work_rows!(actor, thread_id)
-          from_workspace!(actor, thread_id, message)
+          workspace = from_workspace!(actor, thread_id, message)
           thread = locked_thread!(athanor_id, thread_id)
           if thread.retired_at, do: Arca.Repo.rollback(:thread_retired)
+          still_waits!(workspace, thread, Map.get(attrs, :wait))
           card_waits!(athanor_id, message)
           still_asked!(athanor_id, Map.get(attrs, :reply_address))
           opens = if stopped_answer?(athanor_id, thread, attrs), do: nil, else: opens
@@ -315,6 +333,7 @@ defmodule Arca.TurnStorage do
                   thread,
                   message
                   |> with_identity(Map.get(attrs, :request))
+                  |> with_wait(Map.get(attrs, :wait))
                   |> Map.put(:turn_id, steer_id)
                 )
 
@@ -331,7 +350,10 @@ defmodule Arca.TurnStorage do
           answered!(athanor_id, thread, row, Map.get(attrs, :answers, []))
           requested!(actor, thread, row, Map.get(attrs, :request))
           receipted!(actor, Map.get(attrs, :receipt))
-          if thread.kind == "workspace", do: settle_work!(athanor_id, thread)
+          if claim = Map.get(attrs, :claim), do: claimed!(claim)
+
+          if thread.kind == "workspace",
+            do: settle_work!(athanor_id, thread, acted?(message))
 
           %{message: %{row | turn_id: turn && turn.id}, turn: turn}
         end)
@@ -1048,12 +1070,15 @@ defmodule Arca.TurnStorage do
   # move it asks (a report, a card opened or settled, a turn's end, a
   # stop, a crew member's answer, new work): it waits on its person while
   # a card waits in it or in a crew thread under it; otherwise it is at
-  # work while work remains there (`work!/2`); once nothing does, it is
+  # work while work remains there (`work!/3`); once nothing does, it is
   # how its work last ended since it last took new work
-  # (`workspace_outcome`), or at work when nothing ended it.
+  # (`workspace_outcome`), or at work when nothing ended it. `except`
+  # names a turn the rule reads the thread without (a nudge's turn asking,
+  # as it starts, whether its line still stands).
   # arca:db-raise-ok inside the caller's transaction
-  defp work_state!(athanor_id, %Thread{kind: "workspace"} = workspace) do
-    %{card_waits: card_waits, work_remains: work_remains} = work!(athanor_id, workspace)
+  defp work_state!(athanor_id, %Thread{kind: "workspace"} = workspace, except \\ nil) do
+    %{card_waits: card_waits, work_remains: work_remains} =
+      work!(athanor_id, workspace, except)
 
     cond do
       card_waits -> "needs_you"
@@ -1065,7 +1090,7 @@ defmodule Arca.TurnStorage do
 
   @doc false
   # Whether work remains in the daily or workspace thread `room` or in a
-  # crew thread under it (`work!/2`), the rule an archive asks
+  # crew thread under it (`work!/3`), the rule an archive asks
   # (`Arca.ThreadStorage.archive/2`). An in-transaction helper.
   @spec work_remains?(Prima.Actor.t(), Thread.t()) :: boolean()
   # arca:db-raise-ok inside the caller's transaction
@@ -1082,15 +1107,11 @@ defmodule Arca.TurnStorage do
   # which asks no model and is no work of the thread's, while a card it
   # raises waits on the person as any card does); while a request it
   # asked a crew member is left until its answer lands; and while an
-  # opening waits for its turn to start.
+  # opening waits for its turn to start. `except` names one open turn read
+  # as though it were not there.
   # arca:db-raise-ok inside the caller's transaction
-  defp work!(athanor_id, %Thread{} = room) do
-    threads =
-      from(c in Thread,
-        where: c.athanor_id == ^athanor_id,
-        where: c.id == ^room.id or (c.kind == "crew" and c.parent_id == ^room.id),
-        select: c.id
-      )
+  defp work!(athanor_id, %Thread{} = room, except \\ nil) do
+    threads = room_threads(athanor_id, room.id)
 
     card_waits =
       from(a in Approval,
@@ -1098,18 +1119,11 @@ defmodule Arca.TurnStorage do
         where: a.status == "pending"
       )
 
-    pages =
-      from(m in Message,
-        where: m.athanor_id == ^athanor_id and m.thread_id in subquery(threads),
-        where: m.kind == "page_call",
-        select: m.id
-      )
-
     turns_run =
-      from(t in Turn,
-        where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
-        where: t.status in ^@open and t.id not in ^reported_turns(athanor_id, room.id),
-        where: is_nil(t.message_id) or t.message_id not in subquery(pages),
+      from(t in room_turns(athanor_id, threads),
+        where:
+          t.status in ^@open and
+            t.id not in ^Enum.reject([except | reported_turns(athanor_id, room.id)], &is_nil/1),
         where:
           t.id not in subquery(
             from(a in card_waits, where: not is_nil(a.turn_id), select: a.turn_id)
@@ -1130,22 +1144,92 @@ defmodule Arca.TurnStorage do
     }
   end
 
-  # The workspace thread's state as the rule now has it, written when it
-  # moved. Answers the thread as it stands.
-  # arca:db-raise-ok inside the caller's transaction
-  defp settle_work!(athanor_id, %Thread{kind: "workspace"} = workspace) do
-    case work_state!(athanor_id, workspace) do
-      same when same == workspace.workspace_state ->
-        workspace
-
-      state ->
-        {1, _} =
-          from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
-          |> Arca.Repo.update_all(set: [workspace_state: state])
-
-        %{workspace | workspace_state: state}
-    end
+  # The threads of a room, a daily or a workspace thread, and the crew
+  # threads under it: the scope of its work (`work!/3`) and of a workspace
+  # thread's quiet (`quiet?/3`).
+  defp room_threads(athanor_id, room_id) do
+    from(c in Thread,
+      where: c.athanor_id == ^athanor_id,
+      where: c.id == ^room_id or (c.kind == "crew" and c.parent_id == ^room_id),
+      select: c.id
+    )
   end
+
+  # The turns of a room's `threads` that no page's call in any of them
+  # opened (`page_call`): such a turn asks no model, and is neither work
+  # of the room's (`work!/3`) nor activity there (`quiet?/3`).
+  defp room_turns(athanor_id, threads) do
+    pages =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id in subquery(threads),
+        where: m.kind == "page_call",
+        select: m.id
+      )
+
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
+      where: is_nil(t.message_id) or t.message_id not in subquery(pages)
+    )
+  end
+
+  # The workspace thread's state as the rule now has it, written when it
+  # moved, and the wait it waits on its person (`waited!/3`). `acted?` is an
+  # act of the person's on the thread: a post of theirs there, or a card
+  # of it they decided. Answers the thread as it stands.
+  # arca:db-raise-ok inside the caller's transaction
+  defp settle_work!(athanor_id, %Thread{kind: "workspace"} = workspace, acted? \\ false) do
+    moved =
+      case work_state!(athanor_id, workspace) do
+        same when same == workspace.workspace_state ->
+          workspace
+
+        state ->
+          {1, _} =
+            from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
+            |> Arca.Repo.update_all(set: [workspace_state: state])
+
+          %{workspace | workspace_state: state}
+      end
+
+    waited!(athanor_id, moved, moved.workspace_state != workspace.workspace_state or acted?)
+  end
+
+  # The one writer of `waits_since`: a thread that reads `needs_you` or
+  # `error` and has just come to read so (from any other state, the other
+  # of the two included), or that the person has just acted on while it
+  # still waits, begins a new wait, stamped by the database's clock and
+  # later than the wait before it whatever that clock did, so no two waits
+  # of a thread share a stamp. A thread that stops waiting keeps its last
+  # stamp. The server's post of a wait names it by it
+  # (`accept_message/3`'s `:wait`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp waited!(athanor_id, %Thread{workspace_state: state} = workspace, true)
+       when state in @waiting do
+    now = Arca.ServerMetaStorage.now!()
+
+    since =
+      case workspace.waits_since do
+        %DateTime{} = last ->
+          if DateTime.compare(now, last) == :gt,
+            do: now,
+            else: DateTime.add(last, 1, :microsecond)
+
+        nil ->
+          now
+      end
+
+    {1, _} =
+      from(c in Thread, where: c.athanor_id == ^athanor_id and c.id == ^workspace.id)
+      |> Arca.Repo.update_all(set: [waits_since: since])
+
+    %{workspace | waits_since: since}
+  end
+
+  defp waited!(_athanor_id, %Thread{} = workspace, _began?), do: workspace
+
+  # A person's post in a workspace thread is an act of theirs on it.
+  defp acted?(%{sent_by: "person"}), do: true
+  defp acted?(_message), do: false
 
   # A report of the thread's work, Aqua's or the server's: how its work
   # ended, recorded, its record written, and the thread's state asked
@@ -1218,11 +1302,12 @@ defmodule Arca.TurnStorage do
   end
 
   # A card left `pending` by any way, a decision, a skip or an
-  # invalidation: the thread's state asked again, reporting nothing.
+  # invalidation: the thread's state asked again, reporting nothing. A
+  # card the person decided (`acted?`) is an act of theirs on the thread.
   # arca:db-raise-ok inside the caller's transaction
-  defp settled!(athanor_id, thread_id) do
+  defp settled!(athanor_id, thread_id, acted? \\ false) do
     case work_of(athanor_id, thread!(athanor_id, thread_id)) do
-      %Thread{} = workspace -> settle_work!(athanor_id, workspace)
+      %Thread{} = workspace -> settle_work!(athanor_id, workspace, acted?)
       nil -> :ok
     end
 
@@ -1333,11 +1418,529 @@ defmodule Arca.TurnStorage do
        when is_binary(workspace_id) do
     actor
     |> Arca.ThreadStorage.lock_threads!([workspace_id, thread_id])
-    |> Enum.any?(&(&1.id == workspace_id and &1.kind == "workspace"))
-    |> if(do: :ok, else: Arca.Repo.rollback(:workspace_gone))
+    |> Enum.find(&(&1.id == workspace_id and &1.kind == "workspace"))
+    |> case do
+      %Thread{} = workspace -> workspace
+      nil -> Arca.Repo.rollback(:workspace_gone)
+    end
   end
 
-  defp from_workspace!(_actor, _thread_id, _message), do: :ok
+  defp from_workspace!(_actor, _thread_id, _message), do: nil
+
+  # A post of the server's naming a workspace thread's wait on its person
+  # (`accept_message/3`'s `:wait`) lands only while that wait stands, read
+  # under the workspace thread's lock `from_workspace!/3` holds: not
+  # archived, reading `needs_you` or `error` since exactly the stamp the
+  # post names, and for at least `quiet` seconds by the database's clock.
+  # arca:db-raise-ok inside the caller's transaction
+  defp still_waits!(_workspace, _thread, nil), do: :ok
+
+  # A post of a wait takes neither thread out of the archive, as new work
+  # would (`new_work!/2`): an archived one admits none.
+  defp still_waits!(%Thread{archived_at: %DateTime{}}, _thread, %{}),
+    do: Arca.Repo.rollback(:thread_archived)
+
+  defp still_waits!(_workspace, %Thread{archived_at: %DateTime{}}, %{}),
+    do: Arca.Repo.rollback(:thread_archived)
+
+  defp still_waits!(
+         %Thread{workspace_state: state, waits_since: %DateTime{} = since},
+         _thread,
+         %{waits_since: %DateTime{} = named, quiet: quiet}
+       )
+       when state in @waiting and is_integer(quiet) and quiet > 0 do
+    cond do
+      DateTime.compare(since, named) != :eq ->
+        Arca.Repo.rollback(:wait_moved)
+
+      DateTime.compare(since, DateTime.add(Arca.ServerMetaStorage.now!(), -quiet, :second)) ==
+          :gt ->
+        Arca.Repo.rollback(:not_quiet)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp still_waits!(_workspace, _thread, _wait), do: Arca.Repo.rollback(:wait_moved)
+
+  # The row of a wait's post keeps the stamp it was checked against.
+  defp with_wait(message, nil), do: message
+
+  defp with_wait(message, %{waits_since: %DateTime{} = since}) do
+    wait = %{"waits_since" => DateTime.to_iso8601(since)}
+    Map.update(message, :payload, wait, &Map.merge(&1 || %{}, wait))
+  end
+
+  # ---------------------------------------------------------------------------
+  # Nudges and reminders
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  The server's nudge of a quiet workspace thread (`Aqua.Nudge`), accepted
+  in one transaction under the workspace thread's lock, which decides
+  there afresh, by the rows and the database's clock, whether it stands:
+  the thread reads `open`; no nudge of it is unanswered
+  (`unanswered_nudge?/2`); and nothing has happened in it or in a crew
+  thread under it for `:quiet` seconds (`quiet?/3`). Only then is the
+  `nudge` row written, sent by `system` in the server's voice, and in the
+  same transaction it joins the turn that holds the thread when that turn
+  is Aqua's and asks a model (running, or paused around a launch),
+  whatever waits behind it, attached as a steer is
+  (`accept_message/3`'s `:steer_turn_id`), so the turn's next model round
+  reads it from here on whichever member runs it (`drain_steer/3`) under
+  its own person, origin and restrictions; or, with no turn open there
+  and no opening waiting for its turn, opens one under `:turn` (`%{agent,
+  requested_by, model, options, origin}`, the thread's current work's).
+  Otherwise (a page's call's turn holds it, one paused on a card or an
+  uncertain call, a turn queued or an opening waiting with nothing
+  holding it) it is refused `{:error, :busy}`. `:work` names the turn the
+  caller bound it to (`nudge_view/3`'s `work`), the one it joins or whose
+  person, origin and options `:turn` carries: it must be the one the
+  thread's lock finds, or the nudge is refused `{:error, :work_moved}`,
+  so a binding read earlier never lends a turn authority the thread's
+  work no longer has. The nudge row reopens nothing and is no post.
+
+  The rows are the serialized fact, so nothing about a nudge is derived
+  from a time: two acceptances serialize on the thread's lock and the
+  second finds the first unanswered, and a retry finds the same. A step
+  that commits between the quiet read and the insert takes no lock of the
+  thread; the nudge then lands in a thread that has just moved, and is
+  answered once.
+
+  `attrs`: `:message` (`:content`), `:turn`, `:work`, `:quiet`, `:claim` and
+  `:slot` (the nudging job's claim, `Arca.JobClaims`, and this member's
+  slot, judged last in the transaction as a delivery's receipt judges
+  them, so a claim or slot lost lands nothing: `{:error, :taken}`,
+  `{:error, :lapsed}` or `{:error, :not_owner}`) and
+  `:join_only` (true refuses `{:error, :nothing_to_join}` rather than
+  opening a turn). A thread no longer open is `{:error,
+  {:workspace_state, state}}`, one with a nudge unanswered `{:error,
+  :unanswered}`, one not quiet `{:error, :not_quiet}`, each with nothing
+  written. Answers `{:ok, %{message: row, turn: row | nil, joined:
+  boolean}}`: `turn` is the turn it opened, nil when it joined one.
+  """
+  @spec nudge(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def nudge(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
+             is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.nudge", fn ->
+      nudge_round(actor, workspace_id, attrs, 3)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def nudge(%Prima.Actor{}, _workspace_id, _attrs), do: {:error, :no_athanor}
+
+  # The turn to join is chosen before the locks, since a turn's writers
+  # take it before its thread, and asked again under them; one that moved
+  # in between sends the round again, at most three times.
+  defp nudge_round(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, tries) do
+    chosen = nudge_work(athanor_id, workspace_id)
+
+    with_seq_retry(fn ->
+      Arca.Repo.locking_transaction(fn -> nudged!(actor, workspace_id, attrs, chosen) end)
+    end)
+    |> case do
+      {:error, :nudge_moved} when tries > 1 -> nudge_round(actor, workspace_id, attrs, tries - 1)
+      {:error, :nudge_moved} -> {:error, :busy}
+      answer -> answer
+    end
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp nudged!(%Prima.Actor{athanor_id: athanor_id} = actor, workspace_id, attrs, chosen) do
+    with {:join, turn_id} <- chosen, do: held_to_join!(athanor_id, workspace_id, turn_id)
+
+    thread = locked_thread!(athanor_id, workspace_id)
+    if thread.kind != "workspace", do: Arca.Repo.rollback(:not_a_workspace)
+    if thread.archived_at, do: Arca.Repo.rollback(:thread_archived)
+
+    if thread.workspace_state != "open",
+      do: Arca.Repo.rollback({:workspace_state, thread.workspace_state})
+
+    if nudge_work(athanor_id, workspace_id) != chosen, do: Arca.Repo.rollback(:nudge_moved)
+    if unanswered_nudge?(athanor_id, workspace_id), do: Arca.Repo.rollback(:unanswered)
+
+    unless quiet?(athanor_id, workspace_id, Map.fetch!(attrs, :quiet)),
+      do: Arca.Repo.rollback(:not_quiet)
+
+    message = Map.fetch!(attrs, :message)
+
+    row = fn turn_id ->
+      Arca.ThreadStorage.insert_message!(actor, thread, %{
+        author: Message.system_author(),
+        sent_by: Message.system_author(),
+        kind: "nudge",
+        content: Map.fetch!(message, :content),
+        turn_id: turn_id
+      })
+    end
+
+    answer =
+      case chosen do
+        {:join, turn_id} ->
+          bound!(attrs, turn_id)
+          %{message: row.(turn_id), turn: nil, joined: true}
+
+        {:open, work_id} ->
+          bound!(attrs, work_id)
+          if Map.get(attrs, :join_only), do: Arca.Repo.rollback(:nothing_to_join)
+          written = row.(nil)
+          turn = open_turn!(athanor_id, thread, written, Map.fetch!(attrs, :turn), nil)
+          %{message: %{written | turn_id: turn.id}, turn: turn, joined: false}
+
+        :busy ->
+          Arca.Repo.rollback(:busy)
+      end
+
+    settle_work!(athanor_id, thread)
+    claimed!(attrs)
+    answer
+  end
+
+  # The turn a nudge joins, taken first as every writer of a turn and its
+  # thread takes them (`accept_message/3`'s steer); one that ended in
+  # between sends the round again.
+  # arca:db-raise-ok inside the caller's transaction
+  defp held_to_join!(athanor_id, workspace_id, turn_id) do
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.id == ^turn_id and t.thread_id == ^workspace_id,
+      where: t.status in ^@open,
+      update: [set: [status: t.status]]
+    )
+    |> Arca.Repo.update_all([])
+    |> case do
+      {1, _} -> :ok
+      {0, _} -> Arca.Repo.rollback(:nudge_moved)
+    end
+  end
+
+  # The sending job's claim and this member's slot, judged last in the
+  # writing transaction as a delivery's receipt judges them
+  # (`Arca.ConsumerReceipts.record!/4`): the claim held at its owner and
+  # fence until the commit, the slot verified live, and the claim asked
+  # again after the lease row's lock is won. A claim a peer took or that
+  # lapsed, or a slot this member lost, lands nothing.
+  # arca:db-raise-ok inside the caller's transaction
+  defp claimed!(%{claim: claim, slot: slot}) do
+    with {:ok, _held} <- Arca.JobClaims.hold(claim),
+         :ok <- Arca.ControlPlane.verify_held(slot),
+         {:ok, _still} <- Arca.JobClaims.hold(claim) do
+      :ok
+    else
+      lost when lost in [:taken, :lapsed] -> Arca.Repo.rollback(lost)
+      :lost -> Arca.Repo.rollback(:not_owner)
+    end
+  end
+
+  # The work the caller bound the nudge to (`:work`) is the turn the
+  # thread's lock found: one that moved since it was read lands nothing.
+  # arca:db-raise-ok inside the caller's transaction
+  defp bound!(attrs, turn_id) do
+    if Map.fetch!(attrs, :work) != turn_id, do: Arca.Repo.rollback(:work_moved)
+  end
+
+  # What a nudge would do in the workspace thread now, naming the turn it
+  # is bound to: join the turn that holds the thread when it is Aqua's and
+  # asks a model, running or paused around a launch, whatever turns or
+  # openings wait behind it, its row a steer that borrows nothing of that
+  # turn's authority; with no turn open there and no opening waiting for
+  # its turn, open one bound to the thread's current work, the newest turn
+  # of Aqua's there by the thread's order, a page's call's aside; and
+  # nothing otherwise. A turn paused on a card or an uncertain call waits
+  # for the person, whose acknowledgement a timer never stands in for, and
+  # a queued turn or a waiting opening is the work, beside which no nudge
+  # opens a turn. Read before the locks and again under them.
+  # arca:db-raise-ok inside the caller's transaction
+  defp nudge_work(athanor_id, workspace_id) do
+    open =
+      from(t in Turn,
+        where: t.athanor_id == ^athanor_id and t.thread_id == ^workspace_id,
+        where: t.status in ^@open,
+        select: %{
+          id: t.id,
+          status: t.status,
+          paused_reason: t.paused_reason,
+          agent: t.agent,
+          message_id: t.message_id
+        }
+      )
+      |> Arca.Repo.all()
+
+    holder =
+      from(c in Thread,
+        where: c.athanor_id == ^athanor_id and c.id == ^workspace_id,
+        select: c.active_turn_id
+      )
+      |> Arca.Repo.one()
+
+    case {open, Enum.find(open, &(&1.id == holder))} do
+      {_open, %{} = turn} ->
+        if joins?(athanor_id, turn), do: {:join, turn.id}, else: :busy
+
+      {[], nil} ->
+        case current_work(athanor_id, workspace_id) do
+          %{id: id} -> {:open, id}
+          nil -> :busy
+        end
+
+      _queued ->
+        :busy
+    end
+  end
+
+  defp joins?(athanor_id, %{agent: agent} = turn) do
+    Prima.AgentRef.soul?(agent) and
+      (turn.status == "running" or (turn.status == "paused" and turn.paused_reason == "launch")) and
+      not page_call?(athanor_id, struct(Turn, turn))
+  end
+
+  # Whether a nudge of the workspace thread waits for its answer: its turn
+  # is still open, and no model step of that turn has both carried it and
+  # closed. A model step carries the nudges its turn had read by then
+  # (`consumed!/3`), so after Aqua answered a nudge inside a long turn the
+  # next quiet period nudges again; a nudge whose turn ended, however it
+  # ended, answered or not, is retired with it.
+  # arca:db-raise-ok inside the caller's transaction
+  defp unanswered_nudge?(athanor_id, workspace_id) do
+    from(m in Message,
+      join: t in Turn,
+      on: t.id == m.turn_id and t.athanor_id == m.athanor_id,
+      left_join: s in TurnStep,
+      on: s.id == m.resolved_by and s.athanor_id == m.athanor_id,
+      where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace_id,
+      where: m.kind == "nudge" and t.status in ^@open,
+      where: is_nil(s.id) or s.dispatch_state != "closed"
+    )
+    |> Arca.Repo.exists?()
+  end
+
+  # A model step opened on a turn carries the nudges the turn had read by
+  # then, past its boundary or not: each still waiting names the step.
+  # Taken under the turn's lock, after `drain_steer/3` moved the boundary
+  # past what the step's request carries.
+  # arca:db-raise-ok inside the caller's transaction
+  defp consumed!(athanor_id, %Turn{} = turn, %{id: step_id, kind: "model", purpose: "chat"}) do
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.turn_id == ^turn.id and m.kind == "nudge",
+      where: m.seq <= ^(turn.window_upto_seq || 0) and is_nil(m.resolved_by)
+    )
+    |> Arca.Repo.update_all(set: [resolved_by: step_id, resolved_at: DateTime.utc_now()])
+
+    :ok
+  end
+
+  defp consumed!(_athanor_id, _turn, _step), do: :ok
+
+  # Whether nothing has happened in the workspace thread or a crew thread
+  # under it for `seconds`, by the database's clock: no post, no step
+  # starting or ending, no card made or decided and no turn accepted or
+  # ended there since. A nudge, a page's call and its result, a page's
+  # steps and a turn a page's call opened in any of them are no activity
+  # of the thread's, as they are no work of it (`room_turns/2`), and
+  # neither is what is read, a read mark, the timer's own reads, a
+  # delivery's receipt or output streamed and not recorded, none of which
+  # is a row here.
+  # arca:db-raise-ok inside the caller's transaction
+  defp quiet?(athanor_id, workspace_id, seconds) when is_integer(seconds) and seconds > 0 do
+    since = DateTime.add(Arca.ServerMetaStorage.now!(), -seconds, :second)
+    threads = room_threads(athanor_id, workspace_id)
+    turns = room_turns(athanor_id, threads)
+
+    not Enum.any?(
+      [
+        from(m in Message,
+          where: m.athanor_id == ^athanor_id and m.thread_id in subquery(threads),
+          where: m.kind not in ["nudge", "page_call", "page_result"],
+          where: m.inserted_at > ^since
+        ),
+        from(s in TurnStep,
+          join: t in subquery(turns),
+          on: t.id == s.turn_id,
+          where: s.athanor_id == ^athanor_id,
+          where: is_nil(s.purpose) or s.purpose != "page",
+          where: s.started_at > ^since or s.ended_at > ^since
+        ),
+        from(a in Approval,
+          where: a.athanor_id == ^athanor_id and a.thread_id in subquery(threads),
+          where: a.inserted_at > ^since or a.decided_at > ^since
+        ),
+        from(t in subquery(turns), where: t.accepted_at > ^since or t.ended_at > ^since)
+      ],
+      &Arca.Repo.exists?/1
+    )
+  end
+
+  @doc """
+  As a turn a server's line opened first starts (`Aqua.Loop`), whether
+  its line still stands to be answered, read and never written: a
+  workspace thread's nudge while the thread, read without this turn,
+  still reads `open` and is not archived. Any other turn's line stands,
+  and a turn whose thread is gone asks nothing. Answers `{:ok, boolean}`,
+  or `{:error, :database_error}` when the store cannot answer, on which
+  the turn asks no model.
+  """
+  @spec line_stands(Prima.Actor.t(), map()) :: {:ok, boolean()} | {:error, term()}
+  def line_stands(%Prima.Actor{athanor_id: athanor_id}, %{
+        id: turn_id,
+        sent_by: "system",
+        thread_id: thread_id
+      })
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.line_stands", fn ->
+      case Arca.Repo.get_by(Thread, athanor_id: athanor_id, id: thread_id) do
+        %Thread{kind: "workspace", archived_at: nil} = workspace ->
+          {:ok, work_state!(athanor_id, workspace, turn_id) == "open"}
+
+        %Thread{kind: "workspace"} ->
+          {:ok, false}
+
+        %Thread{} ->
+          {:ok, true}
+
+        nil ->
+          {:ok, false}
+      end
+    end)
+  end
+
+  def line_stands(%Prima.Actor{athanor_id: athanor_id}, %{})
+      when is_binary(athanor_id) and athanor_id != "",
+      do: {:ok, true}
+
+  def line_stands(%Prima.Actor{}, _turn), do: {:error, :no_athanor}
+
+  @doc """
+  A page of the cell's workspace threads a quiet period or a wait can
+  make due, after `cursor` (`{athanor_id, id}`, or nil for the first),
+  `limit` at most, in athanor and id order: the ones that read `open`,
+  `needs_you` or `error` and are not archived. Each is `%{athanor_id,
+  id}`.
+  """
+  @spec nudge_candidates({String.t(), String.t()} | nil, pos_integer()) ::
+          {:ok, [map()]} | {:error, :database_error}
+  # arca:unscoped-ok the nudging job reads across the cell; each thread is
+  # then read and acted on under its own athanor's actor.
+  def nudge_candidates(cursor, limit) when is_integer(limit) and limit > 0 do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.nudge_candidates", fn ->
+      query =
+        from(c in Thread,
+          where: c.workspace_state in ["open", "needs_you", "error"] and is_nil(c.archived_at),
+          order_by: [asc: c.athanor_id, asc: c.id],
+          limit: ^limit,
+          select: %{athanor_id: c.athanor_id, id: c.id}
+        )
+
+      query =
+        case cursor do
+          nil ->
+            query
+
+          {athanor_id, id} ->
+            from(c in query,
+              where: c.athanor_id > ^athanor_id or (c.athanor_id == ^athanor_id and c.id > ^id)
+            )
+        end
+
+      {:ok, Arca.Repo.all(query)}
+    end)
+  end
+
+  @doc """
+  What the nudging job reads of one workspace thread: its `state`, its
+  `title`, its wait (`waits_since`), whether it is archived (`archived?`,
+  which is neither nudged nor reminded), whether it is quiet for `seconds`
+  and has no nudge unanswered (`due?`, for a thread that reads `open`),
+  and the turn a nudge is bound to now (`work`, as `%{id, person, origin,
+  options}`): the turn of Aqua's it would join, or the one whose person,
+  origin and options a turn it would open keeps (`nudge/3`); nil when it
+  would do neither.
+  """
+  @spec nudge_view(Prima.Actor.t(), String.t(), pos_integer()) ::
+          {:ok, map()} | {:error, term()}
+  def nudge_view(%Prima.Actor{athanor_id: athanor_id}, workspace_id, seconds)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
+             is_integer(seconds) and seconds > 0 do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.nudge_view", fn ->
+      case Arca.Repo.get_by(Thread, athanor_id: athanor_id, id: workspace_id, kind: "workspace") do
+        %Thread{} = thread ->
+          due? =
+            is_nil(thread.archived_at) and thread.workspace_state == "open" and
+              not unanswered_nudge?(athanor_id, thread.id) and
+              quiet?(athanor_id, thread.id, seconds)
+
+          {:ok,
+           %{
+             id: thread.id,
+             title: thread.title,
+             state: thread.workspace_state,
+             waits_since: thread.waits_since,
+             archived?: not is_nil(thread.archived_at),
+             due?: due?,
+             work: if(due?, do: bound_work(athanor_id, nudge_work(athanor_id, thread.id)))
+           }}
+
+        nil ->
+          {:error, :not_found}
+      end
+    end)
+  end
+
+  def nudge_view(%Prima.Actor{}, _workspace_id, _seconds), do: {:error, :no_athanor}
+
+  # The turn a nudge's choice names, as the caller binds to it.
+  # arca:db-raise-ok inside the caller's transaction
+  defp bound_work(athanor_id, {_join_or_open, turn_id}) do
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.id == ^turn_id,
+      select: %{id: t.id, person: t.requested_by, origin: t.origin, options: t.options}
+    )
+    |> Arca.Repo.one()
+  end
+
+  defp bound_work(_athanor_id, :busy), do: nil
+
+  # The thread's current work with nothing open there: none while an
+  # opening still waits for its turn, since the opening is the work;
+  # otherwise the newest of the thread's own turns by the thread's order,
+  # a page's call's aside.
+  # arca:db-raise-ok inside the caller's transaction
+  defp current_work(athanor_id, workspace_id) do
+    waiting =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace_id,
+        where: m.kind == "opening" and is_nil(m.turn_id) and is_nil(m.status)
+      )
+
+    unless Arca.Repo.exists?(waiting) do
+      from(t in Turn,
+        join: m in Message,
+        on: m.id == t.message_id and m.athanor_id == t.athanor_id,
+        where: t.athanor_id == ^athanor_id and t.thread_id == ^workspace_id,
+        where: m.kind != "page_call",
+        order_by: [desc: m.seq],
+        limit: 1,
+        select: %{id: t.id}
+      )
+      |> Arca.Repo.one()
+    end
+  end
+
+  @doc """
+  Whether the wait `waits_since` began at least `seconds` ago by the
+  database's clock: a reminder of it is due no sooner.
+  """
+  @spec waited?(DateTime.t(), pos_integer()) :: boolean() | {:error, :database_error}
+  def waited?(%DateTime{} = waits_since, seconds) when is_integer(seconds) and seconds > 0 do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.waited?", fn ->
+      DateTime.compare(
+        waits_since,
+        DateTime.add(Arca.ServerMetaStorage.now!(), -seconds, :second)
+      ) !=
+        :gt
+    end)
+  end
 
   # ---------------------------------------------------------------------------
   # Lifecycle
@@ -2269,7 +2872,9 @@ defmodule Arca.TurnStorage do
         if ended_call?(athanor_id, attrs), do: Arca.Repo.rollback(:call_ended)
 
         turn = join_sources!(athanor_id, turn, opened_sources!(athanor_id, turn, attrs))
-        insert_step!(athanor_id, turn, carried!(actor, athanor_id, turn, attrs))
+        step = insert_step!(athanor_id, turn, carried!(actor, athanor_id, turn, attrs))
+        :ok = consumed!(athanor_id, turn, step)
+        step
       end)
     end)
     |> Arca.Data.project()
@@ -3060,7 +3665,7 @@ defmodule Arca.TurnStorage do
             end
           end)
 
-          settled!(athanor_id, turn.thread_id)
+          settled!(athanor_id, turn.thread_id, decision in ["approved", "declined"])
 
           event!(athanor_id, turn, "approval.resolved", step.id, %{
             "approval_id" => approval_id,
@@ -3408,7 +4013,9 @@ defmodule Arca.TurnStorage do
   The rows a turn may read, in `seq` order: its own rows except an
   undrained steer, plus — behind its boundary — unattached rows and the
   rows of terminal turns of the thread. Rows attached to other open
-  turns are never read.
+  turns are never read, nor an opening still waiting for its own turn,
+  whose ask is read under that turn's person, origin and restrictions
+  alone.
   """
   @spec projection(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def projection(%Prima.Actor{athanor_id: athanor_id}, turn_id)
@@ -3425,6 +4032,7 @@ defmodule Arca.TurnStorage do
             where:
               (m.turn_id == ^turn_id and (m.sent_by == ^turn.agent or m.seq <= ^window)) or
                 (m.seq <= ^window and (is_nil(m.turn_id) or m.turn_id in subquery(settled))),
+            where: not (m.kind == "opening" and is_nil(m.turn_id) and is_nil(m.status)),
             order_by: [asc: m.seq]
           )
         )

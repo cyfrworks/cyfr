@@ -571,6 +571,7 @@ defmodule Aqua.Loop.Request do
   defp shape(%{kind: "opening"} = row, acc, opts), do: said(opening_text(row, opts), row, acc)
   defp shape(%{kind: "pointer"} = row, acc, _opts), do: said(pointer_text(row), row, acc)
   defp shape(%{kind: "report"} = row, acc, _opts), do: said(report_text(row), row, acc)
+  defp shape(%{kind: "nudge"} = row, acc, _opts), do: said(server_text(row), row, acc)
 
   defp shape(%{kind: "text"} = row, acc, opts) do
     me = Keyword.get(opts, :me)
@@ -582,10 +583,10 @@ defmodule Aqua.Loop.Request do
       is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
       request?(row) and own?(row, me) -> acc
       request?(row) -> said(request_text(row, opts), row, acc)
-      # Before the reader's own speech: a schedule's line is in the
-      # server's voice, which a request that names no reader reads as its
-      # own.
-      schedule = scheduled(row) -> said(schedule_text(schedule, row), row, acc)
+      # Before the reader's own speech: a line in the server's voice, a
+      # schedule's or the server's own post, which a request that names no
+      # reader reads as its own.
+      server?(row) -> said(server_text(row), row, acc)
       own?(row, me) -> spoken(row, acc)
       agent?(row) -> said("[#{row.sent_by}]\n#{row.content}", row, acc)
       true -> said(person_text(row, opts), row, acc)
@@ -679,22 +680,23 @@ defmodule Aqua.Loop.Request do
   defp agent?(%{sent_by: sent_by}), do: is_binary(sent_by) and sent_by != "person"
   defp agent?(_row), do: false
 
-  # A schedule's line, which its fire wrote for the person in the server's
-  # voice, naming the schedule (`Aqua.ScheduleTurns`).
-  defp scheduled(%{author: author} = row) do
-    with true <- author == Prima.Author.system(),
-         %{"id" => id, "name" => name} when is_binary(id) and is_binary(name) <-
-           Tape.payload(row)["schedule"] do
-      %{id: id, name: name}
-    else
-      _not_a_schedule -> nil
+  # A line in the server's voice: written by the server, never by the
+  # person or an agent.
+  defp server?(%{author: author}), do: author == Prima.Author.system()
+  defp server?(_row), do: false
+
+  # A schedule's line, which its fire wrote for the person, names the
+  # schedule (`Aqua.ScheduleTurns`); any other line of the server's is its
+  # own (`Aqua.Nudge`).
+  defp server_text(row) do
+    case Tape.payload(row)["schedule"] do
+      %{"id" => id, "name" => name} when is_binary(id) and is_binary(name) ->
+        "[The schedule \"#{name}\" (#{id}) fired with its line]\n#{row.content}"
+
+      _own ->
+        "[A line from the server, not the person]\n" <> (row.content || "")
     end
   end
-
-  defp scheduled(_row), do: nil
-
-  defp schedule_text(%{id: id, name: name}, row),
-    do: "[The schedule \"#{name}\" (#{id}) fired with its line]\n#{row.content}"
 
   defp request?(row),
     do: is_binary(Map.get(row, :addressee)) and Map.get(row, :status) in ["pending", "answered"]

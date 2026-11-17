@@ -1032,7 +1032,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
     socket
     |> hold_card(row)
-    |> then(&if(Threads.post?(row), do: upsert_message(&1, row), else: &1))
+    |> then(&if(drawn?(row), do: upsert_message(&1, row), else: &1))
     |> assign(:partials, Aqua.stream_landed(socket.assigns.partials, row))
     |> assign(:turn_replied, socket.assigns.turn_replied or replied?(row, socket))
   end
@@ -2782,12 +2782,17 @@ defmodule PrismWeb.ThreadPaneLive do
       "focus-visible:opacity-100 max-md:opacity-100 min-h-6 text-xs text-gray-500 hover:text-gray-300 px-1"
   end
 
+  # A post, and a line of the server's to the thread's Aqua (`Aqua.Nudge`),
+  # which is drawn as the server's and is no post.
+  defp drawn?(row), do: Threads.post?(row) or row.kind == "nudge"
+
   defp role_of(%{kind: "error"}), do: "error"
-  defp role_of(%{kind: "system"}), do: "system"
+  defp role_of(%{kind: kind}) when kind in ["system", "nudge"], do: "system"
   defp role_of(%{author: @agent_author}), do: "assistant"
 
-  defp role_of(%{author: @system_author} = msg),
-    do: if(fired_by(msg), do: "schedule", else: "user")
+  # A post in the server's voice: a schedule's line, or a post of the
+  # server's own (`Aqua.Nudge`), never the person's.
+  defp role_of(%{kind: "text", author: @system_author}), do: "server"
 
   defp role_of(_), do: "user"
 
@@ -2806,7 +2811,8 @@ defmodule PrismWeb.ThreadPaneLive do
     if name = fired_by(msg), do: "Schedule · #{name}"
   end
 
-  defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system"], do: nil
+  defp author_label(%{kind: kind}, _members, _ctx) when kind in ["error", "system", "nudge"],
+    do: nil
 
   # A workspace thread's pointer, whose post is its title, and its report,
   # which names it.
@@ -2840,6 +2846,6 @@ defmodule PrismWeb.ThreadPaneLive do
   defp role_class("user"), do: "bg-indigo-600 text-white"
   defp role_class("error"), do: "bg-red-900/40 text-red-300 border border-red-800"
   defp role_class("system"), do: "bg-gray-800/60 text-gray-400 border border-gray-800 italic"
-  defp role_class("schedule"), do: "bg-sky-950/50 text-sky-100 border border-sky-900/60"
+  defp role_class("server"), do: "bg-sky-950/50 text-sky-100 border border-sky-900/60"
   defp role_class(_), do: "bg-gray-800 text-gray-200"
 end

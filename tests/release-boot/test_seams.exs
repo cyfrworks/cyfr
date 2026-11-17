@@ -69,6 +69,7 @@ switched = [
   schedule_notes_enabled: Aqua.ScheduleNotes,
   schedule_turns_enabled: Aqua.ScheduleTurns,
   crew_delivery_enabled: Aqua.Crew,
+  nudge_enabled: Aqua.Nudge,
   execution_sweeper_enabled: Opus.Sweeper,
   execution_archive_watch_enabled: Opus.ArchiveWatch,
   worker_watch_enabled: Opus.WorkerWatch,

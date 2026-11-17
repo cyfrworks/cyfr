@@ -31,7 +31,15 @@ defmodule Arca.Schemas.Message do
   and a `report` the daily thread's post of a workspace thread's
   outcome. A pointer and a report
   name their workspace thread in `workspace_id`, by which they go with it
-  when it is deleted; no other row names one.
+  when it is deleted, as the server's post of its wait on its person
+  does: a `text` row sent by `system` on a daily thread, its payload's
+  `waits_since` the wait it names (`Aqua.Nudge`).
+
+  A `nudge` is the server's line to a quiet workspace thread's Aqua
+  (`Aqua.Nudge`), sent by `system` and written in the server's voice:
+  the ask to say where its work stands. It is no post: it counts as
+  nothing unread and reopens nothing. It is answered once a model step of
+  its turn carried it, and that step's id is its `resolved_by`.
   """
 
   use Ecto.Schema
@@ -48,7 +56,7 @@ defmodule Arca.Schemas.Message do
   # `page_call`'s `resolved_at` is when its request ended unanswered
   # (`Arca.TurnStorage.end_call/4`).
   @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted
-             opening pointer report page_call page_result)
+             opening pointer report page_call page_result nudge)
   @statuses ~w(pending running approved declined error expired answered)
 
   @doc """

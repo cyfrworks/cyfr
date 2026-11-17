@@ -2503,6 +2503,7 @@ defmodule Cyfr.Boundaries do
     schedule_notes_enabled: :seam,
     schedule_turns_enabled: :seam,
     crew_delivery_enabled: :seam,
+    nudge_enabled: :seam,
     status_watch_enabled: :seam,
     execution_sweeper_enabled: :seam,
     execution_archive_watch_enabled: :seam,

@@ -303,6 +303,19 @@ defmodule Aqua.Runner do
   options, which its root's admission reads (`Aqua.Loop`). No other
   caller passes it: the console and the thread tool build their options
   by name.
+
+  A post of the server's own (`Aqua.Nudge`'s of a workspace thread that
+  waits on its person) sends with `:server` and `:sent_by` the server's
+  (`Prima.Author.system/0`), as the athanor's person under the
+  `schedule` origin, into a daily thread: a turn of Aqua whatever names
+  its text holds, in the server's voice, with no schedule's occurrence or
+  grants. Unlike a schedule's line it steers a running or paused turn
+  whose sender, person, agent and origin are its own, as any send does,
+  except one paused on an uncertain call, which a line of the server's
+  never acknowledges: it is a turn of its own behind it. `:workspace_id`
+  names the workspace thread, `:wait` the wait it must still stand on and
+  `:claim` the sending job's claim and slot, all judged in the acceptance
+  (`Arca.TurnStorage.accept_message/3`).
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
@@ -310,6 +323,29 @@ defmodule Aqua.Runner do
     with :ok <- held() do
       opts = Keyword.put_new_lazy(opts, :agents, fn -> Aqua.Roster.roster(ctx) end)
       call(ctx, thread_id, {:send, ctx, text, opts})
+    end
+  end
+
+  @doc """
+  The server's nudge of a quiet workspace thread (`Aqua.Nudge`), as the
+  context's person under its origin, which are the thread's current
+  work's (`attrs`: `:content`, `:options`, `:work`, `:quiet`, `:claim`). It is
+  decided and accepted in storage under the thread's lock
+  (`Aqua.Tape.nudge/3`): it joins the turn that holds the thread when that
+  turn is Aqua's and asks a model, whose next model round reads it from
+  storage, or with no turn open there opens one, which this runner starts.
+  It never acknowledges a stopped turn for its person, never queues, and
+  carries no authority of its own. A thread whose turn a live peer holds
+  is joined there in storage alone, since that turn reads it from storage
+  wherever it runs.
+  """
+  @spec nudge(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def nudge(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    with :ok <- held() do
+      case call(ctx, thread_id, {:nudge, ctx, attrs}) do
+        {:error, :held_elsewhere} -> Tape.nudge(ctx, thread_id, Map.put(attrs, :join_only, true))
+        answer -> answer
+      end
     end
   end
 
@@ -558,6 +594,16 @@ defmodule Aqua.Runner do
     end
   end
 
+  defp handle_owned_call({:nudge, ctx, attrs}, _from, state) do
+    with :ok <- line_admitted(ctx),
+         {:ok, accepted} <- Tape.nudge(ctx, state.id, attrs) do
+      state = if accepted.turn, do: admitted(state, ctx, accepted.turn), else: state
+      {:reply, {:ok, accepted}, touch(state)}
+    else
+      {:error, _} = refused -> {:reply, refused, state}
+    end
+  end
+
   defp handle_owned_call({:page_call, call}, _from, state) do
     cond do
       length(state.pages) >= @queue_max ->
@@ -715,8 +761,13 @@ defmodule Aqua.Runner do
 
   defp steer?(%{live: %{} = live}, ctx, name, opts), do: steer?(live, send_of(ctx, name, opts))
 
-  defp steer?(%{live: nil, paused: %{} = paused}, ctx, name, opts),
-    do: steer?(paused, send_of(ctx, name, opts))
+  # A turn paused on an uncertain call goes on at its sender's next line,
+  # which acknowledges it (`acknowledge/2`); a post of the server's never
+  # acknowledges one, so it is a turn of its own behind it.
+  defp steer?(%{live: nil, paused: %{} = paused}, ctx, name, opts) do
+    not (Map.get(paused, :reason) == :uncertain and Keyword.get(opts, :server) == true) and
+      steer?(paused, send_of(ctx, name, opts))
+  end
 
   defp steer?(_state, _ctx, _name, _opts), do: false
 
@@ -858,33 +909,45 @@ defmodule Aqua.Runner do
         {:reply, {:ok, result(row, nil, false, :content)}, touch(state)}
 
       {:ok, %{message: row, turn: turn}} ->
-        entry = %{
-          turn_id: turn.id,
-          user_id: ctx.user_id,
-          sent_by: turn.sent_by,
-          job: job_of(turn),
-          ctx: ctx,
-          agent: name,
-          # What a continuation of this turn resumes under: the origin its
-          # row stores, never the context's as it stands later.
-          origin: turn.origin
-        }
-
-        state = %{state | agent: name}
-
-        state =
-          if busy?(state) do
-            state = %{state | queue: state.queue ++ [entry]}
-            broadcast(state, :queued, length(state.queue))
-            state
-          else
-            start(state, entry)
-          end
-
+        state = admitted(%{state | agent: name}, ctx, turn)
         {:reply, {:ok, result(row, turn.id, false, :turn)}, touch(state)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  # A turn accepted for this thread, started now or queued behind the one
+  # that runs.
+  defp admitted(state, ctx, turn) do
+    entry = %{
+      turn_id: turn.id,
+      user_id: ctx.user_id,
+      sent_by: turn.sent_by,
+      job: job_of(turn),
+      ctx: ctx,
+      agent: turn.agent,
+      # What a continuation of this turn resumes under: the origin its
+      # row stores, never the context's as it stands later.
+      origin: turn.origin
+    }
+
+    if busy?(state) do
+      state = %{state | queue: state.queue ++ [entry]}
+      broadcast(state, :queued, length(state.queue))
+      state
+    else
+      start(state, entry)
+    end
+  end
+
+  # What a server's line asks before it opens a turn: the athanor filled
+  # and the engine up, as a send's turn asks (`admit_turn/5`).
+  defp line_admitted(ctx) do
+    cond do
+      Sanctum.Provisioning.ready(ctx) != :ok -> {:error, :not_provisioned}
+      not Opus.available?() -> {:error, :execution_unavailable}
+      true -> :ok
     end
   end
 
@@ -945,7 +1008,8 @@ defmodule Aqua.Runner do
   end
 
   # A person's line is theirs; anything an agent sends is the agent's; a
-  # schedule's line, sent for its person, is in the server's voice.
+  # schedule's line, sent for its person, and a post of the server's own
+  # are in the server's voice.
   defp message(ctx, text, opts, addressee) do
     sent_by = Keyword.get(opts, :sent_by, Admission.person())
     reply = Keyword.get(opts, :reply)
@@ -970,9 +1034,14 @@ defmodule Aqua.Runner do
 
   defp author(ctx, sent_by, opts) do
     cond do
-      Keyword.has_key?(opts, :schedule) -> Prima.Author.system()
-      sent_by == Admission.person() -> ctx.user_id
-      true -> Prima.Author.agent()
+      Keyword.has_key?(opts, :schedule) or Keyword.get(opts, :server) == true ->
+        Prima.Author.system()
+
+      sent_by == Admission.person() ->
+        ctx.user_id
+
+      true ->
+        Prima.Author.agent()
     end
   end
 
@@ -989,12 +1058,15 @@ defmodule Aqua.Runner do
     end
   end
 
-  # What a crew delivery adds to an acceptance: the reply address of the
-  # turn a delivered request opens, the requests a reply answers, and the
-  # consumer's receipt.
+  # What a delivery adds to an acceptance: the reply address of the turn a
+  # delivered request opens, the requests a reply answers, the consumer's
+  # receipt, and for a post of the server's the wait it stands on and the
+  # sending job's claim.
   defp crew_attrs(attrs, opts) do
     attrs
     |> put_present(:receipt, Keyword.get(opts, :receipt))
+    |> put_present(:wait, Keyword.get(opts, :wait))
+    |> put_present(:claim, Keyword.get(opts, :claim))
     |> put_present(:answers, opts |> Keyword.get(:reply) |> answers())
     |> put_present(:reply_address, opts |> Keyword.get(:request) |> reply_address())
   end

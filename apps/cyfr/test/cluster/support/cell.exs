@@ -591,6 +591,7 @@ defmodule Cyfr.Cluster.Cell do
         # single-node suite drains or starts by hand, run on a timer and on
         # wake-ups as a shipped member runs them.
         {:crew_delivery_enabled, true},
+        {:nudge_enabled, true},
         {:status_watch_enabled, true},
         # The projection reconciler at its shipped settings: none are
         # configured anywhere but `config/test.exs`, which turns it off.

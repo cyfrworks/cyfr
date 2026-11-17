@@ -62,6 +62,7 @@ defmodule Cyfr.TestSeamsTest do
       :execution_archive_watch_enabled,
       :execution_sweeper_enabled,
       :external_server_reconciler_enabled,
+      :nudge_enabled,
       :provisioning_boot_enabled,
       :registry_health_probe,
       :retention_scheduler_enabled,

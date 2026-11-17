@@ -24,7 +24,12 @@ defmodule Arca.Schemas.Thread do
   (`workspace_outcomes/0`): how its work last ended since it last took
   new work (Aqua's report, the person's stop, or the server's error),
   which it becomes once nothing of it remains to run
-  (`Arca.TurnStorage`'s "Workspace threads"). A crew thread is a child
+  (`Arca.TurnStorage`'s "Workspace threads"), and its `waits_since`:
+  when it last came to wait on its person, reading `needs_you` or
+  `error`, or the person last acted on it while it still waited, by the
+  database's clock and always later than the value before it, so each
+  wait is told apart from the last; it is the wait a reminder names
+  (`Aqua.Nudge`) and stays once the thread stops waiting. A crew thread is a child
   thread a crew member (`agent`) works in under the room thread
   `parent_id` names, a daily or a workspace thread, one per member per
   room while it stands; `retired_at` is when a crew thread was retired,
@@ -93,6 +98,7 @@ defmodule Arca.Schemas.Thread do
     field :opened_from, :string
     field :workspace_state, :string
     field :workspace_outcome, :string
+    field :waits_since, :utc_datetime_usec
     field :notes, :string
     field :read_seq, :integer, default: 0
     field :brain_session, :string
@@ -155,6 +161,11 @@ defmodule Arca.Schemas.Thread do
     |> then(fn cs ->
       if kind != "workspace" and get_field(cs, :workspace_outcome) != nil,
         do: add_error(cs, :workspace_outcome, "only a workspace thread reports"),
+        else: cs
+    end)
+    |> then(fn cs ->
+      if kind != "workspace" and get_field(cs, :waits_since) != nil,
+        do: add_error(cs, :waits_since, "only a workspace thread waits on its person"),
         else: cs
     end)
     |> then(fn cs ->

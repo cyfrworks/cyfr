@@ -2552,6 +2552,7 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(kind = 'workspace') = (workspace_state IS NOT NULL) AND " <>
           "(kind = 'workspace' OR opened_from IS NULL) AND " <>
           "(kind = 'workspace' OR workspace_outcome IS NULL) AND " <>
+          "(kind = 'workspace' OR waits_since IS NULL) AND " <>
           "(kind = 'workspace' OR notes IS NULL) AND " <>
           "(kind = 'crew') = (parent_id IS NOT NULL) AND " <>
           "(kind <> 'crew' OR archived_at IS NULL) AND " <>
@@ -2601,6 +2602,11 @@ defmodule Arca.Repo.Migrations.Baseline do
       # the person's stop, the server's error): what it becomes once
       # nothing it accepted remains to run and no card waits.
       add :workspace_outcome, :string, check: if(sqlite?, do: workspace_outcome)
+      # When it last came to wait on its person (needs you or error), or the
+      # person last acted on it while it still waited, by the database's
+      # clock and later than the one before it: the wait its reminders
+      # name. Kept once it stops waiting, so the next wait starts later.
+      add :waits_since, :utc_datetime_usec
       # A workspace thread's notes, its own turns' to write: the note's
       # bytes with the provenance it was written with. They go with the row.
       add :notes, :text
@@ -2655,6 +2661,13 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:threads, [:athanor_id, :last_message_at])
     create index(:threads, [:athanor_id, :parent_id])
 
+    # The workspace threads a quiet period or a wait can make due
+    # (`Aqua.Nudge`): read across the cell a page at a time, never every
+    # thread.
+    create index(:threads, [:workspace_state, :athanor_id, :id],
+             where: "workspace_state IN ('open', 'needs_you', 'error')"
+           )
+
     # One turn holds at most one thread. Partial, so the null of a thread
     # nobody is working costs nothing and does not collide.
     create unique_index(:threads, [:active_turn_id], where: "active_turn_id IS NOT NULL")
@@ -2673,7 +2686,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :author, :string, null: false
       # text | approval | error | system | tool_call | tool_result |
       # compaction | turn_aborted | opening | pointer | report | page_call |
-      # page_result
+      # page_result | nudge
       add :kind, :string, null: false, default: "text"
       add :content, :text, null: false, default: ""
       # Kind-specific JSON: an approval's intent and proposal, a text
@@ -2684,7 +2697,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Approvals: pending | running | approved | declined | expired | error |
       # invalidated. A request to a crew member: pending | answered.
       add :status, :string
-      # A request's `resolved_by` is the id of the reply that answered it.
+      # A request's `resolved_by` is the id of the reply that answered it,
+      # a nudge's the model step whose request carried it.
       add :resolved_by, :string
       add :resolved_at, :utc_datetime_usec
       # Approvals: the decision's reason/result summary/scope, JSON.
@@ -2702,8 +2716,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :reply_to, :string
       # A reply's or notice's outcome.
       add :outcome, :string, check: if(sqlite?, do: message_outcome)
-      # The workspace thread a daily thread's pointer or report names,
-      # with which it is deleted. A plain string, from which nothing
+      # The workspace thread a daily thread's pointer, report or reminder
+      # names, with which it is deleted. A plain string, from which nothing
       # cascades.
       add :workspace_id, :string
       add :inserted_at, :utc_datetime_usec, null: false

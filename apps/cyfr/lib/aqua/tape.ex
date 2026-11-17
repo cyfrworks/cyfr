@@ -134,6 +134,63 @@ defmodule Aqua.Tape do
   defp reused(:message_id_reused), do: :message_id_reused
 
   @doc """
+  The server's nudge of a quiet workspace thread, accepted under the
+  thread's lock where it is decided afresh
+  (`Arca.TurnStorage.nudge/3`): it joins the turn that holds the thread
+  when that turn is Aqua's and asks a model, or opens one as the
+  context's person under its origin with the `:options` of the work it is
+  bound to (`:work`, the turn the binding was read from). `attrs`:
+  `:content`, `:options`, `:work`, `:quiet`, `:claim`,
+  `:slot`, `:join_only`. The row is broadcast after the commit, and a turn it
+  opened announced as an acceptance's is.
+  """
+  @spec nudge(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def nudge(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    storage = %{
+      message: %{content: Map.fetch!(attrs, :content)},
+      turn: line_turn(ctx, Map.get(attrs, :options, %{})),
+      work: Map.fetch!(attrs, :work),
+      quiet: Map.fetch!(attrs, :quiet),
+      claim: Map.fetch!(attrs, :claim),
+      slot: Map.fetch!(attrs, :slot),
+      join_only: Map.get(attrs, :join_only, false)
+    }
+
+    case TurnStorage.nudge(Sanctum.Context.actor(ctx), thread_id, storage) do
+      {:ok, %{message: message, turn: turn} = accepted} ->
+        announce_lists(ctx, thread_id, turn && {:started, turn})
+        broadcast(ctx, thread_id, :message, message)
+        {:ok, accepted}
+
+      other ->
+        other
+    end
+  end
+
+  # The turn a server's line opens: Aqua's, as the context's person under
+  # its origin, with the options of the work it is bound to.
+  defp line_turn(%Context{} = ctx, options) do
+    soul = Prima.AgentRef.soul_name()
+
+    %{
+      agent: soul,
+      requested_by: ctx.user_id,
+      model: nil,
+      options: Map.put(options, "agent", soul),
+      origin: ctx.origin
+    }
+  end
+
+  @doc """
+  As a turn a server's line opened first starts, whether its line still
+  stands to be answered (`Arca.TurnStorage.line_stands/2`); any other
+  turn's line stands. A store that cannot answer is `{:error, _}`.
+  """
+  @spec line_stands(Context.t(), turn()) :: {:ok, boolean()} | {:error, term()}
+  def line_stands(%Context{} = ctx, turn),
+    do: TurnStorage.line_stands(Sanctum.Context.actor(ctx), turn)
+
+  @doc """
   The acceptance a `client_id` already produced in this thread:
   its message and, when the row opened or steered a turn, that turn.
   `{:error, :not_found}` for a `client_id` never accepted.
@@ -1107,8 +1164,9 @@ defmodule Aqua.Tape do
   def payload(row), do: Threads.payload(row)
 
   @doc """
-  What `rows` carry of the athanor's other threads, as sources: a pointer
-  or a report names its workspace thread, and an opening the daily
+  What `rows` carry of the athanor's other threads, as sources: a row
+  naming a workspace thread (a pointer, a report, the server's post of
+  its wait) names it, and an opening the daily
   thread its refs are posts of, each a `thread` source
   (`Prima.Source.thread/1`) by which forgetting that thread finds the
   turn that read it; a report the sources its record kept of the turn
@@ -1121,9 +1179,8 @@ defmodule Aqua.Tape do
   def carried_sources(rows) when is_list(rows),
     do: Enum.flat_map(rows, &(carried(&1) ++ files_carried(&1)))
 
-  defp carried(%{kind: kind, workspace_id: id} = row)
-       when kind in ["pointer", "report"] and is_binary(id),
-       do: [Prima.Source.thread(id) | kept(row)]
+  defp carried(%{workspace_id: id} = row) when is_binary(id),
+    do: [Prima.Source.thread(id) | kept(row)]
 
   defp carried(%{kind: "opening"} = row) do
     case payload(row) do
