@@ -582,6 +582,13 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert skipped.id == s2.id and skipped.outcome == "skipped"
 
+      # Its result answers its call by the call's wire id and name, which a
+      # brain pairs it with.
+      result = Arca.Repo.get!(Message, skipped.result_message_id)
+
+      assert %{"tool_call_id" => "b", "name" => "files.write", "skipped" => true} =
+               Arca.ThreadStorage.payload(result)
+
       assert {:ok, %{status: "invalidated"}} = TurnStorage.approval(actor, approval.id)
 
       assert %{status: "invalidated"} = Arca.Repo.get!(Message, card.id)

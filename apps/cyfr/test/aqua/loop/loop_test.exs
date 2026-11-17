@@ -1222,6 +1222,74 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{status: "approved"}} = Tape.approval(ctx, approval.id)
   end
 
+  # A post lands while a call waits on its card; the resumed turn skips the
+  # call and asks the model again. The call is answered by its own skipped
+  # result, which names it, after the post, where the rows stand: no made-up
+  # unknown outcome, and no result that names no call. Both shipped
+  # adapters take that request, since each pairs the last message's result
+  # with a call of the assistant message nearest before it.
+  test "a post that lands while a call waits on its card leaves the call answered by its own " <>
+         "skipped result in the resumed request",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua keep a note")
+    args = %{"action" => "keep", "name" => "n", "content" => "x"}
+    script!([calls([{"c1", "notes", args}])])
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [_card]} = Tape.pending_approvals(ctx, paused)
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "actually, never mind"},
+        steer_turn_id: turn.id
+      })
+
+    ScriptedWorker.script([{:probe, self()}, reply("ok, dropped")])
+
+    resumed =
+      Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
+
+    assert_receive {:scripted_probe, worker, _}, 10_000
+
+    %{input: %{"params" => %{"messages" => messages}}} =
+      ScriptedWorker.calls() |> Enum.filter(&(&1.input["operation"] == "chat")) |> List.last()
+
+    send(worker, :continue)
+    assert :completed = Task.await(resumed, 60_000)
+
+    assert messages == [
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "text", "text" => "@aqua keep a note"}]
+             },
+             %{
+               "role" => "assistant",
+               "content" => [
+                 %{"type" => "tool_call", "id" => "c1", "name" => "notes", "arguments" => args}
+               ]
+             },
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "text", "text" => "actually, never mind"}]
+             },
+             %{
+               "role" => "tool",
+               "content" => [
+                 %{
+                   "type" => "tool_result",
+                   "tool_call_id" => "c1",
+                   "name" => "notes",
+                   "content" => "a newer message arrived",
+                   "is_error" => false
+                 }
+               ]
+             }
+           ]
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert %{action: "keep", outcome: "skipped"} = Enum.find(steps, &(&1.action == "keep"))
+  end
+
   test "a steer that lands while the last answer is written is answered before the turn completes",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")

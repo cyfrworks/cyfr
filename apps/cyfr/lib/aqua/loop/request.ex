@@ -789,47 +789,45 @@ defmodule Aqua.Loop.Request do
     |> Map.put(:message_id, Map.get(message, :message_id))
   end
 
-  # A call whose result never landed gets a synthetic one, so the
-  # provider sees every call answered and the model knows what happened.
-  defp answer_dangling_calls(messages) do
-    messages
-    |> Enum.chunk_every(2, 1, [nil])
-    |> Enum.flat_map(fn
-      [%{"role" => "assistant", "content" => blocks} = message, next] ->
-        calls = blocks |> Enum.filter(&(&1["type"] == "tool_call")) |> Enum.map(& &1["id"])
+  # A call whose result never landed gets a synthetic one right after it,
+  # so the provider sees every call answered and the model knows what
+  # happened. A call's results are those up to the next assistant message,
+  # its own group, past any post that landed between: a wire id a later
+  # round reuses answers that round's call alone.
+  defp answer_dangling_calls([%{"role" => "assistant", "content" => blocks} = message | rest]) do
+    answered =
+      for %{"role" => "tool", "content" => results} <-
+            Enum.take_while(rest, &(&1["role"] != "assistant")),
+          result <- results,
+          do: result["tool_call_id"]
 
-        answered =
-          case next do
-            %{"role" => "tool", "content" => results} -> Enum.map(results, & &1["tool_call_id"])
-            _ -> []
-          end
+    case calls(blocks) -- answered do
+      [] ->
+        [message | answer_dangling_calls(rest)]
 
-        case calls -- answered do
-          [] ->
-            [message]
+      missing ->
+        synthetic =
+          Enum.map(missing, fn id ->
+            name = Enum.find_value(blocks, fn b -> b["id"] == id && b["name"] end)
 
-          missing ->
-            synthetic =
-              Enum.map(missing, fn id ->
-                name = Enum.find_value(blocks, fn b -> b["id"] == id && b["name"] end)
+            %{
+              "type" => "tool_result",
+              "tool_call_id" => id,
+              "name" => name,
+              "content" => "The call's outcome is unknown; the tool may have partially executed.",
+              "is_error" => true
+            }
+          end)
 
-                %{
-                  "type" => "tool_result",
-                  "tool_call_id" => id,
-                  "name" => name,
-                  "content" =>
-                    "The call's outcome is unknown; the tool may have partially executed.",
-                  "is_error" => true
-                }
-              end)
-
-            [message, %{"role" => "tool", "content" => synthetic, message_id: nil}]
-        end
-
-      [message, _] ->
-        [message]
-    end)
+        [message, %{"role" => "tool", "content" => synthetic, message_id: nil}] ++
+          answer_dangling_calls(rest)
+    end
   end
+
+  defp answer_dangling_calls([message | rest]), do: [message | answer_dangling_calls(rest)]
+  defp answer_dangling_calls([]), do: []
+
+  defp calls(blocks), do: for(%{"type" => "tool_call"} = b <- blocks, do: b["id"])
 
   defp merge_same_role(messages) do
     Enum.reduce(messages, [], fn
