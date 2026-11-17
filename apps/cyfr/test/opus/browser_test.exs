@@ -170,8 +170,8 @@ defmodule Opus.BrowserTest do
     do:
       Provider.handle("browser", guest(ctx), Map.merge(args, Map.put(lineage, "action", action)))
 
-  defp holder(ctx) do
-    case Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id}) do
+  defp holder(ctx, chrome \\ :person) do
+    case Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, chrome}) do
       [{pid, _}] -> pid
       [] -> nil
     end
@@ -181,6 +181,27 @@ defmodule Opus.BrowserTest do
     {:ok, sessions} = Programs.running(ctx)
     Enum.filter(sessions, &(&1.by == :browser))
   end
+
+  # The session of the browser row `row` that runs now, or nil.
+  defp session_of(ctx, row),
+    do: Enum.find_value(browser_sessions(ctx), &(&1.row_id == row.id && &1.session))
+
+  # A running turn of crew member planner, in its thread under workspace
+  # thread `room`: its lineage.
+  defp crew!(ctx, room) do
+    {:ok, thread} = Threads.crew_thread(Sanctum.Context.actor(ctx), room, "planner")
+    {turn, lineage} = turn!(ctx, thread: thread)
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [agent: "planner"]
+      )
+
+    lineage
+  end
+
+  # The names of the browser rows whose sessions run now, in order.
+  defp running_rows(ctx), do: ctx |> browser_sessions() |> Enum.map(& &1.name) |> Enum.sort()
 
   defp eventually(check, what, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
     case check.() do
@@ -1890,6 +1911,261 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "the second Chrome" do
+    # A workspace thread opened apart, a turn running in it, and the row of
+    # the person's second browser beside their own.
+    setup %{ctx: ctx} do
+      room = workspace!(ctx, true)
+      {_turn, apart} = turn!(ctx, thread: %{id: room})
+      apart_row = browser_row!(ctx, %{name: Programs.Definition.browser_name(:apart)})
+      {:ok, apart: apart, apart_row: apart_row}
+    end
+
+    test "a thread opened apart gets a window of the second Chrome, and never one of the person's",
+         %{ctx: ctx, lineage: lineage, apart: apart} do
+      win = apart["thread_id"]
+      assert {:ok, _} = call(ctx, apart, "open", %{"url" => "https://example.com/"})
+      assert_receive {:driver, :req, apart_session, %{"op" => "open", "win" => ^win}}, 5_000
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+
+      # The person's own thread opens in their Chrome, a session of its own.
+      own = lineage["thread_id"]
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.org/"})
+      assert_receive {:driver, :req, person_session, %{"op" => "open", "win" => ^own}}, 5_000
+      refute person_session == apart_session
+
+      # Every later action of the thread kept apart reaches the second alone.
+      assert {:ok, _} = call(ctx, apart, "click", %{"ref" => "12"})
+      assert_receive {:driver, :req, ^apart_session, %{"op" => "click", "win" => ^win}}, 5_000
+      refute_received {:driver, :req, ^person_session, %{"win" => ^win}}
+      refute_received {:driver, :req, ^apart_session, %{"win" => ^own}}
+
+      assert Enum.sort(Opus.Browser.windows(ctx.athanor_id, ctx.user_id)) == Enum.sort([win, own])
+      assert running_rows(ctx) == ["aqua-browser", "aqua-browser-apart"]
+    end
+
+    test "without the second browser's row, a thread opened apart is refused and the person's Chrome does not start",
+         %{ctx: ctx, apart: apart, apart_row: apart_row} do
+      {:ok, _} =
+        Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), apart_row.name, %{
+          id: apart_row.id,
+          epoch: apart_row.epoch
+        })
+
+      assert refusal(call(ctx, apart, "open", %{"url" => "https://example.com/"})) ==
+               "This thread's work is kept apart, in Aqua's second browser, which was not found. " <>
+                 "The person adds it from the Aqua page, once."
+
+      refute_received {:session, "open", _open, _fields}
+      assert browser_sessions(ctx) == []
+
+      assert {:ok, %{browser: "added", apart: "not_added"}} =
+               Provider.handle("browser", ctx, %{"action" => "status"})
+    end
+
+    test "a crew member working under a thread opened apart has its window in the second Chrome alone",
+         %{ctx: ctx} do
+      crew = crew!(ctx, workspace!(ctx, true))
+      assert {:ok, _} = call(ctx, crew, "open", %{"url" => "https://example.com/"})
+      win = crew["thread_id"]
+      assert_receive {:driver, :req, _session, %{"op" => "open", "win" => ^win}}, 5_000
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+    end
+
+    test "without the second browser's row, a crew member under a thread opened apart is refused as that thread is",
+         %{ctx: ctx, apart: apart, apart_row: apart_row} do
+      {:ok, _} =
+        Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), apart_row.name, %{
+          id: apart_row.id,
+          epoch: apart_row.epoch
+        })
+
+      crew = crew!(ctx, workspace!(ctx, true))
+      refused = refusal(call(ctx, crew, "open", %{"url" => "https://example.com/"}))
+      assert refused == refusal(call(ctx, apart, "open", %{"url" => "https://example.com/"}))
+      assert refused =~ "kept apart, in Aqua's second browser, which was not found"
+      refute_received {:driver, :req, _session, %{"op" => "open"}}
+      refute_received {:session, "open", _open, _fields}
+      assert browser_sessions(ctx) == []
+    end
+
+    test "a crew member's thread whose workspace thread opened apart was removed is refused, and the person's Chrome does not start",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      room = workspace!(ctx, true)
+      {:ok, _child} = Threads.crew_thread(actor, room, "planner")
+      [opening] = Threads.messages(actor, room)
+
+      {:ok, %{turn: own}} =
+        TurnStorage.accept_message(actor, room, %{
+          opening_id: opening.id,
+          message: %{author: ctx.user_id, sent_by: "person", content: "look it up"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+        })
+
+      set_status(own, "running")
+
+      assert {:ok, %{workspace_state: "done"}} =
+               TurnStorage.report_workspace(actor, own.id, "done", %{
+                 fence: own.fence,
+                 summary: "Done"
+               })
+
+      set_status(own, "completed")
+
+      # The person speaks to the crew member directly after the work ended.
+      crew = crew!(ctx, room)
+      assert {:ok, _} = call(ctx, crew, "open", %{"url" => "https://example.com/"})
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+
+      # Retention removes the finished workspace thread; the crew turn lives on.
+      old = DateTime.add(DateTime.utc_now(), -60 * 86_400, :second)
+      {:ok, _} = Threads.update(actor, room, %{last_message_at: old})
+      cutoff = DateTime.add(DateTime.utc_now(), -30 * 86_400, :second)
+      assert {:ok, removed} = Threads.delete_before(actor, cutoff)
+      assert removed >= 1
+      assert {:error, :not_found} = Threads.get(actor, room)
+      assert {:ok, {_, _, _}} = Opus.Browser.turn(Opus.Browser.caller(guest(ctx), crew))
+
+      assert refusal(call(ctx, crew, "open", %{"url" => "https://example.org/"})) ==
+               "The browser's response is unavailable."
+
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+      assert holder(ctx, :person) == nil
+    end
+
+    test "a window of a thread that is gone is refused, and no Chrome starts", %{ctx: ctx} do
+      gone = Prima.UUID7.generate_id("thread")
+
+      assert {:error, :unavailable} =
+               Opus.Browser.watch(ctx, gone, %{width: 1280, height: 720}, fn -> true end)
+
+      refute_received {:session, "open", _open, _fields}
+      assert browser_sessions(ctx) == []
+      assert holder(ctx, :person) == nil and holder(ctx, :apart) == nil
+    end
+
+    test "a workspace thread whose first row is not its opening is refused, and no Chrome starts",
+         %{ctx: ctx} do
+      bare =
+        %Arca.Schemas.Thread{}
+        |> Arca.Schemas.Thread.changeset(%{
+          id: Prima.UUID7.generate_id("thread"),
+          athanor_id: ctx.athanor_id,
+          kind: "workspace",
+          workspace_state: "open",
+          title: "No opening",
+          created_by: ctx.user_id
+        })
+        |> Arca.Repo.insert!()
+
+      {_turn, lineage} = turn!(ctx, thread: bare)
+
+      assert refusal(call(ctx, lineage, "open", %{"url" => "https://example.com/"})) ==
+               "The browser's response is unavailable."
+
+      refute_received {:session, "open", _open, _fields}
+      assert browser_sessions(ctx) == []
+    end
+
+    test "the person watches a window kept apart and acts in it, in the second Chrome",
+         %{ctx: ctx, driver: driver, apart: apart} do
+      win = apart["thread_id"]
+      assert {:ok, _} = call(ctx, apart, "open", %{"url" => "https://example.com/"})
+      assert_receive {:driver, :req, apart_session, %{"op" => "open", "win" => ^win}}, 5_000
+      watch = watch!(ctx, win, %{width: 390, height: 844})
+
+      assert_receive {:driver, :req, ^apart_session,
+                      %{"op" => "cast", "id" => cast, "win" => ^win}},
+                     5_000
+
+      image = jpeg()
+      :ok = Driver.image(driver, cast, 1, image)
+      assert_receive {Opus.Browser, _ref, {:image, 1, %Programs.Output{bytes: ^image}}}, 5_000
+      :ok = Opus.Browser.seen(watch, 1)
+      assert_receive {:driver, :seen, ^apart_session, ^cast, 1}, 5_000
+
+      events = [
+        %{
+          "k" => "mouse",
+          "type" => "down",
+          "x" => 0.25,
+          "y" => 0.5,
+          "button" => "left",
+          "clicks" => 1,
+          "mods" => 0
+        }
+      ]
+
+      assert :ok = Opus.Browser.input(watch, events)
+      assert_receive {:driver, :input, ^apart_session, ^cast, ^events}, 5_000
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+    end
+
+    test "a page put into a window kept apart is handed to the second Chrome, and its call is answered there",
+         %{ctx: ctx, driver: driver, apart: apart} do
+      on_exit(&restart_page_calls/0)
+      :ok = Supervisor.terminate_child(Aqua.Supervisor, Aqua.PageCalls)
+      :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.page_calls())
+      win = apart["thread_id"]
+
+      assert {:ok, _} = call(ctx, apart, "page", %{"html" => "<p>hello</p>"})
+      assert_receive {:driver, :put, apart_session, %{"id" => put}, _bytes}, 5_000
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+
+      :ok = Driver.call(driver, apart_session, 3, win, put, "invoke", ~s({"v":1}))
+      assert_receive %PageCall{kind: :call, thread_id: ^win, request: request}, 5_000
+
+      # Its holder is the second Chrome's, which whoever holds the call monitors.
+      holder = holder(ctx, :apart)
+      assert {:ok, ^holder} = Opus.Browser.held(ctx.athanor_id, ctx.user_id, request, self())
+      assert :ok = Opus.Browser.answer(ctx.athanor_id, ctx.user_id, request, 200, ~s({"v":1}))
+      assert_receive {:driver, :answer, ^apart_session, 3, 200, ~s({"v":1})}, 5_000
+      assert holder(ctx, :person) == nil
+    end
+
+    test "the browser setting turning off closes both Chromes, and the second stops at its own idle time",
+         %{ctx: ctx, lineage: lineage, row: row, apart: apart, apart_row: apart_row} do
+      assert {:ok, _} = call(ctx, apart, "open", %{"url" => "https://example.com/"})
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.org/"})
+      person_session = session_of(ctx, row)
+      apart_session = session_of(ctx, apart_row)
+
+      # The second's idle stop ends it alone.
+      holder = holder(ctx, :apart)
+      :sys.replace_state(holder, &%{&1 | last_act: &1.last_act - 86_400_000})
+      {_timer, token} = :sys.get_state(holder).idle
+      send(holder, {:idle, token})
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^apart_session, reason: :closed},
+                     5_000
+
+      eventually(fn -> holder(ctx, :apart) == nil end, "the second's holder to stop")
+      assert [%{session: ^person_session}] = browser_sessions(ctx)
+
+      # Opened again, both close when the setting goes off.
+      assert {:ok, _} = call(ctx, apart, "open", %{"url" => "https://example.com/"})
+      apart_session = session_of(ctx, apart_row)
+      assert {:ok, %{on: false}} = Provider.handle("browser", ctx, %{"action" => "turn_off"})
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^person_session, reason: :closed},
+                     5_000
+
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^apart_session, reason: :closed},
+                     5_000
+
+      assert browser_sessions(ctx) == []
+
+      eventually(
+        fn -> holder(ctx, :apart) == nil and holder(ctx, :person) == nil end,
+        "both holders to stop"
+      )
+
+      assert refusal(call(ctx, apart, "open", %{"url" => "https://example.com/"})) ==
+               "The browser is turned off."
+    end
+  end
+
   describe "the person's watch" do
     test "a window's images go to the page that asked, one at a time, the driver told only once each was drawn",
          %{ctx: ctx, driver: driver, lineage: lineage} do
@@ -2568,7 +2844,7 @@ defmodule Opus.BrowserTest do
   end
 
   # A workspace thread of the person's, opened from a post of their day.
-  defp workspace!(ctx) do
+  defp workspace!(ctx, apart \\ false) do
     ctx = %{ctx | origin: :interactive}
     actor = Sanctum.Context.actor(ctx)
     {:ok, daily} = Aqua.Day.current(ctx)
@@ -2584,7 +2860,8 @@ defmodule Opus.BrowserTest do
         "thread" => daily.id,
         "refs" => [asked.id],
         "title" => "Look it up",
-        "ask" => "Look it up"
+        "ask" => "Look it up",
+        "apart" => apart
       })
 
     id

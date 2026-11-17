@@ -1099,6 +1099,32 @@ defmodule PrismWeb.ProgramsLiveTest do
     refute_received {:session, "open", _message, _fields}
   end
 
+  test "Aqua's second browser is added as the first is, under its own name and in a folder of its own",
+       %{conn: conn, athanor: athanor, user: user} do
+    controller!()
+    {view, _html} = mount_athanor(conn, "/programs?add=browser-apart&from=aqua", athanor)
+    render(view)
+
+    assert has_element?(view, ~s([data-test="add-browser-apart"]), "none of your sign-ins")
+    refute has_element?(view, ~s([data-test="add-browser"]))
+    assert has_element?(view, ~s(form#add-program input[name="name"][value="aqua-browser-apart"]))
+    assert has_element?(view, ~s(form#add-program input[name="command"][value="cyfr-browser"]))
+
+    view |> form("form#add-program", %{}) |> render_submit()
+    answered(view)
+
+    assert %{"details" => %{"command" => "cyfr-browser", "folder" => "new"}} =
+             asked(user, athanor, "mcp_servers.create")
+
+    confirm!(view, user, athanor, "mcp_servers.create")
+
+    assert {:ok, row} = Arca.McpServerStorage.get(ctx(athanor), "aqua-browser-apart")
+    assert Opus.Programs.Definition.browser?(row)
+    assert {:ok, %{id: id}} = Opus.Browser.row(athanor.id, :apart)
+    assert id == row.id
+    assert {:error, :not_added} = Opus.Browser.row(athanor.id)
+  end
+
   test "an install from a component's need asks once, then opens its terminal in the row's folder",
        %{conn: conn, athanor: athanor, user: user} do
     controller!()

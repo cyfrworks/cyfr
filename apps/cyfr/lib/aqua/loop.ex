@@ -1177,9 +1177,11 @@ defmodule Aqua.Loop do
           %{step: call_step, call: call, approval: nil}
         end)
 
-      # A page's calls the model's answer left waiting, a launch among
-      # them, run before the round's own; an answer that calls nothing
-      # asks the model nothing more.
+      # A page's waiting calls are placed in front of the round's own,
+      # with reads among them running beside each other as any batch's
+      # reads do.
+      # An answer that calls nothing asks the model nothing more.
+      # A page's calls alone start no further model round.
       state = %{state | model?: items != []}
       {pages, carded} = page_items(state)
       items = pages ++ items

@@ -2658,9 +2658,9 @@ defmodule Aqua.LoopTest do
         |> Threads.messages(thread.id)
         |> Enum.filter(&(&1.kind in ["page_call", "page_result"]))
 
-    test "proposed while the model answers, with no word to the loop, it runs once the model " <>
-           "has answered, before the round's own calls and before the next round asks, and " <>
-           "no model's request carries it",
+    test "a page's read proposed while the model answers, with no word to the loop, runs " <>
+           "with the round's own read after the answer and before the next round asks, " <>
+           "and no model's request carries the page's call",
          %{ctx: ctx, thread: thread} do
       turn = accept!(ctx, thread, "@aqua look around")
 
@@ -2687,9 +2687,11 @@ defmodule Aqua.LoopTest do
 
       assert page_id == page.id
       closed = step!(ctx, turn, page.id)
-      assert DateTime.compare(closed.started_at, own.started_at) != :gt
-      assert DateTime.compare(closed.ended_at, second.started_at) != :gt
-      assert DateTime.compare(first.ended_at, closed.started_at) != :gt
+
+      for read <- [closed, own] do
+        assert DateTime.compare(first.ended_at, read.started_at) != :gt
+        assert DateTime.compare(read.ended_at, second.started_at) != :gt
+      end
 
       # Its call and its answer are rows of their own, and the wire's answer.
       assert [%{kind: "page_call"}, %{kind: "page_result", content: body}] =
@@ -2698,11 +2700,67 @@ defmodule Aqua.LoopTest do
       assert %{"ok" => true} = Jason.decode!(body)
 
       # The second round's request carries the component call, not the page's.
-      [_first, %{input: %{"params" => %{"messages" => messages}}}] = chats()
+      [_, %{input: %{"params" => %{"messages" => messages}}}] = requests = chats()
       sent = Jason.encode!(messages)
       [%{payload: call} | _] = page_rows(ctx, thread)
       assert sent =~ "c1"
-      refute sent =~ Jason.decode!(call)["tool_call_id"]
+
+      for request <- requests do
+        refute Jason.encode!(request.input) =~ Jason.decode!(call)["tool_call_id"]
+      end
+    end
+
+    test "a page's waiting launch runs before the round's own write",
+         %{ctx: ctx, thread: thread} do
+      app = quiet_app!(ctx)
+
+      {:ok, _} =
+        Sanctum.ToolGrants.put(ctx, %{
+          scope: "thread",
+          thread_id: thread.id,
+          agent_name: "aqua",
+          tool: "notes",
+          action: "keep",
+          sources: [Prima.Source.outside("browser")],
+          effect: "allow"
+        })
+
+      start_supervised!({ScriptedWorker, ref: [@model, app], script: []})
+
+      ScriptedWorker.script([
+        {:probe, self()},
+        calls([
+          {"c1", "notes", %{"action" => "keep", "name" => "after-page", "content" => "kept"}}
+        ]),
+        {:probe, self()},
+        {:output, %{"answered" => true}},
+        reply("done")
+      ])
+
+      turn = accept!(ctx, thread, "@aqua show it and keep a note")
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+
+      launch =
+        page!(
+          ctx,
+          turn,
+          "execution.run",
+          %{
+            "reference" => app <> ":1.0.0",
+            "input" => %{"operation" => "go", "params" => %{}}
+          },
+          false
+        )
+
+      send(model, :continue)
+      assert_receive {:scripted_probe, runner, _child}, 30_000
+      assert {:error, {:not_found, "note", "after-page"}} = Aqua.Notes.read(ctx, "after-page")
+      send(runner, :continue)
+
+      assert :completed = Task.await(task, 60_000)
+      assert %{outcome: "ok", kind: "launch"} = step!(ctx, turn, launch.id)
+      assert {:ok, %{content: "kept"}} = Aqua.Notes.read(ctx, "after-page")
     end
 
     test "told while the model answers, it runs at once beside the model, once, and a " <>
