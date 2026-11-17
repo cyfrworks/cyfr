@@ -65,6 +65,8 @@ defmodule Cyfr.Test.AttemptFixtures do
     inputs its guest's children are stepped with (default `[]` and none);
   - `:reservation` — `true` to admit the row with the invocation
     reservation its authority's budget names, as a root is admitted;
+  - `:inputs` — the process that supplies the run's further inputs
+    (`Opus.Inputs`), none by default;
   - `:attach` — `false` to stop before attaching.
   """
   @spec attached!(keyword()) :: map()
@@ -125,7 +127,8 @@ defmodule Cyfr.Test.AttemptFixtures do
         deadline: deadline,
         worker: Keyword.get_lazy(opts, :worker, fn -> unreachable_worker(service_id) end),
         digest: digest,
-        grant: grant
+        grant: grant,
+        inputs: Keyword.get(opts, :inputs)
       )
 
     {:ok, issued} =

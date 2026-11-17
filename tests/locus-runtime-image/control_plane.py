@@ -388,6 +388,12 @@ class ControlPlane:
             return self.pin(args, caller)
         if op in ("take_rate", "record_denial", "release_child", "runner_exited"):
             return {"ok": True}
+        # As CYFR answers a run started with no supplier of further input
+        # (`Opus.Inputs`): none to read, and no one to record a report.
+        if op == "input_next":
+            return {"ok": None}
+        if op == "input_sent":
+            return {"error": "unavailable"}
         return {"error": "guest_error", "type": "dispatch_error", "message": "The scripted control plane has no answer for this call."}
 
     def pin(self, args, caller):
