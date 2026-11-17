@@ -874,6 +874,29 @@ defmodule Arca.NudgeStorageTest do
       assert posts(actor, today) == [row.id, first.id]
     end
 
+    test "a waiting thread archived, then taken out by new work in a crew member's thread under it, keeps its wait, so the day's post stands for it and no second lands",
+         %{actor: actor, daily: daily, held: held} do
+      {:ok, today} = Arca.Test.Days.thread(actor)
+      {wait, _, _} = waited!(actor, daily)
+      {:ok, %{message: first}} = post(actor, today, wait, held)
+      {:ok, child} = Threads.crew_thread(actor, wait.id, "planner")
+      assert {:ok, _} = Threads.archive(actor, wait.id)
+      assert {:error, :thread_archived} = post(actor, today, wait, held)
+
+      assert {:ok, %{turn: %{}}} =
+               TurnStorage.accept_message(actor, child.id, %{
+                 message: %{author: actor.user_id, sent_by: "person", content: "one more thing"},
+                 turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
+               })
+
+      assert %{archived_at: nil, workspace_state: "needs_you", waits_since: since} =
+               thread(actor, wait.id)
+
+      assert since == wait.waits_since
+      assert {:error, :duplicate_client_id} = post(actor, today, wait, held)
+      assert posts(actor, today) == [first.id]
+    end
+
     test "a claim lost lands no post", %{actor: actor, daily: daily, held: held} do
       {wait, _, _} = waited!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)

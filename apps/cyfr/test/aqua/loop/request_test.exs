@@ -323,7 +323,8 @@ defmodule Aqua.Loop.RequestTest do
 
     test "reads to the model as the schedule's line, naming it by name and id" do
       # Only the server's voice names a schedule: a person's line carrying
-      # the same payload, and a server's line with none, read as lines.
+      # the same payload reads as theirs, and a server's line with none as
+      # the server's own.
       theirs =
         struct(
           row(2, "text", "usr_a", "and this", %{
@@ -344,7 +345,10 @@ defmodule Aqua.Loop.RequestTest do
                  "content" => [
                    %{"type" => "text", "text" => @line},
                    %{"type" => "text", "text" => "Ann: and this"},
-                   %{"type" => "text", "text" => "#{@system}: a plain line"}
+                   %{
+                     "type" => "text",
+                     "text" => "[A line from the server, not the person]\na plain line"
+                   }
                  ]
                }
              ]

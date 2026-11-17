@@ -312,8 +312,8 @@ defmodule Aqua.Runner do
   grants. Unlike a schedule's line it steers a running or paused turn
   whose sender, person, agent and origin are its own, as any send does,
   except one paused on an uncertain call, which a line of the server's
-  never acknowledges: it is a turn of its own behind it. `:workspace_id` names
-  the workspace thread, `:wait` the wait it must still stand on and
+  never acknowledges: it is a turn of its own behind it. `:workspace_id`
+  names the workspace thread, `:wait` the wait it must still stand on and
   `:claim` the sending job's claim and slot, all judged in the acceptance
   (`Arca.TurnStorage.accept_message/3`).
   """
