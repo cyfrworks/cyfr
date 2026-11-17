@@ -45,8 +45,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import KEPT_ROOT, ROOT, Stack, eventually, expect, owner_of, require_docker  # noqa: E402
-import imagesuite  # noqa: E402
+from harness import ROOT, Stack, eventually, expect, owner_of, probe, require_docker  # noqa: E402
 
 with open(os.path.join(ROOT, "tests", "fixtures", "brain_wire.json"), encoding="utf-8") as _vectors:
     VECTORS = json.load(_vectors)
@@ -119,9 +118,16 @@ def harnesses(stack):
     return [p for p in stack.processes() if p["cmd"].startswith(f"node /probe/{FAKE}")]
 
 
-def home_has(stack, path):
-    probe = f"test -e '{KEPT_ROOT}/{HOME}/{path}' && echo present || echo absent"
-    return imagesuite.read_word(stack.exec(probe), ("present", "absent"), f"the probe of {path}") == "present"
+def home_has(c, path):
+    """Whether the brain row's folder holds `path`, as a probe program run in the same kept home, under
+    the same uid, finds it: no other uid, root's in the container among them, reads inside a home."""
+    client = c.mcp(OWNER, "probe", key="folder", home_id=HOME)
+    status, answer = client.call("run", {"argv": ["/bin/sh", "-c", f'test -e "$HOME/{path}" && echo present || echo absent']})
+    result = (answer or {}).get("result") or {}
+    expect(status == 200 and not result.get("isError") and "content" in result, f"the probe of {path} runs", answer)
+    word = json.loads(result["content"][0]["text"])["stdout"].strip()
+    expect(word in ("present", "absent"), f"the probe of {path} answers", word)
+    return word == "present"
 
 
 def main():
@@ -134,7 +140,7 @@ def main():
         stack.up()
         c = stack.controller()
         expect(c.hello()[0] == 200, "the backends service is greeted")
-        status, synced, _ = c.sync(OWNER, [PROGRAM])
+        status, synced, _ = c.sync(OWNER, [PROGRAM, probe(home="kept")])
         expect(status == 200, "an owner of the brain row, kept, is synced", synced)
 
         # ————— hello, and a listing with no harness running —————
@@ -218,14 +224,14 @@ def main():
 
         # ————— forget —————
         transcript = f".claude/projects/-fake/{session}.jsonl"
-        expect(home_has(stack, transcript) and home_has(stack, f".claude/projects/-fake/{other}.jsonl")
-               and home_has(stack, ".claude/.credentials.json"),
+        expect(home_has(c, transcript) and home_has(c, f".claude/projects/-fake/{other}.jsonl")
+               and home_has(c, ".claude/.credentials.json"),
                "both sessions' transcripts and the sign-in are in the folder (a positive control)")
         d.send({"t": "forget", "id": "obx_1", "session": session})
         expect(d.expect("forgot", "forget is answered") == {"t": "forgot", "id": "obx_1", "session": session},
                "by its id and the session")
-        expect(not home_has(stack, transcript), "the forgotten session's transcript is gone from the folder")
-        expect(home_has(stack, f".claude/projects/-fake/{other}.jsonl") and home_has(stack, ".claude/.credentials.json"),
+        expect(not home_has(c, transcript), "the forgotten session's transcript is gone from the folder")
+        expect(home_has(c, f".claude/projects/-fake/{other}.jsonl") and home_has(c, ".claude/.credentials.json"),
                "another session's transcript and the sign-in stay")
         d.send({"t": "forget", "id": "obx_2", "session": other})
         expect(d.expect("refused", "the running session is not forgotten")["id"] == "obx_2", "by its id")
@@ -233,7 +239,7 @@ def main():
         d.close()
 
         # ————— nothing of stderr, the folder or the sign-in —————
-        expect(home_has(stack, "canary.txt"), "the harness kept its folder's canary (a positive control)")
+        expect(home_has(c, "canary.txt"), "the harness kept its folder's canary (a positive control)")
         for canary in CANARIES:
             expect(not any(canary in line for line in seen), f"no line of the driver's carries {canary}")
 

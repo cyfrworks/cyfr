@@ -281,7 +281,8 @@ defmodule Cyfr.ApplicationTest do
                Opus.Host.Egress.Pins,
                Opus.HostListener,
                Opus.Programs,
-               Opus.Browser.Tree
+               Opus.Browser.Tree,
+               Opus.Brain.Tree
              ]},
             {Aqua.Supervisor,
              [
