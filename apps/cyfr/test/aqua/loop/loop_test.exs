@@ -2919,7 +2919,7 @@ defmodule Aqua.LoopTest do
 
       assert :completed = Task.await(task, 60_000)
       assert %{dispatch_state: "closed", outcome: "skipped"} = step!(ctx, turn, launch.id)
-      assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "go")) == 0
+      refute Enum.any?(ScriptedWorker.calls(), &(&1.input["operation"] == "go"))
     end
 
     test "a turn opened on a page's call whose request ended before the turn ran records no " <>
@@ -2962,7 +2962,7 @@ defmodule Aqua.LoopTest do
       assert :completed = Task.await(run(ctx, turn), 60_000)
       assert {:ok, %{status: "completed"} = ended} = Tape.turn(ctx, turn.id)
       assert {:ok, []} = Tape.steps(ctx, ended)
-      assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "go")) == 0
+      refute Enum.any?(ScriptedWorker.calls(), &(&1.input["operation"] == "go"))
     end
 
     test "a turn completes only once no page's call is still proposed in it",
