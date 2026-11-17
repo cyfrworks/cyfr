@@ -256,8 +256,8 @@ defmodule Arca.TurnStorage do
     reading `needs_you` or `error` since exactly `waits_since`
     (`{:error, :wait_moved}`), for at least `quiet` seconds by the
     database's clock (`{:error, :not_quiet}`). The row's payload keeps the
-    stamp. Its `client_id` names the wait on the day, so the row is its
-    own receipt.
+    stamp. Its `client_id` names the wait, and a daily thread is one day's,
+    so the row is its own receipt.
   - `:claim` — `%{claim, slot}`: the sending job's claim and this
     member's slot, judged last in the transaction as a receipt's are, so
     a claim or slot lost lands nothing (`{:error, :taken}`, `{:error,

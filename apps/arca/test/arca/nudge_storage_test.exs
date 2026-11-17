@@ -754,7 +754,7 @@ defmodule Arca.NudgeStorageTest do
               addressee: "aqua",
               content: Map.get(extra, :content, "Needs your attention: #{wait.title}"),
               workspace_id: wait.id,
-              client_id: "wait:#{wait.id}:#{DateTime.to_iso8601(since)}:#{day.day}"
+              client_id: "wait:#{wait.id}:#{DateTime.to_iso8601(since)}"
             },
             turn: %{
               agent: "aqua",

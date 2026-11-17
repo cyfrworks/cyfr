@@ -323,7 +323,7 @@ defmodule Aqua.NudgeTest do
              posts(ctx, today.id)
 
     assert post.workspace_id == workspace.id
-    assert post.client_id == Nudge.client_id(wait_of(waiting), today.day)
+    assert post.client_id == Nudge.client_id(wait_of(waiting))
     assert post.content == Nudge.reminder_post("Moon report", "needs_you")
     assert Tape.payload(post)["waits_since"] == DateTime.to_iso8601(waiting.waits_since)
 
@@ -496,7 +496,7 @@ defmodule Aqua.NudgeTest do
        %{ctx: ctx} do
     wait = waiting!(ctx, "Moon report")
     {:ok, today} = Aqua.Day.current(ctx)
-    client_id = Nudge.client_id(wait_of(wait), today.day)
+    client_id = Nudge.client_id(wait_of(wait))
 
     # The tick has read the day's thread and its post waits at the
     # thread's runner while another send of the wait's post lands.
@@ -587,7 +587,7 @@ defmodule Aqua.NudgeTest do
     assert tick(ctx) == %{"reminded:opened" => 1}
     assert {:ok, west} = Threads.day(actor(ctx), first)
     assert [post] = posts(ctx, west.id)
-    assert post.client_id == Nudge.client_id(wait_of(wait), first)
+    assert post.client_id == Nudge.client_id(wait_of(wait))
     await_status(ctx, post.turn_id, "completed")
 
     :ok = Aqua.Day.put_zone(ctx.user_id, @east)
@@ -596,7 +596,7 @@ defmodule Aqua.NudgeTest do
     assert tick(ctx) == %{"reminded:opened" => 1}
     assert {:ok, east} = Threads.day(actor(ctx), second)
     assert [again] = posts(ctx, east.id)
-    assert again.client_id == Nudge.client_id(wait_of(wait), second)
+    assert again.client_id == Nudge.client_id(wait_of(wait))
     await_status(ctx, again.turn_id, "completed")
     assert ids(posts(ctx, west.id)) == [post.id]
 

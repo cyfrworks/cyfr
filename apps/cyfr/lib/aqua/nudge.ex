@@ -53,9 +53,9 @@ defmodule Aqua.Nudge do
   known to be present, with no schedule's occurrence or grants; it opens
   a turn of Aqua's, steers one of the same sender and origin, or queues,
   and a refusal leaves the wait for the next tick. Its `client_id` names
-  the wait on the day (`client_id/2`), so the accepted post is the
-  receipt: one post per wait per daily thread, whatever its title has
-  become since. It says what was true when it was posted, and nothing
+  the wait (`client_id/1`), and a daily thread is one day's, so the
+  accepted post is the receipt: one post per wait per daily thread,
+  whatever its title has become since. It says what was true when it was posted, and nothing
   reads it again: a wait decided or archived after it leaves the post as
   history. The report that lands on the daily thread and the count stay
   as they are.
@@ -124,14 +124,13 @@ defmodule Aqua.Nudge do
         "and has not been acted on since."
 
   @doc """
-  The `client_id` of the server's post of a wait on the daily thread of
-  `day`: the workspace thread and the wait's stamp, so one wait is posted
-  once on a day.
+  The `client_id` of the server's post of a wait: the workspace thread and
+  the wait's stamp. A thread holds one row per `client_id`, and a daily
+  thread is one day's, so one wait is posted once on a day.
   """
-  @spec client_id(%{workspace_id: String.t(), waits_since: DateTime.t()}, Date.t()) ::
-          String.t()
-  def client_id(%{workspace_id: id, waits_since: %DateTime{} = since}, %Date{} = day),
-    do: "wait:#{id}:#{DateTime.to_iso8601(since)}:#{Date.to_iso8601(day)}"
+  @spec client_id(%{workspace_id: String.t(), waits_since: DateTime.t()}) :: String.t()
+  def client_id(%{workspace_id: id, waits_since: %DateTime{} = since}),
+    do: "wait:#{id}:#{DateTime.to_iso8601(since)}"
 
   @doc false
   def start_link(opts \\ []) do
@@ -286,7 +285,7 @@ defmodule Aqua.Nudge do
          {:ok, daily} <- Aqua.Day.current(ctx) do
       Enum.reduce_while(waits, {:ok, counts, claim}, fn view, {:ok, counts, claim} ->
         wait = %{workspace_id: view.id, waits_since: view.waits_since}
-        client_id = client_id(wait, daily.day)
+        client_id = client_id(wait)
 
         case Tape.accepted(ctx, daily.id, client_id) do
           {:error, :not_found} ->
