@@ -516,7 +516,7 @@ defmodule Aqua.Loop do
              }),
            # A server's line that no longer stands as its turn first starts
            # asks no model: the turn ends with nothing run.
-           stands? = Tape.line_stands?(ctx, started),
+           stands? = Tape.settle_lines(ctx, started),
            {:ok, spec} <-
              Turn.build(ctx, started,
                authority: claim.authority,

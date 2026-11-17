@@ -40,7 +40,9 @@ defmodule Arca.Schemas.Message do
   person, naming it in `workspace_id` and the wait in its payload's
   `waits_since`. It is no post: it counts as nothing unread and reopens
   nothing. A workspace thread's nudge is answered once a model step of
-  its turn carried it, and that step's id is its `resolved_by`.
+  its turn carried it, and that step's id is its `resolved_by`; a
+  reminder's row whose wait no longer stood when its turn started is
+  `expired`, and no request carries it.
   """
 
   use Ecto.Schema

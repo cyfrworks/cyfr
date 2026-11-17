@@ -316,7 +316,7 @@ defmodule Aqua.Runner do
   @doc """
   The server's nudge of a quiet workspace thread (`Aqua.Nudge`), as the
   context's person under its origin, which are the thread's current
-  work's (`attrs`: `:content`, `:options`, `:quiet`, `:claim`). It is
+  work's (`attrs`: `:content`, `:options`, `:work`, `:quiet`, `:claim`). It is
   decided and accepted in storage under the thread's lock
   (`Aqua.Tape.nudge/3`): it joins the turn that holds the thread when that
   turn is Aqua's and asks a model, whose next model round reads it from

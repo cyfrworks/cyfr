@@ -139,7 +139,8 @@ defmodule Aqua.Tape do
   (`Arca.TurnStorage.nudge/3`): it joins the turn that holds the thread
   when that turn is Aqua's and asks a model, or opens one as the
   context's person under its origin with the `:options` of the work it is
-  bound to. `attrs`: `:content`, `:options`, `:quiet`, `:claim`,
+  bound to (`:work`, the turn the binding was read from). `attrs`:
+  `:content`, `:options`, `:work`, `:quiet`, `:claim`,
   `:slot`, `:join_only`. The row is broadcast after the commit, and a turn it
   opened announced as an acceptance's is.
   """
@@ -148,6 +149,7 @@ defmodule Aqua.Tape do
     storage = %{
       message: %{content: Map.fetch!(attrs, :content)},
       turn: line_turn(ctx, Map.get(attrs, :options, %{})),
+      work: Map.fetch!(attrs, :work),
       quiet: Map.fetch!(attrs, :quiet),
       claim: Map.fetch!(attrs, :claim),
       slot: Map.fetch!(attrs, :slot),
@@ -207,12 +209,14 @@ defmodule Aqua.Tape do
   end
 
   @doc """
-  Whether a turn a server's line opened still has its line to answer as
-  it starts (`Arca.TurnStorage.line_stands?/2`); any other turn has.
+  As a turn a server's line opened first starts, whether its line still
+  stands to be answered, a reminder's rows of waits that no longer stand
+  left out of every request (`Arca.TurnStorage.settle_lines/2`); any
+  other turn's line stands.
   """
-  @spec line_stands?(Context.t(), turn()) :: boolean()
-  def line_stands?(%Context{} = ctx, turn),
-    do: TurnStorage.line_stands?(Sanctum.Context.actor(ctx), turn)
+  @spec settle_lines(Context.t(), turn()) :: boolean()
+  def settle_lines(%Context{} = ctx, turn),
+    do: TurnStorage.settle_lines(Sanctum.Context.actor(ctx), turn)
 
   @doc """
   The acceptance a `client_id` already produced in this thread:

@@ -127,6 +127,24 @@ defmodule Aqua.NudgeTest do
 
   defp tick(ctx), do: Map.get(Nudge.tick(), ctx.athanor_id, %{})
 
+  # A further opening of the workspace thread from the daily thread's
+  # person's post, under the schedule's narrower origin and tools.
+  defp further!(ctx, daily, workspace) do
+    asked = Enum.find(rows(ctx, daily.id), &(&1.sent_by == "person"))
+
+    Workspace.handle("workspace", %{ctx | origin: :schedule}, %{
+      "action" => "open",
+      "title" => "Narrow next work",
+      "thread" => daily.id,
+      "refs" => [asked.id],
+      "ask" => "only read the thread",
+      "workspace" => workspace.id,
+      "tools" => ["thread.events"]
+    })
+  end
+
+  defp past, do: DateTime.add(DateTime.utc_now(), -(Nudge.quiet_seconds() + 60), :second)
+
   # What each chat call of the model was sent, oldest first.
   defp sent do
     for %{input: %{"operation" => "chat"} = input} <- ScriptedWorker.calls(),
@@ -184,6 +202,66 @@ defmodule Aqua.NudgeTest do
     assert {:ok, []} = Tape.open_turns(ctx, workspace.id)
   end
 
+  test "a nudge joins Aqua's turn at work there whatever is queued behind it",
+       %{ctx: ctx, daily: daily} do
+    script!([
+      {:probe, self()},
+      reply("Still waiting."),
+      reply("Checked."),
+      reply("Next work done.")
+    ])
+
+    {workspace, active} = open!(ctx, daily)
+    assert_receive {:scripted_probe, player, _}, 60_000
+    assert {:ok, _} = further!(ctx, daily, workspace)
+    assert {:ok, %{"applied" => 1}} = Crew.drain(ctx.athanor_id)
+    :ok = aged!(ctx)
+
+    got = tick(ctx)
+    landed = nudges(ctx, workspace.id)
+    send(player, :continue)
+    await_status(ctx, active, "completed")
+    wait_until(fn -> Tape.open_turns(ctx, workspace.id) == {:ok, []} end, 45_000, "no turn open")
+
+    assert got == %{"joined" => 1}
+    assert [%{turn_id: ^active}] = landed
+  end
+
+  test "a nudge bound to work read before a narrower opening landed opens no turn under the older work",
+       %{ctx: ctx, daily: daily} do
+    script!([reply("On it."), reply("The older work's authority was used.")])
+    {workspace, first} = open!(ctx, daily)
+    await_status(ctx, first, "completed")
+    :ok = aged!(ctx)
+
+    # The tick has read the work and waits at the thread's runner while
+    # the opening lands, written by a member whose clock is behind.
+    {:ok, holder} = Aqua.Runner.ensure(workspace.id, ctx.athanor_id)
+    :sys.suspend(holder)
+    on_exit(fn -> if Process.alive?(holder), do: :sys.resume(holder) end)
+    ticking = Task.async(fn -> tick(ctx) end)
+
+    wait_until(
+      fn ->
+        {:messages, msgs} = Process.info(holder, :messages)
+        Enum.any?(msgs, &match?({:"$gen_call", _, {:nudge, _, _}}, &1))
+      end,
+      5_000,
+      "the nudge waiting at the runner"
+    )
+
+    assert {:ok, _} = further!(ctx, daily, workspace)
+
+    from(m in Message,
+      where: m.thread_id == ^workspace.id and m.kind == "opening" and is_nil(m.turn_id)
+    )
+    |> Arca.Repo.update_all(set: [inserted_at: past()])
+
+    :sys.resume(holder)
+    assert Task.await(ticking, 30_000) == %{"busy" => 1}
+    assert nudges(ctx, workspace.id) == []
+  end
+
   test "a workspace thread that needs the person is reminded once on the daily thread, " <>
          "by a turn of the daily thread's Aqua",
        %{ctx: ctx, daily: daily} do
@@ -224,5 +302,89 @@ defmodule Aqua.NudgeTest do
     :ok = aged!(ctx, waits: false)
     assert tick(ctx) == %{}
     assert length(nudges(ctx, today.id)) == 1
+  end
+
+  test "one reminder names every wait of the athanor, whatever page of candidates it came on",
+       %{ctx: ctx, daily: daily} do
+    script!([
+      reply("On it."),
+      {:probe, self()},
+      reply("These need you."),
+      reply("More need you.")
+    ])
+
+    {workspace, first} = open!(ctx, daily)
+    await_status(ctx, first, "completed")
+
+    for i <- 1..100 do
+      Arca.Repo.insert!(%Thread{
+        id: Prima.UUID7.generate_id("thread"),
+        athanor_id: ctx.athanor_id,
+        created_by: ctx.user_id,
+        kind: "workspace",
+        title: "Waiting #{i}",
+        workspace_state: "error",
+        workspace_outcome: "error",
+        waits_since: past()
+      })
+    end
+
+    from(t in Thread, where: t.id == ^workspace.id)
+    |> Arca.Repo.update_all(
+      set: [workspace_state: "error", workspace_outcome: "error", waits_since: past()]
+    )
+
+    assert %{"reminded:opened" => 1} = tick(ctx)
+    assert_receive {:scripted_probe, player, _}, 60_000
+    {:ok, today} = Aqua.Day.current(ctx)
+    first_rows = nudges(ctx, today.id)
+    send(player, :continue)
+    await_status(ctx, hd(first_rows).turn_id, "completed")
+
+    assert tick(ctx) == %{}
+    all = nudges(ctx, today.id)
+    assert length(first_rows) == 101
+    assert length(all) == 101
+    assert [_one] = Enum.uniq(Enum.map(all, & &1.turn_id))
+  end
+
+  test "a reminder's turn that starts late leaves out what Aqua reads of a wait archived since",
+       %{ctx: ctx, daily: daily} do
+    script!([reply("On it one."), reply("On it two."), reply("These need you.")])
+    {one, first} = open!(ctx, daily)
+    await_status(ctx, first, "completed")
+    {two, second} = open!(ctx, daily)
+    await_status(ctx, second, "completed")
+    ids = [one.id, two.id]
+    since = past()
+
+    from(t in Thread, where: t.id in ^ids)
+    |> Arca.Repo.update_all(
+      set: [workspace_state: "error", workspace_outcome: "error", waits_since: since]
+    )
+
+    {:ok, today} = Aqua.Day.current(ctx)
+    {:ok, claim} = Arca.JobClaims.claim("aqua_nudge", ctx.athanor_id, Prima.Boot.id(), 60_000)
+    {:ok, slot} = Arca.ControlPlane.member_slot()
+
+    # Accepted and left for the runner to start, then the first thread is
+    # archived.
+    {:ok, %{turn: turn}} =
+      Tape.remind(%{ctx | origin: :schedule}, today.id, %{
+        claim: claim,
+        slot: slot,
+        waits: [
+          %{workspace_id: one.id, waits_since: since, content: "ARCHIVED_WAIT needs you."},
+          %{workspace_id: two.id, waits_since: since, content: "CURRENT_WAIT needs you."}
+        ]
+      })
+
+    from(t in Thread, where: t.id == ^one.id)
+    |> Arca.Repo.update_all(set: [archived_at: DateTime.utc_now()])
+
+    {:ok, _} = Aqua.Runner.ensure(today.id, ctx.athanor_id)
+    await_status(ctx, turn.id, "completed")
+    assert List.last(sent()) =~ "CURRENT_WAIT"
+    refute List.last(sent()) =~ "ARCHIVED_WAIT"
   end
 end

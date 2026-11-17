@@ -21,17 +21,22 @@ defmodule Aqua.Nudge do
   the daily thread.
 
   The line joins the turn that holds the thread when that turn is Aqua's
-  and asks a model, read at its next model round from storage on
-  whichever member runs it; with no turn open there it opens one, bound to
-  the thread's current work: the newest turn of Aqua's there, whose
-  person, origin and tools it keeps, the person's standing asked again
-  (`Sanctum.Tenancy.continuation/3`); while an opening waits for its turn
-  the opening is the work and no nudge opens a turn. Anything else open
-  there (a page's call's turn, a turn paused on a card or an uncertain
-  call, a queued one) leaves it to the next tick. An archived thread is
-  neither nudged nor reminded, and no line of this process's takes one
-  out of the archive. No second nudge comes while one is unanswered: until a model round of its turn has carried it
-  and closed, or its turn ended. A nudge's turn is the thread's work as
+  and asks a model, whatever waits behind it, read at its next model
+  round from storage on whichever member runs it, a steer that keeps that
+  turn's own person, origin and restrictions; with no turn open there it
+  opens one, bound to the thread's current work: the newest turn of
+  Aqua's there, whose person, origin and tools it keeps, the person's
+  standing asked again (`Sanctum.Tenancy.continuation/3`). While an
+  opening waits for its turn, or a turn is queued with nothing holding
+  the thread, that is the work and no nudge opens a turn. The tick binds
+  to the turn it read, and the acceptance refuses a binding the thread's
+  lock no longer finds, so authority is never borrowed from work that
+  moved. Anything else open there (a page's call's turn, a turn paused
+  on a card or an uncertain call) leaves it to the next tick. An
+  archived thread is neither nudged nor reminded, and no line of this
+  process's takes one out of the archive. No second nudge comes while one
+  is unanswered: until a model round of its turn has carried it and
+  closed, or its turn ended. A nudge's turn is the thread's work as
   any turn is; one that ends with no report leaves the thread working,
   and the next quiet period runs from its end.
 
@@ -46,15 +51,18 @@ defmodule Aqua.Nudge do
   it names, naming its workspace thread, as the person under the
   `schedule` origin, since nobody is known to be present: it opens no
   card and borrows no schedule's occurrence or grants. A daily thread
-  reminds of a wait at most once (`Arca.TurnStorage.remind/3`). The report
-  that lands on the daily thread and the count stay as they are.
+  reminds of a wait at most once (`Arca.TurnStorage.remind/3`), and one
+  tick's reminder names every wait then due. A wait that no longer stands
+  when the reminder's turn starts is left out of what Aqua reads
+  (`Arca.TurnStorage.settle_lines/2`). The report that lands on the daily
+  thread and the count stay as they are.
 
   ## The tick
 
   Every minute this process reads the cell's workspace threads that read
-  working, needs you or error a page at a time
-  (`Arca.TurnStorage.nudge_candidates/2`) and works each athanor's under
-  its job claim (`Arca.JobClaims`, kind `aqua_nudge`, keyed by the
+  working, needs you or error, a page at a time
+  (`Arca.TurnStorage.nudge_candidates/2`), and works each athanor's
+  together, whatever pages they came on, under its job claim (`Arca.JobClaims`, kind `aqua_nudge`, keyed by the
   athanor), renewed before each acceptance and held in each acceptance's
   transaction, so a claim lost lands nothing more. It keeps nothing
   between ticks: whether a thread is due is decided from the rows each
@@ -138,12 +146,17 @@ defmodule Aqua.Nudge do
   end
 
   @doc """
-  One tick: every page of candidates, each athanor's under its claim.
-  Answers what each athanor's work landed, by athanor. Never raises.
+  One tick: each athanor's candidates, every page of them read, under its
+  claim. Answers what each athanor's work landed, by athanor. Never
+  raises.
   """
   @spec tick() :: %{String.t() => map() | :busy | {:stopped, term()}}
   def tick do
-    pages(nil, %{})
+    candidates()
+    |> Stream.chunk_by(& &1.athanor_id)
+    |> Map.new(fn [%{athanor_id: athanor_id} | _] = threads ->
+      {athanor_id, athanor(athanor_id, threads)}
+    end)
   catch
     # A tick has no caller to answer to: a read that raises must not take
     # the process down, whose restart would tick again at once.
@@ -155,34 +168,34 @@ defmodule Aqua.Nudge do
       %{}
   end
 
-  defp pages(cursor, done) do
-    case TurnStorage.nudge_candidates(cursor, @page) do
-      {:ok, []} ->
-        done
+  # The cell's candidates in athanor order, read a page at a time: the
+  # pages bound each read, and an athanor's candidates are worked together
+  # whatever page they came on, so its reminder names every wait due. A
+  # page not read stops the tick before the athanor it was in is worked
+  # with only some of its waits.
+  defp candidates do
+    Stream.unfold(nil, fn
+      :done ->
+        nil
 
-      {:ok, rows} ->
-        done =
-          rows
-          |> Enum.chunk_by(& &1.athanor_id)
-          |> Enum.reduce(done, fn [%{athanor_id: athanor_id} | _] = threads, done ->
-            worked = athanor(athanor_id, threads)
-            Map.update(done, athanor_id, worked, &merge(&1, worked))
-          end)
+      cursor ->
+        case TurnStorage.nudge_candidates(cursor, @page) do
+          {:ok, rows} when length(rows) < @page ->
+            {rows, :done}
 
-        last = List.last(rows)
-        if length(rows) < @page, do: done, else: pages({last.athanor_id, last.id}, done)
+          {:ok, rows} ->
+            last = List.last(rows)
+            {rows, {last.athanor_id, last.id}}
 
-      {:error, reason} ->
-        Logger.warning("[Aqua.Nudge] candidates not read: #{inspect(reason)}")
-        done
-    end
+          {:error, reason} ->
+            raise "candidates not read: #{inspect(reason)}"
+        end
+    end)
+    |> Stream.concat()
   end
 
-  defp merge(%{} = a, %{} = b), do: Map.merge(a, b, fn _k, x, y -> x + y end)
-  defp merge(_a, b), do: b
-
-  # One athanor's candidates of one page, under its claim, given up when
-  # the work ends.
+  # One athanor's candidates, under its claim, given up when the work
+  # ends.
   defp athanor(athanor_id, threads) do
     case JobClaims.claim("aqua_nudge", athanor_id, Prima.Boot.id(), @lease_ms) do
       {:ok, claim} ->
@@ -297,14 +310,21 @@ defmodule Aqua.Nudge do
 
   # What the work's turn was asked to work under: the tools it narrowed to
   # and the brain options it set.
-  defp nudge_attrs(%{options: options}, claim, slot) do
+  defp nudge_attrs(%{options: options} = work, claim, slot) do
     kept =
       case is_binary(options) && Jason.decode(options) do
         {:ok, %{} = stored} -> Map.take(stored, ["tools", "brain_options"])
         _none -> %{}
       end
 
-    %{content: @nudge, options: kept, quiet: @quiet_seconds, claim: claim, slot: slot}
+    %{
+      content: @nudge,
+      options: kept,
+      work: work.id,
+      quiet: @quiet_seconds,
+      claim: claim,
+      slot: slot
+    }
   end
 
   defp landed({:ok, %{joined: true}}), do: "joined"
