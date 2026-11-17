@@ -1012,9 +1012,9 @@ defmodule Opus.Programs.TerminalTest do
     end
   end
 
-  defp browser_row(ctx),
+  defp browser_row(ctx, chrome \\ :person),
     do:
-      program_row(ctx, Programs.Definition.browser_name(), %{
+      program_row(ctx, Programs.Definition.browser_name(chrome), %{
         memory_bytes: 1_073_741_824,
         home_max_bytes: nil,
         config_json: Jason.encode!(%{"command" => "cyfr-browser", "env" => %{}})
@@ -1063,6 +1063,26 @@ defmodule Opus.Programs.TerminalTest do
                  System.system_time(:millisecond) + 5_000
                )
 
+      refute_received {:session, "open", _message, _fields}
+    end
+
+    test "its second row, for work kept apart, starts a session of its own beside the first, one of each at a time",
+         %{ctx: ctx} do
+      browser = browser_row(ctx)
+      apart = browser_row(ctx, :apart)
+
+      # Each row's session runs in that row's own kept folder.
+      assert {:ok, first} = browser_start(ctx, browser.id)
+      assert_receive {:session, "open", %{"key" => ^first, "home_id" => first_home}, _}, 2_000
+      assert {:ok, second} = browser_start(ctx, apart.id)
+      assert_receive {:session, "open", %{"key" => ^second, "home_id" => second_home}, _}, 2_000
+      assert {first_home, second_home} == {browser.id, apart.id}
+
+      assert {:error, :already_running} = browser_start(ctx, browser.id)
+      assert {:error, :already_running} = browser_start(ctx, apart.id)
+
+      {:ok, sessions} = Programs.running(Programs.browser(ctx.athanor_id, ctx.user_id))
+      assert Enum.sort(Enum.map(sessions, & &1.row_id)) == Enum.sort([browser.id, apart.id])
       refute_received {:session, "open", _message, _fields}
     end
 

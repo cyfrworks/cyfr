@@ -74,8 +74,10 @@ defmodule Aqua.Providers.Browser do
 
   ## The setting
 
-  `turn_on` and `turn_off` set the person's browser setting; `status`
-  reads it, with whether Aqua's browser is added and running. The
+  `turn_on` and `turn_off` set the person's browser setting, which holds
+  for both of Aqua's browsers; `status` reads it, with whether each is
+  added (`browser`, the person's; `apart`, the second, which a workspace
+  thread opened apart uses) and whether either runs. The
   person calls them from the Aqua page; a turn calls them too, proved as
   the running turn itself. `turn_on` is never standing (`standing:
   false`): a turn's call asks with a card in its thread each time, so
@@ -339,16 +341,13 @@ defmodule Aqua.Providers.Browser do
   defp action("status", ctx, args) do
     with {:ok, _who} <- person_or_turn(ctx, args),
          {:ok, on} <- Aqua.BrowserSetting.allowed?(ctx) |> unavailable() do
-      added =
-        case Opus.Browser.row(ctx.athanor_id) do
-          {:ok, _row} -> "added"
-          {:error, :not_added} -> "not_added"
-          {:error, :disabled} -> "disabled"
-          {:error, _other} -> "not_browser"
-        end
-
       {:ok,
-       %{on: on, browser: added, running: Opus.Browser.running?(ctx.athanor_id, ctx.user_id)}}
+       %{
+         on: on,
+         browser: added(ctx, :person),
+         apart: added(ctx, :apart),
+         running: Opus.Browser.running?(ctx.athanor_id, ctx.user_id)
+       }}
     end
   end
 
@@ -406,6 +405,17 @@ defmodule Aqua.Providers.Browser do
 
   defp action(action, _ctx, _args),
     do: {:error, {:invalid_argument, "browser.#{action}: the arguments are incomplete"}}
+
+  # Whether the row of Aqua's browser `chrome` is added, in the words
+  # `status` answers.
+  defp added(ctx, chrome) do
+    case Opus.Browser.row(ctx.athanor_id, chrome) do
+      {:ok, _row} -> "added"
+      {:error, :not_added} -> "not_added"
+      {:error, :disabled} -> "disabled"
+      {:error, _other} -> "not_browser"
+    end
+  end
 
   defp answered("read", _ctx, _caller, args, answer) do
     text = Map.get(answer, "text", "")
@@ -719,6 +729,22 @@ defmodule Aqua.Providers.Browser do
       )
 
   defp refusal(:not_browser), do: conflict("This program is not Aqua's browser.")
+
+  defp refusal({:apart, :not_added}),
+    do:
+      conflict(
+        "This thread's work is kept apart, in Aqua's second browser, which was not found. " <>
+          "The person adds it from the Aqua page, once."
+      )
+
+  defp refusal({:apart, :not_browser}),
+    do: conflict("The program named aqua-browser-apart is not Aqua's second browser.")
+
+  defp refusal({:apart, :disabled}),
+    do:
+      conflict(
+        "Aqua's second browser is disabled on the Programs page; the person enables it there."
+      )
 
   defp refusal(:disabled),
     do: conflict("Aqua's browser is disabled on the Programs page; the person enables it there.")

@@ -12,6 +12,19 @@ defmodule Opus.Browser do
   else), not a turn, so it outlasts the turn that started it and serves
   every later turn of that person.
 
+  ## Two Chromes
+
+  The person has two: their own, the row named `aqua-browser`, and a
+  second, `aqua-browser-apart`, for work a workspace thread keeps apart
+  (`Opus.Programs.Definition.browser_name/1`). Each is its own row, so its
+  own kept folder, profile and hosts, and its own session of the same
+  owner; they share no cookie and no storage. A thread's window is in
+  the second when the thread is a workspace thread whose first opening
+  was made apart, and in the person's otherwise (`chrome/2`), read from
+  the store for every action, put and watch, so a thread kept apart never
+  has a window in the person's Chrome. Everything below holds of each
+  alike: its holder, its setting, its idle stop, its puts and their calls.
+
   ## Who acts on it
 
   `act/3` runs one action of the browser tool for a caller the session
@@ -33,7 +46,7 @@ defmodule Opus.Browser do
 
   ## Its life
 
-  One holder process per person, found by name, starts the session when
+  One holder process per person and Chrome, found by name, starts the session when
   a turn first needs it, or when the person watches a window, and is its
   one attached process. The holder is registered under its name before
   it reads the setting, and it reads the setting, through the check
@@ -47,9 +60,9 @@ defmodule Opus.Browser do
   session ends as any does: its program exits, the person closes it from
   what is running, its row changes, its person no longer stands. Every
   request waiting then is answered, and the profile stays in its folder.
-  A holder that finds a session of the person's browser it does not hold
-  closes it before it starts its own. At most four windows are open at
-  once; a fifth is refused (`:too_many_windows`).
+  A holder that finds a session of its row it does not hold closes it
+  before it starts its own. At most four windows are open at once in each
+  Chrome; a fifth is refused (`:too_many_windows`).
 
   ## The driver's protocol
 
@@ -163,6 +176,8 @@ defmodule Opus.Browser do
 
   @registry Opus.Browser.Registry
   @holders Opus.Browser.Holders
+  # The person's Chrome, and the second, for workspace threads kept apart.
+  @chromes [:person, :apart]
   @max_windows 4
   # What `act/4` runs; a page is put (`put/3`).
   @ops ~w(open read click type key screenshot close)
@@ -205,14 +220,15 @@ defmodule Opus.Browser do
   def memory_bytes, do: setting("browser_memory_bytes")
 
   @doc """
-  The athanor's row of Aqua's browser: `{:ok, row}`, `{:error, :not_added}`
-  when it holds none, `{:error, :not_browser}` for a row of the browser's
-  name with another definition, `{:error, :disabled}` for one that is
-  disabled.
+  The athanor's row of Aqua's browser `chrome`, the person's unless
+  named: `{:ok, row}`, `{:error, :not_added}` when it holds none,
+  `{:error, :not_browser}` for a row of the browser's name with another
+  definition, `{:error, :disabled}` for one that is disabled. A turn's
+  action in a thread kept apart is refused these as `{:apart, reason}`.
   """
-  @spec row(String.t()) :: {:ok, map()} | {:error, term()}
-  def row(athanor_id) when is_binary(athanor_id) do
-    name = Programs.Definition.browser_name()
+  @spec row(String.t(), Programs.Definition.chrome()) :: {:ok, map()} | {:error, term()}
+  def row(athanor_id, chrome \\ :person) when is_binary(athanor_id) do
+    name = Programs.Definition.browser_name(chrome)
 
     case Arca.McpServerStorage.list(Prima.Actor.in_athanor(athanor_id)) do
       {:ok, rows} ->
@@ -225,6 +241,13 @@ defmodule Opus.Browser do
         {:error, :unavailable}
     end
   end
+
+  # A refusal of the second browser's row names it: the person adds,
+  # enables or renames that row, not their own browser's.
+  defp of_chrome({:error, reason}, :apart) when reason in [:not_added, :not_browser, :disabled],
+    do: {:error, {:apart, reason}}
+
+  defp of_chrome(answer, _chrome), do: answer
 
   defp browser_row(row) do
     cond do
@@ -256,7 +279,8 @@ defmodule Opus.Browser do
       when op in @ops and is_map(args) and is_function(allowed?, 0) do
     with {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
          window when is_binary(window) <- Map.get(lineage, "thread_id"),
-         {:ok, pid} <- holder(athanor_id, user_id) do
+         {:ok, chrome} <- chrome(athanor_id, window),
+         {:ok, pid} <- holder(athanor_id, user_id, chrome) do
       # What a turn types, an address it opens and a page it writes travel
       # as their JSON in an `Opus.Programs.Output`, which shows its size
       # alone, so no debug log, status or crash report prints them.
@@ -308,7 +332,8 @@ defmodule Opus.Browser do
     with :ok <- within_bound(files),
          {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
          window when is_binary(window) <- Map.get(lineage, "thread_id"),
-         {:ok, pid} <- holder(athanor_id, user_id) do
+         {:ok, chrome} <- chrome(athanor_id, window),
+         {:ok, pid} <- holder(athanor_id, user_id, chrome) do
       manifest = %{
         "root" => root,
         "entry" => entry,
@@ -389,7 +414,8 @@ defmodule Opus.Browser do
       when is_binary(window) and window != "" and width in 16..4096 and height in 16..4096 and
              is_function(allowed?, 0) do
     with {:ok, {athanor_id, user_id}} <- person_of(ctx),
-         {:ok, pid} <- holder(athanor_id, user_id) do
+         {:ok, chrome} <- chrome(athanor_id, window),
+         {:ok, pid} <- holder(athanor_id, user_id, chrome) do
       ask(pid, window, %{width: width, height: height}, allowed?)
     end
   end
@@ -507,41 +533,43 @@ defmodule Opus.Browser do
   end
 
   @doc """
-  End the person's browser, as the browser setting going off does: every
-  request waiting is answered `:turned_off`, and its session is closed,
-  its profile kept. A session of the person's browser that no holder
-  holds is closed too. Answers once the close was asked, without waiting
+  End the person's browsers, both, as the browser setting going off does:
+  every request waiting is answered `:turned_off`, and each session is
+  closed, its profile kept. A session of either row that no holder holds
+  is closed too. Answers once the close was asked, without waiting
   for a start under way: the session that start brings up is sent
   nothing and is closed as soon as the start answers, and its Chrome,
   started so that it reaches nothing by itself, has reached nothing.
   """
   @spec stop(String.t(), String.t()) :: :ok
   def stop(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do
-    case lookup(athanor_id, user_id) do
-      nil -> close_running(Programs.browser(athanor_id, user_id))
-      pid -> GenServer.call(pid, :stop, @start_ms)
+    browser = Programs.browser(athanor_id, user_id)
+
+    for chrome <- @chromes do
+      case lookup(athanor_id, user_id, chrome) do
+        nil -> close_running(browser, row_id(athanor_id, chrome))
+        pid -> stop_holder(pid, browser, athanor_id, chrome)
+      end
     end
 
     :ok
+  end
+
+  defp stop_holder(pid, browser, athanor_id, chrome) do
+    GenServer.call(pid, :stop, @start_ms)
   catch
-    :exit, _ -> close_running(Programs.browser(athanor_id, user_id))
+    :exit, _ -> close_running(browser, row_id(athanor_id, chrome))
   end
 
   @doc """
-  The windows the person's browser holds now, each named by its thread;
-  none when no browser of theirs runs.
+  The windows the person's browsers hold now, in either Chrome, each named
+  by its thread; none when no browser of theirs runs.
   """
   @spec windows(String.t(), String.t()) :: [String.t()]
-  def windows(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id) do
-    case lookup(athanor_id, user_id) do
-      nil -> []
-      pid -> GenServer.call(pid, :windows, @watch_ms)
-    end
-  catch
-    :exit, _ -> []
-  end
+  def windows(athanor_id, user_id) when is_binary(athanor_id) and is_binary(user_id),
+    do: Enum.flat_map(holders(athanor_id, user_id), &holder_call(&1, :windows, []))
 
-  @doc "Whether the person's browser holds a session now."
+  @doc "Whether either of the person's browsers holds a session now."
   @spec running?(String.t(), String.t()) :: boolean()
   def running?(athanor_id, user_id) do
     match?({:ok, [_ | _]}, Programs.running(Programs.browser(athanor_id, user_id)))
@@ -558,17 +586,11 @@ defmodule Opus.Browser do
   def answer(athanor_id, user_id, request, status, body)
       when is_binary(athanor_id) and is_binary(user_id) and is_binary(request) and
              status in 100..599 and is_binary(body) do
-    case lookup(athanor_id, user_id) do
-      nil ->
-        :ok
-
-      # What a component answers a page travels as an `Opus.Programs.Output`,
-      # which shows its size alone.
-      pid ->
-        GenServer.call(pid, {:answer, request, status, Programs.Output.new(body)}, @watch_ms)
-    end
-  catch
-    :exit, _ -> :ok
+    # What a component answers a page travels as an `Opus.Programs.Output`,
+    # which shows its size alone. The holder that holds the request
+    # answers it; another writes nothing.
+    answer = {:answer, request, status, Programs.Output.new(body)}
+    Enum.each(holders(athanor_id, user_id), &holder_call(&1, answer, :ok))
   end
 
   @doc """
@@ -582,27 +604,54 @@ defmodule Opus.Browser do
   @spec held(String.t(), String.t(), String.t(), pid()) :: {:ok, pid()} | :gone
   def held(athanor_id, user_id, request, pid)
       when is_binary(athanor_id) and is_binary(user_id) and is_binary(request) and is_pid(pid) do
-    case lookup(athanor_id, user_id) do
-      nil -> :gone
-      holder -> GenServer.call(holder, {:held, request, pid}, @watch_ms)
-    end
-  catch
-    :exit, _ -> :gone
+    holders(athanor_id, user_id)
+    |> Enum.map(&holder_call(&1, {:held, request, pid}, :gone))
+    |> Enum.find(:gone, &match?({:ok, _holder}, &1))
   end
 
-  defp lookup(athanor_id, user_id) do
+  defp holder_call(pid, message, gone) do
+    GenServer.call(pid, message, @watch_ms)
+  catch
+    :exit, _ -> gone
+  end
+
+  # The Chrome the window of thread `thread_id` is in: the second
+  # (`:apart`) for a workspace thread whose first opening was made apart
+  # (its envelope's `apart`), and the person's (`:person`) for every other
+  # thread, read from the store each time; `:unavailable` when it cannot
+  # be read, so no window of a thread kept apart opens in the person's.
+  defp chrome(athanor_id, thread_id) when is_binary(athanor_id) and is_binary(thread_id) do
+    case Arca.ThreadStorage.messages(Prima.Actor.in_athanor(athanor_id), thread_id, limit: 1) do
+      [%{kind: "opening"} = opening] ->
+        if Arca.ThreadStorage.payload(opening)["apart"] == true,
+          do: {:ok, :apart},
+          else: {:ok, :person}
+
+      rows when is_list(rows) ->
+        {:ok, :person}
+
+      {:error, _unread} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp lookup(athanor_id, user_id, chrome) do
     if Process.whereis(@registry) do
-      case Registry.lookup(@registry, {athanor_id, user_id}) do
+      case Registry.lookup(@registry, {athanor_id, user_id, chrome}) do
         [{pid, _}] -> pid
         [] -> nil
       end
     end
   end
 
-  defp holder(athanor_id, user_id) do
-    case lookup(athanor_id, user_id) do
+  # The person's holders now, one for each of their browsers that runs.
+  defp holders(athanor_id, user_id),
+    do: for(chrome <- @chromes, pid <- List.wrap(lookup(athanor_id, user_id, chrome)), do: pid)
+
+  defp holder(athanor_id, user_id, chrome) do
+    case lookup(athanor_id, user_id, chrome) do
       nil ->
-        case DynamicSupervisor.start_child(@holders, {__MODULE__, {athanor_id, user_id}}) do
+        case DynamicSupervisor.start_child(@holders, {__MODULE__, {athanor_id, user_id, chrome}}) do
           {:ok, pid} -> {:ok, pid}
           {:error, {:already_started, pid}} -> {:ok, pid}
           {:error, _reason} -> {:error, :unavailable}
@@ -615,10 +664,24 @@ defmodule Opus.Browser do
     :exit, _ -> {:error, :unavailable}
   end
 
-  defp close_running(browser) do
+  defp row_id(athanor_id, chrome) do
+    case row(athanor_id, chrome) do
+      {:ok, row} -> row.id
+      {:error, _none} -> nil
+    end
+  end
+
+  # The person's browser's sessions of row `row_id`, closed; none for no row.
+  defp close_running(_browser, nil), do: :ok
+
+  defp close_running(browser, row_id) do
     case Programs.running(browser) do
-      {:ok, sessions} -> Enum.each(sessions, &Programs.close(browser, &1.session))
-      {:error, _not_standing_or_unanswered} -> :ok
+      {:ok, sessions} ->
+        for %{row_id: ^row_id, session: session} <- sessions,
+            do: Programs.close(browser, session)
+
+      {:error, _not_standing_or_unanswered} ->
+        :ok
     end
 
     :ok
@@ -629,14 +692,14 @@ defmodule Opus.Browser do
   # ===========================================================================
 
   @doc false
-  def start_link({athanor_id, user_id}),
+  def start_link({athanor_id, user_id, chrome}),
     do:
-      GenServer.start_link(__MODULE__, {athanor_id, user_id},
-        name: {:via, Registry, {@registry, {athanor_id, user_id}}}
+      GenServer.start_link(__MODULE__, {athanor_id, user_id, chrome},
+        name: {:via, Registry, {@registry, {athanor_id, user_id, chrome}}}
       )
 
   @impl true
-  def init({athanor_id, user_id}) do
+  def init({athanor_id, user_id, chrome}) do
     Process.flag(:trap_exit, true)
     owner = self()
     browser = Programs.browser(athanor_id, user_id)
@@ -645,6 +708,7 @@ defmodule Opus.Browser do
      %{
        athanor_id: athanor_id,
        user_id: user_id,
+       chrome: chrome,
        browser: browser,
        session: nil,
        phase: :idle,
@@ -1033,7 +1097,7 @@ defmodule Opus.Browser do
   end
 
   defp start_session(state, allowed?) do
-    %{athanor_id: athanor_id, browser: browser} = state
+    %{athanor_id: athanor_id, browser: browser, chrome: chrome} = state
     Process.send_after(self(), :hello_expired, @start_ms)
     holder = self()
 
@@ -1044,8 +1108,8 @@ defmodule Opus.Browser do
     task =
       Task.async(fn ->
         with :ok <- if(allowed?.(), do: :ok, else: {:error, :turned_off}),
-             {:ok, row} <- row(athanor_id),
-             :ok <- close_running(browser) do
+             {:ok, row} <- athanor_id |> row(chrome) |> of_chrome(chrome),
+             :ok <- close_running(browser, row.id) do
           Programs.start(browser, row.id, %{rows: @rows, cols: @cols, args: [], held_by: holder})
         end
       end)

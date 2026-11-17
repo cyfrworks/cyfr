@@ -116,6 +116,31 @@ defmodule Opus.Programs.Terminal do
 
   @impl true
   def init(args) do
+    case one_of_its_row(args) do
+      :ok -> init_session(args)
+      :taken -> :ignore
+    end
+  end
+
+  # A browser's row holds one session at a time, which names it in the
+  # registry as it starts: only one Chrome ever opens its profile. Another
+  # start of that row is ignored, and its caller refused `:already_running`.
+  defp one_of_its_row(args) do
+    if Keyword.fetch!(args, :by) == :browser do
+      case Registry.register(
+             Opus.Programs.Registry,
+             {:browser_row, Keyword.fetch!(args, :row_id)},
+             nil
+           ) do
+        {:ok, _owner} -> :ok
+        {:error, {:already_registered, _pid}} -> :taken
+      end
+    else
+      :ok
+    end
+  end
+
+  defp init_session(args) do
     Process.flag(:trap_exit, true)
     :ok = Cyfr.Bus.subscribe_standing()
 

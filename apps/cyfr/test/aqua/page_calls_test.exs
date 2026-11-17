@@ -94,11 +94,11 @@ defmodule Aqua.PageCallsTest do
     tree
   end
 
-  defp browser_row!(ctx) do
+  defp browser_row!(ctx, chrome \\ :person) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
-        name: Programs.Definition.browser_name(),
+        name: Programs.Definition.browser_name(chrome),
         transport: "program",
         mark: "driven",
         url: nil,
@@ -121,7 +121,9 @@ defmodule Aqua.PageCallsTest do
       "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
     }
 
-  defp workspace!(ctx) do
+  # A workspace thread, opened apart when `apart`: its first row is then
+  # an opening that says so, as `workspace.open` writes one.
+  defp workspace!(ctx, apart \\ false) do
     thread =
       %Arca.Schemas.Thread{}
       |> Arca.Schemas.Thread.changeset(%{
@@ -133,6 +135,17 @@ defmodule Aqua.PageCallsTest do
         created_by: ctx.user_id
       })
       |> Arca.Repo.insert!()
+
+    if apart do
+      {:ok, _opening} =
+        Arca.ThreadStorage.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          sent_by: "person",
+          kind: "opening",
+          content: "Show the page",
+          payload: %{"ask" => "Show the page", "asked_by" => ctx.user_id, "apart" => true}
+        })
+    end
 
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     thread
@@ -804,7 +817,7 @@ defmodule Aqua.PageCallsTest do
     {:ok, [step]} = Tape.steps(ctx, turn)
 
     # The browser's holder dies with no word of its calls.
-    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id})
+    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :person})
     ref = Process.monitor(holder)
     Process.exit(holder, :kill)
     assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
@@ -841,7 +854,7 @@ defmodule Aqua.PageCallsTest do
     )
 
     runner = Runner.whereis(room.id)
-    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id})
+    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :person})
     ScriptedWorker.script([{:output, %{"late" => true}}])
 
     # The call is taken from the browser while its runner cannot take it
@@ -890,7 +903,7 @@ defmodule Aqua.PageCallsTest do
     invoke(driver, room, 2, app <> ":1.0.0")
     waiting!(room, 1)
 
-    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id})
+    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :person})
     ref = Process.monitor(holder)
     Process.exit(holder, :kill)
     assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
@@ -901,6 +914,38 @@ defmodule Aqua.PageCallsTest do
     assert %{status: "completed"} = ended!(ctx, turn.id)
     assert {:ok, [%{dispatch_state: "closed", outcome: "skipped"}]} = Tape.steps(ctx, turn)
     assert [%{kind: "page_call"}, %{kind: "page_result"}] = page_rows(ctx, room)
+    assert runs_of(ctx, app) == [] and app_runs() == 0
+  end
+
+  test "in a thread kept apart, a page's call is the second Chrome's, and that browser killed " <>
+         "outright runs nothing",
+       %{ctx: ctx, driver: driver} do
+    browser_row!(ctx, :apart)
+    app = app!(ctx, @exit)
+    worker!([app])
+    room = workspace!(ctx, true)
+    _put = put!(ctx, room, @html)
+
+    invoke(driver, room, 1, app <> ":1.0.0")
+    {turn, approval} = paused!(ctx)
+    {:ok, [step]} = Tape.steps(ctx, turn)
+
+    # The person's own Chrome never started: the page is in the second.
+    assert [] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :person})
+    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :apart})
+    ref = Process.monitor(holder)
+    Process.exit(holder, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+
+    wait_until(
+      fn -> match?({:ok, %{outcome: "skipped"}}, Tape.step(ctx, step.id)) end,
+      10_000,
+      "the step of the call whose browser died to be skipped"
+    )
+
+    ScriptedWorker.script([{:output, %{"late" => true}}])
+    _ = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+    assert %{status: "completed"} = ended!(ctx, turn.id)
     assert runs_of(ctx, app) == [] and app_runs() == 0
   end
 
