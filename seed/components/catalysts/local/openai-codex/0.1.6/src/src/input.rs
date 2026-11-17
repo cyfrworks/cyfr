@@ -40,6 +40,11 @@ pub const MEDIA_TYPES: &[(&str, &[&str])] = &[
 /// How often a turn asks for its next input, at most.
 pub const ASK_EVERY: Duration = Duration::from_secs(1);
 
+/// No input is asked for once less than this is left of the call's time:
+/// a message written so late could keep the call from its answer past its
+/// budget, so it waits for the next call.
+pub const LAST_ASK: Duration = Duration::from_secs(120);
+
 /// One further message: the id its supplier knows it by, and its content,
 /// a user message's (a string, or `text` and attachment blocks).
 #[derive(Clone, PartialEq)]
@@ -74,17 +79,16 @@ impl Inputs for NoInputs {
 
 /// Whether `input` holds to the input rule, or the member that breaks it
 /// (`Prima.Model.check_input/1`): `id`, `content`, `content[i]`,
-/// `content[i].<member>`, an unknown member by its own name, `input` for
-/// one that is not an object, and `content` for one past
-/// `MAX_INPUT_BYTES`.
+/// `content[i].<member>`, an unknown member by its own name when that is a
+/// plain word (else by the member holding it), `input` for one that is not
+/// an object, and `content` for one past `MAX_INPUT_BYTES`.
 pub fn check(input: &Value) -> Result<(), String> {
     let Some(map) = input.as_object() else {
         return Err("input".into());
     };
-    let mut unknown: Vec<&String> = map.keys().filter(|k| *k != "id" && *k != "content").collect();
-    unknown.sort();
-    if let Some(name) = unknown.first() {
-        return Err((*name).clone());
+    let unknown: Vec<&String> = map.keys().filter(|k| *k != "id" && *k != "content").collect();
+    if !unknown.is_empty() {
+        return Err(named(unknown, "input", ""));
     }
     if !map.get("id").and_then(Value::as_str).is_some_and(id) {
         return Err("id".into());
@@ -177,12 +181,23 @@ fn block(block: &Value, at: &str) -> Result<usize, String> {
 /// A block's members are `type` and `names`, nothing else; the first other
 /// one, by name, is refused.
 fn members(map: &Map<String, Value>, at: &str, names: &[&str]) -> Result<(), String> {
-    let mut unknown: Vec<&String> = map.keys().filter(|k| *k != "type" && !names.contains(&k.as_str())).collect();
-    unknown.sort();
-    match unknown.first() {
-        Some(name) => Err(format!("{at}.{name}")),
-        None => Ok(()),
+    let unknown: Vec<&String> = map.keys().filter(|k| *k != "type" && !names.contains(&k.as_str())).collect();
+    if unknown.is_empty() {
+        return Ok(());
     }
+    Err(named(unknown, at, &format!("{at}.")))
+}
+
+/// The first of `keys` by name when every one is a plain word of lowercase
+/// letters and underscores, else the member holding them: any other key is
+/// the supplier's own bytes.
+fn named(mut keys: Vec<&String>, holder: &str, prefix: &str) -> String {
+    let plain = |k: &&String| (1..=32).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    if !keys.iter().all(plain) {
+        return holder.to_string();
+    }
+    keys.sort();
+    format!("{prefix}{}", keys[0])
 }
 
 /// The bytes padded standard base64 decodes to, or none for text that is
@@ -220,9 +235,13 @@ impl<'a> Feed<'a> {
     }
 
     /// Whether to ask now: the channel still serves, no input it handed is
-    /// unsettled, and the last ask was `ASK_EVERY` ago.
-    pub fn due(&self) -> bool {
-        self.on && !self.pending && self.asked.is_none_or(|at| at.elapsed() >= ASK_EVERY)
+    /// unsettled, the last ask was `ASK_EVERY` ago, and at least `LAST_ASK`
+    /// is left before `deadline`.
+    pub fn due(&self, deadline: Instant) -> bool {
+        self.on
+            && !self.pending
+            && self.asked.is_none_or(|at| at.elapsed() >= ASK_EVERY)
+            && deadline.checked_duration_since(Instant::now()).is_some_and(|left| left >= LAST_ASK)
     }
 
     /// The next input, which the caller writes and then settles (`accepted`,
@@ -284,6 +303,26 @@ impl<'a> Feed<'a> {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+
+    fn far() -> Instant {
+        Instant::now() + Duration::from_secs(600)
+    }
+
+    #[test]
+    fn nothing_is_asked_for_in_the_call_s_last_minutes() {
+        let mut inputs = NoInputs;
+        let feed = Feed::new(&mut inputs);
+        assert!(feed.due(far()));
+        assert!(!feed.due(Instant::now() + LAST_ASK - Duration::from_secs(1)));
+        assert!(!feed.due(Instant::now()));
+    }
+
+    #[test]
+    fn a_key_that_is_no_plain_word_is_named_by_its_holder() {
+        assert_eq!(check(&json!({"id": "a", "content": "hi", "From": "x"})), Err("input".into()));
+        assert_eq!(check(&json!({"id": "a", "content": [{"type": "text", "text": "hi", "x-y": 1}]})), Err("content[0]".into()));
+        assert_eq!(check(&json!({"id": "a", "content": [{"type": "text", "text": "hi", "lang": 1}]})), Err("content[0].lang".into()));
+    }
 
     fn vectors() -> Value {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../../../../tests/fixtures/model_chat.json");
@@ -378,11 +417,11 @@ mod tests {
     fn a_feed_asks_again_only_once_its_input_is_settled() {
         let mut inputs = Scripted { next: VecDeque::from([handed("a", "\"hi\""), handed("b", "\"yo\"")]), sent: VecDeque::new(), log: Vec::new() };
         let mut feed = Feed::new(&mut inputs);
-        assert!(feed.due());
+        assert!(feed.due(far()));
         let a = feed.ask().unwrap();
         assert_eq!(a.id, "a");
         feed.asked = None;
-        assert!(!feed.due(), "no ask while a write awaits its answer");
+        assert!(!feed.due(far()), "no ask while a write awaits its answer");
         feed.accepted("a");
         feed.asked = None;
         assert_eq!(feed.ask().unwrap().id, "b");
@@ -395,9 +434,9 @@ mod tests {
         let mut inputs = NoInputs;
         let mut feed = Feed::new(&mut inputs);
         assert!(feed.ask().is_none());
-        assert!(!feed.due());
+        assert!(!feed.due(far()));
         feed.asked = Some(Instant::now() - ASK_EVERY);
-        assert!(feed.due());
+        assert!(feed.due(far()));
     }
 
     #[test]
@@ -413,7 +452,7 @@ mod tests {
             let mut feed = Feed::new(&mut inputs);
             assert!(feed.ask().is_none());
             feed.asked = None;
-            assert!(!feed.due());
+            assert!(!feed.due(far()));
         }
 
         // An input handed again after it was written is never written twice.
@@ -424,7 +463,7 @@ mod tests {
         feed.asked = None;
         assert!(feed.ask().is_none());
         feed.asked = None;
-        assert!(!feed.due());
+        assert!(!feed.due(far()));
     }
 
     #[test]
@@ -434,7 +473,7 @@ mod tests {
         let a = feed.ask().unwrap();
         feed.accepted(&a.id);
         feed.asked = None;
-        assert!(!feed.due());
+        assert!(!feed.due(far()));
 
         for refuse in [true, false] {
             let mut inputs = Scripted { next: VecDeque::from([handed("a", "\"hi\"")]), sent: VecDeque::new(), log: Vec::new() };
@@ -446,7 +485,7 @@ mod tests {
                 feed.cannot();
             }
             feed.asked = None;
-            assert!(!feed.due());
+            assert!(!feed.due(far()));
             assert_eq!(inputs.log, ["next"], "nothing is reported");
         }
     }

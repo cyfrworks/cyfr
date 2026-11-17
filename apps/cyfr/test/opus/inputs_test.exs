@@ -241,6 +241,26 @@ defmodule Opus.InputsTest do
       refute log =~ secret
     end
 
+    test "whose text is not UTF-8 is refused, and none of its bytes reaches the log" do
+      bad = fn _invocation ->
+        {:ok, %{"id" => "evt_x", "content" => <<"private ", 0xFF, " words 9d2e">>}}
+      end
+
+      supplier = InputSupplier.start!([], mode: {:answer, bad})
+      fixture = attached(inputs: supplier)
+
+      log =
+        capture_log(fn ->
+          assert %{"error" => "guest_error", "type" => "invalid_request", "message" => message} =
+                   next(fixture)
+
+          assert message =~ "(content)"
+        end)
+
+      refute log =~ "9d2e"
+      assert Process.alive?(fixture.pid)
+    end
+
     @tag :capture_log
     test "that is no input at all is refused, naming input" do
       supplier = InputSupplier.start!([], mode: {:answer, fn _invocation -> {:ok, "hi"} end})

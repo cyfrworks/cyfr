@@ -81,6 +81,9 @@ defmodule Prima.Model do
   @option_members ~w(name kind values default)
 
   @input_id ~r/\A[A-Za-z0-9_.:-]{1,128}\z/
+  # A member a refusal may name: a plain word. Any other key is the
+  # supplier's own bytes, and is named by the member that holds it.
+  @member_name ~r/\A[a-z_]{1,32}\z/
   # The most blocks one input carries: a bound of the input's own meaning
   # (ARCHITECTURE.md §5.8), beside the line bound its bytes are held to.
   @max_input_blocks 32
@@ -298,16 +301,18 @@ defmodule Prima.Model do
   @doc """
   Whether `input` holds to `t:input/0`, or the member that breaks it:
   `id`, `content`, `content[i]` for a block, `content[i].<member>` for one
-  of its members (an unknown one by its own name), an unknown member of
-  the input by its name, and `content` for an input whose JSON, or whose
-  attachments' decoded bytes, are past `max_input_bytes/0`. What a member
-  holds is never named.
+  of its members (an unknown one by its own name when that is a plain
+  word of lowercase letters and underscores, else by the block's), an
+  unknown member of the input by its name, `input` for one that is not an
+  object or names a member that is no plain word, and `content` for an
+  input whose JSON, or whose attachments' decoded bytes, are past
+  `max_input_bytes/0`. Text is UTF-8. What a member holds is never named.
   """
   @spec check_input(term()) :: :ok | {:error, invalid()}
   def check_input(%{} = input) when not is_struct(input) do
     cond do
       (unknown = Map.keys(input) -- ["id", "content"]) != [] ->
-        invalid(unknown |> Enum.map(&to_string/1) |> Enum.sort() |> hd())
+        invalid(named(unknown, "input"))
 
       not valid_input_id?(input["id"]) ->
         invalid("id")
@@ -319,7 +324,7 @@ defmodule Prima.Model do
 
   def check_input(_input), do: invalid("input")
 
-  defp content(text) when is_binary(text) and text != "", do: :ok
+  defp content(text) when is_binary(text), do: if(text?(text), do: :ok, else: invalid("content"))
 
   defp content([_ | _] = blocks) when length(blocks) <= @max_input_blocks do
     blocks
@@ -349,9 +354,9 @@ defmodule Prima.Model do
   # A block's members are exactly `type` and its kind's, each held to its
   # check, in the order of their names.
   defp members(block, at, checks) do
-    case Enum.sort(Map.keys(block) -- ["type" | Map.keys(checks)]) do
-      [unknown | _] ->
-        invalid("#{at}.#{unknown}")
+    case Map.keys(block) -- ["type" | Map.keys(checks)] do
+      [_ | _] = unknown ->
+        invalid(named(unknown, at, at <> "."))
 
       [] ->
         checks
@@ -364,7 +369,15 @@ defmodule Prima.Model do
     end
   end
 
-  defp text?(text), do: is_binary(text) and text != ""
+  # The first of `keys` by name, when every one is a plain word, else the
+  # member that holds them.
+  defp named(keys, holder, prefix \\ "") do
+    if Enum.all?(keys, &(is_binary(&1) and Regex.match?(@member_name, &1))),
+      do: prefix <> hd(Enum.sort(keys)),
+      else: holder
+  end
+
+  defp text?(text), do: is_binary(text) and text != "" and String.valid?(text)
 
   defp base64?(data) when is_binary(data) and data != "",
     do: match?({:ok, _bytes}, Base.decode64(data))

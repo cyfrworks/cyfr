@@ -1202,7 +1202,7 @@ fn turn<P: Pipe, S: Sink>(
     };
 
     loop {
-        if call.feed.due() {
+        if call.feed.due(deadline) {
             if let Some(input) = call.feed.ask() {
                 inject(pipe, call, &reader.session, &mut cover, &input)?;
             }
@@ -2456,6 +2456,24 @@ mod tests {
         text.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
     }
 
+    /// A deadline far enough off that the call asks for further messages
+    /// (`crate::input::LAST_ASK`).
+    fn roomy() -> Instant {
+        Instant::now() + Duration::from_secs(600)
+    }
+
+    #[test]
+    fn nothing_is_asked_for_in_the_call_s_last_minutes() {
+        let mut pipe = Scripted::new(replaying(transcript("race")));
+        pipe.names = false;
+        let mut handing = Handing::of(&[("evt_input.a", "Too late")]);
+        let mut deltas = Deltas::new(Vec::new());
+        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), soon()).unwrap();
+        assert_eq!(answer["content"][0]["text"], "FIRST_REPLAY_RACE_FINISHED");
+        assert!(handing.log.is_empty());
+        assert_eq!(user_lines(&pipe).len(), 1);
+    }
+
     /// The uuid a test's `n`th user line carries (`ids`).
     fn nth(n: u64) -> String {
         format!("00000000-0000-4000-8000-{n:012}")
@@ -2556,7 +2574,7 @@ mod tests {
         pipe.names = false;
         let mut handing = Handing::of(inputs);
         let mut deltas = Deltas::new(Vec::new());
-        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), soon());
+        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy());
         (answer, pipe, handing, deltas.into_sink())
     }
 
@@ -2721,7 +2739,7 @@ mod tests {
             later();
             later()
         };
-        let done = chat(&mut pipe, &mut handing, &mut fresh, &mut deltas, &req, "unused".into(), soon()).unwrap();
+        let done = chat(&mut pipe, &mut handing, &mut fresh, &mut deltas, &req, "unused".into(), roomy()).unwrap();
         assert_eq!(done["stop_reason"], "end_turn");
         assert_eq!(handing.log[..2], ["next", "sent evt_input.a"]);
         assert_eq!(user_lines(&pipe)[0]["uuid"], nth(2));
@@ -2763,7 +2781,7 @@ mod tests {
         pipe.running = false;
         let mut handing = Handing::of(&[("evt_input.a", "A new message arrived")]);
         let mut deltas = Deltas::new(Vec::new());
-        let refusal = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), soon()).unwrap_err();
+        let refusal = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy()).unwrap_err();
         assert_eq!(refusal.kind, "provider_error", "{refusal:?}");
         assert!(refusal.message.contains("interrupted"), "{}", refusal.message);
         assert!(pipe.log.contains(&"close pipe-1".to_string()));
@@ -2786,7 +2804,7 @@ mod tests {
         pipe.send_error = Some(("A new message".into(), "lost".into()));
         let mut handing = Handing::of(&[("evt_input.a", "A new message arrived")]);
         let mut deltas = Deltas::new(Vec::new());
-        let refusal = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), soon()).unwrap_err();
+        let refusal = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy()).unwrap_err();
         assert!(refusal.message.contains("interrupted"), "{}", refusal.message);
         assert_eq!(handing.log, ["next"], "an uncertain write is not reported");
     }
@@ -2798,7 +2816,7 @@ mod tests {
         let mut pipe = Scripted::new(replaying(transcript("race")));
         pipe.names = false;
         let mut deltas = Deltas::new(Vec::new());
-        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), soon()).unwrap();
+        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy()).unwrap();
         assert_eq!(answer["stop_reason"], "end_turn");
         assert_eq!(handing.log, ["next", "sent evt_input.a"]);
     }

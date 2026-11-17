@@ -1273,7 +1273,7 @@ fn read_turn<P: Pipe, S: Sink>(
         let lines = match batch.take() {
             Some(lines) => lines,
             None => {
-                if finished.is_none() && feed.due() {
+                if finished.is_none() && feed.due(deadline) {
                     if let Some(input) = feed.ask() {
                         steers += 1;
                         pending = steer(pipe, feed, reader, turn, ids.of(&format!("steer-{steers}")), &input)?;
@@ -1296,8 +1296,10 @@ fn read_turn<P: Pipe, S: Sink>(
         };
         if lines.is_empty() {
             deltas.flush();
-            // The calls held, with none more arriving: the turn answers them.
-            if !calls.is_empty() {
+            // The calls held, with none more arriving: the turn answers them,
+            // once a steer it wrote has its answer, so no input it handed
+            // is left unsettled.
+            if !calls.is_empty() && pending.is_none() {
                 let answer = response(&text, std::mem::take(&mut calls), "tool_call", &known.used, known.total.as_ref());
                 stream::close(deltas, &answer);
                 return Ok(answer);
@@ -2654,7 +2656,7 @@ mod tests {
     /// One chat on `pipe`, handed `inputs`: its answer and events.
     fn steered(pipe: &mut BoxPipe, inputs: &mut Handing) -> (Result<Value, Refusal>, Vec<Value>) {
         let mut deltas = Deltas::new(Vec::new());
-        let answer = chat(pipe, inputs, &mut deltas, &first("Watch the run"), KEY.into(), far());
+        let answer = chat(pipe, inputs, &mut deltas, &first("Watch the run"), KEY.into(), Instant::now() + Duration::from_secs(600));
         (answer, deltas.into_sink())
     }
 
@@ -2769,7 +2771,7 @@ mod tests {
         // Read the turn's end, then find the program gone.
         let answer = {
             let mut ending = Ending { pipe: &mut pipe };
-            chat(&mut ending, &mut inputs, &mut deltas, &first("Watch the run"), KEY.into(), far())
+            chat(&mut ending, &mut inputs, &mut deltas, &first("Watch the run"), KEY.into(), Instant::now() + Duration::from_secs(600))
         };
         assert_eq!(answer.unwrap()["stop_reason"], "end_turn");
         assert_eq!(inputs.log, ["next"]);
@@ -2800,6 +2802,33 @@ mod tests {
         fn close(&mut self, session: &str) -> Result<(), String> {
             self.pipe.close(session)
         }
+    }
+
+    #[test]
+    fn a_turn_holding_calls_answers_them_only_once_its_steer_has_its_answer() {
+        let mut codex = Codex::new(vec![vec![vec![call(1, "c1", "files", json!({"path": "a.txt"}))]]]);
+        codex.defer_steer = true;
+        let mut pipe = BoxPipe::new(codex);
+        let mut inputs = Handing::of(&[("evt_input.a", json!("A new message"))]);
+        let (answer, _events) = steered(&mut pipe, &mut inputs);
+        let answer = answer.unwrap();
+        assert_eq!(answer["stop_reason"], "tool_call");
+        assert_eq!(calls_of(&answer).len(), 1);
+        assert_eq!(inputs.log[..2], ["next", "sent evt_input.a"], "the steer was settled before the call answered");
+        assert!(inputs.log[2..].iter().all(|l| l == "next"), "{:?}", inputs.log);
+    }
+
+    #[test]
+    fn nothing_is_asked_for_in_the_call_s_last_minutes() {
+        let mut pipe = working();
+        pipe.codex.later.push_back((Duration::ZERO, vec![done().replace("{turn}", "t1")]));
+        let mut inputs = Handing::of(&[("evt_input.a", json!("Too late"))]);
+        let mut deltas = Deltas::new(Vec::new());
+        let near = Instant::now() + crate::input::LAST_ASK - Duration::from_secs(1);
+        let answer = chat(&mut pipe, &mut inputs, &mut deltas, &first("Watch the run"), KEY.into(), near);
+        assert_eq!(answer.unwrap()["stop_reason"], "end_turn");
+        assert!(inputs.log.is_empty());
+        assert!(steers(&pipe).is_empty());
     }
 
     #[test]

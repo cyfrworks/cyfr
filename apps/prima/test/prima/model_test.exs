@@ -130,6 +130,30 @@ defmodule Prima.ModelTest do
 
       refute member =~ secret
     end
+
+    test "text that is not UTF-8, or a key that is no plain word, is refused without its bytes" do
+      bytes = <<0xFF, 0xFE, "secret">>
+
+      assert Model.check_input(%{"id" => "evt_x", "content" => bytes}) ==
+               {:error, {:invalid, "content"}}
+
+      assert Model.check_input(%{
+               "id" => "evt_x",
+               "content" => [%{"type" => "text", "text" => bytes}]
+             }) ==
+               {:error, {:invalid, "content[0].text"}}
+
+      assert Model.check_input(%{"id" => "evt_x", "content" => "hi", bytes => "x"}) ==
+               {:error, {:invalid, "input"}}
+
+      assert Model.check_input(%{"id" => "evt_x", "content" => "hi", from: "atom key"}) ==
+               {:error, {:invalid, "input"}}
+
+      assert Model.check_input(%{
+               "id" => "evt_x",
+               "content" => [%{"type" => "text", "text" => "hi", {:tuple} => "x"}]
+             }) == {:error, {:invalid, "content[0]"}}
+    end
   end
 
   defp input(%{"input" => input}), do: input
