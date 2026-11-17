@@ -80,8 +80,9 @@ defmodule Opus.Programs do
   that names its owner (`browser/2`). It is the person's, not a turn's:
   their turns use it through `Opus.Browser`, which acts on it only for a
   caller this module proves (`caller/1`), and no turn's end ends it. It
-  starts only the row of the browser's own definition
-  (`Opus.Programs.Definition.browser?/1`), one session at a time. Its
+  starts only the rows of the browser's own definition
+  (`Opus.Programs.Definition.browser?/1`), the person's Chrome and the
+  second, one session of each at a time. Its
   owner reaches it while the person stands, read from the store.
 
   `running/1` lists a person's sessions, those their turns started and
@@ -457,7 +458,7 @@ defmodule Opus.Programs do
   browser runs in for the person `user_id` of `athanor_id`, held by
   `Opus.Browser` alone, which names it here and nowhere else. Every call
   made with it reads from the store that the person stands; it starts
-  only the row of the browser's own definition.
+  only the rows of the browser's own definition.
   """
   @spec browser(String.t(), String.t()) :: caller()
   def browser(athanor_id, user_id)
@@ -485,8 +486,8 @@ defmodule Opus.Programs do
   that person, started `by: :person`, a turn's to that turn, started
   `by: :aqua`, the browser's to the person's browser, started
   `by: :browser`. The row must be an enabled program, and the browser's
-  the row of its own definition (`:not_browser` otherwise), one session
-  at a time (`:already_running`), and that row starts for no other caller
+  a row of its own definition (`:not_browser` otherwise), one session of
+  each row at a time (`:already_running`), and those rows start for no other caller
   (an `:invalid_argument` saying so). The browser's start names
   `held_by`, the process that holds the session for the person
   (`Opus.Browser`): the session lives as long as that process, from the
@@ -556,6 +557,8 @@ defmodule Opus.Programs do
 
       case DynamicSupervisor.start_child(@relays, {Terminal, spec}) do
         {:ok, pid} -> open(pid, deadline, wait)
+        # A browser's row whose session already runs (`Terminal`).
+        :ignore -> {:error, :already_running}
         {:error, reason} -> {:error, reason}
       end
     end
@@ -935,16 +938,10 @@ defmodule Opus.Programs do
     if Opus.Programs.Definition.browser?(row), do: {:error, @browser_row}, else: :ok
   end
 
-  # A turn holds at most `@turn_sessions` sessions at once, and the
-  # person's browser one; a person's starts are bounded by the box.
-  defp room({_athanor_id, _user_id, :browser} = browser) do
-    held =
-      if Process.whereis(@registry),
-        do: Registry.count_select(@registry, [{{{:terminal, :_}, :_, browser}, [], [true]}]),
-        else: 0
-
-    if held == 0, do: :ok, else: {:error, :already_running}
-  end
+  # A turn holds at most `@turn_sessions` sessions at once; the person's
+  # browser one of each row, which its session holds as it starts
+  # (`Opus.Programs.Terminal`); a person's starts are bounded by the box.
+  defp room({_athanor_id, _user_id, :browser}), do: :ok
 
   defp room({_athanor_id, _user_id, _turn_id} = turn) do
     held =

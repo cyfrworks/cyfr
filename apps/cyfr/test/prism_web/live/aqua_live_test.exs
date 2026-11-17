@@ -102,8 +102,15 @@ defmodule PrismWeb.AquaLiveTest do
 
     assert has_element?(
              view,
-             ~s([data-test="aqua-browser-add"] a[href*="programs?add=browser"]),
+             ~s([data-test="aqua-browser-add"] a[href*="programs?add=browser&"]),
              "Add Aqua's browser"
+           )
+
+    # The second, for work kept apart, is offered beside it.
+    assert has_element?(
+             view,
+             ~s([data-test="aqua-browser-add-apart"] a[href*="programs?add=browser-apart"]),
+             "Add the second browser"
            )
 
     # The setting decides the browser's own actions, so no policy line

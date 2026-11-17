@@ -16,8 +16,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   Beside the soul's capabilities stands the person's browser setting,
   read and written through the `browser` tool as the person: the
   browser's own actions follow it rather than a policy line, so the
-  capability list leaves them out. While Aqua's browser is not added, the
-  section offers to add it on the Programs page, where its definition is
+  capability list leaves them out. While either of Aqua's browsers, the
+  person's or the second for work kept apart, is not added, the section
+  offers to add it on the Programs page, where its definition is
   confirmed as any program's is.
   """
 
@@ -546,8 +547,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:browser, browser_status(ctx))
   end
 
-  # The browser setting, whether Aqua's browser is added and whether it
-  # runs, as `browser.status` answers them; nil when it cannot be read.
+  # The browser setting, whether each of Aqua's browsers is added and
+  # whether either runs, as `browser.status` answers them; nil when it
+  # cannot be read.
   defp browser_status(ctx) do
     case PrismWeb.Ops.call_tool(ctx, "browser/status", %{}) do
       {:ok, status} -> status
@@ -1509,6 +1511,26 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       </p>
       <p :if={@browser[:browser] == "not_browser"} class="text-[11px] text-amber-300">
         A program named aqua-browser is not Aqua's browser; rename or remove it on the Programs page.
+      </p>
+      <p
+        :if={@browser[:apart] == "not_added"}
+        class="text-[11px] text-gray-400"
+        data-test="aqua-browser-add-apart"
+      >
+        Work you ask Aqua to keep apart uses a second Chrome, with none of your sign-ins in it. It is not added yet.
+        <.link
+          :if={@athanor}
+          navigate={PrismWeb.Focus.path(@athanor, "/programs?add=browser-apart&from=aqua")}
+          class="text-blue-400 hover:underline"
+        >
+          Add the second browser
+        </.link>
+      </p>
+      <p :if={@browser[:apart] == "disabled"} class="text-[11px] text-amber-300">
+        Aqua's second browser is disabled on the Programs page; enable it there.
+      </p>
+      <p :if={@browser[:apart] == "not_browser"} class="text-[11px] text-amber-300">
+        A program named aqua-browser-apart is not Aqua's second browser; rename or remove it on the Programs page.
       </p>
     </div>
     """

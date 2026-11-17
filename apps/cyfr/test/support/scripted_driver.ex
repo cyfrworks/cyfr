@@ -58,6 +58,9 @@ defmodule Cyfr.Test.ScriptedDriver do
   @doc "Write `bytes` on every session as the driver's own output."
   def write(driver, bytes), do: GenServer.call(driver, {:write, bytes})
 
+  @doc "Write `bytes` on session `session` alone, as that driver's own output."
+  def write(driver, session, bytes), do: GenServer.call(driver, {:write, session, bytes})
+
   @doc "The frame of image `seq` of cast `cast`, its JPEG `jpeg`."
   def image_frame(cast, seq, jpeg),
     do:
@@ -77,18 +80,22 @@ defmodule Cyfr.Test.ScriptedDriver do
   bytes.
   """
   def call(driver, id, win, put, op, body),
+    do: write(driver, call_frame(id, win, put, op, body))
+
+  @doc "Pass up a page's call as `call/6` does, on session `session` alone."
+  def call(driver, session, id, win, put, op, body),
+    do: write(driver, session, call_frame(id, win, put, op, body))
+
+  defp call_frame(id, win, put, op, body),
     do:
-      write(
-        driver,
-        Frame.message(%{
-          "t" => "call",
-          "id" => id,
-          "win" => win,
-          "put" => put,
-          "op" => op,
-          "body" => Base.encode64(body)
-        })
-      )
+      Frame.message(%{
+        "t" => "call",
+        "id" => id,
+        "win" => win,
+        "put" => put,
+        "op" => op,
+        "body" => Base.encode64(body)
+      })
 
   @impl true
   def init({test, opts}) do
@@ -128,6 +135,11 @@ defmodule Cyfr.Test.ScriptedDriver do
     for {session, _s} <- state.sessions,
         do: Cyfr.Test.ScriptedBackends.write_raw(state.fake, session, bytes)
 
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:write, session, bytes}, _from, state) do
+    Cyfr.Test.ScriptedBackends.write_raw(state.fake, session, bytes)
     {:reply, :ok, state}
   end
 

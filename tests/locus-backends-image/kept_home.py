@@ -17,6 +17,9 @@ requests signed as CYFR signs them (harness.py):
   next, once every process of its uid is gone.
 - No pooled uid and not the release's user (`locus`, which lists the root)
   can read a home.
+- Two rows of one program, as Aqua's two browsers are, run in two homes
+  under two uids: the cookies and storage one keeps in its profile the
+  other neither reads, lists nor writes.
 - A home past its row's `home_max_bytes` has its sessions ended within the
   measuring period, is reported over its cap, and refuses an open
   `home_over_cap` until a reset, which leaves it empty under its uid.
@@ -48,6 +51,11 @@ import imagesuite  # noqa: E402
 
 OWNER, NEIGHBOUR = owner_of("kept"), owner_of("neighbour")
 SHARED, CAPPED, SIGNED, RETIRED = (f"mcp_kept-{name}" for name in ("shared", "capped", "signed", "retired"))
+# Two rows of one program, each a home: the person's browser and the one kept apart.
+BROWSER, APART = (f"mcp_kept-{name}" for name in ("browser", "apart"))
+# A profile as Chrome keeps one: its cookies and its storage, in the home's folder.
+PROFILE = ('mkdir -p "$HOME/profile/Default/Local Storage" && echo {name}-cookie > "$HOME/profile/Default/Cookies" '
+           '&& echo {name}-store > "$HOME/profile/Default/Local Storage/leveldb" && echo done')
 CAP = 8 * 1024 * 1024
 # What the measure may let through past the cap: what ten seconds write.
 MEASURE_S = 10
@@ -151,6 +159,30 @@ def main():
         listed = stack.exec(f"ls {KEPT_ROOT}", user=RELEASE_USER)
         expect(listed.returncode == 0 and SHARED in listed.stdout.split(),
                f"{RELEASE_USER} lists the kept homes' root, which it owns", listed.stdout + listed.stderr)
+
+        # ————— two rows of one program: nothing crosses their homes —————
+        own = whoami(c, OWNER, key="own", home_id=BROWSER)
+        apart = whoami(c, OWNER, key="apart", home_id=APART)
+        expect(own["uid"] != apart["uid"] and own["home"] != apart["home"]
+               and {own["home_mode"], apart["home_mode"]} == {"700"},
+               "two rows of one program run in two homes, 0700, under two uids", [own, apart])
+        for key, home in [("own", BROWSER), ("apart", APART)]:
+            wrote = sh(c, OWNER, PROFILE.format(name=key), key=key, home_id=home)
+            expect(wrote["stdout"] == "done\n", f"the {key} row keeps a profile in its home", wrote)
+        for key, home, other in [("own", BROWSER, apart["home"]), ("apart", APART, own["home"])]:
+            crossed = sh(c, OWNER,
+                         f'cat "{other}/profile/Default/Cookies" 2>&1; echo "rc=$?"; '
+                         f'cat "{other}/profile/Default/Local Storage/leveldb" 2>&1; echo "rc=$?"; '
+                         f'ls "{other}" 2>&1; echo "rc=$?"; touch "{other}/profile/Default/Cookies" 2>&1; echo "rc=$?"',
+                         key=key, home_id=home)
+            out = crossed["stdout"]
+            expect(out.count("Permission denied") == 4 and "rc=0" not in out and "-cookie" not in out
+                   and "-store" not in out,
+                   f"the {key} row neither reads, lists nor writes the other's cookies and storage", out)
+        mine = sh(c, OWNER, 'cat "$HOME/profile/Default/Cookies"', key="apart", home_id=APART)
+        expect(mine["stdout"] == "apart-cookie\n", "each row reads its own profile", mine)
+        for key, home in [("own", BROWSER), ("apart", APART)]:
+            c.close(OWNER, c.mcp(OWNER, "probe", key=key, home_id=home).session)
 
         # ————— the disk bound —————
         capped = whoami(c, OWNER, "capped", home_id=CAPPED)

@@ -141,12 +141,22 @@ defmodule Opus.Programs.Definition do
       "#{@exposed}."
   end
 
-  @browser_name "aqua-browser"
+  # Aqua's two browsers: the person's, and the second, for work a
+  # workspace thread keeps apart, each a row of its own.
+  @browser_names %{person: "aqua-browser", apart: "aqua-browser-apart"}
   @browser_command "cyfr-browser"
 
-  @doc "The name Aqua's browser's row goes by."
-  @spec browser_name() :: String.t()
-  def browser_name, do: @browser_name
+  @typedoc "Which of Aqua's two browsers: the person's, or the one for work kept apart."
+  @type chrome :: :person | :apart
+
+  @doc """
+  The name the row of Aqua's browser `chrome` goes by: the person's
+  (`:person`), or the second, which a workspace thread opened apart uses
+  (`:apart`).
+  """
+  @spec browser_name(chrome()) :: String.t()
+  def browser_name(chrome \\ :person) when is_map_key(@browser_names, chrome),
+    do: Map.fetch!(@browser_names, chrome)
 
   @doc "The command of Aqua's browser: the browser driver."
   @spec browser_command() :: String.t()
@@ -178,16 +188,20 @@ defmodule Opus.Programs.Definition do
   end
 
   @doc """
-  Whether a stored row is Aqua's browser: named `browser_name/0`, the
-  driver's command with no environment, driven, in a kept folder. Its
-  hosts and bounds are the person's to set, as any program's are; a row
-  of that name with any other command, an environment, another mark or a
-  scratch folder is not the browser.
+  Whether a stored row is one of Aqua's browsers: named by
+  `browser_name/1`, the driver's command with no environment, driven, in
+  a kept folder. Each of the two has its own folder, so its own profile,
+  and its hosts and bounds are the person's to set, as any program's are;
+  a row of either name with any other command, an environment, another
+  mark or a scratch folder is not the browser.
   """
   @spec browser?(map()) :: boolean()
-  def browser?(%{name: @browser_name, transport: "program", mark: "driven", home: "kept"} = row) do
+  def browser?(%{name: name, transport: "program", mark: "driven", home: "kept"} = row)
+      when is_binary(name) do
     config = Arca.McpServerStorage.config(row)
-    config["command"] == @browser_command and Map.get(config, "env", %{}) in [nil, %{}]
+
+    name in Map.values(@browser_names) and config["command"] == @browser_command and
+      Map.get(config, "env", %{}) in [nil, %{}]
   end
 
   def browser?(_row), do: false

@@ -131,8 +131,8 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:form_error, nil)
       |> assign(:prefill, %{})
       |> assign(:install, nil)
-      # Whether the open form adds Aqua's browser, prefilled with its
-      # definition.
+      # Which of Aqua's browsers the open form adds, prefilled with its
+      # definition (`:person` or `:apart`); false for none.
       |> assign(:adding_browser, false)
       # The row whose definition an open form replaces: %{name, epoch,
       # config}, its config as `mcp_servers.get` answered it.
@@ -434,7 +434,10 @@ defmodule PrismWeb.ProgramsLive do
           send(self(), {:install, ref, need})
 
         %{"add" => "browser"} ->
-          send(self(), :add_browser)
+          send(self(), {:add_browser, :person})
+
+        %{"add" => "browser-apart"} ->
+          send(self(), {:add_browser, :apart})
 
         _ ->
           :ok
@@ -469,7 +472,8 @@ defmodule PrismWeb.ProgramsLive do
   def handle_info({:install, ref, need}, socket),
     do: {:noreply, prefill_install(socket, ref, need)}
 
-  def handle_info(:add_browser, socket), do: {:noreply, prefill_browser(socket)}
+  def handle_info({:add_browser, chrome}, socket),
+    do: {:noreply, prefill_browser(socket, chrome)}
 
   # What the shown session's program wrote goes straight to the frame's
   # hook, and is kept nowhere here: the next output, or the tail that
@@ -938,12 +942,13 @@ defmodule PrismWeb.ProgramsLive do
     end
   end
 
-  # The program form, prefilled with Aqua's browser's definition
-  # (`Opus.Programs.Definition.browser/1`): the driver's command, driven,
-  # in a kept folder of its bound, at the browser's memory setting. Adding
-  # it asks the person to confirm the program, as any program's addition
-  # does; a command changed here is not the browser.
-  defp prefill_browser(socket) do
+  # The program form, prefilled with the definition of Aqua's browser
+  # `chrome`, the person's or the second (`Opus.Programs.Definition.browser/1`):
+  # the driver's command, driven, in a kept folder of its bound, at the
+  # browser's memory setting, under that browser's name. Adding it asks the
+  # person to confirm the program, as any program's addition does; a
+  # command changed here is not the browser.
+  defp prefill_browser(socket, chrome) do
     browser = Opus.Programs.Definition.browser(Opus.Browser.memory_bytes())
 
     socket
@@ -951,11 +956,11 @@ defmodule PrismWeb.ProgramsLive do
     |> assign(:form_error, nil)
     |> assign(:editing, nil)
     |> assign(:install, nil)
-    |> assign(:adding_browser, true)
+    |> assign(:adding_browser, chrome)
     |> assign(:prefill, %{
       "mark" => browser["mark"],
       "home" => browser["home"],
-      "name" => Opus.Programs.Definition.browser_name(),
+      "name" => Opus.Programs.Definition.browser_name(chrome),
       "command" => browser["command"],
       "memory_mib" => Integer.to_string(div(browser["memory_bytes"], @mib)),
       "disk_mib" => Integer.to_string(div(browser["home_max_bytes"], @mib))
@@ -1176,11 +1181,25 @@ defmodule PrismWeb.ProgramsLive do
             Replace the whole definition of <span class="font-mono">{@editing.name}</span>.
             Its folder is kept.
           </p>
-          <p :if={@adding_browser} class="text-sm text-gray-300" data-test="add-browser">
+          <p
+            :if={@adding_browser == :person}
+            class="text-sm text-gray-300"
+            data-test="add-browser"
+          >
             Add Aqua's browser: a Chrome that is yours alone, which Aqua uses with a
             window for each thread while your browser setting on the Aqua page is on. It
             keeps its profile, and the sites you sign in to, in its own folder. Adding it
             asks you to confirm the program.
+          </p>
+          <p
+            :if={@adding_browser == :apart}
+            class="text-sm text-gray-300"
+            data-test="add-browser-apart"
+          >
+            Add Aqua's second browser: a Chrome with none of your sign-ins, which Aqua
+            uses for work you ask it to keep apart, while your browser setting on the Aqua
+            page is on. It keeps its own profile in its own folder, and shares no cookie
+            or storage with your Chrome. Adding it asks you to confirm the program.
           </p>
           <p :if={!@install && !@editing && !@adding_browser} class="text-xs text-gray-500">
             A program the backends service runs under a user of its own, such as an
