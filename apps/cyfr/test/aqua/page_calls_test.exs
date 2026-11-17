@@ -826,6 +826,84 @@ defmodule Aqua.PageCallsTest do
     assert runs_of(ctx, app) == [] and app_runs() == 0
   end
 
+  test "a call whose browser is killed outright before its runner takes it runs nothing, " <>
+         "and the turn opened on it ends",
+       %{ctx: ctx, driver: driver} do
+    app = app!(ctx)
+    worker!([app])
+    room = workspace!(ctx)
+    put = put!(ctx, room, @html)
+
+    wait_until(
+      fn -> match?(%{running: false, paused: false}, Runner.state(room.id, ctx.athanor_id)) end,
+      10_000,
+      "the putting turn to settle"
+    )
+
+    runner = Runner.whereis(room.id)
+    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id})
+    ScriptedWorker.script([{:output, %{"late" => true}}])
+
+    # The call is taken from the browser while its runner cannot take it
+    # yet, and the browser dies with no word of it.
+    :ok = :sys.suspend(runner)
+
+    try do
+      invoke(driver, room, 1, app <> ":1.0.0")
+
+      wait_until(
+        fn ->
+          Enum.any?(:sys.get_state(holder).calls, fn {_request, call} ->
+            is_reference(call.monitor)
+          end)
+        end,
+        5_000,
+        "the call taker to hold the call"
+      )
+
+      ref = Process.monitor(holder)
+      Process.exit(holder, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+    after
+      :sys.resume(runner)
+    end
+
+    wait_until(fn -> turns_after(ctx, room, put) != [] end, 10_000, "the turn opened on the call")
+    [{turn, _steps}] = turns_after(ctx, room, put)
+    assert %{status: "completed"} = ended!(ctx, turn.id)
+    # The end reached the call before its step or after: no step, or one skipped.
+    assert [{_turn, steps}] = turns_after(ctx, room, put)
+    assert Enum.all?(steps, &match?(%{dispatch_state: "closed", outcome: "skipped"}, &1))
+    assert runs_of(ctx, app) == [] and app_runs() == 0
+  end
+
+  test "a call waiting behind a card when its browser is killed outright never becomes a " <>
+         "step, and runs nothing",
+       %{ctx: ctx, driver: driver} do
+    app = app!(ctx, @exit)
+    worker!([app])
+    room = workspace!(ctx)
+    _put = put!(ctx, room, @html)
+
+    invoke(driver, room, 1, app <> ":1.0.0")
+    {turn, approval} = paused!(ctx)
+    invoke(driver, room, 2, app <> ":1.0.0")
+    waiting!(room, 1)
+
+    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id})
+    ref = Process.monitor(holder)
+    Process.exit(holder, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+    waiting!(room, 0)
+
+    ScriptedWorker.script([{:output, %{"late" => true}}, {:output, %{"late" => true}}])
+    _ = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+    assert %{status: "completed"} = ended!(ctx, turn.id)
+    assert {:ok, [%{dispatch_state: "closed", outcome: "skipped"}]} = Tape.steps(ctx, turn)
+    assert [%{kind: "page_call"}, %{kind: "page_result"}] = page_rows(ctx, room)
+    assert runs_of(ctx, app) == [] and app_runs() == 0
+  end
+
   test "a call waiting to become a step when its runner is killed is answered unavailable " <>
          "and leaves no step",
        %{ctx: ctx, driver: driver} do

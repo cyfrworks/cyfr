@@ -2895,6 +2895,76 @@ defmodule Aqua.LoopTest do
                Jason.decode!(body)
     end
 
+    test "a page's launch whose request ends while it waits for the model's answer is " <>
+           "skipped and runs nothing",
+         %{ctx: ctx, thread: thread} do
+      app = quiet_app!(ctx)
+      start_supervised!({ScriptedWorker, ref: [@model, app], script: []})
+      ScriptedWorker.script([{:probe, self()}, reply("done"), {:output, %{"answered" => true}}])
+
+      turn = accept!(ctx, thread, "@aqua show it")
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+
+      launch =
+        page!(ctx, turn, "execution.run", %{
+          "reference" => app <> ":1.0.0",
+          "input" => %{"operation" => "go", "params" => %{}}
+        })
+
+      {:ok, %{client_id: request}} = Tape.message(ctx, launch.message_id)
+      assert {:ok, %{turn_id: turn_id}} = Tape.end_call(ctx, thread.id, request, "ended")
+      assert turn_id == turn.id
+      send(model, :continue)
+
+      assert :completed = Task.await(task, 60_000)
+      assert %{dispatch_state: "closed", outcome: "skipped"} = step!(ctx, turn, launch.id)
+      assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "go")) == 0
+    end
+
+    test "a turn opened on a page's call whose request ended before the turn ran records no " <>
+           "step, runs nothing and completes",
+         %{ctx: ctx, thread: thread} do
+      app = quiet_app!(ctx)
+      start_supervised!({ScriptedWorker, ref: [@model, app], script: []})
+      ScriptedWorker.script([reply("put"), {:output, %{"ran" => true}}])
+      put = accept!(ctx, thread, "@aqua put the page")
+      assert :completed = Task.await(run(ctx, put), 60_000)
+
+      # The turn the runner opens on a call with no turn running.
+      request = Prima.UUID7.generate_id("pgc")
+
+      call = %{
+        request: request,
+        name: "execution.run",
+        arguments: %{"reference" => app <> ":1.0.0", "input" => %{"operation" => "go"}},
+        user_id: ctx.user_id,
+        put_turn_id: put.id
+      }
+
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "page_call",
+            content: call.name,
+            payload: Aqua.PageCalls.row(call),
+            client_id: request
+          },
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      assert {:ok, %{turn_id: turn_id, skipped: []}} =
+               Tape.end_call(ctx, thread.id, request, "ended")
+
+      assert turn_id == turn.id
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "completed"} = ended} = Tape.turn(ctx, turn.id)
+      assert {:ok, []} = Tape.steps(ctx, ended)
+      assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "go")) == 0
+    end
+
     test "a turn completes only once no page's call is still proposed in it",
          %{ctx: ctx, thread: thread} do
       turn = accept!(ctx, thread, "@aqua hello")

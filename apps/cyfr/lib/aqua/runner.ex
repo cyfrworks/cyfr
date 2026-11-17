@@ -63,11 +63,12 @@ defmodule Aqua.Runner do
   refused `:busy`, and a stop drops those waiting as it drops the queue.
   Its answer is its step's `page_result` row, heard on the thread's
   topic and handed back through `Opus.Browser.answer/5`; a call whose
-  turn ended without answering it is answered as cancelled. A
-  call whose request ended is dropped while it waits, and its step
-  skipped, its card withdrawn, while the step is still proposed; so is
-  every call of a browser that is gone, which the runner monitors from
-  the moment it takes a call of it. A runner
+  turn ended without answering it is answered as cancelled. A call whose
+  request ended, or whose browser is gone, which the runner monitors from
+  the moment it takes a call of it, is dropped while it waits here; once
+  it has a row, the row records the end (`Aqua.Tape.end_call/4`), so no
+  step of it is recorded or dispatched after, however far it had got,
+  and its step still proposed is skipped, its card withdrawn. A runner
   that recovers a thread's turns holds no call of its predecessor, whose
   requests were answered unavailable when it died: their steps still
   proposed are skipped, and a turn one opened that never ran is
@@ -1834,18 +1835,14 @@ defmodule Aqua.Runner do
     end)
   end
 
-  # A request that ended: its step, while still proposed, is skipped and
-  # its card withdrawn, so a late yes runs nothing. Withdrawing a card is
-  # no decision the tape announces: a turn paused on it is settled here,
-  # and goes on once no other card is pending.
+  # A request that ended: no step of it is recorded or dispatched from
+  # now on, and its step still proposed is skipped and its card withdrawn,
+  # so a late yes runs nothing. Withdrawing a card is no decision the tape
+  # announces: a turn paused on it is settled here, and goes on once no
+  # other card is pending.
   defp withdraw(state, request) do
-    with {:ok, %{message: row, turn: %{id: turn_id}}} <-
-           Tape.accepted(state.ctx, state.id, request),
-         {:ok, turn} <- Tape.turn(state.ctx, turn_id),
-         {:ok, steps} <- Tape.steps(state.ctx, turn),
-         %{id: id} <-
-           Enum.find(steps, &(&1.message_id == row.id and &1.dispatch_state == "proposed")),
-         {:ok, [_skipped]} <- Tape.skip_steps(state.ctx, turn, "the page's request ended", [id]),
+    with {:ok, %{turn_id: turn_id, skipped: [_ | _]}} <-
+           Tape.end_call(state.ctx, state.id, request, "the page's request ended"),
          %{paused: %{turn_id: ^turn_id}} <- state do
       settle_paused(state)
     else

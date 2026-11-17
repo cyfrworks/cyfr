@@ -2452,14 +2452,18 @@ defmodule Aqua.Loop do
   # again. A turn opened on a page's call asks no model (`open_call/1`).
 
   # A turn opened on a page's call records that call as its first step,
-  # now that the turn runs, and asks no model.
+  # now that the turn runs, and asks no model. A call whose request ended
+  # is recorded as no step, and the turn ends with nothing run.
   defp open_call(%State{turn: %{message_id: id}} = state) when is_binary(id) do
     case Tape.message(guest(state), id) do
       {:ok, %{kind: "page_call"} = row} ->
         proposal = Aqua.PageCalls.proposal(state.turn, Tape.payload(row), message_id: row.id)
 
-        with {:ok, _step} <- Tape.propose_call(guest(state), state.turn, proposal),
-             do: {:ok, %{state | model?: false}}
+        case Tape.propose_call(guest(state), state.turn, proposal) do
+          {:ok, _step} -> {:ok, %{state | model?: false}}
+          {:error, :call_ended} -> {:ok, %{state | model?: false}}
+          {:error, reason} -> {:error, reason}
+        end
 
       _ ->
         {:ok, state}

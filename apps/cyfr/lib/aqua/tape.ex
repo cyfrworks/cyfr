@@ -595,6 +595,32 @@ defmodule Aqua.Tape do
     end
   end
 
+  @doc """
+  The page's call `request` in `thread_id` ended unanswered
+  (`TurnStorage.end_call/4`): no step of it is recorded or dispatched
+  from now on, and its step still proposed is skipped with `reason`, its
+  card invalidated. Answers the call's turn and the steps skipped, or
+  `nil` for a call with no row yet.
+  """
+  @spec end_call(Context.t(), String.t(), String.t(), String.t()) ::
+          {:ok, %{turn_id: String.t(), skipped: [step()]} | nil} | {:error, term()}
+  def end_call(%Context{} = ctx, thread_id, request, reason) do
+    with {:ok, ended} <-
+           TurnStorage.end_call(Sanctum.Context.actor(ctx), thread_id, request, reason) do
+      for %{skipped: steps, turn_id: turn_id} <- List.wrap(ended), steps != [] do
+        Enum.each(steps, fn step ->
+          with {:ok, row} <-
+                 Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
+               do: broadcast(ctx, thread_id, :message, row)
+        end)
+
+        announce_notices(ctx, [turn_id])
+      end
+
+      {:ok, ended}
+    end
+  end
+
   @doc "Open the next generation of a replay-safe step with a fresh child id."
   @spec next_generation(Context.t(), turn(), step(), String.t()) ::
           {:ok, step()} | {:error, term()}
