@@ -59,11 +59,14 @@ defmodule Prima.OutboxRecord do
   and its snapshot holds `workspace_id`, `opening_id` (the opening row
   whose turn the delivery starts), `person_id` and `origin`.
 
-  `workspace_report` is a workspace thread's state moved to `done`,
-  `failed` or `needs_you` (`workspace_report/1`): its source is the
-  workspace thread, its revision the move's instant, and its snapshot
-  holds `workspace_id`, `title`, `turn_id` (the turn that reported, or
-  the host for it), `outcome` (one of `report_outcomes/0`), `summary`
+  `workspace_report` is a report of a workspace thread's work: Aqua's
+  `done` or `needs_you`, a card's notice (`needs_you` naming its
+  approval), or the server's `error` (`workspace_report/1`): its source
+  is the workspace thread, its revision the move's instant, and its
+  snapshot holds `workspace_id`, `title`, `turn_id` (the turn that
+  reported, or the turn whose end the host reported; none for an
+  opening refused before any turn started), `outcome` (one of
+  `report_outcomes/0`), `summary`
   (cut to `max_reply_bytes/0` on a character boundary with `truncated`
   set), `attachments` (the files of the workspace thread's posts the
   report carries, each `{"message_id", "stored_name"}`, copied at

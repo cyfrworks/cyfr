@@ -109,6 +109,14 @@ defmodule Aqua.Runner do
   which the runner keeps for the running turn's current fence until each
   step's answer lands or is withdrawn. `Cyfr.Bus.ThreadEvent` says what
   each kind's `data` is.
+
+  A `:turn_finished` the runner hears, on whichever member the writer
+  was, has it read again the turns it holds: one another writer ended
+  under a raised fence (the person's stop of a workspace thread, a
+  deletion or an archive of its room, each committed in storage first
+  and announced on the thread after) is stopped here then, as
+  `stop_cancelled/1` stops it on the writer's own member, not at its
+  root's next lease tick (`ended_elsewhere/1`).
   """
 
   use GenServer, restart: :transient
@@ -844,8 +852,8 @@ defmodule Aqua.Runner do
       {:ok, %{message: row, turn: turn, replayed: true}} ->
         {:reply, {:ok, result(row, turn && turn.id, true, :turn)}, touch(state)}
 
-      # A crew member's answer landing in a workspace thread the person
-      # stopped: a row, and no turn (`Arca.TurnStorage.accept_message/3`).
+      # A crew member's answer to a request the person's stop ended: a
+      # row, and no turn (`Arca.TurnStorage.accept_message/3`).
       {:ok, %{message: row, turn: nil}} ->
         {:reply, {:ok, result(row, nil, false, :content)}, touch(state)}
 
@@ -1223,6 +1231,14 @@ defmodule Aqua.Runner do
   defp handle_owned_info(%ThreadEvent{kind: :message, data: row}, state),
     do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
 
+  defp handle_owned_info(%ThreadEvent{kind: :turn_finished}, state) do
+    case ended_elsewhere(state) do
+      {:gone, state} -> {:stop, :normal, state}
+      {:stopped, state} -> {:noreply, start_next(state)}
+      {:kept, state} -> {:noreply, state}
+    end
+  end
+
   defp handle_owned_info(%ThreadEvent{}, state), do: {:noreply, state}
 
   defp handle_owned_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
@@ -1426,6 +1442,86 @@ defmodule Aqua.Runner do
         {:error, reason} -> {:halt, {:error, reason, state}}
       end
     end)
+  end
+
+  # The turns this runner holds that another writer ended, stopped here
+  # as `stop_cancelled/1` stops them: each the store reads ended, or
+  # gone with its thread, whose end this runner did not write. The
+  # running turn's own loop ends it under the fence it announced, and its
+  # result retires it, so the running turn is another's only when the
+  # store's fence passed the loop's; a paused or queued turn this runner
+  # ends it retires in the handler that ends it, before any announcement
+  # of the end reaches it. Answers whether the thread is gone, and
+  # whether anything was stopped.
+  defp ended_elsewhere(state) do
+    held =
+      Enum.flat_map([state.live, state.paused], fn
+        nil -> []
+        entry -> [entry.turn_id]
+      end) ++ Map.keys(state.held) ++ Enum.map(state.queue, & &1.turn_id)
+
+    stopped =
+      Enum.reduce(held, state, fn id, state ->
+        case Tape.turn(state.ctx, id) do
+          {:ok, turn} ->
+            if another_end?(state, turn),
+              do: stop_another(state, turn),
+              else: state
+
+          {:error, :not_found} ->
+            stop_another(state, %{id: id, steps: []})
+
+          {:error, _unread} ->
+            state
+        end
+      end)
+
+    cond do
+      match?({:error, :not_found}, Tape.thread(stopped.ctx, stopped.id)) -> {:gone, stopped}
+      stopped == state -> {:kept, state}
+      true -> {:stopped, stopped}
+    end
+  end
+
+  defp another_end?(state, turn) do
+    cond do
+      not Tape.terminal?(turn) -> false
+      live?(state, turn.id) -> fence_passed?(state, turn)
+      # A held turn's holder may have ended it itself, and its exit
+      # retires it here; a stop, a deletion or an archive cancels.
+      Map.has_key?(state.held, turn.id) -> turn.status == "cancelled"
+      true -> true
+    end
+  end
+
+  defp live?(%{live: %{turn_id: id}}, id), do: true
+  defp live?(_state, _id), do: false
+
+  # The loop announces its fence as it starts and as it takes its root;
+  # a turn ended before any announcement was ended by another writer.
+  defp fence_passed?(%{partials: %{fence: fence}}, turn) when is_integer(fence),
+    do: turn.fence > fence
+
+  defp fence_passed?(_state, _turn), do: true
+
+  # What the runner holds of a turn the store ended: its loop and every
+  # worker under it, then the child execution and catalog handler of each
+  # step the end cancel-marked; a turn gone with its thread has no steps
+  # left to read.
+  defp stop_another(state, %{steps: []} = gone) do
+    case stop_ended(state, gone.id, []) do
+      :ok -> retire_turn(state, gone.id)
+      {:error, _reason} -> state
+    end
+  end
+
+  defp stop_another(state, turn) do
+    with {:ok, steps} <- Tape.steps(state.ctx, turn),
+         :ok <- stop_ended(state, turn.id, Enum.filter(steps, & &1.cancel_requested_at)) do
+      retire_turn(state, turn.id)
+    else
+      _not_stopped -> state
+    end
   end
 
   # The target set belongs to this handler invocation. Retire each local

@@ -933,4 +933,76 @@ defmodule Arca.WorkspaceStorageTest do
                turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
              })
   end
+
+  test "an opening refused after a report of earlier work since it was written ends on its own row alone",
+       %{actor: actor, daily: daily} do
+    {workspace, turn} = at_work!(actor, daily)
+
+    {:ok, _again} =
+      TurnStorage.open_workspace(actor, opening(actor, daily, %{workspace_id: workspace.id}))
+
+    opening =
+      Enum.find(
+        Threads.messages(actor, workspace.id),
+        &(&1.kind == "opening" and is_nil(&1.turn_id))
+      )
+
+    {:ok, _} =
+      TurnStorage.report_workspace(actor, turn.id, "done", %{fence: turn.fence, summary: "Done."})
+
+    {:ok, _} = ended!(actor, turn, "completed")
+    assert state(actor, workspace.id) == "open"
+
+    assert {:ok, %{workspace_state: "done"}} =
+             TurnStorage.refuse_opening(actor, workspace.id, opening.id, %{
+               summary: "the work could not start",
+               person_id: actor.user_id,
+               origin: "interactive"
+             })
+
+    assert {:ok, %{status: "error"}} = Threads.get_message(actor, opening.id)
+    assert outcome(actor, workspace.id) == "done"
+    assert report_outcomes(actor) == ["done"]
+  end
+
+  test "an opening refused after a newer post's report leaves that report the thread's word", %{
+    actor: actor,
+    daily: daily
+  } do
+    workspace = open!(actor, daily)
+    [opening] = Threads.messages(actor, workspace.id)
+    newer = running!(actor, workspace)
+
+    assert {:ok, _} =
+             TurnStorage.report_workspace(actor, newer.id, "done", %{
+               fence: newer.fence,
+               summary: "New work finished"
+             })
+
+    assert {:ok, _} = ended!(actor, newer, "completed")
+    assert outcome(actor, workspace.id) == "done"
+
+    assert {:ok, _} =
+             TurnStorage.refuse_opening(actor, workspace.id, opening.id, %{
+               summary: "old delivery refused",
+               person_id: actor.user_id,
+               origin: "interactive"
+             })
+
+    assert state(actor, workspace.id) == "done"
+    assert outcome(actor, workspace.id) == "done"
+  end
+
+  test "an answer to a request the stop ended opens no turn after new work reopens the thread",
+       %{actor: actor, daily: daily} do
+    {workspace, turn} = at_work!(actor, daily)
+    request = asked!(actor, workspace, "planner")
+    assert {:ok, _} = ended!(actor, turn, "completed")
+    assert {:ok, _} = stop!(actor, workspace)
+    assert {:ok, %{status: "expired"}} = Threads.get_message(actor, request.id)
+    _newer = running!(actor, workspace)
+    assert state(actor, workspace.id) == "open"
+    assert {:ok, %{message: row, turn: nil}} = answer(actor, workspace, request)
+    assert row.reply_to == request.id
+  end
 end

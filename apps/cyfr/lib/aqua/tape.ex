@@ -762,7 +762,9 @@ defmodule Aqua.Tape do
   Delete a thread, and with a room its crew members' child threads, their
   open turns cancelled in the same transaction (`Arca.ThreadStorage.delete/3`)
   under the stamp each root's attempt stores; the runtime still holding
-  them is the caller's to stop (`Aqua.Runner.stop_cancelled/1`).
+  them is the caller's to stop (`Aqua.Runner.stop_cancelled/1`), and a
+  runner on another member stops on hearing each cancelled turn's thread
+  told its turn finished.
   """
   @spec delete_thread(Context.t(), String.t()) ::
           {:ok, %{cancelled: [map()]}} | {:error, term()}
@@ -783,6 +785,7 @@ defmodule Aqua.Tape do
       ThreadList.removed(ctx, thread_id)
       Activity.cancelled(ctx, open, cancelled)
       withdrawn(ctx, waiting)
+      announce_ended(ctx, cancelled)
       deleted
     end
   end
@@ -816,15 +819,20 @@ defmodule Aqua.Tape do
       Enum.each(cancelled, &Opus.end_turn_programs(ctx.athanor_id, &1.turn_id))
       announce_lists(ctx, thread_id, nil)
       Activity.cancelled(ctx, open, cancelled)
-
-      cancelled
-      |> Enum.map(& &1.thread_id)
-      |> Enum.uniq()
-      |> Enum.each(&broadcast(ctx, &1, :turn_finished, nil))
-
+      announce_ended(ctx, cancelled)
       wake_crew(ctx)
       stopped
     end
+  end
+
+  # Each thread whose turns a committed write cancelled hears that its
+  # turn finished: the runner holding one, on whichever member, stops
+  # what it holds of it on hearing (`Aqua.Runner`).
+  defp announce_ended(ctx, cancelled) do
+    cancelled
+    |> Enum.map(& &1.thread_id)
+    |> Enum.uniq()
+    |> Enum.each(&broadcast(ctx, &1, :turn_finished, nil))
   end
 
   @doc """

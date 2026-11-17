@@ -409,4 +409,76 @@ defmodule Aqua.WorkspaceStopTest do
     assert %{workspace_state: nil} = elem(Threads.get(actor(ctx), daily.id), 1)
     assert reports(ctx) == []
   end
+
+  test "a deletion of the room ends a crew holder absent from this node's registry, on hearing it",
+       %{ctx: ctx, daily: daily} do
+    script!([ask_planner(), reply("Asked the planner.") | at_work()])
+    workspace = open!(ctx, daily)
+    aqua = opening_turn!(ctx, workspace)
+    await_status(ctx, aqua, "completed")
+    request = asked!(ctx, workspace)
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    {child, planner} = member_turn!(ctx, workspace, request)
+    playing!()
+    runner = Runner.whereis(child.id)
+    holder = :sys.get_state(runner).live.task.pid
+    holding = Process.monitor(holder)
+    running = Process.monitor(runner)
+
+    on_exit(fn ->
+      Aqua.Loop.Worker.stop(holder)
+      if Process.alive?(runner), do: GenServer.stop(runner, :normal)
+    end)
+
+    # As a peer's runner reads to the deleting member: no entry in its
+    # registry, its processes and subscription alive.
+    :sys.replace_state(runner, fn state ->
+      Registry.unregister(Aqua.RunnerRegistry, child.id)
+      state
+    end)
+
+    assert {:ok, %{cancelled: cancelled}} = Tape.delete_thread(ctx, workspace.id)
+    assert Enum.any?(cancelled, &(&1.turn_id == planner))
+    assert :ok = Runner.stop_cancelled(cancelled)
+    assert {:error, :not_found} = Tape.turn(ctx, planner)
+
+    assert_receive {:DOWN, ^holding, :process, ^holder, _}, 5_000
+    assert_receive {:DOWN, ^running, :process, ^runner, :normal}, 5_000
+  end
+
+  test "the stop ends a crew holder absent from this node's registry, on hearing it", %{
+    ctx: ctx,
+    daily: daily
+  } do
+    script!([ask_planner(), reply("Asked the planner.") | at_work()])
+    workspace = open!(ctx, daily)
+    aqua = opening_turn!(ctx, workspace)
+    await_status(ctx, aqua, "completed")
+    request = asked!(ctx, workspace)
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    {child, planner} = member_turn!(ctx, workspace, request)
+    playing!()
+    runner = Runner.whereis(child.id)
+    holder = :sys.get_state(runner).live.task.pid
+    monitor = Process.monitor(holder)
+    # Model the one condition stop_cancelled sees for a peer's runner:
+    # no entry in this node's registry. Leave its processes and bus subscription alive.
+    on_exit(fn ->
+      Aqua.Loop.Worker.stop(holder)
+      if Process.alive?(runner), do: GenServer.stop(runner, :normal)
+    end)
+
+    :sys.replace_state(runner, fn state ->
+      Registry.unregister(Aqua.RunnerRegistry, child.id)
+      state
+    end)
+
+    assert Runner.whereis(child.id) == nil
+    assert :ok = Runner.stop_turn(ctx, workspace.id)
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, planner)
+    assert state(ctx, workspace.id) == "stopped"
+    # A round trip ensures the cancellation broadcasts have been handled.
+    _ = :sys.get_state(runner)
+    assert_receive {:DOWN, ^monitor, :process, ^holder, _}, 1_000
+  end
 end
