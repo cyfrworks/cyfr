@@ -201,7 +201,7 @@ defmodule Aqua do
 
   @doc """
   The person's workspace threads a view lists, the latest activity
-  first: each at work or waiting on them, and each finished one with
+  first: each at work or waiting on them, and each whose work ended with
   posts they have not seen (`Aqua.Providers.Workspace.records/1`).
   """
   @spec workspaces(Context.t()) ::
@@ -226,6 +226,13 @@ defmodule Aqua do
   @spec steps(Context.t(), String.t(), keyword()) ::
           {:ok, [Aqua.Steps.step()]} | {:error, term()}
   defdelegate steps(ctx, thread_id, opts \\ []), to: Aqua.Steps
+
+  @doc """
+  Who is at work in a workspace thread now, one row an agent, each with
+  the last thing it did and when (`Aqua.Steps.at_work/2`).
+  """
+  @spec at_work(Context.t(), String.t()) :: {:ok, [Aqua.Steps.at_work()]} | {:error, term()}
+  defdelegate at_work(ctx, workspace_id), to: Aqua.Steps
 
   @doc "An empty stream of a running turn's answers (`Aqua.Loop.Stream.new/0`)."
   @spec stream_new() :: Aqua.Loop.Stream.t()

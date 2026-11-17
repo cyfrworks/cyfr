@@ -166,6 +166,8 @@ defmodule Arca.SchemaVocabularyTest do
             Map.put(daily, :parent_id, "thread_room"),
             Map.delete(workspace, :workspace_state),
             %{workspace | workspace_state: "bogus"},
+            %{workspace | workspace_state: "failed"},
+            Map.put(workspace, :workspace_outcome, "failed"),
             Map.put(thread, :day, ~D[2026-11-16]),
             %{thread | parent_id: nil}
           ] do
@@ -293,11 +295,42 @@ defmodule Arca.SchemaVocabularyTest do
 
       refused!("threads", thread(ctx, %{kind: "bogus"}), "threads_kind_known")
 
+      # `failed` is no state or outcome of a workspace thread any more: the
+      # host says `error`.
+      for state <- ["bogus", "failed"] do
+        refused!(
+          "threads",
+          thread(ctx, %{kind: "workspace", day: nil, workspace_state: state}),
+          "threads_workspace_state_known"
+        )
+      end
+
       refused!(
         "threads",
-        thread(ctx, %{kind: "workspace", day: nil, workspace_state: "bogus"}),
-        "threads_workspace_state_known"
+        thread(ctx, %{
+          kind: "workspace",
+          day: nil,
+          workspace_state: "done",
+          workspace_outcome: "failed"
+        }),
+        "threads_workspace_outcome_known"
       )
+
+      for {state, outcome} <- [
+            {"stopped", "stopped"},
+            {"error", "error"},
+            {"needs_you", "needs_you"}
+          ] do
+        row =
+          thread(ctx, %{
+            kind: "workspace",
+            day: nil,
+            workspace_state: state,
+            workspace_outcome: outcome
+          })
+
+        assert {1, _} = insert!("threads", row)
+      end
 
       refused!(
         "threads",

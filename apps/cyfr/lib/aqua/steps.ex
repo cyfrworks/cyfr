@@ -20,6 +20,10 @@ defmodule Aqua.Steps do
 
   A step a page in Aqua's browser called (purpose `page`,
   `Aqua.PageCalls`) is worded as the page's: "The page ran an app".
+
+  Who is at work in a workspace thread (`at_work/2`) is read from the
+  same steps, one row an agent, as it stands: no agent has a status of
+  its own.
   """
 
   alias Sanctum.Context
@@ -31,6 +35,14 @@ defmodule Aqua.Steps do
           at: DateTime.t() | nil,
           sentence: String.t(),
           status: :running | :done | :failed | :refused | :skipped | :waiting
+        }
+
+  @typedoc "An agent at work in a workspace thread, as a view reads it."
+  @type at_work :: %{
+          agent: String.t(),
+          sentence: String.t(),
+          at: DateTime.t() | nil,
+          status: :running | :waiting | :queued
         }
 
   @sentences %{
@@ -103,6 +115,101 @@ defmodule Aqua.Steps do
       {:ok, Enum.map(rows, &step/1)}
     end
   end
+
+  @doc """
+  Who is at work in the workspace thread `workspace_id` now, one row an
+  agent, Aqua first: each agent with an open turn there or in its crew
+  thread under it, worded by the last step that turn took and when, or
+  by where the turn stands while it took none; and a crew member a
+  request there asked whose delivery has opened no turn yet. A turn that ended is no
+  current work, and a turn of a page's call is no agent's (it never
+  speaks for its thread, `Arca.TurnStorage`'s "Workspace threads").
+  Nothing is stored: the rows are read as they stand.
+  """
+  @spec at_work(Context.t(), String.t()) :: {:ok, [at_work()]} | {:error, term()}
+  def at_work(%Context{} = ctx, workspace_id) when is_binary(workspace_id) do
+    actor = Context.actor(ctx)
+
+    with children when is_list(children) <- Arca.ThreadStorage.children(actor, workspace_id),
+         {:ok, turns} <- open_turns(ctx, [workspace_id | Enum.map(children, & &1.id)]),
+         asked when is_list(asked) <-
+           Arca.ThreadStorage.pending_requests(actor,
+             thread_id: workspace_id,
+             unstarted: true
+           ),
+         {:ok, working} <- working(ctx, Enum.reject(turns, &page_call?(ctx, &1))) do
+      busy = MapSet.new(working, & &1.agent)
+
+      waiting =
+        for request <- Enum.uniq_by(asked, & &1.addressee),
+            not MapSet.member?(busy, request.addressee),
+            do: %{
+              agent: request.addressee,
+              sentence: "Asked, not started yet",
+              at: request.inserted_at,
+              status: :queued
+            }
+
+      {:ok, Enum.sort_by(working ++ waiting, &{not Prima.AgentRef.soul?(&1.agent), &1.agent})}
+    end
+  end
+
+  defp open_turns(ctx, thread_ids) do
+    Enum.reduce_while(thread_ids, {:ok, []}, fn id, {:ok, acc} ->
+      case Aqua.Tape.open_turns(ctx, id) do
+        {:ok, turns} -> {:cont, {:ok, acc ++ turns}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  defp page_call?(ctx, %{message_id: id}) when is_binary(id),
+    do: match?({:ok, %{kind: "page_call"}}, Aqua.Tape.message(ctx, id))
+
+  defp page_call?(_ctx, _turn), do: false
+
+  # Each agent's current turn, the one running or paused, else the first
+  # queued, read by the last step it took.
+  defp working(ctx, turns) do
+    turns
+    |> Enum.group_by(& &1.agent)
+    |> Enum.reduce_while({:ok, []}, fn {agent, own}, {:ok, acc} ->
+      turn = Enum.find(own, &(&1.status in ["running", "paused"])) || hd(own)
+
+      case Aqua.Tape.steps(ctx, turn) do
+        {:ok, steps} -> {:cont, {:ok, [row(agent, turn, last_step(steps)) | acc]}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  defp last_step(steps) do
+    steps
+    |> Enum.reject(&(&1.kind == "model"))
+    |> Enum.max_by(& &1.seq, fn -> nil end)
+  end
+
+  defp row(agent, %{status: "accepted"} = turn, nil),
+    do: %{agent: agent, sentence: "Waiting to start", at: turn.accepted_at, status: :queued}
+
+  defp row(agent, %{status: "paused"} = turn, nil),
+    do: %{
+      agent: agent,
+      sentence: "Waiting",
+      at: turn.paused_at || turn.accepted_at,
+      status: :waiting
+    }
+
+  defp row(agent, turn, nil),
+    do: %{agent: agent, sentence: "Thinking", at: turn.accepted_at, status: :running}
+
+  defp row(agent, _turn, step) do
+    %{sentence: sentence, at: at, status: status} = step(step)
+    %{agent: agent, sentence: sentence, at: at, status: at_work_status(status)}
+  end
+
+  defp at_work_status(:waiting), do: :waiting
+  defp at_work_status(_status), do: :running
 
   defp step(row) do
     %{

@@ -898,6 +898,33 @@ defmodule Aqua.Loop.RequestTest do
                ~s|[Report from the workspace thread "Moon report" (thr_work): done]\nThe report is written.|
     end
 
+    test "a report names its outcome as the reader is told it: done, needing the person, " <>
+           "Aqua's error, or a card's notice" do
+      report = fn seq, payload ->
+        %{
+          row(seq, "report", @agent, "Summary #{seq}.", Map.put(payload, "title", "Moon report"))
+          | sent_by: "aqua",
+            workspace_id: "thr_work"
+        }
+      end
+
+      rows = [
+        report.(1, %{"outcome" => "done"}),
+        report.(2, %{"outcome" => "needs_you"}),
+        report.(3, %{"outcome" => "error"}),
+        report.(4, %{"outcome" => "needs_you", "approval_id" => "apr_1"})
+      ]
+
+      [%{"role" => "user", "content" => content}] = Request.messages(rows, %{}, me: "aqua")
+
+      assert Enum.map(content, & &1["text"]) == [
+               ~s|[Report from the workspace thread "Moon report" (thr_work): done]\nSummary 1.|,
+               ~s|[Report from the workspace thread "Moon report" (thr_work): needs the person]\nSummary 2.|,
+               ~s|[Report from the workspace thread "Moon report" (thr_work): error, Aqua could not run it]\nSummary 3.|,
+               ~s|[Report from the workspace thread "Moon report" (thr_work): a card waits on the person]\nSummary 4.|
+             ]
+    end
+
     test "the reader's own post is its call's to show; another agent's post reads under its name" do
       mine = %{row(1, "text", @agent, "the chart", %{"post" => true}) | sent_by: "aqua"}
       theirs = %{row(2, "text", @agent, "their chart", %{"post" => true}) | sent_by: "planner"}

@@ -655,8 +655,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     assert has_element?(pane, card.(pointer), "Workspace thread")
     assert has_element?(pane, ~s(#{card.(pointer)} [data-raw-content="Moon report"]))
-    assert has_element?(pane, ~s(#{card.(pointer)} [data-state="open"]), "Working on it")
-    assert has_element?(pane, ~s(#{card.(report)} [data-state="open"]), "Working on it")
+    assert has_element?(pane, ~s(#{card.(pointer)} [data-state="open"]), "Working")
+    assert has_element?(pane, ~s(#{card.(report)} [data-state="open"]), "Working")
     refute has_element?(pane, ~s(#{card.(report)} [data-state="done"]))
 
     # The report keeps its summary, its picture and its link.
@@ -683,6 +683,22 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       has_element?(pane, ~s(#{card.(pointer)} [data-state="needs_you"]), "Needs you") and
         has_element?(pane, ~s(#{card.(report)} [data-state="needs_you"]), "Needs you")
     end)
+
+    # Each way its work ends reads as a person reads it.
+    for {state, label} <- [{"done", "Finished"}, {"stopped", "Stopped"}, {"error", "Error"}] do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Thread, where: t.id == ^workspace.id),
+          set: [workspace_state: state]
+        )
+
+      Aqua.ThreadList.changed(here, workspace.id)
+
+      Prima.Test.Wait.wait_until(fn ->
+        has_element?(pane, ~s(#{card.(pointer)} [data-state="#{state}"]), label) and
+          has_element?(pane, ~s(#{card.(report)} [data-state="#{state}"]), label)
+      end)
+    end
 
     # Open opens the workspace thread at its layer, and the panel gives way.
     pane |> element(~s(#{card.(pointer)} button[phx-click="open_thread"])) |> render_click()

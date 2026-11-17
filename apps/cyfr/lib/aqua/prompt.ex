@@ -162,8 +162,11 @@ defmodule Aqua.Prompt do
       title,
       "\", which the person's daily thread opened for one piece of work. They asked:\n\n",
       quoted(ask),
-      "\n\nDo the work here and post what you make with `thread.post`. When it is done or " <>
-        "has failed, say so with `workspace.report`: the report lands on the daily thread. " <>
+      "\n\nDo the work here and post what you make with `thread.post`. When it is done, " <>
+        "report it with `workspace.report` as `done`, saying what worked and what did not; " <>
+        "when it cannot go on without the person, report `needs_you` and say what you need " <>
+        "from them. The report lands on the daily thread. While you wait on something " <>
+        "outside, such as a build or a run elsewhere, say so in a post here. " <>
         "Keep this thread's notes current with `notes.workspace`: what you have learned, " <>
         "decided and still have to do, written whole and short, so a later turn here " <>
         "picks the work up from them.",

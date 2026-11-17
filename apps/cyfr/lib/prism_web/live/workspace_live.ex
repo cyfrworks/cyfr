@@ -25,9 +25,13 @@ defmodule PrismWeb.WorkspaceLive do
   hold, as the thread shows them, and no earlier result is listed
   as if there were none. The thread's title and state are `Aqua.workspace/2`'s, worded by
   `PrismWeb.DisplayHelpers.work_state/1`, read again when the person's
-  list announces the thread (`Cyfr.Bus.ThreadListed`) and when a card
-  opens or is decided in the athanor (`Cyfr.Bus.Notify`), since a card in
-  a crew member's thread under it moves it too.
+  list announces the thread (`Cyfr.Bus.ThreadListed`), which a crew
+  member's thread under it announces too, and when a card opens or is
+  decided in the athanor (`Cyfr.Bus.Notify`). Above the steps stands who
+  is at work there, one row an agent with its last step and how long ago
+  (`Aqua.at_work/2`), read with the steps and again every few seconds,
+  since a crew member's steps happen in its own thread. Stop, while the
+  thread is working or needs the person, stops all of its work.
 
   Every read is the person's own: the page's context is focused on the
   athanor in its address, which only its person may focus
@@ -58,6 +62,10 @@ defmodule PrismWeb.WorkspaceLive do
 
   @tabs ~w(posts work)
 
+  # How often the rows of who is at work are read again: a crew member's
+  # step happens in its own thread, and each row's age moves.
+  @at_work_every 10_000
+
   @doc "The address of workspace thread `id` in the athanor `route` names."
   @spec address(String.t() | nil, String.t()) :: String.t()
   def address(route, id) when is_binary(id),
@@ -73,13 +81,17 @@ defmodule PrismWeb.WorkspaceLive do
       |> assign(:overlay, :full)
       |> assign(:tab, "posts")
       |> assign(:steps, [])
+      |> assign(:at_work, [])
       |> assign(:results, [])
       |> assign(:window, nil)
       |> assign(:pane, nil)
 
     case Aqua.workspace(ctx, id) do
       {:ok, work} ->
-        if connected?(socket), do: follow(ctx, id)
+        if connected?(socket) do
+          follow(ctx, id)
+          Process.send_after(self(), :at_work, @at_work_every)
+        end
 
         {:ok,
          socket
@@ -101,15 +113,28 @@ defmodule PrismWeb.WorkspaceLive do
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
   end
 
-  # The steps as they stand; a read that fails keeps what was shown.
+  # The steps and who is at work as they stand; a read that fails keeps
+  # what was shown.
   defp read_steps(%{assigns: %{work: %{id: id}}} = socket) do
-    case Aqua.steps(socket.assigns.context, id) do
-      {:ok, steps} -> assign(socket, :steps, steps)
+    socket =
+      case Aqua.steps(socket.assigns.context, id) do
+        {:ok, steps} -> assign(socket, :steps, steps)
+        {:error, _unread} -> socket
+      end
+
+    read_at_work(socket)
+  end
+
+  defp read_steps(socket), do: socket
+
+  defp read_at_work(%{assigns: %{work: %{id: id}}} = socket) do
+    case Aqua.at_work(socket.assigns.context, id) do
+      {:ok, rows} -> assign(socket, :at_work, rows)
       {:error, _unread} -> socket
     end
   end
 
-  defp read_steps(socket), do: socket
+  defp read_at_work(socket), do: socket
 
   # The thread as it is now; one that cannot be found is gone, and the
   # page says so, with nothing of it left.
@@ -144,6 +169,22 @@ defmodule PrismWeb.WorkspaceLive do
 
   def handle_event("tab", _params, socket), do: {:noreply, socket}
 
+  # The person's stop of the thread's work, all of it, its crew members'
+  # included (`Aqua.Runner.stop_turn/2`); the state is read again when the
+  # list announces it.
+  def handle_event("stop", _params, %{assigns: %{work: %{id: id}}} = socket) do
+    case PrismWeb.Ops.call_tool(socket, "thread/stop", %{"thread" => id}) do
+      {:ok, _stopped} ->
+        {:noreply, read_work(socket)}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not stop: #{PrismWeb.Ops.error_message(reason)}")}
+    end
+  end
+
+  def handle_event("stop", _params, socket), do: {:noreply, socket}
+
   # ============================================================================
   # The thread, the person's list and what the pane tells this page
   # ============================================================================
@@ -158,11 +199,16 @@ defmodule PrismWeb.WorkspaceLive do
 
   def handle_info(%ThreadEvent{}, socket), do: {:noreply, socket}
 
+  def handle_info(:at_work, socket) do
+    Process.send_after(self(), :at_work, @at_work_every)
+    {:noreply, read_at_work(socket)}
+  end
+
   def handle_info(
         %ThreadListed{kind: :workspace, id: id},
         %{assigns: %{work: %{id: id}}} = socket
       ),
-      do: {:noreply, read_work(socket)}
+      do: {:noreply, socket |> read_work() |> read_at_work()}
 
   def handle_info(%ThreadListed{kind: :removed, id: id}, %{assigns: %{work: %{id: id}}} = socket),
     do: {:noreply, gone(socket)}
@@ -276,6 +322,16 @@ defmodule PrismWeb.WorkspaceLive do
         >
           {work_state(@work.state)}
         </span>
+        <button
+          :if={@work.state in ["open", "needs_you"]}
+          id="workspace-stop"
+          type="button"
+          phx-click="stop"
+          title="Stop all of this thread's work, its crew members' included"
+          class="shrink-0 rounded px-2 text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-100"
+        >
+          Stop
+        </button>
       </.close_row>
 
       <%!-- In the hand, the thread's posts and the steps and results are two
@@ -316,6 +372,24 @@ defmodule PrismWeb.WorkspaceLive do
             @tab != "work" && "max-md:hidden"
           ]}
         >
+          <div :if={@at_work != []}>
+            <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              At work
+            </h2>
+            <ul id="workspace-at-work" class="space-y-1">
+              <li
+                :for={row <- @at_work}
+                id={"workspace-at-work-" <> row.agent}
+                data-status={row.status}
+                class="flex min-h-6 items-center gap-2 text-sm"
+              >
+                <span class="shrink-0 font-medium text-gray-100">{agent_name(row.agent)}</span>
+                <span class="min-w-0 flex-1 truncate text-gray-300">{row.sentence}</span>
+                <span class="shrink-0 text-xs text-gray-500">{relative_time(row.at)}</span>
+              </li>
+            </ul>
+          </div>
+
           {live_render(@socket, PrismWeb.WorkspaceLive.BrowserLive,
             id: "workspace-browser-view",
             session: %{"athanor_id" => @context.athanor_id, "thread_id" => @work.id}
@@ -424,6 +498,9 @@ defmodule PrismWeb.WorkspaceLive do
     </div>
     """
   end
+
+  # An agent at work as a person reads its name: the soul is Aqua.
+  defp agent_name(name), do: if(Prima.AgentRef.soul?(name), do: "Aqua", else: name)
 
   # A step's state as a person reads it beside its sentence; a step done
   # says nothing more.

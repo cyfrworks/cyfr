@@ -41,14 +41,14 @@ defmodule PrismWeb.AquaPanelLive do
   the panel says so and offers to try it again (`athanor.provision`).
 
   The panel lists the person's workspace threads (`Aqua.workspaces/1`):
-  each still going, each waiting on them and each finished one with posts
-  they have not seen, by its title, its state
-  (`PrismWeb.DisplayHelpers.work_state/1`) and how many posts are new. A
-  finished one they have read leaves by itself. The list is read when the
-  panel opens and again, while it is open, when the person's list
-  announces a workspace thread and when a card opens or is decided in the
-  athanor (`Cyfr.Bus.Notify`), since a card in a crew member's thread
-  under one moves it without announcing it.
+  each still going, each waiting on them and each whose work ended with
+  posts they have not seen, by its title, its state
+  (`PrismWeb.DisplayHelpers.work_state/1`) and how many posts are new. One
+  whose work ended that they have read leaves by itself. The list is read
+  when the panel opens and again, while it is open, when the person's list
+  announces a workspace thread (a crew member's thread under one announces
+  it too) and when a card opens or is decided in the athanor
+  (`Cyfr.Bus.Notify`).
 
   A workspace thread is not shown in the panel: it opens as its own layer
   over the desktop (`PrismWeb.WorkspaceLive`). Asked for one, from the

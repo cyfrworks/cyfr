@@ -3,12 +3,13 @@
 
 defmodule PrismWeb.WorkspaceLiveTest do
   # A workspace thread as its own layer over the desktop: its title and
-  # state, its steps as Aqua words them, what it made with its pictures,
-  # files and links, and its posts in the thread pane, whose sends
-  # go to that thread alone; two tabs in the hand. Only the person's own
-  # workspace thread opens; anything else reads as not here and shows
-  # nothing of it. The state follows the thread: a move its list
-  # announces, a card in a crew member's thread under it, its deletion.
+  # state, who is at work there, its steps as Aqua words them, what it
+  # made with its pictures, files and links, and its posts in the thread
+  # pane, whose sends go to that thread alone; two tabs in the hand. Only
+  # the person's own workspace thread opens; anything else reads as not
+  # here and shows nothing of it. The state follows the thread: a move
+  # its list announces, a crew member's work ending under it, a card in a
+  # crew member's thread under it, its deletion; Stop ends its work.
   # A crew member's thread under it opens in the same pane, which leads
   # back. Driven against the real loop and a scripted model; the crew's
   # delivery consumer is off in the suite, so an opening starts no turn.
@@ -201,7 +202,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
     assert has_element?(view, ~s(#workspace-close[href="/a/#{route(mine)}"]))
 
     assert has_element?(view, "#workspace-title", "Moon chart")
-    assert has_element?(view, ~s(#workspace-state[data-state="done"]), "Done")
+    assert has_element?(view, ~s(#workspace-state[data-state="done"]), "Finished")
 
     # The steps, newest first, in Aqua's words; no step carries what the
     # model wrote.
@@ -395,7 +396,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
     Sanctum.Notify.broadcast(me.athanor_id, :approval_resolved, %{thread_id: "thr_crew"})
 
     wait_until(fn ->
-      has_element?(view, ~s(#workspace-state[data-state="open"]), "Working on it")
+      has_element?(view, ~s(#workspace-state[data-state="open"]), "Working")
     end)
 
     # Deleted while open: nothing of it is left, its posts included.
@@ -403,6 +404,121 @@ defmodule PrismWeb.WorkspaceLiveTest do
     wait_until(fn -> has_element?(view, "#workspace-missing") end)
     refute find_live_child(view, "workspace-pane")
     refute render(view) =~ "Moon chart"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "each state reads as a person reads it, and Stop is offered only while it works or needs them",
+       %{conn: conn, mine: mine, me: me, daily: daily} do
+    {workspace, _chart, _ref} = charted!(me, daily)
+    {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
+
+    for {state, label, stop?} <- [
+          {"open", "Working", true},
+          {"needs_you", "Needs you", true},
+          {"done", "Finished", false},
+          {"stopped", "Stopped", false},
+          {"error", "Error", false}
+        ] do
+      move!(workspace, state)
+      Aqua.ThreadList.changed(me, workspace.id)
+
+      wait_until(fn ->
+        has_element?(view, ~s(#workspace-state[data-state="#{state}"]), label)
+      end)
+
+      assert has_element?(view, "#workspace-stop") == stop?
+    end
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "who is at work stands above the steps, one row an agent; a crew member's turn ending under it moves the layer's state",
+       %{conn: conn, mine: mine, me: me, daily: daily} do
+    workspace = open!(me, daily, "Crew work")
+    aqua = work!(me, workspace)
+    {:ok, crew} = Threads.crew_thread(actor(me), workspace.id, "planner")
+
+    {:ok, %{turn: planner}} =
+      TurnStorage.accept_message(actor(me), crew.id, %{
+        message: %{author: me.user_id, sent_by: "person", content: "plan it"},
+        turn: %{agent: "planner", requested_by: me.user_id, origin: :interactive}
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^planner.id),
+        set: [status: "running"]
+      )
+
+    steps!(me, planner, [%{tool: "http", action: "read", outcome: nil}])
+
+    # Aqua's work done while the planner's runs: the thread is at work.
+    {:ok, _} = Tape.report_workspace(me, aqua, "done", %{summary: "Done."})
+    {:ok, current} = Tape.turn(me, aqua.id)
+    {:ok, _} = Tape.finish(me, current, "cancelled", %{error: "stopped"})
+
+    {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
+
+    assert has_element?(view, ~s(#workspace-state[data-state="open"]), "Working")
+    assert has_element?(view, ~s(#workspace-at-work-planner[data-status="running"]), "planner")
+    assert has_element?(view, "#workspace-at-work-planner", "Read a page on the web")
+    assert has_element?(view, "#workspace-at-work-planner", "just now")
+    refute has_element?(view, "#workspace-at-work-aqua")
+
+    # The planner's turn ends in its own thread: the list announces its
+    # room, and the layer reads the thread finished, with nobody at work.
+    {:ok, current} = Tape.turn(me, planner.id)
+    {:ok, _} = Tape.finish(me, current, "cancelled", %{error: "stopped"})
+
+    wait_until(fn ->
+      has_element?(view, ~s(#workspace-state[data-state="done"]), "Finished")
+    end)
+
+    refute has_element?(view, "#workspace-at-work")
+    refute has_element?(view, "#workspace-stop")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "Stop ends the thread's work: its turn waiting on a card is cancelled, and the thread reads Stopped",
+       %{conn: conn, mine: mine, me: me, daily: daily} do
+    {workspace, _chart, _ref} = charted!(me, daily)
+    {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
+    pane = on_thread!(child!(view, "workspace-pane"), workspace.id)
+    refute has_element?(view, "#workspace-stop")
+
+    Cyfr.Test.ScriptedWorker.script([
+      model_call("c1", "files", %{"action" => "delete", "path" => "notes.md"})
+    ])
+
+    pane |> form("form", %{"message" => "delete my notes"}) |> render_submit()
+
+    wait_until(
+      fn -> has_element?(view, ~s(#workspace-state[data-state="needs_you"])) end,
+      60_000
+    )
+
+    # Aqua stands at work there, waiting on the card; the soul reads as Aqua.
+    wait_until(fn -> has_element?(view, ~s(#workspace-at-work-aqua[data-status="waiting"])) end)
+    assert has_element?(view, "#workspace-at-work-aqua", "Aqua")
+    assert has_element?(view, "#workspace-at-work-aqua", "Deleted a file")
+
+    [turn] =
+      Arca.Repo.all(
+        from(t in Arca.Schemas.Turn,
+          where: t.thread_id == ^workspace.id and t.status in ^Prima.TurnState.open_statuses()
+        )
+      )
+
+    view |> element("#workspace-stop") |> render_click()
+
+    wait_until(fn ->
+      has_element?(view, ~s(#workspace-state[data-state="stopped"]), "Stopped")
+    end)
+
+    refute has_element?(view, "#workspace-stop")
+    assert {:ok, %{status: "cancelled"}} = Tape.turn(me, turn.id)
+    wait_until(fn -> not has_element?(view, "#workspace-at-work") end)
 
     Cyfr.Test.Sandbox.end_views()
   end

@@ -60,7 +60,7 @@ defmodule Prima.OutboxRecordTest do
 
     assert OutboxRecord.source_kinds() == ~w(schedule_occurrence message turn thread)
     assert OutboxRecord.reply_outcomes() == ~w(done failed cancelled uncertain needs_you)
-    assert OutboxRecord.report_outcomes() == ~w(done failed needs_you)
+    assert OutboxRecord.report_outcomes() == ~w(done needs_you error)
     assert OutboxRecord.max_report_files() == 10
     assert OutboxRecord.max_output_bytes() == 64 * 1024
     assert OutboxRecord.max_reply_bytes() == 32 * 1024
@@ -161,8 +161,25 @@ defmodule Prima.OutboxRecordTest do
       OutboxRecord.workspace_report(report(%{attachments: eleven}))
     end
 
+    for outcome <- ~w(failed cancelled) do
+      assert_raise FunctionClauseError, fn ->
+        OutboxRecord.workspace_report(report(%{outcome: outcome}))
+      end
+    end
+  end
+
+  test "only the server's error report may name no turn" do
+    assert %{snapshot: %{"turn_id" => nil, "outcome" => "error"}} =
+             OutboxRecord.workspace_report(report(%{turn_id: nil, outcome: "error"}))
+
+    for outcome <- OutboxRecord.report_outcomes() -- ["error"] do
+      assert_raise FunctionClauseError, fn ->
+        OutboxRecord.workspace_report(report(%{turn_id: nil, outcome: outcome}))
+      end
+    end
+
     assert_raise FunctionClauseError, fn ->
-      OutboxRecord.workspace_report(report(%{outcome: "cancelled"}))
+      OutboxRecord.workspace_report(report(%{turn_id: "", outcome: "error"}))
     end
   end
 

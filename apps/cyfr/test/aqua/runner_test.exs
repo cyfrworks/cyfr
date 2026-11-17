@@ -7,7 +7,9 @@ defmodule Aqua.RunnerTest do
   and accepted with the turn it opens or refused with nothing written;
   one turn runs at a time, the sender's own line steers it and a line to
   another agent or under another origin waits; a stop cuts the turn and drops the queue; a card pauses
-  the turn and its decision continues it; a runner that starts finds the
+  the turn and its decision continues it; a workspace thread's turn that
+  ends without its report leaves the thread stopped when the person's act
+  ended it and in error when Aqua could not run; a runner that starts finds the
   open turns and does what their rows say, resuming each under the origin
   its row stores and cancelling one whose stored origin is outside the
   vocabulary. A runner's loop dies with it;
@@ -1600,7 +1602,8 @@ defmodule Aqua.RunnerTest do
       Process.exit(holder, :kill)
       assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
       :ok = :sys.resume(runner)
-      assert_receive {^tag, :ok}, 5_000
+      # A daily thread's stop names no crew member's turn to stop after.
+      assert_receive {^tag, {:ok, []}}, 5_000
     else
       assert :ok = Runner.stop_turn(ctx, thread.id)
     end
@@ -2327,7 +2330,8 @@ defmodule Aqua.RunnerTest do
       assert tape_snapshot(ctx, ws.id, [put.id, id]) == before
     end
 
-    test "a stop drops the calls waiting behind the turn: none becomes a step of the next one",
+    test "a stop ends the thread's work and refuses the calls waiting behind its turn: none " <>
+           "becomes a step of the next one, which is new work",
          %{ctx: ctx, workspace: ws} do
       script!([
         reply("put"),
@@ -2338,18 +2342,44 @@ defmodule Aqua.RunnerTest do
       put = put!(ctx, ws)
       {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua keep it")
       assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^id}}, 60_000
+      # The card's notice, which is no report of the work.
+      assert [%{"outcome" => "needs_you", "approval_id" => _card}] = notices = reports(ctx)
       call = page_call(ctx, put, "component.list")
       assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
 
-      assert :ok = Runner.stop_turn(ctx, ws.id)
+      # The page's answer goes to the person's browser, which this test
+      # stands in for while the stop runs.
+      browser = {ctx.athanor_id, ctx.user_id, :person}
+      {:ok, _owner} = Registry.register(Opus.Browser.Registry, browser, nil)
+      stop = Task.async(fn -> Runner.stop_turn(ctx, ws.id) end)
+      request = call.request
+
+      assert_receive {:"$gen_call", from,
+                      {:answer, ^request, status, %Opus.Programs.Output{bytes: body}}},
+                     30_000
+
+      GenServer.reply(from, :ok)
+      assert :ok = Task.await(stop, 30_000)
+      :ok = Registry.unregister(Opus.Browser.Registry, browser)
+
+      assert {status, body} ==
+               Aqua.PageCalls.answered(%{content: "stopped", payload: %{"skipped" => true}})
+
       assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, id)
+      assert thread_state(ctx, ws.id) == "stopped"
+      assert {:ok, []} = Tape.open_turns(ctx, ws.id)
+      assert %{running: false, paused: false, queued: 0} = Runner.state(ws.id, ctx.athanor_id)
+      assert reports(ctx) == notices
 
       {:ok, %{turn_id: next}} = Runner.send_message(ctx, ws.id, "@aqua again")
+      assert thread_state(ctx, ws.id) == "open"
       await_ended!(ctx, next)
 
       assert {:ok, %{status: "completed"}} = Tape.turn(ctx, next)
       assert [model_step(ctx, next, 1, "text")] == steps!(ctx, next)
       assert [] = page_rows!(ctx, ws.id)
+      assert thread_state(ctx, ws.id) == "open"
+      assert reports(ctx) == notices
     end
 
     test "a call that comes as the running turn ends opens work of its own, which still " <>
@@ -2440,6 +2470,65 @@ defmodule Aqua.RunnerTest do
       assert %{kind: "page_result", content: "the page's request ended"} = answered
       assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
       assert chats() == 1
+    end
+  end
+
+  # A workspace thread's turn that ends with no report of its own: the
+  # person's act stops its work, and Aqua that could not run there is the
+  # server's error, told in one report.
+  describe "a workspace thread's turn that ends without its report" do
+    setup %{ctx: ctx} do
+      workspace = workspace!(ctx)
+      :ok = Runner.subscribe(workspace.id, ctx.athanor_id)
+      {:ok, workspace: workspace}
+    end
+
+    test "the consent restart is the person's act: the thread reads stopped, with no report",
+         %{ctx: ctx, workspace: ws} do
+      script!([{:probe, self()}, reply("never sent")])
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua go")
+      pids = running!(ws)
+
+      assert :ok = Runner.restart_for_consent(ctx, ws.id, %{})
+      assert_receive %ThreadEvent{kind: :restart_prompt}, 10_000
+      send(pids.call, :continue)
+
+      assert {:ok, %{status: "cancelled", error: "restart required"}} = Tape.turn(ctx, id)
+      assert thread_state(ctx, ws.id) == "stopped"
+      assert reports(ctx) == []
+    end
+
+    test "a turn that ends failed is Aqua that could not run there: the thread reads error, " <>
+           "with one report saying why",
+         %{ctx: ctx, workspace: ws} do
+      script!([{:error, "the model could not be reached"}])
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua go")
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "failed", error: error}} = Tape.turn(ctx, id)
+      assert is_binary(error) and error != ""
+      assert thread_state(ctx, ws.id) == "error"
+      assert [%{"outcome" => "error", "turn_id" => ^id, "summary" => ^error}] = reports(ctx)
+    end
+
+    test "a loop that crashes leaves its turn uncertain: the thread reads error, with one " <>
+           "report saying why",
+         %{ctx: ctx, workspace: ws} do
+      script!([{:probe, self()}, reply("never sent")])
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua go")
+      pids = running!(ws)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        Process.exit(pids.loop, :crashed)
+        wait_until(fn -> match?({:ok, %{status: "uncertain"}}, Tape.turn(ctx, id)) end)
+      end)
+
+      send(pids.call, :continue)
+
+      assert {:ok, %{status: "uncertain", error: error}} = Tape.turn(ctx, id)
+      assert is_binary(error) and error != ""
+      assert thread_state(ctx, ws.id) == "error"
+      assert [%{"outcome" => "error", "turn_id" => ^id, "summary" => ^error}] = reports(ctx)
     end
   end
 
@@ -2644,5 +2733,17 @@ defmodule Aqua.RunnerTest do
   defp thread_state(ctx, id) do
     {:ok, thread} = Threads.get(Sanctum.Context.actor(ctx), id)
     thread.workspace_state
+  end
+
+  # Every workspace_report the athanor recorded, delivered or not.
+  defp reports(ctx) do
+    import Ecto.Query, only: [from: 2]
+
+    from(r in Arca.Schemas.OutboxRecord,
+      where: r.athanor_id == ^ctx.athanor_id and r.kind == "workspace_report",
+      select: r.snapshot
+    )
+    |> Arca.Repo.all()
+    |> Enum.map(&Jason.decode!/1)
   end
 end

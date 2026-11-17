@@ -16,16 +16,20 @@ defmodule Arca.Schemas.Message do
   turn's own rows carry its agent, so what anyone else wrote into a turn
   is told apart by it. A request to a crew member names it in `addressee`
   and is `pending` until a reply answers it: then `answered`, with the
-  reply's id in `resolved_by`. A reply names the request it answers in
+  reply's id in `resolved_by`, or `expired` when the person stopped its
+  room's work before an answer came. A reply names the request it answers in
   `reply_to`, its `outcome` (`outcomes/0`) and, in `addressee`, who the
   request came from; a notice is a reply row whose outcome is
   `needs_you`, which answers nothing.
 
   A workspace thread's rows: an `opening` is the first message of a
   workspace thread and each further ask sent there (its envelope in
-  `payload`), a `pointer` the daily thread's post that points at a
-  workspace thread opened or asked again, and a `report` the daily
-  thread's post of a workspace thread's outcome. A pointer and a report
+  `payload`), waiting for its turn while it has none and no `status`:
+  `expired` once the person stopped the thread's work before it started,
+  `error` once its delivery was refused for good; a `pointer` the daily
+  thread's post that points at a workspace thread opened or asked again,
+  and a `report` the daily thread's post of a workspace thread's
+  outcome. A pointer and a report
   name their workspace thread in `workspace_id`, by which they go with it
   when it is deleted; no other row names one.
   """

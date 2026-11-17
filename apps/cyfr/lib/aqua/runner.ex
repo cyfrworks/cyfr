@@ -109,6 +109,14 @@ defmodule Aqua.Runner do
   which the runner keeps for the running turn's current fence until each
   step's answer lands or is withdrawn. `Cyfr.Bus.ThreadEvent` says what
   each kind's `data` is.
+
+  A `:turn_finished` the runner hears, on whichever member the writer
+  was, has it read again the turns it holds: one another writer ended
+  under a raised fence (the person's stop of a workspace thread, a
+  deletion or an archive of its room, each committed in storage first
+  and announced on the thread after) is stopped here then, as
+  `stop_cancelled/1` stops it on the writer's own member, not at its
+  root's next lease tick (`ended_elsewhere/1`).
   """
 
   use GenServer, restart: :transient
@@ -335,11 +343,20 @@ defmodule Aqua.Runner do
   end
 
   @doc """
-  Cancel the current running, paused or held turn and the turns and a
-  page's calls queued behind it.
+  The person's stop: cancel the current running, paused or held turn and
+  the turns and a page's calls queued behind it. In a workspace thread it
+  stops all of the thread's work, its crew members' included, in one
+  transaction (`Aqua.Tape.stop_work/2`): the thread's runner stops what
+  it holds of it and refuses a page's calls queued there, and the crew
+  threads' runners stop theirs after (`stop_cancelled/1`).
   """
   @spec stop_turn(Context.t(), String.t()) :: :ok | {:error, term()}
-  def stop_turn(%Context{} = ctx, thread_id), do: call(ctx, thread_id, {:stop, ctx})
+  def stop_turn(%Context{} = ctx, thread_id) do
+    case call(ctx, thread_id, {:stop, ctx}) do
+      {:ok, elsewhere} -> stop_cancelled(elsewhere)
+      {:error, _} = refused -> refused
+    end
+  end
 
   @doc """
   Stop what still runs of turns storage cancelled with their thread, as
@@ -563,9 +580,12 @@ defmodule Aqua.Runner do
 
   defp handle_owned_call({:stop, ctx}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
+      :ok when state.thread.kind == "workspace" ->
+        stop_work(state, ctx)
+
       :ok ->
-        case cancel_work(state, "stopped") do
-          {:ok, state} -> {:reply, :ok, state}
+        case cancel_work(state, "stopped", :person) do
+          {:ok, state} -> {:reply, {:ok, []}, state}
           {:error, reason, state} -> {:stop, :normal, {:error, reason}, retire_runtime(state)}
         end
 
@@ -631,7 +651,7 @@ defmodule Aqua.Runner do
             _ -> nil
           end
 
-        case cancel_work(state, "restart required") do
+        case cancel_work(state, "restart required", :person) do
           {:ok, state} ->
             if prompt,
               do: broadcast(state, :restart_prompt, %{text: prompt, user_id: ctx.user_id})
@@ -831,6 +851,11 @@ defmodule Aqua.Runner do
     case Tape.accept(ctx, state.id, attrs) do
       {:ok, %{message: row, turn: turn, replayed: true}} ->
         {:reply, {:ok, result(row, turn && turn.id, true, :turn)}, touch(state)}
+
+      # A crew member's answer to a request the person's stop ended: a
+      # row, and no turn (`Arca.TurnStorage.accept_message/3`).
+      {:ok, %{message: row, turn: nil}} ->
+        {:reply, {:ok, result(row, nil, false, :content)}, touch(state)}
 
       {:ok, %{message: row, turn: turn}} ->
         entry = %{
@@ -1037,7 +1062,7 @@ defmodule Aqua.Runner do
 
       {:error, :no_origin} ->
         state
-        |> end_turn(turn_id, "cancelled", unresumable(:no_origin))
+        |> end_turn(turn_id, "cancelled", unresumable(:no_origin), :recovery)
         |> start_next()
 
       {:error, reason} ->
@@ -1091,7 +1116,12 @@ defmodule Aqua.Runner do
     cond do
       not Users.own_athanor?(entry.user_id, state.athanor_id) ->
         state
-        |> end_turn(entry.turn_id, "cancelled", "the athanor is no longer the sender's")
+        |> end_turn(
+          entry.turn_id,
+          "cancelled",
+          "the athanor is no longer the sender's",
+          :recovery
+        )
         |> start_next()
 
       # Queued from its row by a recovery: it runs as its sender's continuation.
@@ -1201,6 +1231,14 @@ defmodule Aqua.Runner do
   defp handle_owned_info(%ThreadEvent{kind: :message, data: row}, state),
     do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
 
+  defp handle_owned_info(%ThreadEvent{kind: :turn_finished}, state) do
+    case ended_elsewhere(state) do
+      {:gone, state} -> {:stop, :normal, state}
+      {:stopped, state} -> {:noreply, start_next(state)}
+      {:kept, state} -> {:noreply, state}
+    end
+  end
+
   defp handle_owned_info(%ThreadEvent{}, state), do: {:noreply, state}
 
   defp handle_owned_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
@@ -1225,7 +1263,7 @@ defmodule Aqua.Runner do
   defp handle_owned_info(%Notify{kind: :athanor_changed}, state) do
     case Athanors.get(state.athanor_id) do
       {:ok, %{status: "archived"}} ->
-        case cancel_work(state, "the athanor was archived") do
+        case cancel_work(state, "the athanor was archived", :person) do
           {:ok, state} -> {:stop, :normal, state}
           {:error, _reason, state} -> {:stop, :normal, retire_runtime(state)}
         end
@@ -1380,10 +1418,120 @@ defmodule Aqua.Runner do
   # Cutting turns short
   # ---------------------------------------------------------------------------
 
+  # A workspace thread's work stopped in storage first, all of it at once
+  # (`Aqua.Tape.stop_work/2`); then what this runner holds of it, and a
+  # page's calls queued here, which the stop refuses. Answers the turns of
+  # the crew threads under it, whose runners the caller stops.
+  defp stop_work(state, ctx) do
+    with {:ok, %{cancelled: cancelled}} <- Tape.stop_work(ctx, state.id),
+         {own, elsewhere} = Enum.split_with(cancelled, &(&1.thread_id == state.id)),
+         {:ok, stopped} <- stop_entries(state, own) do
+      {:reply, {:ok, elsewhere}, drop_pages(stopped, "stopped")}
+    else
+      # A runtime that could not stop what it held retires; a stop storage
+      # refused leaves the runner as it was.
+      {:error, reason, held} -> {:stop, :normal, {:error, reason}, retire_runtime(held)}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp stop_entries(state, entries) do
+    Enum.reduce_while(entries, {:ok, state}, fn %{turn_id: id, steps: steps}, {:ok, state} ->
+      case stop_ended(state, id, steps) do
+        :ok -> {:cont, {:ok, retire_turn(state, id)}}
+        {:error, reason} -> {:halt, {:error, reason, state}}
+      end
+    end)
+  end
+
+  # The turns this runner holds that another writer ended, stopped here
+  # as `stop_cancelled/1` stops them: each the store reads ended, or
+  # gone with its thread, whose end this runner did not write. The
+  # running turn's own loop ends it under the fence it announced, and its
+  # result retires it, so the running turn is another's only when the
+  # store's fence passed the loop's; a paused or queued turn this runner
+  # ends it retires in the handler that ends it, before any announcement
+  # of the end reaches it. Answers whether the thread is gone, and
+  # whether anything was stopped.
+  defp ended_elsewhere(state) do
+    held =
+      Enum.flat_map([state.live, state.paused], fn
+        nil -> []
+        entry -> [entry.turn_id]
+      end) ++ Map.keys(state.held) ++ Enum.map(state.queue, & &1.turn_id)
+
+    stopped =
+      Enum.reduce(held, state, fn id, state ->
+        case Tape.turn(state.ctx, id) do
+          {:ok, turn} ->
+            if another_end?(state, turn),
+              do: stop_another(state, turn),
+              else: state
+
+          {:error, :not_found} ->
+            stop_another(state, %{id: id, steps: []})
+
+          {:error, _unread} ->
+            state
+        end
+      end)
+
+    cond do
+      match?({:error, :not_found}, Tape.thread(stopped.ctx, stopped.id)) -> {:gone, stopped}
+      stopped == state -> {:kept, state}
+      true -> {:stopped, stopped}
+    end
+  end
+
+  # A stop, a deletion or an archive ends a turn `cancelled`, under a
+  # raised fence. The running turn's own loop ends it any other way,
+  # before or after announcing its fence: it halts cancelled only on a
+  # fence that moved, under which its end never lands. A held turn's
+  # holder may end it too, and its exit retires it here.
+  defp another_end?(state, turn) do
+    cond do
+      not Tape.terminal?(turn) -> false
+      live?(state, turn.id) -> turn.status == "cancelled" and fence_passed?(state, turn)
+      Map.has_key?(state.held, turn.id) -> turn.status == "cancelled"
+      true -> true
+    end
+  end
+
+  defp live?(%{live: %{turn_id: id}}, id), do: true
+  defp live?(_state, _id), do: false
+
+  # The loop announces its fence as it starts and as it takes its root;
+  # a cancel before any announcement is another writer's.
+  defp fence_passed?(%{partials: %{fence: fence}}, turn) when is_integer(fence),
+    do: turn.fence > fence
+
+  defp fence_passed?(_state, _turn), do: true
+
+  # What the runner holds of a turn the store ended: its loop and every
+  # worker under it, then the child execution and catalog handler of each
+  # step the end cancel-marked; a turn gone with its thread has no steps
+  # left to read.
+  defp stop_another(state, %{steps: []} = gone) do
+    case stop_ended(state, gone.id, []) do
+      :ok -> retire_turn(state, gone.id)
+      {:error, _reason} -> state
+    end
+  end
+
+  defp stop_another(state, turn) do
+    with {:ok, steps} <- Tape.steps(state.ctx, turn),
+         :ok <- stop_ended(state, turn.id, Enum.filter(steps, & &1.cancel_requested_at)) do
+      retire_turn(state, turn.id)
+    else
+      _not_stopped -> state
+    end
+  end
+
   # The target set belongs to this handler invocation. Retire each local
   # entry only after its durable cancellation succeeds; a later send is
-  # processed after this call and opens new work.
-  defp cancel_work(state, reason) do
+  # processed after this call and opens new work. `by` is who cancelled
+  # the turns, which their end names (`Arca.TurnStorage.finish/4`).
+  defp cancel_work(state, reason, by) do
     targets =
       Enum.uniq(
         Enum.flat_map([state.live, state.paused], fn
@@ -1393,7 +1541,7 @@ defmodule Aqua.Runner do
       )
 
     Enum.reduce_while(targets, {:ok, state}, fn id, {:ok, state} ->
-      case cancel_turn(state, id, reason, "cancelled") do
+      case cancel_turn(state, id, reason, "cancelled", by) do
         :ok -> {:cont, {:ok, retire_turn(state, id)}}
         {:error, error} -> {:halt, {:error, error, state}}
       end
@@ -1404,7 +1552,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp cancel_turn(state, id, reason, status) do
+  defp cancel_turn(state, id, reason, status, by \\ nil) do
     with :ok <- held(),
          {:ok, turn} <- Tape.turn(state.ctx, id) do
       if Tape.terminal?(turn) do
@@ -1416,7 +1564,7 @@ defmodule Aqua.Runner do
                  Aqua.Loop.Worker.stop(local_holder(state, id))
                end),
              :ok <- held(),
-             {:ok, _} <- Tape.finish(state.ctx, aborted, status, %{error: reason}) do
+             {:ok, _} <- Tape.finish(state.ctx, aborted, status, ended(reason, by)) do
           :ok
         else
           {:error, :not_open} -> terminal_target(state, id)
@@ -1425,6 +1573,9 @@ defmodule Aqua.Runner do
       end
     end
   end
+
+  defp ended(reason, nil), do: %{error: reason}
+  defp ended(reason, by), do: %{error: reason, ended_by: by}
 
   # A turn whose end storage has written, by a cancellation of its thread
   # or a concurrent completion: its loop and every worker under it, then
@@ -1476,10 +1627,13 @@ defmodule Aqua.Runner do
     state
   end
 
-  defp end_turn(state, turn_id, status, error) do
+  # `by` names who cancelled it: `:recovery` for a turn the server can
+  # neither resume nor start for its sender, which its workspace thread
+  # reads as an error.
+  defp end_turn(state, turn_id, status, error, by \\ nil) do
     with {:ok, turn} <- Tape.turn(state.ctx, turn_id),
          false <- Tape.terminal?(turn) do
-      case Tape.finish(state.ctx, turn, status, %{error: error}) do
+      case Tape.finish(state.ctx, turn, status, ended(error, by)) do
         {:ok, _} ->
           :ok
 
@@ -1664,7 +1818,7 @@ defmodule Aqua.Runner do
 
         {:error, reason} ->
           state
-          |> end_turn(entry.turn_id, "cancelled", unresumable(reason))
+          |> end_turn(entry.turn_id, "cancelled", unresumable(reason), :recovery)
           |> start_next()
       end
     end
