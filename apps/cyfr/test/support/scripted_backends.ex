@@ -302,7 +302,8 @@ defmodule Cyfr.Test.ScriptedBackends do
   defp quiesce(deadline \\ System.monotonic_time(:millisecond) + 3_000) do
     # The browser and brain holders close the sessions they hold through
     # the box as they stop, before the terminals go.
-    for holders <- [Opus.Brain.Holders, Opus.Browser.Holders], Process.whereis(holders),
+    for holders <- [Opus.Brain.Holders, Opus.Browser.Holders],
+        Process.whereis(holders),
         {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(holders),
         do: DynamicSupervisor.terminate_child(holders, pid)
 

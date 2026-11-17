@@ -39,9 +39,11 @@ paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Doc
 # data pinned by its SHA-256 (internal/holder), not CYFR's words.
 # The stand-in for Claude Code writes the line the harness itself
 # writes for a session it holds no transcript of, word for word,
-# since the catalyst reads those words: the harness's, not CYFR's.
+# since the catalyst and the brain driver read those words: the
+# harness's, not CYFR's. The driver holds them in one file of those
+# words alone.
 # This script spells every pattern it refuses.
-excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/** :(exclude)apps/codex/internal/holder/bip39_english.txt :(exclude)tests/locus-backends-image/fake-claude.mjs :(exclude)scripts/ci/vocabulary.sh'
+excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/** :(exclude)apps/codex/internal/holder/bip39_english.txt :(exclude)tests/locus-backends-image/fake-claude.mjs :(exclude)apps/locus/keeper/cmd/cyfr-claude-code/claude_words.go :(exclude)scripts/ci/vocabulary.sh'
 fail=0
 # A path the list names that is gone, or a pattern git grep cannot
 # read (exit 2 or more), fails: either would end that part of the

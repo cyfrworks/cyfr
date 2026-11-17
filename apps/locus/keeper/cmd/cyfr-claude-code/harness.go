@@ -296,15 +296,16 @@ type harnessLine struct {
 // main is a line of the main session, not of a subagent's.
 func (l *harnessLine) main() bool { return l.ParentToolUseID == nil || *l.ParentToolUseID == "" }
 
-// noConversation is the result a `--resume` of a session the folder holds
+// noTranscript is the result a `--resume` of a session the folder holds
 // no transcript of ends with, as Claude Code 2.1.318 wrote it: no turn
-// ran, and its errors name the session in these words.
-func (l *harnessLine) noConversation() bool {
+// ran, and its errors name the session in the harness's own words
+// (claude_words.go).
+func (l *harnessLine) noTranscript() bool {
 	if l.Type != "result" || l.NumTurns == nil || *l.NumTurns != 0 {
 		return false
 	}
 	for _, e := range l.Errors {
-		if s, ok := e.(string); ok && strings.HasPrefix(s, "No conversation found with session ID") {
+		if s, ok := e.(string); ok && strings.HasPrefix(s, noTranscriptWords) {
 			return true
 		}
 	}

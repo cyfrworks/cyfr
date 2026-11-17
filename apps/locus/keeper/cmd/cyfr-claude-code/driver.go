@@ -685,7 +685,7 @@ func (d *driver) toolResults(raw json.RawMessage) error {
 }
 
 func (d *driver) result(l harnessLine) error {
-	if d.starting != nil && l.noConversation() {
+	if d.starting != nil && l.noTranscript() {
 		d.h.expected = true
 		d.starting = nil
 		return d.emit(newEvent("gone"))

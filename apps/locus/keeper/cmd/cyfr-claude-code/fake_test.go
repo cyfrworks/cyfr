@@ -71,7 +71,7 @@ func fakeClaude() int {
 	if resume := flag("--resume"); resume != "" {
 		session = resume
 		if _, err := os.Stat(filepath.Join(project, session+".jsonl")); err != nil {
-			said := "No conversation found with session ID: " + resume
+			said := noTranscriptWords + ": " + resume
 			write(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true,
 				"num_turns": 0, "session_id": resume, "errors": []string{said}})
 			fmt.Fprintln(os.Stderr, said)
