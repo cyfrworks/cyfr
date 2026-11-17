@@ -1409,10 +1409,12 @@ defmodule Aqua.Runner do
   defp stop_work(state, ctx) do
     with {:ok, %{cancelled: cancelled}} <- Tape.stop_work(ctx, state.id),
          {own, elsewhere} = Enum.split_with(cancelled, &(&1.thread_id == state.id)),
-         {:ok, state} <- stop_entries(state, own) do
-      {:reply, {:ok, elsewhere}, drop_pages(state, "stopped")}
+         {:ok, stopped} <- stop_entries(state, own) do
+      {:reply, {:ok, elsewhere}, drop_pages(stopped, "stopped")}
     else
-      {:error, reason, state} -> {:stop, :normal, {:error, reason}, retire_runtime(state)}
+      # A runtime that could not stop what it held retires; a stop storage
+      # refused leaves the runner as it was.
+      {:error, reason, held} -> {:stop, :normal, {:error, reason}, retire_runtime(held)}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end

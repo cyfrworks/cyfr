@@ -13,6 +13,7 @@ defmodule Aqua.FacadeTest do
   @roster [
     answer_schedules: 1,
     approval_scope_string: 1,
+    at_work: 2,
     attachment_blob_path: 3,
     attachment_limits: 0,
     attachment_refs: 1,
