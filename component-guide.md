@@ -997,7 +997,7 @@ A catalyst whose `chat` runs for long, such as a harness adapter, may hand its h
 | `next() -> result<option<input>, string>` | `input { id, content }`, or none |
 | `sent(id) -> result<_, string>` | nothing |
 
-- **`next`** answers the run's next input not yet reported sent: its `id` and its `content`, the JSON of a user message's content (a string, or `text`, `image` and `document` blocks, an attachment's `data` in base64; see [the contract](#model-catalysts-the-modelchat1-contract)). It answers the same input until it is reported, so a read moves nothing and asking again is safe. Ask between your own waits, not in a loop: at most once a second, never while an input you were handed is not yet written and reported, and not so near your call's end that its answer could not come in time.
+- **`next`** answers the run's next input not yet reported sent: its `id` and its `content`, the JSON of a user message's content (a string, or `text`, `image` and `document` blocks, an attachment's `data` in base64; see [the contract](#model-catalysts-the-modelchat1-contract)). It answers none only when nobody supplies the call or its supplier has nothing to hand; a supplier that could not answer is `unavailable`. It answers the same input until it is reported, so a read moves nothing and asking again is safe. Ask between your own waits, not in a loop: at most once a second, and never while an input you were handed is not yet written and reported. When your harness takes a message, and whether the call still answers within its time, is the harness's business: a message handed in near the call's end can keep it from answering in time.
 - **`sent`** reports that the input `id` was handed on, once the harness accepted it (a write the pipe took, or the harness's own acknowledgement). A report repeated after a lost answer marks it once. `sent` promises nothing of the harness: when its model reads the input, and whether it answers, is the harness's business. An input whose write may have reached the harness is never written again, reported or not; one you cannot write (a block your harness does not take, a line past the pipe's bound) is neither written nor reported, and reaches the next call as an ordinary message. An input handed over cannot be recalled.
 
 An error is a code:
@@ -1005,7 +1005,7 @@ An error is a code:
 | Code | What it means |
 |---|---|
 | `lost` | The run is no longer current: it was stopped, replaced or cancelled |
-| `unavailable` | Nobody recorded the report, or CYFR could not answer; asking again is safe |
+| `unavailable` | The call's supplier could not answer a read, nobody recorded a report, or CYFR could not answer; nothing moved, and the bundled adapters ask no more in that call |
 | `invalid_request` | The input the run was handed does not read; the code names no content |
 
 A catalyst that never imports the interface is unchanged by it.

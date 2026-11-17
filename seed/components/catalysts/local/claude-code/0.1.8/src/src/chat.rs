@@ -1191,6 +1191,9 @@ fn turn<P: Pipe, S: Sink>(
     let mut foreign = false;
     let mut held = String::new();
     let mut since = 0;
+    // The usage of every result this call read as its own: a result that
+    // answers part of what the call wrote counts, as the last one does.
+    let mut spent = harness::usage(&Value::Null);
     let response = |text: &str, model: &str, call: Option<Value>, stop: &str, usage: Value| {
         let mut content = Vec::new();
         if !text.is_empty() {
@@ -1202,7 +1205,7 @@ fn turn<P: Pipe, S: Sink>(
     };
 
     loop {
-        if call.feed.due(deadline) {
+        if call.feed.due() {
             if let Some(input) = call.feed.ask() {
                 inject(pipe, call, &reader.session, &mut cover, &input)?;
             }
@@ -1267,7 +1270,7 @@ fn turn<P: Pipe, S: Sink>(
                             "arguments": arguments,
                             "provider_data": {"request_id": request_id, "after": seq, "pending": cover.uncovered()}
                         });
-                        let answer = response(&text, &model, Some(tool_call), "tool_call", harness::usage(&Value::Null));
+                        let answer = response(&text, &model, Some(tool_call), "tool_call", spent.clone());
                         stream::close(deltas, &answer);
                         return Ok(answer);
                     }
@@ -1300,18 +1303,19 @@ fn turn<P: Pipe, S: Sink>(
                             text.push_str(&std::mem::take(&mut held));
                         }
                         foreign = false;
+                        spent = harness::added(&spent, &usage);
                         if covers == Covers::Part {
                             since = text.len();
                             error = None;
                             continue;
                         }
                         if ok {
-                            let answer = response(&text, &model, None, "end_turn", harness::usage(&usage));
+                            let answer = response(&text, &model, None, "end_turn", spent);
                             stream::close(deltas, &answer);
                             return Ok(answer);
                         }
                         if error.is_none() && subtype.starts_with("error_max_") {
-                            let answer = response(&text, &model, None, "other", harness::usage(&usage));
+                            let answer = response(&text, &model, None, "other", spent);
                             stream::close(deltas, &answer);
                             return Ok(answer);
                         }
@@ -2456,22 +2460,9 @@ mod tests {
         text.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
     }
 
-    /// A deadline far enough off that the call asks for further messages
-    /// (`crate::input::LAST_ASK`).
+    /// A deadline the replays never come near.
     fn roomy() -> Instant {
         Instant::now() + Duration::from_secs(600)
-    }
-
-    #[test]
-    fn nothing_is_asked_for_in_the_call_s_last_minutes() {
-        let mut pipe = Scripted::new(replaying(transcript("race")));
-        pipe.names = false;
-        let mut handing = Handing::of(&[("evt_input.a", "Too late")]);
-        let mut deltas = Deltas::new(Vec::new());
-        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), soon()).unwrap();
-        assert_eq!(answer["content"][0]["text"], "FIRST_REPLAY_RACE_FINISHED");
-        assert!(handing.log.is_empty());
-        assert_eq!(user_lines(&pipe).len(), 1);
     }
 
     /// The uuid a test's `n`th user line carries (`ids`).
@@ -2766,6 +2757,8 @@ mod tests {
         let own_text = replies(&own, "I");
         // The first-result rule answered the late result's text.
         assert_eq!(answer["content"], json!([{"type": "text", "text": own_text}]));
+        // Its usage stays out of the call's, as its text does.
+        assert_eq!(answer["usage"], harness::usage(&own[4]["usage"]));
         let streamed = streamed_text(&deltas.into_sink());
         assert_eq!(streamed, own_text);
         assert!(!streamed.contains(late_text.as_str().unwrap()));
@@ -2827,5 +2820,57 @@ mod tests {
         assert_eq!(answer.unwrap()["content"][0]["text"], "FIRST_REPLAY_RACE_FINISHED");
         assert_eq!(user_lines(&pipe).len(), 1);
         assert!(handing.log.iter().all(|l| l == "next"));
+    }
+
+    #[test]
+    fn the_call_s_usage_is_every_result_s_that_belongs_to_it() {
+        let (answer, _, _, events) = replayed("text", &[("evt_input.a", "Please also say where it stands")]);
+        let answer = answer.unwrap();
+        assert_eq!(answer["usage"]["output_tokens"], json!(7683 + 54));
+        assert_eq!(answer["usage"]["input_tokens"], json!(4));
+        let usage = events.iter().find(|e| e["type"] == "usage").unwrap();
+        assert_eq!(usage["usage"], answer["usage"]);
+    }
+
+    #[test]
+    fn a_tool_ask_after_a_partial_result_carries_that_result_s_usage() {
+        // The first message's turn and result, then the further message's
+        // turn asking for one of CYFR's tools.
+        let race = transcript("race");
+        let mut lines = race[..7].to_vec();
+        lines.push(transcript("external")[5].clone());
+        let mut pipe = Scripted::new(replaying(lines));
+        pipe.names = false;
+        let mut handing = Handing::of(&[("evt_input.a", "Then wait for the probe")]);
+        let mut deltas = Deltas::new(Vec::new());
+        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy()).unwrap();
+        assert_eq!(answer["stop_reason"], "tool_call");
+        assert_eq!(answer["usage"], harness::usage(&race[4]["usage"]));
+    }
+
+    #[test]
+    fn an_input_with_ninety_seconds_left_is_handed_on() {
+        let mut pipe = Scripted::new(replaying(transcript("race")));
+        pipe.names = false;
+        let mut handing = Handing::of(&[("evt_input.a", "Please also say where it stands")]);
+        let mut deltas = Deltas::new(Vec::new());
+        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(),
+                          Instant::now() + Duration::from_secs(90)).unwrap();
+        assert_eq!(user_lines(&pipe).len(), 2);
+        assert!(handing.log.contains(&"sent evt_input.a".to_string()));
+        assert_eq!(answer["stop_reason"], "end_turn");
+    }
+
+    #[test]
+    fn a_read_that_fails_stops_the_asking_and_the_call_still_answers() {
+        let mut handing = Handing::of(&[("evt_input.b", "never asked")]);
+        handing.held.push_front(Err("unavailable".into()));
+        let mut pipe = Scripted::new(replaying(transcript("race")));
+        pipe.names = false;
+        let mut deltas = Deltas::new(Vec::new());
+        let answer = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy()).unwrap();
+        assert_eq!(answer["stop_reason"], "end_turn");
+        assert_eq!(handing.log, ["next"]);
+        assert_eq!(user_lines(&pipe).len(), 1);
     }
 }

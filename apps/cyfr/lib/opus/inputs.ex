@@ -27,9 +27,10 @@ defmodule Opus.Inputs do
       or refuse it, `reply(reply_to, {:error, reason})`, recording
       nothing.
 
-  Each is answered within `answer_ms/0`; one answered later, or by a
-  supplier that is gone, is no answer: `next` reads none and `sent` is
-  `unavailable`. A supplier's answer is held to
+  Each is answered within `answer_ms/0`. `:none` is the only answer that
+  reads as no input; one answered later, one that is none of these, or
+  a supplier that is gone, is no answer, and the runner is told
+  `unavailable`, for `next` as for `sent`. A supplier's input is held to
   `Prima.Model.check_input/1` before the runner is handed it.
 
   ## The supplier's contract
@@ -40,10 +41,14 @@ defmodule Opus.Inputs do
     * `sent` marks, idempotently, only an input that was offered to that
       same invocation, and only while the invocation still holds its
       attempt, checked with `held!/1` inside the transaction that commits
-      the mark. A replacement attempt may be offered an earlier unreported
-      input, whose bytes the old attempt may already have handed on, so it
-      can arrive and be acted on twice; the old attempt can never
-      acknowledge the replacement's delivery, since its calls are `lost`.
+      the mark, so a stored mark cannot commit past a cancel that
+      committed first. The port's own tests hold the check with a supplier
+      that keeps its marks in memory, which proves no stored mark's race
+      with a cancel: a supplier that stores its marks proves that itself.
+      A replacement attempt may be offered an earlier unreported input,
+      whose bytes the old attempt may already have handed on, so it can
+      arrive and be acted on twice; the old attempt can never acknowledge
+      the replacement's delivery, since its calls are `lost`.
     * Attachments are the supplier's to resolve: it joins their sources to
       the invocation's run, and checks their removal and authority, before
       it returns their bytes. Nothing an input carries is a path or an
@@ -109,7 +114,8 @@ defmodule Opus.Inputs do
 
   @doc false
   # Ask `supplier` for the invocation's next input: what it answered, or
-  # `:none` when it is gone or silent.
+  # `:none` when it is gone or silent (`Opus.Host.Inputs` reads that, and
+  # an answer that is none of the port's, as `unavailable`).
   @spec next(pid(), invocation()) :: {:ok, term()} | :none
   def next(supplier, invocation) when is_pid(supplier),
     do: ask(supplier, &{__MODULE__, :next, invocation, &1})

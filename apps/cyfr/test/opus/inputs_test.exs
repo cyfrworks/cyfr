@@ -12,8 +12,9 @@ defmodule Opus.InputsTest do
   attempt, reads its inputs or reports one sent, and the supplier hears the
   invocation's trusted identity with each ask. A read moves nothing; a
   report is recorded once, and `ok` only once the supplier recorded it.
-  With no supplier, or one that is gone or silent, a read is none and a
-  report is `unavailable`. A runner that is not the claimant, a replayed
+  With no supplier, a read is none and a report is `unavailable`; a
+  supplier that is gone, silent or answers no answer makes a read
+  `unavailable` too, never none. A runner that is not the claimant, a replayed
   nonce, another attempt or a cancelled invocation is `lost`, and its
   supplier is asked nothing; an input answered while the invocation was
   stopped is handed nothing. A mark the supplier would commit for an
@@ -91,33 +92,42 @@ defmodule Opus.InputsTest do
     end
   end
 
-  describe "with no supplier that answers" do
-    test "none was named: a read is none and a report is unavailable" do
+  describe "with no supplier" do
+    test "a read is none and a report is unavailable" do
       fixture = attached([])
 
       assert %{"v" => 1, "ok" => nil} == next(fixture)
       assert %{"v" => 1, "error" => "unavailable"} == sent(fixture, "evt_input.1")
       assert Process.alive?(fixture.pid)
     end
+  end
 
-    test "one that is gone: a read is none and a report is unavailable" do
+  describe "a supplier that cannot answer" do
+    test "one that is gone: a read and a report are unavailable, not an empty input" do
       supplier = spawn(fn -> :ok end)
       ref = Process.monitor(supplier)
       assert_receive {:DOWN, ^ref, :process, _pid, _reason}
       fixture = attached(inputs: supplier)
 
-      assert %{"v" => 1, "ok" => nil} == next(fixture)
+      assert %{"v" => 1, "error" => "unavailable"} == next(fixture)
       assert %{"v" => 1, "error" => "unavailable"} == sent(fixture, "evt_input.1")
     end
 
-    test "one that is silent: a read is none within its wait, and a late answer reaches no one" do
+    test "one that is silent: a read is unavailable once its wait ends, and a late answer reaches no one" do
       supplier = InputSupplier.start!([@first], mode: :silent)
       fixture = attached(inputs: supplier)
 
       {elapsed, answer} = :timer.tc(fn -> next(fixture) end, :millisecond)
-      assert answer == %{"v" => 1, "ok" => nil}
+      assert answer == %{"v" => 1, "error" => "unavailable"}
       assert elapsed >= Opus.Inputs.answer_ms()
       assert elapsed < Prima.HostAPI.request_timeout_ms(:input_next)
+    end
+
+    test "one that answers no answer of the port's: a read is unavailable" do
+      supplier = InputSupplier.start!([], mode: {:answer, fn _invocation -> :maybe end})
+      fixture = attached(inputs: supplier)
+
+      assert %{"v" => 1, "error" => "unavailable"} == next(fixture)
     end
   end
 
@@ -269,11 +279,6 @@ defmodule Opus.InputsTest do
       assert %{"error" => "guest_error", "type" => "invalid_request", "message" => message} =
                next(fixture)
 
-      assert message =~ "(input)"
-
-      odd = InputSupplier.start!([], mode: {:answer, fn _invocation -> :maybe end})
-      fixture = attached(inputs: odd)
-      assert %{"error" => "guest_error", "message" => message} = next(fixture)
       assert message =~ "(input)"
     end
   end

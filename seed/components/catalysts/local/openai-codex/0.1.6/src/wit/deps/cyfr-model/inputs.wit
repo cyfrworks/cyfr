@@ -16,8 +16,10 @@ interface inputs {
         content: string,
     }
 
-    /// The next input not yet reported sent, or none. Until it is
-    /// reported, every call answers the same input: a read moves nothing.
+    /// The next input not yet reported sent, or none: nobody supplies
+    /// the invocation, or its supplier has none. A supplier that could not
+    /// answer is `unavailable`, never none. Until it is reported, every
+    /// call answers the same input: a read moves nothing.
     next: func() -> result<option<input>, string>;
 
     /// Report that the input `id` was handed on, once the harness accepted

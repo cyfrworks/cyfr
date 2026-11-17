@@ -19,14 +19,17 @@ defmodule Opus.Host.Inputs do
   ## Next
 
   A supplier's input is held to `Prima.Model.check_input/1`; one that
-  breaks it is the guest error `invalid_request` naming the member, and a
-  reply that is no input is the same, naming `input`. The attempt is then
-  checked again, under a nonce of this step's own derived from the
-  header's, before the input is answered: an invocation stopped while its
-  supplier answered is `lost` and is handed nothing. Bytes answered past
-  that check cannot be recalled (`Opus.Inputs`). A supplier that is gone
-  or does not answer within `Opus.Inputs.answer_ms/0`, or none at all,
-  reads as no input.
+  breaks it is the guest error `invalid_request` naming the member. The
+  attempt is then checked again, under a nonce of this step's own derived
+  from the header's, before the input is answered: an invocation stopped
+  while its supplier answered is `lost` and is handed nothing. Bytes
+  answered past that check cannot be recalled (`Opus.Inputs`).
+
+  The read is `nil` only with no supplier or one that answers it has
+  none. A supplier that is gone, does not answer within
+  `Opus.Inputs.answer_ms/0` or answers what is no answer of the port's is
+  `unavailable`, so a runner tells a supplier that failed from one with
+  nothing to hand.
 
   ## Sent
 
@@ -48,10 +51,10 @@ defmodule Opus.Host.Inputs do
   def next(caller) do
     with {:ok, supplier, invocation} <- Attempt.call(caller.execution_id, caller, :inputs) do
       case supplier && Opus.Inputs.next(supplier, invocation) do
+        nil -> {:ok, nil}
         {:ok, {:ok, input}} -> release(caller, input)
         {:ok, :none} -> {:ok, nil}
-        {:ok, _other} -> refused("input")
-        _none_or_silent -> {:ok, nil}
+        _gone_silent_or_no_answer -> {:error, :unavailable}
       end
     end
   end

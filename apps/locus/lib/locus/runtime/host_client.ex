@@ -578,7 +578,8 @@ defmodule Locus.Runtime.HostClient do
 
   @doc """
   The attempt's next input not yet reported sent, its wire shape
-  (`t:Prima.Model.input/0`), or `{:ok, nil}` when there is none.
+  (`t:Prima.Model.input/0`), or `{:ok, nil}` when there is none;
+  `{:error, :unavailable}` when the run's supplier could not answer.
   Idempotent: a lost answer is asked once more, and answers the same
   input. An answer that is not an input `Prima.Model.check_input/1` admits
   is lost.

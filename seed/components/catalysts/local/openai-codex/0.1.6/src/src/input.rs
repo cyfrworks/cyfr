@@ -9,8 +9,11 @@
 //! input until it is reported, so the asking side (`Feed`) asks again only
 //! once the input it was last handed is settled, never while its write
 //! awaits the harness's answer or its report, and asks at most once every
-//! `ASK_EVERY`. It stops asking for the rest of the call once anything of
-//! the channel fails: an error from either call, an input it was handed
+//! `ASK_EVERY`, whatever is left of the call's time: when the harness
+//! reads an input, and whether the call still answers in its time, is the
+//! harness's business. It stops asking for the rest of the call once
+//! anything of the channel fails: an error from either call (a supplier
+//! that could not answer a read among them), an input it was handed
 //! after it wrote it, an input that does not read, or one its harness
 //! cannot take. Such an input is not written and not reported, so the
 //! host carries it into the next call as an ordinary message. An input
@@ -39,11 +42,6 @@ pub const MEDIA_TYPES: &[(&str, &[&str])] = &[
 
 /// How often a turn asks for its next input, at most.
 pub const ASK_EVERY: Duration = Duration::from_secs(1);
-
-/// No input is asked for once less than this is left of the call's time:
-/// a message written so late could keep the call from its answer past its
-/// budget, so it waits for the next call.
-pub const LAST_ASK: Duration = Duration::from_secs(120);
 
 /// One further message: the id its supplier knows it by, and its content,
 /// a user message's (a string, or `text` and attachment blocks).
@@ -235,13 +233,9 @@ impl<'a> Feed<'a> {
     }
 
     /// Whether to ask now: the channel still serves, no input it handed is
-    /// unsettled, the last ask was `ASK_EVERY` ago, and at least `LAST_ASK`
-    /// is left before `deadline`.
-    pub fn due(&self, deadline: Instant) -> bool {
-        self.on
-            && !self.pending
-            && self.asked.is_none_or(|at| at.elapsed() >= ASK_EVERY)
-            && deadline.checked_duration_since(Instant::now()).is_some_and(|left| left >= LAST_ASK)
+    /// unsettled, and the last ask was `ASK_EVERY` ago.
+    pub fn due(&self) -> bool {
+        self.on && !self.pending && self.asked.is_none_or(|at| at.elapsed() >= ASK_EVERY)
     }
 
     /// The next input, which the caller writes and then settles (`accepted`,
@@ -303,19 +297,6 @@ impl<'a> Feed<'a> {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
-
-    fn far() -> Instant {
-        Instant::now() + Duration::from_secs(600)
-    }
-
-    #[test]
-    fn nothing_is_asked_for_in_the_call_s_last_minutes() {
-        let mut inputs = NoInputs;
-        let feed = Feed::new(&mut inputs);
-        assert!(feed.due(far()));
-        assert!(!feed.due(Instant::now() + LAST_ASK - Duration::from_secs(1)));
-        assert!(!feed.due(Instant::now()));
-    }
 
     #[test]
     fn a_key_that_is_no_plain_word_is_named_by_its_holder() {
@@ -417,11 +398,11 @@ mod tests {
     fn a_feed_asks_again_only_once_its_input_is_settled() {
         let mut inputs = Scripted { next: VecDeque::from([handed("a", "\"hi\""), handed("b", "\"yo\"")]), sent: VecDeque::new(), log: Vec::new() };
         let mut feed = Feed::new(&mut inputs);
-        assert!(feed.due(far()));
+        assert!(feed.due());
         let a = feed.ask().unwrap();
         assert_eq!(a.id, "a");
         feed.asked = None;
-        assert!(!feed.due(far()), "no ask while a write awaits its answer");
+        assert!(!feed.due(), "no ask while a write awaits its answer");
         feed.accepted("a");
         feed.asked = None;
         assert_eq!(feed.ask().unwrap().id, "b");
@@ -434,9 +415,9 @@ mod tests {
         let mut inputs = NoInputs;
         let mut feed = Feed::new(&mut inputs);
         assert!(feed.ask().is_none());
-        assert!(!feed.due(far()));
+        assert!(!feed.due());
         feed.asked = Some(Instant::now() - ASK_EVERY);
-        assert!(feed.due(far()));
+        assert!(feed.due());
     }
 
     #[test]
@@ -452,7 +433,7 @@ mod tests {
             let mut feed = Feed::new(&mut inputs);
             assert!(feed.ask().is_none());
             feed.asked = None;
-            assert!(!feed.due(far()));
+            assert!(!feed.due());
         }
 
         // An input handed again after it was written is never written twice.
@@ -463,7 +444,7 @@ mod tests {
         feed.asked = None;
         assert!(feed.ask().is_none());
         feed.asked = None;
-        assert!(!feed.due(far()));
+        assert!(!feed.due());
     }
 
     #[test]
@@ -473,7 +454,7 @@ mod tests {
         let a = feed.ask().unwrap();
         feed.accepted(&a.id);
         feed.asked = None;
-        assert!(!feed.due(far()));
+        assert!(!feed.due());
 
         for refuse in [true, false] {
             let mut inputs = Scripted { next: VecDeque::from([handed("a", "\"hi\"")]), sent: VecDeque::new(), log: Vec::new() };
@@ -485,7 +466,7 @@ mod tests {
                 feed.cannot();
             }
             feed.asked = None;
-            assert!(!feed.due(far()));
+            assert!(!feed.due());
             assert_eq!(inputs.log, ["next"], "nothing is reported");
         }
     }

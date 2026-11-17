@@ -1273,7 +1273,7 @@ fn read_turn<P: Pipe, S: Sink>(
         let lines = match batch.take() {
             Some(lines) => lines,
             None => {
-                if finished.is_none() && feed.due(deadline) {
+                if finished.is_none() && feed.due() {
                     if let Some(input) = feed.ask() {
                         steers += 1;
                         pending = steer(pipe, feed, reader, turn, ids.of(&format!("steer-{steers}")), &input)?;
@@ -2819,15 +2819,73 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_asked_for_in_the_call_s_last_minutes() {
+    fn an_input_with_ninety_seconds_left_is_steered() {
+        let mut pipe = working();
+        let mut inputs = Handing::of(&[("evt_input.a", json!("Are you still on it?"))]);
+        let mut deltas = Deltas::new(Vec::new());
+        let left = Instant::now() + Duration::from_secs(90);
+        let answer = chat(&mut pipe, &mut inputs, &mut deltas, &first("Watch the run"), KEY.into(), left);
+        assert_eq!(answer.unwrap()["stop_reason"], "end_turn");
+        assert_eq!(steers(&pipe).len(), 1);
+        assert_eq!(inputs.log[..2], ["next", "sent evt_input.a"]);
+    }
+
+    #[test]
+    fn a_steered_message_s_usage_counts_in_the_call_s() {
+        // Codex adds each model call of the turn to the thread's total, the
+        // steered message's among them, and the run counts what the total
+        // grew by: nothing is lost before the last snapshot.
+        let mut codex = Codex::new(vec![vec![vec![message("m1", "Working on it."), usage(11, 3, 7)]]]);
+        codex.after_steer.push_back(vec![message("m2", "Still waiting on the run."), usage(20, 3, 9), done()]);
+        let mut pipe = BoxPipe::new(codex);
+        let mut inputs = Handing::of(&[("evt_input.a", json!("Are you still on it?"))]);
+        let (answer, _events) = steered(&mut pipe, &mut inputs);
+        assert_eq!(steers(&pipe).len(), 1);
+        assert_eq!(answer.unwrap()["usage"], json!({"input_tokens": 20, "output_tokens": 9, "cache_read_tokens": 3, "cache_write_tokens": 0}));
+    }
+
+    /// What Codex 0.167.0 wrote in the live probe of a message steered into
+    /// a turn running a foreground command (`fixtures/foreground.jsonl`),
+    /// cut to the lines and members the reader reads: what it wrote before
+    /// the steer, and after it.
+    fn foreground() -> (Vec<String>, Vec<String>) {
+        let text = include_str!("fixtures/foreground.jsonl").replace("{thread}", THREAD);
+        let lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let cut = lines.iter().position(|l| l == r#"{"written":"turn/steer"}"#).unwrap();
+        (lines[..cut].to_vec(), lines[cut + 1..].to_vec())
+    }
+
+    #[test]
+    fn a_message_steered_while_a_foreground_command_runs_is_answered_in_the_turn_codex_ends() {
+        // Codex answered the message and ended its turn with the command
+        // still running, as the probe saw: the call answers that turn.
+        let (before, after) = foreground();
+        let mut codex = Codex::new(vec![vec![before]]);
+        codex.after_steer.push_back(after);
+        let mut pipe = BoxPipe::new(codex);
+        let mut inputs = Handing::of(&[("evt_input.a", json!("A new message arrived during your work."))]);
+        let (answer, events) = steered(&mut pipe, &mut inputs);
+        let answer = answer.unwrap();
+        let reply = "SOL_CODEX_BLOCKING_MANGO_7329\n\nThe exact sleep command is still running; I’m waiting for it to finish.";
+        assert_eq!(answer["stop_reason"], "end_turn");
+        assert_eq!(answer["content"], json!([{"type": "text", "text": reply}]));
+        assert_eq!(text_of(&events), reply);
+        assert!(events.iter().any(|e| e["type"] == "tool_call.start" && e["name"] == "commandExecution"));
+        assert_eq!(inputs.log[..2], ["next", "sent evt_input.a"]);
+        assert_eq!(pipe.codex.started, 1, "no turn of its own");
+        // Both model calls of the turn, the steered message's among them.
+        assert_eq!(answer["usage"], json!({"input_tokens": 28653, "output_tokens": 76, "cache_read_tokens": 25600, "cache_write_tokens": 0}));
+    }
+
+    #[test]
+    fn a_read_that_fails_stops_the_asking_and_the_turn_still_answers() {
         let mut pipe = working();
         pipe.codex.later.push_back((Duration::ZERO, vec![done().replace("{turn}", "t1")]));
-        let mut inputs = Handing::of(&[("evt_input.a", json!("Too late"))]);
-        let mut deltas = Deltas::new(Vec::new());
-        let near = Instant::now() + crate::input::LAST_ASK - Duration::from_secs(1);
-        let answer = chat(&mut pipe, &mut inputs, &mut deltas, &first("Watch the run"), KEY.into(), near);
+        let mut inputs = Handing::of(&[("evt_input.b", json!("never asked"))]);
+        inputs.held.push_front(Err("unavailable".into()));
+        let (answer, _events) = steered(&mut pipe, &mut inputs);
         assert_eq!(answer.unwrap()["stop_reason"], "end_turn");
-        assert!(inputs.log.is_empty());
+        assert_eq!(inputs.log, ["next"]);
         assert!(steers(&pipe).is_empty());
     }
 

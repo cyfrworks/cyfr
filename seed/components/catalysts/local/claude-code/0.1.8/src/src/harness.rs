@@ -323,6 +323,19 @@ pub fn usage(usage: &Value) -> Value {
         "cache_write_tokens": count("cache_creation_input_tokens"),
     })
 }
+/// `spent`, the contract's usage, with a result's `usage` added field by
+/// field: a call's usage is that of every result that belongs to it.
+pub fn added(spent: &Value, usage: &Value) -> Value {
+    let more = self::usage(usage);
+    let sum = |key: &str| spent[key].as_u64().unwrap_or(0) + more[key].as_u64().unwrap_or(0);
+    json!({
+        "input_tokens": sum("input_tokens"),
+        "output_tokens": sum("output_tokens"),
+        "cache_read_tokens": sum("cache_read_tokens"),
+        "cache_write_tokens": sum("cache_write_tokens"),
+    })
+}
+
 
 /// The contract's refusal type for an error the harness typed an assistant
 /// message with: its account's, the provider's, the request's or the

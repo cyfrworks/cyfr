@@ -77,7 +77,8 @@ defmodule Prima.HostAPI do
   arrived after the call began (`Prima.Model`'s `t:Prima.Model.input/0`),
   which the catalyst hands its harness itself. Whoever started the
   invocation supplies it; with nobody supplying, `input_next` answers
-  none. `input_next` answers the next input not yet reported sent, the
+  none, and a supplier that cannot answer is `:unavailable`.
+  `input_next` answers the next input not yet reported sent, the
   same one again until it is, so a read is repeated freely; `input_sent`
   reports that the catalyst handed that input on, and a report repeated
   after a lost answer marks it once. Neither names its invocation: the
@@ -585,13 +586,14 @@ defmodule Prima.HostAPI do
 
   @doc """
   The next input of the caller's invocation not yet reported sent
-  (`t:Prima.Model.input/0`), or `nil` when there is none, nobody supplies
-  the invocation, or its supplier did not answer in time. Until it is
-  reported, every call answers the same input: a read moves nothing. An
-  input whose supplier answered something `Prima.Model.check_input/1`
-  refuses is the guest error `invalid_request` naming the member, never
-  its content. The invocation must be live: no cancel asked of it and its
-  execution running.
+  (`t:Prima.Model.input/0`), or `nil` only when nobody supplies the
+  invocation or its supplier answers it has none. Until it is reported,
+  every call answers the same input: a read moves nothing. A supplier
+  that is gone, does not answer in time or answers no answer is
+  `:unavailable`, never `nil`. An input whose supplier answered something
+  `Prima.Model.check_input/1` refuses is the guest error
+  `invalid_request` naming the member, never its content. The invocation
+  must be live: no cancel asked of it and its execution running.
   """
   @callback input_next(caller()) ::
               {:ok, Prima.Model.input() | nil} | {:error, refusal() | guest_error()}

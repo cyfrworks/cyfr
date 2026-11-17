@@ -16,6 +16,10 @@ defmodule Cyfr.Test.InputSupplier do
     * every ask is recorded with the invocation it named, for a test to
       read (`asks/1`).
 
+  It keeps its marks in its own memory, recorded once the transaction
+  that checked the hold has ended, so it proves the check and not a
+  stored mark's race with a cancel (`Opus.Inputs`).
+
   `:mode` makes it misbehave instead: `:silent` never answers, and
   `{:answer, fun}` answers every `next` with `fun.(invocation)`, which runs
   in the supplier's own process.

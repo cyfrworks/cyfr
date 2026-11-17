@@ -100,8 +100,10 @@ pub mod cyfr {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// The next input not yet reported sent, or none. Until it is
-            /// reported, every call answers the same input: a read moves nothing.
+            /// The next input not yet reported sent, or none: nobody supplies
+            /// the invocation, or its supplier has none. A supplier that could not
+            /// answer is `unavailable`, never none. Until it is reported, every
+            /// call answers the same input: a read moves nothing.
             pub fn next() -> Result<Option<Input>, _rt::String> {
                 unsafe {
                     #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
