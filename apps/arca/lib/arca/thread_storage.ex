@@ -366,10 +366,7 @@ defmodule Arca.ThreadStorage do
       created_by: actor.user_id || @system_author
     })
     |> Repo.insert()
-    |> case do
-      {:ok, thread} -> thread
-      {:error, reason} -> Repo.rollback(reason)
-    end
+    |> Repo.committed()
   end
 
   @doc false
