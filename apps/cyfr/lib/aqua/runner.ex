@@ -311,8 +311,8 @@ defmodule Aqua.Runner do
   its text holds, in the server's voice, with no schedule's occurrence or
   grants. Unlike a schedule's line it steers a running or paused turn
   whose sender, person, agent and origin are its own, as any send does,
-  except one paused on an uncertain call, which only its person's line
-  acknowledges: it is a turn of its own behind it. `:workspace_id` names
+  except one paused on an uncertain call, which a line of the server's
+  never acknowledges: it is a turn of its own behind it. `:workspace_id` names
   the workspace thread, `:wait` the wait it must still stand on and
   `:claim` the sending job's claim and slot, all judged in the acceptance
   (`Arca.TurnStorage.accept_message/3`).
@@ -761,9 +761,9 @@ defmodule Aqua.Runner do
 
   defp steer?(%{live: %{} = live}, ctx, name, opts), do: steer?(live, send_of(ctx, name, opts))
 
-  # A turn paused on an uncertain call goes on at its person's line, which
-  # acknowledges it (`acknowledge/2`); a post of the server's never stands
-  # in for them, so it is a turn of its own behind it.
+  # A turn paused on an uncertain call goes on at its sender's next line,
+  # which acknowledges it (`acknowledge/2`); a post of the server's never
+  # acknowledges one, so it is a turn of its own behind it.
   defp steer?(%{live: nil, paused: %{} = paused}, ctx, name, opts) do
     not (Map.get(paused, :reason) == :uncertain and Keyword.get(opts, :server) == true) and
       steer?(paused, send_of(ctx, name, opts))

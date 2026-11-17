@@ -824,6 +824,45 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute has_element?(pane, ~s([id$="-m-msg_nudge"] .bg-indigo-600))
   end
 
+  test "a post of the server's own on a daily thread counts as unread, and is drawn as the server's " <>
+         "on opening the pane and as it lands, never as the person's or the assistant's",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+    {:ok, unseen} = Threads.get(actor, thread.id)
+    {:ok, before} = Threads.unread(actor, unseen)
+
+    post = fn content ->
+      {:ok, row} =
+        Aqua.Tape.append(here, thread.id, %{
+          author: Prima.Author.system(),
+          sent_by: Prima.Author.system(),
+          content: content
+        })
+
+      row
+    end
+
+    kept = post.("Needs your attention: the workspace thread Moon report is waiting on you.")
+    {:ok, unseen} = Threads.get(actor, thread.id)
+    assert {:ok, count} = Threads.unread(actor, unseen)
+    assert count == before + 1
+
+    pane = open_pane(conn, athanor, thread)
+    landed = post.("Needs your attention: the workspace thread Sun report ran into an error.")
+    Prima.Test.Wait.wait_until(fn -> has_element?(pane, ~s([id$="-m-#{landed.id}"])) end)
+
+    for row <- [kept, landed] do
+      shown = ~s([id$="-m-#{row.id}"])
+      assert has_element?(pane, shown, row.content)
+      assert has_element?(pane, ~s(#{shown} [class*="bg-sky-950"]))
+      assert has_element?(pane, "#{shown} .items-start")
+      refute has_element?(pane, "#{shown} .items-end")
+      refute has_element?(pane, "#{shown} .bg-indigo-600")
+      refute has_element?(pane, ~s(#{shown} [phx-hook="MarkdownContent"]))
+      refute has_element?(pane, shown, "Schedule ·")
+    end
+  end
+
   test "the thread shown is read to its newest row as it opens and as each row lands, never back",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     actor = Sanctum.Context.actor(here)
