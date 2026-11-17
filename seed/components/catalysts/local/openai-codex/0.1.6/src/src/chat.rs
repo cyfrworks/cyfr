@@ -2898,4 +2898,88 @@ mod tests {
         assert_eq!(answer.unwrap()["stop_reason"], "end_turn");
         assert_eq!(inputs.log, ["next", "sent evt_input.a"]);
     }
+
+    #[test]
+    fn a_deadline_after_a_message_was_sent_interrupts_the_session_and_is_not_retried() {
+        let mut codex = Codex::new(vec![vec![vec![message("m1", "Working on it.")]]]);
+        codex.after_steer.push_back(vec![message("m2", "Still working.")]);
+        let mut pipe = BoxPipe::new(codex);
+        let mut inputs = Handing::of(&[("evt_input.a", json!("Please also say where it stands"))]);
+        let mut deltas = Deltas::new(Vec::new());
+        let refusal = chat(&mut pipe, &mut inputs, &mut deltas, &first("Watch the run"), KEY.into(),
+                           Instant::now() + Duration::from_millis(100)).unwrap_err();
+        assert_eq!(refusal.kind, "provider_error");
+        assert!(refusal.code.is_none());
+        assert_eq!(inputs.log, ["next", "sent evt_input.a"]);
+        assert_eq!(steers(&pipe).len(), 1);
+        assert!(pipe.log.iter().any(|s| s.starts_with("close")));
+    }
+
+    /// A box whose program ends once a steer was taken and nothing more is
+    /// left to read.
+    struct EndsAfterSteer<'a> {
+        pipe: &'a mut BoxPipe,
+    }
+
+    impl Pipe for EndsAfterSteer<'_> {
+        fn open(&mut self, need: &str, key: &str, argv: &[String]) -> Result<Opened, String> {
+            self.pipe.open(need, key, argv)
+        }
+        fn send(&mut self, session: &str, lines: &[String]) -> Result<(), String> {
+            self.pipe.send(session, lines)
+        }
+        fn recv(&mut self, session: &str, after: u64, wait: u32) -> Result<Received, String> {
+            let got = self.pipe.recv(session, after, wait)?;
+            if !self.pipe.codex.steered.is_empty() && got.lines.iter().all(|(seq, _)| *seq <= after) {
+                self.pipe.running = false;
+                return Ok(Received { lines: Vec::new(), dropped: 0, running: false });
+            }
+            Ok(got)
+        }
+        fn close(&mut self, session: &str) -> Result<(), String> {
+            self.pipe.close(session)
+        }
+    }
+
+    /// A run that reads usage, steers a message and is refused, at its
+    /// deadline or as its program ends: the refusal carries no usage on the
+    /// stream, and its session the thread's total before what the run read,
+    /// so the run that resumes the session counts both runs' tokens once.
+    fn a_refused_run_s_usage_is_counted_by_the_next(program_ends: bool) {
+        let mut pipe = BoxPipe::new(Codex::new(vec![
+            vec![vec![message("m1", "Working on it."), usage(11, 3, 7)]],
+            vec![vec![usage(29, 4, 11), message("m0", "Continued."), done()]],
+        ]));
+        pipe.codex.after_steer.push_back(vec![message("m2", "Still working."), usage(20, 3, 9)]);
+        let mut inputs = Handing::of(&[("evt_input.a", json!("Please also say where it stands"))]);
+        let mut deltas = Deltas::new(Vec::new());
+        let request = first("Watch the run");
+        let refusal = if program_ends {
+            chat(&mut EndsAfterSteer { pipe: &mut pipe }, &mut inputs, &mut deltas, &request, KEY.into(), far())
+        } else {
+            chat(&mut pipe, &mut inputs, &mut deltas, &request, KEY.into(), Instant::now() + Duration::from_millis(100))
+        }
+        .unwrap_err();
+        assert_eq!(refusal.kind, "provider_error");
+        assert_eq!(inputs.log[..2], ["next", "sent evt_input.a"]);
+        assert!(deltas.into_sink().iter().all(|e| e["type"] != "usage"), "the session carries it, so the stream does not");
+        assert!(refusal.session.is_some());
+        let next = request_of(&refusal);
+        let (answer, _) = run(&mut pipe, &next, far());
+        assert_eq!(answer.unwrap()["usage"], json!({"input_tokens": 29, "output_tokens": 11, "cache_read_tokens": 4, "cache_write_tokens": 0}));
+    }
+
+    fn request_of(refusal: &Refusal) -> Request {
+        request(json!({"model": "default", "session": refusal.session, "messages": [{"role": "user", "content": "continue"}]}))
+    }
+
+    #[test]
+    fn a_run_refused_at_its_deadline_has_its_usage_counted_by_the_next() {
+        a_refused_run_s_usage_is_counted_by_the_next(false);
+    }
+
+    #[test]
+    fn a_run_whose_program_ends_has_its_usage_counted_by_the_next() {
+        a_refused_run_s_usage_is_counted_by_the_next(true);
+    }
 }

@@ -1168,6 +1168,13 @@ fn inject<P: Pipe>(pipe: &mut P, call: &mut Call, session: &str, cover: &mut Cov
 /// background command's late end: its text is neither streamed nor
 /// answered. Between its reads the call asks for its further messages and
 /// writes each into the session (`inject`).
+///
+/// The call's usage is that of every result it read as its own. An answer
+/// carries it, and its close streams it once (`stream::close`); a refusal,
+/// which carries none, is preceded on the stream by that same `usage`
+/// event when the call read any, so what the call spent leaves it on every
+/// exit: its time running out, the program ending, a write, a read or the
+/// harness failing.
 #[allow(clippy::too_many_arguments)]
 fn turn<P: Pipe, S: Sink>(
     pipe: &mut P,
@@ -1178,7 +1185,31 @@ fn turn<P: Pipe, S: Sink>(
     id: &str,
     deadline: Instant,
     taken: &mut bool,
+    cover: Cover,
+) -> Result<Value, Refusal> {
+    let none = harness::usage(&Value::Null);
+    let mut spent = none.clone();
+    let answer = reading(pipe, call, deltas, reader, request, id, deadline, taken, cover, &mut spent);
+    if answer.is_err() && spent != none {
+        deltas.event(json!({"type": "usage", "usage": spent}));
+    }
+    answer
+}
+
+/// `turn`'s reading, adding to `spent` the usage of each result it reads
+/// as the call's own.
+#[allow(clippy::too_many_arguments)]
+fn reading<P: Pipe, S: Sink>(
+    pipe: &mut P,
+    call: &mut Call,
+    deltas: &mut Deltas<S>,
+    reader: &mut Reader,
+    request: &Request,
+    id: &str,
+    deadline: Instant,
+    taken: &mut bool,
     mut cover: Cover,
+    spent: &mut Value,
 ) -> Result<Value, Refusal> {
     let mut model = request.flags.model.clone().unwrap_or_else(|| request.model.clone());
     let mut text = String::new();
@@ -1191,9 +1222,6 @@ fn turn<P: Pipe, S: Sink>(
     let mut foreign = false;
     let mut held = String::new();
     let mut since = 0;
-    // The usage of every result this call read as its own: a result that
-    // answers part of what the call wrote counts, as the last one does.
-    let mut spent = harness::usage(&Value::Null);
     let response = |text: &str, model: &str, call: Option<Value>, stop: &str, usage: Value| {
         let mut content = Vec::new();
         if !text.is_empty() {
@@ -1303,19 +1331,21 @@ fn turn<P: Pipe, S: Sink>(
                             text.push_str(&std::mem::take(&mut held));
                         }
                         foreign = false;
-                        spent = harness::added(&spent, &usage);
+                        // A result that answers part of what the call wrote
+                        // counts, as the last one does.
+                        *spent = harness::added(spent, &usage);
                         if covers == Covers::Part {
                             since = text.len();
                             error = None;
                             continue;
                         }
                         if ok {
-                            let answer = response(&text, &model, None, "end_turn", spent);
+                            let answer = response(&text, &model, None, "end_turn", spent.clone());
                             stream::close(deltas, &answer);
                             return Ok(answer);
                         }
                         if error.is_none() && subtype.starts_with("error_max_") {
-                            let answer = response(&text, &model, None, "other", spent);
+                            let answer = response(&text, &model, None, "other", spent.clone());
                             stream::close(deltas, &answer);
                             return Ok(answer);
                         }
@@ -2872,5 +2902,96 @@ mod tests {
         assert_eq!(answer["stop_reason"], "end_turn");
         assert_eq!(handing.log, ["next"]);
         assert_eq!(user_lines(&pipe).len(), 1);
+    }
+
+    /// A call that reads its first message's result, 22 output tokens, while
+    /// the further message it wrote stays unanswered, and then runs out of
+    /// time (`at_deadline`) or sees its program end.
+    fn a_partial_result_then_the_end(at_deadline: bool) -> (Refusal, Vec<Value>, Scripted, Handing) {
+        let first = transcript("race").into_iter().take(5).collect();
+        let mut pipe = Scripted::new(replaying(first));
+        pipe.names = false;
+        pipe.running = at_deadline;
+        let mut handing = Handing::of(&[("evt_input.a", "Please also say where it stands")]);
+        let mut deltas = Deltas::new(Vec::new());
+        let refusal = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(),
+                           Instant::now() + Duration::from_millis(100)).unwrap_err();
+        (refusal, deltas.into_sink(), pipe, handing)
+    }
+
+    #[test]
+    fn a_deadline_after_a_message_was_sent_interrupts_the_session_and_is_not_retried() {
+        let (refusal, _, pipe, handing) = a_partial_result_then_the_end(true);
+        assert_eq!(refusal.kind, "provider_error");
+        assert!(refusal.code.is_none());
+        assert!(pipe.log.contains(&"close pipe-1".to_string()));
+        assert_eq!(handing.log, ["next", "sent evt_input.a"]);
+        assert_eq!(user_lines(&pipe).len(), 2);
+    }
+
+    /// The usage a refused call read leaves it on the stream, once, and the
+    /// call that resumes the session counts only its own.
+    fn known_usage_leaves_the_refused_call(at_deadline: bool) {
+        let (refusal, events, mut pipe, _) = a_partial_result_then_the_end(at_deadline);
+        let usages: Vec<&Value> = events.iter().filter(|e| e["type"] == "usage").collect();
+        assert_eq!(usages.len(), 1, "{events:?}");
+        assert_eq!(usages[0]["usage"], harness::usage(&transcript("race")[4]["usage"]));
+        let envelope: Value = serde_json::from_str(&refusal.envelope()).unwrap();
+        let counted_before = usages[0]["usage"]["output_tokens"].as_u64().unwrap();
+        let mut result: Value = serde_json::from_str(&result_line()).unwrap();
+        result["usage"] = json!({"input_tokens": 1, "output_tokens": 9});
+        pipe.respond = Box::new(harness_answers(vec![result.to_string()]));
+        pipe.names = true;
+        pipe.running = true;
+        let next = request(json!({"model": "default", "session": envelope["error"]["session"],
+            "messages": [{"role": "user", "content": "go on"}]}));
+        let mut next_ids = ids();
+        next_ids();
+        next_ids();
+        let mut deltas = Deltas::new(Vec::new());
+        let answer = chat(&mut pipe, &mut NoInputs, &mut next_ids, &mut deltas, &next, "unused".into(), soon()).unwrap();
+        assert_eq!(counted_before + answer["usage"]["output_tokens"].as_u64().unwrap(), 31,
+            "22 known tokens must leave the refused call; refusal={envelope}, events={events:?}, resumed={answer}");
+    }
+
+    #[test]
+    fn known_usage_leaves_a_call_that_runs_out_of_time() {
+        known_usage_leaves_the_refused_call(true);
+    }
+
+    #[test]
+    fn known_usage_leaves_a_call_whose_program_ends() {
+        known_usage_leaves_the_refused_call(false);
+    }
+
+    #[test]
+    fn known_usage_leaves_a_call_whose_further_write_fails() {
+        // The first result answers part of what the call wrote; the second
+        // further message's write then fails.
+        let first = transcript("race").into_iter().take(5).collect();
+        let mut pipe = Scripted::new(replaying(first));
+        pipe.names = false;
+        pipe.send_error = Some(("Then this one".into(), "lost".into()));
+        let mut handing = Handing::of(&[("evt_input.a", "A new message arrived"), ("evt_input.b", "Then this one")]);
+        let mut deltas = Deltas::new(Vec::new());
+        let refusal = chat(&mut pipe, &mut handing, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy()).unwrap_err();
+        assert!(refusal.message.contains("interrupted"), "{}", refusal.message);
+        let events = deltas.into_sink();
+        let usages: Vec<&Value> = events.iter().filter(|e| e["type"] == "usage").collect();
+        assert_eq!(usages.len(), 1, "{events:?}");
+        assert_eq!(usages[0]["usage"], harness::usage(&transcript("race")[4]["usage"]));
+    }
+
+    #[test]
+    fn a_refusal_before_any_result_of_its_own_streams_no_usage() {
+        let (answer, _, _, events) = replayed("race", &[]);
+        assert!(answer.is_ok());
+        assert_eq!(events.iter().filter(|e| e["type"] == "usage").count(), 1, "an answer's usage is streamed once, at its close");
+        let mut pipe = Scripted::new(replaying(Vec::new()));
+        pipe.names = false;
+        pipe.running = false;
+        let mut deltas = Deltas::new(Vec::new());
+        assert!(chat(&mut pipe, &mut NoInputs, &mut ids(), &mut deltas, &new_chat(), ID.into(), roomy()).is_err());
+        assert!(deltas.into_sink().iter().all(|e| e["type"] != "usage"));
     }
 }
