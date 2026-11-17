@@ -415,6 +415,57 @@ defmodule Aqua.StreamsTest do
 
       assert {:error, :no_athanor} = ThreadList.listed(%{ada.ctx | athanor_id: nil}, ada.user.id)
     end
+
+    test "is two windows, the latest 200 threads not archived and the latest 200 archived, each " <>
+           "saying which it is",
+         %{ada: ada} do
+      now = DateTime.utc_now()
+
+      # Every archived thread is newer than every other: one window of 200
+      # would hold archived threads alone.
+      rows = fn n, archived, minutes_back ->
+        for i <- 1..n do
+          at = DateTime.add(now, -(minutes_back + i) * 60, :second)
+
+          %{
+            id: Prima.UUID7.generate_id("thread"),
+            athanor_id: ada.actor.athanor_id,
+            kind: "workspace",
+            workspace_state: "done",
+            workspace_outcome: "done",
+            title: "#{if archived, do: "Archived", else: "Active"} #{i}",
+            created_by: Prima.Author.system(),
+            last_message_at: at,
+            archived_at: if(archived, do: now),
+            inserted_at: at,
+            updated_at: at
+          }
+        end
+      end
+
+      archived = rows.(201, true, 0)
+      active = rows.(201, false, 1_000)
+      {201, _} = Arca.Repo.insert_all(Arca.Schemas.Thread, archived)
+      {201, _} = Arca.Repo.insert_all(Arca.Schemas.Thread, active)
+
+      assert {:ok, items} = ThreadList.listed(ada.ctx, ada.user.id)
+      wired = Enum.map(items, &read_as/1)
+      listed = MapSet.new(wired, & &1["id"])
+
+      newest = fn rows -> rows |> Enum.take(200) |> MapSet.new(& &1.id) end
+      assert listed == MapSet.union(newest.(archived), newest.(active))
+
+      by_id = Map.new(wired, &{&1["id"], &1["archived"]})
+      assert Enum.all?(Enum.take(archived, 200), &(by_id[&1.id] == true))
+      assert Enum.all?(Enum.take(active, 200), &(by_id[&1.id] == false))
+
+      # The oldest of each is past its window: search finds it, not the list.
+      refute List.last(archived).id in listed
+      refute List.last(active).id in listed
+
+      times = Enum.map(wired, &elem(DateTime.from_iso8601(&1["last_activity"]), 1))
+      assert times == Enum.sort(times, {:desc, DateTime})
+    end
   end
 
   describe "the crew's activity" do

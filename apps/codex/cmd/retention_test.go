@@ -27,6 +27,21 @@ func TestRetentionSettings_SetPairsJoinTheNamedFlags(t *testing.T) {
 	}
 }
 
+// archive_days=0 turns the archive off: the zero is sent, never dropped as absent.
+func TestRetentionSettings_SendsAZeroArchiveDays(t *testing.T) {
+	settings, err := retentionSettings(map[string]int{}, []string{"archive_days=0"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"archive_days":0}`; string(encoded) != want {
+		t.Errorf("want %s, got %s", want, encoded)
+	}
+}
+
 func TestRetentionSettings_RefusesAnUndeclaredKey(t *testing.T) {
 	_, err := retentionSettings(map[string]int{}, []string{"made_up=3"})
 	if err == nil || !strings.Contains(err.Error(), "made_up") {

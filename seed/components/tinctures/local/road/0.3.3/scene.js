@@ -664,7 +664,8 @@ window.RoadScene = function () {
   function buildingState(id, T, ts) {
     const blink = Math.floor(ts * 2) % 2 === 0;
     if (id === 'house') return { name: fit(S.person || 'your place', 54) };
-    if (id === 'post') return { threads: threads().map((t) => { const then = t.last == null || t.last <= T; return { kind: t.aqua ? 'aqua' : 'shared', unread: then ? t.unread : 0, people: t.people, waits_on_you: t.waits && then }; }) };
+    // the post boxes are the threads the threads card lists: the archived ones under its Archived choice
+    if (id === 'post') return { threads: threads(archived).map((t) => { const then = t.last == null || t.last <= T; return { kind: t.aqua ? 'aqua' : 'shared', unread: then ? t.unread : 0, people: t.people, waits_on_you: t.waits && then }; }) };
     if (id === 'crew') { const n = jobs().filter((j) => j.since == null || j.since <= T).length, s = sys(); return { out: n > 0, ready: s ? s.ready || 0 : 0, total: s ? s.total || 0 : 0 }; }
     if (id === 'market') return { apps: S.installed.map((a) => { const c = R.component(a.ref); return { letter: (Array.from(a.name)[0] || '?').toUpperCase(), open: a.open, update: !!(c && c.update) }; }) };
     if (id === 'silo') { const s = sys() || {}; return { used: s.used || 0, cap: s.cap || 0, model: !!s.model, update: !!s.update }; }
@@ -1237,7 +1238,7 @@ window.RoadScene = function () {
     const list = attention();
     if (on('attention')) add('queue', 'house', list.length + ' waiting at your house' + noteOf('attention') + '. Open the list.');
     else add('queue', 'house', 'Your house');
-    if (on('threads')) add('threads', 'post', 'Post boxes: ' + threads().length + (threads().length === 1 ? ' thread, ' : ' threads, ') + threads().filter((t) => t.waits).length + ' waiting on you, ' + threads().reduce((n, t) => n + t.unread, 0) + ' unread' + noteOf('threads'));
+    if (on('threads')) { const posted = threads(archived); add('threads', 'post', 'Post boxes' + (archived ? ', archived' : '') + ': ' + posted.length + (posted.length === 1 ? ' thread, ' : ' threads, ') + posted.filter((t) => t.waits).length + ' waiting on you, ' + posted.reduce((n, t) => n + t.unread, 0) + ' unread' + noteOf('threads')); }
     if (on('activity')) { const s = sys(); add('crew', 'crew', 'Crew house: ' + S.activity.size + ' at work' + (s && s.total != null ? ', ' + (s.ready ?? 0) + ' of ' + s.total + ' ready' : '') + noteOf('activity')); }
     if (on('components')) { const ups = S.installed.filter((a) => { const c = R.component(a.ref); return c && c.update; }).length; add('market', 'market', 'Market: ' + S.installed.length + ' apps' + (ups ? ', ' + ups + ' with an update' : '') + noteOf('components')); }
     if (on('schedules')) { const nt = noteOf('schedules'); add('tower', 'tower', 'Bell tower: ' + S.schedules.size + (S.schedules.size === 1 ? ' schedule' : ' schedules') + nt); add('press', 'press', 'Press: runs that failed' + nt); add('barn', 'barn', 'Barn: paused schedules' + nt); }

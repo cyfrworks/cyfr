@@ -120,7 +120,8 @@ defmodule Cyfr.RetentionScheduler do
   @typedoc """
   What one member did under one claim: the cycle it belongs to, whether
   it resumed a predecessor's, the steps it carried to completion, the
-  athanors it swept and what it deleted in them, per kind.
+  athanors it swept and what it deleted in them, per kind (what it
+  archived, for `archive_days`).
   """
   @type summary :: %{
           cycle: DateTime.t(),

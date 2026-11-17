@@ -20,6 +20,26 @@ defmodule Aqua.Providers.WorkspaceTest.DyingCopy do
   end
 end
 
+defmodule Aqua.Providers.WorkspaceTest.LostDatabase do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  # A copy whose bytes say so is written, and then the database is lost,
+  # as a connection dropped while an opening's transaction still runs:
+  # the transaction is rolled back with the copy already on disk. The
+  # path written is told to the writing process.
+  def put(actor, path, content) do
+    :ok = Arca.Adapters.Local.put(actor, path, content)
+
+    if content == "the database goes once this is copied" do
+      send(self(), {:copied, path})
+      raise DBConnection.ConnectionError, "the database went away mid-opening"
+    end
+
+    :ok
+  end
+end
+
 defmodule Aqua.Providers.WorkspaceTest do
   @moduledoc """
   Workspace threads: opened from a daily thread in one transaction with
@@ -262,6 +282,17 @@ defmodule Aqua.Providers.WorkspaceTest do
     answer
   end
 
+  # `fun` under the double that loses the database once an opening's copy
+  # is written.
+  defp lost_database(fun) do
+    {answer, _log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Prima.Test.Env.with_app_env(:arca, :storage_adapter, __MODULE__.LostDatabase, fun)
+      end)
+
+    answer
+  end
+
   # The files stored under the message `id` of `thread_id`.
   defp copies(ctx, thread_id, id) do
     case Arca.list_recursive(actor(ctx), Arca.ThreadStorage.blob_root(thread_id) ++ [id]) do
@@ -354,6 +385,56 @@ defmodule Aqua.Providers.WorkspaceTest do
       # Once.
       assert {:ok, %{}} = drain(ctx)
       assert records(ctx, "workspace_open") == []
+    end
+
+    test "an opening whose transaction fails once its files are copied writes nothing and " <>
+           "leaves none of the copies",
+         %{ctx: ctx, daily: daily} do
+      blob = %{
+        "filename" => "moon.png",
+        "media_type" => "image/png",
+        "bytes" => "the database goes once this is copied"
+      }
+
+      shot = Prima.UUID7.generate_id("msg")
+      {:ok, [ref]} = Aqua.Attachments.store(ctx, daily.id, shot, [blob])
+
+      {:ok, _} =
+        Tape.accept(ctx, daily.id, %{
+          message: %{
+            id: shot,
+            author: ctx.user_id,
+            sent_by: "person",
+            content: "this one",
+            payload: %{"attachments" => [ref]}
+          }
+        })
+
+      daily_rows = rows(ctx, daily.id)
+
+      assert {:error, {:unavailable, "Storage"}} =
+               lost_database(fn ->
+                 open(ctx, daily, %{
+                   "attachments" => [%{"message_id" => shot, "stored_name" => ref["stored_name"]}]
+                 })
+               end)
+
+      # The copy was written under the workspace thread the opening named,
+      # and is gone with the transaction.
+      assert_received {:copied, ["threads", workspace_id, opening_id, "0-moon.png"]}
+      refute_received {:copied, _}
+      refute Arca.exists?(actor(ctx), ["threads", workspace_id, opening_id, "0-moon.png"])
+      assert copies(ctx, workspace_id, opening_id) == []
+
+      # Nothing of the opening was written: no thread, no pointer (the post
+      # it was asked from is the daily thread's one new row), no record,
+      # and the post's own file stays.
+      assert Threads.list(actor(ctx), kind: "workspace") == []
+      assert {:error, :not_found} = Threads.get(actor(ctx), workspace_id)
+      assert [%{kind: kind}] = rows(ctx, daily.id) -- daily_rows
+      refute kind == "pointer"
+      assert records(ctx, "workspace_open") == []
+      assert copies(ctx, daily.id, shot) == [["threads", daily.id, shot, ref["stored_name"]]]
     end
 
     test "an opening from a post whose file was deleted from Files says the file is no longer " <>

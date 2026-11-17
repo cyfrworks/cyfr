@@ -840,12 +840,14 @@ describe("the road desktop 0.3.3", () => {
     tap(p, "Yesterday, 1 unread, with Aqua, ")
     assert.deepEqual(p.calls.settings, [["aqua", "t_one"]])
 
-    // The post boxes on the building are the threads not archived, the Archived choice on or off.
-    assert.equal(label(p, "Post boxes"), "Post boxes: 3 threads, 0 waiting on you, 2 unread")
+    // The post boxes on the building are the threads the card lists: the archived ones while its
+    // Archived choice is on, the others once it is off.
+    assert.equal(label(p, "Post boxes"), "Post boxes, archived: 2 threads, 1 waiting on you, 1 unread")
     tap(p, "Post boxes")
     flip(p)
     assert.equal(archived(p).element.getAttribute("aria-pressed"), "false")
     assert.deepEqual(listed(p), ["Today", "Ferry tracker", "Family"])
+    assert.equal(label(p, "Post boxes"), "Post boxes: 3 threads, 0 waiting on you, 2 unread")
   })
 
   test("a live item that archives a thread moves it to the archived list, one that takes it out moves it back, and a removed item leaves both lists", async () => {

@@ -399,16 +399,18 @@ defmodule Arca.ThreadStorage do
   #   * then the athanor's row: shared by the standing check
   #     (`Arca.ExecutionStanding.locked/2`), after the turn; taken for
   #     update, before any standing check of its own, by every create of a
-  #     thread and by a write that takes more than one thread row, by a
-  #     lock, an update, a delete or a row it adds that names one.
+  #     thread, by a write that takes more than one thread row, and by an
+  #     archive, which must wait for work a crew thread's writer holds it
+  #     for (`archive/2`), by a lock, an update, a delete or a row it adds
+  #     that names one.
   #   * then the thread rows, those it holds together in id order, which
   #     this function takes after the athanor's row.
   #
-  # A write that takes one thread row takes no second, and no athanor lock
-  # for it. Nothing takes the athanor's row before a turn's, so no two
-  # writes wait on each other across the three. Answers the rows of `ids`
-  # that stand, held until the caller's transaction ends. An
-  # in-transaction helper.
+  # A write that takes one thread row takes no second, and, an archive
+  # apart, no athanor lock for it. Nothing takes the athanor's row before
+  # a turn's, so no two writes wait on each other across the three.
+  # Answers the rows of `ids` that stand, held until the caller's
+  # transaction ends. An in-transaction helper.
   @spec lock_threads!(Prima.Actor.t(), [String.t()]) :: [Thread.t()]
   # arca:db-raise-ok inside the caller's transaction
   def lock_threads!(%Prima.Actor{athanor_id: athanor_id} = actor, ids)
@@ -1792,9 +1794,12 @@ defmodule Arca.ThreadStorage do
   refused `{:error, :working}` while work remains in it or in a crew
   thread under it (`Arca.TurnStorage.work_remains?/2`), whatever it
   reads, or while a workspace thread reads working (`workspace_state`
-  `open`). Decided under the thread's row lock, which every write that
-  starts new work there takes or waits on before it clears the archive
-  (`unarchive!/2`), so of the two whichever commits last stands. One
+  `open`). Decided under the athanor's row and then the thread's
+  (`lock_threads!/2`'s order): new work in the thread itself takes the
+  thread's row, and new work in a crew thread under it the athanor's
+  (`Arca.TurnStorage`'s `work_lock!`), before it clears the archive
+  (`unarchive!/2`), so the archive waits for work under way there and
+  sees it, or the work's clear waits for the archive and undoes it. One
   already archived answers as it stands. A crew member's thread is
   `{:error, :not_a_room}`: it is retired (`retire/3`). `:archived` is
   announced after the commit (`[:cyfr, :arca, :thread, :archived]`).
@@ -1806,17 +1811,17 @@ defmodule Arca.ThreadStorage do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.archive", fn ->
       Repo.locking_transaction(fn ->
-        case held_row(actor, id) do
-          nil ->
+        case lock_threads!(actor, [id]) do
+          [] ->
             Repo.rollback(:not_found)
 
-          %Thread{kind: "crew"} ->
+          [%Thread{kind: "crew"}] ->
             Repo.rollback(:not_a_room)
 
-          %Thread{archived_at: %DateTime{}} = thread ->
+          [%Thread{archived_at: %DateTime{}} = thread] ->
             {thread, false}
 
-          %Thread{} = thread ->
+          [%Thread{} = thread] ->
             if at_work?(actor, thread), do: Repo.rollback(:working)
             {%{thread | archived_at: archived!(actor, [thread.id])}, true}
         end
