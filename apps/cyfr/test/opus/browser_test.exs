@@ -1989,6 +1989,85 @@ defmodule Opus.BrowserTest do
       assert browser_sessions(ctx) == []
     end
 
+    test "a crew member's thread whose workspace thread opened apart was removed is refused, and the person's Chrome does not start",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      room = workspace!(ctx, true)
+      {:ok, _child} = Threads.crew_thread(actor, room, "planner")
+      [opening] = Threads.messages(actor, room)
+
+      {:ok, %{turn: own}} =
+        TurnStorage.accept_message(actor, room, %{
+          opening_id: opening.id,
+          message: %{author: ctx.user_id, sent_by: "person", content: "look it up"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+        })
+
+      set_status(own, "running")
+
+      assert {:ok, %{workspace_state: "done"}} =
+               TurnStorage.report_workspace(actor, own.id, "done", %{
+                 fence: own.fence,
+                 summary: "Done"
+               })
+
+      set_status(own, "completed")
+
+      # The person speaks to the crew member directly after the work ended.
+      crew = crew!(ctx, room)
+      assert {:ok, _} = call(ctx, crew, "open", %{"url" => "https://example.com/"})
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+
+      # Retention removes the finished workspace thread; the crew turn lives on.
+      old = DateTime.add(DateTime.utc_now(), -60 * 86_400, :second)
+      {:ok, _} = Threads.update(actor, room, %{last_message_at: old})
+      cutoff = DateTime.add(DateTime.utc_now(), -30 * 86_400, :second)
+      assert {:ok, removed} = Threads.delete_before(actor, cutoff)
+      assert removed >= 1
+      assert {:error, :not_found} = Threads.get(actor, room)
+      assert {:ok, {_, _, _}} = Opus.Browser.turn(Opus.Browser.caller(guest(ctx), crew))
+
+      assert refusal(call(ctx, crew, "open", %{"url" => "https://example.org/"})) ==
+               "The browser's response is unavailable."
+
+      assert running_rows(ctx) == ["aqua-browser-apart"]
+      assert holder(ctx, :person) == nil
+    end
+
+    test "a window of a thread that is gone is refused, and no Chrome starts", %{ctx: ctx} do
+      gone = Prima.UUID7.generate_id("thread")
+
+      assert {:error, :unavailable} =
+               Opus.Browser.watch(ctx, gone, %{width: 1280, height: 720}, fn -> true end)
+
+      refute_received {:session, "open", _open, _fields}
+      assert browser_sessions(ctx) == []
+      assert holder(ctx, :person) == nil and holder(ctx, :apart) == nil
+    end
+
+    test "a workspace thread whose first row is not its opening is refused, and no Chrome starts",
+         %{ctx: ctx} do
+      bare =
+        %Arca.Schemas.Thread{}
+        |> Arca.Schemas.Thread.changeset(%{
+          id: Prima.UUID7.generate_id("thread"),
+          athanor_id: ctx.athanor_id,
+          kind: "workspace",
+          workspace_state: "open",
+          title: "No opening",
+          created_by: ctx.user_id
+        })
+        |> Arca.Repo.insert!()
+
+      {_turn, lineage} = turn!(ctx, thread: bare)
+
+      assert refusal(call(ctx, lineage, "open", %{"url" => "https://example.com/"})) ==
+               "The browser's response is unavailable."
+
+      refute_received {:session, "open", _open, _fields}
+      assert browser_sessions(ctx) == []
+    end
+
     test "the person watches a window kept apart and acts in it, in the second Chrome",
          %{ctx: ctx, driver: driver, apart: apart} do
       win = apart["thread_id"]

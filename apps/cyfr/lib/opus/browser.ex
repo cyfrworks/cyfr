@@ -21,9 +21,14 @@ defmodule Opus.Browser do
   owner; they share no cookie and no storage. A thread's window is in
   the second when the thread is a workspace thread whose first opening
   was made apart, or a crew member's thread under one, and in the
-  person's otherwise (`chrome/2`), read from
-  the store for every action, put and watch, so a thread kept apart never
-  has a window in the person's Chrome. Everything below holds of each
+  person's only when it is shown to be theirs: a daily thread, a
+  workspace thread opened not apart, or a crew member's thread under
+  either (`chrome/2`). It is read from the store for every action, put
+  and watch, and what cannot be shown, a thread or parent that is gone or
+  a workspace thread with no opening, is refused with nothing started, so
+  work kept apart never has a window in the person's Chrome. Ending work
+  (an unwatch, a held request's end, an answer, `stop/2`, the idle stop)
+  goes by its holder, watch, request or session and reads no thread. Everything below holds of each
   alike: its holder, its setting, its idle stop, its puts and their calls.
 
   ## Who acts on it
@@ -616,31 +621,38 @@ defmodule Opus.Browser do
     :exit, _ -> gone
   end
 
-  # The Chrome the window of thread `thread_id` is in: the second
-  # (`:apart`) for a workspace thread whose first opening was made apart
-  # (its envelope's `apart`), and for a crew member's thread that works
-  # under one, whose work it is; the person's (`:person`) for every other
-  # thread. Read from the store each time; `:unavailable` when it cannot
-  # be read, so no window of work kept apart opens in the person's.
+  # The Chrome the window of thread `thread_id` is in, read from the store
+  # each time and decided by the thread's kind. The person's (`:person`)
+  # only for what is shown to be the person's: a daily thread, a workspace
+  # thread whose first opening is not apart, and a crew member's thread
+  # under either. The second (`:apart`) for a workspace thread whose first
+  # opening is apart (its envelope's `apart`) and a crew member's thread
+  # under one, whose work it is. Anything else is refused `:unavailable`,
+  # and nothing opens or starts: a thread or a crew thread's parent whose
+  # row is gone, a workspace thread whose first row is not its opening, a
+  # read that fails. An empty read never means the person's.
   defp chrome(athanor_id, thread_id) when is_binary(athanor_id) and is_binary(thread_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
 
     case Arca.ThreadStorage.get(actor, thread_id) do
       {:ok, %{kind: "crew", parent_id: parent}} when is_binary(parent) ->
-        opened_apart(actor, parent)
+        case Arca.ThreadStorage.get(actor, parent) do
+          {:ok, %{kind: kind}} when kind in ["daily", "workspace"] -> of_kind(actor, kind, parent)
+          _gone_or_unread -> {:error, :unavailable}
+        end
 
-      {:ok, _thread} ->
-        opened_apart(actor, thread_id)
+      {:ok, %{kind: kind}} when kind in ["daily", "workspace"] ->
+        of_kind(actor, kind, thread_id)
 
-      {:error, :not_found} ->
-        {:ok, :person}
-
-      {:error, _unread} ->
+      _gone_unread_or_unknown ->
         {:error, :unavailable}
     end
   end
 
-  # Whether the first row of thread `thread_id` is an opening made apart.
+  defp of_kind(_actor, "daily", _thread_id), do: {:ok, :person}
+  defp of_kind(actor, "workspace", thread_id), do: opened_apart(actor, thread_id)
+
+  # A workspace thread's Chrome, by its first row, which is its opening.
   defp opened_apart(actor, thread_id) do
     case Arca.ThreadStorage.messages(actor, thread_id, limit: 1) do
       [%{kind: "opening"} = opening] ->
@@ -648,10 +660,7 @@ defmodule Opus.Browser do
           do: {:ok, :apart},
           else: {:ok, :person}
 
-      rows when is_list(rows) ->
-        {:ok, :person}
-
-      {:error, _unread} ->
+      _none_other_or_unread ->
         {:error, :unavailable}
     end
   end

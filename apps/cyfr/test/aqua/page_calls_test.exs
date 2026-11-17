@@ -121,8 +121,8 @@ defmodule Aqua.PageCallsTest do
       "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
     }
 
-  # A workspace thread, opened apart when `apart`: its first row is then
-  # an opening that says so, as `workspace.open` writes one.
+  # A workspace thread whose first row is its opening, as `workspace.open`
+  # writes one, made apart when `apart`.
   defp workspace!(ctx, apart \\ false) do
     thread =
       %Arca.Schemas.Thread{}
@@ -136,16 +136,14 @@ defmodule Aqua.PageCallsTest do
       })
       |> Arca.Repo.insert!()
 
-    if apart do
-      {:ok, _opening} =
-        Arca.ThreadStorage.append(Sanctum.Context.actor(ctx), thread.id, %{
-          author: ctx.user_id,
-          sent_by: "person",
-          kind: "opening",
-          content: "Show the page",
-          payload: %{"ask" => "Show the page", "asked_by" => ctx.user_id, "apart" => true}
-        })
-    end
+    {:ok, _opening} =
+      Arca.ThreadStorage.append(Sanctum.Context.actor(ctx), thread.id, %{
+        author: ctx.user_id,
+        sent_by: "person",
+        kind: "opening",
+        content: "Show the page",
+        payload: %{"ask" => "Show the page", "asked_by" => ctx.user_id, "apart" => apart}
+      })
 
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     thread
