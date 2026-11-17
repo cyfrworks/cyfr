@@ -11,12 +11,13 @@ defmodule Emissary.Web.TinctureAssets do
   projects, so the Local FS adapter and any configured object-store
   adapter produce identical observable behaviour. Which files may be
   served and with which type are the component domain's rules
-  (`Compendium.tincture_asset_rules/0`, `Compendium.tincture_served_types/0`),
-  and a document's Content Security Policy with its `sandbox` directive is
-  derived whole from the version's declaration by the frame's rules
-  (`Compendium.tincture_frame_policy/2`);
-  path validation, the headers, the nonce, compression and the SDK
-  injection live here.
+  (`Compendium.tincture_served_type/1`), a document's Content Security
+  Policy with its `sandbox` directive is derived whole from the version's
+  declaration by the frame's rules (`Compendium.tincture_frame_policy/2`),
+  and the SDK and the tags that hand it to an entry page are the
+  domain's too (`Compendium.tincture_sdk/0`,
+  `Compendium.tincture_head_tags/3`), so Aqua's browser hands over the
+  same page; the headers, the nonce and compression live here.
 
   ## Every response
 
@@ -58,15 +59,7 @@ defmodule Emissary.Web.TinctureAssets do
 
   import Plug.Conn
 
-  @sdk_path Path.join(:code.priv_dir(:cyfr), "static/sdk/cyfr.js")
-  @external_resource @sdk_path
-  # arca:bypass-ok=C — compile-time embed of the SDK source. Runtime never
-  # reads from disk for this; mix recompiles the module if the file changes.
-  @sdk_source File.read!(@sdk_path)
-  @sdk_digest :sha256 |> :crypto.hash(@sdk_source) |> Base.encode16(case: :lower)
-
-  # The `<head>` start tag an entry page's injected tags follow.
-  @head_re ~r/(<head(?:\s[^>]*)?>)/
+  @sdk_digest :sha256 |> :crypto.hash(Compendium.tincture_sdk()) |> Base.encode16(case: :lower)
 
   # Compressed on the fly, so bounded: a larger file is sent as it is
   # stored rather than holding a request's CPU for it.
@@ -107,8 +100,7 @@ defmodule Emissary.Web.TinctureAssets do
   def serve(conn, %Sanctum.Context{} = ctx, tincture, file, opts) when is_list(file) do
     cache = Keyword.fetch!(opts, :cache)
 
-    with :ok <- servable(file),
-         {:ok, type} <- served_type(file) do
+    with {:ok, type} <- Compendium.tincture_served_type(file) do
       conn = headers(conn, cache)
       path = Enum.join(file, "/")
 
@@ -181,10 +173,6 @@ defmodule Emissary.Web.TinctureAssets do
   @spec canvas_sdk_path() :: String.t()
   def canvas_sdk_path, do: Prima.TinctureWire.page_prefix() <> "sdk/" <> @sdk_digest <> ".js"
 
-  @doc "The SDK's bytes, as `canvas_sdk_path/0` serves them: the bundle every tincture page holds."
-  @spec canvas_sdk() :: binary()
-  def canvas_sdk, do: @sdk_source
-
   @doc """
   A canvas's page: CYFR's prefix, `<!doctype html>`, `<base href="base">`
   and `<script src="sdk_src"></script>` in that order and with no nonce,
@@ -214,22 +202,6 @@ defmodule Emissary.Web.TinctureAssets do
   # ---------------------------------------------------------------------------
   # The file, and what it is served as
   # ---------------------------------------------------------------------------
-
-  defp servable(file) do
-    %{reserved_files: reserved} = Compendium.tincture_asset_rules()
-
-    cond do
-      file == [] -> :error
-      Enum.any?(file, &(&1 in reserved or String.starts_with?(&1, "."))) -> :error
-      Prima.PathSafety.validate_relative_path(Enum.join(file, "/")) != :ok -> :error
-      true -> :ok
-    end
-  end
-
-  defp served_type(file) do
-    extension = file |> List.last() |> Path.extname() |> String.downcase()
-    Map.fetch(Compendium.tincture_served_types(), extension)
-  end
 
   # Whether `path` is the tincture's entry page. Only a version that holds
   # pages has one: a desktop's entry is served at its own route, and a
@@ -283,7 +255,7 @@ defmodule Emissary.Web.TinctureAssets do
     case Arca.get(Sanctum.Context.actor(ctx), tincture.segments ++ file) do
       {:ok, content} ->
         nonce = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
-        content = if base, do: inject_head_tags(content, base, nonce), else: content
+        content = if base, do: Compendium.tincture_head_tags(content, base, nonce), else: content
 
         conn
         |> put_resp_header("content-security-policy", csp(tincture.manifest, nonce))
@@ -367,17 +339,5 @@ defmodule Emissary.Web.TinctureAssets do
       "." -> ""
       dir -> dir <> "/"
     end
-  end
-
-  # The tags follow the head tag through a function, never a replacement
-  # string: a string's `\\` and `\\N` are escapes, and the SDK's source
-  # holds backslashes that must reach the page as they are.
-  defp inject_head_tags(html, href, nonce) do
-    escaped_href = Plug.HTML.html_escape(href)
-
-    injection =
-      "\n<base href=\"#{escaped_href}\">\n<script nonce=\"#{nonce}\">#{@sdk_source}</script>"
-
-    Regex.replace(@head_re, html, &(&1 <> injection), global: false)
   end
 end

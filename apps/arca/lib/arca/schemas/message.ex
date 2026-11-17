@@ -37,9 +37,14 @@ defmodule Arca.Schemas.Message do
 
   @type t :: %__MODULE__{}
   # `tool_call`, `tool_result`, `compaction` and `turn_aborted` are the
-  # turn's own rows: the loop writes them through `Aqua.Tape`.
+  # turn's own rows: the loop writes them through `Aqua.Tape`. A
+  # `page_call` is a call a page in Aqua's browser made, which the host
+  # proposed as a step, and a `page_result` its answer: the turn's own
+  # rows too, which no model's request carries (`Aqua.PageCalls`). A
+  # `page_call`'s `resolved_at` is when its request ended unanswered
+  # (`Arca.TurnStorage.end_call/4`).
   @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted
-             opening pointer report)
+             opening pointer report page_call page_result)
   @statuses ~w(pending running approved declined error expired answered)
 
   @doc """

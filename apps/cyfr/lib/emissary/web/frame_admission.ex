@@ -199,7 +199,7 @@ defmodule Emissary.Web.FrameAdmission do
   def declaration(manifest) do
     case Compendium.tincture_declaration(manifest) do
       {:ok, declaration} -> {:ok, declaration}
-      {:error, _unreadable} -> {:error, undeclared("its declaration does not read")}
+      {:error, _unreadable} -> {:error, Prima.Refusal.undeclared("its declaration does not read")}
     end
   end
 
@@ -394,25 +394,6 @@ defmodule Emissary.Web.FrameAdmission do
       message: "This tincture changed since its frame opened — open it again"
     }
   end
-
-  @doc """
-  The refusal of what the tincture does not declare: a component, an
-  action, a stream, or, as a sentence, why it declares nothing it can
-  reach.
-  """
-  @spec undeclared(:component | :action | :stream | String.t()) :: Prima.Refusal.t()
-  def undeclared(:component),
-    do:
-      undeclared_refusal(:undeclared_component, "This tincture does not declare that component.")
-
-  def undeclared(:action),
-    do: undeclared_refusal(:undeclared_action, "This tincture does not declare that action.")
-
-  def undeclared(:stream),
-    do: undeclared_refusal(:undeclared_stream, "This tincture does not declare that stream.")
-
-  def undeclared(why) when is_binary(why),
-    do: undeclared_refusal(:undeclared, "This tincture declares nothing it can reach: #{why}.")
 
   defp undeclared_refusal(reason, message),
     do: %Prima.Refusal{class: :forbidden, reason: reason, message: message}

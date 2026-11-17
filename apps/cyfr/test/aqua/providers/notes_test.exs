@@ -926,6 +926,12 @@ defmodule Aqua.Providers.NotesTest do
       turn = turn_in!(ctx, work, [])
       assert {:ok, _} = write(ctx, turn, %{"content" => "Half done."})
       assert %{content: "Half done."} = notes_of(ctx, work)
+
+      # The deletion cancels the thread's own open turn, as a queued one with
+      # no root yet: the stand-in root this fixture named has no row.
+      {1, _} =
+        Arca.Repo.update_all(turn_row(ctx.athanor_id, turn.id), set: [root_execution_id: nil])
+
       assert {:ok, _} = Arca.ThreadStorage.delete(Context.actor(ctx), work.id)
 
       assert {:error, :not_found} = Arca.ThreadStorage.get(Context.actor(ctx), work.id)

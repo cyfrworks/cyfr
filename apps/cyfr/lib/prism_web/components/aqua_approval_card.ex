@@ -72,6 +72,10 @@ defmodule PrismWeb.AquaApprovalCard do
   the approval binds: what the page will read is on the card, not only in
   the call's details.
 
+  A card for a call a page in Aqua's browser made (`payload["purpose"]`
+  `page`, the purpose of the step it asks for, `Aqua.PageCalls`) says that
+  the page in the thread's window asks, not the agent.
+
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
   case (`:write`) stays calm and the loud styling is reserved for the loud
@@ -113,8 +117,8 @@ defmodule PrismWeb.AquaApprovalCard do
         ]}>
           {kind_label(@kind)}
         </span>
-        <span class="text-[11px] text-gray-500">
-          {@agent_label || "Aqua"} wants to
+        <span class="text-[11px] text-gray-500" data-test="approval-asker">
+          {asker(@payload, @agent_label)}
         </span>
         <%= if status(@status) == :pending do %>
           <span class="text-[10px] text-gray-600 ml-auto">awaiting confirmation</span>
@@ -201,8 +205,8 @@ defmodule PrismWeb.AquaApprovalCard do
             {if @kind in [:destructive, :external], do: "This will run", else: "Show details"}
           </summary>
           <div class="mt-1 px-2 py-1.5 bg-gray-950 border border-gray-800 rounded font-mono text-gray-400 break-all">
-            {@proposal["tool"]}.{@proposal["action"]}
-            <%= for {k, v} <- @proposal["args"] || %{} do %>
+            {runs(@proposal)}
+            <%= for {k, v} <- shown_args(@proposal) do %>
               <div class="ml-4 text-gray-500">
                 {k}: <span class="text-gray-400">{inspect(v)}</span>
               </div>
@@ -433,6 +437,24 @@ defmodule PrismWeb.AquaApprovalCard do
 
     {:ok, assign_new(socket, :limit, fn -> limit(socket.assigns.payload) end)}
   end
+
+  defp asker(%{"purpose" => "page"}, _agent_label), do: "The page in this thread's window asks to"
+
+  defp asker(_payload, agent_label), do: "#{agent_label || "Aqua"} wants to"
+
+  # What will run: a launch by the app it runs, never by the operation's
+  # name; any other call by its tool and action.
+  defp runs(%{"tool" => "execution", "action" => action, "args" => %{"reference" => ref}})
+       when action in ["run", "run_stream"] and is_binary(ref),
+       do: ref
+
+  defp runs(proposal), do: "#{proposal["tool"]}.#{proposal["action"]}"
+
+  defp shown_args(%{"tool" => "execution", "args" => %{"reference" => ref} = args})
+       when is_binary(ref),
+       do: Map.delete(args, "reference")
+
+  defp shown_args(proposal), do: proposal["args"] || %{}
 
   # A program's start whose card does not carry what it would run is
   # shown, never approved: no details, no card.

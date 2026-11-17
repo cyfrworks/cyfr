@@ -52,7 +52,8 @@ defmodule Arca.ThreadStorage do
   @room_kinds Thread.room_kinds()
 
   # The rows a person reads as posts: what a turn writes for itself
-  # (`tool_call`, `tool_result`, `compaction`, `turn_aborted`) is none.
+  # (`tool_call`, `tool_result`, `compaction`, `turn_aborted`, `page_call`,
+  # `page_result`) is none.
   @post_kinds ~w(text approval error system opening pointer report)
 
   # ---------------------------------------------------------------------------
@@ -66,6 +67,13 @@ defmodule Arca.ThreadStorage do
   """
   @spec room_kinds() :: [String.t()]
   def room_kinds, do: @room_kinds
+
+  @doc """
+  Whether `row` is one a person reads as a post: what a turn writes for
+  itself is drawn as its steps, never as a post (`messages/3`'s `posts:`).
+  """
+  @spec post?(map()) :: boolean()
+  def post?(%{kind: kind}), do: kind in @post_kinds
 
   @doc """
   The athanor's threads, most recently active first. `opts`: `:limit`
@@ -877,10 +885,11 @@ defmodule Arca.ThreadStorage do
   Delete a thread and its messages, and with a room its crew members'
   child threads, read under the athanor's lock a child's creation takes
   (`crew_thread/3`), so a child made during the deletion is in it or made
-  after it, when its room is gone. The children's open turns are
-  cancelled in the same transaction, recording no reply since the room
-  they would answer is going (`Arca.TurnStorage.cancel_open!/4`, under the
-  root's grant `attrs` carry). While a child's turn waits on a card the
+  after it, when its room is gone. Its open turns and the children's
+  are cancelled in the same transaction, recording no reply since the
+  room they would answer is going (`Arca.TurnStorage.cancel_open!/4`,
+  under the root's grant `attrs` carry), and answered for the caller's
+  runtime to stop: a turn of the thread paused on a card is one. While a child's turn waits on a card the
   deletion is refused `{:error, {:child_awaits_card, member}}`, so the
   person decides there first.
 
@@ -984,7 +993,7 @@ defmodule Arca.ThreadStorage do
       cancel = Map.put_new(attrs, :error, "the room was deleted")
 
       cancelled =
-        Enum.flat_map(children, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
+        Enum.flat_map(ids, &Arca.TurnStorage.cancel_open!(actor, &1, cancel, :silent))
 
       stopped = forget!(actor, ids, readers, attrs)
 
@@ -1075,7 +1084,7 @@ defmodule Arca.ThreadStorage do
     carried =
       from(m in Message,
         where: m.athanor_id == ^athanor_id and m.thread_id in ^reader_ids,
-        where: m.kind == "tool_result" and like(m.payload, ^"%\"threads\"%"),
+        where: m.kind in ["tool_result", "page_result"] and like(m.payload, ^"%\"threads\"%"),
         select: {m.id, m.payload}
       )
       |> Repo.all()

@@ -18,6 +18,7 @@ defmodule Cyfr.GenServerCatchallTest do
   # Probed live: named, started by the app under test.
   @genservers [
     {Aqua.Loop.Worker, "Loop.Worker"},
+    {Aqua.PageCalls, "PageCalls"},
     {Arca.Cache.Sweeper, "Sweeper"},
     {Cyfr.TelemetryBridge, "TelemetryBridge"},
     {Cyfr.StandingWatch, "StandingWatch"},

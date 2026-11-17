@@ -42,6 +42,7 @@ defmodule Cyfr.ApplicationTest do
     Aqua.ScheduleNotes => 5_000,
     Aqua.ScheduleTurns => 5_000,
     Aqua.Crew => 5_000,
+    Aqua.PageCalls => 5_000,
     Aqua.Status => 5_000,
     Aqua.Loop.Worker => 5_000,
     Aqua.TaskSupervisor => 30_000,
@@ -288,6 +289,7 @@ defmodule Cyfr.ApplicationTest do
                Aqua.Crew,
                Aqua.WorkerTree,
                Aqua.RunnerTree,
+               Aqua.PageCalls,
                Aqua.Status
              ]},
             {Emissary.Supervisor, [Emissary.External.ServerTree, Emissary.TaskSupervisor]}

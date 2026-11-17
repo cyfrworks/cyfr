@@ -60,6 +60,47 @@ defmodule PrismWeb.AquaApprovalCardTest do
     end
   end
 
+  test "a card for a page's call says the page in the thread's window asks; any other, the agent" do
+    asker = fn html ->
+      [said] =
+        Regex.run(~r/data-test="approval-asker"[^>]*>(.*?)<\/span>/s, html,
+          capture: :all_but_first
+        )
+
+      String.trim(said)
+    end
+
+    page = card(%{"action_kind" => "execute", "purpose" => "page"}, agent_label: "Aqua")
+    assert asker.(page) == "The page in this thread&#39;s window asks to"
+    refute page =~ "wants to"
+
+    for intent <- [%{"purpose" => "chat"}, %{}] do
+      assert asker.(card(Map.put(intent, "action_kind", "execute"), agent_label: "Aqua")) ==
+               "Aqua wants to"
+    end
+
+    assert asker.(card(%{"action_kind" => "execute"})) == "Aqua wants to"
+  end
+
+  test "a launch's card names the app it runs and never the operation, a page's as a model's" do
+    {:ok, launch} =
+      Aqua.Loop.Binding.resolve("execution.run", %{
+        "reference" => "reagent:local.weather:1.0.0",
+        "input" => %{"operation" => "go", "params" => %{}}
+      })
+
+    intent = Aqua.Loop.Policy.card(launch, sources: [Prima.Source.outside("browser")])
+    assert intent["title"] == "Run the app weather"
+
+    for purpose <- ["page", "chat"] do
+      html = card(Map.put(intent, "purpose", purpose), agent_label: "Aqua")
+      assert html =~ "Run the app weather"
+      assert html =~ "reagent:local.weather:1.0.0"
+      refute html =~ "execution.run"
+      refute html =~ "execution</span>"
+    end
+  end
+
   test "an action declared standing: false offers no standing answer" do
     assert %{once: true, run: false, until: false, always: false, schedule: false} =
              offers(card(%{"action_kind" => "write", "standing" => false}))

@@ -182,15 +182,17 @@ func (c *cdp) dispatch(data []byte) {
 		}
 		return
 	}
-	if m.SessionID == "" {
-		if m.Method == "Target.detachedFromTarget" {
-			var detached struct {
-				SessionID string `json:"sessionId"`
-			}
-			if json.Unmarshal(m.Params, &detached) == nil {
-				c.detach(detached.SessionID)
-			}
+	// A target attached to a window's session is reported detached on that
+	// session, a window's own on the browser's.
+	if m.Method == "Target.detachedFromTarget" {
+		var detached struct {
+			SessionID string `json:"sessionId"`
 		}
+		if json.Unmarshal(m.Params, &detached) == nil {
+			c.detach(detached.SessionID)
+		}
+	}
+	if m.SessionID == "" {
 		if c.onTarget != nil {
 			c.onTarget(m.Method, m.Params)
 		}
@@ -301,6 +303,18 @@ func (w *watch) drain() []cdpEvent {
 	events := w.events
 	w.events = nil
 	return events
+}
+
+// queued says whether an event the watch holds, not yet taken, matches.
+func (w *watch) queued(match func(cdpEvent) bool) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, event := range w.events {
+		if match(event) {
+			return true
+		}
+	}
+	return false
 }
 
 // next answers the next matching event, the error that ended the

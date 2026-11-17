@@ -730,7 +730,11 @@ defmodule Arca.TurnStorage do
   # work when none said anything; until then it waits on its person while
   # a card waits, and is at work otherwise. A turn that reported its work
   # done or failed has none left to run, though its row stays open until
-  # it ends; a request it asked a crew member is left until answered.
+  # it ends; a request it asked a crew member is left until answered. A
+  # turn a page's call opened (`page_call`), which asks no model, is not
+  # the thread's work and never speaks for it: it keeps the thread at
+  # work no more than it records an outcome, while a card it raises waits
+  # on the person as any card does.
   # arca:db-raise-ok inside the caller's transaction
   defp work_state!(athanor_id, %Thread{kind: "workspace"} = workspace) do
     threads =
@@ -746,10 +750,18 @@ defmodule Arca.TurnStorage do
         where: a.status == "pending"
       )
 
+    pages =
+      from(m in Message,
+        where: m.athanor_id == ^athanor_id and m.thread_id == ^workspace.id,
+        where: m.kind == "page_call",
+        select: m.id
+      )
+
     turns_run =
       from(t in Turn,
         where: t.athanor_id == ^athanor_id and t.thread_id in subquery(threads),
-        where: t.status in ^@open and t.id not in ^reported_turns(athanor_id, workspace.id)
+        where: t.status in ^@open and t.id not in ^reported_turns(athanor_id, workspace.id),
+        where: is_nil(t.message_id) or t.message_id not in subquery(pages)
       )
 
     asked =
@@ -876,12 +888,18 @@ defmodule Arca.TurnStorage do
       %Thread{id: id, workspace_state: state} = workspace
       when id == turn.thread_id and status in ["failed", "uncertain"] and
              state in ["open", "needs_you"] ->
-        if reported?(athanor_id, workspace.id, turn.id),
-          do: settle_work!(athanor_id, workspace),
-          else:
+        cond do
+          page_call?(athanor_id, turn) ->
+            settle_work!(athanor_id, workspace)
+
+          reported?(athanor_id, workspace.id, turn.id) ->
+            settle_work!(athanor_id, workspace)
+
+          true ->
             report!(athanor_id, workspace, turn, "failed", %{
               summary: Map.get(attrs, :error) || ""
             })
+        end
 
       %Thread{workspace_state: state} = workspace when state in ["open", "needs_you"] ->
         settle_work!(athanor_id, workspace)
@@ -890,6 +908,19 @@ defmodule Arca.TurnStorage do
         :ok
     end
   end
+
+  # A turn a page's call opened: no work of the thread's, which reports
+  # nothing of it (`work_state!/2`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp page_call?(athanor_id, %Turn{message_id: id}) when is_binary(id),
+    do:
+      Arca.Repo.exists?(
+        from(m in Message,
+          where: m.athanor_id == ^athanor_id and m.id == ^id and m.kind == "page_call"
+        )
+      )
+
+  defp page_call?(_athanor_id, %Turn{}), do: false
 
   # A person's post in a finished workspace thread opens it again.
   # arca:db-raise-ok inside the caller's transaction
@@ -1162,7 +1193,9 @@ defmodule Arca.TurnStorage do
   over is answered `{:error, :already_finished}`; a turn with no root yet
   (still `accepted`) closes on its own. A turn with a steer past its
   boundary refuses `completed` with `{:error, :steer_pending}`: its loop
-  goes on to answer the steer. A turn with a root attempt ends under its
+  goes on to answer the steer; one with a page's call the host proposed
+  in it and nobody dispatched yet refuses it with
+  `{:error, :call_pending}`: its loop goes on to dispatch the call. A turn with a root attempt ends under its
   root's grant (the moduledoc's "The root's grant"), and a completion
   names one whatever the turn holds. Event `turn.<status>`.
   """
@@ -1181,6 +1214,9 @@ defmodule Arca.TurnStorage do
 
         if status == "completed" and steer_rows(athanor_id, turn) != [],
           do: Arca.Repo.rollback(:steer_pending)
+
+        if status == "completed" and calls_pending?(athanor_id, turn),
+          do: Arca.Repo.rollback(:call_pending)
 
         ended!(athanor_id, turn, status, grant, attrs, :reply)
       end)
@@ -1347,6 +1383,9 @@ defmodule Arca.TurnStorage do
 
   def cancel_open!(%Prima.Actor{}, _thread_id, _attrs, _reply),
     do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.cancel_open!/4")
+
+  defp only_steps(query, nil), do: query
+  defp only_steps(query, ids) when is_list(ids), do: where(query, [s], s.id in ^ids)
 
   defp only(query, nil), do: query
   defp only(query, ids) when is_list(ids), do: from(t in query, where: t.id in ^ids)
@@ -1799,12 +1838,17 @@ defmodule Arca.TurnStorage do
   (`Prima.TurnState.opening_states/0`, default `proposed`), `:fence`,
   and the sources the step opens with: `:sources` (`Prima.Source`s) and
   `:sources_from` (the ids of the athanor's turns whose words the rows the
-  step sends carry, each turn's sources joined as it stands). A step is
+  step sends carry, each turn's sources joined as it stands), and `:call`:
+  the row the step carries its call in (`:kind`, `:content`, `:payload`,
+  `:client_id`), written in the same transaction as a row of the turn's
+  thread with the turn's agent as its sender, and named by the step's
+  `message_id` (a page's call the host proposes, `page_call`). A step is
   recorded on a running turn only; any other state or turn is
-  `{:error, :illegal_transition}`.
+  `{:error, :illegal_transition}`. A step named by a page's call whose
+  request ended (`end_call/4`) is `{:error, :call_ended}`.
   """
   @spec put_step(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def put_step(%Prima.Actor{athanor_id: athanor_id}, turn_id, attrs)
+  def put_step(%Prima.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.put_step", fn ->
       Arca.Repo.locking_transaction(fn ->
@@ -1814,14 +1858,49 @@ defmodule Arca.TurnStorage do
         if Map.get(attrs, :dispatch_state, "proposed") not in Prima.TurnState.opening_states(),
           do: Arca.Repo.rollback(:illegal_transition)
 
+        if ended_call?(athanor_id, attrs), do: Arca.Repo.rollback(:call_ended)
+
         turn = join_sources!(athanor_id, turn, opened_sources!(athanor_id, turn, attrs))
-        insert_step!(athanor_id, turn, attrs)
+        insert_step!(athanor_id, turn, carried!(actor, athanor_id, turn, attrs))
       end)
     end)
     |> Arca.Data.project()
   end
 
   def put_step(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  # Whether the row a step is named by is a page's call whose request
+  # ended, read under the turn's lock `end_call/4` takes too.
+  # arca:db-raise-ok inside the caller's transaction
+  defp ended_call?(athanor_id, %{message_id: id}) when is_binary(id) do
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.id == ^id,
+      where: m.kind == "page_call" and not is_nil(m.resolved_at)
+    )
+    |> Arca.Repo.exists?()
+  end
+
+  defp ended_call?(_athanor_id, _attrs), do: false
+
+  # The row a step's call is carried in, when the step brings its own.
+  # arca:db-raise-ok inside the caller's transaction
+  defp carried!(actor, athanor_id, %Turn{} = turn, %{call: %{} = call} = attrs) do
+    row =
+      Arca.ThreadStorage.insert_message!(actor, thread!(athanor_id, turn.thread_id), %{
+        author: Message.agent_author(),
+        sent_by: turn.agent,
+        kind: Map.fetch!(call, :kind),
+        content: Map.get(call, :content, ""),
+        payload: Map.get(call, :payload),
+        client_id: Map.get(call, :client_id),
+        turn_id: turn.id,
+        execution_id: turn.root_execution_id
+      })
+
+    attrs |> Map.delete(:call) |> Map.put(:message_id, row.id)
+  end
+
+  defp carried!(_actor, _athanor_id, _turn, attrs), do: attrs
 
   @doc """
   Persist a model response before any of its calls run: the model step
@@ -2135,8 +2214,9 @@ defmodule Arca.TurnStorage do
 
   @doc """
   Close every unstarted step of a turn as `skipped` with a synthetic
-  result, and invalidate their pending approvals. Answers the steps
-  skipped.
+  result, and invalidate their pending approvals; with `attrs[:only]`,
+  the ids of the steps to skip, those of them still unstarted and no
+  other. Answers the steps skipped.
   """
   @spec skip_steps(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, [map()]} | {:error, term()}
@@ -2149,7 +2229,7 @@ defmodule Arca.TurnStorage do
         Arca.Repo.locking_transaction(fn ->
           turn = own!(athanor_id, turn_id, attrs)
           work_lock!(athanor_id, turn)
-          skip_proposed!(actor, athanor_id, turn, reason)
+          skip_proposed!(actor, athanor_id, turn, reason, Map.get(attrs, :only))
         end)
       end)
     end)
@@ -2158,16 +2238,104 @@ defmodule Arca.TurnStorage do
 
   def skip_steps(%Prima.Actor{}, _turn_id, _reason, _attrs), do: {:error, :no_athanor}
 
+  @doc """
+  The page's call `request` in thread `thread_id` ended unanswered,
+  however it ended: its `page_call` row records the end (`resolved_at`),
+  and its step, while still proposed, is skipped with `reason` and its
+  approval invalidated, in one transaction under its turn's lock. From
+  then on no step of that call is recorded (`put_step/3` refuses
+  `{:error, :call_ended}`) and none is dispatched, since none stays
+  proposed: whichever of the end, a step's recording and its dispatch
+  takes the turn's lock first, the others read what it wrote. The end is
+  no transition of the turn, so it holds no fence. Answers the call's
+  turn and the steps skipped, or `nil` for a request with no row, a call
+  that waits in its runner and is no step yet.
+  """
+  @spec end_call(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
+          {:ok, %{turn_id: String.t(), skipped: [map()]} | nil} | {:error, term()}
+  def end_call(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, request, reason)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_binary(request) and is_binary(reason) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.end_call", fn ->
+      with_seq_retry(fn ->
+        Arca.Repo.locking_transaction(fn ->
+          case call_row(athanor_id, thread_id, request) do
+            nil -> nil
+            row -> end_call!(actor, athanor_id, row, reason)
+          end
+        end)
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def end_call(%Prima.Actor{}, _thread_id, _request, _reason), do: {:error, :no_athanor}
+
+  # A page's call's row in its thread, named by its request.
   # arca:db-raise-ok inside the caller's transaction
-  defp skip_proposed!(actor, athanor_id, %Turn{} = turn, reason) do
-    steps =
-      Arca.Repo.all(
-        from(s in TurnStep,
-          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
-          where: s.dispatch_state == "proposed",
-          order_by: [asc: s.seq]
-        )
+  defp call_row(athanor_id, thread_id, request) do
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.thread_id == ^thread_id,
+      where: m.client_id == ^request and m.kind == "page_call"
+    )
+    |> Arca.Repo.one()
+  end
+
+  # The turn a call's row opened, or the one it is a step of, locked; the
+  # row marked ended; its proposed step skipped.
+  # arca:db-raise-ok inside the caller's transaction
+  defp end_call!(actor, athanor_id, %Message{} = row, reason) do
+    turn = locked_turn!(athanor_id, call_turn_id(athanor_id, row))
+    work_lock!(athanor_id, turn)
+
+    from(m in Message,
+      where: m.athanor_id == ^athanor_id and m.id == ^row.id and is_nil(m.resolved_at)
+    )
+    |> Arca.Repo.update_all(set: [resolved_at: DateTime.utc_now()])
+
+    proposed =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+        where: s.message_id == ^row.id and s.dispatch_state == "proposed",
+        select: s.id
       )
+      |> Arca.Repo.all()
+
+    skipped =
+      if proposed == [], do: [], else: skip_proposed!(actor, athanor_id, turn, reason, proposed)
+
+    %{turn_id: turn.id, skipped: skipped}
+  end
+
+  defp call_turn_id(athanor_id, %Message{id: id, turn_id: turn_id}) do
+    Arca.Repo.one(
+      from(t in Turn, where: t.athanor_id == ^athanor_id and t.message_id == ^id, select: t.id)
+    ) || turn_id || Arca.Repo.rollback(:turn_not_found)
+  end
+
+  # A turn's row, held until the caller's transaction ends, whoever holds
+  # the turn.
+  # arca:db-raise-ok inside the caller's transaction
+  defp locked_turn!(athanor_id, turn_id) do
+    from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> Arca.Repo.rollback(:turn_not_found)
+      turn -> turn
+    end
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp skip_proposed!(actor, athanor_id, %Turn{} = turn, reason, only \\ nil) do
+    steps =
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+        where: s.dispatch_state == "proposed",
+        order_by: [asc: s.seq]
+      )
+      |> only_steps(only)
+      |> Arca.Repo.all()
 
     Enum.map(steps, fn step ->
       if step.approval_id do
@@ -3205,7 +3373,7 @@ defmodule Arca.TurnStorage do
           Arca.ThreadStorage.insert_message!(actor, thread, %{
             author: Message.system_author(),
             sent_by: turn.agent,
-            kind: "tool_result",
+            kind: result_kind(step),
             content: Map.get(result, :content, ""),
             payload: result_payload(result, step, Map.get(attrs, :sources, [])),
             turn_id: turn.id,
@@ -3244,6 +3412,11 @@ defmodule Arca.TurnStorage do
 
     %{step: step!(athanor_id, step.id), result: result}
   end
+
+  # A page's call is answered in a row of its own, which no model's
+  # request carries, as its call is.
+  defp result_kind(%TurnStep{purpose: "page"}), do: "page_result"
+  defp result_kind(%TurnStep{}), do: "tool_result"
 
   # A result row's payload: the call's own, the step it closes, and the
   # threads its answer carried, by the thread sources the step joins
@@ -3482,6 +3655,18 @@ defmodule Arca.TurnStorage do
       where: t.athanor_id == ^athanor_id and t.thread_id == ^thread_id,
       where: t.status in ^@terminal,
       select: t.id
+    )
+  end
+
+  # A page's call the host proposed into the turn that is still to be
+  # dispatched, its card's answer awaited among them.
+  # arca:db-raise-ok inside the caller's transaction
+  defp calls_pending?(athanor_id, %Turn{} = turn) do
+    Arca.Repo.exists?(
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id,
+        where: s.purpose == "page" and s.dispatch_state == "proposed"
+      )
     )
   end
 

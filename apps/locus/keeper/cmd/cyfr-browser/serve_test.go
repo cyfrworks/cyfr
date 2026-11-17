@@ -54,7 +54,7 @@ func fakeChrome(commands io.Reader, answers io.Writer, closes chan<- string) {
 			reply(map[string]any{"targetId": "T1"})
 		case "Target.attachToTarget":
 			reply(map[string]any{"sessionId": "S1"})
-		case "Page.enable", "Page.setLifecycleEventsEnabled":
+		case "Page.enable", "Page.setLifecycleEventsEnabled", "Network.enable", "Fetch.enable", "Target.setAutoAttach":
 			reply(map[string]any{})
 		case "Page.getFrameTree":
 			reply(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "T1"}}})

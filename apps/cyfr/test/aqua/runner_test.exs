@@ -1961,4 +1961,688 @@ defmodule Aqua.RunnerTest do
     assert_receive {:DOWN, ^handler_ref, :process, ^handler, :cancelled}, 1_000
     assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat")) == 1
   end
+
+  # A page Aqua put into the workspace thread's window calls CYFR, and the
+  # call reaches the thread's runner as `Aqua.PageCalls` hands it on.
+  describe "a page's calls" do
+    setup %{ctx: ctx} do
+      workspace = workspace!(ctx)
+      :ok = Runner.subscribe(workspace.id, ctx.athanor_id)
+      {:ok, workspace: workspace}
+    end
+
+    test "a call during a running turn is a step of that turn, dispatched once while the " <>
+           "model still answers",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put"), {:probe, self()}, reply("done")])
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua look around")
+      assert_receive {:scripted_probe, model, _}, 60_000
+      runner = Runner.whereis(ws.id)
+      call = page_call(ctx, put, "component.list")
+      assert {:ok, ^runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+
+      # It closes while the model's step is still open: it waited for no answer.
+      wait_until(fn -> match?([_, %{dispatch_state: "closed"}], steps!(ctx, id)) end, 30_000)
+      assert [%{kind: "model", dispatch_state: "dispatched"}, _page] = steps!(ctx, id)
+      send(model, :continue)
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, id)
+      assert [model_step(ctx, id, 1, "text"), page_step(2, id, call, "ok")] == steps!(ctx, id)
+      [carried, answered] = page_rows!(ctx, ws.id)
+      assert carried == called(id, call)
+      assert answered == answered(ctx, id, call, 200, answered.content)
+      assert %{"ok" => true, "result" => _} = Jason.decode!(answered.content)
+      assert chats() == 2
+    end
+
+    test "a running turn does not end while a page's step in it is open: its card pauses " <>
+           "the turn, and the yes runs the call once with no model asked again",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put"), {:probe, self()}, reply("done")])
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua wait here")
+      assert_receive {:scripted_probe, model, _}, 60_000
+      call = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      {:ok, turn} = Tape.turn(ctx, id)
+      wait_until(fn -> match?({:ok, [_]}, Tape.pending_approvals(ctx, turn)) end, 30_000)
+
+      # The model's answer calls nothing, and the turn waits on the page's card.
+      send(model, :continue)
+
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^id, reason: :approval}},
+                     60_000
+
+      assert {:ok, %{status: "paused", paused_reason: "approval"}} = Tape.turn(ctx, id)
+
+      assert [model_step(ctx, id, 1, "text"), page_step(2, id, call, nil, "proposed", "pending")] ==
+               steps!(ctx, id)
+
+      {:ok, [approval]} = Tape.pending_approvals(ctx, turn)
+      {:ok, %{decision: "approved"}} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, id)
+
+      assert [model_step(ctx, id, 1, "text"), page_step(2, id, call, "ok", "closed", "approved")] ==
+               steps!(ctx, id)
+
+      [carried, answered] = page_rows!(ctx, ws.id)
+      assert carried == called(id, call)
+      assert answered == answered(ctx, id, call, 200, answered.content)
+      assert {:ok, %{content: "x"}} = Aqua.Notes.read(ctx, "from-page")
+      assert chats() == 2
+    end
+
+    test "a call while the turn waits on a card writes no row and no step, and becomes a " <>
+           "step of that turn when it runs again after the decision",
+         %{ctx: ctx, workspace: ws} do
+      script!([
+        reply("put"),
+        call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}),
+        {:probe, self()},
+        reply("kept")
+      ])
+
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua keep it")
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^id}}, 60_000
+      runner = Runner.whereis(ws.id)
+      before = tape_snapshot(ctx, ws.id, [put.id, id])
+
+      call = page_call(ctx, put, "component.list")
+      assert {:ok, ^runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      _ = :sys.get_state(runner)
+      assert tape_snapshot(ctx, ws.id, [put.id, id]) == before
+
+      {:ok, turn} = Tape.turn(ctx, id)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, turn)
+      {:ok, %{decision: "approved"}} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+      # The turn runs again and its model answers: the call is a step of it
+      # by then, whether it ran before the model's round or beside it.
+      assert_receive {:scripted_probe, model, _}, 60_000
+      wait_until(fn -> Enum.any?(steps!(ctx, id), &(&1.purpose == "page")) end, 30_000)
+      send(model, :continue)
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, id)
+      [first, keep | rest] = steps!(ctx, id)
+      assert first == model_step(ctx, id, 1, nil)
+      assert %{tool: "notes", action: "keep", outcome: "ok", card: "approved"} = keep
+      [page_seq] = for %{purpose: "page", seq: seq} <- rest, do: seq
+      [model_seq] = for %{kind: "model", seq: seq} <- rest, do: seq
+      assert Enum.sort([page_seq, model_seq]) == [3, 4]
+      assert page_step(page_seq, id, call, "ok") in rest
+      assert model_step(ctx, id, model_seq, "text") in rest
+
+      {:ok, decided} = Tape.approval(ctx, approval.id)
+      [page] = for %{purpose: "page"} = step <- raw_steps!(ctx, id), do: step
+      assert DateTime.compare(page.started_at, decided.decided_at) != :lt
+      [carried, answered] = page_rows!(ctx, ws.id)
+      assert carried == called(id, call)
+      assert answered == answered(ctx, id, call, 200, answered.content)
+      assert chats() == 3
+    end
+
+    test "with no turn running, a call starts a turn that asks no model, holds the thread's " <>
+           "claim, runs as the putting turn's person under that turn's origin and ends " <>
+           "completed with the wire's answer",
+         %{ctx: ctx, workspace: ws} do
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, "catalyst:local.http"],
+         script: [reply("put"), {:probe, self()}, %{"status" => 200, "body" => "x"}]}
+      )
+
+      # The page was put by the person's turn over the API.
+      put = put!(api_line(ctx), ws)
+      assert %{origin: "programmatic", requested_by: person, agent: "aqua"} = put
+      assert person == ctx.user_id
+      # It asks no model, so its brain is not described for it: with the
+      # description the putting turn cached forgotten, none is asked.
+      Arca.Cache.delete_match({:model_caps, ctx.athanor_id, :_, :_, :_})
+      described = Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "describe"))
+      call = page_call(ctx, put, "http.get", %{"url" => "https://example.test/x"})
+      assert {:ok, runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      assert runner == Runner.whereis(ws.id)
+      assert_receive {:scripted_probe, http, _}, 60_000
+
+      assert described ==
+               Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "describe"))
+
+      assert %{running: true, turn_id: id, turn_user: ^person, queued: 0} =
+               Runner.state(ws.id, ctx.athanor_id)
+
+      {:ok, running} = Tape.turn(ctx, id)
+      refute id == put.id
+
+      assert %{
+               status: "running",
+               requested_by: ^person,
+               origin: "programmatic",
+               agent: "aqua",
+               sent_by: "aqua"
+             } = running
+
+      assert {:ok, %{kind: "page_call", client_id: request}} =
+               Tape.message(ctx, running.message_id)
+
+      assert request == call.request
+      assert {:ok, %{turn_id: ^id, live_peer?: false}} = Tape.claim_holder(ctx, ws.id)
+
+      send(http, :continue)
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed", error: nil} = ended} = Tape.turn(ctx, id)
+      assert [page_step(1, id, call, "ok")] == steps!(ctx, id)
+
+      # It started with the sources of the turn that put the page, and the
+      # page's own.
+      {:ok, put} = Tape.turn(ctx, call.put_turn_id)
+      held = Jason.decode!(ended.sources)
+      assert [_ | _] = Jason.decode!(put.sources)
+      assert Jason.decode!(put.sources) -- held == []
+      assert %{"class" => "outside", "name" => "browser"} in held
+      [carried, answered] = page_rows!(ctx, ws.id)
+      assert carried == called(id, call)
+      assert answered == answered(ctx, id, call, 200, answered.content)
+
+      # The page is answered the fetch's data, as the endpoint answers it.
+      assert Jason.decode!(answered.content) ==
+               Prima.TinctureWire.result(%{"body" => "x", "status" => 200})
+
+      assert {:ok, %{turn_id: nil}} = Tape.claim_holder(ctx, ws.id)
+      # The put's model run is the only one.
+      assert chats() == 1
+    end
+
+    test "a second turn never runs beside one: a person's message sent while that work " <>
+           "waits on a card is queued behind it",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put"), reply("hi")])
+      put = put!(ctx, ws)
+      call = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work, reason: :approval}},
+                     60_000
+
+      assert {:ok, %{admitted: :turn, turn_id: line}} =
+               Runner.send_message(ctx, ws.id, "@aqua hi")
+
+      assert ^runner = Runner.whereis(ws.id)
+
+      assert %{running: false, paused: true, turn_id: ^work, queued: 1} =
+               Runner.state(ws.id, ctx.athanor_id)
+
+      assert {:ok, %{status: "accepted"}} = Tape.turn(ctx, line)
+      assert [] = steps!(ctx, line)
+
+      {:ok, paused} = Tape.turn(ctx, work)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      {:ok, %{decision: "approved"}} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      await_ended!(ctx, line)
+
+      assert {:ok, %{status: "completed"} = done} = Tape.turn(ctx, work)
+      assert {:ok, %{status: "completed"} = answered} = Tape.turn(ctx, line)
+      assert DateTime.compare(answered.accepted_at, done.ended_at) == :lt
+      [%{started_at: started}] = raw_steps!(ctx, line)
+      assert DateTime.compare(started, done.ended_at) != :lt
+
+      assert [page_step(1, work, call, "ok", "closed", "approved")] == steps!(ctx, work)
+
+      assert [model_step(ctx, line, 1, "text")] == steps!(ctx, line)
+      assert {:ok, %{content: "x"}} = Aqua.Notes.read(ctx, "from-page")
+      assert chats() == 2
+    end
+
+    test "a full queue of waiting calls refuses the next one :busy, and it never becomes a step",
+         %{ctx: ctx, workspace: ws} do
+      script!([
+        reply("put"),
+        call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}),
+        reply("kept")
+      ])
+
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua keep it")
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^id}}, 60_000
+      before = tape_snapshot(ctx, ws.id, [put.id, id])
+
+      waiting = for _ <- 1..8, do: page_call(ctx, put, "component.list")
+      for call <- waiting, do: assert({:ok, _} = Runner.page_call(ws.id, ctx.athanor_id, call))
+      refused = page_call(ctx, put, "component.list")
+      assert {:error, :busy} = Runner.page_call(ws.id, ctx.athanor_id, refused)
+      assert tape_snapshot(ctx, ws.id, [put.id, id]) == before
+
+      {:ok, turn} = Tape.turn(ctx, id)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, turn)
+      {:ok, %{decision: "approved"}} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, id)
+
+      # The eight ran in the turn that runs again, each once, beside its
+      # model's answer or before it.
+      {pages, [first, keep, last]} = Enum.split_with(steps!(ctx, id), &(&1.purpose == "page"))
+      assert first == model_step(ctx, id, 1, nil)
+      assert %{seq: 2, tool: "notes", action: "keep", outcome: "ok", card: "approved"} = keep
+      assert last == model_step(ctx, id, last.seq, "text")
+      by_key = Map.new(pages, &{&1.idempotency_key, &1})
+      assert map_size(by_key) == 8
+
+      for call <- waiting do
+        step = Map.fetch!(by_key, "page_call:#{id}:#{call.request}")
+        assert step == page_step(step.seq, id, call, "ok")
+      end
+
+      rows = Threads.messages(Sanctum.Context.actor(ctx), ws.id)
+      refute Enum.any?(rows, &(&1.client_id == refused.request))
+      refute Enum.any?(rows, &(Tape.payload(&1)["tool_call_id"] == refused.request))
+    end
+
+    test "a card a page's call raises makes its workspace thread wait on the person, and the " <>
+           "decision settles it back to what Aqua's work left",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put")])
+      put = put!(ctx, ws)
+
+      # Aqua's own work left the thread done.
+      {:ok, %{turn: done}} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(ctx), ws.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "and report"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+        })
+
+      {:ok, _} = Tape.report_workspace(ctx, done, "done", %{summary: "Done."})
+      {:ok, _} = Tape.finish(ctx, done, "cancelled", %{error: "stopped"})
+      before = thread_state(ctx, ws.id)
+      assert before == "done"
+
+      keep = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, keep)
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work}}, 60_000
+      wait_until(fn -> thread_state(ctx, ws.id) == "needs_you" end)
+
+      {:ok, paused} = Tape.turn(ctx, work)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :declined})
+      wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, work)) end)
+      assert thread_state(ctx, ws.id) == before
+    end
+
+    test "deleting the thread stops the work: the turn is cancelled, its card withdrawn, the " <>
+           "waiting call dropped and the runner gone",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put")])
+      put = put!(ctx, ws)
+      keep = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, runner} = Runner.page_call(ws.id, ctx.athanor_id, keep)
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work}}, 60_000
+      waiting = page_call(ctx, put, "component.list")
+      assert {:ok, ^runner} = Runner.page_call(ws.id, ctx.athanor_id, waiting)
+      {:ok, paused} = Tape.turn(ctx, work)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      watched = Process.monitor(runner)
+
+      assert {:ok, %{deleted: true}} =
+               Aqua.Providers.Thread.handle("thread", ctx, %{
+                 "action" => "delete",
+                 "thread" => ws.id
+               })
+
+      await_retired(runner, watched)
+      # The registry lets a name go on its own monitor of the runner.
+      wait_until(fn -> Runner.whereis(ws.id) == nil end)
+      assert {:error, :not_found} = Tape.thread(ctx, ws.id)
+      assert {:error, :not_found} = Tape.turn(ctx, work)
+      assert [] = Threads.messages(Sanctum.Context.actor(ctx), ws.id)
+      assert {:error, _gone} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
+      assert chats() == 1
+    end
+
+    test "a turn that lost its fence writes no step for a page's call", %{
+      ctx: ctx,
+      workspace: ws
+    } do
+      script!([reply("put"), {:probe, self()}, reply("never read")])
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua look around")
+      assert_receive {:scripted_probe, _model, _}, 60_000
+      runner = Runner.whereis(ws.id)
+
+      # Another holder takes the turn: its fence rises under the loop.
+      {:ok, running} = Tape.turn(ctx, id)
+      {:ok, taken} = Tape.supersede(ctx, running)
+      assert taken.fence > running.fence
+      before = tape_snapshot(ctx, ws.id, [put.id, id])
+
+      call = page_call(ctx, put, "component.list")
+      assert {:ok, ^runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      _ = :sys.get_state(runner)
+      assert tape_snapshot(ctx, ws.id, [put.id, id]) == before
+    end
+
+    test "a stop drops the calls waiting behind the turn: none becomes a step of the next one",
+         %{ctx: ctx, workspace: ws} do
+      script!([
+        reply("put"),
+        call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}),
+        reply("again")
+      ])
+
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua keep it")
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^id}}, 60_000
+      call = page_call(ctx, put, "component.list")
+      assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+
+      assert :ok = Runner.stop_turn(ctx, ws.id)
+      assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, id)
+
+      {:ok, %{turn_id: next}} = Runner.send_message(ctx, ws.id, "@aqua again")
+      await_ended!(ctx, next)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, next)
+      assert [model_step(ctx, next, 1, "text")] == steps!(ctx, next)
+      assert [] = page_rows!(ctx, ws.id)
+    end
+
+    test "a call that comes as the running turn ends opens work of its own, which still " <>
+           "holds it: its request ending withdraws its card",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put"), {:probe, self()}, reply("never recorded")])
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua look around")
+      assert_receive {:scripted_probe, model, _}, 60_000
+
+      # The turn's row ends before its loop's end reaches the runner.
+      {:ok, running} = Tape.turn(ctx, id)
+      {:ok, _} = Tape.finish(ctx, running, "cancelled", %{error: "stopped"})
+      call = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      send(model, :continue)
+
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work}}, 60_000
+      refute work == id
+      assert [page_step(1, work, call, nil, "proposed", "pending")] == steps!(ctx, work)
+      {:ok, paused} = Tape.turn(ctx, work)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+
+      assert :ok = Runner.page_call_ended(ws.id, ctx.athanor_id, call.request)
+      assert {:ok, %{status: "invalidated"}} = Tape.approval(ctx, approval.id)
+      await_ended!(ctx, work)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, work)
+      assert [page_step(1, work, call, "skipped", "closed", "invalidated")] == steps!(ctx, work)
+      assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
+    end
+
+    test "a request that ended while its call waits drops the call: it never becomes a step",
+         %{ctx: ctx, workspace: ws} do
+      script!([
+        reply("put"),
+        call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}),
+        reply("kept")
+      ])
+
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua keep it")
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^id}}, 60_000
+      runner = Runner.whereis(ws.id)
+      call = page_call(ctx, put, "component.list")
+      assert {:ok, ^runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      assert :ok = Runner.page_call_ended(ws.id, ctx.athanor_id, call.request)
+
+      {:ok, turn} = Tape.turn(ctx, id)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, turn)
+      {:ok, %{decision: "approved"}} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, id)
+
+      [first, keep, last] = steps!(ctx, id)
+      assert first == model_step(ctx, id, 1, nil)
+      assert %{seq: 2, tool: "notes", action: "keep", outcome: "ok", card: "approved"} = keep
+      assert last == model_step(ctx, id, 3, "text")
+      assert [] = page_rows!(ctx, ws.id)
+      assert %{running: false, paused: false, queued: 0} = Runner.state(ws.id, ctx.athanor_id)
+    end
+
+    test "a request that ended while its step is proposed skips the step, withdraws its " <>
+           "card, and a late yes runs nothing",
+         %{ctx: ctx, workspace: ws} do
+      script!([reply("put")])
+      put = put!(ctx, ws)
+      call = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work}}, 60_000
+      {:ok, paused} = Tape.turn(ctx, work)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+
+      assert :ok = Runner.page_call_ended(ws.id, ctx.athanor_id, call.request)
+      assert {:ok, %{status: "invalidated"}} = Tape.approval(ctx, approval.id)
+
+      # Its last step closed: the work ends.
+      await_ended!(ctx, work)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, work)
+
+      assert [page_step(1, work, call, "skipped", "closed", "invalidated")] == steps!(ctx, work)
+
+      assert {:ok, %{decision: "invalidated", replayed: true}} =
+               Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+      [carried, answered] = page_rows!(ctx, ws.id)
+      assert carried == called(work, call)
+      assert %{kind: "page_result", content: "the page's request ended"} = answered
+      assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
+      assert chats() == 1
+    end
+  end
+
+  # A workspace thread of the person's, as a workspace's opening makes one.
+  defp workspace!(ctx) do
+    %Arca.Schemas.Thread{}
+    |> Arca.Schemas.Thread.changeset(%{
+      id: Prima.UUID7.generate_id("thread"),
+      athanor_id: ctx.athanor_id,
+      kind: "workspace",
+      workspace_state: "open",
+      title: "Show the page",
+      created_by: ctx.user_id
+    })
+    |> Arca.Repo.insert!()
+  end
+
+  # The turn that put the page into the workspace thread's window, ended.
+  defp put!(ctx, workspace) do
+    {:ok, %{turn_id: id}} = Runner.send_message(ctx, workspace.id, "@aqua put the page")
+    await_ended!(ctx, id)
+    {:ok, %{status: "completed"} = put} = Tape.turn(ctx, id)
+    put
+  end
+
+  # A call the page makes, as `Aqua.PageCalls` hands it to the runner,
+  # its browser this test, which outlives it.
+  defp page_call(ctx, put, name, arguments \\ %{}),
+    do: %{
+      request: Prima.UUID7.generate_id("pgc"),
+      name: name,
+      arguments: arguments,
+      user_id: ctx.user_id,
+      put_turn_id: put.id,
+      browser: self()
+    }
+
+  # The turn has ended, and the runner has taken its end.
+  defp await_ended!(ctx, turn_id) do
+    wait_until(
+      fn -> match?({:ok, %{ended_at: %DateTime{}}}, Tape.turn(ctx, turn_id)) end,
+      60_000,
+      "turn #{turn_id} ends"
+    )
+  end
+
+  defp chats, do: Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+
+  defp raw_steps!(ctx, turn_id) do
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    steps
+  end
+
+  # A turn's steps as a case compares them: every field but those minted
+  # (ids, clocks, digests, usage), which a case reads where it speaks of
+  # them, with the rows a step carries its call and its answer in, by kind,
+  # and its card's state.
+  defp steps!(ctx, turn_id) do
+    for step <- raw_steps!(ctx, turn_id) do
+      %{
+        seq: step.seq,
+        kind: step.kind,
+        purpose: step.purpose,
+        tool: step.tool,
+        action: step.action,
+        dispatch_state: step.dispatch_state,
+        outcome: step.outcome,
+        generation: step.generation,
+        recovery: step.recovery,
+        idempotency_key: step.idempotency_key && key_of(step),
+        error: step.error,
+        cancel_requested?: step.cancel_requested_at != nil,
+        carried: kind_of(ctx, step.message_id),
+        answered: kind_of(ctx, step.result_message_id),
+        card: card_of(ctx, step.approval_id)
+      }
+    end
+  end
+
+  # A model step's key is its turn's and its step's, which a case does not mint.
+  defp key_of(%{kind: "model"}), do: :model
+  defp key_of(%{idempotency_key: key}), do: key
+
+  defp kind_of(_ctx, nil), do: nil
+
+  defp kind_of(ctx, id) do
+    {:ok, row} = Tape.message(ctx, id)
+    row.kind
+  end
+
+  defp card_of(_ctx, nil), do: nil
+
+  defp card_of(ctx, id) do
+    {:ok, approval} = Tape.approval(ctx, id)
+    approval.status
+  end
+
+  # A model step of `turn_id` that answered, on the catalyst the turn
+  # pinned; `answered` is the row of its reply, "text", or nil for an
+  # answer of calls alone.
+  defp model_step(ctx, turn_id, seq, answered) do
+    {:ok, %{catalyst_ref: catalyst}} = Tape.turn(ctx, turn_id)
+
+    %{
+      seq: seq,
+      kind: "model",
+      purpose: "chat",
+      tool: catalyst,
+      action: "chat",
+      dispatch_state: "closed",
+      outcome: "ok",
+      generation: 0,
+      recovery: nil,
+      idempotency_key: :model,
+      error: nil,
+      cancel_requested?: false,
+      carried: nil,
+      answered: answered,
+      card: nil
+    }
+  end
+
+  # A page's step in `turn_id` for `call`; of the calls here only
+  # `component.list` is replay-safe.
+  defp page_step(seq, turn_id, call, outcome, state \\ "closed", card \\ nil) do
+    [tool, action] = String.split(call.name, ".")
+
+    %{
+      seq: seq,
+      kind: if(call.name == "execution.run", do: "launch", else: "tool"),
+      purpose: "page",
+      tool: tool,
+      action: action,
+      dispatch_state: state,
+      outcome: outcome,
+      generation: 0,
+      recovery: if(call.name == "component.list", do: "replay_safe"),
+      idempotency_key: "page_call:#{turn_id}:#{call.request}",
+      error: nil,
+      cancel_requested?: false,
+      carried: "page_call",
+      answered: if(state == "closed", do: "page_result"),
+      card: card
+    }
+  end
+
+  # The thread's rows of a page's calls and their answers, as a case
+  # compares them.
+  defp page_rows!(ctx, thread_id) do
+    for row <- Threads.messages(Sanctum.Context.actor(ctx), thread_id),
+        row.kind in ["page_call", "page_result"] do
+      %{
+        kind: row.kind,
+        author: row.author,
+        sent_by: row.sent_by,
+        content: row.content,
+        client_id: row.client_id,
+        turn_id: row.turn_id,
+        payload: Tape.payload(row)
+      }
+    end
+  end
+
+  # The row a page's call is carried in.
+  defp called(turn_id, call) do
+    %{
+      kind: "page_call",
+      author: Prima.Author.agent(),
+      sent_by: "aqua",
+      content: call.name,
+      client_id: call.request,
+      turn_id: turn_id,
+      payload: Aqua.PageCalls.row(call)
+    }
+  end
+
+  # The row a page's call is answered in, with the wire's answer.
+  defp answered(ctx, turn_id, call, status, body) do
+    [%{id: step_id}] =
+      for %{idempotency_key: key} = step <- raw_steps!(ctx, turn_id),
+          key == "page_call:#{turn_id}:#{call.request}",
+          do: step
+
+    %{
+      kind: "page_result",
+      author: Prima.Author.system(),
+      sent_by: "aqua",
+      content: body,
+      client_id: nil,
+      turn_id: turn_id,
+      payload: %{
+        "tool_call_id" => call.request,
+        "name" => call.name,
+        "status" => status,
+        "is_error" => false,
+        "step_id" => step_id
+      }
+    }
+  end
+
+  defp thread_state(ctx, id) do
+    {:ok, thread} = Threads.get(Sanctum.Context.actor(ctx), id)
+    thread.workspace_state
+  end
 end

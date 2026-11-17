@@ -29,18 +29,19 @@ const (
 	// answers where the window is; opWait leaves room for that answer.
 	settleWait = 500 * time.Millisecond
 	stopWait   = 20 * time.Second
-	// maxPage bounds the html of a `page`.
-	maxPage = 4 << 20
 	// maxResponse bounds a response's text.
 	maxResponse = 16 << 20
 )
 
-// request is one `req` of the host's.
+// request is one `req` of the host's; a `page`'s put is assembled from
+// the parts that follow it (page.go).
 type request struct {
 	ID   int64
 	Win  string
 	Op   string
 	Args json.RawMessage
+	Of   int64
+	put  *put
 }
 
 // failure is a response's error: its code and a sentence a person reads.
@@ -62,24 +63,38 @@ type browser struct {
 	c       *cdp
 	mu      sync.Mutex
 	windows map[string]*window
+	// pages carries the windows' calls, and their ends, to the serve loop.
+	pages chan pageEvent
 }
 
-// window is one Chrome page target and its flattened session. Its fields
-// are set before ready closes and read only after.
+// window is one Chrome page target and its flattened session. Its name is
+// set when it is made; its other fields but put and gen are set before
+// ready closes and read only after.
 type window struct {
+	name                   string
 	target, session, frame string
 	ready                  chan struct{}
 	err                    error
 	// op runs the window's requests one at a time.
 	op sync.Mutex
+	// mu guards the window's put, the files its document is answered from;
+	// gen, which moves on whenever its main frame commits another document
+	// or it closes; next, the put a show is loading; and docs, by the
+	// network id of each main-frame navigation a put answered since the
+	// last commit, that put (page.go).
+	mu   sync.Mutex
+	put  *put
+	gen  int64
+	next *put
+	docs map[string]*put
 }
 
 func newBrowser() *browser {
-	return &browser{windows: map[string]*window{}}
+	return &browser{windows: map[string]*window{}, pages: make(chan pageEvent, 64)}
 }
 
-// onTarget forgets a window whose target Chrome reports gone, and closes
-// one whose page crashed.
+// onTarget forgets a window whose target Chrome reports gone, with its put
+// and its calls, and closes one whose page crashed.
 func (b *browser) onTarget(method string, params json.RawMessage) {
 	var event struct {
 		TargetID string `json:"targetId"`
@@ -96,6 +111,7 @@ func (b *browser) onTarget(method string, params json.RawMessage) {
 	for name, w := range b.windows {
 		if made(w) && w.target == event.TargetID {
 			delete(b.windows, name)
+			go b.replace(w, nil)
 		}
 	}
 	b.mu.Unlock()
@@ -177,7 +193,6 @@ func (b *browser) run(ctx context.Context, r request) (any, error) {
 		Ref  *string `json:"ref"`
 		Text *string `json:"text"`
 		Key  *string `json:"key"`
-		HTML *string `json:"html"`
 	}
 	if len(r.Args) > 0 && json.Unmarshal(r.Args, &args) != nil {
 		return nil, badRequest("The request's arguments are not an object of its operation's.")
@@ -232,14 +247,10 @@ func (b *browser) run(ctx context.Context, r request) (any, error) {
 		}
 		return b.in(ctx, r.Win, false, func(w *window) (any, error) { return b.press(ctx, w, key) })
 	case "page":
-		html, err := need(args.HTML, "html")
-		if err != nil {
-			return nil, err
+		if r.put == nil {
+			return nil, errBadPut
 		}
-		if len(html) > maxPage {
-			return nil, &failure{"too_large", "The page is larger than the 4 MiB the browser shows."}
-		}
-		return b.in(ctx, r.Win, true, func(w *window) (any, error) { return b.page(ctx, w, html) })
+		return b.in(ctx, r.Win, true, func(w *window) (any, error) { return b.show(ctx, w, r.put) })
 	case "screenshot":
 		return b.in(ctx, r.Win, false, func(w *window) (any, error) { return b.screenshot(ctx, w) })
 	case "close":
@@ -276,6 +287,7 @@ func (b *browser) forget(ctx context.Context, name string, w *window) {
 		delete(b.windows, name)
 	}
 	b.mu.Unlock()
+	b.replace(w, nil)
 	_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": w.target}, nil)
 }
 
@@ -288,7 +300,7 @@ func (b *browser) window(ctx context.Context, name string, create bool) (*window
 			b.mu.Unlock()
 			return nil, false, errNoWindow
 		}
-		w = &window{ready: make(chan struct{})}
+		w = &window{name: name, ready: make(chan struct{})}
 		b.windows[name] = w
 		b.mu.Unlock()
 		w.err = b.makeWindow(ctx, w)
@@ -328,6 +340,8 @@ func (b *browser) makeWindow(ctx context.Context, w *window) error {
 	return err
 }
 
+// attach takes window w's target, with the reserved origin intercepted
+// before its first navigation (page.go).
 func (b *browser) attach(ctx context.Context, w *window, target string) error {
 	var attached struct {
 		SessionID string `json:"sessionId"`
@@ -336,7 +350,8 @@ func (b *browser) attach(ctx context.Context, w *window, target string) error {
 		return err
 	}
 	session := attached.SessionID
-	if err := b.c.call(ctx, session, "Page.enable", nil, nil); err != nil {
+	go b.serveSession(w, session, sessionPage, b.c.watch(session, intercepted))
+	if err := b.interceptOn(ctx, session); err != nil {
 		return err
 	}
 	if err := b.c.call(ctx, session, "Page.setLifecycleEventsEnabled", map[string]any{"enabled": true}, nil); err != nil {
@@ -373,6 +388,7 @@ func (b *browser) closeWindow(ctx context.Context, name string) bool {
 	if w.err != nil {
 		return false
 	}
+	b.replace(w, nil)
 	_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": w.target}, nil)
 	return true
 }
@@ -675,18 +691,6 @@ func (b *browser) press(ctx context.Context, w *window, k keyDef) (any, error) {
 		}
 	}
 	return struct{}{}, nil
-}
-
-// page shows html in w: the window goes to about:blank, whose document
-// then becomes html.
-func (b *browser) page(ctx context.Context, w *window, html string) (any, error) {
-	if err := b.navigate(ctx, w, "about:blank"); err != nil {
-		return nil, err
-	}
-	if err := b.c.call(ctx, w.session, "Page.setDocumentContent", map[string]any{"frameId": w.frame, "html": html}, nil); err != nil {
-		return nil, err
-	}
-	return b.where(ctx, w)
 }
 
 func (b *browser) screenshot(ctx context.Context, w *window) (any, error) {

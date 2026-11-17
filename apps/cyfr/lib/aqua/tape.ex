@@ -462,6 +462,22 @@ defmodule Aqua.Tape do
   def write_notes(%Context{} = ctx, turn, notes),
     do: TurnStorage.write_notes(Sanctum.Context.actor(ctx), turn.id, notes, %{fence: turn.fence})
 
+  @doc """
+  Propose a page's call as a step of the running `turn`, under its fence
+  (`TurnStorage.put_step/3`): `attrs` as `Aqua.PageCalls.proposal/3`
+  makes them, with the call's own row or the row the turn opened on. A
+  turn that is not running, paused on a card or around a launch among
+  them, refuses it `{:error, :illegal_transition}`.
+  """
+  @spec propose_call(Context.t(), turn(), map()) :: {:ok, step()} | {:error, term()}
+  def propose_call(%Context{} = ctx, turn, attrs) when is_map(attrs),
+    do:
+      TurnStorage.put_step(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        Map.put_new(attrs, :fence, turn.fence)
+      )
+
   @doc "Flip a proposed step to dispatched, in its own commit."
   @spec mark_dispatched(Context.t(), turn(), step()) :: {:ok, step()} | {:error, term()}
   def mark_dispatched(%Context{} = ctx, turn, step),
@@ -557,12 +573,17 @@ defmodule Aqua.Tape do
   def restricted?(%Context{} = ctx, turn),
     do: TurnStorage.restricted?(Sanctum.Context.actor(ctx), turn.id) == true
 
-  @doc "Close every unstarted step as skipped and invalidate their cards."
-  @spec skip_steps(Context.t(), turn(), String.t()) :: {:ok, [step()]} | {:error, term()}
-  def skip_steps(%Context{} = ctx, turn, reason) do
+  @doc """
+  Close every unstarted step as skipped and invalidate their cards; with
+  `only`, the ids of the steps to skip, those of them still unstarted.
+  """
+  @spec skip_steps(Context.t(), turn(), String.t(), [String.t()] | nil) ::
+          {:ok, [step()]} | {:error, term()}
+  def skip_steps(%Context{} = ctx, turn, reason, only \\ nil) do
     with {:ok, steps} <-
            TurnStorage.skip_steps(Sanctum.Context.actor(ctx), turn.id, reason, %{
-             fence: turn.fence
+             fence: turn.fence,
+             only: only
            }) do
       Enum.each(steps, fn step ->
         with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
@@ -571,6 +592,32 @@ defmodule Aqua.Tape do
 
       announce_notices(ctx, [turn.id])
       {:ok, steps}
+    end
+  end
+
+  @doc """
+  The page's call `request` in `thread_id` ended unanswered
+  (`TurnStorage.end_call/4`): no step of it is recorded or dispatched
+  from now on, and its step still proposed is skipped with `reason`, its
+  card invalidated. Answers the call's turn and the steps skipped, or
+  `nil` for a call with no row yet.
+  """
+  @spec end_call(Context.t(), String.t(), String.t(), String.t()) ::
+          {:ok, %{turn_id: String.t(), skipped: [step()]} | nil} | {:error, term()}
+  def end_call(%Context{} = ctx, thread_id, request, reason) do
+    with {:ok, ended} <-
+           TurnStorage.end_call(Sanctum.Context.actor(ctx), thread_id, request, reason) do
+      for %{skipped: steps, turn_id: turn_id} <- List.wrap(ended), steps != [] do
+        Enum.each(steps, fn step ->
+          with {:ok, row} <-
+                 Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
+               do: broadcast(ctx, thread_id, :message, row)
+        end)
+
+        announce_notices(ctx, [turn_id])
+      end
+
+      {:ok, ended}
     end
   end
 

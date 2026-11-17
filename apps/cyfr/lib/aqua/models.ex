@@ -130,6 +130,24 @@ defmodule Aqua.Models do
     end
   end
 
+  @doc """
+  The capabilities of a turn that asks no model (`Aqua.Loop.Turn.build/3`
+  for a turn a page's call opened): none, and no description asked for.
+  """
+  @spec none() :: map()
+  def none do
+    %{
+      context_window: nil,
+      max_output_tokens: nil,
+      max_input_tokens: nil,
+      provider_tools: [],
+      media_types: [],
+      streaming: false,
+      default_max_tokens: nil,
+      options: []
+    }
+  end
+
   defp describe_model(model, run) do
     with {:ok, result} <- ran(run.(%{"operation" => "describe", "params" => %{"model" => model}})),
          {:ok, described} <- described(Prima.Model.decode_envelope(result), model),

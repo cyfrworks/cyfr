@@ -108,6 +108,7 @@ defmodule Compendium.FacadeTest do
     model_catalysts: 1,
     parse_agent_frontmatter: 1,
     parse_component_path: 1,
+    plain_entry: 1,
     put_desktop_prefs: 5,
     resolve: 2,
     resolve_activation: 2,
@@ -132,15 +133,19 @@ defmodule Compendium.FacadeTest do
     tincture_control_runs: 1,
     tincture_declaration: 1,
     tincture_entry: 1,
+    tincture_files: 3,
     tincture_frame_classes: 1,
     tincture_frame_policy: 2,
     tincture_grant_revision: 2,
+    tincture_head_tags: 3,
     tincture_invokes?: 2,
     tincture_lockfile_required?: 1,
     tincture_media: 2,
     tincture_read_classes: 1,
     tincture_request_operation: 1,
     tincture_sandbox_tokens: 1,
+    tincture_sdk: 0,
+    tincture_served_type: 1,
     tincture_served_types: 0,
     tincture_templates: 0
   ]
@@ -166,6 +171,24 @@ defmodule Compendium.FacadeTest do
 
       assert Compendium.encode_activation_graph(graph) ==
                Compendium.Activation.encode_graph(graph)
+    end
+
+    test "a page's bytes answer as Compendium.Tincture" do
+      assert Compendium.tincture_sdk() == Compendium.Tincture.sdk()
+      assert Compendium.plain_entry("<p/>") == Compendium.Tincture.plain_entry("<p/>")
+
+      assert Compendium.tincture_head_tags("<head></head>", "/b/", "n") ==
+               Compendium.Tincture.head_tags("<head></head>", "/b/", "n")
+
+      for file <- [
+            ["index.html"],
+            ["cyfr-manifest.json"],
+            [".env.js"],
+            ["a", "..", "b.js"],
+            ["x.md"]
+          ],
+          do:
+            assert(Compendium.tincture_served_type(file) == Compendium.Tincture.served_type(file))
     end
 
     test "path grammars answer as Compendium.ComponentPath and Compendium.AquaPath" do

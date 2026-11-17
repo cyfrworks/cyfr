@@ -6,10 +6,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,7 +23,20 @@ type frameVectors struct {
 	MaxToDriver int    `json:"max_to_driver"`
 	MaxResponse int    `json:"max_response"`
 	InFlight    int    `json:"input_in_flight"`
-	Encode      []struct {
+	Put         struct {
+		MaxBytes  int `json:"max_bytes"`
+		MaxFiles  int `json:"max_files"`
+		PartBytes int `json:"part_bytes"`
+	} `json:"put"`
+	Call struct {
+		MaxBody int `json:"max_body"`
+	} `json:"call"`
+	Messages map[string]struct {
+		From    string          `json:"from"`
+		Fields  []string        `json:"fields"`
+		Example json.RawMessage `json:"example"`
+	} `json:"messages"`
+	Encode []struct {
 		Name, Body, Frame string
 	} `json:"encode"`
 	Decode []struct {
@@ -71,6 +87,83 @@ func TestFrameBounds(t *testing.T) {
 	if body := len(must(json.Marshal(imageMessage{"image", 1 << 53, 1 << 53, strings.Repeat("A", maxImage)}))); body > maxToHost {
 		t.Fatalf("an image of the largest size holds %d bytes, past the host's %d", body, maxToHost)
 	}
+}
+
+// A put and a call are bounded as the vectors bound them; a part of the
+// largest size fits a frame the driver takes, and a call of the largest
+// body one the host takes.
+func TestPutAndCallBounds(t *testing.T) {
+	v := loadFrameVectors(t)
+	if v.Put.MaxBytes != maxPutBytes || v.Put.MaxFiles != maxPutFiles || v.Put.PartBytes != partBytes || v.Call.MaxBody != maxCallBody {
+		t.Fatalf("the vectors bound a put at %d bytes, %d files and %d bytes a part, and a call's body at %d; the driver at %d, %d, %d and %d",
+			v.Put.MaxBytes, v.Put.MaxFiles, v.Put.PartBytes, v.Call.MaxBody, maxPutBytes, maxPutFiles, partBytes, maxCallBody)
+	}
+	part := map[string]any{"t": "part", "id": 1 << 53, "seq": 1 << 53, "part": strings.Repeat("A", 4*((partBytes+2)/3))}
+	if body := len(must(json.Marshal(part))); body > maxToDriver {
+		t.Fatalf("a part of the largest size holds %d bytes, past the driver's %d", body, maxToDriver)
+	}
+	call := callMessage{T: "call", ID: 1 << 53, Win: strings.Repeat("w", 256), Put: 1 << 53, Op: "action",
+		Body: base64.StdEncoding.EncodeToString(make([]byte, maxCallBody))}
+	if body := len(must(json.Marshal(call))); body > maxToHost {
+		t.Fatalf("a call of the largest body holds %d bytes, past the host's %d", body, maxToHost)
+	}
+}
+
+// Every message's example holds exactly its fields; the driver's own page
+// messages marshal to their examples, field order included, and the
+// host's parse to what they carry.
+func TestPageMessages(t *testing.T) {
+	v := loadFrameVectors(t)
+	examples := map[string]string{}
+	for name, m := range v.Messages {
+		var example map[string]json.RawMessage
+		if err := json.Unmarshal(m.Example, &example); err != nil {
+			t.Fatalf("%s: its example is no object: %v", name, err)
+		}
+		keys := make([]string, 0, len(example))
+		for key := range example {
+			keys = append(keys, key)
+		}
+		if !reflect.DeepEqual(sorted(keys), sorted(m.Fields)) {
+			t.Errorf("%s: its example holds %v, its fields are %v", name, keys, m.Fields)
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, m.Example); err != nil {
+			t.Fatal(err)
+		}
+		examples[name] = compact.String()
+	}
+	for name, message := range map[string]any{
+		"call": callMessage{T: "call", ID: 3, Win: "thr_01", Put: 14, Op: "invoke",
+			Body: base64.StdEncoding.EncodeToString([]byte(`{"ref":"local.counter:0.1.0"}`))},
+		"callend": callendMessage{T: "callend", ID: 3},
+	} {
+		if got := string(must(json.Marshal(message))); got != examples[name] {
+			t.Errorf("%s: marshals to %s, want %s", name, got, examples[name])
+		}
+	}
+	part, ok := parse([]byte(examples["part"]))
+	if !ok || part.kind != "part" || part.id != 14 || part.seq != 0 || string(part.text) != "<!doctype html>" || part.failed {
+		t.Errorf("the part's example parses to %+v", part)
+	}
+	got, ok := parse([]byte(examples["answer"]))
+	if !ok || got.kind != "answer" || got.id != 3 || got.status != 200 || got.body != `{"ok":true}` {
+		t.Errorf("the answer's example parses to %+v", got)
+	}
+	req, ok := parse([]byte(examples["req"]))
+	if !ok || req.kind != "req" || req.req.Of != 0 {
+		t.Errorf("the request's example parses to %+v", req)
+	}
+	put, ok := parse([]byte(`{"t":"req","id":14,"win":"thr_01","op":"page","of":3,"args":{}}`))
+	if !ok || put.req.Of != 3 || put.req.Op != "page" {
+		t.Errorf("a put's request parses to %+v", put)
+	}
+}
+
+func sorted(list []string) []string {
+	list = append([]string{}, list...)
+	slices.Sort(list)
+	return list
 }
 
 func TestEncodeVectors(t *testing.T) {

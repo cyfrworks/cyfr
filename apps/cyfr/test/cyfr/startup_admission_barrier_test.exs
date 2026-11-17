@@ -109,6 +109,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
        Aqua.Crew,
        {Aqua.WorkerTree, [Aqua.Loop.Worker, Aqua.TaskSupervisor]},
        {Aqua.RunnerTree, [Aqua.RunnerRegistry, Aqua.RunnerSupervisor, Aqua.RunnerRecovery]},
+       Aqua.PageCalls,
        Aqua.Status
      ]},
     {Emissary.Supervisor,
@@ -172,6 +173,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Emissary.External.ServerSupervisor,
     Emissary.External.ServerRegistry,
     Aqua.Status,
+    Aqua.PageCalls,
     Aqua.RunnerSupervisor,
     Aqua.RunnerRegistry,
     Aqua.TaskSupervisor,

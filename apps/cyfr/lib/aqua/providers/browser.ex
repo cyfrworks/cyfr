@@ -11,8 +11,8 @@ defmodule Aqua.Providers.Browser do
 
   `open` (an http or https address), `read` (the page as text, each
   element Aqua can act on marked with its ref), `click` and `type` (an
-  element by its ref), `key` (one named key), `page` (the window shows a
-  page Aqua wrote, as html), `screenshot` and `close`. They run in a
+  element by its ref), `key` (one named key), `page` (below),
+  `screenshot` and `close`. They run in a
   turn's chain and nowhere else (`planes: [:in_chain]`), only for a
   person's own sign-in (`consent: :interactive`), and each follows the
   person's browser setting (`follows_setting`), not a policy line: with
@@ -25,6 +25,25 @@ defmodule Aqua.Providers.Browser do
   `Opus.Browser` names from the lineage the gate stamped and from no
   argument, for a caller the session owner proves to be that running
   turn. What a page holds is outside material, named by its host.
+
+  `page` shows a page in the window, from exactly one of: `html`, a page
+  of one file Aqua wrote; `files`, a page of several files Aqua hands,
+  each a `path` held to `Prima.PathSafety`, of a type the served types
+  name by its extension (`Compendium.tincture_served_types/0`), and its
+  `content`, text or base64 by its `encoding`, with the page's `name`
+  and its `entry` (`index.html` unless named), an html file among them;
+  or `tincture`, a tincture version of the person's, read as the endpoint
+  reads it and admitted as `source` admits its path
+  (`Compendium.tincture_files/3`), held to the put's bound before its
+  files are read. Its files are laid out under the
+  address a public tincture of that name has (`Prima.TinctureUrl.path/3`
+  with the `local` publisher), the page of one file as `index.html` of
+  the name `page`, and are put into the window (`Opus.Browser.put/3`).
+  The entry is handed with the `<base>` and the SDK a tincture's entry is
+  served with (`Compendium.tincture_head_tags/3`); a plain page's entry
+  is first given a head (`Compendium.plain_entry/1`), and a tincture's is
+  handed as it was written. A tincture's put carries the reference it was
+  given, which the window's calls are announced with.
 
   `screenshot` keeps the image as a draft of the turn's attempt, under a
   message id of its own that has not been sent, in the turn's thread,
@@ -73,6 +92,10 @@ defmodule Aqua.Providers.Browser do
   @max_url 4_096
   @max_text 65_536
   @max_html 4_194_304
+  # The name a page of one file is laid out under, and the entry a page of
+  # several files opens at unless it names one.
+  @page_name "page"
+  @default_entry "index.html"
   @keys ~w(Enter Tab Escape Backspace Delete ArrowUp ArrowDown ArrowLeft ArrowRight Home End PageUp PageDown Space)
   # What each action hands the driver of its arguments.
   @driver_args %{
@@ -81,7 +104,6 @@ defmodule Aqua.Providers.Browser do
     "click" => ["ref"],
     "type" => ["ref", "text"],
     "key" => ["key"],
-    "page" => ["html"],
     "screenshot" => [],
     "close" => []
   }
@@ -173,9 +195,48 @@ defmodule Aqua.Providers.Browser do
           "Show a page",
           [
             Arg.new("html", :string,
-              required: true,
               max: @max_html,
-              description: "for page, the page to show in this thread's window, as html"
+              description:
+                "for page, a page of one file to show in this thread's window, as html; give exactly one of html, files and tincture"
+            ),
+            Arg.new(
+              "files",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("path", :string,
+                      required: true,
+                      description: "the file's path in the page, as css/site.css"
+                    ),
+                    Arg.new("content", :string,
+                      required: true,
+                      bulk: true,
+                      description: "the file's content: its text, or its bytes in base64"
+                    ),
+                    Arg.new("encoding", :string,
+                      enum: ["text", "base64"],
+                      description:
+                        "base64 when content is the file's bytes in base64; text otherwise"
+                    )
+                  ]}
+               )},
+              min: 1,
+              max: Opus.Browser.put_bound().files,
+              description:
+                "for page, a page of several files to show in this thread's window, each {path, content, encoding}, with name and entry"
+            ),
+            Arg.new("name", :string,
+              description: "page with files: the page's name, the last segment of its address"
+            ),
+            Arg.new("entry", :string,
+              description:
+                "page with files: the path of the html file it opens at, index.html unless named"
+            ),
+            Arg.new("tincture", :string,
+              description:
+                "for page, a tincture version of yours to show as it is served, as tincture:local.<name>:<version>"
             )
           ],
           family
@@ -245,7 +306,7 @@ defmodule Aqua.Providers.Browser do
         )
       ],
       description:
-        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on, and thread.post shows a screenshot by the message_id it answered; watch shows the person a workspace thread's window on their own page; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
+        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; page shows a page there, of one html file, of several files, or a tincture version of yours as it is served; thread.post shows a screenshot by the message_id it answered; watch shows the person a workspace thread's window on their own page; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
       title: "Browser"
     )
   end
@@ -311,6 +372,21 @@ defmodule Aqua.Providers.Browser do
            end)
            |> watcher() do
       {:ok, %{watching: thread}}
+    end
+  end
+
+  defp action("page", ctx, args) do
+    caller = Opus.Browser.caller(ctx, args)
+
+    with {:ok, true} <- Aqua.BrowserSetting.allowed?(ctx) |> unavailable() |> on(),
+         {:ok, _turn} <- Opus.Browser.turn(caller) |> refused(),
+         {:ok, put} <- put(ctx, args),
+         {:ok, answer} <-
+           Opus.Browser.put(caller, put, fn ->
+             Aqua.BrowserSetting.allowed?(ctx) == {:ok, true}
+           end)
+           |> refused() do
+      {:ok, %{url: answer["url"], title: answer["title"]}}
     end
   end
 
@@ -387,13 +463,195 @@ defmodule Aqua.Providers.Browser do
     end
   end
 
-  defp answered(action, _ctx, _caller, _args, answer) when action in ["open", "click", "page"],
+  defp answered(action, _ctx, _caller, _args, answer) when action in ["open", "click"],
     do: {:ok, %{url: answer["url"], title: answer["title"]}}
 
   defp answered("close", _ctx, _caller, _args, answer),
     do: {:ok, %{closed: answer["closed"] == true}}
 
   defp answered(_action, _ctx, _caller, _args, _answer), do: {:ok, %{done: true}}
+
+  # ---------------------------------------------------------------------------
+  # A page's put
+
+  # The put of exactly one of html, files and tincture; a page's name and
+  # entry go with its files alone.
+  defp put(ctx, args) do
+    case {Enum.filter(~w(html files tincture), &(args[&1] != nil)), args["name"], args["entry"]} do
+      {["files"], name, entry} ->
+        plain(ctx, name, entry || @default_entry, args["files"])
+
+      {["html"], nil, nil} ->
+        plain(ctx, @page_name, @default_entry, [
+          %{"path" => @default_entry, "content" => args["html"]}
+        ])
+
+      {["tincture"], nil, nil} ->
+        tincture(ctx, args["tincture"])
+
+      {[_given], _name, _entry} ->
+        {:error, {:invalid_argument, "browser.page takes a name and an entry with files alone"}}
+
+      _none_or_more ->
+        {:error,
+         {:invalid_argument, "browser.page takes exactly one of html, files and tincture"}}
+    end
+  end
+
+  # A page Aqua wrote: its files held to the path rules and the served
+  # types, its entry an html file among them, first given a head.
+  defp plain(ctx, name, entry, files) do
+    with :ok <- page_name(name),
+         {:ok, files} <- plain_files(files),
+         {:ok, %{type: "text/html"}} <- entry_file(files, entry),
+         {:ok, root} <- root(ctx, name) do
+      {:ok, handed(root, entry, files, &Compendium.plain_entry/1)}
+    else
+      {:ok, %{path: path}} ->
+        {:error, {:invalid_argument, "The entry #{path} is not an html file."}}
+
+      {:error, _refused} = refused ->
+        refused
+    end
+  end
+
+  # A tincture version as the endpoint reads it; its entry is handed as
+  # it was written, and its put carries the reference it was put by.
+  defp tincture(ctx, reference) when is_binary(reference) do
+    with {:ok, %{name: name, entry: entry, files: files}} <-
+           Compendium.tincture_files(ctx, reference, Opus.Browser.put_bound()) |> over_bound(),
+         {:ok, root} <- root(ctx, name) do
+      {:ok, Map.put(handed(root, entry, files, & &1), :tincture, reference)}
+    end
+  end
+
+  defp tincture(_ctx, _reference),
+    do: {:error, {:invalid_argument, "tincture names a tincture version"}}
+
+  defp over_bound({:error, :over_bound}), do: {:error, refusal(:put_too_large)}
+  defp over_bound(read), do: read
+
+  # The entry given the `<base>` of its own directory and the SDK, as the
+  # endpoint serves a tincture's entry.
+  defp handed(root, entry, files, prepare) do
+    base = root <> "/" <> entry_dir(entry)
+    nonce = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+
+    files =
+      Enum.map(files, fn
+        %{path: ^entry, bytes: bytes} = file ->
+          %{file | bytes: Compendium.tincture_head_tags(prepare.(bytes), base, nonce)}
+
+        file ->
+          file
+      end)
+
+    %{root: root, entry: entry, files: files}
+  end
+
+  defp entry_dir(entry) do
+    case Path.dirname(entry) do
+      "." -> ""
+      dir -> dir <> "/"
+    end
+  end
+
+  # The page's address, a public tincture's of the name: the same names the
+  # SDK reads from it there.
+  defp root(ctx, name) do
+    case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
+      {:ok, athanor} ->
+        {:ok, Prima.TinctureUrl.path(Sanctum.Tenancy.Athanors.route_slug(athanor), "local", name)}
+
+      {:error, _unanswered} ->
+        {:error, {:unavailable, "The page's address"}}
+    end
+  end
+
+  defp page_name(name) when is_binary(name) do
+    case Prima.ComponentRef.validate_ref_parts("local", name) do
+      :ok -> :ok
+      {:error, sentence} -> {:error, {:invalid_argument, "name: #{sentence}"}}
+    end
+  end
+
+  defp page_name(_name),
+    do: {:error, {:invalid_argument, "browser.page with files takes the page's name"}}
+
+  defp plain_files(files) when is_list(files) and files != [] do
+    types = Compendium.tincture_served_types()
+
+    files
+    |> Enum.reduce_while({:ok, [], MapSet.new()}, fn file, {:ok, taken, paths} ->
+      case plain_file(file, types) do
+        {:ok, %{path: path} = file} ->
+          if MapSet.member?(paths, path),
+            do: {:halt, {:error, {:invalid_argument, "#{path} is given twice."}}},
+            else: {:cont, {:ok, [file | taken], MapSet.put(paths, path)}}
+
+        {:error, _refused} = refused ->
+          {:halt, refused}
+      end
+    end)
+    |> case do
+      {:ok, taken, _paths} -> {:ok, Enum.reverse(taken)}
+      {:error, _refused} = refused -> refused
+    end
+  end
+
+  defp plain_files(_files),
+    do: {:error, {:invalid_argument, "files is a list of {path, content, encoding}"}}
+
+  defp plain_file(%{"path" => path, "content" => content} = file, types)
+       when is_binary(path) and is_binary(content) do
+    with :ok <- safe_path(path),
+         {:ok, type} <- served(types, path),
+         {:ok, bytes} <- content(path, content, Map.get(file, "encoding")) do
+      {:ok, %{path: path, type: type, bytes: bytes}}
+    end
+  end
+
+  defp plain_file(_file, _types),
+    do: {:error, {:invalid_argument, "Each of files is {path, content, encoding}."}}
+
+  defp safe_path(path) do
+    case Prima.PathSafety.validate_relative_path(path) do
+      :ok -> :ok
+      {:error, {_refusal, sentence}} -> {:error, {:invalid_argument, "#{path}: #{sentence}"}}
+    end
+  end
+
+  defp served(types, path) do
+    case Map.fetch(types, path |> Path.extname() |> String.downcase()) do
+      {:ok, type} ->
+        {:ok, type}
+
+      :error ->
+        {:error,
+         {:invalid_argument,
+          "#{path} is not a type a page serves; a served file is one of " <>
+            (types |> Map.keys() |> Enum.sort() |> Enum.join(" "))}}
+    end
+  end
+
+  defp content(_path, content, encoding) when encoding in [nil, "text"], do: {:ok, content}
+
+  defp content(path, content, "base64") do
+    case Base.decode64(content) do
+      {:ok, bytes} -> {:ok, bytes}
+      :error -> {:error, {:invalid_argument, "The content of #{path} is not base64."}}
+    end
+  end
+
+  defp content(path, _content, _encoding),
+    do: {:error, {:invalid_argument, "The encoding of #{path} is text or base64."}}
+
+  defp entry_file(files, entry) do
+    case Enum.find(files, &(&1.path == entry)) do
+      nil -> {:error, {:invalid_argument, "The entry is not among the files."}}
+      file -> {:ok, file}
+    end
+  end
 
   # A person at a screen, or a running turn of theirs that made the call
   # itself: a component a turn started, a key and a frame reach nothing.
@@ -478,6 +736,14 @@ defmodule Aqua.Providers.Browser do
     do: conflict("The browser stopped before it answered. Ask again to start it.")
 
   defp refusal(:too_large), do: {:invalid_argument, "That page is too large to show."}
+
+  defp refusal(:put_too_large) do
+    %{files: files, bytes: bytes} = Opus.Browser.put_bound()
+
+    {:invalid_argument,
+     "That page is too large to show: the browser takes at most #{files} files and " <>
+       "#{div(bytes, 1_048_576)} MiB in one page."}
+  end
 
   defp refusal(:response_too_large),
     do:

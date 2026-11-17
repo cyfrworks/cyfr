@@ -50,6 +50,30 @@ defmodule Aqua.Runner do
   stores an origin outside the vocabulary, damage a hand-edited or
   restored row can carry, is cancelled with that reason and never resumed.
 
+  ## A page's calls
+
+  A call a page in Aqua's browser made (`Aqua.PageCalls`) is held here
+  until it is a step: while a turn of the thread runs, it is proposed
+  into that turn (`Aqua.Tape.propose_call/3`) and the loop is told; while
+  the turn is paused, on a card or around a launch, it waits, and is
+  proposed once the turn runs again or opens work of its own once the
+  turn ends; with no turn, it opens a turn that asks no model, which runs
+  as the person whose turn put the page, under that turn's origin, and
+  is queued as any turn. At most `@queue_max` wait; past that a call is
+  refused `:busy`, and a stop drops those waiting as it drops the queue.
+  Its answer is its step's `page_result` row, heard on the thread's
+  topic and handed back through `Opus.Browser.answer/5`; a call whose
+  turn ended without answering it is answered as cancelled. A call whose
+  request ended, or whose browser is gone, which the runner monitors from
+  the moment it takes a call of it, is dropped while it waits here; once
+  it has a row, the row records the end (`Aqua.Tape.end_call/4`), so no
+  step of it is recorded or dispatched after, however far it had got,
+  and its step still proposed is skipped, its card withdrawn. A runner
+  that recovers a thread's turns holds no call of its predecessor, whose
+  requests were answered unavailable when it died: their steps still
+  proposed are skipped, and a turn one opened that never ran is
+  cancelled.
+
   ## Recovery
 
   A runner starts only on a member that holds its slot in the cell
@@ -104,6 +128,7 @@ defmodule Aqua.Runner do
   # A runner with nothing to do for this long stops; the next send starts it again.
   @idle_ms :timer.minutes(15)
   @resume_retry_ms 5_000
+  @orphaned "the page's request ended with the runner that held it"
   # The boot's recovery scan, retried while the database cannot answer.
   @recovery_backoff_ms [1_000, 4_000, 16_000]
 
@@ -280,7 +305,39 @@ defmodule Aqua.Runner do
     end
   end
 
-  @doc "Cancel the current running, paused or held turn and the turns queued behind it."
+  @doc """
+  Hand a page's call to the thread's runner (moduledoc): `call` is
+  `%{request, name, arguments, user_id, put_turn_id, browser}`, the call
+  a model would make for it, the browser's person, the turn that put the
+  page and the browser's holder (`Opus.Browser.held/4`). Answers the
+  runner that holds it, or why it was refused.
+  """
+  @spec page_call(String.t(), String.t(), map()) :: {:ok, pid()} | {:error, term()}
+  def page_call(thread_id, athanor_id, %{request: _} = call)
+      when is_binary(thread_id) and is_binary(athanor_id) do
+    with :ok <- open?(athanor_id),
+         {:ok, pid} <- ensure(thread_id, athanor_id) do
+      case safe_call(pid, {:page_call, call}) do
+        :ok -> {:ok, pid}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  @doc "A page's call whose request ended unanswered: what of it waits runs nothing."
+  @spec page_call_ended(String.t(), String.t(), String.t()) :: :ok
+  def page_call_ended(thread_id, _athanor_id, request)
+      when is_binary(thread_id) and is_binary(request) do
+    with pid when is_pid(pid) <- whereis(thread_id),
+         do: safe_call(pid, {:page_call_ended, request})
+
+    :ok
+  end
+
+  @doc """
+  Cancel the current running, paused or held turn and the turns and a
+  page's calls queued behind it.
+  """
   @spec stop_turn(Context.t(), String.t()) :: :ok | {:error, term()}
   def stop_turn(%Context{} = ctx, thread_id), do: call(ctx, thread_id, {:stop, ctx})
 
@@ -440,7 +497,13 @@ defmodule Aqua.Runner do
           partials: Aqua.Loop.Stream.new(),
           grants: MapSet.new(),
           agent: thread.agent,
-          idle_ref: nil
+          idle_ref: nil,
+          # A page's calls waiting to become steps, oldest first.
+          pages: [],
+          # Every page's call handed here and not yet answered: its
+          # request => the browser's person, whom the answer goes to, and
+          # the monitor of the browser that holds its request.
+          answering: %{}
         })
 
       # What the rows hold is known before the first send is admitted; a
@@ -477,6 +540,26 @@ defmodule Aqua.Runner do
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
+
+  defp handle_owned_call({:page_call, call}, _from, state) do
+    cond do
+      length(state.pages) >= @queue_max ->
+        {:reply, {:error, :busy}, state}
+
+      busy?(state) ->
+        state = %{state | pages: state.pages ++ [call]} |> answering(call) |> propose()
+        {:reply, :ok, touch(state)}
+
+      true ->
+        case open_call(answering(state, call), call) do
+          {:ok, state} -> {:reply, :ok, touch(state)}
+          {:error, reason, state} -> {:reply, {:error, reason}, unanswering(state, call.request)}
+        end
+    end
+  end
+
+  defp handle_owned_call({:page_call_ended, request}, _from, state),
+    do: {:reply, :ok, ended_call(state, request)}
 
   defp handle_owned_call({:stop, ctx}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
@@ -990,10 +1073,19 @@ defmodule Aqua.Runner do
     touch(state)
   end
 
-  defp start_next(%{queue: []} = state), do: touch(state)
+  defp start_next(%{queue: [], pages: []} = state), do: touch(answer_ended(state))
+
+  # The call is still waiting when the ended turn's calls are answered,
+  # so that end does not answer it.
+  defp start_next(%{queue: [], pages: [call | pages]} = state) do
+    case open_call(%{answer_ended(state) | pages: pages}, call) do
+      {:ok, state} -> touch(state)
+      {:error, reason, state} -> state |> refuse_call(call, reason) |> start_next()
+    end
+  end
 
   defp start_next(%{queue: [entry | rest]} = state) do
-    state = %{state | queue: rest}
+    state = %{answer_ended(state) | queue: rest}
     broadcast(state, :queued, length(rest))
 
     cond do
@@ -1049,18 +1141,22 @@ defmodule Aqua.Runner do
     end
   end
 
-  # The process that held a turn is gone: the turn is recovered now.
+  # The browser that holds a page's call is gone: the call's request
+  # ended. The process that held a turn is gone: the turn is recovered now.
   defp handle_owned_info({:DOWN, ref, :process, _pid, _reason} = msg, state) do
-    case Enum.find(state.held, fn {_turn_id, held} -> match?(%{ref: ^ref}, held) end) do
+    with nil <- Enum.find(state.answering, &match?({_request, %{monitor: ^ref}}, &1)),
+         nil <- Enum.find(state.held, fn {_turn_id, held} -> match?(%{ref: ^ref}, held) end) do
+      Prima.LoggerContext.unexpected(__MODULE__, msg)
+      {:noreply, state}
+    else
+      {request, %{monitor: ^ref}} ->
+        {:noreply, ended_call(state, request)}
+
       {turn_id, %{pid: holder}} ->
         case Aqua.Loop.Worker.stop(holder) do
           :ok -> {:noreply, recover_held(state, turn_id)}
           {:error, _} -> {:stop, :normal, retire_runtime(state)}
         end
-
-      nil ->
-        Prima.LoggerContext.unexpected(__MODULE__, msg)
-        {:noreply, state}
     end
   end
 
@@ -1078,11 +1174,14 @@ defmodule Aqua.Runner do
   defp handle_owned_info(%ThreadEvent{kind: :tool_activity, data: list}, state),
     do: {:noreply, %{state | tool_activity: list}}
 
+  # The loop announces its fence as it starts and as it takes its root
+  # back after a launch: a page's call waiting here becomes a step now.
   defp handle_owned_info(
          %ThreadEvent{kind: :turn_fence, data: %{turn_id: turn_id, fence: fence}},
          %{live: %{turn_id: turn_id}} = state
        ),
-       do: {:noreply, %{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)}}
+       do:
+         {:noreply, propose(%{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)})}
 
   defp handle_owned_info(
          %ThreadEvent{kind: :delta_abandoned, data: %{turn_id: turn_id} = marker},
@@ -1095,6 +1194,9 @@ defmodule Aqua.Runner do
          %{live: %{turn_id: turn_id}} = state
        ),
        do: {:noreply, %{state | partials: Aqua.Loop.Stream.add(state.partials, delta)}}
+
+  defp handle_owned_info(%ThreadEvent{kind: :message, data: %{kind: "page_result"} = row}, state),
+    do: {:noreply, answer(state, row)}
 
   defp handle_owned_info(%ThreadEvent{kind: :message, data: row}, state),
     do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
@@ -1296,6 +1398,10 @@ defmodule Aqua.Runner do
         {:error, error} -> {:halt, {:error, error, state}}
       end
     end)
+    |> case do
+      {:ok, state} -> {:ok, drop_pages(state, reason)}
+      error -> error
+    end
   end
 
   defp cancel_turn(state, id, reason, status) do
@@ -1396,6 +1502,37 @@ defmodule Aqua.Runner do
   end
 
   defp recover_one(action, state) do
+    case orphaned(action, state) do
+      {:skip, state} -> state
+      state -> recovered(action, state)
+    end
+  end
+
+  # What a predecessor runner held of a page's calls died with it.
+  defp orphaned({:queue, turn}, state) do
+    if opened_on_call?(state, turn),
+      do: {:skip, end_turn(state, turn.id, "cancelled", @orphaned)},
+      else: state
+  end
+
+  defp orphaned({mode, turn}, state) when mode in [:wait, :continue, :adopt] do
+    with {:ok, steps} <- Tape.steps(state.ctx, turn),
+         [_ | _] = ids <-
+           for(%{purpose: "page", dispatch_state: "proposed", id: id} <- steps, do: id) do
+      _ = Tape.skip_steps(state.ctx, turn, @orphaned, ids)
+    end
+
+    state
+  end
+
+  defp orphaned(_action, state), do: state
+
+  defp opened_on_call?(state, %{message_id: id}) when is_binary(id),
+    do: match?({:ok, %{kind: "page_call"}}, Tape.message(state.ctx, id))
+
+  defp opened_on_call?(_state, _turn), do: false
+
+  defp recovered(action, state) do
     case action do
       {:queue, turn} ->
         entry = %{
@@ -1530,6 +1667,186 @@ defmodule Aqua.Runner do
           |> end_turn(entry.turn_id, "cancelled", unresumable(reason))
           |> start_next()
       end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A page's calls
+  # ---------------------------------------------------------------------------
+
+  defp answering(state, call) do
+    answering = %{user_id: call.user_id, monitor: Process.monitor(call.browser)}
+    %{state | answering: Map.put(state.answering, call.request, answering)}
+  end
+
+  defp unanswering(state, request) do
+    case Map.pop(state.answering, request) do
+      {nil, _answering} ->
+        state
+
+      {%{monitor: monitor}, answering} ->
+        Process.demonitor(monitor, [:flush])
+        %{state | answering: answering}
+    end
+  end
+
+  # A page's call whose request ended, or whose browser is gone: dropped
+  # while it waits, its step withdrawn while still proposed.
+  defp ended_call(state, request) do
+    case Enum.split_with(state.pages, &(&1.request == request)) do
+      {[_ended], pages} ->
+        unanswering(%{state | pages: pages}, request)
+
+      {[], _pages} ->
+        state =
+          if Map.has_key?(state.answering, request), do: withdraw(state, request), else: state
+
+        unanswering(state, request)
+    end
+  end
+
+  # The waiting calls become steps of the running turn, in order, and its
+  # loop is told. A turn that is not running takes none, nor one whose
+  # loop has not announced its fence yet: they wait. A step is written
+  # under the fence the loop announced, never one read since, so a turn
+  # another holder took writes none.
+  defp propose(%{live: %{turn_id: turn_id}, partials: %{fence: fence}, pages: [_ | _]} = state)
+       when is_integer(fence) do
+    with {:ok, %{status: "running"} = turn} <- Tape.turn(state.ctx, turn_id) do
+      {pages, proposed?, state} = propose_all(state, %{turn | fence: fence}, state.pages, false)
+
+      with true <- proposed?,
+           pid when is_pid(pid) <- Aqua.Loop.holder(turn.id),
+           do: send(pid, {:page_call, turn.id})
+
+      %{state | pages: pages}
+    else
+      _not_running -> state
+    end
+  end
+
+  defp propose(state), do: state
+
+  defp propose_all(state, _turn, [], proposed?), do: {[], proposed?, state}
+
+  defp propose_all(state, turn, [call | rest] = pages, proposed?) do
+    proposal = Aqua.PageCalls.proposal(turn, Aqua.PageCalls.row(call))
+
+    case Tape.propose_call(state.ctx, turn, proposal) do
+      {:ok, _step} -> propose_all(state, turn, rest, true)
+      {:error, :illegal_transition} -> {pages, proposed?, state}
+      {:error, reason} -> state |> refuse_call(call, reason) |> propose_all(turn, rest, proposed?)
+    end
+  end
+
+  # A turn of its own for a call with no turn to join: it asks no model,
+  # and runs as the person whose turn put the page, under that turn's
+  # origin.
+  defp open_call(state, call) do
+    with true <- Opus.available?() || {:error, :execution_unavailable},
+         {:ok, put} <- Tape.turn(state.ctx, call.put_turn_id),
+         {:ok, actor} <-
+           Sanctum.Tenancy.continuation(put.requested_by, state.athanor_id, put.origin),
+         {:ok, %{turn: turn}} <-
+           Tape.accept(actor, state.id, %{
+             message: %{
+               author: Prima.Author.agent(),
+               sent_by: put.agent,
+               kind: "page_call",
+               content: call.name,
+               payload: Aqua.PageCalls.row(call),
+               client_id: call.request
+             },
+             turn: %{
+               agent: put.agent,
+               requested_by: put.requested_by,
+               model: put.model,
+               options: put |> options_of() |> Map.delete("schedule")
+             }
+           }) do
+      entry = %{
+        turn_id: turn.id,
+        user_id: put.requested_by,
+        sent_by: turn.sent_by,
+        job: job_of(turn),
+        ctx: actor,
+        agent: put.agent,
+        origin: turn.origin
+      }
+
+      {:ok, start(state, entry)}
+    else
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp options_of(%{options: json}) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{} = options} -> options
+      _ -> %{}
+    end
+  end
+
+  defp options_of(_turn), do: %{}
+
+  # A page's calls waiting here are queued work like any turn: what cuts
+  # the turns drops them, each answered with its reason.
+  defp drop_pages(state, reason),
+    do: %{Enum.reduce(state.pages, state, &refuse_call(&2, &1, reason)) | pages: []}
+
+  defp refuse_call(state, call, reason) do
+    {status, body} =
+      Aqua.PageCalls.answered(%{content: describe(reason), payload: %{"skipped" => true}})
+
+    Opus.Browser.answer(state.athanor_id, call.user_id, call.request, status, body)
+    unanswering(state, call.request)
+  end
+
+  defp answer(state, row) do
+    payload = Tape.payload(row)
+    request = payload["tool_call_id"]
+
+    case Map.fetch(state.answering, request) do
+      {:ok, %{user_id: user_id}} ->
+        {status, body} = Aqua.PageCalls.answered(%{content: row.content, payload: payload})
+        Opus.Browser.answer(state.athanor_id, user_id, request, status, body)
+        unanswering(state, request)
+
+      :error ->
+        state
+    end
+  end
+
+  # A turn ended: a call it held that no row answered is answered as
+  # cancelled; the calls still waiting here are not its.
+  defp answer_ended(state) do
+    waiting = MapSet.new(state.pages, & &1.request)
+
+    Enum.reduce(state.answering, state, fn {request, %{user_id: user_id}}, state ->
+      if MapSet.member?(waiting, request) or state.paused != nil do
+        state
+      else
+        refuse_call(
+          state,
+          %{request: request, user_id: user_id},
+          "the turn ended before the call ran"
+        )
+      end
+    end)
+  end
+
+  # A request that ended: no step of it is recorded or dispatched from
+  # now on, and its step still proposed is skipped and its card withdrawn,
+  # so a late yes runs nothing. Withdrawing a card is no decision the tape
+  # announces: a turn paused on it is settled here, and goes on once no
+  # other card is pending.
+  defp withdraw(state, request) do
+    with {:ok, %{turn_id: turn_id, skipped: [_ | _]}} <-
+           Tape.end_call(state.ctx, state.id, request, "the page's request ended"),
+         %{paused: %{turn_id: ^turn_id}} <- state do
+      settle_paused(state)
+    else
+      _ -> state
     end
   end
 

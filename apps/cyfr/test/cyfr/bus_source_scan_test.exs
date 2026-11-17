@@ -21,7 +21,7 @@ defmodule Cyfr.BusSourceScanTest do
   @topic_literals ~w("tenant: "sanctum:vault "sanctum:athanor "sanctum:caller "sanctum:sessions
                      "platform:notify "health_check: "page: "bus: "thread: "execution:events
                      "progress: "cyfr:schedule_completions "cyfr:settings_changed
-                     "aqua:crew_deliveries "aqua:schedule_turns)
+                     "aqua:crew_deliveries "aqua:schedule_turns "aqua:page_calls)
 
   defp lib_lines do
     for lib <- Prima.Test.SourceTree.app_libs(root()),

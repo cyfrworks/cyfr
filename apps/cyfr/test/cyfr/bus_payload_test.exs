@@ -32,6 +32,7 @@ defmodule Cyfr.BusPayloadTest do
     LayoutPublished,
     McpServers,
     Notify,
+    PageCall,
     Ping,
     PolicyDecision,
     Program,
@@ -123,6 +124,14 @@ defmodule Cyfr.BusPayloadTest do
       AquaAsk.new("About the runs widget on my main desktop (canvas): "),
       ScheduleCompleted.new(@actor),
       ScheduleTurnDue.new(@actor),
+      PageCall.new(@actor, :call,
+        user_id: "usr_payload",
+        thread_id: "thr_payload",
+        request: "pcl_payload",
+        op: "invoke",
+        body: ~s({"v":1}),
+        put: %{turn_id: "trn_payload", tincture: "tincture:local.viewer:1.0.0"}
+      ),
       CrewPending.new(@actor),
       VaultEntry.new(@actor, :changed, name: "github", type: "api_key", status: "fine"),
       CrewActivity.new(@actor, :started,
@@ -317,7 +326,12 @@ defmodule Cyfr.BusPayloadTest do
             fn -> FileOffer.new(:lost, "ofr_1", "usr_1", "a.txt") end,
             fn -> FileOffer.new(:offered, "", "usr_1", "a.txt") end,
             fn -> FileOffer.new(:offered, "ofr_1", nil, "a.txt") end,
-            fn -> FileOffer.new(:offered, "ofr_1", "usr_1", nil) end
+            fn -> FileOffer.new(:offered, "ofr_1", "usr_1", nil) end,
+            fn -> PageCall.new(@actor, :answered, user_id: "u", thread_id: "t", request: "r") end,
+            fn -> PageCall.new(@actor, :ended, user_id: "u", thread_id: "t") end,
+            fn ->
+              PageCall.new(@actor, :ended, user_id: "u", thread_id: "t", request: "r", body: "b")
+            end
           ] do
         assert_raise ArgumentError, build
       end

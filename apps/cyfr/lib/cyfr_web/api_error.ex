@@ -12,7 +12,8 @@ defmodule CyfrWeb.ApiError do
   A rejection is a refusal (`Prima.Refusal`): the body is
   `{"code": <class>, "message": <sentence>}`, the sentence always the
   refusal's own, plus `data` for a consent signal, and a 401 carries the
-  `www-authenticate` challenge. `status/1` is the class→HTTP table.
+  `www-authenticate` challenge. The class→HTTP table is
+  `Prima.Refusal.http_status/1`.
 
   A rejection rendered here is the request's refused decision, recorded
   once (`CyfrWeb.Plugs.CallIdentity.refused/2`) when the pipeline
@@ -22,31 +23,6 @@ defmodule CyfrWeb.ApiError do
   @behaviour CyfrWeb.ErrorRenderer
 
   import Plug.Conn
-
-  @statuses %{
-    invalid_argument: 400,
-    unauthenticated: 401,
-    forbidden: 403,
-    consent_required: 403,
-    # RFC 6585 §3: the request stands and needs its confirmation first —
-    # neither a denial (403) nor a conflict (409).
-    confirmation_required: 428,
-    not_found: 404,
-    conflict: 409,
-    not_owner: 409,
-    rate_limited: 429,
-    setup_required: 503,
-    unavailable: 503,
-    timeout: 504,
-    corrupt: 500,
-    cancelled: 500,
-    uncertain: 500,
-    internal: 500
-  }
-
-  @doc "The HTTP status a refusal class answers with."
-  @spec status(Prima.Refusal.class()) :: pos_integer()
-  def status(class), do: Map.fetch!(@statuses, class)
 
   @doc """
   Render `reason` at `status`. The body's `code` is the reason's class

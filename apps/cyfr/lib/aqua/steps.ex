@@ -17,6 +17,9 @@ defmodule Aqua.Steps do
   An operation the table does not name is worded by what kind of call it
   was: a component's run, a step that shows something, a card's decision,
   or a call of a tool.
+
+  A step a page in Aqua's browser called (purpose `page`,
+  `Aqua.PageCalls`) is worded as the page's: "The page ran an app".
   """
 
   alias Sanctum.Context
@@ -81,6 +84,13 @@ defmodule Aqua.Steps do
   end
 
   @doc """
+  The sentence of a step of `purpose` that calls `action` of `tool`: a
+  page's step (`"page"`) as the page's, any other as `sentence/2`.
+  """
+  @spec sentence(String.t() | nil, String.t() | nil, String.t() | nil) :: String.t()
+  def sentence(tool, action, purpose), do: tool |> sentence(action) |> by(purpose)
+
+  @doc """
   The steps of `thread_id` across its turns, newest first, at most 100,
   each `%{id, turn, at, sentence, status}`. `opts`: `:limit` and
   `:before` (a step's id: the page after it), as
@@ -99,7 +109,7 @@ defmodule Aqua.Steps do
       id: row.id,
       turn: row.turn_id,
       at: row.started_at || row.ended_at,
-      sentence: worded(row),
+      sentence: row |> worded() |> by(row.purpose),
       status: status(row)
     }
   end
@@ -108,6 +118,12 @@ defmodule Aqua.Steps do
   defp worded(%{kind: "ui"}), do: "Showed something on the screen"
   defp worded(%{kind: "approval"}), do: "Asked you to decide"
   defp worded(%{tool: tool, action: action}), do: sentence(tool, action)
+
+  # Every sentence opens on its verb, which follows the page's name.
+  defp by(<<first::utf8, rest::binary>>, "page"),
+    do: "The page " <> String.downcase(<<first::utf8>>) <> rest
+
+  defp by(sentence, _purpose), do: sentence
 
   defp status(%{approval_id: id, dispatch_state: "proposed", outcome: nil}) when is_binary(id),
     do: :waiting

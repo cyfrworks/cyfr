@@ -126,7 +126,7 @@ defmodule Emissary.Web.TinctureDataController do
 
   # A refusal made here, before the gate.
   defp refuse(conn, %Prima.Refusal{} = refusal),
-    do: __MODULE__.send(conn, CyfrWeb.ApiError.status(refusal.class), refusal, nil)
+    do: __MODULE__.send(conn, Prima.Refusal.http_status(refusal.class), refusal, nil)
 
   # A refusal the gate made and recorded.
   defp refused_by_gate(conn, reason) do
@@ -134,7 +134,7 @@ defmodule Emissary.Web.TinctureDataController do
 
     conn
     |> CallIdentity.decided()
-    |> answer(CyfrWeb.ApiError.status(refusal.class), refusal)
+    |> answer(Prima.Refusal.http_status(refusal.class), refusal)
   end
 
   defp retry_after(conn, {:rate_limited, seconds}) when is_integer(seconds),
@@ -276,13 +276,13 @@ defmodule Emissary.Web.TinctureDataController do
   defp granted(:invoke, %{ref: ref}, %{manifest: manifest}) do
     if Compendium.tincture_invokes?(manifest, ref),
       do: :ok,
-      else: {:error, FrameAdmission.undeclared(:component)}
+      else: {:error, Prima.Refusal.undeclared(:component)}
   end
 
   defp granted(:action, %{operation: operation}, %{declaration: declaration}) do
     if operation in declaration.actions,
       do: :ok,
-      else: {:error, FrameAdmission.undeclared(:action)}
+      else: {:error, Prima.Refusal.undeclared(:action)}
   end
 
   defp read(:invoke, _request), do: :invoke

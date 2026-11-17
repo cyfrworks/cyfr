@@ -157,7 +157,11 @@ defmodule Aqua.Loop do
       sent_upto: 0,
       excerpt_sent?: false,
       # A call's outcome is unknown: only replay-safe reads run from here.
-      restricted?: false
+      restricted?: false,
+      # Whether the next round asks the model: not once its answer called
+      # nothing, so a page's call proposed after it runs and the turn ends
+      # without asking again, and never in a turn opened on a page's call.
+      model?: true
     ]
   end
 
@@ -189,7 +193,12 @@ defmodule Aqua.Loop do
         case claim_and_start(ctx, turn) do
           {:ok, state} ->
             Aqua.Loop.Stream.announce_fence(state.spec.guest, state.turn)
-            conclude(state, loop(state))
+
+            case open_call(state) do
+              {:ok, state} -> conclude(state, loop(state))
+              {:error, :superseded} -> conclude(state, {:cancelled, state})
+              {:error, reason} -> conclude(state, {{:failed, reason}, state})
+            end
 
           {:error, {:after_claim, claim, turn, reason}} ->
             never_ran(ctx, claim, turn, reason)
@@ -295,7 +304,12 @@ defmodule Aqua.Loop do
       with {:ok, turn} <- Tape.turn(ctx, turn_id),
            {:ok, claim, turn} <- reclaim(ctx, turn, mode),
            {:ok, authority} <- pinned_authority(ctx, turn),
-           {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false),
+           {:ok, spec} <-
+             Turn.build(ctx, turn,
+               authority: authority,
+               excerpt?: false,
+               asks_model?: asks_model?(ctx, turn)
+             ),
            {:ok, turn} <- Tape.pin_catalyst(ctx, turn, spec.catalyst) do
         spec = Turn.with_turn(spec, turn)
 
@@ -500,7 +514,11 @@ defmodule Aqua.Loop do
                agent_capability_digest: snapshot.capability_digest,
                recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
              }),
-           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority),
+           {:ok, spec} <-
+             Turn.build(ctx, started,
+               authority: claim.authority,
+               asks_model?: asks_model?(ctx, started)
+             ),
            {:ok, started} <- Tape.pin_catalyst(ctx, started, spec.catalyst) do
         {:ok,
          %State{
@@ -599,12 +617,19 @@ defmodule Aqua.Loop do
 
       _ ->
         {status, error} = terminal(result)
+        if status != "completed", do: skip_pages(ended)
         suspend_keeper(ended)
 
         case Tape.finish(ctx(state), ended.turn, status, %{error: error}) do
           # A steer landed while the last answer was written: the turn goes
           # on to answer it.
           {:error, :steer_pending} ->
+            resume_keeper(ended)
+            conclude(state, loop(%{ended | model?: true}))
+
+          # A page's call was proposed after the last look: the turn goes
+          # on to dispatch it.
+          {:error, :call_pending} ->
             resume_keeper(ended)
             conclude(state, loop(ended))
 
@@ -613,6 +638,21 @@ defmodule Aqua.Loop do
             release(ended)
             final
         end
+    end
+  end
+
+  # A turn that ends otherwise than completed runs none of the page's
+  # calls still proposed in it: each is skipped, its card withdrawn, and
+  # its result row answers the page.
+  defp skip_pages(%State{} = state) do
+    with {:ok, steps} <- Tape.steps(guest(state), state.turn) do
+      case for(%{purpose: "page", dispatch_state: "proposed", id: id} <- steps, do: id) do
+        [] ->
+          :ok
+
+        ids ->
+          Tape.skip_steps(guest(state), state.turn, "the turn ended before the call ran", ids)
+      end
     end
   end
 
@@ -673,7 +713,11 @@ defmodule Aqua.Loop do
         {:halt, {:failed, :deadline}, state}
 
       true ->
-        model_round(state)
+        case page_round(state) do
+          {:continue, %State{model?: true} = state} -> model_round(state)
+          {:continue, state} -> {:halt, :completed, state}
+          halt -> halt
+        end
     end
   end
 
@@ -838,12 +882,17 @@ defmodule Aqua.Loop do
     do: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == turn.id))
 
   defp ask_model(%State{} = state, step, request, retained, retries) do
-    answer = model_call(state, step, request, retained)
+    answer = model_call(state, step, request, retained, true)
     forget? = forgets?(state, request, answer)
 
     case answer do
       {:ok, data} ->
         on_response(state, step, data)
+
+      # A page's call that ran while the model answered has an unknown
+      # outcome: the model was stopped, and the turn stops on the call.
+      {:uncertain, page_step, reason, rest} ->
+        stop_uncertain(state, page_step, reason, rest)
 
       # The turn's fence moved before the model's ledger could join it.
       {:error, :superseded} ->
@@ -992,7 +1041,7 @@ defmodule Aqua.Loop do
   # output — a chat reply, a flush's notes, a compaction's summary, a
   # refusal's text — passes through here, and none happens unless the
   # join was written. A turn whose fence moved answers `:superseded`.
-  defp model_call(%State{spec: spec} = state, step, request, retained) do
+  defp model_call(%State{spec: spec} = state, step, request, retained, pages? \\ false) do
     input = %{"operation" => "chat", "params" => request}
     retained_input = retained && %{"operation" => "chat", "params" => retained}
     guest = guest(state)
@@ -1000,32 +1049,40 @@ defmodule Aqua.Loop do
     streamed = stream_attrs(state, step)
     stream = streamed && Aqua.Loop.Stream.open(guest, step.child_execution_id, streamed)
 
+    run = fn ->
+      Opus.run_child(spec.authority, spec.catalyst, nil, input,
+        ctx: guest,
+        execution_id: step.child_execution_id,
+        step_id: step.id,
+        parent_execution_id: turn.root_execution_id,
+        root_execution_id: turn.root_execution_id,
+        declared_needs: [],
+        retention_class: "chat_step",
+        retained_input: retained_input,
+        charge: Binding.charge(step, turn),
+        guest_fn: :spawn,
+        envelope: true
+      )
+    end
+
     answer =
       try do
-        worker(fn ->
-          Opus.run_child(spec.authority, spec.catalyst, nil, input,
-            ctx: guest,
-            execution_id: step.child_execution_id,
-            step_id: step.id,
-            parent_execution_id: turn.root_execution_id,
-            root_execution_id: turn.root_execution_id,
-            declared_needs: [],
-            retention_class: "chat_step",
-            retained_input: retained_input,
-            charge: Binding.charge(step, turn),
-            guest_fn: :spawn,
-            envelope: true
-          )
-        end)
+        if pages?, do: model_worker(state, step, run), else: worker(run)
       after
         Aqua.Loop.Stream.close(stream)
       end
 
     result =
-      case Tape.join_sources(guest, turn, model_ledger(state, step, answer)) do
-        :ok -> model_result(answer)
-        {:error, :superseded} -> {:error, :superseded}
-        {:error, _unwritten} -> {:error, :sources_unrecorded}
+      case answer do
+        {:uncertain, _page_step, _reason, _rest} = stopped ->
+          stopped
+
+        answer ->
+          case Tape.join_sources(guest, turn, model_ledger(state, step, answer)) do
+            :ok -> model_result(answer)
+            {:error, :superseded} -> {:error, :superseded}
+            {:error, _unwritten} -> {:error, :sources_unrecorded}
+          end
       end
 
     if streamed && not lands_text?(result), do: Aqua.Loop.Stream.abandon(guest, streamed)
@@ -1120,7 +1177,16 @@ defmodule Aqua.Loop do
           %{step: call_step, call: call, approval: nil}
         end)
 
-      if items == [], do: {:halt, :completed, state}, else: dispatch(state, items)
+      # A page's calls the model's answer left waiting, a launch among
+      # them, run before the round's own; an answer that calls nothing
+      # asks the model nothing more.
+      state = %{state | model?: items != []}
+      {pages, carded} = page_items(state)
+      items = pages ++ items
+
+      if items == [] and carded == 0,
+        do: {:halt, :completed, state},
+        else: dispatch(state, items, carded)
     else
       {:error, :superseded} ->
         {:halt, :cancelled, state}
@@ -1147,6 +1213,23 @@ defmodule Aqua.Loop do
     args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
     id = block["id"] || Prima.UUID7.generate_id("call")
 
+    recorded = recorded(name, args, call)
+
+    Map.merge(recorded, %{
+      tool_call_id: id,
+      name: name,
+      arguments: args,
+      provider_data: block["provider_data"],
+      idempotency_key: "call:#{state.turn.id}:#{model_step.id}:#{id}"
+    })
+  end
+
+  @doc false
+  # What a step records of a call as it was bound, a model's
+  # (`call_attrs/4`) or a page's (`Aqua.PageCalls.proposal/3`): one
+  # recording, so a page's call is recorded as Aqua's call of its kind is.
+  @spec recorded(String.t(), map(), {:ok, Call.t()} | {:error, term()}) :: map()
+  def recorded(name, args, call) do
     {tool, action, kind, recovery, child, step_kind} =
       case call do
         {:ok, %Call{} = call} ->
@@ -1158,16 +1241,11 @@ defmodule Aqua.Loop do
       end
 
     %{
-      tool_call_id: id,
-      name: name,
       tool: tool,
       action: action,
-      arguments: args,
-      provider_data: block["provider_data"],
       kind: kind,
       recovery: recovery,
       child_execution_id: child,
-      idempotency_key: "call:#{state.turn.id}:#{model_step.id}:#{id}",
       proposal_digest:
         Policy.proposal_digest(%{"tool" => tool, "action" => action, "args" => args}),
       step_kind: step_kind
@@ -1217,8 +1295,10 @@ defmodule Aqua.Loop do
   # arrived skips what has not started. A launch naming an account its
   # app's profile does not bind ends the turn as setup required, with
   # nothing else of the response started.
-  defp dispatch(%State{} = state, items) do
-    {runnable, cards, setup} = Enum.reduce(items, {[], 0, nil}, &decide(state, &1, &2))
+  # `carded` counts the cards already waiting for calls of the turn, a
+  # page's opened while the model answered.
+  defp dispatch(%State{} = state, items, carded \\ 0) do
+    {runnable, cards, setup} = Enum.reduce(items, {[], carded, nil}, &decide(state, &1, &2))
     runnable = Enum.reverse(runnable)
 
     case setup do
@@ -1511,6 +1591,7 @@ defmodule Aqua.Loop do
         [id: Prima.UUID7.generate_id("apr"), sources: sources] ++ launch ++ program ++ card_opts
       )
       |> Map.put("tool_call_id", call.tool_call_id)
+      |> Map.put("purpose", step.purpose)
 
     case Tape.open_approval(guest(state), state.turn, step, %{
            id: intent["id"],
@@ -1920,6 +2001,9 @@ defmodule Aqua.Loop do
         {:error, %Prima.Refusal{stage: :admission, reason: {:invoke_denied, _}} = refusal} ->
           {"denied", refusal.message, true}
 
+        {:error, {:launch, reason}} ->
+          {"error", describe(reason), true}
+
         {:error, message} when is_binary(message) ->
           {"error", message, true}
 
@@ -1935,19 +2019,32 @@ defmodule Aqua.Loop do
       end
 
     Tape.close_step(guest(state), state.turn, step, outcome, %{
-      result: %{
-        content: text,
-        payload: %{
+      result:
+        result_row(step, outcome, page_value(call, result), text, %{
           "tool_call_id" => call && call.tool_call_id,
           "name" => call && call.model_name,
           "is_error" => error?
-        }
-      },
+        }),
       execution_id: step.child_execution_id,
       error: if(error?, do: text, else: nil),
       sources: sources
     })
   end
+
+  # A page's call is answered in the wire's shape (`Aqua.PageCalls.answer/3`):
+  # its result row is the answer the page is handed.
+  defp result_row(%{purpose: "page"}, outcome, result, text, payload) do
+    {status, body} = Aqua.PageCalls.answer(outcome, result, text)
+    %{content: body, payload: Map.put(payload, "status", status)}
+  end
+
+  defp result_row(_step, _outcome, _result, text, payload), do: %{content: text, payload: payload}
+
+  defp page_value(%Call{kind: :hand}, {:ok, %{output: output}}),
+    do: {:ok, Aqua.PageCalls.data(output)}
+
+  defp page_value(%Call{kind: :hand}, {:ok, output}), do: {:ok, Aqua.PageCalls.data(output)}
+  defp page_value(_call, result), do: result
 
   defp render(nil, {:error, reason}), do: %{text: describe(reason), is_error: true}
 
@@ -2211,14 +2308,12 @@ defmodule Aqua.Loop do
 
     _ =
       Tape.close_step(guest(state), state.turn, step, "ok", %{
-        result: %{
-          content: text,
-          payload: %{
+        result:
+          result_row(step, "ok", {:ok, output(result)}, text, %{
             "tool_call_id" => call && call.tool_call_id,
             "name" => call && call.model_name,
             "is_error" => false
-          }
-        },
+          }),
         execution_id: id,
         launched: %{reference: call && call.target, reached_outside: reached_outside(result)},
         sources: launched_ledger(state, step, id, result)
@@ -2227,22 +2322,30 @@ defmodule Aqua.Loop do
     state
   end
 
-  defp close_launch(state, step, call, {:refused, reason}) do
-    close(state, step, call, {:error, describe(reason)})
+  defp close_launch(state, step, call, {:refused, reason}),
+    do: failed_launch(state, step, call, reason, [])
+
+  defp close_launch(state, step, call, {:error, reason}),
+    do: failed_launch(state, step, call, reason, read_ledger(state, step.child_execution_id))
+
+  # A launch that did not run is closed in its sentence, its reason kept
+  # for a page's answer. A page's call of a component that is not granted
+  # asks the person for the grant, as a model's asks with request_setup.
+  defp failed_launch(state, step, call, reason, sources) do
+    close(state, step, call, {:error, {:launch, reason}}, sources)
+
+    with "page" <- step.purpose,
+         %Call{target: ref} <- call,
+         %Prima.Refusal{class: :consent_required} <- Sanctum.Refusals.classify(reason),
+         do: announce(state, :consent_required, %{ref: ref, user_id: ctx(state).user_id})
+
     state
   end
 
-  defp close_launch(state, step, call, {:error, reason}) do
-    close(
-      state,
-      step,
-      call,
-      {:error, describe(reason)},
-      read_ledger(state, step.child_execution_id)
-    )
-
-    state
-  end
+  # What the launched component answered, which a page's call is handed
+  # as the endpoint hands a frame's.
+  defp output(%{result: output}), do: output
+  defp output(result), do: result
 
   defp launched_ledger(state, step, id, %{} = result) do
     case Map.get(result, :sources) do
@@ -2298,10 +2401,17 @@ defmodule Aqua.Loop do
   # around its launch, as its rows already say, and stops the group: no
   # call after the launch, and no model round, runs without the root's
   # slot. The runner continues the paused turn from its rows.
+  # The fence is announced again once the root is back, so the runner
+  # records a page's call it held while the turn was paused around the
+  # launch.
   defp resumed(%State{} = state) do
     case resume_root(state, 0) do
-      {:ok, state} -> {:ok, state}
-      {:error, _reason} -> {:halt, {:paused, :launch}, state}
+      {:ok, state} ->
+        Aqua.Loop.Stream.announce_fence(state.spec.guest, state.turn)
+        {:ok, state}
+
+      {:error, _reason} ->
+        {:halt, {:paused, :launch}, state}
     end
   end
 
@@ -2324,6 +2434,237 @@ defmodule Aqua.Loop do
 
         error
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A page's calls: steps the host proposed
+  # ---------------------------------------------------------------------------
+
+  # A call a page in Aqua's browser made is a step the runner proposed
+  # into the running turn (`Aqua.PageCalls`), with its call in a row of
+  # its own, and the runner tells this process of it (`{:page_call,
+  # turn_id}`): the notice only wakes the loop, and the rows decide what
+  # runs. Each is decided and dispatched as a model's call is, by the same
+  # code. They run before each model round (`page_round/1`), and while the
+  # model answers (`model_wait/5`). A turn with a page's call still
+  # proposed does not complete: storage refuses it (`:call_pending`, which
+  # covers a call proposed after the last look) and the loop goes round
+  # again. A turn opened on a page's call asks no model (`open_call/1`).
+
+  # A turn opened on a page's call records that call as its first step,
+  # now that the turn runs, and asks no model. A call whose request ended
+  # is recorded as no step, and the turn ends with nothing run.
+  defp open_call(%State{turn: %{message_id: id}} = state) when is_binary(id) do
+    case Tape.message(guest(state), id) do
+      {:ok, %{kind: "page_call"} = row} ->
+        proposal = Aqua.PageCalls.proposal(state.turn, Tape.payload(row), message_id: row.id)
+
+        case Tape.propose_call(guest(state), state.turn, proposal) do
+          {:ok, _step} -> {:ok, %{state | model?: false}}
+          {:error, :call_ended} -> {:ok, %{state | model?: false}}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  defp open_call(%State{} = state), do: {:ok, state}
+
+  defp opened_on_call?(%State{} = state), do: not asks_model?(guest(state), state.turn)
+
+  # A turn opened on a page's call asks no model, so its brain is not
+  # described when the turn is built (`Turn.build/3`).
+  defp asks_model?(ctx, %{message_id: id}) when is_binary(id),
+    do: not match?({:ok, %{kind: "page_call"}}, Tape.message(ctx, id))
+
+  defp asks_model?(_ctx, _turn), do: true
+
+  # Whether the model's last answer called nothing: no step but a page's
+  # came after it.
+  defp answered?(steps) do
+    case steps |> Enum.reverse() |> Enum.drop_while(&(&1.purpose == "page")) do
+      [%{kind: "model", purpose: "chat", dispatch_state: "closed", outcome: "ok"} | _] -> true
+      _ -> false
+    end
+  end
+
+  defp page_round(%State{} = state) do
+    drain_notices(state.turn.id)
+
+    case page_items(state) do
+      {[], 0} -> {:continue, state}
+      {items, carded} -> dispatch(state, items, carded)
+    end
+  end
+
+  defp drain_notices(turn_id) do
+    receive do
+      {:page_call, ^turn_id} -> drain_notices(turn_id)
+    after
+      0 -> :ok
+    end
+  end
+
+  # The page's calls still proposed in the turn, each with its approval
+  # once the person said yes, and how many wait on a card.
+  defp page_items(%State{} = state) do
+    case Tape.steps(guest(state), state.turn) do
+      {:ok, steps} ->
+        {items, carded} =
+          Enum.reduce(steps, {[], 0}, fn
+            %{purpose: "page", dispatch_state: "proposed"} = step, {items, carded} ->
+              case card(state, step) do
+                :waiting ->
+                  {items, carded + 1}
+
+                approval ->
+                  {[%{step: step, call: recall(state, step), approval: approval} | items], carded}
+              end
+
+            _step, acc ->
+              acc
+          end)
+
+        {Enum.reverse(items), carded}
+
+      _unread ->
+        {[], 0}
+    end
+  end
+
+  # A declined, expired or failed card closes its step where it is
+  # decided, so a proposed step's card waits or was approved.
+  defp card(_state, %{approval_id: nil}), do: nil
+
+  defp card(%State{} = state, %{approval_id: id}) do
+    case Tape.approval(guest(state), id) do
+      {:ok, %{status: "approved"} = approval} -> approval
+      _waiting -> :waiting
+    end
+  end
+
+  # The model is waited for as `worker/1` waits. Meanwhile a page's call
+  # the runner proposed is taken as it arrives (`take_calls/2`): one that
+  # runs at once runs in a worker of its own beside the model, one that
+  # asks opens its card, and one that is refused closes. A launch, a call
+  # that needs its account set up, a call that does not bind, and every
+  # call of a turn nobody is present for, wait for the model's answer and
+  # run before the round's own calls, since a launch lets the root go and
+  # the root is never let go under the model's run. Once the model
+  # answered no call is taken, and the page's workers still running are
+  # waited for. A page's call whose outcome is unknown stops the turn at
+  # once, as the group's first one does (`stop_uncertain/4`): the model's
+  # worker is stopped and its child cancelled first, its ledger joins the
+  # turn and its step closes with no answer used.
+  defp model_worker(%State{} = state, step, fun) do
+    model_wait(state, step, Aqua.Loop.Worker.async(fun), nil, %{})
+  end
+
+  defp model_wait(_state, _step, nil, answer, running) when map_size(running) == 0, do: answer
+
+  defp model_wait(%State{} = state, step, task, answer, running) do
+    model_ref = task && task.ref
+    turn_id = state.turn.id
+
+    receive do
+      {^model_ref, result} when model_ref != nil ->
+        Process.demonitor(model_ref, [:flush])
+        model_wait(state, step, nil, {:ok, result}, running)
+
+      {:DOWN, ^model_ref, :process, _pid, reason} when model_ref != nil ->
+        model_wait(state, step, nil, {:exit, reason}, running)
+
+      {:page_call, ^turn_id} when model_ref != nil ->
+        model_wait(state, step, task, answer, take_calls(state, running))
+
+      {ref, result} when is_map_key(running, ref) ->
+        Process.demonitor(ref, [:flush])
+        {_done, rest} = Map.pop(running, ref)
+
+        case result do
+          {:uncertain, page_step, reason} ->
+            {:uncertain, page_step, reason, stop_model(state, step, task, rest)}
+
+          _ ->
+            model_wait(state, step, task, answer, rest)
+        end
+
+      {:DOWN, ref, :process, _pid, reason} when is_map_key(running, ref) ->
+        {%{item: item}, rest} = Map.pop(running, ref)
+
+        case settle_dead(state, item, reason) do
+          {:uncertain, page_step, why} ->
+            {:uncertain, page_step, why, stop_model(state, step, task, rest)}
+
+          _ ->
+            model_wait(state, step, task, answer, rest)
+        end
+    end
+  end
+
+  defp take_calls(%State{turn: %{origin: "schedule"}}, running), do: running
+
+  defp take_calls(%State{} = state, running) do
+    taken = MapSet.new(running, fn {_ref, %{item: %{step: step}}} -> step.id end)
+
+    {items, _carded} = page_items(state)
+
+    items
+    |> Enum.reject(&(MapSet.member?(taken, &1.step.id) or &1.approval != nil))
+    |> Enum.reduce(running, &take_call(state, &1, &2))
+  end
+
+  defp take_call(%State{} = state, %{step: step, call: {:ok, %Call{} = call}} = item, running) do
+    if state.restricted? and not Policy.replay_safe?(call) do
+      running
+    else
+      case Policy.decide(call, state.spec.policy, place(state)) do
+        :auto ->
+          task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
+          Map.put(running, task.ref, %{item: item, task: task})
+
+        # A launch with no card lets the root go around its run: it runs
+        # once the model has answered.
+        {:auto, _decided} ->
+          running
+
+        :ask ->
+          _ = ask(state, step, call, [], {[], 0, nil})
+          running
+
+        {:ask, %{vault_entry: _, name: _} = account} ->
+          _ = ask(state, step, call, [account: account], {[], 0, nil})
+          running
+
+        {refused, message} when refused in [:deny, :refuse] ->
+          close(state, step, call, {:error, {:denied, message}})
+          running
+
+        _later ->
+          running
+      end
+    end
+  end
+
+  defp take_call(_state, _item, running), do: running
+
+  # What the model's worker started stops before the turn's stop: the
+  # worker, then its child, whose ledger joins the turn as a dead
+  # worker's does, and its step closes as a model request that died does.
+  # Answers what of the page's work still runs, for `cancel_rest/2`.
+  defp stop_model(%State{} = state, step, task, rest) do
+    if task, do: Aqua.Loop.Worker.shutdown(task)
+    Opus.cancel(ctx(state), step.child_execution_id)
+    _ = Tape.join_sources(guest(state), state.turn, read_ledger(state, step.child_execution_id))
+
+    _ =
+      Tape.close_step(guest(state), state.turn, step, "error", %{
+        error: "stopped: a page's call's outcome is unknown"
+      })
+
+    Map.values(rest)
   end
 
   # ---------------------------------------------------------------------------
@@ -2394,7 +2735,8 @@ defmodule Aqua.Loop do
         state
         | restricted?: open != [] or Tape.restricted?(guest, state.turn),
           steps: Enum.count(steps, &(&1.kind == "model")),
-          forgot_session?: Enum.any?(steps, &forgot_session?/1)
+          forgot_session?: Enum.any?(steps, &forgot_session?/1),
+          model?: not opened_on_call?(state) and not answered?(steps)
       }
 
       cond do
@@ -2405,7 +2747,7 @@ defmodule Aqua.Loop do
 
         Tape.steer_pending?(guest, state.turn) ->
           _ = Tape.skip_steps(guest, state.turn, "a newer message arrived")
-          {:continue, state}
+          {:continue, %{state | model?: true}}
 
         true ->
           case proposed_items(state) do
@@ -2434,7 +2776,13 @@ defmodule Aqua.Loop do
     guest = guest(state)
 
     with {:ok, steps} <- Tape.steps(guest, state.turn) do
-      for %{dispatch_state: "proposed", kind: kind} = step <- steps, kind != "model" do
+      # A page's call not yet asked waits for the next page round, after
+      # what the person already approved has run: decided now, its card
+      # would bind the turn's sources before an approved launch's ledger
+      # joins them, and that launch would find it stale.
+      for %{dispatch_state: "proposed", kind: kind} = step <- steps,
+          kind != "model",
+          step.purpose != "page" or is_binary(step.approval_id) do
         %{step: step, call: recall(state, step), approval: approved(state, step)}
       end
     else
@@ -2803,10 +3151,12 @@ defmodule Aqua.Loop do
   # it, from the one table a kept step is worded by too (`Aqua.Steps`).
   defp activity(%State{} = state, items, status) do
     named =
-      Enum.map(items, fn %{call: call} ->
+      Enum.map(items, fn %{call: call} = item ->
+        purpose = item[:step] && item.step.purpose
+
         case call do
-          {:ok, call} -> {call.model_name, Aqua.Steps.sentence(call.tool, call.action)}
-          _unbound -> {"tool", Aqua.Steps.sentence(nil, nil)}
+          {:ok, call} -> {call.model_name, Aqua.Steps.sentence(call.tool, call.action, purpose)}
+          _unbound -> {"tool", Aqua.Steps.sentence(nil, nil, purpose)}
         end
       end)
 

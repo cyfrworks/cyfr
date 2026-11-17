@@ -2657,7 +2657,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Who wrote it: a user id, an agent, or "system".
       add :author, :string, null: false
       # text | approval | error | system | tool_call | tool_result |
-      # compaction | turn_aborted | opening | pointer | report
+      # compaction | turn_aborted | opening | pointer | report | page_call |
+      # page_result
       add :kind, :string, null: false, default: "text"
       add :content, :text, null: false, default: ""
       # Kind-specific JSON: an approval's intent and proposal, a text

@@ -73,6 +73,53 @@ defmodule Opus.Browser do
   runs twice; one the driver no longer holds is refused `:unavailable`,
   as is one not answered in time.
 
+  ## A put
+
+  `put/3` shows a page in the window: one request of op `page` whose
+  arguments are the page's manifest (its `root`, the address's path, its
+  `entry` and each file's `path`, `type` and `size`) and whose `of`
+  says how many `part` messages follow it, each the next at most
+  `Opus.Browser.Frame.put_part_bytes/0` bytes of the files' bytes laid
+  end to end in the manifest's order, in base64. The request and its
+  parts are one write, decided once before its first byte as every
+  request is, so a turn that lost the work hands over none of it and
+  nothing of another write lands between them. A put is bounded in files
+  and bytes (`put_bound/0`, the vector file's `put`): one past the bound
+  is refused before anything starts or is written.
+
+  ## A page's call
+
+  The driver passes up a page's call to CYFR (`call`, a `POST` of the
+  tincture wire from a page it put, its body's bytes in base64), naming
+  the put the calling document belongs to by the id of its `page`
+  request, and the holder answers it (`answer`) with an HTTP status and
+  a body. The holder keeps each window's puts by that id, each with the
+  turn that put it and the tincture reference it put (nil for a page of
+  html or files), from the moment it sends the put, since the driver
+  passes up a document's calls from its commit, before the put is
+  answered. A put waiting for its answer is kept as its waiting request
+  and forgotten with it if it fails; one that succeeded is kept until
+  another put of its window succeeds, the window closes or the session
+  ends. A call naming a put of its window the holder keeps is held under
+  a request the holder names and is announced on `Cyfr.Bus.page_calls/0`
+  (`Cyfr.Bus.PageCall`, kind `call`) with its window, its op, its body's
+  bytes and that put; the holder decides nothing of it. A call naming no
+  such put is answered at once with the wire's refusal for `unavailable`
+  (`Prima.TinctureWire.refusal/1` at the status its class answers with,
+  `Prima.Refusal.http_status/1`), and one that does not read, or whose
+  body is past `Opus.Browser.Frame.call_max_body/0`, with the wire's
+  refusal of its arguments; neither is announced.
+
+  `answer/5` answers a held call once and forgets it; an answer that one
+  frame to the driver does not hold is answered with a refusal in its
+  place. `held/4` names the process that holds a call, which the holder
+  monitors: its death answers the call `unavailable`. It answers that
+  process the holder's own pid, which it monitors in turn: the holder's
+  end, however it comes, ends every call it holds, and a holder killed
+  outright announces nothing. A held call that ends unanswered while the
+  holder lives is announced once, kind `ended`: when the driver gives it
+  up (`callend`) or the process that held it dies.
+
   ## The person's watch
 
   `watch/4` is the person watching one window on a page of their own
@@ -110,14 +157,17 @@ defmodule Opus.Browser do
 
   use GenServer, restart: :temporary
 
+  alias Cyfr.Bus.PageCall
   alias Opus.Browser.Frame
   alias Opus.Programs
 
   @registry Opus.Browser.Registry
   @holders Opus.Browser.Holders
   @max_windows 4
-  @ops ~w(open read click type key page screenshot close)
+  # What `act/4` runs; a page is put (`put/3`).
+  @ops ~w(open read click type key screenshot close)
   @openers ~w(open page)
+  @call_ops ~w(invoke action)
   @request_ms 90_000
   # How long a start and the driver's hello may take, together.
   @start_ms 120_000
@@ -136,9 +186,16 @@ defmodule Opus.Browser do
   @spec max_response() :: pos_integer()
   def max_response, do: Frame.max_response()
 
-  @doc "The operations `act/3` runs."
+  @doc "The operations `act/4` runs; a page is shown by `put/3`."
   @spec ops() :: [String.t()]
   def ops, do: @ops
+
+  @doc """
+  The most files and bytes one put hands over (`Opus.Browser.Frame.put_max_files/0`,
+  `put_max_bytes/0`).
+  """
+  @spec put_bound() :: %{files: pos_integer(), bytes: pos_integer()}
+  def put_bound, do: %{files: Frame.put_max_files(), bytes: Frame.put_max_bytes()}
 
   @doc """
   The bound a newly added browser's row is given (the `browser_memory_bytes`
@@ -205,7 +262,8 @@ defmodule Opus.Browser do
       # alone, so no debug log, status or crash report prints them.
       GenServer.call(
         pid,
-        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args)), allowed?},
+        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args)), allowed?,
+         nil, nil},
         @start_ms + @request_ms + @answer_margin_ms
       )
     else
@@ -217,6 +275,83 @@ defmodule Opus.Browser do
   end
 
   def act(_caller, _op, _args, _allowed?), do: {:error, :not_owned}
+
+  @typedoc """
+  A page to put into a window: `root`, the path of its address
+  (`/t/<athanor>/local/<name>`); `entry`, the path among `files` of the
+  page it opens at; and `files` in the order they are handed, each its
+  `path` below the root, with no leading slash, its `type` and its
+  `bytes`; and, for a tincture, `tincture`, the reference it was put by,
+  which the calls of its documents are announced with (moduledoc).
+  """
+  @type put :: %{
+          required(:root) => String.t(),
+          required(:entry) => String.t(),
+          required(:files) => [%{path: String.t(), type: String.t(), bytes: binary()}],
+          optional(:tincture) => String.t() | nil
+        }
+
+  @doc """
+  Put `put` into the window of the caller's thread and show its entry
+  (moduledoc), for a caller proved as `act/4` proves one. Refused
+  `:put_too_large` when it holds more files or bytes than `put_bound/0`,
+  before anything starts or is written; otherwise answered as `act/4`
+  answers.
+  """
+  @spec put(Programs.caller(), put(), (-> boolean())) :: {:ok, map()} | {:error, term()}
+  def put(
+        {:turn, _ctx, lineage} = caller,
+        %{root: root, entry: entry, files: [_ | _] = files} = put,
+        allowed?
+      )
+      when is_binary(root) and is_binary(entry) and is_function(allowed?, 0) do
+    with :ok <- within_bound(files),
+         {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
+         window when is_binary(window) <- Map.get(lineage, "thread_id"),
+         {:ok, pid} <- holder(athanor_id, user_id) do
+      manifest = %{
+        "root" => root,
+        "entry" => entry,
+        "files" =>
+          Enum.map(files, &%{"path" => &1.path, "type" => &1.type, "size" => byte_size(&1.bytes)})
+      }
+
+      # The files' bytes, like a page's html, travel in
+      # `Opus.Programs.Output`s, which show their size alone.
+      parts = files |> Enum.map(& &1.bytes) |> IO.iodata_to_binary() |> parts()
+
+      GenServer.call(
+        pid,
+        {:act, caller, turn_id, window, "page", Programs.Output.new(Jason.encode!(manifest)),
+         allowed?, parts, Map.get(put, :tincture)},
+        @start_ms + @request_ms + @answer_margin_ms
+      )
+    else
+      {:error, reason} -> {:error, reason}
+      _no_thread -> {:error, :not_owned}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  def put(_caller, _put, _allowed?), do: {:error, :not_owned}
+
+  defp within_bound(files) do
+    bytes = Enum.reduce(files, 0, &(&2 + byte_size(&1.bytes)))
+
+    if length(files) <= Frame.put_max_files() and bytes <= Frame.put_max_bytes(),
+      do: :ok,
+      else: {:error, :put_too_large}
+  end
+
+  # The bytes of a put's `part` messages, in order, each in base64.
+  defp parts(<<>>), do: []
+
+  defp parts(bytes) do
+    size = min(byte_size(bytes), Frame.put_part_bytes())
+    <<part::binary-size(^size), rest::binary>> = bytes
+    [Programs.Output.new(Base.encode64(part)) | parts(rest)]
+  end
 
   @typedoc """
   A watch of a window: its holder, which the viewer may monitor, and the
@@ -412,6 +547,49 @@ defmodule Opus.Browser do
     match?({:ok, [_ | _]}, Programs.running(Programs.browser(athanor_id, user_id)))
   end
 
+  @doc """
+  Answer the page's call `request` (`Cyfr.Bus.PageCall`) with an HTTP
+  `status` and `body`, the wire's answer, once; the call is then
+  forgotten. An answer that one frame to the driver does not hold is
+  answered with the wire's refusal in its place. A request the person's
+  browser does not hold, unknown, answered or ended, writes nothing.
+  """
+  @spec answer(String.t(), String.t(), String.t(), 100..599, binary()) :: :ok
+  def answer(athanor_id, user_id, request, status, body)
+      when is_binary(athanor_id) and is_binary(user_id) and is_binary(request) and
+             status in 100..599 and is_binary(body) do
+    case lookup(athanor_id, user_id) do
+      nil ->
+        :ok
+
+      # What a component answers a page travels as an `Opus.Programs.Output`,
+      # which shows its size alone.
+      pid ->
+        GenServer.call(pid, {:answer, request, status, Programs.Output.new(body)}, @watch_ms)
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
+  @doc """
+  The process `pid` now holds the page's call `request`, as a thread's
+  runner does. The browser monitors it: should it die before the call is
+  answered, the call is answered the wire's `unavailable` refusal and its
+  end is announced. Answers the browser's holder, which `pid` monitors:
+  the call ends with it. A request the browser does not hold is passed
+  over, answered `:gone`.
+  """
+  @spec held(String.t(), String.t(), String.t(), pid()) :: {:ok, pid()} | :gone
+  def held(athanor_id, user_id, request, pid)
+      when is_binary(athanor_id) and is_binary(user_id) and is_binary(request) and is_pid(pid) do
+    case lookup(athanor_id, user_id) do
+      nil -> :gone
+      holder -> GenServer.call(holder, {:held, request, pid}, @watch_ms)
+    end
+  catch
+    :exit, _ -> :gone
+  end
+
   defp lookup(athanor_id, user_id) do
     if Process.whereis(@registry) do
       case Registry.lookup(@registry, {athanor_id, user_id}) do
@@ -476,6 +654,9 @@ defmodule Opus.Browser do
        pending: %{},
        queued: [],
        windows: MapSet.new(),
+       puts: %{},
+       calls: %{},
+       call_ids: %{},
        watches: %{},
        last_act: now(),
        idle: nil,
@@ -486,7 +667,8 @@ defmodule Opus.Browser do
 
   @impl true
   def handle_call(
-        {:act, caller, turn_id, window, op, %Programs.Output{} = args, allowed?},
+        {:act, caller, turn_id, window, op, %Programs.Output{} = args, allowed?, upload,
+         tincture},
         from,
         state
       ) do
@@ -499,7 +681,9 @@ defmodule Opus.Browser do
       turn_id: turn_id,
       window: window,
       op: op,
-      args: args
+      args: args,
+      upload: upload,
+      tincture: tincture
     }
 
     cond do
@@ -553,6 +737,25 @@ defmodule Opus.Browser do
   end
 
   def handle_call(:windows, _from, state), do: {:reply, MapSet.to_list(state.windows), state}
+
+  def handle_call({:answer, request, status, %Programs.Output{bytes: body}}, _from, state) do
+    case take_call(state, request) do
+      {nil, state} -> {:reply, :ok, state}
+      {call, state} -> {:reply, :ok, answer_call(state, call.id, status, body)}
+    end
+  end
+
+  def handle_call({:held, request, pid}, _from, state) do
+    case state.calls do
+      %{^request => call} ->
+        if call.monitor, do: Process.demonitor(call.monitor, [:flush])
+        call = %{call | monitor: Process.monitor(pid)}
+        {:reply, {:ok, self()}, %{state | calls: Map.put(state.calls, request, call)}}
+
+      _not_held ->
+        {:reply, :gone, state}
+    end
+  end
 
   # Input is wanted while its watch stands on the cast it was given for.
   def handle_call({:wanted_input, ref, cast}, _from, state),
@@ -684,11 +887,17 @@ defmodule Opus.Browser do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{starting: %Task{ref: ref}} = state),
     do: {:stop, :normal, answer_all(%{state | starting: nil}, {:error, :unavailable})}
 
-  def handle_info({:DOWN, monitor, :process, _viewer, _reason} = message, state) do
-    case Enum.find(Map.values(state.watches), &(&1.monitor == monitor)) do
-      nil ->
-        Prima.LoggerContext.unexpected(__MODULE__, message)
-        {:noreply, state}
+  # A call's holding process, or a watch's viewer, is gone.
+  def handle_info({:DOWN, monitor, :process, _pid, _reason} = message, state) do
+    with nil <- Enum.find(state.calls, fn {_request, call} -> call.monitor == monitor end),
+         nil <- Enum.find(Map.values(state.watches), &(&1.monitor == monitor)) do
+      Prima.LoggerContext.unexpected(__MODULE__, message)
+      {:noreply, state}
+    else
+      {request, _call} ->
+        {call, state} = take_call(state, request)
+        state = refuse_call(state, call.id, :unavailable)
+        {:noreply, announce(state, :ended, call.window, request)}
 
       watch ->
         {:noreply, end_watch(state, watch, nil)}
@@ -771,6 +980,8 @@ defmodule Opus.Browser do
   end
 
   # A holder that stops for any reason leaves no session it held running.
+  # Every call it held ends with it, which their holders hear by their
+  # monitors of it (`held/4`), a holder killed outright as well.
   @impl true
   def terminate(_reason, state) do
     _ = close_session(state)
@@ -868,8 +1079,144 @@ defmodule Opus.Browser do
       {:ok, %{"t" => "gone", "id" => id}} -> gone(id, state)
       {:ok, %{"t" => "image"} = image} -> image(image, state)
       {:ok, %{"t" => "uncast", "id" => cast}} -> uncast(cast, state)
+      {:ok, %{"t" => "call", "id" => id} = call} when is_integer(id) -> call(call, state)
+      {:ok, %{"t" => "callend", "id" => id}} when is_integer(id) -> callend(id, state)
       _unknown -> state
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A page's calls
+
+  # A call naming a put of its window that is kept is held and announced
+  # with that put; any other is answered at once and announced to nobody.
+  defp call(%{"id" => id} = call, state) do
+    case read_call(call) do
+      {:ok, window, put_id, op, body} ->
+        case put_of(state, window, put_id) do
+          nil -> refuse_call(state, id, :unavailable)
+          put -> hold(state, id, window, op, body, put)
+        end
+
+      {:error, reason} ->
+        refuse_call(state, id, reason)
+    end
+  end
+
+  # The put `id` of `window`: one that succeeded and is kept, or one sent
+  # and not yet answered, whose entry the driver may already show.
+  defp put_of(state, window, id) do
+    case {state.puts, state.pending} do
+      {%{{^window, ^id} => put}, _pending} -> put
+      {_puts, %{^id => %{op: "page", window: ^window} = request}} -> put_fields(request)
+      _neither -> nil
+    end
+  end
+
+  defp put_fields(request), do: %{turn_id: request.turn_id, tincture: request.tincture}
+
+  defp read_call(%{"win" => window, "put" => put_id, "op" => op, "body" => body})
+       when is_binary(window) and is_integer(put_id) and op in @call_ops and is_binary(body) do
+    case Base.decode64(body) do
+      {:ok, bytes} ->
+        if byte_size(bytes) <= Frame.call_max_body(),
+          do: {:ok, window, put_id, op, bytes},
+          else:
+            {:error,
+             {:invalid_argument,
+              "A call's body is past the #{Frame.call_max_body()} bytes the browser takes."}}
+
+      :error ->
+        {:error, malformed_call()}
+    end
+  end
+
+  defp read_call(_malformed), do: {:error, malformed_call()}
+
+  defp malformed_call,
+    do:
+      {:invalid_argument,
+       "A call names its window, its put, invoke or action, and its body in base64."}
+
+  defp hold(state, id, window, op, body, put) do
+    request = Prima.UUID7.generate_id("pgc")
+    call = %{id: id, window: window, monitor: nil}
+
+    state = %{
+      state
+      | calls: Map.put(state.calls, request, call),
+        call_ids: Map.put(state.call_ids, id, request)
+    }
+
+    announce(state, :call, window, request, op: op, body: body, put: put)
+  end
+
+  # The driver gave a call up: it ended unanswered.
+  defp callend(id, state) do
+    case state.call_ids do
+      %{^id => request} ->
+        {call, state} = take_call(state, request)
+        announce(state, :ended, call.window, request)
+
+      _not_held ->
+        state
+    end
+  end
+
+  # The held call `request` and the state that holds it no more.
+  defp take_call(state, request) do
+    case Map.pop(state.calls, request) do
+      {nil, _calls} ->
+        {nil, state}
+
+      {call, calls} ->
+        if call.monitor, do: Process.demonitor(call.monitor, [:flush])
+        {call, %{state | calls: calls, call_ids: Map.delete(state.call_ids, call.id)}}
+    end
+  end
+
+  defp answer_call(state, id, status, body) do
+    with {:ok, json} <-
+           Jason.encode(%{"t" => "answer", "id" => id, "status" => status, "body" => body}),
+         true <- byte_size(json) <= Frame.max_to_driver() do
+      write(state, Frame.encode(json), :answer)
+      state
+    else
+      _past_one_frame ->
+        refuse_call(
+          state,
+          id,
+          {:invalid_argument, "The answer to this call is larger than the browser takes."}
+        )
+    end
+  end
+
+  # The call answered with the wire's refusal, at the status its class
+  # answers with.
+  defp refuse_call(state, id, reason) do
+    refusal = Sanctum.Refusals.classify(reason)
+
+    answer = %{
+      "t" => "answer",
+      "id" => id,
+      "status" => Prima.Refusal.http_status(refusal.class),
+      "body" => Jason.encode!(Prima.TinctureWire.refusal(refusal))
+    }
+
+    write(state, Frame.message(answer), :answer)
+    state
+  end
+
+  defp announce(state, kind, window, request, fields \\ []) do
+    page_call =
+      PageCall.new(
+        Prima.Actor.in_athanor(state.athanor_id),
+        kind,
+        [user_id: state.user_id, thread_id: window, request: request] ++ fields
+      )
+
+    _ = Cyfr.Bus.broadcast_global(Cyfr.Bus.page_calls(), page_call)
+    state
   end
 
   # A driver that could not start Chrome is closed; its end, which names
@@ -890,8 +1237,10 @@ defmodule Opus.Browser do
 
   defp send_request(state, request) do
     id = state.next_id
+    {upload, request} = Map.pop(request, :upload)
 
-    # The arguments' JSON, as the caller encoded it, is the frame's `args`.
+    # The arguments' JSON, as the caller encoded it, is the frame's `args`;
+    # a put says how many parts follow it.
     frame =
       Frame.encode(
         IO.iodata_to_binary([
@@ -903,6 +1252,7 @@ defmodule Opus.Browser do
           Jason.encode!(request.op),
           ~s(,"args":),
           request.args.bytes,
+          if(upload, do: [~s(,"of":), Integer.to_string(length(upload))], else: []),
           "}"
         ])
       )
@@ -912,7 +1262,24 @@ defmodule Opus.Browser do
     else
       timer = Process.send_after(self(), {:expired, id}, @request_ms)
       request = Map.merge(request, %{id: id, timer: timer, parts: %{}, of: nil, size: 0})
-      write(state, frame, {:request, id})
+      # A put's parts follow its request in the same write, under its one
+      # decision. A part's base64 needs no escaping in JSON.
+      parts =
+        for {part, seq} <- Enum.with_index(upload || []) do
+          Frame.encode(
+            IO.iodata_to_binary([
+              ~s({"t":"part","id":),
+              Integer.to_string(id),
+              ~s(,"seq":),
+              Integer.to_string(seq),
+              ~s(,"part":"),
+              part.bytes,
+              ~s("})
+            ])
+          )
+        end
+
+      write(state, IO.iodata_to_binary([frame | parts]), {:request, id})
       state = %{state | next_id: id + 1, pending: Map.put(state.pending, id, request)}
 
       case request do
@@ -1029,16 +1396,33 @@ defmodule Opus.Browser do
     end
   end
 
+  # A put that succeeded is kept, and the window's other puts are
+  # forgotten: the driver shows one put of a window at a time, the one it
+  # answered last.
+  defp windows(state, %{op: "page", window: window, id: id} = request, :ok) do
+    state = closed(state, window)
+
+    %{
+      state
+      | windows: MapSet.put(state.windows, window),
+        puts: Map.put(state.puts, {window, id}, put_fields(request))
+    }
+  end
+
   defp windows(state, %{op: op, window: window}, :ok) when op in @openers,
     do: %{state | windows: MapSet.put(state.windows, window)}
 
-  defp windows(state, %{op: "close", window: window}, :ok),
-    do: %{state | windows: MapSet.delete(state.windows, window)}
-
-  defp windows(state, %{window: window}, "no_window"),
-    do: %{state | windows: MapSet.delete(state.windows, window)}
+  defp windows(state, %{op: "close", window: window}, :ok), do: closed(state, window)
+  defp windows(state, %{window: window}, "no_window"), do: closed(state, window)
 
   defp windows(state, _request, _answered), do: state
+
+  defp closed(state, window),
+    do: %{
+      state
+      | windows: MapSet.delete(state.windows, window),
+        puts: Map.reject(state.puts, &match?({{^window, _id}, _put}, &1))
+    }
 
   # After a tail: each response still incomplete is asked for again from
   # its first missing chunk.
@@ -1065,7 +1449,8 @@ defmodule Opus.Browser do
   end
 
   # Every action waiting is answered `reply` and every watch ends with its
-  # reason.
+  # reason. The holder stops after it, and its end announces every call
+  # it still holds (`terminate/2`).
   defp answer_all(state, {:error, reason} = reply) do
     for request <- Map.values(state.pending) do
       Process.cancel_timer(request.timer)
@@ -1086,7 +1471,7 @@ defmodule Opus.Browser do
 
   defp close_session(state) do
     _ = Programs.close(state.browser, state.session)
-    %{state | session: nil, phase: :idle, windows: MapSet.new()}
+    %{state | session: nil, phase: :idle, windows: MapSet.new(), puts: %{}}
   end
 
   # ---------------------------------------------------------------------------
