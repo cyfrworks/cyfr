@@ -20,6 +20,26 @@ defmodule Aqua.Providers.WorkspaceTest.DyingCopy do
   end
 end
 
+defmodule Aqua.Providers.WorkspaceTest.LostDatabase do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  # A copy whose bytes say so is written, and then the database is lost,
+  # as a connection dropped while an opening's transaction still runs:
+  # the transaction is rolled back with the copy already on disk. The
+  # path written is told to the writing process.
+  def put(actor, path, content) do
+    :ok = Arca.Adapters.Local.put(actor, path, content)
+
+    if content == "the database goes once this is copied" do
+      send(self(), {:copied, path})
+      raise DBConnection.ConnectionError, "the database went away mid-opening"
+    end
+
+    :ok
+  end
+end
+
 defmodule Aqua.Providers.WorkspaceTest do
   @moduledoc """
   Workspace threads: opened from a daily thread in one transaction with
@@ -262,6 +282,17 @@ defmodule Aqua.Providers.WorkspaceTest do
     answer
   end
 
+  # `fun` under the double that loses the database once an opening's copy
+  # is written.
+  defp lost_database(fun) do
+    {answer, _log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Prima.Test.Env.with_app_env(:arca, :storage_adapter, __MODULE__.LostDatabase, fun)
+      end)
+
+    answer
+  end
+
   # The files stored under the message `id` of `thread_id`.
   defp copies(ctx, thread_id, id) do
     case Arca.list_recursive(actor(ctx), Arca.ThreadStorage.blob_root(thread_id) ++ [id]) do
@@ -356,9 +387,15 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert records(ctx, "workspace_open") == []
     end
 
-    test "an opening whose thread the ceiling refuses writes nothing and leaves none of its copied files",
+    test "an opening whose transaction fails once its files are copied writes nothing and " <>
+           "leaves none of the copies",
          %{ctx: ctx, daily: daily} do
-      blob = %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG!"}
+      blob = %{
+        "filename" => "moon.png",
+        "media_type" => "image/png",
+        "bytes" => "the database goes once this is copied"
+      }
+
       shot = Prima.UUID7.generate_id("msg")
       {:ok, [ref]} = Aqua.Attachments.store(ctx, daily.id, shot, [blob])
 
@@ -373,23 +410,31 @@ defmodule Aqua.Providers.WorkspaceTest do
           }
         })
 
-      count = length(Threads.list(actor(ctx)))
-      Cyfr.Test.Settings.put("max_threads_per_athanor", count)
+      daily_rows = rows(ctx, daily.id)
 
-      assert {:error, {:limit_reached, :max_threads_per_athanor, ^count}} =
-               open(ctx, daily, %{
-                 "attachments" => [%{"message_id" => shot, "stored_name" => ref["stored_name"]}]
-               })
+      assert {:error, {:unavailable, "Storage"}} =
+               lost_database(fn ->
+                 open(ctx, daily, %{
+                   "attachments" => [%{"message_id" => shot, "stored_name" => ref["stored_name"]}]
+                 })
+               end)
 
+      # The copy was written under the workspace thread the opening named,
+      # and is gone with the transaction.
+      assert_received {:copied, ["threads", workspace_id, opening_id, "0-moon.png"]}
+      refute_received {:copied, _}
+      refute Arca.exists?(actor(ctx), ["threads", workspace_id, opening_id, "0-moon.png"])
+      assert copies(ctx, workspace_id, opening_id) == []
+
+      # Nothing of the opening was written: no thread, no pointer (the post
+      # it was asked from is the daily thread's one new row), no record,
+      # and the post's own file stays.
       assert Threads.list(actor(ctx), kind: "workspace") == []
-      refute Enum.any?(rows(ctx, daily.id), &(&1.kind == "pointer"))
+      assert {:error, :not_found} = Threads.get(actor(ctx), workspace_id)
+      assert [%{kind: kind}] = rows(ctx, daily.id) -- daily_rows
+      refute kind == "pointer"
       assert records(ctx, "workspace_open") == []
-
-      # The only thread directories left are the daily thread's.
-      {:ok, entries} = Arca.list_typed(actor(ctx), ["threads"])
-
-      assert for({name, :dir} <- entries, name != daily.id, do: name)
-             |> Enum.all?(&tree_empty?(ctx, &1))
+      assert copies(ctx, daily.id, shot) == [["threads", daily.id, shot, ref["stored_name"]]]
     end
 
     test "an opening from a post whose file was deleted from Files says the file is no longer " <>
@@ -1243,7 +1288,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       refute Enum.any?(rows(ctx, daily.id), &(&1.kind == "report"))
     end
 
-    test "retention keeps a workspace thread at work or waiting on the person, and forgets a finished one with its pointer",
+    test "the setting keeps a workspace thread at work and archives a finished one, every pointer kept, and the panel's list leaves it out",
          %{ctx: ctx, daily: daily} do
       working = open!(ctx, daily, %{"title" => "Working"})
       finished = open!(ctx, daily, %{"title" => "Finished"})
@@ -1258,14 +1303,18 @@ defmodule Aqua.Providers.WorkspaceTest do
       # The daily thread stays by a turn still open there.
       _open = turn!(ctx, daily.id)
       future = DateTime.add(DateTime.utc_now(), 3600, :second)
-      assert {:ok, 1} = Threads.count_before(actor(ctx), future)
-      assert {:ok, 1} = Threads.delete_before(actor(ctx), future)
+      assert {:ok, 1} = Threads.count_idle(actor(ctx), future)
+      assert {:ok, 1} = Threads.archive_idle(actor(ctx), future)
 
-      ids = Threads.list(actor(ctx), kind: "workspace") |> Enum.map(& &1.id)
-      assert working.id in ids
-      refute finished.id in ids
+      archived = Threads.list(actor(ctx), kind: "workspace", archived: true)
+      assert Enum.map(archived, & &1.id) == [finished.id]
+      active = Threads.list(actor(ctx), kind: "workspace", archived: false)
+      assert Enum.map(active, & &1.id) == [working.id]
       pointed = for %{kind: "pointer", workspace_id: id} <- rows(ctx, daily.id), do: id
-      assert pointed == [working.id]
+      assert Enum.sort(pointed) == Enum.sort([working.id, finished.id])
+
+      {:ok, listed} = Aqua.workspaces(ctx)
+      refute finished.id in Enum.map(listed, & &1.id)
     end
   end
 
@@ -1367,12 +1416,5 @@ defmodule Aqua.Providers.WorkspaceTest do
       })
 
     row
-  end
-
-  defp tree_empty?(ctx, thread_id) do
-    case Arca.list_typed(actor(ctx), ["threads", thread_id]) do
-      {:ok, entries} -> entries == []
-      {:error, :not_found} -> true
-    end
   end
 end

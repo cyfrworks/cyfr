@@ -656,8 +656,8 @@ defmodule Prima.Refusal do
   defp row(:not_in_a_turn),
     do: {:forbidden, "Only Aqua reads your shared threads, in a turn of its own"}
 
-  defp row(:thread_archived),
-    do: {:forbidden, "This crew member's thread is archived — ask the member again from its room"}
+  defp row(:thread_retired),
+    do: {:forbidden, "This crew member's thread is retired — ask the member again from its room"}
 
   # A schedule's line for Aqua runs as its person with nobody present, so
   # only the person, signed in, makes or changes one

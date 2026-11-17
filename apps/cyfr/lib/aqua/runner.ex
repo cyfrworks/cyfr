@@ -396,7 +396,7 @@ defmodule Aqua.Runner do
 
   @doc """
   Stop what still runs of turns storage cancelled with their thread, as
-  an archive (`Aqua.Tape.archive/2`) or a room's deletion
+  a crew thread's retirement (`Aqua.Tape.retire/2`) or a room's deletion
   (`Aqua.Tape.delete_thread/2`) answers them: `%{turn_id, thread_id,
   steps}`. The thread's runner on this boot aborts each through the path
   a cancel takes for an ended turn — its loop and every worker under it,

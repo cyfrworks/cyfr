@@ -5,18 +5,15 @@ defmodule Sanctum.Tenancy.Caps do
   @moduledoc """
   The public-door caps: how many athanors a server holds, how many pairs a
   person may hold open, how many shared threads a person may create, how many
-  people a shared thread may hold, how many threads an athanor may hold,
-  and how many bytes an athanor may store.
+  people a shared thread may hold, and how many bytes an athanor may store.
 
   Each cap is a platform setting of the same name, read on every check
   through `Arca.PlatformSettings.effective/1`, so a cap an operator sets
   refuses the next creation over it with no restart (`CYFR_MAX_ATHANORS`,
   `CYFR_MAX_PAIRS_PER_PERSON`, `CYFR_MAX_SHARED_THREADS_PER_PERSON`,
-  `CYFR_MAX_PEOPLE_PER_THREAD`, `CYFR_MAX_THREADS_PER_ATHANOR` and
-  `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `0` cap is off. Each count
-  ships a generous default, so a server nobody configured is still bounded
-  in how many it holds; an athanor's bytes ship with no ceiling (unset, as
-  `0`), beside the per-call `max_request_size` and the per-scope file
+  `CYFR_MAX_PEOPLE_PER_THREAD` and `CYFR_ATHANOR_STORAGE_BYTES` pin
+  them). A `0` cap is off. An athanor's bytes ship with no ceiling (unset,
+  as `0`), beside the per-call `max_request_size` and the per-scope file
   backstop, and an administrator who wants one sets it.
 
   How fast personal athanors are minted (`CYFR_MINT_PER_HOUR`) is a rate
@@ -29,16 +26,14 @@ defmodule Sanctum.Tenancy.Caps do
   stale value, so a store that has been unreachable past the accessor's
   cache is never read as a server with no caps.
 
-  The athanors ship at 10,000 and an athanor's threads at 1000 (`0` turns
-  either off). A thread is a row a person — or any headless client of
-  theirs — can mint from the wire (a new day's thread, `thread.today` or
-  `thread.send`), so an athanor's thread count needs a ceiling. The pairs a person holds, the
-  shared threads a person creates, the people in one shared thread and
-  the bytes ship off, absent meaning no limit, for an administrator to
-  set. The pair cap counts the ACTIVE pairs a person sits in — an ended
-  pair is archived and frees its place — and is asked for both people,
-  since a pair is made for two. A pair is a shared thread of two
-  (`Arca.SharedThreads.pair/3`).
+  The athanors ship at 10,000 (`0` turns it off), so a server nobody
+  configured is still bounded in how many it holds. The pairs a person
+  holds, the shared threads a person creates, the people in one shared
+  thread and the bytes ship off, absent meaning no limit, for an
+  administrator to set. The pair cap counts the ACTIVE pairs a person
+  sits in — an ended pair is archived and frees its place — and is asked
+  for both people, since a pair is made for two. A pair is a shared
+  thread of two (`Arca.SharedThreads.pair/3`).
 
   The shared thread caps are counted by `Arca.SharedThreads` and
   `Arca.SharedThreadMembers` through the port, under the locks of the
@@ -147,9 +142,8 @@ defmodule Sanctum.Tenancy.Caps do
   `Prima.Caps.check_counted/3`: the port's door onto `check_counted/2`.
 
   The actor is matched and not otherwise read. What a counted cap bounds
-  is counted by the caller's own `count` — Arca counts an athanor's
-  threads and the shared threads and their seats, the tenancy domain
-  counts athanors —
+  is counted by the caller's own `count` — Arca counts the shared
+  threads and their seats, the tenancy domain counts athanors —
   and each closure already names the tenant or the person it counts for.
   Matching the actor is what keeps a caller from passing a bare key or a
   context in its place.

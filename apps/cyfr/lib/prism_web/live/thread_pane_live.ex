@@ -282,6 +282,10 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp thread_of(_ctx, _none), do: nil
 
+  # A daily or a workspace thread: one the person archives.
+  defp room?(%{kind: kind}), do: kind in ["daily", "workspace"]
+  defp room?(_none), do: false
+
   # Everything the pane knows of one thread — its rows, the runner's live
   # state and the subscription that keeps them current — replacing what it
   # knew of the last: the tape, the cards, the draft and the turn's state
@@ -703,11 +707,13 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, socket}
   end
 
-  # Retiring a crew thread stops its member's work there; the row read
-  # again says whether it took.
-  def handle_event("archive", _params, %{assigns: %{thread: %{kind: "crew"} = thread}} = socket) do
-    socket = run(socket, &PrismWeb.Ops.call_tool(&1, "thread/archive", %{"thread" => thread.id}))
-    {:noreply, assign(socket, :thread, thread_of(socket.assigns.context, thread.id) || thread)}
+  # Archiving a daily or a workspace thread puts it behind the list's
+  # Archived filter and changes nothing else; on a crew thread it retires
+  # it, which stops its member's work there. The row read again says
+  # whether it took.
+  def handle_event("archive", _params, %{assigns: %{thread: %{id: id} = thread}} = socket) do
+    socket = run(socket, &PrismWeb.Ops.call_tool(&1, "thread/archive", %{"thread" => id}))
+    {:noreply, assign(socket, :thread, thread_of(socket.assigns.context, id) || thread)}
   end
 
   def handle_event("archive", _params, socket), do: {:noreply, socket}
@@ -780,6 +786,17 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   def handle_info(%ThreadEvent{}, socket), do: {:noreply, socket}
+
+  # The thread shown, archived or taken out of the archive by new work as
+  # the person's list announces it: read again.
+  def handle_info(
+        %ThreadListed{kind: kind, id: id, archived: archived},
+        %{assigns: %{thread: %{id: id, archived_at: at} = thread}} = socket
+      )
+      when kind in [:daily, :workspace] and archived != not is_nil(at) do
+    socket = assign(socket, :thread, thread_of(socket.assigns.context, id) || thread)
+    if kind == :workspace, do: {:noreply, reread_works(socket, [id])}, else: {:noreply, socket}
+  end
 
   # A workspace thread a card names, as the person's list announces it:
   # moved, read again; gone, its cards with it.
@@ -1430,8 +1447,8 @@ defmodule PrismWeb.ThreadPaneLive do
       :archived ->
         put_flash(socket, :error, "This athanor has been archived.")
 
-      :thread_archived ->
-        put_flash(socket, :error, "This thread has been archived.")
+      :thread_retired ->
+        put_flash(socket, :error, "This crew member's thread is retired.")
 
       :not_addressable ->
         put_flash(socket, :error, "Only this thread's crew member can be addressed here.")
@@ -1859,6 +1876,21 @@ defmodule PrismWeb.ThreadPaneLive do
               else: assistant_label(current_assistant(@assistant, @roster))}
           </span>
         </div>
+        <div :if={room?(@thread)} class="aqua-panel-menu-row">
+          <span :if={@thread.archived_at} title="New work here takes it out of the archive">
+            Archived
+          </span>
+          <button
+            :if={is_nil(@thread.archived_at)}
+            id={@dom <> "-archive"}
+            type="button"
+            phx-click="archive"
+            title="Your list shows it under Archived; nothing else about it changes"
+            class="rounded px-1.5 py-0.5 text-text-secondary hover:bg-surface-base hover:text-text-primary"
+          >
+            Archive
+          </button>
+        </div>
         <div class="aqua-panel-menu-row">
           <span>Tokens</span>
           <span class="font-mono">
@@ -1906,7 +1938,7 @@ defmodule PrismWeb.ThreadPaneLive do
           phx-value-id={child.id}
           class="min-h-6 rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
         >
-          {child.agent}<span :if={child.archived_at} class="text-gray-500"> · archived</span>
+          {child.agent}<span :if={child.retired_at} class="text-gray-500"> · archived</span>
         </button>
       </nav>
 
@@ -1924,9 +1956,9 @@ defmodule PrismWeb.ThreadPaneLive do
         >
           Back to {room_name(@parent)}
         </button>
-        <span :if={@thread.archived_at} class="ml-auto shrink-0">Archived</span>
+        <span :if={@thread.retired_at} class="ml-auto shrink-0">Archived</span>
         <button
-          :if={is_nil(@thread.archived_at)}
+          :if={is_nil(@thread.retired_at)}
           type="button"
           phx-click="archive"
           data-confirm={"Archive #{@thread.agent}'s thread? Its work here stops."}

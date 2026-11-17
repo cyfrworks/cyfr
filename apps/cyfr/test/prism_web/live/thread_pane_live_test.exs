@@ -2438,6 +2438,65 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     %{notice | status: "approved"}
   end
 
+  describe "the archive" do
+    test "a daily thread's menu archives it through thread.archive and then reads Archived; " <>
+           "new work there, announced on the person's list, brings the Archive row back",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      actor = Sanctum.Context.actor(here)
+      pane = open_pane(conn, athanor, thread)
+      archive = ~s([id$="-menu"] button[phx-click="archive"])
+      assert has_element?(pane, archive, "Archive")
+
+      pane |> element(archive) |> render_click()
+
+      assert [_] =
+               Arca.Repo.all(
+                 from(l in Arca.Schemas.McpLog,
+                   where: l.tool == "thread" and l.action == "archive",
+                   select: l.input
+                 )
+               )
+
+      assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor, thread.id)
+      assert has_element?(pane, ~s([id$="-menu"]), "Archived")
+      refute has_element?(pane, archive)
+
+      # The person's post takes it out of the archive, and their list says so.
+      {:ok, _} =
+        Arca.TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: here.user_id, sent_by: "person", content: "and one more thing"},
+          turn: %{agent: "aqua", requested_by: here.user_id, origin: :interactive}
+        })
+
+      assert {:ok, %{archived_at: nil}} = Threads.get(actor, thread.id)
+      :ok = Aqua.ThreadList.changed(here, thread.id)
+      assert has_element?(pane, archive, "Archive")
+      refute has_element?(pane, ~s([id$="-menu"]), "Archived")
+
+      # While that turn is open the thread works, and the archive is refused.
+      pane |> element(archive) |> render_click()
+      assert :sys.get_state(pane.pid).socket.assigns.flash["error"] =~ "still working"
+      assert {:ok, %{archived_at: nil}} = Threads.get(actor, thread.id)
+      assert has_element?(pane, archive, "Archive")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a crew member's thread has no Archive row in the menu: its strip retires it",
+         %{conn: conn, here: here, thread: room} do
+      {:ok, explorer} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      {_panel, pane} = panel_pane(conn, room)
+      assert has_element?(pane, ~s([id$="-menu"] button[phx-click="archive"]))
+
+      pane |> element(~s([id$="-crew-#{explorer.id}"])) |> render_click()
+      on_thread!(pane, explorer.id)
+      refute has_element?(pane, ~s([id$="-menu"] button[phx-click="archive"]))
+      assert has_element?(pane, ~s([id$="-crew-thread"] button[phx-click="archive"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   describe "the crew" do
     test "a room shows a request with the reply under it, by the member's name and its outcome",
          %{conn: conn, athanor: athanor, here: here, thread: room} do
@@ -2612,12 +2671,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "a room lists its crew threads, and a crew thread leads back to its room and archives through thread.archive",
+    test "a room lists its crew threads, and a crew thread leads back to its room and retires through thread.archive",
          %{conn: conn, here: here, thread: room} do
       actor = Sanctum.Context.actor(here)
       {:ok, explorer} = Threads.crew_thread(actor, room.id, "explorer")
       {:ok, reviewer} = Threads.crew_thread(actor, room.id, "reviewer")
-      {:ok, _} = Threads.archive(actor, reviewer.id)
+      {:ok, _} = Threads.retire(actor, reviewer.id)
       {_panel, pane} = panel_pane(conn, room)
 
       assert has_element?(pane, ~s([id$="-crew-#{explorer.id}"]), "explorer")
@@ -2653,7 +2712,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                  )
                )
 
-      assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor, explorer.id)
+      assert {:ok, %{retired_at: %DateTime{}}} = Threads.get(actor, explorer.id)
       assert has_element?(pane, strip, "Archived")
       refute has_element?(pane, ~s(button[phx-click="archive"]))
 

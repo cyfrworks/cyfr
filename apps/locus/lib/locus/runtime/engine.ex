@@ -329,6 +329,8 @@ defmodule Locus.Runtime.Engine do
     pipe_imports =
       if component_type == :catalyst, do: build_pipe_imports(host, limits), else: %{}
 
+    input_imports = if component_type == :catalyst, do: build_input_imports(host), else: %{}
+
     {formula_imports, formula_tracker_pid} =
       if component_type == :formula do
         Locus.Runtime.FormulaHandler.build_formula_imports(host,
@@ -347,6 +349,7 @@ defmodule Locus.Runtime.Engine do
       |> Map.merge(oauth_imports)
       |> Map.merge(emit_imports)
       |> Map.merge(pipe_imports)
+      |> Map.merge(input_imports)
       |> Map.merge(formula_imports)
 
     cleanup_refs = %{
@@ -432,12 +435,46 @@ defmodule Locus.Runtime.Engine do
     end
   end
 
+  # A catalyst's `cyfr:model/inputs` import: each call is the host call of
+  # its name (`c:Prima.HostAPI.input_next/1`, `c:Prima.HostAPI.input_sent/2`).
+  # An input crosses as its id and its content's JSON, which the host held
+  # to `Prima.Model.check_input/1`; every refusal reaches the guest as
+  # `err(code)`, and nothing an input carries is logged.
+  defp build_input_imports(host) do
+    %{
+      "cyfr:model/inputs@0.1.0" => %{
+        "next" => {:fn, fn -> input_next(host) end},
+        "sent" => {:fn, fn id -> input_sent(host, id) end}
+      }
+    }
+  end
+
+  defp input_next(host) do
+    case Locus.Runtime.HostClient.input_next(host) do
+      {:ok, nil} ->
+        {:ok, :none}
+
+      {:ok, %{"id" => id, "content" => content}} ->
+        {:ok, {:some, %{id: id, content: Jason.encode!(content)}}}
+
+      {:error, reason} ->
+        {:error, pipe_code(reason)}
+    end
+  end
+
+  defp input_sent(host, id) do
+    case Locus.Runtime.HostClient.input_sent(host, id) do
+      :ok -> :ok
+      {:error, reason} -> {:error, pipe_code(reason)}
+    end
+  end
+
   defp pipe_checked(:ok), do: :ok
   defp pipe_checked({:error, code, _message}), do: {:error, {:local, code}}
 
-  # The code a guest is handed: a guest error's type, the pipe's own
-  # refusals by name, and `lost` for a lost or uncertain answer and
-  # anything else, since the attempt cannot tell what happened.
+  # The code a pipe or input call's guest is handed: a guest error's type,
+  # the pipe's own refusals by name, and `lost` for a lost or uncertain
+  # answer and anything else, since the attempt cannot tell what happened.
   defp pipe_code({:local, code}), do: code
   defp pipe_code({:guest_error, type, _message}), do: type
   defp pipe_code({:guest_error, type, _message, _remediation}), do: type

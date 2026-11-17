@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning what model/chat@1 lets a caller set per brain (Prima.Model): the options describe declares, a chat request's session and options, and a chat response's session. option_kinds are the kinds an option may be. valid_describes are describe answers whose options read as they are (absent reads as none); invalid_describes are refused naming member, the first member that breaks the option shape (options[i] for the entry, options[i].<member> for one of its members, an unknown member by its own name). valid_chat_requests and invalid_chat_requests are requests checked against declared, the options a describe declared; a request's other members are the catalyst's to read and are not checked here. valid_chat_responses are chat answers, a response's data or a refusal's error object, and answer session (null for none); invalid_chat_responses are refused naming member, an unknown_session refusal that names a session among them. Read by apps/prima/test/prima/model_test.exs; a model catalyst's own tests read the same file.",
+  "comment": "The vectors pinning what model/chat@1 lets a caller set per brain (Prima.Model): the options describe declares, a chat request's session and options, and a chat response's session. option_kinds are the kinds an option may be. valid_describes are describe answers whose options read as they are (absent reads as none); invalid_describes are refused naming member, the first member that breaks the option shape (options[i] for the entry, options[i].<member> for one of its members, an unknown member by its own name). valid_chat_requests and invalid_chat_requests are requests checked against declared, the options a describe declared; a request's other members are the catalyst's to read and are not checked here. valid_chat_responses are chat answers, a response's data or a refusal's error object, and answer session (null for none); invalid_chat_responses are refused naming member, an unknown_session refusal that names a session among them. Read by apps/prima/test/prima/model_test.exs; a model catalyst's own tests read the same file. The further messages of a running chat (Prima.Model.check_input/1): max_input_bytes, max_input_blocks and input_media_types are the input's bounds and the media types an attachment may be; valid_inputs read as they are, each naming kinds, the block kinds it carries, which a harness catalyst writes only when it takes every one of them and refuses otherwise; invalid_inputs are refused naming member, the first member that breaks the input (id, content, content[i] for a block, content[i].<member> for one of its members, an unknown member by its own name when it is a plain word of lowercase letters and underscores and by the member holding it otherwise, input for one that is not an object, content for one past max_input_bytes). A case may give generate in place of input: {id, text_blocks: n} is n blocks {type: text, text: x}, and {id, text_bytes: n} is a string content of n bytes of a; an input's JSON is counted with its members in the order of their names and nothing escaped.",
   "option_kinds": ["enum", "string", "integer", "boolean"],
   "valid_describes": [
     {
@@ -189,5 +189,53 @@
       "response": {"type": "unknown_session", "message": "The brain no longer holds this session.", "session": "4f7c2a9e-session"},
       "member": "session"
     }
+  ],
+  "max_input_bytes": 1048576,
+  "max_input_blocks": 32,
+  "input_media_types": {"image": ["image/jpeg", "image/png", "image/gif", "image/webp"], "document": ["application/pdf"]},
+  "valid_inputs": [
+    {"why": "a string content", "input": {"id": "evt_01a0ab12-input", "content": "Still waiting on the run?"}, "kinds": ["text"]},
+    {"why": "text blocks", "input": {"id": "evt_input.2", "content": [{"type": "text", "text": "Look at this"}, {"type": "text", "text": "and this"}]}, "kinds": ["text"]},
+    {"why": "text and an image", "input": {"id": "evt_input.3", "content": [{"type": "text", "text": "This one"}, {"type": "image", "media_type": "image/png", "data": "iVBORw0KGgo="}]}, "kinds": ["text", "image"]},
+    {"why": "a document", "input": {"id": "evt_input.4", "content": [{"type": "document", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}]}, "kinds": ["document"]},
+    {"why": "an id of every character an id takes", "input": {"id": "Aa0_.:-", "content": "hi"}, "kinds": ["text"]},
+    {"why": "an id of 128 characters", "input": {"id": "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii", "content": "hi"}, "kinds": ["text"]},
+    {"why": "as many blocks as an input carries", "generate": {"id": "evt_input.blocks", "text_blocks": 32}, "kinds": ["text"]},
+    {"why": "an input whose JSON is exactly the line bound", "generate": {"id": "evt_input.big", "text_bytes": 1048541}, "kinds": ["text"]}
+  ],
+  "invalid_inputs": [
+    {"why": "an input that is not an object", "input": "Still waiting?", "member": "input"},
+    {"why": "a member besides id and content, named", "input": {"id": "evt_x", "content": "hi", "from": "someone"}, "member": "from"},
+    {"why": "no id", "input": {"content": "hi"}, "member": "id"},
+    {"why": "an empty id", "input": {"id": "", "content": "hi"}, "member": "id"},
+    {"why": "an id with a space", "input": {"id": "evt x", "content": "hi"}, "member": "id"},
+    {"why": "an id with a slash", "input": {"id": "evt/x", "content": "hi"}, "member": "id"},
+    {"why": "an id of 129 characters", "input": {"id": "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii", "content": "hi"}, "member": "id"},
+    {"why": "an id that is not a string", "input": {"id": 7, "content": "hi"}, "member": "id"},
+    {"why": "no content", "input": {"id": "evt_x"}, "member": "content"},
+    {"why": "an empty string", "input": {"id": "evt_x", "content": ""}, "member": "content"},
+    {"why": "no blocks", "input": {"id": "evt_x", "content": []}, "member": "content"},
+    {"why": "content that is neither a string nor blocks", "input": {"id": "evt_x", "content": {"type": "text", "text": "hi"}}, "member": "content"},
+    {"why": "one block past those an input carries", "generate": {"id": "evt_x", "text_blocks": 33}, "member": "content"},
+    {"why": "a block that is not an object", "input": {"id": "evt_x", "content": ["hi"]}, "member": "content[0]"},
+    {"why": "a block nested in a list", "input": {"id": "evt_x", "content": [[{"type": "text", "text": "hi"}]]}, "member": "content[0]"},
+    {"why": "a block with no type", "input": {"id": "evt_x", "content": [{"text": "hi"}]}, "member": "content[0]"},
+    {"why": "a block of a kind no input carries", "input": {"id": "evt_x", "content": [{"type": "text", "text": "a"}, {"type": "audio", "media_type": "audio/wav", "data": "UklGRg=="}]}, "member": "content[1].type"},
+    {"why": "a tool result is no message of a person's", "input": {"id": "evt_x", "content": [{"type": "tool_result", "tool_call_id": "c1", "content": "ok"}]}, "member": "content[0].type"},
+    {"why": "an empty text", "input": {"id": "evt_x", "content": [{"type": "text", "text": ""}]}, "member": "content[0].text"},
+    {"why": "a text that is an object", "input": {"id": "evt_x", "content": [{"type": "text", "text": {"type": "text", "text": "hi"}}]}, "member": "content[0].text"},
+    {"why": "a member a text block does not carry, named", "input": {"id": "evt_x", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}, "member": "content[0].cache_control"},
+    {"why": "a member of the input that is no plain word, named by the input", "input": {"id": "evt_x", "content": "hi", "X-Forwarded-For": "10.0.0.1"}, "member": "input"},
+    {"why": "a member of a block that is no plain word, named by the block", "input": {"id": "evt_x", "content": [{"type": "text", "text": "hi", "Data-URL": "https://x.test"}]}, "member": "content[0]"},
+    {"why": "an image by address, which nothing fetches", "input": {"id": "evt_x", "content": [{"type": "image", "url": "https://example.test/a.png"}]}, "member": "content[0].url"},
+    {"why": "an image by path, which nothing reads", "input": {"id": "evt_x", "content": [{"type": "image", "media_type": "image/png", "path": "/etc/passwd"}]}, "member": "content[0].path"},
+    {"why": "an image in a harness's own source shape", "input": {"id": "evt_x", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}]}, "member": "content[0].source"},
+    {"why": "an image with no data", "input": {"id": "evt_x", "content": [{"type": "image", "media_type": "image/png"}]}, "member": "content[0].data"},
+    {"why": "an image whose data is not base64", "input": {"id": "evt_x", "content": [{"type": "image", "media_type": "image/png", "data": "not base64!"}]}, "member": "content[0].data"},
+    {"why": "an image whose base64 is not padded", "input": {"id": "evt_x", "content": [{"type": "image", "media_type": "image/png", "data": "iVBORw0KGgo"}]}, "member": "content[0].data"},
+    {"why": "an image of a media type no input takes", "input": {"id": "evt_x", "content": [{"type": "image", "media_type": "image/svg+xml", "data": "PHN2Zz4="}]}, "member": "content[0].media_type"},
+    {"why": "a document that is not a PDF", "input": {"id": "evt_x", "content": [{"type": "document", "media_type": "text/html", "data": "PGI+"}]}, "member": "content[0].media_type"},
+    {"why": "an image media type on a document", "input": {"id": "evt_x", "content": [{"type": "document", "media_type": "image/png", "data": "iVBORw0KGgo="}]}, "member": "content[0].media_type"},
+    {"why": "an input whose JSON is one byte past the line bound", "generate": {"id": "evt_input.big", "text_bytes": 1048542}, "member": "content"}
   ]
 }

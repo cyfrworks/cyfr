@@ -287,6 +287,12 @@ defmodule Cyfr.Telemetry.Catalog do
     # athanor and the path, never content. The bridge reads the file as it
     # stands and carries it to `Cyfr.Bus.files/1` ———
     [:cyfr, :arca, :file, :changed] => %{consumers: [:bridge]},
+    # ——— a daily or a workspace thread was archived, by its person or by
+    # the athanor's setting: after the commit (`Arca.ThreadStorage`'s
+    # archive), with the athanor and the thread, never content. The bridge
+    # reads the thread as it stands and carries it to its person's
+    # `Cyfr.Bus.threads/2`, where the browser holding its window hears it ———
+    [:cyfr, :arca, :thread, :archived] => %{consumers: [:bridge]},
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:

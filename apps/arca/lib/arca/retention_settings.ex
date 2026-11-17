@@ -7,8 +7,9 @@ defmodule Arca.RetentionSettings do
   per athanor (`Arca.Schemas.RetentionSettings`), apart from the
   security-owned settings document on the athanor row.
 
-  The row holds only the keys the athanor chose, each a positive integer,
-  as the RFC 8785 encoding of a string-keyed map. A key never set is
+  The row holds only the keys the athanor chose, each a value its kind
+  takes (`Arca.Retention.value?/2`), as the RFC 8785 encoding of a
+  string-keyed map. A key never set is
   absent from it; `Arca.Retention` fills the defaults on read. An athanor
   with no row has set nothing: `get/1` answers the empty patch at
   revision 0.
@@ -28,7 +29,7 @@ defmodule Arca.RetentionSettings do
   Every value drives destructive cleanup, so a document that cannot be
   read as the athanor wrote it is `{:error, :corrupt}`, never the
   defaults: a stored document that is not a JSON object, or a roster key
-  whose value is not a positive integer. A key outside the roster is
+  whose value is not one its kind takes. A key outside the roster is
   ignored, and the next patch drops it.
 
   ## Tenancy
@@ -46,7 +47,7 @@ defmodule Arca.RetentionSettings do
   @retries 3
 
   @typedoc "The keys an athanor has set, and the revision of the row that holds them."
-  @type stored :: %{patch: %{String.t() => pos_integer()}, revision: non_neg_integer()}
+  @type stored :: %{patch: %{String.t() => non_neg_integer()}, revision: non_neg_integer()}
 
   @doc """
   The athanor's patch and the revision of its row: `%{patch: %{}, revision:
@@ -62,11 +63,12 @@ defmodule Arca.RetentionSettings do
   end
 
   @doc """
-  Merge `changes` — retention keys to positive integers, validated by the
-  caller (`Arca.Retention.set_settings/2`) — over the athanor's patch,
-  answering the merged patch and the revision it landed at.
+  Merge `changes` — retention keys to the values their kinds take,
+  validated by the caller (`Arca.Retention.set_settings/2`) — over the
+  athanor's patch, answering the merged patch and the revision it landed
+  at.
   """
-  @spec patch(Prima.Actor.t(), %{String.t() => pos_integer()}) ::
+  @spec patch(Prima.Actor.t(), %{String.t() => non_neg_integer()}) ::
           {:ok, stored()}
           | {:error, :no_athanor | :corrupt | :database_error | :settings_conflict}
   def patch(%Prima.Actor{} = actor, changes) when is_map(changes) do
@@ -144,16 +146,15 @@ defmodule Arca.RetentionSettings do
     end
   end
 
-  # The roster keys the document holds, each a positive integer; any other
-  # key is ignored here and gone after the next patch.
+  # The roster keys the document holds, each a value its kind takes; any
+  # other key is ignored here and gone after the next patch.
   defp roster_values(document) do
     Enum.reduce_while(Arca.Retention.kinds(), {:ok, %{}}, fn kind, {:ok, patch} ->
       case Map.fetch(document, kind.key()) do
-        {:ok, value} when is_integer(value) and value > 0 ->
-          {:cont, {:ok, Map.put(patch, kind.key(), value)}}
-
-        {:ok, _not_a_value} ->
-          {:halt, :corrupt}
+        {:ok, value} ->
+          if Arca.Retention.value?(kind, value),
+            do: {:cont, {:ok, Map.put(patch, kind.key(), value)}},
+            else: {:halt, :corrupt}
 
         :error ->
           {:cont, {:ok, patch}}

@@ -18,12 +18,16 @@ defmodule Locus.Runtime.ComponentType do
   | `wasi:random/random`          | ✅        | ✅       | ✅       |
   | `cyfr:vault/read`           | ✅*       | ❌       | ❌       |
   | `cyfr:process/pipe`         | ✅‡       | ❌       | ❌       |
+  | `cyfr:model/inputs`         | ✅§       | ❌       | ❌       |
 
   *`cyfr:vault/read` resolves fields from the Vault entry a consent edge binds
   †`cyfr:oauth/token` resolves a token from the Vault OAuth entry a consent edge binds
   ‡`cyfr:process/pipe` is a session on the program a `login` need is bound to: each
   call is a host call (`c:Prima.HostAPI.pipe_open/4` and the rest), and CYFR decides
   the need, the binding and the session
+  §`cyfr:model/inputs` is the further input of the running invocation, which whoever
+  started it supplies: each call is a host call (`c:Prima.HostAPI.input_next/1` and
+  `c:Prima.HostAPI.input_sent/2`), answered for the caller's own attempt alone
 
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects

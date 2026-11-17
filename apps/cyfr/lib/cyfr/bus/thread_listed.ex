@@ -7,16 +7,17 @@ defmodule Cyfr.Bus.ThreadListed do
   `Cyfr.Bus.threads/2` topic, for the stream a canvas reads
   (`threads.changes`): the kind is `daily` or `workspace`, a thread of the
   person's athanor, or `shared`, with the thread's `title`, the display
-  names of its `people`, its `last_activity`, whether it `waits_on_you`
-  and how many of its posts are `unread` to the person, or `removed` with
-  its `id` once it leaves the list. Never a message, a person's id or an
-  address.
+  names of its `people`, its `last_activity`, whether it `waits_on_you`,
+  how many of its posts are `unread` to the person and, for a thread of
+  the athanor, whether it is `archived` (behind the list's Archived
+  filter), or `removed` with its `id` once it leaves the list. Never a
+  message, a person's id or an address.
   """
 
   alias Cyfr.Bus.Payload
 
   @kinds [:daily, :workspace, :shared, :removed]
-  @fields [:id, :title, :people, :last_activity, :waits_on_you, :unread]
+  @fields [:id, :title, :people, :last_activity, :waits_on_you, :unread, :archived]
 
   @enforce_keys [:athanor_id, :kind]
   defstruct [:athanor_id, :kind, :revision, :at | @fields]
@@ -33,7 +34,8 @@ defmodule Cyfr.Bus.ThreadListed do
           people: [String.t()] | nil,
           last_activity: DateTime.t() | nil,
           waits_on_you: boolean() | nil,
-          unread: non_neg_integer() | nil
+          unread: non_neg_integer() | nil,
+          archived: boolean() | nil
         }
 
   @doc """

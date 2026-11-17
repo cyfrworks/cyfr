@@ -91,7 +91,7 @@ defmodule Aqua.Crew do
   A refusal that may pass (`:busy`, `:held_elsewhere`, `:unavailable`,
   and any other but those below) leaves the record pending for the next
   drain, and the records after it for the same thread wait behind it. A
-  refusal that cannot (`:archived`, `:thread_archived`,
+  refusal that cannot (`:archived`, `:thread_retired`,
   `:not_addressable`, a thread or request gone, a person no longer
   standing) receipts the record
   `refused`; for a request it writes a `failed` reply saying why on the
@@ -130,7 +130,7 @@ defmodule Aqua.Crew do
 
   @undeliverable [
     :archived,
-    :thread_archived,
+    :thread_retired,
     :not_addressable,
     :not_found,
     :not_member,

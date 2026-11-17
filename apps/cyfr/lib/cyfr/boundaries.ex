@@ -3103,7 +3103,8 @@ defmodule Cyfr.Boundaries do
       modules: ~w(Cyfr.RetentionScheduler),
       check: "Arca.Retention.cleanup_athanor/2",
       reason:
-        "retention deletes what each athanor's own settings say it no longer keeps, and " <>
+        "retention deletes what each athanor's own settings say it no longer keeps and " <>
+          "archives the threads they say have gone quiet, and " <>
           "nobody asks for it: the scheduler, holding the cluster's retention claim and its " <>
           "slot, walks the athanors the identity domain names active, asks again before " <>
           "each, and hands the storage layer one actor per athanor — the server's, narrowed " <>

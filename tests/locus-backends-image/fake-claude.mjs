@@ -27,6 +27,9 @@
 //   the provider's rate limit instead, as the harness reports one); `first message` replies with the session's first message,
 //   from its folder. Each reply streams as `stream_event` text deltas, then
 //   the whole `assistant` message, then `result` with usage.
+// - What a turn writes names the user line it answers by that line's
+//   `uuid` (`user_message_uuids` on its init, its messages and its
+//   result), as 2.1.318 names a line written with one.
 // - It writes a canary to its stderr and to its folder, which the driver
 //   must never pass on.
 import { spawn } from 'node:child_process';
@@ -80,7 +83,15 @@ const MODELS = [
   { value: 'fake-haiku', displayName: 'Fake Haiku', description: 'fake' },
 ];
 
-const out = (event) => process.stdout.write(JSON.stringify(event) + '\n');
+// The user line the turn under way answers, which its lines name.
+let answering = null;
+const NAMING = new Set(['system', 'assistant', 'result']);
+const out = (event) => {
+  const named = answering && NAMING.has(event.type) && !('user_message_uuids' in event)
+    ? { ...event, user_message_uuids: [answering] }
+    : event;
+  process.stdout.write(JSON.stringify(named) + '\n');
+};
 let appended = '';
 const asks = new Map();
 let asked = 0;
@@ -162,6 +173,7 @@ async function turn(message) {
   // The words of the ask, its last text block: a new session's history
   // rides in a block before it, and is read but never acted on.
   const words = texts[texts.length - 1] ?? '';
+  answering = message.uuid ?? null;
   transcript.push({ role: 'user', text });
   save();
   out({ type: 'system', subtype: 'init', session_id: sessionId, model, tools: [...OWN_TOOLS, ...mcpTools()], mcp_servers: [...servers.keys()].map((name) => ({ name, status: 'connected' })), permissionMode: flag('--permission-mode') || 'default' });
