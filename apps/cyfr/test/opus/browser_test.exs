@@ -1911,6 +1911,129 @@ defmodule Opus.BrowserTest do
     end
   end
 
+  describe "a window whose thread is put away" do
+    # The browser alone, as in "a page's call": a call held in a window is
+    # seen to end.
+    setup do
+      on_exit(&restart_page_calls/0)
+      :ok = Supervisor.terminate_child(Aqua.Supervisor, Aqua.PageCalls)
+      :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.page_calls())
+    end
+
+    test "its thread archived by the person is closed by its holder and the call held there ends; " <>
+           "another thread's window stays",
+         %{driver: driver, ctx: ctx, turn: turn, lineage: lineage} do
+      win = lineage["thread_id"]
+      {_other_turn, other} = turn!(ctx)
+      assert {:ok, _} = call(ctx, other, "open", %{"url" => "https://example.org/"})
+      put = put!(ctx, lineage, %{"html" => "<p>hello</p>"})
+      :ok = Driver.call(driver, 3, win, put, "invoke", ~s({"v":1}))
+      assert_receive %PageCall{kind: :call, request: request}, 5_000
+
+      # Its turn over, no work remains there, and the person archives it.
+      set_status(turn, "completed")
+      assert {:ok, %{archived_at: %DateTime{}}} = Threads.archive(Sanctum.Context.actor(ctx), win)
+
+      assert_receive {:driver, :req, _s, %{"op" => "close", "win" => ^win, "args" => %{}}}, 5_000
+
+      # The driver gives up the closed window's calls (cyfr-browser's
+      # TestCallsEndWithTheirDocument), and the holder announces the end.
+      :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "callend", "id" => 3}))
+      assert_receive %PageCall{kind: :ended, request: ^request, thread_id: ^win}, 5_000
+
+      # The other thread's window stands, and nothing else was closed.
+      assert {:ok, _} = call(ctx, other, "read")
+      assert_receive {:driver, :req, _s, %{"op" => "read", "win" => other_win}}, 5_000
+      assert other_win == other["thread_id"]
+      refute_received {:driver, :req, _s, %{"op" => "close"}}
+      assert :sys.get_state(holder(ctx)).windows == MapSet.new([other_win])
+    end
+
+    test "its thread archived by the setting is closed as one the person archived; " <>
+           "a thread at work is neither archived nor closed",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      win = lineage["thread_id"]
+      {_other_turn, other} = turn!(ctx)
+
+      for each <- [lineage, other],
+          do: assert({:ok, _} = call(ctx, each, "open", %{"url" => "https://example.com/"}))
+
+      set_status(turn, "completed")
+      future = DateTime.add(DateTime.utc_now(), 3600, :second)
+      assert {:ok, 1} = Threads.archive_idle(Sanctum.Context.actor(ctx), future)
+
+      assert_receive {:driver, :req, _s, %{"op" => "close", "win" => ^win}}, 5_000
+      assert {:ok, _} = call(ctx, other, "read")
+      assert_receive {:driver, :req, _s, %{"op" => "read"}}, 5_000
+      refute_received {:driver, :req, _s, %{"op" => "close"}}
+      assert :sys.get_state(holder(ctx)).windows == MapSet.new([other["thread_id"]])
+    end
+
+    test "a crew member's window is closed when its room is archived, and a thread's window " <>
+           "when the person deletes the thread",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      actor = Sanctum.Context.actor(ctx)
+      win = lineage["thread_id"]
+      {:ok, room} = Arca.Test.Days.thread(actor)
+      crew = crew!(ctx, room.id)
+      crew_win = crew["thread_id"]
+
+      for each <- [lineage, crew],
+          do: assert({:ok, _} = call(ctx, each, "open", %{"url" => "https://example.com/"}))
+
+      # The crew member's turn over, nothing works in the room or under it.
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.thread_id == ^crew_win),
+          set: [status: "completed"]
+        )
+
+      assert {:ok, _} = Threads.archive(actor, room.id)
+      assert_receive {:driver, :req, _s, %{"op" => "close", "win" => ^crew_win}}, 5_000
+      eventually(fn -> :sys.get_state(holder(ctx)).windows == MapSet.new([win]) end, "the close")
+
+      # Deleted by hand. (Its turn's root is this case's stand-in, which no
+      # cancel could reach.)
+      set_status(turn, "completed")
+      assert {:ok, _} = Aqua.Tape.delete_thread(ctx, win)
+      assert_receive {:driver, :req, _s, %{"op" => "close", "win" => ^win}}, 5_000
+      eventually(fn -> :sys.get_state(holder(ctx)).windows == MapSet.new() end, "the close")
+      refute_received {:driver, :req, _s, %{"op" => "close"}}
+    end
+
+    test "an archive whose announcement is read after new work took the thread out again " <>
+           "closes nothing",
+         %{ctx: ctx, turn: turn, lineage: lineage} do
+      actor = Sanctum.Context.actor(ctx)
+      win = lineage["thread_id"]
+      assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
+      set_status(turn, "completed")
+
+      # The holder hears the archive only once the person's next post has
+      # taken the thread out of the archive again.
+      holder = holder(ctx)
+      :ok = :sys.suspend(holder)
+      assert {:ok, _} = Threads.archive(actor, win)
+
+      eventually(
+        fn ->
+          {:messages, messages} = Process.info(holder, :messages)
+          Enum.any?(messages, &match?(%Cyfr.Bus.ThreadListed{id: ^win, archived: true}, &1))
+        end,
+        "the archive's announcement to reach the holder"
+      )
+
+      {_next, next} = turn!(ctx, thread: %{id: win})
+      assert {:ok, %{archived_at: nil}} = Threads.get(actor, win)
+      :ok = :sys.resume(holder)
+
+      # The holder takes its mailbox in order: the announcement, then this.
+      assert {:ok, _} = call(ctx, next, "read")
+      assert_receive {:driver, :req, _s, %{"op" => "read", "win" => ^win}}, 5_000
+      refute_received {:driver, :req, _s, %{"op" => "close"}}
+      assert :sys.get_state(holder).windows == MapSet.new([win])
+    end
+  end
+
   describe "the second Chrome" do
     # A workspace thread opened apart, a turn running in it, and the row of
     # the person's second browser beside their own.
@@ -2018,12 +2141,10 @@ defmodule Opus.BrowserTest do
       assert {:ok, _} = call(ctx, crew, "open", %{"url" => "https://example.com/"})
       assert running_rows(ctx) == ["aqua-browser-apart"]
 
-      # Retention removes the finished workspace thread; the crew turn lives on.
-      old = DateTime.add(DateTime.utc_now(), -60 * 86_400, :second)
-      {:ok, _} = Threads.update(actor, room, %{last_message_at: old})
-      cutoff = DateTime.add(DateTime.utc_now(), -30 * 86_400, :second)
-      assert {:ok, removed} = Threads.delete_before(actor, cutoff)
-      assert removed >= 1
+      # The workspace thread's row goes while the crew turn lives on: what
+      # the browser reads when a deletion of the room commits between its
+      # read of the crew member's thread and its read of the room.
+      {1, _} = Arca.Repo.delete_all(from(c in Arca.Schemas.Thread, where: c.id == ^room))
       assert {:error, :not_found} = Threads.get(actor, room)
       assert {:ok, {_, _, _}} = Opus.Browser.turn(Opus.Browser.caller(guest(ctx), crew))
 

@@ -30,7 +30,7 @@ window.RoadScene = function () {
   const schedules = () => R.values(S.schedules).sort((a, b) => (a.next ?? Infinity) - (b.next ?? Infinity));
   const sched = (id) => { const h = S.schedules.get(id); return h ? h.value : null; };
   const run = (id) => { const h = id && S.runs.get(id); return h ? h.value : null; };
-  const threads = () => R.threads().sort((a, b) => (b.waits - a.waits) || (b.last ?? 0) - (a.last ?? 0));
+  const threads = (archived = false) => R.threads(archived).sort((a, b) => (b.waits - a.waits) || (b.last ?? 0) - (a.last ?? 0));
   const jobs = () => R.values(S.activity).sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
   const vault = () => R.values(S.vault).sort((a, b) => a.fine - b.fine || a.name.localeCompare(b.name));
   const sys = () => R.values(S.system)[0] || null;
@@ -244,8 +244,9 @@ window.RoadScene = function () {
   let millAngle = 0, tramPos = 0, tramDir = 1, tramWait = 0, towerRing = 0;
 
   // ---- interaction state ---------------------------------------------------------------------
-  // The open card, the part picked in the Plan, and the page of the card's rows shown.
-  let card = null, planSel = null, cardPage = 0;
+  // The open card, the part picked in the Plan, and the page of the card's rows shown; and whether
+  // the threads card lists the archived threads (its Archived choice).
+  let card = null, planSel = null, cardPage = 0, archived = false;
   const pending = { weather: null, vpn: null, sched: new Set(), retry: new Set() };
 
   R.subscribe((ch) => {
@@ -372,9 +373,13 @@ window.RoadScene = function () {
       return { title: list.length ? list.length + ' waiting at your house' : 'Nobody waiting', portrait: 'house', lines: list.length ? [] : ['Everything that waited on you is done.'],
         rows: list.map((a) => ({ text: attLabel(a), sub: a.untimed ? 'now' : when(a.since), dot: lookOf(a.kind).bc, run: () => openCard('att:' + a.id) })), choices: [] };
     }
-    if (kind === 'threads') return { title: 'Threads', portrait: 'post', lines: S.threads.size ? [] : ['No threads yet.'],
-      rows: threads().map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.aqua ? 'with Aqua' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
-        run: () => (t.aqua ? settings('aqua', 'Aqua', t.id) : settings('chat', 'the chat', t.id)) })), choices: [ask('threads')] };
+    if (kind === 'threads') {
+      const list = threads(archived);
+      return { title: 'Threads', portrait: 'post', lines: list.length ? [] : [archived ? 'No archived threads.' : 'No threads yet.'],
+        rows: list.map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.aqua ? 'with Aqua' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
+          run: () => (t.aqua ? settings('aqua', 'Aqua', t.id) : settings('chat', 'the chat', t.id)) })),
+        choices: [{ label: 'Archived', pressed: archived, run: () => { archived = !archived; cardPage = 0; } }, ask('threads')] };
+    }
     if (kind === 'crew') {
       const list = jobs(), s = sys();
       return { title: 'Crew', portrait: 'crew', lines: [...(list.length ? list.map((j) => j.member + ' is at work' + (j.title ? ': ' + j.title : '') + (j.askedBy ? ', asked by ' + j.askedBy : '') + ', since ' + when(j.since) + (j.status ? ' (' + j.status + ')' : '') + '.') : ['Nobody is out on a job.']),
@@ -659,7 +664,8 @@ window.RoadScene = function () {
   function buildingState(id, T, ts) {
     const blink = Math.floor(ts * 2) % 2 === 0;
     if (id === 'house') return { name: fit(S.person || 'your place', 54) };
-    if (id === 'post') return { threads: threads().map((t) => { const then = t.last == null || t.last <= T; return { kind: t.aqua ? 'aqua' : 'shared', unread: then ? t.unread : 0, people: t.people, waits_on_you: t.waits && then }; }) };
+    // the post boxes are the threads the threads card lists: the archived ones under its Archived choice
+    if (id === 'post') return { threads: threads(archived).map((t) => { const then = t.last == null || t.last <= T; return { kind: t.aqua ? 'aqua' : 'shared', unread: then ? t.unread : 0, people: t.people, waits_on_you: t.waits && then }; }) };
     if (id === 'crew') { const n = jobs().filter((j) => j.since == null || j.since <= T).length, s = sys(); return { out: n > 0, ready: s ? s.ready || 0 : 0, total: s ? s.total || 0 : 0 }; }
     if (id === 'market') return { apps: S.installed.map((a) => { const c = R.component(a.ref); return { letter: (Array.from(a.name)[0] || '?').toUpperCase(), open: a.open, update: !!(c && c.update) }; }) };
     if (id === 'silo') { const s = sys() || {}; return { used: s.used || 0, cap: s.cap || 0, model: !!s.model, update: !!s.update }; }
@@ -1186,7 +1192,7 @@ window.RoadScene = function () {
     ly += rowsH;
     ch.forEach((x, i) => {
       const p = chPos[i], bx = p.x, by = ly + p.y + 2;
-      panel(bx, by, p.w, 22, x.disabled ? P.whiteS : x.primary ? P.ink : x.aqua ? P.aqua : P.paper2, x.disabled ? P.whiteD : P.ink);
+      panel(bx, by, p.w, 22, x.disabled ? P.whiteS : x.primary ? P.ink : x.pressed ? P.aquaL : x.aqua ? P.aqua : P.paper2, x.disabled ? P.whiteD : P.ink);
       F.text(g, x.label, bx + 9, by + 7, x.disabled ? '#8a8172' : x.primary ? '#fff8ec' : P.ink);
       box.choices.push({ x: bx, y: by, w: p.w, h: 22, c: x });
     });
@@ -1232,7 +1238,7 @@ window.RoadScene = function () {
     const list = attention();
     if (on('attention')) add('queue', 'house', list.length + ' waiting at your house' + noteOf('attention') + '. Open the list.');
     else add('queue', 'house', 'Your house');
-    if (on('threads')) add('threads', 'post', 'Post boxes: ' + threads().length + (threads().length === 1 ? ' thread, ' : ' threads, ') + threads().filter((t) => t.waits).length + ' waiting on you, ' + threads().reduce((n, t) => n + t.unread, 0) + ' unread' + noteOf('threads'));
+    if (on('threads')) { const posted = threads(archived); add('threads', 'post', 'Post boxes' + (archived ? ', archived' : '') + ': ' + posted.length + (posted.length === 1 ? ' thread, ' : ' threads, ') + posted.filter((t) => t.waits).length + ' waiting on you, ' + posted.reduce((n, t) => n + t.unread, 0) + ' unread' + noteOf('threads')); }
     if (on('activity')) { const s = sys(); add('crew', 'crew', 'Crew house: ' + S.activity.size + ' at work' + (s && s.total != null ? ', ' + (s.ready ?? 0) + ' of ' + s.total + ' ready' : '') + noteOf('activity')); }
     if (on('components')) { const ups = S.installed.filter((a) => { const c = R.component(a.ref); return c && c.update; }).length; add('market', 'market', 'Market: ' + S.installed.length + ' apps' + (ups ? ', ' + ups + ' with an update' : '') + noteOf('components')); }
     if (on('schedules')) { const nt = noteOf('schedules'); add('tower', 'tower', 'Bell tower: ' + S.schedules.size + (S.schedules.size === 1 ? ' schedule' : ' schedules') + nt); add('press', 'press', 'Press: runs that failed' + nt); add('barn', 'barn', 'Barn: paused schedules' + nt); }
@@ -1260,7 +1266,7 @@ window.RoadScene = function () {
       hit('cardbg', cb.x, cb.y, cb.w, cb.h, '', () => {}, { exact: true, z: 5, tab: -1 });
       cb.rows.forEach((r) => { hit('row' + r.i, r.x, r.y, r.w, r.h, r.r.text + ', ' + r.r.sub, r.r.run, { exact: true, z: 6, pressed: r.r.toggle != null ? !!r.r.sel : null }); if (r.tg) hit('tg' + r.i, r.tg.x, r.tg.y, r.tg.w, r.tg.h, (r.r.toggle ? 'Turn off ' : 'Turn on ') + r.r.text, r.r.flip, { exact: true, z: 6, pressed: r.r.toggle }); });
       const more = card === 'plan' ? 'More parts, page ' : 'More rows, page ';
-      cb.choices.forEach((c, i) => hit('ch' + i + c.c.label, c.x, c.y, c.w, c.h, c.c.more ? more + c.c.label.slice(5).replace('/', ' of ') : c.c.label, c.c.close ? closeCard : c.c.run, { exact: true, z: 6, disabled: c.c.disabled }));
+      cb.choices.forEach((c, i) => hit('ch' + i + c.c.label, c.x, c.y, c.w, c.h, c.c.more ? more + c.c.label.slice(5).replace('/', ' of ') : c.c.label, c.c.close ? closeCard : c.c.run, { exact: true, z: 6, disabled: c.c.disabled, pressed: c.c.pressed ?? null }));
     }
     hitsDone();
   }

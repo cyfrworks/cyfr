@@ -610,14 +610,15 @@ describe("the line desktop 0.2.0", () => {
   })
 })
 
-// 0.3.2: a feed's widget with no reading names its feed and how to bind one,
-// and the threads are Aqua's daily and workspace threads and shared ones.
-const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.2/", import.meta.url)
+// 0.3.3: a feed's widget with no reading names its feed and how to bind one,
+// the threads are Aqua's daily and workspace threads and shared ones, and
+// the threads widget's Archived button lists the archived ones instead.
+const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.3/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the line desktop 0.3.2", () => {
+describe("the line desktop 0.3.3", () => {
   test("a feed widget with no reading names its feed and says to ask Aqua for one, until a reading comes", async () => {
     const p = desk({version: V3})
     await flush()
@@ -663,7 +664,7 @@ describe("the line desktop 0.3.2", () => {
       await flush()
       p.picture("threads.changes", [{kind: "daily", id: "th_1", title: day(n), people: ["Noor"], last_activity: today(9, 0), waits_on_you: false, unread: 0}])
       await flush()
-      assert.ok(p.seen().includes(`Threads 1 of 1 All threads ${words} With Aqua`), p.seen())
+      assert.ok(p.seen().includes(`Threads 1 of 1 Archived All threads ${words} With Aqua`), p.seen())
     }
   })
 
@@ -685,5 +686,92 @@ describe("the line desktop 0.3.2", () => {
     p.picture("attention.changes", [{kind: "approval", id: "ap_crew", label: "2026-11-15", day: null, since: today(9, 0), destination: {kind: "page", page: "aqua", ref: "th_crew"}}])
     await flush()
     assert.deepEqual(p.buttons().filter((b) => b.dataset.page === "aqua").map((b) => b.label), ["Open in Aqua: 2026-11-15"])
+  })
+
+  // Two daily threads in each list, a workspace thread in each and a shared
+  // one, whose `archived` is null.
+  const THREADS = [
+    {kind: "daily", id: "th_today", title: day(0), people: ["Noor"], last_activity: today(13, 0), waits_on_you: false, unread: 2, archived: false},
+    {kind: "daily", id: "th_two", title: day(-2), people: ["Noor"], last_activity: today(12, 50), waits_on_you: false, unread: 0, archived: false},
+    {kind: "daily", id: "th_one", title: day(-1), people: ["Noor"], last_activity: today(12, 40), waits_on_you: false, unread: 1, archived: true},
+    {kind: "daily", id: "th_three", title: day(-3), people: ["Noor"], last_activity: today(12, 30), waits_on_you: false, unread: 0, archived: true},
+    {kind: "workspace", id: "th_work", title: "Ferry tracker", people: ["Noor"], last_activity: today(12, 0), waits_on_you: false, unread: 0, archived: false},
+    {kind: "workspace", id: "th_old", title: "Old tracker", people: ["Noor"], last_activity: today(11, 30), waits_on_you: true, unread: 0, archived: true},
+    {kind: "shared", id: "th_family", title: "Family", people: ["a", "b", "c"], last_activity: today(11, 0), waits_on_you: false, unread: 1, archived: null}
+  ]
+  const listed = (p) => p.buttons().filter((b) => b.dataset.key?.startsWith("th-")).map((b) => b.dataset.key)
+  const archived = (p) => p.button((b) => b.dataset.act === "archived")
+  const flip = (p) => p.tap((b) => b.dataset.act === "archived")
+
+  test("the threads widget lists the threads not archived; its Archived button lists only the archived ones, each drawn and opened as before, the newest daily thread of each list standing for its days, and the count counts the list shown", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("threads.changes", THREADS)
+    await flush()
+    assert.equal(archived(p).words, "Archived")
+    assert.equal(archived(p).attrs["aria-pressed"], "false")
+    assert.deepEqual(listed(p), ["th-th_today", "th-th_work", "th-th_family"])
+    assert.ok(p.seen().includes("Threads 3 of 3 Archived All threads Today With Aqua · 2 unread"), p.seen())
+
+    flip(p)
+    assert.equal(archived(p).attrs["aria-pressed"], "true")
+    assert.deepEqual(listed(p), ["th-th_one", "th-th_old"])
+    assert.ok(p.seen().includes("Threads 2 of 2 Archived All threads Yesterday With Aqua · 1 unread"), p.seen())
+    assert.match(p.seen(), /Old tracker With Aqua · waits on you/)
+    p.tap((b) => b.dataset.key === "th-th_one")
+    p.tap((b) => b.dataset.key === "th-th_old")
+    assert.deepEqual(p.pages, [["aqua", "th_one"], ["aqua", "th_old"]])
+
+    flip(p)
+    assert.equal(archived(p).attrs["aria-pressed"], "false")
+    assert.deepEqual(listed(p), ["th-th_today", "th-th_work", "th-th_family"])
+  })
+
+  test("a live item that archives a thread moves it to the archived list, one that takes it out moves it back, and a removed item leaves both lists", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("threads.changes", THREADS)
+    await flush()
+    const work = THREADS.find((t) => t.id === "th_work")
+    p.change("threads.changes", {...work, archived: true}, 20)
+    await flush()
+    assert.deepEqual(listed(p), ["th-th_today", "th-th_family"])
+    flip(p)
+    assert.deepEqual(listed(p), ["th-th_one", "th-th_work", "th-th_old"])
+
+    p.change("threads.changes", {...work, last_activity: today(13, 30), archived: false}, 21)
+    await flush()
+    assert.deepEqual(listed(p), ["th-th_one", "th-th_old"])
+    flip(p)
+    assert.deepEqual(listed(p), ["th-th_work", "th-th_today", "th-th_family"])
+
+    p.change("threads.changes", {kind: "removed", id: "th_work"}, 22)
+    p.change("threads.changes", {kind: "removed", id: "th_old"}, 23)
+    await flush()
+    assert.deepEqual(listed(p), ["th-th_today", "th-th_family"])
+    flip(p)
+    assert.deepEqual(listed(p), ["th-th_one"])
+  })
+
+  test("a daily thread archived live hands its days to the newest one left in the list, and the archived list's newest is the one it shows", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("threads.changes", THREADS)
+    await flush()
+    p.change("threads.changes", {...THREADS.find((t) => t.id === "th_today"), archived: true}, 20)
+    await flush()
+    assert.deepEqual(listed(p), ["th-th_two", "th-th_work", "th-th_family"])
+    flip(p)
+    assert.deepEqual(listed(p), ["th-th_today", "th-th_old"])
+  })
+
+  test("with no archived thread the Archived button's list says so", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.picture("threads.changes", THREADS.filter((t) => t.archived !== true))
+    await flush()
+    flip(p)
+    assert.deepEqual(listed(p), [])
+    assert.match(p.seen(), /Threads Archived All threads No archived threads\./)
   })
 })

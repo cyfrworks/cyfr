@@ -43,6 +43,8 @@ defmodule Cyfr.TelemetryBridgeTest do
   alias Cyfr.Telemetry.Catalog
 
   @athanor "ath_bridge"
+  # Read against a person's own athanor (its own test below), so no case.
+  @thread_archived [:cyfr, :arca, :thread, :archived]
   @actor Prima.Actor.in_athanor(@athanor)
   @user "user_bridge"
   # A confirmation as the stream names it, and the secret its asker alone holds.
@@ -257,7 +259,8 @@ defmodule Cyfr.TelemetryBridgeTest do
     end
 
     test "every roster event has its message here, and nothing else does" do
-      assert cases() |> Enum.map(&elem(&1, 0)) |> Enum.sort() == Catalog.consumed_by(:bridge)
+      events = [@thread_archived | Enum.map(cases(), &elem(&1, 0))]
+      assert Enum.sort(events) == Catalog.consumed_by(:bridge)
     end
   end
 
@@ -279,6 +282,30 @@ defmodule Cyfr.TelemetryBridgeTest do
         # Anything else the same event put on this topic.
         flush()
       end
+    end
+
+    # An archive names no person: the thread is read when its message is
+    # delivered and told to its athanor's person, as their list shows it.
+    test "a thread archived reaches its person's list as it reads then" do
+      {:ok, user} =
+        Sanctum.Test.People.linked(%{id: "bridge-archive", provider: "local", verified: true})
+
+      athanor = Sanctum.Test.People.athanor!(user)
+      actor = Prima.Actor.in_athanor(athanor.id)
+      {:ok, daily} = Arca.ThreadStorage.daily(actor, ~D[2026-01-02])
+      :ok = Bus.subscribe(actor, Bus.threads(actor, user.id))
+
+      {:ok, _} = Arca.ThreadStorage.archive(actor, daily.id)
+      id = daily.id
+      assert_receive %Cyfr.Bus.ThreadListed{kind: :daily, id: ^id, archived: true}, 1_000
+
+      # Read when delivered: a thread gone by then is told nothing.
+      :telemetry.execute(@thread_archived, %{count: 1}, %{
+        athanor_id: athanor.id,
+        thread_id: "thread_gone"
+      })
+
+      refute_receive %Cyfr.Bus.ThreadListed{id: "thread_gone"}, 200
     end
 
     test "a root's completion and failure reach the notify topic; a child's do not" do

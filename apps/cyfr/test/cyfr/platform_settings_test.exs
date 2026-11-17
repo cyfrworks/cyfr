@@ -355,7 +355,7 @@ defmodule Cyfr.PlatformSettingsTest do
       assert set_by == ctx.user_id and at == listing.revision
 
       assert %{source: "default", value: 1000, default: 1000, pending: false, divergent: false} =
-               by_key["max_threads_per_athanor"]
+               by_key["max_schedules_per_athanor"]
 
       assert %{value: level} = by_key["log_level"]
       assert level == Atom.to_string(Logger.level())

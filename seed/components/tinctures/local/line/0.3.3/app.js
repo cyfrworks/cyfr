@@ -97,6 +97,7 @@
     person: null,
     settled: [], // seen leaving the attention stream, this session only
     arranging: false,
+    archived: false, // the threads widget lists the archived threads
     saved: null,
     note: null,
     busy: {}, // a pressed schedule, run or feed, until its answer
@@ -248,10 +249,12 @@
   const held = (name) => BY[name].items;
   const items = (name) => [...BY[name].items.values()];
   const one = (name) => items(name)[0] || null;
-  // The threads listed: the newest daily thread stands for Aqua's days, the
-  // earlier ones a step back in Aqua's panel.
+  // The threads listed, the archived ones while the threads widget's
+  // Archived button is pressed (a shared thread's `archived` is null: it is
+  // never archived): in each list the newest daily thread stands for Aqua's
+  // days, the earlier ones a step back in Aqua's panel.
   function listedThreads() {
-    const all = items("threads.changes");
+    const all = items("threads.changes").filter((t) => (t.archived === true) === S.archived);
     const newest = all.reduce((n, t) => (t.kind === "daily" && (!n || text(t.title) > text(n.title)) ? t : n), null);
     return all.filter((t) => t.kind !== "daily" || t === newest);
   }
@@ -558,8 +561,9 @@
       const list = all.slice(0, 4);
       return {
         meta: all.length ? `${list.length} of ${all.length}` : "",
-        tools: `<button class="btn sm" data-act="page" data-page="chat" data-key="all-threads">All threads</button>`,
-        body: list.length === 0 ? `<p class="empty">No threads yet.</p>` : `<ul class="rows">${list.map((t) => {
+        tools: `<button class="btn sm${S.archived ? " primary" : ""}" data-act="archived" data-key="archived" aria-pressed="${S.archived}">Archived</button>`
+          + `<button class="btn sm" data-act="page" data-page="chat" data-key="all-threads">All threads</button>`,
+        body: list.length === 0 ? `<p class="empty">${S.archived ? "No archived threads." : "No threads yet."}</p>` : `<ul class="rows">${list.map((t) => {
           const people = Array.isArray(t.people) ? t.people.length : 0;
           const aqua = isAqua(t);
           const who = aqua ? "With Aqua" : `${people} ${plural(people, "person", "people")}`;
@@ -982,6 +986,7 @@
       case "retry": return retry(id);
       case "feed": return pressFeed(b.dataset.feed, b.dataset.action);
       case "arrange": S.arranging = !S.arranging; S.note = null; return render();
+      case "archived": S.archived = !S.archived; return render();
       case "move": return move(id, Number(b.dataset.dir));
       case "toggle": return toggle(id);
     }

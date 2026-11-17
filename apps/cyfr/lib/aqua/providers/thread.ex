@@ -98,8 +98,9 @@ defmodule Aqua.Providers.Thread do
 
     * `threads.changes` is one person's list of threads, on their own
       topic, so its subject is the grant holder's own id, which the gate
-      binds: their athanor's daily and workspace threads and the active
-      shared threads they sit in (`Aqua.ThreadList`).
+      binds: their athanor's daily and workspace threads, each saying
+      whether it is archived, and the active shared threads they sit in
+      (`Aqua.ThreadList`).
     * `activity.changes` is the athanor's crew at work, a job's start and
       end, and takes no subject (`Aqua.Crew.Activity`). It is declared
       here, beside the `crew` tool, as the assistant's one provider.
@@ -150,7 +151,7 @@ defmodule Aqua.Providers.Thread do
         name: "threads.changes",
         topic: :threads,
         projection:
-          ["kind", "id", "title", "people", "last_activity", "waits_on_you", "unread"] ++
+          ["kind", "id", "title", "people", "last_activity", "waits_on_you", "unread", "archived"] ++
             Prima.Provider.Stream.delivery_fields(),
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
@@ -197,9 +198,19 @@ defmodule Aqua.Providers.Thread do
         },
         "last_activity" => %{"type" => "time", "nullable" => true},
         "waits_on_you" => %{"type" => "boolean", "nullable" => true},
-        "unread" => %{"type" => "integer", "nullable" => true}
+        "unread" => %{"type" => "integer", "nullable" => true},
+        "archived" => %{"type" => "boolean", "nullable" => true}
       },
-      "required" => ["kind", "id", "title", "people", "last_activity", "waits_on_you", "unread"]
+      "required" => [
+        "kind",
+        "id",
+        "title",
+        "people",
+        "last_activity",
+        "waits_on_you",
+        "unread",
+        "archived"
+      ]
     })
   end
 
@@ -656,7 +667,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a crew member's thread, and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a thread (a daily or workspace thread goes behind the list's Archived filter until new work there, nothing else changing; a crew member's thread is retired, which stops its work there), and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -997,18 +1008,22 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # A crew member's thread is retired: it admits nothing more, its open
-  # turns end cancelled with their replies in the archive's own
-  # transaction, the runtime still holding them is stopped after, and the
-  # next request to the member opens a new one.
+  # A daily or a workspace thread is archived: behind the list's Archived
+  # filter, with nothing else about it changed, and never while work
+  # remains in it. A crew member's thread is retired: it admits nothing
+  # more, its open turns end cancelled with their replies in the
+  # retirement's own transaction, the runtime still holding them is
+  # stopped after, and the next request to the member opens a new one.
   defp act("archive", ctx, id, _args) do
-    with {:ok, %{thread: archived, cancelled: cancelled}} <- Tape.archive(ctx, id),
-         :ok <- Runner.stop_cancelled(cancelled) do
-      {:ok, Map.put(render_thread(archived), :archived, true)}
-    else
-      {:error, :not_crew} ->
-        {:error,
-         {:conflict, "only a crew member's thread is archived; delete a thread of your own"}}
+    case Tape.archive(ctx, id) do
+      {:ok, archived} ->
+        {:ok, Map.put(render_thread(archived), :archived, true)}
+
+      {:error, :not_a_room} ->
+        retire(ctx, id)
+
+      {:error, :working} ->
+        {:error, {:conflict, "this thread is still working — archive it once nothing runs in it"}}
 
       {:error, reason} ->
         {:error, refusal(reason, id)}
@@ -1217,6 +1232,16 @@ defmodule Aqua.Providers.Thread do
   # reason already in the vocabulary included; what it does name is this
   # domain's spelling and wins over a shared one — `:unavailable` here is
   # the thread store, not the storage-unit outcome `Prima.Refusal` maps.
+  # A crew member's thread `thread.archive` names is retired.
+  defp retire(ctx, id) do
+    with {:ok, %{thread: retired, cancelled: cancelled}} <- Tape.retire(ctx, id),
+         :ok <- Runner.stop_cancelled(cancelled) do
+      {:ok, Map.put(render_thread(retired), :retired, true)}
+    else
+      {:error, reason} -> {:error, refusal(reason, id)}
+    end
+  end
+
   defp refusal(reason, id), do: translate(reason, id)
 
   defp translate(:not_found, id), do: {:not_found, "thread", id}
@@ -1654,6 +1679,7 @@ defmodule Aqua.Providers.Thread do
       parent_id: thread.parent_id,
       agent: if(thread.kind == "crew", do: thread.agent),
       archived_at: thread.archived_at,
+      retired_at: thread.retired_at,
       created_by: thread.created_by,
       last_message_at: thread.last_message_at,
       at: thread.inserted_at

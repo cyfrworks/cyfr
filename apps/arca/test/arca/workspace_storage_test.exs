@@ -1,20 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.WorkspaceStorageTest.PausingDelete do
-  @moduledoc false
-  use Arca.Storage.TestDouble
-
-  # The first thread tree this process deletes runs the test's hook first:
-  # what a person does the moment retention's bytes start to go.
-  def delete_tree(actor, ["threads", _id] = path) do
-    if hook = Process.delete(:on_blob_delete), do: hook.()
-    Arca.Adapters.Local.delete_tree(actor, path)
-  end
-
-  def delete_tree(actor, path), do: Arca.Adapters.Local.delete_tree(actor, path)
-end
-
 defmodule Arca.WorkspaceStorageTest do
   @moduledoc """
   A workspace thread's rows: opened in one transaction with its opening,
@@ -284,7 +270,7 @@ defmodule Arca.WorkspaceStorageTest do
            )
   end
 
-  test "retention keeps a thread an open turn has read, which it cannot stop without the turn's root grant",
+  test "the setting archives a thread an open turn has read all the same, and deleting it by hand waits on that turn's root grant",
        %{actor: actor, daily: daily} do
     workspace = open!(actor, daily)
     reader = running!(actor, daily)
@@ -296,23 +282,35 @@ defmodule Arca.WorkspaceStorageTest do
         set: [sources: read]
       )
 
+    # Finished, its opening stopped before it started: no work remains in it.
     {1, _} =
       Arca.Repo.update_all(
         from(c in Arca.Schemas.Thread, where: c.id == ^workspace.id),
         set: [workspace_state: "done"]
       )
 
+    {1, _} =
+      Arca.Repo.update_all(
+        from(m in Arca.Schemas.Message,
+          where: m.thread_id == ^workspace.id and m.kind == "opening"
+        ),
+        set: [status: "expired"]
+      )
+
+    # The daily thread holds the open turn, so the workspace thread alone
+    # is archived; that the turn read it keeps nothing.
     future = DateTime.add(DateTime.utc_now(), 3600, :second)
-    assert {:ok, 0} = Threads.count_before(actor, future)
-    assert {:ok, 0} = Threads.delete_before(actor, future)
-    assert {:ok, _kept} = Threads.get(actor, workspace.id)
+    assert {:ok, 1} = Threads.count_idle(actor, future)
+    assert {:ok, 1} = Threads.archive_idle(actor, future)
+    assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor, workspace.id)
+    assert {:ok, %{archived_at: nil}} = Threads.get(actor, daily.id)
 
     # Forgetting it would stop the open turn that read it, and stopping a
-    # turn with a root ends its attempt under the root's grant, which
-    # retention does not hold: a deletion that names none is refused.
+    # turn with a root ends its attempt under the root's grant: a deletion
+    # that names none is refused.
     assert {:error, :missing_grant} = Threads.delete(actor, workspace.id)
 
-    # Once that turn has ended, retention forgets the thread.
+    # Once that turn has ended, a deletion by hand forgets the thread.
     {:ok, _} =
       TurnStorage.finish(actor, reader.id, "failed", %{
         fence: reader.fence,
@@ -321,8 +319,7 @@ defmodule Arca.WorkspaceStorageTest do
         verify: &Arca.Test.Actor.admits/1
       })
 
-    assert {:ok, removed} = Threads.delete_before(actor, future)
-    assert removed >= 1
+    assert {:ok, %{cancelled: []}} = Threads.delete(actor, workspace.id)
     assert {:error, :not_found} = Threads.get(actor, workspace.id)
   end
 
@@ -398,51 +395,6 @@ defmodule Arca.WorkspaceStorageTest do
     finish!(actor, member)
     assert state(actor, workspace.id) == "done"
     assert length(records(actor, "workspace_report")) == 2
-  end
-
-  # Retention decides under the rows it deletes.
-  test "a person's post that lands as retention removes a thread keeps the thread, or finds it gone",
-       %{actor: actor, daily: daily} do
-    workspace = open!(actor, daily)
-
-    {1, _} =
-      Arca.Repo.update_all(
-        from(c in Arca.Schemas.Thread, where: c.id == ^workspace.id),
-        set: [workspace_state: "done"]
-      )
-
-    # The daily thread stays by a turn still open there.
-    _open = running!(actor, daily)
-    future = DateTime.add(DateTime.utc_now(), 3600, :second)
-
-    me = self()
-
-    Process.put(:on_blob_delete, fn ->
-      posted =
-        TurnStorage.accept_message(actor, workspace.id, %{
-          message: %{author: actor.user_id, sent_by: "person", content: "one more thing"}
-        })
-
-      send(me, {:posted, posted})
-    end)
-
-    assert {:ok, _removed} =
-             Prima.Test.Env.with_app_env(
-               :arca,
-               :storage_adapter,
-               Arca.WorkspaceStorageTest.PausingDelete,
-               fn -> Threads.delete_before(actor, future) end
-             )
-
-    assert_received {:posted, posted}
-
-    case posted do
-      {:ok, _landed} ->
-        assert {:ok, %{workspace_state: "open"}} = Threads.get(actor, workspace.id)
-
-      {:error, _gone} ->
-        assert {:error, :not_found} = Threads.get(actor, workspace.id)
-    end
   end
 
   test "a row naming a workspace thread lands only while it stands", %{actor: actor, daily: daily} do

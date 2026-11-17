@@ -307,10 +307,12 @@
   // A daily thread (one a day) and a workspace thread are Aqua's; a shared
   // thread is people's.
   const isAqua = (t) => t.kind === 'daily' || t.kind === 'workspace';
-  // The threads listed: the newest daily thread stands for Aqua's days, the
-  // earlier ones a step back in Aqua's panel.
-  function threads() {
-    const all = items('threads.changes');
+  // The threads listed, the archived ones when `archived` (a shared thread's
+  // `archived` is null: it is never archived): in each list the newest daily
+  // thread stands for Aqua's days, the earlier ones a step back in Aqua's
+  // panel.
+  function threads(archived = false) {
+    const all = items('threads.changes').filter((t) => (t.archived === true) === archived);
     const newest = all.reduce((n, t) => (t.kind === 'daily' && (!n || text(t.title) > text(n.title)) ? t : n), null);
     return all.filter((t) => t.kind !== 'daily' || t === newest);
   }

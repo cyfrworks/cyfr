@@ -728,10 +728,10 @@ defmodule Aqua.CrewTest do
   end
 
   # The room's viewers hear a card's notice settled whichever way its card
-  # goes: decided, its turn cancelled, its thread archived.
+  # goes: decided, its turn cancelled, its thread retired.
   for {how, settle} <- [
         cancelled: quote(do: fn ctx, child -> Runner.stop_turn(ctx, child.id) end),
-        archived: quote(do: fn ctx, child -> Tape.archive(ctx, child.id) end)
+        retired: quote(do: fn ctx, child -> Tape.retire(ctx, child.id) end)
       ] do
     test "a card's notice is announced invalidated on the room when its turn is #{how}",
          %{ctx: ctx, room: room} do
@@ -1097,7 +1097,7 @@ defmodule Aqua.CrewTest do
     assert {:ok, []} = Tape.pending_approvals(ctx, turn)
   end
 
-  test "archiving cancels every open turn in its own transaction, the running one included, and leaves none open",
+  test "retiring cancels every open turn in its own transaction, the running one included, and leaves none open",
        %{ctx: ctx, room: room} do
     script!([{:probe, self()}])
     request = soul_request!(ctx, room, "planner", "take a while")
@@ -1109,14 +1109,14 @@ defmodule Aqua.CrewTest do
     assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn_id)
 
     # The store's write alone, as a crash before the runner's stop leaves it.
-    assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: cancelled}} =
-             Tape.archive(ctx, child.id)
+    assert {:ok, %{thread: %{retired_at: %DateTime{}}, cancelled: cancelled}} =
+             Tape.retire(ctx, child.id)
 
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn_id)
     assert {:ok, []} = Tape.open_turns(ctx, child.id)
     assert [%{snapshot: %{"outcome" => "cancelled"}}] = replies_of(ctx, turn_id)
 
-    # Then the runner's stop, as the archive's caller makes it: no attempt
+    # Then the runner's stop, as the retirement's caller makes it: no attempt
     # of what the turn ran outlives the case.
     executions =
       Arca.Repo.all(
@@ -1130,7 +1130,7 @@ defmodule Aqua.CrewTest do
     assert %{status: "answered"} = row(ctx, request.id)
   end
 
-  test "archiving a working member's thread aborts its loop through the runner, the call's independent catalog handler with it",
+  test "retiring a working member's thread aborts its loop through the runner, the call's independent catalog handler with it",
        %{ctx: ctx, room: room} do
     start_supervised!(
       {ScriptedWorker,
@@ -1183,7 +1183,7 @@ defmodule Aqua.CrewTest do
     handler_ref = Process.monitor(handler)
     loop_ref = Process.monitor(loop)
 
-    assert {:ok, %{archived: true}} =
+    assert {:ok, %{retired: true}} =
              Aqua.Providers.Thread.handle("thread", ctx, %{
                "action" => "archive",
                "thread" => child.id
@@ -1598,18 +1598,18 @@ defmodule Aqua.CrewTest do
     refute Enum.any?(rows(ctx, elsewhere.id), &(&1.content == "posted elsewhere"))
   end
 
-  test "an archived child thread admits nothing, and the next request opens a new one",
+  test "a retired child thread admits nothing, and the next request opens a new one",
        %{ctx: ctx, room: room} do
     script!([reply("in the new thread")])
     {:ok, old} = Threads.crew_thread(actor(ctx), room.id, "planner")
-    {:ok, _} = Tape.archive(ctx, old.id)
+    {:ok, _} = Tape.retire(ctx, old.id)
 
-    assert {:error, :thread_archived} = Runner.send_message(ctx, old.id, "still there?")
+    assert {:error, :thread_retired} = Runner.send_message(ctx, old.id, "still there?")
 
     request = soul_request!(ctx, room, "planner", "anew")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     [_old, new] = Threads.children(actor(ctx), room.id)
-    assert new.id != old.id and is_nil(new.archived_at)
+    assert new.id != old.id and is_nil(new.retired_at)
     await_status(ctx, delivered_turn(ctx, new, request.id), "completed")
   end
 

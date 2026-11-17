@@ -18,10 +18,10 @@ import (
 func init() {
 	retentionSetCmd.Flags().Int("executions", 0, "Number of executions to keep per user")
 	retentionSetCmd.Flags().Int("builds", 0, "Number of builds to keep per user")
-	retentionSetCmd.Flags().StringArray("set", nil, "Set any retention key to a positive integer, as key=value (repeatable)")
+	retentionSetCmd.Flags().StringArray("set", nil, "Set any retention key, as key=value (repeatable): a positive integer, or 0 for archive_days to archive no thread")
 
-	retentionCleanupCmd.Flags().Bool("dry-run", false, "Preview what would be cleaned up")
-	retentionCleanupCmd.Flags().String("type", "", "Retention key whose data to clean up, e.g. executions, builds or mcp_log_days (default executions)")
+	retentionCleanupCmd.Flags().Bool("dry-run", false, "Count what the cleanup would delete, or for archive_days archive, without doing it")
+	retentionCleanupCmd.Flags().String("type", "", "Retention key whose data to clean up, e.g. executions, builds, mcp_log_days or archive_days, which archives threads (default executions)")
 
 	retentionCmd.AddCommand(retentionShowCmd)
 	retentionCmd.AddCommand(retentionSetCmd)
@@ -34,7 +34,7 @@ var retentionCmd = &cobra.Command{
 	Use:     "retention",
 	Short:   "Manage data retention policies",
 	GroupID: "admin",
-	Long:    "Show or set data retention settings, or trigger a manual cleanup of expired data.",
+	Long:    "Show or set data retention settings, or trigger a manual cleanup of expired data; archive_days archives threads with no activity and deletes nothing.",
 }
 
 var retentionShowCmd = &cobra.Command{
@@ -58,7 +58,8 @@ var retentionSetCmd = &cobra.Command{
 		"(as `cyfr retention show` names them) with --set key=value.",
 	Example: `  cyfr retention set --executions 100 --builds 50
   cyfr retention set --executions 200
-  cyfr retention set --set mcp_log_days=14 --set messages_days=90`,
+  cyfr retention set --set mcp_log_days=14 --set archive_days=7
+  cyfr retention set --set archive_days=0`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		values := map[string]int{}
 
@@ -89,7 +90,7 @@ var retentionSetCmd = &cobra.Command{
 var retentionCleanupCmd = &cobra.Command{
 	Use:   "cleanup",
 	Short: "Run retention cleanup",
-	Long:  "Trigger a manual cleanup of data that exceeds retention limits.",
+	Long:  "Trigger a manual cleanup of data that exceeds retention limits; --type archive_days archives the threads with no activity for that many days instead.",
 	Example: `  cyfr retention cleanup
   cyfr retention cleanup --type executions
   cyfr retention cleanup --dry-run`,

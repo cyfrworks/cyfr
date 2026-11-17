@@ -29,7 +29,6 @@ defmodule Sanctum.Test.Settings do
     "max_pairs_per_person" => %{default: nil, stale: :refuse},
     "max_shared_threads_per_person" => %{default: nil, stale: :refuse},
     "max_people_per_thread" => %{default: nil, stale: :refuse},
-    "max_threads_per_athanor" => %{default: 1000, stale: :refuse},
     "athanor_storage_bytes" => %{default: nil, stale: :refuse},
     # A rate bound, not a cap: a rate limit that refuses a stale value.
     "mint_per_hour" => %{default: nil, stale: :refuse},

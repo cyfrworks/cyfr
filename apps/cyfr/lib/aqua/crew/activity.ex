@@ -36,7 +36,7 @@ defmodule Aqua.Crew.Activity do
   The refresh of `activity.changes`: every open job of the caller's
   athanor, one per open turn of a member's child thread, oldest first,
   each read as `started`. A child thread is listed among the athanor's
-  threads (`Arca.ThreadStorage.list/2`), and an archived one holds no
+  threads (`Arca.ThreadStorage.list/2`), and a retired one holds no
   open turn.
   """
   @spec open(Context.t(), nil) :: {:ok, [CrewActivity.t()]} | {:error, term()}
@@ -45,7 +45,7 @@ defmodule Aqua.Crew.Activity do
     actor = Context.actor(ctx)
 
     with threads when is_list(threads) <- Arca.ThreadStorage.list(actor, kind: "crew"),
-         {:ok, turns} <- open_turns(ctx, for(%{archived_at: nil, id: id} <- threads, do: id)) do
+         {:ok, turns} <- open_turns(ctx, for(%{retired_at: nil, id: id} <- threads, do: id)) do
       {:ok,
        turns
        |> Enum.sort_by(& &1.accepted_at, DateTime)

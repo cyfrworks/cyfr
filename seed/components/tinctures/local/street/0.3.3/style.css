@@ -147,7 +147,7 @@ button { font: inherit; color: inherit; }
   color: var(--board-ink); font-size: 16px; cursor: pointer; white-space: nowrap;
 }
 .btn.go { background: var(--tram); color: var(--tram-ink); border-color: var(--tram-ink); }
-.btn.on { background: var(--cobalt); color: #f6f2e8; border-color: var(--cobalt); }
+.btn.on { background: var(--cobalt); color: var(--tile); border-color: var(--cobalt); }
 .btn:active { transform: translateY(2px); }
 .btn[disabled] { opacity: .45; cursor: default; transform: none; }
 .tickets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }

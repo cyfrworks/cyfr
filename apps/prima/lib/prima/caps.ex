@@ -30,8 +30,8 @@ defmodule Prima.Caps do
   arguments. It takes the cap `key` because the ceilings are separate
   meanings (`keys/0`), and a zero-arity `count` rather than a number
   because only the domain that owns those rows can count them — Arca
-  counts an athanor's threads, a person's pairs and a shared thread's
-  people, the tenancy domain counts athanors — and this port sits
+  counts a person's pairs and a shared thread's people, the tenancy
+  domain counts athanors — and this port sits
   below all of them. The count runs
   only while its cap is configured, so a server with the cap off pays no
   query.
@@ -61,7 +61,6 @@ defmodule Prima.Caps do
     :max_pairs_per_person,
     :max_shared_threads_per_person,
     :max_people_per_thread,
-    :max_threads_per_athanor,
     :athanor_storage_bytes
   ]
 
@@ -74,7 +73,6 @@ defmodule Prima.Caps do
           | :max_pairs_per_person
           | :max_shared_threads_per_person
           | :max_people_per_thread
-          | :max_threads_per_athanor
           | :athanor_storage_bytes
 
   @typedoc """

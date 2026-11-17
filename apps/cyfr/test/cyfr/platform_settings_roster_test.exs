@@ -58,7 +58,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # security bound on how fast strangers are minted an athanor; the other
   # rate limits, stream limits and cache bounds serve one.
   @refuse ~w(max_athanors max_pairs_per_person
-             max_shared_threads_per_person max_people_per_thread max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
+             max_shared_threads_per_person max_people_per_thread max_schedules_per_athanor max_feeds_per_athanor
              max_external_servers_per_athanor mint_per_hour athanor_storage_bytes session_ttl_hours
              webhook_max_skew_seconds webhook_idempotency_ttl_seconds
              directory_serve directory_max_identities directory_log_bytes
@@ -294,7 +294,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                Enum.sort(~w(
                  max_athanors max_pairs_per_person
                  max_shared_threads_per_person max_people_per_thread
-                 max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
+                 max_schedules_per_athanor max_feeds_per_athanor
                  max_external_servers_per_athanor mint_per_hour athanor_storage_bytes
                  opus_max_concurrent opus_max_concurrent_per_tenant
                  mcp_rate_limit_max mcp_rate_limit_window_ms api_rate_limit_max

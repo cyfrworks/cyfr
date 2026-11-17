@@ -428,3 +428,8 @@ noscript p { padding: 1rem; color: var(--pane); }
   .puddle--scroll .ripples li { position: static; transform: none !important; flex: none; }
 }
 li.row--unfit { display: none; }
+
+/* The threads' Archived button hangs under the plaques; pressed, the archived threads hang instead. */
+.part--threads { display: flex; flex-direction: column; }
+.part--threads .plaques { flex: 1 1 auto; height: auto; min-height: 0; }
+.archived-btn { align-self: flex-end; flex: none; margin-top: .6rem; min-height: 40px; font-size: .88rem; }

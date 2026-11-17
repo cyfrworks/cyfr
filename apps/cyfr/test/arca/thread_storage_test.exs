@@ -494,7 +494,8 @@ defmodule Arca.ThreadStorageTest do
     assert Arca.Schemas.Message.system_author() == "system"
   end
 
-  test "retention drops stale idle threads and keeps one holding an open turn", %{ctx: ctx} do
+  test "the setting archives an idle thread, its files kept, and leaves one holding an open turn and a fresh one",
+       %{ctx: ctx} do
     {:ok, stale} = Days.thread(ctx)
     {:ok, running} = Days.thread(ctx)
     {:ok, fresh} = Days.thread(ctx)
@@ -513,7 +514,7 @@ defmodule Arca.ThreadStorageTest do
 
     {:ok, _} = Threads.update(ctx, running.id, %{last_message_at: old})
 
-    # a blob under the stale thread goes with it
+    # a blob under the idle thread stays with it
     :ok =
       Arca.put(
         ctx,
@@ -522,42 +523,17 @@ defmodule Arca.ThreadStorageTest do
       )
 
     cutoff = DateTime.add(DateTime.utc_now(), -365 * 86_400, :second)
-    assert {:ok, 1} = Threads.count_before(ctx, cutoff)
-    assert {:ok, 1} = Threads.delete_before(ctx, cutoff)
+    assert {:ok, 1} = Threads.count_idle(ctx, cutoff)
+    assert {:ok, 1} = Threads.archive_idle(ctx, cutoff)
 
-    refute Arca.exists?(
+    assert Arca.exists?(
              ctx,
              Threads.blob_root(stale.id) ++ ["msg_1", "note.txt"]
            )
 
-    ids = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
+    assert Enum.map(Threads.list(ctx, archived: true), & &1.id) == [stale.id]
+    ids = Threads.list(ctx, archived: false) |> Enum.map(& &1.id) |> Enum.sort()
     assert ids == Enum.sort([running.id, fresh.id])
-  end
-
-  test "a new day over the athanor's thread cap is refused through the port and commits nothing, and a day it holds is answered",
-       %{ctx: ctx} do
-    {:ok, first} = Days.thread(ctx)
-    before = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
-
-    Cyfr.Test.Settings.put("max_threads_per_athanor", 1)
-
-    # The refusal is the port's vocabulary (`Prima.Caps`), not the tenancy
-    # domain named from below it, and the row it refused is not there.
-    assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
-             Threads.daily(ctx, Days.next())
-
-    assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
-             Threads.crew_thread(ctx, first.id, "planner")
-
-    assert Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort() == before
-
-    # A day already made is no new thread: the cap does not stand in its way.
-    assert {:ok, %{id: id}} = Threads.daily(ctx, first.day)
-    assert id == first.id
-
-    # Another athanor's count is its own.
-    other = Prima.Actor.in_athanor("ath_b")
-    assert {:ok, _} = Threads.daily(other, Days.next())
   end
 end
 
@@ -570,11 +546,6 @@ defmodule Arca.ThreadStorageRaceTest do
   let go; SQLite's one write lock admits one transaction at a time, so
   there they run as concurrent processes. Each case works in an athanor
   of its own, whose rows it deletes when it ends.
-
-  The ceiling is a stored setting, and a row written in a test's sandbox
-  transaction is invisible to the callers' own connections, so it is
-  written outside the sandbox too, with the node's cached value dropped
-  so the callers read it, and deleted again when the case ends.
   """
 
   use ExUnit.Case, async: false
@@ -582,7 +553,6 @@ defmodule Arca.ThreadStorageRaceTest do
   import Ecto.Query, only: [from: 2]
   import Arca.Test.Adapter, only: [postgres?: 0]
 
-  alias Arca.PlatformSettings, as: Store
   alias Arca.QueryHelpers
   alias Arca.Schemas.{Athanor, Thread}
   alias Arca.Test.Actor
@@ -590,8 +560,6 @@ defmodule Arca.ThreadStorageRaceTest do
   alias Arca.ThreadStorage, as: Threads
   alias Ecto.Adapters.SQL.Sandbox
 
-  @key "max_threads_per_athanor"
-  @cap 4
   @callers 12
 
   setup do
@@ -601,45 +569,16 @@ defmodule Arca.ThreadStorageRaceTest do
     # holds its days.
     rowless = "ath_threads_race_rowless_#{n}"
 
-    unboxed(fn ->
-      Actor.ensure_athanor_row(athanor)
-      # The case owns the setting's row outright: it stores one and
-      # deletes it, so there must be none to restore.
-      {:error, :not_found} = Store.get(@key)
-      {:ok, %{revision: revision}} = Store.all()
-      {:ok, _} = Store.put(@key, @cap, revision, "test")
-    end)
-
-    Store.invalidate(@key)
+    unboxed(fn -> Actor.ensure_athanor_row(athanor) end)
 
     on_exit(fn ->
       unboxed(fn ->
-        {:ok, %{revision: revision}} = Store.all()
-        {:ok, _} = Store.delete(@key, revision)
-
         Arca.Repo.delete_all(from(t in Thread, where: t.athanor_id in ^[athanor, rowless]))
         Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor))
       end)
-
-      Store.invalidate(@key)
     end)
 
     {:ok, actor: Actor.local(athanor_id: athanor), rowless: Actor.local(athanor_id: rowless)}
-  end
-
-  test "concurrent new days stop at the athanor's thread cap", %{actor: actor} do
-    first = Arca.Test.Days.next()
-
-    answers =
-      race(fn i -> Threads.daily(actor, Date.add(first, i)) end, fn ->
-        lock_athanor_row(actor)
-        lock_thread_inserts()
-      end)
-
-    refused = {:error, {:limit_reached, :max_threads_per_athanor, @cap}}
-    assert Enum.count(answers, &match?({:ok, _}, &1)) == @cap
-    assert Enum.count(answers, &(&1 == refused)) == @callers - @cap
-    assert rows(actor) == @cap
   end
 
   test "concurrent callers of one day make one daily thread, and every one is answered it", %{
@@ -711,8 +650,8 @@ defmodule Arca.ThreadStorageRaceTest do
   end
 
   # Reads pass the table's SHARE lock and inserts wait on it, so a caller
-  # that counted or looked without waiting for the athanor's row still
-  # waits before its row lands.
+  # that looked without waiting for the athanor's row still waits before
+  # its row lands.
   defp lock_thread_inserts, do: Arca.Repo.query!("LOCK TABLE threads IN SHARE MODE")
 
   defp rows(actor) do

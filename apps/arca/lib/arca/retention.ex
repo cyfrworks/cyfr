@@ -20,10 +20,11 @@ defmodule Arca.Retention do
   (`Arca.RetentionSettings`), keyed by each kind's `key/0`, apart from
   the security-owned settings document on the athanor row. A key the
   athanor never set reads as its kind's default, which
-  `config :arca, Arca.Retention` may override. Every value drives
-  destructive cleanup, so settings that are corrupt or cannot be read
-  refuse cleanup rather than default: defaulting could delete data the
-  athanor asked to keep.
+  `config :arca, Arca.Retention` may override. A value is a positive
+  integer, or `0` for a kind of unit `:archive_days`, whose zero turns it
+  off (`value?/2`). Nearly every value drives destructive cleanup, so
+  settings that are corrupt or cannot be read refuse cleanup rather than
+  default: defaulting could delete data the athanor asked to keep.
 
   ## Cleanup
 
@@ -74,7 +75,7 @@ defmodule Arca.Retention do
   @max_value 9_007_199_254_740_991
 
   @typedoc "One value per retention key."
-  @type settings :: %{String.t() => pos_integer()}
+  @type settings :: %{String.t() => non_neg_integer()}
 
   @typedoc "Why settings could not be read or written."
   @type settings_refusal :: :no_athanor | :corrupt | :database_error
@@ -82,6 +83,23 @@ defmodule Arca.Retention do
   @doc "The closed roster of retainable kinds — everything else derives from it."
   @spec kinds() :: [module()]
   def kinds, do: @kinds
+
+  @doc "The kind whose key is `key`, or nil for a key outside the roster."
+  @spec kind(String.t()) :: module() | nil
+  def kind(key) when is_binary(key), do: Enum.find(@kinds, &(&1.key() == key))
+
+  @doc """
+  Whether `value` is one `kind` takes: a positive integer the settings
+  row's encoding carries, or `0` for a kind of unit `:archive_days`, which
+  turns it off. Zero, a negative or fractional number and an integer's
+  spelling as text are refused for every other kind.
+  """
+  @spec value?(module(), term()) :: boolean()
+  def value?(_kind, value) when is_integer(value) and value > 0 and value <= @max_value,
+    do: true
+
+  def value?(kind, 0), do: kind.unit() == :archive_days
+  def value?(_kind, _value), do: false
 
   @doc """
   The class an execution's payloads are kept under when its caller names
@@ -110,10 +128,11 @@ defmodule Arca.Retention do
 
   @doc """
   Set some of the actor's athanor's settings, answering all of them as
-  they now stand. Only roster keys are accepted, and only positive
-  integers as values, an integer's spelling as text among the refused;
-  anything else refuses typed rather than silently keeping the old value. Keys not named keep their
-  values, including under a patch another caller lands at the same time.
+  they now stand. Only roster keys are accepted, and only the values each
+  kind takes (`value?/2`), an integer's spelling as text among the
+  refused; anything else refuses typed rather than silently keeping the
+  old value. Keys not named keep their values, including under a patch
+  another caller lands at the same time.
   """
   @spec set_settings(Prima.Actor.t(), map()) ::
           {:ok, settings()}
@@ -132,29 +151,25 @@ defmodule Arca.Retention do
   defp fill(patch), do: Map.new(@kinds, &{&1.key(), Map.get(patch, &1.key(), &1.default())})
 
   defp validate(changes) do
-    known = MapSet.new(@kinds, & &1.key())
-
     Enum.reduce_while(changes, {:ok, %{}}, fn {key, value}, {:ok, validated} ->
+      kind = if is_binary(key), do: kind(key)
+
       cond do
-        not MapSet.member?(known, key) -> {:halt, {:error, {:unknown_setting, key}}}
-        positive = positive_int(value) -> {:cont, {:ok, Map.put(validated, key, positive)}}
+        is_nil(kind) -> {:halt, {:error, {:unknown_setting, key}}}
+        value?(kind, value) -> {:cont, {:ok, Map.put(validated, key, value)}}
         true -> {:halt, {:error, {:invalid_setting, key}}}
       end
     end)
   end
-
-  defp positive_int(value) when is_integer(value) and value > 0 and value <= @max_value,
-    do: value
-
-  defp positive_int(_value), do: nil
 
   # ============================================================================
   # Cleanup
   # ============================================================================
 
   @doc """
-  Apply one kind's policy inside the actor's athanor: delete — or, with
-  `dry_run: true`, count — everything past the athanor's value for it.
+  Apply one kind's policy inside the actor's athanor: delete, or archive
+  for a kind of unit `:archive_days` — or, with `dry_run: true`, count —
+  everything past the athanor's value for it.
   `value:` overrides that value for a one-off cleanup and must be a
   positive integer (`{:error, {:invalid_setting, key}}` otherwise).
 
@@ -178,7 +193,7 @@ defmodule Arca.Retention do
       do: {:error, :no_athanor}
 
   def cleanup(%Prima.Actor{} = actor, key, opts) when is_binary(key) and is_list(opts) do
-    case Enum.find(@kinds, &(&1.key() == key)) do
+    case kind(key) do
       nil ->
         {:error, {:unknown_kind, key}}
 
@@ -207,8 +222,9 @@ defmodule Arca.Retention do
   `athanor_id` (`{:error, :forbidden}` otherwise, `{:error, :no_athanor}`
   without an athanor). `dry_run: true` counts instead of deleting.
 
-  Answers what each kind deleted and the `{key, reason}` of each kind
-  that failed; a kind that failed never stops the rest. Settings that are
+  Answers what each kind deleted (archived, for a kind of unit
+  `:archive_days`) and the `{key, reason}` of each kind that failed; a
+  kind that failed never stops the rest. Settings that are
   corrupt or cannot be read refuse the whole of it, before any kind runs.
   """
   @spec cleanup_athanor(Prima.Actor.t(), keyword()) ::

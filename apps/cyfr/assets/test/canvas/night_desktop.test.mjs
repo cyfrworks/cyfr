@@ -613,14 +613,14 @@ describe("the night desktop 0.2.0", () => {
   })
 })
 
-// ---------- 0.3.2: a feed's sign with no reading names its feed; Aqua's threads and shared ones ----------
+// ---------- 0.3.3: a feed's sign with no reading names its feed; Aqua's threads and shared ones; the Archived button ----------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.2/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.3/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the night desktop 0.3.2", () => {
+describe("the night desktop 0.3.3", () => {
   test("a feed sign with no reading names its feed and says to ask Aqua for one, from the moment it opens", async () => {
     const p = night2({version: V3, widgets: {vpn: {on: true}}})
     await settle()
@@ -690,5 +690,89 @@ describe("the night desktop 0.3.2", () => {
     assert.deepEqual([...p.html("puddle-index").matchAll(/<b>approve<\/b> <span>([^<]*)<\/span>/g)].map(([, label]) => label), ["2026-11-15"])
     p.tap({class: "ripple", "data-ref": "thread:tc"})
     assert.match(p.plate.innerHTML, /<h2 id="plate-title">2026-11-15<\/h2>/)
+  })
+
+  // Two daily threads in each list, a workspace thread in each and a shared
+  // one, whose `archived` is null.
+  const ago = (minutes) => new Date(Date.now() - minutes * 60000).toISOString()
+  const THREADS = [
+    {kind: "daily", id: "t_today", title: day(0), people: ["Noor"], last_activity: ago(1), unread: 2, archived: false},
+    {kind: "daily", id: "t_two", title: day(-2), people: ["Noor"], last_activity: ago(2), unread: 0, archived: false},
+    {kind: "daily", id: "t_one", title: day(-1), people: ["Noor"], last_activity: ago(3), unread: 1, archived: true},
+    {kind: "daily", id: "t_three", title: day(-3), people: ["Noor"], last_activity: ago(4), unread: 0, archived: true},
+    {kind: "workspace", id: "t_work", title: "Ferry tracker", people: ["Noor"], last_activity: ago(5), unread: 0, archived: false},
+    {kind: "workspace", id: "t_old", title: "Old tracker", people: ["Noor"], last_activity: ago(6), waits_on_you: true, unread: 0, archived: true},
+    {kind: "shared", id: "t_family", title: "Family", people: ["a", "b", "c"], last_activity: ago(7), unread: 0, archived: null},
+  ]
+  const hung = (p) => [...p.html("wall").matchAll(/data-target="thread:(\w+)"/g)].map(([, id]) => id)
+  const archivedButton = (p) => (/<button class="btn archived-btn" data-act="archived" aria-pressed="(\w+)">([^<]*)<\/button>/.exec(p.html("wall")) || []).slice(1)
+  const flip = (p) => p.tap({"data-act": "archived"})
+  async function hungWith(threads) {
+    const p = await lit({version: V3})
+    picture(p.line("threads.changes"), threads)
+    p.draw()
+    return p
+  }
+
+  test("the threads hang when not archived; the Archived button hangs only the archived ones, each drawn and opened as before, the newest daily thread of each list standing for its days", async () => {
+    const p = await hungWith(THREADS)
+    assert.deepEqual(archivedButton(p), ["false", "Archived"])
+    assert.deepEqual(hung(p), ["t_today", "t_work", "t_family"])
+
+    flip(p)
+    assert.deepEqual(archivedButton(p), ["true", "Archived"])
+    assert.deepEqual(hung(p), ["t_one", "t_old"])
+    const wall = p.html("wall")
+    assert.match(wall, /plaque--aqua" data-target="thread:t_one"><span class="plaque__title"><span class="tube">Yesterday<\/span><\/span><span class="meta">with Aqua · [^<]*<span class="news"><i><\/i>1 new<\/span><\/span>/)
+    assert.match(wall, /data-target="thread:t_old"><span class="plaque__title"><span class="tube">Old tracker<\/span><\/span><span class="meta">with Aqua · [^<]* · waits on you<\/span>/)
+    for (const id of ["t_one", "t_old"]) {
+      p.tap({"data-target": `thread:${id}`})
+      press(p, "Open in Aqua")
+    }
+    assert.deepEqual(p.pages, [["aqua", "t_one"], ["aqua", "t_old"]])
+
+    flip(p)
+    assert.deepEqual(archivedButton(p), ["false", "Archived"])
+    assert.deepEqual(hung(p), ["t_today", "t_work", "t_family"])
+  })
+
+  test("a live item that archives a thread moves it to the archived list, one that takes it out moves it back, and a removed item leaves both lists", async () => {
+    const p = await hungWith(THREADS)
+    const line = p.line("threads.changes")
+    const work = THREADS.find((t) => t.id === "t_work")
+    change(line, {...work, revision: 2, archived: true})
+    p.draw()
+    assert.deepEqual(hung(p), ["t_today", "t_family"])
+    flip(p)
+    assert.deepEqual(hung(p), ["t_one", "t_work", "t_old"])
+
+    change(line, {...work, revision: 3, last_activity: ago(0), archived: false})
+    p.draw()
+    assert.deepEqual(hung(p), ["t_one", "t_old"])
+    flip(p)
+    assert.deepEqual(hung(p), ["t_work", "t_today", "t_family"])
+
+    change(line, {kind: "removed", id: "t_work", revision: 4})
+    change(line, {kind: "removed", id: "t_old", revision: 5})
+    p.draw()
+    assert.deepEqual(hung(p), ["t_today", "t_family"])
+    flip(p)
+    assert.deepEqual(hung(p), ["t_one"])
+  })
+
+  test("a daily thread archived live hands its days to the newest one left in the list, and the archived list's newest is the one it hangs", async () => {
+    const p = await hungWith(THREADS)
+    change(p.line("threads.changes"), {...THREADS.find((t) => t.id === "t_today"), revision: 2, archived: true})
+    p.draw()
+    assert.deepEqual(hung(p), ["t_two", "t_work", "t_family"])
+    flip(p)
+    assert.deepEqual(hung(p), ["t_today", "t_old"])
+  })
+
+  test("with no archived thread the Archived button's list says so", async () => {
+    const p = await hungWith(THREADS.filter((t) => t.archived !== true))
+    flip(p)
+    assert.deepEqual(hung(p), [])
+    assert.match(p.html("wall"), /<span class="plaque__title tube">No archived threads<\/span><span class="meta">an archived thread hangs here<\/span>/)
   })
 })

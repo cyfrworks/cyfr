@@ -320,8 +320,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       "Shared threads one person may create, an archived one not counted (they may sit in more); unset, no ceiling, and 0 is the same.",
     "max_people_per_thread" =>
       "People in one shared thread, invitations included; unset, no ceiling, and 0 is the same.",
-    "max_threads_per_athanor" =>
-      "Threads one athanor may hold, each a row its person's client can mint; 0 turns the cap off.",
     "max_schedules_per_athanor" =>
       "Schedules one athanor may hold, a paused one included and a deleted one or a feed not; unset, 1,000, and 0 removes the ceiling.",
     "max_feeds_per_athanor" =>
@@ -413,7 +411,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       cap(:max_pairs_per_person, "CYFR_MAX_PAIRS_PER_PERSON", nil, "pairs"),
       cap(:max_shared_threads_per_person, "CYFR_MAX_SHARED_THREADS_PER_PERSON", nil, "threads"),
       cap(:max_people_per_thread, "CYFR_MAX_PEOPLE_PER_THREAD", nil, "people"),
-      cap(:max_threads_per_athanor, "CYFR_MAX_THREADS_PER_ATHANOR", 1000, "threads"),
       cap(
         :max_schedules_per_athanor,
         "CYFR_MAX_SCHEDULES_PER_ATHANOR",

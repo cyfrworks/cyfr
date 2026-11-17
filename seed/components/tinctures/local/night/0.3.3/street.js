@@ -14,7 +14,7 @@
   const RETRY_MS = [2000, 5000, 15000, 60000];
 
   const state = N.EMPTY();
-  const ui = { now: Date.now(), going: {}, gone: {}, working: {}, fuse: false, note: null, selected: null, live: true };
+  const ui = { now: Date.now(), going: {}, gone: {}, working: {}, fuse: false, note: null, selected: null, live: true, archived: false };
   const els = {};
 
   // ---------- what the shell tells the page ----------
@@ -464,6 +464,11 @@
     if (a === 'settings') return sdk.settings(el.dataset.page);
     if (a === 'feed-press') { sdk.press(el.dataset.binding, el.dataset.action); if (el.dataset.feed) { ui.working[el.dataset.feed] = true; schedule(); } return; }
     if (a === 'fusebox') { ui.fuse = !ui.fuse; ui.note = null; els.fuse.hidden = !ui.fuse; if (ui.fuse) { els.fuse.innerHTML = N.renderFusebox(state, ui); closePlate(); const f = $('.switch', els.fuse); if (f) f.focus(); } render(); return; }
+    if (a === 'archived') {
+      ui.archived = !ui.archived; closePlate(); render();
+      const again = $('[data-act="archived"]'); if (again) again.focus();
+      return;
+    }
     if (a === 'part-toggle') return togglePart(el.dataset.part);
     if (a === 'part-move') return movePart(el.dataset.part, +el.dataset.dir);
   }

@@ -2543,7 +2543,8 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # Each kind holds its own fields and no other's: a day names its date,
     # a workspace thread its state, the post that asked for it and its
-    # notes, and a crew member's thread the room it works under.
+    # notes, a crew member's thread the room it works under and its
+    # retirement, and only a daily or a workspace thread is archived.
     thread_whole = %{
       name: "threads_kind_whole",
       expr:
@@ -2552,7 +2553,9 @@ defmodule Arca.Repo.Migrations.Baseline do
           "(kind = 'workspace' OR opened_from IS NULL) AND " <>
           "(kind = 'workspace' OR workspace_outcome IS NULL) AND " <>
           "(kind = 'workspace' OR notes IS NULL) AND " <>
-          "(kind = 'crew') = (parent_id IS NOT NULL)"
+          "(kind = 'crew') = (parent_id IS NOT NULL) AND " <>
+          "(kind <> 'crew' OR archived_at IS NULL) AND " <>
+          "(kind = 'crew' OR retired_at IS NULL)"
     }
 
     # `Arca.Schemas.Thread.workspace_states/0`.
@@ -2609,9 +2612,13 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Raised each time the session is forgotten (its program home reset or
       # retired): a turn keeps a session only under the generation it read.
       add :brain_generation, :integer, null: false, default: 0
-      # When a child thread was retired: it admits nothing more, and the
-      # next request to its member opens a new one.
+      # When a daily or a workspace thread was archived: the person's list
+      # shows it behind its Archived filter until new work takes it out,
+      # and nothing else about it changes.
       add :archived_at, :utc_datetime_usec
+      # When a crew member's thread was retired: it admits nothing more,
+      # and the next request to its member opens a new one.
+      add :retired_at, :utc_datetime_usec
       add :title, :string, null: false
       # Attribution: the person who opened it. The athanor owns it.
       add :created_by, :string, null: false

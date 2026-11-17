@@ -346,18 +346,22 @@
   // A daily thread (one a day) and a workspace thread are Aqua's; a shared
   // thread is people's.
   const isAqua = (t) => t.kind === 'daily' || t.kind === 'workspace';
-  // The threads listed: the newest daily thread stands for Aqua's days, the
-  // earlier ones a step back in Aqua's panel.
-  function listedThreads(s) {
-    const all = [...s.threads.values()];
+  // The threads listed, the archived ones when `archived` (a shared
+  // thread's `archived` is null: it is never archived): in each list the
+  // newest daily thread stands for Aqua's days, the earlier ones a step back
+  // in Aqua's panel.
+  function listedThreads(s, archived) {
+    const all = [...s.threads.values()].filter((t) => (t.archived === true) === archived);
     const newest = all.reduce((n, t) => (t.kind === 'daily' && (!n || text(t.title) > text(n.title)) ? t : n), null);
     return all.filter((t) => t.kind !== 'daily' || t === newest);
   }
   const threadTitle = (t, C, now) => (t.kind === 'daily' ? C.day(t.title, now) : text(t.title)) || 'Untitled';
 
   // ---------- parts ----------
+  // ui.archived: the Archived button under the plaques is pressed, and the
+  // archived threads hang instead.
   function renderThreads(s, lit, ui, C) {
-    const list = listedThreads(s).sort((a, b) => (time(b.last_activity) || 0) - (time(a.last_activity) || 0)).slice(0, 6);
+    const list = listedThreads(s, ui.archived === true).sort((a, b) => (time(b.last_activity) || 0) - (time(a.last_activity) || 0)).slice(0, 6);
     const rows = list.map((t, i) => {
       const L = lit.get('thread:' + text(t.id));
       const people = Array.isArray(t.people) ? t.people.length : 0;
@@ -370,8 +374,9 @@
         '<span class="plaque__title">' + tube(threadTitle(t, C, ui.now), L && L.light) + '</span>' +
         '<span class="meta">' + esc(who) + (last ? ' · ' + esc(C.when(last, ui.now)) : '') + news + (t.waits_on_you && !L ? ' · waits on you' : '') + tag(L) + '</span></button></li>';
     }).join('');
-    const empty = !list.length && !isDark(s, PARTS.threads.streams) ? '<li class="hang"><span class="sign plaque plaque--shared plaque--empty"><span class="plaque__title tube">No threads yet</span><span class="meta">a chat with Aqua hangs here</span></span></li>' : '';
-    return '<h2 class="vh" id="h-threads">Threads</h2>' + note(s, PARTS.threads.streams, C) + '<ul class="plaques">' + rows + empty + '</ul>';
+    const empty = !list.length && !isDark(s, PARTS.threads.streams) ? '<li class="hang"><span class="sign plaque plaque--shared plaque--empty"><span class="plaque__title tube">' + (ui.archived ? 'No archived threads' : 'No threads yet') + '</span><span class="meta">' + (ui.archived ? 'an archived thread hangs here' : 'a chat with Aqua hangs here') + '</span></span></li>' : '';
+    return '<h2 class="vh" id="h-threads">Threads</h2>' + note(s, PARTS.threads.streams, C) + '<ul class="plaques">' + rows + empty + '</ul>' +
+      '<button class="btn archived-btn" data-act="archived" aria-pressed="' + (ui.archived === true) + '">Archived</button>';
   }
 
   function renderBoard(s, lit, ui, C) {
