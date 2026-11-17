@@ -1483,12 +1483,15 @@ defmodule Aqua.Runner do
     end
   end
 
+  # A stop, a deletion or an archive ends a turn `cancelled`, under a
+  # raised fence. The running turn's own loop ends it any other way,
+  # before or after announcing its fence: it halts cancelled only on a
+  # fence that moved, under which its end never lands. A held turn's
+  # holder may end it too, and its exit retires it here.
   defp another_end?(state, turn) do
     cond do
       not Tape.terminal?(turn) -> false
-      live?(state, turn.id) -> fence_passed?(state, turn)
-      # A held turn's holder may have ended it itself, and its exit
-      # retires it here; a stop, a deletion or an archive cancels.
+      live?(state, turn.id) -> turn.status == "cancelled" and fence_passed?(state, turn)
       Map.has_key?(state.held, turn.id) -> turn.status == "cancelled"
       true -> true
     end
@@ -1498,7 +1501,7 @@ defmodule Aqua.Runner do
   defp live?(_state, _id), do: false
 
   # The loop announces its fence as it starts and as it takes its root;
-  # a turn ended before any announcement was ended by another writer.
+  # a cancel before any announcement is another writer's.
   defp fence_passed?(%{partials: %{fence: fence}}, turn) when is_integer(fence),
     do: turn.fence > fence
 
