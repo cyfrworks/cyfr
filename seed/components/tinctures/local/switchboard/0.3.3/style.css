@@ -607,3 +607,10 @@ html[data-theme='dark'] [data-part]:is([data-state='unavailable'], [data-state='
 .strip:not([data-state='live']) .cells:empty::after { content: none; }
 /* A lamp a fresh picture put out goes out with no afterglow. */
 .line.quiet .lamp::after { transition: none; }
+
+/* The threads strip's Archived key, in a column of its own at the strip's
+   end so it never covers a line, and under the lines in the hand; lit while
+   the strip lists the archived threads. */
+.archived-key { grid-column: 3; grid-row: 1; align-self: end; margin: 0 8px 8px 2px; }
+.archived-key[aria-pressed='true'] { background: var(--lamp-amber); }
+html[data-compact='on'] .archived-key { grid-column: 1; grid-row: auto; justify-self: end; margin: 0 8px 8px; }

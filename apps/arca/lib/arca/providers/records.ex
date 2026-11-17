@@ -25,7 +25,10 @@ defmodule Arca.Providers.Records do
   (`storage_write`) and answers them as they now stand, and `cleanup`
   runs one kind's policy now (`admin`), `executions` when no
   `cleanup_type` is named (`Arca.Retention`). The settable keys and the
-  cleanup vocabulary derive from the retention roster. Settings are an
+  cleanup vocabulary derive from the retention roster. A cleanup answers
+  what it `deleted`, or with `dry_run` what it `would_delete`; for
+  `archive_days`, which archives threads and deletes nothing, what it
+  `archived` and `would_archive`. Settings are an
   athanor's, so an actor with no athanor is refused whatever its scope.
 
   ## The files resource
@@ -161,7 +164,8 @@ defmodule Arca.Providers.Records do
               description: "Kind of records to clean up"
             ),
             Arg.new("dry_run", :boolean,
-              description: "If true, show what would be deleted without actually deleting"
+              description:
+                "If true, count what the cleanup would delete (or, for archive_days, archive) without doing it"
             )
           ],
           kind: :destructive,
@@ -180,6 +184,7 @@ defmodule Arca.Providers.Records do
     case kind.unit() do
       :keep -> "Newest records kept per athanor"
       :days -> "Days of records kept per athanor"
+      :archive_days -> "Days with no activity before a thread is archived; 0 archives none"
     end
   end
 
@@ -306,8 +311,7 @@ defmodule Arca.Providers.Records do
 
         {:error, {:invalid_setting, key}} ->
           {:error,
-           {:invalid_argument,
-            "Invalid value for retention setting #{key} — use a positive integer"}}
+           {:invalid_argument, "Invalid value for retention setting #{key} — #{wanted(key)}"}}
 
         {:error, reason} ->
           {:error, settings_refusal(reason)}
@@ -324,13 +328,15 @@ defmodule Arca.Providers.Records do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
+      {done, would} = cleanup_words(cleanup_type)
+
       case Arca.Retention.cleanup(actor, cleanup_type, dry_run: dry_run) do
         {:ok, count} when dry_run ->
           {:ok,
-           %{action: "cleanup", cleanup_type: cleanup_type, dry_run: true, would_delete: count}}
+           Map.put(%{action: "cleanup", cleanup_type: cleanup_type, dry_run: true}, would, count)}
 
         {:ok, count} ->
-          {:ok, %{action: "cleanup", cleanup_type: cleanup_type, deleted: count}}
+          {:ok, Map.put(%{action: "cleanup", cleanup_type: cleanup_type}, done, count)}
 
         {:error, {:unknown_kind, _}} ->
           {:error, {:invalid_argument, "Unknown cleanup_type: #{cleanup_type}"}}
@@ -350,6 +356,27 @@ defmodule Arca.Providers.Records do
   end
 
   def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
+
+  # What a cleanup of a kind did, and on a dry run would do, and what a
+  # setting of it takes: a kind of unit `:archive_days` archives, and its
+  # zero archives nothing; every other deletes, and takes a positive
+  # integer.
+  defp cleanup_words(key),
+    do: if(archives?(key), do: {:archived, :would_archive}, else: {:deleted, :would_delete})
+
+  defp wanted(key),
+    do:
+      if(archives?(key),
+        do: "use 0 to archive nothing or a positive whole number of days",
+        else: "use a positive integer"
+      )
+
+  defp archives?(key) do
+    case Arca.Retention.kind(key) do
+      nil -> false
+      kind -> kind.unit() == :archive_days
+    end
+  end
 
   # A settings refusal as the wire renders it.
   defp settings_refusal(:corrupt), do: {:corrupt, {:settings, :retention}}

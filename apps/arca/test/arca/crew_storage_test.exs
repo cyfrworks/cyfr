@@ -24,7 +24,7 @@ defmodule Arca.CrewStorageTest do
   records a notice; a reply answers the requests it names in its own
   acceptance, where the consumer's receipt lands too or nothing does.
   A steer is whatever anyone but the turn's agent wrote into it. One
-  child thread stands per member per room, and an archived one admits
+  child thread stands per member per room, and a retired one admits
   nothing.
   """
 
@@ -139,7 +139,7 @@ defmodule Arca.CrewStorageTest do
   end
 
   describe "requests" do
-    test "a request is accepted with its delivery's record, and an archived child thread admits nothing",
+    test "a request is accepted with its delivery's record, and a retired child thread admits nothing",
          %{actor: actor, room: room} do
       request = request!(actor, room, "planner", "plan it")
 
@@ -158,9 +158,9 @@ defmodule Arca.CrewStorageTest do
       assert room_id == room.id and request_id == request.id
 
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
-      {:ok, _} = Threads.archive(actor, child.id)
+      {:ok, _} = Threads.retire(actor, child.id)
 
-      assert {:error, :thread_archived} =
+      assert {:error, :thread_retired} =
                TurnStorage.accept_message(actor, child.id, %{
                  message: %{author: actor.user_id, sent_by: "person", content: "late"}
                })
@@ -377,19 +377,19 @@ defmodule Arca.CrewStorageTest do
       assert person == actor.user_id
     end
 
-    test "a takeover refuses a turn of an archived thread", %{actor: actor, room: room} do
+    test "a takeover refuses a turn of a retired thread", %{actor: actor, room: room} do
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
       turn = start!(actor, delivered!(actor, room, child, request!(actor, room, "planner", "go")))
 
-      # Archived around the turn, as a write that never ran its cancel would
+      # Retired around the turn, as a write that never ran its cancel would
       # leave it.
       {1, _} =
         Arca.Repo.update_all(
           from(c in Arca.Schemas.Thread, where: c.id == ^child.id),
-          set: [archived_at: DateTime.utc_now()]
+          set: [retired_at: DateTime.utc_now()]
         )
 
-      assert {:error, :thread_archived} =
+      assert {:error, :thread_retired} =
                TurnStorage.takeover(actor, turn.id, %{
                  fence: turn.fence,
                  grant: :stored,
@@ -397,24 +397,24 @@ defmodule Arca.CrewStorageTest do
                })
     end
 
-    test "a turn accepted while its thread was archived is refused its claim", %{
+    test "a turn accepted while its thread was retired is refused its claim", %{
       actor: actor,
       room: room
     } do
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
       turn = delivered!(actor, room, child, request!(actor, room, "planner", "go"))
 
-      # Archived after the turn's acceptance and before its start, as an
-      # archive whose scan ran ahead of that acceptance leaves it.
+      # Retired after the turn's acceptance and before its start, as a
+      # retirement whose scan ran ahead of that acceptance leaves it.
       {1, _} =
         Arca.Repo.update_all(
           from(c in Arca.Schemas.Thread, where: c.id == ^child.id),
-          set: [archived_at: DateTime.utc_now()]
+          set: [retired_at: DateTime.utc_now()]
         )
 
       root = root!(actor, turn.id)
 
-      assert {:error, :thread_archived} =
+      assert {:error, :thread_retired} =
                TurnStorage.start(actor, turn.id, %{
                  root_execution_id: root.execution.id,
                  attempt: root.attempt.attempt,
@@ -906,12 +906,12 @@ defmodule Arca.CrewStorageTest do
   end
 
   describe "child threads" do
-    test "one stands per member per room; archived ones stay listed, and the next is new", %{
+    test "one stands per member per room; retired ones stay listed, and the next is new", %{
       actor: actor,
       room: room
     } do
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
-      assert %{kind: "crew", agent: "planner", title: "planner", archived_at: nil} = child
+      assert %{kind: "crew", agent: "planner", title: "planner", retired_at: nil} = child
       assert child.parent_id == room.id
       assert {:ok, %{id: same}} = Threads.crew_thread(actor, room.id, "planner")
       assert same == child.id
@@ -919,14 +919,14 @@ defmodule Arca.CrewStorageTest do
       {:ok, %{id: other}} = Threads.crew_thread(actor, room.id, "builder")
       assert other != child.id
 
-      {:ok, %{thread: archived, cancelled: []}} = Threads.archive(actor, child.id)
-      assert archived.archived_at
-      assert {:ok, %{thread: ^archived, cancelled: []}} = Threads.archive(actor, child.id)
+      {:ok, %{thread: retired, cancelled: []}} = Threads.retire(actor, child.id)
+      assert retired.retired_at
+      assert {:ok, %{thread: ^retired, cancelled: []}} = Threads.retire(actor, child.id)
       {:ok, fresh} = Threads.crew_thread(actor, room.id, "planner")
       assert fresh.id not in [child.id, other]
 
       assert Enum.map(Threads.children(actor, room.id), & &1.id) == [child.id, other, fresh.id]
-      assert {:error, :not_crew} = Threads.archive(actor, room.id)
+      assert {:error, :not_crew} = Threads.retire(actor, room.id)
       assert {:error, :not_a_room} = Threads.crew_thread(actor, fresh.id, "web")
       assert Enum.map(Threads.list(actor, kind: "daily"), & &1.id) == [room.id]
     end

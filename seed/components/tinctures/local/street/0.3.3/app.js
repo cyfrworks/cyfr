@@ -815,6 +815,7 @@ function drawBuoy(e, t) {
 /* ================= entities: the streams turned into things on the street ================= */
 let ents = [];
 let selected = null;
+let archived = false;          // the board's Archived key: the houses of the archived threads stand instead
 const leaving = new Map();     // attention id -> {from, start, dur, ent, done}
 
 // The runs as lamps want them, each with a state and the time it started.
@@ -1077,10 +1078,11 @@ function waitingWords(a) {
 }
 // A daily thread (one a day) and a workspace thread are Aqua's; a shared thread is people's.
 function isAqua(th) { return th.kind === 'daily' || th.kind === 'workspace'; }
-// The threads the street shows: the newest daily thread stands for Aqua's days, the earlier
-// ones a step back in Aqua's panel.
+// The threads the street shows, the archived ones while the board's Archived key is pressed (a
+// shared thread's `archived` is null: it is never archived): in each, the newest daily thread
+// stands for Aqua's days, the earlier ones a step back in Aqua's panel.
 function listedThreads() {
-  const threads = all('threads.changes');
+  const threads = all('threads.changes').filter((th) => (th.archived === true) === archived);
   const newest = threads.reduce((n, th) => (th.kind === 'daily' && (!n || text(th.title) > text(n.title)) ? th : n), null);
   return threads.filter((th) => th.kind !== 'daily' || th === newest);
 }
@@ -1573,7 +1575,7 @@ function defaultSign() {
       // Each part that cannot show a live picture says how it stands.
       ...PARTS.filter(([k]) => on(k) && notes[k]).map(([k, label]) => [label.toLowerCase(), notes[k].words]),
     ],
-    acts: [act('Arrange', openPlan)],
+    acts: [...(on('houses') ? [{ ...act('Archived', () => { archived = !archived; rebuild(); }, archived ? 'on' : ''), pressed: archived }] : []), act('Arrange', openPlan)],
   };
 }
 function scrubSign() {
@@ -1594,7 +1596,7 @@ function renderBoard() {
   const facts = sign.facts.filter((f) => f[1] !== '' && f[1] != null).map(([k, v]) => `${k ? `<span class="k">${esc(k)}</span> ` : ''}${esc(v)}`).join(' · ');
   const picks = sign.picks ? `<div class="tickets">${sign.picks.map((p) => `<button class="ticket" data-pick="${esc(p.id)}">${esc(p.label)}</button>`).join('')}</div>` : '';
   const list = L.posture === 'phone' && !e && !scrub ? phoneList() : '';
-  const acts = sign.acts.map((a, i) => `<button class="btn ${a.cls}" data-act="${i}" ${a.disabled ? 'disabled' : ''}>${esc(a.label)}</button>`).join('');
+  const acts = sign.acts.map((a, i) => `<button class="btn ${a.cls}" data-act="${i}" ${a.disabled ? 'disabled' : ''}${a.pressed != null ? ` aria-pressed="${a.pressed}"` : ''}>${esc(a.label)}</button>`).join('');
   const back = e ? '<button class="btn" data-back>Close</button>' : '';
   const html = `<div class="say"><h2>${esc(sign.title)}</h2>${facts ? `<p class="facts">${facts}</p>` : ''}${said ? `<p class="said${saidOk ? ' ok' : ''}">${esc(said)}</p>` : ''}${picks}${list}</div><div class="acts">${acts}${back}</div>`;
   boardActs = sign.acts;

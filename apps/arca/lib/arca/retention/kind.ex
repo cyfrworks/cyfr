@@ -8,9 +8,11 @@ defmodule Arca.Retention.Kind do
   and each kind's row mechanics.
 
   An adapter interprets ONE settings value in its own unit — `:keep`
-  (the newest N survive) or `:days` (rows older than N days go) — and
-  answers in one convention: `{:ok, count}` affected (deleted, or
-  would-be deleted on a dry run), `{:error, term}` when its store cannot
+  (the newest N survive), `:days` (rows older than N days go) or
+  `:archive_days` (threads with no activity for N days are archived, and
+  `0` archives none: the one unit whose zero is a value) — and answers
+  in one convention: `{:ok, count}` affected (deleted or archived, or
+  would-be on a dry run), `{:error, term}` when its store cannot
   answer. Adding a kind is one adapter module plus one entry in
   `Arca.Retention.kinds/0`; the settings, the cleanup and the `retention`
   tool's vocabulary all derive from that roster and cannot fall behind
@@ -28,16 +30,20 @@ defmodule Arca.Retention.Kind do
   @callback key() :: String.t()
 
   @doc "The value while the athanor has not set one (`config :arca, Arca.Retention` may override)."
-  @callback default() :: pos_integer()
-
-  @doc "How the value reads: `:keep` (newest N survive) or `:days` (age cutoff)."
-  @callback unit() :: :keep | :days
+  @callback default() :: non_neg_integer()
 
   @doc """
-  Apply the policy inside the actor's athanor: delete — or, on a dry
-  run, count — everything past `value`, answering `{:ok, affected}`.
+  How the value reads: `:keep` (newest N survive), `:days` (age cutoff) or
+  `:archive_days` (archived after N days with no activity, `0` off).
   """
-  @callback prune(Prima.Actor.t(), pos_integer(), dry_run :: boolean()) ::
+  @callback unit() :: :keep | :days | :archive_days
+
+  @doc """
+  Apply the policy inside the actor's athanor: delete, or archive for an
+  `:archive_days` kind — or, on a dry run, count — everything past
+  `value`, answering `{:ok, affected}`.
+  """
+  @callback prune(Prima.Actor.t(), non_neg_integer(), dry_run :: boolean()) ::
               {:ok, non_neg_integer()} | {:error, term()}
 
   @doc "The cutoff a `:days` value names, from now."
@@ -50,7 +56,7 @@ defmodule Arca.Retention.Kind do
   A value from `config :arca, Arca.Retention` — a kind's default or a
   bound of its own — or `fallback` when the configuration names none.
   """
-  @spec configured(atom(), pos_integer()) :: pos_integer()
+  @spec configured(atom(), pos_integer()) :: non_neg_integer()
   def configured(key, fallback) when is_atom(key) and is_integer(fallback) and fallback > 0,
     do: Keyword.get(Application.get_env(:arca, Arca.Retention, []), key, fallback)
 end

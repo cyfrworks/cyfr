@@ -2534,12 +2534,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
-    test "a room lists its crew threads, and a crew thread leads back to its room and archives through thread.archive",
+    test "a room lists its crew threads, and a crew thread leads back to its room and retires through thread.archive",
          %{conn: conn, here: here, thread: room} do
       actor = Sanctum.Context.actor(here)
       {:ok, explorer} = Threads.crew_thread(actor, room.id, "explorer")
       {:ok, reviewer} = Threads.crew_thread(actor, room.id, "reviewer")
-      {:ok, _} = Threads.archive(actor, reviewer.id)
+      {:ok, _} = Threads.retire(actor, reviewer.id)
       {_panel, pane} = panel_pane(conn, room)
 
       assert has_element?(pane, ~s([id$="-crew-#{explorer.id}"]), "explorer")
@@ -2575,7 +2575,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                  )
                )
 
-      assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor, explorer.id)
+      assert {:ok, %{retired_at: %DateTime{}}} = Threads.get(actor, explorer.id)
       assert has_element?(pane, strip, "Archived")
       refute has_element?(pane, ~s(button[phx-click="archive"]))
 

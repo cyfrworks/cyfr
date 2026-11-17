@@ -30,7 +30,7 @@ window.RoadScene = function () {
   const schedules = () => R.values(S.schedules).sort((a, b) => (a.next ?? Infinity) - (b.next ?? Infinity));
   const sched = (id) => { const h = S.schedules.get(id); return h ? h.value : null; };
   const run = (id) => { const h = id && S.runs.get(id); return h ? h.value : null; };
-  const threads = () => R.threads().sort((a, b) => (b.waits - a.waits) || (b.last ?? 0) - (a.last ?? 0));
+  const threads = (archived = false) => R.threads(archived).sort((a, b) => (b.waits - a.waits) || (b.last ?? 0) - (a.last ?? 0));
   const jobs = () => R.values(S.activity).sort((a, b) => (a.since ?? 0) - (b.since ?? 0));
   const vault = () => R.values(S.vault).sort((a, b) => a.fine - b.fine || a.name.localeCompare(b.name));
   const sys = () => R.values(S.system)[0] || null;
@@ -244,8 +244,9 @@ window.RoadScene = function () {
   let millAngle = 0, tramPos = 0, tramDir = 1, tramWait = 0, towerRing = 0;
 
   // ---- interaction state ---------------------------------------------------------------------
-  // The open card, the part picked in the Plan, and the page of the card's rows shown.
-  let card = null, planSel = null, cardPage = 0;
+  // The open card, the part picked in the Plan, and the page of the card's rows shown; and whether
+  // the threads card lists the archived threads (its Archived choice).
+  let card = null, planSel = null, cardPage = 0, archived = false;
   const pending = { weather: null, vpn: null, sched: new Set(), retry: new Set() };
 
   R.subscribe((ch) => {
@@ -372,9 +373,13 @@ window.RoadScene = function () {
       return { title: list.length ? list.length + ' waiting at your house' : 'Nobody waiting', portrait: 'house', lines: list.length ? [] : ['Everything that waited on you is done.'],
         rows: list.map((a) => ({ text: attLabel(a), sub: a.untimed ? 'now' : when(a.since), dot: lookOf(a.kind).bc, run: () => openCard('att:' + a.id) })), choices: [] };
     }
-    if (kind === 'threads') return { title: 'Threads', portrait: 'post', lines: S.threads.size ? [] : ['No threads yet.'],
-      rows: threads().map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.aqua ? 'with Aqua' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
-        run: () => (t.aqua ? settings('aqua', 'Aqua', t.id) : settings('chat', 'the chat', t.id)) })), choices: [ask('threads')] };
+    if (kind === 'threads') {
+      const list = threads(archived);
+      return { title: 'Threads', portrait: 'post', lines: list.length ? [] : [archived ? 'No archived threads.' : 'No threads yet.'],
+        rows: list.map((t) => ({ text: t.title, sub: (t.waits ? 'waits on you, ' : '') + (t.unread ? t.unread + ' unread, ' : '') + (t.aqua ? 'with Aqua' : t.people + (t.people === 1 ? ' person' : ' people')) + ', ' + when(t.last), dot: t.waits ? P.red : t.unread ? P.ochre : null,
+          run: () => (t.aqua ? settings('aqua', 'Aqua', t.id) : settings('chat', 'the chat', t.id)) })),
+        choices: [{ label: 'Archived', pressed: archived, run: () => { archived = !archived; cardPage = 0; } }, ask('threads')] };
+    }
     if (kind === 'crew') {
       const list = jobs(), s = sys();
       return { title: 'Crew', portrait: 'crew', lines: [...(list.length ? list.map((j) => j.member + ' is at work' + (j.title ? ': ' + j.title : '') + (j.askedBy ? ', asked by ' + j.askedBy : '') + ', since ' + when(j.since) + (j.status ? ' (' + j.status + ')' : '') + '.') : ['Nobody is out on a job.']),
@@ -1186,7 +1191,7 @@ window.RoadScene = function () {
     ly += rowsH;
     ch.forEach((x, i) => {
       const p = chPos[i], bx = p.x, by = ly + p.y + 2;
-      panel(bx, by, p.w, 22, x.disabled ? P.whiteS : x.primary ? P.ink : x.aqua ? P.aqua : P.paper2, x.disabled ? P.whiteD : P.ink);
+      panel(bx, by, p.w, 22, x.disabled ? P.whiteS : x.primary ? P.ink : x.pressed ? P.aquaL : x.aqua ? P.aqua : P.paper2, x.disabled ? P.whiteD : P.ink);
       F.text(g, x.label, bx + 9, by + 7, x.disabled ? '#8a8172' : x.primary ? '#fff8ec' : P.ink);
       box.choices.push({ x: bx, y: by, w: p.w, h: 22, c: x });
     });
@@ -1260,7 +1265,7 @@ window.RoadScene = function () {
       hit('cardbg', cb.x, cb.y, cb.w, cb.h, '', () => {}, { exact: true, z: 5, tab: -1 });
       cb.rows.forEach((r) => { hit('row' + r.i, r.x, r.y, r.w, r.h, r.r.text + ', ' + r.r.sub, r.r.run, { exact: true, z: 6, pressed: r.r.toggle != null ? !!r.r.sel : null }); if (r.tg) hit('tg' + r.i, r.tg.x, r.tg.y, r.tg.w, r.tg.h, (r.r.toggle ? 'Turn off ' : 'Turn on ') + r.r.text, r.r.flip, { exact: true, z: 6, pressed: r.r.toggle }); });
       const more = card === 'plan' ? 'More parts, page ' : 'More rows, page ';
-      cb.choices.forEach((c, i) => hit('ch' + i + c.c.label, c.x, c.y, c.w, c.h, c.c.more ? more + c.c.label.slice(5).replace('/', ' of ') : c.c.label, c.c.close ? closeCard : c.c.run, { exact: true, z: 6, disabled: c.c.disabled }));
+      cb.choices.forEach((c, i) => hit('ch' + i + c.c.label, c.x, c.y, c.w, c.h, c.c.more ? more + c.c.label.slice(5).replace('/', ' of ') : c.c.label, c.c.close ? closeCard : c.c.run, { exact: true, z: 6, disabled: c.c.disabled, pressed: c.c.pressed ?? null }));
     }
     hitsDone();
   }

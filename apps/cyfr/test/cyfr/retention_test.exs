@@ -78,7 +78,7 @@ defmodule Arca.RetentionTest do
       for kind <- kinds do
         assert is_binary(kind.key())
         assert kind.default() > 0
-        assert kind.unit() in [:keep, :days]
+        assert kind.unit() in [:keep, :days, :archive_days]
       end
 
       keys = Enum.map(kinds, & &1.key())

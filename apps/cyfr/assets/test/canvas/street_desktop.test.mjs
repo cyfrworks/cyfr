@@ -630,11 +630,11 @@ describe("the street desktop 0.2.0", () => {
 // A daily thread's title: the ISO date `n` days from today, in UTC, the stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the street desktop 0.3.2", () => {
+describe("the street desktop 0.3.3", () => {
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the sky and the ferry with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
-    const p = await street({version: "0.3.2"})
+    const p = await street({version: "0.3.3"})
     assert.ok(labelled(p, sentence("weather")), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
     assert.ok(labelled(p, sentence("vpn")))
     // Their plates say it where the sun and the ferry stand, and their board when tapped.
@@ -653,14 +653,14 @@ describe("the street desktop 0.3.2", () => {
   })
 
   test("on a phone the board's cards say the same of a feed with no reading", async () => {
-    const p = await street({version: "0.3.2", width: 390, height: 844})
+    const p = await street({version: "0.3.3", width: 390, height: 844})
     assert.equal(p.plain(), false)
     assert.match(p.board().textContent, /No reading from the weather feed yet ?To bind one, ask Aqua for a feed named weather/)
     assert.match(p.board().textContent, /No reading from the vpn feed yet ?To bind one, ask Aqua for a feed named vpn/)
   })
 
   test("today's daily thread is a house read Today that opens Aqua, an earlier day's stands nowhere, a workspace thread opens Aqua and a shared one the chat", async () => {
-    const p = await street({version: "0.3.2"})
+    const p = await street({version: "0.3.3"})
     picture(p.stream("runs.changes"), [])
     picture(p.stream("threads.changes"), [
       {kind: "daily", id: "th-today", title: day(0), people: ["Noor"], last_activity: at(-30), waits_on_you: false, unread: 2},
@@ -691,7 +691,7 @@ describe("the street desktop 0.3.2", () => {
   test("the newest daily thread's house reads Yesterday a day back, and its date further back", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
-      const p = await street({version: "0.3.2"})
+      const p = await street({version: "0.3.3"})
       picture(p.stream("threads.changes"), [{kind: "daily", id: "th-1", title: day(n), people: ["Noor"], last_activity: at(-30), waits_on_you: false, unread: 0}])
       p.pump(5)
       assert.ok(labelled(p, `Thread ${words}, with Aqua`), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
@@ -701,7 +701,7 @@ describe("the street desktop 0.3.2", () => {
   test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     const named = ["Today", "Yesterday", date, "builder"]
-    const p = await street({version: "0.3.2"})
+    const p = await street({version: "0.3.3"})
     picture(p.stream("attention.changes"), [[day(0), day(0), "th-0"], [day(-1), day(-1), "th-1"], [day(-3), day(-3), "th-3"], ["builder", null, "th-crew"]].map(([label, d, ref], i) =>
       waiting(`ap-${i}`, "approval", {kind: "page", page: "aqua", ref}, {label, day: d, since: at(i * 10 - 60)})))
     p.pump(5)
@@ -713,12 +713,96 @@ describe("the street desktop 0.3.2", () => {
   })
 
   test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
-    const p = await street({version: "0.3.2"})
+    const p = await street({version: "0.3.3"})
     picture(p.stream("attention.changes"), [waiting("ap-crew", "approval", {kind: "page", page: "aqua", ref: "th-crew"}, {label: "2026-11-15", day: null, since: at(-30)})])
     p.pump(5)
     const asks = p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Waiting on you: an approval"))
     assert.deepEqual(asks.map((l) => l.split(", ")[1]), ["Approve in 2026-11-15"])
     tap(p, "Waiting on you: an approval, Approve in 2026-11-15")
     assert.match(p.board().textContent, /Approve in 2026-11-15/)
+  })
+
+  // Two daily threads in each list, a workspace thread in each and a shared one, whose
+  // `archived` is null.
+  const THREADS = [
+    {kind: "daily", id: "th-today", title: day(0), people: ["Noor"], last_activity: at(-30), waits_on_you: false, unread: 2, archived: false},
+    {kind: "daily", id: "th-two", title: day(-2), people: ["Noor"], last_activity: at(-35), waits_on_you: false, unread: 0, archived: false},
+    {kind: "daily", id: "th-one", title: day(-1), people: ["Noor"], last_activity: at(-40), waits_on_you: false, unread: 1, archived: true},
+    {kind: "daily", id: "th-three", title: day(-3), people: ["Noor"], last_activity: at(-45), waits_on_you: false, unread: 0, archived: true},
+    {kind: "workspace", id: "th-work", title: "Ferry tracker", people: ["Noor"], last_activity: at(-50), waits_on_you: false, unread: 0, archived: false},
+    {kind: "workspace", id: "th-old", title: "Old tracker", people: ["Noor"], last_activity: at(-55), waits_on_you: true, unread: 0, archived: true},
+    {kind: "shared", id: "th-family", title: "Family", people: ["Noor", "Sam", "Ana"], last_activity: at(-60), waits_on_you: false, unread: 0, archived: null},
+  ]
+  const dateOf = (n) => new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(n)))
+  // The houses that stand, by title, in sorted order.
+  const houses = (p) => p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Thread ")).map((l) => l.slice(7).split(", ")[0]).sort()
+  const flip = (p) => (button(p, "Archived").dispatch("click"), p.pump())
+  async function built(threads) {
+    const p = await street({version: "0.3.3"})
+    picture(p.stream("runs.changes"), [])
+    picture(p.stream("threads.changes"), threads)
+    p.pump(5)
+    return p
+  }
+
+  test("the houses of the threads not archived stand; the board's Archived key stands only the archived ones, each drawn and opened as before, the newest daily thread of each list standing for its days", async () => {
+    const p = await built(THREADS)
+    assert.equal(button(p, "Archived").getAttribute("aria-pressed"), "false")
+    assert.deepEqual(houses(p), ["Family", "Ferry tracker", "Today"])
+
+    flip(p)
+    assert.equal(button(p, "Archived").getAttribute("aria-pressed"), "true")
+    assert.deepEqual(houses(p), ["Old tracker", "Yesterday"])
+    assert.ok(labelled(p, "Thread Yesterday, with Aqua, last active "), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
+    assert.match(hit(p, "Thread Yesterday").getAttribute("aria-label"), /, 1 unread$/)
+    assert.match(hit(p, "Thread Old tracker").getAttribute("aria-label"), /, waits on you$/)
+    tap(p, "Thread Old tracker")
+    await press(p, "Open Aqua")
+    assert.deepEqual(p.pages, [["aqua", "th-old"]])
+    button(p, "Close").dispatch("click")
+    p.pump()
+
+    flip(p)
+    assert.equal(button(p, "Archived").getAttribute("aria-pressed"), "false")
+    assert.deepEqual(houses(p), ["Family", "Ferry tracker", "Today"])
+  })
+
+  test("a live item that archives a thread moves it to the archived list, one that takes it out moves it back, and a removed item leaves both lists", async () => {
+    const p = await built(THREADS)
+    const line = p.stream("threads.changes")
+    const work = THREADS.find((t) => t.id === "th-work")
+    change(line, {...work, archived: true})
+    p.pump(5)
+    assert.deepEqual(houses(p), ["Family", "Today"])
+    flip(p)
+    assert.deepEqual(houses(p), ["Ferry tracker", "Old tracker", "Yesterday"])
+
+    change(line, {...work, last_activity: at(-10), archived: false})
+    p.pump(5)
+    assert.deepEqual(houses(p), ["Old tracker", "Yesterday"])
+    flip(p)
+    assert.deepEqual(houses(p), ["Family", "Ferry tracker", "Today"])
+
+    change(line, {kind: "removed", id: "th-work"})
+    change(line, {kind: "removed", id: "th-old"})
+    p.pump(5)
+    assert.deepEqual(houses(p), ["Family", "Today"])
+    flip(p)
+    assert.deepEqual(houses(p), ["Yesterday"])
+  })
+
+  test("a daily thread archived live hands its days to the newest one left in the list, and the archived list's newest is the one that stands", async () => {
+    const p = await built(THREADS)
+    change(p.stream("threads.changes"), {...THREADS.find((t) => t.id === "th-today"), archived: true})
+    p.pump(5)
+    assert.deepEqual(houses(p), [dateOf(-2), "Family", "Ferry tracker"].sort())
+    flip(p)
+    assert.deepEqual(houses(p), ["Old tracker", "Today"])
+  })
+
+  test("the Archived key stands on the board only while the thread houses are on", async () => {
+    const p = await street({version: "0.3.3", document: {widgets: {houses: {on: false}}}})
+    assert.ok(button(p, "Arrange"))
+    assert.equal(button(p, "Archived"), undefined)
   })
 })

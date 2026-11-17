@@ -774,13 +774,13 @@ service this CYFR names — that is the public-hosting configuration, and it is 
 matter. They are platform settings in
 [configuration-guide.md](configuration-guide.md): the `tenancy` group's
 athanors on the server, shared threads one person creates, pairs one
-person holds, people in one shared thread, threads, schedules, feeds and
-external servers in an athanor, the bytes one athanor holds, and the
-athanors minted per hour (`CYFR_MINT_PER_HOUR`, a rate). The athanor
-counts ship with a generous default — 10,000 athanors, and 1,000 each of
-threads, schedules, feeds and external servers in one — and each is turned
-off with `0`; the shared-thread counts and the bytes one athanor holds have
-no ceiling until you set one. The mint rate is a bound
+person holds, people in one shared thread, schedules, feeds and external
+servers in an athanor, the bytes one athanor holds, and the athanors
+minted per hour (`CYFR_MINT_PER_HOUR`, a rate). The athanor counts ship
+with a generous default — 10,000 athanors, and 1,000 each of schedules,
+feeds and external servers in one — and each is turned off with `0`;
+the shared-thread counts and the bytes one athanor holds have no ceiling
+until you set one. The mint rate is a bound
 that is never 0: `CYFR_MINT_PER_HOUR=0` refuses the boot, and unset is no
 bound.
 

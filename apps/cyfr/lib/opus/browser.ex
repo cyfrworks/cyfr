@@ -70,6 +70,21 @@ defmodule Opus.Browser do
   before it starts its own. At most four windows are open at once in each
   Chrome; a fifth is refused (`:too_many_windows`).
 
+  ## A window whose thread is put away
+
+  A window stands while its thread does. The holder hears its person's
+  list of threads (`Cyfr.Bus.threads/2`, `Cyfr.Bus.ThreadListed`) on
+  whatever member it runs, and each announcement that a thread was
+  archived or left the list (deleted) makes it read, then, every window
+  it holds: one whose thread is gone or archived, or a crew member's
+  thread's window whose room is gone or archived, is closed by a request
+  of the holder's own (`close`, which proves no turn), which also ends the
+  page calls the driver holds for that window (`callend`). Nothing is
+  decided from the announcement or from a row read before it, so a
+  late announcement of an archive that new work has since undone closes
+  nothing, and a read that fails keeps the window. Nothing starts for
+  it: a browser that does not run holds no window.
+
   ## The driver's protocol
 
   Every message is one frame (`Opus.Browser.Frame`). A request names its
@@ -176,7 +191,7 @@ defmodule Opus.Browser do
 
   use GenServer, restart: :temporary
 
-  alias Cyfr.Bus.PageCall
+  alias Cyfr.Bus.{PageCall, ThreadListed}
   alias Opus.Browser.Frame
   alias Opus.Programs
 
@@ -733,6 +748,11 @@ defmodule Opus.Browser do
     Process.flag(:trap_exit, true)
     owner = self()
     browser = Programs.browser(athanor_id, user_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
+    # Its person's list of threads, on every member: what puts a thread
+    # away is announced there (the moduledoc's "A window whose thread is
+    # put away").
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.threads(actor, user_id))
 
     {:ok,
      %{
@@ -809,6 +829,10 @@ defmodule Opus.Browser do
     case Map.fetch(state.pending, id) do
       :error ->
         {:reply, false, state}
+
+      # The holder's own close is wanted while it waits.
+      {:ok, %{kind: :close}} ->
+        {:reply, true, state}
 
       # A cast is wanted while its watch stands on it.
       {:ok, %{kind: :cast} = request} ->
@@ -1067,6 +1091,14 @@ defmodule Opus.Browser do
   end
 
   def handle_info({:idle, _stale}, state), do: {:noreply, state}
+
+  # A thread of the person's was archived or deleted: every window held is
+  # read again, then, and those whose thread is put away are closed.
+  def handle_info(%ThreadListed{} = listed, state) do
+    if listed.kind == :removed or listed.archived == true,
+      do: {:noreply, close_put_away(state)},
+      else: {:noreply, state}
+  end
 
   def handle_info(message, state) do
     Prima.LoggerContext.unexpected(__MODULE__, message)
@@ -1446,8 +1478,10 @@ defmodule Opus.Browser do
   end
 
   # A request's answer: an action's caller is replied to; a cast's watch
-  # takes it, if it still stands on that cast.
+  # takes it, if it still stands on that cast; the holder's own close has
+  # nobody to tell.
   defp settle(state, %{kind: :cast} = request, reply), do: cast_answered(state, request, reply)
+  defp settle(state, %{kind: :close}, _reply), do: state
 
   defp settle(state, request, reply) do
     GenServer.reply(request.from, reply)
@@ -1523,7 +1557,7 @@ defmodule Opus.Browser do
   # Every cast is ended and asked for anew, so an image or an end cut by
   # the tail never stalls it.
   defp recover(state) do
-    for {id, %{kind: :act} = request} <- state.pending do
+    for {id, %{kind: kind} = request} <- state.pending, kind in [:act, :close] do
       first = Enum.find(0..map_size(request.parts), &(not Map.has_key?(request.parts, &1)))
       write(state, Frame.message(%{"t" => "again", "id" => id, "seq" => first}), :again)
     end
@@ -1559,6 +1593,53 @@ defmodule Opus.Browser do
     end
 
     %{state | pending: %{}, queued: [], watches: %{}}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Windows whose thread is put away
+
+  # Each window held whose thread, read now, is put away, closed by the
+  # holder's own request; one with a close of its own still waiting is
+  # asked once. A holder whose session is not ready holds no window.
+  defp close_put_away(%{phase: :ready} = state) do
+    closing = for {_id, %{kind: :close, window: window}} <- state.pending, do: window
+
+    state.windows
+    |> Enum.reject(&(&1 in closing))
+    |> Enum.filter(&put_away?(state.athanor_id, &1))
+    |> Enum.reduce(state, fn window, state ->
+      send_request(state, %{
+        kind: :close,
+        window: window,
+        op: "close",
+        args: Programs.Output.new("{}"),
+        upload: nil
+      })
+    end)
+  end
+
+  defp close_put_away(state), do: state
+
+  # Whether the thread a window is named by is put away, read now: gone or
+  # archived, or, for a crew member's thread, its room gone or archived.
+  # A read that fails keeps the window.
+  defp put_away?(athanor_id, thread_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    case Arca.ThreadStorage.get(actor, thread_id) do
+      {:ok, %{kind: "crew", parent_id: room}} when is_binary(room) -> room_put_away?(actor, room)
+      {:ok, thread} -> Arca.ThreadStorage.archived?(thread)
+      {:error, :not_found} -> true
+      {:error, _unread} -> false
+    end
+  end
+
+  defp room_put_away?(actor, room) do
+    case Arca.ThreadStorage.get(actor, room) do
+      {:ok, thread} -> Arca.ThreadStorage.archived?(thread)
+      {:error, :not_found} -> true
+      {:error, _unread} -> false
+    end
   end
 
   defp close_session(%{session: nil} = state), do: state

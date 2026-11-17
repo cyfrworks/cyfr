@@ -9,8 +9,9 @@ defmodule Cyfr.TelemetryBridge do
   every announcement the identity domain makes — a tray entry, a session
   minted or revoked, a dropped caller memo, a vault entry,
   a share, an archive, the API key and webhook rosters, a pending
-  confirmation — every file offer the storage layer moves, and every
-  lifecycle event the console follows reaches `Cyfr.Bus` here. The
+  confirmation — every file offer the storage layer moves, every thread it
+  archives, and every lifecycle event the console follows reaches
+  `Cyfr.Bus` here. The
   events it attaches are exactly
   `Cyfr.Telemetry.Catalog.consumed_by(:bridge)`; there is no second list.
 
@@ -412,6 +413,18 @@ defmodule Cyfr.TelemetryBridge do
     [files(athanor_id, &Cyfr.Providers.Files.file(&1, path))]
   end
 
+  # A thread of the athanor archived, by its person or by the setting: on
+  # its person's list as it reads when the message is delivered
+  # (`Cyfr.Providers.Threads`), where a browser holding its window hears
+  # it too (`Opus.Browser`).
+  defp messages([:cyfr, :arca, :thread, :archived], _measurements, %{
+         athanor_id: athanor_id,
+         thread_id: thread_id
+       })
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+              thread_id != "",
+       do: [{:thread, Prima.Actor.in_athanor(athanor_id), thread_id}]
+
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})
        when is_binary(id) and id != "",
        do: [{:global, Bus.athanor_archived_global(), AthanorArchived.new(id)}]
@@ -796,6 +809,9 @@ defmodule Cyfr.TelemetryBridge do
       end
     end)
   end
+
+  defp deliver(event, {:thread, actor, thread_id}),
+    do: publish(event, fn -> Cyfr.Providers.Threads.changed(actor, thread_id) end)
 
   defp deliver(event, {:files, actor, read}) do
     publish(event, fn ->

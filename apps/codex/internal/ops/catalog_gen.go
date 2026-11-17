@@ -3844,7 +3844,7 @@ func (args ResourceReadArgs) MarshalJSON() ([]byte, error) {
 type RetentionCleanupArgs struct {
 	// Kind of records to clean up
 	CleanupType Field[string] `json:"cleanup_type,omitzero"`
-	// If true, show what would be deleted without actually deleting
+	// If true, count what the cleanup would delete (or, for archive_days, archive) without doing it
 	DryRun Field[bool] `json:"dry_run,omitzero"`
 }
 
@@ -3906,8 +3906,8 @@ type RetentionSetArgsSettings struct {
 	PolicyLogDays Field[int] `json:"policy_log_days,omitzero"`
 	// Days of records kept per athanor
 	DecisionsDays Field[int] `json:"decisions_days,omitzero"`
-	// Days of records kept per athanor
-	MessagesDays Field[int] `json:"messages_days,omitzero"`
+	// Days with no activity before a thread is archived; 0 archives none
+	ArchiveDays Field[int] `json:"archive_days,omitzero"`
 	// Days of records kept per athanor
 	StagingDays Field[int] `json:"staging_days,omitzero"`
 	// Days of records kept per athanor

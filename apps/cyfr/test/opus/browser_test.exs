@@ -2018,12 +2018,10 @@ defmodule Opus.BrowserTest do
       assert {:ok, _} = call(ctx, crew, "open", %{"url" => "https://example.com/"})
       assert running_rows(ctx) == ["aqua-browser-apart"]
 
-      # Retention removes the finished workspace thread; the crew turn lives on.
-      old = DateTime.add(DateTime.utc_now(), -60 * 86_400, :second)
-      {:ok, _} = Threads.update(actor, room, %{last_message_at: old})
-      cutoff = DateTime.add(DateTime.utc_now(), -30 * 86_400, :second)
-      assert {:ok, removed} = Threads.delete_before(actor, cutoff)
-      assert removed >= 1
+      # The workspace thread's row goes while the crew turn lives on: what
+      # the browser reads when a deletion of the room commits between its
+      # read of the crew member's thread and its read of the room.
+      {1, _} = Arca.Repo.delete_all(from(c in Arca.Schemas.Thread, where: c.id == ^room))
       assert {:error, :not_found} = Threads.get(actor, room)
       assert {:ok, {_, _, _}} = Opus.Browser.turn(Opus.Browser.caller(guest(ctx), crew))
 

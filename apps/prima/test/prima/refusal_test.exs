@@ -236,7 +236,7 @@ defmodule Prima.RefusalTest do
     {{:held_elsewhere, "turn_1"}, :conflict},
     {:not_member, :forbidden},
     {:archived, :forbidden},
-    {:thread_archived, :forbidden},
+    {:thread_retired, :forbidden},
     {{:child_awaits_card, "planner"}, :conflict},
     {:thread_in_use, :conflict},
     {:not_addressable, :forbidden},

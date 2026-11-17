@@ -501,30 +501,6 @@ defmodule Aqua.Providers.ThreadTest do
 
       assert Threads.list(Sanctum.Context.actor(ctx)) == before
     end
-
-    test "the athanor's thread count is held to the operator's cap, a new day's included", %{
-      ctx: ctx
-    } do
-      # The setup already minted one thread; a cap of one refuses today's,
-      # whether asked for or joined by a send.
-      Cyfr.Test.Settings.put("max_threads_per_athanor", 1)
-      before = Threads.list(Sanctum.Context.actor(ctx))
-
-      assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
-               call(ctx, %{"action" => "today"})
-
-      assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
-               call(ctx, %{"action" => "send", "message" => "hello", "agent" => "aqua"})
-
-      assert Threads.list(Sanctum.Context.actor(ctx)) == before
-
-      # Another athanor's count is its own: another person's, in their own.
-      n = System.unique_integer([:positive])
-      {other, user} = Sanctum.TestContext.person!(%{ctx | user_id: "local|idp|other-#{n}"})
-      other = %{other | athanor_id: Sanctum.Test.People.athanor!(user).id}
-
-      assert {:ok, %{id: _, kind: "daily"}} = call(other, %{"action" => "today"})
-    end
   end
 
   describe "aloud on the wire" do

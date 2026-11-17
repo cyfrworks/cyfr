@@ -120,8 +120,8 @@ defmodule Prima.CapsTest do
     end
 
     test "passes the actor and the key through, and counts only what it is given" do
-      assert :ok = Caps.check_counted(@actor, :max_threads_per_athanor, fn -> {:ok, 1} end)
-      assert_received {:check_counted, actor, :max_threads_per_athanor}
+      assert :ok = Caps.check_counted(@actor, :max_pairs_per_person, fn -> {:ok, 1} end)
+      assert_received {:check_counted, actor, :max_pairs_per_person}
       assert actor == @actor
     end
 
@@ -184,7 +184,6 @@ defmodule Prima.CapsTest do
              :max_pairs_per_person,
              :max_shared_threads_per_person,
              :max_people_per_thread,
-             :max_threads_per_athanor,
              :athanor_storage_bytes
            ]
 

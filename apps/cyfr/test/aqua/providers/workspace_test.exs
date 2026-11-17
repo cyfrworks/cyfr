@@ -356,42 +356,6 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert records(ctx, "workspace_open") == []
     end
 
-    test "an opening whose thread the ceiling refuses writes nothing and leaves none of its copied files",
-         %{ctx: ctx, daily: daily} do
-      blob = %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG!"}
-      shot = Prima.UUID7.generate_id("msg")
-      {:ok, [ref]} = Aqua.Attachments.store(ctx, daily.id, shot, [blob])
-
-      {:ok, _} =
-        Tape.accept(ctx, daily.id, %{
-          message: %{
-            id: shot,
-            author: ctx.user_id,
-            sent_by: "person",
-            content: "this one",
-            payload: %{"attachments" => [ref]}
-          }
-        })
-
-      count = length(Threads.list(actor(ctx)))
-      Cyfr.Test.Settings.put("max_threads_per_athanor", count)
-
-      assert {:error, {:limit_reached, :max_threads_per_athanor, ^count}} =
-               open(ctx, daily, %{
-                 "attachments" => [%{"message_id" => shot, "stored_name" => ref["stored_name"]}]
-               })
-
-      assert Threads.list(actor(ctx), kind: "workspace") == []
-      refute Enum.any?(rows(ctx, daily.id), &(&1.kind == "pointer"))
-      assert records(ctx, "workspace_open") == []
-
-      # The only thread directories left are the daily thread's.
-      {:ok, entries} = Arca.list_typed(actor(ctx), ["threads"])
-
-      assert for({name, :dir} <- entries, name != daily.id, do: name)
-             |> Enum.all?(&tree_empty?(ctx, &1))
-    end
-
     test "an opening from a post whose file was deleted from Files says the file is no longer " <>
            "kept, and writes nothing",
          %{ctx: ctx, daily: daily} do
@@ -1243,7 +1207,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       refute Enum.any?(rows(ctx, daily.id), &(&1.kind == "report"))
     end
 
-    test "retention keeps a workspace thread at work or waiting on the person, and forgets a finished one with its pointer",
+    test "the setting keeps a workspace thread at work and archives a finished one, every pointer kept, and the panel's list leaves it out",
          %{ctx: ctx, daily: daily} do
       working = open!(ctx, daily, %{"title" => "Working"})
       finished = open!(ctx, daily, %{"title" => "Finished"})
@@ -1258,14 +1222,18 @@ defmodule Aqua.Providers.WorkspaceTest do
       # The daily thread stays by a turn still open there.
       _open = turn!(ctx, daily.id)
       future = DateTime.add(DateTime.utc_now(), 3600, :second)
-      assert {:ok, 1} = Threads.count_before(actor(ctx), future)
-      assert {:ok, 1} = Threads.delete_before(actor(ctx), future)
+      assert {:ok, 1} = Threads.count_idle(actor(ctx), future)
+      assert {:ok, 1} = Threads.archive_idle(actor(ctx), future)
 
-      ids = Threads.list(actor(ctx), kind: "workspace") |> Enum.map(& &1.id)
-      assert working.id in ids
-      refute finished.id in ids
+      archived = Threads.list(actor(ctx), kind: "workspace", archived: true)
+      assert Enum.map(archived, & &1.id) == [finished.id]
+      active = Threads.list(actor(ctx), kind: "workspace", archived: false)
+      assert Enum.map(active, & &1.id) == [working.id]
       pointed = for %{kind: "pointer", workspace_id: id} <- rows(ctx, daily.id), do: id
-      assert pointed == [working.id]
+      assert Enum.sort(pointed) == Enum.sort([working.id, finished.id])
+
+      {:ok, listed} = Aqua.workspaces(ctx)
+      refute finished.id in Enum.map(listed, & &1.id)
     end
   end
 
@@ -1367,12 +1335,5 @@ defmodule Aqua.Providers.WorkspaceTest do
       })
 
     row
-  end
-
-  defp tree_empty?(ctx, thread_id) do
-    case Arca.list_typed(actor(ctx), ["threads", thread_id]) do
-      {:ok, entries} -> entries == []
-      {:error, :not_found} -> true
-    end
   end
 end

@@ -66,6 +66,7 @@ defmodule Cyfr do
       OtelTenantHandler,
       Platform.Settings,
       Platform.Settings.Roster,
+      Providers.Threads,
       ReleaseChannel,
       Requests,
       RetentionScheduler,

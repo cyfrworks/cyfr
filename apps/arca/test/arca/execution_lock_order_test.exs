@@ -7,7 +7,7 @@ defmodule Arca.ExecutionLockOrderTest do
   so two writes of one run wait on each other in one order and never
   deadlock: a lapse of a run against the run's own terminal write, and a
   lapse of a turn's root against the turn's end. A turn's writers take
-  the turn before its thread, an archive of the thread among them, and a
+  the turn before its thread, a retirement of the thread among them, and a
   room's deletion holds the athanor's lock a child's creation waits on.
   Turns, then the athanor's row, then thread rows
   (`Arca.ThreadStorage.lock_threads!/2` states the order): a write that
@@ -17,7 +17,7 @@ defmodule Arca.ExecutionLockOrderTest do
   takes its asking turn first and a deletion the turns it stops; a step
   write, which takes no second thread row, takes no athanor lock. A write
   that takes more than one turn takes them by when each was accepted,
-  then by id (`Arca.TurnStorage.hold_turns!/2`), an archive and a
+  then by id (`Arca.TurnStorage.hold_turns!/2`), a retirement and a
   deletion alike.
   These run outside the sandbox, on connections of their own, with the
   run's attempt held by a third transaction so both writes are seen
@@ -549,7 +549,7 @@ defmodule Arca.ExecutionLockOrderTest do
 
   @stored %{grant: :stored, verify: &Arca.Test.Actor.admits/1}
 
-  test "an archive and the end of a turn it would cancel take the turn first and never deadlock" do
+  test "a retirement and the end of a turn it would cancel take the turn first and never deadlock" do
     actor = Arca.Test.Actor.local()
     %{child: child, turn: turn, attempt: attempt} = running_child_turn!(actor)
 
@@ -565,17 +565,17 @@ defmodule Arca.ExecutionLockOrderTest do
 
         Arca.Test.LockWait.await_lock_wait!(finish_backend, ["execution_attempts"])
 
-        {archive, archive_backend} =
-          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+        {retire, retire_backend} =
+          waiting(:retire, fn -> Threads.retire(actor, child.id, @stored) end)
 
-        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+        Arca.Test.LockWait.await_lock_wait!(retire_backend, ["turns"])
         release(blocker)
 
-        # The end took the turn first, so the archive finds it ended.
+        # The end took the turn first, so the retirement finds it ended.
         assert {:ok, %{status: "completed"}} = Task.await(finish, 10_000)
 
-        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: []}} =
-                 Task.await(archive, 10_000)
+        assert {:ok, %{thread: %{retired_at: %DateTime{}}, cancelled: []}} =
+                 Task.await(retire, 10_000)
       end)
 
     refute log =~ "deadlock", log
@@ -591,10 +591,17 @@ defmodule Arca.ExecutionLockOrderTest do
         {:ok, %{workspace: workspace}} =
           TurnStorage.open_workspace(actor, opening(actor, daily, %{}))
 
-        # Finished, so both are retention's to remove.
+        # Finished, its opening stopped before it started, so no work
+        # remains and both are retention's to archive.
         {1, _} =
           Arca.Repo.update_all(from(c in Thread, where: c.id == ^workspace.id),
             set: [workspace_state: "done", workspace_outcome: "done"]
+          )
+
+        {1, _} =
+          Arca.Repo.update_all(
+            from(m in Message, where: m.thread_id == ^workspace.id and m.kind == "opening"),
+            set: [status: "expired"]
           )
 
         {daily, workspace}
@@ -618,7 +625,7 @@ defmodule Arca.ExecutionLockOrderTest do
 
         # Retention holds the athanor and waits on the daily thread.
         {retention, retention_backend} =
-          waiting(:retention, fn -> Threads.delete_before(actor, cutoff) end)
+          waiting(:retention, fn -> Threads.archive_idle(actor, cutoff) end)
 
         Arca.Test.LockWait.await_lock_wait!(retention_backend, ["threads"])
 
@@ -627,16 +634,20 @@ defmodule Arca.ExecutionLockOrderTest do
             TurnStorage.accept_message(actor, daily.id, %{message: report})
           end)
 
-        Arca.Test.LockWait.await_lock_wait!(landing_backend)
+        Arca.Test.LockWait.await_lock_wait!(landing_backend, ["athanors"])
         release(blocker)
 
-        # Retention went first, so the report finds its workspace thread gone.
+        # Retention went first and archived both; the report, which starts
+        # no work, lands on the archived daily thread after it.
         assert {:ok, 2} = Task.await(retention, 10_000)
-        assert {:error, :workspace_gone} = Task.await(landing, 10_000)
+        assert {:ok, %{message: %{kind: "report"}, turn: nil}} = Task.await(landing, 10_000)
       end)
 
     refute log =~ "deadlock", log
-    assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, daily.id) end)
+    assert {:ok, %{archived_at: %DateTime{}}} = unboxed(fn -> Threads.get(actor, daily.id) end)
+
+    assert {:ok, %{archived_at: %DateTime{}}} =
+             unboxed(fn -> Threads.get(actor, workspace.id) end)
   end
 
   test "a child made while its room is deleted waits for the deletion and finds no room" do
@@ -776,7 +787,7 @@ defmodule Arca.ExecutionLockOrderTest do
     assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, room.id) end)
   end
 
-  test "an archive and a deletion take a crew thread's turns in one order, by when each was accepted" do
+  test "a retirement and a deletion take a crew thread's turns in one order, by when each was accepted" do
     actor = committed_athanor!()
     {:ok, room} = unboxed(fn -> Arca.Test.Days.thread(actor) end)
     {:ok, child} = unboxed(fn -> Threads.crew_thread(actor, room.id, "planner") end)
@@ -795,11 +806,11 @@ defmodule Arca.ExecutionLockOrderTest do
       capture_log(fn ->
         blocker = hold_turn(higher.id)
 
-        # The archive waits on the earlier-accepted turn, holding none.
-        {archive, archive_backend} =
-          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+        # The retirement waits on the earlier-accepted turn, holding none.
+        {retire, retire_backend} =
+          waiting(:retire, fn -> Threads.retire(actor, child.id, @stored) end)
 
-        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+        Arca.Test.LockWait.await_lock_wait!(retire_backend, ["turns"])
 
         {deletion, deletion_backend} =
           waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
@@ -807,10 +818,10 @@ defmodule Arca.ExecutionLockOrderTest do
         Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
         release(blocker)
 
-        # Both took the earlier-accepted turn first, so the archive went
+        # Both took the earlier-accepted turn first, so the retirement went
         # first with both and the deletion followed with nothing to cancel.
-        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: cancelled}} =
-                 Task.await(archive, 10_000)
+        assert {:ok, %{thread: %{retired_at: %DateTime{}}, cancelled: cancelled}} =
+                 Task.await(retire, 10_000)
 
         assert length(cancelled) == 2
         assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
@@ -829,7 +840,7 @@ defmodule Arca.ExecutionLockOrderTest do
     %{actor: actor, room: room, child: child, turn: turn, blocker: hold_turn(turn.id)}
   end
 
-  test "an archive that a deletion of its room goes before finds no thread, and writes nothing" do
+  test "a retirement that a deletion of its room goes before finds no thread, and writes nothing" do
     %{actor: actor, room: room, child: child, turn: turn, blocker: blocker} = member_turn_held!()
     turn_id = turn.id
 
@@ -840,30 +851,30 @@ defmodule Arca.ExecutionLockOrderTest do
 
         Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
 
-        {archive, archive_backend} =
-          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+        {retire, retire_backend} =
+          waiting(:retire, fn -> Threads.retire(actor, child.id, @stored) end)
 
-        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+        Arca.Test.LockWait.await_lock_wait!(retire_backend, ["turns"])
         release(blocker)
 
         assert {:ok, %{cancelled: [%{turn_id: ^turn_id}]}} = Task.await(deletion, 10_000)
-        assert {:error, :not_found} = Task.await(archive, 10_000)
+        assert {:error, :not_found} = Task.await(retire, 10_000)
       end)
 
     refute log =~ "MatchError", log
     assert {:error, :not_found} = unboxed(fn -> Threads.get(actor, child.id) end)
   end
 
-  test "a deletion that an archive of its member's thread goes before removes the archived thread" do
+  test "a deletion that a retirement of its member's thread goes before removes the retired thread" do
     %{actor: actor, room: room, child: child, turn: turn, blocker: blocker} = member_turn_held!()
     turn_id = turn.id
 
     log =
       capture_log(fn ->
-        {archive, archive_backend} =
-          waiting(:archive, fn -> Threads.archive(actor, child.id, @stored) end)
+        {retire, retire_backend} =
+          waiting(:retire, fn -> Threads.retire(actor, child.id, @stored) end)
 
-        Arca.Test.LockWait.await_lock_wait!(archive_backend, ["turns"])
+        Arca.Test.LockWait.await_lock_wait!(retire_backend, ["turns"])
 
         {deletion, deletion_backend} =
           waiting(:deletion, fn -> Threads.delete(actor, room.id, @stored) end)
@@ -871,8 +882,8 @@ defmodule Arca.ExecutionLockOrderTest do
         Arca.Test.LockWait.await_lock_wait!(deletion_backend, ["turns"])
         release(blocker)
 
-        assert {:ok, %{thread: %{archived_at: %DateTime{}}, cancelled: [%{turn_id: ^turn_id}]}} =
-                 Task.await(archive, 10_000)
+        assert {:ok, %{thread: %{retired_at: %DateTime{}}, cancelled: [%{turn_id: ^turn_id}]}} =
+                 Task.await(retire, 10_000)
 
         assert {:ok, %{cancelled: []}} = Task.await(deletion, 10_000)
       end)

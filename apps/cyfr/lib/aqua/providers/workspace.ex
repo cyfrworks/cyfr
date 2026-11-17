@@ -478,9 +478,12 @@ defmodule Aqua.Providers.Workspace do
 
   @doc """
   The person's workspace threads a view lists, the latest activity first:
-  each one `open` or `needs_you`, and each one whose work ended (`done`,
-  `stopped`, `error`) with posts the person has not seen; one they have
-  seen leaves the list by itself and is found from the daily thread.
+  each one not archived that is `open` or `needs_you`, and each one whose
+  work ended (`done`, `stopped`, `error`) with posts the person has not
+  seen; one they have seen leaves the list by itself and is found from
+  the daily thread, and one archived is found in their list's Archived
+  filter, a card waiting in it still counted where the person's waiting
+  items are.
   `waits_on_you` is whether it needs the person: a card waits there or
   in a crew member's thread under it, or Aqua reported it needs them.
   """
@@ -488,7 +491,7 @@ defmodule Aqua.Providers.Workspace do
   def records(%Context{} = ctx) do
     actor = Context.actor(ctx)
 
-    case Arca.ThreadStorage.list(actor, kind: "workspace") do
+    case Arca.ThreadStorage.list(actor, kind: "workspace", archived: false) do
       threads when is_list(threads) ->
         threads
         |> Enum.reduce_while({:ok, []}, fn thread, {:ok, acc} ->

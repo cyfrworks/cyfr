@@ -726,20 +726,32 @@ defmodule Aqua.Tape do
     do: Threads.crew_thread(Sanctum.Context.actor(ctx), room_id, member)
 
   @doc """
+  Archive the person's daily or workspace thread
+  (`Arca.ThreadStorage.archive/2`): it moves behind their list's Archived
+  filter, which the storage announces after the commit, with its window
+  closed by the browser that holds it (`Opus.Browser`), and nothing else
+  about it changes. Refused `:working` while work remains in it, and
+  `:not_a_room` for a crew member's thread, which is retired (`retire/2`).
+  """
+  @spec archive(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def archive(%Context{} = ctx, thread_id),
+    do: Threads.archive(Sanctum.Context.actor(ctx), thread_id)
+
+  @doc """
   Retire a child thread, its open turns cancelled with their replies in
-  the same transaction (`Arca.ThreadStorage.archive/3`), under the stamp
+  the same transaction (`Arca.ThreadStorage.retire/3`), under the stamp
   each root's attempt stores: a cancel retires work. Viewers hear the
   turns end and the crew's delivery consumer is woken after the commit;
   the runtime still holding the cancelled turns is the caller's to stop
   (`Aqua.Runner.stop_cancelled/1`).
   """
-  @spec archive(Context.t(), String.t()) ::
+  @spec retire(Context.t(), String.t()) ::
           {:ok, %{thread: map(), cancelled: [map()]}} | {:error, term()}
-  def archive(%Context{} = ctx, thread_id) do
+  def retire(%Context{} = ctx, thread_id) do
     open = open_jobs(ctx, [thread_id])
 
-    with {:ok, %{cancelled: cancelled}} = archived <-
-           Threads.archive(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring)) do
+    with {:ok, %{cancelled: cancelled}} = retired <-
+           Threads.retire(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring)) do
       if cancelled != [] do
         broadcast(ctx, thread_id, :turn_finished, nil)
         announce_notices(ctx, Enum.map(cancelled, & &1.turn_id))
@@ -747,7 +759,7 @@ defmodule Aqua.Tape do
         Activity.cancelled(ctx, open, cancelled)
       end
 
-      archived
+      retired
     end
   end
 

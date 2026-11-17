@@ -402,8 +402,8 @@ defmodule Cyfr.Bus do
       struct: ThreadListed,
       match: {:prefix, "bus:threads:"},
       template: "tenant:<athanor_id>:bus:threads:<user_id>",
-      producers: ["Aqua.ThreadList", "Cyfr.TelemetryBridge"],
-      consumers: ["stream:threads.changes"],
+      producers: ["Cyfr.Providers.Threads", "Cyfr.TelemetryBridge"],
+      consumers: ["stream:threads.changes", "Opus.Browser"],
       reason:
         "one person's list of threads moved, on that person's own topic: a shared thread is " <>
           "told to each of its people in their own athanor, never a message"

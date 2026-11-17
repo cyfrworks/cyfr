@@ -488,34 +488,6 @@ defmodule Aqua.TurnSourcesTest do
       assert {:ok, _} = Threads.get(Sanctum.Context.actor(ctx), kept.id)
     end
 
-    test "retention removing a thread a turn searched blanks that read the same way",
-         %{ctx: ctx, thread: daily} do
-      actor = Sanctum.Context.actor(ctx)
-      work = workspace!(ctx, "Old fares")
-      say!(ctx, work, "the old fares were lower")
-
-      turn = accept!(ctx, daily, "@aqua what were the old fares?")
-
-      script!([
-        calls([{"s1", "thread", %{"action" => "search", "q" => "old fares"}}]),
-        reply("Lower.")
-      ])
-
-      assert :completed = run(ctx, turn)
-      assert result(ctx, turn, "s1").content =~ "the old fares were lower"
-
-      long_ago = DateTime.add(DateTime.utc_now(), -400, :day)
-
-      {1, _} =
-        Arca.Repo.update_all(from(c in Arca.Schemas.Thread, where: c.id == ^work.id),
-          set: [last_message_at: long_ago, inserted_at: long_ago]
-        )
-
-      assert {:ok, 1} = Threads.delete_before(actor, DateTime.add(DateTime.utc_now(), -1, :day))
-      assert {:error, :not_found} = Threads.get(actor, work.id)
-      assert result(ctx, turn, "s1").content == Threads.forgotten_read()
-    end
-
     test "a thread deleted before a turn's read joins it is neither joined nor answered",
          %{ctx: ctx, thread: daily} do
       work = workspace!(ctx, "Gone first")

@@ -65,7 +65,7 @@ defmodule Aqua.StreamsTest do
       assert threads.refresh == {ThreadList, :listed}
 
       assert threads.projection ==
-               ~w(kind id title people last_activity waits_on_you unread revision at)
+               ~w(kind id title people last_activity waits_on_you unread archived revision at)
 
       assert {threads.key, threads.removal, threads.reread, threads.stale_after} ==
                {"id", "removed", [], 900}
@@ -77,7 +77,7 @@ defmodule Aqua.StreamsTest do
       refute Prima.Provider.Stream.admits?(threads, nil)
 
       # A removal carries its kind and id alone.
-      for field <- ~w(title people last_activity waits_on_you unread),
+      for field <- ~w(title people last_activity waits_on_you unread archived),
           do: assert(threads.shape["fields"][field]["nullable"], field)
 
       assert threads.shape["fields"]["unread"] == %{"type" => "integer", "nullable" => true}
@@ -136,7 +136,8 @@ defmodule Aqua.StreamsTest do
                "people" => nil,
                "last_activity" => nil,
                "waits_on_you" => nil,
-               "unread" => nil
+               "unread" => nil,
+               "archived" => nil
              }
 
       # A later announcement reads the thread gone and says nothing.
@@ -316,6 +317,7 @@ defmodule Aqua.StreamsTest do
             last_activity: last_activity,
             unread: event["unread"],
             waits_on_you: event["waits_on_you"],
+            archived: event["archived"],
             revision: event["revision"],
             at: at
           )
@@ -484,7 +486,7 @@ defmodule Aqua.StreamsTest do
       assert %{"asked_by" => "scout"} = read_as(by_member)
     end
 
-    test "an archive and a room's deletion end the jobs they cancelled", %{
+    test "a retirement and a room's deletion end the jobs they cancelled", %{
       ada: ada,
       room: room,
       planner: planner,
@@ -495,9 +497,9 @@ defmodule Aqua.StreamsTest do
       assert_receive %CrewActivity{kind: :started, member: "planner"}
       assert_receive %CrewActivity{kind: :started, member: "scout"}
 
-      {:ok, %{archived: true}} = call(ada.ctx, %{"action" => "archive", "thread" => planner.id})
-      assert_receive %CrewActivity{kind: :ended, member: "planner"} = archived
-      assert %{"status" => "cancelled", "asked_by" => "Ada"} = read_as(archived)
+      {:ok, %{retired: true}} = call(ada.ctx, %{"action" => "archive", "thread" => planner.id})
+      assert_receive %CrewActivity{kind: :ended, member: "planner"} = retired
+      assert %{"status" => "cancelled", "asked_by" => "Ada"} = read_as(retired)
 
       {:ok, %{deleted: true}} = call(ada.ctx, %{"action" => "delete", "thread" => room.id})
       assert_receive %CrewActivity{kind: :ended, member: "scout"} = deleted
@@ -523,9 +525,9 @@ defmodule Aqua.StreamsTest do
 
       {:ok, _} = requested_job!(ada, room, scout, "scout", "Scout it")
       assert_receive %CrewActivity{kind: :started, member: "scout"}
-      {:ok, %{archived: true}} = call(ada.ctx, %{"action" => "archive", "thread" => scout.id})
-      assert_receive %CrewActivity{kind: :ended, member: "scout"} = archived
-      assert %{"title" => "Scout it", "status" => "cancelled"} = read_as(archived)
+      {:ok, %{retired: true}} = call(ada.ctx, %{"action" => "archive", "thread" => scout.id})
+      assert_receive %CrewActivity{kind: :ended, member: "scout"} = retired
+      assert %{"title" => "Scout it", "status" => "cancelled"} = read_as(retired)
 
       {:ok, _} = job!(ada, planner, "planner")
       assert_receive %CrewActivity{kind: :started, member: "planner"} = untitled

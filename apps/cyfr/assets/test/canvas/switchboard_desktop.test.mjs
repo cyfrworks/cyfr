@@ -806,16 +806,17 @@ describe("the switchboard desktop 0.2.0", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 0.3.2: a meter with no reading names its feed and how to bind one, and
-// the threads are Aqua's daily and workspace threads and shared ones.
+// 0.3.3: a meter with no reading names its feed and how to bind one, the
+// threads are Aqua's daily and workspace threads and shared ones, and the
+// threads strip's Archived key lists the archived ones instead.
 // ---------------------------------------------------------------------------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.2/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.3/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // board's time zone here.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the switchboard 0.3.2", () => {
+describe("the switchboard 0.3.3", () => {
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the weather and VPN meters with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
@@ -878,5 +879,70 @@ describe("the switchboard 0.3.2", () => {
       "attention.changes": [{kind: "approval", id: "ap_crew", label: "2026-11-15", day: null, since: ago(30), destination: {kind: "page", page: "aqua", ref: "th_crew"}}]
     })
     assert.deepEqual(lines(b, "calls"), ["2026-11-15"])
+  })
+
+  // Two daily threads in each list, a workspace thread in each and a shared
+  // one, whose `archived` is null.
+  const THREADS = [
+    {kind: "daily", id: "th_today", title: day(0), people: ["Noor"], last_activity: ago(10), waits_on_you: false, unread: 2, archived: false},
+    {kind: "daily", id: "th_two", title: day(-2), people: ["Noor"], last_activity: ago(15), waits_on_you: false, unread: 0, archived: false},
+    {kind: "daily", id: "th_one", title: day(-1), people: ["Noor"], last_activity: ago(20), waits_on_you: false, unread: 1, archived: true},
+    {kind: "daily", id: "th_three", title: day(-3), people: ["Noor"], last_activity: ago(25), waits_on_you: false, unread: 0, archived: true},
+    {kind: "workspace", id: "th_work", title: "Ferry tracker", people: ["Noor"], last_activity: ago(30), waits_on_you: false, unread: 0, archived: false},
+    {kind: "workspace", id: "th_old", title: "Old tracker", people: ["Noor"], last_activity: ago(35), waits_on_you: true, unread: 0, archived: true},
+    {kind: "shared", id: "sth_fam", title: "Family", people: ["Ada", "Bob", "Cy"], last_activity: ago(40), waits_on_you: false, unread: 0, archived: null}
+  ]
+  const archivedKey = (b) => b.$('.strip[data-part="threads"] [data-archived]')
+  const flip = (b) => (archivedKey(b).click(), b.pump())
+
+  test("the threads strip lists the threads not archived; its Archived key lists only the archived ones, each drawn and opened as before, the newest daily thread of each list standing for its days", async () => {
+    const b = await started({version: V3}, {"threads.changes": THREADS})
+    assert.equal(archivedKey(b).textContent, "Archived")
+    assert.equal(archivedKey(b).getAttribute("aria-pressed"), "false")
+    assert.deepEqual(lines(b, "threads"), ["Today", "Ferry tracker", "Family"])
+
+    flip(b)
+    assert.equal(archivedKey(b).getAttribute("aria-pressed"), "true")
+    assert.deepEqual(lines(b, "threads"), ["Yesterday", "Old tracker"])
+    assert.equal(line(b, "threads", "Yesterday").querySelector(".meta-a").textContent, "1 unread")
+    assert.equal(line(b, "threads", "Old tracker").querySelector(".meta-a").textContent, "Waits on you")
+    assert.equal(line(b, "threads", "Old tracker").getAttribute("data-lamp"), "amber")
+    patch(b, line(b, "threads", "Yesterday"), "aqua")
+    patch(b, line(b, "threads", "Old tracker"), "aqua")
+    assert.deepEqual(b.shell.settings, [["aqua", "th_one"], ["aqua", "th_old"]])
+
+    flip(b)
+    assert.equal(archivedKey(b).getAttribute("aria-pressed"), "false")
+    assert.deepEqual(lines(b, "threads"), ["Today", "Ferry tracker", "Family"])
+  })
+
+  test("a live item that archives a thread moves it to the archived list, one that takes it out moves it back, and a removed item leaves both lists", async () => {
+    const b = await started({version: V3}, {"threads.changes": THREADS})
+    const work = THREADS.find((t) => t.id === "th_work")
+    change(b, "threads.changes", {...work, revision: 2, archived: true})
+    assert.deepEqual(lines(b, "threads"), ["Today", "Family"])
+    flip(b)
+    assert.deepEqual(lines(b, "threads"), ["Yesterday", "Ferry tracker", "Old tracker"])
+
+    change(b, "threads.changes", {...work, revision: 3, last_activity: ago(1), archived: false})
+    assert.deepEqual(lines(b, "threads"), ["Yesterday", "Old tracker"])
+    flip(b)
+    assert.deepEqual(lines(b, "threads"), ["Ferry tracker", "Today", "Family"])
+
+    change(b, "threads.changes", {kind: "removed", id: "th_work", revision: 4})
+    change(b, "threads.changes", {kind: "removed", id: "th_old", revision: 5})
+    assert.deepEqual(lines(b, "threads"), ["Today", "Family"])
+    flip(b)
+    assert.deepEqual(lines(b, "threads"), ["Yesterday"])
+  })
+
+  test("a daily thread archived live hands its days to the newest one left in the list, and the archived list's newest is the one it shows", async () => {
+    const b = await started({version: V3}, {"threads.changes": THREADS})
+    const today = THREADS.find((t) => t.id === "th_today")
+    change(b, "threads.changes", {...today, revision: 2, archived: true})
+    const date = new Intl.DateTimeFormat("en-GB", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-2)))
+    assert.deepEqual(lines(b, "threads"), [date, "Ferry tracker", "Family"])
+    flip(b)
+    assert.deepEqual(lines(b, "threads"), ["Today", "Old tracker"])
   })
 })

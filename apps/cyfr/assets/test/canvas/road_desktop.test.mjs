@@ -717,16 +717,16 @@ describe("the road desktop 0.2.0 draws", () => {
   })
 })
 
-// ---- 0.3.2 -------------------------------------------------------------------------------------
+// ---- 0.3.3 -------------------------------------------------------------------------------------
 
 // A daily thread's title: the ISO date `n` days from today, in UTC, the stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the road desktop 0.3.2", () => {
+describe("the road desktop 0.3.3", () => {
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the windmill and the tram line with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
-    const p = page({version: "0.3.2"})
+    const p = page({version: "0.3.3"})
     await settle()
     p.pump()
     assert.equal(label(p, "Windmill"), `Windmill: ${sentence("weather")}`)
@@ -744,7 +744,7 @@ describe("the road desktop 0.3.2", () => {
   })
 
   test("today's daily thread is a post box read Today that opens Aqua, an earlier day's is none, a workspace thread opens Aqua and a shared one the chat", async () => {
-    const p = page({version: "0.3.2"})
+    const p = page({version: "0.3.3"})
     await settle()
     picture(p, "threads.changes", [
       {kind: "daily", id: "t_today", title: day(0), people: ["Noor"], last_activity: iso(-5), waits_on_you: false, unread: 2},
@@ -768,7 +768,7 @@ describe("the road desktop 0.3.2", () => {
   test("the newest daily thread's post box reads Yesterday a day back, and its date further back", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
-      const p = page({version: "0.3.2"})
+      const p = page({version: "0.3.3"})
       await settle()
       picture(p, "threads.changes", [{kind: "daily", id: "t1", title: day(n), people: ["Noor"], last_activity: iso(-5), waits_on_you: false, unread: 0}])
       tap(p, "Post boxes")
@@ -779,7 +779,7 @@ describe("the road desktop 0.3.2", () => {
   test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     const named = ["Today", "Yesterday", date, "builder"]
-    const p = page({version: "0.3.2"})
+    const p = page({version: "0.3.3"})
     await settle()
     picture(p, "attention.changes", [[day(0), day(0), "t0"], [day(-1), day(-1), "t1"], [day(-3), day(-3), "t3"], ["builder", null, "tc"]].map(([label, d, ref], i) =>
       ({kind: "approval", id: `a${i}`, label, day: d, since: iso(i - 20), destination: {kind: "page", page: "aqua", ref}})))
@@ -794,12 +794,86 @@ describe("the road desktop 0.3.2", () => {
   })
 
   test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
-    const p = page({version: "0.3.2"})
+    const p = page({version: "0.3.3"})
     await settle()
     picture(p, "attention.changes", [{kind: "approval", id: "a_crew", label: "2026-11-15", day: null, since: iso(-20), destination: {kind: "page", page: "aqua", ref: "tc"}}])
     assert.deepEqual(labels(p).filter((l) => l.startsWith("Approval in ")).map((l) => l.split(", since")[0]), ["Approval in 2026-11-15"])
     p.win.RoadList.show()
     const waiting = p.ids.lists.children.filter((c) => c.tagName === "SECTION").find((sec) => sec.children[0].textContent === "Waiting on you")
     assert.deepEqual(waiting.children[1].children.map((li) => li.textContent.split(" waits for your approval")[0]), ["2026-11-15"])
+  })
+
+  // Two daily threads in each list, a workspace thread in each and a shared one, whose
+  // `archived` is null.
+  const THREADS = [
+    {kind: "daily", id: "t_today", title: day(0), people: ["Noor"], last_activity: iso(-5), waits_on_you: false, unread: 2, archived: false},
+    {kind: "daily", id: "t_two", title: day(-2), people: ["Noor"], last_activity: iso(-6), waits_on_you: false, unread: 0, archived: false},
+    {kind: "daily", id: "t_one", title: day(-1), people: ["Noor"], last_activity: iso(-7), waits_on_you: false, unread: 1, archived: true},
+    {kind: "daily", id: "t_three", title: day(-3), people: ["Noor"], last_activity: iso(-8), waits_on_you: false, unread: 0, archived: true},
+    {kind: "workspace", id: "t_work", title: "Ferry tracker", people: ["Noor"], last_activity: iso(-9), waits_on_you: false, unread: 0, archived: false},
+    {kind: "workspace", id: "t_old", title: "Old tracker", people: ["Noor"], last_activity: iso(-10), waits_on_you: true, unread: 0, archived: true},
+    {kind: "shared", id: "t_family", title: "Family", people: ["a", "b", "c"], last_activity: iso(-11), waits_on_you: false, unread: 0, archived: null},
+  ]
+  const dateOf = (n) => new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(n)))
+  const TITLES = ["Today", "Yesterday", dateOf(-2), dateOf(-3), "Ferry tracker", "Old tracker", "Family"]
+  // The thread rows of the open threads card, by title, as they stand.
+  const listed = (p) => labels(p).map((l) => l.split(", ")[0]).filter((t) => TITLES.includes(t))
+  const archived = (p) => hits(p).find((h) => h.label === "Archived")
+  const flip = (p) => tap(p, "Archived")
+  async function posted(threads) {
+    const p = page({version: "0.3.3"})
+    await settle()
+    picture(p, "threads.changes", threads)
+    tap(p, "Post boxes")
+    return p
+  }
+
+  test("the threads card lists the threads not archived; its Archived choice lists only the archived ones, each drawn and opened as before, the newest daily thread of each list standing for its days", async () => {
+    const p = await posted(THREADS)
+    assert.equal(archived(p).element.getAttribute("aria-pressed"), "false")
+    assert.deepEqual(listed(p), ["Today", "Ferry tracker", "Family"])
+
+    flip(p)
+    assert.equal(archived(p).element.getAttribute("aria-pressed"), "true")
+    assert.deepEqual(listed(p), ["Old tracker", "Yesterday"])
+    assert.ok(label(p, "Old tracker, waits on you, with Aqua, "), labels(p).join(" | "))
+    tap(p, "Yesterday, 1 unread, with Aqua, ")
+    assert.deepEqual(p.calls.settings, [["aqua", "t_one"]])
+
+    // The post boxes on the building are the threads not archived, the Archived choice on or off.
+    assert.equal(label(p, "Post boxes"), "Post boxes: 3 threads, 0 waiting on you, 2 unread")
+    tap(p, "Post boxes")
+    flip(p)
+    assert.equal(archived(p).element.getAttribute("aria-pressed"), "false")
+    assert.deepEqual(listed(p), ["Today", "Ferry tracker", "Family"])
+  })
+
+  test("a live item that archives a thread moves it to the archived list, one that takes it out moves it back, and a removed item leaves both lists", async () => {
+    const p = await posted(THREADS)
+    const work = THREADS.find((t) => t.id === "t_work")
+    change(p, "threads.changes", {...work, archived: true}, 2)
+    assert.deepEqual(listed(p), ["Today", "Family"])
+    assert.equal(label(p, "Post boxes"), "Post boxes: 2 threads, 0 waiting on you, 2 unread")
+    flip(p)
+    assert.deepEqual(listed(p), ["Old tracker", "Yesterday", "Ferry tracker"])
+
+    change(p, "threads.changes", {...work, last_activity: iso(-1), archived: false}, 3)
+    assert.deepEqual(listed(p), ["Old tracker", "Yesterday"])
+    flip(p)
+    assert.deepEqual(listed(p), ["Ferry tracker", "Today", "Family"])
+
+    change(p, "threads.changes", {kind: "removed", id: "t_work"}, 4)
+    change(p, "threads.changes", {kind: "removed", id: "t_old"}, 5)
+    assert.deepEqual(listed(p), ["Today", "Family"])
+    flip(p)
+    assert.deepEqual(listed(p), ["Yesterday"])
+  })
+
+  test("a daily thread archived live hands its days to the newest one left in the list, and the archived list's newest is the one it shows", async () => {
+    const p = await posted(THREADS)
+    change(p, "threads.changes", {...THREADS.find((t) => t.id === "t_today"), archived: true}, 2)
+    assert.deepEqual(listed(p), [dateOf(-2), "Ferry tracker", "Family"])
+    flip(p)
+    assert.deepEqual(listed(p), ["Old tracker", "Today"])
   })
 })

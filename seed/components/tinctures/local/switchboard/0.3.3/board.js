@@ -111,6 +111,8 @@
 
   let sdk = null;
   let root = null;
+  // Whether the threads strip lists the archived threads (its Archived key).
+  let archived = false;
   const $ = (s, el = root) => el.querySelector(s);
   const $$ = (s, el = root) => [...el.querySelectorAll(s)];
   let posEl = {};
@@ -161,7 +163,10 @@
   /* ---------- the skeleton ---------- */
   const askJack = (part) => `<button class="askjack" data-ask="${part}" aria-label="Lift the ${PARTS[part].title} cord: patch to Aqua or settings"><span class="jack sm"><span class="hole"></span></span></button>`;
   const modHead = (part, extra = '') => `<header class="mod-hd"><h2>${PARTS[part].title}</h2><span class="mod-sub"></span>${extra}${askJack(part)}</header>`;
-  const strip = (part) => `<div class="strip" data-part="${part}"><h2 class="strip-tag">${PARTS[part].title}</h2><div class="cells" data-group="${part}"></div><span class="strip-note"></span></div>`;
+  // The threads strip carries its Archived key: pressed, the strip lists the
+  // archived threads instead.
+  const ARCHIVED_KEY = '<button class="key sm archived-key" data-archived aria-pressed="false">Archived</button>';
+  const strip = (part) => `<div class="strip" data-part="${part}"><h2 class="strip-tag">${PARTS[part].title}</h2><div class="cells" data-group="${part}"></div>${part === 'threads' ? ARCHIVED_KEY : ''}<span class="strip-note"></span></div>`;
   const KNOB = '<button class="knob" data-knob aria-label="Units"><span class="knob-c">°C</span><span class="knob-dial"></span><span class="knob-f">°F</span></button>';
   const LAMP_CODE = '<p class="code" aria-label="Lamp code"><span data-lamp="amber"><span class="lamp"></span>calling</span><span data-lamp="red"><span class="lamp"></span>fault</span><span data-lamp="green"><span class="lamp"></span>in service</span><span data-lamp="white"><span class="lamp"></span>busy</span></p>';
 
@@ -215,7 +220,7 @@
   // What finds no line, or comes second to one, calls on a line of its own.
   function lineModel() {
     const comps = window.SB.components();
-    const threads = window.SB.threads();
+    const threads = window.SB.threads(archived);
     const threadIds = new Set(threads.map((t) => t.id));
     const onThread = new Map(), onComp = new Map(), loose = [];
     const calls = window.SB.attention().sort((a, b) => text(a.since).localeCompare(text(b.since)));
@@ -760,6 +765,14 @@
     const t = e.target;
     if (t.closest('.rack-key')) { setRack(root.dataset.rack !== 'on'); return; }
     if (t.closest('[data-rackdone]')) { setRack(false); return; }
+    const archivedKey = t.closest('[data-archived]');
+    if (archivedKey) {
+      archived = !archived;
+      archivedKey.setAttribute('aria-pressed', String(archived));
+      renderLines();
+      requestAnimationFrame(() => window.Cords.fit());
+      return;
+    }
     const bar = t.closest('.rack-bar');
     if (bar && t.closest('[data-move]')) { move(bar.dataset.for, Number(t.closest('[data-move]').dataset.move)); return; }
     if (bar && t.closest('[data-pull]')) { const id = bar.dataset.for; save({ [id]: entryWith(id, { on: false }) }, `${PARTS[id].title} pulled`); return; }

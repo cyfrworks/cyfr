@@ -377,7 +377,10 @@ defmodule Arca.Providers.RecordsTest do
 
     test "every kind is cleanable through the tool", %{ctx: ctx} do
       for kind <- Arca.Retention.kinds() do
-        assert {:ok, %{deleted: n}} =
+        # A kind of unit `:archive_days` archives; every other deletes.
+        done = if kind.unit() == :archive_days, do: :archived, else: :deleted
+
+        assert {:ok, %{^done => n}} =
                  MCP.handle("retention", actor(ctx), %{
                    "action" => "cleanup",
                    "cleanup_type" => kind.key()

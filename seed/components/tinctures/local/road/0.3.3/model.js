@@ -130,8 +130,9 @@
         return { id: str(d.execution_id), kind: str(d.kind), parent: str(d.parent_execution_id), name: refName(str(d.reference)) || 'A run', started: timeOf(d.started_at), ended: timeOf(d.ended_at), cause: error ? str(error.cause) : '' };
       }
       case 'threads.changes':
-        // a daily thread (one a day) and a workspace thread are Aqua's; a shared thread is people's
-        return { id: str(d.id), aqua: d.kind === 'daily' || d.kind === 'workspace', daily: d.kind === 'daily', title: str(d.title) || 'Untitled thread', people: Array.isArray(d.people) ? d.people.length : 0, last: timeOf(d.last_activity), waits: d.waits_on_you === true, unread: num(d.unread) || 0 };
+        // a daily thread (one a day) and a workspace thread are Aqua's; a shared thread is people's,
+        // and its `archived` is null: it is never archived
+        return { id: str(d.id), aqua: d.kind === 'daily' || d.kind === 'workspace', daily: d.kind === 'daily', title: str(d.title) || 'Untitled thread', people: Array.isArray(d.people) ? d.people.length : 0, last: timeOf(d.last_activity), waits: d.waits_on_you === true, unread: num(d.unread) || 0, archived: d.archived === true };
       case 'activity.changes':
         return { id: str(d.id), member: str(d.member) || 'crew', askedBy: str(d.asked_by), title: str(d.title), since: timeOf(d.since), status: str(d.status) };
       case 'components.changes':
@@ -351,11 +352,12 @@
     return Promise.race([Promise.allSettled(firsts), new Promise((r) => setTimeout(r, 3000))]);
   }
 
-  // The threads listed: the newest daily thread stands for Aqua's days, the earlier ones a step
-  // back in Aqua's panel. A day by its ISO date, a daily thread's title or a waiting item's
-  // `day`, reads "Today" or "Yesterday" on the person's clock, else the date.
-  function threads() {
-    const all = [...state.threads.values()].map((held) => held.value);
+  // The threads listed, the archived ones when `archived`: in each list the newest daily thread
+  // stands for Aqua's days, the earlier ones a step back in Aqua's panel. A day by its ISO date, a
+  // daily thread's title or a waiting item's `day`, reads "Today" or "Yesterday" on the person's
+  // clock, else the date.
+  function threads(archived = false) {
+    const all = [...state.threads.values()].map((held) => held.value).filter((t) => t.archived === archived);
     const newest = all.reduce((n, t) => (t.daily && (!n || t.title > n.title) ? t : n), null);
     return all.filter((t) => !t.daily || t === newest).map((t) => (t.daily ? { ...t, title: dayTitle(t.title) } : t));
   }

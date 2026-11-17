@@ -27,10 +27,16 @@ defmodule Arca.Schemas.Thread do
   (`Arca.TurnStorage`'s "Workspace threads"). A crew thread is a child
   thread a crew member (`agent`) works in under the room thread
   `parent_id` names, a daily or a workspace thread, one per member per
-  room while it stands; `archived_at` is when a child thread was
-  retired, after which it admits nothing and the next request to its
-  member opens a new one. Each kind holds its own fields and no other's,
-  which the table's CHECK holds too.
+  room while it stands; `retired_at` is when a crew thread was retired,
+  after which it admits nothing and the next request to its member opens
+  a new one. Each kind holds its own fields and no other's, which the
+  table's CHECK holds too.
+
+  `archived_at` is when a daily or a workspace thread was archived
+  (`archived?/1`): the person's list shows it behind its Archived filter,
+  and nothing else about it changes. It is set only while no work remains
+  in the thread or in a crew thread under it, and new work there clears
+  it (`Arca.ThreadStorage`'s "Archive").
 
   A workspace thread keeps its `notes`, which its own turns write and its
   prompt reads (`Arca.TurnStorage.write_notes/4`): the note's bytes as
@@ -64,6 +70,13 @@ defmodule Arca.Schemas.Thread do
   @spec room_kinds() :: [String.t()]
   def room_kinds, do: ~w(daily workspace)
 
+  @doc """
+  Whether a daily or a workspace thread is archived, read from its row; a
+  crew thread never is (it is retired, `retired_at`).
+  """
+  @spec archived?(%{archived_at: DateTime.t() | nil}) :: boolean()
+  def archived?(%{archived_at: archived_at}), do: not is_nil(archived_at)
+
   @doc "A workspace thread's states, the `threads_workspace_state_known` check's."
   @spec workspace_states() :: [String.t()]
   def workspace_states, do: @workspace_states
@@ -85,6 +98,7 @@ defmodule Arca.Schemas.Thread do
     field :brain_session, :string
     field :brain_generation, :integer, default: 0
     field :archived_at, :utc_datetime_usec
+    field :retired_at, :utc_datetime_usec
     field :title, :string
     field :created_by, :string
     field :agent, :string
