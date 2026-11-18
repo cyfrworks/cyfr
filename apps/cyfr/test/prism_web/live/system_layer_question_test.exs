@@ -92,6 +92,23 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
+    # Each `question.answer` the gate admits, wherever it came from: a
+    # repeat is counted where it is dispatched, not by what it won.
+    dispatched = "question-dispatched-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        dispatched,
+        [:cyfr, :sanctum, :decision, :admitted],
+        fn _event, _measurements, meta, _config ->
+          if meta[:tool] == "question" and meta[:action] == "answer",
+            do: send(test, :answer_dispatched)
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(dispatched) end)
+
     %{conn: conn, user: user, athanor: athanor, ctx: ctx, component: component}
   end
 
@@ -184,7 +201,11 @@ defmodule PrismWeb.SystemLayerQuestionTest do
                )
 
         assert has_element?(view, ~s([data-test="question-caller"]), "you")
-        assert has_element?(view, ~s([data-test="question-deadline"]), "UTC")
+        # In the person's own time zone, as the layer's script writes it.
+        assert has_element?(
+                 view,
+                 ~s([data-test="question-deadline"] time[data-local][datetime$="Z"])
+               )
 
         assert has_element?(
                  view,
@@ -277,6 +298,84 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end
 
       end_views()
+    end
+  end
+
+  describe "the pages that draw it" do
+    # Every signed-in page of the console, mounted while a question and
+    # another client's confirmation both wait: a page draws the question
+    # exactly when it draws the confirmation, since one listening layer
+    # draws both. A page with none (the legal page among them) draws
+    # neither, and attention still lists the question.
+    test "are the pages that draw another client's confirmation", setup do
+      other = other_session!(setup.ctx)
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               PrismWeb.Ops.call_tool(other, "vault/create", %{
+                 "name" => "pages-#{System.unique_integer([:positive])}",
+                 "kind" => "api_key",
+                 "fields" => %{"KEY" => "x"},
+                 "destination" => %{"hosts" => ["api.example.com"]}
+               })
+
+      confirmation = Prompt.confirmation_id(Prima.Confirmation.ref(id))
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      question = Prompt.question_id(ref)
+
+      drawn =
+        for path <- signed_in_paths(), into: %{} do
+          ids = drawn_on(setup.conn, path)
+          assert question in ids == confirmation in ids, "#{path}: #{inspect(ids)}"
+          {path, question in ids}
+        end
+
+      # Both kinds reach the pages that listen, so the test above compares
+      # something.
+      assert drawn["/a/:athanor/vault"]
+      refute drawn["/a/:athanor/legal"]
+      end_views()
+    end
+
+    defp signed_in_paths do
+      Cyfr.Boundaries.router().__routes__()
+      |> Enum.filter(&(&1.metadata[:auth] == :browser_authenticated))
+      |> Enum.map(& &1.path)
+      |> Enum.uniq()
+    end
+
+    # The prompts every system layer of the page holds, open or waiting;
+    # none for a route that sends the browser elsewhere.
+    defp drawn_on(conn, path) do
+      url =
+        path
+        |> String.replace(":athanor", Sanctum.Tenancy.Athanors.route_slug(seated_athanor()))
+        |> String.replace(":ref", "catalyst:local.tables:1.0.0")
+        |> String.replace(":id", "wst_none")
+
+      case live(conn, url) do
+        {:ok, view, _html} ->
+          render(view)
+          {by_cid, _ids, _next} = :sys.get_state(view.pid).components
+
+          for {_cid, entry} <- by_cid,
+              elem(entry, 0) == PrismWeb.SystemLayer,
+              %{current: current, queue: queue} = elem(entry, 2),
+              prompt <- [current | queue],
+              prompt != nil,
+              do: prompt.id
+
+        {:error, {_redirect, _to}} ->
+          []
+      end
+    end
+
+    defp other_session!(ctx) do
+      {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
+
+      {:ok, other} =
+        Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, refresh: false)
+
+      other
     end
   end
 
@@ -452,6 +551,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
         choose(view, choice)
         assert_receive {:answered, ^ref}
+        assert_receive {:host, {:system_layer, ^id, :confirmed}}
         assert Q.row(setup.ctx, ref).state == state
         refute open_prompt(view) == id
 
@@ -483,6 +583,27 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
+    test "an answer that lasts binds the words the question was asked under", setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+
+      # A newer version rewords the action while the card waits.
+      Q.catalyst!(setup.ctx, "tables", "2.0.0", [
+        %{"name" => "delete_table", "title" => "delete every table"}
+      ])
+
+      choose(view, "allow_hour")
+      assert_receive {:answered, ^ref}
+
+      assert [%{declaration_digest: digest}] = Q.standing(setup.ctx)
+
+      assert digest ==
+               Prima.Manifest.Asks.digest(%{name: "delete_table", title: "delete a table"})
+
+      end_views()
+    end
+
     test "closing the card without a choice is Don't allow, once", setup do
       view = screen!(setup)
       {_run, ref} = Q.open!(setup.ctx, setup.component)
@@ -496,7 +617,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert Q.row(setup.ctx, ref).state == "denied"
       assert Q.standing(setup.ctx) == []
       assert open_prompt(view) == nil
-      refute_received {:host, {:system_layer, ^id, _outcome}}
+      assert_receive {:host, {:system_layer, ^id, :dismissed}}
       end_views()
     end
   end
@@ -591,6 +712,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       shows!(view, id)
 
       choose(view, "allow_always")
+      assert_received :answer_dispatched
 
       # The confirmation is drawn in the card, whose choices step aside.
       assert open_prompt(view) == id
@@ -607,6 +729,101 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert Q.row(setup.ctx, ref).state == "allowed"
       assert [%{effect: "allow", caller: "any", until: nil}] = Q.standing(setup.ctx)
       refute_receive {:answered, ^ref}, 300
+
+      # The answer was sent twice in all: asked, then repeated once.
+      assert_received :answer_dispatched
+      refute_received :answer_dispatched
+      end_views()
+    end
+
+    test "a proof given while another question's confirmation stands in front of the card is repeated",
+         setup do
+      authenticator = Sanctum.TestContext.passkey!(setup.user.user_id)
+      asking = screen!(setup)
+      proving = screen!(setup)
+      {_run, first} = Q.open!(setup.ctx, setup.component)
+      shows!(asking, Prompt.question_id(first))
+      choose(asking, "allow_always")
+      original = waited_ref(asking)
+      shows!(proving, Prompt.confirmation_id(original), "the first confirmation")
+
+      # A second question, answered "Always allow" from the other screen:
+      # its confirmation steps in front of the first card on the asking
+      # screen, whose own confirmation still waits.
+      {_run, second} =
+        Q.open!(setup.ctx, setup.component, request: %{action: "delete_rows"})
+
+      assert {:error, {:confirmation_required, %{id: second_id}}} =
+               PrismWeb.Ops.call_tool(view_context(proving), "question/answer", %{
+                 "ref" => second,
+                 "answer" => %{"effect" => "allow", "lasts" => "always", "covers" => "any_caller"}
+               })
+
+      shows!(asking, Prompt.confirmation_id(Prima.Confirmation.ref(second_id)), "in front")
+      assert Enum.any?(layer_assigns(asking).queue, &(&1.id == Prompt.question_id(first)))
+
+      prove_here!(proving, original, authenticator)
+
+      assert_receive {:answered, ^first}, 2_000
+      assert Q.row(setup.ctx, first).state == "allowed"
+      assert [%{action: "delete_table", caller: "any", until: nil}] = Q.standing(setup.ctx)
+      assert Q.row(setup.ctx, second).state == "open"
+      end_views()
+    end
+
+    test "withdrawn, the confirmation leaves the card and its choices come back unanswered",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+      choose(view, "allow_always")
+      confirmation = waited_ref(view)
+      ctx = view_context(view)
+      actor = Context.actor(ctx)
+
+      :ok =
+        Cyfr.Bus.broadcast(
+          actor,
+          Cyfr.Bus.prompts(actor, ctx.user_id),
+          Cyfr.Bus.Prompt.new(actor, :confirmation, :voided, ref: confirmation)
+        )
+
+      wait_until(
+        fn -> has_element?(view, ~s([data-test="question-choices"])) end,
+        2_000,
+        "the choices back"
+      )
+
+      assert has_element?(view, ~s([role="alert"]), "The confirmation was withdrawn.")
+      assert layer_assigns(view).held == %{}
+      assert Q.row(setup.ctx, ref).state == "open"
+      refute_received {:answered, ^ref}
+      end_views()
+    end
+
+    test "a run that ends while the confirmation waits clears both screens and leaves nothing standing",
+         setup do
+      asking = screen!(setup)
+      other = screen!(setup)
+      {run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(asking, Prompt.question_id(ref))
+      choose(asking, "allow_always")
+      confirmation = waited_ref(asking)
+      shows!(other, Prompt.confirmation_id(confirmation), "the confirmation in front")
+
+      Q.end!(setup.ctx, run, :withdrawn)
+
+      wait_until(
+        fn -> is_nil(open_prompt(asking)) and is_nil(open_prompt(other)) end,
+        2_000,
+        "both screens clear"
+      )
+
+      assert Q.standing(setup.ctx) == []
+
+      assert {:ok, %{state: "cancelled"}} =
+               Arca.PendingConfirmations.get(Context.actor(setup.ctx), confirmation)
+
       end_views()
     end
 

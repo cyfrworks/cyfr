@@ -151,10 +151,18 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   # A permission set from the page: for anyone or a caller its questions
-  # have had, allowed or never, always or for an hour.
+  # have had, allowed or denied, always or for an hour, under the words
+  # the page showed for the action (`declaration_digest`), which the
+  # operation stores only while an installed version declares them.
   def handle_event(
         "set_permission",
-        %{"action_name" => action, "effect" => effect, "caller" => caller, "lasts" => lasts},
+        %{
+          "action_name" => action,
+          "declaration_digest" => digest,
+          "effect" => effect,
+          "caller" => caller,
+          "lasts" => lasts
+        },
         socket
       )
       when effect in ["allow", "deny"] and lasts in ["always", "hour"] do
@@ -172,6 +180,7 @@ defmodule PrismWeb.ComponentDetailLive do
           "publisher" => publisher,
           "name" => name,
           "action_name" => action,
+          "declaration_digest" => digest,
           "standing" => %{"effect" => effect, "until" => until, "caller" => caller}
         })
 
@@ -214,6 +223,14 @@ defmodule PrismWeb.ComponentDetailLive do
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_repeat({:question_set, _action}, _tool, args, socket),
     do: set_permission(socket, args)
+
+  # A question's card answered or closed on this page may have left a
+  # permission: the list is read again.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report("question-" <> _ref, _outcome, socket),
+    do: {:noreply, load_permissions(socket)}
+
+  def system_layer_report(_id, _outcome, _socket), do: :pass
 
   @impl true
   def handle_info(%Cyfr.Bus.Components{}, socket) do
@@ -450,9 +467,10 @@ defmodule PrismWeb.ComponentDetailLive do
           data-test="permission-set"
         >
           <input type="hidden" name="action_name" value={action.name} />
+          <input type="hidden" name="declaration_digest" value={Asks.digest(action)} />
           <select name="effect" class="rounded bg-gray-800 px-2 py-1 text-white">
             <option value="allow">Allow</option>
-            <option value="deny">Never allow</option>
+            <option value="deny">Deny</option>
           </select>
           <select name="caller" class="rounded bg-gray-800 px-2 py-1 text-white">
             <option value="any">when anyone starts it</option>
@@ -472,7 +490,7 @@ defmodule PrismWeb.ComponentDetailLive do
         <p class="text-sm text-gray-400">
           {@permissions.name} no longer asks about these, so these answers cover nothing.
         </p>
-        <.answers answers={@retired} declared={nil} />
+        <.answers answers={@retired} declared={nil} named />
       </div>
     </section>
     """
@@ -480,6 +498,7 @@ defmodule PrismWeb.ComponentDetailLive do
 
   attr :answers, :list, required: true
   attr :declared, :any, default: nil
+  attr :named, :boolean, default: false
 
   defp answers(assigns) do
     ~H"""
@@ -494,7 +513,11 @@ defmodule PrismWeb.ComponentDetailLive do
         data-id={answer.id}
         data-caller={answer.caller}
         data-effect={answer.effect}
+        data-action={answer.action}
       >
+        <span :if={@named} class="font-mono text-xs text-gray-400" data-test="permission-action">
+          {answer.action}:
+        </span>
         <span>{answer_words(answer)}</span>
         <span
           :if={reworded?(answer, @declared)}
@@ -517,11 +540,16 @@ defmodule PrismWeb.ComponentDetailLive do
     """
   end
 
-  # A standing answer as the person reads it.
-  defp answer_words(%{effect: effect, caller: caller, until: until}) do
-    verb = if effect == "allow", do: "Allowed", else: "Never allowed"
-    "#{verb} #{when_words(caller)}, #{lasts_words(until)}"
-  end
+  # A standing answer as the person reads it: "Never allowed" only for a
+  # denial that lasts always, as the card's "Never allow" is.
+  defp answer_words(%{effect: "allow", caller: caller, until: until}),
+    do: "Allowed #{when_words(caller)}, #{lasts_words(until)}"
+
+  defp answer_words(%{effect: "deny", caller: caller, until: nil}),
+    do: "Never allowed #{when_words(caller)}"
+
+  defp answer_words(%{effect: "deny", caller: caller, until: until}),
+    do: "Denied #{when_words(caller)}, #{lasts_words(until)}"
 
   # Who an answer is for, as a clause: "when you start it", "when the
   # assistant Aqua starts it".

@@ -108,7 +108,7 @@ defmodule PrismWeb.SystemLayer.Question do
   @spec switchable?(map()) :: boolean()
   def switchable?(%{subject: %{caller: caller}}), do: caller != Caller.encode(:unknown)
 
-  @doc "When a question waits until, as the card says it."
+  @doc "When a permission lasts until, as the component's page says it."
   @spec until(DateTime.t()) :: String.t()
   def until(%DateTime{} = deadline), do: Calendar.strftime(deadline, "%Y-%m-%d %H:%M UTC")
 
@@ -131,7 +131,11 @@ defmodule PrismWeb.SystemLayer.Question do
           {caller_words(@subject.caller)}
         </dd>
         <dt class="text-gray-400">Waits until</dt>
-        <dd class="col-span-2" data-test="question-deadline">{until(@subject.deadline)}</dd>
+        <dd class="col-span-2" data-test="question-deadline">
+          <time datetime={DateTime.to_iso8601(@subject.deadline)} data-local>
+            {DateTime.to_iso8601(@subject.deadline)}
+          </time>
+        </dd>
       </dl>
 
       <figure

@@ -550,7 +550,7 @@ defmodule PrismWeb.ComponentDetailLiveTest do
 
       set!(view, "delete_rows", %{"effect" => "deny", "caller" => "any", "lasts" => "always"})
       assert answers(view, "delete_rows") == [{"deny", "any"}]
-      assert render(view) =~ "Never allowed when anyone starts it, always"
+      assert render(view) =~ "Never allowed when anyone starts it"
 
       assert [%{action: "delete_rows", caller: "any", effect: "deny", until: nil}] =
                Q.standing(person)
@@ -677,6 +677,136 @@ defmodule PrismWeb.ComponentDetailLiveTest do
              )
 
       refute has_element?(view, ~s([data-test="permission"][data-action="drop_database"]))
+    end
+
+    test "an answer set on an older version's page binds the words that page showed", %{
+      conn: conn,
+      person: person
+    } do
+      Q.catalyst!(person, "tables", "2.0.0", [
+        %{"name" => "delete_table", "title" => "delete every table"}
+      ])
+
+      {view, _html} = mount_athanor(conn, @page)
+
+      assert has_element?(
+               view,
+               ~s([data-test="permission"][data-action="delete_table"] p),
+               "tables wants to delete a table"
+             )
+
+      set!(view, "delete_table", %{"effect" => "allow", "caller" => "any", "lasts" => "hour"})
+
+      assert [%{declaration_digest: digest}] = Q.standing(person)
+
+      assert digest ==
+               Prima.Manifest.Asks.digest(%{name: "delete_table", title: "delete a table"})
+    end
+
+    test "an answer whose words were reworded since the page showed them is refused", %{
+      conn: conn,
+      person: person
+    } do
+      {view, _html} = mount_athanor(conn, @page)
+
+      # The version the page showed is replaced by one that rewords it.
+      Q.catalyst!(person, "tables", "2.0.0", [
+        %{"name" => "delete_table", "title" => "delete every table"}
+      ])
+
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Sanctum.Context.actor(person),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      set!(view, "delete_table", %{"effect" => "allow", "caller" => "any", "lasts" => "hour"})
+      assert Q.standing(person) == []
+
+      assert has_element?(
+               view,
+               ~s([data-test="permission-error"]),
+               "in the words you were shown"
+             )
+    end
+
+    test "a permission given on the page's own card is listed at once", %{
+      conn: conn,
+      person: person,
+      component: component
+    } do
+      {view, _html} = mount_athanor(conn, @page)
+      {_run, ref} = Q.open!(person, component)
+
+      Prima.Test.Wait.wait_until(
+        fn -> has_element?(view, ~s([data-test="question"][data-ref="#{ref}"])) end,
+        2_000,
+        "the card"
+      )
+
+      view |> element(~s([data-choice="allow_hour"])) |> render_click()
+      assert [_answer] = Q.standing(person)
+
+      Prima.Test.Wait.wait_until(
+        fn -> answers(view, "delete_table") == [{"allow", "any"}] end,
+        2_000,
+        "the list read again"
+      )
+    end
+
+    test "a denial for an hour reads as one, and Never allowed is a denial that lasts", %{
+      conn: conn
+    } do
+      {view, html} = mount_athanor(conn, @page)
+      assert html =~ ~s(<option value="deny">Deny</option>)
+      refute html =~ "Never allow</option>"
+
+      set!(view, "delete_table", %{"effect" => "deny", "caller" => "any", "lasts" => "hour"})
+      assert render(view) =~ "Denied when anyone starts it, until"
+      refute render(view) =~ "Never allowed"
+
+      set!(view, "delete_rows", %{"effect" => "deny", "caller" => "any", "lasts" => "always"})
+      assert render(view) =~ "Never allowed when anyone starts it"
+    end
+
+    test "each answer for an action no longer declared names its action", %{
+      conn: conn,
+      person: person
+    } do
+      for action <- ["drop_database", "drop_schema"] do
+        {:ok, _row} =
+          Arca.Questions.put_standing(
+            Sanctum.Context.actor(person),
+            %{
+              publisher: "local",
+              name: "tables",
+              action: action,
+              declaration_digest:
+                Prima.Manifest.Asks.digest(%{name: action, title: "drop something"}),
+              caller: "any",
+              effect: "deny",
+              until: nil
+            },
+            verify: fn -> :ok end
+          )
+      end
+
+      {view, _html} = mount_athanor(conn, @page)
+
+      rows =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-test="permissions-retired"] [data-test="permission-answer"]))
+        |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+
+      assert length(rows) == 2
+      assert Enum.any?(rows, &(&1 =~ "drop_database:"))
+      assert Enum.any?(rows, &(&1 =~ "drop_schema:"))
+      assert Enum.uniq(rows) == rows
     end
 
     test "a reagent's page lists no permissions", %{conn: conn, ctx: ctx} do

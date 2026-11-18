@@ -231,12 +231,15 @@ defmodule PrismWeb.SystemLayer do
   `answered`, `expired` or `withdrawn` fact, letting go of any
   confirmation it waited on. The desktop's layer and the panel's draw
   none. A choice sends its answer through `question.answer`; closing the
-  card without choosing is "Don't allow", once. A card reports nothing to
-  the page: the page never asked for it.
+  card without choosing is "Don't allow", once. A card reports to the page
+  `:confirmed` once its answer is kept, and `:dismissed` when it is
+  closed, so a page that lists permissions reads them again; a card taken
+  away by its question's own end reports nothing.
 
   "Always allow" for any caller needs a fresh confirmation. It is the
   layer's own change: its confirmation is drawn inside the card, which
-  hides its choices, keeps the answer and repeats it once on `confirmed`;
+  hides its choices, keeps the answer and repeats it once on `confirmed`,
+  wherever the card then stands, open or behind another's confirmation;
   cancelled, voided or expired, the confirmation leaves the card and its
   choices show again, unanswered. On every other screen of the person's
   that confirmation arrives from the stream, and goes in front of an open
@@ -2239,6 +2242,14 @@ defmodule PrismWeb.SystemLayer do
       %{repeat: :resubmit} ->
         push_resubmit(socket, "#{socket.assigns.id}-credential")
 
+      # A question's card may have stepped behind another's confirmation
+      # while its own waited: it is found wherever it stands.
+      %{prompt_id: prompt_id, repeat: {:question_answer, answer}} ->
+        case prompt_of(socket, prompt_id) do
+          %{kind: :question} = prompt -> question_answer(socket, prompt, answer)
+          _gone -> socket
+        end
+
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
@@ -2252,10 +2263,6 @@ defmodule PrismWeb.SystemLayer do
           %{id: ^prompt_id, kind: :request} = prompt ->
             :request = repeat
             request_run(socket, prompt)
-
-          %{id: ^prompt_id, kind: :question} = prompt ->
-            {:question_answer, answer} = repeat
-            question_answer(socket, prompt, answer)
 
           %{id: ^prompt_id, kind: :confirmation} = prompt ->
             {:restore_reenable, operation, id} = repeat
@@ -2331,7 +2338,6 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp reports?(_socket, %{kind: :question}), do: false
   defp reports?(_socket, _prompt), do: true
 
   # ---------------------------------------------------------------------------
@@ -2459,18 +2465,25 @@ defmodule PrismWeb.SystemLayer do
         socket
 
       {:done, {:ok, _answered}, socket} ->
+        report(prompt.id, :confirmed)
         remove_prompt(socket, prompt.id)
 
       {:done, {:error, reason}, socket} ->
-        if no_longer_waiting?(reason),
-          do: remove_prompt(socket, prompt.id),
-          else: assign(socket, :error, Ops.error_message(reason))
+        cond do
+          no_longer_waiting?(reason) -> remove_prompt(socket, prompt.id)
+          shown?(socket, prompt) -> assign(socket, :error, Ops.error_message(reason))
+          true -> socket
+        end
     end
   end
 
   defp ended_words(:cancelled), do: "The confirmation was cancelled."
   defp ended_words(:voided), do: "The confirmation was withdrawn."
   defp ended_words(:expired), do: "The confirmation expired."
+
+  # A refusal is said on the card only while it is the one shown.
+  defp shown?(%{assigns: %{current: %{id: id}}}, %{id: id}), do: true
+  defp shown?(_socket, _prompt), do: false
 
   defp no_longer_waiting?(%Prima.Refusal{reason: :not_pending}), do: true
   defp no_longer_waiting?({:not_found, "question", _ref}), do: true

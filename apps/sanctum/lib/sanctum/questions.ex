@@ -345,25 +345,31 @@ defmodule Sanctum.Questions do
   @doc """
   Set the context's person's standing answer `standing`
   (`Prima.Question.Standing`) for the action `action` of the installed
-  catalyst `publisher` and `name`, under the declaration its newest
-  installed version makes, replacing the answer of the same caller. A
-  caller of `unknown` is refused: it is covered only by an answer for any
-  caller. `{:ok, row}`; `{:error, {:confirmation_required, _}}` for an
-  allow, always, for any caller not yet confirmed; or a refusal.
+  catalyst `publisher` and `name`, under `declaration_digest`, the digest
+  of the action's name and title the person was shown
+  (`Prima.Manifest.Asks.digest/1`), replacing the answer of the same
+  caller. The digest is stored only when an installed version of the
+  catalyst declares the action with exactly those words, and is refused
+  otherwise: an answer never binds words the person did not see, and no
+  other version's are put in their place. A caller of `unknown` is
+  refused: it is covered only by an answer for any caller. `{:ok, row}`;
+  `{:error, {:confirmation_required, _}}` for an allow, always, for any
+  caller not yet confirmed; or a refusal.
   """
-  @spec set(Context.t(), String.t(), String.t(), String.t(), Standing.t()) ::
+  @spec set(Context.t(), String.t(), String.t(), String.t(), String.t(), Standing.t()) ::
           {:ok, map()} | {:error, term()}
-  def set(%Context{} = ctx, publisher, name, action, %Standing{} = standing)
-      when is_binary(publisher) and is_binary(name) and is_binary(action) do
+  def set(%Context{} = ctx, publisher, name, action, declaration_digest, %Standing{} = standing)
+      when is_binary(publisher) and is_binary(name) and is_binary(action) and
+             is_binary(declaration_digest) do
     with :ok <- answerer(ctx),
          :ok <- known_caller(standing.caller),
          :ok <- to_come(standing.until),
-         {:ok, title} <- installed_title(ctx, publisher, name, action) do
+         {:ok, title} <- shown_declaration(ctx, publisher, name, action, declaration_digest) do
       row = %{
         publisher: publisher,
         name: name,
         action: action,
-        declaration_digest: Asks.digest(%{name: action, title: title}),
+        declaration_digest: declaration_digest,
         caller: Standing.caller_text(standing.caller),
         effect: Atom.to_string(standing.effect),
         until: standing.until
@@ -709,21 +715,32 @@ defmodule Sanctum.Questions do
     if DateTime.compare(until, DateTime.utc_now()) == :gt, do: :ok, else: {:error, :until_passed}
   end
 
-  # The title the newest installed version of the catalyst declares for
-  # `action`.
-  defp installed_title(ctx, publisher, name, action) do
-    case Components.get_latest(ctx, name, publisher, "catalyst") do
-      {:ok, %{manifest: manifest}} ->
-        case declaration(manifest, action) do
-          {:ok, %{title: title}} -> {:ok, title}
-          {:error, :invalid} -> {:error, :undeclared}
-        end
-
-      {:error, outage} when Components.is_outage(outage) ->
-        {:error, :unavailable}
-
-      {:error, _absent} ->
+  # The title an installed version of the catalyst declares for `action`
+  # under exactly `digest`, the words the person was shown: none of them
+  # declaring it so is `:undeclared`, whatever another version says.
+  defp shown_declaration(ctx, publisher, name, action, digest) do
+    case Arca.ComponentStorage.list_components(Context.actor(ctx),
+           name: name,
+           publisher: publisher,
+           component_type: "catalyst",
+           limit: :none
+         ) do
+      {:ok, []} ->
         {:error, {:not_found, "component", Prima.ComponentRef.build("catalyst", publisher, name)}}
+
+      {:ok, rows} ->
+        Enum.find_value(rows, {:error, :undeclared}, fn row ->
+          case declaration(row.manifest, action) do
+            {:ok, %{title: title} = declared} ->
+              if Asks.digest(declared) == digest, do: {:ok, title}
+
+            {:error, :invalid} ->
+              nil
+          end
+        end)
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 
@@ -801,7 +818,8 @@ defmodule Sanctum.Questions do
       refused(
         :invalid_argument,
         :undeclared,
-        "This component does not say it asks before #{inspect(action)}"
+        "No installed version of this component says it asks before " <>
+          "#{inspect(action)} in the words you were shown"
       )
 
   defp refusal(:unauthenticated, _ref),

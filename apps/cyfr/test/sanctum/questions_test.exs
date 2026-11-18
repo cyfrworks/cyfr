@@ -217,6 +217,13 @@ defmodule Sanctum.QuestionsTest do
     rows
   end
 
+  # The digest of an action's words as the fixture's catalyst declares
+  # them: what a page that rendered them sends.
+  defp shown(action) do
+    title = Enum.find_value(@asks, "drop a database", &(&1["name"] == action && &1["title"]))
+    Prima.Manifest.Asks.digest(%{name: action, title: title})
+  end
+
   defp answer(json), do: elem(Answer.decode(json), 1)
   defp once(effect), do: answer(%{"effect" => effect, "lasts" => "once"})
 
@@ -707,6 +714,7 @@ defmodule Sanctum.QuestionsTest do
            "publisher" => "local",
            "name" => "tables",
            "action_name" => "delete_table",
+           "declaration_digest" => shown("delete_table"),
            "standing" => %{"effect" => "allow", "caller" => "person"}
          }},
         {"forget", %{"id" => "qan_x"}}
@@ -729,10 +737,14 @@ defmodule Sanctum.QuestionsTest do
                Questions.answer(frame, ref, once("deny"))
 
       assert {:error, %Prima.Refusal{class: :unauthenticated}} =
-               Questions.set(chain, "local", "tables", "delete_table", %Prima.Question.Standing{
-                 effect: :allow,
-                 caller: :person
-               })
+               Questions.set(
+                 chain,
+                 "local",
+                 "tables",
+                 "delete_table",
+                 shown("delete_table"),
+                 %Prima.Question.Standing{effect: :allow, caller: :person}
+               )
 
       assert {:error, %Prima.Refusal{class: :unauthenticated}} = Questions.forget(chain, "qan_x")
 
@@ -879,12 +891,13 @@ defmodule Sanctum.QuestionsTest do
       assert standing(person.ctx) == []
     end
 
-    test "on question.set, is written only after its confirmation; a reworded title asks again",
+    test "on question.set, is written only after its confirmation, under the words shown",
          person do
       args = %{
         "publisher" => "local",
         "name" => "tables",
         "action_name" => "delete_table",
+        "declaration_digest" => shown("delete_table"),
         "standing" => %{"effect" => "allow", "until" => nil, "caller" => "any"}
       }
 
@@ -894,22 +907,26 @@ defmodule Sanctum.QuestionsTest do
       assert standing(person.ctx) == []
       proven!(person.ctx, id)
 
-      # A newer version rewords the action: the proof names the old words.
+      # A newer version rewords the action meanwhile: the words shown are
+      # still an installed version's, and they are what is kept.
       ship!(person.ctx, "catalyst", "tables", "1.1.0", [
         %{"name" => "delete_table", "title" => "remove a table"}
       ])
 
-      repeat = %{person.ctx | confirmation_id: id}
-      assert {:error, {:confirmation_required, %{id: fresh}}} = call(repeat, "set", args)
-      assert standing(person.ctx) == []
-
-      proven!(person.ctx, fresh)
-
       assert {:ok, %{caller: "any", effect: "allow", declaration_digest: digest}} =
-               call(%{person.ctx | confirmation_id: fresh}, "set", args)
+               call(%{person.ctx | confirmation_id: id}, "set", args)
 
-      assert digest ==
-               Prima.Manifest.Asks.digest(%{name: "delete_table", title: "remove a table"})
+      assert digest == shown("delete_table")
+
+      # The newer words are another answer, with a confirmation of their own.
+      reworded = %{
+        args
+        | "declaration_digest" =>
+            Prima.Manifest.Asks.digest(%{name: "delete_table", title: "remove a table"})
+      }
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} = call(person.ctx, "set", reworded)
+      refute fresh == id
     end
 
     test "every other answer set beforehand needs the session alone", person do
@@ -927,6 +944,7 @@ defmodule Sanctum.QuestionsTest do
                    "publisher" => "local",
                    "name" => "tables",
                    "action_name" => "delete_rows",
+                   "declaration_digest" => shown("delete_rows"),
                    "standing" => standing
                  })
       end
@@ -947,6 +965,7 @@ defmodule Sanctum.QuestionsTest do
           "publisher" => "local",
           "name" => "tables",
           "action_name" => action,
+          "declaration_digest" => shown(action),
           "standing" => standing
         })
 
@@ -966,6 +985,65 @@ defmodule Sanctum.QuestionsTest do
       assert {:ok, %{}} = call(person.ctx, "forget", %{"id" => id})
       assert standing(person.ctx) == []
       assert {:error, {:not_found, "permission", ^id}} = Questions.forget(person.ctx, id)
+    end
+
+    test "bind the words the person was shown, never another version's", person do
+      v2 =
+        ship!(person.ctx, "catalyst", "tables", "2.0.0", [
+          %{"name" => "delete_table", "title" => "delete every table"}
+        ])
+
+      until = DateTime.to_iso8601(hour_from_now())
+
+      assert {:ok, %{declaration_digest: digest}} =
+               set(person.ctx, "delete_table", %{
+                 "effect" => "allow",
+                 "until" => until,
+                 "caller" => "any"
+               })
+
+      assert digest == shown("delete_table")
+
+      # It covers a run of the version whose words were shown, and asks
+      # again in a run of the version that reworded them.
+      assert {:answer, :allowed} = Questions.ask(asking(person.ctx), run!(person), 1, request())
+
+      v2_run =
+        run!(person, reference: "catalyst:local.tables:2.0.0", release: v2.release_digest)
+
+      assert {:pending, _ref} = Questions.ask(asking(person.ctx), v2_run, 1, request())
+    end
+
+    test "are refused when the words shown are no installed version's", person do
+      # A digest no version declares.
+      assert {:error, %Prima.Refusal{reason: :undeclared}} =
+               call(person.ctx, "set", %{
+                 "publisher" => "local",
+                 "name" => "tables",
+                 "action_name" => "delete_table",
+                 "declaration_digest" => String.duplicate("0", 64),
+                 "standing" => %{"effect" => "deny", "caller" => "any"}
+               })
+
+      # The version that was shown is replaced by one that rewords the
+      # action between the page's rendering and its submitting.
+      ship!(person.ctx, "catalyst", "tables", "2.0.0", [
+        %{"name" => "delete_table", "title" => "delete every table"}
+      ])
+
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Context.actor(person.ctx),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      assert {:error, %Prima.Refusal{reason: :undeclared}} =
+               set(person.ctx, "delete_table", %{"effect" => "deny", "caller" => "any"})
+
+      assert standing(person.ctx) == []
     end
 
     test "are refused for an undeclared action, an unknown caller or a passed time", person do
@@ -992,6 +1070,7 @@ defmodule Sanctum.QuestionsTest do
                  "publisher" => "local",
                  "name" => "absent",
                  "action_name" => "delete_table",
+                 "declaration_digest" => shown("delete_table"),
                  "standing" => %{"effect" => "deny", "caller" => "any"}
                })
 
@@ -1050,6 +1129,7 @@ defmodule Sanctum.QuestionsTest do
                "publisher" => "local",
                "name" => "tables",
                "action_name" => "delete_table",
+               "declaration_digest" => shown("delete_table"),
                "standing" => %{"effect" => "deny", "caller" => "any"}
              }},
             {"forget", %{"id" => "qan_x"}}
@@ -1174,6 +1254,7 @@ defmodule Sanctum.QuestionsTest do
            "publisher" => "local",
            "name" => "tables",
            "action_name" => "delete_rows",
+           "declaration_digest" => shown("delete_rows"),
            "standing" => %{"effect" => "deny", "caller" => "person"}
          }},
         {"forget", %{"id" => fixture.id}}
@@ -1446,11 +1527,14 @@ defmodule Sanctum.QuestionsTest do
       # What they set is theirs: it covers no ask of the person's, and the
       # person's list does not show it.
       assert {:ok, %{user_id: user_id}} =
-               Questions.set(in_mine, "local", "tables", "delete_table", %Prima.Question.Standing{
-                 effect: :allow,
-                 caller: :person,
-                 until: nil
-               })
+               Questions.set(
+                 in_mine,
+                 "local",
+                 "tables",
+                 "delete_table",
+                 shown("delete_table"),
+                 %Prima.Question.Standing{effect: :allow, caller: :person, until: nil}
+               )
 
       assert user_id == other.ctx.user_id
       run = run!(person)
@@ -1470,6 +1554,7 @@ defmodule Sanctum.QuestionsTest do
                  "local",
                  "tables",
                  "delete_table",
+                 shown("delete_table"),
                  %Prima.Question.Standing{effect: :allow, caller: :person, until: nil}
                )
 
@@ -1490,6 +1575,8 @@ defmodule Sanctum.QuestionsTest do
       "publisher" => "local",
       "name" => "tables",
       "action_name" => "delete_table",
+      "declaration_digest" =>
+        Prima.Manifest.Asks.digest(%{name: "delete_table", title: "delete a table"}),
       "standing" => %{"effect" => "allow", "until" => nil, "caller" => "any"}
     }
 
