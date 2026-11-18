@@ -33,7 +33,8 @@
 // the harness with only its own reading tools (Read, Grep, Glob), in its
 // default permission mode, loading no settings file of the user's or the
 // project's, and denies every ask of its own tools; one that also names a
-// permission mode or the harness's tools ends the driver. The driver
+// permission mode or the harness's tools, or whose row command carries an
+// argument of the harness's own, ends the driver. The driver
 // keeps no account of calls: which post a result answers is the result's
 // own naming of the posts' uuids, which `idle` passes on.
 //

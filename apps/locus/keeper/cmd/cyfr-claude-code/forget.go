@@ -6,9 +6,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -73,28 +76,58 @@ func transcripts(home, session string) (found []string, failed []error) {
 	return found, failed
 }
 
-// planFiles are the plan files of the session whose transcripts are
-// `found`: in each plans folder, the files named by a slug the
-// transcripts name. Beside them it answers each transcript or folder it
+// sessionTranscripts are the transcripts among the session's paths
+// `found`: each `.jsonl` file, the session's own and its helpers' (in the
+// session's folder, `subagents/`), with each part of a folder that could
+// not be walked.
+func sessionTranscripts(found []string) (files []string, failed []error) {
+	for _, path := range found {
+		err := filepath.WalkDir(path, func(name string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				failed = append(failed, err)
+				return nil
+			}
+			if !entry.IsDir() && filepath.Ext(name) == ".jsonl" {
+				files = append(files, name)
+			}
+			return nil
+		})
+		if err != nil {
+			failed = append(failed, err)
+		}
+	}
+	return files, failed
+}
+
+// planFiles are the plan files of the session whose paths are `found`: in
+// each plans folder, the files named by a slug its transcripts or its
+// helpers' name. Beside them it answers each transcript, line or folder it
 // could not read: a plan file is tied to its session only by the
-// transcript, so one that cannot be read whole may name a slug, and a
-// folder past inspection may hold the file.
+// transcripts, so a line, an attachment or a planFilePath that does not
+// read may name a slug or a folder, and a folder past inspection may hold
+// the file.
 func planFiles(home string, found []string) (plans []string, failed []error) {
 	slugs := map[string]bool{}
 	folders := map[string]bool{filepath.Join(configDir(home), "plans"): true}
-	for _, file := range found {
-		if filepath.Ext(file) != ".jsonl" {
-			continue
-		}
+	files, failed := sessionTranscripts(found)
+	for _, file := range files {
 		err := readTranscript(file, func(entry transcriptEntry) {
 			if entry.Slug != "" {
 				slugs[entry.Slug] = true
 			}
-			var attachment struct {
-				PlanFilePath string `json:"planFilePath"`
+			if len(entry.Attachment) == 0 || string(entry.Attachment) == "null" {
+				return
 			}
-			if json.Unmarshal(entry.Attachment, &attachment) == nil && attachment.PlanFilePath != "" {
-				folders[filepath.Dir(attachment.PlanFilePath)] = true
+			var attachment map[string]json.RawMessage
+			var path string
+			if err := json.Unmarshal(entry.Attachment, &attachment); err != nil {
+				failed = append(failed, fmt.Errorf("%s: an attachment that does not read", file))
+			} else if raw, ok := attachment["planFilePath"]; !ok {
+				return
+			} else if err := json.Unmarshal(raw, &path); err != nil {
+				failed = append(failed, fmt.Errorf("%s: a planFilePath that is no string", file))
+			} else if path != "" {
+				folders[filepath.Dir(path)] = true
 			}
 		})
 		if err != nil {
@@ -208,10 +241,11 @@ type transcriptEntry struct {
 	Attachment json.RawMessage `json:"attachment"`
 }
 
-// readTranscript gives each entry of the transcript at `path` to `each`,
-// a line that is no entry skipped, and answers why it stopped short of
-// the end: a read that failed, or a line past every bound the harness
-// keeps to, after which the rest is not read.
+// readTranscript gives each entry of the transcript at `path` to `each`
+// and answers what kept it from reading the whole: a line that is no
+// entry, which is skipped and the rest read, a read that failed, or a line
+// past every bound the harness keeps to, after which the rest is not read.
+// A blank line is none of these.
 func readTranscript(path string, each func(transcriptEntry)) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -219,14 +253,19 @@ func readTranscript(path string, each func(transcriptEntry)) error {
 	}
 	defer file.Close()
 	reader := brainwire.NewLineReader(file, brainwire.MaxHarnessLineBytes)
+	var unread error
 	for {
 		line, err := reader.Next()
-		var entry transcriptEntry
-		if line != nil && json.Unmarshal(line, &entry) == nil {
-			each(entry)
+		if len(bytes.TrimSpace(line)) > 0 {
+			var entry transcriptEntry
+			if json.Unmarshal(line, &entry) == nil {
+				each(entry)
+			} else if unread == nil {
+				unread = fmt.Errorf("%s: a line that is no entry", path)
+			}
 		}
 		if errors.Is(err, io.EOF) {
-			return nil
+			return unread
 		}
 		if err != nil {
 			return err

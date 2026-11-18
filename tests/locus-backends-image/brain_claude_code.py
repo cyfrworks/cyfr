@@ -15,11 +15,12 @@ its message is one of the events, with exactly its members.
 - A run session's first line is the driver's `hello`, naming the wire's
   version and a boot of its own; `models` with no harness running starts one
   for the listing alone and leaves no process of it.
-- A read-only start gives the harness only its reading tools (Read,
-  Grep, Glob), in its default permission mode, loading no settings file of
-  the user's or the project's, and denies every ask of its own tools; one with no read_only runs it as before,
-  its own tools allowed: both seen as the harness's whole command line and
-  the driver's whole answers.
+- A start with no read_only runs the harness as before, its own tools
+  allowed, seen as the harness's whole command line and the driver's whole
+  answers. A read-only start runs with the driver's arguments alone, so
+  this row's command, `node` and the stand-in's script, which carries an
+  argument past the program's name, ends the driver before anything runs,
+  with no line written.
 - A start runs the harness with the start's configuration as its flags,
   and `started` names the new session; a work sets CYFR's tools on the stub;
   a post is a turn, streamed as `text` and said whole, its usage each
@@ -220,11 +221,19 @@ def main():
         said = [e["text"] for e in d.until("idle") if e["t"] == "said"]
         expect(said and f"session {session}, model fake-opus" in said[0], "the new process runs the new flags", said)
 
-        # ————— the two modes, each a fresh start of its own —————
+        # ————— a read-only start of this row's command runs nothing —————
         d.close()
+        r = Driver(c, "brain-read-only")
+        r.expect("hello", "a driver to refuse a read-only start")
+        status, answer = c.send(OWNER, r.session, [json.dumps({"t": "start", "gen": 7, "config": {"model": "fake-haiku", "read_only": True}})])
+        expect(status == 200, "the read-only start is written", answer)
+        lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
+        expect(not running and lines == [], "a read-only start of a command carrying the harness's arguments ends the driver and writes nothing", lines)
+        r.close()
+
+        # ————— a start that is not read-only, whole —————
         for key, config, mode, behaviour in (
             ("brain-auto", {"model": "fake-haiku"}, [], "allow"),
-            ("brain-read-only", {"model": "fake-haiku", "read_only": True}, ["--permission-mode", "default", "--setting-sources", "", "--tools", "Read,Grep,Glob"], "deny"),
         ):
             m = Driver(c, key)
             m.expect("hello", f"{key}: the driver says hello")

@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf16"
@@ -66,14 +67,46 @@ const (
 // no settings file of the user's or the project's, local ones included, so
 // no hook or allow rule of theirs applies. The folder is the box's kept
 // one, which the person, or an auto member's session on the same row, may
-// have written; the sign-in is no setting and stays. A permission mode
-// alone is not it: plan mode on 2.1.323 runs a Bash command that writes
-// without asking, and a default-mode session enters plan mode by its own
-// EnterPlanMode, unasked.
+// have written; the sign-in is no setting and stays. The harness runs with
+// these and the driver's other arguments alone: a row whose command
+// carries an argument of the harness's own (harnessOptions) is refused,
+// since one such as --settings puts back what these take away. A
+// permission mode alone is not it: plan mode on 2.1.323 runs a Bash
+// command that writes without asking, and a default-mode session enters
+// plan mode by its own EnterPlanMode, unasked. Not vetted: the row's
+// environment, the person's, which the launcher and the harness inherit;
+// a plugin or other switch set there is not proved to keep a read-only
+// start read-only.
 var readOnlyArgv = []string{"--permission-mode", "default", "--setting-sources", "", "--tools", strings.Join(readOnlyTools, ",")}
 
 // readOnlyTools are a read-only start's own tools.
 var readOnlyTools = []string{"Read", "Grep", "Glob"}
+
+// harnessOptions are the arguments of the row's command that are the
+// harness's own, not its launcher's. The command is either the program's
+// name alone, and then every argument after it is the harness's; or
+// `npx`, any of its own `-y` and `--yes`, and the package, and then every
+// argument after the package is the harness's, and so is any other flag
+// of npx's before it (`-c` and `-p` choose what runs), or everything after
+// `npx` when no package follows. A read-only start runs with the driver's
+// arguments alone, so it refuses a command for which this is not empty:
+// a list of options to strip would name only the ones known.
+func harnessOptions(command []string) []string {
+	if len(command) == 0 {
+		return nil
+	}
+	if filepath.Base(command[0]) != "npx" {
+		return command[1:]
+	}
+	rest := command[1:]
+	for len(rest) > 0 && (rest[0] == "-y" || rest[0] == "--yes") {
+		rest = rest[1:]
+	}
+	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
+		return command[1:]
+	}
+	return rest[1:]
+}
 
 // readOnlyDenial is what the harness reads when a read-only start denies
 // one of its own tools.
