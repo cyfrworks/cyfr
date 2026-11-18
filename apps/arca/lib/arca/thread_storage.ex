@@ -58,14 +58,10 @@ defmodule Arca.ThreadStorage do
 
   @typedoc """
   A brain session a clearing or a deletion owed its removal
-  (`Prima.OutboxRecord.brain_forget/1`): the thread, the agent whose
-  session it was, and the session generation it was held under.
+  (`Prima.OutboxRecord.brain_forget/1`): its thread, and the session
+  generation it was held under.
   """
-  @type forgotten :: %{
-          thread_id: String.t(),
-          agent: String.t(),
-          generation: non_neg_integer()
-        }
+  @type forgotten :: %{thread_id: String.t(), generation: non_neg_integer()}
 
   # The two reserved row authors, spelled once in the schema.
   @agent_author Message.agent_author()
@@ -1127,9 +1123,8 @@ defmodule Arca.ThreadStorage do
   def owe_forgets!(%Prima.Actor{athanor_id: athanor_id} = actor, threads)
       when is_binary(athanor_id) and athanor_id != "" and is_list(threads) do
     held =
-      for %Thread{athanor_id: ^athanor_id, brain_session: session, agent: agent} = thread <-
-            threads,
-          is_binary(session) and session != "" and is_binary(agent) and agent != "",
+      for %Thread{athanor_id: ^athanor_id, brain_session: session} = thread <- threads,
+          is_binary(session) and session != "",
           do: thread
 
     rows = session_rows(actor, held)
@@ -1139,7 +1134,6 @@ defmodule Arca.ThreadStorage do
         Prima.OutboxRecord.brain_forget(%{
           athanor_id: athanor_id,
           thread_id: thread_id,
-          agent: thread.agent,
           row_id: row_id,
           session: thread.brain_session,
           generation: thread.brain_generation
@@ -1148,7 +1142,7 @@ defmodule Arca.ThreadStorage do
       # A thread owes one removal per generation, and each clearing
       # raises it: a record already there is this very one.
       _put_or_there = Arca.Outbox.put!(actor, record)
-      %{thread_id: thread_id, agent: thread.agent, generation: thread.brain_generation}
+      %{thread_id: thread_id, generation: thread.brain_generation}
     end
   end
 

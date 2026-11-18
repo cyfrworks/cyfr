@@ -37,8 +37,9 @@ defmodule Opus.Brain.Cleanup do
   running there), a box that is away or does not answer, a lost answer, a
   row disabled, a row whose command names no driver (one that still runs
   the bare harness, which nothing answers the wire in, so nothing is
-  opened until the row names a driver again), and a successor's holder
-  running under the key. It never removes a session the record does not
+  opened until the row names a driver again), and a holder running under
+  the thread's key that is a successor's or runs on another row, until it
+  ends. It never removes a session the record does not
   name, and no folder is ever reset here; a whole-home reset stays the
   person's own operation. A record left owed costs each tick of its
   athanor the outbox's reads, the claim taken, renewed and given up, and

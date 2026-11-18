@@ -311,7 +311,6 @@ defmodule Prima.OutboxRecordTest do
         %{
           athanor_id: "ath_1",
           thread_id: "thr_1",
-          agent: "aqua",
           row_id: "mcp_1",
           session: "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
           generation: 3
@@ -328,7 +327,6 @@ defmodule Prima.OutboxRecordTest do
              kind: "brain_forget",
              snapshot: %{
                "thread_id" => "thr_1",
-               "agent" => "aqua",
                "row_id" => "mcp_1",
                "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
                "generation" => 3
@@ -338,7 +336,6 @@ defmodule Prima.OutboxRecordTest do
     for bad <- [
           %{athanor_id: ""},
           %{thread_id: nil},
-          %{agent: ""},
           %{row_id: nil},
           %{session: ""},
           %{generation: -1},

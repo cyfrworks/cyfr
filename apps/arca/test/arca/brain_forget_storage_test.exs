@@ -183,12 +183,11 @@ defmodule Arca.BrainForgetStorageTest do
     set_turn!(turn, status: "completed", sources: sources)
   end
 
-  defp record(actor, thread, agent, row, session, generation),
+  defp record(actor, thread, row, session, generation),
     do:
       Prima.OutboxRecord.brain_forget(%{
         athanor_id: actor.athanor_id,
         thread_id: thread.id,
-        agent: agent,
         row_id: row.id,
         session: session,
         generation: generation
@@ -220,18 +219,18 @@ defmodule Arca.BrainForgetStorageTest do
       assert Enum.sort_by(forgotten, & &1.thread_id) ==
                Enum.sort_by(
                  [
-                   %{thread_id: room.id, agent: "aqua", generation: 2},
-                   %{thread_id: child.id, agent: "planner", generation: 0},
-                   %{thread_id: reader.id, agent: "aqua", generation: 5}
+                   %{thread_id: room.id, generation: 2},
+                   %{thread_id: child.id, generation: 0},
+                   %{thread_id: reader.id, generation: 5}
                  ],
                  & &1.thread_id
                )
 
       assert owed(actor) ==
                sorted([
-                 record(actor, room, "aqua", row, "6f1e2d3c-0000-4968-8776-000000000001", 2),
-                 record(actor, child, "planner", row, "6f1e2d3c-0000-4968-8776-000000000002", 0),
-                 record(actor, reader, "aqua", row, "6f1e2d3c-0000-4968-8776-000000000003", 5)
+                 record(actor, room, row, "6f1e2d3c-0000-4968-8776-000000000001", 2),
+                 record(actor, child, row, "6f1e2d3c-0000-4968-8776-000000000002", 0),
+                 record(actor, reader, row, "6f1e2d3c-0000-4968-8776-000000000003", 5)
                ])
 
       # The rows went, and the reader's session with its generation raised.
@@ -303,7 +302,7 @@ defmodule Arca.BrainForgetStorageTest do
 
       assert {row_id, driver["row"]} == {row.id, later.id}
       assert {:ok, %{}} = Threads.delete(actor, room.id)
-      assert owed(actor) == [record(actor, room, "aqua", row, session, 0)]
+      assert owed(actor) == [record(actor, room, row, session, 0)]
     end
   end
 
@@ -315,13 +314,13 @@ defmodule Arca.BrainForgetStorageTest do
     } do
       held!(actor, room, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000001")
 
-      assert {:ok, [%{thread_id: id, agent: "aqua", generation: 0}]} =
+      assert {:ok, [%{thread_id: id, generation: 0}]} =
                Threads.forget_sessions(actor, ["aqua"])
 
       assert id == room.id
       assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
 
-      first = record(actor, room, "aqua", row, "6f1e2d3c-0000-4968-8776-000000000001", 0)
+      first = record(actor, room, row, "6f1e2d3c-0000-4968-8776-000000000001", 0)
       assert owed(actor) == [first]
 
       # A session kept under the raised generation is its own removal.
@@ -331,7 +330,7 @@ defmodule Arca.BrainForgetStorageTest do
       assert owed(actor) ==
                sorted([
                  first,
-                 record(actor, room, "aqua", row, "6f1e2d3c-0000-4968-8776-000000000002", 1)
+                 record(actor, room, row, "6f1e2d3c-0000-4968-8776-000000000002", 1)
                ])
 
       # A forget with no session left owes nothing more.
@@ -384,8 +383,8 @@ defmodule Arca.BrainForgetStorageTest do
 
       assert owed(actor) ==
                sorted([
-                 record(actor, room, "aqua", row, @session, 0),
-                 record(actor, other, "aqua", row, @session, 0)
+                 record(actor, room, row, @session, 0),
+                 record(actor, other, row, @session, 0)
                ])
     end
 

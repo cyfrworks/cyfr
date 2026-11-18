@@ -79,10 +79,9 @@ defmodule Prima.OutboxRecord do
   cleared or its row deleted while a program held it. Its source is the
   thread (`thread`), its revision the session generation the thread held
   the session under, so a thread owes at most one removal per
-  generation, and its snapshot holds `thread_id`, `agent` (whose session
-  it was, the holder's key with the thread), `row_id` (the program row
-  whose folder holds the transcript), `session` (the native session) and
-  `generation`. It outlives the thread: nothing of it is read again from
+  generation, and its snapshot holds `thread_id` (the holder's key),
+  `row_id` (the program row whose folder holds the transcript), `session`
+  (the native session) and `generation`. It outlives the thread: nothing of it is read again from
   the thread's rows.
 
   A record's snapshot is canonical JSON text (`Prima.JCS`): the record
@@ -389,7 +388,7 @@ defmodule Prima.OutboxRecord do
   @doc """
   The record of a program's native session owed removal from its row's
   folder, from what the clearing transaction read of the thread before
-  it cleared or deleted it: `athanor_id`, `thread_id`, `agent`, `row_id`,
+  it cleared or deleted it: `athanor_id`, `thread_id`, `row_id`,
   `session` and `generation` (the thread's `brain_generation` the session
   was held under).
   """
@@ -397,15 +396,13 @@ defmodule Prima.OutboxRecord do
   def brain_forget(%{
         athanor_id: athanor_id,
         thread_id: thread_id,
-        agent: agent,
         row_id: row_id,
         session: session,
         generation: generation
       })
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
-             thread_id != "" and is_binary(agent) and agent != "" and is_binary(row_id) and
-             row_id != "" and is_binary(session) and session != "" and is_integer(generation) and
-             generation >= 0 do
+             thread_id != "" and is_binary(row_id) and row_id != "" and is_binary(session) and
+             session != "" and is_integer(generation) and generation >= 0 do
     %__MODULE__{
       source_kind: "thread",
       source_id: thread_id,
@@ -414,7 +411,6 @@ defmodule Prima.OutboxRecord do
       kind: "brain_forget",
       snapshot: %{
         "thread_id" => thread_id,
-        "agent" => agent,
         "row_id" => row_id,
         "session" => session,
         "generation" => generation

@@ -72,7 +72,6 @@ defmodule Opus.Brain.CleanupTest do
       Prima.OutboxRecord.brain_forget(%{
         athanor_id: actor.athanor_id,
         thread_id: thread_id,
-        agent: "aqua",
         row_id: row.id,
         session: @session,
         generation: 0
