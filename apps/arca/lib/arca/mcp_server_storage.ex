@@ -316,8 +316,7 @@ defmodule Arca.McpServerStorage do
   """
   @spec update(Prima.Actor.t(), String.t(), map(), expected() | nil) ::
           {:ok, map()}
-          | {:error,
-             :no_athanor | :not_found | :stale_epoch | :driver_fixed | :database_error}
+          | {:error, :no_athanor | :not_found | :stale_epoch | :driver_fixed | :database_error}
   def update(actor, name, updates, expected \\ nil)
 
   def update(%Prima.Actor{athanor_id: athanor_id} = actor, name, updates, expected)

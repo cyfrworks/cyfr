@@ -1155,6 +1155,7 @@ defmodule Opus.BrainTest do
       assert {:ok, {holder, ref}} = Brain.open(planner)
       assert_receive {Brain, ^aqua_ref, {:ended, :replaced}}, 5_000
       refute Process.alive?(aqua)
+
       assert [{"close", %{"session" => ^first}}, {"open", %{"home_id" => home}}] =
                opens_and_closes(2)
 
@@ -1163,7 +1164,9 @@ defmodule Opus.BrainTest do
       assert Brain.whereis(ctx.athanor_id, thread.id) == holder
 
       # And back: Aqua's next turn ends the planner's holder the same way.
-      aqua_again = admitted!(ctx, binding, next_turn!(ctx, thread.id, %{id: later.id}, "aqua"), row)
+      aqua_again =
+        admitted!(ctx, binding, next_turn!(ctx, thread.id, %{id: later.id}, "aqua"), row)
+
       assert {:ok, {again, _ref}} = Brain.open(aqua_again)
       assert_receive {Brain, ^ref, {:ended, :replaced}}, 5_000
       refute Process.alive?(holder)

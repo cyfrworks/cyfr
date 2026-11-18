@@ -363,7 +363,10 @@ defmodule Arca.McpServerStorageTest do
       # A bare command that gains a driver, and a scratch folder, which
       # keeps no records.
       _bare = program.("bare", "kept", "npx -y @anthropic-ai/claude-code@2.1.323")
-      assert {:ok, %{epoch: 2}} = McpServerStorage.update(actor, "bare", %{config_json: config.(claude)})
+
+      assert {:ok, %{epoch: 2}} =
+               McpServerStorage.update(actor, "bare", %{config_json: config.(claude)})
+
       _scratch = program.("scratch", "scratch", claude)
       codex = config.("cyfr-codex npx -y @openai/codex")
       assert {:ok, %{epoch: 2}} = McpServerStorage.update(actor, "scratch", %{config_json: codex})
