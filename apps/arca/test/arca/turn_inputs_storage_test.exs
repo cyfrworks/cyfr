@@ -527,8 +527,99 @@ defmodule Arca.TurnInputsStorageTest do
     assert {held_id, lost_id} == {held.id, lost.id}
     assert step(held.id).outcome == "ok"
     assert step(lost.id).dispatch_state == "closed" and step(lost.id).outcome == "uncertain"
-    assert progress(daily)["owed"] == []
-    assert {:ok, []} = TurnStorage.brain_pending(actor, turn.id)
     assert carried_by(second) == lost.id
+
+    # The held post owes one prompt, and stays owed an answer until that
+    # prompt's own step is recorded, which takes the obligation over.
+    assert progress(daily)["owed"] == [held.id]
+    assert progress(daily)["notices"] == [%{"step" => held.id}]
+
+    assert {:ok, [%{action: "post", message_id: first_id, context?: false}]} =
+             TurnStorage.brain_notices(actor, turn.id)
+
+    assert first_id == first.id
+    {:ok, %{step: notice}} = carry(actor, turn, "notice", first)
+    assert progress(daily)["owed"] == [notice.id]
+    assert progress(daily)["notices"] == []
+    assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
+  end
+
+  test "a restart before a held post's prompt is recorded keeps the prompt owed: the post stays " <>
+         "pending and held, and is reconciled again",
+       %{actor: actor, daily: daily, turn: turn} do
+    {:ok, %{step: input}} = carry(actor, turn, "post", opening(actor, turn))
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [input.id], busy: true})
+    attrs = %{fence: turn.fence, generation: 0, held: [input.id]}
+    assert {:ok, %{held: [%{id: id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    assert id == input.id
+
+    # No prompt was recorded before the next restart.
+    assert {:ok, [^id]} = TurnStorage.brain_pending(actor, turn.id)
+    assert {:ok, %{held: [%{id: ^id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    assert progress(daily)["notices"] == [%{"step" => id}]
+  end
+
+  test "a restart before an uncertain answer's prompt is recorded keeps the prompt owed, and " <>
+         "the reconcile run again answers it again",
+       %{actor: actor, daily: daily, turn: turn} do
+    ask = %{
+      kind: "tool",
+      tool: "files",
+      action: "read",
+      idempotency_key: TurnStorage.brain_ask_key(turn.id, "toolu_answered"),
+      call: %{kind: "tool_call", content: "files", payload: %{"tool_call_id" => "toolu_answered"}}
+    }
+
+    {:ok, %{asks: [asked]}} = commit(actor, daily, turn, %{asks: [ask]})
+    {:ok, asked} = TurnStorage.dispatch_step(actor, asked.id, %{fence: turn.fence})
+
+    {:ok, %{result: result}} =
+      TurnStorage.close_step(actor, asked.id, "ok", %{
+        fence: turn.fence,
+        result: %{content: "effect completed"}
+      })
+
+    {:ok, %{step: answer}} = carry(actor, turn, "answer", result)
+    attrs = %{fence: turn.fence, generation: 0, held: []}
+    assert {:ok, %{answers: [%{id: id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    assert id == answer.id
+    assert step(answer.id).outcome == "uncertain"
+    assert {:ok, %{answers: [%{id: ^id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+
+    assert {:ok, [%{action: "answer", message_id: row, context?: false}]} =
+             TurnStorage.brain_notices(actor, turn.id)
+
+    assert row == result.id
+    {:ok, _notice} = carry(actor, turn, "notice", result)
+    assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
+    assert {:ok, %{answers: []}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+  end
+
+  test "a session started anew while the turn was at work owes one prompt with the thread so " <>
+         "far, for the newest post it delivered, and nothing else of before",
+       %{actor: actor, daily: daily, turn: turn} do
+    first = opening(actor, turn)
+    second = steer!(actor, daily, turn, "second")
+    {:ok, %{step: taken}} = carry(actor, turn, "post", first)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [taken.id], busy: true})
+    {:ok, %{step: handed}} = carry(actor, turn, "post", second)
+    {:ok, 1} = TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+    assert {:ok, %{held: [], absent: [], answers: []}} =
+             TurnStorage.reconcile_brain(actor, turn.id, %{
+               fence: turn.fence,
+               generation: 1,
+               fresh: true
+             })
+
+    assert step(taken.id).outcome == "ok"
+    assert {step(handed.id).dispatch_state, step(handed.id).outcome} == {"closed", "uncertain"}
+    assert progress(daily)["owed"] == []
+    assert progress(daily)["notices"] == [%{"step" => handed.id, "context" => true}]
+
+    assert {:ok, [%{action: "post", message_id: row, context?: true}]} =
+             TurnStorage.brain_notices(actor, turn.id)
+
+    assert row == second.id
   end
 end

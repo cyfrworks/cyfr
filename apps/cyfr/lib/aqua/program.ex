@@ -26,7 +26,9 @@ defmodule Aqua.Program do
   holder told to read on. An ask of the open turn becomes a proposed step
   of purpose `brain`, recorded once by the native ask's id on a running
   or a paused turn, and the loop is told; an ask of other work, or with
-  no turn open, is refused with no step. What the program says with no
+  no turn open, is no step and cannot be answered under this session's
+  binding, so it is refused by closing the session, and the open turn
+  ends saying why. What the program says with no
   work open stays out of the thread.
 
   It writes a command when a row says one is owed, one at a time: a closed
@@ -46,11 +48,16 @@ defmodule Aqua.Program do
   attempted once), and each it does not hold is uncertain: never sent
   again, the thread says so, and the turn ends failed. An answer whose
   ask the resumed session no longer holds is told as one notice that names
-  the call; the recorded tool step is never run again. A start the driver
-  cannot honour ends its process: the thread says so and the turn ends,
-  and that start is not made again by itself. A transcript the harness no
-  longer has (`gone`) is forgotten: the thread says the program starts
-  over, and it does, with the thread's posts as its context.
+  the call; the recorded tool step is never run again. The prompts owed
+  are rows (`Arca.TurnStorage.reconcile_brain/3`), each obligation kept
+  until its prompt's own step is recorded, so a restart between the two
+  loses none. A start the driver cannot honour ends its process: the
+  thread says so and the turn ends, and that start is not made again by
+  itself. A transcript the harness no longer has (`gone`) is forgotten:
+  the thread says the program starts over, and it does, with the thread's
+  posts as its context; in the middle of the work, one recorded prompt
+  carries the thread so far and what the work's calls answered, none of
+  which runs again.
 
   ## Silence
 
@@ -72,6 +79,8 @@ defmodule Aqua.Program do
   # The most bytes of the thread's posts a fresh session is given as its
   # context: the newest that fit, under the wire's line bound.
   @context_bytes 512 * 1024
+  # The kinds of row a fresh session's context carries: the thread's posts.
+  @context_kinds ~w(text opening report)
 
   @typedoc "What a turn's dispatch of its `program.start` hands the attendant."
   @type work :: %{
@@ -202,7 +211,6 @@ defmodule Aqua.Program do
        fresh?: false,
        recovering?: false,
        pending: [],
-       notices: [],
        timer: nil,
        subscribed?: false
      }}
@@ -437,7 +445,10 @@ defmodule Aqua.Program do
         Opus.Brain.read_on(state.brain, boot, last)
         state = %{state | boot: boot}
         if committed.asks != [] and open_turn, do: tell(state, {:page_call, open_turn.id})
-        state |> act(effects, committed) |> arm()
+
+        if effects.foreign?,
+          do: state |> foreign() |> arm(),
+          else: state |> act(effects, committed) |> arm()
 
       {:error, reason} when reason in [:superseded, :generation_moved, :row_changed, :not_open] ->
         # The session is no longer this work's: its writes end here. A
@@ -470,6 +481,7 @@ defmodule Aqua.Program do
       refused: [],
       idle: nil,
       errors: [],
+      foreign?: false,
       native?: false
     }
 
@@ -512,12 +524,21 @@ defmodule Aqua.Program do
        when is_binary(work_id),
        do: put_commit(acc, :asks, ask(work, event))
 
+  # An ask of other work, or of none, is no step: the holder answers only
+  # asks shown for the work it is bound to, so it is refused by closing
+  # the session (`foreign/1`).
+  defp effect(%{"t" => "ask"}, acc, _work, _work_id, _outstanding), do: %{acc | foreign?: true}
+
   defp effect(%{"t" => "usage"} = event, acc, _work, _work_id, _outstanding),
     do: put_commit(acc, :usage, event)
 
-  defp effect(%{"t" => "idle"} = event, acc, _work, _work_id, _outstanding) do
+  # The open work's idle says the program owes nothing more for now; an
+  # idle of other work answers its posts and leaves the open work's
+  # obligation as it was.
+  defp effect(%{"t" => "idle"} = event, acc, _work, work_id, _outstanding) do
     acc = Enum.reduce(event["answered"] || [], acc, &put_commit(&2, :answered, &1))
-    busy(%{acc | idle: event}, false)
+    acc = %{acc | idle: event}
+    if is_binary(work_id) and event["work"] == work_id, do: busy(acc, false), else: acc
   end
 
   defp effect(%{"t" => "error"} = event, acc, _work, _work_id, _outstanding),
@@ -649,6 +670,16 @@ defmodule Aqua.Program do
 
   defp on_idle(state, _effects), do: state
 
+  # The program asked for a tool for work other than the open turn's: the
+  # ask cannot be answered under this session's binding and is never a
+  # step, so the session is closed and the open turn ends saying why.
+  defp foreign(%{work: work} = state),
+    do:
+      fail(
+        shut(state),
+        "#{work.title} asked for a tool for other work than this, so it was stopped."
+      )
+
   # The native session's transcript is gone: the thread forgets it, says
   # the program starts over, and it starts again with no session, the
   # thread's posts its context. Nothing backs the session forgotten, so
@@ -672,15 +703,25 @@ defmodule Aqua.Program do
   # notice held again, is uncertain and ends the turn saying so.
   defp reconcile(%{pending: [], recovering?: false} = state, _started), do: {:ok, state}
 
+  # A session started anew while the turn was at work, its transcript
+  # gone: nothing holds what was delivered, and the turn goes on with one
+  # prompt that carries the thread so far (`Arca.TurnStorage`).
+  defp reconcile(%{fresh?: true, work: work} = state, _started) do
+    case Tape.reconcile_brain(work.guest, work.turn, %{generation: work.generation, fresh: true}) do
+      {:ok, _reconciled} -> {:ok, %{state | pending: []}}
+      {:error, _reason} -> {:fail, state, "#{work.title} could not go on after a restart."}
+    end
+  end
+
   defp reconcile(%{work: work} = state, started) do
     case Tape.reconcile_brain(work.guest, work.turn, %{
            generation: work.generation,
            held: started["held"] || []
          }) do
-      {:ok, %{absent: [], held: held, answers: answers}} ->
+      {:ok, %{absent: [], held: held}} ->
         if Enum.any?(held, &(&1.action == "notice")),
           do: {:fail, state, uncertain_line(work)},
-          else: {:ok, %{state | pending: []} |> queue_notices(held, answers)}
+          else: {:ok, %{state | pending: []}}
 
       {:ok, %{absent: [_ | _]}} ->
         {:fail, state, uncertain_line(work)}
@@ -695,15 +736,11 @@ defmodule Aqua.Program do
       "#{work.title} was interrupted after it was handed your last message, and it is not " <>
         "handed that message again. Send a message to go on."
 
-  # The notices a recovery owes, delivered once the work is set again.
-  defp queue_notices(state, held, answers),
-    do: Map.put(state, :notices, Enum.map(held ++ answers, &{&1.action, &1.message_id}))
-
   # ---------------------------------------------------------------------------
   # Deliveries
 
   # The next command a row says is owed, one at a time while the session
-  # is ready: a notice a recovery owes, then a closed ask's result, then a
+  # is ready: a prompt a recovery owes, then a closed ask's result, then a
   # post that waits.
   defp deliver(%{outstanding: nil, work: work} = state) do
     case open_turn(work) do
@@ -715,21 +752,24 @@ defmodule Aqua.Program do
   defp deliver(state), do: state
 
   defp deliver_next(%{work: work} = state, turn) do
-    with nil <- next_notice(state),
+    with nil <- next_notice(work, turn),
          nil <- next_result(work, turn),
          nil <- next_post(work, turn) do
       state
     else
-      {:notice, kind, row_id} -> notice(pop_notice(state), kind, row_id)
+      {:notice, %{context?: true, message_id: row_id}} -> notice(state, "fresh", row_id)
+      {:notice, %{action: kind, message_id: row_id}} -> notice(state, kind, row_id)
       {:answer, result} -> answer(state, result)
       {:post, row} -> post(state, row)
     end
   end
 
-  defp next_notice(%{notices: [{kind, row_id} | _]}), do: {:notice, kind, row_id}
-  defp next_notice(_state), do: nil
-
-  defp pop_notice(%{notices: [_ | rest]} = state), do: %{state | notices: rest}
+  defp next_notice(work, turn) do
+    case Tape.brain_notices(work.guest, turn) do
+      {:ok, [notice | _]} -> {:notice, notice}
+      _none -> nil
+    end
+  end
 
   defp next_result(work, turn) do
     case Tape.brain_results(work.guest, turn) do
@@ -776,7 +816,7 @@ defmodule Aqua.Program do
   end
 
   defp post(%{work: work} = state, row) do
-    {context, read} = if state.fresh?, do: context(work, row), else: {nil, []}
+    {context, read} = if state.fresh?, do: context(work, {:before, row.seq}), else: {nil, []}
 
     with {:ok, %{step: step}} <- carry(work, "post", row.id, [row | read]) do
       command =
@@ -803,20 +843,35 @@ defmodule Aqua.Program do
 
   # One recovery prompt, attempted once: for a post the transcript holds,
   # to go on with it or say where it stands; for a result its ask can no
-  # longer take, the call named and what it answered.
+  # longer take, the call named and what it answered; for a session
+  # started anew in the middle of the work (`"fresh"`), the thread so far
+  # with what the work's calls answered, which are not run again.
   defp notice(%{work: work} = state, kind, row_id) do
-    case carry(work, "notice", row_id) do
+    {context, read} =
+      if kind == "fresh", do: context(work, {:all, answers(work)}), else: {nil, []}
+
+    case carry(work, "notice", row_id, read) do
       {:ok, %{step: step, row: row}} ->
-        command = %{
-          "t" => "post",
-          "id" => step.id,
-          "work" => work.turn.id,
-          "content" => [%{"type" => "text", "text" => notice_text(work, kind, row)}]
-        }
+        command =
+          %{
+            "t" => "post",
+            "id" => step.id,
+            "work" => work.turn.id,
+            "content" => [%{"type" => "text", "text" => notice_text(work, kind, row)}],
+            "context" => context
+          }
+          |> reject_nil()
 
         case write(state, command) do
-          :ok -> %{state | outstanding: %{id: step.id, input?: true, deliver: "notice"}}
-          {:error, reason} -> not_written(state, step, reason)
+          :ok ->
+            %{
+              state
+              | outstanding: %{id: step.id, input?: true, deliver: "notice"},
+                fresh?: state.fresh? and kind != "fresh"
+            }
+
+          {:error, reason} ->
+            not_written(state, step, reason)
         end
 
       # A notice was attempted for this row already: no second follows.
@@ -834,6 +889,12 @@ defmodule Aqua.Program do
     do:
       "CYFR restarted while you were working on the last message, which you already have. " <>
         "Go on with it, or say where it stands."
+
+  defp notice_text(_work, "fresh", _row),
+    do:
+      "CYFR restarted and you no longer had your record of this thread, so the thread so " <>
+        "far is above, with what your calls in this work answered; they are not run again. " <>
+        "Go on with the last message, or say where it stands."
 
   defp notice_text(_work, _answer, row) do
     payload = Tape.payload(row)
@@ -885,17 +946,19 @@ defmodule Aqua.Program do
     end
   end
 
-  # The thread so far, for a fresh session's first post: its posts before
-  # `row`, the newest that fit.
-  defp context(work, row) do
+  # The thread so far for a fresh session, the newest that fit: its posts
+  # before a post (`{:before, seq}`), or every post and the result rows
+  # of the open work's asks (`{:all, ids}`), for one started anew in the
+  # middle of it.
+  defp context(work, bound) do
     case Tape.projection(work.guest, work.turn) do
       {:ok, rows} ->
         read =
           rows
-          |> Enum.filter(&(&1.kind in ["text", "opening", "report"] and &1.seq < row.seq))
+          |> Enum.filter(&read?(work, &1, bound))
           |> Enum.reverse()
           |> Enum.reduce_while({[], 0}, fn read, {kept, size} ->
-            line = "#{author(work, read)}: #{read.content}"
+            line = line(work, read)
 
             if size + byte_size(line) > @context_bytes,
               do: {:halt, {kept, size}},
@@ -918,6 +981,31 @@ defmodule Aqua.Program do
         {nil, []}
     end
   end
+
+  defp read?(_work, row, {:before, seq}), do: row.kind in @context_kinds and row.seq < seq
+
+  defp read?(_work, row, {:all, answers}),
+    do: row.kind in @context_kinds or (row.kind == "tool_result" and row.id in answers)
+
+  # The result rows of the open work's asks that closed, never its start's.
+  defp answers(work) do
+    start = Tape.brain_start_key(work.turn.id)
+
+    case Tape.steps(work.guest, work.turn) do
+      {:ok, steps} ->
+        for %{purpose: "brain", kind: kind, result_message_id: id} = step <- steps,
+            kind != "input" and step.idempotency_key != start and is_binary(id),
+            do: id
+
+      {:error, _unread} ->
+        []
+    end
+  end
+
+  defp line(_work, %{kind: "tool_result"} = row),
+    do: "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"
+
+  defp line(work, row), do: "#{author(work, row)}: #{row.content}"
 
   # A person's row names them by its author, their id; its `sent_by` is
   # only "person".

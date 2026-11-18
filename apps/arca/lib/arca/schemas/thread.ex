@@ -63,7 +63,10 @@ defmodule Arca.Schemas.Thread do
   newest result identities, and `total`, the last running total);
   `unattributed`, usage no work could be given, never charged to later
   work; `owed`, the post and notice `input` steps written and not yet
-  named by the program's end of a turn; `busy`, whether the program
+  named by the program's end of a turn; `notices`, the recovery prompts
+  a reconcile left owed, each `step`, the post or answer step it
+  continues, and `context`, true for a session started anew, until the
+  prompt's own step is recorded; `busy`, whether the program
   owes output since a delivery was taken; and `clock`, the silence
   clock: `since` when it last ran from, nil while it is paused, and
   `left_ms`, what is left of its interval.

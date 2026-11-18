@@ -624,6 +624,11 @@ defmodule Aqua.Tape do
         Map.put_new(attrs, :fence, turn.fence)
       )
 
+  @doc "The recovery prompts a program turn owes (`Arca.TurnStorage.brain_notices/2`)."
+  @spec brain_notices(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
+  def brain_notices(%Context{} = ctx, turn),
+    do: TurnStorage.brain_notices(Sanctum.Context.actor(ctx), turn.id)
+
   @doc "The deliveries a resuming start names as pending (`Arca.TurnStorage.brain_pending/2`)."
   @spec brain_pending(Context.t(), turn()) :: {:ok, [String.t()]} | {:error, term()}
   def brain_pending(%Context{} = ctx, turn),

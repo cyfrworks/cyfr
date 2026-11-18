@@ -4163,8 +4163,10 @@ defmodule Arca.TurnStorage do
   (`Prima.Source`s, the threads and files it carries) and the sources of
   the turns in `:sources_from`, whose words it carries; a delivery taken
   back leaves them joined. A post or a notice joins the posts owed an
-  answer, and the silence clock pauses on the delivery not yet taken
-  (`brain_progress`). Answers `%{step: step, row: row}`.
+  answer, a notice in place of the post or answer it continues, whose
+  recovery obligation it takes over (`reconcile_brain/3`), and the
+  silence clock pauses on the delivery not yet taken (`brain_progress`).
+  Answers `%{step: step, row: row}`.
   """
   @spec carry(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def carry(%Prima.Actor{athanor_id: athanor_id}, turn_id, attrs)
@@ -4212,6 +4214,10 @@ defmodule Arca.TurnStorage do
         end
 
         progress = progress(thread)
+
+        progress =
+          if deliver == "notice", do: noticed(progress, athanor_id, turn, row.id), else: progress
+
         progress = if deliver == "answer", do: progress, else: owe(progress, step.id)
         progress = clocked(progress, athanor_id, turn, Map.fetch!(attrs, :silence_ms), false)
         :ok = put_progress!(athanor_id, thread.id, progress)
@@ -4311,11 +4317,22 @@ defmodule Arca.TurnStorage do
   notice steps owed an answer or still `dispatched`, each named in
   `:held` was delivered and its answer is not established, and each not
   named is uncertain; a dispatched one closes `ok` or `uncertain`
-  accordingly, and every one leaves the posts owed an answer. An answer
-  step still `dispatched` closes `uncertain`: no transcript says whether
-  it was taken. What the thread owes from other turns' steps is dropped,
-  as those turns are over. Answers `%{held: [step], absent: [step],
-  answers: [step]}`.
+  accordingly. An answer step still `dispatched` closes `uncertain`: no
+  transcript says whether it was taken. What the thread owes from other
+  turns' steps is dropped, as those turns are over.
+
+  A held post and an uncertain answer each owe one recovery prompt
+  (`brain_notices/2`), and the obligation stays recorded until that
+  prompt's own step is (`carry/3` moves it): a held post stays owed an
+  answer, and a reconcile run again before then answers both again.
+  Answers `%{held: [step], absent: [step], answers: [step]}`.
+
+  With `fresh: true` the session was started anew because its transcript
+  is gone, so nothing holds the turn's deliveries: each still
+  `dispatched` closes `uncertain`, nothing stays owed, and when the turn
+  delivered a post the turn owes one prompt that carries the thread so
+  far, recorded as the others are. Answers the same map, every list
+  empty.
   """
   @spec reconcile_brain(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def reconcile_brain(%Prima.Actor{athanor_id: athanor_id}, turn_id, attrs)
@@ -4330,8 +4347,6 @@ defmodule Arca.TurnStorage do
           do: Arca.Repo.rollback(:generation_moved)
 
         progress = progress(thread)
-        owed = progress["owed"] || []
-        held = Map.get(attrs, :held, [])
 
         steps =
           Arca.Repo.all(
@@ -4341,35 +4356,139 @@ defmodule Arca.TurnStorage do
             )
           )
 
-        pending =
-          Enum.filter(steps, fn s ->
-            s.action in ["post", "notice"] and (s.id in owed or s.dispatch_state == "dispatched")
-          end)
+        # The prompts this turn still owes; other turns' are dropped.
+        ids = MapSet.new(steps, & &1.id)
+        noticed = Enum.filter(progress["notices"] || [], &MapSet.member?(ids, &1["step"]))
 
-        {held_steps, absent} = Enum.split_with(pending, &(&1.id in held))
+        {reconciled, progress} =
+          if Map.get(attrs, :fresh) == true,
+            do: started_fresh!(athanor_id, steps, progress),
+            else: resumed!(athanor_id, steps, noticed, progress, Map.get(attrs, :held, []))
 
-        answers =
-          Enum.filter(steps, &(&1.action == "answer" and &1.dispatch_state == "dispatched"))
-
-        now = DateTime.utc_now()
-
-        for {steps, outcome} <- [{held_steps, "ok"}, {absent ++ answers, "uncertain"}],
-            step <- steps,
-            step.dispatch_state == "dispatched" do
-          from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step.id)
-          |> Arca.Repo.update_all(
-            set: [dispatch_state: "closed", outcome: outcome, ended_at: now]
-          )
-        end
-
-        :ok = put_progress!(athanor_id, thread.id, Map.put(progress, "owed", []))
-        %{held: held_steps, absent: absent, answers: answers}
+        :ok = put_progress!(athanor_id, thread.id, progress)
+        reconciled
       end)
     end)
     |> Arca.Data.project()
   end
 
   def reconcile_brain(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  # A resumed transcript's word on the turn's deliveries; each held post
+  # and uncertain answer owes a prompt until that prompt's step is
+  # recorded.
+  # arca:db-raise-ok inside the caller's transaction
+  defp resumed!(athanor_id, steps, noticed, progress, held) do
+    owed = progress["owed"] || []
+
+    pending =
+      Enum.filter(steps, fn s ->
+        s.action in ["post", "notice"] and (s.id in owed or s.dispatch_state == "dispatched")
+      end)
+
+    {held_steps, absent} = Enum.split_with(pending, &(&1.id in held))
+    owes = Enum.map(noticed, & &1["step"])
+
+    answers =
+      Enum.filter(steps, fn s ->
+        s.action == "answer" and (s.dispatch_state == "dispatched" or s.id in owes)
+      end)
+
+    close_inputs!(athanor_id, held_steps, "ok")
+    close_inputs!(athanor_id, absent ++ answers, "uncertain")
+
+    notices =
+      Enum.uniq_by(
+        noticed ++ for(s <- held_steps ++ answers, s.action != "notice", do: %{"step" => s.id}),
+        & &1["step"]
+      )
+
+    progress =
+      progress
+      |> Map.put("owed", for(s <- held_steps, s.action == "post", do: s.id))
+      |> Map.put("notices", notices)
+
+    {%{held: held_steps, absent: absent, answers: answers}, progress}
+  end
+
+  # A session started anew owes the turn one prompt with the thread so
+  # far, for the newest post it delivered, and nothing else of before.
+  # arca:db-raise-ok inside the caller's transaction
+  defp started_fresh!(athanor_id, steps, progress) do
+    close_inputs!(athanor_id, steps, "uncertain")
+
+    notices =
+      case steps |> Enum.filter(&(&1.action == "post")) |> List.last() do
+        nil -> []
+        post -> [%{"step" => post.id, "context" => true}]
+      end
+
+    {%{held: [], absent: [], answers: []},
+     progress |> Map.put("owed", []) |> Map.put("notices", notices)}
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp close_inputs!(athanor_id, steps, outcome) do
+    now = DateTime.utc_now()
+
+    for step <- steps, step.dispatch_state == "dispatched" do
+      from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step.id)
+      |> Arca.Repo.update_all(set: [dispatch_state: "closed", outcome: outcome, ended_at: now])
+    end
+
+    :ok
+  end
+
+  @doc """
+  The recovery prompts a program turn owes, in order (`reconcile_brain/3`):
+  each `%{action: "post" | "answer", message_id: row, context?: boolean}`,
+  the row it continues (the post, or the result row of the answer) and
+  whether it carries the thread so far, for a session started anew.
+  """
+  @spec brain_notices(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def brain_notices(%Prima.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.brain_notices", fn ->
+      turn = turn!(athanor_id, turn_id)
+      {:ok, owed_notices(athanor_id, turn, progress(thread!(athanor_id, turn.thread_id)))}
+    end)
+  end
+
+  def brain_notices(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp owed_notices(athanor_id, %Turn{} = turn, progress) do
+    case progress["notices"] || [] do
+      [] ->
+        []
+
+      noticed ->
+        steps =
+          Arca.Repo.all(
+            from(s in TurnStep,
+              where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
+              where: s.id in ^Enum.map(noticed, & &1["step"])
+            )
+          )
+          |> Map.new(&{&1.id, &1})
+
+        Enum.flat_map(noticed, fn notice ->
+          case steps[notice["step"]] do
+            nil ->
+              []
+
+            step ->
+              [
+                %{
+                  action: step.action,
+                  message_id: step.message_id,
+                  context?: notice["context"] == true
+                }
+              ]
+          end
+        end)
+    end
+  end
 
   @doc """
   The ids a resuming start names as `pending` (`Opus.Brain.Wire`): the
@@ -4399,6 +4518,25 @@ defmodule Arca.TurnStorage do
   end
 
   def brain_pending(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
+
+  # A recovery prompt recorded takes over the obligation it answers
+  # (`reconcile_brain/3`): the post or the answer it continues owes it no
+  # longer, and the post leaves the posts owed an answer to the prompt.
+  # arca:db-raise-ok inside the caller's transaction
+  defp noticed(progress, athanor_id, %Turn{} = turn, row_id) do
+    ids =
+      Arca.Repo.all(
+        from(s in TurnStep,
+          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
+          where: s.message_id == ^row_id and s.action != "notice",
+          select: s.id
+        )
+      )
+
+    progress
+    |> Map.update("notices", [], &Enum.reject(&1, fn notice -> notice["step"] in ids end))
+    |> Map.update("owed", [], &(&1 -- ids))
+  end
 
   # A running turn takes any delivery; a paused one only a post or an
   # answer of its own work.
@@ -4866,16 +5004,30 @@ defmodule Arca.TurnStorage do
 
   # Whether the program owes output: with no turn open, always, so a
   # session idle that long is closed; with one, when a delivery was taken
-  # since its last `idle` and neither CYFR nor the person owes it
+  # since its last `idle`, or a post or notice of the turn it took is
+  # still owed an answer, and neither CYFR nor the person owes it
   # anything: no ask undecided or running, no card waiting, no closed
   # result whose answer is not yet taken, no post waiting or not yet
-  # taken.
+  # taken, no recovery prompt not yet recorded.
   # arca:db-raise-ok inside the caller's transaction
   defp owes?(_athanor_id, nil, _progress), do: true
 
   defp owes?(athanor_id, %Turn{} = turn, progress) do
-    progress["busy"] == true and not owed_to_program?(athanor_id, turn)
+    (progress["busy"] == true or answer_owed?(athanor_id, turn, progress)) and
+      owed_notices(athanor_id, turn, progress) == [] and
+      not owed_to_program?(athanor_id, turn)
   end
+
+  defp answer_owed?(athanor_id, %Turn{} = turn, %{"owed" => [_ | _] = owed}) do
+    Arca.Repo.exists?(
+      from(s in TurnStep,
+        where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
+        where: s.id in ^owed
+      )
+    )
+  end
+
+  defp answer_owed?(_athanor_id, _turn, _progress), do: false
 
   defp owed_to_program?(athanor_id, %Turn{} = turn) do
     start = brain_start_key(turn.id)
@@ -5629,11 +5781,13 @@ defmodule Arca.TurnStorage do
         )
       )
 
-    owed = progress(thread!(athanor_id, turn.thread_id))["owed"] || []
+    progress = progress(thread!(athanor_id, turn.thread_id))
+    owed = progress["owed"] || []
     delivered = MapSet.new(inputs, &elem(&1, 2))
 
     Enum.any?(inputs, fn {id, state, _row} -> state == "dispatched" or id in owed end) or
-      Enum.any?(closed_results(athanor_id, turn), &(not MapSet.member?(delivered, &1)))
+      Enum.any?(closed_results(athanor_id, turn), &(not MapSet.member?(delivered, &1))) or
+      owed_notices(athanor_id, turn, progress) != []
   end
 
   # A steer is what someone other than the turn's agent wrote into it

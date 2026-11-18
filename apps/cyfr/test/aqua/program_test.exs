@@ -14,11 +14,13 @@ defmodule Aqua.ProgramTest do
   the `idle` that answers every post it was given, one written while it
   works included. Its asks are steps the loop decides and runs, answered
   with their results; an ask of a tool the turn does not offer is refused,
-  and one of other work writes no step. A start nobody allowed waits on its
+  and one of other work writes no step and closes the session. A start
+  nobody allowed waits on its
   card, and a schedule's opens none. A holder's end resumes the native
   session with the posts whose delivery its transcript says: one it holds
   is continued by one notice, one it does not ends the turn. A transcript
-  the harness no longer has starts over, the thread its context. Stop
+  the harness no longer has starts over, the thread its context, and in
+  the middle of the work one prompt carries what its calls answered. Stop
   closes the session first. A program turn has no deadline, and the
   program's own silence ends it, never while a card waits.
   """
@@ -177,7 +179,7 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "the program's asks" do
-    test "an ask of the open turn is a step the loop decides and runs, answered with its result; one of a tool not offered is refused; one of other work writes no step",
+    test "an ask of the open turn is a step the loop decides and runs, answered with its result; one of a tool not offered is refused",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "list the programs")
@@ -245,10 +247,6 @@ defmodule Aqua.ProgramTest do
                {"closed", "denied", "vault is not one of the tools this work has"}
 
       say(fake, row, accepted(told))
-
-      # An ask of other work, and one of no work, are refused with no step.
-      say(fake, row, ask(turn, "ask-3", "program", %{"action" => "list"}, "trn_other"))
-      say(fake, row, Map.delete(ask(turn, "ask-4", "program", %{"action" => "list"}), "work"))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
 
@@ -264,6 +262,38 @@ defmodule Aqua.ProgramTest do
              ]
 
       refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "an ask of other work, or of none, writes no step and cannot be answered here, so the " <>
+           "session closes and the turn ends saying why",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+
+      # Each round is a driver process of its own, its boot its own.
+      for {work, boot} <- [{"trn_other", "boot-one"}, {nil, "boot-two"}] do
+        turn = accept!(ctx, thread, row, "first")
+        loop = run(ctx, turn)
+        started!(fake, row, boot)
+        _post = sent()
+        [input] = inputs(ctx, turn)
+        say(fake, row, accepted(input))
+
+        foreign = ask(turn, "foreign-ask", "program", %{"action" => "list"}, work)
+        say(fake, row, if(work, do: foreign, else: Map.delete(foreign, "work")))
+
+        line = "#{@title} asked for a tool for other work than this, so it was stopped."
+        assert {:failed, ^line} = Task.await(loop, 15_000)
+        assert system_lines(ctx, thread, turn) == [line]
+        assert_receive {:session, "close", _wire, _fields}, 10_000
+        assert running_sessions(fake, row) == []
+        assert step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "foreign-ask")) == nil
+
+        assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+                 input_fields("post", turn.message_id, "ok")
+               ]
+
+        refute_received {:session, "send", _wire, _fields}
+      end
     end
   end
 
@@ -512,6 +542,71 @@ defmodule Aqua.ProgramTest do
       say(fake, row, %{idle(next, [second.id]) | "gen" => 1})
       assert :completed = Task.await(loop, 30_000)
     end
+
+    test "a transcript lost in the middle of the work starts over with one prompt that carries " <>
+           "the thread so far and what its calls answered, and runs none of them again",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "unfinished")
+      loop = run(ctx, turn)
+      %{start: first} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "looking"))
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      answer = sent()
+      listed = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1"))
+      {:ok, result} = Tape.message(ctx, listed.result_message_id)
+      say(fake, row, %{"t" => "accepted", "id" => answer["id"]})
+      committed!(ctx, thread, 7)
+
+      Scripted.end_sessions(fake, row.id)
+      opened!(fake, row, "boot-two")
+      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      say(fake, row, %{"t" => "gone"})
+      fresh = sent()
+      assert Map.delete(fresh, "system") == %{Map.delete(first, "system") | "gen" => 1}
+      say(fake, row, started([]))
+      assert %{"t" => "work"} = work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+
+      prompt = sent()
+      [_post, _answer, continued] = inputs(ctx, turn)
+      person = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+
+      assert prompt ==
+               Map.put(
+                 posted(
+                   continued,
+                   turn,
+                   "CYFR restarted and you no longer had your record of this thread, so the " <>
+                     "thread so far is above, with what your calls in this work answered; they " <>
+                     "are not run again. Go on with the last message, or say where it stands."
+                 ),
+                 "context",
+                 [
+                   %{
+                     "type" => "text",
+                     "text" =>
+                       "The thread so far:\n\n#{person}: unfinished\n\n#{@title}: looking\n\n" <>
+                         "Your call program answered: #{result.content}"
+                   }
+                 ]
+               )
+
+      assert step_fields(continued) ==
+               input_fields("notice", turn.message_id, nil, "1:notice:")
+
+      say(fake, row, accepted(continued))
+      say(fake, row, %{idle(turn, [continued.id]) | "gen" => 1})
+      assert :completed = Task.await(loop, 30_000)
+
+      # The call ran once: one step, one result, never dispatched again.
+      {:ok, steps} = Tape.steps(ctx, turn)
+      assert Enum.count(steps, &(&1.kind != "input" and &1.action == "list")) == 1
+      assert step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1")) == listed
+    end
   end
 
   describe "its end" do
@@ -588,6 +683,28 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == [line]
       assert_receive {:session, "close", _wire, _fields}, 10_000
       assert running_sessions(fake, row) == []
+    end
+
+    test "the silence runs on after an idle that answers only some of the posts the program took",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      silence!(1_000)
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _first = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      committed!(ctx, thread, 4)
+      steer!(ctx, thread, turn, "second")
+      _second = sent()
+      [_first, second] = inputs(ctx, turn)
+      say(fake, row, accepted(second))
+      say(fake, row, idle(turn, [first.id]))
+
+      line = "#{@title} said nothing for 0 minutes, so its work here ended."
+      assert {:failed, ^line} = Task.await(loop, 15_000)
+      assert system_lines(ctx, thread, turn) == [line]
     end
 
     test "an attendant that ends while its turn waits on it ends the turn, saying so",
@@ -735,6 +852,17 @@ defmodule Aqua.ProgramTest do
     assert Opus.Brain.silence_ms() == ms
   end
 
+  # A post the person writes into the open turn `turn`.
+  defp steer!(ctx, thread, turn, text) do
+    {:ok, %{message: steer}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
+        steer_turn_id: turn.id
+      })
+
+    steer
+  end
+
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
   defp resume(ctx, turn),
@@ -877,8 +1005,8 @@ defmodule Aqua.ProgramTest do
 
   # The driver's session opens, starts and takes the turn's work: the
   # start and the work it was given.
-  defp started!(fake, row) do
-    opened!(fake, row, "boot-one")
+  defp started!(fake, row, boot \\ "boot-one") do
+    opened!(fake, row, boot)
     start = sent()
     assert %{"t" => "start"} = start
     say(fake, row, started([]))
