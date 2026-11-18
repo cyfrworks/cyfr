@@ -1065,8 +1065,7 @@ defmodule Sanctum.QuestionsTest do
       test = self()
 
       # The first read of the registry that the set makes is followed at
-      # once by the version's removal and its cleanup, which finds nothing
-      # yet to delete.
+      # once by the version's removal, which finds no answer yet to delete.
       :ok =
         :telemetry.attach(
           handler,
@@ -1084,7 +1083,6 @@ defmodule Sanctum.QuestionsTest do
                   "catalyst"
                 )
 
-              {:ok, 0} = Questions.component_removed(person.ctx, "local", "tables")
               send(test, :removed)
             end
           end,
@@ -1274,6 +1272,55 @@ defmodule Sanctum.QuestionsTest do
                Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
     end
 
+    test "a release deleted and published again before anything after the removal asks starts again",
+         person do
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+
+      assert {:ok, _} =
+               call(person.ctx, "answer", %{"ref" => ref, "answer" => for_an_hour("allow")})
+
+      assert [_allow] = standing(person.ctx, "local", "archive")
+      handler = {__MODULE__, :reinstalled}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test = self()
+
+      # The removal's row is deleted; at the first read after it outside
+      # any transaction, before the registry's delete answers, the release
+      # is published again.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            cond do
+              self() != test ->
+                :ok
+
+              String.starts_with?(meta.query, ~s(DELETE FROM "components")) ->
+                Process.put(handler, :deleted)
+
+              Process.get(handler) == :deleted and not Arca.Repo.in_transaction?() ->
+                :telemetry.detach(handler)
+                send(test, {:reinstalled, publish_archive!(person.ctx, "delete a table")})
+
+              true ->
+                :ok
+            end
+          end,
+          nil
+        )
+
+      assert {:ok, :deleted} = Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+      assert_received {:reinstalled, release}
+      assert standing(person.ctx, "local", "archive") == []
+
+      assert {:pending, _ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+    end
+
     test "a card whose component has left is still answered once, and leaves nothing standing",
          person do
       release = publish_archive!(person.ctx, "delete a table")
@@ -1397,46 +1444,96 @@ defmodule Sanctum.QuestionsTest do
   end
 
   describe "a removal" do
-    defp removed!(ctx, type, version) do
-      :ok =
-        Arca.ComponentStorage.delete_component(
-          Context.actor(ctx),
-          "tables",
-          version,
-          "local",
-          type
-        )
+    # `local.archive` of `type` at `version`, published through the
+    # registry into `ctx`'s athanor; a catalyst declares the fixture's
+    # actions.
+    defp publish!(ctx, type, version) do
+      manifest =
+        %{"name" => "archive", "publisher" => "local", "version" => version, "type" => type}
+        |> then(&if(type == "catalyst", do: Map.put(&1, "asks", @asks), else: &1))
 
-      Compendium.Cascade.name_removed(ctx, %{
-        name: "tables",
-        publisher: "local",
-        version: version,
-        component_type: type
-      })
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(type), %{
+          type: type,
+          name: "archive",
+          publisher: "local",
+          version: version,
+          manifest: Jason.encode!(manifest)
+        })
+
+      :ok
     end
 
-    test "of the last catalyst deletes its answers, though a reagent of its name remains",
+    defp delete!(ctx, version),
+      do: assert({:ok, :deleted} = Compendium.Registry.delete(ctx, "archive", version, "local"))
+
+    defp answers(ctx), do: standing(ctx, "local", "archive")
+
+    defp archive_answer!(ctx, attrs \\ %{}), do: put!(ctx, Map.put(attrs, :name, "archive"))
+
+    defp unit(type, version),
+      do: Compendium.ComponentPath.version_dir(type, "local", "archive", version)
+
+    # The catalyst `local.archive` at `version` committed into the tree as
+    # a unit lands, with `description`; the registry derives its row.
+    defp lay!(actor, version, description) do
+      manifest = %{
+        "name" => "archive",
+        "publisher" => "local",
+        "version" => version,
+        "type" => "catalyst",
+        "description" => description,
+        "asks" => @asks
+      }
+
+      files = [
+        {[Compendium.ComponentPath.wasm_name("catalyst")], Cyfr.Test.Guests.wasm("catalyst")},
+        {[Compendium.ComponentPath.manifest_name()], Jason.encode!(manifest)}
+      ]
+
+      {:ok, _written} =
+        Arca.Overlay.commit_unit(actor, unit("catalyst", version), {:files, files}, cap: :exempt)
+
+      :ok
+    end
+
+    test "of the last catalyst release deletes its answers, though a reagent of its name remains",
          person do
-      ship!(person.ctx, "reagent", "tables", "1.0.0", [])
-      put!(person.ctx, %{})
-      put!(person.ctx, %{action: "delete_rows", effect: "deny"})
+      publish!(person.ctx, "reagent", "2.0.0")
+      publish!(person.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+      archive_answer!(person.ctx, %{action: "delete_rows", effect: "deny"})
 
-      :ok = removed!(person.ctx, "catalyst", "1.0.0")
-      assert standing(person.ctx) == []
+      delete!(person.ctx, "1.0.0")
+      assert answers(person.ctx) == []
+
+      assert {:ok, _reagent} =
+               Arca.ComponentStorage.get_component(
+                 Context.actor(person.ctx),
+                 "archive",
+                 "2.0.0",
+                 "local",
+                 "reagent"
+               )
     end
 
-    test "of a catalyst version while another remains deletes nothing", person do
-      ship!(person.ctx, "catalyst", "tables", "1.1.0", @asks)
-      put!(person.ctx, %{})
+    test "of one of two catalyst releases keeps them, and of the second deletes them", person do
+      publish!(person.ctx, "catalyst", "1.0.0")
+      publish!(person.ctx, "catalyst", "1.1.0")
+      archive_answer!(person.ctx)
 
-      :ok = removed!(person.ctx, "catalyst", "1.0.0")
-      assert [_kept] = standing(person.ctx)
+      delete!(person.ctx, "1.0.0")
+      assert [_kept] = answers(person.ctx)
+
+      delete!(person.ctx, "1.1.0")
+      assert answers(person.ctx) == []
     end
 
     test "of a reagent version while another remains revokes nothing, as before", person do
-      ship!(person.ctx, "reagent", "tables", "1.0.0", [])
-      ship!(person.ctx, "reagent", "tables", "1.1.0", [])
-      put!(person.ctx, %{})
+      publish!(person.ctx, "reagent", "1.0.0")
+      publish!(person.ctx, "reagent", "1.1.0")
+      publish!(person.ctx, "catalyst", "2.0.0")
+      archive_answer!(person.ctx)
       events = [[:cyfr, :sanctum, :consent, :changed]]
       pid = self()
 
@@ -1449,9 +1546,82 @@ defmodule Sanctum.QuestionsTest do
 
       on_exit(fn -> :telemetry.detach({__MODULE__, :consent}) end)
 
-      :ok = removed!(person.ctx, "reagent", "1.0.0")
-      assert [_kept] = standing(person.ctx)
+      delete!(person.ctx, "1.0.0")
+      assert [_kept] = answers(person.ctx)
       refute_receive {:consent, _}, 50
+    end
+
+    test "of the last release by the projection's reconcile deletes its answers", person do
+      publish!(person.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+
+      :ok = Arca.delete_tree(Context.actor(person.ctx), unit("catalyst", "1.0.0"))
+
+      assert {:error, :not_found} =
+               Compendium.Registry.get(person.ctx, "archive", "1.0.0", "local")
+
+      assert answers(person.ctx) == []
+    end
+
+    test "of a release the reconcile replaces in the same transaction keeps its answers",
+         person do
+      actor = Context.actor(person.ctx)
+      laid = fn description -> lay!(actor, "1.0.0", description) end
+
+      # A unit the tree derives its row from, laid as a unit lands.
+      laid.("first")
+
+      assert {:ok, %{description: "first"}} =
+               Compendium.Registry.get(person.ctx, "archive", "1.0.0", "local")
+
+      archive_answer!(person.ctx)
+
+      # The same version's manifest rewritten in the tree: its row is
+      # removed and written again by one replacement.
+      laid.("rewritten")
+
+      assert {:ok, %{description: "rewritten"}} =
+               Compendium.Registry.get(person.ctx, "archive", "1.0.0", "local")
+
+      assert [_kept] = answers(person.ctx)
+    end
+
+    test "rolled back keeps the answers it deleted", person do
+      publish!(person.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+      actor = Context.actor(person.ctx)
+
+      assert {:error, :undone} =
+               Arca.Repo.transaction(fn ->
+                 :ok =
+                   Arca.ComponentStorage.delete_component(
+                     actor,
+                     "archive",
+                     "1.0.0",
+                     "local",
+                     "catalyst"
+                   )
+
+                 assert answers(person.ctx) == []
+                 Arca.Repo.rollback(:undone)
+               end)
+
+      assert [_kept] = answers(person.ctx)
+
+      assert {:ok, _release} =
+               Arca.ComponentStorage.get_component(actor, "archive", "1.0.0", "local", "catalyst")
+    end
+
+    test "in one athanor leaves another's answers for the same component", person do
+      other = person!("other-athanor")
+      publish!(person.ctx, "catalyst", "1.0.0")
+      publish!(other.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+      archive_answer!(other.ctx)
+
+      delete!(person.ctx, "1.0.0")
+      assert answers(person.ctx) == []
+      assert [_kept] = answers(other.ctx)
     end
   end
 

@@ -107,9 +107,13 @@ defmodule Arca.ComponentStorage do
   release's coordinates, so a release removed, or removed and published
   again under the same version with other words, fails it. A removal
   that comes while the answer is written waits for it and then sees what
-  it wrote. PostgreSQL reads the releases `FOR SHARE`
-  (`Arca.QueryHelpers.for_share/1`), the read and the hold one statement;
-  SQLite's immediate transaction already holds its one write lock.
+  it wrote, which it deletes with the last catalyst release. PostgreSQL
+  reads the releases `FOR SHARE` (`Arca.QueryHelpers.for_share/1`), the
+  read and the hold one statement; SQLite's immediate transaction already
+  holds its one write lock. A removal waits for the answer's component
+  lock before it reaches a release (`Arca.Questions.lock_component!/3`);
+  the share lock holds the release against a publication, which rewrites
+  a release in place under no component lock.
   """
   @spec hold_declaring(Prima.Actor.t(), String.t(), String.t(), String.t(), String.t()) ::
           :ok | {:error, :not_found}
@@ -250,8 +254,10 @@ defmodule Arca.ComponentStorage do
   `token`, that root's snapshot (`Arca.StorageProjectionChanges.snapshot/3`):
   in one transaction the rows each `delete:` removal names go, each
   `put:` row is written (an upsert on its identity, as `put_component/3`),
-  and every unit the token names that is ready is acknowledged — the
-  root's epoch too, when all of them are. Removals are made before puts.
+  the standing answers of each catalyst left with no installed release
+  go, as `delete_component/5`'s do, and every unit the token names that
+  is ready is acknowledged — the root's epoch too, when all of them are.
+  Removals are made before puts.
 
   The transaction holds the root's row and the token's unit rows first
   (`Arca.StorageProjectionChanges.replace/4`): a change the token did not
@@ -288,8 +294,10 @@ defmodule Arca.ComponentStorage do
 
     rescuing_db("replace_projection", fn ->
       StorageProjectionChanges.replace(actor, "components", token, fn ->
+        Arca.Questions.lock_components!(actor, Enum.map(removals, &{&1.publisher, &1.name}))
         deleted = Enum.flat_map(removals, &remove_matching!(actor, &1))
         Enum.each(puts, &do_put_component/1)
+        forget_answers!(actor, deleted)
         %{put: puts, deleted: deleted}
       end)
     end)
@@ -373,7 +381,10 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
-  Delete a component by name and version, with optional publisher and component_type filters.
+  Delete a component by name and version, with optional publisher and
+  component_type filters, in one transaction with the standing answers of
+  each catalyst whose last installed release it removes
+  (`Arca.Questions.delete_component!/3`).
   """
   def delete_component(actor, name, version, publisher \\ nil, component_type \\ nil)
 
@@ -397,10 +408,17 @@ defmodule Arca.ComponentStorage do
         else: query
 
     rescuing_db("delete_component", fn ->
-      case Arca.Repo.delete_all(query) do
-        {_count, _} -> :ok
-        error -> {:error, error}
-      end
+      {:ok, :ok} =
+        Arca.Repo.locking_transaction(fn ->
+          locked = lock_removing!(actor, name, publisher, query)
+          removing = query |> where([c], c.publisher in ^locked) |> Arca.Repo.all()
+          ids = Enum.map(removing, & &1.id)
+          Arca.Repo.delete_all(from(c in Component, where: c.id in ^ids) |> where_tenant(actor))
+          forget_answers!(actor, removing)
+          :ok
+        end)
+
+      :ok
     end)
   end
 
@@ -431,38 +449,55 @@ defmodule Arca.ComponentStorage do
   def has_remaining_versions?(%Prima.Actor{}, _name, _publisher),
     do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.has_remaining_versions?/3")
 
-  @doc """
-  Whether any version of the `component_type` named `name` by `publisher`
-  remains in the actor's athanor: `has_remaining_versions?/3` asked of
-  one type, for what belongs to that type alone, such as a catalyst's
-  standing answers, which a reagent of the same name does not keep.
-  """
-  def has_remaining_versions?(
-        %Prima.Actor{athanor_id: athanor_id} = actor,
-        name,
-        publisher,
-        component_type
-      )
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_binary(publisher) and
-             is_binary(component_type) do
-    query =
-      from(c in Component,
-        where:
-          c.name == ^name and c.publisher == ^publisher and c.component_type == ^component_type,
-        select: c.id,
-        limit: 1
-      )
-      |> where_tenant(actor)
+  # A removal's first step: the lock of every component it may remove a
+  # release of (`Arca.Questions.lock_component!/3`, which says why), before
+  # it reads a release. A removal that names no publisher reads which
+  # publishers it matches to name them, then reads its rows again under
+  # the locks, of those publishers only: one that appeared in between is
+  # unlocked here and left for a later removal. Answers the publishers
+  # locked.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_removing!(actor, name, publisher, _query) when is_binary(publisher) do
+    :ok = Arca.Questions.lock_component!(actor, publisher, name)
+    [publisher]
+  end
 
-    # Fail safe, as the untyped read is: on a store outage assume a
-    # version remains, so nothing is deleted on an unanswerable read.
-    Arca.Repo.Errors.with_db_rescue("ComponentStorage.has_remaining_versions?", true, fn ->
-      Arca.Repo.one(query) != nil
+  defp lock_removing!(actor, name, nil, query) do
+    publishers = query |> select([c], c.publisher) |> distinct(true) |> Arca.Repo.all()
+    :ok = Arca.Questions.lock_components!(actor, Enum.map(publishers, &{&1, name}))
+    publishers
+  end
+
+  # A removal's last step, under the components' locks, once its removals
+  # and the puts of the same transaction are applied: a catalyst's standing answers go when no
+  # catalyst release of its publisher and name is installed, so a reagent
+  # of the same name keeps none, and a release replaced in the same
+  # transaction by another keeps them. Nothing commits between the
+  # removal and this read, so a release published again after it finds no
+  # answer of the one removed.
+  # arca:db-raise-ok inside the caller's transaction
+  defp forget_answers!(actor, removed) do
+    removed
+    |> Enum.filter(&(&1.component_type == "catalyst"))
+    |> Enum.map(&{&1.publisher, &1.name})
+    |> Enum.uniq()
+    |> Enum.reject(fn {publisher, name} -> catalyst_installed?(actor, publisher, name) end)
+    |> Enum.each(fn {publisher, name} ->
+      Arca.Questions.delete_component!(actor, publisher, name)
     end)
   end
 
-  def has_remaining_versions?(%Prima.Actor{}, _name, _publisher, _component_type),
-    do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.has_remaining_versions?/4")
+  # arca:db-raise-ok inside the caller's transaction
+  defp catalyst_installed?(actor, publisher, name) do
+    from(c in Component,
+      where: c.name == ^name and c.publisher == ^publisher and c.component_type == "catalyst",
+      select: c.id,
+      limit: 1
+    )
+    |> where_tenant(actor)
+    |> Arca.Repo.one()
+    |> is_binary()
+  end
 
   @doc """
   List components with optional filters.
