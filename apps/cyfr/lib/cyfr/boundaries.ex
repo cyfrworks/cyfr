@@ -765,7 +765,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Opus",
-      allow: ~w(Opus Opus.Browser),
+      allow: ~w(Opus Opus.Brain Opus.Browser),
       reason:
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
@@ -774,7 +774,10 @@ defmodule Cyfr.Boundaries do
           "Its browser tool acts through Aqua's browser's holder (`Opus.Browser`), which " <>
           "proves the caller and holds the person's browser session, and stops it when " <>
           "the person's browser setting goes off. " <>
-          "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
+          "A program used as a brain is a session its holder (`Opus.Brain`) keeps, which " <>
+          "Aqua's attendant (`Aqua.Program`) opens, writes and reads, each write checked " <>
+          "there against the work it is bound to. " <>
+          "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
           "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
           "`Supervisor` beside its " <>
@@ -834,7 +837,7 @@ defmodule Cyfr.Boundaries do
           "sessions through the programs controller (`Opus.Programs`, its session " <>
           "client and the row definition it syncs), and the provider asks it for a " <>
           "row's status, a person's start of it on a terminal and a kept home's reset. " <>
-          "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
+          "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
           "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
           "`Supervisor` beside its " <>
@@ -858,7 +861,7 @@ defmodule Cyfr.Boundaries do
           "form with Aqua's browser's definition and its memory setting " <>
           "(`Opus.Browser.memory_bytes/0`), and names none of " <>
           "either's internals. " <>
-          "Boundary's exports are global, and `Opus` exports `Browser`, `Host.Children`, " <>
+          "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
           "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
           "`Supervisor` beside its " <>

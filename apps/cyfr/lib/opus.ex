@@ -44,6 +44,7 @@ defmodule Opus do
   use Boundary,
     deps: [Compendium, Cyfr, Sanctum, Arca],
     exports: [
+      Brain,
       Browser,
       Host.Children,
       Keys,

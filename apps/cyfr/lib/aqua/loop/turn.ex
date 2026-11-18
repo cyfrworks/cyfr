@@ -50,6 +50,9 @@ defmodule Aqua.Loop.Turn do
     :policy,
     :authority,
     :catalyst,
+    # The program row a program brain runs on, `%{row, epoch, name}`, or
+    # nil for a catalyst's brain.
+    :program,
     :model,
     :capabilities,
     :request_cap,
@@ -99,8 +102,9 @@ defmodule Aqua.Loop.Turn do
              Aqua.BrowserSetting.allowed?(ctx)
            )
            |> narrowed(options["tools"]),
-         {:ok, catalyst, model} <- model(ctx, turn, agent),
-         asks? = Keyword.get(opts, :asks_model?, true),
+         {:ok, brain, model} <- model(ctx, turn, agent),
+         {catalyst, program} = brain,
+         asks? = Keyword.get(opts, :asks_model?, true) and program == nil,
          {:ok, capabilities} <- asked(asks?, ctx, authority, catalyst, model, turn),
          :ok <- if(asks?, do: brain_options(brain_options, capabilities), else: :ok) do
       prompt =
@@ -123,6 +127,7 @@ defmodule Aqua.Loop.Turn do
         policy: policy,
         authority: authority,
         catalyst: catalyst,
+        program: program,
         model: model,
         capabilities: capabilities,
         request_cap: request_cap(authority, catalyst),
@@ -263,6 +268,7 @@ defmodule Aqua.Loop.Turn do
       "prompt" => parsed.prompt,
       "tool_policy" => parsed.tool_policy,
       "catalyst_ref" => parsed.catalyst_ref,
+      "program" => Map.get(parsed, :program),
       "model" => parsed.model,
       "options" => parsed.options
     }
@@ -278,6 +284,17 @@ defmodule Aqua.Loop.Turn do
   # switch of the agent's catalyst reaches the next turn; what a turn
   # already sent to its provider stays that provider's.
   defp model(ctx, turn, agent) do
+    case Map.get(turn, :program) || agent["program"] do
+      row_id when is_binary(row_id) ->
+        with {:ok, program} <- program(ctx, row_id),
+             do: {:ok, {nil, program}, turn.model || agent["model"]}
+
+      nil ->
+        catalyst_model(ctx, turn, agent)
+    end
+  end
+
+  defp catalyst_model(ctx, turn, agent) do
     listing =
       case Aqua.AgentConfig.catalyst_listing(ctx) do
         {:ok, listing} -> listing
@@ -286,7 +303,21 @@ defmodule Aqua.Loop.Turn do
 
     with {:ok, catalyst, model} <- catalyst(listing, turn, agent),
          :ok <- speaks_chat(listing, catalyst) do
-      if is_binary(model), do: {:ok, catalyst, model}, else: {:error, :no_model}
+      if is_binary(model), do: {:ok, {catalyst, nil}, model}, else: {:error, :no_model}
+    end
+  end
+
+  # The program row a program brain runs on, as it stands now
+  # (`Aqua.Models.program/2`): its epoch is the one the turn's
+  # `program.start` names, which `Opus.Brain` holds every write to. A
+  # program brain names its harness's model, if any, as the agent's
+  # `model`; the harness's default stands for none.
+  defp program(ctx, row_id) do
+    case Aqua.Models.program(ctx, row_id) do
+      {:ok, program} -> {:ok, program}
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, {state, _name}} -> {:error, state}
+      {:error, state} -> {:error, state}
     end
   end
 
@@ -307,7 +338,10 @@ defmodule Aqua.Loop.Turn do
   # by name, without the version: the spec carries a versioned ref because
   # that is what resolved, but the graph keys every node by name
   # (`Opus.Admission` steps by name), so a versioned key finds nothing and
-  # a cap of nil is a check that never fires.
+  # a cap of nil is a check that never fires. A program brain has no
+  # catalyst, and so neither cap nor timeout.
+  defp request_cap(_authority, nil), do: nil
+
   defp request_cap(authority, catalyst) do
     with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
          {:ok, %Prima.Limits{max_request_size: cap}} <-
@@ -325,6 +359,8 @@ defmodule Aqua.Loop.Turn do
   # (`Opus.Admission`), so the turn's own deadline is never under it. Nil
   # when the graph holds no such node or its timeout does not parse:
   # admission refuses such a call before anything runs.
+  defp brain_timeout_ms(_authority, nil), do: nil
+
   defp brain_timeout_ms(authority, catalyst) do
     with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
          {:ok, limits} <- Prima.Authority.node_limits(authority, name_ref),

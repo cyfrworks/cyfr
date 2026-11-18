@@ -428,6 +428,11 @@ defmodule Aqua.Tape do
         fence: turn.fence
       })
 
+  @doc "Pin the program row the turn's brain runs on (`TurnStorage.pin_program/4`)."
+  @spec pin_program(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
+  def pin_program(%Context{} = ctx, turn, row_id),
+    do: TurnStorage.pin_program(Sanctum.Context.actor(ctx), turn.id, row_id, %{fence: turn.fence})
+
   @doc "Renew the fence and cancel-mark the dispatched steps, before the loop is stopped."
   @spec supersede(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def supersede(%Context{} = ctx, turn),
@@ -569,6 +574,88 @@ defmodule Aqua.Tape do
         fence: turn.fence,
         generation: generation
       })
+
+  @doc """
+  Record one delivery to a program brain before its command is written,
+  under the turn's fence (`Arca.TurnStorage.carry/3`): `:deliver`
+  (`"post"`, `"answer"` or `"notice"`), `:row_id`, `:generation`,
+  `:silence_ms`.
+  """
+  @spec carry(Context.t(), turn(), map()) :: {:ok, %{step: step(), row: row()}} | {:error, term()}
+  def carry(%Context{} = ctx, turn, attrs) when is_map(attrs),
+    do:
+      TurnStorage.carry(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        Map.put_new(attrs, :fence, turn.fence)
+      )
+
+  @doc "Take back a delivery whose command was certainly not written (`Arca.TurnStorage.uncarry/3`)."
+  @spec uncarry(Context.t(), turn(), String.t()) :: :ok | {:error, term()}
+  def uncarry(%Context{} = ctx, turn, step_id),
+    do:
+      TurnStorage.uncarry(Sanctum.Context.actor(ctx), turn.id, %{
+        fence: turn.fence,
+        step_id: step_id
+      })
+
+  @doc """
+  Commit what a batch of a program brain's lines did with its position
+  (`Arca.TurnStorage.commit_brain/3`); the posts it wrote and the calls
+  it recorded are broadcast after the commit.
+  """
+  @spec commit_brain(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def commit_brain(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    with {:ok, committed} <-
+           TurnStorage.commit_brain(Sanctum.Context.actor(ctx), thread_id, attrs) do
+      Enum.each(committed.said, &broadcast(ctx, thread_id, :message, &1))
+      if committed.said != [], do: announce_lists(ctx, thread_id, nil)
+      {:ok, committed}
+    end
+  end
+
+  @doc "Reconcile a program turn's deliveries with a resumed transcript (`Arca.TurnStorage.reconcile_brain/3`)."
+  @spec reconcile_brain(Context.t(), turn(), map()) :: {:ok, map()} | {:error, term()}
+  def reconcile_brain(%Context{} = ctx, turn, attrs),
+    do:
+      TurnStorage.reconcile_brain(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        Map.put_new(attrs, :fence, turn.fence)
+      )
+
+  @doc "The deliveries a resuming start names as pending (`Arca.TurnStorage.brain_pending/2`)."
+  @spec brain_pending(Context.t(), turn()) :: {:ok, [String.t()]} | {:error, term()}
+  def brain_pending(%Context{} = ctx, turn),
+    do: TurnStorage.brain_pending(Sanctum.Context.actor(ctx), turn.id)
+
+  @doc "The key of a turn's host `program.start` (`Arca.TurnStorage.brain_start_key/1`)."
+  @spec brain_start_key(String.t()) :: String.t()
+  defdelegate brain_start_key(turn_id), to: TurnStorage
+
+  @doc "The key of a program brain's ask (`Arca.TurnStorage.brain_ask_key/2`)."
+  @spec brain_ask_key(String.t(), String.t()) :: String.t()
+  defdelegate brain_ask_key(turn_id, ask), to: TurnStorage
+
+  @doc "A program brain's session as its thread keeps it (`Arca.TurnStorage.brain/2`)."
+  @spec brain(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def brain(%Context{} = ctx, thread_id),
+    do: TurnStorage.brain(Sanctum.Context.actor(ctx), thread_id)
+
+  @doc "Whether a program brain's silence ran out (`Arca.TurnStorage.brain_silence/2`)."
+  @spec brain_silence(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def brain_silence(%Context{} = ctx, thread_id),
+    do: TurnStorage.brain_silence(Sanctum.Context.actor(ctx), thread_id)
+
+  @doc "The posts of a program turn that wait for their delivery (`Arca.TurnStorage.brain_posts/2`)."
+  @spec brain_posts(Context.t(), turn()) :: {:ok, [row()]} | {:error, term()}
+  def brain_posts(%Context{} = ctx, turn),
+    do: TurnStorage.brain_posts(Sanctum.Context.actor(ctx), turn.id)
+
+  @doc "The results a program turn owes its brain (`Arca.TurnStorage.brain_results/2`)."
+  @spec brain_results(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
+  def brain_results(%Context{} = ctx, turn),
+    do: TurnStorage.brain_results(Sanctum.Context.actor(ctx), turn.id)
 
   @doc """
   Mark a dispatched step whose effect cannot be known, under the turn's
