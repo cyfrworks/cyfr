@@ -1497,11 +1497,13 @@ defmodule Sanctum.Consent.Plan do
     source_key = Prima.ComponentRow.node_key(source)
     keys = [source_key | closure_rows |> Map.keys() |> List.delete(source_key) |> Enum.sort()]
 
-    Enum.reduce_while(keys, {:ok, []}, fn key, {:ok, acc} ->
+    # Each node's list is collected, newest first, and joined once.
+    keys
+    |> Enum.reduce_while({:ok, []}, fn key, {:ok, acc} ->
       case node_manifest(closure_rows, key) do
         {:ok, manifest} ->
           asks = Enum.map(Prima.Manifest.Asks.from_manifest(manifest), &Map.put(&1, :node, key))
-          {:cont, {:ok, acc ++ asks}}
+          {:cont, {:ok, [asks | acc]}}
 
         {:error, :not_in_closure} ->
           {:cont, {:ok, acc}}
@@ -1510,6 +1512,10 @@ defmodule Sanctum.Consent.Plan do
           {:halt, refused}
       end
     end)
+    |> case do
+      {:ok, lists} -> {:ok, lists |> Enum.reverse() |> Enum.concat()}
+      refused -> refused
+    end
   end
 
   # The closure's dependency edges whose target declares a credential

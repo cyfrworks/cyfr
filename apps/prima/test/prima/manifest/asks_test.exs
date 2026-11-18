@@ -56,6 +56,12 @@ defmodule Prima.Manifest.AsksTest do
       assert "asks" in Manifest.known_keys()
     end
 
+    test "a stored block part valid and part invalid declares none, not its valid part" do
+      manifest = catalyst([entry("delete_table", "delete a table"), entry("Drop", "drop it")])
+      assert {:error, _} = validate(manifest)
+      assert Asks.from_manifest(manifest) == []
+    end
+
     test "a manifest without the block declares none" do
       assert Asks.from_manifest(%{"type" => "catalyst"}) == []
       assert Asks.from_manifest(nil) == []

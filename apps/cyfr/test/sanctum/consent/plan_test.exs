@@ -256,62 +256,116 @@ defmodule Sanctum.Consent.PlanTest do
 
   describe "what the closure's catalysts say they ask" do
     setup %{ctx: ctx} do
-      for {type, name, manifest} <- [
-            {"catalyst", "plan-asker", %{"asks" => [ask("delete_table"), ask("delete_rows")]}},
-            {"catalyst", "plan-quiet", %{}},
-            {"formula", "plan-asking-app",
-             %{
-               "asks" => nil,
-               "dependencies" => %{
-                 "static" => [
-                   %{"ref" => "catalyst:local.plan-quiet"},
-                   %{"ref" => "catalyst:local.plan-asker"}
-                 ]
-               }
-             }}
-          ] do
-        manifest =
-          manifest
-          |> Map.reject(fn {_key, value} -> is_nil(value) end)
-          |> Map.merge(%{
-            "name" => name,
-            "type" => type,
-            "version" => "1.0.0",
-            "publisher" => "local"
-          })
+      ship!(ctx, "catalyst", "plan-asker", %{"asks" => [ask("delete_table"), ask("delete_rows")]})
+      ship!(ctx, "catalyst", "plan-quiet", %{})
 
-        {:ok, _} =
-          Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, "1.0.0",
-            manifest: manifest,
-            wasm: Cyfr.Test.Guests.wasm(type)
-          )
-      end
+      ship!(ctx, "formula", "plan-asking-app", %{
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "catalyst:local.plan-quiet"},
+            %{"ref" => "catalyst:local.plan-asker"}
+          ]
+        }
+      })
 
       :ok
     end
 
     defp ask(name), do: %{"name" => name, "title" => String.replace(name, "_", " ")}
 
+    defp ship!(ctx, type, name, manifest, version \\ "1.0.0") do
+      manifest =
+        Map.merge(manifest, %{
+          "name" => name,
+          "type" => type,
+          "version" => version,
+          "publisher" => "local"
+        })
+
+      {:ok, component} =
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, version,
+          manifest: manifest,
+          wasm: Cyfr.Test.Guests.wasm(type)
+        )
+
+      component
+    end
+
+    defp asked(node, names),
+      do: for(name <- names, do: %{node: node, name: name, title: String.replace(name, "_", " ")})
+
     test "a catalyst's own, in its manifest's order, under its node", %{ctx: ctx} do
       {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.plan-asker"})
-
-      assert plan.asks == [
-               %{node: "catalyst:local.plan-asker", name: "delete_table", title: "delete table"},
-               %{node: "catalyst:local.plan-asker", name: "delete_rows", title: "delete rows"}
-             ]
+      assert plan.asks == asked("catalyst:local.plan-asker", ["delete_table", "delete_rows"])
     end
 
     test "a dependency's, under the dependency, and none for a node that declares none",
          %{ctx: ctx} do
       {:ok, plan} = Plan.plan(ctx, %{ref: "formula:local.plan-asking-app"})
-
-      assert plan.asks == [
-               %{node: "catalyst:local.plan-asker", name: "delete_table", title: "delete table"},
-               %{node: "catalyst:local.plan-asker", name: "delete_rows", title: "delete rows"}
-             ]
+      assert plan.asks == asked("catalyst:local.plan-asker", ["delete_table", "delete_rows"])
 
       {:ok, quiet} = Plan.plan(ctx, %{ref: "catalyst:local.plan-quiet"})
       assert quiet.asks == []
+    end
+
+    test "the source's own first, then each dependency's by ref, each in its manifest's order",
+         %{ctx: ctx} do
+      ship!(ctx, "catalyst", "plan-ask-zeta", %{"asks" => [ask("zeta_two"), ask("zeta_one")]})
+      ship!(ctx, "catalyst", "plan-ask-beta", %{"asks" => [ask("beta_two"), ask("beta_one")]})
+
+      ship!(ctx, "catalyst", "plan-ask-source", %{
+        "asks" => [ask("source_two"), ask("source_one")],
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "catalyst:local.plan-ask-zeta"},
+            %{"ref" => "catalyst:local.plan-quiet"},
+            %{"ref" => "catalyst:local.plan-ask-beta"}
+          ]
+        }
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.plan-ask-source"})
+      assert plan.unresolved == nil
+
+      assert plan.asks ==
+               asked("catalyst:local.plan-ask-source", ["source_two", "source_one"]) ++
+                 asked("catalyst:local.plan-ask-beta", ["beta_two", "beta_one"]) ++
+                 asked("catalyst:local.plan-ask-zeta", ["zeta_two", "zeta_one"])
+    end
+
+    test "a closure that does not resolve shows none, the source's own among them", %{ctx: ctx} do
+      ship!(ctx, "catalyst", "plan-ask-orphan", %{
+        "asks" => [ask("delete_table")],
+        "dependencies" => %{"static" => [%{"ref" => "catalyst:local.plan-ask-absent"}]}
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.plan-ask-orphan"})
+      assert %{reason: "unresolvable_dependency"} = plan.unresolved
+      assert plan.asks == []
+    end
+
+    test "two releases that differ only in asks have one shape, commit and release digest",
+         %{ctx: ctx} do
+      quiet = ship!(ctx, "catalyst", "plan-ask-pair", %{}, "1.0.0")
+
+      asking =
+        ship!(ctx, "catalyst", "plan-ask-pair", %{"asks" => [ask("delete_table")]}, "1.0.1")
+
+      assert quiet.release_digest == asking.release_digest
+
+      [quiet_plan, asking_plan] =
+        for version <- ["1.0.0", "1.0.1"] do
+          ref = "catalyst:local.plan-ask-pair:" <> version
+          {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+          {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+          Map.put(plan, :commit_digest, preview.commit_digest)
+        end
+
+      assert quiet_plan.asks == []
+      assert asking_plan.asks == asked("catalyst:local.plan-ask-pair", ["delete_table"])
+      assert asking_plan.rows == quiet_plan.rows
+      assert asking_plan.shape_digest == quiet_plan.shape_digest
+      assert asking_plan.commit_digest == quiet_plan.commit_digest
     end
   end
 
