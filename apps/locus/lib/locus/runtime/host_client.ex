@@ -76,6 +76,10 @@ defmodule Locus.Runtime.HostClient do
   next one its run was handed while it runs, and the report that it handed
   one on (`c:Prima.HostAPI.input_next/1`).
 
+  `question_ask/5` and `question_wait/3` carry a catalyst's ask, keyed by
+  its attempt and number (`c:Prima.HostAPI.question_ask/3`); each is one
+  call, and the import's loop is the caller's (`Locus.Runtime.Engine`).
+
   `attached_fetch/3` posts a guest's request naming a connection, which
   CYFR makes itself with the credential attached, and hands the answer's
   sealed frames to its caller as they arrive, unopened: the worker
@@ -613,6 +617,68 @@ defmodule Locus.Runtime.HostClient do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @doc """
+  Ask the attempt's ask `ask_no` before `action`, with its `summary` and
+  `operation`: `{:ok, {:answer, answer}}`, `{:ok, :pending}` while its
+  question is open, or `{:ok, {:retry_after_ms, ms}}` when the root's
+  allowance has no room (`t:Prima.HostAPI.question_asked/0`). Keyed: a
+  lost answer is asked once more with the same arguments, and CYFR
+  answers what it admitted under the number.
+  """
+  @spec question_ask(t(), pos_integer(), String.t(), String.t(), String.t()) ::
+          {:ok, Prima.HostAPI.question_asked()} | {:error, term()}
+  def question_ask(%__MODULE__{} = client, ask_no, action, summary, operation)
+      when is_integer(ask_no) and ask_no > 0 and is_binary(action) and is_binary(summary) and
+             is_binary(operation) do
+    args = %{
+      "ask_no" => ask_no,
+      "action" => action,
+      "summary" => summary,
+      "operation" => operation
+    }
+
+    case request(client, :question_ask, args) do
+      {:ok, %{"retry_after_ms" => ms} = wire}
+      when map_size(wire) == 1 and is_integer(ms) and ms > 0 ->
+        {:ok, {:retry_after_ms, ms}}
+
+      {:ok, wire} ->
+        question_answered(wire)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Wait up to `max_wait_ms` (at most `Prima.HostAPI.max_question_wait_ms/0`)
+  for the attempt's ask `ask_no` to be decided: `{:ok, {:answer, answer}}`
+  or `{:ok, :pending}`. Idempotent: a lost answer is asked once more.
+  """
+  @spec question_wait(t(), pos_integer(), non_neg_integer()) ::
+          {:ok, {:answer, Prima.HostAPI.question_answer()} | :pending} | {:error, term()}
+  def question_wait(%__MODULE__{} = client, ask_no, max_wait_ms)
+      when is_integer(ask_no) and ask_no > 0 and is_integer(max_wait_ms) and max_wait_ms >= 0 do
+    args = %{
+      "ask_no" => ask_no,
+      "max_wait_ms" => min(max_wait_ms, HostAPI.max_question_wait_ms())
+    }
+
+    with {:ok, wire} <- request(client, :question_wait, args), do: question_answered(wire)
+  end
+
+  defp question_answered(%{"pending" => true} = wire) when map_size(wire) == 1,
+    do: {:ok, :pending}
+
+  defp question_answered(%{"answer" => answer} = wire) when map_size(wire) == 1 do
+    case HostAPI.answer_from_wire(answer) do
+      {:ok, answer} -> {:ok, {:answer, answer}}
+      :error -> {:error, :lost}
+    end
+  end
+
+  defp question_answered(_wire), do: {:error, :lost}
 
   @doc """
   Report, for the worker service `credentials` name on its boot `boot`,

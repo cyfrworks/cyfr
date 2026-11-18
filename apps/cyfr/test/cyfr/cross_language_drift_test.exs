@@ -486,14 +486,16 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "host_api.json" => [
       {"apps/cyfr/test/opus/host/attached_fetch_test.exs", ~w(version calls)},
+      {"apps/cyfr/test/opus/host/question_test.exs", ~w(question_cases)},
       {"apps/cyfr/test/opus/host_egress_test.exs", ~w(egress_pin_cases egress_policy_cases)},
       {"apps/cyfr/test/opus/host_listener_test.exs", ~w(calls pre_body_refusals body_refusals)},
       {"apps/cyfr/test/opus/host_test.exs", ~w(version calls report connection_cases)},
       {"apps/locus/test/locus/runtime/formula_handler_runner_test.exs", ~w(connection_cases)},
       {"apps/locus/test/locus/runtime/host_client_test.exs",
        ~w(connection_cases egress_pin_cases egress_policy_cases)},
+      {"apps/locus/test/locus/runtime/question_import_test.exs", ~w(question_cases)},
       {"apps/prima/test/prima/host_api_test.exs",
-       ~w(routes retries timeouts_ms max_body_bytes max_answer_bytes window_ms standing keys calls pre_body_refusals report retry_identity connection_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases)},
+       ~w(routes retries timeouts_ms max_body_bytes max_answer_bytes window_ms standing keys calls pre_body_refusals report retry_identity connection_cases question_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases)},
       {"apps/prima/test/prima/network_test.exs",
        ~w(framing_headers override_headers override_prefixes credential_headers)},
       {"apps/prima/test/prima/runner_relay_test.exs", ~w(version max_body_bytes keys calls)},
@@ -505,7 +507,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-runtime-image/control_plane.py", ~w()},
       {"tests/locus-runtime-image/runners.py", ~w(report)},
       {"tests/locus-runtime-image/worker_auth.py",
-       ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report retry_identity connection_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
+       ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report retry_identity connection_cases question_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
     ],
     "directory_wire.json" => [
       {"apps/codex/internal/account/wire_test.go", ~w(keys scenarios)},

@@ -24,4 +24,5 @@ world catalyst {
     import cyfr:emit/events@0.1.0;
     import cyfr:process/pipe@0.1.0;
     import cyfr:model/inputs@0.1.0;
+    import cyfr:question/ask@0.1.0;
 }

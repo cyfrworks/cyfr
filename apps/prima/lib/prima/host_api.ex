@@ -85,6 +85,23 @@ defmodule Prima.HostAPI do
   caller is the one the header names, at its attempt and fence, and an
   invocation that is stopped, replaced or cancelled is `:lost`. What an
   input carries is never logged.
+
+  ## An ask
+
+  `c:question_ask/3` and `c:question_wait/3` carry a catalyst's ask before
+  an action its manifest declares (`cyfr:question/ask`): the person's
+  answer, or a permission's. The runner takes `ask_no` once for each call
+  of the guest's `ask`, and the ask is keyed by the signed attempt and that
+  number, so a repeat after a lost answer is answered what the first
+  admitted, its decision or the same wait, and an ask paced by its root's
+  allowance (`{:retry_after_ms, ms}`) is sent again, the same arguments
+  under a fresh header, after so long. An ask still open is answered
+  `:pending`, and the runner waits on it in calls of at most
+  `max_question_wait_ms/0`, less than the request timeout. The runner
+  loops itself, since a client repeats a lost answer once and never an
+  answer CYFR gave: it stops when CYFR answers `:lost`, its attempt no
+  longer live, or when the run's deadline ends the component. An answer
+  crosses as `answer_to_wire/1` writes it.
   """
 
   @typedoc """
@@ -147,6 +164,8 @@ defmodule Prima.HostAPI do
     :pipe_close,
     :input_next,
     :input_sent,
+    :question_ask,
+    :question_wait,
     :runner_exited
   ]
 
@@ -172,6 +191,8 @@ defmodule Prima.HostAPI do
     pipe_close: :idempotent,
     input_next: :idempotent,
     input_sent: :idempotent,
+    question_ask: :keyed,
+    question_wait: :idempotent,
     runner_exited: :idempotent
   }
 
@@ -179,6 +200,9 @@ defmodule Prima.HostAPI do
   # the margin a slow host's answer needs, so the wait ends inside the
   # call's request timeout.
   @max_pipe_wait_ms 20_000
+  # The longest a `question_wait` may wait for an answer, for the same reason.
+  @max_question_wait_ms 20_000
+  @unanswered [:unattended, :invalid, :unavailable]
 
   @field_denials ["secret_denied", "disclosure_refused"]
 
@@ -197,6 +221,40 @@ defmodule Prima.HostAPI do
   """
   @spec max_pipe_wait_ms() :: pos_integer()
   def max_pipe_wait_ms, do: @max_pipe_wait_ms
+
+  @doc """
+  The most milliseconds a `c:question_wait/3` may ask to wait,
+  #{@max_question_wait_ms}: less than `request_timeout_ms(:question_wait)`,
+  so the host answers within the time its client waits.
+  """
+  @spec max_question_wait_ms() :: pos_integer()
+  def max_question_wait_ms, do: @max_question_wait_ms
+
+  @doc """
+  An ask's answer as it crosses: `"allowed"`, `"denied"`, or
+  `{"none": reason}` with `reason` one of `unattended`, `invalid` and
+  `unavailable`.
+  """
+  @spec answer_to_wire(question_answer()) :: String.t() | map()
+  def answer_to_wire(:allowed), do: "allowed"
+  def answer_to_wire(:denied), do: "denied"
+
+  def answer_to_wire({:none, reason}) when reason in @unanswered,
+    do: %{"none" => Atom.to_string(reason)}
+
+  @doc "The answer `answer_to_wire/1` wrote, or `:error` for anything else."
+  @spec answer_from_wire(term()) :: {:ok, question_answer()} | :error
+  def answer_from_wire("allowed"), do: {:ok, :allowed}
+  def answer_from_wire("denied"), do: {:ok, :denied}
+
+  def answer_from_wire(%{"none" => reason} = wire) when map_size(wire) == 1 do
+    case Enum.find(@unanswered, &(Atom.to_string(&1) == reason)) do
+      nil -> :error
+      reason -> {:ok, {:none, reason}}
+    end
+  end
+
+  def answer_from_wire(_wire), do: :error
 
   @doc "Whether `key` is a well-formed `t:child_key/0`."
   @spec valid_child_key?(term()) :: boolean()
@@ -231,8 +289,8 @@ defmodule Prima.HostAPI do
   it treats the answer as lost: the host-call header window for every
   call, so a late answer never verifies as fresh. For `attached_fetch` it
   bounds the wait for the answer's beginning, a refusal or the first
-  frame; for `pipe_recv` it exceeds the longest wait a call may ask
-  (`max_pipe_wait_ms/0`).
+  frame; for `pipe_recv` and `question_wait` it exceeds the longest wait
+  a call may ask (`max_pipe_wait_ms/0`, `max_question_wait_ms/0`).
   """
   @spec request_timeout_ms(atom()) :: pos_integer()
   def request_timeout_ms(callback) when is_map_key(@retries, callback),
@@ -327,6 +385,27 @@ defmodule Prima.HostAPI do
   refuses) or `too_large` (a line the answer bound cannot carry).
   """
   @type pipe_refusal :: :denied | guest_error()
+
+  @typedoc """
+  What an ask is answered: allowed or denied, by the person or a
+  permission of theirs, or none, with why: nobody could be asked and no
+  permission covers it (`:unattended`), the request or its action is
+  wrong (`:invalid`), or CYFR could not ask or record just now
+  (`:unavailable`).
+  """
+  @type question_answer ::
+          :allowed | :denied | {:none, :unattended | :invalid | :unavailable}
+
+  @typedoc """
+  What a `c:question_ask/3` answers: the ask's answer, `:pending` while
+  its question is open, or `{:retry_after_ms, ms}` when the root's
+  allowance has no room, to be sent again after `ms`.
+  """
+  @type question_asked ::
+          {:answer, question_answer()} | :pending | {:retry_after_ms, pos_integer()}
+
+  @typedoc "An ask's request: a declared action's name, its summary and its operation."
+  @type question_request :: %{action: String.t(), summary: String.t(), operation: String.t()}
 
   @typedoc """
   One attempt's lease renewal: its new expiry in Unix ms, or its loss. A
@@ -608,6 +687,26 @@ defmodule Prima.HostAPI do
   that is not an input id is `:lost`.
   """
   @callback input_sent(caller(), id :: String.t()) :: :ok | {:error, refusal()}
+
+  @doc """
+  Ask the caller's ask `ask_no` (a positive integer, once for each call of
+  the guest's `ask`) with `request` (`t:question_request/0`). An ask
+  already admitted under that number answers what it holds and spends
+  nothing; the same number with another request is `none(invalid)`. An
+  ask past its root's allowance is `{:retry_after_ms, ms}`. The attempt
+  must be live.
+  """
+  @callback question_ask(caller(), ask_no :: pos_integer(), question_request()) ::
+              {:ok, question_asked()} | {:error, refusal()}
+
+  @doc """
+  Wait up to `max_wait_ms` (at most `max_question_wait_ms/0`) for the
+  caller's ask `ask_no` to be decided: its answer, or `:pending`. The
+  attempt must be live before the wait and after it, so an attempt
+  stopped while it waited is `:lost` and is handed no answer.
+  """
+  @callback question_wait(caller(), ask_no :: pos_integer(), max_wait_ms :: non_neg_integer()) ::
+              {:ok, {:answer, question_answer()} | :pending} | {:error, refusal()}
 
   @doc """
   Report that the runner `runner` of the reporting worker service exited,

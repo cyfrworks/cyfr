@@ -35,7 +35,7 @@ cd "$root" || exit 1
 locus=apps/locus/test/support/runtime/test_wasm
 cyfr=apps/cyfr/test/support/test_wasm
 wat="$locus $locus/hostile $cyfr/guests tests/locus-runtime-image"
-rust="$cyfr/chat_fixture $cyfr/step_stub apps/cyfr/test/integration/runtime/support/test_wasm/nested_probe"
+rust="$cyfr/chat_fixture $cyfr/question_probe $cyfr/step_stub apps/cyfr/test/integration/runtime/support/test_wasm/nested_probe"
 
 differs=()
 refused=()

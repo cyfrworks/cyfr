@@ -732,6 +732,8 @@ defmodule Opus.Record do
                verify: &Sanctum.ExecutionStanding.verify/1
              ) do
           {:ok, execution} ->
+            questions_ended(record.athanor_id, execution)
+
             :ok =
               publish(record, "execution.completed", execution.event_seq, %{
                 "status" => "completed",
@@ -793,6 +795,8 @@ defmodule Opus.Record do
            verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
+        questions_ended(record.athanor_id, execution)
+
         publish(record, "execution.failed", execution.event_seq, %{
           "status" => "failed",
           "error" => message,
@@ -828,6 +832,8 @@ defmodule Opus.Record do
            verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
+        questions_ended(record.athanor_id, execution)
+
         publish(record, "execution.result_lost", execution.event_seq, %{
           "status" => "failed",
           "error" => "result not retained",
@@ -897,6 +903,8 @@ defmodule Opus.Record do
            verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
+        questions_ended(record.athanor_id, execution)
+
         data =
           %{"status" => Atom.to_string(status), "error" => record.error}
           |> Map.reject(fn {_k, v} -> is_nil(v) end)
@@ -907,6 +915,33 @@ defmodule Opus.Record do
         {:error, reason}
     end
   end
+
+  @doc """
+  Announce, after the write that ended a run committed, the questions it
+  closed (`Sanctum.Questions.ended/3`): `ended` is the closed questions,
+  each its `ref`, `user_id` and `deadline`, or the ended row whose
+  `closed_questions` they are. A question whose own deadline has passed
+  was ended by it and is `:expired`; any other was `:withdrawn`. Shared by
+  every write that ends a run (`Opus.Lapse`, `Opus.Cascade`).
+  """
+  @spec questions_ended(String.t(), [map()] | map()) :: :ok
+  def questions_ended(athanor_id, ended)
+
+  def questions_ended(athanor_id, closed) when is_list(closed) do
+    now = DateTime.utc_now()
+
+    {expired, withdrawn} =
+      Enum.split_with(closed, fn %{deadline: deadline} ->
+        DateTime.compare(deadline, now) != :gt
+      end)
+
+    if expired != [], do: Sanctum.Questions.ended(athanor_id, expired, :expired)
+    if withdrawn != [], do: Sanctum.Questions.ended(athanor_id, withdrawn, :withdrawn)
+    :ok
+  end
+
+  def questions_ended(athanor_id, %{} = execution),
+    do: questions_ended(athanor_id, Map.get(execution, :closed_questions, []))
 
   @doc """
   Whether `execution.retry` runs `record` again, by its one rule: `:ok`
