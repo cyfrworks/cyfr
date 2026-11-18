@@ -88,7 +88,9 @@ defmodule Arca.QuestionsOverlapTest do
       end)
 
     assert_receive {:second, backend}, 5_000
-    Arca.Test.LockWait.await_lock_wait!(backend, ["question_answers"])
+    # It waits on the component's lock, which the first holds
+    # (`Arca.Questions.lock_component!/3`).
+    Arca.Test.LockWait.await_lock_wait!(backend, [], event: "advisory")
 
     send(first.pid, :release)
     assert {:ok, %{effect: "allow"}} = Task.await(first, 10_000)

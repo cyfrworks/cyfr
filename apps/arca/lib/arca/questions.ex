@@ -14,9 +14,10 @@ defmodule Arca.Questions do
   Every function takes the actor first. Every read, answer and deletion is
   bound to the actor's athanor, and to the actor's person or the `user_id`
   it is handed; an actor with no person is `{:error, :no_person}`.
-  `lock_component!/3` and `delete_component!/3` alone are bound to the
-  athanor only: they are steps of the component leaving the athanor, in
-  the transaction that removes its releases, which may hold no person.
+  `lock_component!/3`, `lock_components!/2` and `delete_component!/3`
+  alone are bound to the athanor only: they are steps of the component
+  leaving the athanor, in the transaction that removes its releases,
+  which may hold no person.
 
   ## A question's life
 
@@ -38,7 +39,9 @@ defmodule Arca.Questions do
   answer with the same identity replaces the old one; a deny for any
   caller also deletes that action's allows for single callers, in the same
   transaction. A component's answers go in the transaction that removes
-  its last installed catalyst release (`Arca.ComponentStorage`).
+  its last installed catalyst release (`Arca.ComponentStorage`). Every
+  write and deletion of a component's answers, and every removal of its
+  releases, runs under the component's lock (`lock_component!/3`).
   """
 
   import Ecto.Query
@@ -262,6 +265,8 @@ defmodule Arca.Questions do
 
     Arca.Repo.Errors.with_db_rescue("Arca.Questions.answer", fn ->
       Arca.Repo.locking_transaction(fn ->
+        if standing, do: lock_standing!(actor, standing)
+
         with {:ok, question} <- found(Arca.Repo.one(own(actor, ref))),
              :ok <- answerable(actor, question),
              {:ok, answered} <- decide(actor, question, answer),
@@ -406,6 +411,8 @@ defmodule Arca.Questions do
 
     Arca.Repo.Errors.with_db_rescue("Arca.Questions.put_standing", fn ->
       Arca.Repo.locking_transaction(fn ->
+        lock_standing!(actor, standing)
+
         with {:ok, row} <- put_standing_in(actor, standing),
              :ok <- verify.() do
           {:ok, row}
@@ -460,6 +467,19 @@ defmodule Arca.Questions do
     end
   end
 
+  # A standing answer's component lock; one that names no component is
+  # refused by its changeset, under no lock.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_standing!(actor, standing) do
+    case {Map.get(standing, :publisher), Map.get(standing, :name)} do
+      {publisher, name} when is_binary(publisher) and is_binary(name) ->
+        lock_component!(actor, publisher, name)
+
+      _incomplete ->
+        :ok
+    end
+  end
+
   defp identity, do: [:athanor_id, :user_id, :publisher, :name, :action, :caller]
 
   defp same_action(row) do
@@ -473,43 +493,81 @@ defmodule Arca.Questions do
   @doc "Remove the person's standing answer `id`: `:ok`, or `{:error, :not_found}`."
   @spec delete_standing(Prima.Actor.t(), String.t()) :: :ok | {:error, term()}
   def delete_standing(actor, id) when person(actor) and is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Questions.delete_standing", fn ->
+    owned =
       QuestionAnswer
       |> QueryHelpers.where_tenant(actor)
       |> where([a], a.id == ^id and a.user_id == ^actor.user_id)
-      |> Arca.Repo.delete_all()
-      |> case do
-        {0, _} -> {:error, :not_found}
-        {_one, _} -> :ok
-      end
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Questions.delete_standing", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        # The row's component names the lock; the deletion is made under it,
+        # so a removal under way has taken the row first or finds it gone.
+        with %{publisher: publisher, name: name} <-
+               owned |> select([a], %{publisher: a.publisher, name: a.name}) |> Arca.Repo.one(),
+             :ok <- lock_component!(actor, publisher, name),
+             {1, _} <- Arca.Repo.delete_all(owned) do
+          {:ok, :ok}
+        else
+          _gone -> {:error, :not_found}
+        end
+        |> Arca.Repo.committed()
+      end)
     end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, _} = refused -> refused
+    end
   end
 
   def delete_standing(actor, _id) when athanor(actor), do: {:error, :no_person}
   def delete_standing(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
-  Lock every standing answer of the component `publisher` and `name` in
-  the actor's athanor, inside the caller's transaction and until it ends:
-  the first step of a removal of its releases (`Arca.ComponentStorage`),
-  before any release row moves.
+  Take the lock of the component `publisher` and `name` in the actor's
+  athanor (`Arca.Repo.transaction_lock/1`) until the caller's transaction
+  ends, before it reads or writes anything else of the component.
 
-  The lock order is a standing answer's own write's: the answer, then the
-  releases its declaration hold reads (`Arca.ComponentStorage.hold_declaring/5`).
-  A removal that deleted a release first and then the answers would wait
-  for an answer whose replacing write waits for that release.
+  Every write and deletion of a component's standing answers takes it
+  (`put_standing/3`, `answer/5` with a standing answer, `delete_standing/2`),
+  and so does every removal of its catalyst releases
+  (`Arca.ComponentStorage`), so all of them run one at a time for one
+  component, whatever answer rows exist yet: a removal decides whether a
+  catalyst release remains, and deletes the answers, with no answer
+  written or deleted beside it. Locking the answer rows themselves gave
+  no such order: a row not yet written locks nothing, and two writers
+  that each hold one row of the component and want another deadlock. A
+  transaction that takes several takes them in key order
+  (`lock_components!/2`). PostgreSQL takes a transaction-level advisory
+  lock; SQLite's write lock already serializes every writer.
   """
   @spec lock_component!(Prima.Actor.t(), String.t(), String.t()) :: :ok
   # arca:db-raise-ok inside the caller's transaction
   def lock_component!(actor, publisher, name)
-      when athanor(actor) and is_binary(publisher) and is_binary(name) do
-    actor
-    |> component_answers(publisher, name)
-    |> select([a], a.id)
-    |> QueryHelpers.for_update()
-    |> Arca.Repo.all()
+      when athanor(actor) and is_binary(publisher) and is_binary(name),
+      do: lock_components!(actor, [{publisher, name}])
 
-    :ok
+  @doc "`lock_component!/3` for each `{publisher, name}` of `components`, in key order."
+  @spec lock_components!(Prima.Actor.t(), [{String.t(), String.t()}]) :: :ok
+  # arca:db-raise-ok inside the caller's transaction
+  def lock_components!(actor, components) when athanor(actor) and is_list(components) do
+    components
+    |> Enum.map(fn {publisher, name} -> component_key(actor.athanor_id, publisher, name) end)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.each(&Arca.Repo.transaction_lock/1)
+  end
+
+  # The lock's key: 64 bits of a digest of the athanor, publisher and name,
+  # none of which holds a NUL. Two components whose keys collide only wait
+  # for each other.
+  defp component_key(athanor_id, publisher, name) do
+    <<key::signed-64, _rest::binary>> =
+      :crypto.hash(
+        :sha256,
+        Enum.join(["arca:question_component", athanor_id, publisher, name], <<0>>)
+      )
+
+    key
   end
 
   @doc """
