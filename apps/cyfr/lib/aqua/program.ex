@@ -1044,7 +1044,7 @@ defmodule Aqua.Program do
   # ---------------------------------------------------------------------------
   # Its end, and the clock
 
-  defp ended(state, reason) when reason in [:closed, :replaced],
+  defp ended(state, reason) when reason in [:closed, :replaced, :forgotten],
     do: {:noreply, reply_waiting(%{state | phase: :closed}, {:error, "the session was closed"})}
 
   # A start the driver could not honour ends its process: the thread says
