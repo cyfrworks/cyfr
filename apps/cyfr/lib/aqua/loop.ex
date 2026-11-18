@@ -205,11 +205,27 @@ defmodule Aqua.Loop do
             setup_required(ctx, turn)
 
           {:error, reason} ->
+            reason = unclaimed(ctx, turn, reason)
+            say_unrun(ctx, turn, reason)
             _ = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
             {:failed, reason}
         end
       end
     end)
+  end
+
+  # Why a root was not claimed, as the person can act on it. A soul whose
+  # file is refused has no registry row (`Compendium.AgentIndex` indexes
+  # only what parses), so its root is refused as an unknown component
+  # before the file is read: the soul's own refusal is the reason then,
+  # and a file still holding the retired `tool_policy` gets its line.
+  defp unclaimed(ctx, %{agent: agent}, reason) do
+    with true <- Prima.AgentRef.soul?(agent),
+         {:ok, _roster, :tool_policy_retired} <- Aqua.AgentConfig.roster_and_soul(ctx) do
+      :tool_policy_retired
+    else
+      _other -> reason
+    end
   end
 
   # The root is held but the turn never ran: ended with the actor's own

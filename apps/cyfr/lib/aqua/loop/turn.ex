@@ -314,8 +314,9 @@ defmodule Aqua.Loop.Turn do
   # (`Aqua.Models.holds_read_only?/1`): this is the first point the turn
   # reads its catalyst's manifest or its program row, after the root's
   # claim and before anything runs, and a turn refused here ends unrun
-  # with the sentence as a line in its thread (`Aqua.Loop`).
-  defp holds(%{mode: "read-only"}, agent, brain, name) do
+  # with the sentence as a line in its thread (`Aqua.Loop`). The mode is
+  # the one the turn's row stored at its start (`turns.agent_mode`).
+  defp holds(%{agent_mode: "read-only"}, agent, brain, name) do
     if Aqua.Models.holds_read_only?(brain),
       do: :ok,
       else: {:error, {:read_only_unheld, agent["title"] || agent["name"], name}}
