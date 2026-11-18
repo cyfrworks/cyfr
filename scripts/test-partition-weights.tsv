@@ -140,7 +140,6 @@
 0.0	apps/cyfr/test/aqua/intents_test.exs
 29.1	apps/cyfr/test/aqua/launch_test.exs
 0.2	apps/cyfr/test/aqua/loop/abort_test.exs
-24.0	apps/cyfr/test/aqua/loop/agent_wide_auto_policy_test.exs
 0.1	apps/cyfr/test/aqua/loop/binding_test.exs
 32.4	apps/cyfr/test/aqua/loop/catalog_sources_test.exs
 5.3	apps/cyfr/test/aqua/loop/files_hand_host_roots_test.exs

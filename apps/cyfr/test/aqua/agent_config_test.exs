@@ -2,10 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.AgentConfigTest do
-  # The agent's tool_policy is DECLARED policy, read from the athanor's
-  # own copy of the shipped template. A chat decision that outlives the
-  # turn ("always" / "never") is not an edit to it — those are
-  # `Aqua.ToolGrants` rows, composed over the declaration at use time.
+  # An agent's mode and the soul's tools are DECLARED, read from the
+  # athanor's own copy of the shipped template.
   use ExUnit.Case, async: false
 
   alias Aqua.AgentConfig
@@ -34,11 +32,11 @@ defmodule Aqua.AgentConfigTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  defp policy(ctx, name) do
+  defp declared(ctx, name) do
     {:ok, guide} =
       Sanctum.Gate.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
-    Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
+    Map.take(Aqua.AgentConfig.stringify_deep(guide), ["mode", "tools"])
   end
 
   # Every Aqua unit the athanor holds is an unedited copy of what ships.
@@ -48,28 +46,9 @@ defmodule Aqua.AgentConfigTest do
   end
 
   test "the shipped roster is read from the athanor's own copy", %{ctx: ctx} do
-    assert is_map(policy(ctx, "aqua"))
+    assert %{"mode" => "auto", "tools" => tools} = declared(ctx, "aqua")
+    assert "files.read" in tools
     assert Arca.exists?(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("aqua"))
-    assert pristine?(ctx)
-  end
-
-  test "a standing decision never rewrites the declared policy", %{ctx: ctx} do
-    assert policy(ctx, "aqua")["component.pull"] == "ask"
-
-    {:ok, _} =
-      Sanctum.ToolGrants.put(ctx, %{
-        scope: "agent",
-        effect: "allow",
-        agent_name: "aqua",
-        tool: "component",
-        action: "pull"
-      })
-
-    # The agent's own file still says "ask" — a chat click is a decision,
-    # not an edit to what the author declared.
-    assert policy(ctx, "aqua")["component.pull"] == "ask"
-
-    # And no file in the athanor's tree was edited to say so.
     assert pristine?(ctx)
   end
 

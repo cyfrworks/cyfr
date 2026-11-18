@@ -5,10 +5,10 @@ defmodule Aqua.ScheduleTurnsTest do
   @moduledoc """
   A schedule that holds a line for Aqua: who may make and change one, what
   its fire writes, the turn each fire becomes on the person's daily thread
-  current when it fires (what it may do with nobody present, where it
-  stops, which day it joins), and the one end of its occurrence. The
-  consumer is off in the suite (`:schedule_turns_enabled`), so each case
-  drains by hand, which is what its wake-up and its tick do.
+  current when it fires (what it may do with nobody present in each mode,
+  which day it joins), and the one end of its occurrence. The consumer is
+  off in the suite (`:schedule_turns_enabled`), so each case drains by
+  hand, which is what its wake-up and its tick do.
   """
 
   use ExUnit.Case, async: false
@@ -17,7 +17,7 @@ defmodule Aqua.ScheduleTurnsTest do
   import Prima.Test.Wait
   import Cyfr.Test.Cron, only: [hourly_away: 0]
 
-  alias Aqua.{Approvals, Runner, ScheduleTurns, Tape}
+  alias Aqua.{Runner, ScheduleTurns, Tape}
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ScheduleTurnDue
@@ -199,19 +199,20 @@ defmodule Aqua.ScheduleTurnsTest do
   defp under_client_id(ctx, thread_id, client_id),
     do: Enum.filter(Threads.messages(actor(ctx), thread_id), &(&1.client_id == client_id))
 
-  # A person's turn on `thread_id` that waits on a card for notes.keep,
-  # which the script's next answer asks for: the thread is busy until the
-  # card is decided.
-  defp waiting_on_card!(ctx, thread_id) do
-    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread_id, "keep the plan")
-    await_status(ctx, turn_id, "paused")
-    [%{id: card, thread_id: ^thread_id}] = waiting_cards(ctx)
-    {turn_id, card}
+  # A person's turn on `thread_id` whose model call the script holds on
+  # its probes (`held/0`): the thread is busy until `release!/1` lets the
+  # call answer. Each probe waits 5 s for its `:continue`, so a hold lasts
+  # a minute at most.
+  @probes 12
+  defp held, do: List.duplicate({:probe, self()}, @probes)
+
+  defp busy!(ctx, thread_id) do
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread_id, "plan the day")
+    assert_receive {:scripted_probe, player, _model_run}, 30_000
+    {turn_id, player}
   end
 
-  # An answer "for a schedule" on the card, naming the schedule.
-  defp for_schedule(id),
-    do: %{decision: :approved, scope: :always, lifecycle: :schedule, schedule: id}
+  defp release!(player), do: for(_probe <- 1..@probes, do: send(player, :continue))
 
   defp await_status(ctx, turn_id, status) do
     wait_until(
@@ -233,34 +234,37 @@ defmodule Aqua.ScheduleTurnsTest do
     Enum.filter(steps, &(&1.kind == "tool"))
   end
 
-  defp waiting_cards(ctx) do
-    {:ok, rows} = Arca.TurnStorage.waiting_approvals(actor(ctx), DateTime.utc_now())
-    rows
+  # What each tool step of the turn was and how it ended.
+  defp outcomes(ctx, turn),
+    do:
+      Enum.map(steps(ctx, turn), &Map.take(&1, [:tool, :action, :outcome, :error, :approval_id]))
+
+  # The thread's posts, as a person reads them.
+  defp posts(ctx, thread_id) do
+    for %{kind: kind} = row <- Threads.messages(actor(ctx), thread_id),
+        kind in ~w(text approval error system),
+        do: Map.take(row, [:kind, :author, :sent_by, :content, :client_id, :turn_id])
   end
 
-  defp sentence(tool_action, allowable \\ true)
+  # The soul switched to read-only, as the Aqua page switches it.
+  defp read_only!(ctx) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => Compendium.AquaPath.soul_name(),
+        "mode" => "read-only"
+      })
+  end
 
-  defp sentence(tool_action, true),
-    do:
-      "This scheduled run needed your approval to use #{tool_action}, and nobody was here " <>
-        "to give it. To allow it next time, ask Aqua for it once on your daily thread and " <>
-        "choose \"for a schedule\", naming this one, when it asks."
-
-  defp sentence(tool_action, false),
-    do:
-      "This scheduled run needed your approval to use #{tool_action}, and nobody was here " <>
-        "to give it. This cannot be allowed for a schedule: it needs you here."
-
-  # One model answer holding several calls, in this order.
-  defp calls(items),
-    do: %{
-      "content" =>
-        Enum.map(items, fn {id, name, args} ->
-          %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}
-        end),
-      "stop_reason" => "tool_call",
-      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
-    }
+  # A fire of a new schedule whose turn reads the day's threads, keeps a
+  # note and answers, run to its end.
+  defp fire_keeping!(ctx) do
+    script!([call("t1", "threads", %{"action" => "list"}), keep("k1", "plan"), reply("Done.")])
+    id = schedule!(ctx, "Keeper", "look, then keep the plan")
+    occurrence = fire!(ctx, id)
+    assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+    {id, occurrence, await_status(ctx, turn_of(ctx, occurrence).id, "completed")}
+  end
 
   # ---------------------------------------------------------------------------
 
@@ -589,12 +593,12 @@ defmodule Aqua.ScheduleTurnsTest do
 
     test "two fires and the person's own line are turns of the day's thread, run one at a time in the order they were accepted",
          %{ctx: ctx} do
-      script!([keep("k1", "plan"), reply("Kept."), reply("First."), reply("Second.")])
+      script!(held() ++ [reply("Planned."), reply("First."), reply("Second.")])
 
       first = schedule!(ctx, "First", "say first")
       second = schedule!(ctx, "Second", "say second")
       %{id: thread_id} = today!(ctx)
-      {mine, card} = waiting_on_card!(ctx, thread_id)
+      {mine, player} = busy!(ctx, thread_id)
 
       # Behind the person's turn, each fire is a turn of its own, waiting:
       # neither steers the turn there.
@@ -607,12 +611,11 @@ defmodule Aqua.ScheduleTurnsTest do
       %{id: b_turn} = turn_of(ctx, b)
       assert turns_in(thread_id) == [mine, a_turn, b_turn]
 
-      for {turn_id, status} <- [{mine, "paused"}, {a_turn, "accepted"}, {b_turn, "accepted"}] do
+      for {turn_id, status} <- [{mine, "running"}, {a_turn, "accepted"}, {b_turn, "accepted"}] do
         assert {:ok, %{status: ^status}} = Tape.turn(ctx, turn_id)
       end
 
-      assert {:ok, %{decision: "approved"}} =
-               Approvals.resolve(ctx, card, %{decision: :approved})
+      release!(player)
 
       ended =
         for turn_id <- [mine, a_turn, b_turn] do
@@ -625,7 +628,7 @@ defmodule Aqua.ScheduleTurnsTest do
                %{kind: "text", author: author} = row <- Threads.messages(actor(ctx), thread_id),
                author == Prima.Author.agent(),
                do: {row.content, row.turn_id}
-             ) == [{"Kept.", mine}, {"First.", a_turn}, {"Second.", b_turn}]
+             ) == [{"Planned.", mine}, {"First.", a_turn}, {"Second.", b_turn}]
 
       assert %{state: "completed"} = ended!(ctx, a, "completed")
       assert %{state: "completed"} = ended!(ctx, b, "completed")
@@ -634,10 +637,12 @@ defmodule Aqua.ScheduleTurnsTest do
 
     test "a fire the day's thread cannot take yet waits for the next drain, and is sent once it can",
          %{ctx: ctx} do
-      script!([keep("k1", "plan"), reply("Late.")])
+      # The person's turn never hears from its model.
+      script!([{:probe, self()}, :hang, reply("Late.")])
 
       %{id: thread_id} = today!(ctx)
-      {_mine, _card} = waiting_on_card!(ctx, thread_id)
+      {_mine, player} = busy!(ctx, thread_id)
+      send(player, :continue)
 
       # Eight fires wait behind the person's turn: the thread's queue is
       # full. A claim drained again answers the turn its first send opened.
@@ -673,68 +678,106 @@ defmodule Aqua.ScheduleTurnsTest do
       assert %{state: "completed"} = ended!(ctx, late, "completed")
     end
 
-    test "at its first call that would ask, the turn stops with what it needed and how to allow it: no card, a failed occurrence, the schedule's attention item",
+    test "in read-only, the write a fire's turn calls is refused in the read-only sentence, its read runs, and the turn goes on to its reply with nobody asked",
          %{ctx: ctx} do
-      script!([keep("k1", "plan")])
+      read_only!(ctx)
+      {id, occurrence, turn} = fire_keeping!(ctx)
+      said = Aqua.Loop.Policy.read_only_sentence("Aqua")
+      system = Prima.Author.system()
 
-      handler = "schedule-failed-#{System.unique_integer([:positive])}"
-      test = self()
+      assert %{agent_mode: "read-only", error: nil, paused_at: nil} = turn
 
-      :ok =
-        :telemetry.attach(
-          handler,
-          [:cyfr, :schedules, :failed],
-          fn _event, _measurements, meta, _ -> send(test, {:failed, meta}) end,
-          nil
-        )
+      # The keep is refused before it dispatches, the sentence its result.
+      # Auto runs the same call (below): the mode alone refused it.
+      assert [_read, refused] = steps(ctx, turn)
 
-      on_exit(fn -> :telemetry.detach(handler) end)
+      assert outcomes(ctx, turn) == [
+               %{tool: "threads", action: "list", outcome: "ok", error: nil, approval_id: nil},
+               %{tool: "notes", action: "keep", outcome: "denied", error: said, approval_id: nil}
+             ]
 
-      id = schedule!(ctx, "Keeper", "keep the plan")
-      occurrence = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
-
-      turn = await_status(ctx, turn_of(ctx, occurrence).id, "failed")
-      said = sentence("notes.keep")
-      assert turn.error == said
-
-      assert [%{tool: "notes", action: "keep", outcome: "denied", approval_id: nil, error: ^said}] =
-               steps(ctx, turn)
-
-      assert waiting_cards(ctx) == []
+      assert refused.started_at == nil
+      assert {:ok, %{content: content}} = Tape.message(ctx, refused.result_message_id)
+      assert content == said
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
 
-      assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
-      assert row!(ctx, id).last_error == "Last run failed: " <> said
+      # The thread holds the line, the mode's sentence once and the reply:
+      # nothing waits on the person.
+      assert posts(ctx, turn.thread_id) == [
+               %{
+                 kind: "text",
+                 author: system,
+                 sent_by: "person",
+                 content: "look, then keep the plan",
+                 client_id: client_id(occurrence),
+                 turn_id: turn.id
+               },
+               %{
+                 kind: "system",
+                 author: system,
+                 sent_by: "aqua",
+                 content: said,
+                 client_id: "read-only:" <> turn.id,
+                 turn_id: turn.id
+               },
+               %{
+                 kind: "text",
+                 author: Prima.Author.agent(),
+                 sent_by: "aqua",
+                 content: "Done.",
+                 client_id: nil,
+                 turn_id: turn.id
+               }
+             ]
 
-      occurrence_id = occurrence.id
-      assert_receive {:failed, %{schedule_id: ^id, occurrence_id: ^occurrence_id}}, 5_000
-
-      assert {:ok, [%{kind: :failed_schedule, id: ^id, label: "Keeper"}]} =
-               Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
+      assert %{state: "completed", execution_id: root} = ended!(ctx, occurrence, "completed")
+      assert root == turn.root_execution_id
+      assert %{run_count: 1, last_error: nil} = row!(ctx, id)
+      assert {:ok, []} = Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
     end
 
-    test "an act no answer may stand for says it needs the person there, and offers no way to allow it",
+    test "in auto, the same fire's turn keeps the note: its read and its write run, and the thread is told nothing of a mode",
          %{ctx: ctx} do
-      script!([call("d1", "files", %{"action" => "delete", "path" => "data/plan.md"})])
+      {id, occurrence, turn} = fire_keeping!(ctx)
+      system = Prima.Author.system()
 
-      id = schedule!(ctx, "Cleaner", "delete the plan")
-      occurrence = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+      assert %{agent_mode: "auto", error: nil, paused_at: nil} = turn
 
-      turn = await_status(ctx, turn_of(ctx, occurrence).id, "failed")
-      assert turn.error == sentence("files.delete", false)
-      assert [%{tool: "files", action: "delete", outcome: "denied"}] = steps(ctx, turn)
-      assert waiting_cards(ctx) == []
-      assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
-      assert row!(ctx, id).last_error == "Last run failed: " <> sentence("files.delete", false)
+      assert outcomes(ctx, turn) == [
+               %{tool: "threads", action: "list", outcome: "ok", error: nil, approval_id: nil},
+               %{tool: "notes", action: "keep", outcome: "ok", error: nil, approval_id: nil}
+             ]
+
+      assert {:ok, %{notes: [%{name: "plan"}]}} = Aqua.Notes.list(ctx)
+
+      assert posts(ctx, turn.thread_id) == [
+               %{
+                 kind: "text",
+                 author: system,
+                 sent_by: "person",
+                 content: "look, then keep the plan",
+                 client_id: client_id(occurrence),
+                 turn_id: turn.id
+               },
+               %{
+                 kind: "text",
+                 author: Prima.Author.agent(),
+                 sent_by: "aqua",
+                 content: "Done.",
+                 client_id: nil,
+                 turn_id: turn.id
+               }
+             ]
+
+      assert %{state: "completed", execution_id: root} = ended!(ctx, occurrence, "completed")
+      assert root == turn.root_execution_id
+      assert %{run_count: 1, last_error: nil} = row!(ctx, id)
+      assert {:ok, []} = Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
     end
 
-    # An app of the person's own, granted with nothing to bind: with no
-    # exit its grant covers whatever a turn has read; with `egress` its one
-    # exit declares no flow of any.
-    defp app!(ctx, caps \\ nil) do
-      ref = published!(ctx, caps)
+    # An app of the person's own, granted with nothing to bind.
+    defp app!(ctx) do
+      ref = published!(ctx)
       {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
       decisions = %{ref: ref, bindings: []}
       {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
@@ -751,12 +794,9 @@ defmodule Aqua.ScheduleTurnsTest do
       ref
     end
 
-    defp published!(ctx, caps \\ nil) do
+    defp published!(ctx) do
       name = "sched-app-#{System.unique_integer([:positive])}"
-
-      manifest =
-        %{"name" => name, "version" => "1.0.0", "type" => "reagent"}
-        |> Prima.MapUtil.put_present("caps", caps)
+      manifest = %{"name" => name, "version" => "1.0.0", "type" => "reagent"}
 
       {:ok, _component} =
         Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
@@ -808,7 +848,6 @@ defmodule Aqua.ScheduleTurnsTest do
                launches(ctx, turn)
 
       assert runs_of(ctx, app) == [root]
-      assert waiting_cards(ctx) == []
       assert %{state: "completed"} = ended!(ctx, occurrence, "completed")
 
       # The launched root's caller is the agent, from the launch's stamp.
@@ -833,560 +872,36 @@ defmodule Aqua.ScheduleTurnsTest do
       end
     end
 
-    test "a run that would carry what the turn read where its grant does not let it go opens no card, and the turn ends failed saying so",
-         %{ctx: ctx} do
-      app = app!(ctx, %{"egress" => %{"domains" => ["api.example.com"]}})
-      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
-
-      start_supervised!(
-        {ScriptedWorker,
-         ref: [@model, app],
-         script: [call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})]}
-      )
-
-      id = schedule!(ctx, "Sender", "send it on")
-      occurrence = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
-
-      turn = await_status(ctx, turn_of(ctx, occurrence).id, "failed")
-
-      said =
-        "This scheduled run needed your approval to run #{app}:1.0.0: it would carry what the " <>
-          "run had read somewhere the component's grant does not let it go, and nobody was " <>
-          "here to give it. It runs with nobody here once the component's grant lets that " <>
-          "through."
-
-      assert turn.error == said
-      assert [%{outcome: "denied", approval_id: nil, error: ^said}] = launches(ctx, turn)
-      assert runs_of(ctx, app) == []
-      assert waiting_cards(ctx) == []
-      assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
-      assert row!(ctx, id).last_error == "Last run failed: " <> said
-    end
-
-    test "a run of a component nobody has granted opens no card, and the turn ends failed saying it is not granted",
+    test "a run of a component nobody has granted runs nothing, and the turn goes on to its reply",
          %{ctx: ctx} do
       app = published!(ctx)
 
       start_supervised!(
         {ScriptedWorker,
          ref: [@model, app],
-         script: [call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})]}
+         script: [
+           call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}),
+           reply("It is not granted.")
+         ]}
       )
 
       id = schedule!(ctx, "Ungranted", "run the new app")
       occurrence = fire!(ctx, id)
       assert ScheduleTurns.drain() == %{occurrence.id => :sent}
 
-      turn = await_status(ctx, turn_of(ctx, occurrence).id, "failed")
-
-      said =
-        "This scheduled run needed your approval to run #{app}:1.0.0, which is not granted, " <>
-          "and nobody was here to give it. It runs with nobody here once the component is " <>
-          "granted and its grant lets through what the run reads."
-
-      assert turn.error == said
-      assert [%{outcome: "denied", approval_id: nil, error: ^said}] = launches(ctx, turn)
-      assert runs_of(ctx, app) == []
-      assert waiting_cards(ctx) == []
-      assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
-    end
-
-    test "a call that ran before the one that asks keeps its result, and the asking call never runs",
-         %{ctx: ctx} do
-      script!([call("t1", "threads", %{"action" => "list"}), keep("k1", "plan")])
-
-      id = schedule!(ctx, "Keeper", "look, then keep the plan")
-      occurrence = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
-
-      turn = await_status(ctx, turn_of(ctx, occurrence).id, "failed")
-      assert turn.error == sentence("notes.keep")
-
-      assert [
-               %{tool: "threads", action: "list", outcome: "ok", result_message_id: result},
-               %{tool: "notes", action: "keep", outcome: "denied", started_at: nil}
-             ] = steps(ctx, turn)
-
-      assert {:ok, %{content: content}} = Tape.message(ctx, result)
-      assert content =~ "count"
-      assert waiting_cards(ctx) == []
-      assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
-      assert %{state: "failed"} = ended!(ctx, occurrence, "failed")
-    end
-
-    test "for a schedule, given on a daily thread's card naming it, is honoured by its fire a week later on another day's thread, and by no other schedule's run or the person's own turn; it ends with the schedule",
-         %{ctx: ctx} do
-      script!([
-        keep("k1", "plan"),
-        reply("Kept."),
-        keep("k2", "plan2"),
-        reply("Kept again."),
-        keep("k3", "plan3"),
-        keep("k4", "plan4")
-      ])
-
-      id = schedule!(ctx, "Keeper", "keep the plan")
-      other = schedule!(ctx, "Other", "keep the plan")
-
-      # The person, on their day's thread, asks once and answers "for a
-      # schedule", naming this one.
-      zone!(ctx, @west)
-      %{id: day_before} = today!(ctx)
-      {asked, approval_id} = waiting_on_card!(ctx, day_before)
-
-      assert {:ok, %{decision: "approved"}} =
-               Approvals.resolve(ctx, approval_id, for_schedule(id))
-
-      await_status(ctx, asked, "completed")
-
-      assert {:ok,
-              [
-                %{
-                  tool: "notes",
-                  action: "keep",
-                  effect: "allow",
-                  scope: "agent",
-                  thread_id: nil,
-                  lifecycle_kind: "schedule",
-                  lifecycle_id: ^id,
-                  schedule_id: ^id,
-                  expires_at: nil,
-                  constraint: nil
-                }
-              ]} = Aqua.ToolGrants.for_thread(ctx, day_before, "aqua")
-
-      # A week of clock later, on a later day, the next fire keeps its note
-      # with nobody there.
-      {1, _} =
-        Arca.Repo.update_all(
-          from(g in Arca.Schemas.ToolGrant, where: g.schedule_id == ^id),
-          set: [granted_at: DateTime.add(DateTime.utc_now(), -8 * 86_400, :second)]
-        )
-
-      zone!(ctx, @east)
-      second = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{second.id => :sent}
-      turn = await_status(ctx, turn_of(ctx, second).id, "completed")
-      day_after = turn.thread_id
-      refute day_after == day_before
-      assert {:ok, %{kind: "daily"}} = Threads.get(actor(ctx), day_after)
-      assert [%{tool: "notes", action: "keep", outcome: "ok"}] = steps(ctx, turn)
-      assert %{state: "completed"} = ended!(ctx, second, "completed")
-      assert waiting_cards(ctx) == []
-
-      # Another schedule's run, on the same day's thread, is not allowed by it.
-      third = fire!(ctx, other)
-      assert ScheduleTurns.drain() == %{third.id => :sent}
-      turn = await_status(ctx, turn_of(ctx, third).id, "failed")
-      assert turn.thread_id == day_after
-      assert turn.error == sentence("notes.keep")
-      assert %{state: "failed"} = ended!(ctx, third, "failed")
-
-      # The person's own turn asks again.
-      {:ok, %{turn_id: again}} = Runner.send_message(ctx, day_after, "keep another")
-      await_status(ctx, again, "paused")
-      assert [%{thread_id: ^day_after}] = waiting_cards(ctx)
-      :ok = Runner.stop_turn(ctx, day_after)
-
-      # Deleted, the schedule takes its answer with it, on every day.
-      assert {:ok, %{deleted: true}} =
-               Provider.handle("schedule", ctx, %{"action" => "delete", "schedule_id" => id})
-
-      for thread_id <- [day_before, day_after] do
-        assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread_id, "aqua")
-      end
-    end
-
-    test "for a schedule outlives the daily thread its card was on: that thread deleted, the answer stands and the next fire makes the day's thread again",
-         %{ctx: ctx} do
-      script!([keep("k1", "plan"), reply("Kept."), keep("k2", "plan2"), reply("Kept again.")])
-
-      id = schedule!(ctx, "Keeper", "keep the plan")
-      %{id: gone} = today!(ctx)
-      {asked, approval_id} = waiting_on_card!(ctx, gone)
-
-      assert {:ok, %{decision: "approved"}} =
-               Approvals.resolve(ctx, approval_id, for_schedule(id))
-
-      await_status(ctx, asked, "completed")
-
-      assert {:ok, _} = Tape.delete_thread(ctx, gone)
-      assert threads(ctx) == []
-
-      assert [%{scope: "agent", lifecycle_kind: "schedule", lifecycle_id: ^id}] =
-               Arca.Repo.all(from(g in Arca.Schemas.ToolGrant, where: g.schedule_id == ^id))
-
-      occurrence = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
       turn = await_status(ctx, turn_of(ctx, occurrence).id, "completed")
-      refute turn.thread_id == gone
-      assert threads(ctx) == [turn.thread_id]
-      assert {:ok, %{kind: "daily"}} = Threads.get(actor(ctx), turn.thread_id)
-      assert [%{tool: "notes", action: "keep", outcome: "ok"}] = steps(ctx, turn)
+      assert [launch] = launches(ctx, turn)
+
+      assert Map.take(launch, [:outcome, :error, :approval_id]) == %{
+               outcome: "error",
+               error: "Consent required: #{app} has not been granted — grant it to run it",
+               approval_id: nil
+             }
+
+      assert runs_of(ctx, app) == []
+      assert %{content: "It is not granted."} = List.last(posts(ctx, turn.thread_id))
       assert %{state: "completed"} = ended!(ctx, occurrence, "completed")
-    end
-
-    test "a call whose allow stops covering it as it dispatches stops the turn there, and nothing after it runs",
-         %{ctx: ctx} do
-      script!([
-        keep("k1", "plan"),
-        reply("Kept."),
-        calls([
-          {"t1", "threads", %{"action" => "list"}},
-          {"k2", "notes", %{"action" => "keep", "name" => "plan2", "content" => "x"}},
-          {"n1", "notes", %{"action" => "list"}}
-        ])
-      ])
-
-      handler = "schedule-failed-#{System.unique_integer([:positive])}"
-      test = self()
-
-      :ok =
-        :telemetry.attach(
-          handler,
-          [:cyfr, :schedules, :failed],
-          fn _event, _measurements, meta, _ -> send(test, {:failed, meta}) end,
-          nil
-        )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      id = schedule!(ctx, "Keeper", "look, then keep the plan")
-
-      # For a schedule, following no outside source.
-      {asked, approval_id} = waiting_on_card!(ctx, today!(ctx).id)
-
-      assert {:ok, %{decision: "approved"}} =
-               Approvals.resolve(ctx, approval_id, for_schedule(id))
-
-      await_status(ctx, asked, "completed")
-
-      # One answer: a read that brings in other people's words, the keep
-      # its allow covered until then, and another automatic read.
-      second = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{second.id => :sent}
-      turn = await_status(ctx, turn_of(ctx, second).id, "failed")
-      assert turn.error == sentence("notes.keep")
-
-      assert [
-               %{tool: "threads", action: "list", outcome: "ok"},
-               %{tool: "notes", action: "keep", outcome: "denied", started_at: nil},
-               %{tool: "notes", action: "list", started_at: nil} = never
-             ] = steps(ctx, turn)
-
-      refute never.outcome == "ok"
-      assert {:ok, %{notes: [%{name: "plan"}]}} = Aqua.Notes.list(ctx)
-      assert waiting_cards(ctx) == []
-
-      second_id = second.id
-      assert %{state: "failed"} = ended!(ctx, second, "failed")
-      assert_receive {:failed, %{schedule_id: ^id, occurrence_id: ^second_id}}, 5_000
-
-      assert {:ok, [%{kind: :failed_schedule, id: ^id}]} =
-               Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
-    end
-
-    # The standing rows as a schedule turn's loop and its steps read them,
-    # once the batch's model call is under way (`armed`). The loop's first
-    # read after that is the batch's decision, which finds the answer for
-    # threads.list: right after it, the answer is withdrawn, before any
-    # call dispatches. A step's worker reads them once to take the policy
-    # and, only for a call the policy asks for, again to judge the standing
-    # answer: the worker that reads them twice is the read's, named to the
-    # test. Nothing is held; every event is one the loop makes in order.
-    @doc false
-    def withdraw_at_decision(_event, _measurements, metadata, %{test: test, state: state}) do
-      with "tool_grants" <- metadata[:source],
-           true <- Agent.get(state, & &1.armed) do
-        me = self()
-
-        cond do
-          loop?(me) ->
-            if Agent.get_and_update(state, &{&1.withdrawn, %{&1 | withdrawn: true}}) == false do
-              {1, _} =
-                Arca.Repo.delete_all(
-                  from(g in Arca.Schemas.ToolGrant,
-                    where:
-                      g.schedule_id == ^Agent.get(state, & &1.schedule_id) and g.tool == "threads"
-                  )
-                )
-
-              send(test, :withdrawn)
-            end
-
-          loop?(List.first(Process.get(:"$callers", []))) ->
-            reads =
-              Agent.get_and_update(state, fn s ->
-                n = Map.get(s.reads, me, 0) + 1
-                {n, %{s | reads: Map.put(s.reads, me, n)}}
-              end)
-
-            if reads == 2, do: send(test, {:asking_worker, me})
-
-          true ->
-            :ok
-        end
-      end
-
-      :ok
-    end
-
-    defp loop?(pid) when is_pid(pid),
-      do: Enum.any?(Registry.keys(Aqua.RunnerRegistry, pid), &match?({:turn, _}, &1))
-
-    defp loop?(_none), do: false
-
-    # The soul's own file asks for `threads.list`, its grant walked again.
-    defp soul_asks!(ctx, key) do
-      path = Compendium.AquaPath.soul_file()
-      {:ok, binary} = Arca.get(actor(ctx), path)
-      {:ok, soul} = Compendium.AquaAgent.parse(Compendium.AquaPath.soul_name(), binary)
-      soul = %{soul | tool_policy: Map.put(soul.tool_policy, key, "ask")}
-      :ok = Arca.put(actor(ctx), path, Compendium.AquaAgent.serialize(soul))
-      {:ok, _} = Compendium.AgentIndex.sync(ctx)
-
-      decisions = %{ref: @aqua, selections: [%{dep: @model, label: "default"}]}
-      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
-      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-      {:ok, _} =
-        Sanctum.Consent.Commit.commit(ctx, %{
-          decisions: decisions,
-          plan_token: plan.plan_token,
-          proof: preview.proof,
-          commit_digest: preview.commit_digest,
-          expected_consent_revision: plan.expected_consent_revision
-        })
-    end
-
-    # A schedule with an answer "for a schedule" for threads.list, which
-    # the soul asks for, and the parallel batch of its fire held at both
-    # calls' dispatch checks with that answer withdrawn: the read reports
-    # the stop while its sibling's fetch is still running.
-    defp withdrawn_mid_batch!(ctx, order \\ :read_first) do
-      soul_asks!(ctx, "threads.list")
-      read_call = {"t1", "threads", %{"action" => "list"}}
-      fetch_call = {"h1", "http", %{"action" => "get", "url" => "https://example.test/a"}}
-
-      batch =
-        if order == :read_first, do: [read_call, fetch_call], else: [fetch_call, read_call]
-
-      start_supervised!(
-        {ScriptedWorker,
-         ref: [@model, "catalyst:local.http"],
-         script: [
-           {:probe, self()},
-           calls(batch),
-           {:probe, self()},
-           %{"status" => 200, "body" => "a"}
-         ]}
-      )
-
-      id = schedule!(ctx, "Lister", "list what is unread")
-
-      # "For a schedule", following no outside source, as the card's
-      # answer writes it; the day's thread has read nothing outside yet.
-      {:ok, _} =
-        Sanctum.ToolGrants.put(ctx, %{
-          scope: "agent",
-          effect: "allow",
-          agent_name: "aqua",
-          tool: "threads",
-          action: "list",
-          lifecycle_kind: "schedule",
-          lifecycle_id: id
-        })
-
-      {:ok, state} =
-        Agent.start_link(fn ->
-          %{armed: false, withdrawn: false, schedule_id: id, reads: %{}}
-        end)
-
-      handler = "withdraw-#{System.unique_integer([:positive])}"
-
-      :ok =
-        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.withdraw_at_decision/4, %{
-          test: self(),
-          state: state
-        })
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      # The next fire's turn has taken its policy and asks its model: from
-      # here the loop's next read of the standing rows is the batch's
-      # decision.
-      second = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{second.id => :sent}
-      assert_receive {:scripted_probe, model, _model_run}, 30_000
-      Agent.update(state, &%{&1 | armed: true})
-      send(model, :continue)
-
-      # Decided with the answer, then withdrawn before anything dispatched;
-      # the fetch's run is held by the script, and the read's worker, which
-      # judges the standing answer again at its dispatch, reports the stop
-      # and ends.
-      assert_receive :withdrawn, 30_000
-      assert_receive {:scripted_probe, player, fetch}, 30_000
-      assert_receive {:asking_worker, read}, 30_000
-      [{waiter, _}] = Registry.lookup(Opus.Registry, fetch)
-      refute waiter == read
-      wait_until(fn -> not Process.alive?(read) end, 30_000, "the read's worker to end")
-      :telemetry.detach(handler)
-
-      {id, second, waiter, player}
-    end
-
-    defp stopped_mid_batch!(ctx, id, second) do
-      turn = await_status(ctx, turn_of(ctx, second).id, "failed")
-      assert turn.error == sentence("threads.list")
-
-      assert [
-               %{tool: "threads", action: "list", outcome: "denied", error: denied},
-               %{tool: "http", action: "get", dispatch_state: "uncertain", outcome: "uncertain"}
-             ] = steps(ctx, turn)
-
-      assert denied == sentence("threads.list")
-      assert %{state: "failed"} = ended!(ctx, second, "failed")
-
-      assert {:ok, [%{kind: :failed_schedule, id: ^id}]} =
-               Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
-
-      # The model was asked nothing after the batch.
-      assert length(Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))) ==
-               1
-
-      turn
-    end
-
-    test "a sibling that dies after a parallel read reported the stop is marked uncertain, and the stop stands",
-         %{ctx: ctx} do
-      {id, second, waiter, player} = withdrawn_mid_batch!(ctx)
-
-      Process.exit(waiter, :kill)
-      send(player, :continue)
-
-      stopped_mid_batch!(ctx, id, second)
-    end
-
-    test "the stop stands whichever of the two calls the answer names first",
-         %{ctx: ctx} do
-      {_id, second, waiter, player} = withdrawn_mid_batch!(ctx, :fetch_first)
-
-      Process.exit(waiter, :kill)
-      send(player, :continue)
-
-      turn = await_status(ctx, turn_of(ctx, second).id, "failed")
-      assert turn.error == sentence("threads.list")
-
-      assert %{dispatch_state: "uncertain"} =
-               Enum.find(steps(ctx, turn), &(&1.tool == "http"))
-
-      assert %{state: "failed"} = ended!(ctx, second, "failed")
-    end
-
-    test "a sibling whose run is lost after a parallel read reported the stop is marked uncertain, and the stop stands",
-         %{ctx: ctx} do
-      {id, second, _waiter, player} = withdrawn_mid_batch!(ctx)
-
-      # The fetch's runner dies: its waiter answers an unknown outcome.
-      Process.exit(player, :kill)
-
-      turn = stopped_mid_batch!(ctx, id, second)
-
-      # Marked from the waiter's own answer, not from a death.
-      assert [
-               _read,
-               %{tool: "http", error: "Execution terminated: runner stopped without cleanup"}
-             ] =
-               steps(ctx, turn)
-    end
-
-    test "a turn ended failed with a step marked uncertain holds nothing back: the schedule's next turn there runs unrestricted",
-         %{ctx: ctx} do
-      {id, second, waiter, player} = withdrawn_mid_batch!(ctx)
-      Process.exit(waiter, :kill)
-      send(player, :continue)
-      stopped_mid_batch!(ctx, id, second)
-
-      ScriptedWorker.script([reply("Next.")])
-
-      third = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{third.id => :sent}
-      turn = await_status(ctx, turn_of(ctx, third).id, "completed")
-      refute Tape.restricted?(ctx, turn)
-      assert %{state: "completed"} = ended!(ctx, third, "completed")
-    end
-
-    test "an automatic read turned to never before it dispatches is refused, and the schedule's turn goes on",
-         %{ctx: ctx} do
-      script!([
-        {:probe, self()},
-        calls([{"t1", "threads", %{"action" => "list"}}]),
-        reply("Done without it.")
-      ])
-
-      id = schedule!(ctx, "Lister", "list what is unread")
-
-      # The fire's turn has taken its policy; while its model is asked, the
-      # person answers threads.list "never".
-      second = fire!(ctx, id)
-      assert ScheduleTurns.drain() == %{second.id => :sent}
-      assert_receive {:scripted_probe, player, _model_run}, 30_000
-
-      {:ok, _} =
-        Sanctum.ToolGrants.put(ctx, %{
-          scope: "agent",
-          effect: "deny",
-          agent_name: "aqua",
-          tool: "threads",
-          action: "list"
-        })
-
-      send(player, :continue)
-
-      turn = await_status(ctx, turn_of(ctx, second).id, "completed")
-
-      assert [
-               %{
-                 tool: "threads",
-                 action: "list",
-                 outcome: "denied",
-                 error: "threads.list is not in the agent's policy"
-               }
-             ] =
-               steps(ctx, turn)
-
-      assert List.last(Threads.messages(actor(ctx), turn.thread_id)).content == "Done without it."
-      assert %{state: "completed"} = ended!(ctx, second, "completed")
-      assert {:ok, []} = Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
-    end
-
-    test "an answer for this thread cannot end with a schedule, and one for a schedule names it; the card waits",
-         %{ctx: ctx} do
-      script!([
-        call("w1", "files", %{"action" => "write", "path" => "data/plan.md", "content" => "x"})
-      ])
-
-      id = schedule!(ctx, "Writer", "write the plan")
-      %{id: thread_id} = today!(ctx)
-      {:ok, %{turn_id: asked}} = Runner.send_message(ctx, thread_id, "write the plan")
-      await_status(ctx, asked, "paused")
-      [%{id: approval_id}] = waiting_cards(ctx)
-
-      for {choice, reason} <- [
-            {%{scope: :thread, lifecycle: :schedule, schedule: id}, :invalid_lifecycle},
-            {%{scope: :thread, lifecycle: :schedule}, :no_schedule},
-            {%{scope: :always, lifecycle: :schedule}, :no_schedule}
-          ] do
-        assert Approvals.resolve(ctx, approval_id, Map.put(choice, :decision, :approved)) ==
-                 {:error, {:scope_not_permitted, reason}},
-               "#{inspect(choice)} was not refused as #{reason}"
-      end
-
-      assert [%{id: ^approval_id}] = waiting_cards(ctx)
-      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread_id, "aqua")
-      :ok = Runner.stop_turn(ctx, thread_id)
+      assert %{last_error: nil} = row!(ctx, id)
     end
 
     test "a fire's turn that finds its claim another server's says so plainly, and ends nothing",
@@ -1464,70 +979,6 @@ defmodule Aqua.ScheduleTurnsTest do
       assert length(Threads.messages(actor(ctx), again)) == 2
     end
 
-    # An answer "for a schedule" is held by the schedule's row, not by its
-    # line: it stands while the schedule does, whatever it holds.
-    test "a new line or kind keeps the schedule's answers, and an Aqua line again is answered by them",
-         %{ctx: ctx} do
-      id = schedule!(ctx, "Morning", "say something")
-      %{id: thread_id} = today!(ctx)
-
-      {:ok, _} =
-        Sanctum.ToolGrants.put(ctx, %{
-          scope: "agent",
-          effect: "allow",
-          agent_name: "aqua",
-          tool: "threads",
-          action: "list",
-          lifecycle_kind: "schedule",
-          lifecycle_id: id
-        })
-
-      standing = fn ->
-        {:ok, rows} = Arca.ToolGrantStorage.list_for_thread(actor(ctx), thread_id)
-        Enum.filter(rows, &(&1.lifecycle_kind == "schedule" and &1.lifecycle_id == id))
-      end
-
-      assert [_allow] = standing.()
-
-      assert {:ok, _} =
-               Provider.handle("schedule", ctx, %{
-                 "action" => "update",
-                 "schedule_id" => id,
-                 "input" => %{"line" => "say something else"}
-               })
-
-      assert [_allow] = standing.()
-
-      # Made a component's schedule, then Aqua's again.
-      {:ok, _} =
-        CronSchedule.update(
-          actor(ctx),
-          id,
-          %{
-            reference: "reagent:local.test:1.0.0",
-            resolved_reference: "reagent:local.test:1.0.0",
-            profile_id: "prof_test",
-            input: Jason.encode!(%{"n" => 1})
-          },
-          by_person: true
-        )
-
-      assert %{reference: "reagent:local.test:1.0.0"} = row!(ctx, id)
-      assert [_allow] = standing.()
-
-      assert {:ok, _} =
-               Provider.handle("schedule", ctx, %{
-                 "action" => "update",
-                 "schedule_id" => id,
-                 "reference" => @aqua,
-                 "input" => %{"line" => "a new line"}
-               })
-
-      assert [_allow] = standing.()
-      refute Map.has_key?(row!(ctx, id), :thread_id)
-      assert threads(ctx) == [thread_id]
-    end
-
     test "a component's schedule is untouched: its claim is no line for Aqua, and makes no thread or post",
          %{ctx: ctx} do
       component = component!(ctx)
@@ -1579,12 +1030,12 @@ defmodule Aqua.ScheduleTurnsTest do
 
     test "a fire accepted behind busy work before midnight and drained again after it is found in the thread that accepted it, and leaves nothing in the new day",
          %{ctx: ctx} do
-      script!([keep("k1", "plan"), reply("Kept."), reply("Fired.")])
+      script!(held() ++ [reply("Planned."), reply("Fired.")])
       id = schedule!(ctx, "Morning", "say something")
 
       zone!(ctx, @west)
       %{id: day_before} = today!(ctx)
-      {mine, card} = waiting_on_card!(ctx, day_before)
+      {mine, player} = busy!(ctx, day_before)
 
       occurrence = fire!(ctx, id)
       assert ScheduleTurns.drain() == %{occurrence.id => :sent}
@@ -1600,9 +1051,7 @@ defmodule Aqua.ScheduleTurnsTest do
       assert turns_in(day_before) == [mine, queued.id]
       assert threads(ctx) == [day_before]
 
-      assert {:ok, %{decision: "approved"}} =
-               Approvals.resolve(ctx, card, %{decision: :approved})
-
+      release!(player)
       await_status(ctx, mine, "completed")
       assert %{thread_id: ^day_before} = await_status(ctx, queued.id, "completed")
       assert %{state: "completed"} = ended!(ctx, occurrence, "completed")

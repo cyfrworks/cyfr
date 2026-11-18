@@ -3,23 +3,16 @@
 
 defmodule Aqua.CanvasWriteTest do
   @moduledoc """
-  Aqua writes a canvas itself, through `canvas.write`, and asks the person
-  first (the soul's standing `ask`): a scripted turn's call opens a card
-  and writes nothing until it is decided. Every write asks: the action
-  takes no standing answer (`standing: false`), so its card offers only
-  this call's approval, and no allow, given on a card or stored past the
-  rule, covers a later write. The card names the streams the
-  version reads, from the call it binds. Approved, the call runs as the
-  card showed it, and the new version is laid whole, registered and
-  allocated, while the turn opens no stream and the request log holds
-  each file as its size and digest. Declined, or with its turn cancelled
-  while the card waits, nothing is written.
+  Aqua writes a canvas itself, through `canvas.write`. In `auto` a
+  scripted turn's call runs as the model made it: the new version is laid
+  whole, registered and allocated, while the turn opens no stream and the
+  request log holds each file as its size and digest. A read-only soul is
+  refused the call in its mode's sentence, and nothing is written.
   """
 
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Phoenix.LiveViewTest, only: [render_component: 2]
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
@@ -76,53 +69,10 @@ defmodule Aqua.CanvasWriteTest do
     {:ok, ctx: ctx, thread: thread}
   end
 
-  test "the write waits for the person, its card names the streams, and the approval runs " <>
-         "the call the card showed",
+  test "in auto the write runs as the model made it: the version laid whole, registered and " <>
+         "allocated, no stream opened and each file logged as its size and digest",
        %{ctx: ctx, thread: thread} do
     turn = asked!(ctx, thread)
-
-    # Nothing is written while the card waits.
-    assert %{approval: approval, intent: intent} = pending_card(ctx, turn)
-    assert_nothing_written(ctx)
-
-    # The card binds the call as the model made it, and names its streams.
-    assert %{"tool" => "canvas", "action" => "write", "args" => args} = intent["proposal"]
-
-    assert {args["name"], args["template"], args["files"], args["data"], args["feeds"]} ==
-             {@canvas, "vanilla", @files, @data, @feeds}
-
-    html = card_html(intent, approval)
-
-    [named] =
-      Regex.run(~r/data-test="approval-canvas-streams"[^>]*>(.*?)<\/div>/s, html,
-        capture: :all_but_first
-      )
-
-    assert named =~ "runs.changes"
-    assert named =~ "schedules.changes"
-    assert named =~ "feed.results (btc)"
-
-    # The card offers this call's approval and no standing answer, and one
-    # that would stand is refused while the card waits.
-    assert intent["standing"] == false
-    assert html =~ ~s(phx-value-scope="once")
-    refute html =~ ~s(data-test="approval-standing")
-    refute html =~ ~s(phx-value-scope="thread")
-    refute html =~ ~s(phx-value-scope="always")
-
-    for scope <- [:thread, :always] do
-      assert {:error, {:scope_not_permitted, :never_standing}} =
-               Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: scope})
-    end
-
-    assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
-    assert_nothing_written(ctx)
-
-    # Approved, the call runs as it was shown.
-    assert {:ok, %{decision: "approved"}} =
-             Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved})
-
-    assert :completed = resume(ctx, turn)
     assert %{dispatch_state: "closed", outcome: "ok"} = canvas_step(ctx, turn)
 
     # The version directory, whole: the files and the manifest.
@@ -167,76 +117,26 @@ defmodule Aqua.CanvasWriteTest do
              Map.new(@files, fn {path, text} -> {path, measured(text)} end)
   end
 
-  test "no standing answer covers a later write: none is taken at either scope, and one " <>
-         "stored past the rule leaves the next write waiting on its card",
+  test "a read-only soul is refused the write in its mode's sentence, and nothing is written",
        %{ctx: ctx, thread: thread} do
-    allow = fn scope, thread_id ->
-      %{
-        scope: scope,
-        effect: "allow",
-        thread_id: thread_id,
-        agent_name: "aqua",
-        tool: "canvas",
-        action: "write"
-      }
-    end
-
-    standing = [{"thread", thread.id}, {"agent", nil}]
-
-    for {scope, thread_id} <- standing do
-      assert {:error, {:scope_not_permitted, :never_standing}} =
-               Sanctum.ToolGrants.put(ctx, allow.(scope, thread_id)),
-             "canvas.write took a #{scope}-scope standing allow"
-    end
-
-    # Allows written straight to storage, as by a surface that never went
-    # through the rule, at both scopes: the turn's write still asks.
-    for {scope, thread_id} <- standing do
-      assert {:ok, _} =
-               Arca.ToolGrantStorage.put(
-                 Map.merge(allow.(scope, thread_id), %{
-                   athanor_id: ctx.athanor_id,
-                   granted_by: ctx.user_id
-                 })
-               )
-    end
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "mode" => "read-only"
+      })
 
     turn = asked!(ctx, thread)
-    assert %{intent: %{"standing" => false}} = pending_card(ctx, turn)
+
+    assert %{dispatch_state: "closed", outcome: "denied", result_message_id: refused} =
+             canvas_step(ctx, turn)
+
+    assert {:ok, %{content: content}} = Tape.message(ctx, refused)
+    assert content == Aqua.Loop.Policy.read_only_sentence("Aqua")
     assert_nothing_written(ctx)
   end
 
-  test "a declined card writes nothing", %{ctx: ctx, thread: thread} do
-    turn = asked!(ctx, thread)
-    %{approval: approval} = pending_card(ctx, turn)
-
-    assert {:ok, %{decision: "declined"}} =
-             Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
-
-    assert :completed = resume(ctx, turn)
-    assert %{outcome: "denied"} = canvas_step(ctx, turn)
-    assert_nothing_written(ctx)
-  end
-
-  test "a turn cancelled while its card waits writes nothing, and its card approves nothing",
-       %{ctx: ctx, thread: thread} do
-    turn = asked!(ctx, thread)
-    %{approval: approval} = pending_card(ctx, turn)
-
-    # As the runner stops a turn: abort it, then end it cancelled.
-    {:ok, open} = Tape.turn(ctx, turn.id)
-    assert {:ok, aborted} = Aqua.Loop.abort(ctx, open, "stopped")
-    assert {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
-
-    refute match?(
-             {:ok, %{decision: "approved"}},
-             Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved})
-           )
-
-    assert_nothing_written(ctx)
-  end
-
-  # The turn that asks to write the canvas, run until it waits on its card.
+  # The turn that asks to write the canvas, run to its end.
   defp asked!(ctx, thread) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
@@ -276,40 +176,16 @@ defmodule Aqua.CanvasWriteTest do
        ]}
     )
 
-    assert {:paused, :approval} =
+    assert :completed =
              Task.await(Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end), 60_000)
 
-    assert %{dispatch_state: "proposed"} = canvas_step(ctx, turn)
     turn
-  end
-
-  defp resume(ctx, turn) do
-    Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
-    |> Task.await(60_000)
   end
 
   defp canvas_step(ctx, turn) do
     {:ok, steps} = Tape.steps(ctx, turn)
     [step] = for %{kind: "tool", tool: "canvas", action: "write"} = step <- steps, do: step
     step
-  end
-
-  defp pending_card(ctx, turn) do
-    {:ok, fresh} = Tape.turn(ctx, turn.id)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, fresh)
-    {:ok, card} = Tape.message(ctx, approval.message_id)
-    %{approval: approval, intent: Tape.payload(card)["intent"]}
-  end
-
-  # The card as the console draws it.
-  defp card_html(intent, approval) do
-    render_component(PrismWeb.AquaApprovalCard,
-      id: "card-#{approval.id}",
-      message_id: approval.message_id,
-      approval_id: approval.id,
-      status: "pending",
-      payload: intent
-    )
   end
 
   defp assert_nothing_written(ctx) do

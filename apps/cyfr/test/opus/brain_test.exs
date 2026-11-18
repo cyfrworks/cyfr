@@ -13,11 +13,12 @@ defmodule Opus.BrainTest do
   attendant says; a write is refused, with nothing written, for a binding
   of another athanor, person, row or epoch, a moved fence, a moved
   generation, a step that is not the turn's decided `program.start` of
-  that row and epoch, a turn that is not running, and a stored decision
-  that no longer stands (a standing never recorded since, an allow past
-  its deadline or short of the turn's sources, a card not approved); a
-  paused turn's proof writes a post or an answer of its own work and
-  nothing else; a stale open ends no successor. A line that does not read, one past the bound, one lost
+  that row and epoch, and a turn that is not running; a paused turn's
+  proof writes a post or an answer of its own work and nothing else; a
+  stale open ends no successor. The configuration's `read_only` is the
+  stored turn's mode in every start and work, whatever the caller names,
+  and a work for a turn of the other mode starts the program again in
+  that mode. A line that does not read, one past the bound, one lost
   unread, the row's change, the driver's end, a lost answer to a write and
   a take-over each end the session, its box session closed.
   """
@@ -105,11 +106,8 @@ defmodule Opus.BrainTest do
         turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
-    {1, _} =
-      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [status: "running"]
-      )
-
+    # Running in the mode a start stores (`TurnStorage.start/3`).
+    set_turn(turn, status: "running", agent_mode: "auto")
     {:ok, turn} = TurnStorage.get(actor, turn.id)
     {:ok, thread} = Arca.ThreadStorage.get(actor, thread.id)
     {turn, thread}
@@ -117,9 +115,8 @@ defmodule Opus.BrainTest do
 
   # The step that admitted the program's start, as the loop records and
   # decides one: the model's `program.start` of `row` at its epoch, its
-  # `tool_call` row and its step written as a response's call, dispatched,
-  # and allowed by a standing answer for this thread as a card writes one
-  # (`Aqua.Standing.rows/5`); `allow: false` writes no answer.
+  # `tool_call` row and its step written as a response's call, and
+  # dispatched, which the loop does only once it decided the call.
   defp start_step!(ctx, turn, row, opts \\ []) do
     actor = Sanctum.Context.actor(ctx)
     {:ok, model} = TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: turn.fence})
@@ -141,31 +138,8 @@ defmodule Opus.BrainTest do
         ]
       })
 
-    step =
-      if Keyword.get(opts, :card) do
-        step
-      else
-        {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
-        step
-      end
-
-    if Keyword.get(opts, :allow, true), do: allow!(ctx, turn, row)
+    {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
     step
-  end
-
-  defp start_proposal(row),
-    do: %{
-      "tool" => "program",
-      "action" => "start",
-      "args" => %{"program" => row.id, "epoch" => row.epoch}
-    }
-
-  # A standing answer to the agent's `program.start` of `row`, recorded
-  # through Sanctum as the card's answer records one.
-  defp allow!(ctx, turn, row, bounds \\ %{}) do
-    {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_proposal(row), :thread, bounds)
-    {:ok, grant} = Sanctum.ToolGrants.put(ctx, grant)
-    grant
   end
 
   # The thread's turn over, and the next one addressed to `agent`.
@@ -181,9 +155,10 @@ defmodule Opus.BrainTest do
     later
   end
 
-  # `turn` running with its `program.start` of `row` admitted: its binding.
-  defp admitted!(ctx, binding, turn, row) do
-    set_turn(turn, status: "running")
+  # `turn` running in `mode` with its `program.start` of `row` admitted:
+  # its binding.
+  defp admitted!(ctx, binding, turn, row, mode \\ "auto") do
+    set_turn(turn, status: "running", agent_mode: mode)
     {:ok, turn} = TurnStorage.get(Sanctum.Context.actor(ctx), turn.id)
     step = start_step!(ctx, turn, row)
 
@@ -218,69 +193,12 @@ defmodule Opus.BrainTest do
     end
   end
 
-  defp no_allows!(ctx),
-    do:
-      Arca.Repo.delete_all(
-        from(g in Arca.Schemas.ToolGrant, where: g.athanor_id == ^ctx.athanor_id)
-      )
-
-  # A card opened on a start step as the loop opens one, its intent naming
-  # the proposal and the turn's sources it shows (`sources`, none by
-  # default; `intent` overrides members, `:drop` removing one), answered
-  # or still waiting; the waiting one's step is marked dispatched by hand,
-  # which no loop does, so the approval's own state is what refuses it.
-  defp carded!(ctx, turn, row, answer, opts \\ []) do
-    actor = Sanctum.Context.actor(ctx)
-    step = start_step!(ctx, turn, row, card: true, allow: false)
-    proposal = start_proposal(row)
-
-    intent =
-      %{
-        "kind" => "request_approval",
-        "proposal" => proposal,
-        "sources" => Prima.Source.to_json_list(Keyword.get(opts, :sources, []))
-      }
-      |> Map.merge(Keyword.get(opts, :intent, %{}))
-      |> Map.reject(fn {_key, value} -> value == :drop end)
-
-    {:ok, %{approval: approval}} =
-      TurnStorage.open_approval(actor, step.id, %{
-        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
-        card: %{content: "program.start", payload: %{"intent" => intent}},
-        fence: turn.fence
-      })
-
-    if answer == :approved do
-      {:ok, _} =
-        TurnStorage.resolve_approval(actor, approval.id, "approved", %{
-          resolution_kind: "continue",
-          fence: turn.fence
-        })
-
-      {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
-      step
-    else
-      {1, _} =
-        Arca.Repo.update_all(from(t in Arca.Schemas.TurnStep, where: t.id == ^step.id),
-          set: [dispatch_state: "dispatched"]
-        )
-
-      step
-    end
-  end
-
-  # The driver accepts the post just written, and the holder reads it.
-  defp accepted!(fake, row, brain) do
-    assert %{"t" => "post", "id" => id} = sent()
+  # The driver accepts the command `id` just written, and the holder
+  # reads it.
+  defp accepted!(fake, row, brain, id, boot \\ "boot-one") do
     say(fake, row, %{"t" => "accepted", "id" => id})
-    assert {"boot-one", [{seq, %{"t" => "accepted"}}]} = batch(brain)
-    :ok = Brain.read_on(brain, "boot-one", seq)
-  end
-
-  defp never!(ctx, turn, row) do
-    {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_proposal(row), :never)
-    {:ok, grant} = Sanctum.ToolGrants.put(ctx, grant)
-    grant
+    assert {^boot, [{seq, %{"t" => "accepted", "id" => ^id}}]} = batch(brain)
+    :ok = Brain.read_on(brain, boot, seq)
   end
 
   # A step written by hand, for the steps that are no decided start.
@@ -345,7 +263,11 @@ defmodule Opus.BrainTest do
     brain = opened!(fake, row, binding)
     assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => gen, "config" => config})
     assert %{"t" => "start"} = sent()
+    harness_started!(fake, row, brain)
+  end
 
+  # The driver answers the start just written, and the holder reads it.
+  defp harness_started!(fake, row, brain, boot \\ "boot-one") do
     say(fake, row, %{
       "t" => "started",
       "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
@@ -353,8 +275,8 @@ defmodule Opus.BrainTest do
       "held" => []
     })
 
-    assert {"boot-one", [{seq, %{"t" => "started"}}]} = batch(brain)
-    :ok = Brain.read_on(brain, "boot-one", seq)
+    assert {^boot, [{seq, %{"t" => "started"}}]} = batch(brain)
+    :ok = Brain.read_on(brain, boot, seq)
     brain
   end
 
@@ -564,6 +486,112 @@ defmodule Opus.BrainTest do
     end
   end
 
+  describe "the configuration's mode" do
+    # What a caller names beside the stored mode: a model, and the
+    # harness's own permission mode and tools.
+    @named %{
+      "model" => "opus",
+      "permission_mode" => "acceptEdits",
+      "harness_tools" => ["Read", "Grep"]
+    }
+
+    # A work written as it came, on the process that was running: its
+    # configuration, held as the start's was, is the running one.
+    defp worked!(fake, row, brain, binding, work, config) do
+      [{running, _}] = running_sessions(fake, row)
+      assert :ok = Brain.write(brain, binding, work, config: config)
+      assert sent() == work
+      accepted!(fake, row, brain, work["id"])
+      assert [{^running, %{running: true}}] = running_sessions(fake, row)
+    end
+
+    test "a turn stored read-only starts and works read-only, with none of the harness's own " <>
+           "permission mode or tools, whatever the caller names",
+         %{fake: fake, row: row, binding: binding, turn: turn} do
+      set_turn(turn, agent_mode: "read-only")
+      named = Map.put(@named, "read_only", false)
+      brain = opened!(fake, row, binding)
+
+      assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => named})
+
+      assert sent() == %{
+               "t" => "start",
+               "gen" => 0,
+               "config" => %{"model" => "opus", "read_only" => true}
+             }
+
+      harness_started!(fake, row, brain)
+      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
+      worked!(fake, row, brain, binding, work, named)
+    end
+
+    test "a turn stored auto starts and works with read_only false, keeping the caller's " <>
+           "permission mode and tools",
+         %{fake: fake, row: row, binding: binding, turn: turn} do
+      set_turn(turn, agent_mode: "auto")
+      named = Map.put(@named, "read_only", true)
+      brain = opened!(fake, row, binding)
+
+      assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => named})
+
+      assert sent() == %{
+               "t" => "start",
+               "gen" => 0,
+               "config" => Map.put(@named, "read_only", false)
+             }
+
+      harness_started!(fake, row, brain)
+      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
+      worked!(fake, row, brain, binding, work, named)
+    end
+
+    test "a later turn of the same mode works on the running process; one of the other mode " <>
+           "starts the program again, resuming, in its own mode",
+         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
+      brain = started!(fake, row, binding, @named)
+      [{first, _}] = running_sessions(fake, row)
+
+      same = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "aqua"), row, "auto")
+      work = %{"t" => "work", "id" => "stp_same", "work" => same.turn_id, "tools" => []}
+      worked!(fake, row, brain, same, work, @named)
+
+      other =
+        admitted!(
+          ctx,
+          binding,
+          next_turn!(ctx, thread.id, %{id: same.turn_id}, "aqua"),
+          row,
+          "read-only"
+        )
+
+      flush_opens_and_closes()
+      switched = %{work | "id" => "stp_switched", "work" => other.turn_id}
+      assert {:ok, :restarted} = Brain.write(brain, other, switched, config: @named)
+      refute_sent()
+
+      assert [{"close", %{"session" => ^first}}, {"open", %{"home_id" => home}}] =
+               opens_and_closes(2)
+
+      assert home == row.id
+      assert [{second, %{running: true}}] = running_sessions(fake, row)
+      assert second != first
+
+      say(fake, row, hello("boot-two"))
+      assert {"boot-two", [{1, %{"t" => "hello"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-two", 1)
+
+      resume = %{
+        "t" => "start",
+        "gen" => 0,
+        "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
+        "config" => @named
+      }
+
+      assert :ok = Brain.write(brain, other, resume)
+      assert sent() == %{resume | "config" => %{"model" => "opus", "read_only" => true}}
+    end
+  end
+
   describe "the binding to admitted work" do
     setup %{fake: fake, row: row, binding: binding} do
       {:ok, brain: started!(fake, row, binding)}
@@ -673,43 +701,6 @@ defmodule Opus.BrainTest do
       refute_sent()
     end
 
-    test "a standing never recorded after the start writes nothing", %{
-      brain: brain,
-      binding: binding,
-      ctx: ctx,
-      turn: turn,
-      row: row
-    } do
-      never!(ctx, turn, row)
-      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :denied}}
-      refute_sent()
-    end
-
-    test "an allow past its deadline writes nothing", %{
-      brain: brain,
-      binding: binding,
-      ctx: ctx
-    } do
-      {1, _} =
-        Arca.Repo.update_all(
-          from(g in Arca.Schemas.ToolGrant, where: g.athanor_id == ^ctx.athanor_id),
-          set: [expires_at: DateTime.add(DateTime.utc_now(), -60, :second)]
-        )
-
-      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :withdrawn}}
-      refute_sent()
-    end
-
-    test "an allow that names none of the turn's outside sources writes nothing", %{
-      brain: brain,
-      binding: binding,
-      turn: turn
-    } do
-      set_turn(turn, sources: Prima.Source.encode([Prima.Source.outside("the web")]))
-      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :withdrawn}}
-      refute_sent()
-    end
-
     test "a step whose call started another program, or this one at another epoch, writes nothing",
          %{brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
       other = brain_row!(ctx, "another")
@@ -722,74 +713,6 @@ defmodule Opus.BrainTest do
 
         assert Brain.write(brain, %{binding | step: step.id}, post(binding)) ==
                  {:error, {:not_admitted, :not_this_program}}
-      end
-
-      refute_sent()
-    end
-
-    test "a start the person allowed on its card writes, until a standing never; one not approved writes nothing",
-         %{fake: fake, brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
-      no_allows!(ctx)
-      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :withdrawn}}
-
-      approved = carded!(ctx, turn, row, :approved)
-      waiting = carded!(ctx, turn, row, :waiting)
-
-      assert Brain.write(brain, %{binding | step: waiting.id}, post(binding)) ==
-               {:error, {:not_admitted, :not_allowed}}
-
-      refute_sent()
-
-      assert :ok = Brain.write(brain, %{binding | step: approved.id}, post(binding))
-      accepted!(fake, row, brain)
-
-      never!(ctx, turn, row)
-
-      assert Brain.write(brain, %{binding | step: approved.id}, post(binding, "stp_post_2")) ==
-               {:error, {:not_admitted, :denied}}
-
-      refute_sent()
-    end
-
-    # #8321's first finding: a card covers the outside sources it showed
-    # and no other, since the session takes the posts and results of later
-    # writes; a card whose sources cannot be read covers none.
-    test "a start the person allowed on its card writes only while the turn's outside sources are ones the card showed",
-         %{fake: fake, brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
-      no_allows!(ctx)
-      web = Prima.Source.outside("the web")
-      approved = carded!(ctx, turn, row, :approved, sources: [web])
-      binding = %{binding | step: approved.id}
-
-      assert :ok = Brain.write(brain, binding, post(binding))
-      accepted!(fake, row, brain)
-
-      set_turn(turn, sources: Prima.Source.encode([web]))
-      assert :ok = Brain.write(brain, binding, post(binding, "stp_post_2"))
-      accepted!(fake, row, brain)
-
-      set_turn(turn, sources: Prima.Source.encode([web, Prima.Source.outside("mail")]))
-
-      assert Brain.write(brain, binding, post(binding, "stp_post_3")) ==
-               {:error, {:not_admitted, :source_not_covered}}
-
-      refute_sent()
-    end
-
-    test "a card whose shown sources cannot be read covers nothing", %{
-      brain: brain,
-      binding: binding,
-      ctx: ctx,
-      turn: turn,
-      row: row
-    } do
-      no_allows!(ctx)
-
-      for intent <- [%{"sources" => :drop}, %{"sources" => "[]"}, %{"sources" => ["the web"]}] do
-        step = carded!(ctx, turn, row, :approved, intent: intent)
-
-        assert Brain.write(brain, %{binding | step: step.id}, post(binding)) ==
-                 {:error, {:not_admitted, :coverage_unreadable}}
       end
 
       refute_sent()
@@ -885,9 +808,22 @@ defmodule Opus.BrainTest do
   end
 
   describe "a paused turn's narrow proof" do
-    test "delivers a post or an answer of its own work, and starts nothing",
+    # The launch pause, a turn's one wait on the person: the program's
+    # start or work is refused while it holds, the same one written once
+    # the turn runs again, so the pause alone refused it.
+    test "on a launch pause, delivers a post or an answer of its own work, and neither starts nor works",
          %{fake: fake, row: row, binding: binding, turn: turn} do
-      brain = started!(fake, row, binding)
+      brain = opened!(fake, row, binding)
+      set_turn(turn, status: "paused", paused_reason: "launch")
+
+      start = %{"t" => "start", "gen" => 0, "config" => %{}}
+      assert Brain.write(brain, binding, start) == {:error, {:not_admitted, :paused}}
+      refute_sent()
+
+      set_turn(turn, status: "running", paused_reason: nil)
+      assert :ok = Brain.write(brain, binding, start)
+      assert sent() == %{start | "config" => %{"read_only" => false}}
+      harness_started!(fake, row, brain)
 
       say(fake, row, %{
         "t" => "ask",
@@ -900,17 +836,15 @@ defmodule Opus.BrainTest do
 
       {_boot, [{seq, _}]} = batch(brain)
       :ok = Brain.read_on(brain, "boot-one", seq)
-      set_turn(turn, status: "paused", paused_reason: "approval")
+      set_turn(turn, status: "paused", paused_reason: "launch")
 
       work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
       assert Brain.write(brain, binding, work) == {:error, {:not_admitted, :paused}}
       refute_sent()
 
       assert :ok = Brain.write(brain, binding, post(binding))
-      assert %{"t" => "post"} = sent()
-      say(fake, row, %{"t" => "accepted", "id" => "stp_post"})
-      {_boot, [{seq, _}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-one", seq)
+      assert sent() == post(binding)
+      accepted!(fake, row, brain, "stp_post")
 
       answer = %{
         "t" => "answer",
@@ -921,29 +855,26 @@ defmodule Opus.BrainTest do
       }
 
       assert :ok = Brain.write(brain, binding, answer)
-      assert %{"t" => "answer"} = sent()
+      assert sent() == answer
+      accepted!(fake, row, brain, "stp_answer")
+
+      set_turn(turn, status: "running", paused_reason: nil)
+      assert :ok = Brain.write(brain, binding, work)
+      assert sent() == work
     end
 
-    test "opens nothing: a paused turn starts no driver", %{binding: binding, turn: turn} do
-      set_turn(turn, status: "paused", paused_reason: "approval")
+    test "opens nothing: a turn paused on a launch starts no driver", %{
+      binding: binding,
+      turn: turn
+    } do
+      set_turn(turn, status: "paused", paused_reason: "launch")
       assert Brain.open(binding) == {:error, {:not_admitted, :paused}}
       refute_received {:session, "open", _wire, _fields}
     end
 
-    test "revocation and a take-over end it", %{
-      fake: fake,
-      row: row,
-      binding: binding,
-      ctx: ctx,
-      turn: turn
-    } do
+    test "a take-over ends it", %{fake: fake, row: row, binding: binding, turn: turn} do
       brain = started!(fake, row, binding)
-      set_turn(turn, status: "paused", paused_reason: "approval")
-      never!(ctx, turn, row)
-
-      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :denied}}
-
-      set_turn(turn, fence: turn.fence + 1)
+      set_turn(turn, status: "paused", paused_reason: "launch", fence: turn.fence + 1)
       assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :superseded}}
       refute_sent()
     end

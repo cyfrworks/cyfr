@@ -324,12 +324,12 @@ defmodule Aqua.Providers.NotesTest do
     assert sources == Prima.Source.to_json_list([vault])
   end
 
-  test "an approved call keeps a note from inside the chain, and only an OIDC session's chain may",
+  test "a turn's call keeps a note from inside the chain, kept by Aqua, and only an OIDC session's chain may",
        %{ctx: ctx, mine: mine} do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])
 
     # What the model wrote as provenance — ignored in a chain: the host
-    # stamps the card's own execution and thread as lineage, and
+    # stamps the turn's own execution and thread as lineage, and
     # those are the only provenance the tool records there. The guest's
     # own lineage keys are dropped before the stamp.
     args = %{
@@ -346,7 +346,7 @@ defmodule Aqua.Providers.NotesTest do
     turn = turn_in!(ctx, daily, [])
     lineage = [lineage: %{root_execution_id: turn.root_execution_id, thread_id: daily.id}]
 
-    # The person's own session, now guest-planed by the approved run: the
+    # The person's own session, now guest-planed by the turn's run: the
     # plane is not asked again, the surface is.
     assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth, lineage)
     assert id == mine.id
@@ -354,8 +354,9 @@ defmodule Aqua.Providers.NotesTest do
     assert {:ok, %{thread: thread, execution: execution, kept_by: kept_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
 
+    # A note a turn keeps names Aqua as its keeper, as its pin does.
     assert thread == daily.id and execution == turn.root_execution_id
-    assert kept_by == ctx.user_id
+    assert kept_by == Prima.Author.agent()
 
     # A lineage that names a thread no open turn of it answers for keeps
     # nothing.
@@ -367,13 +368,16 @@ defmodule Aqua.Providers.NotesTest do
     # still not recorded: the execution kept is the calling one.
     assert {:ok, _} = in_chain(ctx, %{args | "name" => "bare"}, auth)
 
-    assert {:ok, %{thread: nil, execution: execution}} =
+    # A chain whose lineage names no thread keeps it as the person it runs
+    # for.
+    assert {:ok, %{thread: nil, execution: execution, kept_by: bare_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "bare"}, auth)
 
     assert String.starts_with?(execution, "exec_")
+    assert bare_by == ctx.user_id
 
     # The same formula started by a key or a schedule is refused inside the
-    # chain exactly as it is at the door — the click was a session's.
+    # chain exactly as it is at the door — the call was a session's.
     for method <- [:api_key, :scheduled] do
       assert {:error,
               %Prima.Refusal{
@@ -764,7 +768,7 @@ defmodule Aqua.Providers.NotesTest do
     end
   end
 
-  test "the shipped soul's manifest grants the notes actions its policy names" do
+  test "the shipped soul's manifest grants the notes actions its list names" do
     # The chain authority is exact `tool.action` membership in the consent
     # blob, minted from the manifest's caps against the loaded providers —
     # a name no provider serves drops silently, so this pins that every

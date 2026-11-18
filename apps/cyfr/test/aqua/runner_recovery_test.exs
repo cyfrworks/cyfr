@@ -26,8 +26,7 @@ defmodule Aqua.RunnerRecoveryTest do
   import ExUnit.CaptureLog
   import Prima.Test.Wait
 
-  alias Aqua.{Approvals, Runner, Tape}
-  alias Cyfr.Bus.ThreadEvent
+  alias Aqua.{Runner, Tape}
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.Bootstrap
 
@@ -334,35 +333,72 @@ defmodule Aqua.RunnerRecoveryTest do
   end
 
   describe "a page's calls a runner recovers" do
-    test "its predecessor's proposed page steps are skipped, their cards withdrawn, and the " <>
-           "turn goes on: a late yes runs nothing",
+    test "its predecessor's proposed page step is skipped, and the turn opened on it goes on " <>
+           "to its end with no model asked: the call never runs",
          %{ctx: ctx} do
       start_supervised!({ScriptedWorker, ref: @model, script: [reply("put")]})
       ws = workspace!(ctx)
       :ok = Runner.subscribe(ws.id, ctx.athanor_id)
-      # The turn that put the page, run by a runner the recovery starts.
+      # The turn that put the page, run by a runner the recovery starts,
+      # which then goes.
       put = open_turn!(ctx, ws).id
       assert Runner.recover_all(wait_reported()) == :ok
       wait_until(fn -> ended?(ctx, put) end, 60_000, "the put ends")
       assert {:ok, %{status: "completed"}} = Tape.turn(ctx, put)
+      wait_until(fn -> match?(%{running: false}, Runner.state(ws.id, ctx.athanor_id)) end)
+      runner = Runner.whereis(ws.id)
+      _ = :sys.get_state(runner)
+      :ok = DynamicSupervisor.terminate_child(Aqua.RunnerSupervisor, runner)
 
+      # A runner that is gone opened a turn on a page's call, ran it, and
+      # proposed the call as its step; its boot's slot and keeper went with
+      # it, and the rows say running.
       call = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
-      assert {:ok, predecessor} = Runner.page_call(ws.id, ctx.athanor_id, call)
-      assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work}}, 60_000
-      {:ok, paused} = Tape.turn(ctx, work)
-      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-      [%{id: step_id, dispatch_state: "proposed", approval_id: card}] = steps!(ctx, work)
-      assert card == approval.id
 
-      # The runner dies holding the call; the supervisor starts its successor.
-      watched = Process.monitor(predecessor)
-      Process.exit(predecessor, :kill)
-      assert_receive {:DOWN, ^watched, :process, ^predecessor, :killed}, 5_000
-      wait_until(fn -> Runner.whereis(ws.id) not in [nil, predecessor] end, 30_000, "a successor")
-      wait_until(fn -> ended?(ctx, work) end, 60_000, "the work ends")
+      {:ok, %{turn: opened}} =
+        Tape.accept(ctx, ws.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "page_call",
+            content: call.name,
+            payload: Aqua.PageCalls.row(call),
+            client_id: call.request
+          },
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
 
-      assert {:ok, %{status: "completed", error: nil}} = Tape.turn(ctx, work)
-      assert {:ok, %{status: "invalidated"}} = Tape.approval(ctx, approval.id)
+      {:ok, claim} = Opus.claim_turn_root(ctx, @soul, turn_id: opened.id, thread_id: ws.id)
+
+      {:ok, %{capability_digest: capability, revision_digest: revision}} =
+        Compendium.AgentIndex.snapshot(ctx, "aqua")
+
+      {:ok, running} =
+        Tape.start_turn(ctx, opened, %{
+          root_execution_id: claim.execution_id,
+          attempt: claim.attempt,
+          budget_id: claim.budget_id,
+          profile_id: claim.authority.profile_id,
+          consent_id: claim.authority.consent_id,
+          agent_revision_digest: revision,
+          agent_capability_digest: capability,
+          agent_mode: "auto",
+          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+        })
+
+      proposal =
+        Aqua.PageCalls.proposal(running, Aqua.PageCalls.row(call), message_id: opened.message_id)
+
+      {:ok, %{id: step_id, dispatch_state: "proposed"}} =
+        Tape.propose_call(ctx, running, proposal)
+
+      :ok = Opus.release_turn_root(ctx, claim.execution_id, claim: claim)
+      assert Runner.whereis(ws.id) == nil
+
+      assert Runner.recover_all(wait_reported()) == :ok
+      wait_until(fn -> ended?(ctx, opened.id) end, 60_000, "the work ends")
+
+      assert {:ok, %{status: "completed", error: nil}} = Tape.turn(ctx, opened.id)
 
       assert [
                %{
@@ -376,14 +412,12 @@ defmodule Aqua.RunnerRecoveryTest do
                  generation: 0,
                  result_message_id: result
                }
-             ] = steps!(ctx, work)
+             ] = steps!(ctx, opened.id)
 
-      assert {:ok, %{kind: "page_result", content: @orphaned, turn_id: ^work}} =
+      assert {:ok, %{kind: "page_result", content: @orphaned, turn_id: turn_id}} =
                Tape.message(ctx, result)
 
-      assert {:ok, %{decision: "invalidated", replayed: true}} =
-               Approvals.resolve(ctx, approval.id, %{decision: :approved})
-
+      assert turn_id == opened.id
       assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
       assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat")) == 1
     end

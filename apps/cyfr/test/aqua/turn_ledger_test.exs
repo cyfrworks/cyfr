@@ -106,22 +106,24 @@ defmodule Aqua.TurnLedgerTest do
 
     test "the capability probe, under no step, is seeded with every turn on the root",
          %{ctx: ctx, thread: thread, actor: actor} do
+      # The second read's child dies before it answers: the turn stops on
+      # the unknown outcome, having read the news.
       script!([
         calls([get("g1")]),
         %{"body" => "Fares rise"},
-        calls([keep("k1", "fares", "they rise")]),
+        calls([get("g2")]),
+        {:crash, :before_response},
         reply("done")
       ])
 
-      turn = accept!(ctx, thread, "@aqua read and keep")
-      assert {:paused, :approval} = run!(ctx, turn)
+      turn = accept!(ctx, thread, "@aqua read twice")
+      assert {:paused, :uncertain} = run!(ctx, turn)
       at_pause = sources(ctx, turn)
       assert Source.outside("news.example") in at_pause
 
       # The model's description is asked again when the turn resumes, as a
       # child of the root under no step.
       :ok = Arca.Cache.delete_match({:model_caps, ctx.athanor_id, :_, :_, :_})
-      approve!(ctx, turn)
       assert :completed = resume!(ctx, turn)
 
       %{execution_id: probe} =
@@ -171,10 +173,13 @@ defmodule Aqua.TurnLedgerTest do
     end
 
     test "a compaction's, before its summary is committed", %{ctx: ctx, thread: thread} do
+      # The note flush ahead of the compaction keeps nothing, and the window
+      # it reports is still full.
       script!(
         [
           response([get("g1")], nil, @full),
           %{"body" => "Fares rise"},
+          reply("nothing to keep", @full),
           {:probe, self()},
           reply("the story so far"),
           reply("Fares rise.")
@@ -192,17 +197,6 @@ defmodule Aqua.TurnLedgerTest do
     end
 
     test "a note flush's, before the notes it keeps", %{ctx: ctx, thread: thread} do
-      {:ok, _} =
-        Sanctum.ToolGrants.put(ctx, %{
-          scope: "thread",
-          effect: "allow",
-          thread_id: thread.id,
-          agent_name: "aqua",
-          tool: "notes",
-          action: "keep",
-          sources: []
-        })
-
       script!(
         [
           response([read("f1")], nil, @full),
@@ -508,13 +502,6 @@ defmodule Aqua.TurnLedgerTest do
     ledger
   end
 
-  defp approve!(ctx, turn) do
-    {:ok, [approval]} = Tape.pending_approvals(ctx, turn_row(ctx, turn))
-
-    assert {:ok, %{decision: "approved"}} =
-             Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved})
-  end
-
   defp turn_row(ctx, turn) do
     {:ok, row} = Tape.turn(ctx, turn.id)
     row
@@ -564,10 +551,10 @@ defmodule Aqua.TurnLedgerTest do
     }
   end
 
-  defp reply(text),
+  defp reply(text, input_tokens \\ 10),
     do: %{
       "content" => [%{"type" => "text", "text" => text}],
       "stop_reason" => "end_turn",
-      "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
+      "usage" => %{"input_tokens" => input_tokens, "output_tokens" => 5}
     }
 end

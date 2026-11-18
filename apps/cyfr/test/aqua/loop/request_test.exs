@@ -3,7 +3,7 @@
 
 defmodule Aqua.Loop.RequestTest do
   @moduledoc """
-  The request the loop sends: tools from the effective policy, and the
+  The request the loop sends: tools from the member's offered set, and the
   projection shaped for the contract — a step's reply and calls as one
   assistant message with the stored typed blocks, results on a tool
   message with the call's name, a compaction in place of the rows before
@@ -29,31 +29,34 @@ defmodule Aqua.Loop.RequestTest do
   @agent Message.agent_author()
   @system Message.system_author()
 
-  test "tools come from the policy: offered when auto or ask, enum restricted, asks said" do
-    policy = %{
-      "files.read" => "auto",
-      "files.write" => "ask",
-      "files.delete" => "deny",
-      "notes.read" => "auto",
-      "notes.keep" => "ask",
-      "http.get" => "deny",
-      "native_search" => "auto"
-    }
+  test "tools come from the offered set: a tool per offered action, its enum those, and no approval said" do
+    tools = ~w(files.read files.write notes.read notes.keep browser.open native_search)
 
-    tools = Request.tool_definitions(policy)
+    # The person's browser setting off turns the browser's action off: the
+    # browser is no tool of the request; on, it is one.
+    off = Request.tool_definitions(Aqua.Offered.resolve(tools, {:ok, false}))
+    on = Request.tool_definitions(Aqua.Offered.resolve(tools, {:ok, true}))
 
-    names = Enum.map(tools, & &1["name"])
-    assert names == ["files", "notes", "ui", "request_setup"]
+    assert Enum.map(off, & &1["name"]) == ["files", "notes", "ui", "request_setup"]
+    assert Enum.map(on, & &1["name"]) == ["files", "browser", "notes", "ui", "request_setup"]
 
-    files = Enum.find(tools, &(&1["name"] == "files"))
+    files = Enum.find(off, &(&1["name"] == "files"))
     assert files["parameters"]["properties"]["action"]["enum"] == ["read", "write"]
-    assert files["description"] =~ "Actions write need the person's approval"
     assert Map.has_key?(files["parameters"]["properties"], "path")
 
-    notes = Enum.find(tools, &(&1["name"] == "notes"))
+    notes = Enum.find(off, &(&1["name"] == "notes"))
     assert notes["parameters"]["properties"]["action"]["enum"] == ["keep", "read"]
 
-    # External tools ride under their wire name.
+    # A catalog tool's description is the catalog's own, whatever its
+    # actions do: nothing is said of an approval or a pause.
+    {:ok, declared} = Sanctum.Catalog.get_tool("notes")
+    assert notes["description"] == declared["description"]
+
+    for tool <- on,
+        do: refute(tool["description"] =~ ~r/approval|pauses the turn/, tool["name"])
+
+    # External tools ride under their wire name, with their server's own
+    # description.
     [ext] =
       Request.tool_definitions(%{},
         external: [
@@ -62,31 +65,26 @@ defmodule Aqua.Loop.RequestTest do
       )
       |> Enum.filter(&(&1["name"] == "github__search"))
 
-    assert ext["description"] =~ "approval"
+    assert ext["description"] == "Search"
   end
 
-  test "a launch under auto is said to run on the component's grant and still ask when what was read is not covered; under ask, to ask" do
-    execution = fn policy ->
-      policy |> Request.tool_definitions() |> Enum.find(&(&1["name"] == "execution"))
-    end
+  test "a launch's description is the catalog's own: a run is said to need no approval" do
+    execution =
+      %{"execution.run" => "offered", "execution.logs" => "offered"}
+      |> Request.tool_definitions()
+      |> Enum.find(&(&1["name"] == "execution"))
 
-    auto = execution.(%{"execution.run" => "auto", "execution.logs" => "auto"})
-    assert auto["description"] =~ "A component the person has granted runs at once through run;"
-    assert auto["description"] =~ "does not let it send on"
-    refute auto["description"] =~ "Actions run need"
-
-    asks = execution.(%{"execution.run" => "ask"})
-    assert asks["description"] =~ "Actions run need the person's approval"
-    refute asks["description"] =~ "granted runs at once"
-
-    # Another tool's auto says nothing of a grant.
-    refute execution.(%{"execution.logs" => "auto"})["description"] =~ "granted"
+    {:ok, declared} = Sanctum.Catalog.get_tool("execution")
+    assert execution["description"] == declared["description"]
+    refute execution["description"] =~ "approval"
+    assert Enum.sort(execution["parameters"]["properties"]["action"]["enum"]) == ["logs", "run"]
   end
 
   test "catalog tools alone, and an instruction as the person's last word" do
-    assert [%{"name" => "notes"} = notes] = Request.catalog_tools(%{"notes.keep" => "auto"})
+    assert [%{"name" => "notes"} = notes] = Request.catalog_tools(%{"notes.keep" => "offered"})
     assert get_in(notes, ["parameters", "properties", "action", "enum"]) == ["keep"]
-    assert Request.catalog_tools(%{"files.read" => "auto", "notes.keep" => "deny"}) == []
+    # A hand is no catalog tool, and a browser action turned off is none.
+    assert Request.catalog_tools(%{"files.read" => "offered", "browser.open" => "off"}) == []
 
     user = %{"role" => "user", "content" => [%{"type" => "text", "text" => "hi"}]}
     tool = %{"role" => "tool", "content" => [%{"type" => "tool_result", "tool_call_id" => "c"}]}
@@ -117,7 +115,7 @@ defmodule Aqua.Loop.RequestTest do
       }
 
       text =
-        connection(Request.tool_definitions(%{"execution.run" => "ask"}, accounts: accounts))
+        connection(Request.tool_definitions(%{"execution.run" => "offered"}, accounts: accounts))
 
       assert text =~ "omit `connection` for its default account"
       assert text =~ ~s[formula:local.mailer ("Personal", "Work")]
@@ -128,7 +126,7 @@ defmodule Aqua.Loop.RequestTest do
       # Nothing listed says so, and still names the default.
       none =
         connection(
-          Request.tool_definitions(%{"execution.run" => "auto"},
+          Request.tool_definitions(%{"execution.run" => "offered"},
             accounts: %{apps: [], truncated?: false}
           )
         )
@@ -137,7 +135,7 @@ defmodule Aqua.Loop.RequestTest do
       assert none =~ "No app binds a named account"
 
       # Without the turn's list the declared description stands.
-      declared = connection(Request.tool_definitions(%{"execution.run" => "ask"}))
+      declared = connection(Request.tool_definitions(%{"execution.run" => "offered"}))
       assert declared =~ "a run started outside a chain asks its profile's own calls for it"
       refute declared =~ "Apps with named accounts"
     end
@@ -148,7 +146,7 @@ defmodule Aqua.Loop.RequestTest do
 
       text =
         connection(
-          Request.tool_definitions(%{"execution.run" => "ask"},
+          Request.tool_definitions(%{"execution.run" => "offered"},
             accounts: %{apps: apps, truncated?: false}
           )
         )
@@ -160,7 +158,7 @@ defmodule Aqua.Loop.RequestTest do
       # Heads read cut short: more may stand, uncounted.
       cut =
         connection(
-          Request.tool_definitions(%{"execution.run" => "ask"},
+          Request.tool_definitions(%{"execution.run" => "offered"},
             accounts: %{apps: Enum.take(apps, 2), truncated?: true}
           )
         )
@@ -706,21 +704,21 @@ defmodule Aqua.Loop.RequestTest do
            ]
   end
 
-  test "the provider's own search runs only when the policy turns it on and the grant carries it" do
+  test "the provider's own search runs only when the member is offered it and the grant carries it" do
     granted = fn tools ->
       %Prima.Authority{resources: %Prima.Authority.Blob.Edge{tools: tools}}
     end
 
-    on = %{"native_search" => "auto", "files.read" => "auto"}
+    on = %{"native_search" => "offered", "files.read" => "offered"}
 
     assert Request.native_search?(on, granted.(["files.read", "native_search"]))
 
-    # The policy says auto, but the grant the turn runs under lacks it.
+    # The member is offered it, but the grant the turn runs under lacks it.
     refute Request.native_search?(on, granted.(["files.read"]))
     refute Request.native_search?(on, %Prima.Authority{resources: :none})
 
-    # The grant carries it, but the policy does not turn it on.
-    refute Request.native_search?(%{"native_search" => "ask"}, granted.(["native_search"]))
+    # The grant carries it, but the member is not offered it.
+    refute Request.native_search?(%{"files.read" => "offered"}, granted.(["native_search"]))
     refute Request.native_search?(%{}, granted.(["native_search"]))
 
     # A request offers it, and a turn records the open web, only where the
