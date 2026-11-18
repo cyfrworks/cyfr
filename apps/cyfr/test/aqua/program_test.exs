@@ -1645,6 +1645,45 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == [line]
     end
 
+    test "an idle of other work leaves the open work owing output: after a tool's answer is " <>
+           "taken with no post owed, the program is still busy and its clock runs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "write it down")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      say(
+        fake,
+        row,
+        ask(turn, "ask-1", "files", %{
+          "action" => "write",
+          "path" => "data/b.md",
+          "content" => "x"
+        })
+      )
+
+      assert {:paused, :approval} = Task.await(loop, 30_000)
+      %{approval: card} = pending_card(ctx, turn)
+      say(fake, row, idle(turn, [input.id]))
+      committed!(ctx, thread, 6)
+      approve!(ctx, card)
+      loop = resume(ctx, turn)
+      assert %{"t" => "answer", "id" => answer} = sent()
+      say(fake, row, %{"t" => "accepted", "id" => answer})
+      committed!(ctx, thread, 7)
+      say(fake, row, idle(%{id: "previous-work"}, []))
+      committed!(ctx, thread, 8)
+      {:ok, %{progress: progress}} = TurnStorage.brain(Sanctum.Context.actor(ctx), thread.id)
+      say(fake, row, idle(turn, []))
+      assert :completed = Task.await(loop, 30_000)
+      assert {progress["owed"], progress["busy"]} == {[], true}
+      assert is_binary(progress["clock"]["since"])
+    end
+
     test "an attendant that ends while its turn waits on it ends the turn, saying so",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       allow!(ctx, thread, row)
