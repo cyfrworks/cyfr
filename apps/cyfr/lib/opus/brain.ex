@@ -171,7 +171,7 @@ defmodule Opus.Brain do
   @once_ms 60_000
   # The drivers a brain's row may name as its command's first word, each
   # built into the box beside the harness it drives (`Dockerfile.locus`).
-  @drivers ~w(cyfr-claude-code)
+  @drivers ~w(cyfr-claude-code cyfr-codex)
   # The refusals of a session route that say the session is not on the
   # service any more.
   @gone [:unknown_session, :stale_boot, :epoch_ahead, :unknown_owner, :lapsed]

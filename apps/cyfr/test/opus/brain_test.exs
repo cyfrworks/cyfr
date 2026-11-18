@@ -1168,6 +1168,24 @@ defmodule Opus.BrainTest do
       assert Task.await(again, 10_000) == :forgot
     end
 
+    test "a row of either driver is a brain's", %{fake: fake, ctx: ctx, thread: thread} do
+      codex = brain_row!(ctx, "openai-codex")
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^codex.id),
+          set: [
+            config_json:
+              Jason.encode!(%{"command" => "cyfr-codex npx -y @openai/codex", "env" => %{}})
+          ]
+        )
+
+      record = owed!(ctx, thread.id, codex)
+      task = Task.async(fn -> Brain.forget(record) end)
+      assert %{"t" => "forget", "id" => id, "session" => @session} = once_driver!(fake, codex)
+      say(fake, codex, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 10_000) == :forgot
+    end
+
     test "cleanup takes no answer but forgot of that id and session as a removal",
          %{fake: fake, ctx: ctx, row: row, thread: thread} do
       record = owed!(ctx, thread.id, row)
