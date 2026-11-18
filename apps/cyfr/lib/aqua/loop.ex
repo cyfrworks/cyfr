@@ -797,7 +797,8 @@ defmodule Aqua.Loop do
   end
 
   # The attendant is watched while the turn waits on it: one that ends
-  # ends the turn's wait, as the program's job is over with it.
+  # ends the turn's wait, as the program's job is over with it, and says
+  # so unless it was closed on purpose.
   defp attended(%State{} = state, start) do
     turn_id = state.turn.id
 
@@ -818,6 +819,11 @@ defmodule Aqua.Loop do
             Process.demonitor(monitor, [:flush])
             _ = system_row(state, sentence)
             {:halt, {:failed, sentence}, state}
+
+          # Closed on purpose: Stop closes the session before it stops the
+          # turn, which says nothing more in the thread.
+          {:DOWN, ^monitor, :process, _pid, :normal} ->
+            {:halt, :cancelled, state}
 
           {:DOWN, ^monitor, :process, _pid, _reason} ->
             sentence = "#{program_title(state)} stopped before it finished."

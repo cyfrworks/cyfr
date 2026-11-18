@@ -618,6 +618,29 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == [line]
     end
 
+    test "a session closed on purpose while its turn waits ends the wait and says nothing in " <>
+           "the thread",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      Prima.Test.Wait.wait_until(
+        fn -> Enum.map(inputs(ctx, turn), & &1.dispatch_state) == ["closed"] end,
+        10_000,
+        "the post's acceptance to commit"
+      )
+
+      :ok = Aqua.Program.close(ctx.athanor_id, thread.id, turn.agent)
+
+      assert :cancelled = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == []
+    end
+
     test "the silence does not run out while an ask's card waits",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       silence!(2_000)
