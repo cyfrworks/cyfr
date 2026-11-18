@@ -699,7 +699,7 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
 
 Shapes nest at most 8 deep, and a manifest whose `results` does not hold this grammar is refused where it is registered or published.
 
-**Binding a feed.** A catalyst, reagent or formula never binds a feed, and no manifest declares one: `feed.bind`, `feed.remove`, `layout.edit`, `schedule.create` and `schedule.update` are an agent's alone, named exactly in its `caps.tools`, a manifest of any other type naming one is refused, and no pattern (`*`, `feed.*`, `layout.*`, `schedule.*`) grants them. A feed is bound with the `feed` tool's `bind` (see the [Integration Guide](integration-guide.md)), by the person or by the assistant with the person's approval. It names an installed catalyst or formula, one of its operations, fixed arguments, an interval and labelled actions. Binding pins the installed version and copies its `results[operation]` into the binding, and an operation that declares no shape cannot be bound; the binding keeps that copy, so a changed `results` reaches a feed only when it is bound again. Each fire runs the operation under the bound profile with the input `{"operation": …, "params": <the fixed arguments>}`. Its result is the `data` of a 2xx `{"status", "data"}` envelope, held to the copied shape and to 64 KiB of JSON; anything else changes nothing. An accepted result is what a canvas that declares the feed by name reads.
+**Binding a feed.** A catalyst, reagent or formula never binds a feed, and no manifest declares one: `feed.bind`, `feed.remove`, `layout.edit`, `schedule.create` and `schedule.update` are an agent's alone, named exactly in its `caps.tools`, a manifest of any other type naming one is refused, and no pattern (`*`, `feed.*`, `layout.*`, `schedule.*`) grants them. A feed is bound with the `feed` tool's `bind` (see the [Integration Guide](integration-guide.md)), by the person or by the assistant in auto. It names an installed catalyst or formula, one of its operations, fixed arguments, an interval and labelled actions. Binding pins the installed version and copies its `results[operation]` into the binding, and an operation that declares no shape cannot be bound; the binding keeps that copy, so a changed `results` reaches a feed only when it is bound again. Each fire runs the operation under the bound profile with the input `{"operation": …, "params": <the fixed arguments>}`. Its result is the `data` of a 2xx `{"status", "data"}` envelope, held to the copied shape and to 64 KiB of JSON; anything else changes nothing. An accepted result is what a canvas that declares the feed by name reads.
 
 ### Example: Catalyst Manifest
 
@@ -1165,7 +1165,7 @@ The window comes from the provider's models API where it reports one (claude, ge
 }}
 ```
 
-Request fields: `model` (required); `system`; `messages` (required, non-empty — `content` is a string or a list of blocks: `text` in any turn; `image` and `document` (`media_type`, base64 `data`, optional `filename`) in a user turn; `tool_call` (`id`, `name`, `arguments`, and `provider_data` when a response carried it — send it back unchanged) in an assistant turn; `tool_result` (`tool_call_id`, `name`, `content` as a string or text blocks, `is_error`) in a tool turn); `tools` (`name`, `description`, `parameters` as JSON Schema); `provider_tools` (names from `describe`, run inside the provider with no approval round trip); `max_tokens`; `temperature`.
+Request fields: `model` (required); `system`; `messages` (required, non-empty — `content` is a string or a list of blocks: `text` in any turn; `image` and `document` (`media_type`, base64 `data`, optional `filename`) in a user turn; `tool_call` (`id`, `name`, `arguments`, and `provider_data` when a response carried it — send it back unchanged) in an assistant turn; `tool_result` (`tool_call_id`, `name`, `content` as a string or text blocks, `is_error`) in a tool turn); `tools` (`name`, `description`, `parameters` as JSON Schema); `provider_tools` (names from `describe`, run inside the provider with no call through CYFR); `max_tokens`; `temperature`.
 
 **Tool schemas.** A catalyst receives each tool's `parameters` as full JSON Schema, exactly as the platform derives it: a platform tool's schema with its `action` enum narrowed to the actions the turn offers, an external MCP server's `inputSchema` as that server declares it. The platform promises no subset — any JSON Schema keyword can arrive (`anyOf`, `oneOf`, `$ref`, `additionalProperties`, `format`, nested objects and arrays). Adapting a schema to what its provider accepts is the catalyst's work, done in its request mapping beside the rest of the provider's shape.
 
@@ -1367,8 +1367,7 @@ place that holds nothing yet, both under `data/`; a rename is a move
 within one folder. A move lands each file as a write would and keeps the
 sources it was written with, and it happens at once: the files are at
 `path` or at `to`, never both. A source that changes while it moves, or
-a file that lands at `to` first, refuses the move and loses nothing. A
-move takes no standing approval: each one is approved on its own.
+a file that lands at `to` first, refuses the move and loses nothing.
 
 Pick files under `data/` and choose **Send a copy**. The recipient picker
 lists the people who share a shared thread with you. The offer snapshots the
