@@ -226,7 +226,7 @@ var filesTool = map[string]any{"name": "files", "description": "Read the athanor
 func TestHelloFirstAndAnEmptyInputEndsIt(t *testing.T) {
 	s := startDriver(t)
 	hello := s.expect("hello")
-	if hello["v"] != float64(1) || hello["driver"] != "cyfr-claude-code" || len(hello["boot"].(string)) != 32 {
+	if hello["v"] != float64(brainwire.Version) || hello["driver"] != "cyfr-claude-code" || len(hello["boot"].(string)) != 32 {
 		t.Fatalf("hello names the version, the driver and a fresh boot: %v", hello)
 	}
 	if status := s.end(); status != 0 {
@@ -621,7 +621,7 @@ func TestForgetRefusesWhereItCannotLook(t *testing.T) {
 	if err := os.MkdirAll(project, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(transcript, []byte("the session"), 0o600); err != nil {
+	if err := os.WriteFile(transcript, []byte(`{"type":"user","text":"the session"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s.expect("hello")
@@ -694,12 +694,12 @@ func TestForgetRemovesThatTranscriptAndNothingElse(t *testing.T) {
 	gone := "1b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
 	kept := "2b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
 	files := map[string]string{
-		filepath.Join(config, "projects", "-home-a", gone+".jsonl"):                    "the forgotten session",
-		filepath.Join(config, "projects", "-home-a", gone, "subagents", "agent.jsonl"): "its subagent",
-		filepath.Join(config, "projects", "-home-b", gone+".jsonl"):                    "the same session from another folder",
+		filepath.Join(config, "projects", "-home-a", gone+".jsonl"):                    `{"type":"user","text":"the forgotten session"}`,
+		filepath.Join(config, "projects", "-home-a", gone, "subagents", "agent.jsonl"): `{"type":"user","text":"its subagent"}`,
+		filepath.Join(config, "projects", "-home-b", gone+".jsonl"):                    `{"type":"user","text":"the same session from another folder"}`,
 		filepath.Join(config, "session-env", gone, "env"):                              "its environment",
 		filepath.Join(config, "session-env", kept, "env"):                              "another session's environment",
-		filepath.Join(config, "projects", "-home-a", kept+".jsonl"):                    "another session",
+		filepath.Join(config, "projects", "-home-a", kept+".jsonl"):                    `{"type":"user","text":"another session"}`,
 		filepath.Join(config, ".credentials.json"):                                     "the sign-in",
 		filepath.Join(s.home, ".claude.json"):                                          "the harness's own settings",
 	}
@@ -740,6 +740,340 @@ func TestForgetRemovesThatTranscriptAndNothingElse(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(config, ".credentials.json")); err != nil {
 		t.Fatal("the sign-in survives every forget")
 	}
+}
+
+// A session's plan files go with its transcript: the ones its slug names,
+// in the harness's plans folder and in the folder its plan-mode reminders
+// name, a subagent's among them; another session's, a file whose name
+// only begins with the slug, and the sign-in stay. A plans folder or a
+// transcript that cannot be read may hide one: forget refuses, and both
+// are there until it can look.
+func TestForgetRemovesTheSessionsPlanFiles(t *testing.T) {
+	s := startDriver(t)
+	config := filepath.Join(s.home, ".claude")
+	plans := filepath.Join(config, "plans")
+	moved := filepath.Join(s.home, "work", ".plans")
+	gone := "6b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	kept := "7b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	entry := func(slug string, fields map[string]any) string {
+		fields["slug"] = slug
+		line, _ := json.Marshal(fields)
+		return string(line) + "\n"
+	}
+	transcript := filepath.Join(config, "projects", "-home-a", gone+".jsonl")
+	files := map[string]string{
+		transcript: "\n" + entry("brave-otter", map[string]any{"type": "user", "uuid": "u1"}) +
+			entry("brave-otter", map[string]any{"type": "attachment", "attachment": map[string]any{"type": "plan_mode", "planFilePath": filepath.Join(moved, "brave-otter.md")}}),
+		filepath.Join(config, "projects", "-home-a", kept+".jsonl"): entry("calm-fox", map[string]any{"type": "user"}),
+		filepath.Join(plans, "brave-otter.md"):                      "the forgotten session's plan",
+		filepath.Join(plans, "brave-otter-agent-a1b2.md"):           "its subagent's plan",
+		filepath.Join(moved, "brave-otter.md"):                      "its plan where the project's settings put plans",
+		filepath.Join(plans, "calm-fox.md"):                         "another session's plan",
+		filepath.Join(plans, "brave-otterish.md"):                   "a plan whose slug only begins so",
+		filepath.Join(config, ".credentials.json"):                  "the sign-in",
+	}
+	for path, body := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed := map[string]bool{
+		transcript:                             true,
+		filepath.Join(plans, "brave-otter.md"): true,
+		filepath.Join(plans, "brave-otter-agent-a1b2.md"): true,
+		filepath.Join(moved, "brave-otter.md"):            true,
+	}
+	present := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	s.expect("hello")
+	if os.Geteuid() != 0 {
+		for i, unreadable := range []string{plans, moved, transcript} {
+			if err := os.Chmod(unreadable, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(unreadable, 0o700) })
+			id := fmt.Sprintf("obx_%d", i+1)
+			s.send(map[string]any{"t": "forget", "id": id, "session": gone})
+			if e := s.expect("refused"); e["id"] != id {
+				t.Fatalf("%s past inspection is no proof the plan files are gone: %v", unreadable, e)
+			}
+			if err := os.Chmod(unreadable, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for path := range files {
+				if !present(path) {
+					t.Fatalf("a refused forget removes nothing: %s", path)
+				}
+			}
+		}
+	}
+	s.send(map[string]any{"t": "forget", "id": "obx_4", "session": gone})
+	if e := s.expect("forgot"); e["id"] != "obx_4" {
+		t.Fatalf("the session and its plan files are forgotten: %v", e)
+	}
+	for path := range files {
+		if present(path) == removed[path] {
+			t.Fatalf("only the forgotten session's transcript and plan files go: %s (present %v)", path, present(path))
+		}
+	}
+}
+
+// forgetIn answers a forget of `session` in `home`, by the driver's own
+// forget, with no harness run.
+func forgetIn(t *testing.T, home, session string) string {
+	t.Helper()
+	var out, errs bytes.Buffer
+	d := newDriver([]string{"unused"}, brainwire.NewConn(driverName, &out, &errs), home).(*driver)
+	if err := d.forget("obx_tie", session); err != nil {
+		t.Fatal(err)
+	}
+	var e map[string]any
+	if err := json.Unmarshal(out.Bytes(), &e); err != nil {
+		t.Fatal(err)
+	}
+	return e["t"].(string)
+}
+
+func writeAll(t *testing.T, files map[string]string) {
+	t.Helper()
+	for path, body := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// #10196's second finding: a tie that does not read is no proof of
+// absence. A transcript line that is no entry, an attachment that is no
+// object, a planFilePath that is no string, in the session's transcript or
+// its helper's: forget refuses and removes nothing.
+func TestForgetRefusesAPlanTieThatDoesNotRead(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	session := "6b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	slug := `{"type":"user","slug":"brave-otter"}` + "\n"
+	for name, broken := range map[string]string{
+		"a truncated line":                          `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":`,
+		"an attachment that is no object":           `{"type":"system","slug":"brave-otter","attachment":"plan_mode"}` + "\n",
+		"a planFilePath that is no string":          `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":42}}` + "\n",
+		"a null line":                               "null\n",
+		"a null planFilePath":                       `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":null}}` + "\n",
+		"a null slug":                               `{"type":"user","slug":null}` + "\n",
+		"a null attachment on an attachment record": `{"type":"attachment","slug":"brave-otter","attachment":null}` + "\n",
+		"an attachment record with no attachment":   `{"type":"attachment","slug":"brave-otter"}` + "\n",
+	} {
+		for _, where := range []string{"session", "helper"} {
+			home := t.TempDir()
+			project := filepath.Join(home, ".claude", "projects", "-work")
+			files := map[string]string{
+				filepath.Join(project, session+".jsonl"):                             slug,
+				filepath.Join(home, "work", ".plans", "brave-otter.md"):              "the session's plan",
+				filepath.Join(project, session, "subagents", "agent-a1234567.jsonl"): slug,
+			}
+			if where == "session" {
+				files[filepath.Join(project, session+".jsonl")] += broken
+			} else {
+				files[filepath.Join(project, session, "subagents", "agent-a1234567.jsonl")] += broken
+			}
+			writeAll(t, files)
+			if got := forgetIn(t, home, session); got != "refused" {
+				t.Fatalf("%s in the %s's transcript: forget answers %s", name, where, got)
+			}
+			for path := range files {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("%s in the %s's transcript: a refused forget removes nothing: %v", name, where, err)
+				}
+			}
+		}
+	}
+}
+
+// #10222's first finding: only a regular file or a folder among the
+// session's paths is the session's own. A helper's transcript, or the
+// session's own, that is a link (here to a file naming another session's
+// slug), and a plan file the slug names that is a link, each refuse the
+// forget, which removes nothing: another session's plan and the link's
+// target stay.
+func TestForgetRefusesALinkAmongTheSessionsPaths(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	session := "6b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	for _, link := range []string{"the helper's transcript", "the session's transcript", "the plan file"} {
+		home := t.TempDir()
+		project := filepath.Join(home, ".claude", "projects", "-work")
+		transcript := filepath.Join(project, session+".jsonl")
+		helper := filepath.Join(project, session, "subagents", "agent-a1234567.jsonl")
+		plans := filepath.Join(home, ".claude", "plans")
+		other := filepath.Join(home, "elsewhere", "other.jsonl")
+		target := filepath.Join(home, "elsewhere", "own-session.md")
+		files := map[string]string{
+			other:                                    `{"type":"user","slug":"other-session"}` + "\n",
+			filepath.Join(plans, "other-session.md"): "another session's plan",
+			target:                                   "what the link stands for",
+			helper:                                   `{"type":"user","slug":"own-session"}` + "\n",
+			transcript:                               `{"type":"user","slug":"own-session"}` + "\n",
+			filepath.Join(plans, "own-session.md"):   "the session's plan",
+		}
+		linked := map[string]string{"the helper's transcript": helper, "the session's transcript": transcript, "the plan file": filepath.Join(plans, "own-session.md")}[link]
+		delete(files, linked)
+		writeAll(t, files)
+		points := other
+		if link == "the plan file" {
+			points = target
+		}
+		if err := os.MkdirAll(filepath.Dir(linked), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(points, linked); err != nil {
+			t.Fatal(err)
+		}
+		if got := forgetIn(t, home, session); got != "refused" {
+			t.Fatalf("%s a link: forget answers %s", link, got)
+		}
+		for path := range files {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("%s a link: a refused forget removes nothing: %v", link, err)
+			}
+		}
+		if _, err := os.Lstat(linked); err != nil {
+			t.Fatalf("%s a link: the link stays: %v", link, err)
+		}
+	}
+}
+
+// #10196's third finding: a helper's transcript can hold the only tie to
+// a plan file, in a folder the project's settings moved. Forget reads it
+// before the session's folder goes, and removes the helper's plan; a
+// helper's transcript that cannot be read refuses.
+func TestForgetReadsTheHelpersTranscriptsForTheirPlanFiles(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	session := "6b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	home := t.TempDir()
+	project := filepath.Join(home, ".claude", "projects", "-work")
+	helper := filepath.Join(project, session, "subagents", "agent-a1234567.jsonl")
+	plan := filepath.Join(home, "work", ".plans", "brave-otter-agent-a1234567.md")
+	attachment, _ := json.Marshal(map[string]any{"type": "attachment", "slug": "brave-otter", "attachment": map[string]any{"type": "plan_mode", "planFilePath": plan}})
+	writeAll(t, map[string]string{
+		filepath.Join(project, session+".jsonl"): `{"type":"user","slug":"brave-otter"}` + "\n",
+		helper:                                   string(attachment) + "\n",
+		plan:                                     "the helper's plan",
+	})
+	if os.Geteuid() != 0 {
+		if err := os.Chmod(helper, 0); err != nil {
+			t.Fatal(err)
+		}
+		if got := forgetIn(t, home, session); got != "refused" {
+			t.Fatalf("a helper's transcript that cannot be read refuses: %s", got)
+		}
+		if err := os.Chmod(helper, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := forgetIn(t, home, session); got != "forgot" {
+		t.Fatalf("the session is forgotten: %s", got)
+	}
+	if _, err := os.Stat(plan); !os.IsNotExist(err) {
+		t.Fatalf("the helper's plan goes with the session: %v", err)
+	}
+}
+
+// The launcher's part of the row's command and the harness's own
+// arguments: the shipped row's command and a program's name alone carry
+// none; any other argument, or a flag of npx's that chooses what runs,
+// is the harness's.
+func TestHarnessOptionsAreTheRowCommandsArgumentsPastItsLauncher(t *testing.T) {
+	for _, c := range []struct {
+		command []string
+		options []string
+	}{
+		{[]string{"npx", "-y", "@anthropic-ai/claude-code@2.1.323"}, []string{}},
+		{[]string{"/usr/bin/npx", "--yes", "@anthropic-ai/claude-code@2.1.323"}, []string{}},
+		{[]string{"npx", "@anthropic-ai/claude-code@2.1.323"}, []string{}},
+		{[]string{"claude"}, []string{}},
+		{[]string{"/home/a/.local/bin/claude"}, []string{}},
+		{[]string{"npx", "-y", "@anthropic-ai/claude-code@2.1.323", "--settings", "x.json"}, []string{"--settings", "x.json"}},
+		{[]string{"npx", "-c", "claude --settings x.json"}, []string{"npx", "-c", "claude --settings x.json"}},
+		{[]string{"npx", "-y", "-p", "@anthropic-ai/claude-code", "claude"}, []string{"npx", "-y", "-p", "@anthropic-ai/claude-code", "claude"}},
+		{[]string{"npx", "-y"}, []string{"npx", "-y"}},
+		{[]string{"npx"}, []string{"npx"}},
+		{[]string{"npx", "--call=claude --settings hook.json"}, []string{"npx", "--call=claude --settings hook.json"}},
+		{[]string{"env", "X=y", "npx", "-y", "@anthropic-ai/claude-code@2.1.323"}, []string{"X=y", "npx", "-y", "@anthropic-ai/claude-code@2.1.323"}},
+		{[]string{"X=y", "claude"}, []string{"claude"}},
+		{[]string{"sh", "-c", "claude --settings hook.json"}, []string{"-c", "claude --settings hook.json"}},
+		{[]string{"/usr/local/bin/npx", "--package=other", "claude"}, []string{"/usr/local/bin/npx", "--package=other", "claude"}},
+		{[]string{"claude", "--plugin-dir", "p"}, []string{"--plugin-dir", "p"}},
+		{[]string{"node", "/probe/fake-claude.mjs"}, []string{"/probe/fake-claude.mjs"}},
+	} {
+		if got := harnessOptions(c.command); !reflect.DeepEqual(append([]string{}, got...), c.options) {
+			t.Fatalf("%v: the harness's own arguments are %v, not %v", c.command, c.options, got)
+		}
+	}
+}
+
+// #10262's note: a launcher named npx with no package after it, bare or
+// with only -y or --yes, refuses a read-only start before spawning.
+func TestAReadOnlyStartRefusesAnNpxWithNoPackage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(fakeEnv, "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	launcher := filepath.Join(t.TempDir(), "npx")
+	if err := os.Symlink(os.Args[0], launcher); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{nil, {"-y"}, {"--yes"}} {
+		command := append([]string{launcher}, args...)
+		s := startDriverWith(t, home, command)
+		s.expect("hello")
+		s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true}})
+		if status := s.end(); status != 2 {
+			t.Fatalf("%v: an npx with no package refuses before spawning: %d", command, status)
+		}
+	}
+}
+
+// #10196's first finding: a read-only start runs with the driver's own
+// arguments and none of the row's. One whose row command carries an
+// argument of the harness's own (here --settings, which loads a hook
+// whatever --setting-sources says) ends the driver before anything is
+// spawned, saying why; one whose read_only is false keeps the row's
+// arguments exactly.
+func TestAReadOnlyStartRefusesARowCommandCarryingTheHarnessesOptions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(fakeEnv, "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	settings := filepath.Join(home, "explicit-settings.json")
+	writeAll(t, map[string]string{settings: `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch marker"}]}]}}`})
+	command := []string{os.Args[0], "--settings", settings}
+	s := startDriverWith(t, home, command)
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true}})
+	if status := s.end(); status != 2 {
+		t.Fatalf("the driver ends with 2: %d", status)
+	}
+	if !strings.Contains(s.stderr.String(), "cyfr-claude-code: The program's command carries options a read-only crew member cannot run with, so nothing ran.\n") {
+		t.Fatalf("the driver says why: %q", s.stderr.String())
+	}
+	if matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", "*")); len(matches) != 0 {
+		t.Fatalf("no harness ran: %v", matches)
+	}
+
+	auto := startDriverWith(t, home, command)
+	session := startFresh(auto, map[string]any{"read_only": false})
+	work(auto, "stp_work", []any{})
+	argv, _ := modesOf(t, auto, "stp_post")
+	want := append(strs("--settings", settings), append(strs(baseArgv...), strs("--session-id", session)...)...)
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("a start that is not read-only keeps the row's arguments exactly:\n%v\nnot\n%v", want, argv)
+	}
+	auto.end()
 }
 
 // openPTY opens a pseudo-terminal pair: the driver's input is its other end.
@@ -816,5 +1150,129 @@ func TestALaunchThatFailsNamesNoFolderOnTheWire(t *testing.T) {
 	}
 	if n := strings.Count(s.stderr.String(), "FOLDER-CANARY/no-such-"); n != 4 {
 		t.Fatalf("each launch's detail, the command and the system's words on it, is on the driver's standard error (a positive control for the check above): %d in %q", n, s.stderr.String())
+	}
+}
+
+// modesOf is the fake's answer to "modes": its whole command line and the
+// driver's two whole answers, to its own Write and Bash.
+func modesOf(t *testing.T, s *wireSession, id string) (argv []any, answers []any) {
+	t.Helper()
+	postText(s, id, "modes")
+	var got struct {
+		Argv    []any `json:"argv"`
+		Answers []any `json:"answers"`
+	}
+	said := ""
+	for _, e := range s.until("idle") {
+		if e["t"] == "ask" {
+			t.Fatalf("the harness's own tools are never CYFR's to ask about: %v", e)
+		}
+		if e["t"] == "said" {
+			said = e["text"].(string)
+		}
+	}
+	if err := json.Unmarshal([]byte(said), &got); err != nil {
+		t.Fatalf("the fake said its command line and answers: %q", said)
+	}
+	return got.Argv, got.Answers
+}
+
+func permissionAnswer(id string, response map[string]any) any {
+	return map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": response}}
+}
+
+func strs(xs ...string) []any {
+	out := make([]any, len(xs))
+	for i, x := range xs {
+		out[i] = x
+	}
+	return out
+}
+
+// A read-only start gives the harness only its reading tools, runs it in
+// its default permission mode, loading no settings file of the user's or
+// the project's, and denies every ask of its own tools; one whose
+// read_only is false or absent runs as it always did, its own tools
+// allowed. Both are seen
+// whole: the harness's command line and the driver's answers.
+func TestAReadOnlyStartRunsDefaultModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
+	write := map[string]any{"file_path": "/work/new.txt", "content": "x"}
+	bash := map[string]any{"command": "touch new.txt"}
+	allowed := []any{
+		permissionAnswer("ask-1", map[string]any{"behavior": "allow", "updatedInput": write}),
+		permissionAnswer("ask-2", map[string]any{"behavior": "allow", "updatedInput": bash}),
+	}
+	denied := []any{
+		permissionAnswer("ask-1", map[string]any{"behavior": "deny", "message": "This crew member is read-only."}),
+		permissionAnswer("ask-2", map[string]any{"behavior": "deny", "message": "This crew member is read-only."}),
+	}
+	for _, c := range []struct {
+		name    string
+		config  map[string]any
+		mode    []string
+		answers []any
+	}{
+		{"absent", map[string]any{"model": "fake-opus"}, nil, allowed},
+		{"false", map[string]any{"model": "fake-opus", "read_only": false}, nil, allowed},
+		{"false beside a permission mode", map[string]any{"model": "fake-opus", "read_only": false, "permission_mode": "acceptEdits"}, []string{"--permission-mode", "acceptEdits"}, allowed},
+		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "default", "--setting-sources", "", "--tools", "Read,Grep,Glob"}, denied},
+	} {
+		s := startDriver(t)
+		session := startFresh(s, c.config)
+		work(s, "stp_work", []any{})
+		argv, answers := modesOf(t, s, "stp_post")
+		want := append(append(strs(baseArgv...), strs("--session-id", session, "--model", "fake-opus")...), strs(c.mode...)...)
+		if !reflect.DeepEqual(argv, want) {
+			t.Fatalf("%s: the harness starts with exactly\n%v\nnot\n%v", c.name, want, argv)
+		}
+		if !reflect.DeepEqual(answers, c.answers) {
+			t.Fatalf("%s: the driver answers the harness's own tools exactly\n%v\nnot\n%v", c.name, c.answers, answers)
+		}
+		s.end()
+
+		// A resume starts in the same mode.
+		again := startDriverIn(t, s.home)
+		again.expect("hello")
+		again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": c.config})
+		again.expect("started")
+		work(again, "stp_work_2", []any{})
+		argv, answers = modesOf(t, again, "stp_post_2")
+		want = append(append(strs(baseArgv...), strs("--resume", session, "--model", "fake-opus")...), strs(c.mode...)...)
+		if !reflect.DeepEqual(argv, want) || !reflect.DeepEqual(answers, c.answers) {
+			t.Fatalf("%s: a resume starts and answers as the fresh start did: %v %v", c.name, argv, answers)
+		}
+		again.end()
+	}
+}
+
+// CYFR's own tools are CYFR's to decide in either mode: a read-only start
+// still shows their asks.
+func TestAReadOnlyStartStillShowsCYFRsToolsAsAsks(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{"read_only": true})
+	work(s, "stp_work", []any{filesTool})
+	postText(s, "stp_post", "read")
+	if e := s.expect("ask"); e["name"] != "files" {
+		t.Fatalf("CYFR's tool is asked about: %v", e)
+	}
+}
+
+// A read-only start that also names a permission mode or the harness's
+// own tools is no start the driver can honour: it ends with 2 and starts
+// no harness.
+func TestAReadOnlyStartNamingAPermissionModeOrToolsEndsTheDriver(t *testing.T) {
+	for name, config := range map[string]map[string]any{
+		"a permission mode":   {"read_only": true, "permission_mode": "plan"},
+		"the harness's tools": {"read_only": true, "harness_tools": []any{"Read", "Write"}},
+	} {
+		s := startDriver(t)
+		s.expect("hello")
+		s.send(map[string]any{"t": "start", "gen": 0, "config": config})
+		if status := s.end(); status != 2 {
+			t.Fatalf("%s: the driver ends with 2: %d", name, status)
+		}
+		if matches, _ := filepath.Glob(filepath.Join(s.home, ".claude", "projects", "*", "*")); len(matches) != 0 {
+			t.Fatalf("%s: no harness ran: %v", name, matches)
+		}
 	}
 }

@@ -29,9 +29,14 @@
 // derived from the post's id, an `answer` allows the ask it names with
 // CYFR's answer in its input; each is `accepted` once the harness's input
 // took it. The harness's own tools run in its box: their asks are allowed
-// and they are shown by name. The driver keeps no account of calls: which
-// post a result answers is the result's own naming of the posts' uuids,
-// which `idle` passes on.
+// and they are shown by name. A read-only start (`config.read_only`) runs
+// the harness with only its own reading tools (Read, Grep, Glob), in its
+// default permission mode, loading no settings file of the user's or the
+// project's, and denies every ask of its own tools; one that also names a
+// permission mode or the harness's tools, or whose row command carries an
+// argument of the harness's own, ends the driver. The driver
+// keeps no account of calls: which post a result answers is the result's
+// own naming of the posts' uuids, which `idle` passes on.
 //
 // The driver ends when its input ends (the session is closed), when the
 // harness ends but after `gone`, with the harness's status, and on a

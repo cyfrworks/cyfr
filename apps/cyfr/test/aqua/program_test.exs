@@ -2121,7 +2121,12 @@ defmodule Aqua.ProgramTest do
     do: Scripted.write(fake, row.id, Jason.encode!(event))
 
   defp hello(boot),
-    do: %{"t" => "hello", "v" => 1, "driver" => "cyfr-claude-code", "boot" => boot}
+    do: %{
+      "t" => "hello",
+      "v" => Opus.Brain.Wire.version(),
+      "driver" => "cyfr-claude-code",
+      "boot" => boot
+    }
 
   # The next command the holder wrote to the driver.
   defp sent(timeout \\ 10_000) do
