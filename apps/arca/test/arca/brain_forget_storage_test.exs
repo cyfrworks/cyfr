@@ -355,6 +355,24 @@ defmodule Arca.BrainForgetStorageTest do
   describe "a lost transcript" do
     @session "6f1e2d3c-0000-4968-8776-000000000001"
 
+    test "the row a session is stored with keeps its driver, so its driver's gone is that " <>
+           "folder's own answer",
+         %{actor: actor, room: room, row: row} do
+      held!(actor, room, row, "aqua", @session)
+      codex = Jason.encode!(%{"command" => "cyfr-codex codex", "env" => %{}})
+
+      assert Arca.McpServerStorage.update(actor, row.name, %{config_json: codex}) ==
+               {:error, :driver_fixed}
+
+      assert Arca.McpServerStorage.get_by_id(actor, row.id) == {:ok, row}
+      turn = running!(actor, room, row)
+
+      assert {:ok, 1} =
+               TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+      assert owed(actor) == []
+    end
+
     test "lost by the brain of the row the session is stored with owes nothing",
          %{actor: actor, room: room, row: row} do
       held!(actor, room, row, "aqua", @session)

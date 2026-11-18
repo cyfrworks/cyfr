@@ -309,6 +309,65 @@ defmodule Arca.McpServerStorageTest do
     test "returns not_found for missing server", %{actor: actor} do
       assert {:error, :not_found} = McpServerStorage.update(actor, "nope", %{enabled: false})
     end
+
+    test "a kept row keeps the driver its command names: another, none or another transport " <>
+           "is refused with nothing written",
+         %{actor: actor} do
+      config = fn command -> Jason.encode!(%{"command" => command, "env" => %{}}) end
+      claude = "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323"
+
+      program = fn name, home, command ->
+        {:ok, row} =
+          McpServerStorage.insert(actor, %{
+            cap: 0,
+            name: name,
+            transport: "program",
+            mark: "driven",
+            url: nil,
+            home: home,
+            memory_bytes: 1_073_741_824,
+            config_json: config.(command)
+          })
+
+        row
+      end
+
+      kept = program.("kept", "kept", claude)
+
+      for {why, updates} <- [
+            {"another driver", %{config_json: config.("cyfr-codex npx -y @openai/codex")}},
+            {"no driver", %{config_json: config.("npx -y @anthropic-ai/claude-code@2.1.323")}},
+            {"no command", %{config_json: "{}"}},
+            {"another transport",
+             %{
+               transport: "http",
+               url: "https://example.com/mcp",
+               config_json: "{}",
+               mark: nil,
+               home: "scratch"
+             }}
+          ] do
+        assert McpServerStorage.update(actor, "kept", updates) == {:error, :driver_fixed}, why
+        assert McpServerStorage.get(actor, "kept") == {:ok, kept}, why
+      end
+
+      # What follows the driver's word, and what is beside the command.
+      later = config.("cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.330")
+
+      assert {:ok, %{epoch: 2, config_json: ^later}} =
+               McpServerStorage.update(actor, "kept", %{config_json: later})
+
+      assert {:ok, %{epoch: 3, enabled: false}} =
+               McpServerStorage.update(actor, "kept", %{enabled: false})
+
+      # A bare command that gains a driver, and a scratch folder, which
+      # keeps no records.
+      _bare = program.("bare", "kept", "npx -y @anthropic-ai/claude-code@2.1.323")
+      assert {:ok, %{epoch: 2}} = McpServerStorage.update(actor, "bare", %{config_json: config.(claude)})
+      _scratch = program.("scratch", "scratch", claude)
+      codex = config.("cyfr-codex npx -y @openai/codex")
+      assert {:ok, %{epoch: 2}} = McpServerStorage.update(actor, "scratch", %{config_json: codex})
+    end
   end
 
   describe "epochs" do

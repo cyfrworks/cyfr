@@ -491,6 +491,9 @@ defmodule Emissary.External.Provider do
            {:conflict,
             "Server '#{name}' changed since epoch #{epoch} — read it again with get and retry"}}
 
+        {:error, :driver_fixed} ->
+          {:error, {:invalid_argument, driver_fixed(name, stored)}}
+
         {:error, reason} ->
           Logger.warning(
             "[Emissary.External.Provider] failed to update server config: #{inspect(reason)}"
@@ -499,6 +502,15 @@ defmodule Emissary.External.Provider do
           {:error, {:unavailable, "The server store"}}
       end
     end
+  end
+
+  # A kept program's folder holds the records of the sessions its driver's
+  # harness ran, which only that driver removes (`Arca.McpServerStorage.update/4`).
+  defp driver_fixed(name, stored) do
+    driver = Arca.McpServerStorage.driver(stored)
+
+    "Program '#{name}' keeps the records of the sessions it ran with #{driver}, so its " <>
+      "command must still start with #{driver}. Add a new program to run another one."
   end
 
   # A program made a tool server elsewhere is removed as a program: its

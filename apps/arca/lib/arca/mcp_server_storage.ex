@@ -50,6 +50,9 @@ defmodule Arca.McpServerStorage do
   @typedoc "The row a write expects to find under its name: its id and epoch."
   @type expected :: %{id: String.t(), epoch: pos_integer()}
 
+  # The brains' drivers, each a command's first word (`driver/1`).
+  @drivers ~w(cyfr-claude-code cyfr-codex)
+
   # A program's settings, which `update/4` writes as named (nil clears one).
   @program_columns [
     :mark,
@@ -78,6 +81,26 @@ defmodule Arca.McpServerStorage do
   end
 
   def config(_server), do: %{}
+
+  @doc """
+  The driver a program row's command names as its first word, one of the
+  brains' drivers built into the box beside the harness each drives
+  (`Dockerfile.locus`), or nil: a bare harness, another program, a tool
+  server, no command. What a kept row's folder holds of a brain's
+  sessions is laid out by that driver's harness, so the driver is fixed
+  once the row names one (`update/4`).
+  """
+  @spec driver(map()) :: String.t() | nil
+  def driver(%{transport: "program"} = row) do
+    with %{"command" => command} when is_binary(command) <- config(row),
+         [first | _args] when first in @drivers <- String.split(command) do
+      first
+    else
+      _no_driver -> nil
+    end
+  end
+
+  def driver(_row), do: nil
 
   @doc """
   List all MCP server configs for the given tenant context.
@@ -251,6 +274,17 @@ defmodule Arca.McpServerStorage do
   defp as_expected(%McpServer{id: id, epoch: epoch}, %{id: id, epoch: epoch}), do: :ok
   defp as_expected(_row, _expected), do: {:error, :stale_epoch}
 
+  # Read under the row's lock, so every writer of a row is held to it.
+  defp driver_kept(%McpServer{home: "kept"} = row, written) do
+    kept = driver(row)
+
+    if kept == nil or driver(Map.merge(row, written)) == kept,
+      do: :ok,
+      else: {:error, :driver_fixed}
+  end
+
+  defp driver_kept(_row, _written), do: :ok
+
   defp locked(actor, name) do
     from(s in McpServer, where: s.name == ^name)
     |> where_tenant(actor)
@@ -271,10 +305,19 @@ defmodule Arca.McpServerStorage do
   is still that row at that epoch, in the one statement: another row made
   under the name, or the row written since, answers
   `{:error, :stale_epoch}`.
+
+  A kept row whose command names a driver (`driver/1`) keeps it: a write
+  that names another driver or none, another transport among them, is
+  `{:error, :driver_fixed}` and writes nothing, since the records the
+  folder holds of the brain's sessions are that driver's harness's, which
+  a removal owed for one of them asks that driver to remove
+  (`Arca.ThreadStorage.forget_sessions/2`). A bare command that gains a
+  driver, and a change after the driver's word, write as any other.
   """
   @spec update(Prima.Actor.t(), String.t(), map(), expected() | nil) ::
           {:ok, map()}
-          | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
+          | {:error,
+             :no_athanor | :not_found | :stale_epoch | :driver_fixed | :database_error}
   def update(actor, name, updates, expected \\ nil)
 
   def update(%Prima.Actor{athanor_id: athanor_id} = actor, name, updates, expected)
@@ -286,6 +329,7 @@ defmodule Arca.McpServerStorage do
       Arca.Repo.locking_transaction(fn ->
         with %McpServer{id: id} = row <- locked(actor, name) || {:error, :not_found},
              :ok <- as_expected(row, expected),
+             :ok <- driver_kept(row, written),
              {1, [server]} <-
                Arca.Repo.update_all(
                  from(s in McpServer, where: s.id == ^id, select: s) |> where_tenant(actor),

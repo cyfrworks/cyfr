@@ -177,9 +177,6 @@ defmodule Opus.Brain do
   # How long a cleanup or a discovery waits for its driver's answer, from
   # the open of its session; past it the answer is lost.
   @once_ms 60_000
-  # The drivers a brain's row may name as its command's first word, each
-  # built into the box beside the harness it drives (`Dockerfile.locus`).
-  @drivers ~w(cyfr-claude-code cyfr-codex)
   # The refusals of a session route that say the session is not on the
   # service any more.
   @gone [:unknown_session, :stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
@@ -526,7 +523,7 @@ defmodule Opus.Brain do
       Programs.Definition.browser?(row) ->
         {:error, :not_a_brain_row}
 
-      not driver?(row) ->
+      Arca.McpServerStorage.driver(row) == nil ->
         {:error, :no_driver}
 
       row.enabled != true ->
@@ -534,16 +531,6 @@ defmodule Opus.Brain do
 
       true ->
         :ok
-    end
-  end
-
-  defp driver?(row) do
-    case Arca.McpServerStorage.config(row) do
-      %{"command" => command} when is_binary(command) ->
-        List.first(String.split(command)) in @drivers
-
-      _no_command ->
-        false
     end
   end
 
