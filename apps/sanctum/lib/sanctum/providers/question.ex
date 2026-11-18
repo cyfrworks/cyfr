@@ -15,8 +15,9 @@ defmodule Sanctum.Providers.Question do
     * `answers` lists the person's permissions for one component, and
       the callers its questions to them have had.
     * `set` sets a permission before any question (`Prima.Question.Standing`'s
-      JSON), for an action the component's newest installed version
-      declares.
+      JSON), for an action under the declaration the person was shown, its
+      `declaration_digest`, which an installed version of the component
+      must declare.
     * `forget` removes one.
 
   Every action is the person's own, on the external plane, through an
@@ -88,6 +89,12 @@ defmodule Sanctum.Providers.Question do
             Arg.new("action_name", :string,
               required: true,
               description: "set: the action, as the component's manifest names it under asks"
+            ),
+            Arg.new("declaration_digest", :string,
+              required: true,
+              description:
+                "set: the digest of the action's name and title as you were shown them " <>
+                  "(64 lowercase hexadecimal characters)"
             ),
             Arg.new("standing", :json,
               required: true,
@@ -165,11 +172,12 @@ defmodule Sanctum.Providers.Question do
         "publisher" => publisher,
         "name" => name,
         "action_name" => action,
+        "declaration_digest" => digest,
         "standing" => standing
       })
-      when is_binary(publisher) and is_binary(name) and is_binary(action) do
+      when is_binary(publisher) and is_binary(name) and is_binary(action) and is_binary(digest) do
     with {:ok, standing} <- Standing.decode(standing),
-         {:ok, row} <- Sanctum.Questions.set(ctx, publisher, name, action, standing) do
+         {:ok, row} <- Sanctum.Questions.set(ctx, publisher, name, action, digest, standing) do
       {:ok, standing(row)}
     end
   end

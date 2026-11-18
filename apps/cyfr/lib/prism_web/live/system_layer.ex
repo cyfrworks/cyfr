@@ -4,7 +4,8 @@
 defmodule PrismWeb.SystemLayer do
   @moduledoc """
   The system layer: what Prism alone draws above every frame — grant,
-  credential-entry, sharing, pairing, request and confirmation prompts, the fallback's notice, and the restore checklist. It presents a prompt
+  credential-entry, sharing, pairing, request, confirmation and question
+  prompts, the fallback's notice, and the restore checklist. It presents a prompt
   and never
   decides one: the operation a confirmation dispatches is decided where
   the change is, in Sanctum, which checks the caller's standing and any
@@ -217,6 +218,34 @@ defmodule PrismWeb.SystemLayer do
   ref ends the wait and says so. Dismissing one's own waiting request
   cancels it.
 
+  ## A component's question
+
+  A component asks its person before an action it cannot undo
+  (`Sanctum.Questions`), and the page's listening layer draws its card
+  (`PrismWeb.SystemLayer.Question`) on every open screen of the person's:
+  on a question's `opened` fact it reads that ref through
+  `question.pending` under its own session and draws it, and each open of
+  the stream reads every question waiting, so a screen opened while one
+  waits shows it. There is one card per question (`Prompt.question_id/1`),
+  so a read that races its fact draws one. It leaves on the question's
+  `answered`, `expired` or `withdrawn` fact, letting go of any
+  confirmation it waited on. The desktop's layer and the panel's draw
+  none. A choice sends its answer through `question.answer`; closing the
+  card without choosing is "Don't allow", once. A card reports to the page
+  `:confirmed` once its answer is kept, and `:dismissed` when it is
+  closed, so a page that lists permissions reads them again; a card taken
+  away by its question's own end reports nothing.
+
+  "Always allow" for any caller needs a fresh confirmation. It is the
+  layer's own change: its confirmation is drawn inside the card, which
+  hides its choices, keeps the answer and repeats it once on `confirmed`,
+  wherever the card then stands, open or behind another's confirmation;
+  cancelled, voided or expired, the confirmation leaves the card and its
+  choices show again, unanswered. On every other screen of the person's
+  that confirmation arrives from the stream, and goes in front of an open
+  question card, which waits first in line and comes back when the
+  confirmation leaves: closing the confirmation there answers nothing.
+
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
   and returns focus on close; Escape dismisses every prompt.
@@ -246,7 +275,7 @@ defmodule PrismWeb.SystemLayer do
   alias Phoenix.LiveView.JS
   alias Prism.Fallback
   alias PrismWeb.Ops
-  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, RestoreChecklist, Share}
+  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Question, RestoreChecklist, Share}
   alias Sanctum.Context
 
   @layer_id "system-layer"
@@ -910,17 +939,20 @@ defmodule PrismWeb.SystemLayer do
   defp refresh(%{assigns: %{listen: :own}} = socket), do: socket
 
   defp refresh(socket) do
-    case pending_entries(socket) do
-      {:ok, entries} ->
-        Enum.reduce(entries, socket, fn entry, socket ->
-          if Map.has_key?(socket.assigns.panels, entry.ref) or not shows_others?(socket),
-            do: socket,
-            else: open_entry(socket, entry)
-        end)
+    socket =
+      case pending_entries(socket) do
+        {:ok, entries} ->
+          Enum.reduce(entries, socket, fn entry, socket ->
+            if Map.has_key?(socket.assigns.panels, entry.ref) or not shows_others?(socket),
+              do: socket,
+              else: open_entry(socket, entry)
+          end)
 
-      {:error, _unread} ->
-        socket
-    end
+        {:error, _unread} ->
+          socket
+      end
+
+    if shows_others?(socket), do: open_questions(socket, %{}), else: socket
   end
 
   # Whether the layer draws a record no change of its own asked for: a
@@ -959,7 +991,46 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  # A question opens a card on a layer that draws others' records, once:
+  # a card already drawn or waiting is the same card. Its ending facts
+  # take it away wherever it stands.
+  defp on_fact(socket, %{"kind" => :question, "ref" => ref, "fact" => :opened})
+       when is_binary(ref) do
+    if shows_others?(socket) and not known?(socket, Prompt.question_id(ref)),
+      do: open_questions(socket, %{"ref" => ref}),
+      else: socket
+  end
+
+  defp on_fact(socket, %{"kind" => :question, "ref" => ref, "fact" => ended})
+       when is_binary(ref) and ended in [:answered, :expired, :withdrawn],
+       do: end_question(socket, Prompt.question_id(ref))
+
   defp on_fact(socket, _fact), do: socket
+
+  # The person's waiting questions `args` names (one by its `ref`, or
+  # all), each drawn as its card, read under the layer's own session.
+  defp open_questions(socket, args) do
+    case Ops.call_tool(socket.assigns.context, "question/pending", args) do
+      {:ok, %{questions: entries}} ->
+        Enum.reduce(entries, socket, fn entry, socket ->
+          case Prompt.question(entry) do
+            {:ok, prompt} -> arrive(socket, prompt)
+            {:error, :invalid_prompt} -> socket
+          end
+        end)
+
+      {:error, _unread} ->
+        socket
+    end
+  end
+
+  # A question that stopped waiting: its card goes, open or waiting, and
+  # a confirmation it waited on is cancelled.
+  defp end_question(socket, prompt_id) do
+    if known?(socket, prompt_id),
+      do: socket |> drop_prompt_asks(prompt_id, cancel: true) |> remove_prompt(prompt_id),
+      else: socket
+  end
 
   # Another client's request, or this one's before it said so: shown with
   # the home's preview and the client that asked, before any proof.
@@ -1325,6 +1396,15 @@ defmodule PrismWeb.SystemLayer do
           is_nil(socket.assigns.current) ->
             socket |> assign(current: prompt, error: nil) |> mark_shown()
 
+          in_front?(prompt, socket.assigns.current) ->
+            socket
+            |> assign(
+              current: prompt,
+              queue: [socket.assigns.current | socket.assigns.queue],
+              error: nil
+            )
+            |> mark_shown()
+
           true ->
             assign(socket, queue: socket.assigns.queue ++ [prompt])
         end
@@ -1352,6 +1432,17 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp panel_for(socket, _prompt), do: socket
+
+  # A confirmation of a question's answer, asked on another screen of the
+  # person's, goes in front of an open question card, which waits first
+  # in line: the card could otherwise be passed only by closing it, which
+  # answers it.
+  defp in_front?(%{kind: :confirmation, subject: %{operation: "question.answer"}}, %{
+         kind: :question
+       }),
+       do: true
+
+  defp in_front?(_prompt, _current), do: false
 
   defp known?(%{assigns: %{current: current, queue: queue}}, id) do
     match?(%{id: ^id}, current) or Enum.any?(queue, &(&1.id == id))
@@ -1418,6 +1509,7 @@ defmodule PrismWeb.SystemLayer do
           _settled = settle_request(prompt.subject, :resolved)
           socket = end_own_request(socket, prompt)
           if reports?(socket, prompt), do: report(id, :dismissed)
+          dismiss_question(socket, prompt)
 
           {:noreply,
            socket
@@ -1430,6 +1522,40 @@ defmodule PrismWeb.SystemLayer do
           {:noreply, socket}
       end
     end)
+  end
+
+  # A question's choice, sent as its answer (`Question.answer/2`), while no
+  # confirmation of an earlier choice waits in its card.
+  def handle_event("question_answer", %{"id" => id, "choice" => choice}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      with {:ok, prompt} <- open(socket, id, [:question]),
+           nil <- panel_of(socket.assigns.panels, prompt),
+           this_caller = Question.choice(prompt).this_caller and Question.switchable?(prompt),
+           {:ok, answer} <- Question.answer(choice, this_caller) do
+        prompt = Map.delete(prompt, :said)
+        {:noreply, socket |> assign(:current, prompt) |> question_answer(prompt, answer)}
+      else
+        _unanswerable -> {:noreply, socket}
+      end
+    end)
+  end
+
+  # The card's second press, and its switch, kept on the shown prompt.
+  def handle_event("question_more", %{"id" => id}, socket) do
+    case open(socket, id, [:question]) do
+      {:ok, prompt} -> {:noreply, put_question_choice(socket, prompt, more: true)}
+      :none -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("question_switch", %{"id" => id}, socket) do
+    with {:ok, prompt} <- open(socket, id, [:question]),
+         true <- Question.switchable?(prompt) do
+      choice = Question.choice(prompt)
+      {:noreply, put_question_choice(socket, prompt, this_caller: not choice.this_caller)}
+    else
+      _unswitchable -> {:noreply, socket}
+    end
   end
 
   def handle_event("confirm", %{"id" => id}, socket) do
@@ -2117,6 +2243,14 @@ defmodule PrismWeb.SystemLayer do
       %{repeat: :resubmit} ->
         push_resubmit(socket, "#{socket.assigns.id}-credential")
 
+      # A question's card may have stepped behind another's confirmation
+      # while its own waited: it is found wherever it stands.
+      %{prompt_id: prompt_id, repeat: {:question_answer, answer}} ->
+        case prompt_of(socket, prompt_id) do
+          %{kind: :question} = prompt -> question_answer(socket, prompt, answer)
+          _gone -> socket
+        end
+
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
@@ -2292,6 +2426,22 @@ defmodule PrismWeb.SystemLayer do
     {held, kept} = Map.pop(socket.assigns.held, ref)
     socket = assign(socket, :held, kept)
 
+    # A question's card shows its choices again, the question unanswered,
+    # and says why: on that card, wherever it stands, and on no other.
+    socket =
+      case held do
+        %{repeat: {:question_answer, _answer}, prompt_id: prompt_id} ->
+          socket
+          |> drop_panel(ref)
+          |> update_prompt(
+            prompt_id,
+            &Map.put(&1, :said, "#{ended_words(kind)} The question is still unanswered.")
+          )
+
+        _other ->
+          socket
+      end
+
     with %{repeat: :request, prompt_id: prompt_id} <- held,
          %{subject: subject} <- prompt_of(socket, prompt_id),
          :ok <- settle_request(subject, if(kind == :expired, do: :expired, else: :resolved)) do
@@ -2303,6 +2453,78 @@ defmodule PrismWeb.SystemLayer do
 
   defp prompt_of(%{assigns: %{current: current, queue: queue}}, id),
     do: Enum.find([current | queue], &match?(%{id: ^id}, &1))
+
+  # The prompt `id`, open or waiting, changed by `fun`; the others as they are.
+  defp update_prompt(socket, id, fun) do
+    change = fn
+      %{id: ^id} = prompt -> fun.(prompt)
+      prompt -> prompt
+    end
+
+    assign(socket,
+      current: socket.assigns.current && change.(socket.assigns.current),
+      queue: Enum.map(socket.assigns.queue, change)
+    )
+  end
+
+  # ---------------------------------------------------------------------------
+  # A component's question
+  # ---------------------------------------------------------------------------
+
+  # The answer the person chose, as the layer's own change: answered, the
+  # card goes; a fresh confirmation it needs is drawn in the card, which
+  # repeats the same answer once it is given (`repeat_held/2`); a question
+  # no longer waiting takes its card away; any other refusal is said on it.
+  defp question_answer(socket, prompt, answer) do
+    args = %{"ref" => prompt.subject.ref, "answer" => answer}
+
+    case layer_call(socket, prompt, {:question_answer, answer}, "question/answer", args) do
+      {:asked, socket} ->
+        socket
+
+      {:done, {:ok, _answered}, socket} ->
+        report(prompt.id, :confirmed)
+        remove_prompt(socket, prompt.id)
+
+      {:done, {:error, reason}, socket} ->
+        cond do
+          no_longer_waiting?(reason) -> remove_prompt(socket, prompt.id)
+          shown?(socket, prompt) -> assign(socket, :error, Ops.error_message(reason))
+          true -> socket
+        end
+    end
+  end
+
+  defp ended_words(:cancelled), do: "The confirmation was cancelled."
+  defp ended_words(:voided), do: "The confirmation was withdrawn."
+  defp ended_words(:expired), do: "The confirmation expired."
+
+  # A refusal is said on the card only while it is the one shown.
+  defp shown?(%{assigns: %{current: %{id: id}}}, %{id: id}), do: true
+  defp shown?(_socket, _prompt), do: false
+
+  defp no_longer_waiting?(%Prima.Refusal{reason: :not_pending}), do: true
+  defp no_longer_waiting?({:not_found, "question", _ref}), do: true
+  defp no_longer_waiting?(_reason), do: false
+
+  # A card closed without a choice is "Don't allow", once, whatever its
+  # store answers: the card goes either way, and comes back with the next
+  # read of what waits if the answer did not land.
+  defp dismiss_question(socket, %{kind: :question, subject: %{ref: ref}}) do
+    {:ok, answer} = Question.answer("deny_once", false)
+    _answered = Ops.call_tool(socket, "question/answer", %{"ref" => ref, "answer" => answer})
+    :ok
+  end
+
+  defp dismiss_question(_socket, _prompt), do: :ok
+
+  defp put_question_choice(socket, prompt, change),
+    do:
+      assign(
+        socket,
+        :current,
+        Map.put(prompt, :choice, Enum.into(change, Question.choice(prompt)))
+      )
 
   # ---------------------------------------------------------------------------
   # Pairing
@@ -2649,6 +2871,22 @@ defmodule PrismWeb.SystemLayer do
             <span class="font-semibold">Not done:</span> {@error}
           </p>
 
+          <p
+            :if={@shown[:said]}
+            role="alert"
+            class="rounded border border-red-500 p-2 text-sm"
+            data-test="question-said"
+          >
+            {@shown[:said]}
+          </p>
+
+          <Question.choices
+            :if={@may and @shown.kind == :question and is_nil(@panel)}
+            prompt={@shown}
+            myself={@myself}
+            button_class={&button_class/1}
+          />
+
           <.controls prompt={@shown} may={@may} myself={@myself} id={@id} panel={@panel} />
 
           <p :if={@queue != []} class="text-xs text-gray-400">
@@ -2964,6 +3202,13 @@ defmodule PrismWeb.SystemLayer do
     """
   end
 
+  # A component's question: CYFR's frame around the component's words.
+  defp body(%{prompt: %{kind: :question}} = assigns) do
+    ~H"""
+    <Question.card id={@id} prompt={@prompt} />
+    """
+  end
+
   defp body(assigns), do: ~H""
 
   attr :preview, :map, required: true
@@ -3101,6 +3346,7 @@ defmodule PrismWeb.SystemLayer do
     ~H"""
     <div class="flex flex-wrap justify-end gap-2">
       <button
+        :if={not (@prompt.kind == :question and @may)}
         type="button"
         phx-click="dismiss"
         phx-target={@myself}
@@ -3210,6 +3456,9 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :request, subject: %{asker: %{name: name}, operation: operation}}),
     do: "#{name} asks you to approve #{operation}"
 
+  defp title(%{kind: :question, subject: %{name: name, title: title}}),
+    do: "#{name} wants to #{title}"
+
   # Where a grant lands, as the person reads it: their own athanor as
   # theirs, any other by its name.
   defp grant_place(name, %Sanctum.Context{athanor_id: id} = ctx) when is_binary(name) do
@@ -3271,6 +3520,9 @@ defmodule PrismWeb.SystemLayer do
     do:
       "Nothing runs until you approve. This is what CYFR would run, as CYFR shows it: " <>
         "the app that asked drew none of it."
+
+  defp description(%{kind: :question}),
+    do: "It asks before it does this, and waits for your answer. Closing this is Don't allow."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:

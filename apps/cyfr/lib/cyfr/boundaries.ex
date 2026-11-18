@@ -533,6 +533,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Attach` is `Opus.Host.AttachedFetch`'s one resolution of the value " <>
           "an attached request carries (`resolve/5`): the vault decides, and the control " <>
           "plane attaches and performs. " <>
+          "`Sanctum.Questions` is attention's refresh of the person's open questions " <>
+          "(`waiting/1`, from `Cyfr.Providers.Attention`), as " <>
+          "`Sanctum.Consent.waiting_confirmations/1` is of their confirmations. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -2074,8 +2077,16 @@ defmodule Cyfr.Boundaries do
     # A removed catalyst's standing answers go with its last version
     # (`Compendium.Cascade`); a catalyst's ask is decided and waited on for
     # the host's side of the call (`Opus.Host.Question`), and a run's end
-    # announces the questions it closed (`Opus.Record`).
-    "Sanctum.Questions" => [ask: 4, component_removed: 3, ended: 3, find: 4, wait: 4],
+    # announces the questions it closed (`Opus.Record`); a person's open
+    # questions are attention's refresh (`Cyfr.Providers.Attention`).
+    "Sanctum.Questions" => [
+      ask: 4,
+      component_removed: 3,
+      ended: 3,
+      find: 4,
+      wait: 4,
+      waiting: 1
+    ],
     "Sanctum.Session" => [cleanup: 0, destroy: 1, load_by_hash: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [

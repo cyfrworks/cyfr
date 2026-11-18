@@ -18,6 +18,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
   alias Cyfr.Bus
   alias Cyfr.Bus.Attention
+  alias Cyfr.Test.QuestionFixtures, as: Q
   alias Cyfr.Providers.Attention, as: Provider
   alias Prima.Canvas.Shape
   alias Sanctum.Context
@@ -232,6 +233,24 @@ defmodule Cyfr.Providers.AttentionTest do
       refute inspect(item) =~ @private
     end
 
+    test "lists an open question by its ref and its words, and none of what it asks", %{ctx: ctx} do
+      ref = question!(ctx)
+
+      assert [item] = refreshed(ctx)
+
+      assert %{
+               "kind" => "question",
+               "id" => ^ref,
+               "label" => "tables wants to delete a table",
+               "day" => nil,
+               "destination" => %{"kind" => "ref", "page" => nil, "ref" => ^ref}
+             } = item
+
+      assert {:ok, since, 0} = DateTime.from_iso8601(item["since"])
+      assert DateTime.compare(since, Q.row(ctx, ref).opened_at) == :eq
+      refute inspect(item) =~ @private
+    end
+
     test "lists a frame's request by its id and operation while its shell holds it", %{
       ctx: ctx,
       other_ctx: other_ctx
@@ -379,6 +398,7 @@ defmodule Cyfr.Providers.AttentionTest do
     test "is every kind at once, oldest first", %{ctx: ctx, actor: actor, other_ctx: other_ctx} do
       approval!(actor, thread!(actor))
       confirmation!(ctx)
+      question!(ctx)
       run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", ~U[2026-01-01 00:00:00.000000Z])
       schedule = schedule!(actor, ctx.user_id, "s")
       occurrence!(actor, schedule.id, ~U[2026-01-02 00:00:00.000000Z], "failed")
@@ -388,7 +408,7 @@ defmodule Cyfr.Providers.AttentionTest do
       items = refreshed(ctx)
 
       assert items |> Enum.map(& &1["kind"]) |> Enum.sort() ==
-               ~w(approval confirmation failed_run failed_schedule file_offer grant_request)
+               ~w(approval confirmation failed_run failed_schedule file_offer grant_request question)
 
       times = Enum.map(items, &elem(DateTime.from_iso8601(&1["since"]), 1))
       assert times == Enum.sort(times, DateTime)
@@ -537,6 +557,32 @@ defmodule Cyfr.Providers.AttentionTest do
         assert_receive %Attention{kind: :removed} = left
         assert removed?(left, ref, outcome), inspect(stage)
       end
+    end
+
+    test "a question enters on its opening, as the refresh lists it, and leaves on each end", %{
+      ctx: ctx
+    } do
+      Q.isolate!()
+      component = Q.catalyst!(ctx)
+      {_run, ref} = Q.open!(ctx, component, request: %{operation: @private})
+      assert_receive %Attention{kind: :question, id: ^ref} = entered
+      assert [read_as(entered)] == refreshed(ctx)
+      refute inspect(entered) =~ @private
+
+      {:ok, answer} = Prima.Question.Answer.decode(%{"effect" => "allow", "lasts" => "once"})
+      {:ok, _answered} = Sanctum.Questions.answer(ctx, ref, answer)
+      assert_receive %Attention{kind: :removed} = left
+      assert removed?(left, ref, "resolved")
+
+      for {stage, outcome} <- [expired: "expired", withdrawn: "withdrawn"] do
+        {run, ref} = Q.open!(ctx, component)
+        assert_receive %Attention{kind: :question, id: ^ref}
+        Q.end!(ctx, run, stage)
+        assert_receive %Attention{kind: :removed} = left
+        assert removed?(left, ref, outcome), inspect(stage)
+      end
+
+      assert refreshed(ctx) == []
     end
 
     test "a request enters as it is asked, as the refresh lists it, and leaves as it ends", %{
@@ -829,6 +875,14 @@ defmodule Cyfr.Providers.AttentionTest do
              Sanctum.Gate.call_external("vault", ctx, Map.put(entry, "action", "create"))
 
     Prima.Confirmation.ref(id)
+  end
+
+  # An open question of the person's, a component's ask with no runner:
+  # answers its ref. Its operation carries the private marker.
+  defp question!(ctx) do
+    Q.isolate!()
+    {_run, ref} = Q.open!(ctx, Q.catalyst!(ctx), request: %{operation: @private})
+    ref
   end
 
   defp run!(actor, user_id, reference, status, completed_at, opts \\ []) do
