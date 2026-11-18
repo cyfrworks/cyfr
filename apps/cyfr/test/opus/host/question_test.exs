@@ -19,7 +19,6 @@ defmodule Opus.Host.QuestionTest do
 
   alias Cyfr.Test.AttemptFixtures
   alias Opus.Host.Question
-  alias Prima.Authority.Blob
 
   @repo Path.expand("../../../../..", __DIR__)
 
@@ -144,39 +143,16 @@ defmodule Opus.Host.QuestionTest do
   @asks [%{"name" => "delete_table", "title" => "delete a table"}]
 
   # The catalyst shipped in the person's athanor, and an attached attempt
-  # of it whose authority pins its release, as a consented root's does.
+  # of it admitted at its release, as admission hands an attempt the
+  # release it selected the artifact from.
   defp asking!(ctx) do
     component = ship!(ctx)
 
-    {pinned, _entry} =
-      AttemptFixtures.vault_authority!(ctx, %{kind: "api_key", fields: %{"KEY" => "k"}})
-
-    {:ok, blob} =
-      Blob.parse(%{
-        "canonical" => "jcs-1",
-        "nodes" => %{
-          @node => %{
-            "limits" => Prima.Test.AuthorityFixtures.limits_map(),
-            "edges" => %{"@ingress" => %{}}
-          }
-        }
-      })
-
-    {:ok, authority} =
-      Prima.Authority.root(
-        %{
-          profile_id: pinned.profile_id,
-          consent_id: pinned.consent_id,
-          source_ref: @node,
-          kind: :owner,
-          invoke_mode: :open_inert,
-          activation: %{@node => component.release_digest}
-        },
-        blob,
-        ceiling: Prima.Test.AuthorityFixtures.ceiling()
-      )
-
-    AttemptFixtures.attached!(ctx: ctx, authority: authority, component_ref: @node <> ":1.0.0")
+    AttemptFixtures.attached!(
+      ctx: ctx,
+      component_ref: @node <> ":1.0.0",
+      release_digest: component.release_digest
+    )
   end
 
   # The catalyst, shipped in the person's athanor with its declared actions.
@@ -396,6 +372,38 @@ defmodule Opus.Host.QuestionTest do
     assert %{state: "ended"} = Arca.Repo.get!(Arca.Schemas.Question, ref)
     assert_receive {:question, :withdrawn, %{ref: ^ref}}
     refute_receive {:question, _stage, %{ref: ^ref}}, 200
+  end
+
+  test "an ask whose admitted release was replaced in the registry since is refused, never bound to the new words",
+       %{ctx: ctx} do
+    fixture = asking!(ctx)
+
+    # The release the run was admitted at is replaced under it: another
+    # digest, and the action's title reworded.
+    reworded =
+      Jason.encode!(%{
+        "name" => "tables",
+        "type" => "catalyst",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "asks" => [%{"name" => "delete_table", "title" => "tidy a table"}]
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.Component,
+          where: c.athanor_id == ^ctx.athanor_id and c.name == "tables"
+        ),
+        set: [release_digest: "sha256:" <> String.duplicate("0", 64), manifest: reworded]
+      )
+
+    assert {:ok, {:answer, {:none, :invalid}}} =
+             Opus.Host.question_ask(AttemptFixtures.caller(fixture), 1, atoms(@ask))
+
+    assert Arca.Repo.all(
+             from(q in Arca.Schemas.Question, where: q.attempt_id == ^fixture.attempt)
+           ) ==
+             []
   end
 
   defp end!(ctx, fixture) do

@@ -235,6 +235,7 @@ defmodule Opus.Attempt do
                 :grant,
                 :inputs,
                 :run_deadline,
+                :release_digest,
                 declared_needs: [],
                 roster: [],
                 held_invoke: false,
@@ -288,7 +289,7 @@ defmodule Opus.Attempt do
   @typedoc """
   What a run's ask is decided under (`Opus.Host.Question`): the context
   its calls run in, its execution, attempt and root, its component's
-  reference and the release digest that runs, its deadline, fixed when
+  reference and the release digest admitted for it, its deadline, fixed when
   the attempt answered its runner's attach, and its record as admitted,
   which names its caller (`Opus.Record.caller/1`). With the ask's texts, also
   the summary and the operation masked with the attempt's masking set,
@@ -330,7 +331,10 @@ defmodule Opus.Attempt do
   of its admitted input, default `[]`), `:step_spans`, `:service_id` and
   `:boot_id` (the id and the boot of that worker service), `:deadline` (the
   run's subtree deadline in Unix ms, which caps its children's), `:digest` (the digest of the
-  component's artifact, which the runner fetches), `:held_invoke` (true
+  component's artifact, which the runner fetches), `:release_digest` (the
+  release admission selected that artifact from, in the registry's
+  `sha256:` spelling, which a question the run asks is bound to, root or
+  child, however it was dispatched), `:held_invoke` (true
   when the waiter holds a charged invoke-budget slot of the authority's
   budget, which the attempt takes over), `:charge` (the charge row that
   slot holds, `%{id: charge_id}`) and `:assignment` (what the run's
@@ -695,6 +699,7 @@ defmodule Opus.Attempt do
       call_id: Keyword.get(opts, :call_id),
       declared_needs: Keyword.get(opts, :declared_needs, []),
       activation_digest: Keyword.get(opts, :activation_digest),
+      release_digest: Keyword.get(opts, :release_digest),
       roster: Keyword.get(opts, :roster, []),
       worker: Keyword.fetch!(opts, :worker),
       service_id: Keyword.get(opts, :service_id),
@@ -1470,7 +1475,7 @@ defmodule Opus.Attempt do
       attempt: state.attempt,
       root_execution_id: state.root_execution_id,
       component_ref: state.component_ref,
-      release_digest: release_digest(state),
+      release_digest: state.release_digest,
       deadline: state.run_deadline && DateTime.from_unix!(state.run_deadline, :millisecond),
       record: state.close.record
     }
@@ -1717,20 +1722,6 @@ defmodule Opus.Attempt do
          ) do
       :ok -> :ok
       {:deny, seconds} -> {:retry_after_ms, seconds * 1000}
-    end
-  end
-
-  # The release that runs, in the registry's `sha256:` spelling: under a
-  # bound authority, root or child, the digest its consent's activation
-  # records for the run's own node (a child's activation digest is its
-  # root's graph's); an unbound child, reached by dynamic dispatch, the
-  # release digest it was admitted at (`Opus.Admission`); an unbound root,
-  # none.
-  defp release_digest(state) do
-    case Prima.Authority.current_node(state.authority) do
-      {:ok, node} -> Map.get(state.authority.activation, node)
-      :unbound when state.execution_id == state.root_execution_id -> nil
-      :unbound -> state.activation_digest
     end
   end
 

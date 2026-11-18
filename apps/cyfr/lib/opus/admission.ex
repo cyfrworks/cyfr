@@ -931,6 +931,9 @@ defmodule Opus.Admission do
         boot_id: run.opts[:boot_id] || Record.boot_id(),
         deadline: run.deadline,
         digest: run.component["digest"],
+        # The release admitted, as the row the executable was selected from
+        # names it: what a question the run asks is bound to.
+        release_digest: run.component["release_digest"],
         held_invoke: run.opts[:held_invoke] == true,
         charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge]),
         inputs: run.opts[:inputs],

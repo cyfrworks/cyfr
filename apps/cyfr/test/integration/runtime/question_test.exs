@@ -180,10 +180,15 @@ defmodule Locus.Runtime.QuestionTest do
     task =
       Task.async(fn ->
         Process.put(:"$callers", callers)
-        Opus.run_root(ctx, :default, ref <> ":1.0.0", input, execution_id: id)
+        Opus.run_root(ctx, :default, pinned(ref), input, execution_id: id)
       end)
 
     {id, task}
+  end
+
+  # A reference pinned at 1.0.0, unless it names its version.
+  defp pinned(ref) do
+    if length(String.split(ref, ":")) == 3, do: ref, else: ref <> ":1.0.0"
   end
 
   # What the probe reported for each statement, once its run completed.
@@ -524,60 +529,68 @@ defmodule Locus.Runtime.QuestionTest do
   end
 
   # ---------------------------------------------------------------------------
-  # A child
+  # Children
   # ---------------------------------------------------------------------------
 
   @nested Path.expand("support/test_wasm/nested_probe/nested_probe.wasm", __DIR__)
 
-  test "a formula's child asks under its own release, and spends its root's allowance", %{
-    ctx: ctx,
-    ref: probe
-  } do
-    name = "question-app-#{System.unique_integer([:positive])}"
-
-    manifest = %{
-      "name" => name,
-      "version" => "1.0.0",
-      "type" => "formula",
-      "caps" => %{"tools" => ["execution.run"]},
-      "dependencies" => %{"static" => [%{"ref" => probe}]}
-    }
+  # The nested probe published as a formula of the person's own under
+  # `name` and `version`, naming `static` as its static dependencies, and
+  # consented: its reference.
+  defp formula!(ctx, name, version, static) do
+    manifest =
+      %{
+        "name" => name,
+        "version" => version,
+        "type" => "formula",
+        "caps" => %{"tools" => ["execution.run"]}
+      }
+      |> then(fn manifest ->
+        if static == [],
+          do: manifest,
+          else:
+            Map.put(manifest, "dependencies", %{"static" => Enum.map(static, &%{"ref" => &1})})
+      end)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@nested), %{
         name: name,
-        version: "1.0.0",
+        version: version,
         type: "formula",
         manifest: Jason.encode!(manifest)
       })
 
     app = "formula:local." <> name
     consent!(ctx, app)
+    app
+  end
 
-    {root, task} =
-      start!(ctx, app, %{
-        "op" => "call",
-        "request" => %{
-          "tool" => "execution",
-          "action" => "run",
-          "args" => %{
-            "reference" => probe <> ":1.0.0",
-            "input" => %{
-              "operation" => "run",
-              "params" => %{"statements" => ["DROP TABLE users"]}
-            }
-          }
-        }
-      })
+  # The formula's call that runs the probe on one statement.
+  defp probe_call(probe) do
+    %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{
+        "reference" => probe <> ":1.0.0",
+        "input" => %{"operation" => "run", "params" => %{"statements" => ["DROP TABLE users"]}}
+      }
+    }
+  end
 
+  # The probe's question, asked `depth` runs below `root`: its row names
+  # the probe's own release and the root, it spends the root's allowance
+  # alone, and the person's allow reaches the probe.
+  defp asked_below!(ctx, probe, root, task, depth) do
     question = opened!()
     row = question!(question)
     {:ok, _ref, _type, component} = Opus.Admission.inspect_component(ctx, probe <> ":1.0.0")
 
-    assert row.execution_id != root
     assert row.root_execution_id == root
     assert row.release_digest == component["release_digest"]
+    assert row.component_ref == probe <> ":1.0.0"
     assert row.caller == "person"
+    assert ancestors(row.execution_id) |> length() == depth
+    assert List.last(ancestors(row.execution_id)) == root
     assert spent(ctx, root) == 1
     assert spent(ctx, row.execution_id) == 0
 
@@ -590,6 +603,46 @@ defmodule Locus.Runtime.QuestionTest do
 
     assert [%{"answer" => "allowed"}] = data["results"]
     assert [_completed] = TwoServices.calls(:complete, root)
+  end
+
+  # The runs above `id`, nearest first.
+  defp ancestors(id) do
+    case Arca.Repo.get!(Arca.Schemas.Execution, id).parent_execution_id do
+      nil -> []
+      parent -> [parent | ancestors(parent)]
+    end
+  end
+
+  test "a formula's static child asks under its own release, and spends its root's allowance", %{
+    ctx: ctx,
+    ref: probe
+  } do
+    app = formula!(ctx, "question-app-#{System.unique_integer([:positive])}", "1.0.0", [probe])
+    {root, task} = start!(ctx, app, %{"op" => "call", "request" => probe_call(probe)})
+    asked_below!(ctx, probe, root, task, 1)
+  end
+
+  test "a catalyst a formula dispatches dynamically asks under its own release", %{
+    ctx: ctx,
+    ref: probe
+  } do
+    app = formula!(ctx, "question-app-#{System.unique_integer([:positive])}", "1.0.0", [])
+    {root, task} = start!(ctx, app, %{"op" => "call", "request" => probe_call(probe)})
+    asked_below!(ctx, probe, root, task, 1)
+  end
+
+  test "a child of a child asks under its own release, and spends its root's allowance", %{
+    ctx: ctx,
+    ref: probe
+  } do
+    # The nested probe calls itself by this reference, one level down,
+    # and that child runs the probe.
+    app = formula!(ctx, "nested-probe", "0.1.0", [])
+
+    {root, task} =
+      start!(ctx, app <> ":0.1.0", %{"op" => "chain", "depth" => 1, "leaf" => probe_call(probe)})
+
+    asked_below!(ctx, probe, root, task, 2)
   end
 
   # ---------------------------------------------------------------------------
