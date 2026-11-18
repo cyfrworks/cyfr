@@ -33,9 +33,9 @@ defmodule Sanctum.ProviderTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 15 action-based tools" do
+    test "returns 16 action-based tools" do
       tools = Provider.tools()
-      assert length(tools) == 15
+      assert length(tools) == 16
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -57,6 +57,8 @@ defmodule Sanctum.ProviderTest do
       assert "invitation" in tool_names
       # Threads people talk in, which no athanor holds.
       assert "shared_thread" in tool_names
+      # What components ask their person before an action.
+      assert "question" in tool_names
       # A sign-out is a session's (session.end), never a key's.
       refute "passkey" in tool_names
     end
