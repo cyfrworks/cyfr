@@ -1449,6 +1449,26 @@ defmodule Opus.BrainTest do
       _ = thread
     end
 
+    test "cleanup ends no holder on another row, which holds nothing of the record's folder, " <>
+           "and waits for it",
+         %{ctx: ctx, row: row, thread: thread, turn: turn, binding: binding} do
+      # The thread's attendant starting over on the row its agent moved to,
+      # still at the generation whose session the record names.
+      other = brain_row!(ctx, "claude-code-other")
+      step = start_step!(ctx, turn, other)
+
+      {:ok, {pid, ref}} =
+        Brain.open(%{binding | step: step.id, row_id: other.id, epoch: other.epoch})
+
+      record = owed!(ctx, thread.id, row, generation: binding.generation)
+      task = Task.async(fn -> Brain.forget(record) end)
+
+      assert Task.await(task, 10_000) == {:error, :busy}
+      assert Process.alive?(pid)
+      refute_received {Brain, ^ref, {:ended, _reason}}
+      refute_received {:session, "close", _close, _fields}
+    end
+
     test "cleanup ends a holder of the record's generation first, and waits for a successor's",
          %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread} do
       {_pid, ref} = started!(fake, row, binding)
@@ -1606,16 +1626,26 @@ defmodule Opus.BrainTest do
       }
 
       brain = opened!(fake, row, bound)
-      keep_session!(thread, "#{name}-0000-4968-8776-000000000001")
+      keep_session!(actor, thread, row, agent, "#{name}-0000-4968-8776-000000000001")
       {brain, turn}
     end
 
-    defp keep_session!(thread, session),
-      do:
-        {1, _} =
-          Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
-            set: [brain_session: session]
-          )
+    # The session kept as the attendant keeps a driver's `started`, with
+    # the row it is stored with (`TurnStorage.commit_brain/3`).
+    defp keep_session!(actor, thread, row, agent, session) do
+      {:ok, %{seen: false}} =
+        TurnStorage.commit_brain(actor, thread.id, %{
+          agent: agent,
+          generation: 0,
+          boot: "boot-one",
+          hello: true,
+          seq: 1,
+          row_id: row.id,
+          epoch: row.epoch,
+          silence_ms: Opus.Brain.silence_ms(),
+          session: session
+        })
+    end
 
     # The room, a crew member's thread under it and a thread that read it,
     # each with its session held.

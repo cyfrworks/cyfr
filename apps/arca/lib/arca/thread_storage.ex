@@ -633,7 +633,7 @@ defmodule Arca.ThreadStorage do
           |> QueryHelpers.where_tenant(actor)
           |> Repo.all()
 
-        forgotten = owe_forgets!(actor, ids)
+        forgotten = owe_forgets_of!(actor, ids)
 
         {_count, _} =
           from(c in Thread, where: c.id in ^ids)
@@ -1035,7 +1035,7 @@ defmodule Arca.ThreadStorage do
       # Before anything clears or deletes them: the sessions of the
       # threads that go and of those that read one, read from the rows
       # that hold them.
-      forgotten = owe_forgets!(actor, ids ++ Enum.map(readers, &elem(&1, 0)))
+      forgotten = owe_forgets_of!(actor, ids ++ Enum.map(readers, &elem(&1, 0)))
 
       cancel = Map.put_new(attrs, :error, "the room was deleted")
 
@@ -1108,36 +1108,38 @@ defmodule Arca.ThreadStorage do
     end)
   end
 
-  # The brain sessions of the threads `ids` a program's transcript may
-  # back, each owed its removal from its row's folder by a `brain_forget`
-  # record (`Prima.OutboxRecord.brain_forget/1`) put in the caller's
-  # transaction before the statement that clears or deletes the session,
-  # so the record is read from the row that holds it and commits with
-  # its clearing or not at all. The rows are held first (`lock_threads!/2`),
-  # so a session a turn keeps meanwhile (`Arca.TurnStorage`'s
-  # `keep_session!`) is either read here or kept under a generation the
-  # caller then raises past. A session is one a program may hold when the
-  # thread's latest admitted `program.start` names a driven program row
-  # with a kept folder (`session_rows/2`); any other session, an API
-  # brain's or one no such row names, owes nothing. Answers the sessions
-  # recorded.
-  defp owe_forgets!(_actor, []), do: []
+  @doc false
+  # Put, in the caller's transaction and before the statement that clears
+  # or deletes them, a `brain_forget` record
+  # (`Prima.OutboxRecord.brain_forget/1`) for each of `threads`' brain
+  # sessions a program's transcript backs, so the record commits with its
+  # clearing or not at all. `threads` are rows the caller holds
+  # (`lock_threads!/2`, or a turn's own thread), so a session a batch
+  # keeps meanwhile (`Arca.TurnStorage.commit_brain/3`) is either read
+  # here or kept under a generation the caller then raises past. A session
+  # backs a transcript in the folder of the row it is stored with
+  # (`session_rows/1`); a session with no stored row owes nothing. Answers
+  # the sessions recorded. An in-transaction helper.
+  @spec owe_forgets!(Prima.Actor.t(), [Thread.t()]) :: [forgotten()]
+  def owe_forgets!(_actor, []), do: []
 
   # arca:db-raise-ok inside the caller's transaction
-  defp owe_forgets!(%Prima.Actor{athanor_id: athanor_id} = actor, ids) do
+  def owe_forgets!(%Prima.Actor{athanor_id: athanor_id} = actor, threads)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(threads) do
     held =
-      for %Thread{brain_session: session} = thread <- lock_threads!(actor, Enum.uniq(ids)),
-          is_binary(session) and session != "",
+      for %Thread{athanor_id: ^athanor_id, brain_session: session, agent: agent} = thread <-
+            threads,
+          is_binary(session) and session != "" and is_binary(agent) and agent != "",
           do: thread
 
-    rows = session_rows(athanor_id, Enum.map(held, & &1.id))
+    rows = session_rows(actor, held)
 
-    for %Thread{id: thread_id} = thread <- held, {agent, row_id} <- List.wrap(rows[thread_id]) do
+    for %Thread{id: thread_id} = thread <- held, row_id <- List.wrap(rows[thread_id]) do
       record =
         Prima.OutboxRecord.brain_forget(%{
           athanor_id: athanor_id,
           thread_id: thread_id,
-          agent: agent,
+          agent: thread.agent,
           row_id: row_id,
           session: thread.brain_session,
           generation: thread.brain_generation
@@ -1146,56 +1148,44 @@ defmodule Arca.ThreadStorage do
       # A thread owes one removal per generation, and each clearing
       # raises it: a record already there is this very one.
       _put_or_there = Arca.Outbox.put!(actor, record)
-      %{thread_id: thread_id, agent: agent, generation: thread.brain_generation}
+      %{thread_id: thread_id, agent: thread.agent, generation: thread.brain_generation}
     end
   end
 
-  # The program row and agent of each thread's brain session: those its
-  # latest admitted `program.start` names (its step dispatched or closed,
-  # its outcome none or ok, its call the `tool_call` row the step was
-  # recorded for), as `Opus.Brain` proves the row a session runs on, when
-  # that row is a driven program with a kept folder in the athanor, as a
-  # brain's row is. A thread with none, or whose named row is gone or is
-  # no such program, is left out.
-  #
-  # The latest start is not always the session's: when the agent's
-  # program moves to another row, a later turn's start for the new row is
-  # admitted before its session answers, and a clearing between the two
-  # names the new row for the old row's session. The removal sent there
-  # answers forgot, finding nothing, and the old row's transcript stays.
-  # The session's own row, stored with it (`brain_progress`), closes that
-  # gap once it exists, and this function reads it then.
-  defp session_rows(_athanor_id, []), do: %{}
+  def owe_forgets!(%Prima.Actor{}, _threads),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.owe_forgets!/2")
+
+  defp owe_forgets_of!(_actor, []), do: []
 
   # arca:db-raise-ok inside the caller's transaction
-  # arca:unscoped-ok every statement names the athanor.
-  defp session_rows(athanor_id, thread_ids) do
-    named =
-      from(s in Arca.Schemas.TurnStep,
-        join: t in Arca.Schemas.Turn,
-        on: t.id == s.turn_id,
-        join: m in Message,
-        on: m.id == s.message_id,
-        where: s.athanor_id == ^athanor_id and t.athanor_id == ^athanor_id,
-        where: m.athanor_id == ^athanor_id and t.thread_id in ^thread_ids,
-        where: s.tool == "program" and s.action == "start" and m.kind == "tool_call",
-        where: s.dispatch_state in ["dispatched", "closed"],
-        where: is_nil(s.outcome) or s.outcome == "ok",
-        order_by: [asc: m.seq],
-        select: {t.thread_id, t.agent, m.payload}
-      )
-      |> Repo.all()
-      |> Enum.reduce(%{}, fn {thread_id, agent, payload}, named ->
-        case decode_map(payload, "payload")["arguments"] do
-          %{"program" => row_id} when is_binary(row_id) and row_id != "" and is_binary(agent) ->
-            Map.put(named, thread_id, {agent, row_id})
+  defp owe_forgets_of!(actor, ids), do: owe_forgets!(actor, lock_threads!(actor, Enum.uniq(ids)))
 
-          _no_row ->
-            named
-        end
-      end)
+  # The program row each thread's brain session is stored with: the
+  # `row` of its `brain_progress`, written in the one write that keeps a
+  # session a `started` names (`Arca.TurnStorage.commit_brain/3`) and
+  # left by everything else, so a forget still reads it until the next
+  # `started`. It is the session's folder, which neither the row its
+  # driver runs on now (`driver`, which a new driver's hello moves) nor a
+  # later turn's start names. Its `epoch` is not the record's: a folder is
+  # its row's whatever the row's epoch, and a removal holds the row's
+  # owner at the epoch the row has then. A session with no stored row was
+  # kept by an adapter catalyst, never by a driver, and its transcript is
+  # in that catalyst's home, which no driver reaches. A stored row that is
+  # gone or keeps no folder is left out: its home's retirement removes the
+  # session's transcript with it.
+  defp session_rows(_actor, []), do: %{}
 
-    row_ids = named |> Map.values() |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+  # arca:db-raise-ok inside the caller's transaction
+  # arca:unscoped-ok the statement names the athanor.
+  defp session_rows(%Prima.Actor{athanor_id: athanor_id}, threads) do
+    stored =
+      for %Thread{id: id, brain_progress: progress} <- threads,
+          is_binary(progress),
+          %{"row" => row_id} when is_binary(row_id) and row_id != "" <- [Jason.decode!(progress)],
+          into: %{},
+          do: {id, row_id}
+
+    row_ids = stored |> Map.values() |> Enum.uniq()
 
     kept =
       from(r in Arca.Schemas.McpServer,
@@ -1206,7 +1196,7 @@ defmodule Arca.ThreadStorage do
       |> Repo.all()
       |> MapSet.new()
 
-    Map.filter(named, fn {_thread_id, {_agent, row_id}} -> MapSet.member?(kept, row_id) end)
+    Map.filter(stored, fn {_thread_id, row_id} -> MapSet.member?(kept, row_id) end)
   end
 
   @doc """

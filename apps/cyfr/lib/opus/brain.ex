@@ -119,10 +119,11 @@ defmodule Opus.Brain do
       stored record names is acted on, so a caller can hasten an owed
       removal and ask for no other. It runs under the record's thread and
       agent, the key a holder of that session runs under: a holder there
-      whose session generation is the record's or older is ended first
-      (`:forgotten`), so the box closes the driver's process that ran the
-      session before the one that forgets it opens; one of a later
-      generation is a successor, and the removal waits. A thread that
+      on the record's row whose session generation is the record's or
+      older is ended first (`:forgotten`), so the box closes the driver's
+      process that ran the session before the one that forgets it opens;
+      one of a later generation is a successor, one on another row holds
+      nothing of that row's folder, and the removal waits for either. A thread that
       holds the record's session again, under a later generation, is a
       successor too, and its session is never removed. The cleanup's own
       holder decides it, reading the record and the thread again once it
@@ -310,7 +311,11 @@ defmodule Opus.Brain do
           :ok
 
         pid ->
-          call(pid, {:forgotten, generation}, Programs.Box.close_timeout_ms() + @answer_margin_ms)
+          call(
+            pid,
+            {:forgotten, generation, nil},
+            Programs.Box.close_timeout_ms() + @answer_margin_ms
+          )
       end
     end)
 
@@ -341,7 +346,7 @@ defmodule Opus.Brain do
     with {:ok, owed} <- owed(actor, record),
          {:ok, row} <- forget_row(actor, owed["row_id"]),
          key = {athanor_id, owed["thread_id"], owed["agent"]},
-         :ok <- retire(key, owed["generation"]),
+         :ok <- retire(key, owed["generation"], owed["row_id"]),
          {:ok, pid} <- holder(key) do
       id = forget_id(record)
       session = owed["session"]
@@ -561,11 +566,13 @@ defmodule Opus.Brain do
     "obx_" <> binary_part(digest, 0, 40)
   end
 
-  # A holder of the record's thread and agent whose session is the
-  # record's generation or older is ended, and gone, before the cleanup's
-  # own process starts there; one of a later generation is a successor's,
-  # and the cleanup waits for it.
-  defp retire(key, generation) do
+  # A holder of the record's thread and agent on the record's row whose
+  # session is the record's generation or older is ended, and gone, before
+  # the cleanup's own process starts there; one of a later generation is a
+  # successor's, and one on another row holds no session of that row's
+  # folder (an attendant starting over there after its brain found the
+  # session gone), and the cleanup waits for either.
+  defp retire(key, generation, row_id) do
     case whereis(elem(key, 0), elem(key, 1), elem(key, 2)) do
       nil ->
         :ok
@@ -574,7 +581,7 @@ defmodule Opus.Brain do
         monitor = Process.monitor(pid)
         wait = Programs.Box.close_timeout_ms() + @answer_margin_ms
 
-        case call(pid, {:forgotten, generation}, wait) do
+        case call(pid, {:forgotten, generation, row_id}, wait) do
           {:error, :successor} ->
             Process.demonitor(monitor, [:flush])
             {:error, :busy}
@@ -1009,13 +1016,15 @@ defmodule Opus.Brain do
     end
   end
 
-  # A session forgotten at `generation`: this holder ends if the session
-  # it holds is of that generation or older (one not yet started is), and
-  # runs on as a successor's otherwise.
-  def handle_call({:forgotten, generation}, _from, state) do
-    if state.generation == nil or state.generation <= generation,
-      do: {:stop, :normal, :ok, ended(state, :forgotten)},
-      else: {:reply, {:error, :successor}, state}
+  # A session forgotten at `generation`, in the folder of `row_id` (nil
+  # for any): this holder ends if the session it holds is of that
+  # generation or older (one not yet started is) and runs on that row (or
+  # on none yet), and runs on otherwise.
+  def handle_call({:forgotten, generation, row_id}, _from, state) do
+    if (state.generation == nil or state.generation <= generation) and
+         (row_id == nil or state.owner == nil or state.owner.server_id == row_id),
+       do: {:stop, :normal, :ok, ended(state, :forgotten)},
+       else: {:reply, {:error, :successor}, state}
   end
 
   # A cleanup's `forget`, decided by the holder that owns the record's

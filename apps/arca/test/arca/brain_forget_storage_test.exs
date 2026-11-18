@@ -6,11 +6,14 @@ defmodule Arca.BrainForgetStorageTest do
   The removals a forgetting owes (`Prima.OutboxRecord.brain_forget/1`),
   recorded in the transaction that clears or deletes a thread's brain
   session, before the statement that does: a deleted room's session, each
-  of its children's and each of its readers', and the sessions a home's
-  reset forgets. A session no program holds, an API brain's or one whose
-  start no driven program with a kept folder admitted, owes nothing; a
-  deletion refused records nothing. Every check reads the whole record
-  the store holds.
+  of its children's and each of its readers', the sessions a home's
+  reset forgets, and a lost transcript's when the session is stored with
+  another row than the one whose brain lost it. Each names the row the
+  session is stored with, as the batch that keeps it stores it
+  (`Arca.TurnStorage.commit_brain/3`). A session stored with no row, an
+  adapter catalyst's, or with a row gone or keeping no folder, owes
+  nothing; a deletion refused records nothing. Every check reads the
+  whole record the store holds.
   """
 
   use ExUnit.Case, async: false
@@ -103,6 +106,70 @@ defmodule Arca.BrainForgetStorageTest do
           set: [brain_session: session, brain_generation: generation]
         )
 
+  # A turn of `agent` addressed in `thread`, over.
+  defp addressed!(actor, thread, agent) do
+    {:ok, %{turn: turn}} =
+      TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: actor.user_id, sent_by: "person", content: "hello"},
+        turn: %{agent: agent, requested_by: actor.user_id, origin: :interactive}
+      })
+
+    set_turn!(turn, status: "completed")
+    turn
+  end
+
+  # `session` kept as a driver's `started` keeps it, on `row`, at the
+  # thread's `generation`, by a turn of `agent`: the batch that names it
+  # stores the row with it.
+  defp held!(actor, thread, row, agent, session, generation \\ 0) do
+    addressed!(actor, thread, agent)
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+        set: [brain_generation: generation]
+      )
+
+    {:ok, %{seen: false}} = batch(actor, thread, row, agent, generation, %{session: session})
+  end
+
+  # One batch of a new driver process of `row`, its hello among its lines.
+  defp batch(actor, thread, row, agent, generation, attrs),
+    do:
+      TurnStorage.commit_brain(
+        actor,
+        thread.id,
+        Map.merge(
+          %{
+            agent: agent,
+            generation: generation,
+            boot: "boot-#{System.unique_integer([:positive])}",
+            hello: true,
+            seq: 1,
+            row_id: row.id,
+            epoch: row.epoch,
+            silence_ms: 1_800_000
+          },
+          attrs
+        )
+      )
+
+  # An open turn of "aqua" in `thread` whose brain runs on `row` (none
+  # for a catalyst's).
+  defp running!(actor, thread, row) do
+    {:ok, %{turn: turn}} =
+      TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: actor.user_id, sent_by: "person", content: "go on"},
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+      })
+
+    set_turn!(turn, status: "running")
+
+    if row,
+      do: {:ok, _} = TurnStorage.pin_program(actor, turn.id, row.id, %{fence: turn.fence})
+
+    turn
+  end
+
   # A turn of `reader` that read `thread`, as a read of it stamps its
   # sources.
   defp reads!(actor, reader, thread) do
@@ -142,13 +209,10 @@ defmodule Arca.BrainForgetStorageTest do
     } do
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
       {:ok, reader} = Arca.Test.Days.thread(actor)
-      started!(actor, room, row, "aqua")
-      started!(actor, child, row, "planner")
-      started!(actor, reader, row, "aqua")
+      held!(actor, room, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000001", 2)
+      held!(actor, child, row, "planner", "6f1e2d3c-0000-4968-8776-000000000002")
+      held!(actor, reader, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000003", 5)
       reads!(actor, reader, room)
-      keep!(room, "6f1e2d3c-0000-4968-8776-000000000001", 2)
-      keep!(child, "6f1e2d3c-0000-4968-8776-000000000002")
-      keep!(reader, "6f1e2d3c-0000-4968-8776-000000000003", 5)
       assert owed(actor) == []
 
       assert {:ok, %{cancelled: [], forgotten: forgotten}} = Threads.delete(actor, room.id)
@@ -177,8 +241,7 @@ defmodule Arca.BrainForgetStorageTest do
     end
 
     test "a refused deletion records nothing", %{actor: actor, room: room, row: row} do
-      started!(actor, room, row, "aqua")
-      keep!(room, "6f1e2d3c-0000-4968-8776-000000000001")
+      held!(actor, room, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000001")
       {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
 
       {:ok, %{turn: turn}} =
@@ -197,32 +260,26 @@ defmodule Arca.BrainForgetStorageTest do
     end
   end
 
-  describe "a session no program holds" do
-    test "owes nothing: an API brain's, a start not admitted, a row that keeps no folder or is gone",
-         %{actor: actor, room: room, row: row} do
-      {:ok, proposed} = Arca.Test.Days.thread(actor)
+  describe "the row a session is stored with" do
+    test "a catalyst's session, one stored with a row that keeps no folder or is gone, owe nothing",
+         %{actor: actor, room: room} do
       {:ok, scratch} = Arca.Test.Days.thread(actor)
       {:ok, gone} = Arca.Test.Days.thread(actor)
-      started!(actor, proposed, row, "aqua", dispatch: false)
-      started!(actor, scratch, brain_row!(actor, %{home: "scratch"}), "aqua")
+      held!(actor, scratch, brain_row!(actor, %{home: "scratch"}), "aqua", "a-session")
       vanished = brain_row!(actor)
-      started!(actor, gone, vanished, "aqua")
+      held!(actor, gone, vanished, "aqua", "a-session")
 
       {1, _} =
         Arca.Repo.delete_all(from(r in Arca.Schemas.McpServer, where: r.id == ^vanished.id))
 
-      # The room's session is an API brain's: no start of a program names it.
-      {1, _} =
-        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^room.id),
-          set: [agent: "aqua"]
-        )
-
-      for thread <- [room, proposed, scratch, gone], do: keep!(thread, "a-session")
+      # The room's session is a catalyst's: kept with no row.
+      addressed!(actor, room, "aqua")
+      keep!(room, "a-session")
 
       assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
       assert owed(actor) == []
 
-      for thread <- [room, proposed, scratch, gone],
+      for thread <- [room, scratch, gone],
           do:
             assert(
               {:ok, %{brain_session: nil, brain_generation: 1}} =
@@ -230,19 +287,23 @@ defmodule Arca.BrainForgetStorageTest do
             )
     end
 
-    test "the latest admitted start names the row", %{actor: actor, room: room, row: row} do
+    test "names the session's own row, neither a start admitted after it nor a new driver's",
+         %{actor: actor, room: room, row: row} do
       later = brain_row!(actor)
-      started!(actor, room, row, "aqua")
+      session = "6f1e2d3c-0000-4968-8776-000000000001"
+      held!(actor, room, row, "aqua", session)
+
+      # A later turn's start of another row is admitted, and that row's
+      # driver says hello, before any session answers there.
       started!(actor, room, later, "aqua")
-      started!(actor, room, row, "aqua", dispatch: false)
-      keep!(room, "6f1e2d3c-0000-4968-8776-000000000001")
+      {:ok, %{seen: false}} = batch(actor, room, later, "aqua", 0, %{})
 
-      assert {:ok, [%{thread_id: _, agent: "aqua", generation: 0}]} =
-               Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, %{session: ^session, progress: %{"row" => row_id, "driver" => driver}}} =
+               TurnStorage.brain(actor, room.id)
 
-      assert owed(actor) == [
-               record(actor, room, "aqua", later, "6f1e2d3c-0000-4968-8776-000000000001", 0)
-             ]
+      assert {row_id, driver["row"]} == {row.id, later.id}
+      assert {:ok, %{}} = Threads.delete(actor, room.id)
+      assert owed(actor) == [record(actor, room, "aqua", row, session, 0)]
     end
   end
 
@@ -252,8 +313,7 @@ defmodule Arca.BrainForgetStorageTest do
       room: room,
       row: row
     } do
-      started!(actor, room, row, "aqua")
-      keep!(room, "6f1e2d3c-0000-4968-8776-000000000001")
+      held!(actor, room, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000001")
 
       assert {:ok, [%{thread_id: id, agent: "aqua", generation: 0}]} =
                Threads.forget_sessions(actor, ["aqua"])
@@ -265,7 +325,7 @@ defmodule Arca.BrainForgetStorageTest do
       assert owed(actor) == [first]
 
       # A session kept under the raised generation is its own removal.
-      keep!(room, "6f1e2d3c-0000-4968-8776-000000000002", 1)
+      held!(actor, room, row, "aqua", "6f1e2d3c-0000-4968-8776-000000000002", 1)
       assert {:ok, [%{generation: 1}]} = Threads.forget_sessions(actor, ["aqua"])
 
       assert owed(actor) ==
@@ -281,18 +341,63 @@ defmodule Arca.BrainForgetStorageTest do
 
     test "a session kept after the forget, under the generation it left, is not kept and owes nothing",
          %{actor: actor, room: room, row: row} do
-      started!(actor, room, row, "aqua")
+      addressed!(actor, room, "aqua")
       assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
 
-      # A turn that read generation 0 keeps nothing it answers with now
-      # (`keep_session!`), so nothing is left that a transcript backs.
-      {0, _} =
-        Arca.Repo.update_all(
-          from(t in Arca.Schemas.Thread, where: t.id == ^room.id and t.brain_generation == 0),
-          set: [brain_session: "late"]
-        )
+      # A batch of the generation the forget left keeps nothing it names.
+      assert {:error, :generation_moved} =
+               batch(actor, room, row, "aqua", 0, %{session: "late"})
 
       assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
+      assert owed(actor) == []
+    end
+  end
+
+  describe "a lost transcript" do
+    @session "6f1e2d3c-0000-4968-8776-000000000001"
+
+    test "lost by the brain of the row the session is stored with owes nothing",
+         %{actor: actor, room: room, row: row} do
+      held!(actor, room, row, "aqua", @session)
+      turn = running!(actor, room, row)
+
+      assert {:ok, 1} =
+               TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+      assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
+      assert owed(actor) == []
+    end
+
+    test "lost by a brain on another row, or by a catalyst, owes the stored row's removal first",
+         %{actor: actor, room: room, row: row} do
+      {:ok, other} = Arca.Test.Days.thread(actor)
+
+      for {thread, brain} <- [{room, brain_row!(actor)}, {other, nil}] do
+        held!(actor, thread, row, "aqua", @session)
+        turn = running!(actor, thread, brain)
+
+        assert {:ok, 1} =
+                 TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+        assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, thread.id)
+      end
+
+      assert owed(actor) ==
+               sorted([
+                 record(actor, room, "aqua", row, @session, 0),
+                 record(actor, other, "aqua", row, @session, 0)
+               ])
+    end
+
+    test "a forget the thread moved past meanwhile records and clears nothing",
+         %{actor: actor, room: room, row: row} do
+      held!(actor, room, row, "aqua", @session, 1)
+      turn = running!(actor, room, brain_row!(actor))
+
+      assert {:ok, 0} =
+               TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+
+      assert {:ok, %{brain_session: @session, brain_generation: 1}} = Threads.get(actor, room.id)
       assert owed(actor) == []
     end
   end
