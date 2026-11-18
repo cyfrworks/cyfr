@@ -991,6 +991,11 @@ defmodule Aqua.LaunchTest do
 
     assert Arca.ExecutionEvents.data(started)["sources"] ==
              Prima.Source.to_json_list([pinned, news])
+
+    # Its caller is the agent whose turn launched it, which the stamp
+    # alone carries, not the person who approved the card.
+    assert %{caller: caller} = Arca.Execution.get_tenant(actor, root_id)
+    assert caller == "agent:" <> turn.agent
   end
 
   # ---------------------------------------------------------------------------

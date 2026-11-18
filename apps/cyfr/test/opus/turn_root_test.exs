@@ -133,6 +133,8 @@ defmodule Opus.TurnRootTest do
     assert is_binary(row.activation_digest)
     assert row.current_attempt == claim.attempt
     assert row.turn_id == turn.id
+    # The root names its agent, from its own reference, as its caller.
+    assert row.caller == "agent:aqua"
 
     assert %{fence: 1, state: "running"} =
              ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)

@@ -133,7 +133,11 @@ defmodule Opus.Tincture do
       Opus.run_root_edge(run_ctx, tincture_ref, reference, input,
         route: route,
         client_ip: ctx.client_ip,
-        frame_sources: frame_sources(tincture)
+        frame_sources: frame_sources(tincture),
+        # The tincture is the run's caller, nearer than the key or person
+        # behind it: the run's context is the tincture's own, which names
+        # no frame.
+        caller: {:tincture, %{publisher: tincture.publisher, name: tincture.name}}
       )
 
     duration_ms =
