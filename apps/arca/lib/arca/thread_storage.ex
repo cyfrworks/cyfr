@@ -619,7 +619,7 @@ defmodule Arca.ThreadStorage do
   same statement, so a turn begun before it keeps no session it answers
   with afterwards (`Arca.TurnStorage.record_response/4`). A session a
   program's transcript may back is owed its removal first, in the same
-  transaction (`owe_forgets!/2`). Answers those sessions, for the
+  transaction (`Prima.OutboxRecord.brain_forget/1`). Answers those sessions, for the
   caller to close their holders after the commit.
   """
   @spec forget_sessions(Prima.Actor.t(), [String.t()]) ::
@@ -954,7 +954,7 @@ defmodule Arca.ThreadStorage do
   (`sweep_orphaned_blobs/1`). Answers the cancelled turns with the steps
   their holders' runtime cancels, and the brain sessions it cleared or
   deleted that a program's transcript may back, each owed its removal
-  first in the same transaction (`owe_forgets!/2`), for the caller to
+  first in the same transaction (`Prima.OutboxRecord.brain_forget/1`), for the caller to
   close their holders after the commit.
   """
   @spec delete(Prima.Actor.t(), String.t(), map()) ::
@@ -1121,9 +1121,9 @@ defmodule Arca.ThreadStorage do
   # with a kept folder (`session_rows/2`); any other session, an API
   # brain's or one no such row names, owes nothing. Answers the sessions
   # recorded.
-  # arca:db-raise-ok inside the caller's transaction
   defp owe_forgets!(_actor, []), do: []
 
+  # arca:db-raise-ok inside the caller's transaction
   defp owe_forgets!(%Prima.Actor{athanor_id: athanor_id} = actor, ids) do
     held =
       for %Thread{brain_session: session} = thread <- lock_threads!(actor, Enum.uniq(ids)),
@@ -1157,10 +1157,10 @@ defmodule Arca.ThreadStorage do
   # that row is a driven program with a kept folder in the athanor, as a
   # brain's row is. A thread with none, or whose named row is gone or is
   # no such program, is left out.
-  # arca:db-raise-ok inside the caller's transaction
-  # arca:unscoped-ok every statement names the athanor.
   defp session_rows(_athanor_id, []), do: %{}
 
+  # arca:db-raise-ok inside the caller's transaction
+  # arca:unscoped-ok every statement names the athanor.
   defp session_rows(athanor_id, thread_ids) do
     named =
       from(s in Arca.Schemas.TurnStep,

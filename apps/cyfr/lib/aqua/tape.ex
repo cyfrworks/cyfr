@@ -836,7 +836,7 @@ defmodule Aqua.Tape do
   told its turn finished.
   """
   @spec delete_thread(Context.t(), String.t()) ::
-          {:ok, %{cancelled: [map()]}} | {:error, term()}
+          {:ok, %{cancelled: [map()], forgotten: [map()]}} | {:error, term()}
   def delete_thread(%Context{} = ctx, thread_id) do
     actor = Sanctum.Context.actor(ctx)
 

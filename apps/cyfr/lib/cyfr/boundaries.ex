@@ -2506,6 +2506,7 @@ defmodule Cyfr.Boundaries do
     # all of them whatever its configuration says.
     cron_scheduler_enabled: :seam,
     schedule_notes_enabled: :seam,
+    brain_cleanup_enabled: :seam,
     schedule_turns_enabled: :seam,
     crew_delivery_enabled: :seam,
     nudge_enabled: :seam,

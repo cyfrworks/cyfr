@@ -1321,15 +1321,17 @@ defmodule Opus.BrainTest do
       flush_reads()
       task = Task.async(fn -> Brain.forget(record) end)
 
-      # The old holder ends, and its session closes, before the cleanup's
-      # own process of the driver opens under the same key.
+      # The old holder ends, and the process that ran the session is
+      # closed before the forget is written, on a process of the driver of
+      # its own under the same key: a close the box still owes when the
+      # cleanup opens is made first (`fresh/2`).
       assert_receive {Brain, ^ref, {:ended, :forgotten}}, 5_000
       assert_receive {:session, "close", %{"session" => ^old}, _fields}, 5_000
       assert_receive {:session, "open", %{"key" => "brain-" <> _}, _fields}, 5_000
-      refute Scripted.sessions(fake, row.id)[old].running
       first_read!()
       say(fake, row, hello())
       assert %{"t" => "forget", "id" => id} = sent()
+      refute Scripted.sessions(fake, row.id)[old].running
       say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
       assert Task.await(task, 10_000) == :forgot
 

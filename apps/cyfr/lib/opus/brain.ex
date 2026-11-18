@@ -140,7 +140,8 @@ defmodule Opus.Brain do
   It ends, telling the attendant `{Opus.Brain, ref, {:ended, reason}}`
   once, when it is told (`close/1`, `:closed`), when a later open replaces
   it (`:replaced`), when its session is forgotten (`forgotten/2` or a
-  cleanup of its thread and agent, `:forgotten`), on a line lost unread (`:dropped`), on a line that does
+  cleanup of its thread and agent, `:forgotten`), on a line lost unread
+  (`:dropped`), on a line that does
   not read or past a bound (`:unreadable`, `:too_large`), on its row's
   change (`:row_changed`, `Opus.Programs.end_mounts/2` or the box telling
   it to stand down), when the driver's process ends (`:exited`), when the
