@@ -1532,7 +1532,8 @@ defmodule PrismWeb.SystemLayer do
            nil <- panel_of(socket.assigns.panels, prompt),
            this_caller = Question.choice(prompt).this_caller and Question.switchable?(prompt),
            {:ok, answer} <- Question.answer(choice, this_caller) do
-        {:noreply, question_answer(socket, prompt, answer)}
+        prompt = Map.delete(prompt, :said)
+        {:noreply, socket |> assign(:current, prompt) |> question_answer(prompt, answer)}
       else
         _unanswerable -> {:noreply, socket}
       end
@@ -2425,13 +2426,17 @@ defmodule PrismWeb.SystemLayer do
     {held, kept} = Map.pop(socket.assigns.held, ref)
     socket = assign(socket, :held, kept)
 
-    # A question's card shows its choices again, the question unanswered.
+    # A question's card shows its choices again, the question unanswered,
+    # and says why: on that card, wherever it stands, and on no other.
     socket =
       case held do
-        %{repeat: {:question_answer, _answer}} ->
+        %{repeat: {:question_answer, _answer}, prompt_id: prompt_id} ->
           socket
           |> drop_panel(ref)
-          |> assign(:error, "#{ended_words(kind)} The question is still unanswered.")
+          |> update_prompt(
+            prompt_id,
+            &Map.put(&1, :said, "#{ended_words(kind)} The question is still unanswered.")
+          )
 
         _other ->
           socket
@@ -2448,6 +2453,19 @@ defmodule PrismWeb.SystemLayer do
 
   defp prompt_of(%{assigns: %{current: current, queue: queue}}, id),
     do: Enum.find([current | queue], &match?(%{id: ^id}, &1))
+
+  # The prompt `id`, open or waiting, changed by `fun`; the others as they are.
+  defp update_prompt(socket, id, fun) do
+    change = fn
+      %{id: ^id} = prompt -> fun.(prompt)
+      prompt -> prompt
+    end
+
+    assign(socket,
+      current: socket.assigns.current && change.(socket.assigns.current),
+      queue: Enum.map(socket.assigns.queue, change)
+    )
+  end
 
   # ---------------------------------------------------------------------------
   # A component's question
@@ -2851,6 +2869,15 @@ defmodule PrismWeb.SystemLayer do
 
           <p :if={@error} role="alert" class="rounded border border-red-500 p-2 text-sm">
             <span class="font-semibold">Not done:</span> {@error}
+          </p>
+
+          <p
+            :if={@shown[:said]}
+            role="alert"
+            class="rounded border border-red-500 p-2 text-sm"
+            data-test="question-said"
+          >
+            {@shown[:said]}
           </p>
 
           <Question.choices

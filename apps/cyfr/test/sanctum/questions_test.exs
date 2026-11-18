@@ -1014,6 +1014,105 @@ defmodule Sanctum.QuestionsTest do
       assert {:pending, _ref} = Questions.ask(asking(person.ctx), v2_run, 1, request())
     end
 
+    test "are refused for another action's words, or the same words of another component",
+         person do
+      title = "delete the warehouse"
+
+      ship!(person.ctx, "catalyst", "warehouse", "1.0.0", [
+        %{"name" => "delete_table", "title" => title}
+      ])
+
+      for digest <- [
+            shown("delete_rows"),
+            Prima.Manifest.Asks.digest(%{name: "delete_table", title: title})
+          ] do
+        assert {:error, %Prima.Refusal{reason: :undeclared}} =
+                 call(person.ctx, "set", %{
+                   "publisher" => "local",
+                   "name" => "tables",
+                   "action_name" => "delete_table",
+                   "declaration_digest" => digest,
+                   "standing" => %{"effect" => "deny", "caller" => "any"}
+                 })
+      end
+
+      assert standing(person.ctx) == []
+    end
+
+    test "are refused while the component facts cannot be read", person do
+      port = Sanctum.Consent.Components
+
+      # The port with nothing installed, as before boot installs it, for
+      # this one call; restored as it was however the test ends.
+      Prima.Test.Env.without_persistent_term({port, :impl}, fn ->
+        assert {:error, :component_facts_unavailable} =
+                 port.get_latest(person.ctx, "tables", "local", "catalyst")
+
+        assert {:error, :unavailable} =
+                 set(person.ctx, "delete_table", %{
+                   "effect" => "allow",
+                   "caller" => "any",
+                   "until" => DateTime.to_iso8601(hour_from_now())
+                 })
+      end)
+
+      assert standing(person.ctx) == []
+    end
+
+    test "are refused when the version shown is removed after its words were read", person do
+      handler = {__MODULE__, :removed_after_read}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test = self()
+
+      # The first read of the registry that the set makes is followed at
+      # once by the version's removal and its cleanup, which finds nothing
+      # yet to delete.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] == "components" do
+              :telemetry.detach(handler)
+
+              :ok =
+                Arca.ComponentStorage.delete_component(
+                  Context.actor(person.ctx),
+                  "tables",
+                  "1.0.0",
+                  "local",
+                  "catalyst"
+                )
+
+              {:ok, 0} = Questions.component_removed(person.ctx, "local", "tables")
+              send(test, :removed)
+            end
+          end,
+          nil
+        )
+
+      {:ok, until_hour} =
+        Prima.Question.Standing.decode(%{
+          "effect" => "allow",
+          "caller" => "any",
+          "until" => DateTime.to_iso8601(hour_from_now())
+        })
+
+      result =
+        Questions.set(
+          person.ctx,
+          "local",
+          "tables",
+          "delete_table",
+          shown("delete_table"),
+          until_hour
+        )
+
+      assert_received :removed
+      assert {:error, %Prima.Refusal{reason: :undeclared}} = result
+      assert standing(person.ctx) == []
+    end
+
     test "are refused when the words shown are no installed version's", person do
       # A digest no version declares.
       assert {:error, %Prima.Refusal{reason: :undeclared}} =

@@ -90,8 +90,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
       and its declared `title`, the component's own `summary` and
       `operation`, the run's `caller` (a caller's text,
       `Prima.Question.Caller`), the `deadline` it waits until, and whether
-      a credential was `masked`. While it is shown the layer keeps the
-      card's choice on it as `choice` (`PrismWeb.SystemLayer.Question`).
+      a credential was `masked`. While it is held the layer keeps the
+      card's choice on it as `choice` (`PrismWeb.SystemLayer.Question`),
+      and as `said` why a confirmation its answer waited on ended.
 
   Anything else is refused as `:invalid_prompt`: nothing is drawn.
   """

@@ -349,9 +349,12 @@ defmodule Sanctum.Questions do
   of the action's name and title the person was shown
   (`Prima.Manifest.Asks.digest/1`), replacing the answer of the same
   caller. The digest is stored only when an installed version of the
-  catalyst declares the action with exactly those words, and is refused
-  otherwise: an answer never binds words the person did not see, and no
-  other version's are put in their place. A caller of `unknown` is
+  catalyst declares the action with exactly those words, read through the
+  component-facts port, and is refused otherwise, or when the port cannot
+  answer: an answer never binds words the person did not see, and no
+  other version's are put in their place. That version is held against
+  its removal inside the write (`Arca.ComponentStorage.hold_release/5`),
+  so a removal either finds the answer for its cleanup or refuses it. A caller of `unknown` is
   refused: it is covered only by an answer for any caller. `{:ok, row}`;
   `{:error, {:confirmation_required, _}}` for an allow, always, for any
   caller not yet confirmed; or a refusal.
@@ -364,7 +367,8 @@ defmodule Sanctum.Questions do
     with :ok <- answerer(ctx),
          :ok <- known_caller(standing.caller),
          :ok <- to_come(standing.until),
-         {:ok, title} <- shown_declaration(ctx, publisher, name, action, declaration_digest) do
+         {:ok, %{version: version, title: title}} <-
+           shown_declaration(ctx, publisher, name, action, declaration_digest) do
       row = %{
         publisher: publisher,
         name: name,
@@ -386,7 +390,16 @@ defmodule Sanctum.Questions do
               declaration_digest: row.declaration_digest
             })
 
-      confirmed(ctx, change, &Store.put_standing(Context.actor(ctx), row, verify: &1))
+      # The release whose words were shown is held against its removal
+      # inside the write, before any proof is spent: a removal either waits
+      # and its cleanup finds this answer, or came first and refuses it.
+      held = fn -> held_release(ctx, publisher, name, version) end
+
+      confirmed(ctx, change, fn verify ->
+        Store.put_standing(Context.actor(ctx), row,
+          verify: fn -> with :ok <- held.(), do: verify.() end
+        )
+      end)
       |> case do
         {:ok, stored} -> {:ok, stored}
         {:error, reason} -> refusal(reason, action)
@@ -715,32 +728,86 @@ defmodule Sanctum.Questions do
     if DateTime.compare(until, DateTime.utc_now()) == :gt, do: :ok, else: {:error, :until_passed}
   end
 
-  # The title an installed version of the catalyst declares for `action`
-  # under exactly `digest`, the words the person was shown: none of them
-  # declaring it so is `:undeclared`, whatever another version says.
+  # The installed version of the catalyst that declares `action` under
+  # exactly `digest`, the words the person was shown, and its title, read
+  # through the component-facts port: the newest first, then each other
+  # installed version. None declaring it so is `:undeclared`, whatever
+  # another version says; a port that cannot answer refuses.
   defp shown_declaration(ctx, publisher, name, action, digest) do
+    with {:ok, newest} <- facts(Components.get_latest(ctx, name, publisher, "catalyst")) do
+      case shown_in(newest, action, digest) do
+        {:ok, shown} -> {:ok, shown}
+        :none -> shown_in_older(ctx, publisher, name, newest.version, action, digest)
+      end
+    else
+      {:error, :not_found} ->
+        {:error, {:not_found, "component", Prima.ComponentRef.build("catalyst", publisher, name)}}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # The other installed versions, each read through the port. The store
+  # names which versions are installed; what each declares is the port's.
+  defp shown_in_older(ctx, publisher, name, newest, action, digest) do
     case Arca.ComponentStorage.list_components(Context.actor(ctx),
            name: name,
            publisher: publisher,
            component_type: "catalyst",
            limit: :none
          ) do
-      {:ok, []} ->
-        {:error, {:not_found, "component", Prima.ComponentRef.build("catalyst", publisher, name)}}
-
       {:ok, rows} ->
-        Enum.find_value(rows, {:error, :undeclared}, fn row ->
-          case declaration(row.manifest, action) do
-            {:ok, %{title: title} = declared} ->
-              if Asks.digest(declared) == digest, do: {:ok, title}
+        rows
+        |> Enum.map(& &1.version)
+        |> Enum.uniq()
+        |> Enum.reject(&(&1 == newest))
+        |> Enum.reduce_while({:error, :undeclared}, fn version, undeclared ->
+          case facts(Components.get_component(ctx, name, version, publisher, "catalyst")) do
+            {:ok, row} ->
+              case shown_in(row, action, digest) do
+                {:ok, shown} -> {:halt, {:ok, shown}}
+                :none -> {:cont, undeclared}
+              end
 
-            {:error, :invalid} ->
-              nil
+            {:error, :not_found} ->
+              {:cont, undeclared}
+
+            {:error, :unavailable} ->
+              {:halt, {:error, :unavailable}}
           end
         end)
 
       {:error, _unanswered} ->
         {:error, :unavailable}
+    end
+  end
+
+  defp facts({:ok, row}), do: {:ok, row}
+  defp facts({:error, outage}) when Components.is_outage(outage), do: {:error, :unavailable}
+  defp facts({:error, _absent}), do: {:error, :not_found}
+
+  defp shown_in(%{version: version, manifest: manifest}, action, digest) do
+    with {:ok, %{title: title} = declared} <- declaration(manifest, action),
+         true <- Asks.digest(declared) == digest do
+      {:ok, %{version: version, title: title}}
+    else
+      _other -> :none
+    end
+  end
+
+  # The release the person was shown, held in the write's transaction
+  # (`Arca.ComponentStorage.hold_release/5`): gone is no longer declared.
+  defp held_release(ctx, publisher, name, version) do
+    case Arca.ComponentStorage.hold_release(
+           Context.actor(ctx),
+           name,
+           version,
+           publisher,
+           "catalyst"
+         ) do
+      :ok -> :ok
+      {:error, :not_found} -> {:error, :undeclared}
     end
   end
 

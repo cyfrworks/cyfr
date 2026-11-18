@@ -95,6 +95,41 @@ defmodule Arca.ComponentStorage do
     do: {:error, :no_athanor}
 
   @doc """
+  Hold the `component_type` release `publisher`.`name` at `version` in
+  the actor's athanor against its removal, inside the caller's
+  transaction, until that transaction ends: `:ok` while the row stands,
+  `{:error, :not_found}` once it is gone.
+
+  A write that stands on a release's declaration takes this after its
+  own write and before it commits (`Arca.Questions.put_standing/3`'s
+  `verify`), so a removal of the release either waits for it and then
+  sees what it wrote, or committed first and is seen here. PostgreSQL
+  holds the row `FOR SHARE` (`Arca.QueryHelpers.for_share/1`); SQLite's
+  immediate transaction already holds its one write lock.
+  """
+  @spec hold_release(Prima.Actor.t(), String.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, :not_found}
+  # arca:db-raise-ok inside the caller's transaction
+  def hold_release(%Prima.Actor{athanor_id: athanor_id} = actor, name, version, publisher, type)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and
+             is_binary(version) and is_binary(publisher) and is_binary(type) do
+    query =
+      from(c in Component,
+        where:
+          c.name == ^name and c.version == ^version and c.publisher == ^publisher and
+            c.component_type == ^type,
+        select: c.id
+      )
+      |> where_tenant(actor)
+      |> Arca.QueryHelpers.for_share()
+
+    case Arca.Repo.all(query) do
+      [] -> {:error, :not_found}
+      [_held | _] -> :ok
+    end
+  end
+
+  @doc """
   Get a component by its WASM digest (SHA256 hash).
 
   Returns `{:ok, row}` or `{:error, :not_found}`.

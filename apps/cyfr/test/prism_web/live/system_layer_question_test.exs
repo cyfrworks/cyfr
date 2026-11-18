@@ -321,19 +321,79 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       confirmation = Prompt.confirmation_id(Prima.Confirmation.ref(id))
       {_run, ref} = Q.open!(setup.ctx, setup.component)
       question = Prompt.question_id(ref)
+      workspace = workspace!(setup.ctx)
 
       drawn =
-        for path <- signed_in_paths(), into: %{} do
-          ids = drawn_on(setup.conn, path)
-          assert question in ids == confirmation in ids, "#{path}: #{inspect(ids)}"
-          {path, question in ids}
+        for {entry, url} <- signed_in_pages(workspace), into: %{} do
+          ids = drawn_on(setup.conn, url)
+          assert question in ids == confirmation in ids, "#{entry}: #{inspect(ids)}"
+          {entry, question in ids}
         end
 
-      # Both kinds reach the pages that listen, so the test above compares
-      # something.
+      # The pages and states that draw neither: no listening layer, a
+      # redirect, or a workspace that is not there.
+      neither = for {entry, false} <- drawn, do: entry
+
+      assert Enum.sort(neither) ==
+               Enum.sort([
+                 "/chat",
+                 "/a/:athanor/workspace/:id (missing)"
+                 | Enum.map(
+                     ~w(files activities enforcements executions reports builds tips legal),
+                     &("/a/:athanor/" <> &1)
+                   )
+               ])
+
+      # So the comparison above compares something on the pages that listen.
       assert drawn["/a/:athanor/vault"]
-      refute drawn["/a/:athanor/legal"]
+      assert drawn["/a/:athanor/components/:ref"]
+      assert drawn["/a/:athanor/workspace/:id"]
       end_views()
+    end
+
+    # A workspace thread of the person's, as its opening leaves it.
+    defp workspace!(ctx) do
+      id = Prima.UUID7.generate_id("thread")
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.Thread, [
+          %{
+            id: id,
+            athanor_id: ctx.athanor_id,
+            kind: "workspace",
+            workspace_state: "done",
+            workspace_outcome: "done",
+            title: "Probe",
+            created_by: Prima.Author.system(),
+            last_message_at: now,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      id
+    end
+
+    # Each signed-in route as a page to open, the workspace's twice: one
+    # that is there and one that is not.
+    defp signed_in_pages(workspace) do
+      route = Sanctum.Tenancy.Athanors.route_slug(seated_athanor())
+
+      for path <- signed_in_paths(),
+          {entry, id} <-
+            if(String.contains?(path, ":id"),
+              do: [{path, workspace}, {path <> " (missing)", "wst_none"}],
+              else: [{path, nil}]
+            ) do
+        url =
+          path
+          |> String.replace(":athanor", route)
+          |> String.replace(":ref", "catalyst:local.tables:1.0.0")
+          |> then(&if(id, do: String.replace(&1, ":id", id), else: &1))
+
+        {entry, url}
+      end
     end
 
     defp signed_in_paths do
@@ -345,13 +405,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
     # The prompts every system layer of the page holds, open or waiting;
     # none for a route that sends the browser elsewhere.
-    defp drawn_on(conn, path) do
-      url =
-        path
-        |> String.replace(":athanor", Sanctum.Tenancy.Athanors.route_slug(seated_athanor()))
-        |> String.replace(":ref", "catalyst:local.tables:1.0.0")
-        |> String.replace(":id", "wst_none")
-
+    defp drawn_on(conn, url) do
       case live(conn, url) do
         {:ok, view, _html} ->
           render(view)
@@ -769,6 +823,70 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert [%{action: "delete_table", caller: "any", until: nil}] = Q.standing(setup.ctx)
       assert Q.row(setup.ctx, second).state == "open"
       end_views()
+    end
+
+    for {fact, words} <- [
+          voided: "The confirmation was withdrawn.",
+          cancelled: "The confirmation was cancelled.",
+          expired: "The confirmation expired."
+        ] do
+      test "a card's confirmation #{fact} while another's stands in front says so on that card alone",
+           setup do
+        asking = screen!(setup)
+        proving = screen!(setup)
+        {_run, first} = Q.open!(setup.ctx, setup.component)
+        first_card = Prompt.question_id(first)
+        shows!(asking, first_card)
+        choose(asking, "allow_always")
+        original = waited_ref(asking)
+
+        # A second question's confirmation, asked from the other screen,
+        # steps in front of the first card on the asking screen.
+        {_run, second} =
+          Q.open!(setup.ctx, setup.component, request: %{action: "delete_rows"})
+
+        assert {:error, {:confirmation_required, %{id: second_id}}} =
+                 PrismWeb.Ops.call_tool(view_context(proving), "question/answer", %{
+                   "ref" => second,
+                   "answer" => %{
+                     "effect" => "allow",
+                     "lasts" => "always",
+                     "covers" => "any_caller"
+                   }
+                 })
+
+        in_front = Prompt.confirmation_id(Prima.Confirmation.ref(second_id))
+        shows!(asking, in_front, "in front")
+
+        ctx = view_context(asking)
+        actor = Context.actor(ctx)
+
+        :ok =
+          Cyfr.Bus.broadcast(
+            actor,
+            Cyfr.Bus.prompts(actor, ctx.user_id),
+            Cyfr.Bus.Prompt.new(actor, :confirmation, unquote(fact), ref: original)
+          )
+
+        wait_until(
+          fn -> not Map.has_key?(layer_assigns(asking).held, original) end,
+          2_000,
+          "the first confirmation's end"
+        )
+
+        # The confirmation in front, whose own record still waits, says
+        # nothing of the first card's.
+        assert open_prompt(asking) == in_front
+        refute has_element?(asking, ~s([role="alert"]), unquote(words))
+
+        # The first card, back once the one in front is closed, says it.
+        asking |> with_target("#system-layer") |> render_click("dismiss", %{"id" => in_front})
+        assert open_prompt(asking) == first_card
+        assert has_element?(asking, ~s([data-test="question-said"]), unquote(words))
+        assert has_element?(asking, ~s([data-test="question-choices"]))
+        assert Q.row(setup.ctx, first).state == "open"
+        end_views()
+      end
     end
 
     test "withdrawn, the confirmation leaves the card and its choices come back unanswered",
