@@ -127,6 +127,12 @@ func planFiles(home string, found []string) (plans []string, failed []error) {
 					slugs[slug] = true
 				}
 			}
+			// A record of type attachment carries an object; one that
+			// carries none, or null, may have named a plans folder.
+			if entry.Type == "attachment" && (len(entry.Attachment) == 0 || entry.Attachment[0] != '{') {
+				failed = append(failed, fmt.Errorf("%s: an attachment record with no attachment", file))
+				return
+			}
 			if len(entry.Attachment) == 0 || string(entry.Attachment) == "null" {
 				return
 			}

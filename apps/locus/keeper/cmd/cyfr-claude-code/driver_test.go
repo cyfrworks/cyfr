@@ -860,12 +860,14 @@ func TestForgetRefusesAPlanTieThatDoesNotRead(t *testing.T) {
 	session := "6b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
 	slug := `{"type":"user","slug":"brave-otter"}` + "\n"
 	for name, broken := range map[string]string{
-		"a truncated line":                 `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":`,
-		"an attachment that is no object":  `{"type":"attachment","slug":"brave-otter","attachment":"plan_mode"}` + "\n",
-		"a planFilePath that is no string": `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":42}}` + "\n",
-		"a null line":                      "null\n",
-		"a null planFilePath":              `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":null}}` + "\n",
-		"a null slug":                      `{"type":"user","slug":null}` + "\n",
+		"a truncated line":                          `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":`,
+		"an attachment that is no object":           `{"type":"system","slug":"brave-otter","attachment":"plan_mode"}` + "\n",
+		"a planFilePath that is no string":          `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":42}}` + "\n",
+		"a null line":                               "null\n",
+		"a null planFilePath":                       `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":null}}` + "\n",
+		"a null slug":                               `{"type":"user","slug":null}` + "\n",
+		"a null attachment on an attachment record": `{"type":"attachment","slug":"brave-otter","attachment":null}` + "\n",
+		"an attachment record with no attachment":   `{"type":"attachment","slug":"brave-otter"}` + "\n",
 	} {
 		for _, where := range []string{"session", "helper"} {
 			home := t.TempDir()
@@ -1010,6 +1012,28 @@ func TestHarnessOptionsAreTheRowCommandsArgumentsPastItsLauncher(t *testing.T) {
 	} {
 		if got := harnessOptions(c.command); !reflect.DeepEqual(append([]string{}, got...), c.options) {
 			t.Fatalf("%v: the harness's own arguments are %v, not %v", c.command, c.options, got)
+		}
+	}
+}
+
+// #10262's note: a launcher named npx with no package after it, bare or
+// with only -y or --yes, refuses a read-only start before spawning.
+func TestAReadOnlyStartRefusesAnNpxWithNoPackage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(fakeEnv, "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	launcher := filepath.Join(t.TempDir(), "npx")
+	if err := os.Symlink(os.Args[0], launcher); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{nil, {"-y"}, {"--yes"}} {
+		command := append([]string{launcher}, args...)
+		s := startDriverWith(t, home, command)
+		s.expect("hello")
+		s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true}})
+		if status := s.end(); status != 2 {
+			t.Fatalf("%v: an npx with no package refuses before spawning: %d", command, status)
 		}
 	}
 }
