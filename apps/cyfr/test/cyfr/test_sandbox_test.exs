@@ -77,9 +77,10 @@ defmodule Cyfr.Test.SandboxTest do
   A sync test's background work is stopped before its sandbox owner is:
   every dynamic supervisor this repository's applications start is swept,
   and each child's last database work lands while the owner still holds
-  the connection, but a fill's: its attempt, keeper and pulls are killed
-  in the same instant as the test's descendants, however the fill was
-  started. The runtime's runners are swept through their pool
+  the connection, but a fill's and Aqua's: a fill's attempt, keeper and
+  pulls, and a thread's runner with its loop and the loop's workers, are
+  killed in the same instant as the test's descendants, however each was
+  started, and no runner is started again. The runtime's runners are swept through their pool
   instead: a runner the test left busy is ended and its exit reported,
   and the fresh runners stay pooled for the next test.
 
@@ -322,6 +323,287 @@ defmodule Cyfr.Test.SandboxTest do
       assert_receive :holding, 5_000
       send(fill, {:watch, holder})
       :erlang.system_flag(:schedulers_online, 1)
+    end
+  end
+
+  describe "a runner and its loop left at work" do
+    setup do
+      collector = spawn(fn -> collect(%{}) end)
+      supervisor = Process.whereis(Aqua.RunnerSupervisor)
+
+      # Registered before the sandbox, so it runs after the sweep: neither
+      # may have run once the holder was killed, and the runner may have
+      # been started once only.
+      schedulers = :erlang.system_info(:schedulers_online)
+
+      on_exit(fn ->
+        :erlang.system_flag(:schedulers_online, schedulers)
+        send(collector, {:reports, self()})
+        assert_receive {:reports, reports}, 5_000
+
+        assert [{{:started, _runner}, :runner}] = Map.to_list(reports),
+               "a runner or its loop ran after the sweep killed the holder, or the runner " <>
+                 "was started again: #{inspect(reports)}"
+
+        assert_runners_given_back(supervisor)
+      end)
+
+      Sandbox.setup!()
+      {:ok, collector: collector}
+    end
+
+    # A loop that has committed its turn goes on to announce it, and its
+    # runner, told of a loop's death, reads the turn to settle it
+    # (`Aqua.Runner`'s `crashed/2`): each answers another process's end
+    # with a query. Neither leads back to the test: the runner is its
+    # supervisor's child and the loop a task of Aqua's task supervisor, as
+    # here. The holder has the shared connection as a query in flight
+    # does, so the sweep's kill of it cuts the connection. On one
+    # scheduler, with both above the test's priority, either one free to
+    # run runs before the sweep reaches its supervisor: the sweep must end
+    # them in the same instant as the holder. The runner is a transient
+    # child, as `Aqua.Runner` is, so its supervisor would start it again
+    # once it was killed: the sweep must hold the supervisor meanwhile.
+    test "are ended with the test's descendants, and the runner is not started again",
+         %{collector: collector} do
+      test = self()
+
+      {:ok, runner} =
+        DynamicSupervisor.start_child(Aqua.RunnerSupervisor, %{
+          id: :runner,
+          restart: :transient,
+          start:
+            {Task, :start_link,
+             [
+               fn ->
+                 Process.flag(:trap_exit, true)
+                 Process.flag(:priority, :high)
+                 Process.delete(:"$callers")
+                 send(collector, {:report, {:started, self()}, :runner})
+                 watch(test, collector, :runner)
+               end
+             ]}
+        })
+
+      {:ok, loop} =
+        Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+          Process.flag(:priority, :high)
+          Process.delete(:"$callers")
+          watch(test, collector, :loop)
+        end)
+
+      holder =
+        spawn(fn ->
+          Arca.Repo.checkout(fn ->
+            send(test, :holding)
+            receive do: (:never -> :ok)
+          end)
+        end)
+
+      assert_receive :holding, 5_000
+      send(runner, {:watch, loop})
+      send(loop, {:watch, holder})
+      assert_receive {:watching, ^runner}, 5_000
+      assert_receive {:watching, ^loop}, 5_000
+      refute Enum.any?([runner, loop], &(&1 in Sandbox.descendants(test)))
+      :erlang.system_flag(:schedulers_online, 1)
+    end
+  end
+
+  describe "a thread's runner" do
+    setup do
+      # Counts the processes the runners' supervisor starts from here on.
+      supervisor = Process.whereis(Aqua.RunnerSupervisor)
+      starts = spawn(fn -> count_starts(supervisor, []) end)
+      on_exit(fn -> Process.exit(starts, :kill) end)
+
+      # Registered before the sandbox, so it runs after the sweep.
+      {:ok, seen} = Agent.start(fn -> nil end)
+
+      on_exit(fn ->
+        {thread_id, runner} = Agent.get(seen, & &1)
+        Agent.stop(seen)
+        send(starts, {:starts, self()})
+        assert_receive {:starts, started}, 5_000
+
+        refute Process.alive?(runner), "the runner outlived the sweep"
+        assert started == [runner], "the sweep's kill had the runner started again"
+        assert Aqua.Runner.whereis(thread_id) == nil
+        assert_runners_given_back(supervisor)
+      end)
+
+      Sandbox.setup!()
+      {:ok, seen: seen, starts: starts, supervisor: supervisor}
+    end
+
+    test "is killed by the sweep and not started again",
+         %{seen: seen, starts: starts, supervisor: supervisor} do
+      {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+      athanor_id = Sanctum.Test.People.athanor!(user).id
+
+      {:ok, thread} =
+        Arca.Test.Days.thread(Sanctum.Context.actor(%{ctx | athanor_id: athanor_id}))
+
+      1 = :erlang.trace(supervisor, true, [:procs, {:tracer, starts}])
+      assert {:ok, runner} = Aqua.Runner.ensure(thread.id, athanor_id)
+      assert {Aqua.Runner, :start_link, _} = Aqua.Runner.child_spec({thread.id, athanor_id}).start
+      assert Aqua.Runner.child_spec({thread.id, athanor_id}).restart == :transient
+      Agent.update(seen, fn _ -> {thread.id, runner} end)
+    end
+  end
+
+  describe "holding_runners/2" do
+    setup do
+      Sandbox.setup!()
+      {:ok, supervisor: Process.whereis(Aqua.RunnerSupervisor)}
+    end
+
+    test "with no runner at all gives the same supervisor back", %{supervisor: supervisor} do
+      assert Sandbox.holding_runners(fn -> :swept end) == :swept
+      assert_runners_given_back(supervisor)
+    end
+
+    test "gives the supervisor back with its living children when the kills fail",
+         %{supervisor: supervisor} do
+      [killed, kept] =
+        for name <- [:killed, :kept] do
+          {:ok, pid} =
+            DynamicSupervisor.start_child(Aqua.RunnerSupervisor, %{
+              id: name,
+              restart: :transient,
+              start: {Agent, :start_link, [fn -> name end]}
+            })
+
+          pid
+        end
+
+      error =
+        assert_raise ExUnit.AssertionError, fn ->
+          Sandbox.holding_runners(fn ->
+            ref = Process.monitor(killed)
+            Process.exit(killed, :kill)
+            assert_receive {:DOWN, ^ref, :process, ^killed, :killed}
+            flunk("the kills failed")
+          end)
+        end
+
+      assert error.message == "the kills failed"
+      assert Process.whereis(Aqua.RunnerSupervisor) == supervisor
+
+      assert [{:undefined, ^kept, :worker, [Agent]}] =
+               DynamicSupervisor.which_children(supervisor)
+
+      assert Agent.get(kept, & &1) == :kept
+    end
+
+    test "with no supervisor running runs the kills alone" do
+      # Put back before the sandbox's sweep, which runs after this.
+      on_exit(fn ->
+        if Process.whereis(Aqua.RunnerSupervisor) == nil,
+          do: {:ok, _pid} = Supervisor.restart_child(Aqua.RunnerTree, Aqua.RunnerSupervisor)
+      end)
+
+      :ok = Supervisor.terminate_child(Aqua.RunnerTree, Aqua.RunnerSupervisor)
+      assert Sandbox.holding_runners(fn -> :swept end) == :swept
+      {:ok, fresh} = Supervisor.restart_child(Aqua.RunnerTree, Aqua.RunnerSupervisor)
+      assert_runners_given_back(fresh)
+    end
+
+    test "a supervisor that goes down while it is held is left to its tree",
+         %{supervisor: supervisor} do
+      assert Sandbox.holding_runners(fn ->
+               :ok = Supervisor.terminate_child(Aqua.RunnerTree, Aqua.RunnerSupervisor)
+               {:ok, fresh} = Supervisor.restart_child(Aqua.RunnerTree, Aqua.RunnerSupervisor)
+               fresh
+             end) == Process.whereis(Aqua.RunnerSupervisor)
+
+      refute Process.alive?(supervisor)
+      assert_runners_given_back(Process.whereis(Aqua.RunnerSupervisor))
+    end
+
+    # The supervisor's state is its own. With the field this reads gone, as
+    # another Elixir could have it, the forgetting fails inside the
+    # supervisor, which stays suspended until it is replaced.
+    test "a supervisor whose state cannot be read is replaced, and the test fails",
+         %{supervisor: supervisor} do
+      error =
+        assert_raise ExUnit.AssertionError, fn ->
+          Sandbox.holding_runners(fn ->
+            :sys.replace_state(supervisor, &Map.delete(&1, :children))
+          end)
+        end
+
+      assert error.message =~ "could not be given back after the sweep's kills"
+      assert error.message =~ "it was replaced"
+      refute Process.alive?(supervisor)
+      assert_runners_given_back(Process.whereis(Aqua.RunnerSupervisor))
+    end
+
+    # ExUnit ends an `on_exit` callback that outlives its deadline with a
+    # kill, which runs nothing of the callback's own.
+    test "a supervisor whose holder is killed at its deadline is replaced",
+         %{supervisor: supervisor} do
+      test = self()
+      root = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(root, :kill) end)
+      ExUnit.OnExitHandler.register(root)
+
+      :ok =
+        ExUnit.OnExitHandler.add(root, make_ref(), fn ->
+          Sandbox.holding_runners(fn ->
+            send(test, :held)
+            Process.sleep(:infinity)
+          end)
+        end)
+
+      assert {:error, %ExUnit.TimeoutError{}, _stack} = ExUnit.OnExitHandler.run(root, 50)
+      assert_received :held
+
+      Prima.Test.Wait.wait_until(
+        fn -> Process.whereis(Aqua.RunnerSupervisor) not in [nil, supervisor] end,
+        5_000,
+        "a fresh supervisor in place of the one its holder died holding"
+      )
+
+      refute Process.alive?(supervisor)
+      assert_runners_given_back(Process.whereis(Aqua.RunnerSupervisor))
+    end
+
+    # The supervisor is inside a child's start, as it is while a runner
+    # reads its thread, and answers nothing until the start returns.
+    test "a supervisor that does not stop for the hold is replaced, and the test fails",
+         %{supervisor: supervisor} do
+      test = self()
+
+      starter =
+        spawn(fn ->
+          DynamicSupervisor.start_child(Aqua.RunnerSupervisor, %{
+            id: :stuck,
+            restart: :temporary,
+            start:
+              {Agent, :start_link,
+               [
+                 fn ->
+                   send(test, :starting)
+                   receive do: (:never -> :ok)
+                 end
+               ]}
+          })
+        end)
+
+      assert_receive :starting, 5_000
+
+      error =
+        assert_raise ExUnit.AssertionError, fn ->
+          Sandbox.holding_runners(fn -> send(test, :swept) end, 100)
+        end
+
+      assert error.message =~ "did not stop for the sweep within 100 ms"
+      assert error.message =~ "it was replaced"
+      assert_received :swept
+      refute Process.alive?(supervisor)
+      refute Process.alive?(starter)
+      assert_runners_given_back(Process.whereis(Aqua.RunnerSupervisor))
     end
   end
 
@@ -613,10 +895,36 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
-  # The dynamic supervisors a sweep stops the children of.
-  # A fill's supervisors are swept by the kills (`Sandbox.fill_supervisors/0`).
+  # The dynamic supervisors a sweep stops the children of. The children of
+  # `Sandbox.killed_supervisors/0` are swept by the kills.
   defp swept_by_stopping,
-    do: repository_dynamic_supervisors() -- (Sandbox.pooled() ++ Sandbox.fill_supervisors())
+    do: repository_dynamic_supervisors() -- (Sandbox.pooled() ++ Sandbox.killed_supervisors())
+
+  # The runners' supervisor after a sweep: this process, running and not
+  # suspended, with no child, and able to start one.
+  defp assert_runners_given_back(supervisor) do
+    assert Process.whereis(Aqua.RunnerSupervisor) == supervisor
+
+    assert {:status, ^supervisor, _module, [_dictionary, :running | _]} =
+             :sys.get_status(supervisor)
+
+    assert %{active: 0, specs: 0} = DynamicSupervisor.count_children(supervisor)
+
+    assert {:ok, child} =
+             DynamicSupervisor.start_child(supervisor, {Agent, fn -> :started end})
+
+    assert :ok = DynamicSupervisor.terminate_child(supervisor, child)
+  end
+
+  # The pids `supervisor` has started since it was traced, oldest first.
+  defp count_starts(supervisor, started) do
+    receive do
+      {:trace, ^supervisor, :spawn, pid, _mfa} -> count_starts(supervisor, [pid | started])
+      {:trace, _pid, _event, _to} -> count_starts(supervisor, started)
+      {:trace, _pid, _event, _to, _more} -> count_starts(supervisor, started)
+      {:starts, from} -> send(from, {:starts, Enum.reverse(started)})
+    end
+  end
 
   # A child that, told to stop, runs one query and reports how it went.
   defp last_query_child(name, collector) do
