@@ -134,6 +134,7 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.files(@actor), {FileListed, %{kind: :removed, id: "data/gone.txt", name: nil}}}
     ] ++
       confirmation_cases(tenant) ++
+      question_cases(tenant) ++
       share_cases() ++ file_offer_cases()
   end
 
@@ -190,6 +191,26 @@ defmodule Cyfr.TelemetryBridgeTest do
           ref: @ref,
           expires_at: expires_at
         }}}
+    end
+  end
+
+  # A component's question's life, each on its person's own topic,
+  # carrying the ref and expiry and nothing else the emitter attached.
+  defp question_cases(tenant) do
+    expires_at = ~U[2026-09-30 12:05:00Z]
+
+    metadata =
+      Map.merge(tenant, %{
+        user_id: @user,
+        ref: "q_case",
+        opened_at: ~U[2026-09-30 12:00:00Z],
+        label: "tables wants to delete a table",
+        expires_at: expires_at
+      })
+
+    for fact <- [:opened, :answered, :expired, :withdrawn] do
+      {[:cyfr, :sanctum, :question, fact], metadata, Bus.prompts(@actor, @user),
+       {Prompt, %{kind: :question, fact: fact, ref: "q_case", expires_at: expires_at}}}
     end
   end
 
@@ -727,6 +748,55 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       assert_raise FunctionClauseError, fn ->
         Sanctum.Telemetry.confirmation(:approved, @athanor, @user, fields)
+      end
+    end
+
+    test "a component's question reaches its own person alone, with no summary or operation" do
+      listen(Bus.prompts(@actor, @user))
+      listen(Bus.prompts(@actor, "user_other"))
+
+      :telemetry.execute([:cyfr, :sanctum, :question, :opened], %{count: 1}, %{
+        athanor_id: @athanor,
+        user_id: @user,
+        ref: "q_bridge",
+        expires_at: ~U[2026-09-30 12:05:00Z],
+        opened_at: ~U[2026-09-30 12:00:00Z],
+        label: "tables wants to delete a table",
+        summary: "Drop the table users",
+        operation: "DROP TABLE users;"
+      })
+
+      assert_receive %Prompt{kind: :question, fact: :opened, ref: "q_bridge"} = heard
+      refute inspect(heard) =~ "DROP TABLE"
+      refute inspect(heard) =~ "Drop the table"
+      refute inspect(heard) =~ "delete a table"
+      refute_receive %Prompt{}, 100
+    end
+
+    test "Sanctum's announcement of a question is what the bridge carries, fact by fact" do
+      listen(Bus.prompts(@actor, @user))
+      expires_at = ~U[2026-09-30 12:05:00Z]
+
+      for fact <- Prompt.facts(:question) do
+        fields =
+          if fact == :opened,
+            do: %{
+              ref: "q_facts",
+              expires_at: expires_at,
+              opened_at: ~U[2026-09-30 12:00:00Z],
+              label: "tables wants to delete a table"
+            },
+            else: %{ref: "q_facts", expires_at: expires_at}
+
+        :ok = Sanctum.Telemetry.question(fact, @athanor, @user, fields)
+
+        assert_receive %Prompt{
+          kind: :question,
+          fact: ^fact,
+          athanor_id: @athanor,
+          ref: "q_facts",
+          expires_at: ^expires_at
+        }
       end
     end
 

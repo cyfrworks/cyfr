@@ -376,6 +376,39 @@ defmodule Arca.ComponentStorage do
     do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.has_remaining_versions?/3")
 
   @doc """
+  Whether any version of the `component_type` named `name` by `publisher`
+  remains in the actor's athanor: `has_remaining_versions?/3` asked of
+  one type, for what belongs to that type alone, such as a catalyst's
+  standing answers, which a reagent of the same name does not keep.
+  """
+  def has_remaining_versions?(
+        %Prima.Actor{athanor_id: athanor_id} = actor,
+        name,
+        publisher,
+        component_type
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_binary(publisher) and
+             is_binary(component_type) do
+    query =
+      from(c in Component,
+        where:
+          c.name == ^name and c.publisher == ^publisher and c.component_type == ^component_type,
+        select: c.id,
+        limit: 1
+      )
+      |> where_tenant(actor)
+
+    # Fail safe, as the untyped read is: on a store outage assume a
+    # version remains, so nothing is deleted on an unanswerable read.
+    Arca.Repo.Errors.with_db_rescue("ComponentStorage.has_remaining_versions?", true, fn ->
+      Arca.Repo.one(query) != nil
+    end)
+  end
+
+  def has_remaining_versions?(%Prima.Actor{}, _name, _publisher, _component_type),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.has_remaining_versions?/4")
+
+  @doc """
   List components with optional filters.
 
   ## Options
