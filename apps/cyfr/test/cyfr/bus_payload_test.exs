@@ -20,7 +20,6 @@ defmodule Cyfr.BusPayloadTest do
     Build,
     CallerInvalidated,
     Components,
-    Confirmation,
     CrewActivity,
     Execution,
     ExecutionEvent,
@@ -37,6 +36,7 @@ defmodule Cyfr.BusPayloadTest do
     PolicyDecision,
     Program,
     Progress,
+    Prompt,
     Request,
     RoomInView,
     ScheduleCompleted,
@@ -105,9 +105,8 @@ defmodule Cyfr.BusPayloadTest do
       ThreadEvent.new(@actor, "thr", :message, %{id: "m", kind: "text", content: "hi"}),
       LayoutPublished.new(@actor, "usr_1", 4),
       FeedPublished.new(@actor, feed_envelope()),
-      Confirmation.new(@actor, :opened,
+      Prompt.new(@actor, :confirmation, :opened,
         ref: "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
-        operation: "vault.create",
         expires_at: ~U[2026-09-30 12:05:00Z]
       ),
       Session.new(:revoked, "u", :denied, ["key_1"]),
@@ -252,10 +251,11 @@ defmodule Cyfr.BusPayloadTest do
       assert roster_gaps(row) == [:no_producer, :no_consumer]
     end
 
-    test "a person's confirmations are heard through their stream alone" do
-      row = Enum.find(Bus.topics(), &(&1.key == :confirmations))
-      assert row.consumers == ["stream:confirmation.changes"]
+    test "a person's prompts are heard through their stream alone" do
+      row = Enum.find(Bus.topics(), &(&1.key == :prompts))
+      assert row.consumers == ["stream:prompt.changes"]
       assert row.reason =~ "kind"
+      assert row.reason =~ "fact"
     end
   end
 
@@ -460,7 +460,7 @@ defmodule Cyfr.BusPayloadTest do
             :execution_events -> Bus.execution_events(other, "e")
             :thread -> Bus.thread(other, "thr")
             :layouts -> Bus.layouts(other, "usr_1")
-            :confirmations -> Bus.confirmations(other, "usr_1")
+            :prompts -> Bus.prompts(other, "usr_1")
             :attention -> Bus.attention(other, "usr_1")
             :threads -> Bus.threads(other, "usr_1")
             :programs -> Bus.programs(other, "usr_1")
@@ -469,6 +469,31 @@ defmodule Cyfr.BusPayloadTest do
 
         assert {:error, :cross_tenant} = Bus.broadcast(@actor, topic, sample),
                "#{key} took #{inspect(module)} from another tenant"
+      end
+    end
+  end
+
+  describe "a prompt" do
+    test "names both kinds, each with its own facts" do
+      assert Prompt.kinds() == [:confirmation, :question]
+
+      assert Prompt.facts(:confirmation) ==
+               [:opened, :confirmed, :consumed, :cancelled, :voided, :expired]
+
+      assert Prompt.facts(:question) == [:opened, :answered, :expired, :withdrawn]
+      assert_raise ArgumentError, fn -> Prompt.facts(:grant) end
+    end
+
+    test "is its kind, ref, fact and expiry, and nothing the record says" do
+      fields =
+        Prompt.new(@actor, :question, :answered, ref: "q_1") |> Map.from_struct() |> Map.keys()
+
+      assert Enum.sort(fields) == [:athanor_id, :expires_at, :fact, :kind, :ref]
+      assert_raise ArgumentError, fn -> Prompt.new(@actor, :confirmation, :answered) end
+      assert_raise ArgumentError, fn -> Prompt.new(@actor, :question, :confirmed) end
+
+      assert_raise ArgumentError, fn ->
+        Prompt.new(@actor, :confirmation, :opened, operation: "vault.create")
       end
     end
   end

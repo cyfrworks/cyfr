@@ -22,7 +22,6 @@ defmodule Cyfr.TelemetryBridgeTest do
     Build,
     CallerInvalidated,
     Components,
-    Confirmation,
     Execution,
     FeedRun,
     FileListed,
@@ -30,6 +29,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     FrameCredential,
     Notify,
     PolicyDecision,
+    Prompt,
     Request,
     ScheduleRun,
     Session,
@@ -182,12 +182,12 @@ defmodule Cyfr.TelemetryBridgeTest do
       })
 
     for kind <- [:opened, :confirmed, :consumed, :cancelled, :voided, :expired] do
-      {[:cyfr, :sanctum, :confirmation, kind], metadata, Bus.confirmations(@actor, @user),
-       {Confirmation,
+      {[:cyfr, :sanctum, :confirmation, kind], metadata, Bus.prompts(@actor, @user),
+       {Prompt,
         %{
-          kind: kind,
+          kind: :confirmation,
+          fact: kind,
           ref: @ref,
-          operation: "vault.create",
           expires_at: expires_at
         }}}
     end
@@ -675,9 +675,9 @@ defmodule Cyfr.TelemetryBridgeTest do
       refute inspect(heard) =~ "sk-live"
     end
 
-    test "a confirmation reaches its own person alone, with no argument and no preview" do
-      listen(Bus.confirmations(@actor, @user))
-      listen(Bus.confirmations(@actor, "user_other"))
+    test "a confirmation reaches its own person alone, with no operation, argument or preview" do
+      listen(Bus.prompts(@actor, @user))
+      listen(Bus.prompts(@actor, "user_other"))
 
       :telemetry.execute([:cyfr, :sanctum, :confirmation, :opened], %{count: 1}, %{
         athanor_id: @athanor,
@@ -690,18 +690,20 @@ defmodule Cyfr.TelemetryBridgeTest do
         preview: %{"resource" => "production-key"}
       })
 
-      assert_receive %Confirmation{kind: :opened, ref: @ref} = heard
+      assert_receive %Prompt{kind: :confirmation, fact: :opened, ref: @ref} = heard
       refute inspect(heard) =~ "sk-confirmed"
       refute inspect(heard) =~ "production-key"
+      refute inspect(heard) =~ "vault.create"
       refute inspect(heard) =~ @secret
       refute Map.has_key?(heard, :id)
+      refute Map.has_key?(heard, :operation)
 
       # Published once, on the person's own topic: another person hears nothing.
-      refute_receive %Confirmation{}, 100
+      refute_receive %Prompt{}, 100
     end
 
-    test "Sanctum's announcement of a confirmation is what the bridge carries, kind by kind" do
-      listen(Bus.confirmations(@actor, @user))
+    test "Sanctum's announcement of a confirmation is what the bridge carries, fact by fact" do
+      listen(Bus.prompts(@actor, @user))
       expires_at = ~U[2026-09-30 12:05:00Z]
 
       fields = %{
@@ -711,14 +713,14 @@ defmodule Cyfr.TelemetryBridgeTest do
         expires_at: expires_at
       }
 
-      for kind <- Cyfr.Bus.Confirmation.kinds() do
-        :ok = Sanctum.Telemetry.confirmation(kind, @athanor, @user, fields)
+      for fact <- Prompt.facts(:confirmation) do
+        :ok = Sanctum.Telemetry.confirmation(fact, @athanor, @user, fields)
 
-        assert_receive %Confirmation{
-          kind: ^kind,
+        assert_receive %Prompt{
+          kind: :confirmation,
+          fact: ^fact,
           athanor_id: @athanor,
           ref: @ref,
-          operation: "vault.create",
           expires_at: ^expires_at
         }
       end

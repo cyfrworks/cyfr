@@ -105,13 +105,13 @@ defmodule Sanctum.Provider do
   end
 
   @doc """
-  The streams Sanctum's tools offer, each declared beside its operations:
-  a person's pending confirmations (`confirmation.changes`) and the
-  athanor's vault entries as a canvas reads them (`vault.changes`).
+  The stream Sanctum's tools offer, declared beside its operations: the
+  athanor's vault entries as a canvas reads them (`vault.changes`). A
+  person's pending confirmations ride Host's stream `prompt.changes`,
+  which can name every kind's owner.
   """
   @impl true
-  def streams,
-    do: Sanctum.Providers.Confirmation.streams() ++ Sanctum.Providers.Vault.streams()
+  def streams, do: Sanctum.Providers.Vault.streams()
 
   # ============================================================================
   # Tool Handlers — delegated to per-tool modules

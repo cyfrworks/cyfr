@@ -135,8 +135,8 @@ defmodule Sanctum.Gate.StreamsTest do
     def streams do
       [
         %Prima.Provider.Stream{
-          name: "held.confirmations",
-          topic: :confirmations,
+          name: "held.prompts",
+          topic: :prompts,
           projection: ["ref"],
           subject: ~S"\A[A-Za-z0-9|_-]{1,64}\z",
           bind: :holder,
@@ -384,13 +384,13 @@ defmodule Sanctum.Gate.StreamsTest do
   describe "a stream bound to its holder" do
     test "takes the holder's own user id when the open names no subject", %{ctx: ctx} do
       Catalog.with_providers([Held], fn ->
-        assert {:ok, grant} = Sanctum.Gate.open_stream(ctx, "held.confirmations")
+        assert {:ok, grant} = Sanctum.Gate.open_stream(ctx, "held.prompts")
         assert grant.subject == ctx.user_id
-        assert grant.topic == :confirmations
+        assert grant.topic == :prompts
 
         # Naming one's own id is the same grant's subject.
         assert {:ok, %{subject: subject}} =
-                 Sanctum.Gate.open_stream(ctx, "held.confirmations", ctx.user_id)
+                 Sanctum.Gate.open_stream(ctx, "held.prompts", ctx.user_id)
 
         assert subject == ctx.user_id
       end)
@@ -400,9 +400,9 @@ defmodule Sanctum.Gate.StreamsTest do
          %{ctx: ctx} do
       Catalog.with_providers([Held], fn ->
         assert {:error, %Prima.Refusal{class: :invalid_argument, message: message}} =
-                 Sanctum.Gate.open_stream(ctx, "held.confirmations", "usr_someone_else")
+                 Sanctum.Gate.open_stream(ctx, "held.prompts", "usr_someone_else")
 
-        assert message == "The stream held.confirmations does not take that subject"
+        assert message == "The stream held.prompts does not take that subject"
       end)
 
       assert_one_refusal(ctx, :invalid_argument)
@@ -413,17 +413,18 @@ defmodule Sanctum.Gate.StreamsTest do
 
       Catalog.with_providers([Held], fn ->
         assert {:error, %Prima.Refusal{class: :invalid_argument, message: message}} =
-                 Sanctum.Gate.open_stream(nobody, "held.confirmations")
+                 Sanctum.Gate.open_stream(nobody, "held.prompts")
 
         assert message =~ "names no person"
       end)
     end
 
-    test "the confirmation stream is declared bound to its holder" do
-      assert {:ok, {Sanctum.Provider, stream}} = Catalog.lookup_stream("confirmation.changes")
+    test "the prompt stream is declared bound to its holder" do
+      assert {:ok, {Cyfr.Providers.Prompts, stream}} = Catalog.lookup_stream("prompt.changes")
       assert Prima.Provider.Stream.holder_bound?(stream)
-      assert stream.topic == :confirmations
-      assert stream.projection == ["ref", "kind", "operation", "expires_at"]
+      assert stream.topic == :prompts
+      assert stream.projection == ["kind", "ref", "fact", "expires_at"]
+      assert stream.deadline_bound == 86_400
     end
   end
 

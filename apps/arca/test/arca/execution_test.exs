@@ -55,6 +55,45 @@ defmodule Arca.ExecutionTest do
       end
     end
 
+    test "keeps an absent caller absent and refuses a supplied one the codec refuses" do
+      attrs = %{
+        id: "exec_caller",
+        root_execution_id: "exec_caller",
+        reference: "catalyst:local.test:1.0.0",
+        user_id: "user_abc",
+        athanor_id: @athanor,
+        started_at: DateTime.utc_now(),
+        status: "running",
+        component_type: "catalyst"
+      }
+
+      for absent <- [attrs, Map.put(attrs, :caller, nil)] do
+        changeset = Row.start_changeset(absent)
+        assert changeset.valid?
+        assert Ecto.Changeset.get_field(changeset, :caller) == nil
+      end
+
+      for caller <- ["person", "key:key_1", "tincture:a:b"] do
+        assert Row.start_changeset(Map.put(attrs, :caller, caller)).valid?, caller
+      end
+
+      for caller <- ["", " ", "any", "key:", "robot:1", :person] do
+        changeset = Row.start_changeset(Map.put(attrs, :caller, caller))
+        refute changeset.valid?, inspect(caller)
+        assert {"names no caller", _} = changeset.errors[:caller]
+      end
+
+      # The cast takes string keys as well, and so does the check.
+      string_keyed = Map.new(attrs, fn {key, value} -> {Atom.to_string(key), value} end)
+      assert Row.start_changeset(Map.put(string_keyed, "caller", "person")).valid?
+
+      for caller <- ["", "any"] do
+        changeset = Row.start_changeset(Map.put(string_keyed, "caller", caller))
+        refute changeset.valid?, inspect(caller)
+        assert {"names no caller", _} = changeset.errors[:caller]
+      end
+    end
+
     test "requires id" do
       attrs = %{
         reference: ~s({"local": "./test.wasm"}),
@@ -601,9 +640,9 @@ defmodule Arca.ExecutionTest do
 
       # A failure names the stamp it retires under; one that names none
       # fails nothing.
-      assert {0, nil} = Execution.mark_failed_if_running(id, failure)
+      assert {0, nil, []} = Execution.mark_failed_if_running(id, failure)
 
-      {count, _} = Execution.mark_failed_if_running(id, failure, Arca.Test.Actor.stored())
+      {count, _, _} = Execution.mark_failed_if_running(id, failure, Arca.Test.Actor.stored())
 
       assert count == 1
 
@@ -647,7 +686,7 @@ defmodule Arca.ExecutionTest do
         )
 
       # Try to mark as failed — should be a no-op
-      {count, _} =
+      {count, _, _} =
         Execution.mark_failed_if_running(
           id,
           %{
@@ -716,7 +755,7 @@ defmodule Arca.ExecutionTest do
       assert {:ok, ^renewed_until} =
                Arca.ExecutionAttempts.renew(live, renewed_until, Arca.Test.Actor.stored())
 
-      assert {0, _} =
+      assert {0, _, _} =
                Execution.mark_failed_if_running(
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
@@ -792,7 +831,7 @@ defmodule Arca.ExecutionTest do
       {id, attempt} = running!(lapsed)
       [observed] = Enum.filter(Execution.list_stale_running(DateTime.utc_now()), &(&1.id == id))
 
-      assert {1, _} =
+      assert {1, _, _} =
                Execution.mark_failed_if_running(
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},

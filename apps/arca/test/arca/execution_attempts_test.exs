@@ -349,7 +349,7 @@ defmodule Arca.ExecutionAttemptsTest do
             )
         end,
         fn parent, attempt ->
-          {1, _} =
+          {1, _, _} =
             Arca.Execution.mark_failed_if_running(
               parent.id,
               %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: "lapsed"},

@@ -982,7 +982,7 @@ defmodule Emissary.Web.FrameSocketTest do
     socket = Socket.connect({:canvas, frame.frame_id})
 
     for {sub, stream, subject} <- [
-          {1, "confirmation.changes", nil},
+          {1, "prompt.changes", nil},
           {2, "mcp_servers.changes", "x"}
         ] do
       Socket.subscribe(socket, sub, frame.bearer, stream, subject)
@@ -1138,12 +1138,12 @@ defmodule Emissary.Web.FrameSocketTest do
 
   test "a stream bound to its holder is each person's own, and a named subject is refused",
        %{source: source} do
-    streams = [%{"name" => "confirmation.changes"}]
+    streams = [%{"name" => "prompt.changes"}]
     name = "sock-confirm-#{System.unique_integer([:positive])}"
 
     # Mine also names any subject for it, which publish refuses and a
     # stored row can still say: the frame's subject is refused all the same.
-    any = %{"name" => "confirmation.changes", "subject" => "*"}
+    any = %{"name" => "prompt.changes", "subject" => "*"}
     mine = frame!(source, name, app!(source, name, [any | streams]))
 
     # The bystander holds the same declaration in their own athanor, under
@@ -1157,14 +1157,14 @@ defmodule Emissary.Web.FrameSocketTest do
 
     # A subject from the frame is never taken, the holder's own included.
     for {sub, subject} <- [{1, other.user_id}, {2, source.user_id}] do
-      Socket.subscribe(my_socket, sub, mine.bearer, "confirmation.changes", subject)
+      Socket.subscribe(my_socket, sub, mine.bearer, "prompt.changes", subject)
       assert %{"type" => "ended", "error" => %{"message" => message}} = answer(my_socket, sub)
       assert message =~ "does not declare that stream"
     end
 
-    Socket.subscribe(my_socket, 3, mine.bearer, "confirmation.changes")
+    Socket.subscribe(my_socket, 3, mine.bearer, "prompt.changes")
     assert %{"type" => "subscribed"} = answer(my_socket, 3)
-    Socket.subscribe(their_socket, 1, theirs.bearer, "confirmation.changes")
+    Socket.subscribe(their_socket, 1, theirs.bearer, "prompt.changes")
     assert %{"type" => "subscribed"} = answer(their_socket, 1)
 
     # Each person's confirmation on their own topic, mine first: had mine
@@ -1174,15 +1174,20 @@ defmodule Emissary.Web.FrameSocketTest do
 
     assert %{
              "type" => "event",
-             "stream" => "confirmation.changes",
+             "stream" => "prompt.changes",
              "subject" => nil,
              "data" =>
-               %{"ref" => ^my_ref, "kind" => "opened", "operation" => "vault.create"} = data
+               %{
+                 "kind" => "confirmation",
+                 "ref" => ^my_ref,
+                 "fact" => "opened",
+                 "expires_at" => "2026-10-09T12:05:00Z"
+               } = data
            } = answer(my_socket, 3)
 
-    # The projection carries no person and no athanor.
-    refute Map.has_key?(data, "user_id")
-    refute Map.has_key?(data, "athanor_id")
+    # The projection is the kind, ref, fact and expiry alone: no operation,
+    # no person and no athanor.
+    assert data |> Map.keys() |> Enum.sort() == ["expires_at", "fact", "kind", "ref"]
 
     assert %{"type" => "event", "data" => %{"ref" => ^their_ref}} = answer(their_socket, 1)
   end
@@ -1194,13 +1199,12 @@ defmodule Emissary.Web.FrameSocketTest do
     ref = Prima.Confirmation.ref("cnf_" <> String.duplicate(letter, 43))
 
     opened =
-      Cyfr.Bus.Confirmation.new(actor, :opened,
+      Cyfr.Bus.Prompt.new(actor, :confirmation, :opened,
         ref: ref,
-        operation: "vault.create",
         expires_at: ~U[2026-10-09 12:05:00Z]
       )
 
-    :ok = Cyfr.Bus.broadcast(actor, Cyfr.Bus.confirmations(actor, ctx.user_id), opened)
+    :ok = Cyfr.Bus.broadcast(actor, Cyfr.Bus.prompts(actor, ctx.user_id), opened)
     ref
   end
 

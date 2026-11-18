@@ -30,6 +30,13 @@ defmodule Sanctum.Consent.Plan do
   its limits, and a tincture's frame, streams and system actions:
   what a narrowing is chosen from, none of it narrowed yet.
 
+  `asks` are the actions the closure's catalysts declare they ask their
+  person about before doing them (`Prima.Manifest.Asks`), each `%{node,
+  name, title}`: the source's own first, in its manifest's order, then
+  each dependency's by node. They are the developer's claim, which
+  nothing checks, and they grant nothing, so they are no row of the ask
+  and no part of its digest. A closure that cannot be resolved has none.
+
   A plan for a profile with a head says what the head holds:
   `head_bindings`, each binding the head
   holds as `%{binding_key, lifetime: %{kind, until}, consumed}`, the
@@ -164,6 +171,7 @@ defmodule Sanctum.Consent.Plan do
           caps: map(),
           limits: map(),
           rows: [BlobBuilder.row()],
+          asks: [%{node: String.t(), name: String.t(), title: String.t()}],
           unresolved: %{reason: String.t(), missing: String.t() | nil} | nil,
           head_bindings: [head_binding()],
           head_narrowing: map(),
@@ -277,6 +285,7 @@ defmodule Sanctum.Consent.Plan do
            Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest),
          {:ok, {closure, closure_rows}} <- closure(ctx, component),
          {:ok, rows} <- ask_rows(closure, closure_rows),
+         {:ok, asks} <- declared_asks(closure, component, closure_rows),
          {:ok, sources} <- ctx |> choice_sources() |> read(:vault),
          candidates = sources.own,
          needs = need_rows(ctx, sources, {component, manifest}),
@@ -311,6 +320,7 @@ defmodule Sanctum.Consent.Plan do
          caps: resources,
          limits: limits,
          rows: rows,
+         asks: asks,
          unresolved: unresolved(closure),
          head_bindings: head.bindings,
          head_narrowing: head_narrowing,
@@ -1476,6 +1486,35 @@ defmodule Sanctum.Consent.Plan do
         {:ok, _checked} -> {:ok, rows}
         {:error, reason} -> {:error, {:preview_unrepresentable, reason}}
       end
+    end
+  end
+
+  # What each catalyst of the closure says it asks before doing, the
+  # source's own first, then each dependency's by node.
+  defp declared_asks({:unresolved, _unresolved}, _source, _closure_rows), do: {:ok, []}
+
+  defp declared_asks({:ok, _graph}, source, closure_rows) do
+    source_key = Prima.ComponentRow.node_key(source)
+    keys = [source_key | closure_rows |> Map.keys() |> List.delete(source_key) |> Enum.sort()]
+
+    # Each node's list is collected, newest first, and joined once.
+    keys
+    |> Enum.reduce_while({:ok, []}, fn key, {:ok, acc} ->
+      case node_manifest(closure_rows, key) do
+        {:ok, manifest} ->
+          asks = Enum.map(Prima.Manifest.Asks.from_manifest(manifest), &Map.put(&1, :node, key))
+          {:cont, {:ok, [asks | acc]}}
+
+        {:error, :not_in_closure} ->
+          {:cont, {:ok, acc}}
+
+        {:error, _} = refused ->
+          {:halt, refused}
+      end
+    end)
+    |> case do
+      {:ok, lists} -> {:ok, lists |> Enum.reverse() |> Enum.concat()}
+      refused -> refused
     end
   end
 
