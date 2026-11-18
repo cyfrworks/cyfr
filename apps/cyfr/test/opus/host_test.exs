@@ -1574,6 +1574,7 @@ defmodule Opus.HostTest do
   defp expected("pipe_open"), do: "denied"
   defp expected("pipe_send"), do: "guest_error"
   defp expected(op) when op in ~w(pipe_recv pipe_close input_next input_sent), do: "ok"
+  defp expected(op) when op in ~w(question_ask question_wait), do: "ok"
 
   defp expected(op) when op in ~w(oauth_token storage admit_child tool_call attached_fetch),
     do: "guest_error"
@@ -1599,6 +1600,15 @@ defmodule Opus.HostTest do
   end
 
   defp answered("pipe_close", answer, vector, _fixture, _before), do: assert(answer == vector)
+
+  # A fixture's component declares no action and its run acts as no
+  # person, so its ask, and a wait on it, is answered at once: invalid.
+  # Asking and waiting are proved end to end (`Locus.Runtime.QuestionTest`).
+  defp answered(op, %{"ok" => got}, %{"ok" => wire}, _fixture, _before)
+       when op in ~w(question_ask question_wait) do
+    assert got == %{"answer" => %{"none" => "invalid"}}, op
+    assert Map.keys(wire) -- ["answer", "pending"] == [], op
+  end
 
   defp answered("fail", %{"ok" => message}, %{"ok" => wire}, _fixture, _before),
     do: assert(message == wire)

@@ -42,6 +42,9 @@ defmodule Cyfr.TestSkipRosterTest do
   @prerequisite_skips %{
     "apps/cyfr/test/opus/host_listener_test.exs" => [
       ~s(@second_loopback_unavailable && "this host cannot bind 127.0.0.2")
+    ],
+    "apps/locus/test/locus/runtime/question_probe_test.exs" => [
+      ~s(@procfs_absent && "no procfs on this host: the VM's mapped memory cannot be read")
     ]
   }
 

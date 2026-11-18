@@ -7,8 +7,8 @@ defmodule Opus.Host do
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
   `fetch_artifact`, `record_denial`, `admit_child`, `tool_call`,
   `release_child`, `egress_pin`, `attached_fetch`, `pipe_open`,
-  `pipe_send`, `pipe_recv`, `pipe_close`, `input_next` and `input_sent`,
-  as `Prima.HostAPI` describes them.
+  `pipe_send`, `pipe_recv`, `pipe_close`, `input_next`, `input_sent`,
+  `question_ask` and `question_wait`, as `Prima.HostAPI` describes them.
 
   `call/3` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`), its JSON body,
@@ -136,12 +136,16 @@ defmodule Opus.Host do
   | `pipe_close` | `session` | `true` |
   | `input_next` | none | the next input (`id`, `content`), or `null` |
   | `input_sent` | `id` (`Prima.Model.valid_input_id?/1`) | `true` |
+  | `question_ask` | `ask_no` (a positive integer), `action`, `summary`, `operation` (strings) | `answer`, `pending: true`, or `retry_after_ms` |
+  | `question_wait` | `ask_no`, `max_wait_ms` (at most `Prima.HostAPI.max_question_wait_ms/0`) | `answer` or `pending: true` |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Opus.Host.Storage`'s;
   `admit_child`, `tool_call` and `release_child` are
-  `Opus.Host.Children`'s; the pipe calls are `Opus.Host.Pipe`'s and the
-  input calls `Opus.Host.Inputs`'s. `admit_child` is keyed: a repeat with
+  `Opus.Host.Children`'s; the pipe calls are `Opus.Host.Pipe`'s, the
+  input calls `Opus.Host.Inputs`'s and the question calls
+  `Opus.Host.Question`'s. An `answer` is `"allowed"`, `"denied"` or
+  `{"none": "unattended" | "invalid" | "unavailable"}`. `admit_child` is keyed: a repeat with
   the same `child_key` answers the child already admitted under it, and
   one naming another `connection` than that child was admitted with is
   refused `invalid_request`.
@@ -177,7 +181,7 @@ defmodule Opus.Host do
   alias Prima.{AttachedRequest, Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
   alias Opus.{Attempt, Keys, Lapse}
   alias Prima.Outcome
-  alias Opus.Host.{AttachedFetch, Children, Egress, Inputs, Pipe}
+  alias Opus.Host.{AttachedFetch, Children, Egress, Inputs, Pipe, Question}
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
   @refusals [
@@ -371,6 +375,12 @@ defmodule Opus.Host do
   defp dispatch(caller, :input_next), do: input_next(caller)
   defp dispatch(caller, {:input_sent, id}), do: input_sent(caller, id)
 
+  defp dispatch(caller, {:question_ask, ask_no, request}),
+    do: question_ask(caller, ask_no, request)
+
+  defp dispatch(caller, {:question_wait, ask_no, max_wait_ms}),
+    do: question_wait(caller, ask_no, max_wait_ms)
+
   defp dispatch(_caller, {:attached_refusal, call_id, refusal}),
     do: {:attached, call_id, {:error, refusal}}
 
@@ -477,6 +487,12 @@ defmodule Opus.Host do
 
   @impl HostAPI
   def input_sent(caller, id), do: Inputs.sent(caller, id)
+
+  @impl HostAPI
+  def question_ask(caller, ask_no, request), do: Question.ask(caller, ask_no, request)
+
+  @impl HostAPI
+  def question_wait(caller, ask_no, max_wait_ms), do: Question.wait(caller, ask_no, max_wait_ms)
 
   @doc """
   The needs the running node's manifest declares, read through
@@ -695,6 +711,24 @@ defmodule Opus.Host do
     if Prima.Model.valid_input_id?(id), do: {:ok, {:input_sent, id}}, else: {:error, :lost}
   end
 
+  defp operation("question_ask", %{
+         "ask_no" => ask_no,
+         "action" => action,
+         "summary" => summary,
+         "operation" => operation
+       })
+       when is_integer(ask_no) and ask_no > 0 and is_binary(action) and is_binary(summary) and
+              is_binary(operation),
+       do:
+         {:ok, {:question_ask, ask_no, %{action: action, summary: summary, operation: operation}}}
+
+  defp operation("question_wait", %{"ask_no" => ask_no, "max_wait_ms" => wait})
+       when is_integer(ask_no) and ask_no > 0 and is_integer(wait) and wait >= 0 do
+    if wait <= HostAPI.max_question_wait_ms(),
+      do: {:ok, {:question_wait, ask_no, wait}},
+      else: {:error, :lost}
+  end
+
   defp operation(_op, _args), do: {:error, :lost}
 
   defp name?(value), do: is_binary(value) and value != ""
@@ -747,6 +781,12 @@ defmodule Opus.Host do
   defp encode(answer), do: answer |> wire() |> Jason.encode!()
 
   defp wire(:ok), do: WorkerWire.ok(true)
+
+  defp wire({:ok, {:answer, answer}}),
+    do: WorkerWire.ok(%{"answer" => HostAPI.answer_to_wire(answer)})
+
+  defp wire({:ok, :pending}), do: WorkerWire.ok(%{"pending" => true})
+  defp wire({:ok, {:retry_after_ms, ms}}), do: WorkerWire.ok(%{"retry_after_ms" => ms})
   defp wire({:ok, %PinnedTarget{} = pin}), do: WorkerWire.ok(PinnedTarget.to_wire(pin))
   defp wire({:ok, value}), do: WorkerWire.ok(value)
 

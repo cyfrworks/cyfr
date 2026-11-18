@@ -19,6 +19,7 @@ defmodule Locus.Runtime.ComponentType do
   | `cyfr:vault/read`           | ✅*       | ❌       | ❌       |
   | `cyfr:process/pipe`         | ✅‡       | ❌       | ❌       |
   | `cyfr:model/inputs`         | ✅§       | ❌       | ❌       |
+  | `cyfr:question/ask`         | ✅¶       | ❌       | ❌       |
 
   *`cyfr:vault/read` resolves fields from the Vault entry a consent edge binds
   †`cyfr:oauth/token` resolves a token from the Vault OAuth entry a consent edge binds
@@ -28,6 +29,10 @@ defmodule Locus.Runtime.ComponentType do
   §`cyfr:model/inputs` is the further input of the running invocation, which whoever
   started it supplies: each call is a host call (`c:Prima.HostAPI.input_next/1` and
   `c:Prima.HostAPI.input_sent/2`), answered for the caller's own attempt alone
+  ¶`cyfr:question/ask` asks the run's person before an action the manifest declares
+  under `asks`, and waits: each call is a `c:Prima.HostAPI.question_ask/3` host call,
+  waited on in `c:Prima.HostAPI.question_wait/3` calls. A reagent does nothing outside
+  itself and a formula acts through its children and CYFR's tools, so neither has it
 
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects

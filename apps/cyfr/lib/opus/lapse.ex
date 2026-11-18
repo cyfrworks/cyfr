@@ -44,11 +44,11 @@ defmodule Opus.Lapse do
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
     case fail_row(record, now, duration_ms) do
-      {:ok, 0, _event_seq} ->
+      {:ok, 0, _event_seq, _closed_questions} ->
         false
 
-      {:ok, _count, event_seq} ->
-        lapsed(record, event_seq, now, duration_ms)
+      {:ok, _count, event_seq, closed_questions} ->
+        lapsed(record, event_seq, closed_questions, now, duration_ms)
         true
 
       :error ->
@@ -60,7 +60,7 @@ defmodule Opus.Lapse do
   # grant that still stands (`Cyfr.Boundaries.system_responsibilities/0`).
   # A failure here commits nothing, and the lapse did not happen.
   defp fail_row(record, now, duration_ms) do
-    {count, event_seq, _closed_questions} =
+    {count, event_seq, closed_questions} =
       Arca.Execution.mark_failed_if_running(
         record.id,
         %{
@@ -75,7 +75,7 @@ defmodule Opus.Lapse do
         verify: &Sanctum.ExecutionStanding.stamp_only/1
       )
 
-    {:ok, count, event_seq}
+    {:ok, count, event_seq, closed_questions}
   rescue
     exception ->
       Logger.error(
@@ -96,8 +96,12 @@ defmodule Opus.Lapse do
   # telemetry, its event and its children's failure each run whatever the
   # one before it did, so a publication that cannot be made never leaves a
   # formula's children running.
-  defp lapsed(record, event_seq, now, duration_ms) do
+  defp lapsed(record, event_seq, closed_questions, now, duration_ms) do
     Logger.info("[Opus.Lapse] #{record.id} lapsed after #{duration_ms}ms")
+
+    after_commit(record, "questions", fn ->
+      Opus.Record.questions_ended(record.athanor_id, closed_questions)
+    end)
 
     after_commit(record, "telemetry", fn ->
       Telemetry.row_failed(record, %{

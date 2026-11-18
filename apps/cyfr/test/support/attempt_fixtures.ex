@@ -63,6 +63,8 @@ defmodule Cyfr.Test.AttemptFixtures do
     `sub_agents` (`Opus.Delegation.roster/1`);
   - `:declared_needs` and `:activation_digest` — the resolver's transition
     inputs its guest's children are stepped with (default `[]` and none);
+  - `:release_digest` — the release admission selected the artifact from,
+    which the run's questions are bound to (default none);
   - `:reservation` — `true` to admit the row with the invocation
     reservation its authority's budget names, as a root is admitted;
   - `:inputs` — the process that supplies the run's further inputs
@@ -127,6 +129,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         deadline: deadline,
         worker: Keyword.get_lazy(opts, :worker, fn -> unreachable_worker(service_id) end),
         digest: digest,
+        release_digest: Keyword.get(opts, :release_digest),
         grant: grant,
         inputs: Keyword.get(opts, :inputs)
       )

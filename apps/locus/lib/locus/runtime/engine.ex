@@ -331,6 +331,9 @@ defmodule Locus.Runtime.Engine do
 
     input_imports = if component_type == :catalyst, do: build_input_imports(host), else: %{}
 
+    question_imports =
+      if component_type == :catalyst, do: build_question_imports(host), else: %{}
+
     {formula_imports, formula_tracker_pid} =
       if component_type == :formula do
         Locus.Runtime.FormulaHandler.build_formula_imports(host,
@@ -350,6 +353,7 @@ defmodule Locus.Runtime.Engine do
       |> Map.merge(emit_imports)
       |> Map.merge(pipe_imports)
       |> Map.merge(input_imports)
+      |> Map.merge(question_imports)
       |> Map.merge(formula_imports)
 
     cleanup_refs = %{
@@ -468,6 +472,72 @@ defmodule Locus.Runtime.Engine do
       {:error, reason} -> {:error, pipe_code(reason)}
     end
   end
+
+  # A catalyst's `cyfr:question/ask` import: each call of `ask` takes the
+  # next ask number of the run and is the `question_ask` host call under it
+  # (`c:Prima.HostAPI.question_ask/3`). The import loops itself, since the
+  # client repeats a lost answer once and never one CYFR gave: an ask past
+  # its root's allowance sleeps as long as CYFR says and is sent again, the
+  # same arguments signed afresh, and an open question is waited on in
+  # `question_wait` calls until it is decided. It stops on CYFR's `lost`,
+  # the attempt no longer live, answered `none(unavailable)`; and at the
+  # run's deadline the runner kills the component's process, and the call
+  # with it (`Locus.Runtime.Attempt`): the import runs in the component's
+  # server process, so the kill ends its sleep or its call, and the guest's
+  # call traps.
+  defp build_question_imports(host) do
+    asks = :counters.new(1, [])
+
+    %{
+      "cyfr:question/ask@0.1.0" => %{
+        "ask" =>
+          {:fn,
+           fn request ->
+             :counters.add(asks, 1, 1)
+             question_ask(host, :counters.get(asks, 1), request)
+           end}
+      }
+    }
+  end
+
+  @doc false
+  # One call of the guest's `ask`, as its import answers it: `:allowed`,
+  # `:denied` or `{:none, reason}`.
+  @spec question_ask(Locus.Runtime.HostClient.t(), pos_integer(), map()) ::
+          Prima.HostAPI.question_answer()
+  def question_ask(host, ask_no, %{action: action, summary: summary, operation: operation}) do
+    case Locus.Runtime.HostClient.question_ask(host, ask_no, action, summary, operation) do
+      {:ok, {:answer, answer}} ->
+        answer
+
+      {:ok, :pending} ->
+        question_wait(host, ask_no)
+
+      {:ok, {:retry_after_ms, ms}} ->
+        Process.sleep(ms)
+        question_ask(host, ask_no, %{action: action, summary: summary, operation: operation})
+
+      {:error, reason} ->
+        unanswered(reason)
+    end
+  end
+
+  defp question_wait(host, ask_no) do
+    case Locus.Runtime.HostClient.question_wait(
+           host,
+           ask_no,
+           Prima.HostAPI.max_question_wait_ms()
+         ) do
+      {:ok, {:answer, answer}} -> answer
+      {:ok, :pending} -> question_wait(host, ask_no)
+      {:error, reason} -> unanswered(reason)
+    end
+  end
+
+  # A request past the host call's bound is refused again whenever it is
+  # sent; anything else, CYFR's `lost` among it, leaves nobody to answer.
+  defp unanswered(:too_large), do: {:none, :invalid}
+  defp unanswered(_lost_or_unavailable), do: {:none, :unavailable}
 
   defp pipe_checked(:ok), do: :ok
   defp pipe_checked({:error, code, _message}), do: {:error, {:local, code}}

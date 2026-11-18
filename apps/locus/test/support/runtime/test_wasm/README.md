@@ -11,6 +11,7 @@ WebAssembly text it is built from.
 | `math.wasm` | a core module exporting `sum` and `multiply`, each over two i32s, for the engine's and registration's refusal of a core module |
 | `echo.wasm` | a reagent component whose `compute` answers its input unchanged |
 | `spin.wasm` | a reagent component whose `compute` never returns, so only the runner's watchdog ends it |
+| `question_probe/` | a catalyst, built from Rust, that asks its person before each statement it is handed (`cyfr:question/ask`) and reports each answer; its README says how it is built, by CYFR's Rust recipe (`apps/cyfr/test/support/test_wasm/build-fixture.sh`) |
 | `hostile/` | components that push against the engine's bounds or use a refused feature, with their own `build.sh` and README |
 
 ## Rebuilding

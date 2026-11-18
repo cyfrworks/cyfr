@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+package cyfr:question@0.1.0;
+
+/// Ask before an action that cannot be undone, and wait for the answer.
+/// Only `allowed` lets the action go ahead.
+interface ask {
+    record request {
+        /// A name this component's manifest declares under `asks`.
+        action: string,
+        /// One line, at most 200 characters: "Drop the table users in the project acme".
+        /// A control or format character refuses the request.
+        summary: string,
+        /// The exact operation, shown whole. Line breaks and
+        /// tabs are kept; any other control or format character refuses it.
+        operation: string,
+    }
+
+    enum unanswered {
+        /// Nobody can be asked for this run, and no permission covers it.
+        unattended,
+        /// The action is not declared, or the request is malformed.
+        invalid,
+        /// CYFR could not ask or record just now.
+        unavailable,
+    }
+
+    variant answer {
+        /// Allowed, by the person now or by a permission of theirs.
+        allowed,
+        /// Denied, by the person now or by a permission of theirs.
+        denied,
+        none(unanswered),
+    }
+
+    ask: func(r: request) -> answer;
+}
