@@ -1138,6 +1138,23 @@ defmodule Opus.BrainTest do
     defp first_read!,
       do: assert_receive({:session, "recv", %{"after" => 0}, _fields}, 5_000)
 
+    # A take-over asked of `holder` waits in its mailbox.
+    defp taking_over!(holder, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
+      {:messages, messages} = Process.info(holder, :messages)
+
+      cond do
+        Enum.any?(messages, &match?({:"$gen_call", _from, {:replace, _binding}}, &1)) ->
+          :ok
+
+        System.monotonic_time(:millisecond) > deadline ->
+          flunk("no take-over waits on the holder")
+
+        true ->
+          Process.sleep(10)
+          taking_over!(holder, deadline)
+      end
+    end
+
     # The reads an earlier holder made, told already.
     defp flush_reads do
       receive do
@@ -1145,6 +1162,107 @@ defmodule Opus.BrainTest do
       after
         0 -> :ok
       end
+    end
+
+    test "a successor that kept the session while the cleanup waited for the key is never removed",
+         %{fake: fake, ctx: ctx, row: row, thread: thread, binding: binding} do
+      # The session `started!/5` reports, so the successor keeps the one
+      # the record names.
+      session = "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+      record = owed!(ctx, thread.id, row, session: session)
+      test = self()
+      handler = "brain-cleanup-pause-#{System.unique_integer([:positive])}"
+
+      # The cleanup is held at its read of the row: past its first read of
+      # the record, before its holder takes the key.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measures, meta, _config ->
+            if Process.get(:cleanup_held) == true and meta[:source] == "mcp_servers" do
+              Process.delete(:cleanup_held)
+              send(test, {:row_read, self()})
+
+              receive do
+                :go_on -> :ok
+              after
+                15_000 -> raise "the cleanup was not let go on"
+              end
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      task =
+        Task.async(fn ->
+          Process.put(:cleanup_held, true)
+          Brain.forget(record)
+        end)
+
+      assert_receive {:row_read, cleanup}, 5_000
+
+      # A successor opens under the key, keeps the session and ends.
+      set_generation(thread, 1)
+      brain = started!(fake, row, %{binding | generation: 1}, %{}, 1)
+      assert_received {:session, "open", _successors, _fields}
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+          set: [brain_session: session]
+        )
+
+      assert :ok = Brain.close(brain)
+      flush_reads()
+      send(cleanup, :go_on)
+
+      # A cleanup that decided before the key was its own opens, and is
+      # answered forgot here, so the test fails on the answer.
+      ref = task.ref
+
+      answer =
+        receive do
+          {^ref, answer} ->
+            answer
+
+          {:session, "open", _open, _fields} ->
+            first_read!()
+            say(fake, row, hello())
+            %{"t" => "forget", "id" => id, "session" => ^session} = sent()
+            say(fake, row, %{"t" => "forgot", "id" => id, "session" => session})
+            Task.await(task, 10_000)
+        after
+          5_000 -> flunk("the cleanup neither answered nor opened")
+        end
+
+      Process.demonitor(ref, [:flush])
+      assert answer == {:error, :successor}
+      refute_received {:session, "open", _open, _fields}
+    end
+
+    test "a successor that opens while the cleanup holds the key waits for its end",
+         %{fake: fake, ctx: ctx, row: row, thread: thread, binding: binding} do
+      record = owed!(ctx, thread.id, row)
+      task = Task.async(fn -> Brain.forget(record) end)
+      assert %{"t" => "forget", "id" => id, "session" => @session} = once_driver!(fake, row)
+      cleanup = Brain.whereis(ctx.athanor_id, thread.id, binding.agent)
+      assert is_pid(cleanup)
+
+      # The forget is written; a successor's open waits on the cleanup's
+      # holder, which takes it up only once its one answer is read.
+      set_generation(thread, 1)
+      opener = Task.async(fn -> Brain.open(%{binding | generation: 1}) end)
+      taking_over!(cleanup)
+      assert Task.yield(opener, 0) == nil
+      refute_received {:session, "open", _open, _fields}
+
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 10_000) == :forgot
+      assert {:ok, {successor, _ref}} = Task.await(opener, 20_000)
+      assert successor != cleanup
+      refute Process.alive?(cleanup)
     end
 
     test "cleanup forgets the session the stored record names and nothing else",

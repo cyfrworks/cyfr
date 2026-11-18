@@ -8,8 +8,9 @@ defmodule Opus.Brain.CleanupTest do
   driver confirms is receipted `applied`; one the driver refuses, one
   whose answer is lost and one while the box is away stay owed and are
   tried again at the next drain; a successor's session and a row gone are
-  `superseded`, a row that runs no driver `refused`, and none of the three
-  opens anything. Every receipt is read whole from the store.
+  `superseded`, a row that runs no driver stays owed until it names one,
+  and none of the three opens anything. Every receipt is read whole from
+  the store.
   """
   use ExUnit.Case, async: false
 
@@ -111,6 +112,33 @@ defmodule Opus.Brain.CleanupTest do
 
   defp say(fake, row, event), do: Scripted.write(fake, row.id, Jason.encode!(event))
 
+  test "a row whose command names no driver leaves its removal owed until it names one again",
+       %{fake: fake, actor: actor, thread: thread, row: row} do
+    driven = row.config_json
+    bare = Jason.encode!(%{"command" => "claude", "env" => %{}})
+    set_config!(row, bare)
+    record = owed!(actor, thread.id, row)
+
+    assert Cleanup.drain(actor.athanor_id) == {:ok, %{"owed" => 1}}
+    refute_received {:session, "open", _open, _fields}
+    assert pending(actor) == [record]
+    assert outcome(actor, record) == :none
+
+    set_config!(row, driven)
+    drain = draining(actor)
+    assert %{"t" => "forget", "id" => id, "session" => @session} = driver!(fake, row)
+    say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+    assert Task.await(drain, 10_000) == {:ok, %{"applied" => 1}}
+    assert outcome(actor, record) == {:ok, "applied"}
+  end
+
+  defp set_config!(row, config_json),
+    do:
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^row.id),
+          set: [config_json: config_json]
+        )
+
   test "a confirmed removal is receipted applied; a refused one stays owed and is tried again",
        %{fake: fake, actor: actor, thread: thread, row: row} do
     record = owed!(actor, thread.id, row)
@@ -155,7 +183,7 @@ defmodule Opus.Brain.CleanupTest do
     assert outcome(actor, record) == {:ok, "applied"}
   end
 
-  test "a successor's session and a row gone are superseded, a row with no driver refused, none opened",
+  test "a successor's session and a row gone are superseded, a row with no driver owed, none opened",
        %{actor: actor, thread: thread, row: row} do
     successor = owed!(actor, thread.id, row)
 
@@ -171,11 +199,10 @@ defmodule Opus.Brain.CleanupTest do
     bare = brain_row!(actor, "claude-code-bare", "npx -y @anthropic-ai/claude-code@2.1.323")
     catalyst_era = owed!(actor, "thr_bare", bare)
 
-    assert Cleanup.drain(actor.athanor_id) == {:ok, %{"superseded" => 2, "refused" => 1}}
+    assert Cleanup.drain(actor.athanor_id) == {:ok, %{"superseded" => 2, "owed" => 1}}
     assert outcome(actor, successor) == {:ok, "superseded"}
     assert outcome(actor, vanished) == {:ok, "superseded"}
-    assert outcome(actor, catalyst_era) == {:ok, "refused"}
-    assert pending(actor) == []
+    assert pending(actor) == [catalyst_era]
     refute_received {:session, "open", _open, _fields}
 
     # The successor's session is untouched.

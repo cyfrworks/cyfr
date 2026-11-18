@@ -124,8 +124,11 @@ defmodule Opus.Brain do
       session before the one that forgets it opens; one of a later
       generation is a successor, and the removal waits. A thread that
       holds the record's session again, under a later generation, is a
-      successor too, and its session is never removed. The answer is
-      `forgot` for that record's id and session, or not a removal.
+      successor too, and its session is never removed. The cleanup's own
+      holder decides it, reading the record and the thread again once it
+      owns the key and before anything opens, and a successor's open under
+      the key waits for that holder to end. The answer is `forgot` for that
+      record's id and session, or not a removal.
     * **Discovery** (`models/2`) runs only for a person at a screen, an
       interactive caller of the row's athanor (`Opus.Programs.caller/1`),
       for a brain's row of that athanor: the models and efforts the
@@ -336,16 +339,14 @@ defmodule Opus.Brain do
     actor = Prima.Actor.in_athanor(athanor_id)
 
     with {:ok, owed} <- owed(actor, record),
-         :ok <- no_successor(actor, owed),
          {:ok, row} <- forget_row(actor, owed["row_id"]),
          key = {athanor_id, owed["thread_id"], owed["agent"]},
          :ok <- retire(key, owed["generation"]),
          {:ok, pid} <- holder(key) do
       id = forget_id(record)
       session = owed["session"]
-      command = %{"t" => "forget", "id" => id, "session" => session}
 
-      case call(pid, {:once, owner(athanor_id, row), command}, @once_ms + @answer_margin_ms) do
+      case call(pid, {:forget, owner(athanor_id, row), record}, @once_ms + @answer_margin_ms) do
         {:ok, %{"t" => "forgot", "id" => ^id, "session" => ^session}} ->
           :forgot
 
@@ -1016,6 +1017,27 @@ defmodule Opus.Brain do
       do: {:stop, :normal, :ok, ended(state, :forgotten)},
       else: {:reply, {:error, :successor}, state}
   end
+
+  # A cleanup's `forget`, decided by the holder that owns the record's
+  # key, before anything opens: the record is read again from the store,
+  # still owed, and the thread again for a successor that holds its
+  # session. A successor's open under the key waits for this holder to end
+  # (`replace/2`), so none opens between this decision and the write; one
+  # that opened, kept the session and ended before the key was taken is in
+  # the thread read here.
+  def handle_call({:forget, owner, record}, from, %{attendant: nil, owner: nil} = state) do
+    actor = Prima.Actor.in_athanor(state.athanor_id)
+
+    with {:ok, owed} <- owed(actor, record),
+         :ok <- no_successor(actor, owed) do
+      command = %{"t" => "forget", "id" => forget_id(record), "session" => owed["session"]}
+      handle_call({:once, owner, command}, from, state)
+    else
+      {:error, reason} -> {:stop, :normal, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:forget, _owner, _record}, _from, state), do: {:reply, {:error, :busy}, state}
 
   # A cleanup's or a discovery's one command, in a holder no attendant
   # opened: the owner held, a new process of the driver opened, the

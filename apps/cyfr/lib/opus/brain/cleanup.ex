@@ -26,20 +26,24 @@ defmodule Opus.Brain.Cleanup do
       dies before its receipt is safe to try again.
     * `superseded` — the thread holds that session again under a later
       generation, a successor's, which is never removed; or the row is
-      gone, and the reconciler retires its whole folder
-      (`Opus.Programs.home/3`), which no removal of one session stands
-      beside.
-    * `refused` — the row's command names no driver (a row that still
-      runs the bare harness): nothing can answer the wire there, so the
-      removal is not tried and its transcript stays as it is. No folder is
-      ever reset here; a whole-home reset stays the person's own
-      operation.
+      gone, and the removal passes to the retirement of the row's whole
+      home: the receipt says the reconciler owns it now
+      (`Opus.Programs.home/3` on the row's deletion, and the sweep of kept
+      homes no row keeps, `Emissary.External.Reconciler.sweep_homes/0`,
+      for a deletion whose word was lost), not that the bytes are gone.
 
   Anything else leaves the record owed, tried again at the next drain:
   the driver's `refused` (a folder it could not inspect, or the session
   running there), a box that is away or does not answer, a lost answer, a
-  row disabled, and a successor's holder running under the key. It never
-  removes a session the record does not name.
+  row disabled, a row whose command names no driver (one that still runs
+  the bare harness, which nothing answers the wire in, so nothing is
+  opened until the row names a driver again), and a successor's holder
+  running under the key. It never removes a session the record does not
+  name, and no folder is ever reset here; a whole-home reset stays the
+  person's own operation. A record left owed costs each tick of its
+  athanor the outbox's reads, the claim taken, renewed and given up, and
+  the record's own reads (the record, its row; the thread too once the
+  row names a driver), and nothing of the box's.
 
   `:brain_cleanup_enabled` false leaves it unstarted: under the test
   sandbox a drain on a tick would work another test's records on the
@@ -214,8 +218,10 @@ defmodule Opus.Brain.Cleanup do
     case Opus.Brain.forget(record) do
       :forgot -> receipted(actor, record, claim, "applied")
       {:error, :successor} -> receipted(actor, record, claim, "superseded")
+      # The row's home goes whole, and its retirement is the reconciler's,
+      # found again by its sweep when the deletion's word was lost: this
+      # receipt hands the removal on, it does not prove the bytes gone.
       {:error, :row_gone} -> receipted(actor, record, claim, "superseded")
-      {:error, :no_driver} -> receipted(actor, record, claim, "refused")
       {:error, _not_now} -> {:ok, "owed"}
     end
   end
