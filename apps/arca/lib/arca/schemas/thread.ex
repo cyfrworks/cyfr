@@ -69,7 +69,8 @@ defmodule Arca.Schemas.Thread do
   counts: the native `thread` it is of and its four `counts`, whatever
   model it came under); `unattributed`, usage no work could be given,
   never charged to later work; `owed`, the post and notice `input` steps
-  written and not yet named by the program's end of a turn; `notices`,
+  written and not yet named by the program's end of a turn, and those a
+  reconcile reported, until their turn is over; `notices`,
   the recovery prompts a reconcile left owed, each `step`, the post or
   answer step it continues, and `context`, true for a session started
   anew, until the driver answers for the prompt's write or a reconcile

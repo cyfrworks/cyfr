@@ -4328,7 +4328,10 @@ defmodule Arca.TurnStorage do
   reconcile finds the prompt's step recorded, as it may have been
   written: either settles it, and it is never prompted again. Until then
   a held post stays owed an answer, and a reconcile run again answers
-  both again.
+  both again. A notice it reports, held or not, and a post not held stay
+  owed too, until their turn is over: each ends the turn, and a reconcile
+  run again before that end is recorded reports them again, with no
+  prompt for them.
   Answers `%{held: [step], absent: [step], answers: [step]}`.
 
   With `fresh: true` the session was started anew because its transcript
@@ -4414,9 +4417,13 @@ defmodule Arca.TurnStorage do
         & &1["step"]
       )
 
+    # Every delivery it reports stays owed: a held post its answer; a
+    # notice, held or not, and a post the transcript lacks end the turn
+    # (`Aqua.Program`), so until the turn is over a reconcile run again
+    # reports them again, and prompts nothing for them.
     progress =
       progress
-      |> Map.put("owed", for(s <- held_steps, s.action == "post", do: s.id))
+      |> Map.put("owed", Enum.map(pending, & &1.id))
       |> Map.put("notices", notices)
 
     {%{held: held_steps, absent: absent, answers: answers}, progress}

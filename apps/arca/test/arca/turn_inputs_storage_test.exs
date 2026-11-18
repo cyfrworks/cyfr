@@ -531,8 +531,9 @@ defmodule Arca.TurnInputsStorageTest do
 
     # The held post owes one prompt, and stays owed an answer until the
     # driver takes that prompt, which takes the obligation over; recorded,
-    # the prompt is offered no second time.
-    assert progress(daily)["owed"] == [held.id]
+    # the prompt is offered no second time. The lost post stays owed until
+    # the turn it ends is over.
+    assert progress(daily)["owed"] == [held.id, lost.id]
     assert progress(daily)["notices"] == [%{"step" => held.id}]
 
     assert {:ok, [%{action: "post", message_id: first_id, context?: false}]} =
@@ -540,11 +541,11 @@ defmodule Arca.TurnInputsStorageTest do
 
     assert first_id == first.id
     {:ok, %{step: notice}} = carry(actor, turn, "notice", first)
-    assert progress(daily)["owed"] == [held.id, notice.id]
+    assert progress(daily)["owed"] == [held.id, lost.id, notice.id]
     assert progress(daily)["notices"] == [%{"step" => held.id}]
     assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
     {:ok, _} = commit(actor, daily, turn, %{accepted: [notice.id], busy: true})
-    assert progress(daily)["owed"] == [notice.id]
+    assert progress(daily)["owed"] == [lost.id, notice.id]
     assert progress(daily)["notices"] == []
     assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
   end
@@ -769,5 +770,59 @@ defmodule Arca.TurnInputsStorageTest do
 
     assert {:ok, %{session: "new-session", progress: %{"row" => "prg_successor", "epoch" => 2}}} =
              TurnStorage.brain(actor, daily.id)
+  end
+
+  # ---- a stop that outlives a crash ------------------------------------------------
+
+  for held? <- [false, true] do
+    test "a notice a reconcile reports stays owed until its turn is over, so a reconcile run " <>
+           "again before the turn's failure lands reports it again and prompts nothing " <>
+           "(the notice #{if held?, do: "held", else: "not held"})",
+         %{actor: actor, daily: daily, turn: turn} do
+      row = opening(actor, turn)
+      {:ok, %{step: post}} = carry(actor, turn, "post", row)
+      {:ok, _} = commit(actor, daily, turn, %{accepted: [post.id], busy: true})
+      attrs = %{fence: turn.fence, generation: 0, held: [post.id]}
+      {:ok, _} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+      {:ok, %{step: notice}} = carry(actor, turn, "notice", row)
+      attrs = %{attrs | held: if(unquote(held?), do: [post.id, notice.id], else: [post.id])}
+      reported = if unquote(held?), do: :held, else: :absent
+      {:ok, first} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+      assert Enum.map(Map.fetch!(first, reported), & &1.id) == [notice.id]
+
+      # CYFR died after that reconcile and before the turn's failure was
+      # recorded: the next reconcile reports the notice again.
+      {:ok, second} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+      assert Enum.map(Map.fetch!(second, reported), & &1.id) == [notice.id]
+      assert {second.answers, progress(daily)["owed"]} == {[], [notice.id]}
+      assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
+    end
+  end
+
+  test "a post the transcript does not hold stays owed until its turn is over, so a reconcile " <>
+         "run again before the turn's failure lands reports it again",
+       %{actor: actor, daily: daily, turn: turn} do
+    {:ok, %{step: post}} = carry(actor, turn, "post", opening(actor, turn))
+    attrs = %{fence: turn.fence, generation: 0, held: []}
+    assert {:ok, %{absent: [%{id: absent}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    assert absent == post.id
+    assert {:ok, %{absent: [%{id: ^absent}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    assert progress(daily)["owed"] == [post.id]
+    assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
+  end
+
+  test "a fresh session's prompt certainly not written is owed again with the thread so far",
+       %{actor: actor, daily: daily, turn: turn} do
+    row = opening(actor, turn)
+    {:ok, %{step: post}} = carry(actor, turn, "post", row)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [post.id], busy: true})
+    {:ok, 1} = TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+    attrs = %{fence: turn.fence, generation: 1, fresh: true}
+    {:ok, _} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    {:ok, %{step: notice}} = carry(actor, turn, "notice", row, %{generation: 1})
+    assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
+    assert :ok = TurnStorage.uncarry(actor, turn.id, %{fence: turn.fence, step_id: notice.id})
+    assert {:ok, [%{context?: true, message_id: id}]} = TurnStorage.brain_notices(actor, turn.id)
+    assert id == row.id
   end
 end
