@@ -138,9 +138,8 @@ func (d *driver) forget(id, session string) error {
 // word. A post it leaves out is not established, never proved absent: a
 // rollout, or a folder that may hold one, can be past inspection, and what
 // the other inspections found is kept all the same. Codex records a post
-// steered into a turn only once the turn takes it in, which it does not
-// while a call of the turn's is held: such a post, accepted and then lost
-// with its process, is never held.
+// once its turn takes it in, which `accepted` does not wait for: a post
+// Codex accepted and then lost with its process may be held or not.
 func heldPosts(home, thread string, pending []string) ([]string, []error) {
 	want := map[string]string{}
 	for _, id := range pending {
