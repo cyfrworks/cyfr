@@ -48,15 +48,20 @@ defmodule Cyfr.Test.Sandbox do
   does this first and again on every pass; an async test's does only this,
   since the supervisors are its neighbours' too.
 
-  A sync test's kills take a fill with them too: the work under
-  `Compendium.ProvisioningSupervisor` and `Sanctum.ProvisioningSupervisor`
-  (an attempt, the keeper that watches it, the pulls it runs beside
-  itself) is killed in the same instant as the test's descendants,
-  whoever started it. A request from outside the test's processes, a host
-  call over the worker wire, starts a fill that leads back to no
-  descendant; left to its supervisor's turn, it would still be running
-  after a kill had cut the shared connection under a query, and its next
-  query, answering its keeper's end, would find no owner.
+  A sync test's kills take with them the work that answers another
+  process's end with a query (`killed_supervisors/0`), whoever started
+  it, in the same instant as the test's descendants: a fill (its attempt,
+  the keeper that watches it, the pulls it runs beside itself) and Aqua's
+  thread runners with their loops and the loops' workers. A request from
+  outside the test's processes starts a fill that leads back to no
+  descendant, and a runner leads back to its supervisor alone; left to
+  its supervisor's turn, either would still be running after a kill had
+  cut the shared connection under a query, and its next query — a keeper
+  answering its attempt's end, a loop announcing the turn it committed,
+  a runner settling the turn of a loop that died — would find no owner.
+  A runner is a transient child, which its supervisor starts again when
+  it is killed: the supervisor is held for the kills and given back with
+  the dead forgotten, so none is started again (`holding_runners/2`).
 
   `on_exit` callbacks run last-registered first. A test that restores
   configuration a background process reads (a base path, a seed path, the
@@ -119,6 +124,15 @@ defmodule Cyfr.Test.Sandbox do
   @watch __MODULE__.OwnershipWatch
   @lines :cyfr_test_ownership_lines
   @running :cyfr_test_sandbox_running
+
+  # A killed runner's supervisor would start it again: it is held while
+  # the kills are sent.
+  @runner_supervisor Aqua.RunnerSupervisor
+
+  # How long the sweep waits for each answer of the runners' supervisor as
+  # it holds it and gives it back. It answers between two of its messages,
+  # and a runner's start is the longest of them.
+  @hold_ms 5_000
 
   # How long `end_views/0` waits, in all, for the views and the work they
   # started to end: well under ExUnit's 60-second test timeout, so a view
@@ -308,7 +322,7 @@ defmodule Cyfr.Test.Sandbox do
 
   defp stop_work(test, spared, passes) do
     sweeping(test)
-    ended = stop_descendants(test, spared, fill_roots())
+    ended = holding_runners(fn -> stop_descendants(test, spared, killed_roots()) end)
 
     stopped =
       Enum.flat_map(@supervisors, fn name ->
@@ -444,7 +458,7 @@ defmodule Cyfr.Test.Sandbox do
   End every process that leads back to `test` (`descendants/2`), or to
   one of the `beside` (never ended itself), the `spared` apart: the sweep
   of an async test, and the first step of each pass of a sync test's,
-  which ends a fill's work beside the descendants (`fill_supervisors/0`).
+  which ends beside the descendants the work of `killed_supervisors/0`.
   Answers the pids it killed, or fails the test when, once those were
   gone, it found more that it had not known.
   """
@@ -491,17 +505,120 @@ defmodule Cyfr.Test.Sandbox do
   end
 
   @doc """
-  The supervisors a fill's work runs under, whose children a sync test's
-  sweep kills with its descendants rather than stopping them in their
-  turn: an attempt and its pulls (`Compendium.ProvisioningSupervisor`),
-  and the keeper that watches the attempt and writes when it ends
+  The supervisors whose children a sync test's sweep kills with its
+  descendants rather than stopping them in their turn, since each answers
+  another's end with a query: a thread's runner, which settles the turn of
+  a loop that died (`Aqua.RunnerSupervisor`); the loops and their workers,
+  which go on to announce a turn they committed (`Aqua.TaskSupervisor`); a
+  fill's attempt and its pulls (`Compendium.ProvisioningSupervisor`); and
+  the keeper that watches the attempt and writes when it ends
   (`Sanctum.ProvisioningSupervisor`).
   """
-  @spec fill_supervisors() :: [atom()]
-  def fill_supervisors, do: [Compendium.ProvisioningSupervisor, Sanctum.ProvisioningSupervisor]
+  @spec killed_supervisors() :: [atom()]
+  def killed_supervisors do
+    [
+      @runner_supervisor,
+      Aqua.TaskSupervisor,
+      Compendium.ProvisioningSupervisor,
+      Sanctum.ProvisioningSupervisor
+    ]
+  end
 
   # Each child leads back to its supervisor through `$ancestors`.
-  defp fill_roots, do: for(name <- fill_supervisors(), pid = Process.whereis(name), do: pid)
+  defp killed_roots, do: for(name <- killed_supervisors(), pid = Process.whereis(name), do: pid)
+
+  @doc """
+  Run `fun`, which kills runners, with `Aqua.RunnerSupervisor` starting
+  none of them again. The supervisor is suspended first, so it starts no
+  runner and reads no runner's end while `fun` runs; afterwards it is
+  told to forget the children that died and resumed, the same process
+  with the children still alive, and the starts asked of it meanwhile
+  are answered then. Each of its answers is awaited `wait_ms` at most.
+
+  Where no such supervisor runs, `fun` runs alone. A supervisor that does
+  not stop for the hold, or cannot be given back, is killed, so its tree
+  starts a fresh one for the next test, and the test fails saying which.
+  """
+  @spec holding_runners((-> result), pos_integer()) :: result when result: var
+  def holding_runners(fun, wait_ms \\ @hold_ms)
+      when is_function(fun, 0) and is_integer(wait_ms) and wait_ms > 0 do
+    supervisor = Process.whereis(@runner_supervisor)
+
+    case supervisor && suspend(supervisor, wait_ms) do
+      :ok ->
+        try do
+          fun.()
+        after
+          give_back(supervisor, wait_ms)
+        end
+
+      :late ->
+        replace(supervisor, wait_ms)
+        fun.()
+
+        ExUnit.Assertions.flunk(
+          "#{inspect(@runner_supervisor)} did not stop for the sweep within #{wait_ms} ms, " <>
+            "so the sweep ran with nothing holding its restarts; it was replaced"
+        )
+
+      _none ->
+        fun.()
+    end
+  end
+
+  # A suspension that timed out is still in the supervisor's mailbox and
+  # would take effect later, with nobody to resume it: `:late` has the
+  # caller replace the supervisor.
+  defp suspend(supervisor, wait_ms) do
+    :sys.suspend(supervisor, wait_ms)
+  catch
+    :exit, {:timeout, _call} -> :late
+    :exit, _gone -> :gone
+  end
+
+  # A dead child's exit, read after the resume, is then no child's and
+  # starts nothing. The supervisor's state is its own: one this cannot
+  # read fails the replacement, and the supervisor is replaced instead.
+  defp give_back(supervisor, wait_ms) do
+    :sys.replace_state(
+      supervisor,
+      fn %{children: children} = state ->
+        %{state | children: Map.filter(children, fn {pid, _child} -> Process.alive?(pid) end)}
+      end,
+      wait_ms
+    )
+
+    :sys.resume(supervisor, wait_ms)
+    :ok
+  catch
+    :exit, reason ->
+      if Process.alive?(supervisor) do
+        replace(supervisor, wait_ms)
+
+        ExUnit.Assertions.flunk(
+          "#{inspect(@runner_supervisor)} could not be given back after the sweep's kills " <>
+            "(#{inspect(reason)}); it was replaced"
+        )
+      end
+
+      :ok
+  end
+
+  # The supervisor's tree starts a fresh one in its place.
+  defp replace(supervisor, wait_ms) do
+    ref = Process.monitor(supervisor)
+    Process.exit(supervisor, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^supervisor, _reason} -> :ok
+    end
+
+    Prima.Test.Wait.wait_until(
+      fn -> Process.whereis(@runner_supervisor) not in [nil, supervisor] end,
+      wait_ms,
+      "a fresh #{inspect(@runner_supervisor)} in place of the one the sweep killed"
+    )
+  end
 
   # Kills and awaits what leads back to the test or to anything `killed`,
   # and reads again with those among the killed, until a read finds none
@@ -644,14 +761,33 @@ defmodule Cyfr.Test.Sandbox do
   # runs after it).
   defp running!(tags) do
     test = self()
-    module = Map.get(tags, :module)
 
-    :ets.insert(
-      @running,
-      {test, {module, "#{inspect(module)} #{Map.get(tags, :test)}"}, nil, :test}
-    )
+    named =
+      case tags do
+        %{module: module, test: name} ->
+          {module, "#{inspect(module)} #{name}"}
 
+        _untagged ->
+          module = calling_module()
+          {module, "a test of #{inspect(module)} (`setup!/1` was given no tags)"}
+      end
+
+    :ets.insert(@running, {test, named, nil, :test})
     ExUnit.Callbacks.on_exit(fn -> :ets.delete(@running, test) end)
+  end
+
+  # The module whose setup called `setup!/1`: the nearest frame that is
+  # neither this module's nor the test framework's.
+  defp calling_module do
+    {:current_stacktrace, frames} = Process.info(self(), :current_stacktrace)
+
+    Enum.find_value(frames, fn {module, _function, _arity, _location} ->
+      root = module |> Module.split() |> hd()
+      if module != __MODULE__ and root not in ["Process", "ExUnit"], do: module
+    end)
+  rescue
+    # An Erlang module has no parts to split.
+    ArgumentError -> nil
   end
 
   # A test that checks the sandbox out itself may register the sweep before
