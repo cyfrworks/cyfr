@@ -826,6 +826,7 @@ defmodule Arca.SchemaVocabularyTest do
       operation: "o",
       masked: false,
       caller: "person",
+      opened_at: now(),
       deadline: now(),
       state: state
     }

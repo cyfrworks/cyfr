@@ -42,6 +42,7 @@ defmodule Arca.Schemas.Question do
     field :operation, :string
     field :masked, :boolean
     field :caller, :string
+    field :opened_at, :utc_datetime_usec
     field :deadline, :utc_datetime_usec
     field :state, :string
     field :none_reason, :string
@@ -67,6 +68,7 @@ defmodule Arca.Schemas.Question do
     :operation,
     :masked,
     :caller,
+    :opened_at,
     :deadline,
     :state,
     :none_reason,
