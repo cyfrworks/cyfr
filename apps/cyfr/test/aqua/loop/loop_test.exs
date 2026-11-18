@@ -818,6 +818,43 @@ defmodule Aqua.LoopTest do
                 "or the number as text", nil}
   end
 
+  test "an external tool's call the agent's policy offers asks, is approved, and runs " <>
+         "through the gate under the turn's authority, granting nothing",
+       %{ctx: ctx, thread: thread} do
+    tool = "ghserver:issues.list"
+
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tool_policy_patch" => %{tool => "ask"}
+      })
+
+    turn = accept!(ctx, thread, "@aqua list the issues")
+    script!([calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]), reply("done")])
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+
+    assert {:ok, %{decision: "approved", resolution_kind: "continue"}} =
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    actor = Sanctum.Context.actor(ctx)
+
+    Task.await(
+      Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end),
+      60_000
+    )
+
+    {:ok, steps} = Tape.steps(ctx, paused)
+    listed = Enum.find(steps, &(&1.tool == tool))
+
+    assert {listed.dispatch_state, listed.approval_id} == {"closed", approval.id}
+    assert {:ok, [_ | _]} = Arca.DecisionLog.list(actor, tool: tool)
+    assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+    assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
+  end
+
   # An approval unblocks a call the chain's authority allows and grants
   # nothing more (§5.4): the approved call still goes through the gate, in
   # the chain, under the authority as it stands when the call is made.

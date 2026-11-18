@@ -768,6 +768,50 @@ defmodule Aqua.ApprovalsTest do
     assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
   end
 
+  test "an external tool's card, whose call names no action, is approved while the agent's " <>
+         "policy holds the tool, writing no grant, and is stale once the policy no longer does",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    tool = "ghserver:issues.list"
+    {:ok, _} = policy!(ctx, %{tool => "ask"})
+
+    {:ok, %{revision_digest: revision, capability_digest: capability}} =
+      Compendium.AgentIndex.snapshot(ctx, "aqua")
+
+    pins = %{pins | agent_revision_digest: revision, agent_capability_digest: capability}
+    turn = started!(ctx, thread, pins)
+    search = %{tool: tool, action: nil, args: %{"q" => "x"}}
+    %{approval: approval, step: step} = card!(ctx, turn, search, kind: "external")
+
+    assert {:ok, %{decision: "approved", resolution_kind: "continue"}} =
+             Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    assert {:ok, %{dispatch_state: "proposed", approval_id: approved}} = Tape.step(ctx, step.id)
+    assert approved == approval.id
+    assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+    {:ok, _} = policy!(ctx, %{tool => nil})
+
+    %{approval: stale, step: stale_step} =
+      card!(ctx, turn, search, kind: "external", call_id: "c2")
+
+    assert {:ok, %{decision: "error", resolution_kind: "denied"}} =
+             Approvals.resolve(ctx, stale.id, %{decision: :approved})
+
+    assert {:ok, %{dispatch_state: "closed", outcome: "denied", result_message_id: rid}} =
+             Tape.step(ctx, stale_step.id)
+
+    assert {:ok, %{content: "aqua no longer holds ghserver:issues.list — the card is stale"}} =
+             Tape.message(ctx, rid)
+  end
+
+  defp policy!(ctx, patch),
+    do:
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tool_policy_patch" => patch
+      })
+
   test "declining closes the step denied with a tool result, and never records a deny", %{
     ctx: ctx,
     thread: thread,
