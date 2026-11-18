@@ -6,8 +6,9 @@ defmodule Opus.Supervisor do
   The execution domain's processes: the slots, the attempt tree, the
   background roots, the watches and sweeper, the node's pin table and the
   host API listener, the programs controller (`Opus.Programs`), each
-  person's browser holder (`Opus.Browser`) and each thread's brain holder
-  (`Opus.Brain`).
+  person's browser holder (`Opus.Browser`), each thread's brain holder
+  (`Opus.Brain`) and the consumer of the removals forgetting owes
+  (`Opus.Brain.Cleanup`).
   `rest_for_one`, because the watches, the sweeper and the listener read
   the attempt registries and the slots before them, and the listener must
   never outlive a fresh attempt tree: a restart of either restarts every
@@ -111,7 +112,12 @@ defmodule Opus.Supervisor do
         group(Opus.Brain.Tree, [
           {Registry, keys: :unique, name: Opus.Brain.Registry},
           {DynamicSupervisor, name: Opus.Brain.Holders, strategy: :one_for_one}
-        ])
+        ]),
+        # The consumer of the removals a forgetting owes
+        # (`Opus.Brain.Cleanup`), after the holders it removes through;
+        # started only when `:brain_cleanup_enabled`. 5 s: its stop, which
+        # holds no work a later drain does not take up again.
+        Supervisor.child_spec(Opus.Brain.Cleanup, shutdown: 5_000)
       ],
       strategy: :rest_for_one,
       max_restarts: 10,

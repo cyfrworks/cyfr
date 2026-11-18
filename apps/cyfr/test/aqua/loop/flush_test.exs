@@ -190,7 +190,7 @@ defmodule Aqua.Loop.FlushTest do
     assert {:ok, %{brain_session: "brain-chat", brain_generation: 0}} =
              Threads.get(actor, thread.id)
 
-    assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+    assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
     send(worker, :continue)
 
     assert :completed = Task.await(task, 60_000)

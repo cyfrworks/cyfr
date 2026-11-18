@@ -189,6 +189,10 @@ config :cyfr, cron_scheduler_enabled: false
 # connection that test lent. Its own tests start one.
 config :cyfr, schedule_notes_enabled: false
 
+# The consumer of the removals forgetting owes drains at boot and on a
+# timer, for the same reason: its own tests drain it by hand.
+config :cyfr, brain_cleanup_enabled: false
+
 # The consumer of schedules' Aqua lines drains this boot's claims at boot
 # and on a timer, so it too runs only where a test drains it by hand.
 config :cyfr, schedule_turns_enabled: false
