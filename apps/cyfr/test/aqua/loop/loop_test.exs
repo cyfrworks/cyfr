@@ -1290,6 +1290,167 @@ defmodule Aqua.LoopTest do
     assert %{action: "keep", outcome: "skipped"} = Enum.find(steps, &(&1.action == "keep"))
   end
 
+  # The user's #7342: a file in a post sent while Aqua works reaches the
+  # model as the first post's does, made by the same encoder under the same
+  # media types, on its own post where that post stands, and with every
+  # round after; a post that is only a file is handed its files. A copied
+  # file's sources join the turn before the request that carries it is sent.
+  test "a later post's files reach the model as the first post's do, in every round after",
+       %{ctx: ctx, thread: thread} do
+    outside = Prima.Source.outside("moon.example")
+    moon = %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "MOON"}
+    sun = %{"filename" => "sun.png", "media_type" => "image/png", "bytes" => "SUN"}
+    notes = %{"filename" => "notes.txt", "media_type" => "text/plain", "bytes" => "two stars"}
+    art = %{"filename" => "art.bmp", "media_type" => "image/bmp", "bytes" => <<66, 77, 0>>}
+
+    {first_id, first_refs} = stored!(ctx, thread, [moon])
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{
+          id: first_id,
+          author: ctx.user_id,
+          sent_by: "person",
+          content: "@aqua keep a note of this",
+          payload: %{"attachments" => first_refs}
+        },
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    args = %{"action" => "keep", "name" => "n", "content" => "x"}
+    list = %{"action" => "list", "path" => "data"}
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.files"], script: []})
+    ScriptedWorker.script([calls([{"c1", "notes", args}])])
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+
+    # The person posts while the call waits: words with a picture, then
+    # files alone, one of them a copy that carries where it came from.
+    {later_id, later_refs} = stored!(ctx, thread, [sun])
+    steer!(ctx, thread, turn, later_id, "make it look like this", later_refs)
+    {only_id, [notes_ref, art_ref]} = stored!(ctx, thread, [notes, art])
+    sourced = Map.put(notes_ref, "sources", Prima.Source.to_json_list([outside]))
+    steer!(ctx, thread, turn, only_id, "", [sourced, art_ref])
+
+    refute outside in turn_sources(ctx, turn)
+
+    ScriptedWorker.script([
+      {:probe, self()},
+      calls([{"c2", "files", list}]),
+      %{"entries" => []},
+      reply("ok")
+    ])
+
+    resumed =
+      Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
+
+    # The request is about to be answered: the copy's sources are the turn's.
+    assert_receive {:scripted_probe, worker, _}, 10_000
+    assert outside in turn_sources(ctx, turn)
+    send(worker, :continue)
+    assert :completed = Task.await(resumed, 60_000)
+
+    [_first, second, third] =
+      for %{input: %{"operation" => "chat", "params" => %{"messages" => m}}} <-
+            ScriptedWorker.calls(),
+          do: m
+
+    image = fn name, bytes ->
+      %{
+        "type" => "image",
+        "media_type" => "image/png",
+        "data" => Base.encode64(bytes),
+        "filename" => name
+      }
+    end
+
+    text = &%{"type" => "text", "text" => &1}
+
+    carried = [
+      %{
+        "role" => "user",
+        "content" => [text.("@aqua keep a note of this"), image.("moon.png", "MOON")]
+      },
+      %{
+        "role" => "assistant",
+        "content" => [
+          %{"type" => "tool_call", "id" => "c1", "name" => "notes", "arguments" => args}
+        ]
+      },
+      %{
+        "role" => "user",
+        "content" => [
+          text.("make it look like this"),
+          image.("sun.png", "SUN"),
+          text.(""),
+          text.("The attached file notes.txt:\n\ntwo stars"),
+          text.("The file art.bmp (image/bmp) is attached, and this brain cannot read it.")
+        ]
+      },
+      %{
+        "role" => "tool",
+        "content" => [
+          %{
+            "type" => "tool_result",
+            "tool_call_id" => "c1",
+            "name" => "notes",
+            "content" => "a newer message arrived",
+            "is_error" => false
+          }
+        ]
+      }
+    ]
+
+    assert second == carried
+
+    assert third ==
+             carried ++
+               [
+                 %{
+                   "role" => "assistant",
+                   "content" => [
+                     %{
+                       "type" => "tool_call",
+                       "id" => "c2",
+                       "name" => "files",
+                       "arguments" => list
+                     }
+                   ]
+                 },
+                 %{
+                   "role" => "tool",
+                   "content" => [
+                     %{
+                       "type" => "tool_result",
+                       "tool_call_id" => "c2",
+                       "name" => "files",
+                       "content" => Jason.encode!(%{"entries" => []}, pretty: true),
+                       "is_error" => false
+                     }
+                   ]
+                 }
+               ]
+  end
+
+  defp stored!(ctx, thread, files) do
+    id = Prima.UUID7.generate_id("msg")
+    {:ok, refs} = Aqua.Attachments.store(ctx, thread.id, id, files)
+    {id, refs}
+  end
+
+  defp steer!(ctx, thread, turn, id, text, refs) do
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{
+          id: id,
+          author: ctx.user_id,
+          sent_by: "person",
+          content: text,
+          payload: %{"attachments" => refs}
+        },
+        steer_turn_id: turn.id
+      })
+  end
+
   test "a steer that lands while the last answer is written is answered before the turn completes",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")

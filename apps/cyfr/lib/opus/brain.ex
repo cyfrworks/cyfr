@@ -4,13 +4,13 @@
 defmodule Opus.Brain do
   @moduledoc """
   The holder of a program used as a brain: one session of a brain's
-  driver (`apps/locus/keeper/cmd/cyfr-claude-code`) for one thread and
-  agent, kept open for as long as the work needs it, as `Opus.Browser`
-  keeps the person's browser. The driver runs beside the harness in its
-  program row's box and speaks the harness's own protocol to it; this
-  process speaks the brain wire (`Opus.Brain.Wire`) to the driver over a
-  `run` session (`Opus.Programs.Session`), and holds nothing else of the
-  harness's.
+  driver (`apps/locus/keeper/cmd/cyfr-claude-code`, `cmd/cyfr-codex`) for
+  one thread and agent, kept open for as long as the work needs it, as
+  `Opus.Browser` keeps the person's browser. The driver runs beside the
+  harness in its program row's box and speaks the harness's own protocol
+  to it; this process speaks the brain wire (`Opus.Brain.Wire`) to the
+  driver over a `run` session (`Opus.Programs.Session`), and holds nothing
+  else of the harness's.
 
   ## One attendant
 
