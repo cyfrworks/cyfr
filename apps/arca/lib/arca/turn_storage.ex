@@ -3170,16 +3170,28 @@ defmodule Arca.TurnStorage do
   raised one, so the session its next request opens is kept, or the one
   it read when the thread was forgotten meanwhile, under which nothing it
   answers with is kept.
+
+  The brain's word speaks for the folder of the row it ran on, the
+  turn's `program` (none for an adapter catalyst). A session stored with
+  another row (`brain_progress`'s `row`), its agent's program moved
+  since, may still have its transcript there, and is owed its removal
+  first, in the same transaction (`Arca.ThreadStorage.owe_forgets!/2`);
+  one stored with the turn's own row is absent from its folder, and owes
+  nothing.
   """
   @spec forget_session(Prima.Actor.t(), String.t(), map()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def forget_session(%Prima.Actor{athanor_id: athanor_id}, turn_id, attrs)
+  def forget_session(%Prima.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.forget_session", fn ->
       Arca.Repo.locking_transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         generation = Map.get(attrs, :generation)
         if not is_integer(generation), do: Arca.Repo.rollback(:generation_required)
+        thread = locked_thread!(athanor_id, turn.thread_id)
+
+        if thread.brain_generation == generation and progress(thread)["row"] != turn.program,
+          do: _owed = Arca.ThreadStorage.owe_forgets!(actor, [thread])
 
         # The comparison is the statement's own, so a forget committed
         # after the turn read the thread still holds.

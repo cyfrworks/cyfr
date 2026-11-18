@@ -1113,9 +1113,20 @@ defmodule Locus.Backends.OwnersTest do
 
       assert held_bytes(owners) == 256 * @mib
       advance(ctx, 86_400_000)
-      for _ <- 1..3, do: Owners.sweep(owners)
-      wait_until(fn -> held(owners) == %{} end, 5_000)
-      wait_until(fn -> held_bytes(owners) == 0 end, 5_000)
+
+      # A fence that read the clock before it moved answers unavailable,
+      # maybe after every sweep so far has found it asking, and only a
+      # later sweep asks again. These owners have no periodic sweeper
+      # (`LeaseSweeper`), so each poll drives one.
+      wait_until(
+        fn ->
+          :ok = Owners.sweep(owners)
+          held(owners) == %{} and held_bytes(owners) == 0
+        end,
+        5_000,
+        "the owner gone and its bound freed"
+      )
+
       {:ok, %{memory: memory}} = control(owners, 1, %{type: :status, owners: []})
       assert memory.held_bytes == 0
     end

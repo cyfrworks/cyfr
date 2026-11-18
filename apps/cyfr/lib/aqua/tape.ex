@@ -925,10 +925,12 @@ defmodule Aqua.Tape do
   under the stamp each root's attempt stores; the runtime still holding
   them is the caller's to stop (`Aqua.Runner.stop_cancelled/1`), and a
   runner on another member stops on hearing each cancelled turn's thread
-  told its turn finished.
+  told its turn finished. The holders of the program sessions the
+  deletion owed their removal, its threads' and its readers', are closed
+  once it commits (`Opus.Brain.forgotten/2`).
   """
   @spec delete_thread(Context.t(), String.t()) ::
-          {:ok, %{cancelled: [map()]}} | {:error, term()}
+          {:ok, %{cancelled: [map()], forgotten: [map()]}} | {:error, term()}
   def delete_thread(%Context{} = ctx, thread_id) do
     actor = Sanctum.Context.actor(ctx)
 
@@ -941,8 +943,9 @@ defmodule Aqua.Tape do
     open = open_jobs(ctx, children)
     waiting = waiting_approvals(actor, [thread_id | children])
 
-    with {:ok, %{cancelled: cancelled}} = deleted <-
+    with {:ok, %{cancelled: cancelled, forgotten: forgotten}} = deleted <-
            Threads.delete(actor, thread_id, standing(%{}, :retiring)) do
+      :ok = Opus.Brain.forgotten(ctx.athanor_id, forgotten)
       ThreadList.removed(ctx, thread_id)
       Activity.cancelled(ctx, open, cancelled)
       withdrawn(ctx, waiting)

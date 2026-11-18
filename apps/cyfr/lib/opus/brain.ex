@@ -5,21 +5,24 @@ defmodule Opus.Brain do
   @moduledoc """
   The holder of a program used as a brain: one session of a brain's
   driver (`apps/locus/keeper/cmd/cyfr-claude-code`, `cmd/cyfr-codex`) for
-  one thread and agent, kept open for as long as the work needs it, as
-  `Opus.Browser` keeps the person's browser. The driver runs beside the
-  harness in its program row's box and speaks the harness's own protocol
-  to it; this process speaks the brain wire (`Opus.Brain.Wire`) to the
-  driver over a `run` session (`Opus.Programs.Session`), and holds nothing
-  else of the harness's.
+  one thread, kept open for as long as the work needs it, as
+  `Opus.Browser` keeps the person's browser. A thread keeps one native
+  session (`brain_session`) whichever agent its turns address, so one
+  holder runs per thread. The driver runs beside the harness in its
+  program row's box and speaks the harness's own protocol to it; this
+  process speaks the brain wire (`Opus.Brain.Wire`) to the driver over a
+  `run` session (`Opus.Programs.Session`), and holds nothing else of the
+  harness's.
 
   ## One attendant
 
   The process that opens the session (`open/1`) is its one attached
   process, the attendant: it alone writes (`write/4`), it is handed what
   the driver says, and its exit ends the session. A later `open/1` for
-  the same thread and agent, for work that proves itself, ends this one
-  first (`:replaced`), so a take-over never shares a session with the work
-  it took over: its next start resumes the native session in a new
+  the same thread, another agent's work among them, for work that proves
+  itself, ends this one first (`:replaced`), so a take-over never shares
+  a session with the work it took over and no two driver processes run
+  one native session: its next start resumes the native session in a new
   process.
 
   A take-over is decided by the holder it would end: that holder reads
@@ -103,11 +106,50 @@ defmodule Opus.Brain do
   or sets its tools. A turn the store reads as anything but running or
   paused writes nothing.
 
+  ## Two paths no turn admits
+
+  A `models` or a `forget` is never a delivery: `write/4` refuses both
+  with nothing written, so no turn and no binding reaches either. Each
+  runs in a process of its own under the holders' supervisor, which holds
+  the row's owner, opens a new process of the driver, writes the one
+  command after its `hello`, reads the one answer and ends; it starts no
+  harness session and writes nothing else.
+
+    * **Cleanup** (`forget/1`) runs for the `brain_cleanup` consumer
+      (`Opus.Brain.Cleanup`), for the session one `brain_forget` record
+      names (`Prima.OutboxRecord.brain_forget/1`). The record is read
+      again from the store, still owed to that consumer, and only what the
+      stored record names is acted on, so a caller can hasten an owed
+      removal and ask for no other. It runs under the record's thread,
+      the key a holder of that session runs under: a holder there on the
+      record's row whose session generation is the record's or older is
+      ended first (`:forgotten`), so the box closes the driver's process
+      that ran the session before the one that forgets it opens; one of a
+      later generation is a successor, one on another row holds nothing
+      of that row's folder, and the removal waits for either, staying
+      owed until that holder ends. A thread that holds the record's
+      session again, under a later generation, is a successor too, and
+      its session is never removed. The cleanup's own holder decides it,
+      reading the record and the thread again once it owns the key and
+      before anything opens, and a successor's open under the key waits
+      for that holder to end. The answer is `forgot` for that record's id
+      and session, or not a removal.
+    * **Discovery** (`models/2`) runs only for a person at a screen, an
+      interactive caller of the row's athanor (`Opus.Programs.caller/1`),
+      for a brain's row of that athanor: the models and efforts the
+      harness itself lists. A turn's caller is a stranger to it.
+
+  A forgetting transaction answers the sessions it owed
+  (`t:Arca.ThreadStorage.forgotten/0`), and its caller closes their holders
+  at once (`forgotten/2`), which also wakes the consumer.
+
   ## Its end
 
   It ends, telling the attendant `{Opus.Brain, ref, {:ended, reason}}`
   once, when it is told (`close/1`, `:closed`), when a later open replaces
-  it (`:replaced`), on a line lost unread (`:dropped`), on a line that does
+  it (`:replaced`), when its session is forgotten (`forgotten/2` or a
+  cleanup of its thread, `:forgotten`), on a line lost unread
+  (`:dropped`), on a line that does
   not read or past a bound (`:unreadable`, `:too_large`), on its row's
   change (`:row_changed`, `Opus.Programs.end_mounts/2` or the box telling
   it to stand down), when the driver's process ends (`:exited`), when the
@@ -132,6 +174,9 @@ defmodule Opus.Brain do
   @recv_wait_ms 20_000
   @read_retries 60
   @read_retry_ms 1_000
+  # How long a cleanup or a discovery waits for its driver's answer, from
+  # the open of its session; past it the answer is lost.
+  @once_ms 60_000
   # The refusals of a session route that say the session is not on the
   # service any more.
   @gone [:unknown_session, :stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
@@ -140,12 +185,12 @@ defmodule Opus.Brain do
 
   @typedoc """
   The work a write is made for, as the attendant holds it: the turn's
-  context (its athanor and person), the thread and agent the session is
-  kept for, the turn, its origin as the row stores it and the fence its
-  runner holds, the step that admitted the program's start, the program
-  row and the epoch the start showed, the thread's session generation,
-  and `admits?`, the attendant's own veto, which can only withdraw what
-  the stored decision allows.
+  context (its athanor and person), the thread the session is kept for,
+  the agent whose work it is, the turn, its origin as the row stores it
+  and the fence its runner holds, the step that admitted the program's
+  start, the program row and the epoch the start showed, the thread's
+  session generation, and `admits?`, the attendant's own veto, which can
+  only withdraw what the stored decision allows.
   """
   @type binding :: %{
           required(:ctx) => Sanctum.Context.t(),
@@ -176,20 +221,21 @@ defmodule Opus.Brain do
   end
 
   @doc """
-  Open the session of `binding`'s thread and agent on its program row, for
-  the calling process, which becomes its attendant: a new process of the
+  Open the session of `binding`'s thread on its program row, for the
+  calling process, which becomes its attendant: a new process of the
   row's driver, once `binding` is read again and proves a running turn
-  (moduledoc). A holder of the same thread and agent is ended first
-  (`:replaced`), by that holder, once it has read `binding` and found it
-  proves; the new holder reads it again before it opens the driver's
-  session and after. Answers the held session, whose first line is the
-  driver's `hello`; `{:error, {:not_admitted, reason}}` for a binding that
-  does not prove, or the refusal of the owner's hold or the session's open.
+  (moduledoc). A holder of the same thread, whichever agent's work it
+  carried, is ended first (`:replaced`), by that holder, once it has read
+  `binding` and found it proves; the new holder reads it again before it
+  opens the driver's session and after. Answers the held session, whose
+  first line is the driver's `hello`; `{:error, {:not_admitted, reason}}`
+  for a binding that does not prove, or the refusal of the owner's hold or
+  the session's open.
   """
   @spec open(binding()) :: {:ok, brain()} | {:error, term()}
   def open(%{ctx: %Sanctum.Context{athanor_id: athanor_id}} = binding)
       when is_binary(athanor_id) do
-    key = {athanor_id, binding.thread_id, binding.agent}
+    key = {athanor_id, binding.thread_id}
 
     with :ok <- replace(key, binding) do
       case DynamicSupervisor.start_child(@holders, {__MODULE__, key}) do
@@ -209,7 +255,8 @@ defmodule Opus.Brain do
   runs with. Answers `:ok` once the service took it, `{:ok, :restarted}`
   for a `work` whose configuration differs from the running harness's
   (nothing written; a new process runs), or `{:error, reason}` with
-  nothing written: `:busy` (before the `hello`, or while the last
+  nothing written: `:not_a_delivery` (a `models` or a `forget`, which no
+  binding writes), `:busy` (before the `hello`, or while the last
   command's answer is outstanding), `:not_attached`, `:unreadable`,
   `:running` (a `start` while a harness runs), `:not_started`,
   `:not_this_work`, `:not_this_generation` (a `start` naming another
@@ -239,15 +286,140 @@ defmodule Opus.Brain do
     :ok
   end
 
-  @doc "The held session of a thread and agent, if one runs."
-  @spec whereis(String.t(), String.t(), String.t()) :: pid() | nil
-  def whereis(athanor_id, thread_id, agent) do
+  @doc "The held session of a thread, if one runs."
+  @spec whereis(String.t(), String.t()) :: pid() | nil
+  def whereis(athanor_id, thread_id) do
     if Process.whereis(@registry) do
-      case Registry.lookup(@registry, {athanor_id, thread_id, agent}) do
+      case Registry.lookup(@registry, {athanor_id, thread_id}) do
         [{pid, _}] -> pid
         [] -> nil
       end
     end
+  end
+
+  @doc """
+  Close at once the holders of sessions a forgetting transaction owed
+  their removal (`t:Arca.ThreadStorage.forgotten/0`): each holder of the
+  thread whose session generation is that one or older ends,
+  its attendant told `:forgotten`, and one of a later generation runs on.
+  Then the consumer is told the athanor owes removals
+  (`Opus.Brain.Cleanup.wake/1`). Called after the transaction commits.
+  """
+  @spec forgotten(String.t(), [Arca.ThreadStorage.forgotten()]) :: :ok
+  def forgotten(athanor_id, forgotten) when is_binary(athanor_id) and is_list(forgotten) do
+    Enum.each(forgotten, fn %{thread_id: thread_id, generation: generation} ->
+      case whereis(athanor_id, thread_id) do
+        nil ->
+          :ok
+
+        pid ->
+          call(
+            pid,
+            {:forgotten, generation, nil},
+            Programs.Box.close_timeout_ms() + @answer_margin_ms
+          )
+      end
+    end)
+
+    if forgotten != [], do: Opus.Brain.Cleanup.wake(athanor_id)
+    :ok
+  end
+
+  @doc """
+  Remove from its row's folder the native session one `brain_forget`
+  record names, for the `brain_cleanup` consumer (moduledoc, "Two paths
+  no turn admits"). Answers `:forgot` once the driver answered `forgot`
+  for the record's id and session, and otherwise what stands in the way:
+  `{:error, :not_owed}` (no such record is owed to the consumer),
+  `{:error, :successor}` (the thread holds that session again),
+  `{:error, :row_gone}`, `{:error, :not_a_brain_row}`,
+  `{:error, :no_driver}` (the row's command names no driver),
+  `{:error, :disabled}`, `{:error, :busy}` (a successor's holder, or
+  another cleanup, runs under the key), `{:error, {:refused, reason}}`
+  (the driver refused it), or the refusal of the owner's hold, the
+  session's open or the line's write, and `{:error, :lost}` for an answer
+  that did not come.
+  """
+  @spec forget(Prima.OutboxRecord.t()) :: :forgot | {:error, term()}
+  def forget(%Prima.OutboxRecord{kind: "brain_forget", athanor_id: athanor_id} = record)
+      when is_binary(athanor_id) and athanor_id != "" do
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    with {:ok, owed} <- owed(actor, record),
+         {:ok, row} <- forget_row(actor, owed["row_id"]),
+         key = {athanor_id, owed["thread_id"]},
+         :ok <- retire(key, owed["generation"], owed["row_id"]),
+         {:ok, pid} <- holder(key) do
+      id = forget_id(record)
+      session = owed["session"]
+
+      case call(pid, {:forget, owner(athanor_id, row), record}, @once_ms + @answer_margin_ms) do
+        {:ok, %{"t" => "forgot", "id" => ^id, "session" => ^session}} ->
+          :forgot
+
+        {:ok, %{"t" => "refused", "reason" => reason}} ->
+          {:error, {:refused, reason}}
+
+        {:ok, _another_answer} ->
+          {:error, :unreadable}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  The models and efforts the harness of the brain's row `row_id` lists,
+  for a person at a screen (moduledoc, "Two paths no turn admits"):
+  `{:ok, %{models: [%{id, name}], efforts: [effort]}}`; `{:error,
+  :not_interactive}` for any other caller, a turn's among them;
+  `:not_standing` or `:unavailable` as `Opus.Programs.caller/1` answers;
+  `{:error, :row_not_found}`, `:not_a_brain_row`, `:no_driver` or
+  `:disabled` for the row; `{:error, {:refused, reason}}` when the driver
+  did not list them; or the refusal of the owner's hold, the session's
+  open or the line's write, and `{:error, :lost}` for an answer that did
+  not come.
+  """
+  @spec models(Sanctum.Context.t(), String.t()) ::
+          {:ok, %{models: [%{id: String.t(), name: String.t()}], efforts: [String.t()]}}
+          | {:error, term()}
+  def models(%Sanctum.Context{athanor_id: athanor_id} = ctx, row_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(row_id) do
+    id = "mdl_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+    with :ok <- interactive(ctx),
+         {:ok, row} <-
+           read(
+             Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row_id),
+             :row_not_found
+           ),
+         :ok <- brain_row(row),
+         {:ok, pid} <- holder({athanor_id, id}) do
+      case call(
+             pid,
+             {:once, owner(athanor_id, row), %{"t" => "models", "id" => id}},
+             @once_ms + @answer_margin_ms
+           ) do
+        {:ok, %{"t" => "models", "id" => ^id, "models" => models, "efforts" => efforts}} ->
+          {:ok,
+           %{
+             models: Enum.map(models, &%{id: &1["id"], name: &1["name"]}),
+             efforts: efforts
+           }}
+
+        {:ok, %{"t" => "refused", "reason" => reason}} ->
+          {:error, {:refused, reason}}
+
+        {:ok, _another_answer} ->
+          {:error, :unreadable}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
   end
 
   # A holder of the key is ended, and gone, before a new one starts. It
@@ -255,8 +427,8 @@ defmodule Opus.Brain do
   # the check and the ending are one step of that holder's: a request it
   # refuses leaves it running. A holder that ended while asked is gone
   # all the same.
-  defp replace({athanor_id, thread_id, agent}, binding) do
-    case whereis(athanor_id, thread_id, agent) do
+  defp replace({athanor_id, thread_id}, binding) do
+    case whereis(athanor_id, thread_id) do
       nil ->
         :ok
 
@@ -284,6 +456,217 @@ defmodule Opus.Brain do
   catch
     :exit, {:timeout, _} -> {:error, :unavailable}
     :exit, _ -> {:error, :unavailable}
+  end
+
+  # ===========================================================================
+  # Cleanup and discovery
+  # ===========================================================================
+
+  # The record as the store holds it, still owed to the consumer: what it
+  # names is read there, never from the caller's copy.
+  defp owed(actor, record) do
+    source = Prima.OutboxRecord.source(record)
+
+    case Arca.Outbox.pending(actor, Opus.Brain.Cleanup.consumer(), "brain_forget") do
+      {:ok, pending} ->
+        case Enum.find(pending, &(Prima.OutboxRecord.source(&1) == source)) do
+          %Prima.OutboxRecord{snapshot: %{} = owed} -> snapshot(owed)
+          nil -> {:error, :not_owed}
+        end
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp snapshot(
+         %{
+           "thread_id" => thread_id,
+           "row_id" => row_id,
+           "session" => session,
+           "generation" => generation
+         } = owed
+       )
+       when is_binary(thread_id) and is_binary(row_id) and is_binary(session) and
+              is_integer(generation),
+       do: {:ok, owed}
+
+  defp snapshot(_unreadable), do: {:error, :not_owed}
+
+  # A thread that holds the record's session again holds a successor's:
+  # it is never removed.
+  defp no_successor(actor, %{"thread_id" => thread_id, "session" => session}) do
+    case Arca.ThreadStorage.get(actor, thread_id) do
+      {:ok, %{brain_session: ^session}} -> {:error, :successor}
+      {:ok, _another_or_none} -> :ok
+      {:error, :not_found} -> :ok
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp forget_row(actor, row_id) do
+    case Arca.McpServerStorage.get_by_id(actor, row_id) do
+      {:ok, row} -> with :ok <- brain_row(row), do: {:ok, row}
+      {:error, :not_found} -> {:error, :row_gone}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # A brain's row: a driven program with a kept folder, not the browser,
+  # whose command starts with a driver, enabled. A row whose command is
+  # the bare harness runs no driver, so nothing would answer the wire.
+  defp brain_row(row) do
+    cond do
+      row.transport != "program" or row.mark != "driven" or row.home != "kept" ->
+        {:error, :not_a_brain_row}
+
+      Programs.Definition.browser?(row) ->
+        {:error, :not_a_brain_row}
+
+      Arca.McpServerStorage.driver(row) == nil ->
+        {:error, :no_driver}
+
+      row.enabled != true ->
+        {:error, :disabled}
+
+      true ->
+        :ok
+    end
+  end
+
+  # A person at a screen of the context's athanor; anything else, a
+  # turn's call among them, is no caller here.
+  defp interactive(ctx) do
+    case Programs.caller(ctx) do
+      {:ok, {athanor_id, _user_id}} when athanor_id == ctx.athanor_id -> :ok
+      {:ok, _stranger_or_another} -> {:error, :not_interactive}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp owner(athanor_id, row), do: %{athanor_id: athanor_id, server_id: row.id, epoch: row.epoch}
+
+  # The id the record's `forget` names: derived from the record's source,
+  # so every try of one record names the same.
+  defp forget_id(record) do
+    %{source_id: source_id, source_revision: revision} = Prima.OutboxRecord.source(record)
+
+    digest =
+      Prima.Digest.sha256_hex(IO.iodata_to_binary([record.athanor_id, 0, source_id, 0, revision]))
+
+    "obx_" <> binary_part(digest, 0, 40)
+  end
+
+  # A holder of the record's thread on the record's row whose
+  # session is the record's generation or older is ended, and gone, before
+  # the cleanup's own process starts there; one of a later generation is a
+  # successor's, and one on another row holds no session of that row's
+  # folder (an attendant starting over there after its brain found the
+  # session gone), and the cleanup waits for either.
+  defp retire({athanor_id, thread_id}, generation, row_id) do
+    case whereis(athanor_id, thread_id) do
+      nil ->
+        :ok
+
+      pid ->
+        monitor = Process.monitor(pid)
+        wait = Programs.Box.close_timeout_ms() + @answer_margin_ms
+
+        case call(pid, {:forgotten, generation, row_id}, wait) do
+          {:error, :successor} ->
+            Process.demonitor(monitor, [:flush])
+            {:error, :busy}
+
+          _ended_or_gone ->
+            receive do
+              {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+            after
+              wait -> {:error, :busy}
+            end
+        end
+    end
+  end
+
+  defp holder(key) do
+    case DynamicSupervisor.start_child(@holders, {__MODULE__, key}) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, _pid}} -> {:error, :busy}
+      {:error, _reason} -> {:error, :unavailable}
+    end
+  end
+
+  # One command and its one answer on a new process of the driver: the
+  # owner held, the session opened, the driver's `hello` read, the line
+  # written, and the first event after it read as the answer. Anything
+  # else of the driver's ends it unanswered.
+  defp once(state, command, deadline) do
+    with {:ok, line} <- encode(command),
+         {:ok, seq} <- hello(state, deadline),
+         :ok <- send_once(state, line),
+         {:ok, _seq, event} <- next(state, seq, deadline) do
+      answer(event, command)
+    end
+  end
+
+  defp hello(state, deadline) do
+    case next(state, 0, deadline) do
+      {:ok, seq, %{"t" => "hello", "v" => v}} ->
+        if v == Wire.version(), do: {:ok, seq}, else: {:error, :unreadable}
+
+      {:ok, _seq, _not_hello} ->
+        {:error, :unreadable}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp answer(%{"t" => t, "id" => id} = event, %{"id" => id})
+       when t in ["forgot", "models", "refused"],
+       do: {:ok, event}
+
+  defp answer(_event, _command), do: {:error, :unreadable}
+
+  defp send_once(state, line) do
+    case Session.send(state.grant, state.session, [line], @write_ms) do
+      {:ok, :running} -> :ok
+      {:ok, :ended} -> {:error, :lost}
+      {:error, {:refused, code, _boot}} when code in @gone -> {:error, :lost}
+      {:error, reason} -> if uncertain?(reason), do: {:error, :lost}, else: {:error, :not_written}
+    end
+  end
+
+  # The next line of the session past `after_seq`, decoded, by `deadline`.
+  defp next(state, after_seq, deadline) do
+    wait = min(@recv_wait_ms, deadline - System.monotonic_time(:millisecond))
+
+    if wait <= 0 do
+      {:error, :lost}
+    else
+      case Session.recv(state.grant, state.session, after_seq, wait) do
+        {:ok, %{dropped: dropped}} when dropped > 0 ->
+          {:error, :lost}
+
+        {:ok, %{lines: [%{seq: seq, text: text} | _rest]}} ->
+          case Wire.decode(text) do
+            {:ok, event} -> {:ok, seq, event}
+            {:error, _unreadable} -> {:error, :unreadable}
+          end
+
+        {:ok, %{lines: [], running: false}} ->
+          {:error, :lost}
+
+        {:ok, %{lines: []}} ->
+          next(state, after_seq, deadline)
+
+        {:error, {:refused, code, _boot}} when code in @gone ->
+          {:error, :lost}
+
+        {:error, _unanswered} ->
+          Process.sleep(@read_retry_ms)
+          next(state, after_seq, deadline)
+      end
+    end
   end
 
   # ===========================================================================
@@ -541,18 +924,18 @@ defmodule Opus.Brain do
   # ===========================================================================
 
   @doc false
-  def start_link({_athanor_id, _thread_id, _agent} = key),
+  def start_link({_athanor_id, _thread_id} = key),
     do: GenServer.start_link(__MODULE__, key, name: {:via, Registry, {@registry, key}})
 
   @impl true
-  def init({athanor_id, thread_id, agent}) do
+  def init({athanor_id, thread_id}) do
     Process.flag(:trap_exit, true)
 
     {:ok,
      %{
        athanor_id: athanor_id,
        thread_id: thread_id,
-       agent: agent,
+       agent: nil,
        ref: make_ref(),
        attendant: nil,
        owner: nil,
@@ -567,7 +950,8 @@ defmodule Opus.Brain do
        harness: :none,
        starting: nil,
        config: nil,
-       asks: %{}
+       asks: %{},
+       generation: nil
      }}
   end
 
@@ -578,7 +962,7 @@ defmodule Opus.Brain do
   def handle_call({:open, attendant, binding}, _from, %{attendant: nil} = state) do
     owner = %{athanor_id: state.athanor_id, server_id: binding.row_id, epoch: binding.epoch}
 
-    state = %{state | owner: owner}
+    state = %{state | owner: owner, generation: binding.generation, agent: binding.agent}
 
     with :ok <- admitted(binding, "start", running_only: true),
          {:ok, connected} <- connect(state) do
@@ -622,6 +1006,66 @@ defmodule Opus.Brain do
       {:error, _reason} = refused -> {:reply, refused, state}
     end
   end
+
+  # A session forgotten at `generation`, in the folder of `row_id` (nil
+  # for any): this holder ends if the session it holds is of that
+  # generation or older (one not yet started is) and runs on that row (or
+  # on none yet), and runs on otherwise.
+  def handle_call({:forgotten, generation, row_id}, _from, state) do
+    if (state.generation == nil or state.generation <= generation) and
+         (row_id == nil or state.owner == nil or state.owner.server_id == row_id),
+       do: {:stop, :normal, :ok, ended(state, :forgotten)},
+       else: {:reply, {:error, :successor}, state}
+  end
+
+  # A cleanup's `forget`, decided by the holder that owns the record's
+  # key, before anything opens: the record is read again from the store,
+  # still owed, and the thread again for a successor that holds its
+  # session. A successor's open under the key waits for this holder to end
+  # (`replace/2`), so none opens between this decision and the write; one
+  # that opened, kept the session and ended before the key was taken is in
+  # the thread read here.
+  def handle_call({:forget, owner, record}, from, %{attendant: nil, owner: nil} = state) do
+    actor = Prima.Actor.in_athanor(state.athanor_id)
+
+    with {:ok, owed} <- owed(actor, record),
+         :ok <- no_successor(actor, owed) do
+      command = %{"t" => "forget", "id" => forget_id(record), "session" => owed["session"]}
+      handle_call({:once, owner, command}, from, state)
+    else
+      {:error, reason} -> {:stop, :normal, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:forget, _owner, _record}, _from, state), do: {:reply, {:error, :busy}, state}
+
+  # A cleanup's or a discovery's one command, in a holder no attendant
+  # opened: the owner held, a new process of the driver opened, the
+  # command written after its hello and its answer read, and the holder
+  # ends, its session closed on the way out (`terminate/2`).
+  def handle_call({:once, owner, command}, _from, %{attendant: nil, owner: nil} = state) do
+    deadline = System.monotonic_time(:millisecond) + @once_ms
+    state = %{state | owner: owner}
+
+    # Each refusal stops with the state that holds what was taken, so the
+    # way out (`terminate/2`) gives back the owner a failed open held.
+    case hold(state) do
+      {:ok, held} ->
+        case fresh(held, 1) do
+          {:ok, session} ->
+            opened = %{held | session: session}
+            {:stop, :normal, once(opened, command, deadline), opened}
+
+          {:error, reason} ->
+            {:stop, :normal, {:error, reason}, held}
+        end
+
+      {:error, reason} ->
+        {:stop, :normal, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:once, _owner, _command}, _from, state), do: {:reply, {:error, :busy}, state}
 
   @impl true
   def handle_cast(
@@ -712,7 +1156,7 @@ defmodule Opus.Brain do
   # The session
 
   # The owner is held for this process and a new process of the driver is
-  # opened under the thread's and agent's key. One that was still running
+  # opened under the thread's key. One that was still running
   # (a close the box still owes) is closed and opened again, so every
   # holder speaks to a driver that has heard nothing.
   defp connect(state) do
@@ -755,9 +1199,9 @@ defmodule Opus.Brain do
     end
   end
 
-  # The service's key of the thread's and agent's session.
+  # The service's key of the thread's session.
   defp key(state) do
-    digest = Prima.Digest.sha256_hex(IO.iodata_to_binary([state.thread_id, 0, state.agent]))
+    digest = Prima.Digest.sha256_hex(state.thread_id)
     "brain-" <> binary_part(digest, 0, 40)
   end
 
@@ -906,6 +1350,11 @@ defmodule Opus.Brain do
   # ---------------------------------------------------------------------------
   # Writing
 
+  # Neither path no turn admits is a delivery: nothing a binding proves
+  # writes either.
+  defp deliver(state, _binding, %{"t" => t}, _opts) when t in ["models", "forget"],
+    do: {:reply, {:error, :not_a_delivery}, state}
+
   defp deliver(state, binding, %{"t" => t} = command, opts) when is_binary(t) do
     with :ok <- this_place(state, binding),
          {:ok, line} <- encode(command),
@@ -921,7 +1370,8 @@ defmodule Opus.Brain do
 
   defp deliver(state, _binding, _command, _opts), do: {:reply, {:error, :unreadable}, state}
 
-  # A binding is of this holder's athanor, thread, agent and row.
+  # A binding is of this holder's athanor, thread and row, and of the
+  # agent whose work opened it.
   defp this_place(state, binding) do
     if binding.ctx.athanor_id == state.athanor_id and binding.thread_id == state.thread_id and
          binding.agent == state.agent and binding.row_id == state.owner.server_id and
@@ -995,7 +1445,13 @@ defmodule Opus.Brain do
   defp uncertain?(_refused_before_writing), do: false
 
   defp written(state, %{"t" => "start"} = command),
-    do: %{state | outstanding: {"start", nil}, harness: :starting, starting: command["config"]}
+    do: %{
+      state
+      | outstanding: {"start", nil},
+        harness: :starting,
+        starting: command["config"],
+        generation: command["gen"]
+    }
 
   defp written(state, %{"t" => "answer", "id" => id, "ask" => ask}),
     do: %{state | outstanding: {"answer", id}, asks: Map.delete(state.asks, ask)}
