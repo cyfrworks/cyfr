@@ -53,15 +53,14 @@ defmodule Sanctum.Providers.Confirmation do
   interactive surface (`consent: :interactive`), and reaches only records
   of the context's own person.
 
-  The stream `confirmation.changes` rides the bus's `confirmations` topic
-  (`Cyfr.Bus.confirmations/2`), bound to its holder, the context's own
-  person: a client of theirs hears each record of theirs opened,
-  confirmed, consumed, cancelled, voided or expired, as its `ref`, what
-  happened to it (`kind`), its `operation` and its `expires_at`, never the
-  secret, the arguments or the preview, which it reads through `pending`
-  under its own session. The asking client knows its own record's events
-  by the `ref` of the secret it holds, and repeats its change once its
-  record is confirmed, wherever it was proven.
+  A client of the person hears each record of theirs opened, confirmed,
+  consumed, cancelled, voided or expired on Host's stream
+  `prompt.changes`, as kind `confirmation`, its `ref`, what happened to
+  it (`fact`) and its `expires_at`, never the secret, the operation, the
+  arguments or the preview, which it reads through `pending` under its
+  own session. The asking client knows its own
+  record's facts by the `ref` of the secret it holds, and repeats its
+  change once its record is confirmed, wherever it was proven.
   """
 
   alias Prima.{Arg, Operation}
@@ -129,24 +128,8 @@ defmodule Sanctum.Providers.Confirmation do
       Arg.new("ref", :string,
         required: true,
         description:
-          "The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it"
+          "The pending confirmation's ref, as confirmation.pending and the prompt.changes stream name it"
       )
-
-  @doc false
-  # The one stream a person's clients hear their confirmations on: bound
-  # to its holder, so a grant reaches that person's topic alone.
-  def streams do
-    [
-      %Prima.Provider.Stream{
-        name: "confirmation.changes",
-        topic: :confirmations,
-        projection: ["ref", "kind", "operation", "expires_at"],
-        subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
-        bind: :holder,
-        deadline_bound: 86_400
-      }
-    ]
-  end
 
   def handle(%Context{} = ctx, %{"action" => "request", "ref" => ref}) when is_binary(ref) do
     with {:ok, user_id} <- person(ctx),

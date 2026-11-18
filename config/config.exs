@@ -83,6 +83,9 @@ config :sanctum,
     Cyfr.Providers.Settings,
     # `cyfr`: what waits for a person, the stream a canvas reads; no tool.
     Cyfr.Providers.Attention,
+    # `cyfr`: the records that wait on a person, the stream the system
+    # layer and a paired device hear; no tool.
+    Cyfr.Providers.Prompts,
     # `cyfr`: a person's recent files and the offers waiting for them, the
     # stream a canvas reads; no tool (the files are `Arca.Providers.Files`').
     Cyfr.Providers.Files,

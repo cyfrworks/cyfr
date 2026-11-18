@@ -189,7 +189,7 @@ defmodule PrismWeb.SystemLayer do
   sign-in page in that tab, which confirms the record. It offers cancel
   too (`confirmation.cancel`).
 
-  The layer listens on `confirmation.changes` while it is mounted on a
+  The layer listens on `prompt.changes` while it is mounted on a
   connected page with a person behind it, unless it was mounted with
   `listen: false`, which hears no record's facts: one listener process per
   LiveView, opened through the gate's stream admission
@@ -253,7 +253,7 @@ defmodule PrismWeb.SystemLayer do
   # A panel ends itself this long after its record's expiry, so the home
   # has refused the record before the page says it expired.
   @expiry_grace_ms 250
-  @stream "confirmation.changes"
+  @stream "prompt.changes"
 
   # Where a page keeps the secrets of the changes it asked for.
   @asks :system_layer_asks
@@ -944,17 +944,18 @@ defmodule PrismWeb.SystemLayer do
 
   # A fact of the stream: what happened to one record of the person's. A
   # layer that hears only its own records (`listen: :own`) opens no prompt
-  # for another.
-  defp on_fact(socket, %{"ref" => ref, "kind" => kind}) when is_binary(ref) do
+  # for another. A kind the layer does not draw is not its to follow.
+  defp on_fact(socket, %{"kind" => :confirmation, "ref" => ref, "fact" => happened})
+       when is_binary(ref) do
     case Map.get(socket.assigns.panels, ref) do
-      nil when kind == :opened ->
+      nil when happened == :opened ->
         if shows_others?(socket), do: open_from_stream(socket, ref), else: socket
 
       nil ->
         socket
 
       panel ->
-        fact(socket, ref, panel, kind)
+        fact(socket, ref, panel, happened)
     end
   end
 
@@ -3422,7 +3423,7 @@ end
 
 defmodule PrismWeb.SystemLayer.Listener do
   @moduledoc false
-  # The system layer's listener on `confirmation.changes`: one process per
+  # The system layer's listener on `prompt.changes`: one process per
   # LiveView that mounts the layer, under the grant the view's open
   # answered. It subscribes to the one topic the grant admits
   # (`Cyfr.Bus.granted_topic/2`), hands each fact to the layer projected

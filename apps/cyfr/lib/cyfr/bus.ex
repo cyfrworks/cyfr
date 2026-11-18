@@ -49,7 +49,6 @@ defmodule Cyfr.Bus do
     CallerInvalidated,
     Attention,
     Components,
-    Confirmation,
     CrewActivity,
     CrewPending,
     Execution,
@@ -67,6 +66,7 @@ defmodule Cyfr.Bus do
     PolicyDecision,
     Program,
     Progress,
+    Prompt,
     Request,
     RoomInView,
     ScheduleCompleted,
@@ -369,20 +369,20 @@ defmodule Cyfr.Bus do
       reason: "one thread's committed rows and its runner's live state"
     },
     %{
-      key: :confirmations,
+      key: :prompts,
       scope: :tenant,
-      struct: Confirmation,
-      match: {:prefix, "bus:confirmations:"},
-      template: "tenant:<athanor_id>:bus:confirmations:<user_id>",
+      struct: Prompt,
+      match: {:prefix, "bus:prompts:"},
+      template: "tenant:<athanor_id>:bus:prompts:<user_id>",
       producers: ["Cyfr.TelemetryBridge"],
       # Heard through the stream's delivery: the system layer's listener in
       # Prism and the device channel's forwarder for a paired glass.
-      consumers: ["stream:confirmation.changes"],
+      consumers: ["stream:prompt.changes"],
       reason:
-        "one person's pending confirmations moved, on that person's own topic, so no other " <>
-          "member learns of their sensitive changes; it carries the ref, what happened to " <>
-          "the record (its kind), the operation and the expiry, and a client reads the " <>
-          "preview under its own session"
+        "a record that waits on one person moved, on that person's own topic, so no other " <>
+          "member learns of it; it carries the record's kind and ref, what happened to it " <>
+          "(its fact) and its expiry, and a client reads the record from its owner under " <>
+          "its own session"
     },
     %{
       key: :attention,
@@ -838,13 +838,12 @@ defmodule Cyfr.Bus do
     do: prefix(actor) <> "thread:" <> thread_id
 
   @doc """
-  One person's pending confirmations (`Cyfr.Bus.Confirmation`): `user_id`
-  is the person whose confirmations moved, and only that person's clients
-  hear it.
+  The records that wait on one person (`Cyfr.Bus.Prompt`): `user_id` is
+  that person, and only their clients hear it.
   """
-  @spec confirmations(Actor.t(), String.t()) :: String.t()
-  def confirmations(actor, user_id) when is_binary(user_id) and user_id != "",
-    do: prefix(actor) <> "bus:confirmations:" <> user_id
+  @spec prompts(Actor.t(), String.t()) :: String.t()
+  def prompts(actor, user_id) when is_binary(user_id) and user_id != "",
+    do: prefix(actor) <> "bus:prompts:" <> user_id
 
   @doc """
   What waits for one person (`Cyfr.Bus.Attention`): `user_id` is that

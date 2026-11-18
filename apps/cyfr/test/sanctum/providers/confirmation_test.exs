@@ -17,9 +17,9 @@ defmodule Sanctum.Providers.ConfirmationTest do
   answer confirms only under the session its request was bound to, once,
   for the record that request names, by a key of the record's own person.
   The ref never repeats a change, and no tool takes the secret as an
-  argument, so no request-log row, decision or log line keeps it. The
-  stream `confirmation.changes` is declared beside the operations,
-  projecting the ref and what happened to the record.
+  argument, so no request-log row, decision or log line keeps it. A
+  record's facts ride Host's stream `prompt.changes` as kind
+  `confirmation`, projecting the ref and what happened to the record.
   """
 
   use ExUnit.Case, async: false
@@ -167,34 +167,37 @@ defmodule Sanctum.Providers.ConfirmationTest do
   # The stream
   # ---------------------------------------------------------------------------
 
-  test "the stream is declared beside the operations, bound to its holder, projecting the ref, its kind and no preview" do
+  test "the prompt stream carries confirmations, bound to its holder, with no operation or preview" do
     assert {:ok, stream} =
-             Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "confirmation.changes")
+             Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "prompt.changes")
 
-    assert stream.topic == :confirmations
-    assert stream.projection == ["ref", "kind", "operation", "expires_at"]
+    assert stream.topic == :prompts
+    assert stream.projection == ["kind", "ref", "fact", "expires_at"]
     assert stream.bind == :holder
     assert Cyfr.Bus.grantable?(stream.topic, true)
+    assert Sanctum.Provider.streams() |> Enum.map(& &1.name) == ["vault.changes"]
   end
 
   test "a fact of the stream says what happened to the record, and carries nothing else", %{
     session_ctx: session_ctx
   } do
-    {:ok, stream} = Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "confirmation.changes")
-    {:ok, grant} = Sanctum.Gate.open_stream(session_ctx, "confirmation.changes")
+    {:ok, stream} = Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "prompt.changes")
+    {:ok, grant} = Sanctum.Gate.open_stream(session_ctx, "prompt.changes")
     actor = Context.actor(session_ctx)
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.granted_topic(actor, grant))
 
     id = asked!(session_ctx)
     {:ok, %{state: "cancelled"}} = call(session_ctx, "cancel", %{"ref" => ref(id)})
 
-    for kind <- [:opened, :cancelled] do
-      assert_receive %Cyfr.Bus.Confirmation{kind: ^kind} = fact, 2_000
+    for happened <- [:opened, :cancelled] do
+      assert_receive %Cyfr.Bus.Prompt{kind: :confirmation, fact: ^happened} = fact, 2_000
       projected = Prima.StreamGrant.project(grant, Map.from_struct(fact))
       assert Map.keys(projected) |> Enum.sort() == Enum.sort(stream.projection)
+      assert projected["kind"] == :confirmation
       assert projected["ref"] == ref(id)
-      assert projected["kind"] == kind
+      assert projected["fact"] == happened
       refute inspect(projected) =~ id
+      refute Map.has_key?(projected, "operation")
     end
   end
 
