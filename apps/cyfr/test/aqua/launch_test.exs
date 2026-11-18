@@ -789,8 +789,8 @@ defmodule Aqua.LaunchTest do
     end
   end
 
-  test "an external execution.run cannot supply the approved entry: an argument naming it is " <>
-         "refused, and the run it starts is rooted with none",
+  test "an external execution.run cannot supply the account a launch's decision resolved: an " <>
+         "`approved_entry` argument is refused, and the run it starts is rooted with none",
        %{ctx: ctx} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)

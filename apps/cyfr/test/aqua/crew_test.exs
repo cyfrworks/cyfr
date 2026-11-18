@@ -647,8 +647,8 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
 
-    # The job was narrowed to what the request named, under the member's
-    # own policy.
+    # The job was narrowed to what the request named, out of the soul's
+    # tools the member is offered.
     %{input: %{"params" => %{"tools" => tools}}} =
       Enum.find(
         ScriptedWorker.calls(),
@@ -793,7 +793,7 @@ defmodule Aqua.CrewTest do
     # The soul's request holds the member's thread while its model request
     # waits; the person's requests, another sender's, queue behind it until
     # the queue is full. Every model call here is a plain answer.
-    script!([{:probe, self()} | for(n <- 1..16, do: reply("answer #{n}"))])
+    script!([{:hold, self()} | for(n <- 1..16, do: reply("answer #{n}"))])
 
     held = soul_request!(ctx, room, "planner", "hold the floor")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
@@ -874,7 +874,7 @@ defmodule Aqua.CrewTest do
     end
   end
 
-  test "the soul's browser call is refused without a card while the setting is off, and goes to the browser without one while it is on",
+  test "the soul's browser call is refused in the browser's own words while the setting is off, and goes to the browser while it is on",
        %{ctx: ctx, room: room} do
     open = %{"action" => "open", "url" => "https://example.com/"}
 
@@ -1040,7 +1040,7 @@ defmodule Aqua.CrewTest do
     )
   end
 
-  test "a member's turn runs a granted component under the soul's tools with no card, and a job narrowed away from it runs none",
+  test "a member's turn in auto runs a granted component under the soul's tools, and a job narrowed away from it runs none",
        %{ctx: ctx, room: room} do
     app = quiet_app!(ctx)
     run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
@@ -1091,7 +1091,7 @@ defmodule Aqua.CrewTest do
     assert runs_of(ctx, app) == [root]
   end
 
-  test "a narrowed job is refused a call outside its tools before any card, and goes on",
+  test "a narrowed job is refused a call outside its tools though its member is in auto, and goes on",
        %{ctx: ctx, room: room} do
     script!([
       call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),

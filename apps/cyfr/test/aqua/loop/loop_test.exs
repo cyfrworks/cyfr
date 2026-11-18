@@ -27,9 +27,10 @@ defmodule Aqua.LoopTest do
   member's mode and nothing is asked: auto runs what the member is
   offered, read-only runs its reads and refuses the rest, saying so once
   in the thread; a worker that dies leaves an uncertain step, and the
-  sender's next line continues the turn with reads only; typed model
-  errors are retried or end the turn; the step cap ends a turn that never
-  stops calling.
+  sender's next line continues the turn with reads only; a turn taken
+  over with a post waiting skips what its response still proposed; typed
+  model errors are retried or end the turn; the step cap ends a turn that
+  never stops calling.
   """
 
   use ExUnit.Case, async: false
@@ -947,7 +948,7 @@ defmodule Aqua.LoopTest do
     assert {:ok, true} = Aqua.BrowserSetting.allowed?(ctx)
 
     script!([
-      {:probe, self()},
+      {:hold, self()},
       calls([{"c1", "browser", %{"action" => "read"}}]),
       reply("the browser is off")
     ])
@@ -999,7 +1000,7 @@ defmodule Aqua.LoopTest do
     sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
 
     script!([
-      {:probe, self()},
+      {:hold, self()},
       calls([{"c1", "notes", keep.("first")}]),
       reply("kept"),
       calls([{"c2", "notes", keep.("second")}]),
@@ -1018,6 +1019,9 @@ defmodule Aqua.LoopTest do
         "mode" => "read-only"
       })
 
+    # The switch landed while the turn's first model call is still held:
+    # its one step is that call, open.
+    assert step_rows(ctx, first) == [%{model_row(nil) | dispatch_state: "dispatched"}]
     send(worker, :continue)
     assert :completed = Task.await(task, 60_000)
     assert {:ok, %{agent_mode: "auto"}} = Tape.turn(ctx, first.id)
@@ -1291,7 +1295,7 @@ defmodule Aqua.LoopTest do
     turn = accept!(ctx, thread, "@aqua keep a note")
 
     script!([
-      {:probe, self()},
+      {:hold, self()},
       calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "remember"}}]),
       reply("not kept")
     ])
@@ -1422,7 +1426,7 @@ defmodule Aqua.LoopTest do
 
     ScriptedWorker.script([
       calls([{"c1", "files", write}, {"c2", "notes", keep}]),
-      {:probe, self()},
+      {:hold, self()},
       %{"written" => "data/x.md"},
       reply("ok, dropped")
     ])
@@ -1478,6 +1482,88 @@ defmodule Aqua.LoopTest do
     assert {:error, _} = Aqua.Notes.read(ctx, "n")
   end
 
+  # A turn continued from its rows with a post waiting skips what its
+  # response still proposed, undecided, and asks the model again
+  # (`Aqua.Loop`'s settle). The runner dies while the turn's read runs,
+  # the click after it still proposed, and the person has posted; the
+  # runner started after it takes the turn over. The browser is turned off
+  # too: a click decided again would be refused in the browser's words,
+  # where a skipped one is never decided.
+  test "a turn taken over with a post waiting skips the calls its response still proposed, " <>
+         "and its model answers the post",
+       %{ctx: ctx, thread: thread} do
+    list = %{"action" => "list", "path" => "data"}
+    click = %{"action" => "click", "ref" => "e1"}
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.files"], script: []})
+
+    ScriptedWorker.script([
+      calls([{"c1", "files", list}, {"c2", "browser", click}]),
+      {:hold, self()},
+      reply("left it")
+    ])
+
+    turn_id = send!(ctx, thread, "tidy up")
+    assert_receive {:scripted_probe, _held_read, _child}, 30_000
+
+    {:ok, _} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "actually, leave it"},
+        steer_turn_id: turn_id
+      })
+
+    assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
+    Process.exit(Aqua.Runner.whereis(thread.id), :kill)
+    turn = ended!(ctx, turn_id)
+
+    assert %{status: "completed", error: nil, recovery_attempts: 1} = turn
+
+    # The read, opened again for its replay, and the click are skipped,
+    # neither run nor decided again.
+    assert step_rows(ctx, turn) == [
+             model_row("ok"),
+             %{call_row("files", "list", "skipped", nil) | generation: 1},
+             call_row("browser", "click", "skipped", nil),
+             model_row("ok")
+           ]
+
+    # The model is asked again with the post, the restart the takeover
+    # wrote, and each skipped call answered by its own skipped result.
+    skipped = "a newer message arrived"
+
+    restarted =
+      "[The server restarted while the assistant was working; tools may have partially " <>
+        "executed. the server restarted while the assistant was working]"
+
+    assert [_first, second] = chat_messages()
+
+    assert second == [
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "tidy up"}]},
+             %{
+               "role" => "assistant",
+               "content" => [
+                 %{"type" => "tool_call", "id" => "c1", "name" => "files", "arguments" => list},
+                 %{"type" => "tool_call", "id" => "c2", "name" => "browser", "arguments" => click}
+               ]
+             },
+             %{
+               "role" => "user",
+               "content" => [
+                 %{"type" => "text", "text" => "actually, leave it"},
+                 %{"type" => "text", "text" => restarted}
+               ]
+             },
+             %{
+               "role" => "tool",
+               "content" => [
+                 tool_result("c1", "files", skipped, false),
+                 tool_result("c2", "browser", skipped, false)
+               ]
+             }
+           ]
+
+    assert %{kind: "text", content: "left it"} = List.last(lines(ctx, thread.id))
+  end
+
   # The user's #7342: a file in a post sent while Aqua works reaches the
   # model as the first post's does, made by the same encoder under the same
   # media types, on its own post where that post stands, and with every
@@ -1511,9 +1597,9 @@ defmodule Aqua.LoopTest do
 
     ScriptedWorker.script([
       calls([{"c1", "files", args}]),
-      {:probe, self()},
+      {:hold, self()},
       %{"written" => "data/note.md"},
-      {:probe, self()},
+      {:hold, self()},
       calls([{"c2", "files", list}]),
       %{"entries" => []},
       reply("ok")
@@ -2146,8 +2232,8 @@ defmodule Aqua.LoopTest do
     assert chat_provider_tools() == [["web_search"]]
     assert web_source?(ctx, searched)
 
-    # The person narrows the soul's grant to every tool but the search; its
-    # policy still says auto.
+    # The person narrows the soul's grant to every tool but the search; the
+    # soul's file, its mode and its tools, is left as it was.
     {_, head, _} = consent_head!(ctx, @soul)
     {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
     {:ok, ingress} = Prima.Authority.Blob.ingress(blob, @soul)

@@ -3,9 +3,10 @@
 
 defmodule Aqua.ApprovalsTest do
   @moduledoc """
-  A card is decided once, from its own rows: a decline records no deny, an
-  approval opens only with the digest it is consumed by, a moved proposal
-  or an expiry settles the card without running anything, and a stale,
+  A card is decided once, from its own rows: a decline closes its step
+  denied with a tool result, and one answered never records a deny; an
+  approval opens only with the digest it is consumed by; a moved proposal
+  or an expiry settles the card without running anything; and a stale,
   declined or expired card writes no answer for a schedule. No turn opens
   a card; each case lays its own (`card!/4`).
   """

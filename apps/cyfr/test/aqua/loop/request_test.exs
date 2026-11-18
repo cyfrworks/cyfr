@@ -68,7 +68,7 @@ defmodule Aqua.Loop.RequestTest do
     assert ext["description"] == "Search"
   end
 
-  test "a launch's description is the catalog's own: a run is said to need no approval" do
+  test "a launch's description is the catalog's own, with no word of an approval, and its actions are those offered" do
     execution =
       %{"execution.run" => "offered", "execution.logs" => "offered"}
       |> Request.tool_definitions()

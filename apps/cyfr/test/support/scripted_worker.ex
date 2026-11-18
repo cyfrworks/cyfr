@@ -87,6 +87,10 @@ defmodule Cyfr.Test.ScriptedWorker do
     `pid` and wait for `:continue` (5 s), so a test can inspect what the
     run holds while it runs. `player` is the process playing the script,
     linked to the runner: killing it kills the runner.
+  - `{:hold, pid}` — as `{:probe, pid}`, waiting for `:continue` with no
+    deadline: for a test whose order rests on the run still being held,
+    which a probe's five seconds cannot promise on a loaded machine. The
+    run ends with the test's processes if nothing continues it.
   - `{:crash, :before_response}` — kill the process waiting on the run,
     once the runner has attached, and wait to be killed.
   - `{:crash, :after_persist}` — kill the process waiting on the run once
@@ -741,6 +745,15 @@ defmodule Cyfr.Test.ScriptedWorker do
           :continue -> :ok
         after
           @probe_wait_ms -> :ok
+        end
+
+        next(runner, crash_after?)
+
+      {:hold, pid} ->
+        send(pid, {:scripted_probe, self(), runner.assignment.execution_id})
+
+        receive do
+          :continue -> :ok
         end
 
         next(runner, crash_after?)

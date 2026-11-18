@@ -11,8 +11,10 @@ defmodule Aqua.RunnerTest do
   another origin waits; a stop cuts the turn and drops the queue; a step
   that does more than read runs at once on auto and is refused on
   read-only, the thread told once, and neither pauses the turn; a page's
-  call is a step of the turn that runs, waits while the turn is stopped
-  and opens work of its own with no turn; a workspace thread's turn that
+  call is a step of the turn that runs, waits with no step while the turn
+  is paused around a launch and is a step of it once it runs again, and
+  opens work of its own with no turn; a call whose request ended runs
+  nothing, its step still proposed skipped; a workspace thread's turn that
   ends without its report leaves the thread stopped when the person's act
   ended it and in error when Aqua could not run; a runner that starts
   finds the open turns and does what their rows say, resuming each under
@@ -134,7 +136,7 @@ defmodule Aqua.RunnerTest do
   end
 
   # A crew member the athanor made, on the scripted model, consented as a
-  # person consents one: it runs under the soul's policy as a source of its
+  # person consents one: it is offered the soul's tools, as a source of its
   # own, its edge into the model selecting the key bound on the model's
   # default profile.
   defp member!(ctx, name) do
@@ -1934,7 +1936,7 @@ defmodule Aqua.RunnerTest do
     test "a call during a running turn is a step of that turn, dispatched once while the " <>
            "model still answers",
          %{ctx: ctx, workspace: ws} do
-      script!([reply("put"), {:probe, self()}, reply("done")])
+      script!([reply("put"), {:hold, self()}, reply("done")])
       put = put!(ctx, ws)
       {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua look around")
       assert_receive {:scripted_probe, model, _}, 60_000
@@ -1962,8 +1964,8 @@ defmodule Aqua.RunnerTest do
          %{ctx: ctx, workspace: ws} do
       script_http!([
         reply("put"),
-        {:probe, self()},
-        {:probe, self()},
+        {:hold, self()},
+        {:hold, self()},
         reply("done"),
         %{"status" => 200, "body" => "x"}
       ])
@@ -1982,7 +1984,7 @@ defmodule Aqua.RunnerTest do
 
       wait_until(
         fn -> match?(%{status: "completed"}, Arca.Repo.get(Arca.Schemas.Execution, chat)) end,
-        4_000,
+        30_000,
         "the model answers"
       )
 
@@ -2001,6 +2003,70 @@ defmodule Aqua.RunnerTest do
       assert chats() == 2
     end
 
+    test "a call while the turn is paused around a launch writes no row and no step, and " <>
+           "becomes a step of that turn once it takes its root back",
+         %{ctx: ctx, workspace: ws} do
+      app = quiet_app!(ctx)
+      run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
+
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, app],
+         script: [
+           reply("put"),
+           run,
+           {:hold, self()},
+           %{"answered" => true},
+           {:hold, self()},
+           reply("ran it")
+         ]}
+      )
+
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua run the app")
+
+      # The app runs, held, with the turn paused around it.
+      assert_receive {:scripted_probe, launched, _}, 60_000
+      assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, id)
+      runner = Runner.whereis(ws.id)
+      before = tape_snapshot(ctx, ws.id, [put.id, id])
+
+      call = page_call(ctx, put, "component.list")
+      assert {:ok, ^runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      _ = :sys.get_state(runner)
+      assert tape_snapshot(ctx, ws.id, [put.id, id]) == before
+
+      # The launch ends and the turn runs again, its model held: the call
+      # is a step of it by then, whether it ran before the model's round or
+      # beside it.
+      send(launched, :continue)
+      assert_receive {:scripted_probe, model, _}, 60_000
+
+      wait_until(
+        fn -> Enum.any?(steps!(ctx, id), &(&1.purpose == "page")) end,
+        30_000,
+        "the call is a step of the turn"
+      )
+
+      send(model, :continue)
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, id)
+      [first, launch | rest] = steps!(ctx, id)
+      assert first == model_step(ctx, id, 1, nil)
+      assert %{seq: 2, kind: "launch", outcome: "ok", dispatch_state: "closed"} = launch
+
+      assert rest in [
+               [page_step(3, id, call, "ok"), model_step(ctx, id, 4, "text")],
+               [model_step(ctx, id, 3, "text"), page_step(4, id, call, "ok")]
+             ]
+
+      [carried, answered] = page_rows!(ctx, ws.id)
+      assert carried == called(id, call)
+      assert answered == answered(ctx, id, call, 200, answered.content)
+      assert chats() == 3
+    end
+
     test "with no turn running, a call starts a turn that asks no model, holds the thread's " <>
            "claim, runs as the putting turn's person under that turn's origin and ends " <>
            "completed with the wire's answer",
@@ -2008,7 +2074,7 @@ defmodule Aqua.RunnerTest do
       start_supervised!(
         {ScriptedWorker,
          ref: [@model, "catalyst:local.http"],
-         script: [reply("put"), {:probe, self()}, %{"status" => 200, "body" => "x"}]}
+         script: [reply("put"), {:hold, self()}, %{"status" => 200, "body" => "x"}]}
       )
 
       # The page was put by the person's turn over the API.
@@ -2078,7 +2144,7 @@ defmodule Aqua.RunnerTest do
          %{ctx: ctx, workspace: ws} do
       script_http!([
         reply("put"),
-        {:probe, self()},
+        {:hold, self()},
         %{"status" => 200, "body" => "x"},
         reply("hi")
       ])
@@ -2116,7 +2182,7 @@ defmodule Aqua.RunnerTest do
 
     test "a full queue of waiting calls refuses the next one :busy, and it never becomes a step",
          %{ctx: ctx, workspace: ws} do
-      script!([reply("put"), {:probe, self()}, reply("never recorded")])
+      script!([reply("put"), {:hold, self()}, reply("never recorded")])
       put = put!(ctx, ws)
       {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua look around")
       assert_receive {:scripted_probe, model, _}, 60_000
@@ -2231,7 +2297,7 @@ defmodule Aqua.RunnerTest do
       ctx: ctx,
       workspace: ws
     } do
-      script!([reply("put"), {:probe, self()}, reply("never read")])
+      script!([reply("put"), {:hold, self()}, reply("never read")])
       put = put!(ctx, ws)
       {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua look around")
       assert_receive {:scripted_probe, _model, _}, 60_000
@@ -2300,7 +2366,7 @@ defmodule Aqua.RunnerTest do
 
     test "a call that comes as the running turn ends opens work of its own, which runs it",
          %{ctx: ctx, workspace: ws} do
-      script!([reply("put"), {:probe, self()}, reply("never recorded")])
+      script!([reply("put"), {:hold, self()}, reply("never recorded")])
       put = put!(ctx, ws)
       {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua look around")
       assert_receive {:scripted_probe, model, _}, 60_000
@@ -2352,6 +2418,67 @@ defmodule Aqua.RunnerTest do
 
       assert [] = page_rows!(ctx, ws.id)
       assert %{running: false, paused: false, queued: 0} = Runner.state(ws.id, ctx.athanor_id)
+    end
+
+    test "a request that ended while its step is proposed skips the step: it never runs, " <>
+           "and the turn goes on",
+         %{ctx: ctx, workspace: ws} do
+      script_http!([
+        reply("put"),
+        fetch("c1"),
+        {:hold, self()},
+        %{"status" => 200, "body" => "x"},
+        reply("fetched")
+      ])
+
+      put = put!(ctx, ws)
+      {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua fetch it")
+      assert_receive {:scripted_probe, http, _}, 60_000
+
+      # The turn's own call is held: the page's call is proposed in the
+      # turn and waits there for the loop's next round.
+      call = page_call(ctx, put, "notes.keep", %{"name" => "from-page", "content" => "x"})
+      assert {:ok, _runner} = Runner.page_call(ws.id, ctx.athanor_id, call)
+      assert [_model, _fetch, page] = steps!(ctx, id)
+      assert page == page_step(3, id, call, nil, "proposed")
+
+      assert :ok = Runner.page_call_ended(ws.id, ctx.athanor_id, call.request)
+      assert [_model, _fetch, page] = steps!(ctx, id)
+      assert page == page_step(3, id, call, "skipped")
+
+      send(http, :continue)
+      await_ended!(ctx, id)
+
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, id)
+
+      assert [
+               model_step(ctx, id, 1, nil),
+               call_step(ctx, id, 2, "http.get", "c1", "ok"),
+               page_step(3, id, call, "skipped"),
+               model_step(ctx, id, 4, "text")
+             ] == steps!(ctx, id)
+
+      [carried, answered] = page_rows!(ctx, ws.id)
+      assert carried == called(id, call)
+      [%{id: step_id}] = for %{purpose: "page"} = step <- raw_steps!(ctx, id), do: step
+
+      assert answered == %{
+               kind: "page_result",
+               author: Prima.Author.system(),
+               sent_by: "aqua",
+               content: "the page's request ended",
+               client_id: nil,
+               turn_id: id,
+               payload: %{
+                 "tool_call_id" => call.request,
+                 "name" => call.name,
+                 "skipped" => true,
+                 "step_id" => step_id
+               }
+             }
+
+      assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
+      assert chats() == 3
     end
   end
 
@@ -2415,6 +2542,36 @@ defmodule Aqua.RunnerTest do
   end
 
   # A workspace thread of the person's, as a workspace's opening makes one.
+  # An app of the person's own with no exit at all, granted with nothing to
+  # bind: a launch of it runs on the scripted worker that names it.
+  defp quiet_app!(ctx) do
+    name = "runner-app-#{System.unique_integer([:positive])}"
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})
+      })
+
+    ref = "reagent:local." <> name
+    decisions = %{ref: ref, bindings: []}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    ref
+  end
+
   defp workspace!(ctx) do
     %Arca.Schemas.Thread{}
     |> Arca.Schemas.Thread.changeset(%{

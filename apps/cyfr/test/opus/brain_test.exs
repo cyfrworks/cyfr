@@ -13,7 +13,8 @@ defmodule Opus.BrainTest do
   attendant says; a write is refused, with nothing written, for a binding
   of another athanor, person, row or epoch, a moved fence, a moved
   generation, a step that is not the turn's decided `program.start` of
-  that row and epoch, and a turn that is not running; a paused turn's
+  that row and epoch, one closed denied or skipped, and a turn that is
+  not running; a paused turn's
   proof writes a post or an answer of its own work and nothing else; a
   stale open ends no successor. The configuration's `read_only` is the
   stored turn's mode in every start and work, whatever the caller names,
@@ -748,6 +749,30 @@ defmodule Opus.BrainTest do
       end
 
       refute_sent()
+    end
+
+    test "a start closed denied or skipped writes nothing; one closed ok writes",
+         %{brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
+      closed = fn outcome ->
+        step = start_step!(ctx, turn, row)
+
+        {:ok, _closed} =
+          TurnStorage.close_step(Sanctum.Context.actor(ctx), step.id, outcome, %{
+            fence: turn.fence
+          })
+
+        %{binding | step: step.id}
+      end
+
+      for outcome <- ["denied", "skipped"] do
+        assert Brain.write(brain, closed.(outcome), post(binding)) ==
+                 {:error, {:not_admitted, :not_allowed}}
+      end
+
+      refute_sent()
+
+      assert :ok = Brain.write(brain, closed.("ok"), post(binding))
+      assert %{"t" => "post", "id" => "stp_post"} = sent()
     end
 
     test "a person who no longer stands writes nothing", %{

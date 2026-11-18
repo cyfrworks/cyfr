@@ -772,7 +772,7 @@ defmodule Aqua.Providers.NotesTest do
     # The chain authority is exact `tool.action` membership in the consent
     # blob, minted from the manifest's caps against the loaded providers —
     # a name no provider serves drops silently, so this pins that every
-    # notes action the soul may propose survives the expansion.
+    # notes action the soul's list names survives the expansion.
     manifest = shipped_soul_manifest()
 
     caps = Prima.Manifest.Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)

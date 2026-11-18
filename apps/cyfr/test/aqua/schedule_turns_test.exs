@@ -775,6 +775,74 @@ defmodule Aqua.ScheduleTurnsTest do
       assert {:ok, []} = Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id)
     end
 
+    test "a fire's turn that fails once it started ends its occurrence failed, says why on the " <>
+           "schedule and in its attention item, and is told as a failed fire",
+         %{ctx: ctx} do
+      script!([{:error, "the model could not be reached"}])
+      handler = "schedule-failed-#{System.unique_integer([:positive])}"
+      test = self()
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :schedules, :failed],
+          fn _event, measurements, meta, _ -> send(test, {:failed, measurements, meta}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      id = schedule!(ctx, "Planner", "plan the day")
+      claimed = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{claimed.id => :sent}
+
+      turn = await_status(ctx, turn_of(ctx, claimed).id, "failed")
+      assert %{error: "the model could not be reached", root_execution_id: root} = turn
+      assert is_binary(root)
+
+      ended = ended!(ctx, claimed, "failed")
+      assert %DateTime{} = ended.ended_at
+      # Its start took the claim's one attempt and bound the turn's root.
+      assert ended == %{
+               claimed
+               | state: "failed",
+                 execution_id: root,
+                 attempts: claimed.attempts + 1,
+                 ended_at: ended.ended_at
+             }
+
+      said = "Last run failed: the model could not be reached"
+      assert %{run_count: 0, last_error: ^said, kind: kind} = row!(ctx, id)
+      occurrence_id = claimed.id
+      assert_receive {:failed, measurements, %{occurrence_id: ^occurrence_id} = meta}, 5_000
+      assert measurements == %{count: 1}
+
+      assert meta == %{
+               schedule_id: id,
+               kind: kind,
+               occurrence_id: claimed.id,
+               scheduled_for: claimed.scheduled_for,
+               athanor_id: ctx.athanor_id,
+               user_id: ctx.user_id,
+               execution_id: root,
+               reason: said
+             }
+
+      assert Cyfr.Providers.Attention.failed_schedule(actor(ctx), ctx.user_id, id) ==
+               {:ok,
+                [
+                  %{
+                    kind: :failed_schedule,
+                    id: id,
+                    label: "Planner",
+                    day: nil,
+                    since: claimed.scheduled_for,
+                    destination: %{kind: "page", page: "schedules", ref: id},
+                    outcome: nil
+                  }
+                ]}
+    end
+
     # An app of the person's own, granted with nothing to bind.
     defp app!(ctx) do
       ref = published!(ctx)
@@ -823,9 +891,10 @@ defmodule Aqua.ScheduleTurnsTest do
       )
     end
 
-    test "a granted component whose grant covers what the turn has read runs with nobody there, with no card",
+    test "a granted component runs with nobody there, whatever the turn has read",
          %{ctx: ctx} do
       app = app!(ctx)
+      # The turn reads the person's pinned note before it launches.
       {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
 
       start_supervised!(

@@ -55,11 +55,11 @@ defmodule Aqua.Runner do
   A call a page in Aqua's browser made (`Aqua.PageCalls`) is held here
   until it is a step: while a turn of the thread runs, it is proposed
   into that turn (`Aqua.Tape.propose_call/3`) and the loop is told; while
-  the turn is paused, on a card or around a launch, it waits, and is
-  proposed once the turn runs again or opens work of its own once the
-  turn ends; with no turn, it opens a turn that asks no model, which runs
-  as the person whose turn put the page, under that turn's origin, and
-  is queued as any turn. At most `@queue_max` wait; past that a call is
+  the turn is paused, around a launch or on an uncertain outcome, it
+  waits, and is proposed once the turn runs again or opens work of its
+  own once the turn ends; with no turn, it opens a turn that asks no
+  model, which runs as the person whose turn put the page, under that
+  turn's origin, and is queued as any turn. At most `@queue_max` wait; past that a call is
   refused `:busy`, and a stop drops those waiting as it drops the queue.
   Its answer is its step's `page_result` row, heard on the thread's
   topic and handed back through `Opus.Browser.answer/5`; a call whose
