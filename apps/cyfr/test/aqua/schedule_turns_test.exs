@@ -564,7 +564,8 @@ defmodule Aqua.ScheduleTurnsTest do
 
       # The root names the schedule and the decision it was admitted under,
       # and that decision is the schedule's fire, naming the occurrence.
-      assert %{schedule_id: ^id, call_id: call_id, origin: "schedule"} =
+      # Its caller is the agent, nearer than the schedule its turn ran on.
+      assert %{schedule_id: ^id, call_id: call_id, origin: "schedule", caller: "agent:aqua"} =
                Arca.Execution.get_tenant(actor(ctx), root)
 
       wait_until(fn -> match?({:ok, _}, Arca.DecisionLog.get(actor(ctx), call_id)) end, 5_000)
@@ -809,6 +810,27 @@ defmodule Aqua.ScheduleTurnsTest do
       assert runs_of(ctx, app) == [root]
       assert waiting_cards(ctx) == []
       assert %{state: "completed"} = ended!(ctx, occurrence, "completed")
+
+      # The launched root's caller is the agent, from the launch's stamp.
+      # The turn's brain is a child of the turn's own root: it records
+      # none and reads the root's, the agent over the schedule.
+      assert %{caller: "agent:aqua"} = Arca.Execution.get_tenant(actor(ctx), root)
+
+      assert [_ | _] =
+               brains =
+               Arca.Repo.all(
+                 from(e in Arca.Schemas.Execution,
+                   where:
+                     e.root_execution_id == ^turn.root_execution_id and
+                       like(e.reference, ^"#{@model}%")
+                 )
+               )
+
+      for brain <- brains do
+        assert brain.caller == nil
+        assert {:ok, record} = Opus.Record.get(ctx, brain.id)
+        assert Opus.Record.caller(record) == {:ok, {:agent, "aqua"}}
+      end
     end
 
     test "a run that would carry what the turn read where its grant does not let it go opens no card, and the turn ends failed saying so",

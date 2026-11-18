@@ -470,15 +470,91 @@ defmodule Cyfr.AdmissionOriginTest do
 
       assert data(:invoke, public_body).status == 200
 
-      origins =
+      rows =
         Arca.Repo.all(
           from(e in Arca.Schemas.Execution,
             where: like(e.reference, ^"#{@dep}%") and is_nil(e.parent_execution_id),
-            select: e.origin
+            select: {e.origin, e.caller}
           )
         )
 
-      assert origins == ["interactive", "interactive"]
+      # Each run's caller is the tincture its frame or page shows, nearer
+      # than the person behind the frame.
+      assert Enum.sort(rows) == [
+               {"interactive", "tincture:tincture:local.origin-public"},
+               {"interactive", "tincture:tincture:local.origin-run"}
+             ]
+    end
+  end
+
+  describe "the caller a root records" do
+    test "a person's session and a key on the HTTP API, a page and a paired device each name " <>
+           "their starter, and no argument a caller sends names one" do
+      %{source: source, user: user, session: session} = seated!()
+
+      {:ok, key} =
+        Sanctum.TestContext.create_key(source, %{
+          name: "caller-#{System.unique_integer([:positive])}",
+          scope: ["execute", "component_read", "storage_read"]
+        })
+
+      runnable!(source, for(_ <- 1..4, do: %{"ran" => true}))
+      {:ok, page} = CyfrWeb.ContextGuard.authenticate(session.token, source.athanor_id)
+      keyed = api!(key.api_key)
+      assert is_binary(keyed.api_key_id)
+
+      ran =
+        for ctx <- [api!(session.token), keyed, page] do
+          assert {:ok, %{execution_id: id}} = run(ctx, %{}), inspect(ctx.auth_method)
+          caller(id)
+        end
+
+      {client_id, device_run} = device_run!(user.id)
+
+      assert ran ++ [caller(device_run)] == [
+               "person",
+               "key:" <> keyed.api_key_id,
+               "person",
+               "device:" <> client_id
+             ]
+
+      # The run's arguments are the operation's closed set: one naming a
+      # caller is refused before anything is admitted.
+      before = Arca.Repo.aggregate(Arca.Schemas.Execution, :count)
+
+      assert {:error, %Prima.Refusal{reason: {:invalid_argument, "Unknown field: caller"}}} =
+               run(page, %{"caller" => "agent:aqua"})
+
+      assert Arca.Repo.aggregate(Arca.Schemas.Execution, :count) == before
+    end
+
+    test "a key's invoke of a tincture names the tincture, over the key behind it" do
+      %{source: source} = seated!()
+      runnable_dep!(source)
+      node = tincture!(source, "caller-key", %{}, [%{"ref" => @dep, "reason" => "dep"}])
+      _owner = tincture_profile!(source, node, :owner)
+
+      {:ok, key} =
+        Sanctum.TestContext.create_key(source, %{
+          name: "caller-#{System.unique_integer([:positive])}",
+          scope: ["execute", "component_read", "storage_read"]
+        })
+
+      keyed = api!(key.api_key)
+      assert is_binary(keyed.api_key_id)
+
+      assert {:ok, %{execution_id: id}} =
+               Sanctum.Gate.call_external("tincture", keyed, %{
+                 "action" => "invoke_protected",
+                 "publisher" => "local",
+                 "tincture_name" => "caller-key",
+                 "reference" => @dep_ref,
+                 "input" => %{}
+               })
+
+      # The run's context still carries the key (`Sanctum.build_tincture_context/2`);
+      # the tincture is nearer.
+      assert caller(id) == "tincture:tincture:local.caller-key"
     end
   end
 
@@ -504,10 +580,14 @@ defmodule Cyfr.AdmissionOriginTest do
 
       assert %{"status" => "duplicate"} = json_response(replayed, 200)
 
-      assert [%{origin: "webhook"}] =
+      assert [%{origin: "webhook", caller: caller}] =
                Arca.Repo.all(
                  from(e in Arca.Schemas.Execution, where: like(e.reference, ^"#{@dep}%"))
                )
+
+      # The run's caller is the webhook's row, which its controller hands in.
+      row = Arca.Repo.get_by!(Arca.Schemas.Webhook, slug: hook.slug)
+      assert caller == "webhook:" <> row.id
     end
   end
 
@@ -785,14 +865,90 @@ defmodule Cyfr.AdmissionOriginTest do
   # A person signed in and working in their own athanor, holding the
   # frames' dependency.
   defp frame_source! do
-    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
-    own = Sanctum.Test.People.athanor!(user)
-    issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
-    {:ok, session} = Sanctum.TestContext.create_session(issuer)
-    {:ok, source} = Sanctum.Caller.establish(session.token)
+    %{source: source} = seated!()
     echo!(source)
     source
   end
+
+  # A person, the session they signed in with to their own athanor, and
+  # the context it establishes there, whose namespace a key of theirs names.
+  defp seated! do
+    {person, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, person.namespace)
+    own = Sanctum.Test.People.athanor!(user)
+    Sanctum.TestContext.ready!(own.id)
+    issuer = Sanctum.TestContext.issuer!(%{person | athanor_id: own.id})
+    {:ok, session} = Sanctum.TestContext.create_session(issuer)
+    {:ok, source} = Sanctum.Caller.establish(session.token)
+    %{source: source, user: user, session: session}
+  end
+
+  # The context the HTTP API's plugs build for `bearer`.
+  defp api!(bearer) do
+    conn =
+      build_conn(:post, "/api/v1/whoami")
+      |> put_req_header("authorization", "Bearer " <> bearer)
+      |> CyfrWeb.Plugs.CallIdentity.call(CyfrWeb.Plugs.CallIdentity.init([]))
+      |> CyfrWeb.Plugs.Authenticate.call(CyfrWeb.Plugs.Authenticate.init([]))
+
+    refute conn.halted
+    conn.assigns.context
+  end
+
+  # `execution.run` of the dependency through the gate, with `args` beside.
+  defp run(ctx, args) do
+    Sanctum.Gate.call_external(
+      "execution",
+      ctx,
+      Map.merge(%{"action" => "run", "reference" => @dep_ref, "input" => %{}}, args)
+    )
+  end
+
+  defp caller(execution_id), do: Arca.Repo.get!(Arca.Schemas.Execution, execution_id).caller
+
+  # A device of `user_id`'s, paired and proven on a channel, whose intent
+  # runs the dependency: its client id and the run's id.
+  defp device_run!(user_id) do
+    paired = Sanctum.Test.Devices.paired!(user_id)
+    {_pub, private} = paired.key
+
+    {:ok, state} =
+      DeviceChannel.connect(%{
+        endpoint: CyfrWeb.Endpoint,
+        transport: :websocket,
+        options: [],
+        params: %{},
+        connect_info: %{peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}}
+      })
+
+    {:ok, state} = DeviceChannel.init(state)
+
+    {:reply, :ok, {:text, json}, state} =
+      device_frame(
+        state,
+        {:connect, %{client_id: paired.client_id, certificate: paired.certificate}}
+      )
+
+    {:ok, {:challenge, %{challenge: challenge}}} = Prima.Device.decode(Jason.decode!(json), :home)
+
+    {:push, [_standing], state} =
+      device_frame(state, {:proof, %{proof: Prima.DeviceCert.Proof.sign(challenge, private)}})
+
+    intent = %{id: "int_run", operation: "execution.run", args: %{"reference" => @dep_ref}}
+    {:reply, :ok, {:text, json}, _state} = device_frame(state, {:intent, intent})
+
+    assert {:ok, {:answer, %{id: "int_run", result: %{"execution_id" => id}}}} =
+             Prima.Device.decode(Jason.decode!(json), :home)
+
+    {paired.client_id, id}
+  end
+
+  defp device_frame(state, message),
+    do:
+      DeviceChannel.handle_in(
+        {Jason.encode!(Prima.Device.encode(message)), [opcode: :text]},
+        state
+      )
 
   # A public tincture's address: its athanor's route segment.
   defp address(ctx) do

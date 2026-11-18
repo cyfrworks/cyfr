@@ -95,6 +95,96 @@ defmodule Opus.RecordTest do
     end
   end
 
+  describe "the caller a root records" do
+    test "each starter's admission is stored as its text and read back from the row", %{
+      ctx: ctx
+    } do
+      for {text, starter, opts} <- starters(ctx) do
+        record = Record.new(starter, "reagent:local.test:0.1.0", %{}, opts)
+        assert :ok = Record.write_started(starter, record)
+
+        assert Arca.Repo.get!(Arca.Schemas.Execution, record.id).caller == text,
+               "#{text} from #{inspect(opts)}"
+
+        assert {:ok, read} = Record.get(ctx, record.id)
+        assert {:ok, read.admitted.caller} == Prima.Question.Caller.decode(text)
+        assert Record.caller(read) == {:ok, read.admitted.caller}
+      end
+    end
+
+    test "a turn's own root is its agent's, over the person who asked", %{ctx: ctx} do
+      turn =
+        Record.new(ctx, "agent:local.web", %{},
+          component_type: :agent,
+          kind: "turn",
+          turn_id: "turn_rec"
+        )
+
+      assert :ok = Record.write_started(ctx, turn)
+      assert Arca.Repo.get!(Arca.Schemas.Execution, turn.id).caller == "agent:web"
+
+      # The turn's brain is a child of its root, and reads the root's.
+      brain =
+        Record.new(ctx, "catalyst:local.brain:1.0.0", %{},
+          component_type: :catalyst,
+          parent_execution_id: turn.id,
+          root_execution_id: turn.id
+        )
+
+      assert :ok = Record.write_started(ctx, brain, grant: inherited!(ctx, turn.id))
+      assert Arca.Repo.get!(Arca.Schemas.Execution, brain.id).caller == nil
+      assert {:ok, %Record{admitted: %{caller: nil}} = read} = Record.get(ctx, brain.id)
+      assert Record.caller(read) == {:ok, {:agent, "web"}}
+    end
+
+    test "a child records none, whatever its context, and reads its root's", %{ctx: ctx} do
+      root = Record.new(ctx, "formula:local.parent:1.0.0", %{}, component_type: :formula)
+      :ok = Record.write_started(ctx, root)
+
+      key = %{ctx | auth_method: :api_key, api_key_id: "key_rec"}
+
+      child =
+        Record.new(key, "reagent:local.test:0.1.0", %{},
+          parent_execution_id: root.id,
+          root_execution_id: root.id,
+          caller: {:webhook, "wh_rec"}
+        )
+
+      assert child.admitted.caller == nil
+      :ok = Record.write_started(key, child, grant: inherited!(ctx, root.id))
+
+      assert Arca.Repo.get!(Arca.Schemas.Execution, child.id).caller == nil
+      assert {:ok, read} = Record.get(ctx, child.id)
+      assert Record.caller(read) == {:ok, :person}
+    end
+
+    test "a root that recorded none reads as unknown" do
+      record = %Record{
+        parent_execution_id: nil,
+        admitted: %{call_id: nil, origin: nil, caller: nil}
+      }
+
+      assert Record.caller(record) == {:ok, :unknown}
+    end
+
+    test "the handed option names a frame or a webhook alone: an agent, a person or a key " <>
+           "raises, so an agent's name rides only the launch stamp",
+         %{ctx: ctx} do
+      for handed <- [{:agent, "aqua"}, :person, {:key, "key_rec"}, {:tincture, ""}, "agent:x"] do
+        assert_raise ArgumentError, fn ->
+          Record.new(ctx, "reagent:local.test:0.1.0", %{}, caller: handed)
+        end
+      end
+    end
+
+    test "a stored caller the codec refuses is damage", %{ctx: ctx} do
+      id = insert_row!(ctx, kind: "component", component_type: "reagent", caller: "any")
+
+      assert {:error, {:corrupt, {:execution, ^id}}} =
+               ExUnit.CaptureLog.with_log(fn -> Record.get(ctx, id) end) |> elem(0)
+    end
+  end
+
   describe "new/4" do
     test "creates a record with UUID execution_id", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
@@ -951,6 +1041,36 @@ defmodule Opus.RecordTest do
       assert {:error, {:corrupt, {:execution, ^id}}} = Record.get(ctx, id)
       assert {:error, {:corrupt, {:execution, ^id}}} = Record.list(ctx)
     end
+  end
+
+  # What each starter's admission hands the record: its context, as
+  # its entry builds it, and the options only that entry passes.
+  defp starters(ctx) do
+    key = %{ctx | auth_method: :api_key, api_key_id: "key_rec"}
+    device = %{ctx | auth_method: :device, client_id: "cli_rec"}
+    system = %{ctx | auth_method: :system}
+    launch = %{sources: [], classes: [], consent_id: nil, agent: "aqua"}
+
+    [
+      {"person", ctx, []},
+      {"key:key_rec", key, []},
+      {"device:cli_rec", device, []},
+      {"webhook:wh_rec", system, [caller: {:webhook, "wh_rec"}]},
+      {"tincture:tincture:local.page", system, [caller: {:tincture, "tincture:local.page"}]},
+      # Nearer starters win: an agent over the person who approved its
+      # launch, a frame over the key behind it and over the person, a
+      # webhook over a key. A schedule's row names a claimed occurrence,
+      # so its cases are the scheduler's (`Cyfr.AdmissionOriginTest`).
+      {"agent:aqua", ctx, [launch: Map.put(launch, :execution_id, Record.generate_id())]},
+      {"tincture:tincture:local.page", key, [caller: {:tincture, "tincture:local.page"}]},
+      {"tincture:tincture:local.page", ctx, [caller: {:tincture, "tincture:local.page"}]},
+      {"webhook:wh_rec", key, [caller: {:webhook, "wh_rec"}]},
+      # The server's own context, a person's context that is anonymous,
+      # and one no sign-in proved name no starter.
+      {"unknown", system, []},
+      {"unknown", %{ctx | anonymous: true}, []},
+      {"unknown", %{ctx | authenticated: false}, []}
+    ]
   end
 
   # A row as a writer outside `Opus.Record` stamps it (`Emissary.External.Proxy`

@@ -299,10 +299,12 @@ defmodule Opus.Admission do
   `:parent_execution_id`, `:child_key` (the key the parent's runner minted
   for this child, which the row carries), `:root_execution_id`,
   `:profile_id`, `:retention_class`, `:retained_input`, `:schedule_id`,
-  `:activation_stamp`, `:activation_digest`, `:dep_ref`, `:need`,
-  `:client_ip`, the barriers `:charge`, `:step`, `:occurrence_id` and
-  `:parent_attempt` (the attempt of `:parent_execution_id` a child is
-  admitted under), `:step_spans`, `:envelope` (true when the caller reads
+  `:caller` (the frame or webhook a root records as its caller, which
+  only its ingress hands in: `Opus.Record.new/4`), `:activation_stamp`,
+  `:activation_digest`, `:dep_ref`, `:need`, `:client_ip`, the barriers
+  `:charge`, `:step`, `:occurrence_id` and `:parent_attempt` (the attempt
+  of `:parent_execution_id` a child is admitted under), `:step_spans`,
+  `:envelope` (true when the caller reads
   the component's answer as its catalyst envelope, whose error is a refusal
   the run completes with: `Opus.Close.complete/3`), and what the
   attempt is opened with
@@ -500,6 +502,7 @@ defmodule Opus.Admission do
       |> maybe_put(:execution_id, opts[:execution_id])
       |> maybe_put(:launch, opts[:launch])
       |> maybe_put(:frame_sources, opts[:frame_sources])
+      |> maybe_put(:caller, opts[:caller])
 
     ctx
     |> Record.new(reference, input, record_opts)

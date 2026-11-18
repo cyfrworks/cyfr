@@ -346,7 +346,7 @@ defmodule Aqua.Launch do
       launcher =
         caller
         |> expecting(proposal, args)
-        |> launching(sources, shown, step)
+        |> launching(sources, shown, step, turn)
 
       {:ok, launcher, args}
     end
@@ -514,17 +514,19 @@ defmodule Aqua.Launch do
   # with (`sources_hold/3` has held them to the proposal's), the classes it
   # lets flow — only ever among those sources' own, none for a proposal
   # that bound no grant to judge them against, and none for a decided
-  # launch — the consent revision the root must load at, and the root's
-  # id: the step's pre-minted child id, so the loop can read the root's
-  # row whatever the launch answers.
-  defp launching(caller, sources, %{classes: classes, consent_id: consent_id}, step) do
+  # launch — the consent revision the root must load at, the root's id:
+  # the step's pre-minted child id, so the loop can read the root's row
+  # whatever the launch answers, and the name of the agent whose turn
+  # launched it, which the root records as its caller.
+  defp launching(caller, sources, %{classes: classes, consent_id: consent_id}, step, turn) do
     held = if is_binary(consent_id), do: Prima.Source.classes_of(sources), else: []
 
     Sanctum.Context.stamp_launch(caller, %{
       sources: sources,
       classes: Enum.filter(classes, &(&1 in held)),
       consent_id: consent_id,
-      execution_id: root_id(step)
+      execution_id: root_id(step),
+      agent: turn.agent
     })
   end
 

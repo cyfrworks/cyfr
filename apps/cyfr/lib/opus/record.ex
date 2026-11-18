@@ -153,12 +153,14 @@ defmodule Opus.Record do
     # The classes an approved launch let flow to every exit of its tree,
     # written into the root's policy (`Arca.Execution.launch_key/0`).
     launch_classes: [],
-    # What the run was admitted under (`admitted/2`): the admission decision
-    # (`call_id`, `Arca.DecisionLog`) and what started it (`origin`,
-    # `Prima.Origin`, a root's alone), taken from the context the record is
-    # made in. `write_started/3` writes the row's origin from it, one
-    # derivation, and a read takes both back from the row.
-    admitted: %{call_id: nil, origin: nil}
+    # What the run was admitted under (`admitted/4`): the admission decision
+    # (`call_id`, `Arca.DecisionLog`), what started it (`origin`,
+    # `Prima.Origin`) and who (`caller`, `Prima.Question.Caller`), the last
+    # two a root's alone, taken from what the record is made from.
+    # `write_started/3` writes the row's origin and caller from it, one
+    # derivation, and a read takes them back from the row; a child reads
+    # its root's caller (`caller/1`).
+    admitted: %{call_id: nil, origin: nil, caller: nil}
   ]
 
   @doc """
@@ -181,6 +183,18 @@ defmodule Opus.Record do
   declared reads may carry (`:frame_sources`, which `Opus.Tincture`
   alone passes); an interactive, programmatic, scheduled or feed run
   starts empty until it reads. A child's is its parent's.
+
+  A root's caller (`Prima.Question.Caller`) is derived here, once, from
+  what admitted it, and never from an argument a caller of the gate
+  sends: the frame or webhook its ingress hands in (`:caller`, a
+  `{:tincture, reference}` or `{:webhook, id}` alone, which
+  `Opus.Tincture` and the webhook controller pass); the agent a turn's
+  own root runs (`kind: "turn"`, its reference); the agent a launch's
+  stamp names; the schedule or feed it fired for (`:schedule_id`); the
+  key, or the paired device after its proof, on the context; or a
+  person's own sign-in, on a page or the HTTP API. Where several apply
+  the nearest wins (`Prima.Question.Caller.nearest/1`); none is
+  `:unknown`. A child records none.
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
@@ -194,7 +208,8 @@ defmodule Opus.Record do
     %__MODULE__{
       id: id,
       request_id: ctx.request_id,
-      admitted: admitted(ctx.call_id, ctx.origin, parent_execution_id),
+      admitted:
+        admitted(ctx.call_id, ctx.origin, starter(ctx, reference, opts), parent_execution_id),
       user_id: ctx.user_id,
       athanor_id: ctx.athanor_id,
       reference: reference,
@@ -223,6 +238,61 @@ defmodule Opus.Record do
       launch_classes: if(is_nil(parent_execution_id), do: launch_classes(opts), else: [])
     }
   end
+
+  # Every starter that applies, the nearest of them the caller, which
+  # `admitted/4` keeps for a root alone. The agent's name comes from a
+  # turn root's own reference or a launch's stamp, never from `:caller`,
+  # which names a frame or a webhook alone.
+  defp starter(%Context{} = ctx, reference, opts) do
+    Prima.Question.Caller.nearest([
+      handed_caller(Keyword.get(opts, :caller)),
+      turn_agent(Keyword.get(opts, :kind), reference),
+      launch_agent(Keyword.get(opts, :launch)),
+      named(:schedule, Keyword.get(opts, :schedule_id)),
+      named(:key, ctx.api_key_id),
+      device(ctx),
+      person(ctx)
+    ])
+  end
+
+  defp handed_caller(nil), do: nil
+
+  defp handed_caller({kind, id} = caller)
+       when kind in [:tincture, :webhook] and is_binary(id) and id != "",
+       do: caller
+
+  defp handed_caller(other),
+    do:
+      raise(
+        ArgumentError,
+        "a root's handed caller is a frame or a webhook, not " <>
+          Prima.LoggerContext.shape(other)
+      )
+
+  defp turn_agent("turn", reference) do
+    case Prima.ComponentRef.parse(reference) do
+      {:ok, %Prima.ComponentRef{type: "agent", name: name}} -> named(:agent, name)
+      _not_an_agent -> nil
+    end
+  end
+
+  defp turn_agent(_kind, _reference), do: nil
+
+  defp launch_agent(%{agent: name}), do: named(:agent, name)
+  defp launch_agent(_none), do: nil
+
+  defp device(%Context{auth_method: :device, client_id: id}), do: named(:device, id)
+  defp device(%Context{}), do: nil
+
+  # A person's own sign-in: a page's, or a session's on the HTTP API.
+  defp person(%Context{auth_method: :oidc, authenticated: true, anonymous: false, user_id: id})
+       when is_binary(id),
+       do: :person
+
+  defp person(%Context{}), do: nil
+
+  defp named(kind, id) when is_binary(id) and id != "", do: {kind, id}
+  defp named(_kind, _none), do: nil
 
   defp root_seed(%Context{} = ctx, opts) do
     case Keyword.get(opts, :launch) do
@@ -512,7 +582,9 @@ defmodule Opus.Record do
              turn_id: record.turn_id,
              schedule_id: record.schedule_id,
              origin: origin,
-             sources: record.sources
+             sources: record.sources,
+             caller:
+               record.admitted.caller && Prima.Question.Caller.encode(record.admitted.caller)
            },
            Keyword.merge(
              [
@@ -939,6 +1011,24 @@ defmodule Opus.Record do
   end
 
   @doc """
+  Who started the run `record` stands for (`Prima.Question.Caller`): a
+  root's own, and a child's root's, read from the root's row as
+  `reread/1` reads, since a child records none. A root that cannot be
+  read answers its refusal.
+  """
+  @spec caller(t()) :: {:ok, Prima.Question.Caller.t()} | {:error, term()}
+  def caller(%__MODULE__{parent_execution_id: nil, admitted: %{caller: caller}}),
+    do: {:ok, caller || :unknown}
+
+  def caller(%__MODULE__{root_execution_id: root} = record) when is_binary(root) do
+    case reread(%{record | id: root}) do
+      {:ok, %__MODULE__{parent_execution_id: nil} = read} -> caller(read)
+      {:ok, %__MODULE__{}} -> {:error, {:corrupt, {:execution, root}}}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  @doc """
   List execution records for the context's athanor.
 
   This returns the athanor's executions, whichever of its credentials
@@ -1019,11 +1109,12 @@ defmodule Opus.Record do
          {:ok, component_type} <- parse_component_type(result.component_type),
          {:ok, input} <- stored_json(result, :input),
          {:ok, output} <- stored_json(result, :output),
-         {:ok, host_policy} <- stored_json(result, :host_policy) do
+         {:ok, host_policy} <- stored_json(result, :host_policy),
+         {:ok, caller} <- stored_caller(result) do
       # An input the read does not select (a listing selects no payload
       # column) reads as empty.
       json = %{input: input || %{}, output: output, host_policy: host_policy}
-      {:ok, record_of(result, status, component_type, json)}
+      {:ok, record_of(result, status, component_type, json, caller)}
     else
       :error ->
         Logger.error(
@@ -1039,15 +1130,37 @@ defmodule Opus.Record do
         )
 
         {:error, {:corrupt, {:execution, result.id}}}
+
+      :not_a_caller ->
+        Logger.error(
+          "[Opus.Record] execution #{result.id} is stored damaged: its caller names none"
+        )
+
+        {:error, {:corrupt, {:execution, result.id}}}
     end
   end
 
-  defp record_of(result, status, component_type, json) do
+  # A row's stored caller, a row that recorded none reading as `:unknown`,
+  # which `admitted/4` keeps for a root alone. Stored text the codec
+  # refuses is damage.
+  defp stored_caller(result) do
+    case Prima.Question.Caller.decode(result[:caller]) do
+      {:ok, caller} -> {:ok, caller}
+      {:error, _} -> :not_a_caller
+    end
+  end
+
+  defp record_of(result, status, component_type, json, caller) do
     %__MODULE__{
       id: result.id,
       request_id: result.request_id,
       admitted:
-        admitted(result[:call_id], stored_origin(result[:origin]), result[:parent_execution_id]),
+        admitted(
+          result[:call_id],
+          stored_origin(result[:origin]),
+          caller,
+          result[:parent_execution_id]
+        ),
       user_id: result.user_id,
       athanor_id: result[:athanor_id],
       reference: result.reference,
@@ -1237,17 +1350,22 @@ defmodule Opus.Record do
   defp stored_class(class), do: Map.get(@error_classes, class)
 
   @typedoc "What a run was admitted under: its decision and what started it."
-  @type admitted :: %{call_id: String.t() | nil, origin: Prima.Origin.t() | nil}
+  @type admitted :: %{
+          call_id: String.t() | nil,
+          origin: Prima.Origin.t() | nil,
+          caller: Prima.Question.Caller.t() | nil
+        }
 
   # The one derivation of what a record was admitted under, at admission
-  # and from its row alike: a root keeps the origin it was started with,
-  # and a child has none, though its row stores its parent's
-  # (`Arca.Execution.admit/2`), so a child reads the same before and after
-  # it is stored.
-  defp admitted(call_id, origin, nil = _parent_execution_id),
-    do: %{call_id: call_id, origin: origin}
+  # and from its row alike: a root keeps the origin it was started with
+  # and its caller, and a child has neither, though its row stores its
+  # parent's origin (`Arca.Execution.admit/2`), so a child reads the same
+  # before and after it is stored.
+  defp admitted(call_id, origin, caller, nil = _parent_execution_id),
+    do: %{call_id: call_id, origin: origin, caller: caller}
 
-  defp admitted(call_id, _origin, _parent_execution_id), do: %{call_id: call_id, origin: nil}
+  defp admitted(call_id, _origin, _caller, _parent_execution_id),
+    do: %{call_id: call_id, origin: nil, caller: nil}
 
   @doc """
   What started the run a record, or its stored row, stands for
@@ -1260,7 +1378,10 @@ defmodule Opus.Record do
 
   def origin(row) when is_map(row) do
     spelling = Map.get(row, :origin)
-    %{origin: origin} = admitted(nil, stored_origin(spelling), Map.get(row, :parent_execution_id))
+
+    %{origin: origin} =
+      admitted(nil, stored_origin(spelling), nil, Map.get(row, :parent_execution_id))
+
     origin
   end
 
