@@ -254,6 +254,67 @@ defmodule Sanctum.Consent.PlanTest do
       })
   end
 
+  describe "what the closure's catalysts say they ask" do
+    setup %{ctx: ctx} do
+      for {type, name, manifest} <- [
+            {"catalyst", "plan-asker", %{"asks" => [ask("delete_table"), ask("delete_rows")]}},
+            {"catalyst", "plan-quiet", %{}},
+            {"formula", "plan-asking-app",
+             %{
+               "asks" => nil,
+               "dependencies" => %{
+                 "static" => [
+                   %{"ref" => "catalyst:local.plan-quiet"},
+                   %{"ref" => "catalyst:local.plan-asker"}
+                 ]
+               }
+             }}
+          ] do
+        manifest =
+          manifest
+          |> Map.reject(fn {_key, value} -> is_nil(value) end)
+          |> Map.merge(%{
+            "name" => name,
+            "type" => type,
+            "version" => "1.0.0",
+            "publisher" => "local"
+          })
+
+        {:ok, _} =
+          Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, "1.0.0",
+            manifest: manifest,
+            wasm: Cyfr.Test.Guests.wasm(type)
+          )
+      end
+
+      :ok
+    end
+
+    defp ask(name), do: %{"name" => name, "title" => String.replace(name, "_", " ")}
+
+    test "a catalyst's own, in its manifest's order, under its node", %{ctx: ctx} do
+      {:ok, plan} = Plan.plan(ctx, %{ref: "catalyst:local.plan-asker"})
+
+      assert plan.asks == [
+               %{node: "catalyst:local.plan-asker", name: "delete_table", title: "delete table"},
+               %{node: "catalyst:local.plan-asker", name: "delete_rows", title: "delete rows"}
+             ]
+    end
+
+    test "a dependency's, under the dependency, and none for a node that declares none",
+         %{ctx: ctx} do
+      {:ok, plan} = Plan.plan(ctx, %{ref: "formula:local.plan-asking-app"})
+
+      assert plan.asks == [
+               %{node: "catalyst:local.plan-asker", name: "delete_table", title: "delete table"},
+               %{node: "catalyst:local.plan-asker", name: "delete_rows", title: "delete rows"}
+             ]
+
+      {:ok, quiet} = Plan.plan(ctx, %{ref: "catalyst:local.plan-quiet"})
+      assert quiet.asks == []
+    end
+  end
+
   describe "a need met by mounting" do
     @login_need %{
       "type" => "login",

@@ -1790,6 +1790,70 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     refute html =~ ~s(data-test="grant-rows")
   end
 
+  test "what the app and its dependencies declare they ask is listed as their developer's " <>
+         "claim, the app's own first, a dependency's under its name; none draws no section" do
+    app = "formula:local.sheet-asks"
+    dep = "catalyst:local.sheet-db"
+
+    walk = fn asks ->
+      %{
+        ref: app,
+        plan: %{
+          plan_token: "not-read",
+          expected_consent_revision: 0,
+          source_ref: app,
+          needs: [],
+          candidates: [],
+          rows: [],
+          asks: asks
+        },
+        preview: nil,
+        decisions: %{"ref" => app, "bindings" => []}
+      }
+    end
+
+    render = fn asks ->
+      render_component(PrismWeb.ConsentSheetComponent,
+        id: "consent-sheet",
+        ref: app,
+        walk: walk.(asks),
+        context: oidc_ctx()
+      )
+    end
+
+    html =
+      render.([
+        %{node: app, name: "send_mail", title: "send an email"},
+        %{node: dep, name: "delete_table", title: "delete a table"},
+        %{node: dep, name: "delete_rows", title: "delete rows from a table"}
+      ])
+
+    section =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="grant-asks"]))
+
+    text = section |> LazyHTML.text() |> String.replace(~r/\s+/, " ")
+    assert text =~ "Its developer says it asks you before it does any of these."
+    assert text =~ "Nothing checks that it does"
+
+    groups =
+      section
+      |> LazyHTML.query(~s([data-test="grant-asks-node"]))
+      |> Enum.map(fn group ->
+        {LazyHTML.attribute(group, "data-node"), group |> LazyHTML.query("h5") |> LazyHTML.text(),
+         group |> LazyHTML.query("li") |> Enum.map(&LazyHTML.text/1)}
+      end)
+
+    assert groups == [
+             {[app], "", ["send an email"]},
+             {[dep], "#{dep}, which this app uses",
+              ["delete a table", "delete rows from a table"]}
+           ]
+
+    refute render.([]) =~ ~s(data-test="grant-asks")
+  end
+
   test "what changed is worded against the person's grant, never as the component widening" do
     walk = %{
       ref: "tincture:local.sheet-delta",
