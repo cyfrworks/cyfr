@@ -521,6 +521,54 @@ defmodule Cyfr.Test.SandboxTest do
       assert_runners_given_back(Process.whereis(Aqua.RunnerSupervisor))
     end
 
+    # The supervisor's state is its own. With the field this reads gone, as
+    # another Elixir could have it, the forgetting fails inside the
+    # supervisor, which stays suspended until it is replaced.
+    test "a supervisor whose state cannot be read is replaced, and the test fails",
+         %{supervisor: supervisor} do
+      error =
+        assert_raise ExUnit.AssertionError, fn ->
+          Sandbox.holding_runners(fn ->
+            :sys.replace_state(supervisor, &Map.delete(&1, :children))
+          end)
+        end
+
+      assert error.message =~ "could not be given back after the sweep's kills"
+      assert error.message =~ "it was replaced"
+      refute Process.alive?(supervisor)
+      assert_runners_given_back(Process.whereis(Aqua.RunnerSupervisor))
+    end
+
+    # ExUnit ends an `on_exit` callback that outlives its deadline with a
+    # kill, which runs nothing of the callback's own.
+    test "a supervisor whose holder is killed at its deadline is replaced",
+         %{supervisor: supervisor} do
+      test = self()
+      root = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(root, :kill) end)
+      ExUnit.OnExitHandler.register(root)
+
+      :ok =
+        ExUnit.OnExitHandler.add(root, make_ref(), fn ->
+          Sandbox.holding_runners(fn ->
+            send(test, :held)
+            Process.sleep(:infinity)
+          end)
+        end)
+
+      assert {:error, %ExUnit.TimeoutError{}, _stack} = ExUnit.OnExitHandler.run(root, 50)
+      assert_received :held
+
+      Prima.Test.Wait.wait_until(
+        fn -> Process.whereis(Aqua.RunnerSupervisor) not in [nil, supervisor] end,
+        5_000,
+        "a fresh supervisor in place of the one its holder died holding"
+      )
+
+      refute Process.alive?(supervisor)
+      assert_runners_given_back(Process.whereis(Aqua.RunnerSupervisor))
+    end
+
     # The supervisor is inside a child's start, as it is while a runner
     # reads its thread, and answers nothing until the start returns.
     test "a supervisor that does not stop for the hold is replaced, and the test fails",

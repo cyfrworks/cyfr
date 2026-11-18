@@ -538,13 +538,30 @@ defmodule Cyfr.Test.Sandbox do
   Where no such supervisor runs, `fun` runs alone. A supervisor that does
   not stop for the hold, or cannot be given back, is killed, so its tree
   starts a fresh one for the next test, and the test fails saying which.
+  So is one whose holder dies before it has given it back, however it
+  dies: ExUnit kills an `on_exit` callback that outlives its deadline,
+  and nothing of the caller's then runs.
   """
   @spec holding_runners((-> result), pos_integer()) :: result when result: var
   def holding_runners(fun, wait_ms \\ @hold_ms)
       when is_function(fun, 0) and is_integer(wait_ms) and wait_ms > 0 do
-    supervisor = Process.whereis(@runner_supervisor)
+    case Process.whereis(@runner_supervisor) do
+      nil ->
+        fun.()
 
-    case supervisor && suspend(supervisor, wait_ms) do
+      supervisor ->
+        watch = watch_holder(supervisor)
+
+        try do
+          held(supervisor, fun, wait_ms)
+        after
+          send(watch, {:given_back, self()})
+        end
+    end
+  end
+
+  defp held(supervisor, fun, wait_ms) do
+    case suspend(supervisor, wait_ms) do
       :ok ->
         try do
           fun.()
@@ -561,9 +578,26 @@ defmodule Cyfr.Test.Sandbox do
             "so the sweep ran with nothing holding its restarts; it was replaced"
         )
 
-      _none ->
+      :gone ->
         fun.()
     end
+  end
+
+  # Outlives the holder: started before the suspension is asked for, it
+  # kills the supervisor when the holder dies without having said it gave
+  # it back, a kill included, which runs no `after`. The supervisor's tree
+  # then starts a fresh one.
+  defp watch_holder(supervisor) do
+    holder = self()
+
+    spawn(fn ->
+      ref = Process.monitor(holder)
+
+      receive do
+        {:given_back, ^holder} -> :ok
+        {:DOWN, ^ref, :process, ^holder, _reason} -> Process.exit(supervisor, :kill)
+      end
+    end)
   end
 
   # A suspension that timed out is still in the supervisor's mailbox and
@@ -578,7 +612,8 @@ defmodule Cyfr.Test.Sandbox do
 
   # A dead child's exit, read after the resume, is then no child's and
   # starts nothing. The supervisor's state is its own: one this cannot
-  # read fails the replacement, and the supervisor is replaced instead.
+  # read fails the replacement, as an error where a call that got no
+  # answer is an exit, and the supervisor is replaced instead.
   defp give_back(supervisor, wait_ms) do
     :sys.replace_state(
       supervisor,
@@ -591,7 +626,7 @@ defmodule Cyfr.Test.Sandbox do
     :sys.resume(supervisor, wait_ms)
     :ok
   catch
-    :exit, reason ->
+    kind, reason when kind in [:exit, :error] ->
       if Process.alive?(supervisor) do
         replace(supervisor, wait_ms)
 
