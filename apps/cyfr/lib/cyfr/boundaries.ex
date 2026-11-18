@@ -461,7 +461,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Mount
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
         Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
-        Sanctum.TinctureAccess Sanctum.Vault Sanctum.VaultReader
+        Sanctum.TinctureAccess Sanctum.ToolGrants Sanctum.Vault Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -472,7 +472,12 @@ defmodule Cyfr.Boundaries do
           "(`Sanctum.Vault.disclosed?/2`) before it unseals any; a " <>
           "catalyst's pipe mounts its login need through `Sanctum.Mount.resolve/4` " <>
           "(`Opus.Host.Pipe`), and a reset or retired home forgets the sessions of the " <>
-          "agents whose brain runs there (`Sanctum.Mount.agents_mounting/2`). `Sanctum` bare is the domain's own " <>
+          "agents whose brain runs there (`Sanctum.Mount.agents_mounting/2`). " <>
+          "`Sanctum.ToolGrants` is `Opus.Brain`'s read of the decision that admitted a " <>
+          "held program's start, as it is about to write: whether a standing answer says " <>
+          "never to the agent's `program.start` (`for_thread/2`), and whether a standing " <>
+          "allow still covers that start (`admits?/2`); it writes no grant. " <>
+          "`Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
