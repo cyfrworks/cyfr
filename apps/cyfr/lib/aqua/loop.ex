@@ -730,11 +730,12 @@ defmodule Aqua.Loop do
     with {:ok, _drained} <- Tape.drain_steer(guest(state), state.turn),
          {:ok, rows} <- Tape.projection(guest(state), state.turn),
          removed = removed_files(state.spec.ctx, rows),
-         {:ok, planned, rows} <- compact(state, rows, removed),
+         files = later_files(state, rows),
+         {:ok, planned, rows} <- compact(state, rows, removed, files),
          cited = cited(planned, rows),
          {:ok, step, planned} <- open_model_step(planned, "chat", rows, cited) do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
-      request = request(planned, rows, excerpt, cited, removed)
+      request = request(planned, rows, excerpt, cited, removed, files)
       planned = %{planned | sent_upto: highest_seq(rows)}
 
       if excerpt do
@@ -752,10 +753,12 @@ defmodule Aqua.Loop do
     end
   end
 
-  # Every round carries the sender's attachments: the projection renders
-  # text, and an image or a document exists only as these typed blocks, so
-  # a round without them would not show the model what it was asked about.
-  defp request(%State{spec: spec} = state, rows, excerpt, cited, removed) do
+  # Every round carries the sender's attachments, and those of each later
+  # post written into the turn (`files`, `later_files/2`): the projection
+  # renders text, and an image or a document exists only as these typed
+  # blocks, so a round without them would not show the model what it was
+  # asked about.
+  defp request(%State{spec: spec} = state, rows, excerpt, cited, removed, files) do
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
     multi? = length(authors) > 1
@@ -771,6 +774,7 @@ defmodule Aqua.Loop do
         excerpt: excerpt,
         attachments: spec.attachments,
         task_message_id: state.turn.message_id,
+        files: files,
         refs: Map.new(cited, &{&1.id, &1})
       )
 
@@ -801,6 +805,19 @@ defmodule Aqua.Loop do
         removed != [],
         into: %{},
         do: {row.id, removed}
+  end
+
+  # By row id, the files of each post written into the turn after the one
+  # that opened it (a drained steer), as blocks the brain takes, made as the
+  # opening post's are (`Turn.file_blocks/3`). Read once a round, beside
+  # `removed_files/2`, and only for the rows the request carries; the turn's
+  # own rows are its agent's, and the opening post's ride `spec.attachments`.
+  defp later_files(%State{spec: spec, turn: turn}, rows) do
+    for row <- rows |> Planner.prune() |> Request.carried(),
+        row.turn_id == turn.id and row.id != turn.message_id and row.sent_by != turn.agent,
+        Aqua.Attachments.refs_of(row) != [],
+        into: %{},
+        do: {row.id, Turn.file_blocks(spec.ctx, row, spec.capabilities.media_types)}
   end
 
   # The model step is dispatched before the call: a recovery finds it
@@ -2825,13 +2842,13 @@ defmodule Aqua.Loop do
   # Compaction
   # ---------------------------------------------------------------------------
 
-  defp compact(%State{spec: spec} = state, rows, removed, flush? \\ true) do
+  defp compact(%State{spec: spec} = state, rows, removed, files, flush? \\ true) do
     # Size the request the way the executor will: it encodes the input and
     # refuses it past the consented cap of the node being entered, which for
     # a model call is the catalyst, not the agent. Without this the turn
     # fails at admission on a request compaction could have made fit.
     excerpt = if state.excerpt_sent?, do: nil, else: spec.excerpt
-    probe = request(state, rows, excerpt, cited(state, rows), removed)
+    probe = request(state, rows, excerpt, cited(state, rows), removed, files)
 
     case Planner.plan(rows,
            capabilities: spec.capabilities,
@@ -2857,7 +2874,7 @@ defmodule Aqua.Loop do
         case flush(state, rows, probe) do
           {:flushed, state} ->
             with {:ok, rows} <- Tape.projection(guest(state), state.turn),
-                 do: compact(state, rows, removed, false)
+                 do: compact(state, rows, removed, files, false)
 
           {:skipped, state} ->
             summarize(state, rows, boundary, removed)
