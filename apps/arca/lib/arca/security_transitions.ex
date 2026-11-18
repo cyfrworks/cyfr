@@ -725,8 +725,8 @@ defmodule Arca.SecurityTransitions do
   `Prima.ExecutionState` and `Prima.TurnState`: an execution `failed`,
   its attempt `lapsed` with outcome `uncertain` and the attempt's pending
   write intents `uncertain`, a turn `uncertain` with its open steps, and
-  every open component question `ended` (`Arca.Questions.close_all!/0`),
-  announced to no one, since every session is gone. Rows
+  every open component question `ended`, announced to no one, since
+  every session is gone. Rows
   already suspended, blocked, revoked or tombstoned keep their state. It
   then deletes the marker it read, so a retry after commit finds no
   marker and moves nothing, and a crash before commit leaves the marker
@@ -858,7 +858,8 @@ defmodule Arca.SecurityTransitions do
     {_count, grant_ids} =
       Arca.Repo.delete_all(from(g in ToolGrant, where: g.effect == "allow", select: g.id))
 
-    question_answer_ids = Arca.Questions.delete_all_allows!()
+    {_count, question_answer_ids} =
+      Arca.Repo.delete_all(from(a in QuestionAnswer, where: a.effect == "allow", select: a.id))
 
     {bindings, _} =
       Arca.Repo.update_all(
@@ -906,7 +907,7 @@ defmodule Arca.SecurityTransitions do
       deleted_confirmation_refs: confirmation_refs,
       needs_consent_profile_ids: profile_ids,
       dropped_grant_ids: Enum.sort(grant_ids || []),
-      dropped_question_answer_ids: question_answer_ids,
+      dropped_question_answer_ids: Enum.sort(question_answer_ids || []),
       dropped_once_bindings: bindings,
       expired_approval_ids: approval_ids,
       needs_reauth_vault_entry_ids: vault_ids,
@@ -984,7 +985,9 @@ defmodule Arca.SecurityTransitions do
       set: [dispatch_state: "uncertain", outcome: "uncertain", ended_at: now]
     )
 
-    _closed = Arca.Questions.close_all!()
+    Arca.Repo.update_all(from(q in Question, where: q.state == "open"),
+      set: [state: "ended", decided_at: now]
+    )
 
     %{
       failed_execution_ids: execution_ids,

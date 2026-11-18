@@ -27,8 +27,9 @@ defmodule Arca.Questions do
   run's lock and then the question's, the order every run-ending write
   keeps, while its deadline is to come on the database's clock and its
   attempt is current and its run open. The writes that end a run close
-  that run's own open questions in their own transaction
-  (`close_run!/2`, `close_all!/0`) and answer which.
+  that run's own open questions in their own transaction (`close_run!/2`)
+  and answer which; a declared restore ends every open one and deletes
+  every standing allow itself (`Arca.SecurityTransitions`).
 
   ## Standing answers
 
@@ -55,6 +56,9 @@ defmodule Arca.Questions do
     :until,
     :question_ref
   ]
+
+  # What a write replaces on its identity: everything but the identity.
+  @replaced [:id, :declaration_digest, :effect, :until, :answered_at, :question_ref]
 
   @typedoc "A question or a standing answer, as a plain map."
   @type row :: map()
@@ -413,9 +417,11 @@ defmodule Arca.Questions do
 
   def put_standing(%Prima.Actor{}, _standing, _opts), do: {:error, :no_athanor}
 
-  # The delete and the insert are two statements in one transaction: a
-  # failed insert leaves the answer that stood before. A writer racing in
-  # between loses on the identity's index, answered as a refusal.
+  # One statement on the identity: an upsert on its unique index, so a
+  # second write of one identity waits for the first and replaces it, and
+  # neither is lost or refused. A deny for any caller then deletes the
+  # action's allows for single callers in the same transaction; one written
+  # after it stands.
   # arca:db-raise-ok inside the caller's transaction
   defp put_standing_in(actor, standing) do
     changeset =
@@ -428,26 +434,24 @@ defmodule Arca.Questions do
         answered_at: Arca.ServerMetaStorage.now!()
       })
       |> QuestionAnswer.changeset()
-      |> Ecto.Changeset.unique_constraint(identity(),
-        name: :question_answers_identity_index
-      )
-      |> Ecto.Changeset.unique_constraint(identity(),
-        name: "question_answers_#{Enum.join(identity(), "_")}_index"
-      )
 
     if changeset.valid? do
-      row = Ecto.Changeset.apply_changes(changeset)
-      same = same_action(row)
+      {:ok, stored} =
+        Arca.Repo.insert(changeset,
+          on_conflict: {:replace, @replaced},
+          conflict_target: identity(),
+          returning: true
+        )
 
-      Arca.Repo.delete_all(from(a in same, where: a.caller == ^row.caller))
-
-      if row.effect == "deny" and row.caller == Prima.Question.Caller.any(),
-        do: Arca.Repo.delete_all(from(a in same, where: a.effect == "allow"))
-
-      case Arca.Repo.insert(changeset) do
-        {:ok, stored} -> {:ok, stored}
-        {:error, changeset} -> {:error, Arca.Data.invalid(changeset)}
+      if stored.effect == "deny" and stored.caller == Prima.Question.Caller.any() do
+        Arca.Repo.delete_all(
+          from(a in same_action(stored),
+            where: a.effect == "allow" and a.caller != ^Prima.Question.Caller.any()
+          )
+        )
       end
+
+      {:ok, stored}
     else
       {:error, Arca.Data.invalid(changeset)}
     end
@@ -521,30 +525,6 @@ defmodule Arca.Questions do
     |> close!()
   end
 
-  @doc """
-  Close every open question of the server, inside a declared restore's
-  transaction, and answer how many.
-  """
-  @spec close_all!() :: non_neg_integer()
-  def close_all! do
-    from(q in Question, where: q.state == "open") |> close!() |> length()
-  end
-
-  @doc """
-  Delete every standing allow of the server, keeping every deny, inside
-  a declared restore's transaction, and answer their ids, sorted.
-  """
-  @spec delete_all_allows!() :: [String.t()]
-  # arca:db-raise-ok a transaction step: the restore rescues around its transaction.
-  # arca:unscoped-ok a declared restore drops every standing allow of the server.
-  def delete_all_allows! do
-    {_count, ids} =
-      Arca.Repo.delete_all(from(a in QuestionAnswer, where: a.effect == "allow", select: a.id))
-
-    Enum.sort(ids || [])
-  end
-
-  # A run's questions, or every open one of the server for a declared restore.
   # arca:db-raise-ok inside the caller's transaction
   defp close!(query) do
     {_count, rows} =

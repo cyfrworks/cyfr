@@ -186,18 +186,25 @@ defmodule Arca.Schemas.Execution do
     |> validate_inclusion(:origin, Prima.Origin.spellings())
     |> validate_component_type()
     |> validate_child_key()
-    |> validate_caller()
+    |> validate_caller(attrs)
   end
 
   # A caller is stored as its text, and only a text that names one: `any`
-  # is a standing answer's, never a run's.
-  defp validate_caller(changeset) do
-    validate_change(changeset, :caller, fn :caller, text ->
-      case Prima.Question.Caller.decode(text) do
-        {:ok, _caller} -> []
-        {:error, _} -> [caller: "names no caller"]
-      end
-    end)
+  # is a standing answer's, never a run's. Read from what was handed in,
+  # since the cast turns an empty text into none: only an absent caller is
+  # absent (a child, or a root that recorded none), and a supplied one the
+  # codec refuses, the empty text among them, is refused here.
+  defp validate_caller(changeset, attrs) do
+    case Map.get(attrs, :caller) do
+      nil ->
+        changeset
+
+      text ->
+        case Prima.Question.Caller.decode(text) do
+          {:ok, _caller} when is_binary(text) -> changeset
+          _refused -> add_error(changeset, :caller, "names no caller")
+        end
+    end
   end
 
   # An origin arrives as a `Prima.Origin` atom or its wire spelling and is

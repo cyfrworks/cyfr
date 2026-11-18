@@ -55,6 +55,35 @@ defmodule Arca.ExecutionTest do
       end
     end
 
+    test "keeps an absent caller absent and refuses a supplied one the codec refuses" do
+      attrs = %{
+        id: "exec_caller",
+        root_execution_id: "exec_caller",
+        reference: "catalyst:local.test:1.0.0",
+        user_id: "user_abc",
+        athanor_id: @athanor,
+        started_at: DateTime.utc_now(),
+        status: "running",
+        component_type: "catalyst"
+      }
+
+      for absent <- [attrs, Map.put(attrs, :caller, nil)] do
+        changeset = Row.start_changeset(absent)
+        assert changeset.valid?
+        assert Ecto.Changeset.get_field(changeset, :caller) == nil
+      end
+
+      for caller <- ["person", "key:key_1", "tincture:a:b"] do
+        assert Row.start_changeset(Map.put(attrs, :caller, caller)).valid?, caller
+      end
+
+      for caller <- ["", " ", "any", "key:", "robot:1", :person] do
+        changeset = Row.start_changeset(Map.put(attrs, :caller, caller))
+        refute changeset.valid?, inspect(caller)
+        assert {"names no caller", _} = changeset.errors[:caller]
+      end
+    end
+
     test "requires id" do
       attrs = %{
         reference: ~s({"local": "./test.wasm"}),

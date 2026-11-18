@@ -75,7 +75,7 @@ defmodule Arca.QuestionsTest do
         ask_no: 1,
         request_digest: @digest,
         component_ref: "catalyst:acme.tables:1.0.0",
-        release_digest: String.duplicate("b", 64),
+        release_digest: Prima.Digest.sha256("release"),
         action: "delete_table",
         title: "delete a table",
         summary: "Drop the table users in the project acme",
@@ -187,6 +187,8 @@ defmodule Arca.QuestionsTest do
 
       for attrs <- [
             %{request_digest: "ABC"},
+            %{request_digest: Prima.Digest.sha256("request")},
+            %{release_digest: String.duplicate("b", 64)},
             %{ask_no: 0},
             %{state: "ended"},
             %{state: "none"},
@@ -211,6 +213,41 @@ defmodule Arca.QuestionsTest do
 
       assert {:error, :no_athanor} =
                Questions.admit(%Prima.Actor{user_id: @person}, question(run))
+    end
+  end
+
+  describe "long texts" do
+    # A caller names a tincture's reference or an agent's name, and a
+    # reference a publisher of up to 253 characters: neither is bounded at
+    # 255, on either adapter.
+    test "a caller and a component reference past 255 characters are stored whole" do
+      publisher = Enum.map_join(~w(a b c d), ".", &String.duplicate(&1, 60))
+      ref = "catalyst:#{publisher}.tables:1.0.0"
+      caller = "tincture:" <> String.duplicate("t", 300)
+      assert {:ok, _} = Prima.ComponentRef.parse(ref)
+      assert String.length(ref) > 255
+
+      run = run!()
+      row = admit!(run, %{caller: caller, component_ref: ref})
+      assert %{caller: ^caller, component_ref: ^ref} = row
+      assert {:ok, [^caller]} = Questions.callers(actor(), @person, publisher, "tables")
+
+      assert {:ok, %{caller: ^caller}} =
+               Questions.put_standing(actor(), standing(%{caller: caller}), verify: &ok/0)
+
+      id = "exec_q_long_#{System.unique_integer([:positive])}"
+
+      assert {:ok, %{caller: ^caller}} =
+               Arca.Test.Writers.record_start(%{
+                 id: id,
+                 reference: "catalyst:acme.tables:1.0.0",
+                 user_id: @person,
+                 athanor_id: @athanor,
+                 started_at: DateTime.utc_now(),
+                 status: "running",
+                 component_type: "catalyst",
+                 caller: caller
+               })
     end
   end
 

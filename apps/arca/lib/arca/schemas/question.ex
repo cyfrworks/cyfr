@@ -21,6 +21,9 @@ defmodule Arca.Schemas.Question do
   @states ~w(open allowed denied none ended)
   @none_reasons ~w(unattended invalid unavailable)
   @digest ~r/\A[0-9a-f]{64}\z/
+  # A release's identity is the registry's own spelling, kept verbatim
+  # (`Compendium.ReleaseDigest`, `Prima.Digest.sha256/1`).
+  @release_digest ~r/\Asha256:[0-9a-f]{64}\z/
   @ref ~r/\A[A-Za-z0-9_-]{1,64}\z/
 
   schema "questions" do
@@ -85,8 +88,9 @@ defmodule Arca.Schemas.Question do
   The row an admission writes: every column present but who decided it,
   the first state any but `ended`, a reason exactly when the state is
   `none`, a standing answer only beside `allowed` or `denied`, a URL-safe
-  ref of at most 64 characters, a positive ask number, both digests
-  lowercase SHA-256 hexadecimal, and a caller's text
+  ref of at most 64 characters, a positive ask number, the request's
+  digest lowercase SHA-256 hexadecimal, the release's digest the
+  registry's `sha256:<hexadecimal>`, and a caller's text
   (`Prima.Question.Caller`).
   """
   @spec admit_changeset(map()) :: Ecto.Changeset.t()
@@ -97,7 +101,7 @@ defmodule Arca.Schemas.Question do
     |> validate_format(:ref, @ref)
     |> validate_number(:ask_no, greater_than: 0)
     |> validate_format(:request_digest, @digest)
-    |> validate_format(:release_digest, @digest)
+    |> validate_format(:release_digest, @release_digest)
     |> validate_inclusion(:state, @states -- ["ended"])
     |> validate_reason()
     |> validate_standing()

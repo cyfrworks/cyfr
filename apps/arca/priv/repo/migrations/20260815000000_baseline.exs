@@ -1345,8 +1345,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :sources, :text, null: false, default: "[]"
       # Who started the root (`Prima.Question.Caller`'s text), set on a
       # root and null on a child, which reads its root's. A root with none
-      # reads as `unknown`.
-      add :caller, :string
+      # reads as `unknown`. Text: a caller names a tincture's reference or
+      # an agent's name, whose length the codec does not bound.
+      add :caller, :text
     end
 
     checked(sqlite?, :executions, [execution_status, execution_error_class])
@@ -1654,7 +1655,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       # SHA-256 of the request before masking, lowercase hexadecimal: a
       # retry under the same key with other content is refused by it.
       add :request_digest, :string, null: false
-      add :component_ref, :string, null: false
+      add :component_ref, :text, null: false
+      # The registry's spelling, `sha256:<hexadecimal>`, kept verbatim.
       add :release_digest, :string, null: false
       add :action, :string, null: false
       add :title, :string, null: false
@@ -1662,7 +1664,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :summary, :text, null: false
       add :operation, :text, null: false
       add :masked, :boolean, null: false
-      add :caller, :string, null: false
+      add :caller, :text, null: false
       add :deadline, :utc_datetime_usec, null: false
       add :state, :string, null: false, check: if(sqlite?, do: question_state)
       add :none_reason, :string
@@ -1689,7 +1691,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :action, :string, null: false
       add :declaration_digest, :string, null: false
-      add :caller, :string, null: false
+      add :caller, :text, null: false
       add :effect, :string, null: false, check: if(sqlite?, do: answer_effect)
       # Null for an answer that stands always.
       add :until, :utc_datetime_usec
