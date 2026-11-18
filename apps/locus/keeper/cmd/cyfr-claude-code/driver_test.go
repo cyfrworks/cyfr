@@ -863,6 +863,9 @@ func TestForgetRefusesAPlanTieThatDoesNotRead(t *testing.T) {
 		"a truncated line":                 `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":`,
 		"an attachment that is no object":  `{"type":"attachment","slug":"brave-otter","attachment":"plan_mode"}` + "\n",
 		"a planFilePath that is no string": `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":42}}` + "\n",
+		"a null line":                      "null\n",
+		"a null planFilePath":              `{"type":"attachment","slug":"brave-otter","attachment":{"type":"plan_mode","planFilePath":null}}` + "\n",
+		"a null slug":                      `{"type":"user","slug":null}` + "\n",
 	} {
 		for _, where := range []string{"session", "helper"} {
 			home := t.TempDir()
@@ -886,6 +889,58 @@ func TestForgetRefusesAPlanTieThatDoesNotRead(t *testing.T) {
 					t.Fatalf("%s in the %s's transcript: a refused forget removes nothing: %v", name, where, err)
 				}
 			}
+		}
+	}
+}
+
+// #10222's first finding: only a regular file or a folder among the
+// session's paths is the session's own. A helper's transcript, or the
+// session's own, that is a link (here to a file naming another session's
+// slug), and a plan file the slug names that is a link, each refuse the
+// forget, which removes nothing: another session's plan and the link's
+// target stay.
+func TestForgetRefusesALinkAmongTheSessionsPaths(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	session := "6b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	for _, link := range []string{"the helper's transcript", "the session's transcript", "the plan file"} {
+		home := t.TempDir()
+		project := filepath.Join(home, ".claude", "projects", "-work")
+		transcript := filepath.Join(project, session+".jsonl")
+		helper := filepath.Join(project, session, "subagents", "agent-a1234567.jsonl")
+		plans := filepath.Join(home, ".claude", "plans")
+		other := filepath.Join(home, "elsewhere", "other.jsonl")
+		target := filepath.Join(home, "elsewhere", "own-session.md")
+		files := map[string]string{
+			other:                                    `{"type":"user","slug":"other-session"}` + "\n",
+			filepath.Join(plans, "other-session.md"): "another session's plan",
+			target:                                   "what the link stands for",
+			helper:                                   `{"type":"user","slug":"own-session"}` + "\n",
+			transcript:                               `{"type":"user","slug":"own-session"}` + "\n",
+			filepath.Join(plans, "own-session.md"):   "the session's plan",
+		}
+		linked := map[string]string{"the helper's transcript": helper, "the session's transcript": transcript, "the plan file": filepath.Join(plans, "own-session.md")}[link]
+		delete(files, linked)
+		writeAll(t, files)
+		points := other
+		if link == "the plan file" {
+			points = target
+		}
+		if err := os.MkdirAll(filepath.Dir(linked), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(points, linked); err != nil {
+			t.Fatal(err)
+		}
+		if got := forgetIn(t, home, session); got != "refused" {
+			t.Fatalf("%s a link: forget answers %s", link, got)
+		}
+		for path := range files {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("%s a link: a refused forget removes nothing: %v", link, err)
+			}
+		}
+		if _, err := os.Lstat(linked); err != nil {
+			t.Fatalf("%s a link: the link stays: %v", link, err)
 		}
 	}
 }
@@ -941,9 +996,15 @@ func TestHarnessOptionsAreTheRowCommandsArgumentsPastItsLauncher(t *testing.T) {
 		{[]string{"claude"}, []string{}},
 		{[]string{"/home/a/.local/bin/claude"}, []string{}},
 		{[]string{"npx", "-y", "@anthropic-ai/claude-code@2.1.323", "--settings", "x.json"}, []string{"--settings", "x.json"}},
-		{[]string{"npx", "-c", "claude --settings x.json"}, []string{"-c", "claude --settings x.json"}},
-		{[]string{"npx", "-y", "-p", "@anthropic-ai/claude-code", "claude"}, []string{"-y", "-p", "@anthropic-ai/claude-code", "claude"}},
-		{[]string{"npx", "-y"}, []string{"-y"}},
+		{[]string{"npx", "-c", "claude --settings x.json"}, []string{"npx", "-c", "claude --settings x.json"}},
+		{[]string{"npx", "-y", "-p", "@anthropic-ai/claude-code", "claude"}, []string{"npx", "-y", "-p", "@anthropic-ai/claude-code", "claude"}},
+		{[]string{"npx", "-y"}, []string{"npx", "-y"}},
+		{[]string{"npx"}, []string{"npx"}},
+		{[]string{"npx", "--call=claude --settings hook.json"}, []string{"npx", "--call=claude --settings hook.json"}},
+		{[]string{"env", "X=y", "npx", "-y", "@anthropic-ai/claude-code@2.1.323"}, []string{"X=y", "npx", "-y", "@anthropic-ai/claude-code@2.1.323"}},
+		{[]string{"X=y", "claude"}, []string{"claude"}},
+		{[]string{"sh", "-c", "claude --settings hook.json"}, []string{"-c", "claude --settings hook.json"}},
+		{[]string{"/usr/local/bin/npx", "--package=other", "claude"}, []string{"/usr/local/bin/npx", "--package=other", "claude"}},
 		{[]string{"claude", "--plugin-dir", "p"}, []string{"--plugin-dir", "p"}},
 		{[]string{"node", "/probe/fake-claude.mjs"}, []string{"/probe/fake-claude.mjs"}},
 	} {

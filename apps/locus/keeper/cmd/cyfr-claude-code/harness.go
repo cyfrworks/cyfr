@@ -86,11 +86,12 @@ var readOnlyTools = []string{"Read", "Grep", "Glob"}
 // harness's own, not its launcher's. The command is either the program's
 // name alone, and then every argument after it is the harness's; or
 // `npx`, any of its own `-y` and `--yes`, and the package, and then every
-// argument after the package is the harness's, and so is any other flag
-// of npx's before it (`-c` and `-p` choose what runs), or everything after
-// `npx` when no package follows. A read-only start runs with the driver's
-// arguments alone, so it refuses a command for which this is not empty:
-// a list of options to strip would name only the ones known.
+// argument after the package is the harness's; with any other flag of
+// npx's before the package (`-c` and `-p` choose what runs), or no
+// package at all, a bare `npx` included, the whole command counts. A
+// read-only start runs with the driver's arguments alone, so it refuses a
+// command for which this is not empty: a list of options to strip would
+// name only the ones known.
 func harnessOptions(command []string) []string {
 	if len(command) == 0 {
 		return nil
@@ -103,7 +104,7 @@ func harnessOptions(command []string) []string {
 		rest = rest[1:]
 	}
 	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
-		return command[1:]
+		return command
 	}
 	return rest[1:]
 }
