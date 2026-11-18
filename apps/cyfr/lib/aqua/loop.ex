@@ -9,17 +9,17 @@ defmodule Aqua.Loop do
   compaction first when the window is full, preceded by a note flush when
   the agent keeps notes without asking), records the model call
   before making it, makes it in a worker, persists the whole response
-  before any of its calls runs, and dispatches the calls: a card is
-  opened for what asks, a refusal is closed as its own result, reads run
-  beside each other and everything else alone, each in a worker of its
-  own. A round with no calls ends the turn. A card pauses it — the loop
-  releases the root itself before it returns — and a continuation
-  resumes it from the rows. A launch stands on its component's grant: it
-  runs with no card where `execution.run` is `auto` and the grant covers
-  what the turn has read, and after its card otherwise; either way
-  `Aqua.Launch` consumes it while the root is paused around it, so the
-  application takes a root of its own, and holds it to what the card or
-  the decision read. A launch naming an account its
+  before any of its calls runs, and dispatches the calls: each is
+  decided under the member's mode (`Aqua.Loop.Policy`) and nothing is
+  asked, a refusal is closed as its own result, reads run beside each
+  other and everything else alone, each in a worker of its own. A round
+  with no calls ends the turn. The first call a read-only member is
+  refused in a turn also writes that sentence once as a line in the
+  thread. A launch stands on its component's grant: `Aqua.Launch`
+  consumes it while the root is paused around it, so the application
+  takes a root of its own, and holds it to what the decision read; the
+  pause ends when the launch does, and a continuation resumes the turn
+  from the rows. A launch naming an account its
   app's own profile does not bind ends the turn as setup required, naming
   the app and the account: the person grants it there, and the retry is a
   new turn, since this one's authority never widens.
@@ -27,21 +27,11 @@ defmodule Aqua.Loop do
   Every write goes through `Aqua.Tape` under the actor's guest-planed
   context; the loop process never runs a child on itself.
 
-  ## A turn with nobody present
+  ## A scheduled turn
 
   A turn a schedule's line started (origin `schedule`, `Aqua.ScheduleTurns`)
-  does only what needs no asking: a call its agent's policy runs `auto`, a
-  launch among them whose grant covers what the turn has read, or one a
-  standing allow already covers, as in any turn (an answer "for a
-  schedule" the person gave naming this schedule among them, which
-  follows its fires onto any day's daily thread, `Aqua.Standing`). It opens
-  no card. At the first call
-  that would ask, that call is closed refused, nothing after it in the
-  response starts, what was decided before it runs and what already ran
-  stays, and the turn ends failed with one sentence: what it needed, and
-  how to allow it next time. Its root ends failed with that sentence, so
-  the schedule's last error reads it. It never pauses for an answer and is
-  never resumed for one.
+  runs as any turn of its member's mode. A refused call is no question,
+  so the turn goes on without it.
 
   ## The turn's sources
 
@@ -60,9 +50,7 @@ defmodule Aqua.Loop do
   (`Aqua.Loop.Policy.sources_of/3`), and a launched component's with an
   outside source named by its reference unless its completion result says
   no run of its tree was admitted with egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
-  members' words and joins nothing. A standing allow is judged against the
-  sources as they stand when a call is decided and again when it
-  dispatches, and a card names them.
+  members' words and joins nothing.
 
   A model adds no source of its own, and never drops one: a model, hand
   or launched child's persisted ledger joins its turn when its step
@@ -78,10 +66,8 @@ defmodule Aqua.Loop do
   run was asked for — says nothing ran, and joins nothing. A join that
   cannot be written leaves the answer unused.
 
-  A launch's card binds the turn's sources, the launched grant's consent
-  revision and the classes the person lets flow
-  (`Aqua.Loop.Policy.launch_flow/3`); `Aqua.Launch` refuses it as stale
-  when either moved, and seeds the launched root with them.
+  A launch's decision binds the turn's sources; `Aqua.Launch` refuses it
+  as stale when they moved, and seeds the launched root with them.
   """
 
   require Logger
@@ -158,6 +144,10 @@ defmodule Aqua.Loop do
       excerpt_sent?: false,
       # A call's outcome is unknown: only replay-safe reads run from here.
       restricted?: false,
+      # The turn's line that its member is read-only was written: once per
+      # turn, and once across a continuation by the line's own id
+      # (`say_read_only/2`).
+      read_only_said?: false,
       # Whether the next round asks the model: not once its answer called
       # nothing, so a page's call proposed after it runs and the turn ends
       # without asking again, and never in a turn opened on a page's call.
@@ -171,7 +161,7 @@ defmodule Aqua.Loop do
 
   @type result ::
           :completed
-          | {:paused, :approval | :launch | :uncertain}
+          | {:paused, :launch | :uncertain}
           | {:failed, term()}
           | :cancelled
           | {:uncertain, term()}
@@ -230,7 +220,7 @@ defmodule Aqua.Loop do
   defp never_ran(ctx, claim, turn, reason) do
     case needs_setup(reason) do
       nil ->
-        say_refused_key(ctx, turn, reason)
+        say_unrun(ctx, turn, reason)
         end_unrun(ctx, claim, turn, describe(reason))
         {:failed, reason}
 
@@ -246,20 +236,31 @@ defmodule Aqua.Loop do
     end
   end
 
-  # A brain that could not be described because the provider refused its
-  # key says so in the thread, in the provider's words.
-  defp say_refused_key(ctx, turn, {:model_refused, _catalyst, %{"type" => @refused_key} = error}) do
+  # A turn that never ran says why in the thread where the person can act
+  # on it: a brain whose provider refused its key, in the provider's
+  # words, and a member whose file still holds the retired `tool_policy`,
+  # in the sentence that says what to change.
+  defp say_unrun(ctx, turn, {:model_refused, _catalyst, %{"type" => @refused_key} = error}),
+    do: unrun_line(ctx, turn, refused_key_line(error))
+
+  defp say_unrun(ctx, turn, :tool_policy_retired),
+    do: unrun_line(ctx, turn, Prima.AgentRef.tool_policy_retired())
+
+  defp say_unrun(ctx, turn, {:read_only_unheld, _title, _brain} = reason),
+    do: unrun_line(ctx, turn, describe(reason))
+
+  defp say_unrun(_ctx, _turn, _reason), do: :ok
+
+  defp unrun_line(ctx, turn, line) do
     Tape.append(ctx, turn.thread_id, %{
       author: Prima.Author.system(),
       sent_by: turn.agent,
       kind: "system",
-      content: refused_key_line(error),
+      content: line,
       turn_id: turn.id,
       execution_id: turn.root_execution_id
     })
   end
-
-  defp say_refused_key(_ctx, _turn, _reason), do: :ok
 
   defp refused_key_line(%{"message" => message}) when is_binary(message),
     do: "The model refused its key: #{message}"
@@ -533,6 +534,7 @@ defmodule Aqua.Loop do
                consent_id: claim.authority.consent_id,
                agent_revision_digest: snapshot.revision_digest,
                agent_capability_digest: snapshot.capability_digest,
+               agent_mode: snapshot.agent.mode,
                recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
              }),
            # A server's line that no longer stands as its turn first starts
@@ -675,8 +677,8 @@ defmodule Aqua.Loop do
   end
 
   # A turn that ends otherwise than completed runs none of the page's
-  # calls still proposed in it: each is skipped, its card withdrawn, and
-  # its result row answers the page.
+  # calls still proposed in it: each is skipped, and its result row
+  # answers the page.
   defp skip_pages(%State{} = state) do
     with {:ok, steps} <- Tape.steps(guest(state), state.turn) do
       case for(
@@ -1032,7 +1034,7 @@ defmodule Aqua.Loop do
   # source, on one answer: the policy turns it on, the grant carries it and
   # the model has the tool.
   defp offers_search?(spec),
-    do: Request.offers_search?(spec.policy, spec.authority, spec.capabilities)
+    do: Request.offers_search?(spec.offered, spec.authority, spec.capabilities)
 
   # What a request reads of the athanor's other threads, by the rows that
   # bring it in (`Aqua.Tape.carried_sources/1`).
@@ -1361,7 +1363,7 @@ defmodule Aqua.Loop do
 
       items =
         Enum.zip_with(recorded, resolved, fn %{step: call_step}, {_block, call} ->
-          %{step: call_step, call: call, approval: nil}
+          %{step: call_step, call: call}
         end)
 
       # A page's waiting calls are placed in front of the round's own,
@@ -1370,12 +1372,11 @@ defmodule Aqua.Loop do
       # An answer that calls nothing asks the model nothing more.
       # A page's calls alone start no further model round.
       state = %{state | model?: items != []}
-      {pages, carded} = page_items(state)
-      items = pages ++ items
+      items = page_items(state) ++ items
 
-      if items == [] and carded == 0,
+      if items == [],
         do: {:halt, :completed, state},
-        else: dispatch(state, items, carded)
+        else: dispatch(state, items)
     else
       {:error, :superseded} ->
         {:halt, :cancelled, state}
@@ -1483,57 +1484,50 @@ defmodule Aqua.Loop do
   # Dispatch
   # ---------------------------------------------------------------------------
 
-  # Cards first, then the runnable steps in source order; a group of
-  # reads runs beside itself, everything else alone; a steer that
-  # arrived skips what has not started. A launch naming an account its
-  # app's profile does not bind ends the turn as setup required, with
-  # nothing else of the response started.
-  # `carded` counts the cards already waiting for calls of the turn, a
-  # page's opened while the model answered.
-  defp dispatch(%State{} = state, items, carded \\ 0) do
-    {runnable, cards, setup} = Enum.reduce(items, {[], carded, nil}, &decide(state, &1, &2))
+  # The runnable steps in source order; a group of reads runs beside
+  # itself, everything else alone; a steer that arrived skips what has
+  # not started. A launch naming an account its app's profile does not
+  # bind ends the turn as setup required, with nothing else of the
+  # response started.
+  defp dispatch(%State{} = state, items) do
+    {runnable, state, setup} =
+      Enum.reduce(items, {[], state, nil}, fn item, {_runnable, state, _setup} = acc ->
+        decide(state, item, acc)
+      end)
+
     runnable = Enum.reverse(runnable)
 
     case setup do
-      nil -> run_dispatched(state, runnable, cards)
-      {:unasked, step, call} -> end_unasked(state, runnable, step, call)
+      nil -> run_dispatched(state, runnable)
       setup -> end_for_account(state, setup)
     end
   end
 
-  defp run_dispatched(%State{} = state, runnable, cards) do
+  defp run_dispatched(%State{} = state, runnable) do
     case run_groups(state, Policy.group(runnable)) do
       {:halt, result, state} ->
         {:halt, result, state}
 
       {:ok, state} ->
-        cond do
-          over_deadline?(state) ->
-            {:halt, {:failed, :deadline}, state}
-
-          cards > 0 and pending?(state) ->
-            pause(state, :approval)
-
-          true ->
-            {:continue, state}
-        end
+        if over_deadline?(state),
+          do: {:halt, {:failed, :deadline}, state},
+          else: {:continue, state}
     end
   end
 
-  # A launch the turn ends on, or a call a turn with nobody present would
-  # have to ask, decides nothing after it: what is left of the response is
-  # skipped with the turn.
-  defp decide(_state, _item, {_runnable, _cards, setup} = acc) when setup != nil, do: acc
+  # A launch the turn ends on decides nothing after it: what is left of
+  # the response is skipped with the turn.
+  defp decide(_state, _item, {_runnable, _state_acc, setup} = acc) when setup != nil, do: acc
 
-  # A restricted turn runs replay-safe reads and nothing else — before a
-  # card's approval or the policy can say otherwise.
+  # A restricted turn runs replay-safe reads and nothing else — before the
+  # policy can say otherwise.
   defp decide(
-         %State{restricted?: true} = state,
+         %State{restricted?: true},
          %{step: step, call: {:ok, %Call{} = call}} = item,
-         acc
+         {_runnable, state, _setup} = acc
        ) do
     if Policy.replay_safe?(call) do
-      decide_open(state, item, acc)
+      decide_open(item, acc)
     else
       close(
         state,
@@ -1549,126 +1543,66 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp decide(state, item, acc), do: decide_open(state, item, acc)
-
-  # An approved call runs as it was approved: the call recalled from its row
-  # must be the proposal the approval's digest names — for a launch, with
-  # the entry its account resolved to when the card was drawn, as the
-  # card stored it.
-  defp decide_open(
-         state,
-         %{approval: %{} = approval, step: step, call: {:ok, %Call{} = call}} = item,
-         {runnable, cards, setup}
-       ) do
-    if Aqua.Approvals.proposal?(approval, approved_proposal(state, approval, call)) do
-      {[item | runnable], cards, setup}
-    else
-      close(state, step, call, {:error, {:denied, "the call no longer matches its approval"}})
-      {runnable, cards, setup}
-    end
-  end
+  defp decide(_state, item, acc), do: decide_open(item, acc)
 
   # A call refused as it resolved never ran: it closes denied, as the
   # policy closes a call it refuses, in the refusal's sentence, and a page
   # is answered the refusal's class (`Aqua.PageCalls.answer/3`).
-  defp decide_open(state, %{step: step, call: {:error, reason}}, acc) do
+  defp decide_open(%{step: step, call: {:error, reason}}, {runnable, state, setup}) do
     close(state, step, nil, {:error, {:denied, reason}})
-    acc
+    {runnable, state, setup}
   end
 
-  defp decide_open(
-         state,
-         %{step: step, call: {:ok, %Call{} = call}} = item,
-         {runnable, cards, setup}
-       ) do
+  defp decide_open(%{step: step, call: {:ok, %Call{} = call}} = item, {runnable, state, setup}) do
     decision =
       if not_offered?(state, step, call),
         do: {:deny, "#{call.model_name} is not one of the tools this work has"},
-        else: Policy.decide(call, state.spec.policy, place(state, step))
+        else: Policy.decide(call, state.spec.offered, state.spec.mode, place(state, step))
 
     case decision do
-      :auto ->
-        {[item | runnable], cards, setup}
+      :run ->
+        {[item | runnable], state, setup}
 
-      # A launch with no card carries what its decision read to its
-      # dispatch, which holds the run to it (`Aqua.Launch.run/3`).
-      {:auto, decided} ->
-        {[Map.put(item, :decided, decided) | runnable], cards, setup}
+      # A launch carries what its decision read to its dispatch, which
+      # holds the run to it (`Aqua.Launch.run/3`).
+      {:run, decided} ->
+        {[Map.put(item, :decided, decided) | runnable], state, setup}
 
       # Closed before it ran, as the policy closes a call it refuses.
       {:setup_required, app, {need, account}} ->
         close(state, step, call, {:error, {:denied, not_granted(app, account)}})
-        {runnable, cards, setup || {app, need, account}}
+        {runnable, state, setup || {app, need, account}}
 
-      :ask ->
-        ask(state, step, call, [], {runnable, cards, setup})
-
-      {:ask, %{vault_entry: _, name: _} = account} ->
-        ask(state, step, call, [account: account], {runnable, cards, setup})
-
-      {:deny, message} ->
+      {:read_only, message} ->
         close(state, step, call, {:error, {:denied, message}})
-        {runnable, cards, setup}
+        {runnable, say_read_only(state, message), setup}
 
-      {:refuse, message} ->
+      {refused, message} when refused in [:deny, :refuse] ->
         close(state, step, call, {:error, {:denied, message}})
-        {runnable, cards, setup}
+        {runnable, state, setup}
     end
   end
 
-  # A call that asks opens its card, unless nobody is present to answer
-  # it: a schedule's turn stops there (`stop_unasked/3`).
-  defp ask(%State{turn: %{origin: "schedule"}}, step, %Call{} = call, _opts, acc) do
-    {runnable, cards, _setup} = acc
-    {runnable, cards, {:unasked, step, call}}
+  # The first call a read-only member is refused in a turn writes the
+  # sentence once as a line in the thread, by the writer a refused key's
+  # line uses. The line carries the turn's own id as its sender id, which
+  # the thread holds once, so a continued turn writes no second.
+  defp say_read_only(%State{read_only_said?: true} = state, _message), do: state
+
+  defp say_read_only(%State{turn: turn} = state, message) do
+    _ =
+      Tape.append(ctx(state), turn.thread_id, %{
+        author: Prima.Author.system(),
+        sent_by: turn.agent,
+        kind: "system",
+        content: message,
+        client_id: "read-only:" <> turn.id,
+        turn_id: turn.id,
+        execution_id: turn.root_execution_id
+      })
+
+    %{state | read_only_said?: true}
   end
-
-  defp ask(%State{} = state, step, %Call{} = call, card_opts, {runnable, cards, setup}) do
-    case open_card(state, step, call, card_opts) do
-      :ok ->
-        {runnable, cards + 1, setup}
-
-      # Refused before it asks: a card that cannot show what it would run.
-      {:refuse, message} ->
-        close(state, step, call, {:error, {:denied, message}})
-        {runnable, cards, setup}
-
-      {:error, reason} ->
-        close(state, step, call, {:error, describe(reason)})
-        {runnable, cards, setup}
-    end
-  end
-
-  # The proposal an approved call is held to. A launch's card stored the
-  # account its call named as the binding stores the name, and the entry
-  # it resolved to, beside the call, and what the launch carries
-  # (`Aqua.Launch.bound/1`), which `Aqua.Launch` holds to the turn and
-  # the grant as they stand; any other call's is the call alone.
-  defp approved_proposal(%State{} = state, approval, %Call{kind: :launch} = call) do
-    shown =
-      case Tape.message(guest(state), approval.message_id) do
-        {:ok, card} -> get_in(Tape.payload(card), ["intent", "proposal"])
-        _ -> nil
-      end
-
-    case shown do
-      %{"vault_entry" => entry_id, "args" => %{"connection" => stored}}
-      when is_binary(entry_id) and is_binary(stored) ->
-        Policy.proposal(
-          call,
-          %{vault_entry: entry_id, name: stored},
-          Aqua.Launch.bound(shown)
-        )
-
-      %{} ->
-        Policy.proposal(call, nil, Aqua.Launch.bound(shown))
-
-      _none ->
-        Policy.proposal(call)
-    end
-  end
-
-  defp approved_proposal(_state, _approval, %Call{} = call), do: Policy.proposal(call)
 
   # What a launch naming an account its app does not bind answers: the
   # account and the app, never an entry.
@@ -1697,123 +1631,6 @@ defmodule Aqua.Loop do
 
     {:halt, {:failed, {:setup_required, setup}}, state}
   end
-
-  # A schedule's turn whose call asks as it is decided: what was decided
-  # before that call runs first, then the turn stops at it.
-  defp end_unasked(%State{} = state, runnable, step, %Call{} = call) do
-    case run_groups(state, Policy.group(runnable)) do
-      {:halt, result, state} -> {:halt, result, state}
-      {:ok, state} -> stop_unasked(state, step, call)
-    end
-  end
-
-  # The one stop of a schedule's turn at a call it would have to ask for,
-  # whether the call asked as it was decided or became an ask as it
-  # dispatched: that call is closed refused with the sentence, nothing
-  # after it starts (what is left of the response is skipped, and the
-  # turn asks the model nothing more), what already ran stays, and the
-  # turn ends failed with the sentence, its root and its occurrence with
-  # it.
-  defp stop_unasked(%State{} = state, step, %Call{} = call) do
-    sentence = unasked(state, call)
-    _ = close(state, step, call, {:error, {:denied, sentence}})
-    _ = Tape.skip_steps(guest(state), state.turn, "the turn stopped: nobody was asked")
-    {:halt, {:failed, {:unasked, sentence}}, state}
-  end
-
-  # The one sentence a stopped schedule turn leaves: what it needed, and
-  # how to allow it next time where the action's own declaration lets an
-  # answer stand for a schedule (`Aqua.Standing.offered?/2`, the rule the
-  # card offers its answers by); otherwise, that it needs the person there.
-  # A launch the agent runs on its grant that stopped for want of one, or
-  # for a flow the grant does not cover, says that, since its grant is what
-  # lets it run with nobody here.
-  defp unasked(%State{spec: spec} = state, %Call{kind: :launch} = call) do
-    if Map.get(spec.policy, "execution.#{call.action}") == "auto" do
-      case Policy.launch_flow(call, spec.ctx, shown_sources(state)) do
-        %{consent_id: nil} ->
-          "This scheduled run needed your approval to run #{call.target}, which is not " <>
-            "granted, and nobody was here to give it. It runs with nobody here once the " <>
-            "component is granted and its grant lets through what the run reads."
-
-        %{classes: [_ | _]} ->
-          "This scheduled run needed your approval to run #{call.target}: it would carry " <>
-            "what the run had read somewhere the component's grant does not let it go, and " <>
-            "nobody was here to give it. It runs with nobody here once the component's grant " <>
-            "lets that through."
-
-        _covered ->
-          unasked(call)
-      end
-    else
-      unasked(call)
-    end
-  end
-
-  defp unasked(%State{}, %Call{} = call), do: unasked(call)
-
-  defp unasked(%Call{} = call) do
-    needed =
-      "This scheduled run needed your approval to use #{call.tool}.#{call.action}, and nobody " <>
-        "was here to give it."
-
-    if Aqua.Standing.offered?(Policy.standing_rule(call), :schedule),
-      do:
-        needed <>
-          " To allow it next time, ask Aqua for it once on your daily thread and choose " <>
-          "\"for a schedule\", naming this one, when it asks.",
-      else: needed <> " This cannot be allowed for a schedule: it needs you here."
-  end
-
-  # A launch's card binds the turn's sources it shows and what they let
-  # flow to the launched grant (`Policy.launch_flow/3`), read now. A
-  # program's start shows what will run, read now, or opens no card and is
-  # refused: no details, no card.
-  defp open_card(%State{} = state, step, %Call{} = call, card_opts) do
-    with {:ok, program} <- card_program(state, call) do
-      open_card(state, step, call, card_opts, program)
-    end
-  end
-
-  defp open_card(%State{} = state, step, %Call{} = call, card_opts, program) do
-    sources = shown_sources(state)
-
-    launch =
-      if call.kind == :launch,
-        do: [launch: Policy.launch_flow(call, state.spec.ctx, sources)],
-        else: []
-
-    intent =
-      Policy.card(
-        call,
-        [id: Prima.UUID7.generate_id("apr"), sources: sources] ++ launch ++ program ++ card_opts
-      )
-      |> Map.put("tool_call_id", call.tool_call_id)
-      |> Map.put("purpose", step.purpose)
-
-    case Tape.open_approval(guest(state), state.turn, step, %{
-           id: intent["id"],
-           proposal_digest: Policy.proposal_digest(intent),
-           expires_at: DateTime.add(DateTime.utc_now(), state.spec.approval_ttl_s, :second),
-           card: %{content: intent["title"], payload: %{"intent" => intent}}
-         }) do
-      {:ok, _} -> :ok
-      {:error, _} = error -> error
-    end
-  end
-
-  defp card_program(
-         %State{} = state,
-         %Call{kind: :catalog, tool: "program", action: "start"} = call
-       ) do
-    case Policy.program_shown(state.spec.ctx, call) do
-      {:ok, %{} = shown} -> {:ok, [program: shown]}
-      {:refuse, message} -> {:refuse, message}
-      {:ok, nil} -> {:refuse, "program.start: what it would run could not be read"}
-    end
-  end
-
-  defp card_program(%State{}, %Call{}), do: {:ok, []}
 
   # Every group's outcome rides out: a group that stopped the turn on an
   # unknown outcome halts the dispatch with the pause it established.
@@ -1845,7 +1662,6 @@ defmodule Aqua.Loop do
     outcome =
       case worker(fn -> run_one(state, item) end) do
         {:ok, {:uncertain, step, reason}} -> {:uncertain, step, reason}
-        {:ok, {:unasked, step, call}} -> {:unasked, step, call}
         {:ok, _} -> :ok
         {:exit, reason} -> settle_dead(state, item, reason)
       end
@@ -1854,7 +1670,6 @@ defmodule Aqua.Loop do
 
     case outcome do
       {:uncertain, step, reason} -> stop_uncertain(state, step, reason, [])
-      {:unasked, step, call} -> stop_unasked(state, step, call)
       _ -> {:ok, state}
     end
   end
@@ -1867,7 +1682,6 @@ defmodule Aqua.Loop do
 
     case outcome do
       {:uncertain, step, reason, rest} -> stop_uncertain(state, step, reason, rest)
-      {:unasked, step, call} -> stop_unasked(state, step, call)
       :ok -> {:ok, state}
     end
   end
@@ -1900,10 +1714,6 @@ defmodule Aqua.Loop do
           {:uncertain, step, reason} ->
             {:uncertain, step, reason, Map.values(running) ++ pending_items(pending)}
 
-          # Nothing more of the group starts; what runs already is let end.
-          {:unasked, step, call} ->
-            drain_unasked(state, running, {:unasked, step, call})
-
           _ ->
             collect(state, pending, running, cap)
         end
@@ -1924,146 +1734,57 @@ defmodule Aqua.Loop do
 
   defp pending_items(pending), do: Enum.map(pending, &%{item: &1, task: nil})
 
-  # Once a call of the group has reported the stop of a schedule's turn,
-  # that stop is the turn's and it stands. Each sibling already running is
-  # waited for; one that ends with an unknown outcome, by its answer or by
-  # its death, is marked uncertain in place, as the siblings a stop covers
-  # are settled (`cancel_rest/2`), and does not replace the stop.
-  defp drain_unasked(_state, running, unasked) when map_size(running) == 0, do: unasked
-
-  defp drain_unasked(state, running, unasked) do
-    receive do
-      {ref, result} when is_map_key(running, ref) ->
-        Process.demonitor(ref, [:flush])
-
-        with {:uncertain, step, reason} <- result,
-             do: Tape.mark_uncertain(guest(state), state.turn, step, reason)
-
-        drain_unasked(state, Map.delete(running, ref), unasked)
-
-      {:DOWN, ref, :process, _pid, reason} when is_map_key(running, ref) ->
-        {%{item: item}, running} = Map.pop(running, ref)
-        _ = settle_dead(state, item, reason, :mark)
-        drain_unasked(state, running, unasked)
-    end
-  end
-
   # In a worker: the step is dispatched, run, and closed with what it
   # answered. A step that is no longer proposed (skipped, superseded)
   # runs nothing. An outcome that cannot be known is not closed here: it
   # is reported, and the loop stops the turn on it.
   defp run_one(%State{} = state, %{step: step, call: {:ok, %Call{} = call}} = item) do
-    case still_granted(state, item, call) do
+    case still_offered(state, item, call) do
       :ok -> dispatch_one(state, step, call)
-      {:ask, message} -> asks_now(state, step, call, message)
       {:denied, message} -> settle_denied(state, step, call, message)
     end
   end
 
-  # A call whose allow no longer covers it as it dispatches would ask now.
-  # In a schedule's turn nobody is there to: the run reports it, and the
-  # loop stops the turn at it (`stop_unasked/3`); elsewhere it is refused
-  # as before.
-  defp asks_now(%State{turn: %{origin: "schedule"}}, step, %Call{} = call, _message),
-    do: {:unasked, step, call}
-
-  defp asks_now(%State{} = state, step, %Call{} = call, message),
-    do: settle_denied(state, step, call, message)
-
-  # The grants a member holds are their live decision; the loop decides from
-  # a snapshot `Turn.build/3` took. Revoking "allow in this thread"
-  # writes the rows and refreshes the runner, and reaches no loop already
-  # running — so the window between a response landing and its calls
-  # dispatching, and the window while an earlier call of the same response
-  # runs, both belonged to a grant that had gone. Every call asks again as
-  # it dispatches. The check can only withdraw an `auto`: a card the person
-  # answered is their decision about this exact call, and a standing grant's
-  # withdrawal does not retract it. A call a bounded allow let run is asked
-  # again whether the allow still covers it, from the rows as they stand.
+  # The loop decides from a snapshot `Turn.build/3` took. The person's
+  # browser setting is live, and reaches no loop already running — so the
+  # window between a response landing and its calls dispatching, and the
+  # window while an earlier call of the same response runs, belonged to a
+  # setting that may have gone. Every call is decided again as it
+  # dispatches, on the offered set as it stands now; the mode is pinned.
   # A call outside the tools its job was narrowed to runs on no answer.
-  defp still_granted(%State{spec: spec} = state, item, %Call{} = call) do
-    cond do
-      not host_start?(state, item.step) and not Policy.within?(call, spec.narrowed) ->
-        {:denied, Policy.outside(call)}
-
-      match?(%{approval: %{}}, item) ->
-        :ok
-
-      true ->
-        still_allowed(state, call)
+  defp still_offered(%State{spec: spec} = state, item, %Call{} = call) do
+    if not host_start?(state, item.step) and not Policy.within?(call, spec.narrowed) do
+      {:denied, Policy.outside(call)}
+    else
+      case Policy.decide(call, Turn.current_offered(spec), spec.mode, place(state, item.step)) do
+        :run -> :ok
+        {:run, _decided} -> :ok
+        {:setup_required, _app, _need} -> {:denied, "#{call.tool}.#{call.action} is not allowed"}
+        {_refused, message} -> {:denied, message}
+      end
     end
   end
 
-  defp still_allowed(%State{} = state, %Call{} = call) do
-    case Turn.current_policy(state.spec) do
-      # The one decision a call is made under (`Policy.decide/3`), read
-      # again from the live grants: a call that would ask now asks; a never
-      # given since is refused as a call decided against it is, and the
-      # turn goes on without it. Only a call that never asks reaches here
-      # (an approved card's call is not re-checked), so a launch's setup
-      # answer cannot arise; it is refused if it ever does.
-      {:ok, policy} ->
-        case Policy.decide(call, policy, place(state)) do
-          :auto ->
-            :ok
-
-          {:auto, _decided} ->
-            :ok
-
-          :ask ->
-            {:ask, asks_now(call)}
-
-          {:ask, _account} ->
-            {:ask, asks_now(call)}
-
-          {:deny, message} ->
-            {:denied, message}
-
-          {:refuse, message} ->
-            {:denied, message}
-
-          {:setup_required, _app, _need} ->
-            {:denied, "#{call.tool}.#{call.action} is not allowed"}
-        end
-
-      # A store that cannot answer whether the grant still stands is not a
-      # grant. Fail closed, the way every other standing question does.
-      {:error, _reason} ->
-        {:denied, "#{call.tool}.#{call.action} could not be checked against the agent's grants"}
-    end
-  end
-
-  # A launch that would ask as it dispatches ran nothing and is proposed
-  # again, to be asked as it is decided; any other call is withdrawn.
-  defp asks_now(%Call{kind: :launch} = call),
-    do:
-      "#{call.tool}.#{call.action} needs the person's approval now, so nothing ran: propose " <>
-        "it again to ask them"
-
-  defp asks_now(%Call{} = call),
-    do: "#{call.tool}.#{call.action} is no longer allowed in this thread"
-
-  # Where a call is made, as a standing allow is judged against it
-  # (`Sanctum.ToolGrants.admits?/2`): the member's context its rows are
-  # read under, the agent, the thread, the turn and the turn's root. The
-  # turn's sources are read from its row as each call is decided
-  # (`Aqua.Loop.Policy`), so a source a concurrent call joined counts.
-  # The host's `program.start` of a program brain is the brain's own start,
-  # not a call of its job, so no narrowing of the job's tools covers it.
+  # Where a call is made (`Aqua.Loop.Policy.decide/4`): the job's
+  # narrowing, the member's title a read-only refusal names, the member's
+  # context a launch's account is resolved under, and the turn whose
+  # sources a launch binds, read from its row as each call is decided, so
+  # a source a concurrent call joined counts. The host's `program.start`
+  # of a program brain is the brain's own start, not a call of its job, so
+  # no narrowing covers it and the mode does not refuse it: the holder
+  # starts it as the mode says (`Opus.Brain`).
   defp place(%State{} = state, step) do
     if host_start?(state, step),
-      do: Keyword.put(place(state), :narrowed, nil),
+      do: place(state) |> Keyword.put(:narrowed, nil) |> Keyword.put(:host_start, true),
       else: place(state)
   end
 
   defp place(%State{spec: spec, turn: turn}) do
     [
       narrowed: spec.narrowed,
+      title: spec.agent["title"],
       ctx: spec.ctx,
-      agent: spec.agent["name"],
-      thread_id: turn.thread_id,
-      turn_id: turn.id,
-      execution_id: turn.root_execution_id
+      turn_id: turn.id
     ]
   end
 
@@ -2082,15 +1803,6 @@ defmodule Aqua.Loop do
   end
 
   defp not_offered?(_state, _step, _call), do: false
-
-  # What a card names: the turn's sources as they stand, or an unnamed
-  # outside source when they cannot be read.
-  defp shown_sources(%State{} = state) do
-    case Tape.turn(guest(state), state.turn.id) do
-      {:ok, %{sources: sources}} -> Prima.Source.decode(sources)
-      _unreadable -> [Prima.Source.outside(nil)]
-    end
-  end
 
   defp settle_denied(%State{} = state, step, %Call{} = call, message) do
     case close(state, step, call, {:error, {:denied, message}}) do
@@ -2466,36 +2178,26 @@ defmodule Aqua.Loop do
   # Launches: the root is let go around the application's own root
   # ---------------------------------------------------------------------------
 
-  # A launch is asked again as it dispatches, as every call is
-  # (`still_granted/3`): one outside the tools its job was narrowed to is
-  # refused, its approval notwithstanding, and one its policy let run with
-  # no card is decided again on the live policy. One that would ask now
-  # runs nothing; in a schedule's turn the turn stops at it.
+  # A launch is decided again as it dispatches, as every call is
+  # (`still_offered/3`): one outside the tools its job was narrowed to, or
+  # no longer offered, runs nothing.
   defp run_launch(%State{} = state, %{step: step, call: {:ok, %Call{} = launch}} = item) do
-    case still_granted(state, item, launch) do
-      :ok -> launch_within(state, item)
-      refused -> refuse_launch(state, step, launch, refused)
+    case still_offered(state, item, launch) do
+      :ok ->
+        launch_within(state, item)
+
+      {:denied, message} ->
+        case settle_denied(state, step, launch, message) do
+          :ok -> {:ok, state}
+          {:uncertain, step, reason} -> stop_uncertain(state, step, reason, [])
+        end
     end
   end
 
   defp run_launch(%State{} = state, item), do: launch_within(state, item)
 
-  defp refuse_launch(%State{} = state, step, %Call{} = launch, refused) do
-    outcome =
-      case refused do
-        {:ask, message} -> asks_now(state, step, launch, message)
-        {:denied, message} -> settle_denied(state, step, launch, message)
-      end
-
-    case outcome do
-      :ok -> {:ok, state}
-      {:unasked, step, call} -> stop_unasked(state, step, call)
-      {:uncertain, step, reason} -> stop_uncertain(state, step, reason, [])
-    end
-  end
-
-  # What a launch with no card's decision read rides to `Aqua.Launch`,
-  # which holds the run to it; an approved one carries none.
+  # What a launch's decision read rides to `Aqua.Launch`, which holds the
+  # run to it.
   defp launch_within(%State{} = state, %{step: step, call: call} = item) do
     guest = guest(state)
     decided = Map.get(item, :decided)
@@ -2640,13 +2342,6 @@ defmodule Aqua.Loop do
 
   defp pause_root(state, _reason, _step), do: {:error, {:no_claim, state.turn.id}}
 
-  defp pause(%State{} = state, reason) do
-    case pause_root(state, reason, nil) do
-      {:ok, state} -> {:halt, {:paused, reason}, state}
-      {:error, error} -> {:halt, {:failed, error}, state}
-    end
-  end
-
   # The launch's step is closed; the group goes on only once the root is
   # taken back. A root that cannot be taken back leaves the turn paused
   # around its launch, as its rows already say, and stops the group: no
@@ -2726,8 +2421,8 @@ defmodule Aqua.Loop do
   # A turn on a program brain opens with the host's `program.start` of the
   # brain's row at its epoch, recorded with its call's `tool_call` row as a
   # model's is (`Opus.Brain` reads the admitting call there) and decided by
-  # the code that decides a model's `program.start`, on the card that
-  # shows the pinned command. Its dispatch attends the session
+  # the code that decides every call: it runs in either mode, and the
+  # holder starts the program as the turn's mode says. Its dispatch attends the session
   # (`Aqua.Program`), never the terminal start a model's call makes.
   defp open_program(%State{program: %{row: row, epoch: epoch}} = state) do
     args = %{"action" => "start", "program" => row, "epoch" => epoch}
@@ -2771,8 +2466,7 @@ defmodule Aqua.Loop do
 
   # What the program is given before its first answer joins the turn's
   # sources before its start is decided, as a model step's request joins
-  # what it reads, so the start's card, or the standing allow that covers
-  # it, covers what the session will read: the system prompt's sources
+  # what it reads, so a thread's deletion finds the turn: the system prompt's sources
   # (`opening_sources/1`), the turn's posts, and for a thread with no
   # native session the thread so far a fresh session's first post carries
   # (`Aqua.Program.context_rows/2`), with the sources of the turns whose
@@ -2843,8 +2537,8 @@ defmodule Aqua.Loop do
     drain_notices(state.turn.id)
 
     case page_items(state) do
-      {[], 0} -> {:continue, state}
-      {items, carded} -> dispatch(state, items, carded)
+      [] -> {:continue, state}
+      items -> dispatch(state, items)
     end
   end
 
@@ -2856,53 +2550,26 @@ defmodule Aqua.Loop do
     end
   end
 
-  # The page's calls still proposed in the turn, each with its approval
-  # once the person said yes, and how many wait on a card.
+  # The page's and the program brain's calls still proposed in the turn.
   defp page_items(%State{} = state) do
     case Tape.steps(guest(state), state.turn) do
       {:ok, steps} ->
-        {items, carded} =
-          Enum.reduce(steps, {[], 0}, fn
-            %{purpose: purpose, dispatch_state: "proposed"} = step, {items, carded}
-            when purpose in ["page", "brain"] ->
-              case card(state, step) do
-                :waiting ->
-                  {items, carded + 1}
-
-                approval ->
-                  {[%{step: step, call: recall(state, step), approval: approval} | items], carded}
-              end
-
-            _step, acc ->
-              acc
-          end)
-
-        {Enum.reverse(items), carded}
+        for %{purpose: purpose, dispatch_state: "proposed"} = step <- steps,
+            purpose in ["page", "brain"],
+            do: %{step: step, call: recall(state, step)}
 
       _unread ->
-        {[], 0}
-    end
-  end
-
-  # A declined, expired or failed card closes its step where it is
-  # decided, so a proposed step's card waits or was approved.
-  defp card(_state, %{approval_id: nil}), do: nil
-
-  defp card(%State{} = state, %{approval_id: id}) do
-    case Tape.approval(guest(state), id) do
-      {:ok, %{status: "approved"} = approval} -> approval
-      _waiting -> :waiting
+        []
     end
   end
 
   # The model is waited for as `worker/1` waits. Meanwhile a page's call
   # the runner proposed is taken as it arrives (`take_calls/2`): one that
-  # runs at once runs in a worker of its own beside the model, one that
-  # asks opens its card, and one that is refused closes. A launch, a call
-  # that needs its account set up, a call that does not bind, and every
-  # call of a turn nobody is present for, wait for the model's answer and
-  # run before the round's own calls, since a launch lets the root go and
-  # the root is never let go under the model's run. Once the model
+  # runs runs in a worker of its own beside the model, and one that is
+  # refused closes. A launch, a call that needs its account set up and a
+  # call that does not bind wait for the model's answer and run before the
+  # round's own calls, since a launch lets the root go and the root is
+  # never let go under the model's run. Once the model
   # answered no call is taken, and the page's workers still running are
   # waited for. A page's call whose outcome is unknown stops the turn at
   # once, as the group's first one does (`stop_uncertain/4`): the model's
@@ -2954,15 +2621,12 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp take_calls(%State{turn: %{origin: "schedule"}}, running), do: running
-
   defp take_calls(%State{} = state, running) do
     taken = MapSet.new(running, fn {_ref, %{item: %{step: step}}} -> step.id end)
 
-    {items, _carded} = page_items(state)
-
-    items
-    |> Enum.reject(&(MapSet.member?(taken, &1.step.id) or &1.approval != nil))
+    state
+    |> page_items()
+    |> Enum.reject(&MapSet.member?(taken, &1.step.id))
     |> Enum.reduce(running, &take_call(state, &1, &2))
   end
 
@@ -2970,22 +2634,18 @@ defmodule Aqua.Loop do
     if state.restricted? and not Policy.replay_safe?(call) do
       running
     else
-      case Policy.decide(call, state.spec.policy, place(state)) do
-        :auto ->
+      case Policy.decide(call, state.spec.offered, state.spec.mode, place(state, step)) do
+        :run ->
           task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
           Map.put(running, task.ref, %{item: item, task: task})
 
-        # A launch with no card lets the root go around its run: it runs
-        # once the model has answered.
-        {:auto, _decided} ->
+        # A launch lets the root go around its run: it runs once the model
+        # has answered.
+        {:run, _decided} ->
           running
 
-        :ask ->
-          _ = ask(state, step, call, [], {[], 0, nil})
-          running
-
-        {:ask, %{vault_entry: _, name: _} = account} ->
-          _ = ask(state, step, call, [account: account], {[], 0, nil})
+        # Decided again with the round's own calls, which write the line.
+        {:read_only, _message} ->
           running
 
         {refused, message} when refused in [:deny, :refuse] ->
@@ -3132,28 +2792,19 @@ defmodule Aqua.Loop do
     guest = guest(state)
 
     with {:ok, steps} <- Tape.steps(guest, state.turn) do
-      # A page's call not yet asked waits for the next page round, after
-      # what the person already approved has run: decided now, its card
-      # would bind the turn's sources before an approved launch's ledger
-      # joins them, and that launch would find it stale.
+      # A page's call waits for the next page round, after what was
+      # decided has run: decided now, a launch would bind the turn's
+      # sources before an earlier launch's ledger joins them, and find
+      # them stale.
       for %{dispatch_state: "proposed", kind: kind} = step <- steps,
           kind not in ["model", "input"],
-          step.purpose != "page" or is_binary(step.approval_id) do
-        %{step: step, call: recall(state, step), approval: approved(state, step)}
+          step.purpose != "page" do
+        %{step: step, call: recall(state, step)}
       end
     else
       _ -> []
     end
   end
-
-  defp approved(%State{} = state, %{approval_id: approval_id}) when is_binary(approval_id) do
-    case Tape.approval(guest(state), approval_id) do
-      {:ok, %{status: "approved"} = approval} -> approval
-      _ -> nil
-    end
-  end
-
-  defp approved(_state, _step), do: nil
 
   # The call a proposed step was recorded for, from its tool_call row.
   defp recall(%State{} = state, %{message_id: message_id}) when is_binary(message_id) do
@@ -3232,9 +2883,9 @@ defmodule Aqua.Loop do
     cap = spec.request_cap
 
     with true <- flush_room?(state.steps, state.restricted?),
-         {:ok, policy} <- Turn.current_policy(spec),
-         true <- flush_granted?(state, policy),
-         request = flush_request(probe, Map.put(policy, @flush_key, "auto")),
+         offered = Turn.current_offered(spec),
+         true <- flush_runs?(state, offered),
+         request = flush_request(probe, Map.put(offered, @flush_key, "offered")),
          size when is_integer(size) and (is_nil(cap) or size <= cap) <- encoded_size(request),
          {:ok, step, opened} <- open_model_step(state, "flush", rows) do
       keep_notes(%{opened | sent_upto: highest_seq(rows)}, step, request)
@@ -3244,10 +2895,9 @@ defmodule Aqua.Loop do
     end
   end
 
-  # The keep a flush offers runs without a card: under the author's `auto`,
-  # or an allow that covers a keep in this turn as it stands now. Each kept
-  # note is asked again as it dispatches.
-  defp flush_granted?(%State{} = state, policy) do
+  # A flush runs only where a keep would: the member is offered it and is
+  # in `auto`. Each kept note is decided again as it dispatches.
+  defp flush_runs?(%State{} = state, offered) do
     probe = %Call{
       kind: :catalog,
       tool: @flush_tool,
@@ -3256,10 +2906,10 @@ defmodule Aqua.Loop do
       model_name: @flush_key
     }
 
-    Policy.auto?(probe, policy, place(state))
+    Policy.decide(probe, offered, state.spec.mode, place(state)) == :run
   end
 
-  # The gate a flush passes before the grant store is asked: a turn no
+  # The gate a flush passes before the offered set is read: a turn no
   # unknown outcome restricts, with room for the flush, the summary and the
   # next chat request under the step cap.
   defp flush_room?(steps, restricted?), do: not restricted? and steps + 3 <= @max_steps
@@ -3267,12 +2917,12 @@ defmodule Aqua.Loop do
   # The flush keeps notes of the rows a summary is about to replace, so it
   # is sent without the room excerpt: nothing of the room reaches it, and
   # the request the store keeps is the one sent.
-  defp flush_request(probe, policy) do
+  defp flush_request(probe, offered) do
     %{"messages" => messages} = Request.without_excerpt(probe)
 
     %{
       probe
-      | "tools" => Request.catalog_tools(Map.take(policy, [@flush_key])),
+      | "tools" => Request.catalog_tools(Map.take(offered, [@flush_key])),
         "provider_tools" => [],
         "messages" => Request.instruct(messages, @flush_instruction)
     }
@@ -3331,8 +2981,8 @@ defmodule Aqua.Loop do
     end
   end
 
-  # A flush runs `notes.keep` and nothing else, never through a card: the
-  # grant is asked again as the call dispatches, and an unknown outcome is
+  # A flush runs `notes.keep` and nothing else: it is decided again as the
+  # call dispatches, and an unknown outcome is
   # recorded on the call without stopping or restricting the turn.
   defp keep_note(
          %State{} = state,
@@ -3350,7 +3000,7 @@ defmodule Aqua.Loop do
          {:denied, "a note kept before a summary holds at most #{@flush_note_max_bytes} bytes"}}
       )
     else
-      item = %{step: step, call: {:ok, call}, approval: nil}
+      item = %{step: step, call: {:ok, call}}
 
       case worker(fn -> run_one(state, item) end) do
         {:ok, {:uncertain, step, reason}} ->
@@ -3487,13 +3137,6 @@ defmodule Aqua.Loop do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp pending?(%State{} = state) do
-    case Tape.pending_approvals(guest(state), state.turn) do
-      {:ok, [_ | _]} -> true
-      _ -> false
-    end
-  end
-
   defp replay_safe?(%Call{} = call), do: Policy.replay_safe?(call)
 
   # A post past a model turn's boundary skips what the turn had not run,
@@ -3612,14 +3255,16 @@ defmodule Aqua.Loop do
     do: "setup_required: the account #{inspect(account)} is not granted to #{app}"
 
   defp describe({:unknown_model, model}), do: "#{model} is not a model its catalyst knows"
+
+  defp describe({:read_only_unheld, title, brain}), do: Aqua.Models.unheld_sentence(title, brain)
+
+  defp describe(:tool_policy_retired), do: Prima.AgentRef.tool_policy_retired()
   defp describe(:no_model), do: "The agent names no model"
 
   # A schedule's turn whose fire another turn already took up: on another
   # server after a takeover, or by the turn that started it first.
   defp describe(:occurrence_not_claimed),
     do: "This scheduled run was already taken up by another turn, so this one did not start."
-
-  defp describe({:unasked, sentence}), do: sentence
 
   defp describe(:sources_unrecorded),
     do: "What the model read could not be recorded on the turn, so its answer was not used"

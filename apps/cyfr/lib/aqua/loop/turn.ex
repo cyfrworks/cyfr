@@ -5,11 +5,11 @@ defmodule Aqua.Loop.Turn do
   @moduledoc """
   What a loop runs, rebuilt from rows: the turn and its thread, the
   agent as the turn pinned it — the revision bytes, resolved as the agent
-  runs (a crew member under the soul's policy,
+  runs (a crew member offered the soul's tools,
   `Compendium.resolve_agent/3`), whose capability digest must equal the
-  one the turn started under — the roster, the effective policy composed
-  with the standing rows and narrowed to the tools a crew request named
-  (`options["tools"]`), the resolved model catalyst with its capabilities
+  one the turn started under — the roster, the member's mode and the set
+  it is offered (`Aqua.Offered`) narrowed to the tools a crew request
+  named (`options["tools"]`), the resolved model catalyst with its capabilities
   and the request size its consent caps it at (`request_cap`), the brain
   options — the agent file's own, over which a crew request's
   (`options["brain_options"]`) set theirs — the system prompt and the
@@ -47,7 +47,10 @@ defmodule Aqua.Loop.Turn do
     :thread,
     :agent,
     :roster,
-    :policy,
+    # What the turn may call (`Aqua.Offered`) and the member's mode, which
+    # decides what of it runs (`Aqua.Loop.Policy`).
+    :offered,
+    :mode,
     :authority,
     :catalyst,
     # The program row a program brain runs on, `%{row, epoch, name}`, or
@@ -59,7 +62,6 @@ defmodule Aqua.Loop.Turn do
     :system,
     :tools,
     :deadline_ms,
-    :approval_ttl_s,
     :options,
     :brain_options,
     :narrowed,
@@ -93,14 +95,9 @@ defmodule Aqua.Loop.Turn do
          soul? = Prima.AgentRef.soul?(agent["name"]),
          options = decode(turn.options),
          brain_options = Map.merge(agent["options"] || %{}, options["brain_options"] || %{}),
-         {:ok, grants} <-
-           Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
-         policy =
-           agent["tool_policy"]
-           |> Aqua.ToolGrants.resolve(
-             Map.fetch!(grants, agent["name"]),
-             Aqua.BrowserSetting.allowed?(ctx)
-           )
+         offered =
+           agent["tools"]
+           |> Aqua.Offered.resolve(Aqua.BrowserSetting.allowed?(ctx))
            |> narrowed(options["tools"]),
          {:ok, brain, model} <- model(ctx, turn, agent),
          {catalyst, program} = brain,
@@ -111,7 +108,7 @@ defmodule Aqua.Loop.Turn do
         Aqua.Prompt.compose(ctx,
           agent: agent,
           authority: authority,
-          crew: crew(ctx, roster, policy, soul?),
+          crew: crew(ctx, roster, offered, soul?),
           requests: requests(ctx, thread),
           where: Aqua.Prompt.where(ctx, thread)
         )
@@ -124,7 +121,11 @@ defmodule Aqua.Loop.Turn do
         thread: thread,
         agent: agent,
         roster: roster,
-        policy: policy,
+        offered: offered,
+        # The mode the turn's row pinned at its start, from the same
+        # snapshot whose capability digest the agent was just checked
+        # against.
+        mode: turn.agent_mode,
         authority: authority,
         catalyst: catalyst,
         program: program,
@@ -134,12 +135,11 @@ defmodule Aqua.Loop.Turn do
         system: prompt.text,
         sources: prompt.sources,
         tools:
-          Request.tool_definitions(policy,
-            external: external_tools(policy),
-            accounts: launch_accounts(ctx, policy)
+          Request.tool_definitions(offered,
+            external: external_tools(offered),
+            accounts: launch_accounts(ctx, offered)
           ),
         deadline_ms: deadline_ms(authority, brain_timeout_ms(authority, catalyst)),
-        approval_ttl_s: Aqua.Approvals.ttl_seconds(ctx),
         options: options,
         brain_options: brain_options,
         narrowed: options["tools"],
@@ -185,24 +185,24 @@ defmodule Aqua.Loop.Turn do
 
   # A crew request narrows the job to the tools it names: a key stays when
   # its tool or its `tool.action` is named, so the narrowing only takes
-  # away from what the agent's policy and the ceiling already allow.
-  defp narrowed(policy, [_ | _] = names) do
+  # away from what the member is offered.
+  defp narrowed(offered, [_ | _] = names) do
     named = MapSet.new(names)
 
-    Map.filter(policy, fn {key, _mode} ->
+    Map.filter(offered, fn {key, _offered} ->
       tool = key |> String.split(".", parts: 2) |> hd()
       MapSet.member?(named, key) or MapSet.member?(named, tool)
     end)
   end
 
-  defp narrowed(policy, _all), do: policy
+  defp narrowed(offered, _all), do: offered
 
-  # The crew index, listed in the soul's prompt when its policy offers
+  # The crew index, listed in the soul's prompt when it is offered
   # `crew.ask`; only the soul hands a job on (`Aqua.Runner.Admission`). An
   # index that cannot be read lists no crew this turn, and says so in the
   # log.
-  defp crew(ctx, roster, policy, true = _soul?) do
-    with true <- Map.get(policy, "crew.ask") in ["auto", "ask"],
+  defp crew(ctx, roster, offered, true = _soul?) do
+    with true <- Aqua.Offered.offered?(offered, "crew.ask"),
          {:ok, index} <- Aqua.Crew.index(ctx, roster) do
       index
     else
@@ -215,7 +215,7 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  defp crew(_ctx, _roster, _policy, false = _soul?), do: []
+  defp crew(_ctx, _roster, _offered, false = _soul?), do: []
 
   # The room's requests still waiting on a reply, which the prompt lists
   # with their age: a daily or a workspace thread's; a child thread holds
@@ -237,8 +237,8 @@ defmodule Aqua.Loop.Turn do
   # their capability digest checked against the pin. Every start pins
   # both, so a turn that pins neither, or only one, is refused; a revision
   # the tree no longer holds is refused too, never replaced.
-  # A crew member's bytes resolve under the soul's policy as it stands, so
-  # a soul whose policy moved since the turn started moves the digest and
+  # A crew member's bytes resolve under the soul's tools as they stand, so
+  # a soul whose tools moved since the turn started moves the digest and
   # refuses the turn, as an edit of the member's own file does.
   defp agent(ctx, %{agent_revision_digest: revision, agent_capability_digest: capability} = turn)
        when is_binary(revision) and is_binary(capability) do
@@ -266,7 +266,8 @@ defmodule Aqua.Loop.Turn do
       "description" => parsed.description,
       "avoid" => parsed.avoid,
       "prompt" => parsed.prompt,
-      "tool_policy" => parsed.tool_policy,
+      "mode" => parsed.mode,
+      "tools" => parsed.tools,
       "catalyst_ref" => parsed.catalyst_ref,
       "program" => Map.get(parsed, :program),
       "model" => parsed.model,
@@ -287,7 +288,8 @@ defmodule Aqua.Loop.Turn do
     case Map.get(turn, :program) || agent["program"] do
       row_id when is_binary(row_id) ->
         with {:ok, program} <- program(ctx, row_id),
-             do: {:ok, {nil, program}, turn.model || agent["model"]}
+             :ok <- holds(turn, agent, {:driver, program.driver}, program.name),
+             do: {:ok, {nil, Map.delete(program, :driver)}, turn.model || agent["model"]}
 
       nil ->
         catalyst_model(ctx, turn, agent)
@@ -302,8 +304,34 @@ defmodule Aqua.Loop.Turn do
       end
 
     with {:ok, catalyst, model} <- catalyst(listing, turn, agent),
-         :ok <- speaks_chat(listing, catalyst) do
+         :ok <- speaks_chat(listing, catalyst),
+         :ok <- holds(turn, agent, {:needs, needs(listing, catalyst)}, brain_name(catalyst)) do
       if is_binary(model), do: {:ok, {catalyst, nil}, model}, else: {:error, :no_model}
+    end
+  end
+
+  # A read-only member's brain must be one CYFR keeps read-only
+  # (`Aqua.Models.holds_read_only?/1`): this is the first point the turn
+  # reads its catalyst's manifest or its program row, after the root's
+  # claim and before anything runs, and a turn refused here ends unrun
+  # with the sentence as a line in its thread (`Aqua.Loop`).
+  defp holds(%{mode: "read-only"}, agent, brain, name) do
+    if Aqua.Models.holds_read_only?(brain),
+      do: :ok,
+      else: {:error, {:read_only_unheld, agent["title"] || agent["name"], name}}
+  end
+
+  defp holds(_auto, _agent, _brain, _name), do: :ok
+
+  defp needs(listing, catalyst) do
+    row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
+    Prima.Manifest.Needs.from_manifest(row["manifest"])
+  end
+
+  defp brain_name(catalyst) do
+    case Prima.ComponentRef.parse(catalyst) do
+      {:ok, %{name: name}} when is_binary(name) -> name
+      _unread -> catalyst
     end
   end
 
@@ -425,18 +453,17 @@ defmodule Aqua.Loop.Turn do
 
   # The apps a launch may name an account of, read once for the spec and
   # kept for every request it makes: only when the agent may launch at
-  # all. A crew member holds the soul's policy, so it may as the soul may.
-  defp launch_accounts(ctx, policy) do
-    if Map.get(policy, "execution.run") in ["auto", "ask"],
+  # all. A crew member is offered the soul's tools, so it may as the soul may.
+  defp launch_accounts(ctx, offered) do
+    if Aqua.Offered.offered?(offered, "execution.run"),
       do: Aqua.Hands.launch_accounts(ctx),
       else: nil
   end
 
-  # An external server's tools the policy names (`server:tool`), as the
-  # catalog knows them.
-  defp external_tools(policy) do
-    for {key, mode} <- policy,
-        mode in ["auto", "ask"],
+  # An outside server's tools the member is offered (`server:tool`), as
+  # the catalog knows them.
+  defp external_tools(offered) do
+    for {key, "offered"} <- offered,
         String.contains?(key, ":"),
         {:ok, definition} <- [Sanctum.Catalog.get_tool(key)] do
       %{
@@ -466,25 +493,19 @@ defmodule Aqua.Loop.Turn do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The agent's policy recomposed against the member's grants and browser
-  setting as they stand.
+  The member's offered set as the person's browser setting stands now.
 
-  `build/3`'s policy is a snapshot. A member withdrawing a standing grant
-  or turning the browser setting off mid-turn writes the store; nothing
-  rebuilds the snapshot a running loop decides from, so a call that has
-  not dispatched yet is decided again here. The authored half is the
-  pinned agent definition and is never re-read here.
+  `build/3`'s set is a snapshot. A person turning the browser setting off
+  mid-turn writes the store; nothing rebuilds the snapshot a running loop
+  decides from, so a call that has not dispatched yet is decided again
+  here. The authored half is the pinned agent definition and is never
+  re-read here; a mode switched mid-turn reaches the member's next turn.
   """
-  @spec current_policy(t()) :: {:ok, map()} | {:error, term()}
-  def current_policy(%__MODULE__{ctx: ctx, turn: turn, agent: agent, options: options}) do
-    name = agent["name"]
-
-    with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [name]) do
-      {:ok,
-       agent["tool_policy"]
-       |> Aqua.ToolGrants.resolve(Map.fetch!(grants, name), Aqua.BrowserSetting.allowed?(ctx))
-       |> narrowed((options || %{})["tools"])}
-    end
+  @spec current_offered(t()) :: Aqua.Offered.t()
+  def current_offered(%__MODULE__{ctx: ctx, agent: agent, options: options}) do
+    agent["tools"]
+    |> Aqua.Offered.resolve(Aqua.BrowserSetting.allowed?(ctx))
+    |> narrowed((options || %{})["tools"])
   end
 
   defp decode(nil), do: %{}

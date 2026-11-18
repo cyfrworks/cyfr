@@ -202,6 +202,17 @@ defmodule Prima.Manifest.Needs do
   def from_manifest(_manifest), do: nil
 
   @doc """
+  Whether a normalized needs list (`from_manifest/1`, or a setup plan's
+  needs, which carry the same `kind`) holds a login need: the one way a
+  component runs a program itself, since the pipe opens only the program
+  its own login need is bound to (`Opus.Host.Pipe`). A component with
+  none runs no program, so every call it makes is CYFR's to decide.
+  """
+  @spec login?([map()] | nil) :: boolean()
+  def login?(needs) when is_list(needs), do: Enum.any?(needs, &(Map.get(&1, :kind) == @login))
+  def login?(_none), do: false
+
+  @doc """
   The kinds of need a consent binds: the credential kinds, each met by
   an entry, and `login`, met by a program row. Every other kind names a
   component.

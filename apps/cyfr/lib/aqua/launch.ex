@@ -11,11 +11,11 @@ defmodule Aqua.Launch do
 
     * **Approved**, on a card a member decided: as that approver, holding
       the run to what the card bound.
-    * **Decided**, with no card: one the agent's policy let run under
-      `auto` because the grant its app roots at covered what the turn had
-      read, as the turn's person, holding the run to what that decision
-      read (`t:decided/0`). A run stands on the grant of the person it
-      acts as, whoever started it; this is the assistant starting one.
+    * **Decided**, with no card: one a member in `auto` called
+      (`Aqua.Loop.Policy`), as the turn's person, holding the run to what
+      that decision read (`t:decided/0`). A run stands on the grant of the
+      person it acts as, whoever started it; this is the assistant
+      starting one.
 
   The input is the durable step, with the decision for a decided one. The
   person's context is rebuilt from the approval's `decided_by`, or for a
@@ -64,11 +64,11 @@ defmodule Aqua.Launch do
   The proposal also binds what the launch carries (`bind/1`): the turn's
   sources, the consent revision of the grant the app roots at, and the
   classes let flow to every exit of that grant's tree — those the person
-  let flow on a card, none for a decided launch, whose grant already
-  covered every source. Before anything runs the turn's sources are read
-  again, and any the turn read since refuse the launch as stale; the
-  grant is loaded again as the person, and another revision refuses it as
-  stale. Then what the proposal bound rides the one call on
+  let flow on a card, none for a decided launch. Before anything runs the
+  turn's sources are read again, and any the turn read since refuse the
+  launch as stale; a proposal that bound a revision has the grant loaded
+  again as the person, and another revision refuses it as stale. Then
+  what the proposal bound rides the one call on
   the person's context (`Sanctum.Context`'s `launch`): the root is
   admitted only at that revision, seeded with those sources, with those
   classes in its policy, under the step's pre-minted id
@@ -76,10 +76,8 @@ defmodule Aqua.Launch do
   there as the same stale launch. A card that bound no revision lets
   nothing flow, so whatever grant the root loads decides its sends alone;
   for a component with no grant the gate answers `consent_required`. A
-  decided launch always binds one: no grant is no cover, so one with none
-  is asked on a card, and a decision that carries no revision runs
-  nothing. The run's root never takes a seed, a class or an id from
-  anything a caller sends.
+  decided launch binds none. The run's root never takes a seed, a class
+  or an id from anything a caller sends.
   """
 
   alias Aqua.Tape
@@ -109,15 +107,14 @@ defmodule Aqua.Launch do
   dispatches: the call it decided, its action and its arguments as the
   model wrote them; the account that call names as it resolved then (nil
   for a launch naming none); and the binding the run stands on: the
-  turn's sources, the revision of the grant its app roots at, which
-  covered them, and no class let flow. It lives in the loop from the
+  turn's sources, no grant revision and no class let flow. It lives in the loop from the
   decision to the dispatch and is stored nowhere: a turn continued from
   its rows decides its steps again.
   """
   @type decided :: %{
           call: %{action: String.t(), args: map()},
           account: account() | nil,
-          binding: %{sources: [Prima.Source.t()], consent_id: String.t(), classes: []}
+          binding: %{sources: [Prima.Source.t()], consent_id: nil, classes: []}
         }
 
   @launch_actions ~w(run run_stream)
@@ -150,9 +147,8 @@ defmodule Aqua.Launch do
   Run a launch. With no `decided`, the step's approved card is what runs,
   as its approver; a step with no approval runs nothing
   (`{:refused, :not_approved}`). With `decided`, what the decision read
-  is what runs, as the turn's person, with no card and no class let flow,
-  at the grant's revision the decision read; a decision that carries none
-  runs nothing (`{:refused, :not_approved}`).
+  is what runs, as the turn's person, with no card, no class let flow and
+  on whatever grant the root loads.
 
   Tells a refusal made before the run's admission could write anything —
   by this dispatcher, by the gate's admission stage
@@ -172,9 +168,8 @@ defmodule Aqua.Launch do
   def run(
         %Context{} = ctx,
         step,
-        %{call: _, account: _, binding: %{consent_id: consent_id, classes: []}} = decided
-      )
-      when is_binary(consent_id) do
+        %{call: _, account: _, binding: %{consent_id: nil, classes: []}} = decided
+      ) do
     case decided_launch(ctx, step, decided) do
       {:ok, launcher, args} -> launch(launcher, args, :decided)
       {:error, reason} -> {:refused, reason}
@@ -473,14 +468,13 @@ defmodule Aqua.Launch do
 
   # The grant the app roots at is still the consent revision the proposal
   # bound, read again as the person before anything runs: the classes a
-  # card lets flow, and a decision's cover, were judged against that
-  # grant's exits. A grant gone, or another revision, is stale; one that
+  # card lets flow were judged against that grant's exits. A grant gone, or another revision, is stale; one that
   # cannot be read now is that refusal. This is the early refusal, not the
   # guarantee: the run's root is admitted only at the revision bound
   # (`Opus.Admission`), on the same read of the head that picks it. A card
   # that bound no revision let nothing flow (`launching/4`), and holds
-  # whatever grant loads; a decided launch always binds one (`run/3`).
-  defp grant_holds(_approver, %{consent_id: nil}, _args, :approved), do: :ok
+  # whatever grant loads, as a decided launch, which binds none, does.
+  defp grant_holds(_caller, %{consent_id: nil}, _args, _head), do: :ok
 
   defp grant_holds(caller, %{consent_id: shown}, args, head) do
     case authority(caller, args["reference"], args["action"], args) do

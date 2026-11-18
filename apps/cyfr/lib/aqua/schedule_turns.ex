@@ -52,12 +52,9 @@ defmodule Aqua.ScheduleTurns do
 
   ## What the turn may do
 
-  Only what Aqua may do without asking, and what a standing allow already
-  covers: among them an answer "for a schedule" the person gave on a card
-  naming this schedule, which holds for this schedule's turns on any day's
-  thread and ends with the schedule (`Aqua.Standing`). At the
-  first call that would ask, it opens no card and ends failed, saying
-  what it needed and how to allow it next time (`Aqua.Loop`).
+  What any turn of Aqua's mode may do (`Aqua.Loop.Policy`): in auto
+  every tool Aqua is offered, in read-only its reads alone. A refused
+  call is no question, so the turn goes on without it (`Aqua.Loop`).
 
   ## Its end
 

@@ -78,11 +78,11 @@ defmodule Aqua.Providers.Browser do
   for both of Aqua's browsers; `status` reads it, with whether each is
   added (`browser`, the person's; `apart`, the second, which a workspace
   thread opened apart uses) and whether either runs. The
-  person calls them from the Aqua page; a turn calls them too, proved as
-  the running turn itself. `turn_on` is never standing (`standing:
-  false`): a turn's call asks with a card in its thread each time, so
-  text Aqua read never widens its own reach. `turn_off` only takes reach
-  away and holds at once.
+  person calls them from the Aqua page. `turn_on` is theirs alone
+  (`planes: [:external]`): no turn calls it, so text Aqua read never
+  widens its own reach. A turn calls `status` and `turn_off`, proved as
+  the running turn itself; `turn_off` only takes reach away and holds at
+  once.
   """
 
   @behaviour Prima.Provider
@@ -297,7 +297,10 @@ defmodule Aqua.Providers.Browser do
           "turn_on",
           "Let Aqua use the browser",
           [],
-          [kind: :write, sources: [], standing: false] ++ setting
+          kind: :write,
+          sources: [],
+          planes: [:external],
+          consent: :interactive
         ),
         Operation.new(
           "browser",
@@ -308,7 +311,7 @@ defmodule Aqua.Providers.Browser do
         )
       ],
       description:
-        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; page shows a page there, of one html file, of several files, or a tincture version of yours as it is served; thread.post shows a screenshot by the message_id it answered; watch shows the person a workspace thread's window on their own page; status reads the setting, turn_on asks the person to let Aqua use the browser, turn_off stops Aqua using it.",
+        "Aqua's browser, a real Chrome that is the person's alone, with a window for each thread. open, read, click, type, key, page, screenshot and close act in this thread's window while the person's browser setting is on; page shows a page there, of one html file, of several files, or a tincture version of yours as it is served; thread.post shows a screenshot by the message_id it answered; watch shows the person a workspace thread's window on their own page; status reads the setting, turn_on is the person's own switch on the Aqua page, turn_off stops Aqua using it.",
       title: "Browser"
     )
   end

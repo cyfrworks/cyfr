@@ -84,6 +84,9 @@ defmodule Aqua.Models do
   @listing_concurrency 5
   @listing_timeout_ms 30_000
   @capabilities_ttl_ms :timer.hours(24)
+  # The brains' drivers whose harness cannot start read-only in the box
+  # (`holds_read_only?/1`).
+  @unheld_drivers ~w(cyfr-codex)
 
   @doc """
   The capabilities of `model` on `resolved_ref`: the catalyst's
@@ -604,7 +607,13 @@ defmodule Aqua.Models do
   def program(%Context{} = ctx, id) when is_binary(id) do
     case Arca.McpServerStorage.get_by_id(Context.actor(ctx), id) do
       {:ok, %{transport: "program", mark: "driven", home: "kept", enabled: true} = row} ->
-        {:ok, %{row: row.id, epoch: row.epoch, name: row.name}}
+        {:ok,
+         %{
+           row: row.id,
+           epoch: row.epoch,
+           name: row.name,
+           driver: Arca.McpServerStorage.driver(row)
+         }}
 
       {:ok, %{transport: "program", mark: "driven", home: "kept"} = row} ->
         {:error, {:program_disabled, row.name}}
@@ -717,6 +726,80 @@ defmodule Aqua.Models do
       true -> :needs_key
     end
   end
+
+  @doc """
+  Whether a read-only member's brain can be kept read-only: a catalyst,
+  by its normalized needs, whose needs hold no login need
+  (`Prima.Manifest.Needs.login?/1`), since one that does runs a program
+  of its own that CYFR's mode never reaches; or a program row by its
+  driver, which must be one that starts its harness read-only. Codex's
+  sandbox cannot start in the box, so its driver refuses a read-only
+  start (`cyfr-codex`), and a member on such a row is refused before it.
+  """
+  @spec holds_read_only?({:needs, [map()] | nil} | {:driver, String.t() | nil}) :: boolean()
+  def holds_read_only?({:needs, needs}), do: not Prima.Manifest.Needs.login?(needs)
+  def holds_read_only?({:driver, driver}), do: driver not in @unheld_drivers
+
+  @doc """
+  The sentence a read-only member whose brain cannot be kept read-only
+  (`holds_read_only?/1`) is refused with: as a line in the thread its turn
+  never ran in, and beneath the read-only choice on the Aqua page.
+  """
+  @spec unheld_sentence(String.t(), String.t()) :: String.t()
+  def unheld_sentence(title, brain) when is_binary(title) and is_binary(brain),
+    do:
+      "#{title} can't run read-only: its brain, #{brain}, runs a program CYFR can't keep " <>
+        "read-only, so nothing ran. Switch #{title} to auto on the Aqua page to use it."
+
+  @doc """
+  Each of `members` (as the `aqua` tool lists them: `name`, `title` and
+  a `catalyst_ref` or a `program`) whose brain CYFR cannot keep read-only
+  (`holds_read_only?/1`), by name, with the sentence the Aqua page shows
+  beneath its closed read-only choice (`unheld_sentence/2`): a catalyst
+  whose setup plan in `plans` (by its ref) holds a login need, named by
+  its own name, or a program row whose driver cannot start its harness
+  read-only, read once each, named by the row's name. A plan or a row
+  that cannot be read leaves the member out; its turn checks the brain
+  again before anything runs (`Aqua.Loop.Turn`).
+  """
+  @spec read_only_unheld(Context.t(), [map()], %{String.t() => map()}) :: %{
+          String.t() => String.t()
+        }
+  def read_only_unheld(%Context{} = ctx, members, plans)
+      when is_list(members) and is_map(plans) do
+    rows =
+      for id <- members |> Enum.map(& &1[:program]) |> Enum.uniq(),
+          is_binary(id) and id != "",
+          {:ok, row} <- [program(ctx, id)],
+          into: %{},
+          do: {id, row}
+
+    for member <- members,
+        brain <- List.wrap(unheld_brain(member, plans, rows)),
+        into: %{},
+        do: {member.name, unheld_sentence(member[:title] || member.name, brain)}
+  end
+
+  defp unheld_brain(%{program: id}, _plans, rows) when is_binary(id) do
+    with %{name: name, driver: driver} <- rows[id],
+         false <- holds_read_only?({:driver, driver}) do
+      name
+    else
+      _held -> nil
+    end
+  end
+
+  defp unheld_brain(%{catalyst_ref: ref}, plans, _rows) when is_binary(ref) do
+    with %{} = plan <- plans[ref],
+         false <- holds_read_only?({:needs, plan[:needs]}),
+         {:ok, %{name: name}} <- Prima.ComponentRef.parse(ref) do
+      name
+    else
+      _held -> nil
+    end
+  end
+
+  defp unheld_brain(_member, _plans, _rows), do: nil
 
   @doc """
   Whether a brain, as its setup plan (`component.setup_plan`) answers it,
