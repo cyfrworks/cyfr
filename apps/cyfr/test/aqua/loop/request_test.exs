@@ -651,6 +651,61 @@ defmodule Aqua.Loop.RequestTest do
              Request.messages(rows, %{}, attachments: [image], task_message_id: "msg_3")
   end
 
+  test "a later post's files ride its own message where it stands, before any merge" do
+    first = %{"type" => "image", "media_type" => "image/png", "data" => "Zmlyc3Q="}
+    later = %{"type" => "image", "media_type" => "image/png", "data" => "bGF0ZXI="}
+    alone = %{"type" => "text", "text" => "The attached file notes.txt:\n\nstars"}
+    call = %{"step_id" => "s1", "tool_call_id" => "c1", "name" => "notes", "arguments" => %{}}
+
+    rows = [
+      row(1, "text", "usr_a", "look"),
+      row(2, "tool_call", @agent, nil, call),
+      row(3, "text", "usr_a", "like this"),
+      row(4, "text", "usr_a", ""),
+      row(5, "tool_result", @agent, "kept", %{"tool_call_id" => "c1", "name" => "notes"}),
+      row(6, "text", "usr_a", "and this, uncarried")
+    ]
+
+    assert Request.messages(rows, %{},
+             attachments: [first],
+             task_message_id: "msg_1",
+             files: %{"msg_3" => [later], "msg_4" => [alone], "msg_9" => [later]}
+           ) == [
+             %{"role" => "user", "content" => [%{"type" => "text", "text" => "look"}, first]},
+             %{
+               "role" => "assistant",
+               "content" => [
+                 %{"type" => "tool_call", "id" => "c1", "name" => "notes", "arguments" => %{}}
+               ]
+             },
+             %{
+               "role" => "user",
+               "content" => [
+                 %{"type" => "text", "text" => "like this"},
+                 later,
+                 %{"type" => "text", "text" => ""},
+                 alone
+               ]
+             },
+             %{
+               "role" => "tool",
+               "content" => [
+                 %{
+                   "type" => "tool_result",
+                   "tool_call_id" => "c1",
+                   "name" => "notes",
+                   "content" => "kept",
+                   "is_error" => false
+                 }
+               ]
+             },
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "text", "text" => "and this, uncarried"}]
+             }
+           ]
+  end
+
   test "the provider's own search runs only when the policy turns it on and the grant carries it" do
     granted = fn tools ->
       %Prima.Authority{resources: %Prima.Authority.Blob.Edge{tools: tools}}
