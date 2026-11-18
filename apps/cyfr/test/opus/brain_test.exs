@@ -12,10 +12,12 @@ defmodule Opus.BrainTest do
   the hello; each batch is handed whole and the next read only once the
   attendant says; a write is refused, with nothing written, for a binding
   of another athanor, person, row or epoch, a moved fence, a moved
-  generation, a step that is not the turn's decided `program.start`, a
-  turn that is not running, and a decision that no longer stands; a
+  generation, a step that is not the turn's decided `program.start` of
+  that row and epoch, a turn that is not running, and a stored decision
+  that no longer stands (a standing never recorded since, an allow past
+  its deadline or short of the turn's sources, a card not approved); a
   paused turn's proof writes a post or an answer of its own work and
-  nothing else. A line that does not read, one past the bound, one lost
+  nothing else; a stale open ends no successor. A line that does not read, one past the bound, one lost
   unread, the row's change, the driver's end, a lost answer to a write and
   a take-over each end the session, its box session closed.
   """
@@ -39,7 +41,7 @@ defmodule Opus.BrainTest do
     {ctx, _user} = person!("brain-person")
     row = brain_row!(ctx)
     {turn, thread} = turn!(ctx)
-    step = start_step!(ctx, turn)
+    step = start_step!(ctx, turn, row)
 
     binding = %{
       ctx: ctx,
@@ -84,7 +86,7 @@ defmodule Opus.BrainTest do
         memory_bytes: 1_073_741_824,
         config_json:
           Jason.encode!(%{
-            "command" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.318",
+            "command" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
             "env" => %{}
           })
       })
@@ -104,10 +106,7 @@ defmodule Opus.BrainTest do
 
     {1, _} =
       Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [
-          root_execution_id: "exe_root_#{System.unique_integer([:positive])}",
-          status: "running"
-        ]
+        set: [status: "running"]
       )
 
     {:ok, turn} = TurnStorage.get(actor, turn.id)
@@ -115,9 +114,67 @@ defmodule Opus.BrainTest do
     {turn, thread}
   end
 
-  # The step that admitted the program's start: the turn's own
-  # `program.start`, dispatched as it ran.
-  defp start_step!(ctx, turn, attrs \\ %{}) do
+  # The step that admitted the program's start, as the loop records and
+  # decides one: the model's `program.start` of `row` at its epoch, its
+  # `tool_call` row and its step written as a response's call, dispatched,
+  # and allowed by a standing answer for this thread as a card writes one
+  # (`Aqua.Standing.rows/5`); `allow: false` writes no answer.
+  defp start_step!(ctx, turn, row, opts \\ []) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, model} = TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: turn.fence})
+
+    args =
+      Keyword.get(opts, :args, %{"action" => "start", "program" => row.id, "epoch" => row.epoch})
+
+    {:ok, %{calls: [%{step: step}]}} =
+      TurnStorage.record_response(actor, turn.id, model.id, %{
+        fence: turn.fence,
+        tool_calls: [
+          %{
+            tool_call_id: "call_#{System.unique_integer([:positive])}",
+            name: "program",
+            tool: "program",
+            action: "start",
+            arguments: args
+          }
+        ]
+      })
+
+    step =
+      if Keyword.get(opts, :card) do
+        step
+      else
+        {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
+        step
+      end
+
+    if Keyword.get(opts, :allow, true), do: allow!(ctx, turn, row)
+    step
+  end
+
+  defp start_proposal(row),
+    do: %{
+      "tool" => "program",
+      "action" => "start",
+      "args" => %{"program" => row.id, "epoch" => row.epoch}
+    }
+
+  # A standing answer to the agent's `program.start` of `row`, recorded
+  # through Sanctum as the card's answer records one.
+  defp allow!(ctx, turn, row, bounds \\ %{}) do
+    {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_proposal(row), :thread, bounds)
+    {:ok, grant} = Sanctum.ToolGrants.put(ctx, grant)
+    grant
+  end
+
+  defp never!(ctx, turn, row) do
+    {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_proposal(row), :never)
+    {:ok, grant} = Sanctum.ToolGrants.put(ctx, grant)
+    grant
+  end
+
+  # A step written by hand, for the steps that are no decided start.
+  defp bare_step!(ctx, turn, attrs \\ %{}) do
     {:ok, step} =
       TurnStorage.put_step(
         Sanctum.Context.actor(ctx),
@@ -203,6 +260,23 @@ defmodule Opus.BrainTest do
     do: fake |> Scripted.sessions(row.id) |> Enum.filter(fn {_id, s} -> s.running end)
 
   describe "a session" do
+    test "a start of another generation than the binding's writes nothing", %{
+      fake: fake,
+      row: row,
+      binding: binding
+    } do
+      brain = opened!(fake, row, binding, "boot-one")
+
+      assert Brain.write(brain, binding, %{
+               "t" => "start",
+               "gen" => binding.generation + 1,
+               "config" => %{}
+             }) ==
+               {:error, :not_this_generation}
+
+      refute_sent()
+    end
+
     test "opens a fresh run session of the driver in the row's kept folder, its hello handed first",
          %{fake: fake, row: row, binding: binding} do
       {:ok, brain} = Brain.open(binding)
@@ -462,24 +536,148 @@ defmodule Opus.BrainTest do
       refute_sent()
     end
 
-    test "an expired or source-bound grant writes nothing", %{brain: brain, binding: binding} do
+    test "a standing never recorded after the start writes nothing", %{
+      brain: brain,
+      binding: binding,
+      ctx: ctx,
+      turn: turn,
+      row: row
+    } do
+      never!(ctx, turn, row)
+      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :denied}}
+      refute_sent()
+    end
+
+    test "an allow past its deadline writes nothing", %{
+      brain: brain,
+      binding: binding,
+      ctx: ctx
+    } do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(g in Arca.Schemas.ToolGrant, where: g.athanor_id == ^ctx.athanor_id),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60, :second)]
+        )
+
+      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :withdrawn}}
+      refute_sent()
+    end
+
+    test "an allow that names none of the turn's outside sources writes nothing", %{
+      brain: brain,
+      binding: binding,
+      turn: turn
+    } do
+      set_turn(turn, sources: Prima.Source.encode([Prima.Source.outside("the web")]))
+      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :withdrawn}}
+      refute_sent()
+    end
+
+    test "a step whose call started another program, or this one at another epoch, writes nothing",
+         %{brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
+      other = brain_row!(ctx, "another")
+
+      for args <- [
+            %{"action" => "start", "program" => other.id, "epoch" => other.epoch},
+            %{"action" => "start", "program" => row.id, "epoch" => row.epoch + 1}
+          ] do
+        step = start_step!(ctx, turn, row, args: args)
+
+        assert Brain.write(brain, %{binding | step: step.id}, post(binding)) ==
+                 {:error, {:not_admitted, :not_this_program}}
+      end
+
+      refute_sent()
+    end
+
+    test "a start the person allowed on its card writes, until a standing never; one not approved writes nothing",
+         %{fake: fake, brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
+      actor = Sanctum.Context.actor(ctx)
+
+      {1, _} =
+        Arca.Repo.delete_all(
+          from(g in Arca.Schemas.ToolGrant, where: g.athanor_id == ^ctx.athanor_id)
+        )
+
+      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :withdrawn}}
+
+      # A card opened on the step, answered or still waiting; the waiting
+      # one's step is marked dispatched by hand, which no loop does, so the
+      # approval's own state is what refuses it.
+      carded = fn answer ->
+        step = start_step!(ctx, turn, row, card: true, allow: false)
+
+        {:ok, %{approval: approval}} =
+          TurnStorage.open_approval(actor, step.id, %{
+            proposal_digest: "sha256:proposal",
+            card: %{content: "may I?"},
+            fence: turn.fence
+          })
+
+        if answer == :approved do
+          {:ok, _} =
+            TurnStorage.resolve_approval(actor, approval.id, "approved", %{
+              resolution_kind: "continue",
+              fence: turn.fence
+            })
+
+          {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
+          step
+        else
+          {1, _} =
+            Arca.Repo.update_all(from(t in Arca.Schemas.TurnStep, where: t.id == ^step.id),
+              set: [dispatch_state: "dispatched"]
+            )
+
+          step
+        end
+      end
+
+      approved = carded.(:approved)
+      waiting = carded.(:waiting)
+
+      assert Brain.write(brain, %{binding | step: waiting.id}, post(binding)) ==
+               {:error, {:not_admitted, :not_allowed}}
+
+      refute_sent()
+
+      assert :ok = Brain.write(brain, %{binding | step: approved.id}, post(binding))
+      assert %{"t" => "post", "id" => id} = sent()
+      say(fake, row, %{"t" => "accepted", "id" => id})
+      assert {"boot-one", [{seq, %{"t" => "accepted"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
+
+      never!(ctx, turn, row)
+
+      assert Brain.write(brain, %{binding | step: approved.id}, post(binding, "stp_post_2")) ==
+               {:error, {:not_admitted, :denied}}
+
+      refute_sent()
+    end
+
+    test "the attendant's veto writes nothing, whatever the stored decision says", %{
+      brain: brain,
+      binding: binding
+    } do
       assert Brain.write(brain, %{binding | admits?: fn -> false end}, post(binding)) ==
-               {:error, {:not_admitted, :withdrawn}}
+               {:error, {:not_admitted, :vetoed}}
 
       refute_sent()
     end
 
     test "a step that is not the turn's decided program.start writes nothing",
          %{brain: brain, binding: binding, ctx: ctx, turn: turn} do
-      proposed = start_step!(ctx, turn, %{dispatch_state: "proposed"})
-      other = start_step!(ctx, turn, %{tool: "files", action: "read"})
+      proposed = bare_step!(ctx, turn, %{dispatch_state: "proposed"})
+      other = bare_step!(ctx, turn, %{tool: "files", action: "read"})
       {:ok, %{turn: elsewhere}} = elsewhere_turn(ctx)
-      foreign = start_step!(ctx, elsewhere)
+      foreign = bare_step!(ctx, elsewhere)
+      unrecorded = bare_step!(ctx, turn)
 
       for {step, reason} <- [
             {proposed.id, :not_decided},
             {other.id, :wrong_step},
             {foreign.id, :wrong_step},
+            {unrecorded.id, :wrong_step},
             {"stp_none", :step_not_found}
           ] do
         assert Brain.write(brain, %{binding | step: step}, post(binding)) ==
@@ -596,13 +794,14 @@ defmodule Opus.BrainTest do
       fake: fake,
       row: row,
       binding: binding,
+      ctx: ctx,
       turn: turn
     } do
       brain = started!(fake, row, binding)
       set_turn(turn, status: "paused", paused_reason: "approval")
+      never!(ctx, turn, row)
 
-      assert Brain.write(brain, %{binding | admits?: fn -> false end}, post(binding)) ==
-               {:error, {:not_admitted, :withdrawn}}
+      assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :denied}}
 
       set_turn(turn, fence: turn.fence + 1)
       assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :superseded}}
@@ -763,6 +962,73 @@ defmodule Opus.BrainTest do
       assert_receive {Brain, ^ref, {:ended, :replaced}}, 5_000
       assert_receive {:DOWN, ^monitor, :process, ^old, _}, 5_000
       assert [{_one, _}] = running_sessions(fake, row)
+    end
+  end
+
+  describe "a take-over" do
+    # The ordering of #8138's second finding: the first open waits in its
+    # binding's last callback, the turn's fence moves, the successor opens,
+    # and only then is the first let go.
+    test "a stale open paused in a wait is refused, and the successor it raced lives",
+         %{binding: binding, turn: turn} do
+      test = self()
+      first = :atomics.new(1, [])
+
+      stale = %{
+        binding
+        | admits?: fn ->
+            if :atomics.add_get(first, 1, 1) == 1 do
+              send(test, {:paused, self()})
+              receive do: (:go -> :ok)
+            end
+
+            true
+          end
+      }
+
+      opening = Task.async(fn -> Brain.open(stale) end)
+      assert_receive {:paused, waiter}, 5_000
+
+      set_turn(turn, fence: turn.fence + 1)
+
+      successor =
+        spawn_link(fn ->
+          send(test, {:successor, Brain.open(%{binding | fence: turn.fence + 1})})
+          receive do: (:done -> :ok)
+        end)
+
+      send(waiter, :go)
+      assert Task.await(opening, 10_000) == {:error, {:not_admitted, :superseded}}
+      assert_receive {:successor, {:ok, {holder, _ref}}}, 10_000
+      assert Process.alive?(holder)
+      assert Brain.whereis(binding.ctx.athanor_id, binding.thread_id, binding.agent) == holder
+      send(successor, :done)
+    end
+
+    test "a binding that goes stale while the driver's session opens opens nothing, its session closed",
+         %{fake: fake, row: row, binding: binding, turn: turn} do
+      Scripted.hold(fake, "opened")
+      opening = Task.async(fn -> Brain.open(binding) end)
+      assert_receive {:held, "opened", service}, 5_000
+      holder = Brain.whereis(binding.ctx.athanor_id, binding.thread_id, binding.agent)
+      monitor = Process.monitor(holder)
+
+      set_turn(turn, fence: turn.fence + 1)
+      send(service, :go)
+
+      assert Task.await(opening, 10_000) == {:error, {:not_admitted, :superseded}}
+      assert_receive {:DOWN, ^monitor, :process, ^holder, _reason}, 5_000
+      assert running_sessions(fake, row) == []
+    end
+
+    test "a stale open ends no holder: the successor's session stays",
+         %{binding: binding, turn: turn} do
+      set_turn(turn, fence: turn.fence + 1)
+      {:ok, {holder, ref}} = Brain.open(%{binding | fence: turn.fence + 1})
+
+      assert Brain.open(binding) == {:error, {:not_admitted, :superseded}}
+      assert Process.alive?(holder)
+      refute_received {Brain, ^ref, {:ended, _reason}}
     end
   end
 

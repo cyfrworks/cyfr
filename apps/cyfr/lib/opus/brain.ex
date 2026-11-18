@@ -22,6 +22,12 @@ defmodule Opus.Brain do
   it took over: its next start resumes the native session in a new
   process.
 
+  A take-over is decided by the holder it would end: that holder reads
+  the opener's binding as it handles the request and ends only when the
+  binding proves, so a stale open never ends its successor. The new holder
+  reads the binding again before it opens the driver's session and after,
+  so a binding that went stale while the opener waited opens nothing.
+
   ## Reading
 
   The driver's lines are read in order, each read past the last line the
@@ -57,23 +63,36 @@ defmodule Opus.Brain do
   Each write names the work it is written for (`t:binding/0`): the turn,
   its person, its origin, its fence, the step that admitted the program's
   start, the program row and its epoch and the thread's session generation.
-  As the command is about to be written it is read again from the store:
+  As the command is about to be written, once the attendant's own veto
+  (`admits?`) has said nothing against it, it is read again from the
+  store:
 
     * the person stands, and is the turn's;
     * the turn is the thread's and agent's, of that origin, at that fence,
       and running; a paused turn may be written only a `post` or an
       `answer` (the narrow proof below);
-    * the step is that turn's `program.start`, and was decided allow;
+    * the step is that turn's `program.start`, dispatched or closed as it
+      ran, and the call it was recorded for (its `tool_call` row) starts
+      this row at this epoch;
+    * the decision that admitted it still stands, read through
+      `Sanctum.ToolGrants`: no standing answer says never to the agent's
+      `program.start`, and the start was allowed either by the person on
+      that step's own card or by a standing allow that covers this very
+      call now (`Sanctum.ToolGrants.admits?/2`: its lifecycle, deadline
+      and row, and every outside source the turn has read by now);
     * the row is the holder's, a driven program with a kept folder,
       enabled and at that epoch;
-    * the thread is at that session generation;
-    * and the binding's own check of the decision that admitted the start
-      (`admits?`, the attendant's reading of the policy and its standing
-      answers now) still says yes.
+    * the thread is at that session generation.
 
-  A `work` and a `post` name the binding's turn as their work; an `answer`
-  answers an ask the driver showed for the binding's turn and that has
-  not been answered.
+  The veto is the attendant's and only ever withdraws: the stored decision
+  is the proof. A card the person answered is their decision about that
+  call, as `Aqua.Loop` holds a card to its call as it dispatches; a
+  standing never recorded since ends what it allowed all the same, since
+  a held session outlives the call that started it.
+
+  A `start` names the binding's generation; a `work` and a `post` name the
+  binding's turn as their work; an `answer` answers an ask the driver
+  showed for the binding's turn and that has not been answered.
 
   A paused turn's proof is narrow: it delivers a `post` or an `answer` of
   its own work and nothing else, so a paused turn never starts the harness
@@ -121,8 +140,8 @@ defmodule Opus.Brain do
   kept for, the turn, its origin as the row stores it and the fence its
   runner holds, the step that admitted the program's start, the program
   row and the epoch the start showed, the thread's session generation,
-  and `admits?`, which answers whether the decision that admitted the
-  start still stands now.
+  and `admits?`, the attendant's own veto, which can only withdraw what
+  the stored decision allows.
   """
   @type binding :: %{
           required(:ctx) => Sanctum.Context.t(),
@@ -155,9 +174,11 @@ defmodule Opus.Brain do
   @doc """
   Open the session of `binding`'s thread and agent on its program row, for
   the calling process, which becomes its attendant: a new process of the
-  row's driver, after `binding` is read again and proves a running turn
+  row's driver, once `binding` is read again and proves a running turn
   (moduledoc). A holder of the same thread and agent is ended first
-  (`:replaced`). Answers the held session, whose first line is the
+  (`:replaced`), by that holder, once it has read `binding` and found it
+  proves; the new holder reads it again before it opens the driver's
+  session and after. Answers the held session, whose first line is the
   driver's `hello`; `{:error, {:not_admitted, reason}}` for a binding that
   does not prove, or the refusal of the owner's hold or the session's open.
   """
@@ -166,8 +187,7 @@ defmodule Opus.Brain do
       when is_binary(athanor_id) do
     key = {athanor_id, binding.thread_id, binding.agent}
 
-    with :ok <- admitted(binding, "start", running_only: true),
-         :ok <- replace(key) do
+    with :ok <- replace(key, binding) do
       case DynamicSupervisor.start_child(@holders, {__MODULE__, key}) do
         {:ok, pid} -> call(pid, {:open, self(), binding}, @open_ms + @answer_margin_ms)
         {:error, {:already_started, _pid}} -> {:error, :busy}
@@ -188,8 +208,10 @@ defmodule Opus.Brain do
   nothing written: `:busy` (before the `hello`, or while the last
   command's answer is outstanding), `:not_attached`, `:unreadable`,
   `:running` (a `start` while a harness runs), `:not_started`,
-  `:not_this_work`, `{:not_admitted, reason}`; or `{:error, :uncertain}`,
-  a write that may have reached the driver, after which the session ends.
+  `:not_this_work`, `:not_this_generation` (a `start` naming another
+  generation than the binding's), `{:not_admitted, reason}`; or
+  `{:error, :uncertain}`, a write that may have reached the driver, after
+  which the session ends.
   """
   @spec write(brain(), binding(), Wire.message(), keyword()) ::
           :ok | {:ok, :restarted} | {:error, term()}
@@ -224,8 +246,12 @@ defmodule Opus.Brain do
     end
   end
 
-  # A holder of the key is ended, and gone, before a new one starts.
-  defp replace({athanor_id, thread_id, agent}) do
+  # A holder of the key is ended, and gone, before a new one starts. It
+  # ends only once it has read `binding` itself and found it proves, so
+  # the check and the ending are one step of that holder's: a request it
+  # refuses leaves it running. A holder that ended while asked is gone
+  # all the same.
+  defp replace({athanor_id, thread_id, agent}, binding) do
     case whereis(athanor_id, thread_id, agent) do
       nil ->
         :ok
@@ -233,12 +259,18 @@ defmodule Opus.Brain do
       pid ->
         monitor = Process.monitor(pid)
         wait = Programs.Box.close_timeout_ms() + @answer_margin_ms
-        _ = call(pid, :replace, wait)
 
-        receive do
-          {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
-        after
-          wait -> {:error, :busy}
+        case call(pid, {:replace, binding}, wait) do
+          {:error, {:not_admitted, _reason}} = refused ->
+            Process.demonitor(monitor, [:flush])
+            refused
+
+          _ended_or_gone ->
+            receive do
+              {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+            after
+              wait -> {:error, :busy}
+            end
         end
     end
   end
@@ -255,26 +287,29 @@ defmodule Opus.Brain do
   # ===========================================================================
 
   # Whether `binding` proves work a command of type `t` may be written
-  # for, read from the store now (moduledoc). Every read is scoped to the
-  # binding's athanor, so a turn, step, thread or row of another athanor
-  # is not found.
+  # for, read from the store now (moduledoc). The attendant's veto is
+  # asked first, so every read of the store follows whatever it waited
+  # on. Every read is scoped to the binding's athanor, so a turn, step,
+  # call, thread or row of another athanor is not found.
   defp admitted(binding, t, opts \\ []) do
     actor = Sanctum.Context.actor(binding.ctx)
     user_id = binding.ctx.user_id
 
-    with :ok <- person(binding.ctx.athanor_id, user_id),
+    with :ok <- veto(binding.admits?),
+         :ok <- person(binding.ctx.athanor_id, user_id),
          {:ok, turn} <- read(Arca.TurnStorage.get(actor, binding.turn_id), :turn_not_found),
          :ok <- turn(turn, binding, user_id),
          :ok <- proof(turn.status, t, Keyword.get(opts, :running_only, false)),
          {:ok, step} <- read(Arca.TurnStorage.step(actor, binding.step), :step_not_found),
          :ok <- start_step(step, turn),
+         {:ok, call} <- start_call(actor, step, turn, binding),
+         :ok <- decision(binding.ctx, actor, step, call),
          {:ok, row} <-
            read(Arca.McpServerStorage.get_by_id(actor, binding.row_id), :row_not_found),
          :ok <- row(row, binding),
          {:ok, thread} <-
            read(Arca.ThreadStorage.get(actor, binding.thread_id), :thread_not_found),
-         :ok <- generation(thread, binding),
-         :ok <- decision(binding.admits?) do
+         :ok <- generation(thread, binding) do
       :ok
     else
       {:error, reason} -> {:error, {:not_admitted, reason}}
@@ -346,11 +381,95 @@ defmodule Opus.Brain do
     end
   end
 
+  # The call the step was recorded for, from its `tool_call` row: the
+  # turn's own `program.start` of this row at this epoch, read as
+  # `Sanctum.ToolGrants.admits?/2` judges a call, with the turn's sources
+  # as its row holds them now (unreadable sources are an outside source
+  # nobody names, `Prima.Source.decode/1`).
+  defp start_call(_actor, %{message_id: nil}, _turn, _binding), do: {:error, :wrong_step}
+
+  defp start_call(actor, step, turn, binding) do
+    with {:ok, message} <-
+           read(Arca.ThreadStorage.get_message(actor, step.message_id), :wrong_step) do
+      payload = Arca.ThreadStorage.payload(message)
+      args = payload["arguments"]
+
+      cond do
+        message.kind != "tool_call" or message.turn_id != turn.id ->
+          {:error, :wrong_step}
+
+        payload["tool"] != "program" or payload["action"] != "start" or not is_map(args) ->
+          {:error, :wrong_step}
+
+        args["program"] != binding.row_id or args["epoch"] != binding.epoch ->
+          {:error, :not_this_program}
+
+        true ->
+          {:ok,
+           %{
+             agent_name: turn.agent,
+             thread_id: turn.thread_id,
+             tool: "program",
+             action: "start",
+             args: Map.delete(args, "action"),
+             execution_id: turn.root_execution_id,
+             turn_id: turn.id,
+             sources: Prima.Source.decode(turn.sources)
+           }}
+      end
+    end
+  end
+
+  # The decision that admitted the start, read through Sanctum now: no
+  # standing answer says never to the agent's `program.start`, and the
+  # person allowed it on the step's own card, or a standing allow covers
+  # this very call now. A store that cannot answer is no decision.
+  defp decision(ctx, actor, step, call) do
+    with :ok <- never(ctx, call), do: allowed(ctx, actor, step, call)
+  end
+
+  defp never(ctx, call) do
+    case Sanctum.ToolGrants.for_thread(ctx, call.thread_id) do
+      {:ok, grants} ->
+        if Enum.any?(grants, &never?(&1, call)), do: {:error, :denied}, else: :ok
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp never?(grant, call),
+    do:
+      grant.effect == "deny" and grant.agent_name == call.agent_name and
+        grant.tool == call.tool and grant.action == call.action
+
+  defp allowed(ctx, _actor, %{approval_id: nil}, call) do
+    if Sanctum.ToolGrants.admits?(ctx, call), do: :ok, else: {:error, :withdrawn}
+  end
+
+  defp allowed(_ctx, actor, step, _call) do
+    case Arca.TurnStorage.approval(actor, step.approval_id) do
+      {:ok, %{status: "approved", step_id: step_id, turn_id: turn_id}}
+      when step_id == step.id and turn_id == step.turn_id ->
+        :ok
+
+      {:ok, _not_approved_or_another_steps} ->
+        {:error, :not_allowed}
+
+      {:error, :not_found} ->
+        {:error, :not_allowed}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
   defp generation(%{brain_generation: generation}, %{generation: generation}), do: :ok
   defp generation(_thread, _binding), do: {:error, :generation_moved}
 
-  defp decision(admits?) when is_function(admits?, 0) do
-    if admits?.() == true, do: :ok, else: {:error, :withdrawn}
+  # The attendant's veto: it may withdraw, never prove.
+  defp veto(admits?) when is_function(admits?, 0) do
+    if admits?.() == true, do: :ok, else: {:error, :vetoed}
   end
 
   # ===========================================================================
@@ -389,13 +508,25 @@ defmodule Opus.Brain do
   end
 
   @impl true
+  # The binding is read before the driver's session opens and again after
+  # it, so one that went stale while the opener or the open waited opens
+  # nothing. A take-over asked meanwhile waits in this holder's mailbox.
   def handle_call({:open, attendant, binding}, _from, %{attendant: nil} = state) do
     owner = %{athanor_id: state.athanor_id, server_id: binding.row_id, epoch: binding.epoch}
-    Process.monitor(attendant)
-    state = %{state | attendant: attendant, owner: owner}
 
-    case connect(state) do
-      {:ok, state} -> {:reply, {:ok, {self(), state.ref}}, state}
+    state = %{state | owner: owner}
+
+    with :ok <- admitted(binding, "start", running_only: true),
+         {:ok, connected} <- connect(state) do
+      case admitted(binding, "start", running_only: true) do
+        :ok ->
+          Process.monitor(attendant)
+          {:reply, {:ok, {self(), connected.ref}}, %{connected | attendant: attendant}}
+
+        {:error, reason} ->
+          {:stop, :normal, {:error, reason}, connected}
+      end
+    else
       {:error, reason} -> {:stop, :normal, {:error, reason}, state}
     end
   end
@@ -418,7 +549,15 @@ defmodule Opus.Brain do
     do: {:stop, :normal, :ok, ended(state, :closed)}
 
   def handle_call({:close, _ref}, _from, state), do: {:reply, :ok, state}
-  def handle_call(:replace, _from, state), do: {:stop, :normal, :ok, ended(state, :replaced)}
+
+  # A take-over ends this holder only for a binding that proves now, read
+  # here, so nothing proves between the check and the end.
+  def handle_call({:replace, binding}, _from, state) do
+    case admitted(binding, "start", running_only: true) do
+      :ok -> {:stop, :normal, :ok, ended(state, :replaced)}
+      {:error, _reason} = refused -> {:reply, refused, state}
+    end
+  end
 
   @impl true
   def handle_cast(
@@ -735,10 +874,14 @@ defmodule Opus.Brain do
   end
 
   # A command fits what the session holds now: a start only while no
-  # harness runs, every delivery once one does, a work and a post of the
-  # binding's turn, an answer to an ask shown for it and not yet answered.
-  defp in_turn(state, _binding, %{"t" => "start"}),
-    do: if(state.harness == :none, do: :ok, else: {:error, :running})
+  # harness runs and of the binding's session generation, every delivery
+  # once one does, a work and a post of the binding's turn, an answer to an
+  # ask shown for it and not yet answered.
+  defp in_turn(%{harness: harness}, _binding, %{"t" => "start"}) when harness != :none,
+    do: {:error, :running}
+
+  defp in_turn(_state, binding, %{"t" => "start", "gen" => gen}),
+    do: if(gen == binding.generation, do: :ok, else: {:error, :not_this_generation})
 
   defp in_turn(%{harness: harness}, _binding, _delivery) when harness != :started,
     do: {:error, :not_started}
