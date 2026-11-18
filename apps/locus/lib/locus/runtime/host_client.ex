@@ -42,7 +42,8 @@ defmodule Locus.Runtime.HostClient do
   the host's bound (`Prima.HostAPI.max_body_bytes/0`), refused before the
   host read it or acted on it, and the call is answered
   `{:error, :too_large}` rather than asked again, since the same body is
-  refused again; and a refusal naming `unknown_version` says the host
+  refused again (a body past that bound is answered so before it is sent,
+  through a relay or directly); and a refusal naming `unknown_version` says the host
   speaks another version of the wire, so it is not this engine's host, and
   the call is answered `{:error, :lost}` at once, which stops the
   attempt's work, rather than asked again. The attempt's seal key also
@@ -75,6 +76,10 @@ defmodule Locus.Runtime.HostClient do
   `input_next/1` and `input_sent/2` carry a catalyst's further inputs: the
   next one its run was handed while it runs, and the report that it handed
   one on (`c:Prima.HostAPI.input_next/1`).
+
+  `question_ask/5` and `question_wait/3` carry a catalyst's ask, keyed by
+  its attempt and number (`c:Prima.HostAPI.question_ask/3`); each is one
+  call, and the import's loop is the caller's (`Locus.Runtime.Engine`).
 
   `attached_fetch/3` posts a guest's request naming a connection, which
   CYFR makes itself with the credential attached, and hands the answer's
@@ -615,6 +620,68 @@ defmodule Locus.Runtime.HostClient do
   end
 
   @doc """
+  Ask the attempt's ask `ask_no` before `action`, with its `summary` and
+  `operation`: `{:ok, {:answer, answer}}`, `{:ok, :pending}` while its
+  question is open, or `{:ok, {:retry_after_ms, ms}}` when the root's
+  allowance has no room (`t:Prima.HostAPI.question_asked/0`). Keyed: a
+  lost answer is asked once more with the same arguments, and CYFR
+  answers what it admitted under the number.
+  """
+  @spec question_ask(t(), pos_integer(), String.t(), String.t(), String.t()) ::
+          {:ok, Prima.HostAPI.question_asked()} | {:error, term()}
+  def question_ask(%__MODULE__{} = client, ask_no, action, summary, operation)
+      when is_integer(ask_no) and ask_no > 0 and is_binary(action) and is_binary(summary) and
+             is_binary(operation) do
+    args = %{
+      "ask_no" => ask_no,
+      "action" => action,
+      "summary" => summary,
+      "operation" => operation
+    }
+
+    case request(client, :question_ask, args) do
+      {:ok, %{"retry_after_ms" => ms} = wire}
+      when map_size(wire) == 1 and is_integer(ms) and ms > 0 ->
+        {:ok, {:retry_after_ms, ms}}
+
+      {:ok, wire} ->
+        question_answered(wire)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Wait up to `max_wait_ms` (at most `Prima.HostAPI.max_question_wait_ms/0`)
+  for the attempt's ask `ask_no` to be decided: `{:ok, {:answer, answer}}`
+  or `{:ok, :pending}`. Idempotent: a lost answer is asked once more.
+  """
+  @spec question_wait(t(), pos_integer(), non_neg_integer()) ::
+          {:ok, {:answer, Prima.HostAPI.question_answer()} | :pending} | {:error, term()}
+  def question_wait(%__MODULE__{} = client, ask_no, max_wait_ms)
+      when is_integer(ask_no) and ask_no > 0 and is_integer(max_wait_ms) and max_wait_ms >= 0 do
+    args = %{
+      "ask_no" => ask_no,
+      "max_wait_ms" => min(max_wait_ms, HostAPI.max_question_wait_ms())
+    }
+
+    with {:ok, wire} <- request(client, :question_wait, args), do: question_answered(wire)
+  end
+
+  defp question_answered(%{"pending" => true} = wire) when map_size(wire) == 1,
+    do: {:ok, :pending}
+
+  defp question_answered(%{"answer" => answer} = wire) when map_size(wire) == 1 do
+    case HostAPI.answer_from_wire(answer) do
+      {:ok, answer} -> {:ok, {:answer, answer}}
+      :error -> {:error, :lost}
+    end
+  end
+
+  defp question_answered(_wire), do: {:error, :lost}
+
+  @doc """
   Report, for the worker service `credentials` name on its boot `boot`,
   that its runner `runner` exited while it held `attempts`. Every attempt
   one runner holds was issued by one member, so the report names that
@@ -730,15 +797,24 @@ defmodule Locus.Runtime.HostClient do
 
   defp post(via, op, try) do
     with {:ok, header, body, read} <- try.(),
+         :ok <- within_bound(body),
          {:ok, raw} <- transport(via, op, header, body),
          {:ok, json} <- read.(raw) do
       answer(json, op)
     else
       {:refused, 413, _raw} -> too_large(op)
+      :too_large -> too_large(op)
       {:refused, _status, raw} -> refused(raw, op)
       _ -> :lost
     end
   end
+
+  # A body past the host's bound is never sent: the host would refuse it
+  # `413`, and a runner's relay refuses a frame past its own, larger bound
+  # before it reaches the host at all, which reads as a lost answer. So it
+  # is refused here, the same on both paths.
+  defp within_bound(body),
+    do: if(byte_size(body) > HostAPI.max_body_bytes(), do: :too_large, else: :ok)
 
   # A body past the host's bound is refused before the host reads it, so
   # nothing was done, and the same body is refused again: the refusal is

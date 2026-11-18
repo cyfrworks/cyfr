@@ -71,7 +71,7 @@ defmodule Opus.Cascade do
     # Failing a child retires work: it needs the attempt's stored stamp,
     # never a grant that still stands
     # (`Cyfr.Boundaries.system_responsibilities/0`).
-    {count, event_seq, _closed_questions} =
+    {count, event_seq, closed_questions} =
       Arca.Execution.mark_failed_if_running(
         child.id,
         %{
@@ -86,6 +86,7 @@ defmodule Opus.Cascade do
       )
 
     if count > 0 do
+      Record.questions_ended(child.athanor_id, closed_questions)
       announce_failed(child, error_msg, now, duration_ms, event_seq)
       true
     else

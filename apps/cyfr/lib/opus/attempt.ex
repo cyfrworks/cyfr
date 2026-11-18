@@ -171,6 +171,7 @@ defmodule Opus.Attempt do
   alias Prima.Delta
   alias Opus.{Charge, Close, Emit, Host, Lapse, StepSpans}
   alias Prima.Outcome
+  alias Prima.SecretMasker
   alias Prima.Slots
   alias Sanctum.Context
 
@@ -187,6 +188,9 @@ defmodule Opus.Attempt do
   @nonce_ttl_ms 60_000
 
   @owner_check_ms 1_000
+  # A root's asks a minute on this member, shared by every run under it.
+  @asks_per_window 60
+  @ask_window_ms 60_000
 
   @redacted "[REDACTED]"
 
@@ -230,6 +234,8 @@ defmodule Opus.Attempt do
                 :assignment,
                 :grant,
                 :inputs,
+                :run_deadline,
+                :release_digest,
                 declared_needs: [],
                 roster: [],
                 held_invoke: false,
@@ -253,6 +259,7 @@ defmodule Opus.Attempt do
           | {:oauth_token, String.t()}
           | {:take_rate, String.t()}
           | {:attached, String.t()}
+          | {:question, nil | %{summary: String.t(), operation: String.t()}}
           | Host.Storage.op()
 
   @typedoc """
@@ -279,6 +286,31 @@ defmodule Opus.Attempt do
           limits: Prima.Limits.t()
         }
 
+  @typedoc """
+  What a run's ask is decided under (`Opus.Host.Question`): the context
+  its calls run in, its execution, attempt and root, its component's
+  reference and the release digest admitted for it, its deadline, fixed when
+  the attempt answered its runner's attach, and its record as admitted,
+  which names its caller (`Opus.Record.caller/1`). With the ask's texts, also
+  the summary and the operation masked with the attempt's masking set,
+  whether anything was masked, and the root's ask allowance: `:ok`, or
+  `{:retry_after_ms, ms}` when it has no room.
+  """
+  @type question :: %{
+          required(:ctx) => Context.t(),
+          required(:execution_id) => String.t(),
+          required(:attempt) => String.t(),
+          required(:root_execution_id) => String.t(),
+          required(:component_ref) => String.t(),
+          required(:release_digest) => String.t() | nil,
+          required(:deadline) => DateTime.t() | nil,
+          required(:record) => Opus.Record.t(),
+          optional(:summary) => String.t(),
+          optional(:operation) => String.t(),
+          optional(:masked) => boolean(),
+          optional(:allowance) => :ok | {:retry_after_ms, pos_integer()}
+        }
+
   @doc """
   Open the attempt of an admitted execution. The calling process is its
   waiter, and the attempt stops when it exits.
@@ -299,7 +331,10 @@ defmodule Opus.Attempt do
   of its admitted input, default `[]`), `:step_spans`, `:service_id` and
   `:boot_id` (the id and the boot of that worker service), `:deadline` (the
   run's subtree deadline in Unix ms, which caps its children's), `:digest` (the digest of the
-  component's artifact, which the runner fetches), `:held_invoke` (true
+  component's artifact, which the runner fetches), `:release_digest` (the
+  release admission selected that artifact from, in the registry's
+  `sha256:` spelling, which a question the run asks is bound to, root or
+  child, however it was dispatched), `:held_invoke` (true
   when the waiter holds a charged invoke-budget slot of the authority's
   budget, which the attempt takes over), `:charge` (the charge row that
   slot holds, `%{id: charge_id}`) and `:assignment` (what the run's
@@ -476,6 +511,13 @@ defmodule Opus.Attempt do
     run's trusted identity (`t:Opus.Inputs.invocation/0`), under the same
     live row `:chain` needs, checked in a read transaction: the supplier
     settles a mark under its own lock.
+  - `{:question, texts}` answers what a run's ask is decided under
+    (`t:question/0`), under the same live row `:inputs` needs. With the
+    ask's `texts` (its `summary` and `operation`) it also masks them with
+    the attempt's masking set and takes one ask from the root's allowance
+    (`Prima.RateLimiter`, #{@asks_per_window} a minute under every run of
+    the root on this member); with nil it takes nothing, so the host can
+    check the attempt is live around a wait.
   - `{:complete, outcome}` closes the run with the outcome's output:
     `{:ok, masked_output}`, or `{:error, {:failed, message}}` when the close
     recorded a failure instead.
@@ -657,6 +699,7 @@ defmodule Opus.Attempt do
       call_id: Keyword.get(opts, :call_id),
       declared_needs: Keyword.get(opts, :declared_needs, []),
       activation_digest: Keyword.get(opts, :activation_digest),
+      release_digest: Keyword.get(opts, :release_digest),
       roster: Keyword.get(opts, :roster, []),
       worker: Keyword.fetch!(opts, :worker),
       service_id: Keyword.get(opts, :service_id),
@@ -1119,7 +1162,14 @@ defmodule Opus.Attempt do
           :ok ->
             StepSpans.guest_started(state.close.step_spans)
             audit_dispensed(state, caller.runner, secrets)
-            {:reply, {:ok, secrets}, %{state | claimed_by: caller.runner, secrets: secrets}}
+
+            {:reply, {:ok, secrets},
+             %{
+               state
+               | claimed_by: caller.runner,
+                 secrets: secrets,
+                 run_deadline: run_deadline(state)
+             }}
 
           {:error, :unavailable} ->
             {:reply, {:error, :unavailable}, state}
@@ -1325,6 +1375,8 @@ defmodule Opus.Attempt do
     end
   end
 
+  defp held(state, caller, {:question, _texts}), do: held(state, caller, :inputs)
+
   defp held(state, caller, :chain) do
     case Arca.ExecutionAttempts.live?(
            Prima.Actor.in_athanor(caller.athanor_id),
@@ -1414,6 +1466,21 @@ defmodule Opus.Attempt do
     }
 
     {:reply, {:ok, state.inputs, invocation}, state}
+  end
+
+  defp run({:question, texts}, state) do
+    question = %{
+      ctx: state.ctx,
+      execution_id: state.execution_id,
+      attempt: state.attempt,
+      root_execution_id: state.root_execution_id,
+      component_ref: state.component_ref,
+      release_digest: state.release_digest,
+      deadline: state.run_deadline && DateTime.from_unix!(state.run_deadline, :millisecond),
+      record: state.close.record
+    }
+
+    {:reply, {:ok, asked(question, texts, state)}, state}
   end
 
   defp run({:complete, %Outcome{status: :completed} = outcome}, state) do
@@ -1627,6 +1694,56 @@ defmodule Opus.Attempt do
   defp emit_failed, do: Prima.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
 
   defp masking_set(state), do: Map.values(state.secrets) ++ state.tokens ++ state.attached
+
+  defp asked(question, nil, _state), do: question
+
+  defp asked(question, %{summary: summary, operation: operation}, state) do
+    secrets = masking_set(state)
+    masked_summary = SecretMasker.mask(summary, secrets)
+    masked_operation = SecretMasker.mask(operation, secrets)
+
+    Map.merge(question, %{
+      summary: masked_summary,
+      operation: masked_operation,
+      masked: masked_summary != summary or masked_operation != operation,
+      allowance: allowance(state)
+    })
+  end
+
+  # A root's asks are paced on this member, shared by every run under it:
+  # a flood guard on its own work, as a root's emit budget is, not an
+  # authority. The limiter answers whole seconds; the wire carries
+  # milliseconds.
+  defp allowance(state) do
+    case Prima.RateLimiter.check(
+           {:question, state.ctx.athanor_id, state.root_execution_id},
+           @asks_per_window,
+           @ask_window_ms
+         ) do
+      :ok -> :ok
+      {:deny, seconds} -> {:retry_after_ms, seconds * 1000}
+    end
+  end
+
+  # The run's deadline, fixed when the attempt answers its runner's attach:
+  # its timeout from then, and no later than its subtree's deadline. The
+  # runner starts its own budget once the attach is answered
+  # (`Locus.Runtime.Attempt`), so this is never later than the moment the
+  # runner ends the run.
+  defp run_deadline(state) do
+    now = System.system_time(:millisecond)
+
+    case {state.assignment, state.deadline} do
+      {%{timeout_ms: timeout_ms}, deadline} when is_integer(deadline) ->
+        min(now + timeout_ms, deadline)
+
+      {%{timeout_ms: timeout_ms}, nil} ->
+        now + timeout_ms
+
+      {_none, deadline} ->
+        deadline
+    end
+  end
 
   defp host_storage(state) do
     %{

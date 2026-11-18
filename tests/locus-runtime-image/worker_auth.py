@@ -1235,7 +1235,72 @@ def check_host_api(path, primitives):
     reused = read_answer(cases["reused"]["answer"])
     assert reused[:2] == ("error", "guest_error") and reused[2]["type"] == "invalid_request", "host_api connection reused: invalid_request"
     assert v["retries"]["admit_child"] == "keyed", "host_api connection: admit_child is keyed"
+
+    check_question_cases(v, reproduce)
     return True
+
+
+QUESTION_CASES = ["opened", "keyed_replay", "changed", "paced", "paced_admitted", "unattended",
+                  "invalid", "wait_timed_out", "allowed", "denied", "unavailable"]
+QUESTION_ANSWERS = {"allowed", "denied"}
+QUESTION_UNANSWERED = {"unattended", "invalid", "unavailable"}
+
+
+def request_digest(action, summary, operation):
+    """An ask's request digest (`Opus.Host.Question.request_digest/3`):
+    SHA-256 over its action, summary and operation, each prefixed with its
+    UTF-8 byte length as an unsigned 32-bit big-endian integer."""
+    data = b"".join(len(text.encode()).to_bytes(4, "big") + text.encode() for text in (action, summary, operation))
+    return sha256_hex(data)
+
+
+def question_answer(wire):
+    """An ask's answer as it crosses, or None for anything else."""
+    if isinstance(wire, str) and wire in QUESTION_ANSWERS:
+        return wire
+    if isinstance(wire, dict) and list(wire) == ["none"] and wire["none"] in QUESTION_UNANSWERED:
+        return ("none", wire["none"])
+    return None
+
+
+def check_question_cases(v, reproduce):
+    """host_api.json's question_cases: an ask's calls in the order one
+    attempt makes them, each answered a success of its shape, and the
+    request digests the host keys a retry by."""
+    qc = v["question_cases"]
+    for vec in qc["request_digests"]:
+        assert request_digest(vec["action"], vec["summary"], vec["operation"]) == vec["digest"], "host_api question digest"
+    cases = {case["name"]: case for case in qc["cases"]}
+    assert [case["name"] for case in qc["cases"]] == QUESTION_CASES, "host_api question: the cases, in order"
+    played = {}
+    for name, case in cases.items():
+        what = f"host_api question {name}"
+        args = reproduce(case, what, case["callback"])
+        kind, value = read_answer(case["answer"])[:2]
+        assert kind == "ok" and isinstance(value, dict) and len(value) == 1, f"{what}: one success"
+        assert isinstance(args["ask_no"], int) and args["ask_no"] > 0, f"{what}: an ask number"
+        if case["callback"] == "question_ask":
+            assert sorted(args) == ["action", "ask_no", "operation", "summary"], f"{what}: the ask's args"
+            assert set(value) <= {"answer", "pending", "retry_after_ms"}, f"{what}: an ask's answer"
+        else:
+            assert case["callback"] == "question_wait", f"{what}: a wait"
+            assert sorted(args) == ["ask_no", "max_wait_ms"] and 0 <= args["max_wait_ms"] <= 20000, f"{what}: the wait's args"
+            assert set(value) <= {"answer", "pending"}, f"{what}: a wait's answer"
+        if "answer" in value:
+            assert question_answer(value["answer"]) is not None, f"{what}: an answer"
+        if "pending" in value:
+            assert value["pending"] is True, f"{what}: pending"
+        if "retry_after_ms" in value:
+            assert isinstance(value["retry_after_ms"], int) and value["retry_after_ms"] > 0, f"{what}: a pace"
+        played[name] = (case, args, value)
+    assert played["keyed_replay"][0]["body"] == played["opened"][0]["body"], "host_api question: a replay is the same body"
+    assert played["keyed_replay"][0]["fields"]["nonce"] != played["opened"][0]["fields"]["nonce"], "host_api question: under a fresh header"
+    assert played["changed"][1]["ask_no"] == played["opened"][1]["ask_no"] and played["changed"][1] != played["opened"][1], "host_api question: one number, another request"
+    assert played["changed"][2] == {"answer": {"none": "invalid"}}, "host_api question changed: invalid"
+    assert played["paced_admitted"][0]["body"] == played["paced"][0]["body"], "host_api question: a paced ask is sent again as it was"
+    finals = {json.dumps(value["answer"], sort_keys=True) for _case, _args, value in played.values() if "answer" in value}
+    assert finals == {json.dumps(a, sort_keys=True) for a in ["allowed", "denied", {"none": "unattended"}, {"none": "invalid"}, {"none": "unavailable"}]}, "host_api question: every final answer"
+    assert v["retries"]["question_ask"] == "keyed" and v["retries"]["question_wait"] == "idempotent", "host_api question: retry classes"
 
 
 def check_attached_call(call, args, root, reserved):

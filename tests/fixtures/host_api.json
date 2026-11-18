@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. A program's pipe (pipe_open, pipe_send, pipe_recv, pipe_close): each pipe call's answer is a success of its shape (an open's session and resumed; true; a read's lines, each seq and text, dropped and running; true), its refusals add denied and the pipe's guest errors, and its body pins the args CYFR reads (need, key and argv; session and lines; session, after and max_wait_ms, at most Prima.HostAPI.max_pipe_wait_ms/0; session). A running invocation's inputs (input_next, input_sent): input_next's body carries no args and its answer is the next input not yet reported sent, its id and content (Prima.Model.check_input/1), or null only when nobody supplies the invocation or its supplier has none, a supplier that is gone, silent or answers no answer being unavailable; input_sent's body names the id reported and its answer is true once the invocation's supplier recorded it, unavailable otherwise; each is refused lost for an attempt that is not live, and input_next a guest_error invalid_request naming the member of a supplier's input that does not read, never its content. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused.",
+  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. A program's pipe (pipe_open, pipe_send, pipe_recv, pipe_close): each pipe call's answer is a success of its shape (an open's session and resumed; true; a read's lines, each seq and text, dropped and running; true), its refusals add denied and the pipe's guest errors, and its body pins the args CYFR reads (need, key and argv; session and lines; session, after and max_wait_ms, at most Prima.HostAPI.max_pipe_wait_ms/0; session). A running invocation's inputs (input_next, input_sent): input_next's body carries no args and its answer is the next input not yet reported sent, its id and content (Prima.Model.check_input/1), or null only when nobody supplies the invocation or its supplier has none, a supplier that is gone, silent or answers no answer being unavailable; input_sent's body names the id reported and its answer is true once the invocation's supplier recorded it, unavailable otherwise; each is refused lost for an attempt that is not live, and input_next a guest_error invalid_request naming the member of a supplier's input that does not read, never its content. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. connection_cases are admit_child calls under one attempt, in order, each answered as CYFR answers it for an attempt whose edge to the reference binds no named account: omitted names no connection and is admitted, its answer holding the child's assignment and in it the child's authority as the host answers it; named names the account Work, which the edge does not bind, and is refused connection_not_granted, setup required, with no default used in its place; reused repeats omitted's child_key naming Work, and is refused invalid_request before anything is answered from that key's child, since a key names one child and the connection it was admitted with. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. attached_fetch is the one call whose success is no single answer: posted with a Prima.AttachedRequest naming the runner's call_id, it is refused before admission by an ordinary sealed answer, a guest_error whose call_id is the request's (its refusals, each sealed with answer_iv_hex as answer_sealed), and admitted it is answered with frames, so the call carries no answer and the frames are frame_cases. A frame is a 4-byte big-endian length, one kind byte in clear (h head, c chunk, e end, x error) and the sealed value: Prima.MacEnvelope's seal of the plaintext under the attempt seal key, label cyfr-locus/v1/runtime/frame-answer, fields call_id, seq and kind (Prima.WorkerAuth.seal_frame/7). Each case's frames are read in order by a reader for call_id, one frame at a time; sealed_for says what a frame was sealed as (its call_id, seq, kind, iv_hex and plaintext_b64), tampered_from what a changed frame was sealed as before it changed, and expect the frames read (a head's status and headers, a chunk's body_b64, an end, an error's type and message) and the refusal that ends the answer, or null. egress_pin_internal_purposes are egress_pin calls naming a purpose CYFR alone takes (attached), each refused malformed. framing_headers and override_headers are the lowercase names, in order, of the headers a guest request, ordinary or attached, may not set and an attach rule may not name: those that route or frame a request (Prima.Network.framing_headers/0) and those that override its method or target or claim a forwarded origin, a proxy hop or a client address (Prima.Network.override_headers/0); override_prefixes are the lowercase prefixes (Prima.Network.override_prefixes/0) any name starting with which is one of the latter too. An attached request setting one, in any case, is refused invalid_request naming it as spelled. credential_headers are the lowercase names, in order, of the headers that carry a credential (Prima.Network.credential_headers/0): an attached request naming one, in any case, is refused credential_header_refused. A catalyst's ask (question_ask, question_wait): question_ask's body pins ask_no, a positive integer the runner takes once for each call of the guest's ask, and the request's action, summary and operation; question_wait's pins ask_no and max_wait_ms, at most Prima.HostAPI.max_question_wait_ms/0. Each answer is a success: {answer}, {pending: true}, or for question_ask {retry_after_ms}, a positive integer, an answer being \"allowed\", \"denied\" or {\"none\": \"unattended\" | \"invalid\" | \"unavailable\"} (Prima.HostAPI.answer_to_wire/1); each is refused lost for an attempt that is not live. question_cases holds them in the order one attempt asks: request_digests are a request's digest, SHA-256 as lowercase hexadecimal over its action, summary and operation, each prefixed with its UTF-8 byte length as an unsigned 32-bit big-endian integer (Opus.Host.Question.request_digest/3), and cases are calls, each answered as CYFR answers it: opened admits an ask whose question opens; keyed_replay is opened's body under a fresh header, answered the same wait; changed is opened's number with another request, invalid; paced is past its root's allowance and paced_admitted the same body sent again, admitted; unattended and invalid are asks answered at once; and the waits are one that timed out, pending, and one of each final answer.",
   "version": 1,
   "auth_header": "x-cyfr-auth",
   "routes": {
@@ -24,6 +24,8 @@
     "pipe_close": "/host/v1/pipe_close",
     "input_next": "/host/v1/input_next",
     "input_sent": "/host/v1/input_sent",
+    "question_ask": "/host/v1/question_ask",
+    "question_wait": "/host/v1/question_wait",
     "runner_exited": "/host/v1/runner_exited"
   },
   "retries": {
@@ -48,6 +50,8 @@
     "pipe_close": "idempotent",
     "input_next": "idempotent",
     "input_sent": "idempotent",
+    "question_ask": "keyed",
+    "question_wait": "idempotent",
     "runner_exited": "idempotent"
   },
   "timeouts_ms": {
@@ -72,6 +76,8 @@
     "pipe_close": 30000,
     "input_next": 30000,
     "input_sent": 30000,
+    "question_ask": 30000,
+    "question_wait": 30000,
     "runner_exited": 30000
   },
   "max_body_bytes": 1048576,
@@ -918,6 +924,72 @@
           "why": "no supplier recorded the report (none was named, it is gone or it did not answer) or CYFR's store could not answer: reported again as the callback's class allows"
         }
       ]
+    },
+    {
+      "callback": "question_ask",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "fence": 2,
+        "generation": 7,
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "nonce": "n_host_question_ask",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "ts": 1789305252000
+      },
+      "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"delete_table\",\"ask_no\":1,\"operation\":\"DROP TABLE users;\",\"summary\":\"Drop the table users in the project acme\"}}",
+      "body_iv_hex": "6a1b2c3d4e5f60718293a4b5",
+      "body_sealed": "ahssPU5fYHGCk6S10BAdFRQr8mXW4b3xibjKIm1y2HHSf09OhrHvt0z5RKGI9fLHZeOPswQh95vZTTmoGe0JQSkXrFm_zf8M8XlgO4QcQTzviWDe4Z9aQxqCLhTYa6HA1OSdkBpavChZXrKgmPWdYaCdLorBoDFO-mcrdKU_Yk_pXDMyuIypBmTGKraFbJlJ-tQ3-svQIEspvza2WomIhR3JL2ncGCtNMTvjK2PJM3ZB87yGnIVGAw",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305252000 nonce=n_host_question_ask body=043c33687b6a0448ca62319b59fa3379afb45206a11d6e2b38f2b16cc2e369b6 mac=s56ThcFHkubZlcnSm-AE1pb8fs89XKIXbLJdVQkQdNY",
+      "answer": "{\"v\":1,\"ok\":{\"pending\":true}}",
+      "answer_iv_hex": "7b2c3d4e5f60718293a4b5c6",
+      "answer_sealed": "eyw9Tl9gcYKTpLXGyxeAvGcJlkDrM7thCUtiu_nPWsL5vIUDMMcRw21I_8ZVBofysWZwPvNMRWXc",
+      "refusals": [
+        {
+          "answer": "{\"v\":1,\"error\":\"lost\"}",
+          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or its execution was cancelled or ended, or the args do not read: the runner stops asking and its guest is answered none(unavailable)"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
+          "why": "CYFR's store could not answer: asked again as the callback's class allows, and a second loss answers the guest none(unavailable)"
+        }
+      ]
+    },
+    {
+      "callback": "question_wait",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "fence": 2,
+        "generation": 7,
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "nonce": "n_host_question_wait",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "ts": 1789305252010
+      },
+      "body": "{\"v\":1,\"op\":\"question_wait\",\"args\":{\"ask_no\":1,\"max_wait_ms\":20000}}",
+      "body_iv_hex": "8c3d4e5f60718293a4b5c6d7",
+      "body_sealed": "jD1OX2BxgpOktcbXN7MGjFSD0dpCRSyJ95s1Y0rR0G40JlYC8afZvnPwyRn85puZBypzl6GOAuedBvtRWf60rpkqDAKaP3L8vjBP1riVBFDszu-2gOFEolRST9DtDg2P",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305252010 nonce=n_host_question_wait body=3632fa3bb95c29ce04fca2a1bfaf6e8691af5bb39239ed0806abea6d65801eea mac=SQkto5FsxpZtlMYN5QMhS5Y5P3C2lMmcuInZi0jt5dE",
+      "answer": "{\"v\":1,\"ok\":{\"answer\":\"allowed\"}}",
+      "answer_iv_hex": "9d4e5f60718293a4b5c6d7e8",
+      "answer_sealed": "nU5fYHGCk6S1xtfoPXYKCoPoxoOel7ix2R3L1wmK3estms0kRwCc3rGrbyWDZv49Q9aEkKFJsTCjIMhr7Q",
+      "refusals": [
+        {
+          "answer": "{\"v\":1,\"error\":\"lost\"}",
+          "why": "the attempt is not current, running, at the caller's fence and claimed by its runner, or its execution was cancelled or ended, or the args do not read: the runner stops asking and its guest is answered none(unavailable)"
+        },
+        {
+          "answer": "{\"v\":1,\"error\":\"unavailable\"}",
+          "why": "CYFR's store could not answer: asked again as the callback's class allows, and a second loss answers the guest none(unavailable)"
+        }
+      ]
     }
   ],
   "pre_body_refusals": [
@@ -1175,6 +1247,305 @@
       "answer_sealed": "nkt9Gmw_IIWh2ebD3z5MKFoTnJlKqvQxnWnUBZgHhMQrpD3vlK8Bx4wdYWQiBBr-H5pnC3LJa8vRzY0kGNN6-YVMWHFTa_cEViaGHRC7ONss94cFVyWGIV03fZZhp6bVuTc_HJDCeoMOEDLSgr6SGHcKVbtPoK1JM0wz6YIVh-Nm36qQtneA5MZzuV_fFQ5kZejGGBmUILxeBNsgXmNB7Q"
     }
   ],
+  "question_cases": {
+    "request_digests": [
+      {
+        "action": "delete_table",
+        "summary": "Drop the table users in the project acme",
+        "operation": "DROP TABLE users;",
+        "digest": "9c11cd99312ba206aea69fdfb96dd720720d519befa4c3bf3d61feb2d88d6b32"
+      },
+      {
+        "action": "delete_rows",
+        "summary": "L\u00f6schen: 3 Zeilen aus users",
+        "operation": "DELETE FROM users\n\tWHERE id IN (1, 2, 3);",
+        "digest": "a730c272512af94f3e10206c22da01c176151d5c478e2c1a20bc7f5c96581c56"
+      },
+      {
+        "action": "a",
+        "summary": "",
+        "operation": "",
+        "digest": "0f86f63d86a14bd5fa24dfdfc731d931847c9a7352b421215c83f0cb50c6390d"
+      }
+    ],
+    "cases": [
+      {
+        "name": "opened",
+        "callback": "question_ask",
+        "why": "admitted, and its question opened: the runner waits on it",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_opened",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305252100
+        },
+        "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"delete_table\",\"ask_no\":1,\"operation\":\"DROP TABLE users;\",\"summary\":\"Drop the table users in the project acme\"}}",
+        "body_iv_hex": "a10000000000000000000001",
+        "body_sealed": "oQAAAAAAAAAAAAAB2CCXYOFcmfqQrrdwUAqMEYFIpB0BUkKm_soGcY3p7ohA9PAwKymP_tZhVK7a5fu903NdhKOAT2WIdXVikP6MDTVvEvLuRmlCtZeROxa8Z_2-8jp3ev8331bNPSI0sTCocwqkglQE4_jYTydV9L3Gts5lS3agQbAnSsP4l6PtbvcZo92rS3BelPTttykc1epGsO53NUkpZQ_GbqD_ymWb0z8jCVDkvHGn-Im5aA",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305252100 nonce=n_question_opened body=06194302c193f1e2bf3089f3fda4322f4eefb3cbe86e2d7e5bda83f101dd1ce8 mac=xQvtN8_tVwmuTweCYmEu5-w_gXLhQg0kstxJTZvswKw",
+        "answer": "{\"v\":1,\"ok\":{\"pending\":true}}",
+        "answer_iv_hex": "b10000000000000000000001",
+        "answer_sealed": "sQAAAAAAAAAAAAABKnkZnLGiY3uSj_3ltefcD_GxfJyzlkLnHiAEN7AnqT6kinLpttgLkaCIHbDM"
+      },
+      {
+        "name": "keyed_replay",
+        "callback": "question_ask",
+        "why": "opened's body again under a fresh header after its answer was lost: answered what the first admitted, the same wait, spending nothing",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_replay",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305252110
+        },
+        "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"delete_table\",\"ask_no\":1,\"operation\":\"DROP TABLE users;\",\"summary\":\"Drop the table users in the project acme\"}}",
+        "body_iv_hex": "a10000000000000000000002",
+        "body_sealed": "oQAAAAAAAAAAAAACP8G_hnWUlZJNVf6j0Z_JmWuqfUKd_mbggyzcs5FHqPnN_wcvgwcun4qml7GTk7f43jx7MEOzqTy53GvQeqrpnthDoo0B3AxrNGoOkWiJWAYvTo6Vlr5jWtifNhmPvqI_528wmozu5ZTnMSuazJs6YPDcefnpQ_nsmmaLdV-rcGIvziP0nRKKV7-bFl8t0Y-sV7nBsdWlqy72tl5JDWIMsNn5mwscW22suhBOMg",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305252110 nonce=n_question_replay body=83544ac04ba73f78b497a4545eadb968c2779b996e2f63b62e2715fae2130dbc mac=Ek0hcQLuKvny5Sbm1zZwf3x46iTdIh5G9-ZzsbXTGJ4",
+        "answer": "{\"v\":1,\"ok\":{\"pending\":true}}",
+        "answer_iv_hex": "b10000000000000000000002",
+        "answer_sealed": "sQAAAAAAAAAAAAACyxyPzio90CNYRxHUbZW1_K-0arRfFYjog7RTacDCyYUGjO8PK1lZyAjL-uPN"
+      },
+      {
+        "name": "changed",
+        "callback": "question_ask",
+        "why": "opened's number with another request: invalid",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_changed",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305252120
+        },
+        "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"delete_table\",\"ask_no\":1,\"operation\":\"DROP TABLE orders;\",\"summary\":\"Drop the table orders in the project acme\"}}",
+        "body_iv_hex": "a10000000000000000000003",
+        "body_sealed": "oQAAAAAAAAAAAAADquW6RFTK3cp9TDK64atW_ZUEGWJopfdDMiIbRdsW-NSvEbg_NdbtI6A4X5pU_R7p177NAnafNVDPnbBCygMrQGHUsGnvMUtlQ9CaIkeSLSqC-iHORWkLyX6kv9TnG3JN9R-UueXOTelbva-9CbgUxt8FJyB1-4RXwwjFcvj6KRvyiHjXfn0OCyzs7Q_YP00IyeU5mYl94L6VWi5mzjtCjgxtNPloMPoB9NdhZQmY",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305252120 nonce=n_question_changed body=6b0530321a07ee75b5c45121f386b82ad194a42e91a13c1b23b31166c9a65619 mac=MOUBgIsWwboW-9GOfAzELewozfWdbnzdiSGusm8KG0A",
+        "answer": "{\"v\":1,\"ok\":{\"answer\":{\"none\":\"invalid\"}}}",
+        "answer_iv_hex": "b10000000000000000000003",
+        "answer_sealed": "sQAAAAAAAAAAAAADHAhg813hO5SAzJQXKRj1y336AgrZVfggw2Zj-N964_43pFOEppLJxSpSRVo8PA9A6rRo6gbcg2J7gQ"
+      },
+      {
+        "name": "paced",
+        "callback": "question_ask",
+        "why": "past the root's allowance: sent again after so long, the same arguments under a fresh header",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_paced",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305252130
+        },
+        "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"delete_rows\",\"ask_no\":2,\"operation\":\"DELETE FROM users WHERE id IN (1, 2, 3);\",\"summary\":\"Delete 3 rows from the table users\"}}",
+        "body_iv_hex": "a10000000000000000000004",
+        "body_sealed": "oQAAAAAAAAAAAAAEU44dzqHv5QlziJo2TCDpV_03QJ8zR5ihreqGraIv2jmJNCJAcUjYMEbgvXQGQYCR_62KeWHs0FBPW1FkD7HKKzKB58q_UJjE0D4lqTHll6nmDL8o8y6dPmDCM7hk5gyjx-uUal8Wicr5stdqDXjqWWW9_CWyVPA_rZf6MqqLx_j47mUcBB20DsP_iUBHeLv_SZSNtAFjrqFR-_5jXEpXIVZhVhQQPIjEmQus8OhWrSFuFlrLrNLdKunRPhM",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305252130 nonce=n_question_paced body=43d7fcb508e5404b4f26eb2d05f82ca91af4e7e75384902a1d27c4474024098f mac=HRNHNz9rcSt3NekxfOhcgHcLWepBlo5VM_p6sOzhOm4",
+        "answer": "{\"v\":1,\"ok\":{\"retry_after_ms\":1000}}",
+        "answer_iv_hex": "b10000000000000000000004",
+        "answer_sealed": "sQAAAAAAAAAAAAAEsLKi-fIDgiWN4TyMlEEtY9E-2sUYCua_oZUygIl-rUxu9VeuXXe9Gfl3KEkL1OcHbN4vsw"
+      },
+      {
+        "name": "paced_admitted",
+        "callback": "question_ask",
+        "why": "paced's body sent again: admitted, and a permission of the person's answers it",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_paced_again",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305253140
+        },
+        "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"delete_rows\",\"ask_no\":2,\"operation\":\"DELETE FROM users WHERE id IN (1, 2, 3);\",\"summary\":\"Delete 3 rows from the table users\"}}",
+        "body_iv_hex": "a10000000000000000000005",
+        "body_sealed": "oQAAAAAAAAAAAAAFzLvTqzajrV3k0LU7HtTQ-Vg7Ng59WYKqgiuMEMM2ypXriDB1dQPHwxhagwaANxFKKy8UOZLOpukApLzX7XHqSix3_z1zs3kxYZcphyyv2di91YkwPziH8x-JPmHPe0QE4YO4Fd2wEUTYwz009-I_R86l2sWPfCyhVRZ-8jfXEdGx58NvX9KjTpOruQxUOh4pNhd2WAuDofs_7E8F8b0QXFmoqimAlWZRrLpYcABJgMhwlWT2mcFHjUT2SEk",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305253140 nonce=n_question_paced_again body=811fa04f9f88c184d34480ad6bfd2eb2ecac12145f734090f9493c0f305e7bc5 mac=E6voUGZ1ivfhZPkwWvhi103JWxmHuMfkpbcOH1aaj8c",
+        "answer": "{\"v\":1,\"ok\":{\"answer\":\"allowed\"}}",
+        "answer_iv_hex": "b10000000000000000000005",
+        "answer_sealed": "sQAAAAAAAAAAAAAFodliGDgIb7GMPEOk2gMG2dNFXgv5MnbZZvRPvMc3er7mKHDj0oTl_d4YZze4BbKtdw"
+      },
+      {
+        "name": "unattended",
+        "callback": "question_ask",
+        "why": "nobody can be asked for the run, and no permission covers it",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_unattended",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305253150
+        },
+        "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"delete_table\",\"ask_no\":3,\"operation\":\"DROP TABLE logs;\",\"summary\":\"Drop the table logs in the project acme\"}}",
+        "body_iv_hex": "a10000000000000000000006",
+        "body_sealed": "oQAAAAAAAAAAAAAGXs-a9_8UEu9QxntIm69Q9dZdNrjTIRLsVn9ySTT-R43ZKCG9naQwe1ka7r9jENvvD1aSmKO07mKE7Z9AxWOljGEWQ-iOL0_qWka5bUCCH9S1ZhiGcLhOprmkIjiamSdF8O7idWmT9T0eDFvQ8NTSMZYYRv5W0WVLZ2Nde6OADkbhI7AGYYhlT6f02YN1-mdC-DIHUa4irDt_tn_LRFUgdTRjQnRUnxxJ2lU",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305253150 nonce=n_question_unattended body=3bb6695664d011e5d4ab967f068901cf8c1f5c3d0db94a75dca7549ea4ced6e5 mac=FGT4fDTPdDssA7f39zS2D9HYt0LOvJvsCpcTP0H6TvA",
+        "answer": "{\"v\":1,\"ok\":{\"answer\":{\"none\":\"unattended\"}}}",
+        "answer_iv_hex": "b10000000000000000000006",
+        "answer_sealed": "sQAAAAAAAAAAAAAGXT_Mm1iD3U6LbFDIi9kmVk9T-olVD-8Jpi-WKgUnKxz5yXZ3_K_KVUcrlqPTfcq0d1KiBQadH9hmexA0dg"
+      },
+      {
+        "name": "invalid",
+        "callback": "question_ask",
+        "why": "an action the manifest does not declare",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_invalid",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305253160
+        },
+        "body": "{\"v\":1,\"op\":\"question_ask\",\"args\":{\"action\":\"drop_database\",\"ask_no\":4,\"operation\":\"DROP DATABASE acme;\",\"summary\":\"Drop the database acme\"}}",
+        "body_iv_hex": "a10000000000000000000007",
+        "body_sealed": "oQAAAAAAAAAAAAAHe5qeN0FxwWoUWSlQWvCSOsnrv4U2uK_N_K4CIgaEM5O8h-aEnxoKUYXZ2czBNEIet21KdwqFmP8p_Mwhf-igQxWD_4HuQetXLQ5KfLKd9BNJo1rb-TR-MzlZB7lZqQNCtTLba2lNafTwb1Ipzw6y_acchsyseFULmM-h5Hu4Hw8-El360VkjXnIasXFTtzufiLNJKhbzYMs8r7hJBg",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305253160 nonce=n_question_invalid body=825e086bde4c285ee7e24f055d1ad69981a2d5e2c346a343b3eb5fd84b136224 mac=qyxFCbQd7bIijH_XDiFg2o3So9n7s6z6Mp_Ffx-ZPlI",
+        "answer": "{\"v\":1,\"ok\":{\"answer\":{\"none\":\"invalid\"}}}",
+        "answer_iv_hex": "b10000000000000000000007",
+        "answer_sealed": "sQAAAAAAAAAAAAAHgKK138UwS8pA3Ijr8ioEjtUpT6Jmhf3xnDnTWFH3YNUuKWiwnikKbdywZmvFryZjEc0LvbylTPfMeA"
+      },
+      {
+        "name": "wait_timed_out",
+        "callback": "question_wait",
+        "why": "nobody answered within the wait: the runner waits again",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_wait_pending",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305253170
+        },
+        "body": "{\"v\":1,\"op\":\"question_wait\",\"args\":{\"ask_no\":1,\"max_wait_ms\":20000}}",
+        "body_iv_hex": "a10000000000000000000008",
+        "body_sealed": "oQAAAAAAAAAAAAAIclQwDgBS7gRmSw_stNJelDHtlAroQmAXERRHozv9lXaQlkOU5Jd_oQOhTo4RSPKRVqOtLIG16XojltRL_u0IVascLuU6Abgcxa1WrtdHxo6nocpJ",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305253170 nonce=n_question_wait_pending body=83c1e74557be2a3a484789511a83f0a0255e437a17c0d2ccc518c9fba78aae09 mac=vXkoSAu1bJRO-tHMCoqzGoRw62bpjn_z_115LbnBMMY",
+        "answer": "{\"v\":1,\"ok\":{\"pending\":true}}",
+        "answer_iv_hex": "b10000000000000000000008",
+        "answer_sealed": "sQAAAAAAAAAAAAAIcFFwcP9BMiGHCyNjfVQCvpX4kMM0hu-owdWGczUgjoQcefYUDW_YGa-oQQQR"
+      },
+      {
+        "name": "allowed",
+        "callback": "question_wait",
+        "why": "the person allowed it, or a permission of theirs did",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_wait_allowed",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305273180
+        },
+        "body": "{\"v\":1,\"op\":\"question_wait\",\"args\":{\"ask_no\":1,\"max_wait_ms\":20000}}",
+        "body_iv_hex": "a10000000000000000000009",
+        "body_sealed": "oQAAAAAAAAAAAAAJTYrKiD1CfZ-u4WkkREhP0AfQARFw0HLPaxpMJVdw0CrSLFD6L8jYvrc5rRFoHbwCav1eNmMUeU7eISIUZW5eH1VGULiKZ1tvBadGhmlmm4KOHhX_",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305273180 nonce=n_question_wait_allowed body=4fbb0dd01d2430ae207aa625d628bde13cebb5a28a8d29e71a55fe62258edd89 mac=5vbjFnhNEaFfVBZy-ZKJrBSYymx1dnikqH7YZyOccZI",
+        "answer": "{\"v\":1,\"ok\":{\"answer\":\"allowed\"}}",
+        "answer_iv_hex": "b10000000000000000000009",
+        "answer_sealed": "sQAAAAAAAAAAAAAJu-s6SfcOL39rZIrw1mpitDlCB6HSra4OAtUSd6Ea-5wmlx5uuyAYOtfJJ8R0bm6iSA"
+      },
+      {
+        "name": "denied",
+        "callback": "question_wait",
+        "why": "the person denied it, or a permission of theirs did",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_wait_denied",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305273190
+        },
+        "body": "{\"v\":1,\"op\":\"question_wait\",\"args\":{\"ask_no\":1,\"max_wait_ms\":20000}}",
+        "body_iv_hex": "a1000000000000000000000a",
+        "body_sealed": "oQAAAAAAAAAAAAAK-vr6kCz5ZWu6N5BSQhfwjEn6LeX3Yr0PwGFWWBNXkgNMb9CB7j1gEYM70xY3C7PvWlyS7ck2eG2c2J65mOkVhwg0vChR5IHiNcFx6RPszwn_bofV",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305273190 nonce=n_question_wait_denied body=a46596420c1791624b6256dbe3167880ec9911207a9d1384badbd0006382a432 mac=aOVz_D6JBWQHNGQin-yBeGZSBL_y43JPXWV4s2fwCrg",
+        "answer": "{\"v\":1,\"ok\":{\"answer\":\"denied\"}}",
+        "answer_iv_hex": "b1000000000000000000000a",
+        "answer_sealed": "sQAAAAAAAAAAAAAKkIiq6k96DcN0yZ44A8oBplO3V8j9aYYlstslu6LYWxduvXH4WhwENAb__4wg60TB"
+      },
+      {
+        "name": "unavailable",
+        "callback": "question_wait",
+        "why": "CYFR could not read the question just now",
+        "fields": {
+          "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+          "fence": 2,
+          "generation": 7,
+          "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+          "nonce": "n_question_wait_unavailable",
+          "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "service": "wrk_4f3c2a1e9d8b7c6a",
+          "ts": 1789305273200
+        },
+        "body": "{\"v\":1,\"op\":\"question_wait\",\"args\":{\"ask_no\":1,\"max_wait_ms\":20000}}",
+        "body_iv_hex": "a1000000000000000000000b",
+        "body_sealed": "oQAAAAAAAAAAAAALpKnwPRwcaPcz2bTDdD1z7U-zf7_WTGc52ozmLBIBPom-laVkVMxGwySXLcwzpRqe7aEJSL1AJ7TwGHJyWAA2ZqCY_H8kUgVVJ-UU60nFi85AifuP",
+        "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305273200 nonce=n_question_wait_unavailable body=c787441b22f2443c91a54a86494c60691f5509b5d23870c537af66fb59e3c780 mac=vtTxgk5H-xYID8ysF1SiUrJd2l7t5s5976QI3OXcigQ",
+        "answer": "{\"v\":1,\"ok\":{\"answer\":{\"none\":\"unavailable\"}}}",
+        "answer_iv_hex": "b1000000000000000000000b",
+        "answer_sealed": "sQAAAAAAAAAAAAAL_2-mZmNkIpqwROm5tUI4viaYi1G041wVC2u1Z1Ws_gCyOXlyMJ-C6RcDKJSC71Qv-XzqMTJ2sSTuUH368fA"
+      }
+    ]
+  },
   "egress_pin_cases": [
     {
       "name": "fetch",
