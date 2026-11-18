@@ -12,9 +12,9 @@ defmodule Cyfr.Providers.Threads do
 
   An item is the thread's id, its title (a daily thread's is its date),
   its person by the name a reader outside CYFR may see
-  (`Sanctum.Tenancy.Users.public_name/1`), its last activity, whether a
-  card in it waits on its person (`Arca.ThreadStorage.pending_approvals/2`),
-  how many of its posts the person has not seen
+  (`Sanctum.Tenancy.Users.public_name/1`), its last activity, whether it
+  waits on its person (a workspace thread whose work Aqua reported needs
+  them), how many of its posts the person has not seen
   (`Arca.ThreadStorage.unread/2`, past its read mark) and whether it is
   archived (`Arca.ThreadStorage.archived?/1`). Never a message, an id of
   a person or an address.
@@ -78,8 +78,8 @@ defmodule Cyfr.Providers.Threads do
 
   @doc """
   A thread of the athanor as the list shows it, under its person's
-  public `name`: a pending card waits on the athanor's person, who alone
-  decides one.
+  public `name`: a workspace thread whose work Aqua reported needs the
+  person (`needs_you`) waits on them.
   """
   @spec item(Prima.Actor.t(), String.t() | nil, map()) ::
           {:ok, ThreadListed.t()} | {:error, term()}
@@ -91,7 +91,7 @@ defmodule Cyfr.Providers.Threads do
          title: thread.title,
          people: [name],
          last_activity: thread.last_message_at || thread.inserted_at,
-         waits_on_you: match?([_ | _], Threads.pending_approvals(actor, thread.id)),
+         waits_on_you: thread.kind == "workspace" and thread.workspace_state == "needs_you",
          unread: unread,
          archived: Threads.archived?(thread)
        )}

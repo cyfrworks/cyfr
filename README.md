@@ -1066,7 +1066,7 @@ and webhook secrets are suspended until their person re-enables each from
 the system layer's checklist under a fresh confirmation; every device
 connected there is suspended and its certificate revoked, and comes back
 by connecting again as it did the first time; every component grant asks
-for consent again; standing permissions, unused once-bindings and pending
+for consent again; components' standing permissions, unused once-bindings and pending
 confirmations are dropped; every invitation link still open and every
 share are revoked; every stored credential is unusable until it is rotated
 where it came from and entered again; and runs open at the backup end
