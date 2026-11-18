@@ -40,11 +40,15 @@ const (
 	sandbox        = "danger-full-access"
 )
 
+// subAgentCall is the type of a thread's item that starts a sub-agent, a
+// thread of its own, or speaks to one.
+const subAgentCall = "collabAgentToolCall"
+
 // ownTools are the types of Codex's thread items that are its own tools,
 // shown as `own` by that name.
 var ownTools = map[string]bool{
 	"commandExecution": true, "fileChange": true, "mcpToolCall": true, "webSearch": true,
-	"imageView": true, "imageGeneration": true, "collabAgentToolCall": true,
+	"imageView": true, "imageGeneration": true, subAgentCall: true,
 }
 
 // mediaTypes are the images Codex takes as input (by data URL); it takes no

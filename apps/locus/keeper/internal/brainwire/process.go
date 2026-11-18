@@ -7,6 +7,7 @@ package brainwire
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"syscall"
@@ -38,11 +39,25 @@ type Process struct {
 	Expected bool
 }
 
-// Spawn starts `argv`, its standard error the driver's (`errOut`), which
-// the box keeps for the person and never hands a thread, in its own
-// process group, so a server it starts ends with it, and it ends with the
-// driver.
-func Spawn(argv []string, errOut io.Writer) (*Process, error) {
+// ErrNotStarted is all the wire is told of a harness that did not start.
+// Why it did not, the command's path and the system's words, may name the
+// folder, so it is the driver's standard error's alone.
+var ErrNotStarted = errors.New("it did not start")
+
+// Spawn starts `argv`, its standard error the driver's, which the box keeps
+// for the person and never hands a thread, in its own process group, so a
+// server it starts ends with it, and it ends with the driver. A start that
+// fails is said on the driver's standard error and answers ErrNotStarted.
+func (c *Conn) Spawn(argv []string) (*Process, error) {
+	p, err := spawn(argv, c.ErrOut)
+	if err != nil {
+		fmt.Fprintf(c.ErrOut, "%s: the harness did not start: %v\n", c.name, err)
+		return nil, ErrNotStarted
+	}
+	return p, nil
+}
+
+func spawn(argv []string, errOut io.Writer) (*Process, error) {
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		return nil, err

@@ -33,6 +33,8 @@ import (
 //	counts    sends a total missing a count, one with none, a reroute, then a whole one
 //	other     asks for the user's input and for an approval, then replies with the answers
 //	stranger  calls CYFR's tool from another thread, then replies with the answer
+//	child     a sub-agent's thread starts a turn and counts its usage, then it replies
+//	agent     calls a sub-agent, with no line of the sub-agent's own, then replies
 //	big       replies with 2 MiB of text
 //	die       ends the process with status 3
 //
@@ -225,6 +227,20 @@ func fakeCodex() int {
 			}
 			_ = json.Unmarshal(answered, &a)
 			reply(turn, fmt.Sprintf("the stranger's call ran %v", a.Result.Success))
+		case strings.Contains(words, "child"):
+			// A sub-agent's thread works: its lines name its own thread.
+			child := "019a0000-0000-7000-8000-00000000c41d"
+			notify("turn/started", map[string]any{"threadId": child, "turn": map[string]any{"id": "turn_child", "items": []any{}, "status": "inProgress"}})
+			notify("thread/tokenUsage/updated", map[string]any{"threadId": child, "turnId": "turn_child", "tokenUsage": map[string]any{"total": map[string]any{
+				"inputTokens": 7, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 2}}})
+			reply(turn, "a child ran")
+		case strings.Contains(words, "agent"):
+			// The session's own call of a sub-agent, and no line of its thread.
+			call := map[string]any{"type": "collabAgentToolCall", "id": "collab_1", "tool": "spawnAgent", "status": "inProgress"}
+			notify("item/started", map[string]any{"threadId": thread.id, "turnId": turn, "item": call})
+			call["status"] = "completed"
+			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": call})
+			reply(turn, "an agent ran")
 		case strings.Contains(words, "big"):
 			reply(turn, strings.Repeat("x", 2<<20))
 		default:

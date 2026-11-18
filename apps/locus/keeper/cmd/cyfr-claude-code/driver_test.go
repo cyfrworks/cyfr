@@ -79,11 +79,17 @@ func startDriver(t *testing.T) *wireSession {
 
 func startDriverIn(t *testing.T, home string) *wireSession {
 	t.Helper()
+	return startDriverWith(t, home, []string{os.Args[0]})
+}
+
+// startDriverWith runs the driver with `command` its harness's.
+func startDriverWith(t *testing.T, home string, command []string) *wireSession {
+	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	s := &wireSession{t: t, in: inW, events: make(chan map[string]any, 1024), done: make(chan int, 1), stderr: &lockedBuffer{}, home: home}
 	c := brainwire.NewConn(driverName, outW, s.stderr)
-	d := newDriver([]string{os.Args[0]}, c, home)
+	d := newDriver(command, c, home)
 	stop := make(chan os.Signal)
 	go func() {
 		status := brainwire.Serve(c, d, inR, stop)
@@ -785,5 +791,30 @@ func TestOnATerminalTheHarnessRunsUnchanged(t *testing.T) {
 	defer null.Close()
 	if got := run(null); !strings.HasPrefix(got, `{"t":"hello"`) {
 		t.Fatalf("off a terminal it speaks the wire (a positive control): %q", got)
+	}
+}
+
+// A harness that does not start says why on the driver's standard error
+// alone: its command's path may name the folder, and the refusal of a
+// listing, and the start's end, carry none of it to the wire.
+func TestALaunchThatFailsNamesNoFolderOnTheWire(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	s := startDriverWith(t, home, []string{filepath.Join(home, "FOLDER-CANARY", "no-such-claude")})
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "m1"})
+	if e := s.expect("refused"); e["id"] != "m1" || e["reason"] != "Claude Code did not list its models: it did not start." {
+		t.Fatalf("a listing whose harness did not start is refused in the driver's words: %v", e)
+	}
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{}})
+	if status := s.end(); status != 1 {
+		t.Fatalf("a start whose harness did not start ends the driver: %d", status)
+	}
+	if strings.Contains(s.output(), "FOLDER-CANARY") {
+		t.Fatalf("nothing of the harness's command reaches the wire: %s", s.output())
+	}
+	if n := strings.Count(s.stderr.String(), "FOLDER-CANARY/no-such-"); n != 4 {
+		t.Fatalf("each launch's detail, the command and the system's words on it, is on the driver's standard error (a positive control for the check above): %d in %q", n, s.stderr.String())
 	}
 }

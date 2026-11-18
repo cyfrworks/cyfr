@@ -27,14 +27,16 @@
 // writes nothing: Codex takes no tools after a thread's start. A `post` is
 // a turn of its own (`turn/start`), or is added to the native turn under
 // way (`turn/steer`), under a uuid derived from the post's id; it is
-// `accepted` once Codex answers that it took it. A call of CYFR's tool
+// `accepted` once Codex answers that it took it, which is no durable
+// delivery. A call of CYFR's tool
 // (`item/tool/call`) is held and shown as an `ask`, and an `answer`
 // answers it by its request's id. There is no interrupt: Stop closes the
 // session, and Codex's own `turn/interrupt` is never sent. Codex's own
 // tools run in its box, asking nothing, and are shown by name only. The
 // driver keeps no account of calls: which post a native turn answers is
 // Codex's own naming of the posts' uuids in that turn, which `idle`
-// passes on, and a turn's usage is the thread's total as Codex reports it.
+// passes on, and a turn's usage is the thread's total as Codex reports it,
+// partial once a sub-agent works (the wire's "comment" says why).
 //
 // The driver ends when its input ends (the session is closed), when the
 // harness ends, with the harness's status, and on a hangup or a TERM, each

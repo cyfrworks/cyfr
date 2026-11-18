@@ -75,6 +75,11 @@ type driver struct {
 	config   brainwire.Config
 	signedIn bool
 	requests int
+	// others is set from the first sign of a thread not the session's (a
+	// sub-agent's): an event of its own, or the session's call of one.
+	// Whether the session's total holds a sub-agent's counts is not
+	// established, so from then on its usage is partial.
+	others bool
 	// What the native turns name: each post by its uuid, each turn under
 	// way, the one Codex runs now, the harness's own tools running, and the
 	// calls of CYFR's tools it holds, by their call ids.
@@ -163,9 +168,10 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 			return &brainwire.Fatal{Status: 2, Reason: "a start whose tools Codex cannot take: " + err.Error()}
 		}
 	}
-	h, err := brainwire.Spawn(append(append([]string{}, d.harnessCommand...), appServer), d.c.ErrOut)
+	h, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), appServer))
 	if err != nil {
-		return &brainwire.Fatal{Status: 1, Reason: "the harness did not start: " + err.Error()}
+		// Spawn has said why on the driver's standard error.
+		return &brainwire.Fatal{Status: 1}
 	}
 	d.h = h
 	d.config = config
@@ -246,7 +252,7 @@ func (d *driver) models(id string) error {
 	if d.h == nil {
 		listing, err := d.listOnce()
 		if err != nil {
-			return d.c.Refuse(id, "OpenAI Codex did not list its models: "+err.Error())
+			return d.c.Refuse(id, "OpenAI Codex did not list its models: "+err.Error()+".")
 		}
 		return d.listed(id, listing)
 	}
@@ -509,7 +515,11 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 		return nil
 	}
 	var n notice
-	if json.Unmarshal(params, &n) != nil || n.ThreadID != d.session {
+	ok := json.Unmarshal(params, &n) == nil
+	if ok && n.ThreadID != "" && n.ThreadID != d.session {
+		d.others = true
+	}
+	if !ok || n.ThreadID != d.session {
 		if method == "serverRequest/resolved" {
 			d.resolved(params)
 		}
@@ -523,6 +533,9 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 			d.active = n.Turn.ID
 		}
 	case "item/started":
+		if n.Item.Type == subAgentCall {
+			d.others = true
+		}
 		switch {
 		case n.Item.Type == "userMessage":
 			d.holds(n.TurnID, n.Item.ClientID)
@@ -549,6 +562,9 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 	case "thread/tokenUsage/updated":
 		usage := brainwire.NewEvent("usage").Set("gen", d.gen).SetOptional("work", work).Set("total", d.session)
 		read, models := threadTotal(n.TokenUsage, d.model)
+		if read == "complete" && d.others {
+			read = "partial"
+		}
 		usage.Set("accounting", read)
 		if read != "unavailable" {
 			usage.Set("models", models)
@@ -653,6 +669,7 @@ func (d *driver) Close() {
 	d.starting = nil
 	d.waiting = nil
 	d.session = ""
+	d.others = false
 	d.active = ""
 	d.turns = map[string]*turn{}
 	d.own = map[string]string{}

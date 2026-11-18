@@ -127,9 +127,10 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if !resume {
 		session = brainwire.NewUUID()
 	}
-	h, err := brainwire.Spawn(harnessArgv(d.harnessCommand, session, resume, config), d.c.ErrOut)
+	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, session, resume, config))
 	if err != nil {
-		return &brainwire.Fatal{Status: 1, Reason: "the harness did not start: " + err.Error()}
+		// Spawn has said why on the driver's standard error.
+		return &brainwire.Fatal{Status: 1}
 	}
 	d.h = h
 	d.gen = gen
@@ -214,7 +215,7 @@ func (d *driver) models(id string) error {
 	if d.h == nil {
 		var err error
 		if listing, err = d.listOnce(); err != nil {
-			return d.c.Refuse(id, "Claude Code did not list its models: "+err.Error())
+			return d.c.Refuse(id, "Claude Code did not list its models: "+err.Error()+".")
 		}
 	}
 	var entries []struct {
@@ -242,9 +243,11 @@ func (d *driver) models(id string) error {
 }
 
 // listOnce starts a harness only to ask its `initialize` answer, and
-// closes it.
+// closes it. Its errors are the driver's own sentences, never the
+// harness's or the system's words, since a refusal carries them to the
+// wire.
 func (d *driver) listOnce() (json.RawMessage, error) {
-	h, err := brainwire.Spawn(append(append([]string{}, d.harnessCommand...), baseArgv...), d.c.ErrOut)
+	h, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), baseArgv...))
 	if err != nil {
 		return nil, err
 	}

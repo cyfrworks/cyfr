@@ -79,11 +79,17 @@ func startDriver(t *testing.T) *wireSession {
 
 func startDriverIn(t *testing.T, home string) *wireSession {
 	t.Helper()
+	return startDriverWith(t, home, []string{os.Args[0]})
+}
+
+// startDriverWith runs the driver with `command` its harness's.
+func startDriverWith(t *testing.T, home string, command []string) *wireSession {
+	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	s := &wireSession{t: t, in: inW, events: make(chan map[string]any, 1024), done: make(chan int, 1), stderr: &lockedBuffer{}, home: home}
 	c := brainwire.NewConn(driverName, outW, s.stderr)
-	d := newDriver([]string{os.Args[0]}, c, home)
+	d := newDriver(command, c, home)
 	stop := make(chan os.Signal)
 	go func() {
 		status := brainwire.Serve(c, d, inR, stop)
@@ -825,5 +831,74 @@ func TestOnATerminalTheHarnessRunsUnchanged(t *testing.T) {
 	defer null.Close()
 	if got := run(null); !strings.HasPrefix(got, `{"t":"hello"`) {
 		t.Fatalf("off a terminal it speaks the wire (a positive control): %q", got)
+	}
+}
+
+// A harness that does not start says why on the driver's standard error
+// alone: its command's path may name the folder, and the refusal of a
+// listing or a removal, and the start's end, carry none of it to the wire.
+func TestALaunchThatFailsNamesNoFolderOnTheWire(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	s := startDriverWith(t, home, []string{filepath.Join(home, "FOLDER-CANARY", "no-such-codex")})
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "m1"})
+	if e := s.expect("refused"); e["id"] != "m1" || e["reason"] != "OpenAI Codex did not list its models: it did not start." {
+		t.Fatalf("a listing whose app-server did not start is refused in the driver's words: %v", e)
+	}
+	s.send(map[string]any{"t": "forget", "id": "obx_1", "session": "019a0000-0000-7000-8000-000000000001"})
+	if e := s.expect("refused"); e["id"] != "obx_1" || e["reason"] != "OpenAI Codex could not be asked to remove the session's thread: it did not start." {
+		t.Fatalf("a removal whose app-server did not start is refused in the driver's words: %v", e)
+	}
+	s.send(map[string]any{"t": "start", "gen": 1, "config": map[string]any{}})
+	if status := s.end(); status != 1 {
+		t.Fatalf("a start whose harness did not start ends the driver: %d", status)
+	}
+	if strings.Contains(s.output(), "FOLDER-CANARY") {
+		t.Fatalf("nothing of the harness's command reaches the wire: %s", s.output())
+	}
+	if n := strings.Count(s.stderr.String(), "FOLDER-CANARY/no-such-"); n != 6 {
+		t.Fatalf("each launch's detail, the command and the system's words on it, is on the driver's standard error (a positive control for the check above): %d in %q", n, s.stderr.String())
+	}
+}
+
+// Whether a thread's total holds its sub-agents' counts is not established:
+// from the first sign of a sub-agent, a line of another thread's or the
+// session's own call of one, the session's usage is partial, its total's
+// counts carried all the same, for as long as the session runs.
+func TestUsageIsPartialOnceASubAgentWorks(t *testing.T) {
+	for _, sign := range []string{"child", "agent"} {
+		t.Run(sign, func(t *testing.T) {
+			s := startDriver(t)
+			session := startFresh(s, map[string]any{})
+			work(s, "stp_work", "trn_1")
+			turn := func(id, words string) []string {
+				postText(s, id, "trn_1", words)
+				var accountings []string
+				for _, e := range s.until("idle") {
+					if e["t"] != "usage" {
+						continue
+					}
+					if e["total"] != session || len(e["models"].([]any)) != 1 {
+						t.Fatalf("the session's usage is its own thread's total, its counts carried: %v", e)
+					}
+					accountings = append(accountings, fmt.Sprint(e["accounting"]))
+				}
+				return accountings
+			}
+			if got := turn("stp_first", "hello"); fmt.Sprint(got) != "[complete]" {
+				t.Fatalf("before any sub-agent the total is complete: %v", got)
+			}
+			if got := turn("stp_second", sign); fmt.Sprint(got) != "[partial]" {
+				t.Fatalf("a sub-agent's work makes the session's total partial: %v", got)
+			}
+			if got := turn("stp_third", "hello"); fmt.Sprint(got) != "[partial]" {
+				t.Fatalf("and it stays partial while the session runs: %v", got)
+			}
+			if strings.Contains(s.output(), "c41d") {
+				t.Fatal("nothing of the sub-agent's thread reaches the wire")
+			}
+		})
 	}
 }

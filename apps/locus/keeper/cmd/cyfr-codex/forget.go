@@ -29,6 +29,14 @@ import (
 // `.codex` in the home. Codex's own `thread/delete` removes the rollout
 // and the rows (0.169.0); the snapshots it leaves, and the driver removes
 // them.
+//
+// A sub-agent's thread is a thread of its own, with its own rollout and
+// snapshots, and the driver looks for the named thread's files alone.
+// Whether `thread/delete` removes a sub-agent's thread with its parent's is
+// not established for 0.169.0: no run of Codex itself here started a
+// sub-agent, and the app-server's own document does not say. If it does,
+// that thread's shell snapshots stay in the folder; if it does not, its
+// rollout and its rows stay as well.
 
 // oneOffWait bounds a one-off app-server's answer: a first start fetches
 // the program.
@@ -96,7 +104,10 @@ func threadFiles(home, thread string) (found []string, failed []error) {
 // what Codex leaves of it, and `forgot` says the thread's files are gone,
 // each removed or proved absent, looked at again after the removal. A
 // removal Codex refuses, and a folder or an entry that cannot be inspected
-// or removed, are `refused`, with the reason.
+// or removed, are `refused`, with the reason. While a session runs, the
+// forget's app-server runs beside the session's own on the same folder:
+// the stand-in's tests run that order, but Codex itself has not been run
+// so, and against it that order is unproved.
 func (d *driver) forget(id, session string) error {
 	if !brainwire.IsUUID(session) {
 		return d.c.Refuse(id, "That names no thread of Codex's.")
@@ -106,13 +117,13 @@ func (d *driver) forget(id, session string) error {
 	}
 	o, err := d.openOneOff()
 	if err != nil {
-		return d.c.Refuse(id, "OpenAI Codex did not start to remove the session's thread: "+err.Error())
+		return d.c.Refuse(id, "OpenAI Codex could not be asked to remove the session's thread: "+err.Error()+".")
 	}
 	answer, err := o.call(func(rid string) []byte { return request(rid, "thread/delete", map[string]any{"threadId": session}) })
 	o.close()
 	switch {
 	case err != nil:
-		return d.c.Refuse(id, "OpenAI Codex did not answer the removal of the session's thread: "+err.Error())
+		return d.c.Refuse(id, "OpenAI Codex did not answer the removal of the session's thread: "+err.Error()+".")
 	case answer.Error != nil && !strings.HasPrefix(answer.Error.Message, noRolloutWords):
 		return d.c.Refuse(id, "OpenAI Codex could not remove the session's thread, so it may still be there.")
 	}
@@ -205,7 +216,9 @@ func readRollout(path string, each func(rolloutEntry)) error {
 }
 
 // oneOff is an app-server of a command's own, started for one request and
-// closed after: a removal or a listing when no session runs.
+// closed after: a removal or a listing when no session runs. Its errors are
+// the driver's own sentences, never Codex's or the system's words, since a
+// refusal carries them to the wire.
 type oneOff struct {
 	p        *brainwire.Process
 	n        int
@@ -213,7 +226,7 @@ type oneOff struct {
 }
 
 func (d *driver) openOneOff() (*oneOff, error) {
-	p, err := brainwire.Spawn(append(append([]string{}, d.harnessCommand...), appServer), d.c.ErrOut)
+	p, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), appServer))
 	if err != nil {
 		return nil, err
 	}
@@ -222,8 +235,8 @@ func (d *driver) openOneOff() (*oneOff, error) {
 	if err == nil && answer.Error != nil {
 		err = errors.New("it refused to start")
 	}
-	if err == nil {
-		err = o.p.Write(initializedLine())
+	if err == nil && o.p.Write(initializedLine()) != nil {
+		err = errors.New("it ended before it was asked")
 	}
 	if err != nil {
 		o.close()
