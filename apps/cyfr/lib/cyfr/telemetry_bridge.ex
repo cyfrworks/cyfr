@@ -463,7 +463,11 @@ defmodule Cyfr.TelemetryBridge do
        )
        when event in @question_events and is_binary(user_id) and user_id != "" do
     fields = Map.take(meta, [:ref, :expires_at])
-    [tenant(meta, &Bus.prompts(&1, user_id), &Prompt.new(&1, :question, stage, fields))]
+
+    [
+      tenant(meta, &Bus.prompts(&1, user_id), &Prompt.new(&1, :question, stage, fields))
+      | question_attention(stage, meta)
+    ]
   end
 
   defp messages([:cyfr, :sanctum, :api_keys, :changed], _measurements, meta),
@@ -768,6 +772,35 @@ defmodule Cyfr.TelemetryBridge do
        ]
 
   defp confirmation_attention(_stage, _meta), do: []
+
+  # A question is its announcement's item, as a confirmation is: the
+  # record is the identity domain's, and `opened` carries what the item
+  # names.
+  defp question_attention(
+         :opened,
+         %{
+           athanor_id: athanor_id,
+           user_id: user_id,
+           ref: ref,
+           label: label,
+           opened_at: %DateTime{} = opened_at
+         }
+       )
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(ref) and is_binary(label) do
+    item = Cyfr.Providers.Attention.question(%{ref: ref, label: label, opened_at: opened_at})
+    [attention(fn -> waiting({:ok, [item]}, athanor_id, user_id) end)]
+  end
+
+  defp question_attention(stage, %{athanor_id: athanor_id, user_id: user_id, ref: ref})
+       when stage in [:answered, :expired, :withdrawn] and is_binary(athanor_id) and
+              athanor_id != "" and is_binary(ref),
+       do: [
+         attention(fn ->
+           {:ok, [{athanor_id, user_id, :removed, %{id: ref, outcome: left_as(stage)}}]}
+         end)
+       ]
+
+  defp question_attention(_stage, _meta), do: []
 
   # How an item left its person's attention (`Cyfr.Bus.Attention.outcomes/0`),
   # by its record's end: a confirmation's stage, an offer's transition or

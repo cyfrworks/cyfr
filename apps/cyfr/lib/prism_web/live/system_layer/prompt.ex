@@ -82,12 +82,21 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `methods` this client proves it by, and `own`, whether this client
       asked for it. A client that asked but cannot read the list carries
       the ref, operation and expiry alone, the rest `nil`. The secret the
-      asking request was answered never enters a prompt.
+      asking request was answered never enters a prompt;
+    * `:question` — a component's question to its person, under the
+      action `:approval`, as `question.pending` lists it: its `ref`, and
+      its preview (`Prima.Question.Preview`) read under the reader's own
+      session: the component's `publisher` and `name`, the `action`'s name
+      and its declared `title`, the component's own `summary` and
+      `operation`, the run's `caller` (a caller's text,
+      `Prima.Question.Caller`), the `deadline` it waits until, and whether
+      a credential was `masked`. While it is shown the layer keeps the
+      card's choice on it as `choice` (`PrismWeb.SystemLayer.Question`).
 
   Anything else is refused as `:invalid_prompt`: nothing is drawn.
   """
 
-  @kinds [:grant, :credential_entry, :share, :pairing, :request, :confirmation]
+  @kinds [:grant, :credential_entry, :share, :pairing, :request, :confirmation, :question]
   @keys [:id, :kind, :action, :subject]
   @max_id_bytes 128
 
@@ -97,6 +106,21 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   @methods ~w(passkey device)
 
+  # A question's preview as the card draws it (`Prima.Question.Preview`),
+  # beside its ref.
+  @question_fields [
+    :publisher,
+    :name,
+    :action,
+    :title,
+    :summary,
+    :operation,
+    :caller,
+    :deadline,
+    :masked
+  ]
+  @question_ref ~r/\A[A-Za-z0-9_-]{1,64}\z/
+
   @typedoc "What a prompt asks for."
   @type kind ::
           :grant
@@ -105,6 +129,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
           | :pairing
           | :request
           | :confirmation
+          | :question
 
   @typedoc "A prompt."
   @type t :: %{
@@ -180,6 +205,37 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   def confirmation(_entry, _own), do: {:error, :invalid_prompt}
 
+  @doc "The id of the question prompt for the question `ref` names: one per question."
+  @spec question_id(String.t()) :: String.t()
+  def question_id(ref) when is_binary(ref), do: "question-" <> ref
+
+  @doc """
+  The `:question` prompt for `entry`, one `question.pending` entry: its
+  `ref` and its `preview`'s JSON map (`Prima.Question.Preview.to_json/1`).
+  `{:error, :invalid_prompt}` for anything else.
+  """
+  @spec question(map()) :: {:ok, t()} | {:error, :invalid_prompt}
+  def question(%{ref: ref, preview: %{} = preview}) when is_binary(ref) do
+    subject =
+      @question_fields
+      |> Map.new(&{&1, Map.get(preview, Atom.to_string(&1))})
+      |> Map.put(:ref, ref)
+      |> Map.update!(:deadline, &instant/1)
+
+    validate(%{id: question_id(ref), kind: :question, action: :approval, subject: subject})
+  end
+
+  def question(_entry), do: {:error, :invalid_prompt}
+
+  defp instant(text) when is_binary(text) do
+    case DateTime.from_iso8601(text) do
+      {:ok, at, 0} -> at
+      _unread -> nil
+    end
+  end
+
+  defp instant(_text), do: nil
+
   # The table's action an entry's `action` spells, or none.
   defp action_named(name) when is_binary(name),
     do: Enum.find(Sanctum.Pairing.actions(), &(Atom.to_string(&1) == name))
@@ -194,6 +250,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp action(:share, :credential_sharing), do: :ok
   defp action(:request, :approval), do: :ok
+  defp action(:question, :approval), do: :ok
   defp action(:pairing, :pairing_revocation), do: :ok
 
   defp action(_kind, _action), do: {:error, :invalid_prompt}
@@ -297,7 +354,22 @@ defmodule PrismWeb.SystemLayer.Prompt do
        else: {:error, :invalid_prompt}
   end
 
+  defp subject(:question, %{ref: ref, deadline: %DateTime{}, masked: masked} = subject)
+       when map_size(subject) == length(@question_fields) + 1 and is_binary(ref) and
+              is_boolean(masked) do
+    named = Map.take(subject, [:publisher, :name, :action, :title, :caller])
+
+    if Regex.match?(@question_ref, ref) and Enum.all?(named, fn {_key, text} -> ref?(text) end) and
+         text?(subject.summary) and text?(subject.operation) and
+         match?({:ok, _caller}, Prima.Question.Caller.decode(subject.caller)),
+       do: {:ok, subject},
+       else: {:error, :invalid_prompt}
+  end
+
   defp subject(_kind, _subject), do: {:error, :invalid_prompt}
+
+  # A text the card draws: a string, which a summary may leave empty.
+  defp text?(text), do: is_binary(text) and String.valid?(text)
 
   @doc """
   Whether `asker` names a frame that asked: exactly its `name`, 1 to 128

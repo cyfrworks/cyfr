@@ -20,6 +20,7 @@ defmodule Cyfr.Providers.Attention do
   | `approval` | a pending approval in the athanor's threads | the approval | its thread's title, as the thread holds it | opened | opened; resolved or expired |
   | `grant_request` | a frame's request of the person, waiting in the shell that presents it (`Cyfr.Requests`) | the request | the operation it asks for, or the component a grant names | asked | asked; decided, expired, or withdrawn with its frame |
   | `confirmation` | the person's open confirmation of a sensitive change | its ref | its operation | opened | opened; consumed, cancelled, voided or expired |
+  | `question` | a component's open question to the person before an action (`Sanctum.Questions`) | its ref | the component's name and the action's title: "<name> wants to <title>" | opened | opened; answered, expired, or withdrawn with its run |
   | `failed_run` | the newest failed top-level run of a reference the person ran, that no later run of it ended after | the reference | the reference | its end | failed; the reference's next top-level run's end |
   | `failed_schedule` | a schedule of the person whose latest ended occurrence failed or is uncertain | the schedule | its name | that occurrence's due time | failed; its next completed run or its deletion |
   | `file_offer` | an offer to the person, offered and unexpired | the offer | its first file's name | made | offered; accepted, declined, withdrawn or expired |
@@ -35,7 +36,7 @@ defmodule Cyfr.Providers.Attention do
   the item it settles without a read. `removed` names the item that
   stopped waiting by its `id` and how it left by its `outcome`, every
   other field nil: `expired` for an end whose time ran out, `withdrawn`
-  for a voided confirmation, a withdrawn offer, a deleted schedule or a
+  for a voided confirmation, a question its run's end withdrew, a withdrawn offer, a deleted schedule or a
   deleted thread's approval, and `resolved` for every other end. A
   waiting item's `outcome` is nil. An approval that a
   cancel, a pause or an archive of its turn invalidates is announced to
@@ -45,8 +46,8 @@ defmodule Cyfr.Providers.Attention do
 
   An athanor is one person's, so its threads' approvals wait for its
   owner, and an offer waits for its recipient in their own athanor; a
-  run, a schedule, a confirmation and a request wait for the person their
-  record names. Nothing an operator decides for the server is an item.
+  run, a schedule, a confirmation, a question and a request wait for the
+  person their record names. Nothing an operator decides for the server is an item.
 
   The destination is where the person acts on the item, in one trusted
   spelling: `{kind: "page", page, ref}` for where Prism shows it, each a
@@ -56,8 +57,8 @@ defmodule Cyfr.Providers.Attention do
   thread's layer, `PrismWeb.AquaPanelLive`; the Dashboard's
   `executions`, `schedules` and `files`), and the record there (a thread,
   a run, a schedule or an offer), or `{kind: "ref", page: nil,
-  ref}` for a confirmation, which the system layer presents wherever the
-  person is, and for a request, which the system layer presents above
+  ref}` for a confirmation and a question, which the system layer
+  presents wherever the person is, and for a request, which the system layer presents above
   the frame that asked. No field carries a message, a credential, a
   diagnostic sentence or a person's identifier.
   """
@@ -138,12 +139,14 @@ defmodule Cyfr.Providers.Attention do
     own? = Sanctum.Tenancy.Users.own_athanor?(holder, athanor_id)
 
     with {:ok, confirmations} <- Sanctum.Consent.waiting_confirmations(ctx),
+         {:ok, questions} <- Sanctum.Questions.waiting(ctx),
          {:ok, approvals} <- if(own?, do: approvals(actor, now, []), else: {:ok, []}),
          {:ok, offers} <- if(own?, do: offers(actor, now, []), else: {:ok, []}),
          {:ok, runs} <- runs(actor, holder, limit: @failed_runs),
          {:ok, schedules} <- schedules(actor, holder, []) do
       items =
         Enum.map(confirmations, &confirmation/1) ++
+          Enum.map(questions, &question/1) ++
           Cyfr.Requests.waiting(athanor_id, holder) ++ approvals ++ offers ++ runs ++ schedules
 
       {:ok,
@@ -221,6 +224,23 @@ defmodule Cyfr.Providers.Attention do
       kind: :confirmation,
       id: ref,
       label: operation,
+      day: nil,
+      since: opened_at,
+      destination: %{kind: "ref", page: nil, ref: ref},
+      outcome: nil
+    }
+  end
+
+  @doc """
+  An open question's item, from its `ref`, `label` and `opened_at`
+  (`Sanctum.Questions.waiting/1`'s entry, or its announcement).
+  """
+  @spec question(%{ref: String.t(), label: String.t(), opened_at: DateTime.t()}) :: item()
+  def question(%{ref: ref, label: label, opened_at: opened_at}) do
+    %{
+      kind: :question,
+      id: ref,
+      label: label,
       day: nil,
       since: opened_at,
       destination: %{kind: "ref", page: nil, ref: ref},
