@@ -131,5 +131,5 @@ It reads crates.io for the crates `Cargo.lock` names.
 ```
 src/lib.rs        sha256:eb53e3107d3c78eb3cc2b19cf616bc571f48499425b7dee8aae0a3af66bc52c6
 Cargo.lock        sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-chat_fixture.wasm sha256:b43dd094bfa27e644fc05bf059f03bdc9c86dedda248ab8cb8859e10a807af61
+chat_fixture.wasm sha256:231731473628942951f4863e727cf85c35b13117a60f5f5c3ef136232ccfad0c
 ```

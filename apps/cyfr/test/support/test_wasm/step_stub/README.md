@@ -72,5 +72,5 @@ It reads crates.io for the crates `Cargo.lock` names.
 ```
 src/lib.rs     sha256:8de6c09c8f0707a18480d61a273a041b65b81e1765d186cb97d79c775cb9d794
 Cargo.lock     sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-step_stub.wasm sha256:ec2a805b9efcada8808eb36c418912666bac386f4bbd08736e45bbd8fece56f8
+step_stub.wasm sha256:98c7be977dea32d1cb287dde9780a1eed8178328d55f53541d0ef958ce93b645
 ```

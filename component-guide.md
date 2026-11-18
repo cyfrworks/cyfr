@@ -160,11 +160,12 @@ path = "wit"
 # "cyfr:storage" = { path = "wit/deps/cyfr-storage" }  # uncomment if you import storage
 # "cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }      # uncomment if you import oauth
 # "cyfr:process" = { path = "wit/deps/cyfr-process" }  # uncomment if you import pipe
+# "cyfr:question" = { path = "wit/deps/cyfr-question" }  # uncomment if you import ask
 ```
 
 ### WIT Worlds
 
-Your `src/wit/world.wit` defines what your component exports and imports. **Catalysts should customize `world.wit` to only import interfaces they actually use** — don't blindly copy the canonical one with all seven imports.
+Your `src/wit/world.wit` defines what your component exports and imports. **Catalysts should customize `world.wit` to only import interfaces they actually use** — don't blindly copy the canonical one with all its imports.
 
 **Reagent** — no imports:
 ```wit
@@ -216,6 +217,17 @@ world catalyst {
     import cyfr:process/pipe@0.1.0;
     import cyfr:emit/events@0.1.0;
     import cyfr:model/inputs@0.1.0;
+}
+```
+
+**Catalyst (asks before what it cannot undo)** — e.g. a database catalyst that drops tables only when its person allows it ([`cyfr:question/ask`](#cyfrquestionask--asking-before-an-action)):
+```wit
+package cyfr:catalyst@0.1.0;
+interface run { run: func(input: string) -> string; }
+world catalyst {
+    export run;
+    import cyfr:http/fetch@0.1.0;
+    import cyfr:question/ask@0.1.0;
 }
 ```
 
@@ -1010,6 +1022,205 @@ An error is a code:
 | `invalid_request` | The input the run was handed does not read; the code names no content |
 
 A catalyst that never imports the interface is unchanged by it.
+
+### `cyfr:question/ask` — asking before an action
+
+A catalyst can ask its person before it does something it cannot undo, such as dropping a table, and wait for the answer. CYFR draws the question as a card above whatever the person has open: CYFR's own frame (your component's publisher and name, the words "wants to" and your action's title, who started the run, until when it waits) around your summary and your operation, marked as your component's words. The person answers *Don't allow*, *Allow once*, *Allow for an hour* or *Always allow*. An answer that lasts stands as a permission for that action, listed on your component's page, where the person can also answer before any card has appeared.
+
+**You write the prompt.** Which actions your component has, what each is called, when it asks and what its summary and operation say are yours to define: CYFR adds only the frame. Everything below is about writing those words well.
+
+The interface, imported by the catalyst world only (`import cyfr:question/ask@0.1.0;`, and `"cyfr:question" = { path = "wit/deps/cyfr-question" }` among your Cargo file's dependencies):
+
+```wit
+package cyfr:question@0.1.0;
+
+/// Ask before an action that cannot be undone, and wait for the answer.
+/// Only `allowed` lets the action go ahead.
+interface ask {
+    record request {
+        /// A name this component's manifest declares under `asks`.
+        action: string,
+        /// One line, at most 200 characters: "Drop the table users in the project acme".
+        /// A control or format character refuses the request.
+        summary: string,
+        /// The exact operation, shown whole. Line breaks and
+        /// tabs are kept; any other control or format character refuses it.
+        operation: string,
+    }
+
+    enum unanswered {
+        /// Nobody can be asked for this run, and no permission covers it.
+        unattended,
+        /// The action is not declared, or the request is malformed.
+        invalid,
+        /// CYFR could not ask or record just now.
+        unavailable,
+    }
+
+    variant answer {
+        /// Allowed, by the person now or by a permission of theirs.
+        allowed,
+        /// Denied, by the person now or by a permission of theirs.
+        denied,
+        none(unanswered),
+    }
+
+    ask: func(r: request) -> answer;
+}
+```
+
+**Which actions to declare.** Anything your component cannot undo. Name an action for what happens to the person's things ("delete a table"), not for the call that does it. A card interrupts the person, so ask about what matters, and nothing else. Declare each one in your manifest's [`asks`](#field-reference) (it is valid on a catalyst only):
+
+```json
+"asks": [
+  { "name": "delete_table", "title": "delete a table" },
+  { "name": "delete_rows",  "title": "delete rows from a table" }
+]
+```
+
+`name` is the action's stable name; `title` completes "<your component> wants to …" and is published with the version: it cannot change under it. The consent sheet and your component's page list these as what you, the developer, say the component asks before doing.
+
+**How to write the words.** The `summary` names the thing and where it is, in one line of at most 200 characters: "Drop the table users in the project acme". The `operation` is the exact statement or request, whole; it keeps its line breaks and tabs. Both are written at run time, and neither ever carries a secret: CYFR masks only the credentials it dispensed to the run (the card says when it did), not anything else you put there. A control or format character (a direction override, a zero-width character) in either refuses the request, `none(invalid)`.
+
+**How to tell which action an operation is.** From what your component alone can read: the SQL statement, the method and endpoint, a parameter of its input. When it cannot tell, ask under the harsher action.
+
+**When to ask.** Before any side effect of that operation. One answer is for one operation: ask again for the next one. A batch of one action asks once, with the whole batch as its operation, since every card interrupts the person. A batch that mixes actions is split into operations that are each described and asked, or declined. When the component still cannot tell what an operation is, it declines it.
+
+**What to do with the answer.** Only `allowed` lets the action go ahead. On `denied`, do nothing and say so in your result. The same on `none`: `unattended` means no person could be asked, `invalid` that the request or its action is wrong (an action your manifest does not declare, a summary of two lines), and `unavailable` that CYFR could not ask or record just now, so the operation may be tried later. Your component is not told whether the person or a permission answered, or for how long, so its result never says "you approved".
+
+**The clock.** `ask` blocks until it is answered, and the run's timeout keeps running while the person reads: there is no separate question clock, and the card shows when the run's time ends. A component that asks declares a timeout long enough for a person to answer (`caps.limits.timeout`), up to the thirty-minute ceiling; the person's own settings may change it. When the run's time ends, or the run is stopped, the question ends with it and the card goes.
+
+**A run nobody can be asked for** (started by a key, a schedule or a webhook) is told `none(unattended)` at once, unless a permission of the person it acts as covers the action, which then answers `allowed` or `denied`. A webhook's run acts as no person, so nothing can be allowed for it beforehand.
+
+**Asking fast.** A run's asks are paced: past sixty a minute under one root, an ask waits its turn. Your component only sees a slower answer, so one that asks in a tight loop only slows itself.
+
+**How to try it.** From your component's page, as a person: run it and the card appears. A run started with a key is unattended, and a key cannot set a permission.
+
+**Versions.** A new version that keeps an action's name and title keeps the person's answers. A reworded title makes every allow ask again, while a deny stays; a renamed action loses its answers.
+
+**Who can ask.** A catalyst. A reagent does nothing outside itself and a formula acts through its children and CYFR's tools, so neither imports the interface.
+
+**What CYFR does not do.** It cannot see inside your component: it does not check that it asks, or that the words it shows match what it does. A permission adds no reach; the grant still bounds everything the component can do. For a hard "never", narrow the component's `caps`.
+
+**A worked example.** The test catalyst CYFR runs its own checks with. It reads a statement only when it is exactly one of two shapes, each one action, asks under that action, and runs the statement only when it is allowed; any other statement, two joined into one among them, it declines without asking.
+
+```rust
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+//
+// question-probe: a catalyst that asks its person before each statement it
+// is handed (`cyfr:question/ask`), and runs a statement only when the
+// answer is `allowed`. Its manifest declares the actions it asks about
+// under `asks`; which action a statement is, and the words the person
+// reads, are this component's own. It reads a statement only when it is
+// exactly one of two shapes, each one action, and declines anything else
+// without asking. It does nothing outside itself: a statement allowed is
+// counted as done. CYFR's tests run it, and the component guide shows it
+// as the worked example of asking.
+
+#[allow(warnings)]
+mod bindings;
+
+use bindings::cyfr::question::ask::{ask, Answer, Request, Unanswered};
+use bindings::exports::cyfr::catalyst::run::Guest;
+
+use serde_json::{json, Value};
+
+struct Component;
+
+impl Guest for Component {
+    // Input: {"operation": "run", "params": {"statements": ["DROP TABLE users", …]}}.
+    // Each statement is read, asked about on its own and run, in order.
+    fn run(input: String) -> String {
+        let parsed: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
+        let statements = parsed
+            .pointer("/params/statements")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut results = Vec::new();
+        for statement in statements.iter().filter_map(Value::as_str) {
+            results.push(json!({"statement": statement, "answer": run_one(statement)}));
+        }
+
+        json!({"status": 200, "data": {"results": results}}).to_string()
+    }
+}
+
+bindings::export!(Component with_types_in bindings);
+
+// One statement the probe can tell the action of, and nothing else.
+enum Statement<'a> {
+    // `DROP TABLE <table>`
+    DropTable { table: &'a str },
+    // `DELETE FROM <table> WHERE id = <id>`
+    DeleteRow { table: &'a str, id: &'a str },
+}
+
+// Ask before one statement, and run it only when it is allowed.
+fn run_one(statement: &str) -> &'static str {
+    // A statement of any other shape (two statements, a clause the probe
+    // does not read, a word it does not know) could be an action it would
+    // not ask about: it is declined, and nobody is asked.
+    let Some(parsed) = parse(statement) else {
+        return "declined";
+    };
+
+    let request = match parsed {
+        Statement::DropTable { table } => Request {
+            action: "delete_table".to_string(),
+            summary: format!("Drop the table {table}"),
+            operation: statement.to_string(),
+        },
+        Statement::DeleteRow { table, id } => Request {
+            action: "delete_rows".to_string(),
+            summary: format!("Delete the row {id} from the table {table}"),
+            operation: statement.to_string(),
+        },
+    };
+
+    match ask(&request) {
+        // Only here may the statement run. This probe touches nothing, so
+        // running it is reporting that it was allowed.
+        Answer::Allowed => "allowed",
+        // Denied, by the person or by a permission of theirs: do nothing.
+        Answer::Denied => "denied",
+        // Nobody could be asked, the request or its action was wrong, or
+        // CYFR could not ask just now: do nothing, and say why.
+        Answer::None(Unanswered::Unattended) => "unattended",
+        Answer::None(Unanswered::Invalid) => "invalid",
+        Answer::None(Unanswered::Unavailable) => "unavailable",
+    }
+}
+
+// The statement when it is exactly one of the two shapes, its words
+// separated by single spaces: anything more, less or else is none.
+fn parse(statement: &str) -> Option<Statement<'_>> {
+    let words: Vec<&str> = statement.split(' ').collect();
+    match words.as_slice() {
+        ["DROP", "TABLE", table] if name(table) => Some(Statement::DropTable { table }),
+        ["DELETE", "FROM", table, "WHERE", "id", "=", id] if name(table) && number(id) => {
+            Some(Statement::DeleteRow { table, id })
+        }
+        _ => None,
+    }
+}
+
+// A table's name: a lowercase letter, then lowercase letters, digits and
+// underscores, at most 63 characters.
+fn name(word: &str) -> bool {
+    let mut chars = word.chars();
+    matches!(chars.next(), Some('a'..='z'))
+        && word.len() <= 63
+        && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_'))
+}
+
+// A row's id: one to eighteen decimal digits.
+fn number(word: &str) -> bool {
+    (1..=18).contains(&word.len()) && word.bytes().all(|b| b.is_ascii_digit())
+}
+```
 
 ### `cyfr:formula/invoke` — Sub-Component Orchestration
 

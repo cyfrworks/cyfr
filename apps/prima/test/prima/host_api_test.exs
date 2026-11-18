@@ -293,6 +293,69 @@ defmodule Prima.HostAPITest do
       assert HostAPI.retry(:admit_child) == :keyed
     end
 
+    test "an ask's cases cross in the order one attempt asks, each answered a success of its shape" do
+      %{"cases" => cases, "request_digests" => digests} = @vectors["question_cases"]
+
+      assert Enum.map(cases, & &1["name"]) ==
+               ~w(opened keyed_replay changed paced paced_admitted unattended invalid
+                  wait_timed_out allowed denied unavailable)
+
+      played =
+        Map.new(cases, fn call ->
+          {fields, args, answer} = reproduces(call)
+          assert call["why"] != "", call["name"]
+          assert {:ok, wire} = answer, call["name"]
+          assert is_integer(args["ask_no"]) and args["ask_no"] > 0, call["name"]
+
+          case call["callback"] do
+            "question_ask" ->
+              assert Enum.sort(Map.keys(args)) == ~w(action ask_no operation summary)
+              assert Enum.all?(~w(action operation summary), &is_binary(args[&1]))
+
+            "question_wait" ->
+              assert Enum.sort(Map.keys(args)) == ~w(ask_no max_wait_ms)
+              assert args["max_wait_ms"] in 0..HostAPI.max_question_wait_ms()
+          end
+
+          {call["name"],
+           %{fields: fields, args: args, answer: answered(wire), body: call["body"]}}
+        end)
+
+      # A lost answer's repeat is the same body under a fresh header.
+      assert played["keyed_replay"].body == played["opened"].body
+      refute played["keyed_replay"].fields.nonce == played["opened"].fields.nonce
+      assert played["keyed_replay"].answer == played["opened"].answer
+      assert HostAPI.retry(:question_ask) == :keyed
+      assert HostAPI.retry(:question_wait) == :idempotent
+
+      # One number with another request is invalid.
+      assert played["changed"].args["ask_no"] == played["opened"].args["ask_no"]
+      refute played["changed"].args == played["opened"].args
+      assert played["changed"].answer == {:answer, {:none, :invalid}}
+
+      # A paced ask is sent again as it was, and admitted.
+      assert {:retry_after_ms, ms} = played["paced"].answer
+      assert is_integer(ms) and ms > 0
+      assert played["paced_admitted"].body == played["paced"].body
+
+      answers = for {_name, %{answer: {:answer, answer}}} <- played, uniq: true, do: answer
+
+      assert Enum.sort(answers) ==
+               Enum.sort([
+                 :allowed,
+                 :denied,
+                 {:none, :invalid},
+                 {:none, :unattended},
+                 {:none, :unavailable}
+               ])
+
+      assert played["opened"].answer == :pending
+      assert played["wait_timed_out"].answer == :pending
+
+      for %{"action" => _, "summary" => _, "operation" => _, "digest" => digest} <- digests,
+          do: assert(digest =~ ~r/\A[0-9a-f]{64}\z/)
+    end
+
     test "every egress_pin case reads through Prima.PinnedTarget, pinned or refused by name" do
       cases = Map.new(@vectors["egress_pin_cases"], &{&1["name"], &1})
 
@@ -418,6 +481,18 @@ defmodule Prima.HostAPITest do
        do: name == "guest_error"
 
   defp refusal_of?(_callback, _name), do: false
+
+  # An ask's answer as the wire carries it (`Prima.HostAPI.answer_from_wire/1`).
+  defp answered(%{"pending" => true} = wire) when map_size(wire) == 1, do: :pending
+
+  defp answered(%{"retry_after_ms" => ms} = wire) when map_size(wire) == 1,
+    do: {:retry_after_ms, ms}
+
+  defp answered(%{"answer" => answer} = wire) when map_size(wire) == 1 do
+    {:ok, read} = HostAPI.answer_from_wire(answer)
+    assert HostAPI.answer_to_wire(read) == answer
+    {:answer, read}
+  end
 
   test "a field name is 1 to 256 bytes of UTF-8 without a control character" do
     for name <- ["K", "PROBE_KEY", "api key", "clé-ünïcode", String.duplicate("N", 256)] do

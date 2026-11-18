@@ -1792,9 +1792,18 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # The packages the worlds import, by package (`wit/<type>/deps/`).
+  defp imported_wits do
+    for path <- Path.wildcard(Path.join(@repo_root, "wit/*/deps/*/*.wit")), into: %{} do
+      wit = wit(SourceTree.read(path))
+      {wit.package, wit}
+    end
+  end
+
   test "component-guide's WIT blocks are the canonical worlds, a catalyst's imports a subset" do
     guide = SourceTree.read(Path.join(@repo_root, "component-guide.md"))
     canonical = canonical_wits()
+    imported = imported_wits()
     blocks = Regex.scan(~r/^```wit\n(.*?)^```/ms, guide, capture: :all_but_first)
 
     assert length(blocks) >= 3, "component-guide.md shows only #{length(blocks)} WIT blocks"
@@ -1803,7 +1812,7 @@ defmodule Cyfr.DocsDriftTest do
       shown = wit(block)
 
       canon =
-        Map.get(canonical, shown.package) ||
+        Map.get(canonical, shown.package) || Map.get(imported, shown.package) ||
           flunk("component-guide.md shows package #{shown.package}, which wit/ does not declare")
 
       for {name, functions} <- shown.interfaces do
@@ -1832,7 +1841,9 @@ defmodule Cyfr.DocsDriftTest do
 
     # Every canonical world is shown at least once.
     shown_packages = for [block] <- blocks, into: MapSet.new(), do: wit(block).package
-    assert MapSet.new(Map.keys(canonical)) == shown_packages
+
+    assert MapSet.new(Map.keys(canonical)) ==
+             MapSet.difference(shown_packages, MapSet.new(Map.keys(imported)))
   end
 
   test "component-guide names every function of the invoke interface and of each host interface heading" do

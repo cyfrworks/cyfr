@@ -461,7 +461,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
         Sanctum.Mount
-        Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
+        Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy
+        Sanctum.Questions Sanctum.Refusals
         Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
         Sanctum.TinctureAccess Sanctum.Vault Sanctum.VaultReader
       ),
@@ -504,6 +505,10 @@ defmodule Cyfr.Boundaries do
           "and the fill is asked for when it is not. The settings roster reads the " <>
           "mint rate's bounds there (`mint_per_hour_range/0`), the one definition its " <>
           "validator and the mint's own check share. " <>
+          "`Sanctum.Questions` decides a catalyst's ask and its wait for the host's side " <>
+          "of the call (`Opus.Host.Question`: `find/4`, `ask/4`, `wait/4`), which checks " <>
+          "the attempt is live and paces the asks, and hears the questions a write that " <>
+          "ended a run closed (`ended/3`, from `Opus.Record`). " <>
           "`Sanctum.Network` is `Opus.Host.Egress`'s one resolution of a guest's " <>
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
@@ -2062,8 +2067,10 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     # A removed catalyst's standing answers go with its last version
-    # (`Compendium.Cascade`).
-    "Sanctum.Questions" => [component_removed: 3],
+    # (`Compendium.Cascade`); a catalyst's ask is decided and waited on for
+    # the host's side of the call (`Opus.Host.Question`), and a run's end
+    # announces the questions it closed (`Opus.Record`).
+    "Sanctum.Questions" => [ask: 4, component_removed: 3, ended: 3, find: 4, wait: 4],
     "Sanctum.Session" => [cleanup: 0, destroy: 1, load_by_hash: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [
