@@ -39,6 +39,7 @@ defmodule Cyfr.ApplicationTest do
     Opus.Sweeper => 5_000,
     Opus.WorkerWatch => 5_000,
     Opus.Host.Egress.Pins => 5_000,
+    Opus.Brain.Cleanup => 5_000,
     Aqua.ScheduleNotes => 5_000,
     Aqua.ScheduleTurns => 5_000,
     Aqua.Crew => 5_000,
@@ -282,7 +283,8 @@ defmodule Cyfr.ApplicationTest do
                Opus.HostListener,
                Opus.Programs,
                Opus.Browser.Tree,
-               Opus.Brain.Tree
+               Opus.Brain.Tree,
+               Opus.Brain.Cleanup
              ]},
             {Aqua.Supervisor,
              [

@@ -25,7 +25,7 @@ defmodule Arca.Schemas.JobClaim do
   @primary_key {:id, :string, autogenerate: false}
 
   @kinds ~w(retention seed_release oauth_refresh worker_watch mcp_backend schedule_notes
-             crew_delivery aqua_nudge)
+             crew_delivery aqua_nudge brain_cleanup)
 
   @type t :: %__MODULE__{}
 

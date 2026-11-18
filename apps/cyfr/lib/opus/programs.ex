@@ -252,7 +252,10 @@ defmodule Opus.Programs do
   agent whose head binds the row (`Sanctum.Mount.agents_mounting/2`) is
   forgotten, so its next
   message starts a new session rather than resuming one the home no
-  longer holds. A store that cannot forget them turns an `:ok` into
+  longer holds; a session a program held there is owed its removal in the
+  same transaction (`Arca.ThreadStorage.forget_sessions/2`), and its
+  holder is closed once that commits (`Opus.Brain.forgotten/2`). A store
+  that cannot forget them turns an `:ok` into
   `{:error, {:unavailable, "Threads"}}`.
   """
   @spec home(String.t(), String.t(), :reset | :retire) :: :ok | {:error, term()}
@@ -267,9 +270,9 @@ defmodule Opus.Programs do
 
   defp forget_sessions(athanor_id, row_id) do
     with {:ok, agents} <- Sanctum.Mount.agents_mounting(athanor_id, row_id),
-         {:ok, _forgotten} <-
+         {:ok, forgotten} <-
            Arca.ThreadStorage.forget_sessions(Prima.Actor.in_athanor(athanor_id), agents) do
-      :ok
+      Opus.Brain.forgotten(athanor_id, forgotten)
     end
   end
 
