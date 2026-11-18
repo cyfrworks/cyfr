@@ -335,12 +335,13 @@ People talk in shared threads of a CYFR that is always on, each from their own a
 
 ## 10. Grants
 
-Consented work runs unattended under its grant; a person is asked only about what no grant covers, and an uncovered external or destructive proposal is approved once, never banked.
+Consented work runs unattended under its grant; a person is asked only about what no grant covers, or what a component itself asks about inside its grant, and an uncovered external or destructive proposal is approved once, never banked.
 
 - Component grants and standing approvals are the two kinds of grant, under one set of rules.
 - A preview is typed rows bound by a digest; narrowing is validated by its owner, and widening is interactive. *Not built yet:* a share's caps on the preview's credential row.
 - A grant says what a component may reach and use, never who may start it: a run carries the origin its admission path set for the record, and stands on the grant of the person it acts as, whether a screen, a key, a schedule, a webhook or a page in the assistant's browser started it.
 - **A standing approval is bounded.** It ends with its lifecycle or deadline and holds to its resource constraint, and an external or destructive action never takes a standing allow, but for the browser tool's actions, which follow the person's own browser setting: on, they run without a card; off, they are refused. An answer for one of the person's schedules is agent-wide, covers only the runs that schedule started and ends with it, and is part of the answer's identity, so it stands beside another schedule's and beside one for no schedule; an action that takes an answer for one thread only takes one for a schedule too.
+- A component may ask its person before an action inside its grant, in its developer's words. The answer may stand as a permission for that action, a destructive one included. A permission is no grant: it adds no reach, it satisfies no fresh confirmation, and it switches off the one human check before that action.
 - Every turn records the source classes it read (`Prima.Source`), and every send to an exit is held to the flows its grant declares, which `Prima.Flow` decides.
 - A standing grant never stands in for a fresh confirmation. *Not built yet:* declared reads of standing approvals.
 

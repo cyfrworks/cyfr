@@ -34,6 +34,7 @@ defmodule Sanctum.PairingTest do
     :pairing_revocation,
     :restore_reenable,
     :program_definition,
+    :question_always_any,
     :directory_tombstone,
     :platform_admin_marking
   ]

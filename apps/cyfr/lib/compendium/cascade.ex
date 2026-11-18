@@ -4,8 +4,9 @@
 defmodule Compendium.Cascade do
   @moduledoc """
   Revokes profiles and disables webhook and cron registrations (schedules
-  and feeds) when the last version of a component name is removed.
-  Consent history and vault entries remain. A registration whose removal
+  and feeds) when the last version of a component name is removed, and
+  deletes a catalyst's standing answers when the last catalyst of that
+  name is removed. Consent history and vault entries remain. A registration whose removal
   is refused is logged by its id and the reason, and the uninstall still
   completes. Called by registry deletion and pruning; the registry owns
   removal of the component's bytes and row.
@@ -25,6 +26,7 @@ defmodule Compendium.Cascade do
   @spec name_removed(Context.t(), map()) :: :ok
   def name_removed(%Context{} = ctx, comp) do
     publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
+    forget_answers(ctx, comp, publisher)
 
     unless Arca.ComponentStorage.has_remaining_versions?(
              Sanctum.Context.actor(ctx),
@@ -44,6 +46,31 @@ defmodule Compendium.Cascade do
 
     :ok
   end
+
+  # A catalyst's standing answers go with the last catalyst of its name,
+  # asked by type, so a reagent of the same name keeps none; the gate
+  # above, which asks without regard to type, is not this one.
+  defp forget_answers(ctx, %{component_type: "catalyst", name: name}, publisher) do
+    unless Arca.ComponentStorage.has_remaining_versions?(
+             Sanctum.Context.actor(ctx),
+             name,
+             publisher,
+             "catalyst"
+           ) do
+      case Sanctum.Questions.component_removed(ctx, publisher, name) do
+        {:ok, _count} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Compendium.Cascade] standing answers of catalyst:#{publisher}.#{name} " <>
+              "not deleted: #{inspect(reason)}"
+          )
+      end
+    end
+  end
+
+  defp forget_answers(_ctx, _comp, _publisher), do: :ok
 
   # Revoke profiles while retaining consent history and vault entries.
   defp revoke_profiles(ctx, name_ref) do

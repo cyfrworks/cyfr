@@ -60,6 +60,7 @@ defmodule Sanctum.Pairing do
   | `:pairing_revocation` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation |
   | `:program_definition` | a fresh confirmation |
+  | `:question_always_any` | a fresh confirmation |
   | `:directory_tombstone` | a fresh confirmation, the platform administrator's |
   | `:platform_admin_marking` | a fresh confirmation, the platform administrator's |
 
@@ -72,6 +73,10 @@ defmodule Sanctum.Pairing do
   row, and the confirmation is asked only then. `program_definition` is a
   program row's whole definition, decided by `Emissary.External.Provider`:
   adding one, every update that changes it, and its removal.
+  `question_always_any` is a component's action allowed always, for every
+  caller, decided by `Sanctum.Questions`: the widest answer a person can
+  give a component's question, on its card or set beforehand. Every other
+  answer needs the session.
 
   `sensitive?/1` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
@@ -108,6 +113,7 @@ defmodule Sanctum.Pairing do
     pairing_revocation: :fresh,
     restore_reenable: :fresh,
     program_definition: :fresh,
+    question_always_any: :fresh,
     directory_tombstone: :fresh,
     platform_admin_marking: :fresh
   }
@@ -124,6 +130,7 @@ defmodule Sanctum.Pairing do
           | :pairing_revocation
           | :restore_reenable
           | :program_definition
+          | :question_always_any
           | :directory_tombstone
           | :platform_admin_marking
 

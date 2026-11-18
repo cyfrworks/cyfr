@@ -181,6 +181,24 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note: "a pending confirmation expired unconsumed"
     },
+    [:cyfr, :sanctum, :question, :opened] => %{
+      consumers: [:bridge],
+      note:
+        "a component's question opened for its person; their clients hear a prompt of " <>
+          "kind question, its ref, the fact and the expiry, never the summary or the operation"
+    },
+    [:cyfr, :sanctum, :question, :answered] => %{
+      consumers: [:bridge],
+      note: "a component's question was answered by its person"
+    },
+    [:cyfr, :sanctum, :question, :expired] => %{
+      consumers: [:bridge],
+      note: "a component's question ended unanswered with its run's deadline"
+    },
+    [:cyfr, :sanctum, :question, :withdrawn] => %{
+      consumers: [:bridge],
+      note: "a component's question ended unanswered with its run, which ended another way"
+    },
     [:cyfr, :sanctum, :api_keys, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :webhooks, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :provisioning, :failed] => %{

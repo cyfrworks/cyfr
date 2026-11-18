@@ -75,6 +75,15 @@ defmodule Sanctum.Telemetry do
     expired: [:cyfr, :sanctum, :confirmation, :expired]
   }
 
+  # A component's question's life, one event per fact, from `opened` to
+  # how it stopped waiting (`Sanctum.Questions`).
+  @question_events %{
+    opened: [:cyfr, :sanctum, :question, :opened],
+    answered: [:cyfr, :sanctum, :question, :answered],
+    expired: [:cyfr, :sanctum, :question, :expired],
+    withdrawn: [:cyfr, :sanctum, :question, :withdrawn]
+  }
+
   @doc """
   Emit an authentication event.
 
@@ -321,6 +330,50 @@ defmodule Sanctum.Telemetry do
       ref: ref,
       operation: operation,
       opened_at: opened_at,
+      expires_at: expires_at
+    })
+  end
+
+  @typedoc "What happened to a component's question."
+  @type question_stage :: :opened | :answered | :expired | :withdrawn
+
+  @doc """
+  A component's question's announcement, once the write that moved it
+  committed (`Sanctum.Questions`): the question `ref` of `user_id` in
+  `athanor_id` was opened for its person to answer, answered by them,
+  expired with its run's deadline, or withdrawn when its run ended any
+  other way. Emits `[:cyfr, :sanctum, :question, stage]` with the
+  athanor, the person, the ref and `expires_at`, the run's deadline;
+  `opened` also carries `opened_at` and `label`, the component's name
+  and the action's title, which a person's attention lists. Never the
+  summary or the operation, which a client reads under its own session.
+  The host's bridge carries it to the person's own clients.
+  """
+  @spec question(question_stage(), String.t(), String.t(), map()) :: :ok
+  def question(:opened, athanor_id, user_id, %{
+        ref: ref,
+        expires_at: %DateTime{} = expires_at,
+        opened_at: %DateTime{} = opened_at,
+        label: label
+      })
+      when is_binary(athanor_id) and is_binary(user_id) and is_binary(ref) and is_binary(label) do
+    :telemetry.execute(@question_events.opened, %{count: 1}, %{
+      athanor_id: athanor_id,
+      user_id: user_id,
+      ref: ref,
+      expires_at: expires_at,
+      opened_at: opened_at,
+      label: label
+    })
+  end
+
+  def question(stage, athanor_id, user_id, %{ref: ref, expires_at: %DateTime{} = expires_at})
+      when stage in [:answered, :expired, :withdrawn] and is_binary(athanor_id) and
+             is_binary(user_id) and is_binary(ref) do
+    :telemetry.execute(Map.fetch!(@question_events, stage), %{count: 1}, %{
+      athanor_id: athanor_id,
+      user_id: user_id,
+      ref: ref,
       expires_at: expires_at
     })
   end
