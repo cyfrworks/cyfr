@@ -30,7 +30,8 @@ defmodule Aqua.Loop.Request do
   happened, and a call that never got its result carries a synthetic one
   saying so. The room excerpt is a transient block on this request's
   last `user` message; the turn's attachments are typed blocks on its
-  initiating message. A workspace thread's rows read as their writer
+  initiating message, and a later post's files are typed blocks on that
+  post's own message, where it stands. A workspace thread's rows read as their writer
   words them: an opening as the ask, attributed to the person who asked,
   then each daily-thread post it refers to as it reads now (`:refs`), then
   the files it carries; a pointer as one line naming its workspace thread
@@ -379,17 +380,21 @@ defmodule Aqua.Loop.Request do
   `:excerpt` (the room excerpt, a transient block), `:attachments` (typed
   blocks for the initiating message), `:task_message_id` (which message
   those blocks belong to; without it they land on the first user message,
-  which is only the right one in a transcript of one), `:refs` (the
-  daily-thread posts an opening refers to, by id, as they read now).
+  which is only the right one in a transcript of one), `:files` (typed
+  blocks by row id, for the later posts written into the turn: each set on
+  its own post's message, after its text, and nowhere when that post is
+  not carried), `:refs` (the daily-thread posts an opening refers to, by
+  id, as they read now).
   """
   @spec messages([Aqua.Tape.row()], %{String.t() => [map()]}, keyword()) :: [map()]
   def messages(rows, removed, opts \\ []) when is_list(rows) and is_map(removed) do
     opts = Keyword.put(opts, :removed, removed)
     items = apply_compaction(rows)
     blocks = List.wrap(Keyword.get(opts, :attachments)) ++ removed_note(items, removed)
+    files = Keyword.get(opts, :files, %{})
 
     items
-    |> Enum.reduce([], fn row, acc -> shape(row, acc, opts) end)
+    |> Enum.reduce([], fn row, acc -> row |> shape(acc, opts) |> with_files(row, files) end)
     |> Enum.reverse()
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
@@ -646,6 +651,14 @@ defmodule Aqua.Loop.Request do
 
   # Cards, notes in the server's voice and errors are not the model's.
   defp shape(%{}, acc, _opts), do: acc
+
+  # A later post's files on the message its row was shaped as, before any
+  # merge joins that message to its neighbour's.
+  defp with_files([%{role: "user", message_id: id} = said | rest], %{id: id}, files)
+       when is_map_key(files, id),
+       do: [%{said | blocks: said.blocks ++ Map.fetch!(files, id)} | rest]
+
+  defp with_files(acc, _row, _files), do: acc
 
   defp spoken(row, acc) do
     step = step_of(row)

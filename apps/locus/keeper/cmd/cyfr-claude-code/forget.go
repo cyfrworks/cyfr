@@ -7,12 +7,11 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
-	"syscall"
+
+	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
 
 // A native session's transcript, as Claude Code keeps it in the folder:
@@ -40,12 +39,12 @@ func configDir(home string) string {
 // be looked at may hold the transcript, and it takes nothing from what
 // the other inspections found.
 func transcripts(home, session string) (found []string, failed []error) {
-	if !isUUID(session) {
+	if !brainwire.IsUUID(session) {
 		return nil, nil
 	}
 	projects := filepath.Join(configDir(home), "projects")
 	entries, err := os.ReadDir(projects)
-	if err != nil && !absent(err) {
+	if err != nil && !brainwire.Absent(err) {
 		failed = append(failed, err)
 	}
 	names := []string{filepath.Join(configDir(home), "session-env", session)}
@@ -56,18 +55,12 @@ func transcripts(home, session string) (found []string, failed []error) {
 	for _, name := range names {
 		if _, err := os.Lstat(name); err == nil {
 			found = append(found, name)
-		} else if !absent(err) {
+		} else if !brainwire.Absent(err) {
 			failed = append(failed, err)
 		}
 	}
 	sort.Strings(found)
 	return found, failed
-}
-
-// absent is an inspection that found nothing under the name: it, or a
-// folder on its way, does not exist, or a step of it is no folder.
-func absent(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 // forget removes the transcript of `session` from the folder, and nothing
@@ -77,25 +70,25 @@ func absent(err error) bool {
 // folder or an entry that cannot be inspected or removed is `refused`,
 // with its reason.
 func (d *driver) forget(id, session string) error {
-	if !isUUID(session) {
-		return d.refuse(id, "That names no session of Claude Code's.")
+	if !brainwire.IsUUID(session) {
+		return d.c.Refuse(id, "That names no session of Claude Code's.")
 	}
-	if d.h != nil && !d.h.expected && (d.session == session || (d.starting != nil && d.starting.session == session)) {
-		return d.refuse(id, "That session runs now; it is closed before it is forgotten.")
+	if d.h != nil && !d.h.Expected && (d.session == session || (d.starting != nil && d.starting.session == session)) {
+		return d.c.Refuse(id, "That session runs now; it is closed before it is forgotten.")
 	}
 	found, failed := transcripts(d.home, session)
 	if len(failed) > 0 {
-		return d.refuse(id, "The folder could not be read to find the session's transcript, so it may still be there.")
+		return d.c.Refuse(id, "The folder could not be read to find the session's transcript, so it may still be there.")
 	}
 	for _, name := range found {
 		if err := os.RemoveAll(name); err != nil {
-			return d.refuse(id, "The session's transcript could not be removed from the folder.")
+			return d.c.Refuse(id, "The session's transcript could not be removed from the folder.")
 		}
 	}
 	if left, failed := transcripts(d.home, session); len(failed) > 0 || len(left) > 0 {
-		return d.refuse(id, "The session's transcript is still in the folder after its removal.")
+		return d.c.Refuse(id, "The session's transcript is still in the folder after its removal.")
 	}
-	return d.emit(newEvent("forgot").set("id", id).set("session", session))
+	return d.c.Emit(brainwire.NewEvent("forgot").Set("id", id).Set("session", session))
 }
 
 // heldPosts are the posts of `pending` whose lines the session's
@@ -107,7 +100,7 @@ func (d *driver) forget(id, session string) error {
 func heldPosts(home, session string, pending []string) []string {
 	want := map[string]string{}
 	for _, id := range pending {
-		want[postUUID(id)] = id
+		want[brainwire.PostUUID(id)] = id
 	}
 	found := map[string]bool{}
 	names, _ := transcripts(home, session)
@@ -123,7 +116,7 @@ func heldPosts(home, session string, pending []string) []string {
 	}
 	held := []string{}
 	for _, id := range pending {
-		if found[id] && len(held) < maxList {
+		if found[id] && len(held) < brainwire.MaxList {
 			held = append(held, id)
 		}
 	}
@@ -141,9 +134,9 @@ func readTranscript(path string, each func(transcriptEntry)) {
 		return
 	}
 	defer file.Close()
-	reader := newLineReader(file, maxHarnessLineBytes)
+	reader := brainwire.NewLineReader(file, brainwire.MaxHarnessLineBytes)
 	for {
-		line, err := reader.next()
+		line, err := reader.Next()
 		var entry transcriptEntry
 		if line != nil && json.Unmarshal(line, &entry) == nil {
 			each(entry)

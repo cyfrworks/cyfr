@@ -509,20 +509,27 @@ defmodule Aqua.Loop.Turn do
   # The initiating message's attachments as blocks the brain takes, each
   # stored under that message's own row: a delivered request's were copied
   # there from the request (`Aqua.Crew`).
-  defp attachments(ctx, %{message_id: message_id, thread_id: thread_id}, media_types)
-       when is_binary(message_id) do
+  defp attachments(ctx, %{message_id: message_id}, media_types) when is_binary(message_id) do
     case Tape.message(ctx, message_id) do
-      {:ok, row} ->
-        ctx
-        |> Aqua.Attachments.load(thread_id, Aqua.Attachments.attachments_of([row]))
-        |> Enum.map(&attachment_block(&1, media_types))
-
-      _ ->
-        []
+      {:ok, row} -> file_blocks(ctx, row, media_types)
+      _ -> []
     end
   end
 
   defp attachments(_ctx, _turn, _media_types), do: []
+
+  @doc """
+  A post's files as blocks a brain declaring `media_types` takes, read
+  from the post's own row: the turn's initiating post's, and each later
+  post written into the turn (`Aqua.Loop`). A file whose bytes are gone
+  is left out.
+  """
+  @spec file_blocks(Context.t(), Tape.row(), [String.t()]) :: [map()]
+  def file_blocks(%Context{} = ctx, row, media_types) do
+    ctx
+    |> Aqua.Attachments.load(row.thread_id, Aqua.Attachments.attachments_of([row]))
+    |> Enum.map(&attachment_block(&1, media_types))
+  end
 
   # A file goes inline, as the image or document block its media type
   # makes, only when the brain declares that type (its capabilities'
