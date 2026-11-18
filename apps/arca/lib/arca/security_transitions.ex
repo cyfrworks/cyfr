@@ -158,6 +158,8 @@ defmodule Arca.SecurityTransitions do
     PendingConfirmation,
     PersonIdentity,
     Profile,
+    Question,
+    QuestionAnswer,
     ServerMeta,
     Session,
     Share,
@@ -714,13 +716,17 @@ defmodule Arca.SecurityTransitions do
   to `needs_consent`, every active vault entry to `needs_reauth` and every
   active share to `revoked` (`Arca.StatusTransitions.restored/1`),
   answering the shares in `revoked_share_ids`; deletes every standing
-  allow (`tool_grants` rows of effect `allow`; denies stay);
+  allow (`tool_grants` rows of effect `allow`, and `question_answers` rows
+  of effect `allow`, answered in `dropped_question_answer_ids`; denies
+  stay);
   drops every unconsumed once binding by consuming it under the restore
   (`consumed_by_root` `restore:<restore id>`); expires every pending
   approval; and settles every open run terminal under
   `Prima.ExecutionState` and `Prima.TurnState`: an execution `failed`,
   its attempt `lapsed` with outcome `uncertain` and the attempt's pending
-  write intents `uncertain`, a turn `uncertain` with its open steps. Rows
+  write intents `uncertain`, a turn `uncertain` with its open steps, and
+  every open component question `ended` (`Arca.Questions.close_all!/0`),
+  announced to no one, since every session is gone. Rows
   already suspended, blocked, revoked or tombstoned keep their state. It
   then deletes the marker it read, so a retry after commit finds no
   marker and moves nothing, and a crash before commit leaves the marker
@@ -852,6 +858,8 @@ defmodule Arca.SecurityTransitions do
     {_count, grant_ids} =
       Arca.Repo.delete_all(from(g in ToolGrant, where: g.effect == "allow", select: g.id))
 
+    question_answer_ids = Arca.Questions.delete_all_allows!()
+
     {bindings, _} =
       Arca.Repo.update_all(
         from(r in ConsentVaultRef,
@@ -898,6 +906,7 @@ defmodule Arca.SecurityTransitions do
       deleted_confirmation_refs: confirmation_refs,
       needs_consent_profile_ids: profile_ids,
       dropped_grant_ids: Enum.sort(grant_ids || []),
+      dropped_question_answer_ids: question_answer_ids,
       dropped_once_bindings: bindings,
       expired_approval_ids: approval_ids,
       needs_reauth_vault_entry_ids: vault_ids,
@@ -931,8 +940,9 @@ defmodule Arca.SecurityTransitions do
   # execution `failed`, its open attempt `lapsed` with outcome `uncertain`
   # and that attempt's pending write intents `uncertain` (what the sweep's
   # lapse writes, `Arca.ExecutionAttempts.lapse!/3`), and an open turn
-  # `uncertain` with each step still proposed or dispatched. The
-  # generation raise keeps any successor from taking up the lapsed row.
+  # `uncertain` with each step still proposed or dispatched, and every
+  # open question `ended`. The generation raise keeps any successor from
+  # taking up the lapsed row.
   # arca:unscoped-ok a declared restore settles every open run of the server.
   defp settle_runs(now) do
     execution_from = Prima.ExecutionState.from(:execution, "failed")
@@ -974,6 +984,8 @@ defmodule Arca.SecurityTransitions do
       set: [dispatch_state: "uncertain", outcome: "uncertain", ended_at: now]
     )
 
+    _closed = Arca.Questions.close_all!()
+
     %{
       failed_execution_ids: execution_ids,
       lapsed_attempts: attempt_ids,
@@ -1000,6 +1012,8 @@ defmodule Arca.SecurityTransitions do
       PendingConfirmation,
       from(p in Profile, where: p.status == ^profile_from),
       from(g in ToolGrant, where: g.effect == "allow"),
+      from(a in QuestionAnswer, where: a.effect == "allow"),
+      from(q in Question, where: q.state == "open"),
       from(r in ConsentVaultRef, where: r.lifetime_kind == "once" and is_nil(r.consumed_by_root)),
       from(a in Approval, where: a.status == "pending"),
       from(v in VaultEntry, where: v.status == ^entry_from),

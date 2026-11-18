@@ -601,9 +601,9 @@ defmodule Arca.ExecutionTest do
 
       # A failure names the stamp it retires under; one that names none
       # fails nothing.
-      assert {0, nil} = Execution.mark_failed_if_running(id, failure)
+      assert {0, nil, []} = Execution.mark_failed_if_running(id, failure)
 
-      {count, _} = Execution.mark_failed_if_running(id, failure, Arca.Test.Actor.stored())
+      {count, _, _} = Execution.mark_failed_if_running(id, failure, Arca.Test.Actor.stored())
 
       assert count == 1
 
@@ -647,7 +647,7 @@ defmodule Arca.ExecutionTest do
         )
 
       # Try to mark as failed — should be a no-op
-      {count, _} =
+      {count, _, _} =
         Execution.mark_failed_if_running(
           id,
           %{
@@ -716,7 +716,7 @@ defmodule Arca.ExecutionTest do
       assert {:ok, ^renewed_until} =
                Arca.ExecutionAttempts.renew(live, renewed_until, Arca.Test.Actor.stored())
 
-      assert {0, _} =
+      assert {0, _, _} =
                Execution.mark_failed_if_running(
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
@@ -792,7 +792,7 @@ defmodule Arca.ExecutionTest do
       {id, attempt} = running!(lapsed)
       [observed] = Enum.filter(Execution.list_stale_running(DateTime.utc_now()), &(&1.id == id))
 
-      assert {1, _} =
+      assert {1, _, _} =
                Execution.mark_failed_if_running(
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},

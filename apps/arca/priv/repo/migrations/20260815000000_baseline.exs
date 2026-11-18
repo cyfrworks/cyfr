@@ -60,6 +60,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     fenced_publication()
     agents()
     executions()
+    questions()
     logs()
     retention()
     # Before the vault and consent: a binding of a login need names a
@@ -1342,6 +1343,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # the admission transaction and only ever grown, before the bytes a
       # read or a child carries reach the run.
       add :sources, :text, null: false, default: "[]"
+      # Who started the root (`Prima.Question.Caller`'s text), set on a
+      # root and null on a child, which reads its root's. A root with none
+      # reads as `unknown`.
+      add :caller, :string
     end
 
     checked(sqlite?, :executions, [execution_status, execution_error_class])
@@ -1609,6 +1614,99 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:budget_charges, [:reservation_id, :id])
     create index(:budget_charges, [:athanor_id, :attempt])
     create index(:budget_charges, [:athanor_id, :holder_execution_id])
+  end
+
+  # ==========================================================================
+  # Component questions
+  # ==========================================================================
+
+  # A run's ask before an action its component declares (`Arca.Questions`,
+  # read by `Sanctum.Questions` alone): one row per admitted ask, keyed by
+  # the attempt and the ask's number in the run, written with its first
+  # state and ended by the write that ends its run. Its key to the run is
+  # the attempts' own, so a run's questions go with it. A standing answer
+  # is a person's answer that stands for one action of one component,
+  # named by its publisher and name, for one caller's text or `any`.
+  defp questions do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    question_state =
+      known("questions_state_known", "state", ~w(open allowed denied none ended))
+
+    answer_effect = known("question_answers_effect_known", "effect", ~w(allow deny))
+
+    create table(:questions, primary_key: false) do
+      add :ref, :string, primary_key: true, null: false
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+
+      add :execution_id,
+          references(:executions,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :attempt_id, :string, null: false
+      add :root_execution_id, :string, null: false
+      add :ask_no, :integer, null: false
+      # SHA-256 of the request before masking, lowercase hexadecimal: a
+      # retry under the same key with other content is refused by it.
+      add :request_digest, :string, null: false
+      add :component_ref, :string, null: false
+      add :release_digest, :string, null: false
+      add :action, :string, null: false
+      add :title, :string, null: false
+      # The component's words, masked of the run's credentials.
+      add :summary, :text, null: false
+      add :operation, :text, null: false
+      add :masked, :boolean, null: false
+      add :caller, :string, null: false
+      add :deadline, :utc_datetime_usec, null: false
+      add :state, :string, null: false, check: if(sqlite?, do: question_state)
+      add :none_reason, :string
+      # Who decided it: a person's id, or the standing answer that did, by
+      # its id as text with no foreign key, so removing it keeps the record.
+      add :decided_by, :string
+      add :standing_answer_id, :string
+      add :decided_at, :utc_datetime_usec
+    end
+
+    create unique_index(:questions, [:athanor_id, :attempt_id, :ask_no])
+    create index(:questions, [:athanor_id, :user_id, :state])
+    create index(:questions, [:execution_id])
+
+    # The identity is the athanor, person, component, action and caller;
+    # `caller` is `any` for every caller, never null, so the key holds on
+    # both adapters. Named, since Ecto's default name passes Postgres's 63
+    # bytes; `Arca.Questions` declares the constraint under both spellings.
+    create table(:question_answers, primary_key: false) do
+      add :id, :string, primary_key: true, null: false
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+      add :publisher, :string, null: false
+      add :name, :string, null: false
+      add :action, :string, null: false
+      add :declaration_digest, :string, null: false
+      add :caller, :string, null: false
+      add :effect, :string, null: false, check: if(sqlite?, do: answer_effect)
+      # Null for an answer that stands always.
+      add :until, :utc_datetime_usec
+      add :answered_at, :utc_datetime_usec, null: false
+      add :question_ref, :string
+    end
+
+    checked(sqlite?, :questions, [question_state])
+    checked(sqlite?, :question_answers, [answer_effect])
+
+    create unique_index(
+             :question_answers,
+             [:athanor_id, :user_id, :publisher, :name, :action, :caller],
+             name: :question_answers_identity_index
+           )
+
+    create index(:question_answers, [:athanor_id, :publisher, :name])
   end
 
   # ==========================================================================

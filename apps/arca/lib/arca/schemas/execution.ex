@@ -25,6 +25,9 @@ defmodule Arca.Schemas.Execution do
   - `host_policy` - JSON-encoded host policy snapshot
   - `call_id` - The admission the run was started under
     (`Arca.DecisionLog`), nil when none recorded one
+  - `caller` - Who started the root, as `Prima.Question.Caller`'s text;
+    nil on a child, which reads its root's, and a root with none reads as
+    `unknown`
   """
 
   use Ecto.Schema
@@ -121,6 +124,8 @@ defmodule Arca.Schemas.Execution do
     # The run's source ledger (`Prima.Source`, canonical JSON): seeded at
     # admission and only ever grown.
     field :sources, :string, default: "[]"
+    # Who started the root (`Prima.Question.Caller`'s text); nil on a child.
+    field :caller, :string
   end
 
   # Every column a start writes — the write path's half of the row shape,
@@ -153,7 +158,8 @@ defmodule Arca.Schemas.Execution do
     :event_seq,
     :call_id,
     :origin,
-    :sources
+    :sources,
+    :caller
   ]
 
   @doc "The columns `start_changeset/1` casts, for the write path to pin against."
@@ -180,6 +186,18 @@ defmodule Arca.Schemas.Execution do
     |> validate_inclusion(:origin, Prima.Origin.spellings())
     |> validate_component_type()
     |> validate_child_key()
+    |> validate_caller()
+  end
+
+  # A caller is stored as its text, and only a text that names one: `any`
+  # is a standing answer's, never a run's.
+  defp validate_caller(changeset) do
+    validate_change(changeset, :caller, fn :caller, text ->
+      case Prima.Question.Caller.decode(text) do
+        {:ok, _caller} -> []
+        {:error, _} -> [caller: "names no caller"]
+      end
+    end)
   end
 
   # An origin arrives as a `Prima.Origin` atom or its wire spelling and is

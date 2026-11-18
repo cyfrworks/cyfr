@@ -361,7 +361,7 @@ defmodule Arca.TurnTransitionContractTest do
       {turn, root} = started!(actor, thread)
       lease = ExecutionAttempts.get(actor, root.attempt.attempt).lease_until
 
-      assert {1, _} =
+      assert {1, _, _} =
                Arca.Execution.mark_failed_if_running(
                  root.execution.id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "lapsed"},
@@ -756,7 +756,7 @@ defmodule Arca.TurnTransitionContractTest do
       fail = %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "gone"}
       lease = ExecutionAttempts.get(actor, a.attempt.attempt).lease_until
 
-      assert {1, _} =
+      assert {1, _, _} =
                Arca.Execution.mark_failed_if_running(
                  a.execution.id,
                  fail,
@@ -764,7 +764,7 @@ defmodule Arca.TurnTransitionContractTest do
                    [attempt: a.attempt.attempt, lease_until: lease, event: "execution.completed"]
                )
 
-      assert {1, _} =
+      assert {1, _, _} =
                Arca.Execution.mark_failed_if_running(
                  b.execution.id,
                  fail,

@@ -339,7 +339,7 @@ defmodule Cyfr.Boundaries do
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
     Arca.PersonIdentities Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates
-    Arca.PendingConfirmations Arca.InstallationClaims
+    Arca.PendingConfirmations Arca.InstallationClaims Arca.Questions
     Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
