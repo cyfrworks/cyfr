@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/locus/keeper/internal/brainwire"
 	"golang.org/x/sys/unix"
 )
 
@@ -81,23 +82,24 @@ func startDriverIn(t *testing.T, home string) *wireSession {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	s := &wireSession{t: t, in: inW, events: make(chan map[string]any, 1024), done: make(chan int, 1), stderr: &lockedBuffer{}, home: home}
-	d := newDriver([]string{os.Args[0]}, outW, s.stderr, home)
+	c := brainwire.NewConn(driverName, outW, s.stderr)
+	d := newDriver([]string{os.Args[0]}, c, home)
 	stop := make(chan os.Signal)
 	go func() {
-		status := d.serve(inR, stop)
+		status := brainwire.Serve(c, d, inR, stop)
 		_ = outW.Close()
 		s.done <- status
 	}()
 	go func() {
 		defer close(s.events)
 		scanner := bufio.NewScanner(outR)
-		scanner.Buffer(make([]byte, 64<<10), 2*maxLineBytes)
+		scanner.Buffer(make([]byte, 64<<10), 2*brainwire.MaxLineBytes)
 		for scanner.Scan() {
 			line := append([]byte(nil), scanner.Bytes()...)
 			s.rawMu.Lock()
 			s.raw = append(s.raw, string(line))
 			s.rawMu.Unlock()
-			if _, _, err := readLine(line, events); err != nil {
+			if _, _, err := brainwire.ReadLine(line, brainwire.Events); err != nil {
 				t.Errorf("the driver wrote a line the wire does not read (%v): %.200s", err, line)
 				continue
 			}
@@ -116,7 +118,7 @@ func (s *wireSession) send(command map[string]any) {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	if _, _, err := readLine(line, commands); err != nil {
+	if _, _, err := brainwire.ReadLine(line, brainwire.Commands); err != nil {
 		s.t.Fatalf("a test command the wire does not read (%v): %s", err, line)
 	}
 	if _, err := s.in.Write(append(line, '\n')); err != nil {
@@ -191,7 +193,7 @@ func started(s *wireSession, config map[string]any) string {
 	s.t.Helper()
 	s.send(map[string]any{"t": "start", "gen": 3, "config": config, "system": "be brief"})
 	started := s.expect("started")
-	if started["fresh"] != true || len(started["held"].([]any)) != 0 || !isUUID(started["session"].(string)) {
+	if started["fresh"] != true || len(started["held"].([]any)) != 0 || !brainwire.IsUUID(started["session"].(string)) {
 		s.t.Fatalf("a fresh start answers a new session holding nothing: %v", started)
 	}
 	return started["session"].(string)
@@ -460,13 +462,13 @@ func TestTextPastOneLineIsCutToFit(t *testing.T) {
 	for _, e := range s.until("idle") {
 		if e["t"] == "said" {
 			text := e["text"].(string)
-			if !strings.HasSuffix(text, "…[CYFR cut this text to fit one line of the wire.]") || len(text) >= maxLineBytes {
+			if !strings.HasSuffix(text, "…[CYFR cut this text to fit one line of the wire.]") || len(text) >= brainwire.MaxLineBytes {
 				t.Fatalf("a message past one line is cut with a note: %d bytes", len(text))
 			}
 		}
 	}
 	for _, line := range strings.Split(s.output(), "\n") {
-		if len(line) > maxLineBytes {
+		if len(line) > brainwire.MaxLineBytes {
 			t.Fatalf("no line is past the wire's bound: %d", len(line))
 		}
 	}
@@ -653,7 +655,7 @@ func TestAnUnreadableProjectLeavesTheHeldPostsAReadableTranscriptHolds(t *testin
 	home := t.TempDir()
 	projects := filepath.Join(home, ".claude", "projects")
 	session := "5b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
-	line, _ := json.Marshal(map[string]any{"type": "user", "uuid": postUUID("stp_post_1")})
+	line, _ := json.Marshal(map[string]any{"type": "user", "uuid": brainwire.PostUUID("stp_post_1")})
 	if err := os.MkdirAll(filepath.Join(projects, "-home-a"), 0o700); err != nil {
 		t.Fatal(err)
 	}

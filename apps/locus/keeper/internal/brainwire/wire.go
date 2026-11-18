@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-//go:build linux
-
-package main
+// Package brainwire is the brain wire, version 1, a driver's side, for
+// every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex):
+// tests/fixtures/brain_wire.json defines it (its "comment") and binds this
+// package and the holder (Opus.Brain.Wire) to the same lines. Commands come
+// from the holder on standard input, events go to it on standard output,
+// one JSON object per line, each read strictly. Beside the wire it holds
+// what every driver does the same way: a line reader with its bound, the
+// harness's process, the loop that serves the wire (serve.go), and the
+// terminal on which a driver runs its harness unchanged.
+package brainwire
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,25 +24,19 @@ import (
 	"unicode/utf8"
 )
 
-// The brain wire, version 1, the driver's side: tests/fixtures/brain_wire.json
-// defines it (its "comment") and binds this file and the holder
-// (Opus.Brain.Wire) to the same lines. Commands come from the holder on
-// standard input, events go to it on standard output, one JSON object per
-// line, each read strictly.
 const (
-	wireVersion  = 1
-	maxLineBytes = 1 << 20
-	maxIDBytes   = 256
-	maxList      = 1000
-	driverName   = "cyfr-claude-code"
-	// uuidPrefix starts what a post's line uuid is derived from.
+	Version      = 1
+	MaxLineBytes = 1 << 20
+	MaxIDBytes   = 256
+	MaxList      = 1000
+	// uuidPrefix starts what a post's uuid is derived from.
 	uuidPrefix = "cyfr-brain-post\x00"
 )
 
 var (
-	errUnreadable = errors.New("unreadable")
-	errUnknown    = errors.New("unknown")
-	errTooLarge   = errors.New("too_large")
+	ErrUnreadable = errors.New("unreadable")
+	ErrUnknown    = errors.New("unknown")
+	ErrTooLarge   = errors.New("too_large")
 )
 
 type fieldType int
@@ -59,9 +61,9 @@ const (
 	tStop
 )
 
-// spec is one message: the members it always carries, those it may, and
+// Spec is one message: the members it always carries, those it may, and
 // the type of each.
-type spec struct {
+type Spec struct {
 	fields   []string
 	optional []string
 	types    map[string]fieldType
@@ -74,7 +76,8 @@ var configTypes = map[string]fieldType{
 	"harness_tools":   tStrings,
 }
 
-var countNames = []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
+// CountNames are the four counts of a model's usage, in the wire's order.
+var CountNames = []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
 var accountings = []string{"complete", "partial", "unavailable"}
 var stops = []string{"end_turn", "limit", "error"}
 var phases = []string{"start", "end"}
@@ -85,9 +88,10 @@ var mediaTypes = map[string][]string{
 }
 var nativeEvents = []string{"text", "said", "own", "ask", "usage", "idle", "error"}
 
-var commands = map[string]spec{
-	"start": {[]string{"t", "gen", "config"}, []string{"session", "system", "pending"},
-		map[string]fieldType{"gen": tCount, "config": tConfig, "session": tID, "system": tString, "pending": tIDs}},
+// Commands are the messages the holder writes.
+var Commands = map[string]Spec{
+	"start": {[]string{"t", "gen", "config"}, []string{"session", "system", "pending", "tools"},
+		map[string]fieldType{"gen": tCount, "config": tConfig, "session": tID, "system": tString, "pending": tIDs, "tools": tTools}},
 	"work": {[]string{"t", "id", "work", "tools"}, nil,
 		map[string]fieldType{"id": tID, "work": tID, "tools": tTools}},
 	"post": {[]string{"t", "id", "work", "content"}, []string{"context"},
@@ -98,7 +102,8 @@ var commands = map[string]spec{
 	"forget": {[]string{"t", "id", "session"}, nil, map[string]fieldType{"id": tID, "session": tID}},
 }
 
-var events = map[string]spec{
+// Events are the messages a driver writes.
+var Events = map[string]Spec{
 	"hello": {[]string{"t", "v", "driver", "boot"}, nil,
 		map[string]fieldType{"v": tCount, "driver": tID, "boot": tID}},
 	"started": {[]string{"t", "session", "fresh", "held"}, nil,
@@ -125,50 +130,57 @@ var events = map[string]spec{
 	"forgot": {[]string{"t", "id", "session"}, nil, map[string]fieldType{"id": tID, "session": tID}},
 }
 
-// readLine reads one line as a message of `messages`: its members raw,
+// ReadLine reads one line as a message of `messages`: its members raw,
 // once it holds exactly its message's members, each of its type.
-func readLine(line []byte, messages map[string]spec) (string, map[string]json.RawMessage, error) {
-	if len(line) > maxLineBytes {
-		return "", nil, errTooLarge
+func ReadLine(line []byte, messages map[string]Spec) (string, map[string]json.RawMessage, error) {
+	if len(line) > MaxLineBytes {
+		return "", nil, ErrTooLarge
 	}
 	if !utf8.Valid(line) {
-		return "", nil, errUnreadable
+		return "", nil, ErrUnreadable
 	}
 	var members map[string]json.RawMessage
-	if err := strictUnmarshal(line, &members); err != nil || members == nil {
-		return "", nil, errUnreadable
+	if err := StrictUnmarshal(line, &members); err != nil || members == nil {
+		return "", nil, ErrUnreadable
 	}
 	var t string
 	if raw, ok := members["t"]; !ok || json.Unmarshal(raw, &t) != nil {
-		return "", nil, errUnreadable
+		return "", nil, ErrUnreadable
 	}
 	s, ok := messages[t]
 	if !ok {
-		return t, nil, errUnknown
+		return t, nil, ErrUnknown
 	}
 	if !messageOK(t, members, s) {
-		return t, nil, errUnreadable
+		return t, nil, ErrUnreadable
 	}
 	return t, members, nil
 }
 
-// strictUnmarshal decodes one JSON value and nothing after it: the line
+// StrictUnmarshal decodes one JSON value and nothing after it: the line
 // must end, white space apart, where the value does. Whatever follows it,
 // a stray `]` or `}` that does not read as a value included, refuses the
 // line.
-func strictUnmarshal(data []byte, v any) error {
+func StrictUnmarshal(data []byte, v any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(v); err != nil {
 		return err
 	}
 	var rest json.RawMessage
 	if err := decoder.Decode(&rest); err != io.EOF {
-		return errUnreadable
+		return ErrUnreadable
 	}
 	return nil
 }
 
-func messageOK(t string, members map[string]json.RawMessage, s spec) bool {
+// Str is a member a read message holds as a string, or "".
+func Str(members map[string]json.RawMessage, name string) string {
+	var s string
+	_ = json.Unmarshal(members[name], &s)
+	return s
+}
+
+func messageOK(t string, members map[string]json.RawMessage, s Spec) bool {
 	for _, field := range s.fields {
 		if _, ok := members[field]; !ok {
 			return false
@@ -187,7 +199,7 @@ func messageOK(t string, members map[string]json.RawMessage, s spec) bool {
 		_, result := members["result"]
 		_, total := members["total"]
 		_, models := members["models"]
-		return result != total && models != oneOf(members["accounting"], []string{"unavailable"})
+		return result != total && models != OneOf(members["accounting"], []string{"unavailable"})
 	}
 	return true
 }
@@ -196,12 +208,12 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 	switch ft {
 	case tID:
 		var s string
-		return json.Unmarshal(raw, &s) == nil && isID(s) && isString(raw)
+		return json.Unmarshal(raw, &s) == nil && IsID(s) && isString(raw)
 	case tString:
 		var s string
 		return isString(raw) && json.Unmarshal(raw, &s) == nil
 	case tCount:
-		return isCount(raw)
+		return IsCount(raw)
 	case tBoolean:
 		var b bool
 		return (string(raw) == "true" || string(raw) == "false") && json.Unmarshal(raw, &b) == nil
@@ -213,7 +225,7 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 	case tStrings:
 		return listOf(raw, func(r json.RawMessage) bool { return ofType(tString, r) })
 	case tContent:
-		return listOf(raw, blockOK)
+		return listOf(raw, BlockOK)
 	case tTools:
 		return listOf(raw, toolOK)
 	case tModels:
@@ -234,34 +246,36 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return true
 	case tCounts:
 		var m map[string]json.RawMessage
-		if json.Unmarshal(raw, &m) != nil || len(m) != len(countNames) {
+		if json.Unmarshal(raw, &m) != nil || len(m) != len(CountNames) {
 			return false
 		}
-		for _, name := range countNames {
+		for _, name := range CountNames {
 			value, ok := m[name]
-			if !ok || !isCount(value) {
+			if !ok || !IsCount(value) {
 				return false
 			}
 		}
 		return true
 	case tPhase:
-		return oneOf(raw, phases)
+		return OneOf(raw, phases)
 	case tErrorType:
-		return oneOf(raw, errorTypes)
+		return OneOf(raw, errorTypes)
 	case tAccounting:
-		return oneOf(raw, accountings)
+		return OneOf(raw, accountings)
 	case tStop:
-		return oneOf(raw, stops)
+		return OneOf(raw, stops)
 	}
 	return false
 }
 
-func isID(s string) bool { return s != "" && len(s) <= maxIDBytes }
+// IsID is an id the wire takes: a non-empty string of at most
+// MaxIDBytes bytes.
+func IsID(s string) bool { return s != "" && len(s) <= MaxIDBytes }
 
 func isString(raw json.RawMessage) bool { return len(raw) > 0 && raw[0] == '"' }
 
-// isCount is a whole number from 0, written as JSON writes one.
-func isCount(raw json.RawMessage) bool {
+// IsCount is a whole number from 0, written as JSON writes one.
+func IsCount(raw json.RawMessage) bool {
 	if len(raw) == 0 || len(raw) > 20 {
 		return false
 	}
@@ -274,7 +288,8 @@ func isCount(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &n) == nil
 }
 
-func oneOf(raw json.RawMessage, allowed []string) bool {
+// OneOf is a JSON string that is one of `allowed`.
+func OneOf(raw json.RawMessage, allowed []string) bool {
 	var s string
 	if !isString(raw) || json.Unmarshal(raw, &s) != nil {
 		return false
@@ -292,7 +307,7 @@ func listOf(raw json.RawMessage, entryOK func(json.RawMessage) bool) bool {
 		return false
 	}
 	var entries []json.RawMessage
-	if json.Unmarshal(raw, &entries) != nil || len(entries) > maxList {
+	if json.Unmarshal(raw, &entries) != nil || len(entries) > MaxList {
 		return false
 	}
 	for _, entry := range entries {
@@ -316,9 +331,11 @@ func objectOf(raw json.RawMessage, keys ...string) (map[string]json.RawMessage, 
 	return m, true
 }
 
-func blockOK(raw json.RawMessage) bool {
+// BlockOK is one content block the wire takes: text, or an image or a
+// document of a media type it names.
+func BlockOK(raw json.RawMessage) bool {
 	if m, ok := objectOf(raw, "type", "text"); ok {
-		return oneOf(m["type"], []string{"text"}) && ofType(tString, m["text"])
+		return OneOf(m["type"], []string{"text"}) && ofType(tString, m["text"])
 	}
 	m, ok := objectOf(raw, "type", "media_type", "data")
 	if !ok {
@@ -329,7 +346,7 @@ func blockOK(raw json.RawMessage) bool {
 		return false
 	}
 	allowed, known := mediaTypes[kind]
-	return known && oneOf(m["media_type"], allowed) && ofType(tString, m["data"])
+	return known && OneOf(m["media_type"], allowed) && ofType(tString, m["data"])
 }
 
 func toolOK(raw json.RawMessage) bool {
@@ -352,9 +369,39 @@ func modelCountsOK(raw json.RawMessage) bool {
 	return ok && ofType(tID, m["model"]) && ofType(tCounts, m["counts"])
 }
 
-// event is one event as the driver writes it: its members in order, `t`
+// Block is one content block of a read command.
+type Block struct {
+	Type      string `json:"type"`
+	Text      string `json:"text"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
+// Tool is one of CYFR's tools a read command names.
+type Tool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// Config is a start's configuration: absent members are the harness's
+// defaults.
+type Config struct {
+	Model          string    `json:"model"`
+	Effort         string    `json:"effort"`
+	PermissionMode string    `json:"permission_mode"`
+	HarnessTools   *[]string `json:"harness_tools"`
+}
+
+// ModelCounts are one model's counts in a `usage` event.
+type ModelCounts struct {
+	Model  string            `json:"model"`
+	Counts map[string]uint64 `json:"counts"`
+}
+
+// Event is one event as a driver writes it: its members in order, `t`
 // first.
-type event struct {
+type Event struct {
 	members []member
 }
 
@@ -363,22 +410,24 @@ type member struct {
 	value any
 }
 
-func newEvent(t string) *event { return &event{members: []member{{"t", t}}} }
+// NewEvent is an event of type t with no other member yet.
+func NewEvent(t string) *Event { return &Event{members: []member{{"t", t}}} }
 
-func (e *event) set(name string, value any) *event {
+// Set sets a member.
+func (e *Event) Set(name string, value any) *Event {
 	e.members = append(e.members, member{name, value})
 	return e
 }
 
-// setOptional sets an optional member when it has a value.
-func (e *event) setOptional(name, value string) *event {
+// SetOptional sets an optional member when it has a value.
+func (e *Event) SetOptional(name, value string) *Event {
 	if value != "" {
-		e.set(name, value)
+		e.Set(name, value)
 	}
 	return e
 }
 
-func (e *event) MarshalJSON() ([]byte, error) {
+func (e *Event) MarshalJSON() ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteByte('{')
 	for i, m := range e.members {
@@ -386,7 +435,7 @@ func (e *event) MarshalJSON() ([]byte, error) {
 			b.WriteByte(',')
 		}
 		name, _ := json.Marshal(m.name)
-		value, err := marshal(m.value)
+		value, err := Marshal(m.value)
 		if err != nil {
 			return nil, err
 		}
@@ -398,9 +447,9 @@ func (e *event) MarshalJSON() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// marshal writes JSON as the wire reads it: without HTML escaping, so a
+// Marshal writes JSON as the wire reads it: without HTML escaping, so a
 // line's text is the text.
-func marshal(v any) ([]byte, error) {
+func Marshal(v any) ([]byte, error) {
 	var b bytes.Buffer
 	encoder := json.NewEncoder(&b)
 	encoder.SetEscapeHTML(false)
@@ -410,32 +459,54 @@ func marshal(v any) ([]byte, error) {
 	return bytes.TrimRight(b.Bytes(), "\n"), nil
 }
 
-// encodeEvent is the line an event is written as, once it reads as an
+// EncodeEvent is the line an event is written as, once it reads as an
 // event of the wire.
-func encodeEvent(e *event) ([]byte, error) {
-	line, err := marshal(e)
+func EncodeEvent(e *Event) ([]byte, error) {
+	line, err := Marshal(e)
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := readLine(line, events); err != nil {
+	if _, _, err := ReadLine(line, Events); err != nil {
 		return nil, fmt.Errorf("an event the wire does not read: %w", err)
 	}
 	return line, nil
 }
 
-// postUUID is the uuid a post's line to the harness carries, derived from
-// the post's id (the vector file's `uuid`).
-func postUUID(id string) string {
+// PostUUID is the uuid a post's input to the harness carries, derived
+// from the post's id (the vector file's `uuid`).
+func PostUUID(id string) string {
 	sum := sha256.Sum256([]byte(uuidPrefix + id))
-	b := sum[:16]
+	return uuidForm(sum[:16])
+}
+
+// NewUUID is a random uuid, version 4.
+func NewUUID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return uuidForm(b)
+}
+
+func uuidForm(b []byte) string {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(b)
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
 
-// isUUID is a uuid in Claude Code's session id form, lowercase.
-func isUUID(s string) bool {
+// RandomHex is n random bytes in hex: a driver process's boot.
+func RandomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
+// IsUUID is a uuid in lowercase 8-4-4-4-12 form, as both harnesses name
+// their sessions.
+func IsUUID(s string) bool {
 	if len(s) != 36 {
 		return false
 	}
