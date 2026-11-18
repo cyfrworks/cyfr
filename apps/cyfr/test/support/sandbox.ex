@@ -587,6 +587,11 @@ defmodule Cyfr.Test.Sandbox do
   # kills the supervisor when the holder dies without having said it gave
   # it back, a kill included, which runs no `after`. The supervisor's tree
   # then starts a fresh one.
+  #
+  # A watcher that acts late may kill a supervisor a later hold already
+  # holds. That hold then sees its supervisor go down while held and
+  # leaves it to its tree: the cost is one counted restart of the tree,
+  # in a run a teardown timeout has already failed.
   defp watch_holder(supervisor) do
     holder = self()
 
