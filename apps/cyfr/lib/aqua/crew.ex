@@ -17,7 +17,8 @@ defmodule Aqua.Crew do
   `crew.list`: each member whose brain is ready (`Aqua.Models.model_status/2`),
   by name, brain, what it is good at and what to avoid. A member whose
   brain is not installed, has no key bound or whose program is not signed
-  in is left out, and every way a job reaches a member holds it to the
+  in, or whose brain is a program row that does not stand as a brain's,
+  is left out, and every way a job reaches a member holds it to the
   same readiness (`ready/2`): `crew.ask` and a person's `@name` are
   refused `{:crew_unready, member, reason}` before anything is written,
   and a request whose member became unready while it waited is answered
@@ -265,10 +266,11 @@ defmodule Aqua.Crew do
   @doc """
   The crew index of `roster`: every crew member whose brain reads ready
   (`Aqua.Models.model_status/2`), by name, as `%{"name", "brain",
-  "description", "avoid"}` — the brain its catalyst and model, what it is
-  good at and what to avoid — in the roster's order. `ctx` reads the
-  athanor's catalysts on its own plane; a listing it cannot read is
-  `{:error, {:unavailable, _}}`, never an index with nobody in it.
+  "description", "avoid"}` — the brain its catalyst's or its program
+  row's name and the model, what it is good at and what to avoid — in
+  the roster's order. `ctx` reads the athanor's catalysts on its own
+  plane; a listing it cannot read is `{:error, {:unavailable, _}}`, never
+  an index with nobody in it.
   """
   @spec index(Context.t(), [map()]) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
   def index(%Context{} = ctx, roster) when is_list(roster) do
@@ -279,7 +281,7 @@ defmodule Aqua.Crew do
        for %{"name" => name} = member <- members, ready_brain?(status[name]) do
          %{
            "name" => name,
-           "brain" => brain(member),
+           "brain" => brain(member, status[name]),
            "description" => member["description"] || "",
            "avoid" => member["avoid"] || ""
          }
@@ -334,8 +336,9 @@ defmodule Aqua.Crew do
   @typedoc """
   Why a crew member cannot take a job: no brain named, its catalyst not
   installed, no key bound, its program not set up and granted, only the
-  person's grant to give, a consent it runs under damaged, or the reads
-  that would tell unavailable.
+  person's grant to give, a consent it runs under damaged, for a brain
+  that is a program its row gone, disabled or not a program a brain runs
+  in, or the reads that would tell unavailable.
   """
   @type unready ::
           :no_brain
@@ -345,6 +348,9 @@ defmodule Aqua.Crew do
           | :no_program
           | :consent_stale
           | :consent_damaged
+          | :program_missing
+          | :program_disabled
+          | :program_unfit
           | :unavailable
 
   @doc """
@@ -393,18 +399,29 @@ defmodule Aqua.Crew do
   defp unready({:needs_program, _}), do: :no_program
   defp unready({:consent_stale, _}), do: :consent_stale
   defp unready({:consent_damaged, _}), do: :consent_damaged
+  defp unready({:program_missing, _}), do: :program_missing
+  defp unready({:program_disabled, _}), do: :program_disabled
+  defp unready({:program_unfit, _}), do: :program_unfit
   defp unready({_unread, _}), do: :unavailable
 
-  # A brain as a reader names it: the catalyst's name and the model.
-  defp brain(%{"catalyst_ref" => ref, "model" => model}) do
+  # A brain as a reader names it: its program row's name, which its ready
+  # status carries, or its catalyst's name, and the model.
+  defp brain(%{"program" => id, "model" => model}, {:ready, row_name})
+       when is_binary(id) and id != "",
+       do: with_model(row_name, model)
+
+  defp brain(%{"catalyst_ref" => ref, "model" => model}, _status) do
     catalyst =
       case Prima.ComponentRef.parse(ref || "") do
         {:ok, %{name: name}} -> name
         _ -> ref
       end
 
-    if is_binary(model) and model != "", do: "#{catalyst} (#{model})", else: catalyst
+    with_model(catalyst, model)
   end
+
+  defp with_model(brain, model) when is_binary(model) and model != "", do: "#{brain} (#{model})"
+  defp with_model(brain, _model), do: brain
 
   defp task(""), do: {:error, {:invalid_argument, "crew.ask requires a non-empty 'task'"}}
 

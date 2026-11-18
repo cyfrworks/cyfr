@@ -698,6 +698,22 @@ defmodule Prima.Refusal do
        "#{member}'s program is not set up — set it up on the Programs page, then connect " <>
          "it from its card on the Aqua page"}
 
+  # A brain that is a program stands on its row alone (`Aqua.Models`).
+  defp row({:crew_unready, member, :program_missing}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s program is no longer on the Programs page — give it another from its " <>
+         "card on the Aqua page"}
+
+  defp row({:crew_unready, member, :program_disabled}) when is_binary(member),
+    do: {:setup_required, "#{member}'s program is disabled — enable it on the Programs page"}
+
+  defp row({:crew_unready, member, :program_unfit}) when is_binary(member),
+    do:
+      {:setup_required,
+       "#{member}'s program is not one a brain can run in — give it a driven program with a " <>
+         "kept folder, not Aqua's browser, from its card on the Aqua page"}
+
   defp row({:crew_unready, member, :consent_stale}) when is_binary(member),
     do:
       {:consent_required,

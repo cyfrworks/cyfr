@@ -22,6 +22,7 @@ defmodule Compendium.AquaAgentTest do
         avoid: "numbers: never",
         disabled: false,
         catalyst_ref: "catalyst:moonmoon69.claude",
+        program: nil,
         model: "claude-sonnet-5-5",
         options: %{"effort" => "high", "budget" => 8, "thinking" => true, "label" => "true"},
         tool_policy: %{},
@@ -88,6 +89,33 @@ defmodule Compendium.AquaAgentTest do
     assert parsed.options == %{}
     assert parsed.tool_policy == %{}
     assert parsed.prompt == "You are minimal."
+  end
+
+  # A brain is named once: a catalyst or a program row, whose model is
+  # its harness's.
+  test "a brain named as a program round-trips, and a file naming a catalyst too refuses" do
+    coder = member(%{catalyst_ref: nil, program: "mcp_019a2b3c", model: "claude-opus-5-5"})
+    binary = AquaAgent.serialize(coder)
+    assert binary =~ "\nprogram: mcp_019a2b3c\n"
+    refute binary =~ "catalyst_ref"
+    assert {:ok, ^coder} = AquaAgent.parse("scribe", binary)
+    assert AquaAgent.serialize(coder) == binary
+
+    assert {:error, :catalyst_and_program} =
+             AquaAgent.parse(
+               "scribe",
+               "---\ncatalyst_ref: catalyst:local.claude\nprogram: mcp_019a2b3c\n---\n\nprompt\n"
+             )
+
+    # A blank one names none, as a blank catalyst does.
+    assert {:ok, %{catalyst_ref: "catalyst:local.claude", program: nil}} =
+             AquaAgent.parse(
+               "scribe",
+               "---\ncatalyst_ref: catalyst:local.claude\nprogram: \"\"\n---\n\nprompt\n"
+             )
+
+    assert {:ok, %{catalyst_ref: nil, program: nil}} =
+             AquaAgent.parse("scribe", "---\ntitle: X\n---\n\nprompt\n")
   end
 
   test "a file without frontmatter is a typed refusal" do
@@ -215,6 +243,19 @@ defmodule Compendium.AquaAgentTest do
     assert AquaAgent.to_manifest(%{scout | options: %{"effort" => "high"}})["options"] == %{
              "effort" => "high"
            }
+
+    # A brain that is a program is named by its row: another row is
+    # another capability, and neither is the catalyst's.
+    coder = Map.merge(scout, %{catalyst_ref: nil, program: "mcp_019a2b3c"})
+    manifest = AquaAgent.to_manifest(coder)
+    assert manifest["program"] == "mcp_019a2b3c"
+    refute Map.has_key?(manifest, "catalyst_ref")
+    refute Map.has_key?(AquaAgent.to_manifest(scout), "program")
+
+    {:ok, programmed} = AquaAgent.capability_digest(coder)
+    {:ok, moved} = AquaAgent.capability_digest(%{coder | program: "mcp_019a2b3d"})
+    refute programmed == digest
+    refute programmed == moved
   end
 
   # What an authored policy may say, on top of the grammar: the rule the

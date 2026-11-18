@@ -61,14 +61,22 @@ defmodule Aqua.Loop.Binding do
   @doc """
   Resolve one model call. `opts`: `:tool_call_id`. Answers the call with
   its canonical operation, or a refusal the loop records as the call's
-  result.
+  result. A call with an argument the proposal's digest has no form for
+  (`Aqua.Loop.Policy.proposal_digest/1`, `Prima.JCS`), at any depth, is
+  refused `invalid_argument` before anything runs: a null, since an
+  explicit null and an omitted argument can be two operations, a decimal
+  number, or an integer past 2^53 - 1.
   """
-  @spec resolve(String.t(), map(), keyword()) :: {:ok, Call.t()} | {:error, String.t()}
+  @spec resolve(String.t(), map(), keyword()) ::
+          {:ok, Call.t()} | {:error, String.t() | {:invalid_argument, String.t()}}
   def resolve(name, args, opts \\ []) when is_binary(name) and is_map(args) do
     tool_call_id = Keyword.get(opts, :tool_call_id)
 
     result =
       cond do
+        refusal = unencodable(name, args) ->
+          {:error, refusal}
+
         name == @ui_tool ->
           {:ok, %Call{kind: :ui, tool: @ui_tool, action: str(args, "action"), args: args}}
 
@@ -102,6 +110,27 @@ defmodule Aqua.Loop.Binding do
       error -> error
     end
   end
+
+  # The refusal of the first argument the canonical form refuses, in a
+  # sentence the caller can act on, or nil when it takes them all.
+  defp unencodable(name, args) do
+    case Prima.JCS.encode(args) do
+      {:ok, _canonical} ->
+        nil
+
+      {:error, {:invalid_value, path, reason}} ->
+        argument = Enum.map_join(path, ".", &to_string/1)
+        {:invalid_argument, "#{name}: the argument #{argument} #{unencodable(reason)}"}
+    end
+  end
+
+  defp unencodable(:nil_not_permitted), do: "is null; leave it out or give it a value"
+
+  defp unencodable(:float_not_permitted),
+    do: "is a decimal number; give a whole number, or the number as text"
+
+  defp unencodable(:integer_out_of_range), do: "is too large a number; give it as text"
+  defp unencodable(_reason), do: "is a value no call carries"
 
   defp resolve_action("execution", action, args) when action in ["run", "run_stream"] do
     reference = str(args, "reference")

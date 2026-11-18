@@ -129,6 +129,26 @@ defmodule Aqua.Loop.PolicyTest do
     assert Policy.proposal_digest(card) =~ ~r/^sha256:[0-9a-f]{64}$/
   end
 
+  test "a proposal with no null is digested as its canonical JSON; an external call's names no action" do
+    # sha256 of {"action":"keep","args":{"content":"c","name":"n"},"tool":"notes"}
+    assert Policy.proposal_digest(%{
+             "tool" => "notes",
+             "action" => "keep",
+             "args" => %{"name" => "n", "content" => "c"}
+           }) == "sha256:ac43e601c35efbc08e02b19ba2486c7badc2de62bfad576681ed3c6069ae3c34"
+
+    card = Policy.card(resolve!("github__search", %{"q" => "x"}), id: "apr_1")
+
+    assert card["proposal"] == %{
+             "tool" => "github:search",
+             "action" => nil,
+             "args" => %{"q" => "x"}
+           }
+
+    assert Policy.proposal_digest(card) ==
+             Policy.proposal_digest(%{"tool" => "github:search", "args" => %{"q" => "x"}})
+  end
+
   # The loop runs only these in a restricted turn (loop_test's stopped
   # turn carried on: a read runs, a write is denied).
   test "a read is replay-safe; a write and a ui event are not" do

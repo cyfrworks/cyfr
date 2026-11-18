@@ -98,7 +98,7 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("detail", :boolean,
               description:
-                "For list: include each agent's full fields (model, catalyst_ref, options, avoid, tool_policy, content, disabled) — one call instead of a get per agent"
+                "For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, tool_policy, content, disabled) — one call instead of a get per agent"
             ),
             Arg.new("include_disabled", :boolean,
               description:
@@ -144,6 +144,10 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("catalyst_ref", :string,
               description: "Versionless catalyst reference (for create/update actions)"
             ),
+            Arg.new("program", :string,
+              description:
+                "The id of the program row this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref (for create/update actions)"
+            ),
             Arg.new("model", :string,
               description: "Model identifier (for create/update actions)"
             ),
@@ -188,6 +192,11 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("catalyst_ref", :string,
               nullable: true,
               description: "Versionless catalyst reference (for create/update actions)"
+            ),
+            Arg.new("program", :string,
+              nullable: true,
+              description:
+                "The id of the program row this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref (for create/update actions)"
             ),
             Arg.new("model", :string,
               nullable: true,
@@ -452,6 +461,7 @@ defmodule Compendium.Providers.Aqua do
             Map.merge(base, %{
               model: agent.model,
               catalyst_ref: agent.catalyst_ref,
+              program: agent.program,
               options: agent.options,
               avoid: agent.avoid,
               tool_policy: agent.tool_policy,
@@ -502,6 +512,7 @@ defmodule Compendium.Providers.Aqua do
          avoid: agent.avoid,
          tool_policy: agent.tool_policy,
          catalyst_ref: agent.catalyst_ref,
+         program: agent.program,
          model: agent.model,
          options: agent.options,
          disabled: agent.disabled,
@@ -527,7 +538,8 @@ defmodule Compendium.Providers.Aqua do
     with :ok <- validate_name(name),
          :ok <- refute_reserved(name),
          :ok <- no_crew_policy(name, args),
-         :ok <- validate_options(args["options"]) do
+         :ok <- validate_options(args["options"]),
+         :ok <- one_brain(%{catalyst_ref: args["catalyst_ref"], program: args["program"]}) do
       create_member(ctx, name, args)
     end
   end
@@ -551,6 +563,7 @@ defmodule Compendium.Providers.Aqua do
       with {:ok, agent} <- AquaAgent.parse(name, bytes),
            :ok <- check_expected_digest(agent, args["expected_digest"]),
            agent = apply_updates(agent, args),
+           :ok <- one_brain(agent),
            {:ok, policy} <- patched_policy(agent.tool_policy, args["tool_policy_patch"]) do
         options = patched_options(agent.options, args["options_patch"])
         {:ok, AquaAgent.serialize(%{agent | tool_policy: policy, options: options})}
@@ -918,6 +931,7 @@ defmodule Compendium.Providers.Aqua do
       avoid: Map.get(args, "avoid", ""),
       disabled: false,
       catalyst_ref: args["catalyst_ref"],
+      program: args["program"],
       model: args["model"],
       options: args["options"] || %{},
       tool_policy: %{},
@@ -1024,6 +1038,7 @@ defmodule Compendium.Providers.Aqua do
     |> maybe_update(args, "avoid", :avoid, "")
     |> maybe_update(args, "tool_policy", :tool_policy, %{})
     |> maybe_update(args, "catalyst_ref", :catalyst_ref, nil)
+    |> maybe_update(args, "program", :program, nil)
     |> maybe_update(args, "model", :model, nil)
     |> maybe_update(args, "options", :options, %{})
     |> maybe_update(args, "disabled", :disabled, false)
@@ -1138,6 +1153,24 @@ defmodule Compendium.Providers.Aqua do
            "A crew member runs under the soul's tool policy and has none of its own — " <>
              "edit the soul's"}},
        else: :ok
+  end
+
+  # An agent names its brain once (`Compendium.AquaAgent.check_brain/1`):
+  # a write that would name both a catalyst and a program is refused here,
+  # never landed as a file that would not parse back. On update it is the
+  # agent the write makes that is judged, the fields the call leaves out
+  # read from the file as it is.
+  defp one_brain(agent) do
+    case AquaAgent.check_brain(agent) do
+      :ok ->
+        :ok
+
+      {:error, :catalyst_and_program} ->
+        {:error,
+         {:invalid_argument,
+          "An agent's brain is a catalyst or a program, never both — " <>
+            "give catalyst_ref or program, and clear the other"}}
+    end
   end
 
   # A brain's options: named strings, integers and booleans, the kinds a

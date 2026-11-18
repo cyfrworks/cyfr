@@ -347,10 +347,29 @@ defmodule Sanctum.MountTest do
       assert Enum.sort(names) == ["bare", "borrower", "member"]
       assert {:ok, ["lent"]} = Mount.agents_mounting(ctx.athanor_id, elsewhere.id)
     end
+
+    # A brain that is a program names its row on the agent's index row,
+    # with no consent edge to it: it runs in that row's home and no other.
+    test "agents_mounting/2 names the agents whose brain is the row, and not another row's",
+         %{ctx: ctx} do
+      entry = row!(ctx, %{name: "claude"})
+      elsewhere = row!(ctx, %{name: "codex"})
+
+      agent!(ctx, "coder", nil, entry.id)
+      agent!(ctx, "reviewer", nil, entry.id)
+      agent!(ctx, "writer", nil, elsewhere.id)
+      agent!(ctx, "plain", "catalyst:local.brain")
+
+      assert {:ok, names} = Mount.agents_mounting(ctx.athanor_id, entry.id)
+      assert Enum.sort(names) == ["coder", "reviewer"]
+      assert {:ok, ["writer"]} = Mount.agents_mounting(ctx.athanor_id, elsewhere.id)
+      assert {:ok, []} = Mount.agents_mounting(ctx.athanor_id, "mcp_none")
+    end
   end
 
-  # The agent `name`'s index row, its brain `catalyst_ref`.
-  defp agent!(ctx, name, catalyst_ref) do
+  # The agent `name`'s index row, its brain `catalyst_ref` or the program
+  # row `program`.
+  defp agent!(ctx, name, catalyst_ref, program \\ nil) do
     Arca.Repo.insert!(%Arca.Schemas.Agent{
       id: "agt_#{System.unique_integer([:positive])}",
       athanor_id: ctx.athanor_id,
@@ -359,6 +378,7 @@ defmodule Sanctum.MountTest do
       revision_digest: "sha256:rev",
       capability_digest: "sha256:cap",
       catalyst_ref: catalyst_ref,
+      program: program,
       synced_at: DateTime.utc_now()
     })
   end

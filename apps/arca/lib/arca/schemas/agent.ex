@@ -22,6 +22,7 @@ defmodule Arca.Schemas.Agent do
     field :revision_digest, :string
     field :capability_digest, :string
     field :catalyst_ref, :string
+    field :program, :string
     field :disabled, :boolean, default: false
     field :synced_at, :utc_datetime_usec
   end

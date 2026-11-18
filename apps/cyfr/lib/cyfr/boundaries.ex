@@ -765,7 +765,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Opus",
-      allow: ~w(Opus Opus.Browser Opus.Brain),
+      allow: ~w(Opus Opus.Brain Opus.Browser),
       reason:
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
@@ -774,8 +774,10 @@ defmodule Cyfr.Boundaries do
           "Its browser tool acts through Aqua's browser's holder (`Opus.Browser`), which " <>
           "proves the caller and holds the person's browser session, and stops it when " <>
           "the person's browser setting goes off. " <>
-          "A thread's deletion closes at once the holders of the program sessions it " <>
-          "owed their removal (`Opus.Brain.forgotten/2`). " <>
+          "A program used as a brain is a session its holder (`Opus.Brain`) keeps, which " <>
+          "Aqua's attendant (`Aqua.Program`) opens, writes and reads, each write checked " <>
+          "there against the work it is bound to; a thread's deletion closes at once the " <>
+          "holders of the program sessions it owed their removal (`Opus.Brain.forgotten/2`). " <>
           "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
           "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>

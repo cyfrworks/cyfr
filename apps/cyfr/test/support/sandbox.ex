@@ -101,8 +101,11 @@ defmodule Cyfr.Test.Sandbox do
     Opus.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.External.ServerSupervisor,
-    # Each browser and brain holder closes the program session it holds as
-    # it stops, so the holders go before the sessions.
+    # A program brain's attendant writes through its brain holder, which
+    # ends with it: the attendants go first. Each browser and brain holder
+    # closes the program session it holds as it stops, so the holders go
+    # before the sessions.
+    Aqua.Program.Sessions,
     Opus.Brain.Holders,
     Opus.Browser.Holders,
     Opus.Programs.Relays,

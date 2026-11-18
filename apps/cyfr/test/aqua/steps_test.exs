@@ -151,6 +151,25 @@ defmodule Aqua.StepsTest do
     assert Steps.sentence(nil, nil, "page") == "The page used a tool"
   end
 
+  test "a program brain's start and asks are steps of its thread, and its deliveries none",
+       %{ctx: ctx, thread: thread} do
+    turn = turn!(ctx, thread)
+
+    [start, _post, searched, _answer] =
+      steps!(ctx, turn, [
+        %{purpose: "brain", tool: "program", action: "start", outcome: "ok"},
+        %{kind: "input", purpose: "brain", tool: "program", action: "post", outcome: "ok"},
+        %{purpose: "brain", tool: "files", action: "search", outcome: "ok"},
+        %{kind: "input", purpose: "brain", tool: "program", action: "answer"}
+      ])
+
+    assert {:ok,
+            [
+              %{id: ^searched, sentence: "Searched the files", status: :done},
+              %{id: ^start, sentence: "Used a tool", status: :done}
+            ]} = Aqua.steps(ctx, thread.id)
+  end
+
   test "a page holds a hundred steps at most", %{ctx: ctx, thread: thread} do
     turn = turn!(ctx, thread)
     ids = steps!(ctx, turn, for(_ <- 1..105, do: %{tool: "files", action: "read", outcome: "ok"}))
@@ -329,6 +348,24 @@ defmodule Aqua.StepsTest do
           %{tool: "files", action: "read", outcome: "ok"},
           %{tool: "files", action: "search", outcome: nil},
           %{kind: "model", tool: "catalyst:local.claude", action: "chat", outcome: nil}
+        ])
+
+      assert {:ok, [%{agent: "aqua", sentence: "Searched the files", status: :running, at: at}]} =
+               Aqua.at_work(ctx, workspace.id)
+
+      assert at == step_at(ctx, workspace.id, searching)
+    end
+
+    test "a turn on a program brain reads by its last step, never a delivery to its brain",
+         %{ctx: ctx, thread: daily} do
+      workspace = workspace!(ctx, daily)
+      turn = moved!(ctx, work!(ctx, workspace), status: "running")
+
+      [_start, searching, _post] =
+        steps!(ctx, turn, [
+          %{purpose: "brain", tool: "program", action: "start", outcome: "ok"},
+          %{purpose: "brain", tool: "files", action: "search", outcome: nil},
+          %{kind: "input", purpose: "brain", tool: "program", action: "post"}
         ])
 
       assert {:ok, [%{agent: "aqua", sentence: "Searched the files", status: :running, at: at}]} =

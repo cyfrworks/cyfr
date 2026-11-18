@@ -353,6 +353,108 @@ defmodule Aqua.CrewTest do
     assert rows(ctx, room.id) == []
   end
 
+  # A brain that is a program is admitted per turn by its program.start
+  # step, so its readiness is its row's alone: the athanor's own, a driven
+  # program with a kept folder, enabled. It is named by the row, and a row
+  # that fails says what to do about it. Aqua's browser's rows the holder
+  # refuses as it writes (`Opus.Brain`).
+  test "a member whose brain is a program is ready on its row alone, named by the row",
+       %{ctx: ctx, room: room} do
+    row! = fn name, over ->
+      {:ok, row} =
+        Arca.McpServerStorage.insert(
+          actor(ctx),
+          Map.merge(
+            %{
+              cap: 0,
+              name: name,
+              transport: "program",
+              mark: "driven",
+              url: nil,
+              home: "kept",
+              config_json: Jason.encode!(%{"command" => "cyfr-claude-code claude", "env" => %{}})
+            },
+            over
+          )
+        )
+
+      row
+    end
+
+    rows = %{
+      "coder" => row!.("claude", %{}),
+      "idle" => row!.("idle-claude", %{enabled: false}),
+      "scratchy" => row!.("scratch-claude", %{home: "scratch"}),
+      "served" => row!.("served-claude", %{mark: "mcp"})
+    }
+
+    named =
+      Map.put(Map.new(rows, fn {member, row} -> {member, row.id} end), "orphan", "mcp_gone")
+
+    for {member, id} <- named do
+      :ok =
+        Arca.put(
+          actor(ctx),
+          Compendium.AquaPath.crew_file(member),
+          "---\ntitle: #{member}\ndescription: Codes.\navoid: Nothing.\n" <>
+            "program: #{id}\nmodel: claude-opus-5-5\n---\n\nYou are the #{member}.\n"
+        )
+    end
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, roster} = Aqua.AgentConfig.roster(ctx)
+
+    coder = rows["coder"].id
+
+    assert %{"program" => ^coder, "catalyst_ref" => nil} =
+             Enum.find(roster, &(&1["name"] == "coder"))
+
+    assert Map.take(Aqua.Models.model_status(ctx, roster), Map.keys(named)) == %{
+             "coder" => {:ready, "claude"},
+             "idle" => {:program_disabled, "idle-claude"},
+             "scratchy" => {:program_unfit, "scratch-claude"},
+             "served" => {:program_unfit, "served-claude"},
+             "orphan" => {:program_missing, "mcp_gone"}
+           }
+
+    unready = %{
+      "idle" => {:program_disabled, "enable it on the Programs page"},
+      "scratchy" => {:program_unfit, "a driven program with a kept folder"},
+      "served" => {:program_unfit, "a driven program with a kept folder"},
+      "orphan" => {:program_missing, "no longer on the Programs page"}
+    }
+
+    refusals =
+      Map.new(unready, fn {member, {reason, _words}} ->
+        {member, {:error, {:crew_unready, member, reason}}}
+      end)
+
+    assert Map.new(named, fn {member, _id} -> {member, Crew.ready(ctx, member)} end) ==
+             Map.put(refusals, "coder", :ok)
+
+    assert {:ok, index} = Crew.index(ctx, roster)
+
+    assert for(%{"name" => name} = member <- index, Map.has_key?(named, name), do: member) == [
+             %{
+               "name" => "coder",
+               "brain" => "claude (claude-opus-5-5)",
+               "description" => "Codes.",
+               "avoid" => "Nothing."
+             }
+           ]
+
+    # A person's @name is held to the same readiness, refused with what to
+    # do before anything is written.
+    for {member, {reason, words}} <- unready do
+      assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
+               Runner.send_message(ctx, room.id, "@#{member} look into this")
+
+      assert Aqua.Ops.render_refusal(refusal) =~ words
+    end
+
+    assert rows(ctx, room.id) == []
+  end
+
   test "a member whose brain changed and was not confirmed is refused with what to do: confirm it",
        %{ctx: ctx, room: room} do
     # The planner's brain moves to another model; its consent is not given

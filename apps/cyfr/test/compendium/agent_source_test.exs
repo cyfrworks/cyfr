@@ -223,6 +223,38 @@ defmodule Compendium.AgentSourceTest do
     assert {:ok, ^soul_before} = AgentSource.latest_row(ctx, "aqua")
   end
 
+  # A program brain's turns are admitted each by its own program.start
+  # step: its consent names no brain, only its hands, and its model alone,
+  # which the manifest grammar and the shape both take. Its row is
+  # capability, so another row is a new release.
+  test "a brain that is a program is no dependency, and its row moves the digest", %{ctx: ctx} do
+    {:ok, before} = AgentSource.latest_row(ctx, "explorer")
+
+    write_agent!(ctx, "explorer", &%{&1 | catalyst_ref: nil, program: "mcp_019a2b3c"})
+    {:ok, programmed} = AgentSource.latest_row(ctx, "explorer")
+    {:ok, agent} = AquaAgent.get(ctx, "explorer")
+
+    assert programmed.manifest["agent"] == %{"model" => agent.model}
+    refs = Enum.map(programmed.manifest["dependencies"]["static"], & &1["ref"])
+
+    assert refs ==
+             Enum.map(before.manifest["dependencies"]["static"], & &1["ref"]) --
+               ["catalyst:local.gemini"]
+
+    assert :ok = Prima.Manifest.validate(programmed.manifest, fn _path -> true end)
+    refute programmed.digest == before.digest
+
+    assert {:ok, shape} =
+             Sanctum.Consent.ShapeDerivation.shape_input(ctx, "agent:local.explorer")
+
+    refute Map.has_key?(shape, :model_target)
+
+    write_agent!(ctx, "explorer", &%{&1 | program: "mcp_019a2b3d"})
+    {:ok, moved} = AgentSource.latest_row(ctx, "explorer")
+    refute moved.digest == programmed.digest
+    refute moved.release_digest == programmed.release_digest
+  end
+
   test "a glob on the soul naming a crew member is a tool pattern, not an edge into it", %{
     ctx: ctx
   } do
