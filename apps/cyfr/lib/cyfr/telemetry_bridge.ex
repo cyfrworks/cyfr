@@ -89,6 +89,15 @@ defmodule Cyfr.TelemetryBridge do
     [:cyfr, :sanctum, :confirmation, :expired]
   ]
 
+  # What a component's question's life announces, one event per fact of
+  # its kind of `Cyfr.Bus.Prompt`.
+  @question_events [
+    [:cyfr, :sanctum, :question, :opened],
+    [:cyfr, :sanctum, :question, :answered],
+    [:cyfr, :sanctum, :question, :expired],
+    [:cyfr, :sanctum, :question, :withdrawn]
+  ]
+
   # What ends a pending confirmation's wait; a confirmed record still waits
   # for the change its asker repeats.
   @confirmation_ends [:consumed, :cancelled, :voided, :expired]
@@ -443,6 +452,18 @@ defmodule Cyfr.TelemetryBridge do
       tenant(meta, &Bus.prompts(&1, user_id), &Prompt.new(&1, :confirmation, stage, fields))
       | confirmation_attention(stage, meta)
     ]
+  end
+
+  # A component's question moved: a prompt on its person's own topic,
+  # carrying its ref and expiry and nothing else the emitter attached.
+  defp messages(
+         [:cyfr, :sanctum, :question, stage] = event,
+         _measurements,
+         %{user_id: user_id} = meta
+       )
+       when event in @question_events and is_binary(user_id) and user_id != "" do
+    fields = Map.take(meta, [:ref, :expires_at])
+    [tenant(meta, &Bus.prompts(&1, user_id), &Prompt.new(&1, :question, stage, fields))]
   end
 
   defp messages([:cyfr, :sanctum, :api_keys, :changed], _measurements, meta),

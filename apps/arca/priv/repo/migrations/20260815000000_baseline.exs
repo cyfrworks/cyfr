@@ -1665,6 +1665,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :operation, :text, null: false
       add :masked, :boolean, null: false
       add :caller, :text, null: false
+      # When the ask was admitted, on the database's clock, whatever its
+      # first state: what a waiting question is shown and sorted since.
+      add :opened_at, :utc_datetime_usec, null: false
       add :deadline, :utc_datetime_usec, null: false
       add :state, :string, null: false, check: if(sqlite?, do: question_state)
       add :none_reason, :string

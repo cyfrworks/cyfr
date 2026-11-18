@@ -36,6 +36,7 @@ const (
 	Pairing            = "pairing"
 	PolicyLog          = "policy_log"
 	Profile            = "profile"
+	Question           = "question"
 	Record             = "record"
 	Registry           = "registry"
 	Resource           = "resource"
@@ -199,6 +200,11 @@ const (
 	ProfilePreview          = "preview"
 	ProfilePublish          = "publish"
 	ProfileRevoke           = "revoke"
+	QuestionAnswer          = "answer"
+	QuestionAnswers         = "answers"
+	QuestionForget          = "forget"
+	QuestionPending         = "pending"
+	QuestionSet             = "set"
 	RecordGet               = "get"
 	RecordList              = "list"
 	RecordPayload           = "payload"
@@ -333,6 +339,7 @@ var Actions = map[string][]string{
 	"pairing":             {"list", "renew", "revoke", "waiting"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
+	"question":            {"answer", "answers", "forget", "pending", "set"},
 	"record":              {"get", "list", "payload"},
 	"registry":            {"appeal", "claim_publisher", "get_namespace", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
@@ -3487,6 +3494,91 @@ func (args ProfileRevokeArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ProfileRevoke, fields: fields(args)})
+}
+
+// QuestionAnswerArgs carries arguments for question.answer.
+type QuestionAnswerArgs struct {
+	// The question's ref, as question.pending and the prompt.changes stream name it
+	Ref string `json:"ref"`
+	// answer: {effect: allow or deny, lasts: once, always or {until: a UTC time}, covers: any_caller or this_caller}
+	Answer any `json:"answer"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args QuestionAnswerArgs) MarshalJSON() ([]byte, error) {
+	type fields QuestionAnswerArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: QuestionAnswer, fields: fields(args)})
+}
+
+// QuestionAnswersArgs carries arguments for question.answers.
+type QuestionAnswersArgs struct {
+	// The component's publisher
+	Publisher string `json:"publisher"`
+	// The component's name
+	Name string `json:"name"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args QuestionAnswersArgs) MarshalJSON() ([]byte, error) {
+	type fields QuestionAnswersArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: QuestionAnswers, fields: fields(args)})
+}
+
+// QuestionForgetArgs carries arguments for question.forget.
+type QuestionForgetArgs struct {
+	// forget: the permission's id, as question.answers lists it
+	Id string `json:"id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args QuestionForgetArgs) MarshalJSON() ([]byte, error) {
+	type fields QuestionForgetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: QuestionForget, fields: fields(args)})
+}
+
+// QuestionPendingArgs carries arguments for question.pending.
+type QuestionPendingArgs struct {
+	// pending: one question's ref, to read that question alone
+	Ref Field[string] `json:"ref,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args QuestionPendingArgs) MarshalJSON() ([]byte, error) {
+	type fields QuestionPendingArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: QuestionPending, fields: fields(args)})
+}
+
+// QuestionSetArgs carries arguments for question.set.
+type QuestionSetArgs struct {
+	// The component's publisher
+	Publisher string `json:"publisher"`
+	// The component's name
+	Name string `json:"name"`
+	// set: the action, as the component's manifest names it under asks
+	ActionName string `json:"action_name"`
+	// set: {effect: allow or deny, until: null or a UTC time, caller: any or a caller}
+	Standing any `json:"standing"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args QuestionSetArgs) MarshalJSON() ([]byte, error) {
+	type fields QuestionSetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: QuestionSet, fields: fields(args)})
 }
 
 // RecordGetArgs carries arguments for record.get.

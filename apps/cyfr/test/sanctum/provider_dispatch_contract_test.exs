@@ -16,7 +16,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   @tool_names ~w(session athanor shared_thread invitation door directory oauth key
                   tincture_visibility webhook vault profile pairing
-                  confirmation share)
+                  confirmation share question)
 
   @action_enums %{
     "session" => [
@@ -78,7 +78,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "grants", "revoke"],
     "pairing" => ["renew", "revoke", "list", "waiting"],
     "confirmation" => ["request", "confirm", "pending", "cancel"],
-    "share" => ["create", "list", "set_audience", "set_caps", "revoke", "usage", "offered"]
+    "share" => ["create", "list", "set_audience", "set_caps", "revoke", "usage", "offered"],
+    "question" => ["pending", "answer", "answers", "set", "forget"]
   }
 
   @invalid_action_errors %{
@@ -100,11 +101,12 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "pairing" => "Unknown action: pairing.___no_such_action___",
     "confirmation" => "Unknown action: confirmation.___no_such_action___",
     "share" =>
-      "Invalid share action. Use: create, list, set_audience, set_caps, revoke, usage, or offered"
+      "Invalid share action. Use: create, list, set_audience, set_caps, revoke, usage, or offered",
+    "question" => "Unknown action: question.___no_such_action___"
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 15 tools, in order" do
+    test "exactly these 16 tools, in order" do
       assert Enum.map(Provider.tools(), & &1.name) == @tool_names
     end
 

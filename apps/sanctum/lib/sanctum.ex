@@ -80,6 +80,7 @@ defmodule Sanctum do
       PolicyLog,
       Provisioning,
       Proxy,
+      Questions,
       Refusals,
       RegistryCredentials,
       RequestLog,
