@@ -1248,7 +1248,7 @@ func (args ComponentYankArgs) MarshalJSON() ([]byte, error) {
 
 // ConfirmationCancelArgs carries arguments for confirmation.cancel.
 type ConfirmationCancelArgs struct {
-	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	// The pending confirmation's ref, as confirmation.pending and the prompt.changes stream name it
 	Ref string `json:"ref"`
 }
 
@@ -1263,7 +1263,7 @@ func (args ConfirmationCancelArgs) MarshalJSON() ([]byte, error) {
 
 // ConfirmationConfirmArgs carries arguments for confirmation.confirm.
 type ConfirmationConfirmArgs struct {
-	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	// The pending confirmation's ref, as confirmation.pending and the prompt.changes stream name it
 	Ref string `json:"ref"`
 	// confirm: the answer to the confirmation's request, from a passkey at the account pages or from your device
 	Answer any `json:"answer"`
@@ -1295,7 +1295,7 @@ func (args ConfirmationPendingArgs) MarshalJSON() ([]byte, error) {
 
 // ConfirmationRequestArgs carries arguments for confirmation.request.
 type ConfirmationRequestArgs struct {
-	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	// The pending confirmation's ref, as confirmation.pending and the prompt.changes stream name it
 	Ref string `json:"ref"`
 }
 
