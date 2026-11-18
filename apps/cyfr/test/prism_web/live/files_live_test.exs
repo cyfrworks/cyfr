@@ -94,14 +94,12 @@ defmodule PrismWeb.FilesLiveTest do
     assert render(view) =~ "hello again"
 
     # The download route streams the bytes as a download.
-    before = tasks()
     response = get(conn, "/a/#{route}/files/download/data/hello.txt")
     assert response.status == 200
     assert response.resp_body == "hello again"
     assert get_resp_header(response, "content-type") == ["text/plain"]
     assert [disposition] = get_resp_header(response, "content-disposition")
     assert disposition =~ ~s(attachment; filename="hello.txt")
-    settle_session_refresh(before)
 
     # Delete takes the file, and its open panel, away.
     view |> element("#files-entries button", "Delete") |> render_click()
@@ -302,21 +300,10 @@ defmodule PrismWeb.FilesLiveTest do
   end
 
   test "the download route knows no folder the page does not show", %{conn: conn, route: route} do
-    before = tasks()
     assert get(conn, "/a/#{route}/files/download/payloads/sha256/abc").status == 404
     assert get(conn, "/a/#{route}/files/download/data/missing.txt").status == 404
     assert get(conn, "/a/#{route}/files/download/data").status == 404
-    settle_session_refresh(before)
   end
-
-  # Each authenticated request starts a session-refresh task; a test that
-  # ends while one is mid-query leaves the shared sandbox connection busy
-  # for the next test. The tasks running `before` the requests are not
-  # theirs: an open page's system layer listens in one for the page's life.
-  defp settle_session_refresh(before),
-    do: Prima.Test.Wait.wait_until(fn -> tasks() -- before == [] end)
-
-  defp tasks, do: Task.Supervisor.children(Prism.TaskSupervisor)
 
   test "a shaped folder says so, and a shipped unit refuses to go in words", %{conn: conn} do
     {_view, html} = mount_athanor(conn, "/files?p=components")
