@@ -5101,6 +5101,152 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  describe "a fact that races the layer's read of what waits" do
+    # The page mounts while its layer's first read of the pending records
+    # is held in the page's own process, before the read (`:admitted`, the
+    # gate's admission of `confirmation.pending`) or just after its query
+    # returned (`:read`). Another client of the person asks meanwhile, and
+    # the read goes on only once its record's opened fact is queued behind
+    # it: the read finds the record and the fact repeats it, or the read
+    # misses it and the fact alone tells of it. Either way, one card.
+    for {point, what} <- [admitted: "finds", read: "misses"] do
+      test "draws one card when the read #{what} the record whose fact waits behind it",
+           %{conn: conn} do
+        {view, ref} = race_the_read!(conn, unquote(point))
+        prompt_id = Prompt.confirmation_id(ref)
+
+        wait_until(fn -> open_prompt(view) == prompt_id end, 2_000, "the card")
+        assert %{current: %{id: ^prompt_id}, queue: queue, panels: panels} = layer_assigns(view)
+        refute Enum.any?(queue, &(&1.id == prompt_id))
+        assert Map.keys(panels) == [ref]
+        assert render(view) =~ ~s(data-status="pending")
+        end_views()
+      end
+    end
+
+    defp race_the_read!(conn, point) do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      other = other_session!(person_context(user, athanor))
+      test = self()
+
+      helper =
+        spawn_link(fn ->
+          receive do
+            {:read_held, view_pid} ->
+              assert {:error, {:confirmation_required, %{id: id}}} =
+                       PrismWeb.Ops.call_tool(other, "vault/create", %{
+                         "name" => "raced-#{System.unique_integer([:positive])}",
+                         "kind" => "api_key",
+                         "fields" => %{"KEY" => "x"},
+                         "destination" => %{"hosts" => ["api.example.com"]}
+                       })
+
+              ref = Prima.Confirmation.ref(id)
+
+              wait_until(
+                fn -> queued(view_pid, fact_for(ref, "opened")) end,
+                2_000,
+                "the opened fact queued behind the read"
+              )
+
+              send(test, {:asked, ref})
+              send(view_pid, :release_read)
+          end
+        end)
+
+      handler = "layer-read-held-#{System.unique_integer([:positive])}"
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      event =
+        if point == :admitted,
+          do: [:cyfr, :sanctum, :decision, :admitted],
+          else: [:arca, :repo, :query]
+
+      :ok = :telemetry.attach(handler, event, &__MODULE__.hold_pending_read/4, {handler, helper})
+
+      {:ok, view, _html} =
+        live_isolated(conn, Host, session: %{"athanor_id" => athanor.id, "test" => self()})
+
+      assert_receive {:asked, ref}, 5_000
+      {view, ref}
+    end
+  end
+
+  @doc false
+  # Holds the first process that reaches a read of the pending
+  # confirmations at the attached event, once: it tells `helper`, and goes
+  # on when released. A bound that runs out lets the read go, so the test
+  # fails on the missing message rather than hanging.
+  def hold_pending_read(event, _measurements, metadata, {handler, helper}) do
+    if pending_read?(event, metadata) do
+      :telemetry.detach(handler)
+      send(helper, {:read_held, self()})
+
+      receive do
+        :release_read -> :ok
+      after
+        5_000 -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp pending_read?([:cyfr, :sanctum, :decision, :admitted], metadata),
+    do: metadata.tool == "confirmation" and metadata.action == "pending"
+
+  defp pending_read?([:arca, :repo, :query], %{source: "pending_confirmations", query: query}),
+    do: String.starts_with?(query, "SELECT")
+
+  defp pending_read?(_event, _metadata), do: false
+
+  describe "a page that disconnects while a record waits" do
+    test "shows it again when it mounts again, and follows it there", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      other = other_session!(person_context(user, athanor))
+      name = "remounted-#{System.unique_integer([:positive])}"
+      session = %{"athanor_id" => athanor.id, "test" => self()}
+
+      {:ok, view, _html} = live_isolated(conn, Host, session: session)
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               PrismWeb.Ops.call_tool(other, "vault/create", %{
+                 "name" => name,
+                 "kind" => "api_key",
+                 "fields" => %{"KEY" => "sk-remounted"},
+                 "destination" => %{"hosts" => ["api.example.com"]}
+               })
+
+      ref = Prima.Confirmation.ref(id)
+      prompt_id = Prompt.confirmation_id(ref)
+      wait_until(fn -> open_prompt(view) == prompt_id end, 2_000, "the opened fact")
+
+      # The page's socket closes, as a browser that leaves closes it.
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      page = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^page, :process, _pid, {:shutdown, :closed}}, 2_000
+
+      # No fact announces the record again: the new page reads it.
+      {:ok, again, _html} = live_isolated(conn, Host, session: session)
+      assert open_prompt(again) == prompt_id
+      assert render(again) =~ ~s(data-status="pending")
+      assert has_element?(again, ~s([data-test="confirmation-preview"]), name)
+
+      # And hears it: the asker's cancel ends the card on the new page.
+      assert {:ok, %{state: "cancelled"}} =
+               PrismWeb.Ops.call_tool(other, "confirmation/cancel", %{"ref" => ref})
+
+      wait_until(fn -> open_prompt(again) == nil end, 2_000, "the cancelled fact")
+      end_views()
+    end
+  end
+
   # The listener stands in the view's place on the bus: the test process is
   # its view here, so the updates it sends the layer arrive in the mailbox.
   describe "the layer's listener" do

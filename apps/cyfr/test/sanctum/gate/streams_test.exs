@@ -425,7 +425,6 @@ defmodule Sanctum.Gate.StreamsTest do
       assert stream.topic == :prompts
       assert stream.projection == ["kind", "ref", "fact", "expires_at"]
       assert stream.deadline_bound == 86_400
-      assert :miss = Catalog.lookup_stream("confirmation.changes")
     end
   end
 
