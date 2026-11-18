@@ -147,6 +147,39 @@ defmodule Arca.QuestionsTest do
       assert {:ok, [^row]} = Questions.list_open(actor(), @person)
     end
 
+    test "every admitted row opens on the database's clock, whatever its first state" do
+      run = run!()
+      supplied = ~U[2000-01-01 00:00:00.000000Z]
+
+      firsts = [
+        %{state: "open"},
+        %{state: "allowed", standing_answer_id: "qan_1"},
+        %{state: "denied", standing_answer_id: "qan_2"},
+        %{state: "none", none_reason: "unattended"}
+      ]
+
+      for {first, ask_no} <- Enum.with_index(firsts, 1) do
+        before = Arca.ServerMetaStorage.now!()
+        row = admit!(run, Map.merge(first, %{ask_no: ask_no, opened_at: supplied}))
+        later = Arca.ServerMetaStorage.now!()
+
+        assert %DateTime{} = opened = row.opened_at, inspect(first)
+        refute opened == supplied
+        assert DateTime.compare(opened, before) != :lt and DateTime.compare(opened, later) != :gt
+
+        if first.state == "open",
+          do: assert(is_nil(row.decided_at)),
+          else: assert(row.decided_at == opened)
+
+        # Every read answers it.
+        assert {:ok, %{opened_at: ^opened}} = Questions.get(actor(), row.ref)
+        assert {:ok, %{opened_at: ^opened}} = Questions.by_key(actor(), run.attempt, ask_no)
+      end
+
+      assert {:ok, [%{state: "open", opened_at: %DateTime{}, decided_at: nil}]} =
+               Questions.list_open(actor(), @person)
+    end
+
     test "a taken key is refused and the first row stands, whatever the second says" do
       run = run!()
       first = admit!(run)

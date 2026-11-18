@@ -80,10 +80,12 @@ defmodule Arca.Questions do
 
   @doc """
   Insert the keyed question `question` (a map of the table's columns but
-  the athanor, person and who decided it, which are the actor's or none)
-  with the first state the decision chose, in a transaction that locks
-  the run's row and checks the attempt is its current one and the run
-  open. A decided first state is stamped with the database's clock.
+  the athanor, person, when it opened and who decided it, which are the
+  actor's, the database's clock or none) with the first state the
+  decision chose, in a transaction that locks the run's row and checks
+  the attempt is its current one and the run open. Every admitted row is
+  stamped `opened_at` with the database's clock, and a decided first
+  state `decided_at` with the same time.
 
   `{:ok, row}`; `{:error, :closed}` when the run has ended or another
   attempt owns it; `{:error, :exists}` when the key
@@ -100,7 +102,7 @@ defmodule Arca.Questions do
           question
           |> Map.take(Question.__schema__(:fields))
           |> Map.drop([:decided_by, :decided_at])
-          |> Map.merge(%{athanor_id: actor.athanor_id, user_id: actor.user_id})
+          |> Map.merge(%{athanor_id: actor.athanor_id, user_id: actor.user_id, opened_at: now})
           |> decided_at(now)
           |> Question.admit_changeset()
 
