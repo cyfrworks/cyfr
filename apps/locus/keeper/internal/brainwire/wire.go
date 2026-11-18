@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 1, a driver's side, for
+// Package brainwire is the brain wire, version 2, a driver's side, for
 // every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	Version      = 1
+	Version      = 2
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
@@ -74,6 +74,7 @@ var configTypes = map[string]fieldType{
 	"effort":          tString,
 	"permission_mode": tString,
 	"harness_tools":   tStrings,
+	"read_only":       tBoolean,
 }
 
 // CountNames are the four counts of a model's usage, in the wire's order.
@@ -385,12 +386,13 @@ type Tool struct {
 }
 
 // Config is a start's configuration: absent members are the harness's
-// defaults.
+// defaults, and an absent ReadOnly is false.
 type Config struct {
 	Model          string    `json:"model"`
 	Effort         string    `json:"effort"`
 	PermissionMode string    `json:"permission_mode"`
 	HarnessTools   *[]string `json:"harness_tools"`
+	ReadOnly       bool      `json:"read_only"`
 }
 
 // ModelCounts are one model's counts in a `usage` event.

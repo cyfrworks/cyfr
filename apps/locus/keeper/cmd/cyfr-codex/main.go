@@ -32,7 +32,9 @@
 // (`item/tool/call`) is held and shown as an `ask`, and an `answer`
 // answers it by its request's id. There is no interrupt: Stop closes the
 // session, and Codex's own `turn/interrupt` is never sent. Codex's own
-// tools run in its box, asking nothing, and are shown by name only. The
+// tools run in its box, asking nothing, and are shown by name only. A
+// read-only start (`config.read_only`) ends the driver before anything
+// starts: Codex's read-only sandbox cannot start in the box. The
 // driver keeps no account of calls: which post a native turn answers is
 // Codex's own naming of the posts' uuids in that turn, which `idle`
 // passes on, and a turn's usage is the thread's total as Codex reports it,
