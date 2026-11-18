@@ -788,8 +788,9 @@ defmodule Aqua.Loop.Policy do
   one form a proposal is digested in where it is recorded and where an
   approval consumes it. A field the proposal leaves absent, as an
   external call's action, is no field of it, since the canonical form has
-  no null. Its arguments are hashed as they were given: a call with a
-  null argument is refused before it is proposed (`Binding.resolve/3`).
+  no null. Its arguments are hashed as they were given: a call with an
+  argument the canonical form refuses is refused before it is proposed
+  (`Binding.resolve/3`).
   """
   @spec proposal_digest(map()) :: String.t()
   def proposal_digest(%{"proposal" => proposal}), do: proposal_digest(proposal)

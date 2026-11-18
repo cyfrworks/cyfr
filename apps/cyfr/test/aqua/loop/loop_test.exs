@@ -775,14 +775,15 @@ defmodule Aqua.LoopTest do
   end
 
   test "an external tool's call, which names no action, asks on a card its own proposal " <>
-         "consumes; one with a null argument is refused as its result before it runs",
+         "consumes; one with a null or a decimal argument is refused as its result before it runs",
        %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua search for it")
 
     script!([
       calls([
         {"c1", "github__search", %{"q" => "x"}},
-        {"c2", "github__search", %{"q" => nil}}
+        {"c2", "github__search", %{"q" => nil}},
+        {"c3", "github__search", %{"q" => "x", "limit" => 1.5}}
       ])
     ])
 
@@ -790,7 +791,7 @@ defmodule Aqua.LoopTest do
     {:ok, paused} = Tape.turn(ctx, turn.id)
     {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
     {:ok, steps} = Tape.steps(ctx, paused)
-    [search, null] = Enum.filter(steps, &(&1.kind == "tool"))
+    [search, null, decimal] = Enum.filter(steps, &(&1.kind == "tool"))
 
     digest =
       Aqua.Loop.Policy.proposal_digest(%{"tool" => "github:search", "args" => %{"q" => "x"}})
@@ -810,6 +811,11 @@ defmodule Aqua.LoopTest do
     assert {null.dispatch_state, null.outcome, null.error, null.proposal_digest} ==
              {"closed", "denied",
               "github__search: the argument q is null; leave it out or give it a value", nil}
+
+    assert {decimal.dispatch_state, decimal.outcome, decimal.error, decimal.proposal_digest} ==
+             {"closed", "denied",
+              "github__search: the argument limit is a decimal number; give a whole number, " <>
+                "or the number as text", nil}
   end
 
   # An approval unblocks a call the chain's authority allows and grants
@@ -3220,7 +3226,8 @@ defmodule Aqua.LoopTest do
                Jason.decode!(body)
     end
 
-    test "a page's call with a null argument is answered refused and runs nothing",
+    test "a page's call with a null or a decimal argument is answered invalid_argument and " <>
+           "runs nothing",
          %{ctx: ctx, thread: thread} do
       start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
       ScriptedWorker.script([{:probe, self()}, reply("done")])
@@ -3228,22 +3235,59 @@ defmodule Aqua.LoopTest do
       turn = accept!(ctx, thread, "@aqua fetch")
       task = run(ctx, turn)
       assert_receive {:scripted_probe, model, _child}, 30_000
-      page = page!(ctx, turn, "http.get", %{"url" => "https://example.test/x", "headers" => nil})
-      until!(fn -> step!(ctx, turn, page.id).dispatch_state == "closed" end)
+
+      null =
+        page!(
+          ctx,
+          turn,
+          "http.get",
+          %{"url" => "https://example.test/x", "headers" => nil},
+          false
+        )
+
+      decimal = page!(ctx, turn, "http.get", %{"url" => "https://example.test/x", "wait" => 0.5})
+
+      until!(fn ->
+        Enum.all?([null, decimal], &(step!(ctx, turn, &1.id).dispatch_state == "closed"))
+      end)
+
       send(model, :continue)
       assert :completed = Task.await(task, 60_000)
 
-      %{result_message_id: result, outcome: "denied"} = step!(ctx, turn, page.id)
-      assert {:ok, %{content: body}} = Tape.message(ctx, result)
+      answers =
+        for page <- [null, decimal] do
+          %{result_message_id: result, outcome: "denied", proposal_digest: nil} =
+            step!(ctx, turn, page.id)
 
-      assert %{
-               "ok" => false,
-               "error" => %{
-                 "class" => "forbidden",
-                 "message" =>
-                   "http.get: the argument headers is null; leave it out or give it a value"
-               }
-             } = Jason.decode!(body)
+          {:ok, %{content: body} = row} = Tape.message(ctx, result)
+          {Tape.payload(row)["status"], Jason.decode!(body)}
+        end
+
+      assert answers == [
+               {400,
+                %{
+                  "v" => 1,
+                  "ok" => false,
+                  "error" => %{
+                    "class" => "invalid_argument",
+                    "message" =>
+                      "http.get: the argument headers is null; leave it out or give it a value",
+                    "stage" => "execution"
+                  }
+                }},
+               {400,
+                %{
+                  "v" => 1,
+                  "ok" => false,
+                  "error" => %{
+                    "class" => "invalid_argument",
+                    "message" =>
+                      "http.get: the argument wait is a decimal number; give a whole number, " <>
+                        "or the number as text",
+                    "stage" => "execution"
+                  }
+                }}
+             ]
 
       assert Enum.all?(ScriptedWorker.calls(), &(&1.input["operation"] in ["describe", "chat"]))
     end

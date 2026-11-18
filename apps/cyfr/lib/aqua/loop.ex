@@ -1418,7 +1418,7 @@ defmodule Aqua.Loop do
   # (`call_attrs/4`) or a page's (`Aqua.PageCalls.proposal/3`): one
   # recording, so a page's call is recorded as Aqua's call of its kind is.
   # A refused call proposes nothing, so it records no proposal digest: its
-  # arguments may hold the null it was refused for.
+  # arguments may hold the value the digest's form refused.
   @spec recorded(String.t(), map(), {:ok, Call.t()} | {:error, term()}) :: map()
   def recorded(name, args, call) do
     {tool, action, kind, recovery, child, step_kind} =
@@ -1569,9 +1569,10 @@ defmodule Aqua.Loop do
   end
 
   # A call refused as it resolved never ran: it closes denied, as the
-  # policy closes a call it refuses, in the refusal's sentence.
+  # policy closes a call it refuses, in the refusal's sentence, and a page
+  # is answered the refusal's class (`Aqua.PageCalls.answer/3`).
   defp decide_open(state, %{step: step, call: {:error, reason}}, acc) do
-    close(state, step, nil, {:error, {:denied, describe(reason)}})
+    close(state, step, nil, {:error, {:denied, reason}})
     acc
   end
 
@@ -2239,8 +2240,8 @@ defmodule Aqua.Loop do
         {:skipped, message} ->
           {"skipped", message, true}
 
-        {:error, {:denied, message}} ->
-          {"denied", message, true}
+        {:error, {:denied, reason}} ->
+          {"denied", describe(reason), true}
 
         # The chain's authority denied the call, answered by the child's
         # admission or refused by the gate: the step closes `denied`, in

@@ -310,6 +310,11 @@ defmodule Aqua.PageCalls do
 
   defp refusal(_outcome, {:error, %Prima.Refusal{} = refusal}, _text), do: refusal
 
+  # A call refused as it resolved, for a typed reason (`Binding.resolve/3`):
+  # an argument no call carries is `invalid_argument`.
+  defp refusal("denied", {:error, {:denied, reason}}, _text) when not is_binary(reason),
+    do: Sanctum.Refusals.classify(reason)
+
   # A launch that did not run (`Aqua.Loop`'s close of one) answers its own
   # refusal: a component not granted is `consent_required`, as the
   # endpoint answers a frame's call of one.
