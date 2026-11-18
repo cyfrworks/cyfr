@@ -25,7 +25,7 @@
 //   the stub with the allow's `updatedInput` and replies with what it
 //   answered (an allow carrying the result `RATE-LIMIT` ends the turn with
 //   the provider's rate limit instead, as the harness reports one); `first message` replies with the session's first message,
-//   from its folder; `modes` asks for its own `Write` and `ExitPlanMode`
+//   from its folder; `modes` asks for its own `Write` and `Bash`
 //   and replies with its whole command line and the driver's two whole
 //   answers, as JSON. Each reply streams as `stream_event` text deltas, then
 //   the whole `assistant` message, then `result` with usage.
@@ -227,7 +227,7 @@ async function turn(message) {
     reply(said);
   } else if (words.includes('modes')) {
     const ids = [];
-    for (const [tool, input] of [['Write', { file_path: 'made.txt', content: 'x' }], ['ExitPlanMode', { plan: 'write made.txt' }]]) {
+    for (const [tool, input] of [['Write', { file_path: 'made.txt', content: 'x' }], ['Bash', { command: 'touch made.txt' }]]) {
       await ask(tool, input);
       ids.push(`ask-${asked}`);
     }

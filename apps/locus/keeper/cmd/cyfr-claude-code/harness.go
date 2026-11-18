@@ -57,16 +57,19 @@ const (
 	maxResultChars = 50000
 )
 
-// readOnlyArgv is what a read-only start adds: plan mode, in which the
-// harness runs its reading tools and asks before its editing tools and
-// ExitPlanMode, every ask denied (readOnlyDenial), and no settings file of
+// readOnlyArgv is what a read-only start adds: the harness's default
+// permission mode, in which its reads run without asking and it asks
+// before every other use of its own tools, a Bash command that writes
+// among them, every ask denied (readOnlyDenial); and no settings file of
 // the user's or the project's, local ones included, so no hook of theirs
-// runs and no allow rule of theirs lets an edit through without asking.
+// runs and no allow rule of theirs lets a write through without asking.
 // The folder is the box's kept one, which the person, or an auto member's
 // session on the same row, may have written; the sign-in is no setting and
-// stays. Plan mode on 2.1.323 asks nothing before a Bash command, one that
-// writes included: the command runs as the box lets it.
-var readOnlyArgv = []string{"--permission-mode", "plan", "--setting-sources", ""}
+// stays. Plan mode is not it: on 2.1.323 it runs a Bash command that
+// writes without asking, and EnterPlanMode, which the harness takes
+// without asking, puts a default-mode session there (probed: the write
+// then ran).
+var readOnlyArgv = []string{"--permission-mode", "default", "--setting-sources", ""}
 
 // readOnlyDenial is what the harness reads when a read-only start denies
 // one of its own tools.

@@ -31,7 +31,7 @@ import (
 //	partial    replies with a result one of whose models' counts does not read
 //	big    replies with 2 MiB of text
 //	other  asks the driver a control request of another kind, then replies
-//	modes  asks for its own Write and ExitPlanMode, then replies with its
+//	modes  asks for its own Write and Bash, then replies with its
 //	       whole command line and the driver's two whole answers, as JSON
 //
 // Started with `--resume` of a session its folder does not hold, it ends
@@ -177,7 +177,7 @@ func fakeClaude() int {
 				input map[string]any
 			}{
 				{"Write", map[string]any{"file_path": "/work/new.txt", "content": "x"}},
-				{"ExitPlanMode", map[string]any{"plan": "write new.txt"}},
+				{"Bash", map[string]any{"command": "touch new.txt"}},
 			} {
 				ask(tool.name, tool.input)
 				ids = append(ids, fmt.Sprintf("ask-%d", asked))

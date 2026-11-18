@@ -901,7 +901,7 @@ func TestALaunchThatFailsNamesNoFolderOnTheWire(t *testing.T) {
 }
 
 // modesOf is the fake's answer to "modes": its whole command line and the
-// driver's two whole answers, to its own Write and to ExitPlanMode.
+// driver's two whole answers, to its own Write and Bash.
 func modesOf(t *testing.T, s *wireSession, id string) (argv []any, answers []any) {
 	t.Helper()
 	postText(s, id, "modes")
@@ -936,17 +936,17 @@ func strs(xs ...string) []any {
 	return out
 }
 
-// A read-only start runs the harness in plan mode, loading no settings
-// file of the user's or the project's, and denies its own tools,
-// ExitPlanMode among them; one whose read_only is false or absent runs as
-// it always did, its own tools allowed. Both are seen whole: the
-// harness's command line and the driver's answers.
-func TestAReadOnlyStartRunsPlanModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
+// A read-only start runs the harness in its default permission mode,
+// loading no settings file of the user's or the project's, and denies its
+// own tools, a write and a Bash command; one whose read_only is false or
+// absent runs as it always did, its own tools allowed. Both are seen
+// whole: the harness's command line and the driver's answers.
+func TestAReadOnlyStartRunsDefaultModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
 	write := map[string]any{"file_path": "/work/new.txt", "content": "x"}
-	exit := map[string]any{"plan": "write new.txt"}
+	bash := map[string]any{"command": "touch new.txt"}
 	allowed := []any{
 		permissionAnswer("ask-1", map[string]any{"behavior": "allow", "updatedInput": write}),
-		permissionAnswer("ask-2", map[string]any{"behavior": "allow", "updatedInput": exit}),
+		permissionAnswer("ask-2", map[string]any{"behavior": "allow", "updatedInput": bash}),
 	}
 	denied := []any{
 		permissionAnswer("ask-1", map[string]any{"behavior": "deny", "message": "This crew member is read-only."}),
@@ -961,7 +961,7 @@ func TestAReadOnlyStartRunsPlanModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
 		{"absent", map[string]any{"model": "fake-opus"}, nil, allowed},
 		{"false", map[string]any{"model": "fake-opus", "read_only": false}, nil, allowed},
 		{"false beside a permission mode", map[string]any{"model": "fake-opus", "read_only": false, "permission_mode": "acceptEdits"}, []string{"--permission-mode", "acceptEdits"}, allowed},
-		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "plan", "--setting-sources", ""}, denied},
+		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "default", "--setting-sources", ""}, denied},
 	} {
 		s := startDriver(t)
 		session := startFresh(s, c.config)

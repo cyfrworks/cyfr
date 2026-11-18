@@ -400,7 +400,7 @@ func (d *driver) controlRequest(l harnessLine) error {
 	if !ours {
 		// The harness's own tool runs in its box: allowed, and shown by its
 		// tool_use (assistant) by name only; under a read-only start it is
-		// denied, ExitPlanMode, plan mode's own way out, among them.
+		// denied.
 		if d.readOnly {
 			return d.h.Write(denyLine(l.RequestID, readOnlyDenial))
 		}

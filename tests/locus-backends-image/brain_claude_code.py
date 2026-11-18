@@ -15,9 +15,9 @@ its message is one of the events, with exactly its members.
 - A run session's first line is the driver's `hello`, naming the wire's
   version and a boot of its own; `models` with no harness running starts one
   for the listing alone and leaves no process of it.
-- A read-only start runs the harness in plan mode, loading no settings
-  file of the user's or the project's, and denies its own tools,
-  ExitPlanMode among them; one with no read_only runs it as before,
+- A read-only start runs the harness in its default permission mode,
+  loading no settings file of the user's or the project's, and denies its
+  own tools, Write and Bash among them; one with no read_only runs it as before,
   its own tools allowed: both seen as the harness's whole command line and
   the driver's whole answers.
 - A start runs the harness with the start's configuration as its flags,
@@ -224,7 +224,7 @@ def main():
         d.close()
         for key, config, mode, behaviour in (
             ("brain-auto", {"model": "fake-haiku"}, [], "allow"),
-            ("brain-read-only", {"model": "fake-haiku", "read_only": True}, ["--permission-mode", "plan", "--setting-sources", ""], "deny"),
+            ("brain-read-only", {"model": "fake-haiku", "read_only": True}, ["--permission-mode", "default", "--setting-sources", ""], "deny"),
         ):
             m = Driver(c, key)
             m.expect("hello", f"{key}: the driver says hello")
@@ -243,11 +243,11 @@ def main():
                    f"{key}: the harness starts with exactly the start's command line", got["argv"])
             answer = ({"behavior": "allow", "updatedInput": None} if behaviour == "allow"
                       else {"behavior": "deny", "message": "This crew member is read-only."})
-            inputs = [{"file_path": "made.txt", "content": "x"}, {"plan": "write made.txt"}]
+            inputs = [{"file_path": "made.txt", "content": "x"}, {"command": "touch made.txt"}]
             wanted = [{"type": "control_response", "response": {"subtype": "success", "request_id": f"ask-{i}",
                        "response": dict(answer, updatedInput=inputs[i - 1]) if behaviour == "allow" else answer}}
                       for i in (1, 2)]
-            expect(got["answers"] == wanted, f"{key}: the driver answers the harness's own Write and ExitPlanMode exactly",
+            expect(got["answers"] == wanted, f"{key}: the driver answers the harness's own Write and Bash exactly",
                    got["answers"])
             seen += m.lines
             m.close()
