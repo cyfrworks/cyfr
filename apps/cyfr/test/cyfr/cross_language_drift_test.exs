@@ -408,6 +408,13 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "account_names.json" => [
       {"apps/prima/test/prima/authority/blob_test.exs", ~w(unicode keys same different)}
     ],
+    "brain_wire.json" => [
+      {"apps/cyfr/test/opus/brain/wire_test.exs",
+       ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases error_types media_types native commands events read refuse)},
+      {"apps/locus/keeper/cmd/cyfr-claude-code/wire_test.go",
+       ~w(version max_line_bytes max_id_bytes max_list config counts accountings stops phases error_types blocks media_types native commands events uuid read refuse)},
+      {"tests/locus-backends-image/brain_claude_code.py", ~w(version events refuse)}
+    ],
     "browser_frames.json" => [
       {"apps/cyfr/test/opus/browser/frame_test.exs",
        ~w(start max_to_host max_to_driver max_response put encode decode messages)},

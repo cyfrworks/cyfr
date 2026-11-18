@@ -291,18 +291,19 @@ defmodule Opus.Programs do
   # ============================================================================
 
   @doc """
-  End every running terminal and pipe session of the athanor's program row
-  `row_id`: the row was changed or deleted, so nothing runs as it was
-  defined any more. Answers at once; each terminal ends `:row_changed`, and
-  each pipe holder closes its session and releases its owner.
+  End every running terminal, pipe and brain session of the athanor's
+  program row `row_id`: the row was changed or deleted, so nothing runs as
+  it was defined any more. Answers at once; each terminal and each brain
+  holder (`Opus.Brain`) ends `:row_changed`, and each pipe holder closes
+  its session and releases its owner.
   """
   @spec end_mounts(String.t(), String.t()) :: :ok
   def end_mounts(athanor_id, row_id) when is_binary(athanor_id) and is_binary(row_id) do
-    if Process.whereis(@relays) do
-      for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(@relays),
-          is_pid(pid),
-          do: GenServer.cast(pid, {:row_ended, athanor_id, row_id})
-    end
+    for supervisor <- [@relays, Opus.Brain.Holders],
+        Process.whereis(supervisor),
+        {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(supervisor),
+        is_pid(pid),
+        do: GenServer.cast(pid, {:row_ended, athanor_id, row_id})
 
     :ok
   end

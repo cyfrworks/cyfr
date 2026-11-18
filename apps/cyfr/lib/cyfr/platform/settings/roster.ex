@@ -372,6 +372,8 @@ defmodule Cyfr.Platform.Settings.Roster do
       "Bytes the program sessions of one athanor may hold on one backends box together, each session counted at its memory bound from its start until its process is gone; an open past it is refused until one ends. Unset, the box's own budget (`LOCUS_BACKENDS_MEMORY_BUDGET`); 0 is refused.",
     "browser_idle_ms" =>
       "How long Aqua's browser runs with no action of Aqua's before it stops, in milliseconds; its profile stays in its folder, and Aqua's next action starts it again.",
+    "program_silence_ms" =>
+      "How long a program used as a brain may say nothing while it owes its work an answer before that work ends, in milliseconds; waits on a person or on CYFR are not counted, and no work has a limit of its own.",
     "browser_memory_bytes" =>
       "The memory bound Aqua's browser is added with, for its Chrome and its four windows at most; the person changes the bound of the row on the Programs page. The backends service's default total (`LOCUS_BACKENDS_MEMORY_BUDGET`, 1792 MiB) does not hold a 1 GiB browser beside a 1 GiB program: to run both, raise `LOCUS_BACKENDS_MEMORY_BUDGET` in `.env.locus` and `LOCUS_BACKENDS_MEMORY_LIMIT` in `.env` with it, the budget plus 256 MiB. Measured with the image suite's pages, one, three and six windows held 1058, 1154 and 1273 MiB with the file cache of the Chrome the first start fetched, which the kernel gives back first, and 573, 641 and 734 MiB without it; all six fit in the 1 GiB default, the cache giving way. A heavy page can still reach the bound: the browser then ends, every window with it, and the next action starts it again. Its folder, bounded at 2 GiB, holds its profile and the Chrome it fetches at its first start, about 430 MB, looking for a newer one at most once a day: `googlechromelabs.github.io` answers the current stable's version number, and `storage.googleapis.com` holds that version's archive, so the backends service reaches both.",
     "locus_backends_idle_ms" =>
@@ -657,6 +659,14 @@ defmodule Cyfr.Platform.Settings.Roster do
       limit(
         :browser_idle_ms,
         "CYFR_BROWSER_IDLE_MS",
+        1_800_000,
+        whole(60_000..86_400_000, "milliseconds"),
+        :backends
+      ),
+      # Read by `Opus.Brain` (`silence_ms/0`).
+      limit(
+        :program_silence_ms,
+        "CYFR_PROGRAM_SILENCE_MS",
         1_800_000,
         whole(60_000..86_400_000, "milliseconds"),
         :backends
