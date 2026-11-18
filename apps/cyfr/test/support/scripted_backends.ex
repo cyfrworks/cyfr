@@ -54,7 +54,8 @@ defmodule Cyfr.Test.ScriptedBackends do
   false`). A session's key is Locus's: its program, home, key and mode.
 
   `set(fake, :reset_send, true)` resets the connection of the next `send`
-  once it has arrived, before any answer. `hold/2` holds a control or a
+  once it has arrived, before any answer. `set(fake, :dropped, n)` makes
+  the next answer that carries lines say `n` were lost before them. `hold/2` holds a control or a
   session message of its type, and `"opened"` holds an open's answer
   once its session stands.
 
@@ -299,12 +300,12 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   defp quiesce(deadline \\ System.monotonic_time(:millisecond) + 3_000) do
-    # The browser holders close the sessions they hold through the box as
-    # they stop, before the terminals go.
-    if Process.whereis(Opus.Browser.Holders) do
-      for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(Opus.Browser.Holders),
-          do: DynamicSupervisor.terminate_child(Opus.Browser.Holders, pid)
-    end
+    # The browser and brain holders close the sessions they hold through
+    # the box as they stop, before the terminals go.
+    for holders <- [Opus.Brain.Holders, Opus.Browser.Holders],
+        Process.whereis(holders),
+        {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(holders),
+        do: DynamicSupervisor.terminate_child(holders, pid)
 
     for {_id, pid, _type, _modules} <-
           DynamicSupervisor.which_children(Emissary.External.ServerSupervisor) do
@@ -859,7 +860,8 @@ defmodule Cyfr.Test.ScriptedBackends do
 
         if lines != [] or not s.running or now() >= deadline do
           member = if s.mode == :terminal, do: "chunks", else: "lines"
-          answer = %{member => lines, "dropped" => 0, "running" => s.running}
+          dropped = if lines != [], do: take_dropped(agent), else: 0
+          answer = %{member => lines, "dropped" => dropped, "running" => s.running}
 
           answer =
             if s.exit_code != nil and not s.running,
@@ -874,6 +876,11 @@ defmodule Cyfr.Test.ScriptedBackends do
         end
     end
   end
+
+  # Lines the next answer that carries lines says were lost before it
+  # (`set(fake, :dropped, n)`), once.
+  defp take_dropped(agent),
+    do: Agent.get_and_update(agent, &{Map.get(&1, :dropped, 0), Map.put(&1, :dropped, 0)})
 
   defp touch(st, id) do
     case st.sessions[id] do

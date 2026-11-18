@@ -31,7 +31,11 @@
 //   `uuid` (`user_message_uuids` on its init, its messages and its
 //   result), as 2.1.318 names a line written with one.
 // - It writes a canary to its stderr and to its folder, which the driver
-//   must never pass on.
+//   must never pass on, and a stand-in sign-in, `.claude/.credentials.json`.
+// - Beside its own store it keeps each session's user lines as Claude Code
+//   keeps its transcript, `.claude/projects/-fake/<session>.jsonl`, each
+//   under the uuid it was written with, for the brain driver's `forget` and
+//   its reading of what a transcript holds (brain_claude_code.py).
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -56,6 +60,12 @@ const store = path.join(home, '.fake-claude');
 fs.mkdirSync(store, { recursive: true });
 process.stderr.write('FAKE-STDERR-CANARY the harness writes this to its stderr\n');
 fs.writeFileSync(path.join(home, 'canary.txt'), 'FAKE-FOLDER-CANARY the harness keeps this in its folder\n');
+const config = path.join(home, '.claude');
+const projects = path.join(config, 'projects', '-fake');
+fs.mkdirSync(projects, { recursive: true });
+if (!fs.existsSync(path.join(config, '.credentials.json'))) {
+  fs.writeFileSync(path.join(config, '.credentials.json'), '{"FAKE-SIGNIN-CANARY":"the sign-in a person made"}\n');
+}
 
 const resume = flag('--resume');
 const sessionId = resume || flag('--session-id') || crypto.randomUUID();
@@ -163,7 +173,14 @@ function reply(text) {
   out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text }], usage: { input_tokens: 7, output_tokens: 3 } }, parent_tool_use_id: null, session_id: sessionId });
   transcript.push({ role: 'assistant', text });
   save();
-  out({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: text, session_id: sessionId, usage: { input_tokens: 12, output_tokens: text.length, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 } });
+  // The main requests' own usage, and every model's since the last result,
+  // a side request's among them, which holds the main requests' too, as
+  // Claude Code 2.1.323 reports them.
+  out({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: text, session_id: sessionId, usage: { input_tokens: 12, output_tokens: text.length, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 },
+    model_usage_since_last_result: {
+      [model]: { inputTokens: 12, outputTokens: text.length, cacheReadInputTokens: 5, cacheCreationInputTokens: 2, webSearchRequests: 0, costUSD: 0.01 },
+      'fake-side': { inputTokens: 30, outputTokens: 4, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.001 },
+    } });
 }
 
 async function turn(message) {
@@ -176,6 +193,7 @@ async function turn(message) {
   answering = message.uuid ?? null;
   transcript.push({ role: 'user', text });
   save();
+  fs.appendFileSync(path.join(projects, `${sessionId}.jsonl`), JSON.stringify({ type: 'user', uuid: message.uuid, sessionId }) + '\n');
   out({ type: 'system', subtype: 'init', session_id: sessionId, model, tools: [...OWN_TOOLS, ...mcpTools()], mcp_servers: [...servers.keys()].map((name) => ({ name, status: 'connected' })), permissionMode: flag('--permission-mode') || 'default' });
 
   if (words.includes('hello')) {
