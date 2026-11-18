@@ -3,10 +3,11 @@
 
 defmodule Sanctum.LaunchStampBoundaryTest do
   @moduledoc """
-  An approved launch's stamp (`Sanctum.Context`'s `launch`) seeds a root
-  and names the classes its tree may send anywhere, so it is written by
-  one function, `Sanctum.Context.stamp_launch/2`, called from
-  `Aqua.Launch` alone. Mechanically, over the code of every app's `lib`,
+  An approved launch's stamp (`Sanctum.Context`'s `launch`) seeds a root,
+  names the classes its tree may send anywhere and names the agent the
+  root records as its caller, which a standing answer's match keys on, so
+  it is written by one function, `Sanctum.Context.stamp_launch/2`, called
+  from `Aqua.Launch` alone. Mechanically, over the code of every app's `lib`,
   read as Elixir's own syntax tree: the setter is called in one place,
   and nothing but the setter's own module gives the field a value — no
   map or struct literal or update names a `launch` key with anything but
@@ -171,7 +172,8 @@ defmodule Sanctum.LaunchStampBoundaryTest do
       sources: [Prima.Source.new(:filed)],
       classes: [:filed],
       consent_id: nil,
-      execution_id: "exec_x"
+      execution_id: "exec_x",
+      agent: "aqua"
     }
 
     assert %{launch: ^stamp} = Sanctum.Context.stamp_launch(ctx, stamp)
@@ -180,10 +182,18 @@ defmodule Sanctum.LaunchStampBoundaryTest do
       Sanctum.Context.stamp_launch(ctx, %{stamp | classes: [:unsettled]})
     end
 
-    # Through `apply/3`: a stamp missing its root's id is refused as it
+    # Through `apply/3`: a stamp missing its root's id, or the agent its
+    # root names as its caller, or naming an empty one, is refused as it
     # runs, which the compiler's type check would otherwise refuse first.
-    assert_raise FunctionClauseError, fn ->
-      apply(Sanctum.Context, :stamp_launch, [ctx, Map.delete(stamp, :execution_id)])
+    for refused <- [
+          Map.delete(stamp, :execution_id),
+          Map.delete(stamp, :agent),
+          %{stamp | agent: ""},
+          %{stamp | agent: :aqua}
+        ] do
+      assert_raise FunctionClauseError, fn ->
+        apply(Sanctum.Context, :stamp_launch, [ctx, refused])
+      end
     end
   end
 end

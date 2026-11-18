@@ -123,10 +123,17 @@ defmodule Opus.FeedsTest do
       assert Enum.any?(ScriptedWorker.calls(), &(&1.input == Prima.Feed.input(binding)))
       [%{execution_id: execution_id}] = occurrences(actor, feed.id)
 
-      assert [%{schedule_id: schedule_id}] =
+      assert [%{schedule_id: schedule_id, caller: caller}] =
                Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.id == ^execution_id))
 
       assert schedule_id == feed.id
+      # A feed is a row of the schedules' table, and its run names it as
+      # a schedule's names that schedule.
+      assert caller == "schedule:" <> feed.id
+      [%{execution_id: scheduled}] = occurrences(actor, schedule.id)
+
+      assert Arca.Repo.get!(Arca.Schemas.Execution, scheduled).caller ==
+               "schedule:" <> schedule.id
 
       # The schedule's completion is the athanor's one: a feed's fire
       # announces none.

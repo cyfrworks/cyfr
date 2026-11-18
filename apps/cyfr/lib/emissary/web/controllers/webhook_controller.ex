@@ -291,7 +291,9 @@ defmodule Emissary.Web.WebhookController do
       # enforced at create/update and by the NOT NULL column.
       run_result =
         Opus.run_root(ctx, {:id, webhook.profile_id}, webhook.target_ref, input,
-          class: :background
+          class: :background,
+          # The run's caller is the webhook's row, known here alone.
+          caller: {:webhook, webhook.id}
         )
 
       case run_result do
