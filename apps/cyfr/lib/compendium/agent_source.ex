@@ -16,18 +16,18 @@ defmodule Compendium.AgentSource do
 
     * The artifact digest is the agent's **capability** digest
       (`Compendium.AquaAgent.capability_digest/1`): type, catalyst or
-      program, model, options, tool policy, disabled. A crew member's
-      tool policy is the soul's (`Compendium.AquaAgent.under_soul/2`), so
+      program, model, options, mode, tools, disabled. A crew member's
+      tools are the soul's (`Compendium.AquaAgent.under_soul/2`), so
       a tool the soul gains or loses moves every member's consent with
       the soul's. The prompt is not in it, so editing what an agent says
       never moves a consent; the file's bytes are its **revision**, kept
       by `Arca.AgentRevisions` for a turn to pin.
-    * `caps.tools` are the policy keys that name tool actions
+    * `caps.tools` are the agent's `tools` that name tool actions
       (`tool.action`, `tool.*`), which consent expands against the live
       catalog: a key no catalogued action matches expands to nothing
-      (`Prima.ToolPattern.expand/2`); and `native_search` when it is
-      `auto`, the provider's own search, which no catalog action is and
-      the consent carries by its name.
+      (`Prima.ToolPattern.expand/2`); and `native_search`, the provider's
+      own search, which no catalog action is and the consent carries by
+      its name.
     * `dependencies.static` are the model catalyst the agent runs on and
       the catalysts behind the tool families it names — its hands. An
       agent has no edge into another agent: a crew member consents and
@@ -37,10 +37,9 @@ defmodule Compendium.AgentSource do
       `program.start` step, never by the agent's consent.
     * `agent` is the model target, the catalyst and the model, which the
       shape digest reads; a program brain's holds its model alone, which
-      names no target. The policy's modes are not in the manifest: a tool
-      is in `caps.tools` whether it is `auto` or `ask`, and whether the
-      person is asked first grants nothing the consent does not
-      (`ARCHITECTURE.md` §5.4), so marking a tool `auto` or `ask` moves no
+      names no target. The member's mode is not in the manifest: what of
+      its tools a member runs grants nothing the consent does not
+      (`ARCHITECTURE.md` §5.4), so switching a member's mode moves no
       consent. The flat `"model"` key is not written.
 
   A disabled agent has no row: it is out of the roster.
@@ -80,10 +79,7 @@ defmodule Compendium.AgentSource do
   @doc "The consent manifest of an agent."
   @spec manifest(AquaAgent.t()) :: map()
   def manifest(%{name: name} = agent) do
-    tools =
-      for {key, mode} <- agent.tool_policy || %{},
-          key != "native_search" or mode == "auto",
-          do: key
+    tools = Map.get(agent, :tools) || []
 
     hands =
       tools

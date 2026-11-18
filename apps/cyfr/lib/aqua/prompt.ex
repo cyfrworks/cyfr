@@ -79,7 +79,7 @@ defmodule Aqua.Prompt do
   """
   @spec compose(Context.t(), opts()) :: composed()
   def compose(%Context{} = ctx, opts) do
-    %{"prompt" => prompt, "tool_policy" => tool_policy} = Keyword.fetch!(opts, :agent)
+    %{"prompt" => prompt} = Keyword.fetch!(opts, :agent)
     authority = Keyword.get(opts, :authority)
     {notes, sources} = notes(ctx)
     where = Keyword.get(opts, :where)
@@ -89,7 +89,7 @@ defmodule Aqua.Prompt do
         prompt,
         "\n\n---\n\n## Runtime Context\n\n",
         file_paths(authority),
-        Aqua.Prelude.system_prelude(tool_policy),
+        Aqua.Prelude.system_prelude(),
         scrolls(ctx),
         notes,
         crew(Keyword.get(opts, :crew, [])),

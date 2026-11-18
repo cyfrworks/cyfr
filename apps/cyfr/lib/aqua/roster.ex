@@ -20,15 +20,19 @@ defmodule Aqua.Roster do
   itself: an unreadable tree reads as "nobody here" — the chat still
   renders, which beats refusing the whole thread for a catalog
   read. A send with an empty roster and no prior pick is still refused
-  `:no_agent` by the runner.
+  `:no_agent` by the runner. A soul whose file is refused still heads
+  the roster, under its name, so a post that names no one goes to it and
+  its turn says why it cannot answer, never to a crew member in its place.
   """
   @spec roster(Context.t()) :: [map()]
   def roster(%Context{} = ctx) do
-    case Aqua.AgentConfig.roster(ctx) do
-      {:ok, agents} ->
-        Enum.map(agents, fn agent ->
-          %{"name" => agent["name"], "title" => agent["title"]}
-        end)
+    case Aqua.AgentConfig.roster_and_soul(ctx) do
+      {:ok, agents, soul_refused} ->
+        listed = Enum.map(agents, &%{"name" => &1["name"], "title" => &1["title"]})
+
+        if soul_refused,
+          do: [%{"name" => Prima.AgentRef.soul_name(), "title" => "Aqua"} | listed],
+          else: listed
 
       {:error, _} ->
         []

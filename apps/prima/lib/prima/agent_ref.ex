@@ -58,6 +58,20 @@ defmodule Prima.AgentRef do
   def soul_name, do: @soul
 
   @doc """
+  The sentence a person reads where an agent file that still holds the
+  retired `tool_policy` is refused (`Compendium.AquaAgent`): on the Aqua
+  page, as the line a thread is given, and for a post that names no one.
+  It says what to change and that nothing else must.
+  """
+  @spec tool_policy_retired() :: String.t()
+  def tool_policy_retired,
+    do:
+      "Aqua's file still lists its tools under `tool_policy:`, which CYFR no longer reads, " <>
+        "so Aqua can't answer. In Files, open aqua/aqua.md and replace that header with " <>
+        "`tools:`, writing each tool on its own line as `- name`, without its `auto` or " <>
+        "`ask`. Nothing else in the file needs to change."
+
+  @doc """
   The soul's name-level ref.
 
   ## Examples

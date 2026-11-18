@@ -4,6 +4,7 @@ description: "Deep web research: fact-finding across several searches, current e
 avoid: "Changing the athanor's files, components or settings; reading one known URL, which needs no search"
 catalyst_ref: catalyst:local.gemini
 model: gemini-pro-latest
+mode: auto
 ---
 
 # Explorer

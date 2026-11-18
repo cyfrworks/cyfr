@@ -4,6 +4,7 @@ description: "Coding work end to end in a folder of its own: reading, writing, b
 avoid: "A quick answer, a single read or a web search; work the person must watch step by step"
 catalyst_ref: catalyst:local.claude-code
 model: claude-opus-5-5
+mode: auto
 ---
 
 # Claude Code
