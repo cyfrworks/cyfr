@@ -4163,9 +4163,12 @@ defmodule Arca.TurnStorage do
   (`Prima.Source`s, the threads and files it carries) and the sources of
   the turns in `:sources_from`, whose words it carries; a delivery taken
   back leaves them joined. A post or a notice joins the posts owed an
-  answer, a notice in place of the post or answer it continues, whose
-  recovery obligation it takes over (`reconcile_brain/3`), and the
-  silence clock pauses on the delivery not yet taken (`brain_progress`).
+  answer, and the silence clock pauses on the delivery not yet taken
+  (`brain_progress`). A notice leaves the recovery obligation it answers
+  (`reconcile_brain/3`) where it stands until the driver answers for its
+  write (`commit_brain/3`) or a reconcile settles it; until then its step
+  alone keeps another notice of its row from being offered
+  (`brain_notices/2`).
   Answers `%{step: step, row: row}`.
   """
   @spec carry(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
@@ -4214,10 +4217,6 @@ defmodule Arca.TurnStorage do
         end
 
         progress = progress(thread)
-
-        progress =
-          if deliver == "notice", do: noticed(progress, athanor_id, turn, row.id), else: progress
-
         progress = if deliver == "answer", do: progress, else: owe(progress, step.id)
         progress = clocked(progress, athanor_id, turn, Map.fetch!(attrs, :silence_ms), false)
         :ok = put_progress!(athanor_id, thread.id, progress)
@@ -4232,7 +4231,9 @@ defmodule Arca.TurnStorage do
   @doc """
   Take back a delivery `carry/3` recorded whose command was certainly not
   written (the holder refused it before writing): its `input` step goes,
-  a post it carried waits again, and it owes no answer. Under the turn's
+  a post it carried waits again, and it owes no answer; a notice's
+  recovery obligation, which it had not taken over, is owed again as it
+  stood, a fresh session's context with it. Under the turn's
   lock (`:fence`) and its thread's; a step no longer `dispatched`, or of
   another turn, is `:not_dispatched`.
   """
@@ -4322,9 +4323,12 @@ defmodule Arca.TurnStorage do
   turns' steps is dropped, as those turns are over.
 
   A held post and an uncertain answer each owe one recovery prompt
-  (`brain_notices/2`), and the obligation stays recorded until that
-  prompt's own step is (`carry/3` moves it): a held post stays owed an
-  answer, and a reconcile run again before then answers both again.
+  (`brain_notices/2`), and the obligation stays recorded until the
+  driver answers for that prompt's write (`commit_brain/3`) or a
+  reconcile finds the prompt's step recorded, as it may have been
+  written: either settles it, and it is never prompted again. Until then
+  a held post stays owed an answer, and a reconcile run again answers
+  both again.
   Answers `%{held: [step], absent: [step], answers: [step]}`.
 
   With `fresh: true` the session was started anew because its transcript
@@ -4346,14 +4350,21 @@ defmodule Arca.TurnStorage do
         if thread.brain_generation != Map.fetch!(attrs, :generation),
           do: Arca.Repo.rollback(:generation_moved)
 
-        progress = progress(thread)
-
         steps =
           Arca.Repo.all(
             from(s in TurnStep,
               where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
               order_by: [asc: s.seq]
             )
+          )
+
+        # A notice recorded may have been written: it settles what it
+        # answers, which is never prompted again.
+        progress =
+          taken_over(
+            progress(thread),
+            athanor_id,
+            for(s <- steps, s.action == "notice", do: s.id)
           )
 
         # The prompts this turn still owes; other turns' are dropped.
@@ -4467,26 +4478,22 @@ defmodule Arca.TurnStorage do
           Arca.Repo.all(
             from(s in TurnStep,
               where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
-              where: s.id in ^Enum.map(noticed, & &1["step"])
+              where: s.id in ^Enum.map(noticed, & &1["step"]) or s.action == "notice"
             )
           )
-          |> Map.new(&{&1.id, &1})
 
-        Enum.flat_map(noticed, fn notice ->
-          case steps[notice["step"]] do
-            nil ->
-              []
+        # A row a notice was recorded for is offered no second one.
+        recorded = for %{action: "notice", message_id: row} <- steps, do: row
+        steps = Map.new(steps, &{&1.id, &1})
 
-            step ->
-              [
-                %{
-                  action: step.action,
-                  message_id: step.message_id,
-                  context?: notice["context"] == true
-                }
-              ]
-          end
-        end)
+        for notice <- noticed,
+            step = steps[notice["step"]],
+            step != nil and step.message_id not in recorded,
+            do: %{
+              action: step.action,
+              message_id: step.message_id,
+              context?: notice["context"] == true
+            }
     end
   end
 
@@ -4519,16 +4526,25 @@ defmodule Arca.TurnStorage do
 
   def brain_pending(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
 
-  # A recovery prompt recorded takes over the obligation it answers
-  # (`reconcile_brain/3`): the post or the answer it continues owes it no
-  # longer, and the post leaves the posts owed an answer to the prompt.
+  # The recovery prompts `notice_ids` take over the obligations they
+  # answer (`reconcile_brain/3`), once the driver answered for their write
+  # or a reconcile found them recorded: the post or the answer each
+  # continues owes it no longer, and the post leaves the posts owed an
+  # answer to the prompt.
   # arca:db-raise-ok inside the caller's transaction
-  defp noticed(progress, athanor_id, %Turn{} = turn, row_id) do
+  defp taken_over(progress, _athanor_id, []), do: progress
+
+  defp taken_over(progress, athanor_id, notice_ids) do
     ids =
       Arca.Repo.all(
-        from(s in TurnStep,
-          where: s.athanor_id == ^athanor_id and s.turn_id == ^turn.id and s.kind == "input",
-          where: s.message_id == ^row_id and s.action != "notice",
+        from(n in TurnStep,
+          join: s in TurnStep,
+          on:
+            s.athanor_id == n.athanor_id and s.turn_id == n.turn_id and
+              s.message_id == n.message_id,
+          where: n.athanor_id == ^athanor_id and n.id in ^notice_ids,
+          where: n.kind == "input" and n.action == "notice",
+          where: s.kind == "input" and s.action != "notice",
           select: s.id
         )
       )
@@ -4659,7 +4675,8 @@ defmodule Arca.TurnStorage do
       a running or a paused turn and never dispatched by being recorded;
     * `:accepted` and `:refused`, the `input` steps the driver answered:
       taken closes one `ok`, refused closes it `error`, and neither is an
-      answer;
+      answer; a notice among them takes over the recovery obligation it
+      answers (`reconcile_brain/3`);
     * `:answered`, the post and notice steps a native `idle` named: they
       leave the posts owed an answer, and a nudge among them is answered;
     * `:usage`, the `usage` events: each counted once, by its result's
@@ -4753,6 +4770,7 @@ defmodule Arca.TurnStorage do
 
     progress =
       progress
+      |> taken_over(athanor_id, Map.get(attrs, :accepted, []) ++ Map.get(attrs, :refused, []))
       |> Map.update("owed", [], &(&1 -- answered))
       |> counted!(athanor_id, thread, turn, attrs.agent, Map.get(attrs, :usage, []))
       |> then(fn p ->

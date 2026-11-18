@@ -1033,6 +1033,49 @@ defmodule Aqua.ProgramTest do
              ]
     end
 
+    test "a notice the holder refuses before writing it leaves its post owed: the next start " <>
+           "names the post again, and the notice follows once",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      %{work: work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+      Scripted.end_sessions(fake, row.id)
+      opened!(fake, row, "boot-two")
+      _resume = sent()
+      say(fake, row, started([input.id]))
+      assert sent() == work
+
+      # The backend lost the process before this send: its unknown_session
+      # says none of the notice was written.
+      Scripted.refuse_once(fake, "send", "unknown_session")
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      assert %{"t" => "post"} = sent()
+      opened!(fake, row, "boot-three")
+      assert %{"t" => "start", "pending" => [pending]} = sent()
+      assert pending == input.id
+      assert [_input] = inputs(ctx, turn)
+
+      say(fake, row, started([input.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      notice = sent()
+      [_post, noticed] = inputs(ctx, turn)
+      assert notice["id"] == noticed.id
+      say(fake, row, accepted(noticed))
+      say(fake, row, idle(turn, [noticed.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("notice", turn.message_id, "ok", "0:notice:")
+             ]
+    end
+
     test "a post the resumed transcript does not hold ends the turn saying so, and is never written again",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       allow!(ctx, thread, row)

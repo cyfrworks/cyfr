@@ -529,8 +529,9 @@ defmodule Arca.TurnInputsStorageTest do
     assert step(lost.id).dispatch_state == "closed" and step(lost.id).outcome == "uncertain"
     assert carried_by(second) == lost.id
 
-    # The held post owes one prompt, and stays owed an answer until that
-    # prompt's own step is recorded, which takes the obligation over.
+    # The held post owes one prompt, and stays owed an answer until the
+    # driver takes that prompt, which takes the obligation over; recorded,
+    # the prompt is offered no second time.
     assert progress(daily)["owed"] == [held.id]
     assert progress(daily)["notices"] == [%{"step" => held.id}]
 
@@ -539,6 +540,10 @@ defmodule Arca.TurnInputsStorageTest do
 
     assert first_id == first.id
     {:ok, %{step: notice}} = carry(actor, turn, "notice", first)
+    assert progress(daily)["owed"] == [held.id, notice.id]
+    assert progress(daily)["notices"] == [%{"step" => held.id}]
+    assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [notice.id], busy: true})
     assert progress(daily)["owed"] == [notice.id]
     assert progress(daily)["notices"] == []
     assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
@@ -553,10 +558,41 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:ok, %{held: [%{id: id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
     assert id == input.id
 
-    # No prompt was recorded before the next restart.
+    # No prompt was recorded before the next restart, nor before the one
+    # after it.
     assert {:ok, [^id]} = TurnStorage.brain_pending(actor, turn.id)
     assert {:ok, %{held: [%{id: ^id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    assert {:ok, %{held: [%{id: ^id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
     assert progress(daily)["notices"] == [%{"step" => id}]
+  end
+
+  test "a prompt certainly not written leaves the obligation it was to take over owed as it " <>
+         "stood, and one recorded settles it at the next reconcile, written or not",
+       %{actor: actor, daily: daily, turn: turn} do
+    row = opening(actor, turn)
+    {:ok, %{step: input}} = carry(actor, turn, "post", row)
+    {:ok, _} = commit(actor, daily, turn, %{accepted: [input.id], busy: true})
+    attrs = %{fence: turn.fence, generation: 0, held: [input.id]}
+    {:ok, _} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    {:ok, %{step: notice}} = carry(actor, turn, "notice", row)
+    assert :ok = TurnStorage.uncarry(actor, turn.id, %{fence: turn.fence, step_id: notice.id})
+    assert progress(daily)["owed"] == [input.id]
+    assert progress(daily)["notices"] == [%{"step" => input.id}]
+    assert {:ok, [input.id]} == TurnStorage.brain_pending(actor, turn.id)
+    {:ok, _} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+
+    assert {:ok, [%{action: "post", message_id: id, context?: false}]} =
+             TurnStorage.brain_notices(actor, turn.id)
+
+    assert id == row.id
+
+    # Recorded and never answered for, it may have been written: the next
+    # reconcile settles the obligation, and no prompt follows.
+    {:ok, %{step: again}} = carry(actor, turn, "notice", row)
+    assert {:ok, %{absent: [%{id: absent}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
+    assert absent == again.id
+    assert progress(daily)["notices"] == []
+    assert {:ok, []} = TurnStorage.brain_notices(actor, turn.id)
   end
 
   test "a restart before an uncertain answer's prompt is recorded keeps the prompt owed, and " <>
@@ -584,6 +620,7 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:ok, %{answers: [%{id: id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
     assert id == answer.id
     assert step(answer.id).outcome == "uncertain"
+    assert {:ok, %{answers: [%{id: ^id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
     assert {:ok, %{answers: [%{id: ^id}]}} = TurnStorage.reconcile_brain(actor, turn.id, attrs)
 
     assert {:ok, [%{action: "answer", message_id: row, context?: false}]} =
