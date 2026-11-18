@@ -13,6 +13,9 @@ defmodule PrismWeb.TipsLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   # Each tip's "Show me", by the tip's id: a path under the athanor,
   # linked through `PrismWeb.Nav.href/2`.
   @show_me [
@@ -112,6 +115,12 @@ defmodule PrismWeb.TipsLive do
         </p>
         <p>Executions is in dev's side menu, and "Show me" opens it in lite too.</p>
       </.tip>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+      />
     </div>
     """
   end

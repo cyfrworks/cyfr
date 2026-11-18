@@ -301,6 +301,13 @@ defmodule PrismWeb.WorkspaceLive do
           Back to the desktop
         </.link>
       </div>
+
+      <.live_component
+        module={SystemLayer}
+        id={SystemLayer.layer_id()}
+        context={@context}
+        athanor_route={@athanor_route}
+      />
     </div>
     """
   end

@@ -15,6 +15,9 @@ defmodule PrismWeb.MyReportsLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   require Logger
 
   @page_size 50
@@ -204,6 +207,12 @@ defmodule PrismWeb.MyReportsLive do
           <span :if={!@loading}>Load more</span>
         </button>
       </div>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+      />
     </div>
     """
   end

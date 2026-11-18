@@ -38,6 +38,9 @@ defmodule PrismWeb.ExecutionsLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias Cyfr.Bus.Execution
   alias Phoenix.LiveView.JS
 
@@ -573,6 +576,12 @@ defmodule PrismWeb.ExecutionsLive do
           </tbody>
         </table>
       </div>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+      />
     </div>
     """
   end
