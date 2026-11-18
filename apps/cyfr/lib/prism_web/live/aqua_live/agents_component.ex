@@ -3,23 +3,25 @@
 
 defmodule PrismWeb.AquaLive.AgentsComponent do
   @moduledoc """
-  The soul and its crew. The soul has a prompt, a brain and the
-  capability allowlist every crew member runs under too; a crew member
-  has a prompt, a brain, what it is good at and what to avoid. Each
-  brain's models come from the model catalogue and its options from the
-  brain's own `describe` (`Aqua.brain_options/2`). Every write goes
-  through the `aqua` tool, the gate a card in chat goes through; a write
-  that changes a file's provenance asks the page to re-read it
-  (`{:refresh, :agents}`), since the chips and the removal verbs come off
-  that read.
+  The soul and its crew. The soul has a prompt, a brain and the tools
+  every crew member is offered too; a crew member has a prompt, a brain,
+  what it is good at and what to avoid. Each of them has a mode,
+  read-only or auto, which decides what of its offered tools it runs; the
+  read-only choice is closed, with the reason beneath it, for a member
+  whose brain CYFR cannot keep read-only (`Aqua.read_only_unheld/3`).
+  Each brain's models come from the model catalogue and its options from
+  the brain's own `describe` (`Aqua.brain_options/2`). Every write goes
+  through the `aqua` tool, the gate every writer of an agent file goes
+  through; a write that changes a file's provenance asks the page to
+  re-read it (`{:refresh, :agents}`), since the chips and the removal
+  verbs come off that read.
 
-  Beside the soul's capabilities stands the person's browser setting,
-  read and written through the `browser` tool as the person: the
-  browser's own actions follow it rather than a policy line, so the
-  capability list leaves them out. While either of Aqua's browsers, the
-  person's or the second for work kept apart, is not added, the section
-  offers to add it on the Programs page, where its definition is
-  confirmed as any program's is.
+  Beside the soul's tools stands the person's browser setting, read and
+  written through the `browser` tool as the person: the browser's own
+  actions follow it, so the capability list leaves them out. While
+  either of Aqua's browsers, the person's or the second for work kept
+  apart, is not added, the section offers to add it on the Programs
+  page, where its definition is confirmed as any program's is.
   """
 
   use PrismWeb, :live_component
@@ -35,6 +37,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # included, from an event the templates never send.
   @editable_fields ~w(title description avoid)
 
+  # Each mode a member may be in, as its file spells it, with the words
+  # its choice on the card reads.
+  @modes [
+    {"read-only", "Read-only: runs only reads, then answers; every other call is refused"},
+    {"auto", "Auto: runs every tool it is offered, deleting included"}
+  ]
+  @mode_names Enum.map(@modes, &elem(&1, 0))
+
   @impl true
   def mount(socket) do
     {:ok,
@@ -42,7 +52,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:loaded, false)
      |> assign(:agents, [])
      |> assign(:soul, nil)
-     |> assign(:agents_unread, false)
+     |> assign(:agents_unread, nil)
      |> assign(:crew, [])
      |> assign(:tool_actions, nil)
      |> assign(:browser, nil)
@@ -50,6 +60,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:brain_options, %{})
      |> assign(:program_offers, %{})
      |> assign(:signs_in, MapSet.new())
+     |> assign(:unheld, %{})
      |> assign(:installing, nil)
      |> assign(:setting_up, nil)
      |> assign(:set_up_refused, %{})
@@ -220,50 +231,53 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # Add/remove a `tool.action` from an allowlist. On add, the default is
-  # "auto" for a read (they never ask) and "ask" for everything else. The
-  # kind is DERIVED here from the action's own annotation
-  # (`Aqua.tool_kind/2`), never taken off the wire. A key that resolves to
-  # no known action is refused.
-  def handle_event("editor_toggle_capability", %{"name" => name, "key" => key}, socket) do
+  # A member's mode, the soul's or a crew member's: what of its offered
+  # tools it runs from its next turn on. Only the two modes are written;
+  # any other value is no edit.
+  def handle_event("editor_set_mode", %{"name" => name, "mode" => mode}, socket)
+      when mode in @mode_names do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      {:noreply,
-       update_tool_policy(socket, name, fn policy ->
-         cond do
-           Map.has_key?(policy, key) ->
-             {:ok, %{key => nil}}
+      case call_aqua(socket.assigns.context, %{
+             "action" => "update",
+             "name" => name,
+             "mode" => mode
+           }) do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
+          {:noreply, socket}
 
-           resolved_kind(key) == nil ->
-             {:refused, "Unknown capability: #{key}"}
-
-           resolved_kind(key) == :read ->
-             {:ok, %{key => "auto"}}
-
-           true ->
-             {:ok, %{key => "ask"}}
-         end
-       end)}
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+      end
     end)
   end
 
-  # Toggle a write/execute capability between "ask" (request approval) and
-  # "auto" (run without asking). A destructive or external action, or one
-  # declared to take no standing allow at agent scope, is never "auto":
-  # enforced here, on the action's declaration, whatever the client sent;
-  # the `aqua` door holds the same rule for every other writer.
-  def handle_event(
-        "editor_set_capability_mode",
-        %{"name" => name, "key" => key, "mode" => mode},
-        socket
-      )
-      when mode in ["ask", "auto"] do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      cond do
-        mode == "auto" and not auto_permitted?(key) ->
-          {:noreply, put_flash(socket, :error, "#{key} always asks — it cannot be set to auto")}
+  def handle_event("editor_set_mode", _params, socket), do: {:noreply, socket}
 
-        true ->
-          {:noreply, update_tool_policy(socket, name, fn _policy -> {:ok, %{key => mode}} end)}
+  # Offer one tool to the soul, or take it off: a `tool.action`, or the
+  # provider's own `native_search`. The direction is read from the soul's
+  # list as it is NOW, just before the write, never the copy this page
+  # loaded, and the edit names the one tool, which the `aqua` door adds to
+  # or takes off the list as it stands when the write lands, so a toggle
+  # made elsewhere at the same moment on another tool is kept.
+  def handle_event("editor_toggle_capability", %{"name" => name, "key" => key}, socket)
+      when is_binary(key) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
+
+      result =
+        with {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
+          edit = if key in (agent.tools || []), do: "tools_remove", else: "tools_add"
+          call_aqua(ctx, %{"action" => "update", "name" => name, edit => [key]})
+        end
+
+      case result do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
+          {:noreply, socket}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
       end
     end)
   end
@@ -283,15 +297,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, Sanctum.Refusals.render(reason))}
       end
-    end)
-  end
-
-  # Toggle the provider-native search grant. It is an ordinary policy key
-  # that coexists with the rest of the allowlist; the formula appends the
-  # native tool when the key is "auto".
-  def handle_event("editor_toggle_native", %{"name" => name}, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      {:noreply, update_tool_policy(socket, name, &{:ok, toggle_key(&1, "native_search")})}
     end)
   end
 
@@ -494,14 +499,20 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     # disabled from this page must stay on it to be put back.
     # A list that cannot be read is not a room with no agents: the page
     # says so in place of the agent cards, the new-member form and the
-    # missing soul's note, and no model can be installed or connected.
-    {listed, unread?} =
+    # missing soul's note, and no model can be installed or connected. A
+    # soul whose file still holds the retired `tool_policy` is refused as
+    # a conflict whose sentence says what to change, which stands there
+    # instead of a fault's words.
+    {listed, unread} =
       case call_aqua(ctx, %{"action" => "list", "detail" => true, "include_disabled" => true}) do
         {:ok, %{guides: guides}} when is_list(guides) ->
-          {Enum.filter(guides, &(&1.type in types)), false}
+          {Enum.filter(guides, &(&1.type in types)), nil}
+
+        {:error, {:conflict, sentence}} when is_binary(sentence) ->
+          {[], sentence}
 
         _unread ->
-          {[], true}
+          {[], "The agents cannot be read right now — try again."}
       end
 
     # Each card reads its agent in the roster's string-keyed projection,
@@ -517,7 +528,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           "model" => g.model,
           "catalyst_ref" => g.catalyst_ref,
           "options" => g[:options] || %{},
-          "tool_policy" => g.tool_policy || %{},
+          "mode" => g[:mode] || "auto",
+          "tools" => g[:tools] || [],
           "disabled" => g.disabled == true,
           "provenance" => Map.get(provenance, Enum.join(Compendium.agent_file_path(g.name), "/"))
         }
@@ -531,17 +543,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     # The page's setup is open while the soul's brain is not connected and
     # names the crew members whose brain is not; a roster that could not
     # be read tells it nothing.
-    unless unread? do
+    if is_nil(unread) do
       send(self(), {:agents_read, brains_read(soul, crew, status)})
     end
 
     socket
     |> assign(:agents, agents)
-    |> assign(:agents_unread, unread?)
+    |> assign(:agents_unread, unread)
     |> assign(:soul, soul)
     |> assign(:crew, crew)
     |> assign(:model_status, status)
-    |> assign_plans(ctx, agents)
+    |> assign_plans(ctx, agents, listed)
     |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
     |> assign(:browser, browser_status(ctx))
@@ -596,9 +608,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Each agent's catalyst, read once through its setup plan: the programs
   # its login needs offer to install, and whether it runs on a program's
   # own sign-in (`Aqua.brain_signs_in?/1`), whose binding is the one row
-  # named as its program, so its card offers no other to change to. A
-  # plan that cannot be read offers nothing.
-  defp assign_plans(socket, ctx, agents) do
+  # named as its program, so its card offers no other to change to; and
+  # which members' brains CYFR cannot keep read-only
+  # (`Aqua.read_only_unheld/3`). A plan
+  # that cannot be read offers nothing.
+  defp assign_plans(socket, ctx, agents, listed) do
     plans =
       for ref <- agents |> Enum.map(& &1["catalyst_ref"]) |> Enum.uniq(),
           is_binary(ref),
@@ -616,6 +630,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       :signs_in,
       for({ref, plan} <- plans, Aqua.brain_signs_in?(plan), into: MapSet.new(), do: ref)
     )
+    |> assign(:unheld, Aqua.read_only_unheld(ctx, listed, Map.new(plans)))
   end
 
   # For each catalyst, the programs its login needs name: one the athanor
@@ -683,7 +698,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
   # once per page open, so the matrix UI can render real (tool, action)
   # pairs the user can toggle. native_search is included as a bare key
-  # (no actions enum) since the formula treats it specially.
+  # (no actions enum); its own checkbox stands for it.
   defp ensure_tool_actions_loaded(socket) do
     if socket.assigns[:tool_actions] do
       socket
@@ -692,8 +707,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # The actions that follow the person's browser setting have no policy
-  # line to choose: the browser section stands for them.
+  # The actions that follow the person's browser setting have no checkbox:
+  # the browser section stands for them.
   defp without_setting(tool_actions) do
     for {tool, actions} <- tool_actions do
       kept =
@@ -711,60 +726,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # ============================================================================
   # Helpers
   # ============================================================================
-
-  # The patch that flips one "auto"-or-absent key: present, it is taken
-  # off; absent, put on.
-  defp toggle_key(policy, key) do
-    if Map.has_key?(policy, key), do: %{key => nil}, else: %{key => "auto"}
-  end
-
-  # The action's kind, resolved from its own annotation — the server-owned
-  # fact the ask/auto decisions above key on. nil for a key the catalog
-  # has never heard of (fail closed).
-  defp resolved_kind(key) when is_binary(key) do
-    case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.tool_kind(tool, action)
-      _ -> nil
-    end
-  end
-
-  # "auto" (run with no card) is only for kinds a card can be skipped for —
-  # the one rule `Aqua.auto_permitted?/2` holds for every door.
-  defp auto_permitted?(key) do
-    case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.auto_permitted?(tool, action)
-      _ -> false
-    end
-  end
-
-  # An allowlist edit is one key's. `change` reads the policy as it is
-  # NOW — again, just before the write, never the copy this page loaded —
-  # to decide the direction, and answers the one-key patch
-  # (`%{key => "auto" | "ask" | nil}`) the `aqua` door applies under its
-  # lock, so a toggle made elsewhere at the same moment on another
-  # key is kept, not written over. Or `{:refused, sentence}` for the person.
-  defp edit_tool_policy(ctx, name, change) do
-    with {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => name}),
-         {:ok, patch} <- change.(agent.tool_policy || %{}),
-         {:ok, _} <-
-           call_aqua(ctx, %{"action" => "update", "name" => name, "tool_policy_patch" => patch}) do
-      :ok
-    end
-  end
-
-  defp update_tool_policy(socket, name, change) do
-    case edit_tool_policy(socket.assigns.context, name, change) do
-      :ok ->
-        send(self(), {:refresh, :agents})
-        socket
-
-      {:refused, message} ->
-        put_flash(socket, :error, message)
-
-      {:error, reason} ->
-        put_flash(socket, :error, "Update failed: #{error_message(reason)}")
-    end
-  end
 
   # The option as the brain's `describe` declared it on this page's read.
   defp declared_option(socket, name, option) do
@@ -833,40 +794,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # Count of capabilities that run without asking that *aren't* reads —
-  # i.e. the write/execute actions the user has blanket-approved ("auto").
-  defp count_auto(tool_policy, tool_actions) when is_map(tool_policy) do
-    kinds = kind_index(tool_actions)
+  # How many of a kind's rows the soul's tools name.
+  defp count_in_list(tools, rows),
+    do: Enum.count(rows, fn {t, a} -> "#{t}.#{a}" in tools end)
 
-    Enum.count(tool_policy, fn {key, val} ->
-      val == "auto" and Map.get(kinds, key) not in [nil, :read]
-    end)
-  end
+  # What each mode does with a kind: a read-only member runs reads alone.
+  defp kind_hint(:read), do: "runs in either mode"
+  defp kind_hint(_kind), do: "runs only in auto"
 
-  defp count_auto(_, _), do: 0
-
-  defp count_in_list(tool_policy, rows) when is_map(tool_policy) do
-    Enum.count(rows, fn {t, a} -> Map.has_key?(tool_policy, "#{t}.#{a}") end)
-  end
-
-  defp count_in_list(_, _), do: 0
-
-  # `%{"tool.action" => kind}` lookup built from the enumerated tool catalog.
-  defp kind_index(tool_actions) do
-    for {tool, actions} <- tool_actions, {action, kind} <- actions, into: %{} do
-      {"#{tool}.#{action}", kind}
-    end
-  end
-
-  defp kind_hint(:read), do: "available, never asks"
-  defp kind_hint(:write), do: "asks unless marked auto"
-  defp kind_hint(:execute), do: "asks unless marked auto"
-  defp kind_hint(:destructive), do: "always asks — can't be automated"
-  defp kind_hint(_), do: ""
-
-  # Kind sections in fixed display order, with their visual treatment (matches
-  # the approval-card colour ramp: read = calm green, write = near-neutral
-  # slate, execute = amber, destructive = red, external = amber + ring).
+  # Kind sections in fixed display order, with their visual treatment:
+  # read = calm green, write = near-neutral slate, execute = amber,
+  # destructive = red.
   # Tuple: {atom_kind, label, pill-classes, summary-strip-classes}.
   defp kind_sections do
     [
@@ -903,7 +841,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             its card. --%>
       <div class="flex justify-end">
         <form
-          :if={@loaded and not @agents_unread}
+          :if={@loaded and is_nil(@agents_unread)}
           phx-submit="editor_create_member"
           phx-target={@myself}
           class="flex items-center gap-2"
@@ -925,16 +863,19 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </form>
       </div>
 
+      <%!-- Why the roster could not be read: a fault's words, or the
+            sentence that says what to change in a soul still holding
+            `tool_policy`. --%>
       <div
-        :if={@loaded and @agents_unread}
+        :if={@loaded and @agents_unread != nil}
         data-test="agents-unavailable"
-        class="text-xs text-amber-300 py-8 text-center border border-dashed border-gray-800 rounded"
+        class="text-xs text-amber-300 py-8 px-4 text-center border border-dashed border-gray-800 rounded"
       >
-        The agents cannot be read right now — try again.
+        {@agents_unread}
       </div>
 
       <div
-        :if={@loaded and @soul == nil and not @agents_unread}
+        :if={@loaded and @soul == nil and is_nil(@agents_unread)}
         class="text-xs text-gray-500 py-8 text-center border border-dashed border-gray-800 rounded"
       >
         No soul here. The soul ships with the server — restore the shipped files below to bring it back.
@@ -955,6 +896,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         athanor={@athanor}
         offers={Map.get(@program_offers, @soul["catalyst_ref"], [])}
         signs_in?={MapSet.member?(@signs_in, @soul["catalyst_ref"])}
+        unheld={Map.get(@unheld, @soul["name"])}
         browser={@browser}
       />
 
@@ -974,6 +916,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           athanor={@athanor}
           offers={Map.get(@program_offers, member["catalyst_ref"], [])}
           signs_in?={MapSet.member?(@signs_in, member["catalyst_ref"])}
+          unheld={Map.get(@unheld, member["name"])}
         />
       </div>
 
@@ -1043,13 +986,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :athanor, :any, default: nil
   attr :offers, :list, default: []
   attr :signs_in?, :boolean, default: false
+  attr :unheld, :string, default: nil
   attr :browser, :map, default: nil
 
   defp agent_card(assigns) do
     assigns =
       assigns
       |> assign(:current_provider, agent_provider_for_select(assigns.agent))
-      |> assign(:tool_policy, assigns.agent["tool_policy"] || %{})
+      |> assign(:tools, assigns.agent["tools"] || [])
+      |> assign(:mode, assigns.agent["mode"] || "auto")
       |> assign(:removal, removal(assigns.agent))
       |> assign(:disabled?, assigns.agent["disabled"] == true)
 
@@ -1360,8 +1305,44 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </div>
       </div>
 
+      <%!-- The member's mode. A brain CYFR cannot keep read-only closes
+            the read-only choice, and a file set to it by hand shows it
+            chosen with the same reason, since its turns are refused. --%>
+      <div
+        id={"aqua-card-#{@agent["name"]}-mode"}
+        role="radiogroup"
+        aria-label="Mode"
+      >
+        <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Mode</p>
+        <div class="flex flex-col md:flex-row gap-2">
+          <button
+            :for={{mode, words} <- modes()}
+            type="button"
+            role="radio"
+            aria-checked={to_string(@mode == mode)}
+            phx-click="editor_set_mode"
+            phx-target={@myself}
+            phx-value-name={@agent["name"]}
+            phx-value-mode={mode}
+            disabled={mode == "read-only" and @unheld != nil}
+            class={[
+              "flex-1 rounded border px-2 py-1 text-left text-[11px] disabled:cursor-not-allowed disabled:opacity-60",
+              if(@mode == mode,
+                do: "border-blue-500 bg-blue-950/40 text-gray-100",
+                else: "border-gray-700 bg-gray-950 text-gray-400 hover:border-gray-500"
+              )
+            ]}
+          >
+            {words}
+          </button>
+        </div>
+        <p :if={@unheld} data-test="read-only-unheld" class="mt-1 text-[11px] text-amber-300">
+          {@unheld}
+        </p>
+      </div>
+
       <p :if={!@is_soul} class="text-[11px] text-gray-500">
-        Runs under the soul's capabilities; a hand-off may narrow them for one job.
+        Offered the soul's tools; a hand-off may narrow them for one job.
       </p>
 
       <div :if={@is_soul}>
@@ -1369,11 +1350,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           <p class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
             <span class="normal-case text-gray-600">
-              — reads run without asking; writes and executes ask unless you mark them "auto"; some, and every destructive one, always ask.
+              — the tools Aqua and every crew member are offered; each one's mode decides which of them it runs.
             </span>
           </p>
-          <% auto_count = count_auto(@tool_policy, @tool_actions) %>
-          <span :if={auto_count > 0} class="text-[10px] text-gray-600">{auto_count} won't ask</span>
         </div>
 
         <div class="border border-gray-800 rounded divide-y divide-gray-800/60 max-h-[28rem] overflow-y-auto">
@@ -1393,18 +1372,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                   </span>
                   <span class="text-[10px] text-gray-600">{kind_hint(kind)}</span>
                   <span class="ml-auto text-[10px] text-gray-600">
-                    {count_in_list(@tool_policy, rows)}/{length(rows)}
+                    {count_in_list(@tools, rows)}/{length(rows)}
                   </span>
                 </summary>
 
                 <%= for {tool, action} <- rows do %>
                   <% key = "#{tool}.#{action}" %>
-                  <% val = @tool_policy[key] %>
                   <div class="px-3 py-1 flex items-center gap-2 bg-gray-950/40">
                     <label class="flex items-center gap-1.5 flex-1 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={val != nil}
+                        checked={key in @tools}
                         phx-click="editor_toggle_capability"
                         phx-target={@myself}
                         phx-value-name={@agent["name"]}
@@ -1415,21 +1393,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                         <span class="text-gray-500">{tool}.</span>{action}
                       </span>
                     </label>
-                    <%= cond do %>
-                      <% is_nil(val) -> %>
-                        <span></span>
-                      <% kind == :read -> %>
-                        <span class="text-[10px] text-emerald-400/70">runs without asking</span>
-                      <% kind == :destructive or not auto_permitted?(key) -> %>
-                        <span class="text-[10px] text-gray-500">always asks</span>
-                      <% true -> %>
-                        <.auto_ask_toggle
-                          myself={@myself}
-                          agent={@agent["name"]}
-                          key={key}
-                          value={val}
-                        />
-                    <% end %>
                   </div>
                 <% end %>
               </details>
@@ -1439,12 +1402,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <label class="flex items-center gap-2 mt-2 text-[11px] text-gray-400 cursor-pointer">
           <input
             type="checkbox"
-            checked={Map.has_key?(@tool_policy, "native_search")}
-            phx-click="editor_toggle_native"
+            checked={"native_search" in @tools}
+            phx-click="editor_toggle_capability"
             phx-target={@myself}
             phx-value-name={@agent["name"]}
+            phx-value-key="native_search"
             class="rounded bg-gray-900 border-gray-600"
-          /> Native search (model-side web grounding) — runs inside the provider without asking
+          /> Native search (model-side web grounding) — runs inside the provider
         </label>
         <.browser_setting :if={@browser} myself={@myself} athanor={@athanor} browser={@browser} />
       </div>
@@ -1581,35 +1545,5 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp default_label(%{"default" => default}), do: " (#{default})"
   defp default_label(_option), do: ""
 
-  attr :myself, :any, required: true
-  attr :agent, :string, required: true
-  attr :key, :string, required: true
-  attr :value, :string, required: true
-
-  # Two-state ask/auto toggle for a write- or execute-kind capability.
-  defp auto_ask_toggle(assigns) do
-    ~H"""
-    <div class="flex items-center gap-0.5">
-      <button
-        :for={{label, mode} <- [{"ask", "ask"}, {"auto", "auto"}]}
-        type="button"
-        phx-click="editor_set_capability_mode"
-        phx-target={@myself}
-        phx-value-name={@agent}
-        phx-value-key={@key}
-        phx-value-mode={mode}
-        class={[
-          "px-1.5 py-0.5 text-[10px] rounded font-medium",
-          if(@value == mode,
-            do:
-              if(mode == "auto", do: "bg-slate-600 text-white", else: "bg-amber-800 text-amber-100"),
-            else: "bg-gray-900 text-gray-500 hover:bg-gray-800 hover:text-gray-300"
-          )
-        ]}
-      >
-        {label}
-      </button>
-    </div>
-    """
-  end
+  defp modes, do: @modes
 end

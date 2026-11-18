@@ -63,7 +63,7 @@ defmodule Aqua do
     ],
     check: [aliases: true]
 
-  alias Aqua.{ApprovalScope, Attachments, ConsentStatus, Kinds, Models, Notes}
+  alias Aqua.{ApprovalScope, Attachments, ConsentStatus, Models, Notes}
   alias Sanctum.Context
 
   @doc "The model listing the console's pickers show. See `Aqua.Models.catalogue/1`."
@@ -85,6 +85,15 @@ defmodule Aqua do
   @doc "Whether a brain runs on a program's own sign-in. See `Aqua.Models.signs_in?/1`."
   @spec brain_signs_in?(map()) :: boolean()
   defdelegate brain_signs_in?(plan), to: Models, as: :signs_in?
+
+  @doc """
+  The members whose brain CYFR cannot keep read-only, each with its
+  sentence. See `Aqua.Models.read_only_unheld/3`.
+  """
+  @spec read_only_unheld(Context.t(), [map()], %{String.t() => map()}) :: %{
+          String.t() => String.t()
+        }
+  defdelegate read_only_unheld(ctx, members, plans), to: Models
 
   @doc "The options an agent's brain declares. See `Aqua.Models.brain_options/2`."
   @spec brain_options(Context.t(), map()) :: {:ok, [map()]} | {:error, term()}
@@ -127,14 +136,6 @@ defmodule Aqua do
   @doc "The per-message attachment bounds (`Aqua.Attachments.limits/0`)."
   @spec attachment_limits() :: %{max_files: pos_integer(), max_file_bytes: pos_integer()}
   defdelegate attachment_limits(), to: Attachments, as: :limits
-
-  @doc "What the assistant classifies `tool.action` as, or nil (`Aqua.Kinds.kind_for/2`)."
-  @spec tool_kind(String.t(), String.t()) :: atom() | nil
-  defdelegate tool_kind(tool, action), to: Kinds, as: :kind_for
-
-  @doc "Whether `tool.action` may ever run without a card (`Aqua.Kinds.auto_permitted?/2`)."
-  @spec auto_permitted?(String.t(), String.t()) :: boolean()
-  defdelegate auto_permitted?(tool, action), to: Kinds
 
   @doc "The virtual tools with each action's kind (`Aqua.Hands.list_for_panel/0`)."
   @spec virtual_tool_catalog() :: [{String.t(), [{String.t(), atom()}]}]
