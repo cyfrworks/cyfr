@@ -1231,17 +1231,19 @@ defmodule Arca.Execution do
   (`:stored` for the current attempt's stamp) and `verify:`
   (`Arca.ExecutionStanding`, required) — a failure retires work, so its
   check need not find the grant standing, but the attempt must carry its
-  stamp. Answers `{count, nil}` with the rows failed; `{0, nil}` when the
-  check refused or either input was missing.
+  stamp. Answers `{count, event_seq, closed_questions}`: the rows failed,
+  the lifecycle event's number and the run's own questions the failure
+  closed in its transaction (`Arca.Questions.close_run!/2`); `{0, nil, []}`
+  when nothing was failed, the check refused or either input was missing.
   """
   def mark_failed_if_running(id, attrs, fence \\ []) when is_binary(id) and is_list(fence) do
     # Fail-open default: a row the store could not fail stays running; the sweep retries next tick.
-    Arca.Repo.Errors.with_db_rescue("Execution.mark_failed_if_running", {0, nil}, fn ->
+    Arca.Repo.Errors.with_db_rescue("Execution.mark_failed_if_running", {0, nil, []}, fn ->
       stored = fn -> stored_of(id) end
 
       case Arca.ExecutionStanding.inputs(fence, stored) do
         {:ok, grant, verify} -> fail_open(id, attrs, fence, grant, verify)
-        {:error, :missing_grant} -> {0, nil}
+        {:error, :missing_grant} -> {0, nil, []}
       end
     end)
   end
@@ -1288,7 +1290,7 @@ defmodule Arca.Execution do
 
       case row do
         nil ->
-          {0, nil}
+          {0, nil, []}
 
         %Row{} = execution ->
           attempt = Keyword.get(fence, :attempt) || execution.current_attempt
@@ -1325,15 +1327,16 @@ defmodule Arca.Execution do
                 data: %{"status" => "failed", "error" => attrs[:error_message]}
               )
 
-            {count, event.seq}
+            {count, event.seq,
+             Arca.Questions.close_run!(Prima.Actor.in_athanor(execution.athanor_id), id)}
           else
-            {0, nil}
+            {0, nil, []}
           end
       end
     end)
     |> case do
       {:ok, result} -> result
-      {:error, _} -> {0, nil}
+      {:error, _} -> {0, nil, []}
     end
   end
 
@@ -1366,6 +1369,10 @@ defmodule Arca.Execution do
   standing; a failure or a cancel retires work, and its check need not.
   The check's refusal is answered as itself (`{:error, :not_standing}`),
   and a missing input as `{:error, :missing_grant}`; neither writes.
+
+  The answered map also carries `closed_questions`: the run's own open
+  questions the end closed in its transaction, never another run's
+  (`Arca.Questions.close_run!/2`), for the caller to announce.
   """
   @spec record_end(Prima.Actor.t(), String.t(), String.t(), map(), String.t() | nil, keyword()) ::
           {:ok, map()}
@@ -1494,7 +1501,11 @@ defmodule Arca.Execution do
         |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
         |> Arca.Repo.one!()
 
+      closed = Arca.Questions.close_run!(Prima.Actor.in_athanor(execution.athanor_id), id)
+
       %{ended | event_seq: event.seq}
+      |> Arca.Data.project()
+      |> Map.put(:closed_questions, closed)
     end)
   end
 

@@ -388,7 +388,7 @@ defmodule Arca.ExecutionLockOrderTest do
         release(blocker)
 
         # The lapse took the row first, so the end finds it no longer open.
-        assert {1, seq} = Task.await(lapse, 10_000)
+        assert {1, seq, []} = Task.await(lapse, 10_000)
         assert is_integer(seq)
         assert {:error, :not_running} = Task.await(ending, 10_000)
       end)
@@ -483,7 +483,7 @@ defmodule Arca.ExecutionLockOrderTest do
 
         # The turn's end took its root first, so the lapse finds it ended.
         assert {:ok, %{status: "cancelled"}} = Task.await(finish, 10_000)
-        assert {0, nil} = Task.await(lapse, 10_000)
+        assert {0, nil, []} = Task.await(lapse, 10_000)
       end)
 
     refute log =~ "deadlock", log

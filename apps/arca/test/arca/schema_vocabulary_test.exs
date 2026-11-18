@@ -48,6 +48,9 @@ defmodule Arca.SchemaVocabularyTest do
        Prima.ExecutionState.attempt_states()},
       {"execution_attempts", "execution_attempts_outcome_known", "outcome",
        Prima.ExecutionState.outcomes()},
+      {"questions", "questions_state_known", "state", Arca.Schemas.Question.states()},
+      {"question_answers", "question_answers_effect_known", "effect",
+       Arca.Schemas.QuestionAnswer.effects()},
       {"turns", "turns_status_known", "status", Prima.TurnState.statuses()},
       {"schedule_occurrences", "schedule_occurrences_state_known", "state",
        Arca.ScheduleOccurrences.states()},
@@ -208,6 +211,26 @@ defmodule Arca.SchemaVocabularyTest do
         "execution_attempts",
         attempt(ctx, execution_id, "completed", "bogus"),
         "execution_attempts_outcome_known"
+      )
+    end
+
+    test "lands every question state and answer effect and refuses any other", ctx do
+      execution_id = execution_row!(ctx)
+
+      for state <- ~w(open allowed denied none ended) do
+        assert {1, _} = insert!("questions", question(ctx, execution_id, state))
+      end
+
+      refused!("questions", question(ctx, execution_id, "bogus"), "questions_state_known")
+
+      for effect <- ~w(allow deny) do
+        assert {1, _} = insert!("question_answers", question_answer(ctx, effect))
+      end
+
+      refused!(
+        "question_answers",
+        question_answer(ctx, "bogus"),
+        "question_answers_effect_known"
       )
     end
 
@@ -782,6 +805,44 @@ defmodule Arca.SchemaVocabularyTest do
       state: state,
       outcome: outcome,
       started_at: now()
+    }
+  end
+
+  defp question(%{athanor: athanor}, execution_id, state) do
+    %{
+      ref: id("q"),
+      athanor_id: athanor,
+      user_id: "user_vocab",
+      execution_id: execution_id,
+      attempt_id: "att_vocab",
+      root_execution_id: execution_id,
+      ask_no: System.unique_integer([:positive]),
+      request_digest: "d",
+      component_ref: "catalyst:local.vocab:1.0.0",
+      release_digest: "r",
+      action: "delete_table",
+      title: "delete a table",
+      summary: "s",
+      operation: "o",
+      masked: false,
+      caller: "person",
+      deadline: now(),
+      state: state
+    }
+  end
+
+  defp question_answer(%{athanor: athanor}, effect) do
+    %{
+      id: id("qan"),
+      athanor_id: athanor,
+      user_id: "user_vocab",
+      publisher: "local",
+      name: "vocab",
+      action: id("action"),
+      declaration_digest: "d",
+      caller: "any",
+      effect: effect,
+      answered_at: now()
     }
   end
 
