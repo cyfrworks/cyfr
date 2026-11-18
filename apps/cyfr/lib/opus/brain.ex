@@ -1025,12 +1025,21 @@ defmodule Opus.Brain do
     deadline = System.monotonic_time(:millisecond) + @once_ms
     state = %{state | owner: owner}
 
-    with {:ok, state} <- hold(state),
-         {:ok, session} <- fresh(state, 1) do
-      state = %{state | session: session}
-      {:stop, :normal, once(state, command, deadline), state}
-    else
-      {:error, reason} -> {:stop, :normal, {:error, reason}, state}
+    # Each refusal stops with the state that holds what was taken, so the
+    # way out (`terminate/2`) gives back the owner a failed open held.
+    case hold(state) do
+      {:ok, held} ->
+        case fresh(held, 1) do
+          {:ok, session} ->
+            opened = %{held | session: session}
+            {:stop, :normal, once(opened, command, deadline), opened}
+
+          {:error, reason} ->
+            {:stop, :normal, {:error, reason}, held}
+        end
+
+      {:error, reason} ->
+        {:stop, :normal, {:error, reason}, state}
     end
   end
 
