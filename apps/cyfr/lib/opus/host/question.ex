@@ -34,7 +34,10 @@ defmodule Opus.Host.Question do
        deadline.
 
   An answer is `{answer}`, or `{pending: true}` while its question is
-  open.
+  open. Whatever is answered, a held row's decision, a fresh one or a
+  pace, the attempt is checked live again before it leaves: an ask that
+  waited for its key while its run ended is `lost`, never handed what its
+  row holds.
 
   ## A wait
 
@@ -72,13 +75,17 @@ defmodule Opus.Host.Question do
   def ask(caller, ask_no, %{action: action, summary: summary, operation: operation}) do
     digest = request_digest(action, summary, operation)
 
-    with {:ok, run} <- Attempt.call(caller.execution_id, caller, {:question, nil}) do
-      serialized(run.attempt, ask_no, fn ->
-        case found(run, ask_no, digest) do
-          :none -> admit(step(caller, "ask"), ask_no, action, summary, operation, digest)
-          held -> {:ok, held}
-        end
-      end)
+    with {:ok, run} <- Attempt.call(caller.execution_id, caller, {:question, nil}),
+         {:ok, asked} <-
+           serialized(run.attempt, ask_no, fn ->
+             case found(run, ask_no, digest) do
+               :none -> admit(step(caller, "ask"), ask_no, action, summary, operation, digest)
+               held -> {:ok, held}
+             end
+           end),
+         {:ok, _still_live} <-
+           Attempt.call(caller.execution_id, step(caller, "asked"), {:question, nil}) do
+      {:ok, asked}
     end
   end
 

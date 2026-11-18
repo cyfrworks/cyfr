@@ -65,12 +65,25 @@ defmodule Locus.Runtime.QuestionProbeTest do
       {:answer, ~s({"v":1,"ok":{"answer":{"none":"unattended"}}})}
     )
 
-    statements = ["DROP TABLE users;", "DELETE FROM logs", "DROP TABLE orders", "UNDECLARED x"]
+    statements = [
+      "DROP TABLE users",
+      # Two statements joined, a prefix of a word, a clause the probe does
+      # not read, another case: each declined, and nobody asked.
+      "DELETE FROM users WHERE id = 1; DROP TABLE users",
+      "DELETE_PREFIX FROM users WHERE id = 1",
+      "DROP TABLE users;",
+      "DELETE FROM users WHERE id = 1 OR 1 = 1",
+      "drop table users",
+      "DELETE FROM logs WHERE id = 7",
+      "DROP TABLE orders",
+      "DROP TABLE audit"
+    ]
 
     assert {:ok, %{"status" => 200, "data" => %{"results" => results}}} =
              run(attempt, statements)
 
-    assert Enum.map(results, & &1["answer"]) == ~w(allowed denied unattended invalid)
+    assert Enum.map(results, & &1["answer"]) ==
+             ~w(allowed declined declined declined declined declined denied unattended invalid)
 
     asks = ScriptedHost.requests(host, "question_ask")
 
@@ -79,13 +92,13 @@ defmodule Locus.Runtime.QuestionProbeTest do
                "ask_no" => 1,
                "action" => "delete_table",
                "summary" => "Drop the table users",
-               "operation" => "DROP TABLE users;"
+               "operation" => "DROP TABLE users"
              },
              %{
                "ask_no" => 2,
                "action" => "delete_rows",
-               "summary" => "Run DELETE FROM logs",
-               "operation" => "DELETE FROM logs"
+               "summary" => "Delete the row 7 from the table logs",
+               "operation" => "DELETE FROM logs WHERE id = 7"
              },
              %{
                "ask_no" => 3,
@@ -95,9 +108,9 @@ defmodule Locus.Runtime.QuestionProbeTest do
              },
              %{
                "ask_no" => 4,
-               "action" => "undeclared_action",
-               "summary" => "Run UNDECLARED x",
-               "operation" => "UNDECLARED x"
+               "action" => "delete_table",
+               "summary" => "Drop the table audit",
+               "operation" => "DROP TABLE audit"
              }
            ]
 
@@ -114,6 +127,11 @@ defmodule Locus.Runtime.QuestionProbeTest do
     end
   end
 
+  # The store is measured by this VM's mapped memory, read from procfs: a
+  # host without it cannot run the test, which is skipped there alone.
+  @procfs_absent not File.exists?("/proc/self/status")
+
+  @tag skip: @procfs_absent && "no procfs on this host: the VM's mapped memory cannot be read"
   test "a component waiting on an ask gives its store back when its process is killed" do
     {host, attempt} = catalyst()
     test = self()

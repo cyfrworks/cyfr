@@ -42,7 +42,8 @@ defmodule Locus.Runtime.HostClient do
   the host's bound (`Prima.HostAPI.max_body_bytes/0`), refused before the
   host read it or acted on it, and the call is answered
   `{:error, :too_large}` rather than asked again, since the same body is
-  refused again; and a refusal naming `unknown_version` says the host
+  refused again (a body past that bound is answered so before it is sent,
+  through a relay or directly); and a refusal naming `unknown_version` says the host
   speaks another version of the wire, so it is not this engine's host, and
   the call is answered `{:error, :lost}` at once, which stops the
   attempt's work, rather than asked again. The attempt's seal key also
@@ -796,15 +797,24 @@ defmodule Locus.Runtime.HostClient do
 
   defp post(via, op, try) do
     with {:ok, header, body, read} <- try.(),
+         :ok <- within_bound(body),
          {:ok, raw} <- transport(via, op, header, body),
          {:ok, json} <- read.(raw) do
       answer(json, op)
     else
       {:refused, 413, _raw} -> too_large(op)
+      :too_large -> too_large(op)
       {:refused, _status, raw} -> refused(raw, op)
       _ -> :lost
     end
   end
+
+  # A body past the host's bound is never sent: the host would refuse it
+  # `413`, and a runner's relay refuses a frame past its own, larger bound
+  # before it reaches the host at all, which reads as a lost answer. So it
+  # is refused here, the same on both paths.
+  defp within_bound(body),
+    do: if(byte_size(body) > HostAPI.max_body_bytes(), do: :too_large, else: :ok)
 
   # A body past the host's bound is refused before the host reads it, so
   # nothing was done, and the same body is refused again: the refusal is

@@ -1720,18 +1720,19 @@ defmodule Opus.Attempt do
     end
   end
 
-  # The release that runs, in the registry's `sha256:` spelling: at a root
-  # the digest its consent's activation pins for its node (the root's own
-  # activation digest is its graph's), at a child the release digest it
-  # was admitted at (`Opus.Admission`).
-  defp release_digest(%__MODULE__{execution_id: id, root_execution_id: id} = state) do
+  # The release that runs, in the registry's `sha256:` spelling: under a
+  # bound authority, root or child, the digest its consent's activation
+  # records for the run's own node (a child's activation digest is its
+  # root's graph's); an unbound child, reached by dynamic dispatch, the
+  # release digest it was admitted at (`Opus.Admission`); an unbound root,
+  # none.
+  defp release_digest(state) do
     case Prima.Authority.current_node(state.authority) do
       {:ok, node} -> Map.get(state.authority.activation, node)
-      :unbound -> nil
+      :unbound when state.execution_id == state.root_execution_id -> nil
+      :unbound -> state.activation_digest
     end
   end
-
-  defp release_digest(state), do: state.activation_digest
 
   # The run's deadline, fixed when the attempt answers its runner's attach:
   # its timeout from then, and no later than its subtree's deadline. The

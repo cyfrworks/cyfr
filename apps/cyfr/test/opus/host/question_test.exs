@@ -146,19 +146,7 @@ defmodule Opus.Host.QuestionTest do
   # The catalyst shipped in the person's athanor, and an attached attempt
   # of it whose authority pins its release, as a consented root's does.
   defp asking!(ctx) do
-    manifest = %{
-      "name" => "tables",
-      "type" => "catalyst",
-      "version" => "1.0.0",
-      "publisher" => "local",
-      "asks" => @asks
-    }
-
-    {:ok, component} =
-      Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "tables", "1.0.0",
-        manifest: manifest,
-        wasm: Cyfr.Test.Guests.wasm("catalyst")
-      )
+    component = ship!(ctx)
 
     {pinned, _entry} =
       AttemptFixtures.vault_authority!(ctx, %{kind: "api_key", fields: %{"KEY" => "k"}})
@@ -191,6 +179,25 @@ defmodule Opus.Host.QuestionTest do
     AttemptFixtures.attached!(ctx: ctx, authority: authority, component_ref: @node <> ":1.0.0")
   end
 
+  # The catalyst, shipped in the person's athanor with its declared actions.
+  defp ship!(ctx) do
+    manifest = %{
+      "name" => "tables",
+      "type" => "catalyst",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "asks" => @asks
+    }
+
+    {:ok, component} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "tables", "1.0.0",
+        manifest: manifest,
+        wasm: Cyfr.Test.Guests.wasm("catalyst")
+      )
+
+    component
+  end
+
   defp spent(ctx, fixture) do
     case :ets.lookup(:cyfr_rate_limiter, {:question, ctx.athanor_id, fixture.execution_id}) do
       [{_key, count, _started}] -> count
@@ -198,12 +205,13 @@ defmodule Opus.Host.QuestionTest do
     end
   end
 
-  # Until `pid` waits inside `fun` of `module`, or ten seconds have passed.
+  # Until `pid` waits inside `fun` of `module` (any of its functions for
+  # `:any`), or ten seconds have passed.
   defp parked!(pid, module, fun, tries \\ 200) do
     {:current_stacktrace, stack} = Process.info(pid, :current_stacktrace)
 
     cond do
-      Enum.any?(stack, &match?({^module, ^fun, _arity, _location}, &1)) ->
+      Enum.any?(stack, fn {m, f, _arity, _location} -> m == module and fun in [f, :any] end) ->
         :ok
 
       tries == 0 ->
@@ -278,6 +286,128 @@ defmodule Opus.Host.QuestionTest do
              Arca.Repo.all(
                from(q in Arca.Schemas.Question, where: q.attempt_id == ^fixture.attempt)
              )
+  end
+
+  for decision <- ~w(allowed denied) do
+    test "a retry that waited for its key while the run ended is handed lost, never the #{decision} its row holds",
+         %{ctx: ctx} do
+      fixture = asking!(ctx)
+
+      assert {:ok, :pending} =
+               Opus.Host.question_ask(AttemptFixtures.caller(fixture), 1, atoms(@ask))
+
+      [question] =
+        Arca.Repo.all(from(q in Arca.Schemas.Question, where: q.attempt_id == ^fixture.attempt))
+
+      assert {:ok, %{state: unquote(decision)}} =
+               Arca.Questions.answer(
+                 Sanctum.Context.actor(ctx),
+                 question.ref,
+                 unquote(decision),
+                 nil,
+                 verify: fn -> :ok end
+               )
+
+      # The key is held, as an admission of it still deciding holds it: the
+      # retry passes its first look at the attempt and waits for the key.
+      lock = {{Opus.Host.Question, fixture.attempt, 1}, self()}
+      true = :global.set_lock(lock, [node()])
+
+      retry =
+        Task.async(fn ->
+          Opus.Host.question_ask(AttemptFixtures.caller(fixture), 1, atoms(@ask))
+        end)
+
+      parked!(retry.pid, :global, :any)
+
+      # The run ends while the retry waits; then the key is let go, and the
+      # row's decision is found.
+      assert {:ok, _ended} = end!(ctx, fixture)
+      true = :global.del_lock(lock, [node()])
+      assert Task.await(retry, 15_000) == {:error, :lost}
+    end
+  end
+
+  test "a child's question that the cascade ends is closed and announced withdrawn, once", %{
+    ctx: ctx
+  } do
+    component = ship!(ctx)
+    test = self()
+    events = for stage <- [:opened, :withdrawn, :expired], do: [:cyfr, :sanctum, :question, stage]
+
+    :telemetry.attach_many(
+      {__MODULE__, test},
+      events,
+      fn event, _measurements, meta, _config ->
+        send(test, {:question, List.last(event), meta})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, test}) end)
+
+    # A formula's root, and a catalyst child of it running and asking.
+    %{parent_execution_id: parent} = AttemptFixtures.lineage!(ctx)
+    child = Prima.UUID7.execution_id()
+    {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
+
+    {:ok, %{attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: child,
+          root_execution_id: parent,
+          parent_execution_id: parent,
+          reference: @node <> ":1.0.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "catalyst",
+          origin: :interactive
+        },
+        boot_id: Opus.Record.boot_id(),
+        lease_until: DateTime.add(DateTime.utc_now(), 120, :second),
+        grant: grant,
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    run = %{
+      execution_id: child,
+      attempt_id: attempt.attempt,
+      root_execution_id: parent,
+      component_ref: @node <> ":1.0.0",
+      release_digest: component.release_digest,
+      caller: "person",
+      deadline: DateTime.add(DateTime.utc_now(), 600, :second)
+    }
+
+    request = %{
+      action: "delete_table",
+      summary: "Drop the table users",
+      operation: "DROP TABLE users",
+      masked: false,
+      request_digest:
+        Question.request_digest("delete_table", "Drop the table users", "DROP TABLE users")
+    }
+
+    assert {:pending, ref} = Sanctum.Questions.ask(ctx, run, 1, request)
+    assert_receive {:question, :opened, %{ref: ^ref}}
+
+    assert :ok = Opus.Cascade.fail_children_of(parent)
+
+    assert %{state: "ended"} = Arca.Repo.get!(Arca.Schemas.Question, ref)
+    assert_receive {:question, :withdrawn, %{ref: ^ref}}
+    refute_receive {:question, _stage, %{ref: ^ref}}, 200
+  end
+
+  defp end!(ctx, fixture) do
+    Arca.Execution.record_end(
+      Prima.Actor.in_athanor(ctx.athanor_id),
+      fixture.execution_id,
+      "cancelled",
+      %{completed_at: DateTime.utc_now(), duration_ms: 1},
+      fixture.attempt,
+      grant: :stored,
+      verify: fn _grant -> :ok end
+    )
   end
 
   defp atoms(ask),

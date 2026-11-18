@@ -19,7 +19,7 @@ defmodule Locus.Runtime.QuestionImportTest do
   import ExUnit.CaptureLog
 
   alias Locus.Runtime.{Engine, HostClient}
-  alias Locus.Runtime.Test.ScriptedHost
+  alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
 
   @host_api Path.expand("../../../../../tests/fixtures/host_api.json", __DIR__)
             |> File.read!()
@@ -164,6 +164,43 @@ defmodule Locus.Runtime.QuestionImportTest do
     end)
 
     assert length(ScriptedHost.requests(host, "question_wait")) == 2
+  end
+
+  # An ask whose operation alone is past the host's bound: its sealed body
+  # can never be sent.
+  defp oversized(bytes),
+    do: %{
+      action: "delete_table",
+      summary: "Drop the table users",
+      operation: String.duplicate("x", bytes)
+    }
+
+  test "an ask too large to send is told invalid at once, and nothing is sent", %{
+    host: host,
+    client: client
+  } do
+    capture_log(fn ->
+      assert Engine.question_ask(client, 1, oversized(Prima.HostAPI.max_body_bytes())) ==
+               {:none, :invalid}
+    end)
+
+    assert ScriptedHost.requests(host, "question_ask") == []
+  end
+
+  test "through a runner's relay too, even past the relay's own frame bound", %{host: host} do
+    attempt = ScriptedHost.attempt!(host, component_type: :catalyst) |> ScriptedKeeper.relayed!()
+
+    for bytes <- [Prima.HostAPI.max_body_bytes(), Prima.RunnerRelay.max_frame_bytes() + 1] do
+      capture_log(fn ->
+        assert Engine.question_ask(attempt.client, 1, oversized(bytes)) == {:none, :invalid}
+      end)
+    end
+
+    assert ScriptedHost.requests(host, "question_ask") == []
+
+    # The relay still carries the next ask.
+    ScriptedHost.script(host, "question_ask", answer("allowed"))
+    assert Engine.question_ask(attempt.client, 2, @request) == :allowed
   end
 
   test "CYFR's lost ends the ask none(unavailable)", %{host: host, client: client} do

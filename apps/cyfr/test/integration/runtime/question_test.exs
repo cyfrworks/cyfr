@@ -131,7 +131,7 @@ defmodule Locus.Runtime.QuestionTest do
         "version" => "1.0.0",
         "type" => "catalyst",
         "publisher" => "local",
-        "asks" => @asks,
+        "asks" => Keyword.get(opts, :asks, @asks),
         "needs" => Keyword.get(opts, :needs, %{}),
         "caps" =>
           Map.merge(
@@ -170,9 +170,11 @@ defmodule Locus.Runtime.QuestionTest do
 
   # A root of the probe handed `statements`, run by the runtime in a task:
   # its id and the task, which answers what `Opus.run_root/5` answered.
-  defp start!(ctx, ref, statements) do
+  defp start!(ctx, ref, statements) when is_list(statements),
+    do: start!(ctx, ref, %{"operation" => "run", "params" => %{"statements" => statements}})
+
+  defp start!(ctx, ref, input) when is_map(input) do
     id = Prima.UUID7.execution_id()
-    input = %{"operation" => "run", "params" => %{"statements" => statements}}
     callers = [self() | Process.get(:"$callers", [])]
 
     task =
@@ -287,12 +289,29 @@ defmodule Locus.Runtime.QuestionTest do
     ref: ref
   } do
     unattended = Sanctum.TestContext.via(ctx, :api)
-    {id, task} = start!(unattended, ref, ["DROP TABLE users", "UNDECLARED x"])
-    assert answers!(id, task) == ~w(unattended invalid)
+    {id, task} = start!(unattended, ref, ["DROP TABLE users"])
+    assert answers!(id, task) == ~w(unattended)
 
-    # The unattended ask was admitted and recorded; the invalid one leaves no row.
+    # The unattended ask was admitted and recorded.
     assert [%{ask_no: 1, state: "none", none_reason: "unattended"}] = questions(id)
+
+    # A release whose manifest leaves delete_rows out is told its ask under
+    # that action is invalid, and the ask leaves no row.
+    tables_only = publish!(ctx, "question-probe-tables", asks: [hd(@asks)])
+    {id, task} = start!(ctx, tables_only, ["DELETE FROM users WHERE id = 1"])
+    assert answers!(id, task) == ~w(invalid)
+    assert questions(id) == []
     refute_received {:question, :opened, _meta}
+  end
+
+  test "a statement of two actions joined is declined, and nobody is asked", %{
+    ctx: ctx,
+    ref: ref
+  } do
+    {id, task} = start!(ctx, ref, ["DELETE FROM users WHERE id = 1; DROP TABLE users"])
+    assert answers!(id, task) == ~w(declined)
+    assert TwoServices.calls(:question_ask, id) == []
+    assert questions(id) == []
   end
 
   test "an ask whose wait is answered lost twice is told unavailable, and its card stays until the run ends",
@@ -458,9 +477,13 @@ defmodule Locus.Runtime.QuestionTest do
   test "the run's deadline ends the wait and announces it expired; the question's deadline is never later",
        %{ctx: ctx} do
     ref = publish!(ctx, "question-probe-brief", limits: %{"timeout" => "3s"})
+    started = DateTime.utc_now()
     {id, task} = start!(ctx, ref, ["DROP TABLE users"])
     question = opened!()
     deadline = question!(question).deadline
+
+    # The run's own deadline: its whole timeout from its start, no less.
+    assert DateTime.diff(deadline, started, :millisecond) >= 3_000
     Task.await(task, 120_000)
 
     assert_receive {:question, :expired, %{ref: ^question}}, 30_000
@@ -477,10 +500,14 @@ defmodule Locus.Runtime.QuestionTest do
   test "an answer past the question's deadline is refused while the runner's end of the run is still on its way",
        %{ctx: ctx} do
     ref = publish!(ctx, "question-probe-held", limits: %{"timeout" => "4s"})
+    started = DateTime.utc_now()
     {id, task} = start!(ctx, ref, ["DROP TABLE users"])
     TwoServices.hold!(:fail, id, once: true)
     question = opened!()
     %{deadline: deadline} = question!(question)
+
+    # The run's own deadline: its whole timeout from its start, no less.
+    assert DateTime.diff(deadline, started, :millisecond) >= 4_000
 
     # The runner ended the run at its budget and its failure is held on the
     # wire: the card's deadline has passed, though the run is still open,
@@ -494,6 +521,75 @@ defmodule Locus.Runtime.QuestionTest do
     TwoServices.release!(conn)
     Task.await(task, 120_000)
     assert_receive {:question, :expired, %{ref: ^question}}, 30_000
+  end
+
+  # ---------------------------------------------------------------------------
+  # A child
+  # ---------------------------------------------------------------------------
+
+  @nested Path.expand("support/test_wasm/nested_probe/nested_probe.wasm", __DIR__)
+
+  test "a formula's child asks under its own release, and spends its root's allowance", %{
+    ctx: ctx,
+    ref: probe
+  } do
+    name = "question-app-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "formula",
+      "caps" => %{"tools" => ["execution.run"]},
+      "dependencies" => %{"static" => [%{"ref" => probe}]}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@nested), %{
+        name: name,
+        version: "1.0.0",
+        type: "formula",
+        manifest: Jason.encode!(manifest)
+      })
+
+    app = "formula:local." <> name
+    consent!(ctx, app)
+
+    {root, task} =
+      start!(ctx, app, %{
+        "op" => "call",
+        "request" => %{
+          "tool" => "execution",
+          "action" => "run",
+          "args" => %{
+            "reference" => probe <> ":1.0.0",
+            "input" => %{
+              "operation" => "run",
+              "params" => %{"statements" => ["DROP TABLE users"]}
+            }
+          }
+        }
+      })
+
+    question = opened!()
+    row = question!(question)
+    {:ok, _ref, _type, component} = Opus.Admission.inspect_component(ctx, probe <> ":1.0.0")
+
+    assert row.execution_id != root
+    assert row.root_execution_id == root
+    assert row.release_digest == component["release_digest"]
+    assert row.caller == "person"
+    assert spent(ctx, root) == 1
+    assert spent(ctx, row.execution_id) == 0
+
+    assert {:ok, _} = answer(ctx, question, "allow")
+    Task.await(task, 120_000)
+    TwoServices.settled!()
+
+    assert [%{args: %{"outcome" => %{"output" => %{"data" => data}}}}] =
+             TwoServices.calls(:complete, row.execution_id)
+
+    assert [%{"answer" => "allowed"}] = data["results"]
+    assert [_completed] = TwoServices.calls(:complete, root)
   end
 
   # ---------------------------------------------------------------------------
@@ -521,7 +617,8 @@ defmodule Locus.Runtime.QuestionTest do
         consent: false
       )
 
-    token = "tok-#{System.unique_integer([:positive])}-question"
+    # A token the probe reads as a table's name.
+    token = "tok_#{System.unique_integer([:positive])}_question"
     [_key, ^token] = TwoServices.arm!(ctx, ref, key: "key-question-probe", token: token)
 
     {id, task} = start!(ctx, ref, ["DROP TABLE #{token}"])

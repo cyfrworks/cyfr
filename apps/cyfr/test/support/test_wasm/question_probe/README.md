@@ -17,17 +17,20 @@ before an action") shows its source as the worked example.
           {"name": "delete_rows",  "title": "delete rows from a table"}]}
 
 // Its input: each statement is asked about on its own, in order.
-{"operation": "run", "params": {"statements": ["DROP TABLE users", "DELETE FROM logs"]}}
+{"operation": "run", "params": {"statements": ["DROP TABLE users", "DELETE FROM logs WHERE id = 7"]}}
 
 // Its output: what each ask was answered.
 {"status": 200, "data": {"results": [{"statement": "DROP TABLE users", "answer": "allowed"}, …]}}
 ```
 
-A statement that starts with `DELETE` is asked under `delete_rows`, one
-that starts with `UNDECLARED` under `undeclared_action`, which the manifest
-does not declare, and any other under `delete_table`, the harsher action.
-An answer is `allowed`, `denied`, `unattended`, `invalid` or
-`unavailable`.
+It reads a statement only when it is exactly one of two shapes, its words
+separated by single spaces: `DROP TABLE <table>`, asked under
+`delete_table`, and `DELETE FROM <table> WHERE id = <id>`, asked under
+`delete_rows`, a table's name being a lowercase letter then lowercase
+letters, digits and underscores, and an id one to eighteen digits. Any
+other statement, two statements joined, a clause it does not read, is
+`declined` and nobody is asked. An answer is otherwise `allowed`,
+`denied`, `unattended`, `invalid` or `unavailable`.
 
 ## Rebuilding
 
@@ -49,7 +52,7 @@ is the one pin of the toolchain.
 ## Digests
 
 ```
-src/lib.rs          sha256:f25a40e674a974a87add3efd70f8b2d32ea35394d7670aad2b4b9f96f9638fc7
+src/lib.rs          sha256:b68ac7e7d929c5ca7391e73fd673425588e84c219b7b97ec1fac2d0e68ca9e71
 Cargo.lock          sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-question_probe.wasm sha256:0897946e1f8df3ab82e63c0e331b6775d85d478800fbfcd04937f59dcb0d46ea
+question_probe.wasm sha256:b9b3f4cd0372c2ff3513742843b7ae4f4b1fde25f89432ca99d4cbcfcdcfed0b
 ```

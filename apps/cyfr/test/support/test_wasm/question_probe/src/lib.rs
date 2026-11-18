@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// question-probe: a catalyst that asks its person before each operation it
-// is handed (`cyfr:question/ask`), and does an operation only when the
+// question-probe: a catalyst that asks its person before each statement it
+// is handed (`cyfr:question/ask`), and runs a statement only when the
 // answer is `allowed`. Its manifest declares the actions it asks about
-// under `asks`; which action an operation is, and the words the person
-// reads, are this component's own. It does nothing outside itself: an
-// operation allowed is counted as done. CYFR's tests run it, and the
-// component guide shows it as the worked example of asking.
+// under `asks`; which action a statement is, and the words the person
+// reads, are this component's own. It reads a statement only when it is
+// exactly one of two shapes, each one action, and declines anything else
+// without asking. It does nothing outside itself: a statement allowed is
+// counted as done. CYFR's tests run it, and the component guide shows it
+// as the worked example of asking.
 
 #[allow(warnings)]
 mod bindings;
@@ -21,7 +23,7 @@ struct Component;
 
 impl Guest for Component {
     // Input: {"operation": "run", "params": {"statements": ["DROP TABLE users", …]}}.
-    // Each statement is asked about on its own, in order, before it runs.
+    // Each statement is read, asked about on its own and run, in order.
     fn run(input: String) -> String {
         let parsed: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
         let statements = parsed
@@ -41,12 +43,34 @@ impl Guest for Component {
 
 bindings::export!(Component with_types_in bindings);
 
+// One statement the probe can tell the action of, and nothing else.
+enum Statement<'a> {
+    // `DROP TABLE <table>`
+    DropTable { table: &'a str },
+    // `DELETE FROM <table> WHERE id = <id>`
+    DeleteRow { table: &'a str, id: &'a str },
+}
+
 // Ask before one statement, and run it only when it is allowed.
 fn run_one(statement: &str) -> &'static str {
-    let request = Request {
-        action: action_of(statement).to_string(),
-        summary: summary_of(statement),
-        operation: statement.to_string(),
+    // A statement of any other shape (two statements, a clause the probe
+    // does not read, a word it does not know) could be an action it would
+    // not ask about: it is declined, and nobody is asked.
+    let Some(parsed) = parse(statement) else {
+        return "declined";
+    };
+
+    let request = match parsed {
+        Statement::DropTable { table } => Request {
+            action: "delete_table".to_string(),
+            summary: format!("Drop the table {table}"),
+            operation: statement.to_string(),
+        },
+        Statement::DeleteRow { table, id } => Request {
+            action: "delete_rows".to_string(),
+            summary: format!("Delete the row {id} from the table {table}"),
+            operation: statement.to_string(),
+        },
     };
 
     match ask(&request) {
@@ -63,30 +87,29 @@ fn run_one(statement: &str) -> &'static str {
     }
 }
 
-// Which declared action a statement is, read from the statement alone.
-// A statement it cannot tell is asked under the harsher action.
-fn action_of(statement: &str) -> &'static str {
-    let upper = statement.trim_start().to_ascii_uppercase();
-    if upper.starts_with("DELETE") {
-        "delete_rows"
-    } else if upper.starts_with("UNDECLARED") {
-        // A name the manifest does not declare: CYFR answers invalid.
-        "undeclared_action"
-    } else {
-        "delete_table"
+// The statement when it is exactly one of the two shapes, its words
+// separated by single spaces: anything more, less or else is none.
+fn parse(statement: &str) -> Option<Statement<'_>> {
+    let words: Vec<&str> = statement.split(' ').collect();
+    match words.as_slice() {
+        ["DROP", "TABLE", table] if name(table) => Some(Statement::DropTable { table }),
+        ["DELETE", "FROM", table, "WHERE", "id", "=", id] if name(table) && number(id) => {
+            Some(Statement::DeleteRow { table, id })
+        }
+        _ => None,
     }
 }
 
-// One line naming the thing and where it is, as the person will read it.
-fn summary_of(statement: &str) -> String {
-    let words: Vec<&str> = statement.split_whitespace().collect();
-    match words.as_slice() {
-        [verb, kind, name, ..] if verb.eq_ignore_ascii_case("drop") => {
-            format!("Drop the {} {}", kind.to_ascii_lowercase(), name.trim_end_matches(';'))
-        }
-        _ => {
-            let line: String = statement.lines().next().unwrap_or("").chars().take(120).collect();
-            format!("Run {line}")
-        }
-    }
+// A table's name: a lowercase letter, then lowercase letters, digits and
+// underscores, at most 63 characters.
+fn name(word: &str) -> bool {
+    let mut chars = word.chars();
+    matches!(chars.next(), Some('a'..='z'))
+        && word.len() <= 63
+        && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_'))
+}
+
+// A row's id: one to eighteen decimal digits.
+fn number(word: &str) -> bool {
+    (1..=18).contains(&word.len()) && word.bytes().all(|b| b.is_ascii_digit())
 }
