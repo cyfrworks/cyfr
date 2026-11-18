@@ -1596,6 +1596,18 @@ jobs:
       - name: Claude Code's brain driver
         run: python3 tests/locus-backends-image/brain_claude_code.py cyfr-locus:backends
 
+      # OpenAI Codex's brain driver beside a fake app-server in a kept
+      # folder, spoken to over the brain wire as its holder speaks it: hello,
+      # Codex's listing, a start that gives a new thread its tools, model,
+      # prompt and the box's policy, a post's turn naming the post, a post
+      # steered into the turn under way, an ask answered by its request's
+      # id, a resume that holds the thread and names what its rollout
+      # holds, gone, forget of one thread alone, nothing of stderr, the
+      # folder, the sign-in or the account on the wire, and the harness
+      # unchanged on a terminal.
+      - name: OpenAI Codex's brain driver
+        run: python3 tests/locus-backends-image/brain_openai_codex.py cyfr-locus:backends
+
       # The OpenAI Codex catalyst, run by the runtime under a scripted host,
       # driving a fake app-server over the pipe in a kept folder: describe's
       # options from its model listing, a chat round trip on a new thread

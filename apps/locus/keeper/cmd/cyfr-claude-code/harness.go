@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
 
 // Claude Code's own protocol on its standard input and output, as the
@@ -57,7 +59,7 @@ const (
 
 // harnessArgv is the harness's command line: its own command, then the
 // base, the session and the start's configuration.
-func harnessArgv(command []string, session string, resume bool, config startConfig) []string {
+func harnessArgv(command []string, session string, resume bool, config brainwire.Config) []string {
 	argv := append([]string{}, command...)
 	argv = append(argv, baseArgv...)
 	if resume {
@@ -80,17 +82,8 @@ func harnessArgv(command []string, session string, resume bool, config startConf
 	return argv
 }
 
-// startConfig is a start's configuration: absent members are the
-// harness's defaults.
-type startConfig struct {
-	Model          string    `json:"model"`
-	Effort         string    `json:"effort"`
-	PermissionMode string    `json:"permission_mode"`
-	HarnessTools   *[]string `json:"harness_tools"`
-}
-
 func controlRequest(id string, request map[string]any) []byte {
-	line, _ := marshal(map[string]any{"type": "control_request", "request_id": id, "request": request})
+	line, _ := brainwire.Marshal(map[string]any{"type": "control_request", "request_id": id, "request": request})
 	return line
 }
 
@@ -104,15 +97,9 @@ func initializeLine(system string) []byte {
 }
 
 // stubTool is one tool as the stub's argument.
-func stubTool(t tool) (string, error) {
-	line, err := marshal(map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
+func stubTool(t brainwire.Tool) (string, error) {
+	line, err := brainwire.Marshal(map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
 	return string(line), err
-}
-
-type tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
 }
 
 // setToolsLine sets CYFR's tools: the stub with each as one argument, or
@@ -128,7 +115,7 @@ func setToolsLine(id string, args []string) []byte {
 // userLine is a user message of content blocks in the harness's (the
 // Messages API's) shapes, under the uuid its results name it by.
 func userLine(content []any, uuid string) []byte {
-	line, _ := marshal(map[string]any{
+	line, _ := brainwire.Marshal(map[string]any{
 		"type":               "user",
 		"uuid":               uuid,
 		"message":            map[string]any{"role": "user", "content": content},
@@ -139,7 +126,7 @@ func userLine(content []any, uuid string) []byte {
 }
 
 // harnessBlocks are the wire's content blocks in the Messages API's shapes.
-func harnessBlocks(blocks []wireBlock) []any {
+func harnessBlocks(blocks []brainwire.Block) []any {
 	out := make([]any, 0, len(blocks))
 	for _, b := range blocks {
 		if b.Type == "text" {
@@ -154,16 +141,9 @@ func harnessBlocks(blocks []wireBlock) []any {
 	return out
 }
 
-type wireBlock struct {
-	Type      string `json:"type"`
-	Text      string `json:"text"`
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
-}
-
 // allowLine allows the ask `id` with the input the call runs with.
 func allowLine(id string, input any) []byte {
-	line, _ := marshal(map[string]any{
+	line, _ := brainwire.Marshal(map[string]any{
 		"type": "control_response",
 		"response": map[string]any{
 			"subtype":    "success",
@@ -176,7 +156,7 @@ func allowLine(id string, input any) []byte {
 
 // unansweredLine refuses a control request the driver does not answer.
 func unansweredLine(id, subtype string) []byte {
-	line, _ := marshal(map[string]any{
+	line, _ := brainwire.Marshal(map[string]any{
 		"type": "control_response",
 		"response": map[string]any{
 			"subtype":    "error",
@@ -316,12 +296,6 @@ func (l *harnessLine) noTranscript() bool {
 	return false
 }
 
-// modelCounts are one model's counts in a `usage` event.
-type modelCounts struct {
-	Model  string            `json:"model"`
-	Counts map[string]uint64 `json:"counts"`
-}
-
 // harnessCounts are the wire's counts by the names the harness gives
 // them in each model's usage. Its thinking tokens are already inside its
 // output tokens and its cache writes of either lifetime inside its cache
@@ -342,7 +316,7 @@ var harnessCounts = map[string]string{
 // harness's first request, is "unavailable", never zeros; one with an
 // entry or a count that does not read is "partial", with the models that
 // did; otherwise "complete".
-func accounting(raw json.RawMessage) (string, []modelCounts) {
+func accounting(raw json.RawMessage) (string, []brainwire.ModelCounts) {
 	var byModel map[string]json.RawMessage
 	if len(raw) == 0 || json.Unmarshal(raw, &byModel) != nil || byModel == nil {
 		return "unavailable", nil
@@ -353,14 +327,14 @@ func accounting(raw json.RawMessage) (string, []modelCounts) {
 	}
 	sort.Strings(names)
 	read := "complete"
-	models := []modelCounts{}
+	models := []brainwire.ModelCounts{}
 	for _, name := range names {
 		counts, ok := modelCountsOf(byModel[name])
-		if !ok || !isID(name) || len(models) == maxList {
+		if !ok || !brainwire.IsID(name) || len(models) == brainwire.MaxList {
 			read = "partial"
 			continue
 		}
-		models = append(models, modelCounts{Model: name, Counts: counts})
+		models = append(models, brainwire.ModelCounts{Model: name, Counts: counts})
 	}
 	return read, models
 }
@@ -373,7 +347,7 @@ func modelCountsOf(raw json.RawMessage) (map[string]uint64, bool) {
 	counts := map[string]uint64{}
 	for name, key := range harnessCounts {
 		var n uint64
-		if !isCount(usage[key]) || json.Unmarshal(usage[key], &n) != nil {
+		if !brainwire.IsCount(usage[key]) || json.Unmarshal(usage[key], &n) != nil {
 			return nil, false
 		}
 		counts[name] = n

@@ -64,9 +64,9 @@
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
-# ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser and
-# cyfr-claude-code: static Go binaries, pinned to the Go release
-# apps/locus/keeper/go.mod names ----
+# ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser and the
+# brain drivers cyfr-claude-code and cyfr-codex: static Go binaries, pinned
+# to the Go release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS keeper
 WORKDIR /src
 COPY apps/locus/keeper/go.mod apps/locus/keeper/go.sum ./
@@ -75,7 +75,8 @@ COPY apps/locus/keeper/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus . \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-stub ./cmd/cyfr-stub \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-browser ./cmd/cyfr-browser \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-claude-code ./cmd/cyfr-claude-code
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-claude-code ./cmd/cyfr-claude-code \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-codex ./cmd/cyfr-codex
 
 # ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
@@ -308,6 +309,9 @@ COPY --from=keeper /out/cyfr-browser /usr/local/bin/cyfr-browser
 # harness's protocol to in the row's kept home; it speaks the brain wire to
 # its holder, and on a terminal runs the harness unchanged.
 COPY --from=keeper /out/cyfr-claude-code /usr/local/bin/cyfr-claude-code
+# OpenAI Codex's driver, as a brain of CYFR's, the same way: it starts the
+# harness's app-server in the row's kept home and speaks its protocol.
+COPY --from=keeper /out/cyfr-codex /usr/local/bin/cyfr-codex
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,
