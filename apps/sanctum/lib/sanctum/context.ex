@@ -111,14 +111,17 @@ defmodule Sanctum.Context do
   What an approved launch's card bound for the root it dispatches: the
   turn's sources it seeds (`sources`), the classes the person let flow to
   every exit of the launched tree (`classes`), the consent revision the
-  card showed the launched grant at (`consent_id`) and the root's
-  pre-minted id (`execution_id`).
+  card showed the launched grant at (`consent_id`), the root's
+  pre-minted id (`execution_id`) and the name of the agent whose turn
+  launched it (`agent`), which the root records as its caller
+  (`Prima.Question.Caller`).
   """
   @type launch :: %{
           sources: [Prima.Source.t()],
           classes: [Prima.Source.class()],
           consent_id: String.t() | nil,
-          execution_id: String.t()
+          execution_id: String.t(),
+          agent: String.t()
         }
 
   @typedoc """
@@ -657,23 +660,30 @@ defmodule Sanctum.Context do
   @doc """
   `ctx` carrying an approved launch's stamp (`t:launch/0`): the one writer
   of the field, whose root admission seeds the launched root from it
-  (`Opus.Admission`). It mints a host-trusted seed and the classes a tree
-  may send anywhere, so it is called from `Aqua.Launch` alone, a roster
-  holds (`Sanctum.LaunchStampBoundaryTest`). A stamp of another shape
-  raises.
+  (`Opus.Admission`). It mints a host-trusted seed, the classes a tree
+  may send anywhere and the agent the root names as its caller, which a
+  standing answer's match keys on, so it is called from `Aqua.Launch`
+  alone, a roster holds (`Sanctum.LaunchStampBoundaryTest`). A stamp of
+  another shape raises.
   """
   @spec stamp_launch(t(), launch()) :: t()
   def stamp_launch(
         %__MODULE__{} = ctx,
-        %{sources: sources, classes: classes, consent_id: consent_id, execution_id: id} = launch
+        %{
+          sources: sources,
+          classes: classes,
+          consent_id: consent_id,
+          execution_id: id,
+          agent: agent
+        } = launch
       )
       when is_list(sources) and is_list(classes) and (is_binary(consent_id) or is_nil(consent_id)) and
-             is_binary(id) do
+             is_binary(id) and is_binary(agent) and agent != "" do
     unless Enum.all?(sources, &is_struct(&1, Prima.Source)) and
              Enum.all?(classes, &(&1 in Prima.Source.classes())),
            do: raise(ArgumentError, "a launch stamp names Prima.Source values and classes")
 
-    %{ctx | launch: Map.take(launch, [:sources, :classes, :consent_id, :execution_id])}
+    %{ctx | launch: Map.take(launch, [:sources, :classes, :consent_id, :execution_id, :agent])}
   end
 
   @doc """
