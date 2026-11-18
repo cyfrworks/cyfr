@@ -1578,11 +1578,18 @@ defmodule Opus.BrainTest do
       flush_opens_and_closes()
       flush_reads()
       task = Task.async(fn -> Brain.forget(record) end)
-      %{"t" => "forget", "id" => id, "session" => session} = once_driver!(fake, row)
-      at_the_forget = {Scripted.sessions(fake, row.id)[first].running, Process.alive?(pid)}
+
+      # Read as the cleanup's process opens, before its hello, which the
+      # scripted service writes into every session of the row.
+      assert_receive {:session, "open", %{"mode" => "run", "home_id" => home}, _fields}, 5_000
+      at_the_open = {Scripted.sessions(fake, row.id)[first].running, Process.alive?(pid)}
+      assert home == row.id
+      first_read!()
+      say(fake, row, hello())
+      %{"t" => "forget", "id" => id, "session" => session} = sent()
       say(fake, row, %{"t" => "forgot", "id" => id, "session" => session})
       assert Task.await(task, 10_000) == :forgot
-      assert at_the_forget == {false, false}
+      assert at_the_open == {false, false}
     end
 
     test "cleanup ends a holder of the record's generation first, and waits for a successor's",
