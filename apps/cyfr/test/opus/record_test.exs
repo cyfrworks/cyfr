@@ -158,6 +158,36 @@ defmodule Opus.RecordTest do
       assert Record.caller(read) == {:ok, :person}
     end
 
+    test "a listing reads each row's caller as a read of the row does", %{ctx: ctx} do
+      ids =
+        for {_text, starter, opts} <- starters(ctx) do
+          record = Record.new(starter, "reagent:local.test:0.1.0", %{}, opts)
+          :ok = Record.write_started(starter, record)
+          record.id
+        end
+
+      root = List.first(ids)
+
+      child =
+        Record.new(ctx, "reagent:local.test:0.1.0", %{},
+          parent_execution_id: root,
+          root_execution_id: root
+        )
+
+      :ok = Record.write_started(ctx, child, grant: inherited!(ctx, root))
+
+      assert {:ok, listed} = Record.list(ctx, limit: 100)
+      listed = Map.new(listed, &{&1.id, &1})
+
+      for id <- [child.id | ids] do
+        assert {:ok, read} = Record.get(ctx, id)
+        assert listed[id].admitted == read.admitted
+        assert Record.caller(listed[id]) == Record.caller(read)
+      end
+
+      assert Record.caller(listed[child.id]) == {:ok, :person}
+    end
+
     test "a root that recorded none reads as unknown" do
       record = %Record{
         parent_execution_id: nil,
@@ -167,10 +197,19 @@ defmodule Opus.RecordTest do
       assert Record.caller(record) == {:ok, :unknown}
     end
 
-    test "the handed option names a frame or a webhook alone: an agent, a person or a key " <>
+    test "the handed option names a tincture or a webhook alone: an agent, a person or a key " <>
            "raises, so an agent's name rides only the launch stamp",
          %{ctx: ctx} do
-      for handed <- [{:agent, "aqua"}, :person, {:key, "key_rec"}, {:tincture, ""}, "agent:x"] do
+      for handed <- [
+            {:agent, "aqua"},
+            :person,
+            {:key, "key_rec"},
+            {:tincture, ""},
+            {:tincture, "tincture:local.page"},
+            {:tincture, %{publisher: "", name: "page"}},
+            {:webhook, ""},
+            "agent:x"
+          ] do
         assert_raise ArgumentError, fn ->
           Record.new(ctx, "reagent:local.test:0.1.0", %{}, caller: handed)
         end
@@ -1050,20 +1089,42 @@ defmodule Opus.RecordTest do
     device = %{ctx | auth_method: :device, client_id: "cli_rec"}
     system = %{ctx | auth_method: :system}
     launch = %{sources: [], classes: [], consent_id: nil, agent: "aqua"}
+    page = %{publisher: "local", name: "page"}
+
+    # A frame's context, as its credential's verification builds it.
+    framed = fn version ->
+      %{
+        ctx
+        | auth_method: :tincture,
+          frame: %{
+            id: "fcr_rec",
+            frame_id: "frm_rec",
+            reference: Map.put(page, :version, version),
+            version_digest: "sha256:rec",
+            grant_revision: 1,
+            mode: :live
+          }
+      }
+    end
 
     [
       {"person", ctx, []},
       {"key:key_rec", key, []},
       {"device:cli_rec", device, []},
       {"webhook:wh_rec", system, [caller: {:webhook, "wh_rec"}]},
-      {"tincture:tincture:local.page", system, [caller: {:tincture, "tincture:local.page"}]},
+      {"tincture:local.page", system, [caller: {:tincture, page}]},
+      # A frame's credential names its tincture's version; the caller does
+      # not, so every version of one tincture is the same caller.
+      {"tincture:local.page", framed.("1.0.0"), []},
+      {"tincture:local.page", framed.("2.0.0"), []},
       # Nearer starters win: an agent over the person who approved its
       # launch, a frame over the key behind it and over the person, a
       # webhook over a key. A schedule's row names a claimed occurrence,
       # so its cases are the scheduler's (`Cyfr.AdmissionOriginTest`).
       {"agent:aqua", ctx, [launch: Map.put(launch, :execution_id, Record.generate_id())]},
-      {"tincture:tincture:local.page", key, [caller: {:tincture, "tincture:local.page"}]},
-      {"tincture:tincture:local.page", ctx, [caller: {:tincture, "tincture:local.page"}]},
+      {"tincture:local.page", key, [caller: {:tincture, page}]},
+      {"tincture:local.page", ctx, [caller: {:tincture, page}]},
+      {"tincture:local.page", %{framed.("1.0.0") | api_key_id: "key_rec"}, []},
       {"webhook:wh_rec", key, [caller: {:webhook, "wh_rec"}]},
       # The server's own context, a person's context that is anonymous,
       # and one no sign-in proved name no starter.

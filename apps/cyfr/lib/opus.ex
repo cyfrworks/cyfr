@@ -539,7 +539,7 @@ defmodule Opus do
     # A frame-invoked root's seed (`Opus.Tincture`); a child's row starts
     # from its parent's ledger whatever this says (`Opus.Record.new/4`).
     |> put(:frame_sources, Keyword.get(opts, :frame_sources))
-    # The frame a frame-invoked root names as its caller (`Opus.Tincture`).
+    # The tincture a tincture-invoked root names as its caller (`Opus.Tincture`).
     |> put(:caller, Keyword.get(opts, :caller))
     # Only a root carries a profile; an in-chain child walks its parent's
     # authority.

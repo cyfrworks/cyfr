@@ -481,8 +481,8 @@ defmodule Cyfr.AdmissionOriginTest do
       # Each run's caller is the tincture its frame or page shows, nearer
       # than the person behind the frame.
       assert Enum.sort(rows) == [
-               {"interactive", "tincture:tincture:local.origin-public"},
-               {"interactive", "tincture:tincture:local.origin-run"}
+               {"interactive", "tincture:local.origin-public"},
+               {"interactive", "tincture:local.origin-run"}
              ]
     end
   end
@@ -528,6 +528,106 @@ defmodule Cyfr.AdmissionOriginTest do
       assert Arca.Repo.aggregate(Arca.Schemas.Execution, :count) == before
     end
 
+    test "a frame's declared execution.run names its tincture, the same for each of its " <>
+           "versions" do
+      %{source: source} = seated!()
+      echo!(source)
+      runnable!(source, [%{"ran" => true}, %{"ran" => true}])
+      name = "caller-act-#{System.unique_integer([:positive])}"
+      block = %{"actions" => ["execution.run"]}
+      deps = [%{"ref" => "reagent:local.echo", "reason" => "echo"}]
+      tincture!(source, name, block, deps)
+      tincture!(source, name, block, deps, "2.0.0")
+      revision = granted!(source, name)
+
+      for version <- ["1.0.0", "2.0.0"] do
+        frame = frame!(source, name, digest_of(name, version), revision, version)
+
+        request =
+          TinctureWire.request(:action, %{
+            operation: "execution.run",
+            args: %{"reference" => @dep_ref, "input" => %{}}
+          })
+
+        assert data(:action, request, bearer: frame.bearer).status == 200, version
+      end
+
+      callers =
+        Arca.Repo.all(
+          from(e in Arca.Schemas.Execution,
+            where: e.reference == ^@dep_ref and e.athanor_id == ^source.athanor_id,
+            select: e.caller
+          )
+        )
+
+      assert callers == ["tincture:local.#{name}", "tincture:local.#{name}"]
+    end
+
+    test "a webhook whose body names a caller records its own webhook" do
+      ctx = Sanctum.TestContext.local()
+      runnable!(ctx, [%{"ran" => true}])
+      hook = hook!(ctx)
+      watch_deliveries()
+
+      delivered =
+        build_conn()
+        |> put_req_header("x-cyfr-caller", "agent:aqua")
+        |> post_signed(hook, ~s({"caller":"agent:aqua","input":{"caller":"person"}}))
+
+      request_id = json_response(delivered, 200)["request_id"]
+      assert_receive {:delivered, ^request_id}, 30_000
+
+      row = Arca.Repo.get_by!(Arca.Schemas.Webhook, slug: hook.slug)
+      assert [execution] = executions(request_id: request_id)
+      assert execution.caller == "webhook:" <> row.id
+    end
+
+    test "a formula's child whose input names a caller records none and reads its root's" do
+      publisher = Sanctum.TestContext.local()
+
+      for {name, type} <- [{"origin-formula", "formula"}, {"origin-target", "reagent"}] do
+        {:ok, _} =
+          Compendium.Registry.publish_bytes(publisher, Cyfr.Test.Guests.wasm(type), %{
+            name: name,
+            version: "1.0.0",
+            type: type
+          })
+      end
+
+      start_supervised!({ScriptedWorker, ref: "reagent:local.unscripted", script: []})
+
+      # A person's run of the formula.
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:prism),
+          authority: formula_authority(),
+          component_ref: "#{@formula}:1.0.0",
+          component_type: :formula,
+          worker: ScriptedWorker.endpoint(),
+          reservation: true
+        )
+
+      assert caller(fixture.execution_id) == "person"
+
+      # The child's input and the runner's body both name a caller;
+      # nothing reads either.
+      assert %{"ok" => answer} =
+               AttemptFixtures.call(fixture, "admit_child", %{
+                 "reference" => "#{@target}:1.0.0",
+                 "input" => %{"caller" => "agent:aqua"},
+                 "guest_fn" => "call",
+                 "child_key" => "ck_#{System.unique_integer([:positive])}",
+                 "caller" => "agent:aqua"
+               })
+
+      child = child!(fixture, answer)
+      assert caller(child.execution_id) == nil
+      {:ok, record} = Opus.Record.get(Sanctum.TestContext.local(:prism), child.execution_id)
+      assert Opus.Record.caller(record) == {:ok, :person}
+      assert %{"ok" => _} = fail!(child, "done")
+      assert %{"ok" => _} = fail!(fixture, "done")
+    end
+
     test "a key's invoke of a tincture names the tincture, over the key behind it" do
       %{source: source} = seated!()
       runnable_dep!(source)
@@ -554,7 +654,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
       # The run's context still carries the key (`Sanctum.build_tincture_context/2`);
       # the tincture is nearer.
-      assert caller(id) == "tincture:tincture:local.caller-key"
+      assert caller(id) == "tincture:local.caller-key"
     end
   end
 
@@ -969,11 +1069,11 @@ defmodule Cyfr.AdmissionOriginTest do
 
   # A tincture version in the source's athanor declaring `block` and the
   # static dependencies `deps`. Answers its reference.
-  defp tincture!(ctx, name, block, deps) do
+  defp tincture!(ctx, name, block, deps, version \\ "1.0.0") do
     put_version!(ctx, name, %{
       "name" => name,
       "type" => "tincture",
-      "version" => "1.0.0",
+      "version" => version,
       "publisher" => "local",
       "tincture" => Map.merge(%{"entry" => "index.html"}, block),
       "dependencies" => %{"static" => deps}
@@ -992,7 +1092,7 @@ defmodule Cyfr.AdmissionOriginTest do
       Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
         id: "cmp_#{name}_#{System.unique_integer([:positive])}",
         name: name,
-        version: "1.0.0",
+        version: manifest["version"],
         component_type: type,
         description: name,
         tags: "[]",
@@ -1102,12 +1202,21 @@ defmodule Cyfr.AdmissionOriginTest do
     )
   end
 
+  defp digest_of(name, version) do
+    Arca.Repo.one!(
+      from(c in Arca.Schemas.Component,
+        where: c.name == ^name and c.version == ^version,
+        select: c.release_digest
+      )
+    )
+  end
+
   # A frame the shell would open for `name`, minted at `revision`, or by
   # default at revision 1 of a grant made as the person would make it: its
   # credential, row id and frame id.
-  defp frame!(source, name, digest, revision \\ nil) do
+  defp frame!(source, name, digest, revision \\ nil, version \\ "1.0.0") do
     revision = revision || granted!(source, name)
-    reference = %{publisher: "local", name: name, version: "1.0.0"}
+    reference = %{publisher: "local", name: name, version: version}
     frame_id = "frm_origin_#{System.unique_integer([:positive])}"
 
     {:ok, %{credential: bearer, id: id}} =

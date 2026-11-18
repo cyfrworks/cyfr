@@ -186,9 +186,11 @@ defmodule Opus.Record do
 
   A root's caller (`Prima.Question.Caller`) is derived here, once, from
   what admitted it, and never from an argument a caller of the gate
-  sends: the frame or webhook its ingress hands in (`:caller`, a
-  `{:tincture, reference}` or `{:webhook, id}` alone, which
-  `Opus.Tincture` and the webhook controller pass); the agent a turn's
+  sends: the frame whose verified credential the context carries
+  (`Sanctum.Context`'s `frame`); the tincture or webhook its ingress
+  hands in (`:caller`, a `{:tincture, %{publisher, name}}` or
+  `{:webhook, id}` alone, which `Opus.Tincture`, whose run's context is
+  the tincture's own, and the webhook controller pass); the agent a turn's
   own root runs (`kind: "turn"`, its reference); the agent a launch's
   stamp names; the schedule or feed it fired for (`:schedule_id`); the
   key, or the paired device after its proof, on the context; or a
@@ -242,9 +244,10 @@ defmodule Opus.Record do
   # Every starter that applies, the nearest of them the caller, which
   # `admitted/4` keeps for a root alone. The agent's name comes from a
   # turn root's own reference or a launch's stamp, never from `:caller`,
-  # which names a frame or a webhook alone.
+  # which names a tincture or a webhook alone.
   defp starter(%Context{} = ctx, reference, opts) do
     Prima.Question.Caller.nearest([
+      frame(ctx),
       handed_caller(Keyword.get(opts, :caller)),
       turn_agent(Keyword.get(opts, :kind), reference),
       launch_agent(Keyword.get(opts, :launch)),
@@ -255,19 +258,34 @@ defmodule Opus.Record do
     ])
   end
 
-  defp handed_caller(nil), do: nil
+  defguardp text?(value) when is_binary(value) and value != ""
 
-  defp handed_caller({kind, id} = caller)
-       when kind in [:tincture, :webhook] and is_binary(id) and id != "",
-       do: caller
+  defp handed_caller(nil), do: nil
+  defp handed_caller({:webhook, id}) when text?(id), do: {:webhook, id}
+
+  defp handed_caller({:tincture, %{publisher: publisher, name: name} = tincture})
+       when text?(publisher) and text?(name),
+       do: tincture(tincture)
 
   defp handed_caller(other),
     do:
       raise(
         ArgumentError,
-        "a root's handed caller is a frame or a webhook, not " <>
+        "a root's handed caller is a tincture or a webhook, not " <>
           Prima.LoggerContext.shape(other)
       )
+
+  # The frame a frame credential established the context for: the
+  # tincture its verified credential names.
+  defp frame(%Context{frame: %{reference: reference}}), do: tincture(reference)
+  defp frame(%Context{}), do: nil
+
+  # A tincture as a caller: its publisher and name, with no type and no
+  # version, so every version of one tincture is the same caller.
+  defp tincture(%{publisher: publisher, name: name}) when text?(publisher) and text?(name),
+    do: {:tincture, publisher <> "." <> name}
+
+  defp tincture(_other), do: nil
 
   defp turn_agent("turn", reference) do
     case Prima.ComponentRef.parse(reference) do

@@ -134,9 +134,10 @@ defmodule Opus.Tincture do
         route: route,
         client_ip: ctx.client_ip,
         frame_sources: frame_sources(tincture),
-        # The frame is the run's caller, nearer than the key or person
-        # behind it, which the run's context no longer names as such.
-        caller: {:tincture, tincture_ref}
+        # The tincture is the run's caller, nearer than the key or person
+        # behind it: the run's context is the tincture's own, which names
+        # no frame.
+        caller: {:tincture, %{publisher: tincture.publisher, name: tincture.name}}
       )
 
     duration_ms =

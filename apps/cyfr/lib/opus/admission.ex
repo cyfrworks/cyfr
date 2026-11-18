@@ -299,7 +299,7 @@ defmodule Opus.Admission do
   `:parent_execution_id`, `:child_key` (the key the parent's runner minted
   for this child, which the row carries), `:root_execution_id`,
   `:profile_id`, `:retention_class`, `:retained_input`, `:schedule_id`,
-  `:caller` (the frame or webhook a root records as its caller, which
+  `:caller` (the tincture or webhook a root records as its caller, which
   only its ingress hands in: `Opus.Record.new/4`), `:activation_stamp`,
   `:activation_digest`, `:dep_ref`, `:need`, `:client_ip`, the barriers
   `:charge`, `:step`, `:occurrence_id` and `:parent_attempt` (the attempt
