@@ -1455,6 +1455,108 @@ defmodule Opus.BrainTest do
     end
   end
 
+  describe "a thread's deletion" do
+    # A held session of `agent` in `thread`, on a row of its own so that
+    # one driver's hello reaches only its own session: a running turn
+    # whose start admitted that row, its holder opened, and the session
+    # kept on the thread; the turn then ends, as a session outlives it.
+    defp held!(fake, ctx, binding, thread, agent, name) do
+      actor = Sanctum.Context.actor(ctx)
+      row = brain_row!(ctx, name)
+
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "work on it"},
+          turn: %{agent: agent, requested_by: ctx.user_id, origin: :interactive}
+        })
+
+      set_turn(turn, status: "running")
+      {:ok, turn} = TurnStorage.get(actor, turn.id)
+      step = start_step!(ctx, turn, row)
+
+      bound = %{
+        binding
+        | thread_id: thread.id,
+          agent: agent,
+          turn_id: turn.id,
+          origin: turn.origin,
+          fence: turn.fence,
+          step: step.id,
+          row_id: row.id,
+          epoch: row.epoch,
+          generation: 0
+      }
+
+      brain = opened!(fake, row, bound)
+      keep_session!(thread, "#{name}-0000-4968-8776-000000000001")
+      {brain, turn}
+    end
+
+    defp keep_session!(thread, session),
+      do:
+        {1, _} =
+          Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+            set: [brain_session: session]
+          )
+
+    # The room, a crew member's thread under it and a thread that read it,
+    # each with its session held.
+    defp three_held!(fake, ctx, binding, thread) do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, child} = Arca.ThreadStorage.crew_thread(actor, thread.id, "planner")
+      {:ok, reader} = Arca.Test.Days.thread(actor)
+      room = held!(fake, ctx, binding, thread, "aqua", "6f1e2d3c")
+      crew = held!(fake, ctx, binding, child, "planner", "7f1e2d3c")
+      {_brain, reading} = read = held!(fake, ctx, binding, reader, "aqua", "8f1e2d3c")
+
+      set_turn(reading,
+        sources: Jason.encode!([Prima.Source.to_json(Prima.Source.thread(thread.id))])
+      )
+
+      {room, crew, read}
+    end
+
+    test "ends at once the holders of its thread's session, its child's and its reader's",
+         %{fake: fake, ctx: ctx, binding: binding, thread: thread, turn: setup_turn} do
+      set_turn(setup_turn, status: "completed")
+      held = three_held!(fake, ctx, binding, thread)
+      {{room, room_turn}, {crew, crew_turn}, {read, read_turn}} = held
+      for turn <- [room_turn, crew_turn, read_turn], do: set_turn(turn, status: "completed")
+
+      assert {:ok, %{cancelled: []}} = Aqua.Tape.delete_thread(ctx, thread.id)
+
+      # Told before the deletion answers: no consumer runs under the suite
+      # (`:brain_cleanup_enabled`), so no tick ended them.
+      for {pid, ref} <- [room, crew, read] do
+        assert_received {Brain, ^ref, {:ended, :forgotten}}
+        refute Process.alive?(pid)
+      end
+    end
+
+    test "a refused deletion ends none", %{
+      fake: fake,
+      ctx: ctx,
+      binding: binding,
+      thread: thread,
+      turn: setup_turn
+    } do
+      set_turn(setup_turn, status: "completed")
+
+      {{room, room_turn}, {crew, crew_turn}, {read, read_turn}} =
+        three_held!(fake, ctx, binding, thread)
+
+      for turn <- [room_turn, read_turn], do: set_turn(turn, status: "completed")
+      set_turn(crew_turn, status: "paused", paused_reason: "approval")
+
+      assert {:error, {:child_awaits_card, "planner"}} = Aqua.Tape.delete_thread(ctx, thread.id)
+
+      for {pid, ref} <- [room, crew, read] do
+        refute_received {Brain, ^ref, {:ended, _reason}}
+        assert Process.alive?(pid)
+      end
+    end
+  end
+
   test "nothing the person posts, the program says or the grant holds shows in its status",
        %{fake: fake, row: row, binding: binding} do
     {pid, _ref} = brain = started!(fake, row, binding)

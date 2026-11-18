@@ -1157,6 +1157,14 @@ defmodule Arca.ThreadStorage do
   # that row is a driven program with a kept folder in the athanor, as a
   # brain's row is. A thread with none, or whose named row is gone or is
   # no such program, is left out.
+  #
+  # The latest start is not always the session's: when the agent's
+  # program moves to another row, a later turn's start for the new row is
+  # admitted before its session answers, and a clearing between the two
+  # names the new row for the old row's session. The removal sent there
+  # answers forgot, finding nothing, and the old row's transcript stays.
+  # The session's own row, stored with it (`brain_progress`), closes that
+  # gap once it exists, and this function reads it then.
   defp session_rows(_athanor_id, []), do: %{}
 
   # arca:db-raise-ok inside the caller's transaction
