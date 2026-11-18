@@ -1237,6 +1237,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :revision_digest, :string, null: false
       add :capability_digest, :string, null: false
       add :catalyst_ref, :string
+      # The program row a brain that is a program names, the other way an
+      # agent names its brain: exactly one of the two is set.
+      add :program, :string
       add :disabled, :boolean, null: false, default: false
       add :synced_at, :utc_datetime_usec, null: false
     end
@@ -2618,6 +2621,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Raised each time the session is forgotten (its program home reset or
       # retired): a turn keeps a session only under the generation it read.
       add :brain_generation, :integer, null: false, default: 0
+      # A program brain's session as its attendant last committed it, one
+      # JSON map (`Arca.Schemas.Thread`).
+      add :brain_progress, :text
       # When a daily or a workspace thread was archived: the person's list
       # shows it behind its Archived filter until new work takes it out,
       # and nothing else about it changes.
@@ -2700,6 +2706,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # A request's `resolved_by` is the id of the reply that answered it,
       # a nudge's the model step whose request carried it.
       add :resolved_by, :string
+      # The step that first carried a post to its brain: a program's
+      # `input` step. A plain string, from which nothing cascades.
+      add :carried_by, :string
       add :resolved_at, :utc_datetime_usec
       # Approvals: the decision's reason/result summary/scope, JSON.
       add :resolution, :text
@@ -2801,6 +2810,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :model, :string
       # The exact catalyst release the turn runs on, pinned at its first build.
       add :catalyst_ref, :string
+      # The program row the turn's brain runs on, pinned at its first build.
+      add :program, :string
       add :options, :text
       # The consumption boundary: the transcript a turn reads.
       add :window_upto_seq, :integer
@@ -2839,9 +2850,9 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :seq, :integer, null: false
-      # model | tool | ui | approval | launch
+      # model | tool | ui | approval | launch | input
       add :kind, :string, null: false
-      # chat | flush | compaction — what the step serves, set by the host
+      # chat | flush | compaction | page | brain — what the step serves, set by the host
       add :purpose, :string, null: false
       add :idempotency_key, :string
       add :tool, :string

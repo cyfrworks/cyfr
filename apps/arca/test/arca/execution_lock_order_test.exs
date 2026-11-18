@@ -490,6 +490,148 @@ defmodule Arca.ExecutionLockOrderTest do
     assert %Execution{status: "cancelled"} = unboxed(fn -> Arca.Repo.get!(Execution, root_id) end)
   end
 
+  # A turn on a program brain whose start is admitted, with its own post
+  # waiting for its delivery (`TurnStorage.carry/3`).
+  defp delivering!(actor) do
+    unboxed(fn ->
+      {:ok, thread} = Arca.Test.Days.thread(actor)
+
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, sent_by: "person", content: "go"},
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+        })
+
+      root_id = "exec_lock_order_#{System.unique_integer([:positive])}"
+      budget_id = "bgt_lock_order_#{System.unique_integer([:positive])}"
+
+      {:ok, %{attempt: attempt}} =
+        Arca.Execution.admit(
+          %{
+            id: root_id,
+            reference: "agent:local.aqua",
+            user_id: actor.user_id,
+            athanor_id: actor.athanor_id,
+            component_type: "agent",
+            kind: "turn",
+            turn_id: turn.id,
+            origin: :interactive
+          },
+          reservation: %{budget_id: budget_id, cap: 4},
+          grant: Arca.Test.Actor.grant(actor.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
+        )
+
+      {:ok, turn} =
+        TurnStorage.start(actor, turn.id, %{
+          root_execution_id: root_id,
+          attempt: attempt.attempt,
+          budget_id: budget_id,
+          recovery_limit: 3,
+          fence: turn.fence
+        })
+
+      {:ok, turn} = TurnStorage.pin_program(actor, turn.id, "prg_brain", %{fence: turn.fence})
+
+      {:ok, _start} =
+        TurnStorage.put_step(actor, turn.id, %{
+          purpose: "brain",
+          tool: "program",
+          action: "start",
+          idempotency_key: TurnStorage.brain_start_key(turn.id),
+          dispatch_state: "dispatched",
+          fence: turn.fence
+        })
+
+      {:ok, [row]} = TurnStorage.brain_posts(actor, turn.id)
+
+      on_exit(fn ->
+        unboxed(fn ->
+          delete_thread!(actor.athanor_id, thread.id)
+          delete_run!(root_id)
+        end)
+      end)
+
+      record = %{
+        fence: turn.fence,
+        deliver: "post",
+        row_id: row.id,
+        generation: 0,
+        silence_ms: 60_000
+      }
+
+      %{turn: turn, thread: thread, attempt: attempt.attempt, row: row, record: record}
+    end)
+  end
+
+  test "a delivery's record and the turn's end take the turn before its thread and never " <>
+         "deadlock: a record that holds the turn goes first, and the end waits for it" do
+    actor = Arca.Test.Actor.local()
+    %{turn: turn, thread: thread, row: row, record: record} = delivering!(actor)
+
+    log =
+      capture_log(fn ->
+        blocker = hold_thread(thread.id)
+
+        {carry, carry_backend} =
+          waiting(:carry, fn -> TurnStorage.carry(actor, turn.id, record) end)
+
+        Arca.Test.LockWait.await_lock_wait!(carry_backend, ["threads"])
+
+        {finish, finish_backend} =
+          waiting(:finish, fn ->
+            TurnStorage.finish(actor, turn.id, "cancelled", %{
+              grant: :stored,
+              verify: &Arca.Test.Actor.admits/1,
+              fence: turn.fence
+            })
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(finish_backend, ["turns"])
+        release(blocker)
+
+        assert {:ok, %{step: %{kind: "input"}}} = Task.await(carry, 10_000)
+        assert {:ok, %{status: "cancelled"}} = Task.await(finish, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert unboxed(fn -> Arca.Repo.get!(Message, row.id).carried_by end) != nil
+  end
+
+  test "a delivery's record and the turn's end take the turn before its thread and never " <>
+         "deadlock: an end that holds the turn goes first, and the record finds the turn over" do
+    actor = Arca.Test.Actor.local()
+    %{turn: turn, attempt: attempt, row: row, record: record} = delivering!(actor)
+
+    log =
+      capture_log(fn ->
+        blocker = hold_attempt(attempt)
+
+        {finish, finish_backend} =
+          waiting(:finish, fn ->
+            TurnStorage.finish(actor, turn.id, "cancelled", %{
+              grant: :stored,
+              verify: &Arca.Test.Actor.admits/1,
+              fence: turn.fence
+            })
+          end)
+
+        Arca.Test.LockWait.await_lock_wait!(finish_backend, ["execution_attempts"])
+
+        {carry, carry_backend} =
+          waiting(:carry, fn -> TurnStorage.carry(actor, turn.id, record) end)
+
+        Arca.Test.LockWait.await_lock_wait!(carry_backend, ["turns"])
+        release(blocker)
+
+        assert {:ok, %{status: "cancelled"}} = Task.await(finish, 10_000)
+        assert {:error, :not_running} = Task.await(carry, 10_000)
+      end)
+
+    refute log =~ "deadlock", log
+    assert unboxed(fn -> Arca.Repo.get!(Message, row.id).carried_by end) == nil
+  end
+
   # A member's turn running in its child thread of a fresh room.
   defp running_child_turn!(actor) do
     budget_id = "bgt_lock_order_#{System.unique_integer([:positive])}"
