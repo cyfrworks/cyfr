@@ -1209,6 +1209,131 @@ defmodule Sanctum.QuestionsTest do
   # While the storage reserve is spent
   # ---------------------------------------------------------------------------
 
+  describe "the declaration a permission rests on" do
+    # A catalyst `local.archive` at 1.0.0 declaring `delete_table` titled
+    # `title`, published through the registry: its row as the port reads it.
+    defp publish_archive!(ctx, title) do
+      manifest = %{
+        "name" => "archive",
+        "publisher" => "local",
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "asks" => [%{"name" => "delete_table", "title" => title}]
+      }
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm("catalyst"), %{
+          type: "catalyst",
+          name: "archive",
+          publisher: "local",
+          version: "1.0.0",
+          manifest: Jason.encode!(manifest)
+        })
+
+      {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, "archive", "local", "catalyst")
+      row
+    end
+
+    defp archive_run!(person, release),
+      do:
+        run!(person,
+          reference: "catalyst:local.archive:1.0.0",
+          release: release.release_digest
+        )
+
+    defp for_an_hour(effect),
+      do: %{
+        "effect" => effect,
+        "lasts" => %{"until" => DateTime.to_iso8601(hour_from_now())},
+        "covers" => "any_caller"
+      }
+
+    test "a waiting card's lasting answer is refused once the component has left, and a reinstall asks again",
+         person do
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+
+      assert_receive {:question, :opened, %{ref: ^ref}, false}
+
+      assert {:ok, :deleted} = Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+
+      assert {:error, %Prima.Refusal{reason: :removed, message: message}} =
+               call(person.ctx, "answer", %{"ref" => ref, "answer" => for_an_hour("allow")})
+
+      assert message =~ "no longer installed"
+      assert standing(person.ctx, "local", "archive") == []
+      assert row(person.ctx, ref).state == "open"
+      refute_received {:question, :answered, _meta, _in_transaction}
+
+      # Installed again, its next run is asked: nothing stood in between.
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, _ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+    end
+
+    test "a card whose component has left is still answered once, and leaves nothing standing",
+         person do
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+
+      assert {:ok, :deleted} = Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+
+      assert {:ok, %{state: "allowed"}} =
+               call(person.ctx, "answer", %{
+                 "ref" => ref,
+                 "answer" => %{"effect" => "allow", "lasts" => "once"}
+               })
+
+      assert standing(person.ctx, "local", "archive") == []
+    end
+
+    test "a release published again under the same version in other words refuses the words shown",
+         person do
+      publish_archive!(person.ctx, "delete a table")
+      handler = {__MODULE__, :republished}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test = self()
+
+      # Right after the set reads the release, it is removed and published
+      # again under the same version, in other words.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] == "components" do
+              :telemetry.detach(handler)
+
+              {:ok, :deleted} =
+                Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+
+              send(test, {:republished, publish_archive!(person.ctx, "delete every table")})
+            end
+          end,
+          nil
+        )
+
+      result =
+        call(person.ctx, "set", %{
+          "publisher" => "local",
+          "name" => "archive",
+          "action_name" => "delete_table",
+          "declaration_digest" => shown("delete_table"),
+          "standing" => %{"effect" => "deny", "caller" => "any"}
+        })
+
+      assert_received {:republished, %{manifest: manifest}}
+      assert inspect(manifest) =~ "delete every table"
+      assert {:error, %Prima.Refusal{reason: :undeclared}} = result
+      assert standing(person.ctx, "local", "archive") == []
+    end
+  end
+
   describe "below the storage reserve's mark" do
     test "the reads are admitted and the writes refused by the gate", person do
       {_run, ref} = open!(person)

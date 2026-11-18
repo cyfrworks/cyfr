@@ -56,7 +56,7 @@ defmodule Sanctum.Questions do
 
   ## The answer door
 
-  `answer/3`, `set/5` and `forget/2` are the person's, through their own
+  `answer/3`, `set/6` and `forget/2` are the person's, through their own
   session or a paired device of theirs (`Sanctum.Pairing.can_confirm?/1`),
   never a key, a frame or a running chain, and reach only the context's
   own person's rows in its own athanor. An answer counts only while the
@@ -69,6 +69,15 @@ defmodule Sanctum.Questions do
   consumed inside the write's transaction (`Authz.consume/2`) and
   announced after its commit (`Authz.consumed/1`). Every other answer
   needs the session alone.
+
+  A standing answer, from a card or set beforehand, is written only while,
+  inside its own write and before any proof is spent, an installed release
+  of the component is held that declares its action under the digest it
+  stores (`Arca.ComponentStorage.hold_declaring/5`): a card's under its
+  question's own words, a set's under the words its person was shown. A
+  card whose component has left can still be answered once, which leaves
+  no permission; an answer that would last is refused, and the question
+  stays open.
 
   ## What is announced
 
@@ -303,8 +312,14 @@ defmodule Sanctum.Questions do
               declaration_digest: standing.declaration_digest
             })
 
+      # An answer that lasts is written only while a release of the
+      # component still declares the action in the question's own words,
+      # held inside the write before any proof is spent; one given once
+      # leaves no permission and needs none.
       confirmed(ctx, change, fn verify ->
-        Store.answer(actor, ref, decision(answer.effect), standing, verify: verify)
+        Store.answer(actor, ref, decision(answer.effect), standing,
+          verify: fn -> with :ok <- declared_still(ctx, standing, :removed), do: verify.() end
+        )
       end)
       |> case do
         {:ok, answered} ->
@@ -352,9 +367,10 @@ defmodule Sanctum.Questions do
   catalyst declares the action with exactly those words, read through the
   component-facts port, and is refused otherwise, or when the port cannot
   answer: an answer never binds words the person did not see, and no
-  other version's are put in their place. That version is held against
-  its removal inside the write (`Arca.ComponentStorage.hold_release/5`),
-  so a removal either finds the answer for its cleanup or refuses it. A caller of `unknown` is
+  other version's are put in their place. Inside the write, an installed
+  version declaring those words is held (`Arca.ComponentStorage.hold_declaring/5`),
+  so a removal, or a republication in other words, either finds the
+  answer for its cleanup or refuses it. A caller of `unknown` is
   refused: it is covered only by an answer for any caller. `{:ok, row}`;
   `{:error, {:confirmation_required, _}}` for an allow, always, for any
   caller not yet confirmed; or a refusal.
@@ -367,8 +383,7 @@ defmodule Sanctum.Questions do
     with :ok <- answerer(ctx),
          :ok <- known_caller(standing.caller),
          :ok <- to_come(standing.until),
-         {:ok, %{version: version, title: title}} <-
-           shown_declaration(ctx, publisher, name, action, declaration_digest) do
+         {:ok, title} <- shown_declaration(ctx, publisher, name, action, declaration_digest) do
       row = %{
         publisher: publisher,
         name: name,
@@ -390,14 +405,13 @@ defmodule Sanctum.Questions do
               declaration_digest: row.declaration_digest
             })
 
-      # The release whose words were shown is held against its removal
-      # inside the write, before any proof is spent: a removal either waits
-      # and its cleanup finds this answer, or came first and refuses it.
-      held = fn -> held_release(ctx, publisher, name, version) end
-
+      # A release declaring the words shown is held inside the write,
+      # before any proof is spent: a removal or a republication in other
+      # words either waits and its cleanup finds this answer, or came
+      # first and refuses it.
       confirmed(ctx, change, fn verify ->
         Store.put_standing(Context.actor(ctx), row,
-          verify: fn -> with :ok <- held.(), do: verify.() end
+          verify: fn -> with :ok <- declared_still(ctx, row, :undeclared), do: verify.() end
         )
       end)
       |> case do
@@ -787,27 +801,32 @@ defmodule Sanctum.Questions do
   defp facts({:error, outage}) when Components.is_outage(outage), do: {:error, :unavailable}
   defp facts({:error, _absent}), do: {:error, :not_found}
 
-  defp shown_in(%{version: version, manifest: manifest}, action, digest) do
+  defp shown_in(%{manifest: manifest}, action, digest) do
     with {:ok, %{title: title} = declared} <- declaration(manifest, action),
          true <- Asks.digest(declared) == digest do
-      {:ok, %{version: version, title: title}}
+      {:ok, title}
     else
       _other -> :none
     end
   end
 
-  # The release the person was shown, held in the write's transaction
-  # (`Arca.ComponentStorage.hold_release/5`): gone is no longer declared.
-  defp held_release(ctx, publisher, name, version) do
-    case Arca.ComponentStorage.hold_release(
+  # The rule every standing answer is written under: inside its own
+  # write, an installed release of the component is held that declares
+  # its action under the digest it stores
+  # (`Arca.ComponentStorage.hold_declaring/5`). None is `gone`, the door's
+  # own refusal.
+  defp declared_still(_ctx, nil, _gone), do: :ok
+
+  defp declared_still(ctx, standing, gone) do
+    case Arca.ComponentStorage.hold_declaring(
            Context.actor(ctx),
-           name,
-           version,
-           publisher,
-           "catalyst"
+           standing.publisher,
+           standing.name,
+           standing.action,
+           standing.declaration_digest
          ) do
       :ok -> :ok
-      {:error, :not_found} -> {:error, :undeclared}
+      {:error, :not_found} -> {:error, gone}
     end
   end
 
@@ -887,6 +906,15 @@ defmodule Sanctum.Questions do
         :undeclared,
         "No installed version of this component says it asks before " <>
           "#{inspect(action)} in the words you were shown"
+      )
+
+  defp refusal(:removed, _ref),
+    do:
+      refused(
+        :conflict,
+        :removed,
+        "This component is no longer installed, so this answer cannot be kept. " <>
+          "You can still allow it once, or not allow it."
       )
 
   defp refusal(:unauthenticated, _ref),

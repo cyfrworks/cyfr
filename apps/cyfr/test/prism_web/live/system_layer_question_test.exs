@@ -658,6 +658,42 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
+    test "an answer that would last is refused once the component has left; once still answers",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      id = Prompt.question_id(ref)
+      shows!(view, id)
+
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Context.actor(setup.ctx),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      choose(view, "allow_hour")
+      assert open_prompt(view) == id
+
+      assert has_element?(
+               view,
+               ~s([role="alert"]),
+               "This component is no longer installed, so this answer cannot be kept."
+             )
+
+      assert has_element?(view, ~s([data-test="question-choices"]))
+      assert Q.standing(setup.ctx) == []
+      refute_received {:answered, ^ref}
+
+      choose(view, "allow_once")
+      assert_receive {:answered, ^ref}
+      assert Q.row(setup.ctx, ref).state == "allowed"
+      assert Q.standing(setup.ctx) == []
+      end_views()
+    end
+
     test "closing the card without a choice is Don't allow, once", setup do
       view = screen!(setup)
       {_run, ref} = Q.open!(setup.ctx, setup.component)
