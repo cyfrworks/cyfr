@@ -36,8 +36,8 @@
 // driver keeps no account of calls: which post a native turn answers is
 // Codex's own naming of the posts' uuids in that turn, which `idle`
 // passes on, and a turn's usage is the thread's total as Codex reports it,
-// partial once a sub-agent works and for a resumed thread's first total
-// (the wire's "comment" says why).
+// partial once a sub-agent works and for a resumed thread's first usable
+// total, one that carries counts (the wire's "comment" says why).
 //
 // The driver ends when its input ends (the session is closed), when the
 // harness ends, with the harness's status, and on a hangup or a TERM, each

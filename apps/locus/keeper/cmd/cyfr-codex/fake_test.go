@@ -35,6 +35,8 @@ import (
 //	stranger  calls CYFR's tool from another thread, then replies with the answer
 //	child     a sub-agent's thread starts a turn and counts its usage, then it replies
 //	agent     calls a sub-agent, with no line of the sub-agent's own, then replies
+//	none      sends usage with no total, then replies
+//	missing   sends a total missing a count, then replies
 //	big       replies with 2 MiB of text
 //	die       ends the process with status 3
 //
@@ -242,6 +244,12 @@ func fakeCodex() int {
 			call["status"] = "completed"
 			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": call})
 			reply(turn, "an agent ran")
+		case strings.Contains(words, "none"):
+			notify("thread/tokenUsage/updated", map[string]any{"threadId": thread.id, "turnId": turn, "tokenUsage": map[string]any{}})
+			reply(turn, "none counted")
+		case strings.Contains(words, "missing"):
+			notify("thread/tokenUsage/updated", map[string]any{"threadId": thread.id, "turnId": turn, "tokenUsage": map[string]any{"total": map[string]any{"inputTokens": 5}}})
+			reply(turn, "one count missing")
 		case strings.Contains(words, "big"):
 			reply(turn, strings.Repeat("x", 2<<20))
 		default:

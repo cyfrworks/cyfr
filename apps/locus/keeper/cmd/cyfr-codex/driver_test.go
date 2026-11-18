@@ -950,3 +950,43 @@ func TestTheFirstTotalAfterAResumeIsPartial(t *testing.T) {
 		})
 	}
 }
+
+// The resumed thread's first usable total, one that carries counts, is the
+// partial one: a usage before it that carries none, no total or a total
+// missing a count, leaves the next total partial.
+func TestAnUnreadableTotalLeavesTheResumedThreadsFirstUsableOnePartial(t *testing.T) {
+	for _, first := range []string{"none", "missing"} {
+		t.Run(first, func(t *testing.T) {
+			s := startDriver(t)
+			session := startFresh(s, map[string]any{})
+			work(s, "stp_work", "trn_1")
+			postText(s, "stp_first", "trn_1", "hello")
+			s.until("idle")
+			s.end()
+			t.Setenv("FAKE_NO_REPEAT", "1")
+			again := startDriverIn(t, s.home)
+			again.expect("hello")
+			again.send(map[string]any{"t": "start", "gen": 4, "session": session, "config": map[string]any{}})
+			again.expect("started")
+			work(again, "stp_work_2", "trn_2")
+			accountings := func(id, words string) string {
+				postText(again, id, "trn_2", words)
+				var got []string
+				for _, e := range again.until("idle") {
+					if e["t"] == "usage" {
+						models, _ := e["models"].([]any)
+						got = append(got, fmt.Sprintf("%v/%d", e["accounting"], len(models)))
+					}
+				}
+				return fmt.Sprint(got)
+			}
+			want := map[string]string{"none": "[unavailable/0 partial/1]", "missing": "[partial/0 partial/1]"}[first]
+			if got := accountings("stp_second", first); got != want {
+				t.Fatalf("a total with no counts leaves the first usable one partial: %s, want %s", got, want)
+			}
+			if got := accountings("stp_third", "hello"); got != "[complete/1]" {
+				t.Fatalf("the totals after the first usable one are complete: %s", got)
+			}
+		})
+	}
+}

@@ -80,10 +80,10 @@ type driver struct {
 	// Whether the session's total holds a sub-agent's counts is not
 	// established, so from then on its usage is partial.
 	others bool
-	// resumed is set while a resumed thread has sent no total yet: its
-	// first is partial, since it may end a stretch a sub-agent worked in
-	// whose total's event never committed, and nothing of `others`
-	// outlives the process that saw it.
+	// resumed is set while a resumed thread has sent no usable total, one
+	// that carries counts: its first is partial, since it may end a stretch
+	// a sub-agent worked in whose total's event never committed, and
+	// nothing of `others` outlives the process that saw it.
 	resumed bool
 	// What the native turns name: each post by its uuid, each turn under
 	// way, the one Codex runs now, the harness's own tools running, and the
@@ -568,10 +568,13 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 	case "thread/tokenUsage/updated":
 		usage := brainwire.NewEvent("usage").Set("gen", d.gen).SetOptional("work", work).Set("total", d.session)
 		read, models := threadTotal(n.TokenUsage, d.model)
-		if read == "complete" && (d.others || d.resumed) {
+		usable := read == "complete"
+		if usable && (d.others || d.resumed) {
 			read = "partial"
 		}
-		d.resumed = false
+		if usable {
+			d.resumed = false
+		}
 		usage.Set("accounting", read)
 		if read != "unavailable" {
 			usage.Set("models", models)
