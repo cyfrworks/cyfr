@@ -456,6 +456,8 @@ type AquaCreateArgs struct {
 	Model Field[string] `json:"model,omitzero"`
 	// What the soul should never hand a crew member (create/update; crew members only)
 	Avoid Field[string] `json:"avoid,omitzero"`
+	// What of its offered tools the member runs: 'read-only' or 'auto' (the default)
+	Mode Field[string] `json:"mode,omitzero"`
 	// The options this agent's brain is asked with on every request — names and values its describe declares (create/update)
 	Options Field[map[string]any] `json:"options,omitzero"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
@@ -503,7 +505,7 @@ func (args AquaGetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaListArgs carries arguments for aqua.list.
 type AquaListArgs struct {
-	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, tool_policy, content, disabled) — one call instead of a get per agent
+	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, mode, tools, content, disabled) — one call instead of a get per agent
 	Detail Field[bool] `json:"detail,omitzero"`
 	// For list: include crew members set aside with disabled: true, which the roster otherwise leaves out
 	IncludeDisabled Field[bool] `json:"include_disabled,omitzero"`
@@ -664,10 +666,14 @@ type AquaUpdateArgs struct {
 	Options Field[*map[string]any] `json:"options,omitzero"`
 	// update only: the brain options to change, applied to the options as they are when the write lands — a value sets an option, null takes it off; options not named are kept, so two edits of different options at once keep both. Not with options.
 	OptionsPatch Field[map[string]*any] `json:"options_patch,omitzero"`
-	// The soul's per-(tool,action) allowlist, which every crew member runs under too (a crew member has none of its own). Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's.
-	ToolPolicy Field[*map[string]string] `json:"tool_policy,omitzero"`
-	// update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two edits of different keys at once keep both. Not with tool_policy.
-	ToolPolicyPatch Field[map[string]*string] `json:"tool_policy_patch,omitzero"`
+	// What of its offered tools this member runs (create/update; the soul or a crew member): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto.
+	Mode Field[string] `json:"mode,omitzero"`
+	// The soul's tools, which every crew member is offered too (a crew member has none of its own): each 'tool.action', 'tool.*', 'native_search' (the provider's own search) or an outside server's 'server:tool'. A tool missing from the list is not callable at all; null offers nothing.
+	Tools Field[*[]string] `json:"tools,omitzero"`
+	// update only: tools to add to the soul's list as it is when the write lands, so two edits of different tools at once keep both. Not with tools.
+	ToolsAdd Field[[]string] `json:"tools_add,omitzero"`
+	// update only: tools to take off the soul's list as it is when the write lands. Not with tools.
+	ToolsRemove Field[[]string] `json:"tools_remove,omitzero"`
 	// Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
 	// Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)
