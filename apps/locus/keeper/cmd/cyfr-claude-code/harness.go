@@ -57,19 +57,23 @@ const (
 	maxResultChars = 50000
 )
 
-// readOnlyArgv is what a read-only start adds: the harness's default
-// permission mode, in which its reads run without asking and it asks
-// before every other use of its own tools, a Bash command that writes
-// among them, every ask denied (readOnlyDenial); and no settings file of
-// the user's or the project's, local ones included, so no hook of theirs
-// runs and no allow rule of theirs lets a write through without asking.
-// The folder is the box's kept one, which the person, or an auto member's
-// session on the same row, may have written; the sign-in is no setting and
-// stays. Plan mode is not it: on 2.1.323 it runs a Bash command that
-// writes without asking, and EnterPlanMode, which the harness takes
-// without asking, puts a default-mode session there (probed: the write
-// then ran).
-var readOnlyArgv = []string{"--permission-mode", "default", "--setting-sources", ""}
+// readOnlyArgv is what a read-only start adds. Its own tools are only the
+// three that read the folder (`--tools` removes every other built-in tool
+// from the session, so none that writes, runs a command, switches the
+// permission mode or starts a helper is there to call); CYFR's tools are
+// no built-in ones and still reach the driver as asks. The harness runs in
+// its default permission mode, every ask denied (readOnlyDenial), and with
+// no settings file of the user's or the project's, local ones included, so
+// no hook or allow rule of theirs applies. The folder is the box's kept
+// one, which the person, or an auto member's session on the same row, may
+// have written; the sign-in is no setting and stays. A permission mode
+// alone is not it: plan mode on 2.1.323 runs a Bash command that writes
+// without asking, and a default-mode session enters plan mode by its own
+// EnterPlanMode, unasked.
+var readOnlyArgv = []string{"--permission-mode", "default", "--setting-sources", "", "--tools", strings.Join(readOnlyTools, ",")}
+
+// readOnlyTools are a read-only start's own tools.
+var readOnlyTools = []string{"Read", "Grep", "Glob"}
 
 // readOnlyDenial is what the harness reads when a read-only start denies
 // one of its own tools.
@@ -77,7 +81,7 @@ const readOnlyDenial = "This crew member is read-only."
 
 // harnessArgv is the harness's command line: its own command, then the
 // base, the session and the start's configuration, a read-only start's
-// last, since it names no permission mode of its own (start).
+// last, since it names no permission mode or tools of its own (start).
 func harnessArgv(command []string, session string, resume bool, config brainwire.Config) []string {
 	argv := append([]string{}, command...)
 	argv = append(argv, baseArgv...)

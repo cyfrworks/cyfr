@@ -936,10 +936,11 @@ func strs(xs ...string) []any {
 	return out
 }
 
-// A read-only start runs the harness in its default permission mode,
-// loading no settings file of the user's or the project's, and denies its
-// own tools, a write and a Bash command; one whose read_only is false or
-// absent runs as it always did, its own tools allowed. Both are seen
+// A read-only start gives the harness only its reading tools, runs it in
+// its default permission mode, loading no settings file of the user's or
+// the project's, and denies every ask of its own tools; one whose
+// read_only is false or absent runs as it always did, its own tools
+// allowed. Both are seen
 // whole: the harness's command line and the driver's answers.
 func TestAReadOnlyStartRunsDefaultModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
 	write := map[string]any{"file_path": "/work/new.txt", "content": "x"}
@@ -961,7 +962,7 @@ func TestAReadOnlyStartRunsDefaultModeAndDeniesTheHarnessesOwnTools(t *testing.T
 		{"absent", map[string]any{"model": "fake-opus"}, nil, allowed},
 		{"false", map[string]any{"model": "fake-opus", "read_only": false}, nil, allowed},
 		{"false beside a permission mode", map[string]any{"model": "fake-opus", "read_only": false, "permission_mode": "acceptEdits"}, []string{"--permission-mode", "acceptEdits"}, allowed},
-		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "default", "--setting-sources", ""}, denied},
+		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "default", "--setting-sources", "", "--tools", "Read,Grep,Glob"}, denied},
 	} {
 		s := startDriver(t)
 		session := startFresh(s, c.config)
@@ -1003,16 +1004,22 @@ func TestAReadOnlyStartStillShowsCYFRsToolsAsAsks(t *testing.T) {
 	}
 }
 
-// A read-only start that also names a permission mode is no start the
-// driver can honour: it ends with 2 and starts no harness.
-func TestAReadOnlyStartNamingAPermissionModeEndsTheDriver(t *testing.T) {
-	s := startDriver(t)
-	s.expect("hello")
-	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true, "permission_mode": "plan"}})
-	if status := s.end(); status != 2 {
-		t.Fatalf("the driver ends with 2: %d", status)
-	}
-	if matches, _ := filepath.Glob(filepath.Join(s.home, ".claude", "projects", "*", "*")); len(matches) != 0 {
-		t.Fatalf("no harness ran: %v", matches)
+// A read-only start that also names a permission mode or the harness's
+// own tools is no start the driver can honour: it ends with 2 and starts
+// no harness.
+func TestAReadOnlyStartNamingAPermissionModeOrToolsEndsTheDriver(t *testing.T) {
+	for name, config := range map[string]map[string]any{
+		"a permission mode":   {"read_only": true, "permission_mode": "plan"},
+		"the harness's tools": {"read_only": true, "harness_tools": []any{"Read", "Write"}},
+	} {
+		s := startDriver(t)
+		s.expect("hello")
+		s.send(map[string]any{"t": "start", "gen": 0, "config": config})
+		if status := s.end(); status != 2 {
+			t.Fatalf("%s: the driver ends with 2: %d", name, status)
+		}
+		if matches, _ := filepath.Glob(filepath.Join(s.home, ".claude", "projects", "*", "*")); len(matches) != 0 {
+			t.Fatalf("%s: no harness ran: %v", name, matches)
+		}
 	}
 }

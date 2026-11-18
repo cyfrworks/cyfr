@@ -124,6 +124,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if config.ReadOnly && config.PermissionMode != "" {
 		return &brainwire.Fatal{Status: 2, Reason: "a read-only start names a permission mode"}
 	}
+	if config.ReadOnly && config.HarnessTools != nil {
+		return &brainwire.Fatal{Status: 2, Reason: "a read-only start names the harness's own tools"}
+	}
 	session := str("session")
 	resume := session != ""
 	// A session that is no session id of Claude Code's has no transcript.
