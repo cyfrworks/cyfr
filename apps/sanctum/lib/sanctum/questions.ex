@@ -17,10 +17,13 @@ defmodule Sanctum.Questions do
   `ask/4` decides in this order, and the first that answers ends it:
 
     1. The request is well formed: a positive ask number, the action a
-       name, the summary one line of at most #{200} characters and the
-       operation any text but a control or format character (a line break
-       or a tab is kept), the run's caller a caller's text. Otherwise
-       `none(invalid)`.
+       name, the summary one line of at most #{200} characters, with no
+       control or format character and no line or paragraph separator, so
+       nothing in it breaks a line; the operation any text but a control
+       or format character, keeping its line feeds, carriage returns and
+       tabs and its line and paragraph separators (U+2028, U+2029), since
+       it is shown whole with its lines; the run's caller a caller's text.
+       Otherwise `none(invalid)`.
     2. The run acts as a person: the one its root acts as, never a
        webhook's identity or a public tincture's anonymous one. Otherwise
        `none(unattended)`: nobody can be asked and no permission is theirs.
@@ -90,9 +93,11 @@ defmodule Sanctum.Questions do
   @digest ~r/\A[0-9a-f]{64}\z/
   @release_digest ~r/\Asha256:[0-9a-f]{64}\z/
   @action ~r/\A[a-z][a-z0-9_]{0,63}\z/
-  # A control or format character, which a summary never holds.
-  @unprintable ~r/[\p{Cc}\p{Cf}]/u
-  # The same, but a line break and a tab, which an operation keeps.
+  # A control or format character, or a line or paragraph separator:
+  # anything that is not one line of text, which a summary never holds.
+  @not_one_line ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+  # A control or format character but a line feed, a carriage return and a
+  # tab; an operation keeps those, and the line and paragraph separators.
   @unprintable_but_lines ~r/[^\P{Cc}\n\r\t]|\p{Cf}/u
 
   @typedoc "What the asking component is told."
@@ -465,7 +470,7 @@ defmodule Sanctum.Questions do
   defp summary?(summary) do
     is_binary(summary) and String.valid?(summary) and
       length(String.codepoints(summary)) <= @summary_max and
-      not Regex.match?(@unprintable, summary)
+      not Regex.match?(@not_one_line, summary)
   end
 
   defp operation?(operation) do

@@ -698,8 +698,13 @@ defmodule Sanctum.TestContext do
   head as a first read leaves it, and the person's identity row names the
   account in place of any row they held. Answers `%{identifier,
   authenticator, head}`.
+
+  With `device: pub`, an Ed25519 device key the recovery key added after
+  the passkey, so a device paired here under that key gives the person's
+  own proof: the head cached here and the person's identity row are
+  replaced by this longer log's.
   """
-  def account!(user_id) when is_binary(user_id) do
+  def account!(user_id, opts \\ []) when is_binary(user_id) and is_list(opts) do
     alias Prima.Identity
     alias Prima.Identity.{Entry, Key}
 
@@ -746,9 +751,44 @@ defmodule Sanctum.TestContext do
       )
 
     added = Identity.sign(added, recovery_priv)
-    {:ok, state} = Identity.verify_chain([genesis, added])
-    held!(user_id, state, [genesis, added])
+    entries = with_device([genesis, added], Keyword.get(opts, :device), signer, recovery_priv)
+    {:ok, state} = Identity.verify_chain(entries)
+    if Keyword.has_key?(opts, :device), do: forget_held!(user_id, state.identifier)
+    held!(user_id, state, entries)
     %{identifier: state.identifier, authenticator: authenticator, head: state.head}
+  end
+
+  defp with_device(entries, nil, _signer, _recovery_priv), do: entries
+
+  defp with_device([_genesis, added] = entries, pub, signer, recovery_priv) do
+    alias Prima.Identity
+    alias Prima.Identity.{Entry, Key}
+
+    {:ok, key} = Key.new(alg: :ed25519, kind: :device, pub: pub)
+
+    {:ok, device} =
+      Entry.new(
+        kind: :add_key,
+        prev: Identity.hash(added),
+        seq: 2,
+        at: added.at,
+        signer: signer,
+        key: key
+      )
+
+    entries ++ [Identity.sign(device, recovery_priv)]
+  end
+
+  # The account's cached head and the person's identity row, removed so a
+  # longer log of the same account is cached in their place.
+  defp forget_held!(user_id, identifier) do
+    import Ecto.Query, only: [from: 2]
+
+    Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user_id))
+
+    Arca.Repo.delete_all(
+      from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier)
+    )
   end
 
   # The account's head cached here and the person's identity row naming

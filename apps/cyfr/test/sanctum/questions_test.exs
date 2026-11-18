@@ -86,10 +86,16 @@ defmodule Sanctum.QuestionsTest do
 
     athanor = Sanctum.Test.People.athanor!(user)
     _account = TestContext.account!(user.id)
-    %{user: user, athanor: athanor, ctx: session_ctx(user, athanor)}
+    {ctx, token} = session!(user, athanor)
+    %{user: user, athanor: athanor, ctx: ctx, token: token}
   end
 
-  defp session_ctx(user, athanor) do
+  defp session_ctx(user, athanor), do: elem(session!(user, athanor), 0)
+
+  # A session of the person in their athanor: its context, as a page's
+  # sign-in establishes it, and its token, which the HTTP API is called
+  # with.
+  defp session!(user, athanor) do
     built =
       Context.build(
         user_id: user.id,
@@ -103,7 +109,7 @@ defmodule Sanctum.QuestionsTest do
 
     {:ok, session} = TestContext.create_session(built)
     {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
-    ctx
+    {ctx, session.token}
   end
 
   defp ship!(ctx, type, name, version, asks) do
@@ -307,6 +313,9 @@ defmodule Sanctum.QuestionsTest do
             {"long summary", run, 1, request(%{summary: String.duplicate("a", 201)})},
             {"two-line summary", run, 1, request(%{summary: "one\ntwo"})},
             {"direction override", run, 1, request(%{summary: "x\u202Ey"})},
+            {"line separator in summary", run, 1, request(%{summary: "one\u2028two"})},
+            {"paragraph separator in summary", run, 1, request(%{summary: "one\u2029two"})},
+            {"next line in summary", run, 1, request(%{summary: "one\u0085two"})},
             {"control in operation", run, 1, request(%{operation: "DROP\a"})},
             {"zero width in operation", run, 1, request(%{operation: "DROP\u200B"})},
             {"digest", run, 1, request(%{request_digest: "nothex"})},
@@ -324,14 +333,17 @@ defmodule Sanctum.QuestionsTest do
 
     test "a summary of 200 characters and an operation of lines and tabs are asked", person do
       run = run!(person)
+      operation = "a\r\nb\tc\u2028d\u2029e"
 
-      assert {:pending, _ref} =
+      assert {:pending, ref} =
                Questions.ask(
                  asking(person.ctx),
                  run,
                  1,
-                 request(%{summary: String.duplicate("é", 200), operation: "a\r\nb\tc"})
+                 request(%{summary: String.duplicate("é", 200), operation: operation})
                )
+
+      assert row(person.ctx, ref).operation == operation
     end
 
     test "an action the running release does not declare is none(invalid)", person do
@@ -1136,6 +1148,480 @@ defmodule Sanctum.QuestionsTest do
       :ok = removed!(person.ctx, "reagent", "1.0.0")
       assert [_kept] = standing(person.ctx)
       refute_receive {:consent, _}, 50
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Who may use the door, through the gate
+  # ---------------------------------------------------------------------------
+
+  describe "every caller, through the gate, on all five operations" do
+    # An open question to answer once and a permission to forget, both the
+    # person's own.
+    defp fixture!(person) do
+      {_run, ref} = open!(person)
+      %{id: id} = put!(person.ctx, %{action: "delete_table", caller: "agent:fixture"})
+      %{ref: ref, id: id}
+    end
+
+    defp operations(fixture) do
+      [
+        {"pending", %{}},
+        {"answer", %{"ref" => fixture.ref, "answer" => %{"effect" => "deny", "lasts" => "once"}}},
+        {"answers", %{"publisher" => "local", "name" => "tables"}},
+        {"set",
+         %{
+           "publisher" => "local",
+           "name" => "tables",
+           "action_name" => "delete_rows",
+           "standing" => %{"effect" => "deny", "caller" => "person"}
+         }},
+        {"forget", %{"id" => fixture.id}}
+      ]
+    end
+
+    # Nothing a refused call could have changed has changed.
+    defp untouched!(person, fixture) do
+      assert row(person.ctx, fixture.ref).state == "open"
+      assert [%{id: id, action: "delete_table"}] = standing(person.ctx)
+      assert id == fixture.id
+    end
+
+    defp granting_authority do
+      node = "formula:local.question-matrix"
+
+      tools =
+        Enum.map(Sanctum.Providers.Question.definition().operations, &"question.#{&1.action}")
+
+      {:ok, blob} =
+        Prima.Authority.Blob.parse(%{
+          "canonical" => "jcs-1",
+          "nodes" => %{
+            node => %{
+              "limits" => %{
+                "timeout" => "1m",
+                "max_memory_bytes" => 67_108_864,
+                "max_request_size" => 1_048_576,
+                "max_response_size" => 5_242_880,
+                "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+                "max_concurrent_tasks" => 10,
+                "batch_timeout" => "1m"
+              },
+              "edges" => %{"@ingress" => %{"tools" => tools}}
+            }
+          }
+        })
+
+      {:ok, auth} =
+        Prima.Authority.root(
+          %{
+            profile_id: "prof-question-matrix",
+            consent_id: "consent-question-matrix",
+            source_ref: node,
+            kind: :owner,
+            invoke_mode: :open_inert,
+            activation: %{node => "sha256:question-matrix"}
+          },
+          blob,
+          ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+        )
+
+      auth
+    end
+
+    # One `tools/call` to `/mcp` under the session's token, as a person's
+    # own client calls the HTTP API: its decoded result, or its error.
+    defp over_http(token, args) do
+      body = %{
+        "jsonrpc" => "2.0",
+        "id" => System.unique_integer([:positive]),
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "question",
+          "arguments" => args,
+          "_meta" => %{
+            Prima.MCP.Protocol.meta_protocol_version_key() => Prima.MCP.Protocol.version(),
+            Prima.MCP.Protocol.meta_client_info_key() => %{"name" => "cyfr", "version" => "test"},
+            Prima.MCP.Protocol.meta_client_capabilities_key() => %{}
+          }
+        }
+      }
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Plug.Conn.put_req_header("authorization", "Bearer #{token}")
+        |> Plug.Conn.put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
+        |> Plug.Conn.put_req_header("mcp-method", "tools/call")
+        |> Plug.Conn.put_req_header("mcp-name", "question")
+        |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/mcp", Jason.encode!(body))
+
+      case Jason.decode!(conn.resp_body) do
+        %{"result" => %{"isError" => true} = result} -> {:error, result}
+        %{"result" => %{"content" => [%{"text" => text}]}} -> {:ok, Jason.decode!(text)}
+        other -> {:error, other}
+      end
+    end
+
+    test "an API key is refused by the gate's consent class", person do
+      fixture = fixture!(person)
+
+      key =
+        Context.build(
+          user_id: person.ctx.user_id,
+          athanor_id: person.ctx.athanor_id,
+          scope: :athanor,
+          permissions: [:*],
+          auth_method: :api_key,
+          api_key_id: "key_questions",
+          authenticated: true
+        )
+
+      for {action, args} <- operations(fixture) do
+        assert {:error,
+                %Prima.Refusal{
+                  class: :forbidden,
+                  reason: {:consent_class_required, {:surface_not_permitted, :api_key}},
+                  stage: :admission
+                }} = call(key, action, args),
+               action
+      end
+
+      untouched!(person, fixture)
+    end
+
+    # A frame's context is the person's, under the frame credential's
+    # surface (`Sanctum.Caller`'s frame clause sets `auth_method:
+    # :tincture` and `frame`); it is assembled here as that clause leaves it.
+    test "a frame's credential is refused by the gate's consent class", person do
+      fixture = fixture!(person)
+
+      frame = %{
+        person.ctx
+        | auth_method: :tincture,
+          session_token_hash: nil,
+          frame: %{id: "fcr_questions", tincture: "tincture:local.board:1.0.0"}
+      }
+
+      for {action, args} <- operations(fixture) do
+        assert {:error,
+                %Prima.Refusal{
+                  class: :forbidden,
+                  reason: {:consent_class_required, {:surface_not_permitted, :tincture}},
+                  stage: :admission
+                }} = call(frame, action, args),
+               action
+      end
+
+      untouched!(person, fixture)
+    end
+
+    test "a running chain a signed-in person started is refused: no action is in-chain", person do
+      fixture = fixture!(person)
+      chain = Context.enter_guest(%{person.ctx | origin: :interactive})
+      auth = granting_authority()
+
+      for {action, args} <- operations(fixture) do
+        assert {:error, refusal} =
+                 Sanctum.Gate.call_in_chain(
+                   "question",
+                   chain,
+                   Map.put(args, "action", action),
+                   auth,
+                   lineage: Cyfr.Test.AttemptFixtures.lineage!(chain)
+                 ),
+               action
+
+        sentence = "Tool action 'question.#{action}' is not reachable from a running chain"
+
+        assert %Prima.Refusal{class: :internal, reason: ^sentence, stage: :admission} = refusal
+      end
+
+      untouched!(person, fixture)
+    end
+
+    test "an anonymous caller is refused before any consent is asked", person do
+      fixture = fixture!(person)
+
+      anonymous =
+        Context.build(
+          athanor_id: person.ctx.athanor_id,
+          scope: :athanor,
+          permissions: [],
+          authenticated: false,
+          anonymous: true
+        )
+
+      for {action, args} <- operations(fixture) do
+        assert {:error,
+                %Prima.Refusal{
+                  class: :unauthenticated,
+                  reason: {:tool_auth_required, "question"},
+                  stage: :admission
+                }} = call(anonymous, action, args),
+               action
+      end
+
+      untouched!(person, fixture)
+    end
+
+    test "a signed-in page, a session on the HTTP API and a paired device are admitted",
+         person do
+      %{ctx: device} = Sanctum.Test.Devices.paired!(person.ctx.user_id)
+
+      callers = [
+        {"page", &PrismWeb.Ops.call_tool(person.ctx, "question", Map.put(&2, "action", &1))},
+        {"http", &over_http(person.token, Map.put(&2, "action", &1))},
+        {"device", &call(device, &1, &2)}
+      ]
+
+      for {surface, call} <- callers do
+        fixture = fixture!(person)
+
+        results =
+          Map.new(operations(fixture), fn {action, args} -> {action, call.(action, args)} end)
+
+        json = fn {:ok, result} -> result |> Jason.encode!() |> Jason.decode!() end
+
+        assert %{"questions" => pending} = json.(results["pending"]), surface
+        assert fixture.ref in Enum.map(pending, & &1["ref"]), surface
+        assert %{"state" => "denied"} = json.(results["answer"]), surface
+        assert %{"answers" => listed} = json.(results["answers"]), surface
+        assert fixture.id in Enum.map(listed, & &1["id"]), surface
+
+        assert %{"action" => "delete_rows", "effect" => "deny", "caller" => "person"} =
+                 json.(results["set"]),
+               surface
+
+        assert {:ok, _empty} = results["forget"], surface
+        refute fixture.id in Enum.map(standing(person.ctx), & &1.id), surface
+        assert row(person.ctx, fixture.ref).state == "denied"
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Ownership, one dimension at a time
+  # ---------------------------------------------------------------------------
+
+  # A person has one athanor and a session is focused on a seat of its
+  # person alone, so no credential names another person in this athanor,
+  # or this person in another athanor. Each case is the owner's boundary
+  # (`Sanctum.Questions`) asked with the context assembled by hand: a real
+  # session of one, refocused on the other's athanor.
+  describe "ownership" do
+    defp each_door(ctx, fixture) do
+      %{
+        pending: Questions.pending(ctx),
+        one: Questions.pending(ctx, fixture.ref),
+        answer: Questions.answer(ctx, fixture.ref, once("allow")),
+        answers: Questions.answers(ctx, "local", "tables"),
+        forget: Questions.forget(ctx, fixture.id)
+      }
+    end
+
+    defp refused_every_door!(person, ctx) do
+      {_run, ref} = open!(person)
+      %{id: id} = put!(person.ctx, %{caller: "agent:owner"})
+      fixture = %{ref: ref, id: id}
+      doors = each_door(ctx, fixture)
+
+      assert {:ok, []} = doors.pending
+      assert {:ok, []} = doors.one
+      assert {:error, {:not_found, "question", ^ref}} = doors.answer
+      assert {:ok, %{answers: [], callers: []}} = doors.answers
+      assert {:error, {:not_found, "permission", ^id}} = doors.forget
+
+      assert row(person.ctx, ref).state == "open"
+      assert [%{id: ^id}] = standing(person.ctx)
+      refute_receive {:question, :answered, _, _}, 50
+      fixture
+    end
+
+    test "another person in the same athanor reaches none of the person's rows", person do
+      other = person!("questions-same-athanor")
+      in_mine = %{other.ctx | athanor_id: person.ctx.athanor_id}
+      refused_every_door!(person, in_mine)
+
+      # What they set is theirs: it covers no ask of the person's, and the
+      # person's list does not show it.
+      assert {:ok, %{user_id: user_id}} =
+               Questions.set(in_mine, "local", "tables", "delete_table", %Prima.Question.Standing{
+                 effect: :allow,
+                 caller: :person,
+                 until: nil
+               })
+
+      assert user_id == other.ctx.user_id
+      run = run!(person)
+      assert {:pending, _ref} = Questions.ask(asking(person.ctx), run, 1, request())
+      assert [%{caller: "agent:owner"}] = standing(person.ctx)
+    end
+
+    test "the same person in another athanor reaches none of their rows here", person do
+      other = person!("questions-other-athanor")
+      ship!(other.ctx, "catalyst", "tables", "1.0.0", @asks)
+      elsewhere = %{person.ctx | athanor_id: other.ctx.athanor_id}
+      refused_every_door!(person, elsewhere)
+
+      assert {:ok, %{athanor_id: athanor_id}} =
+               Questions.set(
+                 elsewhere,
+                 "local",
+                 "tables",
+                 "delete_table",
+                 %Prima.Question.Standing{effect: :allow, caller: :person, until: nil}
+               )
+
+      assert athanor_id == other.ctx.athanor_id
+      run = run!(person)
+      assert {:pending, _ref} = Questions.ask(asking(person.ctx), run, 1, request())
+      assert [%{caller: "agent:owner"}] = standing(person.ctx)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The fresh confirmation, further
+  # ---------------------------------------------------------------------------
+
+  describe "the widest answer's confirmation" do
+    @widest_answer %{"effect" => "allow", "lasts" => "always", "covers" => "any_caller"}
+    @widest_set %{
+      "publisher" => "local",
+      "name" => "tables",
+      "action_name" => "delete_table",
+      "standing" => %{"effect" => "allow", "until" => nil, "caller" => "any"}
+    }
+
+    # A person whose account lists a device key, and that device paired
+    # here and connected over its channel: its proof is its own.
+    defp device_person! do
+      {pub, _priv} = key = :crypto.generate_key(:eddsa, :ed25519)
+      n = System.unique_integer([:positive])
+
+      {:ok, user} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|questions-device-#{n}",
+          provider: "github",
+          email: "questions-device#{n}@example.com",
+          verified: true
+        })
+
+      athanor = Sanctum.Test.People.athanor!(user)
+      account = TestContext.account!(user.id, device: pub)
+      {ctx, token} = session!(user, athanor)
+      component = ship!(ctx, "catalyst", "tables", "1.0.0", @asks)
+
+      {:ok, device_key} = Prima.Identity.Key.new(alg: :ed25519, kind: :device, pub: pub)
+      client_id = Prima.UUID7.generate_id("pcl")
+      holder = Map.put(Sanctum.Test.Devices.holder(), :client_id, client_id)
+      :ok = Sanctum.DeviceUnlock.pair(%{id: user.id}, holder, device_key, account.head)
+
+      {:ok, %{certificate: bytes}} =
+        Arca.DeviceCertificates.current(Prima.Actor.in_athanor(athanor.id), client_id)
+
+      {:ok, certificate} = bytes |> Jason.decode!() |> Prima.DeviceCert.decode()
+
+      device =
+        Sanctum.Test.Devices.connected!(%{
+          client_id: client_id,
+          certificate: certificate,
+          key: key
+        })
+
+      %{
+        user: user,
+        athanor: athanor,
+        ctx: ctx,
+        token: token,
+        release: component.release_digest,
+        device: device,
+        key: key
+      }
+    end
+
+    test "is given from a paired device with the device's own proof" do
+      %{device: device, key: key} = person = device_person!()
+      {_run, ref} = open!(person)
+      args = %{"ref" => ref, "answer" => @widest_answer}
+
+      assert {:error, {:confirmation_required, %{id: id}}} = call(device, "answer", args)
+      assert row(person.ctx, ref).state == "open"
+
+      cref = Prima.Confirmation.ref(id)
+
+      assert {:ok, %{request: encoded}} =
+               Sanctum.Gate.call_external("confirmation", device, %{
+                 "action" => "request",
+                 "ref" => cref
+               })
+
+      {:ok, request} = Prima.SignIn.decode(encoded)
+
+      answer =
+        request
+        |> Sanctum.Test.Devices.answer(key)
+        |> Prima.SignIn.DeviceAnswer.encode()
+
+      assert {:ok, %{state: "confirmed"}} =
+               Sanctum.Gate.call_external("confirmation", device, %{
+                 "action" => "confirm",
+                 "ref" => cref,
+                 "answer" => answer
+               })
+
+      assert {:ok, %{state: "allowed"}} = call(%{device | confirmation_id: id}, "answer", args)
+      assert [%{caller: "any", effect: "allow", until: nil}] = standing(person.ctx)
+    end
+
+    test "a proof one person made is no proof for another", person do
+      other = person!("questions-other-proof")
+      ship!(other.ctx, "catalyst", "tables", "1.0.0", @asks)
+
+      assert {:error, {:confirmation_required, %{id: id}}} = call(person.ctx, "set", @widest_set)
+      proven!(person.ctx, id)
+
+      # The very same arguments, repeated by the other person under the
+      # first person's proof: asked again, nothing written, the proof unspent.
+      assert {:error, {:confirmation_required, %{id: fresh}}} =
+               call(%{other.ctx | confirmation_id: id}, "set", @widest_set)
+
+      assert fresh != id
+      assert standing(other.ctx) == []
+
+      assert {:ok, %{state: "confirmed"}} =
+               Arca.PendingConfirmations.get(
+                 Context.actor(person.ctx),
+                 Prima.Confirmation.ref(id)
+               )
+
+      assert {:ok, %{caller: "any"}} =
+               call(%{person.ctx | confirmation_id: id}, "set", @widest_set)
+    end
+
+    test "a deadline that passes between the proof and the repeat writes nothing", person do
+      {_run, ref} = open!(person, deadline: DateTime.add(DateTime.utc_now(), 3, :second))
+      args = %{"ref" => ref, "answer" => @widest_answer}
+
+      assert {:error, {:confirmation_required, %{id: id}}} = call(person.ctx, "answer", args)
+      proven!(person.ctx, id)
+
+      deadline = row(person.ctx, ref).deadline
+      Process.sleep(max(DateTime.diff(deadline, DateTime.utc_now(), :millisecond), 0) + 200)
+
+      assert {:error, %Prima.Refusal{reason: :not_pending}} =
+               call(%{person.ctx | confirmation_id: id}, "answer", args)
+
+      assert row(person.ctx, ref).state == "open"
+      assert standing(person.ctx) == []
+
+      assert {:ok, %{state: "confirmed"}} =
+               Arca.PendingConfirmations.get(
+                 Context.actor(person.ctx),
+                 Prima.Confirmation.ref(id)
+               )
+
+      refute_receive {:question, :answered, _, _}, 50
     end
   end
 end
