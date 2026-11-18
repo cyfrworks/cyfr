@@ -14,14 +14,22 @@ defmodule Aqua.ProgramTest do
   the `idle` that answers every post it was given, one written while it
   works included. Its asks are steps the loop decides and runs, answered
   with their results; an ask of a tool the turn does not offer is refused,
-  and one of other work writes no step and closes the session. A start
-  nobody allowed waits on its
-  card, and a schedule's opens none. A holder's end resumes the native
+  and one of other work writes no step and closes the session. A post and
+  an answer owed together are written one at a time, the answer first. A
+  post written while an ask's card waits is written at once and approves
+  nothing, and an ask made then is recorded and decided when the turn
+  goes on, under what holds then. A start nobody allowed waits on its
+  card, and a schedule's opens none; a session left from the turn before
+  is written nothing while the next waits on its own; a post that brings
+  in what the start's card did not show ends the turn; and new startup
+  options restart the driver, resuming. A holder's end resumes the native
   session with the posts whose delivery its transcript says: one it holds
-  is continued by one notice, one it does not ends the turn. A transcript
-  the harness no longer has starts over, the thread its context, and in
-  the middle of the work one prompt carries what its calls answered. Stop
-  closes the session first. A program turn has no deadline, and the
+  is continued by one notice, one it does not ends the turn, and an
+  answer the resumed session no longer asks for comes as one notice that
+  names its call, attempted once. A transcript the harness no longer has
+  starts over, the thread its context, and in the middle of the work one
+  prompt carries what its calls answered. Stop closes the session first,
+  during a CYFR tool too. A program turn has no deadline, and the
   program's own silence ends it, never while a card waits.
   """
 
@@ -295,6 +303,293 @@ defmodule Aqua.ProgramTest do
         refute_received {:session, "send", _wire, _fields}
       end
     end
+
+    test "a post and a tool's answer owed together are written one at a time, the answer " <>
+           "first, each once",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _first = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      committed!(ctx, thread, 4)
+
+      # A post is written and not yet taken when the program asks.
+      steer = steer!(ctx, thread, turn, "and this")
+      second_post = sent()
+      [_first, second] = inputs(ctx, turn)
+      assert second_post == posted(second, turn, "and this")
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      listed = closed!(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1"))
+      {:ok, result} = Tape.message(ctx, listed.result_message_id)
+
+      # The answer and a later post both wait on the post the driver has
+      # not taken: nothing is written meanwhile.
+      later = steer!(ctx, thread, turn, "one more")
+      refute_receive {:session, "send", _wire, _fields}, 500
+
+      say(fake, row, accepted(second))
+      answer = sent()
+      [_first, _second, answered] = inputs(ctx, turn)
+
+      assert answer == %{
+               "t" => "answer",
+               "id" => answered.id,
+               "ask" => "ask-1",
+               "content" => result.content,
+               "is_error" => false
+             }
+
+      refute_receive {:session, "send", _wire, _fields}, 500
+      say(fake, row, accepted(answered))
+      third_post = sent()
+      [_first, _second, _answered, third] = inputs(ctx, turn)
+      assert third_post == posted(third, turn, "one more")
+      say(fake, row, accepted(third))
+      say(fake, row, idle(turn, [first.id, second.id, third.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("post", steer.id, "ok"),
+               input_fields("answer", result.id, "ok"),
+               input_fields("post", later.id, "ok")
+             ]
+
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "a post written while an ask's card waits is written at once and approves nothing; " <>
+           "approved, the ask runs and its answer follows",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "write it down")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      say(
+        fake,
+        row,
+        ask(turn, "ask-1", "files", %{
+          "action" => "write",
+          "path" => "data/a.md",
+          "content" => "x"
+        })
+      )
+
+      assert {:paused, :approval} = Task.await(loop, 30_000)
+      %{approval: card} = pending_card(ctx, turn)
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1")
+
+      steer = steer!(ctx, thread, turn, "and this")
+      post = sent()
+      [_input, steered] = inputs(ctx, turn)
+      assert post == posted(steered, turn, "and this")
+      say(fake, row, accepted(steered))
+      closed!(ctx, turn, steered.idempotency_key)
+
+      # The card still waits, and the turn with it.
+      assert %{approval: %{id: card_id, status: "pending"}} = pending_card(ctx, turn)
+      assert card_id == card.id
+      assert {:ok, %{status: "paused"}} = Tape.turn(ctx, turn.id)
+
+      assert Map.take(step_by_key(ctx, turn, key), [:dispatch_state, :outcome, :approval_id]) ==
+               %{dispatch_state: "proposed", outcome: nil, approval_id: card.id}
+
+      approve!(ctx, card)
+      loop = resume(ctx, turn)
+      answer = sent()
+      written = step_by_key(ctx, turn, key)
+      {:ok, result} = Tape.message(ctx, written.result_message_id)
+      [_input, _steered, answered] = inputs(ctx, turn)
+
+      assert answer == %{
+               "t" => "answer",
+               "id" => answered.id,
+               "ask" => "ask-1",
+               "content" => result.content,
+               "is_error" => false
+             }
+
+      assert Map.take(written, [:tool, :action, :dispatch_state, :outcome, :approval_id]) ==
+               %{
+                 tool: "files",
+                 action: "write",
+                 dispatch_state: "closed",
+                 outcome: "ok",
+                 approval_id: card.id
+               }
+
+      say(fake, row, accepted(answered))
+      say(fake, row, idle(turn, [input.id, steered.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("post", steer.id, "ok"),
+               input_fields("answer", result.id, "ok")
+             ]
+
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "asks made while a card waits are recorded and dispatched by none, and are decided " <>
+           "when the turn goes on, under the authority and the sources that hold then",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      outside = Prima.Source.outside("news.example")
+      allow!(ctx, thread, row, :thread, %{sources: [outside]})
+      standing!(ctx, thread, "files", "write", %{"path" => "data/b.md"}, :thread)
+      turn = accept!(ctx, thread, row, "tidy up")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      say(
+        fake,
+        row,
+        ask(turn, "ask-1", "notes", %{"action" => "keep", "name" => "todo", "content" => "tidy"})
+      )
+
+      assert {:paused, :approval} = Task.await(loop, 30_000)
+      %{approval: card} = pending_card(ctx, turn)
+
+      # While the card waits the program asks for a write the standing
+      # allow covers now, and for a list: each recorded, neither run.
+      say(
+        fake,
+        row,
+        ask(turn, "ask-2", "files", %{
+          "action" => "write",
+          "path" => "data/b.md",
+          "content" => "y"
+        })
+      )
+
+      say(fake, row, ask(turn, "ask-3", "program", %{"action" => "list"}))
+      committed!(ctx, thread, 7)
+      write_key = TurnStorage.brain_ask_key(turn.id, "ask-2")
+      list_key = TurnStorage.brain_ask_key(turn.id, "ask-3")
+
+      for key <- [write_key, list_key] do
+        assert Map.take(step_by_key(ctx, turn, key), [:dispatch_state, :outcome, :approval_id]) ==
+                 %{dispatch_state: "proposed", outcome: nil, approval_id: nil}
+      end
+
+      refute_receive {:session, "send", _wire, _fields}, 500
+
+      # Then a never on the list is recorded, and a post brings in outside
+      # material, which joins the turn as it is written.
+      standing!(ctx, thread, "program", "list", %{}, :never)
+
+      steer =
+        steer!(ctx, thread, turn, "and this brief", %{"attachments" => [brief("news.example")]})
+
+      post = sent()
+      [_input, steered] = inputs(ctx, turn)
+      assert post == posted(steered, turn, "and this brief")
+      say(fake, row, accepted(steered))
+      {:ok, paused} = Tape.turn(ctx, turn.id)
+      assert Prima.Source.decode(paused.sources) == [outside]
+
+      for key <- [write_key, list_key] do
+        assert %{dispatch_state: "proposed"} = step_by_key(ctx, turn, key)
+      end
+
+      # Approved, the card's ask runs; the list is refused by the never;
+      # the write asks on a card of its own, which shows the outside
+      # source the allow does not cover.
+      approve!(ctx, card)
+      assert {:paused, :approval} = Task.await(resume(ctx, turn), 30_000)
+
+      kept = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1"))
+      listed = step_by_key(ctx, turn, list_key)
+      writing = step_by_key(ctx, turn, write_key)
+
+      assert Map.take(kept, [:tool, :action, :dispatch_state, :outcome, :approval_id]) ==
+               %{
+                 tool: "notes",
+                 action: "keep",
+                 dispatch_state: "closed",
+                 outcome: "ok",
+                 approval_id: card.id
+               }
+
+      assert Map.take(listed, [:tool, :action, :dispatch_state, :outcome, :approval_id]) ==
+               %{
+                 tool: "program",
+                 action: "list",
+                 dispatch_state: "closed",
+                 outcome: "denied",
+                 approval_id: nil
+               }
+
+      %{approval: second_card, intent: intent} = pending_card(ctx, turn)
+      assert second_card.step_id == writing.id
+
+      assert intent["proposal"] == %{
+               "tool" => "files",
+               "action" => "write",
+               "args" => %{"path" => "data/b.md", "content" => "y"}
+             }
+
+      assert intent["sources"] == [%{"class" => "outside", "name" => "news.example"}]
+
+      assert Map.take(writing, [:dispatch_state, :outcome, :approval_id]) ==
+               %{dispatch_state: "proposed", outcome: nil, approval_id: second_card.id}
+
+      # The two closed asks are answered while the new card waits, each once.
+      answers =
+        for _ <- 1..2 do
+          answer = sent()
+          say(fake, row, %{"t" => "accepted", "id" => answer["id"]})
+          answer
+        end
+
+      {:ok, kept_result} = Tape.message(ctx, kept.result_message_id)
+      {:ok, denial} = Tape.message(ctx, listed.result_message_id)
+
+      assert answers |> Enum.map(&Map.delete(&1, "id")) |> Enum.sort_by(& &1["ask"]) == [
+               %{
+                 "t" => "answer",
+                 "ask" => "ask-1",
+                 "content" => kept_result.content,
+                 "is_error" => false
+               },
+               %{
+                 "t" => "answer",
+                 "ask" => "ask-3",
+                 "content" => denial.content,
+                 "is_error" => true
+               }
+             ]
+
+      approve!(ctx, second_card)
+      loop = resume(ctx, turn)
+      answer = sent()
+      written = step_by_key(ctx, turn, write_key)
+      {:ok, write_result} = Tape.message(ctx, written.result_message_id)
+
+      assert Map.delete(answer, "id") == %{
+               "t" => "answer",
+               "ask" => "ask-2",
+               "content" => write_result.content,
+               "is_error" => false
+             }
+
+      assert %{dispatch_state: "closed", outcome: "ok"} = written
+      say(fake, row, %{"t" => "accepted", "id" => answer["id"]})
+      say(fake, row, idle(turn, [input.id, steered.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert carried_by(ctx, steer.id) == steered.id
+      refute_received {:session, "send", _wire, _fields}
+    end
   end
 
   describe "its start's decision" do
@@ -381,6 +676,100 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "a post that brings in material its start's card did not show ends the turn at its " <>
+           "write, which is never written",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
+      %{approval: card, intent: %{"sources" => []}} = pending_card(ctx, turn)
+      approve!(ctx, card)
+      loop = resume(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      steer =
+        steer!(ctx, thread, turn, "and this brief", %{"attachments" => [brief("news.example")]})
+
+      line =
+        "This message brings in material the approval of #{@title} did not cover, so this " <>
+          "work ends here. Send it again to be asked anew."
+
+      assert {:failed, ^line} = Task.await(loop, 15_000)
+      assert system_lines(ctx, thread, turn) == [line]
+      assert carried_by(ctx, steer.id) == nil
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok")
+             ]
+
+      # What the post brings in joined the turn before its write was
+      # refused, and stays joined: the turn read it.
+      {:ok, ended} = Tape.turn(ctx, turn.id)
+      assert Prima.Source.decode(ended.sources) == [Prima.Source.outside("news.example")]
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+      assert running_sessions(fake, row) == []
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "a session left from the turn before is written nothing while the next turn waits on " <>
+           "its own start's card, and once allowed takes the next turn's work",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
+      approve!(ctx, pending_card(ctx, turn).approval)
+      loop = resume(ctx, turn)
+      %{work: first_work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua")
+
+      # The start of the turn before was allowed once, for that turn: the
+      # next waits on a card of its own, and nothing of it is written.
+      next = accept!(ctx, thread, row, "second")
+      paused = run(ctx, next)
+      refute_receive {:session, "send", _wire, _fields}, 2_000
+      assert {:paused, :approval} = Task.await(paused, 30_000)
+      %{approval: card} = pending_card(ctx, next)
+      refute_received {:session, "send", _wire, _fields}
+      refute_received {:session, "close", _wire, _fields}
+      assert [_held] = running_sessions(fake, row)
+      assert inputs(ctx, next) == []
+      assert carried_by(ctx, next.message_id) == nil
+
+      # Allowed, the same session takes the turn's work, then its post.
+      approve!(ctx, card)
+      loop = resume(ctx, next)
+      work = sent()
+
+      assert work == %{
+               first_work
+               | "id" => start_step(ctx, next).id,
+                 "work" => next.id,
+                 "tools" => json(spec!(ctx, next).tools)
+             }
+
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      post = sent()
+      [second] = inputs(ctx, next)
+      assert post == posted(second, next, "second")
+      say(fake, row, accepted(second))
+      say(fake, row, idle(next, [second.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, next), &step_fields/1) == [
+               input_fields("post", next.message_id, "ok")
+             ]
+
+      refute_received {:session, "open", _wire, _fields}
+      refute_received {:session, "send", _wire, _fields}
+    end
+
     test "what the program is given first joins the turn before its start is decided: its " <>
            "instructions' sources, its post's and the thread's a fresh session reads are on " <>
            "the card, and once allowed its post is written",
@@ -455,6 +844,59 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(input))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a turn whose startup options differ from the running harness's closes its driver " <>
+           "and starts a new one, resuming with them, before anything is written",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua")
+
+      next = accept!(ctx, thread, row, "second")
+      options!(next, %{"effort" => "high"})
+      loop = run(ctx, next)
+
+      # The running harness started with other options: its process is
+      # closed and a new one opened, with nothing written to either.
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+      refute_received {:session, "send", _wire, _fields}
+      opened!(fake, row, "boot-two")
+      resume = sent()
+
+      assert Map.delete(resume, "system") ==
+               Map.merge(Map.delete(first, "system"), %{
+                 "session" => @session,
+                 "config" => %{"model" => spec!(ctx, next).agent["model"], "effort" => "high"}
+               })
+
+      assert without_clock(resume["system"]) == without_clock(first["system"])
+      say(fake, row, started([]))
+      work = sent()
+
+      assert work == %{
+               "t" => "work",
+               "id" => start_step(ctx, next).id,
+               "work" => next.id,
+               "tools" => json(spec!(ctx, next).tools)
+             }
+
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      post = sent()
+      [second] = inputs(ctx, next)
+      assert post == posted(second, next, "second")
+      say(fake, row, accepted(second))
+      say(fake, row, idle(next, [second.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert [_running] = running_sessions(fake, row)
+      refute_received {:session, "open", _wire, _fields}
     end
 
     test "a startup option the harness does not take is refused before anything is written",
@@ -574,6 +1016,162 @@ defmodule Aqua.ProgramTest do
 
       assert {:ok, []} = Tape.brain_posts(ctx, turn)
       refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "the driver's death with a tool's answer held back by a post resumes each held post " <>
+           "with one notice, and the answer as one notice that names its call",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first_start, work: work} = started!(fake, row)
+      _post = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      committed!(ctx, thread, 4)
+
+      steer = steer!(ctx, thread, turn, "and this")
+      steered_post = sent()
+      [_first, steered] = inputs(ctx, turn)
+      assert steered_post == posted(steered, turn, "and this")
+
+      # The program asks while the post is not yet taken: the ask runs,
+      # and its answer waits behind the post.
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1")
+      listed = closed!(ctx, turn, key)
+      {:ok, result} = Tape.message(ctx, listed.result_message_id)
+      refute_receive {:session, "send", _wire, _fields}, 500
+
+      Scripted.end_sessions(fake, row.id)
+      opened!(fake, row, "boot-two")
+
+      assert sent() ==
+               Map.merge(first_start, %{
+                 "session" => @session,
+                 "pending" => [first.id, steered.id]
+               })
+
+      say(fake, row, started([first.id, steered.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+
+      held = for _ <- 1..2, do: accept_next!(fake, row)
+      [_first, _steered, noticed_first, noticed_steer] = inputs(ctx, turn)
+
+      assert held == [
+               posted(noticed_first, turn, post_notice()),
+               posted(noticed_steer, turn, post_notice())
+             ]
+
+      # The resumed session does not hold the ask: its answer comes as one
+      # notice naming the call, and no answer step is left of it.
+      told = accept_next!(fake, row)
+      [_first, _steered, _noticed_first, _noticed_steer, noticed_answer] = inputs(ctx, turn)
+
+      assert told ==
+               posted(noticed_answer, turn, answer_notice("program", "ask-1", result.content))
+
+      say(fake, row, idle(turn, [noticed_first.id, noticed_steer.id, noticed_answer.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("post", steer.id, "ok"),
+               input_fields("notice", turn.message_id, "ok", "0:notice:"),
+               input_fields("notice", steer.id, "ok", "0:notice:"),
+               input_fields("notice", result.id, "ok", "0:notice:")
+             ]
+
+      # The call ran once: one step, one result, never dispatched again.
+      {:ok, steps} = Tape.steps(ctx, turn)
+      assert Enum.count(steps, &(&1.kind != "input" and &1.action == "list")) == 1
+      assert step_by_key(ctx, turn, key) == listed
+      assert result_rows(ctx, turn) == [start_step(ctx, turn).result_message_id, result.id]
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "an answer whose delivery is uncertain becomes one notice, a second restart sends no " <>
+           "second one and ends the turn saying so, and the call never runs again",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first_start, work: work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      answer = sent()
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1")
+      listed = step_by_key(ctx, turn, key)
+      {:ok, result} = Tape.message(ctx, listed.result_message_id)
+      [_post, answered] = inputs(ctx, turn)
+
+      assert answer == %{
+               "t" => "answer",
+               "id" => answered.id,
+               "ask" => "ask-1",
+               "content" => result.content,
+               "is_error" => false
+             }
+
+      committed!(ctx, thread, 5)
+
+      # The answer was written and never taken when the driver ends.
+      Scripted.end_sessions(fake, row.id)
+      opened!(fake, row, "boot-two")
+      assert sent() == Map.merge(first_start, %{"session" => @session, "pending" => [input.id]})
+      say(fake, row, started([input.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+
+      continued = accept_next!(fake, row)
+      [_post, _answered, noticed_post] = inputs(ctx, turn)
+      assert continued == posted(noticed_post, turn, post_notice())
+      told = accept_next!(fake, row)
+      [_post, _answered, _noticed_post, noticed_answer] = inputs(ctx, turn)
+
+      assert told ==
+               posted(noticed_answer, turn, answer_notice("program", "ask-1", result.content))
+
+      closed!(ctx, turn, noticed_answer.idempotency_key)
+
+      # The driver ends again before the program answers: the transcript
+      # holds both notices, and neither is followed by another.
+      Scripted.end_sessions(fake, row.id)
+      opened!(fake, row, "boot-three")
+
+      assert sent() ==
+               Map.merge(first_start, %{
+                 "session" => @session,
+                 "pending" => [noticed_post.id, noticed_answer.id]
+               })
+
+      say(fake, row, started([noticed_post.id, noticed_answer.id]))
+
+      line =
+        "#{@title} was interrupted after it was handed your last message, and it is not " <>
+          "handed that message again. Send a message to go on."
+
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("answer", result.id, "uncertain"),
+               input_fields("notice", turn.message_id, "ok", "0:notice:"),
+               input_fields("notice", result.id, "ok", "0:notice:")
+             ]
+
+      {:ok, steps} = Tape.steps(ctx, turn)
+      assert Enum.count(steps, &(&1.kind != "input" and &1.action == "list")) == 1
+
+      assert Map.take(step_by_key(ctx, turn, key), [:dispatch_state, :outcome, :result_message_id]) ==
+               %{dispatch_state: "closed", outcome: "ok", result_message_id: result.id}
+
+      assert result_rows(ctx, turn) == [start_step(ctx, turn).result_message_id, result.id]
+      refute_receive {:session, "send", _wire, _fields}, 500
     end
 
     test "a transcript the harness no longer has starts over, and the next post carries the thread as its context",
@@ -738,6 +1336,106 @@ defmodule Aqua.ProgramTest do
 
       {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
       assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn.id)
+      refute_received {:session, "send", _wire, _fields}
+    end
+
+    test "Stop while a CYFR tool the program asked for runs closes the session before " <>
+           "anything of the turn stops, and the tool's step settles by its own record",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "run it")
+      tasks = start_supervised!(Task.Supervisor)
+
+      loop =
+        Task.Supervisor.async_nolink(tasks, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+
+      # The program asks to run its own row on a terminal, which the
+      # thread's standing allow covers; the terminal's open is held.
+      Scripted.hold(fake, "open", 30_000)
+      args = %{"action" => "start", "program" => row.id, "epoch" => row.epoch}
+      say(fake, row, ask(turn, "ask-1", "program", args))
+      assert_receive {:held, "open", opening}, 10_000
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1")
+      assert %{dispatch_state: "dispatched"} = step_by_key(ctx, turn, key)
+      assert {:ok, [%{by: :aqua}]} = Opus.Programs.running(ctx)
+
+      Scripted.hold(fake, "close")
+      {:ok, open} = Tape.turn(ctx, turn.id)
+      stopping = Task.async(fn -> Aqua.Loop.abort(ctx, open, "stopped") end)
+
+      # The session's close is under way while the tool still runs, and
+      # nothing of the turn has stopped.
+      assert_receive {:held, "close", closing}, 10_000
+      assert Process.alive?(loop.pid)
+      assert Task.yield(stopping, 500) == nil
+
+      send(closing, :go)
+      assert {:ok, aborted} = Task.await(stopping, 30_000)
+      assert_receive {:DOWN, _ref, :process, pid, _reason} when pid == loop.pid, 10_000
+      {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
+      assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, turn.id)
+
+      # The tool's step settles by its own record: a start whose effect
+      # may have landed is marked uncertain.
+      stopped = step_by_key(ctx, turn, key)
+
+      assert Map.take(stopped, [
+               :kind,
+               :purpose,
+               :tool,
+               :action,
+               :dispatch_state,
+               :outcome,
+               :error,
+               :approval_id,
+               :result_message_id,
+               :usage
+             ]) == %{
+               kind: "tool",
+               purpose: "brain",
+               tool: "program",
+               action: "start",
+               dispatch_state: "uncertain",
+               outcome: "uncertain",
+               error: "stopped",
+               approval_id: nil,
+               result_message_id: nil,
+               usage: nil
+             }
+
+      assert call_row(ctx, stopped) ==
+               {"tool_call", "program",
+                %{
+                  "tool_call_id" => "ask-1",
+                  "name" => "program",
+                  "tool" => "program",
+                  "action" => "start",
+                  "arguments" => args,
+                  "kind" => "execute"
+                }}
+
+      # Nothing of the row is held once the turn is over: its owner is
+      # released, which ends every session of it on the service, and no
+      # terminal of the turn is left when the held open answers late.
+      assert_receive {:control, "release", %{"owners" => [%{"server" => server}]}, _fields},
+                     10_000
+
+      assert server == row.id
+      send(opening, :go)
+      assert_receive {:session, "open", %{"mode" => "terminal"}, _fields}, 10_000
+
+      Prima.Test.Wait.wait_until(
+        fn -> Opus.Programs.running(ctx) == {:ok, []} end,
+        10_000,
+        "the stopped turn's terminal to end"
+      )
+
       refute_received {:session, "send", _wire, _fields}
     end
 
@@ -983,17 +1681,28 @@ defmodule Aqua.ProgramTest do
   # A standing answer to the soul's `program.start` of `row` in this
   # thread (or a never), recorded through Sanctum as a card's answer
   # records one.
-  defp allow!(ctx, thread, row, scope \\ :thread) do
+  defp allow!(ctx, thread, row, scope \\ :thread, bounds \\ %{}),
+    do:
+      standing!(
+        ctx,
+        thread,
+        "program",
+        "start",
+        %{"program" => row.id, "epoch" => row.epoch},
+        scope,
+        bounds
+      )
+
+  # A standing answer to the soul's `tool.action` in this thread, with
+  # the bounds the person chose.
+  defp standing!(ctx, thread, tool, action, args, scope, bounds \\ %{}) do
     {:ok, [grant]} =
       Aqua.Standing.rows(
         ctx,
         %{id: "turn_none", thread_id: thread.id, agent: "aqua", root_execution_id: nil},
-        %{
-          "tool" => "program",
-          "action" => "start",
-          "args" => %{"program" => row.id, "epoch" => row.epoch}
-        },
-        scope
+        %{"tool" => tool, "action" => action, "args" => args},
+        scope,
+        bounds
       )
 
     {:ok, _} = Sanctum.ToolGrants.put(ctx, grant)
@@ -1009,13 +1718,15 @@ defmodule Aqua.ProgramTest do
     assert Opus.Brain.silence_ms() == ms
   end
 
-  # A post the person writes into the open turn `turn`.
-  defp steer!(ctx, thread, turn, text) do
+  # A post the person writes into the open turn `turn`, with `payload`
+  # (its attachments) when one is given.
+  defp steer!(ctx, thread, turn, text, payload \\ nil) do
+    message =
+      %{author: ctx.user_id, sent_by: "person", content: text}
+      |> then(&if(payload, do: Map.put(&1, :payload, payload), else: &1))
+
     {:ok, %{message: steer}} =
-      Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, sent_by: "person", content: text},
-        steer_turn_id: turn.id
-      })
+      Tape.accept(ctx, thread.id, %{message: message, steer_turn_id: turn.id})
 
     steer
   end
@@ -1084,9 +1795,31 @@ defmodule Aqua.ProgramTest do
     Enum.find(steps, &(&1.idempotency_key == key))
   end
 
+  # The step keyed `key`, once it closed.
+  defp closed!(ctx, turn, key) do
+    Prima.Test.Wait.wait_until(
+      fn -> match?(%{dispatch_state: "closed"}, step_by_key(ctx, turn, key)) end,
+      10_000,
+      "the step #{key} to close"
+    )
+
+    step_by_key(ctx, turn, key)
+  end
+
   defp inputs(ctx, turn) do
     {:ok, steps} = Tape.steps(ctx, turn)
     Enum.filter(steps, &(&1.kind == "input"))
+  end
+
+  # The ids of the turn's result rows, in order.
+  defp result_rows(ctx, turn) do
+    from(m in Arca.Schemas.Message,
+      where: m.athanor_id == ^ctx.athanor_id and m.turn_id == ^turn.id,
+      where: m.kind == "tool_result",
+      order_by: [asc: m.seq],
+      select: m.id
+    )
+    |> Arca.Repo.all()
   end
 
   defp step_fields(step) do
@@ -1211,6 +1944,25 @@ defmodule Aqua.ProgramTest do
     }
 
   defp accepted(input), do: %{"t" => "accepted", "id" => input.id}
+
+  # The next command written, taken by the driver.
+  defp accept_next!(fake, row) do
+    command = sent()
+    say(fake, row, %{"t" => "accepted", "id" => command["id"]})
+    command
+  end
+
+  # The recovery prompt that continues a post the transcript holds.
+  defp post_notice,
+    do:
+      "CYFR restarted while you were working on the last message, which you already have. " <>
+        "Go on with it, or say where it stands."
+
+  # The recovery prompt that carries an answer the session no longer asks for.
+  defp answer_notice(name, ask, content),
+    do:
+      "CYFR restarted while your call #{name} (#{ask}) ran, so its answer comes as this " <>
+        "message instead. It answered: " <> content
 
   defp said(turn, message, text),
     do: %{"t" => "said", "gen" => 0, "work" => turn.id, "message" => message, "text" => text}
