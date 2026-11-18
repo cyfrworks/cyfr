@@ -1624,4 +1624,122 @@ defmodule Sanctum.QuestionsTest do
       refute_receive {:question, :answered, _, _}, 50
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # The proof is used with the write
+  # ---------------------------------------------------------------------------
+
+  # The write is rolled back after its verification ran: a handler of the
+  # repository's own query event (`[:arca, :repo, :query]`, emitted in the
+  # querying process), attached by the test alone, watches this process's
+  # statements. Once the write has begun (an UPDATE of `questions` or an
+  # INSERT into `question_answers`), once the proof was consumed (an
+  # UPDATE of `pending_confirmations`), it rolls the write's transaction
+  # back to its savepoint, so the write's commit then commits nothing. The
+  # test runs in the sandbox's transaction, so the write's transaction is
+  # that savepoint, named by the adapter; the consumption's own transaction
+  # runs inside it and opens none. A proof used outside the write's
+  # transaction never arms it, and the write commits.
+  describe "the proof's use and the write commit together" do
+    defp roll_back_after_consumption! do
+      test = self()
+      handler = {__MODULE__, :rollback, make_ref()}
+
+      savepoint =
+        Map.fetch!(
+          %{
+            Ecto.Adapters.Postgres => "postgrex_savepoint",
+            Ecto.Adapters.SQLite3 => "exqlite_savepoint"
+          },
+          Arca.Repo.__adapter__()
+        )
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, %{query: query, source: source}, _config ->
+            if self() == test, do: watch(query, source, savepoint, test)
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      handler
+    end
+
+    defp watch(query, source, savepoint, test) do
+      step = Process.get({__MODULE__, :rollback}, :idle)
+      verb = query |> String.split(" ", parts: 2) |> hd() |> String.upcase()
+
+      cond do
+        step == :idle and
+            {verb, source} in [{"UPDATE", "questions"}, {"INSERT", "question_answers"}] ->
+          Process.put({__MODULE__, :rollback}, :writing)
+
+        step == :writing and {verb, source} == {"UPDATE", "pending_confirmations"} ->
+          Process.put({__MODULE__, :rollback}, :done)
+          Arca.Repo.query!("ROLLBACK TO SAVEPOINT #{savepoint}")
+          send(test, :write_rolled_back)
+
+        true ->
+          :ok
+      end
+    end
+
+    defp still_unanswered!(person, ref, id) do
+      if ref, do: assert(row(person.ctx, ref).state == "open")
+      assert standing(person.ctx) == []
+
+      assert {:ok, %{state: "confirmed"}} =
+               Arca.PendingConfirmations.get(
+                 Context.actor(person.ctx),
+                 Prima.Confirmation.ref(id)
+               )
+
+      assert_received :write_rolled_back
+    end
+
+    test "on the card: rolled back, the question stays open and the proof unspent", person do
+      {_run, ref} = open!(person)
+      args = %{"ref" => ref, "answer" => @widest_answer}
+      assert {:error, {:confirmation_required, %{id: id}}} = call(person.ctx, "answer", args)
+      proven!(person.ctx, id)
+      repeat = %{person.ctx | confirmation_id: id}
+
+      handler = roll_back_after_consumption!()
+      _rolled_back = call(repeat, "answer", args)
+      :telemetry.detach(handler)
+      still_unanswered!(person, ref, id)
+
+      # The person repeats it, and it is written with the proof spent.
+      assert {:ok, %{state: "allowed"}} = call(repeat, "answer", args)
+      assert [%{caller: "any", effect: "allow"}] = standing(person.ctx)
+
+      assert {:ok, %{state: "consumed"}} =
+               Arca.PendingConfirmations.get(
+                 Context.actor(person.ctx),
+                 Prima.Confirmation.ref(id)
+               )
+    end
+
+    test "on question.set: rolled back, no permission and the proof unspent", person do
+      assert {:error, {:confirmation_required, %{id: id}}} = call(person.ctx, "set", @widest_set)
+      proven!(person.ctx, id)
+      repeat = %{person.ctx | confirmation_id: id}
+
+      handler = roll_back_after_consumption!()
+      _rolled_back = call(repeat, "set", @widest_set)
+      :telemetry.detach(handler)
+      still_unanswered!(person, nil, id)
+
+      assert {:ok, %{caller: "any", effect: "allow"}} = call(repeat, "set", @widest_set)
+
+      assert {:ok, %{state: "consumed"}} =
+               Arca.PendingConfirmations.get(
+                 Context.actor(person.ctx),
+                 Prima.Confirmation.ref(id)
+               )
+    end
+  end
 end
