@@ -226,7 +226,7 @@ var filesTool = map[string]any{"name": "files", "description": "Read the athanor
 func TestHelloFirstAndAnEmptyInputEndsIt(t *testing.T) {
 	s := startDriver(t)
 	hello := s.expect("hello")
-	if hello["v"] != float64(1) || hello["driver"] != "cyfr-claude-code" || len(hello["boot"].(string)) != 32 {
+	if hello["v"] != float64(brainwire.Version) || hello["driver"] != "cyfr-claude-code" || len(hello["boot"].(string)) != 32 {
 		t.Fatalf("hello names the version, the driver and a fresh boot: %v", hello)
 	}
 	if status := s.end(); status != 0 {
@@ -816,5 +816,121 @@ func TestALaunchThatFailsNamesNoFolderOnTheWire(t *testing.T) {
 	}
 	if n := strings.Count(s.stderr.String(), "FOLDER-CANARY/no-such-"); n != 4 {
 		t.Fatalf("each launch's detail, the command and the system's words on it, is on the driver's standard error (a positive control for the check above): %d in %q", n, s.stderr.String())
+	}
+}
+
+// modesOf is the fake's answer to "modes": its whole command line and the
+// driver's two whole answers, to its own Write and to ExitPlanMode.
+func modesOf(t *testing.T, s *wireSession, id string) (argv []any, answers []any) {
+	t.Helper()
+	postText(s, id, "modes")
+	var got struct {
+		Argv    []any `json:"argv"`
+		Answers []any `json:"answers"`
+	}
+	said := ""
+	for _, e := range s.until("idle") {
+		if e["t"] == "ask" {
+			t.Fatalf("the harness's own tools are never CYFR's to ask about: %v", e)
+		}
+		if e["t"] == "said" {
+			said = e["text"].(string)
+		}
+	}
+	if err := json.Unmarshal([]byte(said), &got); err != nil {
+		t.Fatalf("the fake said its command line and answers: %q", said)
+	}
+	return got.Argv, got.Answers
+}
+
+func permissionAnswer(id string, response map[string]any) any {
+	return map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": response}}
+}
+
+func strs(xs ...string) []any {
+	out := make([]any, len(xs))
+	for i, x := range xs {
+		out[i] = x
+	}
+	return out
+}
+
+// A read-only start runs the harness in plan mode and denies its own
+// tools, ExitPlanMode among them; one whose read_only is false or absent
+// runs as it always did, its own tools allowed. Both are seen whole: the
+// harness's command line and the driver's answers.
+func TestAReadOnlyStartRunsPlanModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
+	write := map[string]any{"file_path": "/work/new.txt", "content": "x"}
+	exit := map[string]any{"plan": "write new.txt"}
+	allowed := []any{
+		permissionAnswer("ask-1", map[string]any{"behavior": "allow", "updatedInput": write}),
+		permissionAnswer("ask-2", map[string]any{"behavior": "allow", "updatedInput": exit}),
+	}
+	denied := []any{
+		permissionAnswer("ask-1", map[string]any{"behavior": "deny", "message": "This crew member is read-only."}),
+		permissionAnswer("ask-2", map[string]any{"behavior": "deny", "message": "This crew member is read-only."}),
+	}
+	for _, c := range []struct {
+		name    string
+		config  map[string]any
+		mode    []string
+		answers []any
+	}{
+		{"absent", map[string]any{"model": "fake-opus"}, nil, allowed},
+		{"false", map[string]any{"model": "fake-opus", "read_only": false}, nil, allowed},
+		{"false beside a permission mode", map[string]any{"model": "fake-opus", "read_only": false, "permission_mode": "acceptEdits"}, []string{"--permission-mode", "acceptEdits"}, allowed},
+		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "plan"}, denied},
+	} {
+		s := startDriver(t)
+		session := startFresh(s, c.config)
+		work(s, "stp_work", []any{})
+		argv, answers := modesOf(t, s, "stp_post")
+		want := append(append(strs(baseArgv...), strs("--session-id", session, "--model", "fake-opus")...), strs(c.mode...)...)
+		if !reflect.DeepEqual(argv, want) {
+			t.Fatalf("%s: the harness starts with exactly\n%v\nnot\n%v", c.name, want, argv)
+		}
+		if !reflect.DeepEqual(answers, c.answers) {
+			t.Fatalf("%s: the driver answers the harness's own tools exactly\n%v\nnot\n%v", c.name, c.answers, answers)
+		}
+		s.end()
+
+		// A resume starts in the same mode.
+		again := startDriverIn(t, s.home)
+		again.expect("hello")
+		again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": c.config})
+		again.expect("started")
+		work(again, "stp_work_2", []any{})
+		argv, answers = modesOf(t, again, "stp_post_2")
+		want = append(append(strs(baseArgv...), strs("--resume", session, "--model", "fake-opus")...), strs(c.mode...)...)
+		if !reflect.DeepEqual(argv, want) || !reflect.DeepEqual(answers, c.answers) {
+			t.Fatalf("%s: a resume starts and answers as the fresh start did: %v %v", c.name, argv, answers)
+		}
+		again.end()
+	}
+}
+
+// CYFR's own tools are CYFR's to decide in either mode: a read-only start
+// still shows their asks.
+func TestAReadOnlyStartStillShowsCYFRsToolsAsAsks(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{"read_only": true})
+	work(s, "stp_work", []any{filesTool})
+	postText(s, "stp_post", "read")
+	if e := s.expect("ask"); e["name"] != "files" {
+		t.Fatalf("CYFR's tool is asked about: %v", e)
+	}
+}
+
+// A read-only start that also names a permission mode is no start the
+// driver can honour: it ends with 2 and starts no harness.
+func TestAReadOnlyStartNamingAPermissionModeEndsTheDriver(t *testing.T) {
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true, "permission_mode": "plan"}})
+	if status := s.end(); status != 2 {
+		t.Fatalf("the driver ends with 2: %d", status)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(s.home, ".claude", "projects", "*", "*")); len(matches) != 0 {
+		t.Fatalf("no harness ran: %v", matches)
 	}
 }

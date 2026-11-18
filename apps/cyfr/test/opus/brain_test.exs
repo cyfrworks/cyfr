@@ -28,6 +28,7 @@ defmodule Opus.BrainTest do
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Opus.Brain
+  alias Opus.Brain.Wire
 
   @root :crypto.strong_rand_bytes(32)
 
@@ -265,7 +266,7 @@ defmodule Opus.BrainTest do
   defp say(fake, row, line) when is_binary(line), do: Scripted.write(fake, row.id, line)
 
   defp hello(boot \\ "boot-one"),
-    do: %{"t" => "hello", "v" => 1, "driver" => "cyfr-claude-code", "boot" => boot}
+    do: %{"t" => "hello", "v" => Wire.version(), "driver" => "cyfr-claude-code", "boot" => boot}
 
   # The next batch handed to this attendant.
   defp batch({_pid, ref}) do
@@ -351,6 +352,26 @@ defmodule Opus.BrainTest do
 
       say(fake, row, hello())
       assert {"boot-one", [{1, %{"t" => "hello", "boot" => "boot-one"}}]} = batch(brain)
+    end
+
+    test "a driver whose hello names another version is ended before anything is written to it",
+         %{fake: fake, row: row, binding: binding} do
+      {:ok, {pid, ref} = brain} = Brain.open(binding)
+      monitor = Process.monitor(pid)
+      say(fake, row, %{hello() | "v" => Wire.version() - 1})
+      assert_receive {Brain, ^ref, {:ended, :unreadable}}, 5_000
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _}, 5_000
+      refute_received {Brain, ^ref, {:lines, _boot, _lines}}
+
+      assert Brain.write(brain, binding, %{
+               "t" => "start",
+               "gen" => 0,
+               "config" => %{"read_only" => true}
+             }) ==
+               {:error, :unavailable}
+
+      refute_sent()
+      assert running_sessions(fake, row) == []
     end
 
     test "writes one command at a time: the next only once the last is answered",
@@ -891,7 +912,7 @@ defmodule Opus.BrainTest do
     for {name, line} <- [
           {"an unknown message", ~s({"t":"shell","cmd":"rm -rf /"})},
           {"a command from the driver", ~s({"t":"post","id":"p","work":"w","content":[]})},
-          {"a second hello", ~s({"t":"hello","v":1,"driver":"d","boot":"b"})},
+          {"a second hello", ~s({"t":"hello","v":#{Wire.version()},"driver":"d","boot":"b"})},
           {"a member beyond its message's", ~s({"t":"accepted","id":"p","thread":"thr_other"})}
         ] do
       test "#{name} ends it", %{fake: fake, row: row, brain: {_pid, ref}} do

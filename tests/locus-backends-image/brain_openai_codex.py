@@ -22,6 +22,10 @@ with exactly its members.
   said whole, the start's effort its own, its own command shown by name
   only and its patch approval allowed, its usage the thread's total, and
   its `idle` naming the post, every event naming the post's work.
+- A read-only start starts and resumes the thread in Codex's read-only
+  sandbox, asking nothing, and every approval, permission and elicitation
+  is declined; one with no read_only runs as before, each allowed: both
+  seen as the thread's whole params and the driver's whole answers.
 - A post while the turn works is added to it (`turn/steer`), and the turn's
   `idle` names both posts.
 - An ask of CYFR's tool is passed up with its arguments, held, and answered
@@ -244,9 +248,52 @@ def main():
         expect(said and f"thread {thread}, model fake-sol" in said[0] and "tools files" in said[0],
                "the new process runs the thread with the new model and the tools it started with", said)
 
-        # ————— a thread the folder does not hold —————
+        # ————— the two modes, each a fresh start of its own, read-only resumed too —————
         seen += d.lines
         d.close()
+        tool = {"type": "function", "name": FILES["name"], "description": FILES["description"], "inputSchema": FILES["parameters"]}
+        network = {"network": {"enabled": True}}
+        denial = {"denied": {"rejection": "This crew member is read-only."}}
+        results = {
+            "danger-full-access": [{"decision": "accept"}, {"decision": "accept"}, {"decision": "approved"}, {"decision": "approved"},
+                                   {"permissions": network, "scope": "turn"}, {"action": "accept", "content": None}],
+            "read-only": [{"decision": "decline"}, {"decision": "decline"}, {"decision": denial}, {"decision": denial},
+                          {"permissions": {}, "scope": "turn"}, {"action": "decline"}],
+        }
+        read_only_thread = None
+        for key, config, sandbox in (
+            ("brain-auto", {"model": "fake-sol"}, "danger-full-access"),
+            ("brain-read-only", {"model": "fake-sol", "read_only": True}, "read-only"),
+            ("brain-read-only-resumed", {"model": "fake-sol", "read_only": True}, "read-only"),
+        ):
+            m = Driver(c, key)
+            m.expect("hello", f"{key}: the driver says hello")
+            start = {"t": "start", "gen": 7, "config": config, "system": SYSTEM, "tools": [FILES]}
+            if key == "brain-read-only-resumed":
+                start["session"] = read_only_thread
+            m.send(start)
+            started_modes = m.expect("started", f"{key}: the start answers started")
+            if key == "brain-read-only":
+                read_only_thread = started_modes["session"]
+            m.send({"t": "work", "id": "stp_work_modes", "work": "trn_brain_modes", "tools": []})
+            m.expect("accepted", f"{key}: its work is accepted")
+            m.send({"t": "post", "id": "stp_post_modes", "work": "trn_brain_modes",
+                    "content": [{"type": "text", "text": "modes"}]})
+            turn = m.until("idle")
+            expect(not any(e["t"] == "ask" for e in turn), f"{key}: Codex's approvals are never asked of CYFR", turn)
+            got = json.loads([e["text"] for e in turn if e["t"] == "said"][0])
+            wanted = ({"threadId": read_only_thread, "approvalPolicy": "never", "sandbox": sandbox, "excludeTurns": True,
+                       "developerInstructions": SYSTEM, "model": "fake-sol"}
+                      if key == "brain-read-only-resumed" else
+                      {"approvalPolicy": "never", "sandbox": sandbox, "dynamicTools": [tool], "developerInstructions": SYSTEM,
+                       "model": "fake-sol"})
+            expect(got["params"] == wanted, f"{key}: the thread runs with exactly the start's params", got["params"])
+            expect(got["answers"] == [{"id": i, "result": r} for i, r in enumerate(results[sandbox])],
+                   f"{key}: the driver answers every approval, permission and elicitation exactly", got["answers"])
+            seen += m.lines
+            m.close()
+
+        # ————— a thread the folder does not hold —————
         d = Driver(c, "brain-three")
         d.expect("hello", "another process says hello")
         d.send({"t": "start", "gen": 5, "session": str(uuid.uuid4()), "config": {}})

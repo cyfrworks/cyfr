@@ -235,7 +235,7 @@ func saidOf(events []map[string]any) string {
 func TestHelloFirstAndAnEmptyInputEndsIt(t *testing.T) {
 	s := startDriver(t)
 	hello := s.expect("hello")
-	if hello["v"] != float64(1) || hello["driver"] != "cyfr-codex" || len(hello["boot"].(string)) != 32 {
+	if hello["v"] != float64(brainwire.Version) || hello["driver"] != "cyfr-codex" || len(hello["boot"].(string)) != 32 {
 		t.Fatalf("hello names the version, the driver and a fresh boot: %v", hello)
 	}
 	if status := s.end(); status != 0 {
@@ -988,5 +988,111 @@ func TestAnUnreadableTotalLeavesTheResumedThreadsFirstUsableOnePartial(t *testin
 				t.Fatalf("the totals after the first usable one are complete: %s", got)
 			}
 		})
+	}
+}
+
+// modesOf is the fake's answer to "modes": the thread's whole start or
+// resume params and the driver's whole answers to every approval,
+// permission and elicitation Codex can ask.
+func modesOf(t *testing.T, s *wireSession, id, turn string) (params map[string]any, answers []any) {
+	t.Helper()
+	postText(s, id, turn, "modes")
+	var got struct {
+		Params  map[string]any `json:"params"`
+		Answers []any          `json:"answers"`
+	}
+	events := s.until("idle")
+	for _, e := range events {
+		if e["t"] == "ask" {
+			t.Fatalf("Codex's approvals are never CYFR's to ask about: %v", e)
+		}
+	}
+	if err := json.Unmarshal([]byte(saidOf(events)), &got); err != nil {
+		t.Fatalf("the fake said its params and answers: %q", saidOf(events))
+	}
+	return got.Params, got.Answers
+}
+
+func answerOf(id int, result any) any {
+	return map[string]any{"id": float64(id), "result": result}
+}
+
+// A read-only start starts and resumes the thread in Codex's read-only
+// sandbox, asking nothing, and declines every approval, permission and
+// elicitation; one whose read_only is false or absent runs as it always
+// did, everything allowed. Both are seen whole: the thread's params and
+// the driver's answers.
+func TestAReadOnlyStartRunsCodexsReadOnlySandboxAndDeclinesEveryApproval(t *testing.T) {
+	network := map[string]any{"network": map[string]any{"enabled": true}}
+	allowed := []any{
+		answerOf(1, map[string]any{"decision": "accept"}),
+		answerOf(2, map[string]any{"decision": "accept"}),
+		answerOf(3, map[string]any{"decision": "approved"}),
+		answerOf(4, map[string]any{"decision": "approved"}),
+		answerOf(5, map[string]any{"permissions": network, "scope": "turn"}),
+		answerOf(6, map[string]any{"action": "accept", "content": nil}),
+	}
+	denial := map[string]any{"denied": map[string]any{"rejection": "This crew member is read-only."}}
+	declined := []any{
+		answerOf(1, map[string]any{"decision": "decline"}),
+		answerOf(2, map[string]any{"decision": "decline"}),
+		answerOf(3, map[string]any{"decision": denial}),
+		answerOf(4, map[string]any{"decision": denial}),
+		answerOf(5, map[string]any{"permissions": map[string]any{}, "scope": "turn"}),
+		answerOf(6, map[string]any{"action": "decline"}),
+	}
+	for _, c := range []struct {
+		name    string
+		config  map[string]any
+		sandbox string
+		answers []any
+	}{
+		{"absent", map[string]any{"model": "fake-sol"}, "danger-full-access", allowed},
+		{"false", map[string]any{"model": "fake-sol", "read_only": false}, "danger-full-access", allowed},
+		{"true", map[string]any{"model": "fake-sol", "read_only": true}, "read-only", declined},
+	} {
+		s := startDriver(t)
+		session := startFresh(s, c.config)
+		work(s, "stp_work", "trn_1")
+		params, answers := modesOf(t, s, "stp_post", "trn_1")
+		want := map[string]any{"approvalPolicy": "never", "sandbox": c.sandbox, "model": "fake-sol", "developerInstructions": "be brief",
+			"dynamicTools": []any{map[string]any{"type": "function", "name": "files", "description": "Read the athanor's files", "inputSchema": map[string]any{"type": "object"}}}}
+		if !reflect.DeepEqual(params, want) {
+			t.Fatalf("%s: the thread starts with exactly\n%v\nnot\n%v", c.name, want, params)
+		}
+		if !reflect.DeepEqual(answers, c.answers) {
+			t.Fatalf("%s: the driver answers Codex exactly\n%v\nnot\n%v", c.name, c.answers, answers)
+		}
+		s.end()
+
+		again := startDriverIn(t, s.home)
+		again.expect("hello")
+		again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": c.config, "system": "be brief"})
+		again.expect("started")
+		again.expect("usage") // the resumed thread's last total, sent again
+		work(again, "stp_work_2", "trn_2")
+		params, answers = modesOf(t, again, "stp_post_2", "trn_2")
+		want = map[string]any{"threadId": session, "approvalPolicy": "never", "sandbox": c.sandbox, "model": "fake-sol",
+			"developerInstructions": "be brief", "excludeTurns": true}
+		if !reflect.DeepEqual(params, want) || !reflect.DeepEqual(answers, c.answers) {
+			t.Fatalf("%s: a resume runs and answers as the fresh start did:\n%v\n%v", c.name, params, answers)
+		}
+		again.end()
+	}
+}
+
+// A read-only start naming a permission mode ends the driver, as any start
+// naming one does (TestAStartCodexCannotHonourEndsTheDriver).
+func TestAReadOnlyStartNamingAPermissionModeEndsTheDriver(t *testing.T) {
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"read_only": true, "permission_mode": "plan"}})
+	select {
+	case status := <-s.done:
+		if status != 2 {
+			t.Fatalf("the driver ends with 2: %d", status)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the driver did not end")
 	}
 }

@@ -20,9 +20,10 @@ import (
 // `turn/steer`, `thread/delete`) and the `initialized` notification, and
 // answers Codex's own requests: `item/tool/call` for CYFR's tools, given
 // to the thread as its dynamic tools, held until CYFR answers it and then
-// answered by its request's id; the approvals, which are allowed; and
-// `currentTime/read`. Every other request is refused. These shapes are the
-// ones the catalyst read from Codex 0.167.0
+// answered by its request's id; the approvals, which are allowed, or
+// declined under a read-only start; and `currentTime/read`. Every other
+// request is refused. These shapes are the ones the catalyst read from
+// Codex 0.167.0
 // (seed/components/catalysts/local/openai-codex/0.1.6/src/src/server.rs
 // and chat.rs), held on 0.169.0, the version a brain row pins, against its
 // own schema (`codex app-server generate-json-schema`) and the binary.
@@ -35,10 +36,30 @@ const appServer = "app-server"
 // second sandbox inside the box's and its namespaces are not the box's to
 // grant, and it asks for nothing: its commands and patches run as the box
 // lets them, and are shown by name only.
+//
+// A read-only start runs the thread in Codex's own read-only sandbox,
+// still asking nothing: the sandbox and the policy are set by the client
+// alone, so the model cannot widen them, and an escalation would arrive as
+// an approval, which is declined (declined). That sandbox needs namespaces
+// the box refuses: inside the box it does not start, and every command of
+// a read-only thread fails, a read among them.
 const (
-	approvalPolicy = "never"
-	sandbox        = "danger-full-access"
+	approvalPolicy  = "never"
+	sandbox         = "danger-full-access"
+	readOnlySandbox = "read-only"
 )
+
+// readOnlyDenial is what Codex reads when a read-only start declines what it
+// asked.
+const readOnlyDenial = "This crew member is read-only."
+
+// sandboxOf is the sandbox a start's thread runs in.
+func sandboxOf(config brainwire.Config) string {
+	if config.ReadOnly {
+		return readOnlySandbox
+	}
+	return sandbox
+}
 
 // subAgentCall is the type of a thread's item that starts a sub-agent, a
 // thread of its own, or speaks to one.
@@ -119,7 +140,7 @@ func dynamicTools(tools []brainwire.Tool) ([]map[string]any, error) {
 // prompt as developer instructions beside Codex's own, CYFR's tools as its
 // dynamic tools, which the thread keeps for its life, and the start's model.
 func threadStart(id string, system string, tools []map[string]any, config brainwire.Config) []byte {
-	params := map[string]any{"approvalPolicy": approvalPolicy, "sandbox": sandbox, "dynamicTools": tools}
+	params := map[string]any{"approvalPolicy": approvalPolicy, "sandbox": sandboxOf(config), "dynamicTools": tools}
 	if system != "" {
 		params["developerInstructions"] = system
 	}
@@ -132,7 +153,7 @@ func threadStart(id string, system string, tools []map[string]any, config brainw
 // threadResume resumes the thread the folder holds, which keeps the dynamic
 // tools it was started with.
 func threadResume(id, thread, system string, config brainwire.Config) []byte {
-	params := map[string]any{"threadId": thread, "approvalPolicy": approvalPolicy, "sandbox": sandbox, "excludeTurns": true}
+	params := map[string]any{"threadId": thread, "approvalPolicy": approvalPolicy, "sandbox": sandboxOf(config), "excludeTurns": true}
 	if system != "" {
 		params["developerInstructions"] = system
 	}
@@ -192,6 +213,23 @@ func toolAnswer(id json.RawMessage, text string, success bool) []byte {
 func refuseLine(id json.RawMessage, method string) []byte {
 	line, _ := brainwire.Marshal(map[string]any{"id": id, "error": map[string]any{"code": -32601, "message": "CYFR does not answer " + method}})
 	return line
+}
+
+// declined is a read-only start's answer to an approval, permission or
+// elicitation request, by its method, or false for a request that is none:
+// each is declined, a permission granted nothing.
+func declined(method string) (any, bool) {
+	switch method {
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+		return map[string]any{"decision": "decline"}, true
+	case "execCommandApproval", "applyPatchApproval":
+		return map[string]any{"decision": map[string]any{"denied": map[string]any{"rejection": readOnlyDenial}}}, true
+	case "item/permissions/requestApproval":
+		return map[string]any{"permissions": map[string]any{}, "scope": "turn"}, true
+	case "mcpServer/elicitation/request":
+		return map[string]any{"action": "decline"}, true
+	}
+	return nil, false
 }
 
 // allowed is the answer to an approval request, by its method, or false for

@@ -57,8 +57,18 @@ const (
 	maxResultChars = 50000
 )
 
+// readOnlyMode is the permission mode a read-only start runs in: plan
+// mode, in which the harness runs its reading tools and asks before any
+// other, and every ask is denied (readOnlyDenial).
+const readOnlyMode = "plan"
+
+// readOnlyDenial is what the harness reads when a read-only start denies
+// one of its own tools.
+const readOnlyDenial = "This crew member is read-only."
+
 // harnessArgv is the harness's command line: its own command, then the
-// base, the session and the start's configuration.
+// base, the session and the start's configuration; a read-only start's
+// permission mode is plan mode, since it names none of its own (start).
 func harnessArgv(command []string, session string, resume bool, config brainwire.Config) []string {
 	argv := append([]string{}, command...)
 	argv = append(argv, baseArgv...)
@@ -67,10 +77,14 @@ func harnessArgv(command []string, session string, resume bool, config brainwire
 	} else {
 		argv = append(argv, "--session-id", session)
 	}
+	mode := config.PermissionMode
+	if config.ReadOnly {
+		mode = readOnlyMode
+	}
 	for _, pair := range [][2]string{
 		{"--model", config.Model},
 		{"--effort", config.Effort},
-		{"--permission-mode", config.PermissionMode},
+		{"--permission-mode", mode},
 	} {
 		if pair[1] != "" {
 			argv = append(argv, pair[0], pair[1])
@@ -149,6 +163,20 @@ func allowLine(id string, input any) []byte {
 			"subtype":    "success",
 			"request_id": id,
 			"response":   map[string]any{"behavior": "allow", "updatedInput": input},
+		},
+	})
+	return line
+}
+
+// denyLine denies a permission ask of the harness's, which reads `message`
+// as the reason.
+func denyLine(id, message string) []byte {
+	line, _ := brainwire.Marshal(map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "success",
+			"request_id": id,
+			"response":   map[string]any{"behavior": "deny", "message": message},
 		},
 	})
 	return line

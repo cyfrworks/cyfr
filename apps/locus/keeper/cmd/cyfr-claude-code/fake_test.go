@@ -31,6 +31,8 @@ import (
 //	partial    replies with a result one of whose models' counts does not read
 //	big    replies with 2 MiB of text
 //	other  asks the driver a control request of another kind, then replies
+//	modes  asks for its own Write and ExitPlanMode, then replies with its
+//	       whole command line and the driver's two whole answers, as JSON
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -85,6 +87,8 @@ func fakeClaude() int {
 	flags := fmt.Sprintf("model=%s effort=%s permission=%s tools=%s", flag("--model"), flag("--effort"), flag("--permission-mode"), flag("--tools"))
 
 	answers := map[string]chan map[string]any{}
+	// wholes are the driver's answers as their whole lines, by request id.
+	wholes := map[string]map[string]any{}
 	var answersMu sync.Mutex
 	asked := 0
 	ask := func(tool string, input map[string]any) map[string]any {
@@ -166,6 +170,26 @@ func fakeClaude() int {
 			reply(nil, "a background task ended")
 		case strings.Contains(words, "big"):
 			reply(uuids, strings.Repeat("x", 2<<20))
+		case strings.Contains(words, "modes"):
+			var ids []string
+			for _, tool := range []struct {
+				name  string
+				input map[string]any
+			}{
+				{"Write", map[string]any{"file_path": "/work/new.txt", "content": "x"}},
+				{"ExitPlanMode", map[string]any{"plan": "write new.txt"}},
+			} {
+				ask(tool.name, tool.input)
+				ids = append(ids, fmt.Sprintf("ask-%d", asked))
+			}
+			answersMu.Lock()
+			got := []any{}
+			for _, id := range ids {
+				got = append(got, wholes[id])
+			}
+			answersMu.Unlock()
+			line, _ := json.Marshal(map[string]any{"argv": args, "answers": got})
+			reply(uuids, string(line))
 		case strings.Contains(words, "other"):
 			write(map[string]any{"type": "control_request", "request_id": "hook-1", "request": map[string]any{"subtype": "hook_callback"}})
 			answersMu.Lock()
@@ -216,6 +240,7 @@ func fakeClaude() int {
 				answersMu.Lock()
 				ch := answers[fmt.Sprint(response["request_id"])]
 				delete(answers, fmt.Sprint(response["request_id"]))
+				wholes[fmt.Sprint(response["request_id"])] = message
 				answersMu.Unlock()
 				if ch != nil {
 					inner, _ := response["response"].(map[string]any)

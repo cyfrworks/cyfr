@@ -454,9 +454,13 @@ func (d *driver) startStep(s *starting, m rpc) error {
 }
 
 // request is a request of Codex's: a call of CYFR's tool, held and shown
-// as an ask; an approval, allowed; any other, refused.
+// as an ask; an approval, allowed, or declined under a read-only start;
+// any other, refused.
 func (d *driver) request(m rpc) error {
 	if m.Method != "item/tool/call" {
+		if answer, ok := declined(m.Method); ok && d.config.ReadOnly {
+			return d.h.Write(answerLine(m.ID, answer))
+		}
 		if answer, ok := allowed(m.Method, m.Params, time.Now().Unix()); ok {
 			return d.h.Write(answerLine(m.ID, answer))
 		}
