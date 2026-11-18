@@ -87,8 +87,8 @@ defmodule Arca.McpServerStorage do
   brains' drivers built into the box beside the harness each drives
   (`Dockerfile.locus`), or nil: a bare harness, another program, a tool
   server, no command. What a kept row's folder holds of a brain's
-  sessions is laid out by that driver's harness, so the driver is fixed
-  once the row names one (`update/4`).
+  sessions is laid out by that driver's harness, so the driver and the
+  kept folder are fixed once the row names one (`update/4`).
   """
   @spec driver(map()) :: String.t() | nil
   def driver(%{transport: "program"} = row) do
@@ -277,10 +277,14 @@ defmodule Arca.McpServerStorage do
   # Read under the row's lock, so every writer of a row is held to it.
   defp driver_kept(%McpServer{home: "kept"} = row, written) do
     kept = driver(row)
+    becomes = Map.merge(row, written)
 
-    if kept == nil or driver(Map.merge(row, written)) == kept,
-      do: :ok,
-      else: {:error, :driver_fixed}
+    cond do
+      kept == nil -> :ok
+      driver(becomes) != kept -> {:error, :driver_fixed}
+      becomes.home != "kept" -> {:error, :folder_kept}
+      true -> :ok
+    end
   end
 
   defp driver_kept(_row, _written), do: :ok
@@ -306,17 +310,26 @@ defmodule Arca.McpServerStorage do
   under the name, or the row written since, answers
   `{:error, :stale_epoch}`.
 
-  A kept row whose command names a driver (`driver/1`) keeps it: a write
-  that names another driver or none, another transport among them, is
-  `{:error, :driver_fixed}` and writes nothing, since the records the
-  folder holds of the brain's sessions are that driver's harness's, which
-  a removal owed for one of them asks that driver to remove
-  (`Arca.ThreadStorage.forget_sessions/2`). A bare command that gains a
-  driver, and a change after the driver's word, write as any other.
+  A kept row whose command names a driver (`driver/1`) keeps it, and
+  keeps its folder: a write that names another driver or none, another
+  transport among them, is `{:error, :driver_fixed}`, and one that takes
+  its home from kept is `{:error, :folder_kept}`; neither writes
+  anything. The records the folder holds of the brain's sessions are that
+  driver's harness's, which a removal owed for one of them asks that
+  driver to remove (`Arca.ThreadStorage.forget_sessions/2`), and the
+  folder goes only with the row's deletion or its home's reset. A bare
+  command that gains a driver, and a change after the driver's word,
+  write as any other.
   """
   @spec update(Prima.Actor.t(), String.t(), map(), expected() | nil) ::
           {:ok, map()}
-          | {:error, :no_athanor | :not_found | :stale_epoch | :driver_fixed | :database_error}
+          | {:error,
+             :no_athanor
+             | :not_found
+             | :stale_epoch
+             | :driver_fixed
+             | :folder_kept
+             | :database_error}
   def update(actor, name, updates, expected \\ nil)
 
   def update(%Prima.Actor{athanor_id: athanor_id} = actor, name, updates, expected)

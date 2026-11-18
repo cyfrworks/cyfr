@@ -23,7 +23,13 @@ defmodule Opus.Brain.Cleanup do
     * `applied` — the driver answered `forgot`: the session's transcript
       is gone from the folder, or was proved absent. A forget repeated
       after a receipt that did not land answers the same, so a try that
-      dies before its receipt is safe to try again.
+      dies before its receipt is safe to try again. It speaks for the
+      harness's configuration directory as the row's environment names
+      it now: a row whose environment moved that directory
+      (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) moved where its sessions'
+      records are kept and where a forget looks, and records under the
+      directory it named before stay until the folder is reset or the row
+      is removed, a stated limit.
     * `superseded` — the thread holds that session again under a later
       generation, a successor's, which is never removed; or the row is
       gone, and the removal passes to the retirement of the row's whole

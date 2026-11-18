@@ -373,6 +373,21 @@ defmodule Arca.BrainForgetStorageTest do
       assert owed(actor) == []
     end
 
+    test "the row a session is stored with keeps its folder, so no scratch detour reaches " <>
+           "another driver",
+         %{actor: actor, room: room, row: row} do
+      held!(actor, room, row, "aqua", @session)
+      codex = Jason.encode!(%{"command" => "cyfr-codex codex", "env" => %{}})
+
+      assert Arca.McpServerStorage.update(actor, row.name, %{home: "scratch"}) ==
+               {:error, :folder_kept}
+
+      assert Arca.McpServerStorage.update(actor, row.name, %{home: "kept", config_json: codex}) ==
+               {:error, :driver_fixed}
+
+      assert Arca.McpServerStorage.get_by_id(actor, row.id) == {:ok, row}
+    end
+
     test "lost by the brain of the row the session is stored with owes nothing",
          %{actor: actor, room: room, row: row} do
       held!(actor, room, row, "aqua", @session)

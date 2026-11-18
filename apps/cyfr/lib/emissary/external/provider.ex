@@ -494,6 +494,12 @@ defmodule Emissary.External.Provider do
         {:error, :driver_fixed} ->
           {:error, {:invalid_argument, driver_fixed(name, stored)}}
 
+        {:error, :folder_kept} ->
+          {:error,
+           {:invalid_argument,
+            "Program '#{name}' keeps the records of its sessions in its folder, so its " <>
+              "folder stays. Remove the program to remove them."}}
+
         {:error, reason} ->
           Logger.warning(
             "[Emissary.External.Provider] failed to update server config: #{inspect(reason)}"

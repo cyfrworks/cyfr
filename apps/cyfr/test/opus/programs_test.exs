@@ -1791,6 +1791,19 @@ defmodule Opus.ProgramsTest do
         assert Arca.McpServerStorage.get(actor, "claude") == {:ok, kept}, why
       end
 
+      folder =
+        "Program 'claude' keeps the records of its sessions in its folder, so its folder " <>
+          "stays. Remove the program to remove them."
+
+      scratch =
+        "cyfr-claude-code npx -y @anthropic-ai/claude-code"
+        |> program.()
+        |> Map.put("home", "scratch")
+        |> Map.delete("home_max_bytes")
+
+      assert update.(2, scratch) == {:error, {:invalid_argument, folder}}
+      assert Arca.McpServerStorage.get(actor, "claude") == {:ok, kept}
+
       assert {:ok, %{epoch: 3}} =
                update.(2, program.("cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.330"))
     end
