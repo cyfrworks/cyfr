@@ -2776,15 +2776,23 @@ defmodule Aqua.Loop do
   # (`opening_sources/1`), the turn's posts, and for a thread with no
   # native session the thread so far a fresh session's first post carries
   # (`Aqua.Program.context_rows/2`), with the sources of the turns whose
-  # words those rows are.
-  defp join_startup(%State{} = state) do
+  # words those rows are. The program itself reads outside material with
+  # tools of its own, so it is an outside source named as a program used
+  # as a tool is (`Opus.Programs.Provider.answer_sources/2`).
+  defp join_startup(%State{program: program} = state) do
     guest = guest(state)
 
     with {:ok, posts} <- Tape.brain_posts(guest, state.turn),
          {:ok, context} <- startup_context(state, posts) do
       rows = posts ++ context
       read = Enum.flat_map(earlier_turns(state, rows), &turn_sources(guest, &1))
-      Tape.join_sources(guest, state.turn, opening_sources(state) ++ thread_sources(rows) ++ read)
+
+      Tape.join_sources(
+        guest,
+        state.turn,
+        [Prima.Source.outside(program.name) | opening_sources(state)] ++
+          thread_sources(rows) ++ read
+      )
     end
   end
 

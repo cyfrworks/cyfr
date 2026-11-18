@@ -496,7 +496,7 @@ defmodule Aqua.ProgramTest do
       assert post == posted(steered, turn, "and this brief")
       say(fake, row, accepted(steered))
       {:ok, paused} = Tape.turn(ctx, turn.id)
-      assert Prima.Source.decode(paused.sources) == [outside]
+      assert Prima.Source.decode(paused.sources) == [program_source(row), outside]
 
       for key <- [write_key, list_key] do
         assert %{dispatch_state: "proposed"} = step_by_key(ctx, turn, key)
@@ -539,7 +539,10 @@ defmodule Aqua.ProgramTest do
                "args" => %{"path" => "data/b.md", "content" => "y"}
              }
 
-      assert intent["sources"] == [%{"class" => "outside", "name" => "news.example"}]
+      assert intent["sources"] == [
+               %{"class" => "outside", "name" => "claude-code"},
+               %{"class" => "outside", "name" => "news.example"}
+             ]
 
       assert Map.take(writing, [:dispatch_state, :outcome, :approval_id]) ==
                %{dispatch_state: "proposed", outcome: nil, approval_id: second_card.id}
@@ -621,7 +624,7 @@ defmodule Aqua.ProgramTest do
                  "tool" => "program"
                },
                "purpose" => "brain",
-               "sources" => [],
+               "sources" => [%{"class" => "outside", "name" => "claude-code"}],
                "standing" => nil,
                "summary" => "",
                "title" => "program.start",
@@ -642,6 +645,30 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(input))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "the program itself is an outside source its turn reads from the start: a standing " <>
+           "allow that does not follow it asks on the card, and the turn keeps it",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      args = %{"program" => row.id, "epoch" => row.epoch}
+      standing!(ctx, thread, "program", "start", args, :thread)
+      turn = accept!(ctx, thread, row, "look it up")
+      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
+      refute_received {:session, "open", _wire, _fields}
+      %{approval: card, intent: intent} = pending_card(ctx, turn)
+      assert intent["sources"] == [%{"class" => "outside", "name" => row.name}]
+
+      approve!(ctx, card)
+      loop = resume(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      committed!(ctx, thread, 4)
+      {:ok, working} = Tape.turn(ctx, turn.id)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert Prima.Source.decode(working.sources) == [program_source(row)]
     end
 
     test "a post written while the start's card waits skips nothing and is written nothing " <>
@@ -721,7 +748,13 @@ defmodule Aqua.ProgramTest do
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
       assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
-      %{approval: card, intent: %{"sources" => []}} = pending_card(ctx, turn)
+
+      %{
+        approval: card,
+        intent: %{"sources" => [%{"class" => "outside", "name" => "claude-code"}]}
+      } =
+        pending_card(ctx, turn)
+
       approve!(ctx, card)
       loop = resume(ctx, turn)
       started!(fake, row)
@@ -748,7 +781,12 @@ defmodule Aqua.ProgramTest do
       # What the post brings in joined the turn before its write was
       # refused, and stays joined: the turn read it.
       {:ok, ended} = Tape.turn(ctx, turn.id)
-      assert Prima.Source.decode(ended.sources) == [Prima.Source.outside("news.example")]
+
+      assert Prima.Source.decode(ended.sources) == [
+               Prima.Source.outside("claude-code"),
+               Prima.Source.outside("news.example")
+             ]
+
       assert_receive {:session, "close", _wire, _fields}, 10_000
       assert running_sessions(fake, row) == []
       refute_received {:session, "send", _wire, _fields}
@@ -848,6 +886,7 @@ defmodule Aqua.ProgramTest do
 
       assert intent["sources"] == [
                %{"class" => "filed", "name" => nil},
+               %{"class" => "outside", "name" => "claude-code"},
                %{"class" => "outside", "name" => "news.example"},
                %{"class" => "outside", "name" => "post.example"},
                %{"class" => "outside", "name" => "wire.example"}
@@ -1785,18 +1824,26 @@ defmodule Aqua.ProgramTest do
 
   # A standing answer to the soul's `program.start` of `row` in this
   # thread (or a never), recorded through Sanctum as a card's answer
-  # records one.
-  defp allow!(ctx, thread, row, scope \\ :thread, bounds \\ %{}),
-    do:
-      standing!(
-        ctx,
-        thread,
-        "program",
-        "start",
-        %{"program" => row.id, "epoch" => row.epoch},
-        scope,
-        bounds
-      )
+  # records one. An allow follows the program itself, an outside source
+  # the start reads (`Aqua.Loop`), and any other the bounds name.
+  defp allow!(ctx, thread, row, scope \\ :thread, bounds \\ %{}) do
+    bounds =
+      if scope == :never,
+        do: bounds,
+        else: Map.update(bounds, :sources, [program_source(row)], &[program_source(row) | &1])
+
+    standing!(
+      ctx,
+      thread,
+      "program",
+      "start",
+      %{"program" => row.id, "epoch" => row.epoch},
+      scope,
+      bounds
+    )
+  end
+
+  defp program_source(row), do: Prima.Source.outside(row.name)
 
   # A standing answer to the soul's `tool.action` in this thread, with
   # the bounds the person chose.
