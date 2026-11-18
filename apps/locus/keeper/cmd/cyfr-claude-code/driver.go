@@ -530,6 +530,9 @@ func (d *driver) controlResponse(l harnessLine) error {
 		d.starting = nil
 		d.session = s.session
 		d.listing = response.Models
+		// `held` is delivery evidence and no more: the pending posts the
+		// transcript was read to hold. A pending post it leaves out is not
+		// established, never proved absent.
 		held := []string{}
 		if s.resume && len(s.pending) > 0 {
 			held = heldPosts(d.home, s.session, s.pending)

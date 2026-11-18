@@ -167,6 +167,65 @@ defmodule Opus.BrainTest do
     grant
   end
 
+  defp no_allows!(ctx),
+    do:
+      Arca.Repo.delete_all(
+        from(g in Arca.Schemas.ToolGrant, where: g.athanor_id == ^ctx.athanor_id)
+      )
+
+  # A card opened on a start step as the loop opens one, its intent naming
+  # the proposal and the turn's sources it shows (`sources`, none by
+  # default; `intent` overrides members, `:drop` removing one), answered
+  # or still waiting; the waiting one's step is marked dispatched by hand,
+  # which no loop does, so the approval's own state is what refuses it.
+  defp carded!(ctx, turn, row, answer, opts \\ []) do
+    actor = Sanctum.Context.actor(ctx)
+    step = start_step!(ctx, turn, row, card: true, allow: false)
+    proposal = start_proposal(row)
+
+    intent =
+      %{
+        "kind" => "request_approval",
+        "proposal" => proposal,
+        "sources" => Prima.Source.to_json_list(Keyword.get(opts, :sources, []))
+      }
+      |> Map.merge(Keyword.get(opts, :intent, %{}))
+      |> Map.reject(fn {_key, value} -> value == :drop end)
+
+    {:ok, %{approval: approval}} =
+      TurnStorage.open_approval(actor, step.id, %{
+        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
+        card: %{content: "program.start", payload: %{"intent" => intent}},
+        fence: turn.fence
+      })
+
+    if answer == :approved do
+      {:ok, _} =
+        TurnStorage.resolve_approval(actor, approval.id, "approved", %{
+          resolution_kind: "continue",
+          fence: turn.fence
+        })
+
+      {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
+      step
+    else
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.TurnStep, where: t.id == ^step.id),
+          set: [dispatch_state: "dispatched"]
+        )
+
+      step
+    end
+  end
+
+  # The driver accepts the post just written, and the holder reads it.
+  defp accepted!(fake, row, brain) do
+    assert %{"t" => "post", "id" => id} = sent()
+    say(fake, row, %{"t" => "accepted", "id" => id})
+    assert {"boot-one", [{seq, %{"t" => "accepted"}}]} = batch(brain)
+    :ok = Brain.read_on(brain, "boot-one", seq)
+  end
+
   defp never!(ctx, turn, row) do
     {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_proposal(row), :never)
     {:ok, grant} = Sanctum.ToolGrants.put(ctx, grant)
@@ -592,49 +651,11 @@ defmodule Opus.BrainTest do
 
     test "a start the person allowed on its card writes, until a standing never; one not approved writes nothing",
          %{fake: fake, brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
-      actor = Sanctum.Context.actor(ctx)
-
-      {1, _} =
-        Arca.Repo.delete_all(
-          from(g in Arca.Schemas.ToolGrant, where: g.athanor_id == ^ctx.athanor_id)
-        )
-
+      no_allows!(ctx)
       assert Brain.write(brain, binding, post(binding)) == {:error, {:not_admitted, :withdrawn}}
 
-      # A card opened on the step, answered or still waiting; the waiting
-      # one's step is marked dispatched by hand, which no loop does, so the
-      # approval's own state is what refuses it.
-      carded = fn answer ->
-        step = start_step!(ctx, turn, row, card: true, allow: false)
-
-        {:ok, %{approval: approval}} =
-          TurnStorage.open_approval(actor, step.id, %{
-            proposal_digest: "sha256:proposal",
-            card: %{content: "may I?"},
-            fence: turn.fence
-          })
-
-        if answer == :approved do
-          {:ok, _} =
-            TurnStorage.resolve_approval(actor, approval.id, "approved", %{
-              resolution_kind: "continue",
-              fence: turn.fence
-            })
-
-          {:ok, step} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
-          step
-        else
-          {1, _} =
-            Arca.Repo.update_all(from(t in Arca.Schemas.TurnStep, where: t.id == ^step.id),
-              set: [dispatch_state: "dispatched"]
-            )
-
-          step
-        end
-      end
-
-      approved = carded.(:approved)
-      waiting = carded.(:waiting)
+      approved = carded!(ctx, turn, row, :approved)
+      waiting = carded!(ctx, turn, row, :waiting)
 
       assert Brain.write(brain, %{binding | step: waiting.id}, post(binding)) ==
                {:error, {:not_admitted, :not_allowed}}
@@ -642,15 +663,56 @@ defmodule Opus.BrainTest do
       refute_sent()
 
       assert :ok = Brain.write(brain, %{binding | step: approved.id}, post(binding))
-      assert %{"t" => "post", "id" => id} = sent()
-      say(fake, row, %{"t" => "accepted", "id" => id})
-      assert {"boot-one", [{seq, %{"t" => "accepted"}}]} = batch(brain)
-      :ok = Brain.read_on(brain, "boot-one", seq)
+      accepted!(fake, row, brain)
 
       never!(ctx, turn, row)
 
       assert Brain.write(brain, %{binding | step: approved.id}, post(binding, "stp_post_2")) ==
                {:error, {:not_admitted, :denied}}
+
+      refute_sent()
+    end
+
+    # #8321's first finding: a card covers the outside sources it showed
+    # and no other, since the session takes the posts and results of later
+    # writes; a card whose sources cannot be read covers none.
+    test "a start the person allowed on its card writes only while the turn's outside sources are ones the card showed",
+         %{fake: fake, brain: brain, binding: binding, ctx: ctx, turn: turn, row: row} do
+      no_allows!(ctx)
+      web = Prima.Source.outside("the web")
+      approved = carded!(ctx, turn, row, :approved, sources: [web])
+      binding = %{binding | step: approved.id}
+
+      assert :ok = Brain.write(brain, binding, post(binding))
+      accepted!(fake, row, brain)
+
+      set_turn(turn, sources: Prima.Source.encode([web]))
+      assert :ok = Brain.write(brain, binding, post(binding, "stp_post_2"))
+      accepted!(fake, row, brain)
+
+      set_turn(turn, sources: Prima.Source.encode([web, Prima.Source.outside("mail")]))
+
+      assert Brain.write(brain, binding, post(binding, "stp_post_3")) ==
+               {:error, {:not_admitted, :source_not_covered}}
+
+      refute_sent()
+    end
+
+    test "a card whose shown sources cannot be read covers nothing", %{
+      brain: brain,
+      binding: binding,
+      ctx: ctx,
+      turn: turn,
+      row: row
+    } do
+      no_allows!(ctx)
+
+      for intent <- [%{"sources" => :drop}, %{"sources" => "[]"}, %{"sources" => ["the web"]}] do
+        step = carded!(ctx, turn, row, :approved, intent: intent)
+
+        assert Brain.write(brain, %{binding | step: step.id}, post(binding)) ==
+                 {:error, {:not_admitted, :coverage_unreadable}}
+      end
 
       refute_sent()
     end

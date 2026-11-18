@@ -641,6 +641,45 @@ func TestForgetRefusesWhereItCannotLook(t *testing.T) {
 	}
 }
 
+// #8321's seventh finding: a project folder past inspection takes nothing
+// from what the other inspections found. The readable transcript's
+// pending post is still held while another project cannot be read, and
+// that failure is kept beside it, for forget to refuse on.
+func TestAnUnreadableProjectLeavesTheHeldPostsAReadableTranscriptHolds(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder of mode 000, so no folder here is unreadable")
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	projects := filepath.Join(home, ".claude", "projects")
+	session := "5b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	line, _ := json.Marshal(map[string]any{"type": "user", "uuid": postUUID("stp_post_1")})
+	if err := os.MkdirAll(filepath.Join(projects, "-home-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projects, "-home-a", session+".jsonl"), append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pending := []string{"stp_post_1", "stp_never"}
+	if got := heldPosts(home, session, pending); fmt.Sprint(got) != "[stp_post_1]" {
+		t.Fatalf("the transcript holds the post: %v", got)
+	}
+	other := filepath.Join(projects, "-home-b")
+	if err := os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(other, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(other, 0o700) })
+	if got := heldPosts(home, session, pending); fmt.Sprint(got) != "[stp_post_1]" {
+		t.Fatalf("another project past inspection leaves the post held: %v", got)
+	}
+	if found, failed := transcripts(home, session); len(found) != 1 || len(failed) == 0 {
+		t.Fatalf("what the scan found and what it could not inspect, both kept: %v %v", found, failed)
+	}
+}
+
 func TestForgetRemovesThatTranscriptAndNothingElse(t *testing.T) {
 	s := startDriver(t)
 	config := filepath.Join(s.home, ".claude")

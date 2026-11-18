@@ -77,18 +77,22 @@ defmodule Opus.Brain do
     * the decision that admitted it still stands, read through
       `Sanctum.ToolGrants`: no standing answer says never to the agent's
       `program.start`, and the start was allowed either by the person on
-      that step's own card or by a standing allow that covers this very
-      call now (`Sanctum.ToolGrants.admits?/2`: its lifecycle, deadline
-      and row, and every outside source the turn has read by now);
+      that step's own card, whose proposal is this start and which showed
+      every outside source the turn has read by now, or by a standing
+      allow that covers this very call now (`Sanctum.ToolGrants.admits?/2`:
+      its lifecycle, deadline and row, and every outside source the turn
+      has read by now);
     * the row is the holder's, a driven program with a kept folder,
       enabled and at that epoch;
     * the thread is at that session generation.
 
   The veto is the attendant's and only ever withdraws: the stored decision
   is the proof. A card the person answered is their decision about that
-  call, as `Aqua.Loop` holds a card to its call as it dispatches; a
-  standing never recorded since ends what it allowed all the same, since
-  a held session outlives the call that started it.
+  call and what the turn had read when they saw it, so a source the turn
+  reads since that the card did not show ends what it allowed
+  (`:source_not_covered`), as a card that cannot be read does
+  (`:coverage_unreadable`); a standing never recorded since ends it too,
+  since a held session outlives the call that started it.
 
   A `start` names the binding's generation; a `work` and a `post` name the
   binding's turn as their work; an `answer` answers an ask the driver
@@ -423,7 +427,11 @@ defmodule Opus.Brain do
   # The decision that admitted the start, read through Sanctum now: no
   # standing answer says never to the agent's `program.start`, and the
   # person allowed it on the step's own card, or a standing allow covers
-  # this very call now. A store that cannot answer is no decision.
+  # this very call now. A store that cannot answer is no decision. Of
+  # `Sanctum.ToolGrants` the holder calls `for_thread/2` and `admits?/2`
+  # alone and writes no grant: the surface row it reaches the module
+  # through (`Cyfr.Boundaries`) names the whole module, `revoke/2` with
+  # it, so that it only reads is held here, not by the roster.
   defp decision(ctx, actor, step, call) do
     with :ok <- never(ctx, call), do: allowed(ctx, actor, step, call)
   end
@@ -447,11 +455,29 @@ defmodule Opus.Brain do
     if Sanctum.ToolGrants.admits?(ctx, call), do: :ok, else: {:error, :withdrawn}
   end
 
-  defp allowed(_ctx, actor, step, _call) do
+  # The person's answer on the step's own card: approved, for this step
+  # and turn; the card it answered proposes this start of this row at
+  # this epoch; and every outside source the turn has read now is one
+  # that card showed (its `sources`, `Prima.Source.uncovered/2`). One
+  # dispatch runs the call the person saw, but a held session takes the
+  # posts and results of later writes, so the answer covers no source the
+  # card did not show. A card whose sources cannot be read covers none.
+  defp allowed(_ctx, actor, step, call) do
+    with {:ok, approval} <- approved(actor, step),
+         {:ok, intent} <- card(actor, approval),
+         :ok <- card_call(intent, call),
+         {:ok, shown} <- shown(intent) do
+      if Prima.Source.uncovered(call.sources, shown) == [],
+        do: :ok,
+        else: {:error, :source_not_covered}
+    end
+  end
+
+  defp approved(actor, step) do
     case Arca.TurnStorage.approval(actor, step.approval_id) do
-      {:ok, %{status: "approved", step_id: step_id, turn_id: turn_id}}
+      {:ok, %{status: "approved", step_id: step_id, turn_id: turn_id} = approval}
       when step_id == step.id and turn_id == step.turn_id ->
-        :ok
+        {:ok, approval}
 
       {:ok, _not_approved_or_another_steps} ->
         {:error, :not_allowed}
@@ -463,6 +489,44 @@ defmodule Opus.Brain do
         {:error, :unavailable}
     end
   end
+
+  # The card the approval answered, as the loop wrote it with the
+  # approval: its message's `intent`.
+  defp card(actor, %{message_id: message_id}) when is_binary(message_id) do
+    with {:ok, message} <-
+           read(Arca.ThreadStorage.get_message(actor, message_id), :coverage_unreadable) do
+      case {message.kind, Arca.ThreadStorage.payload(message)} do
+        {"approval", %{"intent" => %{} = intent}} -> {:ok, intent}
+        _no_card -> {:error, :coverage_unreadable}
+      end
+    end
+  end
+
+  defp card(_actor, _approval), do: {:error, :coverage_unreadable}
+
+  defp card_call(%{"proposal" => %{"tool" => "program", "action" => "start"} = proposal}, call) do
+    case proposal["args"] do
+      %{"program" => program, "epoch" => epoch} ->
+        if program == call.args["program"] and epoch == call.args["epoch"],
+          do: :ok,
+          else: {:error, :not_this_program}
+
+      _another_start ->
+        {:error, :not_this_program}
+    end
+  end
+
+  defp card_call(_intent, _call), do: {:error, :not_this_program}
+
+  # The sources the card showed, each a source's JSON object; anything
+  # else is no reading of them, never an empty list.
+  defp shown(%{"sources" => sources}) when is_list(sources) do
+    if Enum.all?(sources, &is_map/1),
+      do: {:ok, Enum.map(sources, &Prima.Source.from_json/1)},
+      else: {:error, :coverage_unreadable}
+  end
+
+  defp shown(_intent), do: {:error, :coverage_unreadable}
 
   defp generation(%{brain_generation: generation}, %{generation: generation}), do: :ok
   defp generation(_thread, _binding), do: {:error, :generation_moved}
