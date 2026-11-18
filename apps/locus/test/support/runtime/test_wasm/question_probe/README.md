@@ -40,11 +40,12 @@ changes, or the `catalyst` world it is built against (`wit/catalyst`,
 prints below.
 
 ```sh
-apps/cyfr/test/support/test_wasm/question_probe/build.sh          # build and write
-apps/cyfr/test/support/test_wasm/question_probe/build.sh --check  # build and compare
+apps/locus/test/support/runtime/test_wasm/question_probe/build.sh          # build and write
+apps/locus/test/support/runtime/test_wasm/question_probe/build.sh --check  # build and compare
 ```
 
-`build.sh` runs `apps/cyfr/test/support/test_wasm/build-fixture.sh`, which
+`build.sh` runs `apps/cyfr/test/support/test_wasm/build-fixture.sh`, the
+suites' one recipe for a Rust fixture, which
 lays the crate out with the canonical catalyst `Cargo.toml`
 (`Prima.CargoToml.template(:catalyst)`) and the catalyst world's WIT, and
 is the one pin of the toolchain.

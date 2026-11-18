@@ -3,7 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # Build question_probe.wasm from src/lib.rs and Cargo.lock as the catalyst
-# world's component, with ../build-fixture.sh (which says how).
+# world's component, with apps/cyfr/test/support/test_wasm/build-fixture.sh
+# (which says how).
 #
 # Usage, from anywhere in the repository:
 #   build.sh            build, write question_probe.wasm, print the digests
@@ -19,4 +20,5 @@ case "$#:${1:-}" in
     ;;
 esac
 here="$(dirname "$0")"
-exec "$here/../build-fixture.sh" question_probe catalyst "$here" "$@"
+# The one recipe of the suites' Rust fixtures, beside CYFR's.
+exec "$here/../../../../../../cyfr/test/support/test_wasm/build-fixture.sh" question_probe catalyst "$here" "$@"

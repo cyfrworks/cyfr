@@ -3,7 +3,7 @@
 
 defmodule Locus.Runtime.QuestionProbeTest do
   @moduledoc """
-  The question probe (`apps/cyfr/test/support/test_wasm/question_probe`),
+  The question probe (`test_wasm/question_probe`),
   run by the runtime in this VM against a scripted host: a catalyst asks
   through `cyfr:question/ask` and is handed what the host answered, one
   ask number for each call; a reagent and a formula are given no such
@@ -23,7 +23,7 @@ defmodule Locus.Runtime.QuestionProbeTest do
 
   @probe File.read!(
            Path.expand(
-             "../../../../cyfr/test/support/test_wasm/question_probe/question_probe.wasm",
+             "../../support/runtime/test_wasm/question_probe/question_probe.wasm",
              __DIR__
            )
          )

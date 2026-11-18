@@ -72,7 +72,9 @@ defmodule Opus.Host.QuestionTest do
              wit |> String.split("\n", parts: 4) |> List.last() |> String.trim_leading()
 
     source =
-      File.read!(Path.join(@repo, "apps/cyfr/test/support/test_wasm/question_probe/src/lib.rs"))
+      File.read!(
+        Path.join(@repo, "apps/locus/test/support/runtime/test_wasm/question_probe/src/lib.rs")
+      )
 
     assert shown_rust == source
     assert section =~ "import cyfr:question/ask@0.1.0;"

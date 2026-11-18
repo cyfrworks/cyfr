@@ -4,7 +4,7 @@
 defmodule Locus.Runtime.QuestionTest do
   @moduledoc """
   A catalyst's ask, end to end: the question probe
-  (`test/support/test_wasm/question_probe`) run by the runtime in a runner
+  (`test_wasm/question_probe` of the runtime's suite) run by the runtime in a runner
   of its own, over the suite's wire (`Cyfr.Test.TwoServices`), through
   CYFR's host (`Opus.Host.Question`) to `Sanctum.Questions`, and answered
   by its person through `question.answer`.
@@ -33,7 +33,7 @@ defmodule Locus.Runtime.QuestionTest do
   @moduletag timeout: 300_000
 
   @probe Path.expand(
-           "../../../test/support/test_wasm/question_probe/question_probe.wasm",
+           "../../../../locus/test/support/runtime/test_wasm/question_probe/question_probe.wasm",
            __DIR__
          )
 
