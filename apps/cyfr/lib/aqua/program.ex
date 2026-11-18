@@ -371,14 +371,23 @@ defmodule Aqua.Program do
     do: Opus.Brain.write(brain, bound(work), command, opts)
 
   # The harness starts, resuming the thread's native session if it keeps
-  # one, with the posts whose delivery its transcript says.
+  # one, with the posts whose delivery its transcript says. A read that
+  # did not answer says nothing of the session: a fresh start then would
+  # leave a kept one behind, so the work ends with nothing written.
   defp write_start(%{work: work} = state) do
-    session =
-      case Tape.brain(work.guest, state.thread_id) do
-        {:ok, %{session: session}} -> session
-        {:error, _unanswered} -> nil
-      end
+    case Tape.brain(work.guest, state.thread_id) do
+      {:ok, %{session: session}} ->
+        write_start(state, session)
 
+      {:error, _unanswered} ->
+        fail(
+          shut(state),
+          "#{work.title} could not start: this thread's session could not be read."
+        )
+    end
+  end
+
+  defp write_start(%{work: work} = state, session) do
     pending =
       if session do
         case Tape.brain_pending(work.guest, work.turn) do
@@ -474,9 +483,8 @@ defmodule Aqua.Program do
 
       {:error, reason} when reason in [:superseded, :generation_moved, :row_changed, :not_open] ->
         # The session is no longer this work's: its writes end here. A
-        # session the thread forgot keeps its transcript in the program's
-        # folder: removing it is the forget's, which this slice sends
-        # none of, as a catalyst's brain kept its own.
+        # session the thread forgot is owed its removal from the program's
+        # folder by the transaction that forgot it (`Opus.Brain.Cleanup`).
         shut(state)
 
       {:error, reason} ->
