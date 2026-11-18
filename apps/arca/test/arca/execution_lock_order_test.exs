@@ -749,8 +749,10 @@ defmodule Arca.ExecutionLockOrderTest do
         {daily, workspace}
       end)
 
-    # The daily thread's id first, as retention takes its candidates.
-    assert daily.id < workspace.id
+    # Retention takes the athanor's row, then both threads in one statement
+    # in id order (`Arca.ThreadStorage.lock_threads!/2`): with the daily
+    # thread's row held it waits on a thread row whichever id sorts first,
+    # and the two ids, made in one millisecond, may sort either way.
     cutoff = DateTime.add(DateTime.utc_now(), 3600)
 
     report = %{
