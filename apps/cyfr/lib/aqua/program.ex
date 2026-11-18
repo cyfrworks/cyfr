@@ -372,13 +372,15 @@ defmodule Aqua.Program do
 
   # The harness starts, resuming the thread's native session if it keeps
   # one, with the posts whose delivery its transcript says. A read that
-  # did not answer says nothing of the session: a fresh start then would
-  # leave a kept one behind, so the work ends with nothing written.
+  # did not answer says nothing of the session or of those posts: a fresh
+  # start would leave a kept session behind, and a resume naming none
+  # would leave the posts it holds unreconciled, so the work ends with
+  # nothing written.
   defp write_start(%{work: work} = state) do
-    case Tape.brain(work.guest, state.thread_id) do
-      {:ok, %{session: session}} ->
-        write_start(state, session)
-
+    with {:ok, %{session: session}} <- Tape.brain(work.guest, state.thread_id),
+         {:ok, pending} <- pending(work, session) do
+      write_start(state, session, pending)
+    else
       {:error, _unanswered} ->
         fail(
           shut(state),
@@ -387,17 +389,10 @@ defmodule Aqua.Program do
     end
   end
 
-  defp write_start(%{work: work} = state, session) do
-    pending =
-      if session do
-        case Tape.brain_pending(work.guest, work.turn) do
-          {:ok, ids} -> ids
-          {:error, _} -> []
-        end
-      else
-        []
-      end
+  defp pending(_work, nil), do: {:ok, []}
+  defp pending(work, _session), do: Tape.brain_pending(work.guest, work.turn)
 
+  defp write_start(%{work: work} = state, session, pending) do
     command =
       %{
         "t" => "start",
