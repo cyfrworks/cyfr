@@ -140,8 +140,9 @@ defmodule Arca.OutboxTest do
   end
 
   describe "the consumers" do
-    test "are schedule_notes and crew_delivery" do
-      assert Enum.sort(Outbox.all_consumers()) == ["crew_delivery", "schedule_notes"]
+    test "are schedule_notes, crew_delivery and brain_cleanup" do
+      assert Enum.sort(Outbox.all_consumers()) ==
+               ["brain_cleanup", "crew_delivery", "schedule_notes"]
     end
 
     test "of a crew record find it pending until crew_delivery receipts it", %{athanor: athanor} do

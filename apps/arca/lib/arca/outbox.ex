@@ -40,7 +40,8 @@ defmodule Arca.Outbox do
     "crew_request" => ["crew_delivery"],
     "crew_reply" => ["crew_delivery"],
     "workspace_open" => ["crew_delivery"],
-    "workspace_report" => ["crew_delivery"]
+    "workspace_report" => ["crew_delivery"],
+    "brain_forget" => ["brain_cleanup"]
   }
 
   # Every kind a record may carry has its consumers declared.

@@ -1740,6 +1740,74 @@ defmodule Opus.ProgramsTest do
     # Every change to what a program's definition holds asks, a narrower
     # one too: there is no change that is only narrowing. A re-save that
     # changes nothing asks nothing.
+    # A kept program's folder holds the records of the sessions its
+    # driver's harness ran, which only that driver removes.
+    test "a kept program keeps its driver once its command names one; what follows the driver " <>
+           "changes as any change does",
+         %{ctx: ctx, admin: admin, row: row} do
+      {person, _user} = Sanctum.TestContext.person!(admin)
+      actor = Sanctum.Context.actor(ctx)
+
+      program = fn command ->
+        %{
+          "transport" => "program",
+          "mark" => "driven",
+          "home" => "kept",
+          "command" => command,
+          "memory_bytes" => 1_073_741_824,
+          "home_max_bytes" => 2_147_483_648,
+          "env" => %{}
+        }
+      end
+
+      update = fn epoch, config ->
+        Sanctum.TestContext.confirming(person, fn person ->
+          Provider.handle("mcp_servers", person, %{
+            "action" => "update",
+            "name" => "claude",
+            "epoch" => epoch,
+            "config" => config
+          })
+        end)
+      end
+
+      # The bare harness saved again with its driver.
+      assert {:ok, %{epoch: 2}} =
+               update.(row.epoch, program.("cyfr-claude-code npx -y @anthropic-ai/claude-code"))
+
+      {:ok, kept} = Arca.McpServerStorage.get(actor, "claude")
+
+      line =
+        "Program 'claude' keeps the records of the sessions it ran with cyfr-claude-code, " <>
+          "so its command must still start with cyfr-claude-code. Add a new program to run " <>
+          "another one."
+
+      for {why, config} <- [
+            {"another driver", program.("cyfr-codex npx -y @openai/codex")},
+            {"no driver", program.("npx -y @anthropic-ai/claude-code")},
+            {"a tool server", %{"transport" => "http", "url" => "https://127.0.0.1:9/mcp"}}
+          ] do
+        assert update.(2, config) == {:error, {:invalid_argument, line}}, why
+        assert Arca.McpServerStorage.get(actor, "claude") == {:ok, kept}, why
+      end
+
+      folder =
+        "Program 'claude' keeps the records of its sessions in its folder, so its folder " <>
+          "stays. Remove the program to remove them."
+
+      scratch =
+        "cyfr-claude-code npx -y @anthropic-ai/claude-code"
+        |> program.()
+        |> Map.put("home", "scratch")
+        |> Map.delete("home_max_bytes")
+
+      assert update.(2, scratch) == {:error, {:invalid_argument, folder}}
+      assert Arca.McpServerStorage.get(actor, "claude") == {:ok, kept}
+
+      assert {:ok, %{epoch: 3}} =
+               update.(2, program.("cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.330"))
+    end
+
     test "every change to a program's definition asks, and a re-save that changes nothing " <>
            "asks nothing",
          %{ctx: ctx, admin: admin, row: row} do

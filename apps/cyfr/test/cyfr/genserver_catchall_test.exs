@@ -43,6 +43,7 @@ defmodule Cyfr.GenServerCatchallTest do
     Aqua.Crew => "gated by :crew_delivery_enabled; probed on an instance below",
     Aqua.Nudge => "gated by :nudge_enabled; probed on an instance below",
     Aqua.ScheduleTurns => "gated by :schedule_turns_enabled; probed on an instance below",
+    Opus.Brain.Cleanup => "gated by :brain_cleanup_enabled; probed on an instance below",
     Aqua.Status => "gated by :status_watch_enabled; probed on an instance in its own test",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
     Cyfr.StorageReserve =>
@@ -160,6 +161,30 @@ defmodule Cyfr.GenServerCatchallTest do
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         pid = start_supervised!({Aqua.ScheduleTurns, tick_ms: :timer.hours(1)})
+
+        assert capture_log(fn ->
+                 send(pid, unquote(Macro.escape(message)))
+                 :sys.get_state(pid)
+               end) =~ "unexpected message"
+
+        assert Process.alive?(pid)
+      end
+    end
+  end
+
+  describe "the consumer of the removals forgetting owes" do
+    # Off under the suite (`:brain_cleanup_enabled`), so it is probed on a
+    # consumer of its own, which drains at its start and so needs the
+    # sandbox connection.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      Prima.Test.Env.put_app_env(:cyfr, :brain_cleanup_enabled, true)
+      :ok
+    end
+
+    for message <- [@unexpected_msg, {:random, "payload"}] do
+      test "survives #{inspect(message)} and logs it" do
+        pid = start_supervised!({Opus.Brain.Cleanup, tick_ms: :timer.hours(1)})
 
         assert capture_log(fn ->
                  send(pid, unquote(Macro.escape(message)))
