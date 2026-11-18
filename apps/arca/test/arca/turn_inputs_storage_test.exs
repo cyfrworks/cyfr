@@ -292,7 +292,7 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:error, :row_changed} =
              commit(actor, daily, turn, %{boot: "boot-2", seq: 2, epoch: 0})
 
-    assert %{"boot" => "boot-2", "seq" => 1, "row" => "prg_brain", "epoch" => 1} =
+    assert %{"boot" => "boot-2", "seq" => 1, "driver" => %{"row" => "prg_brain", "epoch" => 1}} =
              progress(daily)
 
     texts =
@@ -699,5 +699,38 @@ defmodule Arca.TurnInputsStorageTest do
              "partial" => 0,
              "unknown" => 0
            }
+  end
+
+  # ---- the session's row ---------------------------------------------------------
+
+  test "a new driver's hello leaves the native session with the row it was stored with",
+       %{actor: actor, daily: daily, turn: turn} do
+    {:ok, _} = commit(actor, daily, turn, %{session: "old-session", hello: true})
+
+    {:ok, _} =
+      commit(actor, daily, turn, %{row_id: "prg_successor", epoch: 2, boot: "boot-2", hello: true})
+
+    assert {:ok, %{session: "old-session", progress: progress}} =
+             TurnStorage.brain(actor, daily.id)
+
+    assert {progress["row"], progress["epoch"]} == {"prg_brain", 1}
+  end
+
+  test "the session's row and epoch change only with the session it names, while each batch " <>
+         "moves the owner the next is held to",
+       %{actor: actor, daily: daily, turn: turn} do
+    successor = %{row_id: "prg_successor", epoch: 2, boot: "boot-2"}
+    {:ok, _} = commit(actor, daily, turn, %{session: "old-session", hello: true})
+    {:ok, _} = commit(actor, daily, turn, Map.put(successor, :hello, true))
+
+    assert {:ok, %{session: "old-session", progress: %{"row" => "prg_brain", "epoch" => 1}}} =
+             TurnStorage.brain(actor, daily.id)
+
+    assert {:error, :row_changed} = commit(actor, daily, turn, %{successor | epoch: 1})
+    assert {:error, :superseded} = commit(actor, daily, turn, %{})
+    {:ok, _} = commit(actor, daily, turn, Map.put(successor, :session, "new-session"))
+
+    assert {:ok, %{session: "new-session", progress: %{"row" => "prg_successor", "epoch" => 2}}} =
+             TurnStorage.brain(actor, daily.id)
   end
 end

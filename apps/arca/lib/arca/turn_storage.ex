@@ -4638,18 +4638,20 @@ defmodule Arca.TurnStorage do
   open (`:turn`, `%{id, fence}`), so a batch with none can still be
   committed and read past, and always to the thread's lock, its session
   generation (`:generation_moved`), and the session's owner, the program
-  row at an epoch no older than the one committed (`:row_changed`). The
-  driver process `:boot` becomes the session's only once the batch holds
-  its `hello` (`:hello`); any other batch of a boot that is not the
-  committed one is `:superseded`. A batch whose last line `:seq` is at or
-  before the committed position of the same boot commits nothing and
-  answers `seen: true`.
+  row at an epoch no older than the last committed batch's
+  (`:row_changed`). The driver process `:boot` becomes the session's only
+  once the batch holds its `hello` (`:hello`); any other batch of a boot
+  that is not the committed one is `:superseded`. A batch whose last line
+  `:seq` is at or before the committed position of the same boot commits
+  nothing and answers `seen: true`.
 
   `attrs` names what the lines did, each already judged by the attendant
   (`Aqua.Program`):
 
     * `:session` (with the generation), the native session `started`
-      named, kept as `brain_session`;
+      named, kept as `brain_session`, and the batch's `:row_id` and
+      `:epoch` as the row it is stored with, in the same write: no other
+      batch moves that row;
     * `:said`, `%{message, text}` the program said in the open turn's
       work, each a post of its agent there;
     * `:asks`, the open turn's asks, each a step proposal with its
@@ -4702,15 +4704,18 @@ defmodule Arca.TurnStorage do
 
   def commit_brain(%Prima.Actor{}, _thread_id, _attrs), do: {:error, :no_athanor}
 
-  # The session's owner: the program row, at an epoch no older than the
-  # committed one, and the driver process the committed position is of,
-  # which a batch holding a new process's hello replaces.
+  # The session's owner: the program row the last committed batch ran on
+  # (`driver`), at an epoch no older than that batch's, and the driver
+  # process the committed position is of, which a batch holding a new
+  # process's hello replaces. It is not the row the native session is
+  # stored with (`row`), which a hello never moves.
   defp owner!(progress, attrs) do
     row = Map.fetch!(attrs, :row_id)
     epoch = Map.fetch!(attrs, :epoch)
+    driver = progress["driver"] || %{}
 
     cond do
-      progress["row"] == row and is_integer(progress["epoch"]) and epoch < progress["epoch"] ->
+      driver["row"] == row and is_integer(driver["epoch"]) and epoch < driver["epoch"] ->
         Arca.Repo.rollback(:row_changed)
 
       progress["boot"] not in [nil, Map.fetch!(attrs, :boot)] and
@@ -4728,11 +4733,10 @@ defmodule Arca.TurnStorage do
   # arca:db-raise-ok inside the caller's transaction
   defp committed!(actor, athanor_id, thread, turn, progress, attrs) do
     generation = attrs.generation
+    session = Map.get(attrs, :session)
 
-    case Map.get(attrs, :session) do
-      nil -> :ok
-      session -> keep_session!(athanor_id, thread, %{session: session, generation: generation})
-    end
+    if session,
+      do: keep_session!(athanor_id, thread, %{session: session, generation: generation})
 
     said =
       if turn, do: Enum.map(Map.get(attrs, :said, []), &said!(actor, thread, turn, &1)), else: []
@@ -4759,11 +4763,14 @@ defmodule Arca.TurnStorage do
       end)
       |> clocked(athanor_id, turn, Map.fetch!(attrs, :silence_ms), Map.get(attrs, :native, false))
       |> Map.merge(%{
-        "row" => attrs.row_id,
-        "epoch" => attrs.epoch,
+        "driver" => %{"row" => attrs.row_id, "epoch" => attrs.epoch},
         "boot" => attrs.boot,
         "seq" => attrs.seq
       })
+      # The row the native session is stored with moves with the session
+      # alone, in this write, so a forget reads where its transcript is
+      # until the write that replaces the session.
+      |> Map.merge(if session, do: %{"row" => attrs.row_id, "epoch" => attrs.epoch}, else: %{})
 
     :ok = put_progress!(athanor_id, thread.id, progress)
     %{seen: false, asks: asks, said: said, progress: progress}
