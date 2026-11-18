@@ -6,7 +6,8 @@ defmodule Aqua.Loop.BindingTest do
   One table from a model-visible call to what runs it: hands on their
   catalysts with the canonical operation, catalog actions in-chain,
   external servers under their wire name, the `ui` event, and an
-  `execution.run` that is a hand, a refused agent, or a launch.
+  `execution.run` that is a hand, a refused agent, or a launch. A call
+  with a null argument is refused.
   """
 
   use ExUnit.Case, async: true
@@ -93,6 +94,16 @@ defmodule Aqua.Loop.BindingTest do
 
     assert {:error, "unknown tool: nope.thing"} = Binding.resolve("nope.thing", %{})
     assert {:error, "unknown tool: bare"} = Binding.resolve("bare", %{})
+  end
+
+  test "a null argument, at any depth, is refused invalid_argument before the call resolves" do
+    assert {:error,
+            {:invalid_argument,
+             "github__search: the argument q is null; leave it out or give it a value"}} =
+             Binding.resolve("github__search", %{"q" => nil})
+
+    assert {:error, {:invalid_argument, "files.read: the argument opts.lines.1 is null; " <> _}} =
+             Binding.resolve("files.read", %{"path" => "a", "opts" => %{"lines" => [1, nil]}})
   end
 
   test "a result renders as the text the model reads, bounded" do

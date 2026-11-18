@@ -61,14 +61,21 @@ defmodule Aqua.Loop.Binding do
   @doc """
   Resolve one model call. `opts`: `:tool_call_id`. Answers the call with
   its canonical operation, or a refusal the loop records as the call's
-  result.
+  result. A call with a null argument, at any depth, is refused
+  `invalid_argument` before anything runs: an explicit null and an
+  omitted argument can be two operations, and the proposal's digest has
+  no form for a null (`Aqua.Loop.Policy.proposal_digest/1`).
   """
-  @spec resolve(String.t(), map(), keyword()) :: {:ok, Call.t()} | {:error, String.t()}
+  @spec resolve(String.t(), map(), keyword()) ::
+          {:ok, Call.t()} | {:error, String.t() | {:invalid_argument, String.t()}}
   def resolve(name, args, opts \\ []) when is_binary(name) and is_map(args) do
     tool_call_id = Keyword.get(opts, :tool_call_id)
 
     result =
       cond do
+        path = null_argument(args, []) ->
+          {:error, null_refused(name, path)}
+
         name == @ui_tool ->
           {:ok, %Call{kind: :ui, tool: @ui_tool, action: str(args, "action"), args: args}}
 
@@ -101,6 +108,27 @@ defmodule Aqua.Loop.Binding do
       {:ok, call} -> {:ok, %{call | model_name: name, tool_call_id: tool_call_id}}
       error -> error
     end
+  end
+
+  # The path of a null among the arguments, or nil when they hold none.
+  defp null_argument(nil, path), do: path
+
+  defp null_argument(%{} = map, path),
+    do: Enum.find_value(map, fn {key, value} -> null_argument(value, path ++ [key]) end)
+
+  defp null_argument(list, path) when is_list(list),
+    do:
+      list
+      |> Enum.with_index()
+      |> Enum.find_value(fn {value, index} -> null_argument(value, path ++ [index]) end)
+
+  defp null_argument(_value, _path), do: nil
+
+  defp null_refused(name, path) do
+    argument = Enum.map_join(path, ".", &to_string/1)
+
+    {:invalid_argument,
+     "#{name}: the argument #{argument} is null; leave it out or give it a value"}
   end
 
   defp resolve_action("execution", action, args) when action in ["run", "run_stream"] do

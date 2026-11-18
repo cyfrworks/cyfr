@@ -774,6 +774,44 @@ defmodule Aqua.LoopTest do
     assert {:error, _} = Aqua.Notes.read(ctx, "n")
   end
 
+  test "an external tool's call, which names no action, asks on a card its own proposal " <>
+         "consumes; one with a null argument is refused as its result before it runs",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua search for it")
+
+    script!([
+      calls([
+        {"c1", "github__search", %{"q" => "x"}},
+        {"c2", "github__search", %{"q" => nil}}
+      ])
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, steps} = Tape.steps(ctx, paused)
+    [search, null] = Enum.filter(steps, &(&1.kind == "tool"))
+
+    digest =
+      Aqua.Loop.Policy.proposal_digest(%{"tool" => "github:search", "args" => %{"q" => "x"}})
+
+    assert {search.tool, search.action, search.dispatch_state, search.approval_id} ==
+             {"github:search", nil, "proposed", approval.id}
+
+    assert {search.proposal_digest, approval.proposal_digest} == {digest, digest}
+
+    # The card is consumed by the proposal it stored and by the call as a
+    # resumed turn resolves it again.
+    {:ok, card} = Tape.message(ctx, approval.message_id)
+    assert Approvals.proposal?(approval, Tape.payload(card)["intent"]["proposal"])
+    {:ok, call} = Aqua.Loop.Binding.resolve("github__search", %{"q" => "x"})
+    assert Approvals.proposal?(approval, Aqua.Loop.Policy.proposal(call))
+
+    assert {null.dispatch_state, null.outcome, null.error, null.proposal_digest} ==
+             {"closed", "denied",
+              "github__search: the argument q is null; leave it out or give it a value", nil}
+  end
+
   # An approval unblocks a call the chain's authority allows and grants
   # nothing more (§5.4): the approved call still goes through the gate, in
   # the chain, under the authority as it stands when the call is made.
@@ -3180,6 +3218,34 @@ defmodule Aqua.LoopTest do
 
       assert %{"v" => 1, "ok" => true, "result" => %{"body" => "x", "status" => 200}} ==
                Jason.decode!(body)
+    end
+
+    test "a page's call with a null argument is answered refused and runs nothing",
+         %{ctx: ctx, thread: thread} do
+      start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
+      ScriptedWorker.script([{:probe, self()}, reply("done")])
+
+      turn = accept!(ctx, thread, "@aqua fetch")
+      task = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      page = page!(ctx, turn, "http.get", %{"url" => "https://example.test/x", "headers" => nil})
+      until!(fn -> step!(ctx, turn, page.id).dispatch_state == "closed" end)
+      send(model, :continue)
+      assert :completed = Task.await(task, 60_000)
+
+      %{result_message_id: result, outcome: "denied"} = step!(ctx, turn, page.id)
+      assert {:ok, %{content: body}} = Tape.message(ctx, result)
+
+      assert %{
+               "ok" => false,
+               "error" => %{
+                 "class" => "forbidden",
+                 "message" =>
+                   "http.get: the argument headers is null; leave it out or give it a value"
+               }
+             } = Jason.decode!(body)
+
+      assert Enum.all?(ScriptedWorker.calls(), &(&1.input["operation"] in ["describe", "chat"]))
     end
 
     test "a page's launch whose request ends while it waits for the model's answer is " <>

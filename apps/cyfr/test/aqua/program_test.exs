@@ -881,6 +881,63 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "an external tool's ask" do
+    test "one no turn offers is decided denied and answered as an error, one with a null " <>
+           "argument is refused before it runs, and the turn completes",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "search for it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      refute "github__search" in Enum.map(spec!(ctx, turn).tools, & &1["name"])
+
+      say(fake, row, ask(turn, "ask-1", "github__search", %{"q" => "x"}))
+      refused = sent()
+      denied = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1"))
+      {:ok, denial} = Tape.message(ctx, denied.result_message_id)
+      [_post, told] = inputs(ctx, turn)
+
+      assert refused == %{
+               "t" => "answer",
+               "id" => told.id,
+               "ask" => "ask-1",
+               "content" => denial.content,
+               "is_error" => true
+             }
+
+      assert {denied.tool, denied.action, denied.dispatch_state, denied.outcome, denied.error} ==
+               {"github:search", nil, "closed", "denied",
+                "github__search is not one of the tools this work has"}
+
+      say(fake, row, accepted(told))
+
+      say(fake, row, ask(turn, "ask-2", "github__search", %{"q" => nil}))
+      answer = sent()
+      null = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-2"))
+      [_post, _told, answered] = inputs(ctx, turn)
+
+      assert answer == %{
+               "t" => "answer",
+               "id" => answered.id,
+               "ask" => "ask-2",
+               "content" =>
+                 "github__search: the argument q is null; leave it out or give it a value",
+               "is_error" => true
+             }
+
+      assert {null.dispatch_state, null.outcome, null.proposal_digest} ==
+               {"closed", "denied", nil}
+
+      say(fake, row, accepted(answered))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # The brain's row, the turn and its decision
 
