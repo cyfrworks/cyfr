@@ -461,8 +461,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
         Sanctum.Mount
-        Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
-        Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
+        Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Questions
+        Sanctum.Refusals Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
         Sanctum.TinctureAccess Sanctum.ToolGrants Sanctum.Vault Sanctum.VaultReader
       ),
       reason:
@@ -528,6 +528,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Attach` is `Opus.Host.AttachedFetch`'s one resolution of the value " <>
           "an attached request carries (`resolve/5`): the vault decides, and the control " <>
           "plane attaches and performs. " <>
+          "`Sanctum.Questions` is attention's refresh of the person's open questions " <>
+          "(`waiting/1`, from `Cyfr.Providers.Attention`), as " <>
+          "`Sanctum.Consent.waiting_confirmations/1` is of their confirmations. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -2066,8 +2069,9 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     # A removed catalyst's standing answers go with its last version
-    # (`Compendium.Cascade`).
-    "Sanctum.Questions" => [component_removed: 3],
+    # (`Compendium.Cascade`); a person's open questions are attention's
+    # refresh (`Cyfr.Providers.Attention`).
+    "Sanctum.Questions" => [component_removed: 3, waiting: 1],
     "Sanctum.Session" => [cleanup: 0, destroy: 1, load_by_hash: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [
