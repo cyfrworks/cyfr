@@ -11,7 +11,8 @@ defmodule Prima.Manifest do
   representations (nil, JSON string, map) into a map. `validate/2` holds a
   decoded manifest to the schema; the `needs`, `caps` and `provides`
   blocks are `Prima.Manifest.Needs`, `Prima.Manifest.Caps` and
-  `Prima.Manifest.Provides`, the tincture's frame, streams and
+  `Prima.Manifest.Provides`, a catalyst's declared actions
+  `Prima.Manifest.Asks`, the tincture's frame, streams and
   actions `Prima.Manifest.Tincture`, and the operations'
   result shapes `Prima.Manifest.Results`. Which storage paths a
   guest may name is the storage boundary's fact, so the validator takes
@@ -19,7 +20,7 @@ defmodule Prima.Manifest do
   every caller) and restates nothing about the layout.
   """
 
-  alias Prima.Manifest.{Caps, Needs, Provides, Results, Tincture}
+  alias Prima.Manifest.{Asks, Caps, Needs, Provides, Results, Tincture}
 
   # The closed top-level key roster — every field a manifest may carry,
   # which is also the roster component-guide.md documents. Identity fields
@@ -31,7 +32,7 @@ defmodule Prima.Manifest do
     needs caps dependencies tincture
     schema examples defaults forked_from
     contracts agent provides
-    results
+    results asks
   )
 
   # A contract is `<family>/<name>@<major>`: the operations a component
@@ -78,6 +79,8 @@ defmodule Prima.Manifest do
       * a malformed `results` block (`Prima.Manifest.Results.validate/1`),
         which any component type may carry;
       * malformed `contracts` or `agent` blocks;
+      * a malformed `asks` block, or one on a manifest whose type is not
+        `catalyst` (`Prima.Manifest.Asks.validate/1`);
       * a malformed `dependencies` block, which feeds activation-graph and
         release-digest validation;
       * a malformed `provides` block, or one naming a dependency
@@ -98,6 +101,7 @@ defmodule Prima.Manifest do
          :ok <- validate_results_block(manifest),
          :ok <- validate_contracts_block(manifest),
          :ok <- validate_agent_block(manifest),
+         :ok <- Asks.validate(manifest),
          :ok <- validate_dependencies_block(manifest),
          :ok <- Provides.validate(manifest) do
       :ok

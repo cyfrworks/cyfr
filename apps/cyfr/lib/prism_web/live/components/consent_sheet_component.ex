@@ -1500,6 +1500,28 @@ defmodule PrismWeb.ConsentSheetComponent do
           </p>
         </section>
 
+        <section
+          :if={asks(@plan) != []}
+          class="consent-sheet__asks space-y-2"
+          data-test="grant-asks"
+        >
+          <h4 class="font-medium">What it says it asks you first</h4>
+          <p class="consent-sheet__note text-gray-400">
+            Its developer says it asks you before it does any of these. Nothing checks that it
+            does: what it can reach is only what you grant here.
+          </p>
+          <div
+            :for={group <- ask_groups(@plan, @plan[:source_ref] || @ref)}
+            data-test="grant-asks-node"
+            data-node={group.node}
+          >
+            <h5 :if={group.heading} class="text-xs text-gray-400">{group.heading}</h5>
+            <ul>
+              <li :for={ask <- group.asks} data-ask={ask.name}>{ask.title}</li>
+            </ul>
+          </div>
+        </section>
+
         <section :if={@picker} class="consent-sheet__picker" data-test="grant-picker">
           <h4 class="font-medium">Choose inside {@picker.path}</h4>
           <ul>
@@ -3009,4 +3031,18 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   defp warnings(plan), do: plan[:warnings] || []
+
+  # The actions the plan's catalysts declare they ask about, in the plan's
+  # order: the app's own first, then each dependency's under its name.
+  defp asks(nil), do: []
+  defp asks(plan), do: plan[:asks] || []
+
+  defp ask_groups(plan, app) do
+    plan
+    |> asks()
+    |> Enum.chunk_by(& &1.node)
+    |> Enum.map(fn [%{node: node} | _] = asks ->
+      %{node: node, heading: if(node != app, do: "#{node}, which this app uses"), asks: asks}
+    end)
+  end
 end
