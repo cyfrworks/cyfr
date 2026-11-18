@@ -726,7 +726,7 @@ defmodule Arca.CrewStorageTest do
         |> Arca.Repo.update_all(set: [brain_session: "old-session"])
 
       assert {:ok, %{brain_generation: 0}} = Threads.get(actor, room.id)
-      assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
       assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, room.id)
 
       {:ok, _} =
@@ -780,7 +780,7 @@ defmodule Arca.CrewStorageTest do
     } do
       turn = running!(actor, room)
       step = model_step!(actor, turn, "model:first")
-      assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
 
       {:ok, _} =
         TurnStorage.record_response(actor, turn.id, step.id, %{
@@ -848,7 +848,7 @@ defmodule Arca.CrewStorageTest do
       room: room
     } do
       turn = running!(actor, room)
-      assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+      assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
       keep_session!(room, "session-since")
 
       assert {:ok, 0} =
@@ -985,7 +985,7 @@ defmodule Arca.CrewStorageTest do
           |> Arca.Repo.update_all(set: [agent: agent, brain_session: session])
       end
 
-      assert {:ok, 1} = Threads.forget_sessions(actor, ["planner"])
+      assert {:ok, []} = Threads.forget_sessions(actor, ["planner"])
       assert {:ok, %{brain_session: nil, brain_generation: 1}} = Threads.get(actor, planner.id)
 
       assert {:ok, %{brain_session: "s-builder", brain_generation: 0}} =
@@ -996,9 +996,9 @@ defmodule Arca.CrewStorageTest do
 
       # A thread keeping no session moves on too: a turn of it may still
       # be opening one.
-      assert {:ok, 1} = Threads.forget_sessions(actor, ["planner"])
+      assert {:ok, []} = Threads.forget_sessions(actor, ["planner"])
       assert {:ok, %{brain_generation: 2}} = Threads.get(actor, planner.id)
-      assert {:ok, 0} = Threads.forget_sessions(actor, [])
+      assert {:ok, []} = Threads.forget_sessions(actor, [])
     end
   end
 end

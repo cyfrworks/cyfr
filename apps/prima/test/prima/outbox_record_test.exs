@@ -56,7 +56,7 @@ defmodule Prima.OutboxRecordTest do
 
   test "the rosters are closed" do
     assert OutboxRecord.kinds() ==
-             ~w(schedule_outcome crew_request crew_reply workspace_open workspace_report)
+             ~w(schedule_outcome crew_request crew_reply workspace_open workspace_report brain_forget)
 
     assert OutboxRecord.source_kinds() == ~w(schedule_occurrence message turn thread)
     assert OutboxRecord.reply_outcomes() == ~w(done failed cancelled uncertain needs_you)
@@ -305,8 +305,55 @@ defmodule Prima.OutboxRecordTest do
     assert_raise ArgumentError, fn -> OutboxRecord.crew_reply(reply(%{request_ids: [1]})) end
   end
 
+  defp forget(attrs \\ %{}),
+    do:
+      Map.merge(
+        %{
+          athanor_id: "ath_1",
+          thread_id: "thr_1",
+          agent: "aqua",
+          row_id: "mcp_1",
+          session: "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
+          generation: 3
+        },
+        attrs
+      )
+
+  test "a removal owed is a record of its thread at the generation the session was held under" do
+    assert OutboxRecord.brain_forget(forget()) == %OutboxRecord{
+             source_kind: "thread",
+             source_id: "thr_1",
+             source_revision: "3",
+             athanor_id: "ath_1",
+             kind: "brain_forget",
+             snapshot: %{
+               "thread_id" => "thr_1",
+               "agent" => "aqua",
+               "row_id" => "mcp_1",
+               "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
+               "generation" => 3
+             }
+           }
+
+    for bad <- [
+          %{athanor_id: ""},
+          %{thread_id: nil},
+          %{agent: ""},
+          %{row_id: nil},
+          %{session: ""},
+          %{generation: -1},
+          %{generation: "3"}
+        ] do
+      assert_raise FunctionClauseError, fn -> OutboxRecord.brain_forget(forget(bad)) end
+    end
+  end
+
   test "a stored row reads back for every kind, and not outside the rosters" do
-    for record <- [OutboxRecord.crew_request(request()), OutboxRecord.crew_reply(reply())] do
+    for record <- [
+          OutboxRecord.crew_request(request()),
+          OutboxRecord.crew_reply(reply()),
+          OutboxRecord.brain_forget(forget())
+        ] do
       {:ok, text} = OutboxRecord.encode_snapshot(record)
       row = record |> Map.from_struct() |> Map.put(:snapshot, text)
 
