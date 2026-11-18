@@ -82,6 +82,16 @@ defmodule Arca.ExecutionTest do
         refute changeset.valid?, inspect(caller)
         assert {"names no caller", _} = changeset.errors[:caller]
       end
+
+      # The cast takes string keys as well, and so does the check.
+      string_keyed = Map.new(attrs, fn {key, value} -> {Atom.to_string(key), value} end)
+      assert Row.start_changeset(Map.put(string_keyed, "caller", "person")).valid?
+
+      for caller <- ["", "any"] do
+        changeset = Row.start_changeset(Map.put(string_keyed, "caller", caller))
+        refute changeset.valid?, inspect(caller)
+        assert {"names no caller", _} = changeset.errors[:caller]
+      end
     end
 
     test "requires id" do

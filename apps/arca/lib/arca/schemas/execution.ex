@@ -193,9 +193,10 @@ defmodule Arca.Schemas.Execution do
   # is a standing answer's, never a run's. Read from what was handed in,
   # since the cast turns an empty text into none: only an absent caller is
   # absent (a child, or a root that recorded none), and a supplied one the
-  # codec refuses, the empty text among them, is refused here.
+  # codec refuses, the empty text among them, is refused here, whichever
+  # key form the attributes arrive in, as the cast takes either.
   defp validate_caller(changeset, attrs) do
-    case Map.get(attrs, :caller) do
+    case Map.get(attrs, :caller, Map.get(attrs, "caller")) do
       nil ->
         changeset
 

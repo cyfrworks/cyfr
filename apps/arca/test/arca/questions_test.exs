@@ -123,6 +123,32 @@ defmodule Arca.QuestionsTest do
   defp state(ref), do: Arca.Repo.get!(Question, ref).state
   defp ok, do: :ok
 
+  describe "the store's surface" do
+    # Every operation is bound to an actor's athanor: none takes no
+    # argument, and none has a head that admits anything but a
+    # `%Prima.Actor{}` first, so a server-wide write cannot hide here.
+    test "every exported operation takes an actor first" do
+      functions = Arca.Questions.__info__(:functions)
+      assert {:admit, 2} in functions
+
+      for {name, arity} <- functions do
+        assert arity > 0, "Arca.Questions.#{name}/0 takes no actor"
+        args = [:not_an_actor | List.duplicate(nil, arity - 1)]
+
+        refused? =
+          try do
+            apply(Arca.Questions, name, args)
+            false
+          rescue
+            FunctionClauseError -> true
+          end
+
+        assert refused?,
+               "Arca.Questions.#{name}/#{arity} admits a first argument that is no actor"
+      end
+    end
+  end
+
   describe "admit/2" do
     test "writes the keyed row with the actor's athanor and person, open" do
       run = run!()
