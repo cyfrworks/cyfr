@@ -1262,7 +1262,7 @@ defmodule Sanctum.QuestionsTest do
       assert {:error, %Prima.Refusal{reason: :removed, message: message}} =
                call(person.ctx, "answer", %{"ref" => ref, "answer" => for_an_hour("allow")})
 
-      assert message =~ "no longer installed"
+      assert message =~ "No installed version asks for this permission in these words"
       assert standing(person.ctx, "local", "archive") == []
       assert row(person.ctx, ref).state == "open"
       refute_received {:question, :answered, _meta, _in_transaction}

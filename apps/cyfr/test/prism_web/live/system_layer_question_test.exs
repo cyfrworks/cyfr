@@ -658,40 +658,56 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
-    test "an answer that would last is refused once the component has left; once still answers",
-         setup do
-      view = screen!(setup)
-      {_run, ref} = Q.open!(setup.ctx, setup.component)
-      id = Prompt.question_id(ref)
-      shows!(view, id)
+    # The card's line when an answer cannot be kept: true whether the
+    # component has left, or another version is installed whose words for
+    # the action differ from those the question was asked in.
+    for {state, leave} <- [
+          gone: :delete,
+          reworded: :reword
+        ] do
+      test "an answer that would last is refused when no installed version asks in these words (#{state}); once still answers",
+           setup do
+        view = screen!(setup)
+        {_run, ref} = Q.open!(setup.ctx, setup.component)
+        id = Prompt.question_id(ref)
+        shows!(view, id)
 
-      :ok =
-        Arca.ComponentStorage.delete_component(
-          Context.actor(setup.ctx),
-          "tables",
-          "1.0.0",
-          "local",
-          "catalyst"
-        )
+        if unquote(leave) == :reword do
+          Q.catalyst!(setup.ctx, "tables", "2.0.0", [
+            %{"name" => "delete_table", "title" => "delete every table"}
+          ])
+        end
 
-      choose(view, "allow_hour")
-      assert open_prompt(view) == id
+        :ok =
+          Arca.ComponentStorage.delete_component(
+            Context.actor(setup.ctx),
+            "tables",
+            "1.0.0",
+            "local",
+            "catalyst"
+          )
 
-      assert has_element?(
-               view,
-               ~s([role="alert"]),
-               "This component is no longer installed, so this answer cannot be kept."
-             )
+        choose(view, "allow_hour")
+        assert open_prompt(view) == id
 
-      assert has_element?(view, ~s([data-test="question-choices"]))
-      assert Q.standing(setup.ctx) == []
-      refute_received {:answered, ^ref}
+        assert has_element?(
+                 view,
+                 ~s([role="alert"]),
+                 "No installed version asks for this permission in these words, " <>
+                   "so this answer cannot be kept. You can still allow it once, or not allow it."
+               )
 
-      choose(view, "allow_once")
-      assert_receive {:answered, ^ref}
-      assert Q.row(setup.ctx, ref).state == "allowed"
-      assert Q.standing(setup.ctx) == []
-      end_views()
+        refute render(view) =~ "no longer installed"
+        assert has_element?(view, ~s([data-test="question-choices"]))
+        assert Q.standing(setup.ctx) == []
+        refute_received {:answered, ^ref}
+
+        choose(view, "allow_once")
+        assert_receive {:answered, ^ref}
+        assert Q.row(setup.ctx, ref).state == "allowed"
+        assert Q.standing(setup.ctx) == []
+        end_views()
+      end
     end
 
     test "closing the card without a choice is Don't allow, once", setup do

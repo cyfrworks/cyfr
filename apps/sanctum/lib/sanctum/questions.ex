@@ -77,7 +77,8 @@ defmodule Sanctum.Questions do
   question's own words, a set's under the words its person was shown. A
   card whose component has left can still be answered once, which leaves
   no permission; an answer that would last is refused, and the question
-  stays open.
+  stays open. That holds whether the component has left or only reworded
+  the action in every version still installed.
 
   ## What is announced
 
@@ -913,8 +914,8 @@ defmodule Sanctum.Questions do
       refused(
         :conflict,
         :removed,
-        "This component is no longer installed, so this answer cannot be kept. " <>
-          "You can still allow it once, or not allow it."
+        "No installed version asks for this permission in these words, so this answer " <>
+          "cannot be kept. You can still allow it once, or not allow it."
       )
 
   defp refusal(:unauthenticated, _ref),
