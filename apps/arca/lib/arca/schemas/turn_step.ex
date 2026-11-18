@@ -10,10 +10,19 @@ defmodule Arca.Schemas.TurnStep do
   A step's `purpose` is what it serves, set by the host and never by a
   model: `chat` (the turn's own work), `flush` (the silent request that
   lets the model keep notes before a summary, and the calls it proposed),
-  `compaction` (the summary request), or `page` (a call a page in Aqua's
+  `compaction` (the summary request), `page` (a call a page in Aqua's
   browser made, which the host proposed: its call and answer are rows of
   their own, `page_call` and `page_result`, which no model's request
-  carries).
+  carries), or `brain` (what the host proposes for a program brain: its
+  turn's `program.start`, the program's asks, and the deliveries to it).
+
+  A step of kind `input` is one delivery to a program brain
+  (`Arca.TurnStorage.carry/3`): its `action` is what it delivers (`post`,
+  `answer`, or `notice`, a recovery prompt), its `message_id` the row it
+  delivers, and its `idempotency_key` the session generation, the action
+  and that row's id, so each is attempted once. It is `dispatched` before
+  its command is written and closed once the driver answered; it is no
+  call of a tool, gets no result and is never dispatched as one.
   """
 
   use Ecto.Schema
@@ -22,7 +31,7 @@ defmodule Arca.Schemas.TurnStep do
 
   @type t :: %__MODULE__{}
 
-  @purposes ["chat", "flush", "compaction", "page"]
+  @purposes ["chat", "flush", "compaction", "page", "brain"]
 
   schema "turn_steps" do
     field :athanor_id, :string

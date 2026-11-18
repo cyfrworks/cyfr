@@ -183,9 +183,11 @@ defmodule Aqua.Steps do
     end)
   end
 
+  # A model step is thinking and an `input` step a delivery to a program
+  # brain: neither is a step of the turn's work.
   defp last_step(steps) do
     steps
-    |> Enum.reject(&(&1.kind == "model"))
+    |> Enum.reject(&(&1.kind in ["model", "input"]))
     |> Enum.max_by(& &1.seq, fn -> nil end)
   end
 

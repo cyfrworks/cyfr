@@ -54,6 +54,30 @@ defmodule Arca.Schemas.Thread do
   `brain_generation` how many times it was forgotten: a turn keeps a
   session only under the generation it read, or the one its own forget
   raised (`Arca.TurnStorage`).
+
+  `brain_progress` is a program brain's session as its attendant last
+  committed it (`Aqua.Program`, `Arca.TurnStorage.commit_brain/3`), one
+  JSON map: `row` and `epoch`, the program row and epoch the native
+  session (`brain_session`) is stored with, written in the same write as
+  the session a `started` names and in no other, so a new driver's hello
+  leaves them and a forget that clears the session still reads them;
+  `driver`, the `row` and `epoch` the last committed batch ran on, with
+  `boot` the owner the next batch is held to; `boot`, the driver process,
+  and `seq`, the last of its lines whose effects are committed;
+  `baseline`, what usage was counted against (`results`, the newest
+  result identities, and `total`, the last running total that carried
+  counts: the native `thread` it is of and its four `counts`, whatever
+  model it came under); `unattributed`, usage no work could be given,
+  never charged to later work; `owed`, the post and notice `input` steps
+  written and not yet named by the program's end of a turn, and those a
+  reconcile reported, until their turn is over; `notices`,
+  the recovery prompts a reconcile left owed, each `step`, the post or
+  answer step it continues, and `context`, true for a session started
+  anew, until the driver answers for the prompt's write or a reconcile
+  finds its step recorded; `busy`,
+  whether the program owes output since a delivery was taken; and
+  `clock`, the silence clock: `since` when it last ran from, nil while it
+  is paused, and `left_ms`, what is left of its interval.
   """
 
   use Ecto.Schema
@@ -103,6 +127,7 @@ defmodule Arca.Schemas.Thread do
     field :read_seq, :integer, default: 0
     field :brain_session, :string
     field :brain_generation, :integer, default: 0
+    field :brain_progress, :string
     field :archived_at, :utc_datetime_usec
     field :retired_at, :utc_datetime_usec
     field :title, :string

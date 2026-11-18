@@ -39,7 +39,14 @@ defmodule Arca.Schemas.Message do
   (`Aqua.Nudge`), sent by `system` and written in the server's voice:
   the ask to say where its work stands. It is no post: it counts as
   nothing unread and reopens nothing. It is answered once a model step of
-  its turn carried it, and that step's id is its `resolved_by`.
+  its turn carried it, and that step's id is its `resolved_by`; for a
+  program brain, once the program's own end of its turn named the
+  `input` step that delivered it.
+
+  `carried_by` is the step that first carried a post to its brain: a
+  program brain's `input` step (`Arca.TurnStorage.carry/3`). A post with
+  none still waits; one carried is no steer and the turn reads it as
+  history.
   """
 
   use Ecto.Schema
@@ -91,6 +98,7 @@ defmodule Arca.Schemas.Message do
     field :payload, :string
     field :status, :string
     field :resolved_by, :string
+    field :carried_by, :string
     field :resolved_at, :utc_datetime_usec
     field :resolution, :string
     field :execution_id, :string

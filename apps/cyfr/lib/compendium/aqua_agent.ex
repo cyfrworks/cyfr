@@ -28,15 +28,18 @@ defmodule Compendium.AquaAgent do
       You are the explorer …
 
   The keys: `title`; `description`, what the member is good at, which the
-  soul reads when it hands a job; `avoid`, what to hand it never;
-  `catalyst_ref` and `model`, the brain its turns run on; `options`, the
-  brain options its every request sets (a flat map of strings, integers
-  and booleans, which the brain's `describe` declares); `disabled: true`,
-  how a shipped member is taken out of the crew (shipped files revert,
-  they don't delete); and on the soul alone `tool_policy`, the per-action
-  allowlist. A crew member has no policy of its own: it runs under the
-  soul's (`under_soul/2`), narrowed only by the request that asks it, so a
-  `tool_policy` in a crew file refuses the file.
+  soul reads when it hands a job; `avoid`, what to hand it never; the
+  brain its turns run on, named once, as a catalyst (`catalyst_ref`) or
+  as a program (`program`, the id of the athanor's program row it runs
+  in), and `model`, the model it asks for (for a program, its harness's
+  model name); `options`, the brain options its every request sets (a
+  flat map of strings, integers and booleans, which the brain's
+  `describe` declares); `disabled: true`, how a shipped member is taken
+  out of the crew (shipped files revert, they don't delete); and on the
+  soul alone `tool_policy`, the per-action allowlist. A crew member has
+  no policy of its own: it runs under the soul's (`under_soul/2`),
+  narrowed only by the request that asks it, so a `tool_policy` in a
+  crew file refuses the file.
 
   The frontmatter grammar is restricted on purpose: string and boolean
   scalars plus two flat maps (`tool_policy`, `options`) — enough for
@@ -64,6 +67,7 @@ defmodule Compendium.AquaAgent do
           avoid: String.t(),
           disabled: boolean(),
           catalyst_ref: String.t() | nil,
+          program: String.t() | nil,
           model: String.t() | nil,
           options: %{String.t() => option_value()},
           tool_policy: %{String.t() => String.t()},
@@ -78,10 +82,11 @@ defmodule Compendium.AquaAgent do
   Parse one agent file as it is written. The name comes from the filename
   (`<name>.md`), never from the frontmatter — the tree is the roster. A
   `tool_policy` outside the grammar, a `tool_policy` in a crew member's
-  file (`:crew_has_no_tool_policy`), or `options` that are not a flat map
-  of strings, integers and booleans (`:options_invalid`) refuse the whole
-  file with its typed reason rather than parsing to something the runtime
-  would have to guess at.
+  file (`:crew_has_no_tool_policy`), `options` that are not a flat map
+  of strings, integers and booleans (`:options_invalid`), or a brain
+  named both as a catalyst and as a program (`:catalyst_and_program`,
+  `check_brain/1`) refuse the whole file with its typed reason rather
+  than parsing to something the runtime would have to guess at.
 
   A crew member parsed here holds no policy; the one it runs under is the
   soul's (`resolve/3`, `under_soul/2`).
@@ -90,22 +95,39 @@ defmodule Compendium.AquaAgent do
   def parse(name, binary) when is_binary(name) and is_binary(binary) do
     with {:ok, meta, body} <- parse_frontmatter(binary),
          {:ok, policy} <- policy_of(name, meta),
-         {:ok, options} <- options_of(meta["options"]) do
-      {:ok,
-       %{
-         name: name,
-         title: string_or(meta["title"], name),
-         description: string_or(meta["description"], ""),
-         avoid: string_or(meta["avoid"], ""),
-         disabled: meta["disabled"] == true,
-         catalyst_ref: blank_to_nil(meta["catalyst_ref"]),
-         model: blank_to_nil(meta["model"]),
-         options: options,
-         tool_policy: policy,
-         prompt: body
-       }}
+         {:ok, options} <- options_of(meta["options"]),
+         agent = %{
+           name: name,
+           title: string_or(meta["title"], name),
+           description: string_or(meta["description"], ""),
+           avoid: string_or(meta["avoid"], ""),
+           disabled: meta["disabled"] == true,
+           catalyst_ref: blank_to_nil(meta["catalyst_ref"]),
+           program: blank_to_nil(meta["program"]),
+           model: blank_to_nil(meta["model"]),
+           options: options,
+           tool_policy: policy,
+           prompt: body
+         },
+         :ok <- check_brain(agent) do
+      {:ok, agent}
     end
   end
+
+  @doc """
+  Whether `agent` names its brain at most once: a catalyst
+  (`catalyst_ref`) or a program (`program`), never both. The one rule the
+  file parser and the `aqua` tool door both apply, so no write lands a
+  file that would not parse back.
+  """
+  @spec check_brain(map()) :: :ok | {:error, :catalyst_and_program}
+  def check_brain(agent) when is_map(agent) do
+    if named?(Map.get(agent, :catalyst_ref)) and named?(Map.get(agent, :program)),
+      do: {:error, :catalyst_and_program},
+      else: :ok
+  end
+
+  defp named?(value), do: is_binary(value) and value != ""
 
   @doc """
   An agent file as it runs: parsed (`parse/2`), and a crew member put
@@ -166,6 +188,7 @@ defmodule Compendium.AquaAgent do
         {"description", blank_to_nil(agent.description)},
         {"avoid", blank_to_nil(Map.get(agent, :avoid))},
         {"catalyst_ref", agent.catalyst_ref},
+        {"program", Map.get(agent, :program)},
         {"model", agent.model},
         {"disabled", if(agent.disabled, do: true)}
       ]
@@ -303,18 +326,18 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   The security-relevant subset of an agent, as a manifest: what it is
-  (soul or crew), which catalyst and model run it with which options,
-  whether it is disabled, and the tool policy it runs under (a crew
-  member's is the soul's). Nothing else — not the prompt, the title, the
+  (soul or crew), which brain (a catalyst or a program row) and model run
+  it with which options, whether it is disabled, and the tool policy it
+  runs under (a crew member's is the soul's). Nothing else — not the prompt, the title, the
   description or what to avoid, which change what the agent says and
   never what it may do. Pure: the same agent projects to the same map, so
   a digest of it is the agent's capability revision.
   """
   @spec to_manifest(t()) :: map()
   def to_manifest(%{name: name} = agent) do
-    # An unset catalyst or model, and no options, are absent, never a
-    # null: the projection names what the agent declares, and its digest
-    # is canonical JSON.
+    # An unset brain or model, and no options, are absent, never a null:
+    # the projection names what the agent declares, and its digest is
+    # canonical JSON.
     options = Map.get(agent, :options) || %{}
 
     %{
@@ -324,6 +347,7 @@ defmodule Compendium.AquaAgent do
       "tool_policy" => agent.tool_policy
     }
     |> Prima.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
+    |> Prima.MapUtil.put_present("program", Map.get(agent, :program))
     |> Prima.MapUtil.put_present("model", agent.model)
     |> Prima.MapUtil.put_present("options", if(options == %{}, do: nil, else: options))
   end

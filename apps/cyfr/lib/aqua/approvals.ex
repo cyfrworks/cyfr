@@ -344,15 +344,34 @@ defmodule Aqua.Approvals do
 
   defp authorize_card(_ctx, _turn, proposal) when map_size(proposal) == 0, do: :ok
 
-  defp authorize_card(ctx, turn, %{"tool" => tool, "action" => action})
-       when is_binary(tool) and is_binary(action) do
+  defp authorize_card(ctx, turn, %{"tool" => tool} = proposal) when is_binary(tool) do
+    case policy_key(proposal) do
+      nil -> {:error, {:stale_card, "the card names no call"}}
+      key -> authorize_key(ctx, turn, tool, proposal["action"], key)
+    end
+  end
+
+  defp authorize_card(_ctx, _turn, _proposal),
+    do: {:error, {:stale_card, "the card names no call"}}
+
+  # The key the agent's policy holds a proposal's call under: `tool.action`,
+  # or for an external server's tool, which names no action, the tool
+  # itself (`server:tool`), as the turn offers it (`Aqua.Loop.Turn`).
+  defp policy_key(%{"tool" => tool, "action" => action}) when is_binary(action),
+    do: "#{tool}.#{action}"
+
+  defp policy_key(%{"tool" => tool}) do
+    if String.contains?(tool, ":"), do: tool, else: nil
+  end
+
+  defp authorize_key(ctx, turn, tool, action, key) do
     name = turn.agent
 
     with {:ok, authored} <- authored_policy(ctx, name),
          {:ok, rows} <- Aqua.ToolGrants.for_thread(ctx, turn.thread_id, name) do
       policy = Aqua.ToolGrants.resolve(authored, rows, Aqua.BrowserSetting.allowed?(ctx))
 
-      case Map.get(policy, "#{tool}.#{action}") do
+      case Map.get(policy, key) do
         mode when mode in ["ask", "auto"] ->
           :ok
 
@@ -360,20 +379,16 @@ defmodule Aqua.Approvals do
           if Sanctum.Catalog.follows_setting?(tool, action),
             do: {:error, {:stale_card, "This confirmation is no longer current."}},
             else:
-              {:error,
-               {:stale_card, "#{tool}.#{action} was declined for good since this card was raised"}}
+              {:error, {:stale_card, "#{key} was declined for good since this card was raised"}}
 
         _ ->
-          {:error, {:stale_card, "#{name} no longer holds #{tool}.#{action} — the card is stale"}}
+          {:error, {:stale_card, "#{name} no longer holds #{key} — the card is stale"}}
       end
     else
       {:error, :no_agent} -> {:error, {:stale_card, "#{name} is no longer on the roster"}}
       {:error, {:unavailable, what}} -> {:error, {:unavailable, what}}
     end
   end
-
-  defp authorize_card(_ctx, _turn, _proposal),
-    do: {:error, {:stale_card, "the card names no call"}}
 
   # The agent's policy as its enabled definition in the tree says it now,
   # read again for every decision: one edited or disabled since the card

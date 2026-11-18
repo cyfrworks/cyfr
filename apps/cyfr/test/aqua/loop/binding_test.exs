@@ -6,7 +6,8 @@ defmodule Aqua.Loop.BindingTest do
   One table from a model-visible call to what runs it: hands on their
   catalysts with the canonical operation, catalog actions in-chain,
   external servers under their wire name, the `ui` event, and an
-  `execution.run` that is a hand, a refused agent, or a launch.
+  `execution.run` that is a hand, a refused agent, or a launch. A call
+  with a null argument is refused.
   """
 
   use ExUnit.Case, async: true
@@ -93,6 +94,41 @@ defmodule Aqua.Loop.BindingTest do
 
     assert {:error, "unknown tool: nope.thing"} = Binding.resolve("nope.thing", %{})
     assert {:error, "unknown tool: bare"} = Binding.resolve("bare", %{})
+  end
+
+  test "an argument the proposal's digest has no form for, at any depth, is refused " <>
+         "invalid_argument before the call resolves: a null, a decimal, a number past 2^53 - 1" do
+    assert {:error,
+            {:invalid_argument,
+             "github__search: the argument q is null; leave it out or give it a value"}} =
+             Binding.resolve("github__search", %{"q" => nil})
+
+    assert {:error, {:invalid_argument, "files.read: the argument opts.lines.1 is null; " <> _}} =
+             Binding.resolve("files.read", %{"path" => "a", "opts" => %{"lines" => [1, nil]}})
+
+    assert {:error,
+            {:invalid_argument,
+             "github__search: the argument page.size is a decimal number; give a whole " <>
+               "number, or the number as text"}} =
+             Binding.resolve("github__search", %{"q" => "x", "page" => %{"size" => 2.0}})
+
+    too_large = Prima.JCS.max_safe_integer() + 1
+
+    assert {:error,
+            {:invalid_argument,
+             "notes.read: the argument ids.0 is too large a number; give it as text"}} =
+             Binding.resolve("notes.read", %{"ids" => [too_large]})
+
+    assert {:ok, %Call{args: %{"ids" => [9_007_199_254_740_991]}}} =
+             Binding.resolve("notes.read", %{"ids" => [Prima.JCS.max_safe_integer()]})
+
+    # Refused, the call is recorded with no digest of what was refused.
+    for value <- [1.5, too_large] do
+      args = %{"action" => "read", "path" => "data/a", "options" => %{"value" => value}}
+      refused = Binding.resolve("files", args)
+      assert {:error, {:invalid_argument, "files: the argument options.value is " <> _}} = refused
+      assert %{proposal_digest: nil, kind: "unknown"} = Aqua.Loop.recorded("files", args, refused)
+    end
   end
 
   test "a result renders as the text the model reads, bounded" do

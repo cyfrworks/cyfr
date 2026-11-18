@@ -231,6 +231,78 @@ defmodule Aqua.AquaToolEditsTest do
              })
   end
 
+  # A brain is a catalyst or a program row: the tool writes either, lists
+  # and gets what it wrote, indexes it, and refuses a member that would
+  # name both, whether the call names both or one beside the file's other.
+  test "a member's brain is a program row through the tool, never a catalyst too", %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+
+    assert {:ok, %{"created" => "coder"}} =
+             call(ctx, %{
+               "action" => "create",
+               "name" => "coder",
+               "program" => "mcp_019a2b3c",
+               "model" => "claude-opus-5-5"
+             })
+
+    assert {:ok,
+            %{"program" => "mcp_019a2b3c", "catalyst_ref" => nil, "model" => "claude-opus-5-5"}} =
+             call(ctx, %{"action" => "get", "name" => "coder"})
+
+    {:ok, %{"guides" => guides}} = call(ctx, %{"action" => "list", "detail" => true})
+
+    assert %{"program" => "mcp_019a2b3c", "catalyst_ref" => nil} =
+             Enum.find(guides, &(&1["name"] == "coder"))
+
+    assert %{"program" => nil} = Enum.find(guides, &(&1["name"] == "scout"))
+
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    coder = Enum.find(rows, &(&1.name == "coder"))
+    assert %{program: "mcp_019a2b3c", catalyst_ref: nil} = coder
+    assert %{program: nil} = Enum.find(rows, &(&1.name == "scout"))
+
+    # Another row is another capability.
+    assert {:ok, _} =
+             call(ctx, %{"action" => "update", "name" => "coder", "program" => "mcp_019a2b3d"})
+
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    moved = Enum.find(rows, &(&1.name == "coder"))
+    assert moved.program == "mcp_019a2b3d"
+    refute moved.capability_digest == coder.capability_digest
+
+    {:ok, file} = Arca.get(actor, AquaPath.crew_file("coder"))
+
+    both =
+      "An agent's brain is a catalyst or a program, never both — " <>
+        "give catalyst_ref or program, and clear the other"
+
+    # Both named by the call, and a catalyst named beside the file's program.
+    refused =
+      for args <- [
+            %{"action" => "create", "name" => "both", "program" => "mcp_019a2b3c"},
+            %{"action" => "update", "name" => "coder", "program" => "mcp_019a2b3c"},
+            %{"action" => "update", "name" => "coder"}
+          ],
+          do: call(ctx, Map.put(args, "catalyst_ref", "catalyst:local.claude"))
+
+    assert refused == List.duplicate({:error, {:invalid_argument, both}}, 3)
+
+    refute Arca.exists?(actor, AquaPath.crew_file("both"))
+    assert {:ok, ^file} = Arca.get(actor, AquaPath.crew_file("coder"))
+
+    # The program cleared in the same write, the brain moves to the catalyst.
+    assert {:ok, _} =
+             call(ctx, %{
+               "action" => "update",
+               "name" => "coder",
+               "catalyst_ref" => "catalyst:local.claude",
+               "program" => nil
+             })
+
+    assert {:ok, %{"program" => nil, "catalyst_ref" => "catalyst:local.claude"}} =
+             call(ctx, %{"action" => "get", "name" => "coder"})
+  end
+
   test "a prompt save names the version it edited and is refused over a newer one", %{ctx: ctx} do
     {:ok, %{"content_digest" => digest}} = call(ctx, %{"action" => "get", "name" => "scout"})
     assert digest == Prima.Digest.sha256_hex("")

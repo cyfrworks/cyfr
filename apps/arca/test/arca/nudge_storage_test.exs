@@ -436,6 +436,52 @@ defmodule Arca.NudgeStorageTest do
       assert {:ok, _} = nudge(actor, workspace, held)
     end
 
+    test "a delivery to a program brain and the driver's receipt of it are no activity of the thread's",
+         %{actor: actor, daily: daily, held: held} do
+      workspace = at_rest!(actor, daily)
+      turn = running!(actor, Arca.Repo.get!(Arca.Schemas.Thread, workspace.id))
+      {:ok, turn} = TurnStorage.pin_program(actor, turn.id, "prg_brain", %{fence: turn.fence})
+
+      {:ok, _start} =
+        TurnStorage.put_step(actor, turn.id, %{
+          purpose: "brain",
+          tool: "program",
+          action: "start",
+          idempotency_key: TurnStorage.brain_start_key(turn.id),
+          dispatch_state: "dispatched",
+          fence: turn.fence
+        })
+
+      :ok = aged!(actor)
+      {:ok, [post]} = TurnStorage.brain_posts(actor, turn.id)
+
+      {:ok, %{step: step}} =
+        TurnStorage.carry(actor, turn.id, %{
+          fence: turn.fence,
+          deliver: "post",
+          row_id: post.id,
+          generation: 0,
+          silence_ms: 60_000
+        })
+
+      {:ok, _} =
+        TurnStorage.commit_brain(actor, workspace.id, %{
+          agent: "aqua",
+          generation: 0,
+          boot: "boot-1",
+          seq: 1,
+          hello: true,
+          row_id: "prg_brain",
+          epoch: 1,
+          silence_ms: 60_000,
+          turn: %{id: turn.id, fence: turn.fence},
+          accepted: [step.id],
+          busy: true
+        })
+
+      assert {:ok, _} = nudge(actor, workspace, held)
+    end
+
     test "a step starting and a card decided are activity; a card waiting is the person's, not the thread's quiet",
          %{actor: actor, daily: daily, held: held} do
       workspace = at_rest!(actor, daily)

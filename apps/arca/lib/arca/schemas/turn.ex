@@ -51,6 +51,7 @@ defmodule Arca.Schemas.Turn do
     field :budget_id, :string
     field :model, :string
     field :catalyst_ref, :string
+    field :program, :string
     field :options, :string
     field :window_upto_seq, :integer
     field :active_ms, :integer, default: 0
