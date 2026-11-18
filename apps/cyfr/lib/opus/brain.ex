@@ -61,6 +61,14 @@ defmodule Opus.Brain do
   nothing: the driver's process is closed and a new one opened in the same
   holder, `{:ok, :restarted}`, and the attendant starts it again, resuming.
 
+  The configuration's `read_only` is the holder's to set, never the
+  caller's: in every `start` and every `work` it is the mode the turn's
+  row stored when it started (`turns.agent_mode`), read with the binding, and a
+  read-only one also drops the harness's own `permission_mode` and
+  `harness_tools`. A mode switched between turns therefore makes the next
+  `work`'s configuration differ, and the program is started again in the
+  mode of the turn it now works for.
+
   ## The binding to admitted work
 
   Each write names the work it is written for (`t:binding/0`): the turn,
@@ -75,27 +83,16 @@ defmodule Opus.Brain do
       and running; a paused turn may be written only a `post` or an
       `answer` (the narrow proof below);
     * the step is that turn's `program.start`, dispatched or closed as it
-      ran, and the call it was recorded for (its `tool_call` row) starts
-      this row at this epoch;
-    * the decision that admitted it still stands, read through
-      `Sanctum.ToolGrants`: no standing answer says never to the agent's
-      `program.start`, and the start was allowed either by the person on
-      that step's own card, whose proposal is this start and which showed
-      every outside source the turn has read by now, or by a standing
-      allow that covers this very call now (`Sanctum.ToolGrants.admits?/2`:
-      its lifecycle, deadline and row, and every outside source the turn
-      has read by now);
+      ran, with no refusal and no Stop, and the call it was recorded for
+      (its `tool_call` row) starts this row at this epoch: the loop
+      dispatches a step only after deciding it, so the dispatched step is
+      the proof;
     * the row is the holder's, a driven program with a kept folder,
       enabled and at that epoch;
     * the thread is at that session generation.
 
-  The veto is the attendant's and only ever withdraws: the stored decision
-  is the proof. A card the person answered is their decision about that
-  call and what the turn had read when they saw it, so a source the turn
-  reads since that the card did not show ends what it allowed
-  (`:source_not_covered`), as a card that cannot be read does
-  (`:coverage_unreadable`); a standing never recorded since ends it too,
-  since a held session outlives the call that started it.
+  The veto is the attendant's and only ever withdraws: the stored step is
+  the proof.
 
   A `start` names the binding's generation; a `work` and a `post` name the
   binding's turn as their work; an `answer` answers an ask the driver
@@ -674,7 +671,7 @@ defmodule Opus.Brain do
   # ===========================================================================
 
   # Whether `binding` proves work a command of type `t` may be written
-  # for, read from the store now (moduledoc). The attendant's veto is
+  # for, read from the store now (moduledoc), with the turn as read. The attendant's veto is
   # asked first, so every read of the store follows whatever it waited
   # on. Every read is scoped to the binding's athanor, so a turn, step,
   # call, thread or row of another athanor is not found.
@@ -689,15 +686,14 @@ defmodule Opus.Brain do
          :ok <- proof(turn.status, t, Keyword.get(opts, :running_only, false)),
          {:ok, step} <- read(Arca.TurnStorage.step(actor, binding.step), :step_not_found),
          :ok <- start_step(step, turn),
-         {:ok, call} <- start_call(actor, step, turn, binding),
-         :ok <- decision(binding.ctx, actor, step, call),
+         :ok <- start_call(actor, step, turn, binding),
          {:ok, row} <-
            read(Arca.McpServerStorage.get_by_id(actor, binding.row_id), :row_not_found),
          :ok <- row(row, binding),
          {:ok, thread} <-
            read(Arca.ThreadStorage.get(actor, binding.thread_id), :thread_not_found),
          :ok <- generation(thread, binding) do
-      :ok
+      {:ok, turn}
     else
       {:error, reason} -> {:error, {:not_admitted, reason}}
     end
@@ -769,10 +765,7 @@ defmodule Opus.Brain do
   end
 
   # The call the step was recorded for, from its `tool_call` row: the
-  # turn's own `program.start` of this row at this epoch, read as
-  # `Sanctum.ToolGrants.admits?/2` judges a call, with the turn's sources
-  # as its row holds them now (unreadable sources are an outside source
-  # nobody names, `Prima.Source.decode/1`).
+  # turn's own `program.start` of this row at this epoch.
   defp start_call(_actor, %{message_id: nil}, _turn, _binding), do: {:error, :wrong_step}
 
   defp start_call(actor, step, turn, binding) do
@@ -792,124 +785,10 @@ defmodule Opus.Brain do
           {:error, :not_this_program}
 
         true ->
-          {:ok,
-           %{
-             agent_name: turn.agent,
-             thread_id: turn.thread_id,
-             tool: "program",
-             action: "start",
-             args: Map.delete(args, "action"),
-             execution_id: turn.root_execution_id,
-             turn_id: turn.id,
-             sources: Prima.Source.decode(turn.sources)
-           }}
+          :ok
       end
     end
   end
-
-  # The decision that admitted the start, read through Sanctum now: no
-  # standing answer says never to the agent's `program.start`, and the
-  # person allowed it on the step's own card, or a standing allow covers
-  # this very call now. A store that cannot answer is no decision. Of
-  # `Sanctum.ToolGrants` the holder calls `for_thread/2` and `admits?/2`
-  # alone and writes no grant: the surface row it reaches the module
-  # through (`Cyfr.Boundaries`) names the whole module, `revoke/2` with
-  # it, so that it only reads is held here, not by the roster.
-  defp decision(ctx, actor, step, call) do
-    with :ok <- never(ctx, call), do: allowed(ctx, actor, step, call)
-  end
-
-  defp never(ctx, call) do
-    case Sanctum.ToolGrants.for_thread(ctx, call.thread_id) do
-      {:ok, grants} ->
-        if Enum.any?(grants, &never?(&1, call)), do: {:error, :denied}, else: :ok
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp never?(grant, call),
-    do:
-      grant.effect == "deny" and grant.agent_name == call.agent_name and
-        grant.tool == call.tool and grant.action == call.action
-
-  defp allowed(ctx, _actor, %{approval_id: nil}, call) do
-    if Sanctum.ToolGrants.admits?(ctx, call), do: :ok, else: {:error, :withdrawn}
-  end
-
-  # The person's answer on the step's own card: approved, for this step
-  # and turn; the card it answered proposes this start of this row at
-  # this epoch; and every outside source the turn has read now is one
-  # that card showed (its `sources`, `Prima.Source.uncovered/2`). One
-  # dispatch runs the call the person saw, but a held session takes the
-  # posts and results of later writes, so the answer covers no source the
-  # card did not show. A card whose sources cannot be read covers none.
-  defp allowed(_ctx, actor, step, call) do
-    with {:ok, approval} <- approved(actor, step),
-         {:ok, intent} <- card(actor, approval),
-         :ok <- card_call(intent, call),
-         {:ok, shown} <- shown(intent) do
-      if Prima.Source.uncovered(call.sources, shown) == [],
-        do: :ok,
-        else: {:error, :source_not_covered}
-    end
-  end
-
-  defp approved(actor, step) do
-    case Arca.TurnStorage.approval(actor, step.approval_id) do
-      {:ok, %{status: "approved", step_id: step_id, turn_id: turn_id} = approval}
-      when step_id == step.id and turn_id == step.turn_id ->
-        {:ok, approval}
-
-      {:ok, _not_approved_or_another_steps} ->
-        {:error, :not_allowed}
-
-      {:error, :not_found} ->
-        {:error, :not_allowed}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
-  # The card the approval answered, as the loop wrote it with the
-  # approval: its message's `intent`.
-  defp card(actor, %{message_id: message_id}) when is_binary(message_id) do
-    with {:ok, message} <-
-           read(Arca.ThreadStorage.get_message(actor, message_id), :coverage_unreadable) do
-      case {message.kind, Arca.ThreadStorage.payload(message)} do
-        {"approval", %{"intent" => %{} = intent}} -> {:ok, intent}
-        _no_card -> {:error, :coverage_unreadable}
-      end
-    end
-  end
-
-  defp card(_actor, _approval), do: {:error, :coverage_unreadable}
-
-  defp card_call(%{"proposal" => %{"tool" => "program", "action" => "start"} = proposal}, call) do
-    case proposal["args"] do
-      %{"program" => program, "epoch" => epoch} ->
-        if program == call.args["program"] and epoch == call.args["epoch"],
-          do: :ok,
-          else: {:error, :not_this_program}
-
-      _another_start ->
-        {:error, :not_this_program}
-    end
-  end
-
-  defp card_call(_intent, _call), do: {:error, :not_this_program}
-
-  # The sources the card showed, each a source's JSON object; anything
-  # else is no reading of them, never an empty list.
-  defp shown(%{"sources" => sources}) when is_list(sources) do
-    if Enum.all?(sources, &is_map/1),
-      do: {:ok, Enum.map(sources, &Prima.Source.from_json/1)},
-      else: {:error, :coverage_unreadable}
-  end
-
-  defp shown(_intent), do: {:error, :coverage_unreadable}
 
   defp generation(%{brain_generation: generation}, %{generation: generation}), do: :ok
   defp generation(_thread, _binding), do: {:error, :generation_moved}
@@ -964,10 +843,10 @@ defmodule Opus.Brain do
 
     state = %{state | owner: owner, generation: binding.generation, agent: binding.agent}
 
-    with :ok <- admitted(binding, "start", running_only: true),
+    with {:ok, _turn} <- admitted(binding, "start", running_only: true),
          {:ok, connected} <- connect(state) do
       case admitted(binding, "start", running_only: true) do
-        :ok ->
+        {:ok, _turn} ->
           Process.monitor(attendant)
           {:reply, {:ok, {self(), connected.ref}}, %{connected | attendant: attendant}}
 
@@ -1002,7 +881,7 @@ defmodule Opus.Brain do
   # here, so nothing proves between the check and the end.
   def handle_call({:replace, binding}, _from, state) do
     case admitted(binding, "start", running_only: true) do
-      :ok -> {:stop, :normal, :ok, ended(state, :replaced)}
+      {:ok, _turn} -> {:stop, :normal, :ok, ended(state, :replaced)}
       {:error, _reason} = refused -> {:reply, refused, state}
     end
   end
@@ -1357,18 +1236,38 @@ defmodule Opus.Brain do
 
   defp deliver(state, binding, %{"t" => t} = command, opts) when is_binary(t) do
     with :ok <- this_place(state, binding),
-         {:ok, line} <- encode(command),
          :ok <- in_turn(state, binding, command),
-         :ok <- admitted(binding, t) do
-      if t == "work" and state.config != Keyword.get(opts, :config, state.config),
-        do: restarted(state),
-        else: send_line(state, command, line)
+         {:ok, turn} <- admitted(binding, t),
+         command = held(command, turn),
+         {:ok, line} <- encode(command) do
+      if t == "work" and Keyword.has_key?(opts, :config) and
+           state.config != held_config(opts[:config], turn),
+         do: restarted(state),
+         else: send_line(state, command, line)
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
   defp deliver(state, _binding, _command, _opts), do: {:reply, {:error, :unreadable}, state}
+
+  # A start's configuration as the holder sets it from the turn it is
+  # admitted for (moduledoc, "Writing").
+  defp held(%{"t" => "start"} = command, turn),
+    do: Map.put(command, "config", held_config(command["config"], turn))
+
+  defp held(command, _turn), do: command
+
+  # The configuration's `read_only` is the turn's stored mode, whatever
+  # the caller named; a read-only one carries none of the harness's own
+  # permission mode or tools, which the driver refuses beside it.
+  defp held_config(config, %{agent_mode: "read-only"}) do
+    (config || %{})
+    |> Map.drop(["permission_mode", "harness_tools"])
+    |> Map.put("read_only", true)
+  end
+
+  defp held_config(config, _auto), do: Map.put(config || %{}, "read_only", false)
 
   # A binding is of this holder's athanor, thread and row, and of the
   # agent whose work opened it.
