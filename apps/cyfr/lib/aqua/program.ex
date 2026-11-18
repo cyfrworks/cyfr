@@ -102,6 +102,17 @@ defmodule Aqua.Program do
   # ===========================================================================
 
   @doc """
+  Of `rows` (a turn's projection), those a fresh session's context may
+  carry before the post at `seq`: the thread's posts before it, of which
+  the first post's context keeps the newest that fit. The loop joins
+  their sources before the turn's start is decided.
+  """
+  @spec context_rows([map()], integer()) :: [map()]
+  def context_rows(rows, seq) when is_list(rows), do: Enum.filter(rows, &context_row?(&1, seq))
+
+  defp context_row?(row, seq), do: row.kind in @context_kinds and row.seq < seq
+
+  @doc """
   Attend `work`'s turn, for the loop `loop`: open the session if none is
   held, start the harness or resume its native session, and set the
   turn's work. Answers once the driver took the work, or `{:error,
@@ -391,8 +402,19 @@ defmodule Aqua.Program do
 
     case write(state, command) do
       :ok -> %{state | phase: :starting, pending: pending, fresh?: session == nil}
+      # The wire takes no such start: a startup option of the work's, or
+      # its instructions, are not what the harness takes. Nothing was
+      # written, and the work ends saying so.
+      {:error, :unreadable} -> fail(shut(state), unreadable_start(work))
       {:error, reason} -> write_failed(state, reason)
     end
+  end
+
+  defp unreadable_start(work) do
+    named = work.config |> Map.keys() |> Enum.sort() |> Enum.join(", ")
+
+    "#{work.title} could not start with what this work gives it: one of its options " <>
+      "(#{named}) or its instructions is not one it takes."
   end
 
   defp write_work(%{work: work} = state) do
@@ -982,7 +1004,7 @@ defmodule Aqua.Program do
     end
   end
 
-  defp read?(_work, row, {:before, seq}), do: row.kind in @context_kinds and row.seq < seq
+  defp read?(_work, row, {:before, seq}), do: context_row?(row, seq)
 
   defp read?(_work, row, {:all, answers}),
     do: row.kind in @context_kinds or (row.kind == "tool_result" and row.id in answers)

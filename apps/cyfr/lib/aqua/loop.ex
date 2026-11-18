@@ -879,11 +879,15 @@ defmodule Aqua.Loop do
   defp program_title(%State{spec: spec, program: program}),
     do: spec.agent["title"] || program.name || spec.agent["name"]
 
-  # The configuration the harness runs with: the agent's model and effort,
-  # where it names them; each absent member is the harness's default.
+  # The whole configuration the harness runs with: the agent's model and
+  # every option its file and the turn name, none dropped, so a narrowing
+  # option reaches the holder, which compares the whole of it at each
+  # `work` and refuses, before writing, one the wire does not take
+  # (`Aqua.Program`). An absent member is the harness's default.
   defp program_config(spec) do
-    %{"model" => spec.model, "effort" => spec.brain_options["effort"]}
-    |> Enum.filter(fn {_member, value} -> is_binary(value) and value != "" end)
+    spec.brain_options
+    |> Map.put("model", spec.model)
+    |> Enum.reject(fn {_member, value} -> is_nil(value) or value == "" end)
     |> Map.new()
   end
 
@@ -2723,8 +2727,11 @@ defmodule Aqua.Loop do
     call = Binding.resolve("program", args, tool_call_id: "start")
     recorded = recorded("program", args, call)
 
-    # Attending again only resumes the native session, so a start found
-    # dispatched after a restart is dispatched again.
+    # Replay safe: attending again reattaches to the held session, or
+    # opens one, and sets the work and the configuration it runs with; it
+    # never replays an input or a tool's effect, and each write is checked
+    # again against the admission (`Opus.Brain`). Before a session's
+    # identity is committed, another start may make a fresh session.
     proposal = %{
       kind: recorded.step_kind,
       purpose: "brain",
@@ -2747,13 +2754,57 @@ defmodule Aqua.Loop do
       }
     }
 
-    case Tape.propose_call(guest(state), state.turn, proposal) do
-      {:ok, _step} -> {:ok, %{state | model?: false}}
-      {:error, reason} -> {:error, reason}
+    with :ok <- join_startup(state),
+         {:ok, _step} <- Tape.propose_call(guest(state), state.turn, proposal) do
+      {:ok, %{state | model?: false}}
     end
   end
 
   defp open_program(%State{} = state), do: {:ok, state}
+
+  # What the program is given before its first answer joins the turn's
+  # sources before its start is decided, as a model step's request joins
+  # what it reads, so the start's card, or the standing allow that covers
+  # it, covers what the session will read: the system prompt's sources
+  # (`opening_sources/1`), the turn's posts, and for a thread with no
+  # native session the thread so far a fresh session's first post carries
+  # (`Aqua.Program.context_rows/2`), with the sources of the turns whose
+  # words those rows are.
+  defp join_startup(%State{} = state) do
+    guest = guest(state)
+
+    with {:ok, posts} <- Tape.brain_posts(guest, state.turn),
+         {:ok, context} <- startup_context(state, posts) do
+      rows = posts ++ context
+      read = Enum.flat_map(earlier_turns(state, rows), &turn_sources(guest, &1))
+      Tape.join_sources(guest, state.turn, opening_sources(state) ++ thread_sources(rows) ++ read)
+    end
+  end
+
+  defp startup_context(%State{spec: spec} = state, [first | _]) do
+    case Tape.brain(guest(state), spec.thread.id) do
+      {:ok, %{session: nil}} ->
+        with {:ok, rows} <- Tape.projection(guest(state), state.turn),
+             do: {:ok, Aqua.Program.context_rows(rows, first.seq)}
+
+      {:ok, _resumed} ->
+        {:ok, []}
+
+      {:error, _} = unread ->
+        unread
+    end
+  end
+
+  defp startup_context(_state, []), do: {:ok, []}
+
+  # A turn's sources as its row stands; one that cannot be read is an
+  # outside source no answer names.
+  defp turn_sources(guest, turn_id) do
+    case Tape.turn(guest, turn_id) do
+      {:ok, %{sources: sources}} -> Prima.Source.decode(sources)
+      {:error, _} -> [Prima.Source.outside(nil)]
+    end
+  end
 
   defp opened_on_call?(%State{} = state), do: not asks_model?(guest(state), state.turn)
 

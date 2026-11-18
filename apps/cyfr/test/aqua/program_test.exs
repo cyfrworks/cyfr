@@ -381,6 +381,102 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "what the program is given first joins the turn before its start is decided: its " <>
+           "instructions' sources, its post's and the thread's a fresh session reads are on " <>
+           "the card, and once allowed its post is written",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      # Its instructions carry a note kept from outside, the thread an
+      # earlier post that brought outside material, and its own post too.
+      {:ok, _} =
+        Aqua.Notes.keep(ctx, "clip", "Fares rise on Monday",
+          sources: [Prima.Source.outside("news.example")]
+        )
+
+      {:ok, _earlier} =
+        Tape.append(ctx, thread.id, %{
+          author: ctx.user_id,
+          sent_by: "person",
+          kind: "text",
+          content: "from the wire",
+          payload: %{"attachments" => [brief("wire.example")]}
+        })
+
+      allow!(ctx, thread, row)
+
+      turn =
+        accept!(ctx, thread, row, "read this brief", %{"attachments" => [brief("post.example")]})
+
+      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
+      refute_received {:session, "open", _wire, _fields}
+      %{approval: card, intent: intent} = pending_card(ctx, turn)
+
+      assert intent["sources"] == [
+               %{"class" => "filed", "name" => nil},
+               %{"class" => "outside", "name" => "news.example"},
+               %{"class" => "outside", "name" => "post.example"},
+               %{"class" => "outside", "name" => "wire.example"}
+             ]
+
+      approve!(ctx, card)
+      loop = resume(ctx, turn)
+      %{start: start} = started!(fake, row)
+      assert start["system"] =~ "Fares rise on Monday"
+      post = sent()
+      [input] = inputs(ctx, turn)
+      person = Sanctum.Tenancy.Users.display_name(ctx.user_id)
+
+      assert post ==
+               Map.put(posted(input, turn, "read this brief"), "context", [
+                 %{"type" => "text", "text" => "The thread so far:\n\n#{person}: from the wire"}
+               ])
+
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "every startup option the work names reaches the harness's start, none dropped",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "plan only")
+      options!(turn, %{"permission_mode" => "plan", "effort" => "high"})
+      loop = run(ctx, turn)
+      %{start: start} = started!(fake, row)
+
+      assert start["config"] == %{
+               "model" => spec!(ctx, turn).agent["model"],
+               "permission_mode" => "plan",
+               "effort" => "high"
+             }
+
+      post = sent()
+      [input] = inputs(ctx, turn)
+      assert post == posted(input, turn, "plan only")
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a startup option the harness does not take is refused before anything is written",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "warm")
+      options!(turn, %{"temperature" => "0.2"})
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+
+      line =
+        "#{@title} could not start with what this work gives it: one of its options " <>
+          "(model, temperature) or its instructions is not one it takes."
+
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert {:ok, %{status: "failed", error: ^line}} = Tape.turn(ctx, turn.id)
+      assert %{dispatch_state: "closed", error: ^line} = start_step(ctx, turn)
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+      assert inputs(ctx, turn) == []
+      refute_received {:session, "send", _wire, _fields}
+    end
+
     test "a scheduled turn with no standing allow opens no card and ends failed saying what it needed",
          %{ctx: ctx, thread: thread, row: row} do
       ctx = %{ctx | origin: :schedule}
@@ -810,10 +906,14 @@ defmodule Aqua.ProgramTest do
 
   # A turn of the soul on `row`'s brain: the person's post, and the
   # program row pinned before the loop builds it (`Aqua.Loop.Turn`).
-  defp accept!(ctx, thread, row, text) do
+  defp accept!(ctx, thread, row, text, payload \\ nil) do
+    message =
+      %{author: ctx.user_id, sent_by: "person", content: text}
+      |> then(&if(payload, do: Map.put(&1, :payload, payload), else: &1))
+
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, sent_by: "person", content: text},
+        message: message,
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
@@ -862,6 +962,29 @@ defmodule Aqua.ProgramTest do
 
     steer
   end
+
+  # The person's yes on a card, for this call alone.
+  defp approve!(ctx, approval) do
+    assert {:ok, %{decision: "approved"}} =
+             Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: :once})
+  end
+
+  # The startup options the turn names, as a crew request sets them.
+  defp options!(turn, options) do
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [options: Jason.encode!(%{"brain_options" => options})]
+      )
+  end
+
+  # A file copied from material that came from `host`.
+  defp brief(host),
+    do: %{
+      "id" => "att_#{host}",
+      "filename" => "brief.txt",
+      "media_type" => "text/plain",
+      "sources" => [%{"class" => "outside", "name" => host}]
+    }
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
