@@ -988,6 +988,7 @@ defmodule Aqua.RunnerTest do
         consent_id: claim.authority.consent_id,
         agent_revision_digest: revision,
         agent_capability_digest: capability,
+        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 

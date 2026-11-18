@@ -50,7 +50,11 @@ defmodule Arca.TurnFenceRaceTest do
     # A running turn: a runner records steps only on one.
     {:ok, turn} =
       unboxed(fn ->
-        TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 3})
+        TurnStorage.start(actor, turn.id, %{
+          fence: turn.fence,
+          agent_mode: "auto",
+          recovery_limit: 3
+        })
       end)
 
     runner =

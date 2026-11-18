@@ -113,11 +113,13 @@ defmodule PrismWeb.AquaLiveTest do
              "Add the second browser"
            )
 
-    # The setting decides the browser's own actions, so no policy line
-    # offers them; turning it on and off stays the soul's to ask about.
+    # The setting decides the browser's own actions, so no checkbox offers
+    # them; turning it on is the person's switch alone, so none offers
+    # that either, and turning it off stays a tool the soul is offered.
     refute has_element?(view, ~s([phx-value-key="browser.open"]))
     refute has_element?(view, ~s([phx-value-key="browser.read"]))
-    assert has_element?(view, ~s([phx-value-key="browser.turn_on"]))
+    refute has_element?(view, ~s([phx-value-key="browser.turn_on"]))
+    assert has_element?(view, ~s([phx-value-key="browser.turn_off"]))
 
     view |> element(switch) |> render_click()
     assert {:ok, false} = Aqua.BrowserSetting.allowed?(ctx)
@@ -496,9 +498,10 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-restore-result", "aqua/crew/scout.md")
     end
 
-    test "a new crew member is a name: it runs under the soul's policy and holds none of its own",
+    test "a new crew member is a name: it is offered the soul's tools and holds none of its own",
          %{conn: conn, ctx: ctx} do
-      {:ok, %{"tool_policy" => soul_policy}} = get_agent(ctx, "aqua")
+      {:ok, %{"tools" => soul_tools}} = get_agent(ctx, "aqua")
+      assert soul_tools != []
 
       {view, _html} = mount_athanor(conn, "/aqua")
 
@@ -508,20 +511,29 @@ defmodule PrismWeb.AquaLiveTest do
         |> render_submit()
 
       assert html =~ "Added &#39;scout&#39; to the crew"
-      assert {:ok, %{"type" => "crew", "tool_policy" => ^soul_policy}} = get_agent(ctx, "scout")
-      assert {:ok, %{"tool_policy" => ^soul_policy}} = get_agent(ctx, "aqua")
+
+      assert {:ok, %{"type" => "crew", "tools" => ^soul_tools, "mode" => "auto"}} =
+               get_agent(ctx, "scout")
+
+      assert {:ok, %{"tools" => ^soul_tools}} = get_agent(ctx, "aqua")
 
       {:ok, bytes} =
         Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.crew_file("scout"))
 
-      refute bytes =~ "tool_policy"
+      refute bytes =~ "tools:"
 
       # Its card says what it is good at and what to avoid, and edits no
       # capabilities: those are the soul's.
       settled(fn -> has_element?(view, "#aqua-card-scout") end, "the scout card")
       assert has_element?(view, "#aqua-card-scout-description")
       assert has_element?(view, "#aqua-card-scout-avoid")
-      assert has_element?(view, "#aqua-card-scout", "Runs under the soul's capabilities")
+
+      assert has_element?(
+               view,
+               "#aqua-card-scout",
+               "Offered the soul's tools; a hand-off may narrow them for one job."
+             )
+
       refute has_element?(view, "#aqua-card-scout input[phx-click=editor_toggle_capability]")
       assert has_element?(view, "#aqua-card-aqua input[phx-click=editor_toggle_capability]")
     end
@@ -1424,33 +1436,6 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"description" => "proofreading"}} = get_agent(ctx, "tidy")
     end
 
-    test "a capability that can never run without asking draws no ask/auto toggle",
-         %{conn: conn, ctx: ctx} do
-      {:ok, _} =
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "update",
-          "name" => "aqua",
-          "tool_policy_patch" => %{"notes.keep" => "ask", "files.write" => "ask"}
-        })
-
-      refute Aqua.auto_permitted?("notes", "keep")
-      assert Aqua.auto_permitted?("files", "write")
-
-      {view, _html} = mount_athanor(conn, "/aqua")
-
-      assert has_element?(view, ~s(#aqua-card-aqua input[phx-value-key="notes.keep"][checked]))
-
-      refute has_element?(
-               view,
-               ~s(#aqua-card-aqua button[phx-click=editor_set_capability_mode][phx-value-key="notes.keep"])
-             )
-
-      assert has_element?(
-               view,
-               ~s(#aqua-card-aqua button[phx-click=editor_set_capability_mode][phx-value-key="files.write"])
-             )
-    end
-
     test "a brain that needs nothing asks only for the grant, and is connected once granted",
          %{conn: conn, ctx: ctx} do
       publish_brain!(ctx, "open", %{})
@@ -1639,72 +1624,224 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#prompt-editor textarea[name=content]")
     end
 
-    test "the page writes the soul's policy, never a destructive auto; a crew member holds none",
+    # A box ticked offers the soul the tool, and every crew member with
+    # it; cleared, it takes it off. The provider's own search is a box of
+    # its own on the same list.
+    test "a checkbox offers the soul a tool and takes it off again; a crew member holds none",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
-      agents = with_target(view, "#aqua-agents")
-      {:ok, %{"tool_policy" => before}} = get_agent(ctx, "aqua")
-      refute Map.has_key?(before, "storage.write")
+      {:ok, before} = get_agent(ctx, "aqua")
+      refute "storage.write" in before["tools"]
+      assert "native_search" in before["tools"]
 
-      # A write-kind hand starts at ask, and moves between ask and auto.
-      render_click(agents, "editor_toggle_capability", %{
-        "name" => "aqua",
-        "key" => "storage.write"
-      })
+      for {key, during} <- [
+            {"storage.write", Enum.sort(["storage.write" | before["tools"]])},
+            {"native_search", before["tools"] -- ["native_search"]}
+          ] do
+        box =
+          ~s(#aqua-card-aqua input[phx-click=editor_toggle_capability][phx-value-key="#{key}"])
 
-      assert {:ok, %{"tool_policy" => %{"storage.write" => "ask"}}} = get_agent(ctx, "aqua")
+        ticked? = key in before["tools"]
+        assert has_element?(view, box <> "[checked]") == ticked?
 
-      for mode <- ["auto", "ask"] do
-        render_click(agents, "editor_set_capability_mode", %{
-          "name" => "aqua",
-          "key" => "storage.write",
-          "mode" => mode
-        })
+        view |> element(box) |> render_click()
+        assert {:ok, %{before | "tools" => during}} == get_agent(ctx, "aqua")
+        assert {:ok, %{"tools" => ^during}} = get_agent(ctx, "explorer")
 
-        assert {:ok, %{"tool_policy" => %{"storage.write" => ^mode}}} = get_agent(ctx, "aqua")
+        settled(
+          fn -> has_element?(view, box <> "[checked]") == not ticked? end,
+          "#{key}'s box after the first click"
+        )
+
+        view |> element(box) |> render_click()
+        assert {:ok, before} == get_agent(ctx, "aqua")
+
+        settled(
+          fn -> has_element?(view, box <> "[checked]") == ticked? end,
+          "#{key}'s box after the second click"
+        )
       end
 
-      # A destructive hand is never auto.
+      # A crew member's own write is refused.
       html =
-        render_click(agents, "editor_set_capability_mode", %{
-          "name" => "aqua",
-          "key" => "files.delete",
-          "mode" => "auto"
-        })
-
-      assert html =~ "always asks"
-      assert {:ok, %{"tool_policy" => %{"files.delete" => "ask"}}} = get_agent(ctx, "aqua")
-
-      # A crew member runs under the soul's policy: the soul's edit is its
-      # too, and a write of its own is refused.
-      assert {:ok, %{"tool_policy" => %{"storage.write" => "ask"}}} = get_agent(ctx, "explorer")
-
-      html =
-        render_click(agents, "editor_toggle_capability", %{
+        view
+        |> with_target("#aqua-agents")
+        |> render_click("editor_toggle_capability", %{
           "name" => "explorer",
           "key" => "storage.list"
         })
 
-      assert html =~ "runs under the soul&#39;s tool policy"
+      assert html =~ "A crew member is offered the soul&#39;s tools and has none of its own"
+      assert {:ok, before} == get_agent(ctx, "aqua")
     end
 
-    test "the page sets a launch to ask, a card before every run, and back to auto, a run on the component's grant",
+    # Each member's mode is its own, the soul's and a crew member's alike:
+    # its switch shows it, and a choice writes it into the member's file.
+    test "each member's switch shows its mode, and a choice writes it to the member's file",
          %{conn: conn, ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
       {view, _html} = mount_athanor(conn, "/aqua")
-      agents = with_target(view, "#aqua-agents")
-      assert {:ok, %{"tool_policy" => %{"execution.run" => "auto"}}} = get_agent(ctx, "aqua")
 
-      for mode <- ["ask", "auto"] do
-        html =
-          render_click(agents, "editor_set_capability_mode", %{
-            "name" => "aqua",
-            "key" => "execution.run",
-            "mode" => mode
-          })
+      for name <- ["aqua", "explorer"] do
+        assert mode_shown(view, name) == ["auto"]
 
-        refute html =~ "execution.run always asks"
-        assert {:ok, %{"tool_policy" => %{"execution.run" => ^mode}}} = get_agent(ctx, "aqua")
+        assert has_element?(
+                 view,
+                 mode_choice(name, "read-only"),
+                 "Read-only: runs only reads, then answers; every other call is refused"
+               )
+
+        assert has_element?(
+                 view,
+                 mode_choice(name, "auto"),
+                 "Auto: runs every tool it is offered, deleting included"
+               )
+
+        refute has_element?(view, mode_choice(name, "read-only") <> "[disabled]")
+        refute has_element?(view, "#aqua-card-#{name} [data-test=read-only-unheld]")
       end
+
+      for name <- ["explorer", "aqua"] do
+        {:ok, before} = get_agent(ctx, name)
+        assert before["mode"] == "auto"
+
+        view |> element(mode_choice(name, "read-only")) |> render_click()
+        assert {:ok, %{before | "mode" => "read-only"}} == get_agent(ctx, name)
+        {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.agent_file(name))
+        assert bytes =~ "\nmode: read-only\n"
+
+        settled(
+          fn -> mode_shown(view, name) == ["read-only"] end,
+          "#{name}'s switch on read-only"
+        )
+
+        view |> element(mode_choice(name, "auto")) |> render_click()
+        assert {:ok, before} == get_agent(ctx, name)
+        settled(fn -> mode_shown(view, name) == ["auto"] end, "#{name}'s switch back on auto")
+      end
+
+      # Only the two modes are written.
+      {:ok, before} = get_agent(ctx, "explorer")
+
+      view
+      |> with_target("#aqua-agents")
+      |> render_click("editor_set_mode", %{"name" => "explorer", "mode" => "ask"})
+
+      assert {:ok, before} == get_agent(ctx, "explorer")
+    end
+
+    # A brain CYFR cannot keep read-only closes the read-only choice and
+    # says why beneath it: a catalyst whose manifest declares a login need,
+    # or a program row whose driver cannot start its harness read-only. A
+    # file set to read-only by hand on such a brain shows it chosen, with
+    # the same sentence, since its turns are refused. A brain on a key, or
+    # a row CYFR keeps read-only, leaves the choice open.
+    test "a member whose brain cannot be kept read-only has its read-only choice closed, " <>
+           "with why beneath it",
+         %{conn: conn, ctx: ctx} do
+      publish_brain!(ctx, "planned", %{
+        "plan" => %{
+          "type" => "login",
+          "program" => "planner",
+          "reason" => "to run Planner on your own plan"
+        }
+      })
+
+      publish_brain!(ctx, "keyed", %{
+        "api_key" => %{
+          "type" => "api_key:keyed.test",
+          "reason" => "to call Keyed with your key (keyed.test/keys)",
+          "fields" => ["KEYED_API_KEY"],
+          "required" => true,
+          "hosts" => ["api.keyed.example"]
+        }
+      })
+
+      codex = program_row!(ctx, "codex", "cyfr-codex")
+      claude = program_row!(ctx, "claude", "cyfr-claude-code")
+
+      members = [
+        {"planner", "Planner", %{"catalyst_ref" => "catalyst:local.planned"}},
+        {"by-hand", "By Hand", %{"catalyst_ref" => "catalyst:local.planned"}},
+        {"keyed", "Keyed", %{"catalyst_ref" => "catalyst:local.keyed"}},
+        {"coder", "Coder", %{"program" => codex.id}},
+        {"held", "Held", %{"program" => claude.id}}
+      ]
+
+      for {name, title, brain} <- members do
+        {:ok, _} =
+          Cyfr.Test.AquaTool.call(
+            ctx,
+            Map.merge(
+              %{
+                "action" => "create",
+                "name" => name,
+                "title" => title,
+                "content" => "# #{title}"
+              },
+              brain
+            )
+          )
+      end
+
+      # Set to read-only by hand, as an edit made off this page would.
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "by-hand",
+          "mode" => "read-only"
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      for {name, title, brain, shown} <- [
+            {"planner", "Planner", "planned", ["auto"]},
+            {"by-hand", "By Hand", "planned", ["read-only"]},
+            {"coder", "Coder", "codex", ["auto"]}
+          ] do
+        assert has_element?(view, mode_choice(name, "read-only") <> "[disabled]")
+        refute has_element?(view, mode_choice(name, "auto") <> "[disabled]")
+        assert mode_shown(view, name) == shown
+
+        assert texts(view, "#aqua-card-#{name} [data-test=read-only-unheld]") ==
+                 [Aqua.Models.unheld_sentence(title, brain)]
+      end
+
+      for name <- ["keyed", "held"] do
+        assert mode_shown(view, name) == ["auto"]
+        refute has_element?(view, mode_choice(name, "read-only") <> "[disabled]")
+        refute has_element?(view, "#aqua-card-#{name} [data-test=read-only-unheld]")
+      end
+
+      # The auto choice stays open: the member set to read-only by hand
+      # is switched to auto from its card.
+      {:ok, before} = get_agent(ctx, "by-hand")
+      view |> element(mode_choice("by-hand", "auto")) |> render_click()
+      assert {:ok, %{before | "mode" => "auto"}} == get_agent(ctx, "by-hand")
+    end
+
+    # Every athanor made before modes holds a soul whose file lists its
+    # tools under the retired `tool_policy`: the section says what to
+    # change in place of every card, and the rest of the page renders.
+    test "a soul that still holds tool_policy says what to change in place of every card",
+         %{conn: conn, ctx: ctx} do
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.soul_file(),
+          "---\ntitle: Aqua\ntool_policy:\n  files.read: auto\n---\n\nsoul\n"
+        )
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert texts(view, ~s([data-test="agents-unavailable"])) == [
+               Prima.AgentRef.tool_policy_retired()
+             ]
+
+      refute has_element?(view, "[id^=aqua-card-]")
+      refute has_element?(view, "form[phx-submit=editor_create_member]")
+      refute render(view) =~ "No soul here"
+      assert has_element?(view, "#aqua-notes")
     end
 
     # A brain's options are what its `describe` declares: the card offers
@@ -1789,32 +1926,25 @@ defmodule PrismWeb.AquaLiveTest do
                get_agent(ctx, "explorer")
     end
 
-    test "the capability matrix is the soul's alone: the ask/auto pill and the destructive row",
+    test "the capability matrix is the soul's alone, its destructive rows among it",
          %{conn: conn} do
       {view, _html} = mount_athanor(conn, "/aqua")
-
-      assert has_element?(
-               view,
-               ~s(#aqua-card-aqua button[phx-click=editor_set_capability_mode][phx-value-key="files.write"])
-             )
 
       assert has_element?(view, ~s(#aqua-card-aqua input[phx-value-key="files.delete"]))
       refute has_element?(view, ~s(#aqua-card-explorer input[phx-value-key="files.delete"]))
     end
 
-    test "an allowlist edit lands on the policy as it is now, not on the copy the page loaded",
+    test "a tools edit lands on the list as it is now, not on the copy the page loaded",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
+      {:ok, %{"tools" => shipped}} = get_agent(ctx, "aqua")
 
       # Another member's edit, after this page read the soul.
-      {:ok, %{"tool_policy" => theirs}} = get_agent(ctx, "aqua")
-      theirs = Map.put(theirs, "vault.list", "ask")
-
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
           "name" => "aqua",
-          "tool_policy" => theirs
+          "tools_add" => ["vault.list"]
         })
 
       # A toggle on the soul's card keeps it…
@@ -1822,32 +1952,51 @@ defmodule PrismWeb.AquaLiveTest do
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "storage.write"})
 
-      assert {:ok,
-              %{"tool_policy" => %{"storage.write" => "ask", "vault.list" => "ask"} = policy}} =
-               get_agent(ctx, "aqua")
+      want = Enum.sort(["storage.write", "vault.list" | shipped])
+      assert {:ok, %{"tools" => ^want}} = get_agent(ctx, "aqua")
 
       # …and another, after yet another edit, keeps both.
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
           "name" => "aqua",
-          "tool_policy" => Map.put(policy, "vault.get", "ask")
+          "tools_add" => ["vault.get"]
         })
 
       view
       |> with_target("#aqua-agents")
       |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "storage.write"})
 
-      {:ok, %{"tool_policy" => after_toggle}} = get_agent(ctx, "aqua")
-      refute Map.has_key?(after_toggle, "storage.write")
-      assert after_toggle["vault.list"] == "ask"
-      assert after_toggle["vault.get"] == "ask"
+      want = Enum.sort(["vault.get", "vault.list" | shipped])
+      assert {:ok, %{"tools" => ^want}} = get_agent(ctx, "aqua")
     end
   end
 
   # A section re-reads itself on a message the write sends after it
   # answers, so a card's new state is awaited rather than read at once.
   defp settled(fun, label), do: Prima.Test.Wait.wait_until(fun, 2_000, label)
+
+  # One choice of a member's mode switch.
+  defp mode_choice(name, mode),
+    do: ~s(#aqua-card-#{name}-mode button[role=radio][phx-value-mode="#{mode}"])
+
+  # The modes a member's switch shows chosen.
+  defp mode_shown(view, name) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(#aqua-card-#{name}-mode [role=radio][aria-checked="true"]))
+    |> Enum.flat_map(&LazyHTML.attribute(&1, "phx-value-mode"))
+  end
+
+  # The text of each element `selector` finds, trimmed.
+  defp texts(view, selector) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+  end
 
   # A card whose brain waits on the person's grant alone: it says so, and
   # its Connect opens the setup, whose step for the brain is the grant,
@@ -1912,7 +2061,7 @@ defmodule PrismWeb.AquaLiveTest do
     fake
   end
 
-  defp program_row!(ctx, name) do
+  defp program_row!(ctx, name, command \\ nil) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
@@ -1921,7 +2070,7 @@ defmodule PrismWeb.AquaLiveTest do
         mark: "driven",
         url: nil,
         home: "kept",
-        config_json: Jason.encode!(%{"command" => "npx -y #{name}", "env" => %{}})
+        config_json: Jason.encode!(%{"command" => command || "npx -y #{name}", "env" => %{}})
       })
 
     row

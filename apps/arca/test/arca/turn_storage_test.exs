@@ -38,7 +38,13 @@ defmodule Arca.TurnStorageTest do
       turn = accept!(actor, thread)
       assert turn.recovery_limit == nil
 
-      {:ok, started} = TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 5})
+      {:ok, started} =
+        TurnStorage.start(actor, turn.id, %{
+          fence: turn.fence,
+          agent_mode: "auto",
+          recovery_limit: 5
+        })
+
       assert started.recovery_limit == 5
     end
   end

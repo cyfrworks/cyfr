@@ -84,6 +84,7 @@ defmodule Arca.TurnTransitionContractTest do
         attempt: root.attempt.attempt,
         budget_id: root.budget_id,
         profile_id: "prof_root",
+        agent_mode: "auto",
         recovery_limit: 3,
         fence: turn.fence
       },
@@ -167,7 +168,8 @@ defmodule Arca.TurnTransitionContractTest do
       assert {:error, :illegal_transition} =
                TurnStorage.start(actor, turn.id, start_attrs(turn, root))
 
-      assert %{status: "accepted", root_execution_id: nil, recovery_limit: nil} = row(turn.id)
+      assert %{status: "accepted", root_execution_id: nil, agent_mode: nil, recovery_limit: nil} =
+               row(turn.id)
     end
 
     test "the root's rows fill what the caller left out, and the limit is required and positive",
@@ -180,13 +182,14 @@ defmodule Arca.TurnTransitionContractTest do
                  TurnStorage.start(
                    actor,
                    turn.id,
-                   start_attrs(turn, root, %{recovery_limit: limit})
+                   start_attrs(turn, root, %{agent_mode: "auto", recovery_limit: limit})
                  )
       end
 
       assert {:ok, started} =
                TurnStorage.start(actor, turn.id, %{
                  root_execution_id: root.execution.id,
+                 agent_mode: "auto",
                  recovery_limit: 2,
                  fence: turn.fence
                })
@@ -203,12 +206,17 @@ defmodule Arca.TurnTransitionContractTest do
       assert {:error, :illegal_transition} =
                TurnStorage.start(actor, turn.id, %{
                  attempt: "att_x",
+                 agent_mode: "auto",
                  recovery_limit: 3,
                  fence: turn.fence
                })
 
       assert {:ok, %{status: "running", attempt: nil}} =
-               TurnStorage.start(actor, turn.id, %{recovery_limit: 3, fence: turn.fence})
+               TurnStorage.start(actor, turn.id, %{
+                 agent_mode: "auto",
+                 recovery_limit: 3,
+                 fence: turn.fence
+               })
     end
   end
 

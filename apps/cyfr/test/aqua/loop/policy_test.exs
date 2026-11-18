@@ -3,11 +3,12 @@
 
 defmodule Aqua.Loop.PolicyTest do
   @moduledoc """
-  A call runs, asks or is refused by the agent's effective policy; a
-  launch is decided by its own line, on its component's grant under
-  `auto` (`Aqua.LaunchTest` decides it against grants), and its card
-  takes no standing answer; reads overlap and nothing else does; a card
-  carries the canonical proposal and the catalog's kind and standing.
+  A call runs or is refused by its member's offered set and mode, and is
+  never asked: read-only runs a read, the `ui` event and the turn's own
+  start of its program brain, and refuses every other call with one
+  sentence; auto runs every offered call. A call not offered, or outside
+  a job's narrowing, is refused in either mode. Reads overlap and nothing
+  else does.
   """
 
   use ExUnit.Case, async: true
@@ -19,37 +20,149 @@ defmodule Aqua.Loop.PolicyTest do
     call
   end
 
-  @policy %{
-    "files.read" => "auto",
-    "files.write" => "ask",
-    "notes.read" => "auto",
-    "execution.run" => "auto"
-  }
+  # Every call of section 2's table, offered: a soul's read, a write, an
+  # execute, a destructive and an external action, a component's launch,
+  # a model's program start, the browser's external and write actions,
+  # the notes writes, the workspace thread's writes, a hand-off, a post
+  # and an outside server's tool.
+  @rows [
+    {"a file read", "files", %{"action" => "read", "path" => "a"}, :read},
+    {"a notes read", "notes", %{"action" => "list"}, :read},
+    {"a web read", "http", %{"action" => "get", "url" => "https://example.com/"}, :read},
+    {"a thread search", "thread", %{"action" => "search", "query" => "q"}, :read},
+    {"the crew's list", "crew", %{"action" => "list"}, :read},
+    {"the browser's read", "browser", %{"action" => "read"}, :read},
+    {"the browser's status", "browser", %{"action" => "status"}, :read},
+    {"a file write", "files", %{"action" => "write", "path" => "a", "content" => "b"}, :other},
+    {"a file delete", "files", %{"action" => "delete", "path" => "a"}, :other},
+    {"a web post", "http", %{"action" => "post", "url" => "https://example.com/"}, :other},
+    {"a launch", "execution",
+     %{"action" => "run", "reference" => "reagent:local.app:1.0.0", "input" => %{}}, :launch},
+    {"a model's program start", "program", %{"action" => "start", "program" => "srv_1"}, :other},
+    {"the browser's open", "browser", %{"action" => "open", "url" => "https://example.com/"},
+     :other},
+    {"the browser's click", "browser", %{"action" => "click", "ref" => "e1"}, :other},
+    {"the browser's close", "browser", %{"action" => "close"}, :other},
+    {"the browser's turn off", "browser", %{"action" => "turn_off"}, :other},
+    {"a kept note", "notes", %{"action" => "keep", "name" => "n", "content" => "c"}, :other},
+    {"the pinned page", "notes", %{"action" => "pin", "content" => "c"}, :other},
+    {"a workspace's notes", "notes", %{"action" => "workspace", "content" => "c"}, :other},
+    {"a forgotten note", "notes", %{"action" => "forget", "name" => "n"}, :other},
+    {"a workspace opened", "workspace", %{"action" => "open", "title" => "t", "ask" => "a"},
+     :other},
+    {"a workspace report", "workspace",
+     %{"action" => "report", "outcome" => "done", "summary" => "s"}, :other},
+    {"a hand-off", "crew", %{"action" => "ask", "member" => "explorer", "task" => "t"}, :other},
+    {"a post", "thread", %{"action" => "post", "content" => "c"}, :other},
+    {"an outside server's tool", "github__search", %{"q" => "x"}, :other}
+  ]
 
-  test "the decision matrix" do
-    assert :auto =
-             Policy.decide(resolve!("files", %{"action" => "read", "path" => "a"}), @policy, [])
+  defp offered(rows) do
+    keys =
+      for {_label, name, args, _row} <- rows do
+        case resolve!(name, args) do
+          %{kind: :external, tool: tool} -> tool
+          %{tool: tool, action: action} -> "#{tool}.#{action}"
+        end
+      end
 
-    assert :ask =
-             Policy.decide(resolve!("files", %{"action" => "write", "path" => "a"}), @policy, [])
-
-    assert {:deny, text} =
-             Policy.decide(resolve!("files", %{"action" => "delete", "path" => "a"}), @policy, [])
-
-    assert text =~ "files.delete"
-    assert :auto = Policy.decide(resolve!("ui", %{"kind" => "ui.navigate"}), @policy, [])
-
-    assert :ask = Policy.decide(resolve!("github__search", %{}), @policy, [])
+    Aqua.Offered.resolve(keys, {:ok, true})
   end
 
-  test "a job narrowed to some tools refuses every other call before any card, whatever its kind" do
-    policy = Map.merge(@policy, %{"github:search" => "ask", "notes.keep" => "ask"})
-    narrowed = [narrowed: ["files.read"]]
+  @opts [title: "Aqua", sources: []]
 
-    assert :auto =
+  test "each row of the table in both modes: read-only runs reads alone, auto runs every one" do
+    offered = offered(@rows)
+
+    for {label, name, args, row} <- @rows do
+      call = resolve!(name, args)
+      read_only = Policy.decide(call, offered, "read-only", @opts)
+      auto = Policy.decide(call, offered, "auto", @opts)
+
+      case row do
+        :read ->
+          assert read_only == :run, label
+          assert auto == :run, label
+
+        :launch ->
+          assert read_only == {:read_only, Policy.read_only_sentence("Aqua")}, label
+
+          assert auto ==
+                   {:run,
+                    %{
+                      call: %{action: call.action, args: call.args},
+                      account: nil,
+                      binding: %{sources: [], consent_id: nil, classes: []}
+                    }},
+                 label
+
+        :other ->
+          assert read_only == {:read_only, Policy.read_only_sentence("Aqua")}, label
+          assert auto == :run, label
+      end
+    end
+  end
+
+  test "the sentence names the member by its title and the one way to let it" do
+    assert Policy.read_only_sentence("Explorer") ==
+             "Explorer is read-only, so it refused a step that does more than read. " <>
+               "To let it, switch Explorer to auto on the Aqua page."
+
+    write = resolve!("files", %{"action" => "write", "path" => "a", "content" => "b"})
+
+    assert {:read_only, sentence} =
+             Policy.decide(write, offered(@rows), "read-only", title: "Explorer")
+
+    assert sentence == Policy.read_only_sentence("Explorer")
+  end
+
+  test "what only shows the person something runs in either mode, offered or not" do
+    for call <- [resolve!("ui", %{"kind" => "ui.navigate"}), resolve!("request_setup.open", %{})],
+        mode <- ["read-only", "auto"] do
+      assert :run = Policy.decide(call, %{}, mode, @opts)
+    end
+  end
+
+  test "the turn's own start of its program brain runs in either mode, unnarrowed" do
+    start = resolve!("program", %{"action" => "start", "program" => "srv_1", "epoch" => 1})
+
+    for mode <- ["read-only", "auto"] do
+      assert :run = Policy.decide(start, %{}, mode, host_start: true, narrowed: nil)
+    end
+
+    # A model's start of a program is a call like any other.
+    assert {:deny, _} = Policy.decide(start, %{}, "auto", @opts)
+  end
+
+  test "a call not offered is refused in either mode, a browser action the setting turned off in the browser's words" do
+    offered = Aqua.Offered.resolve(["files.read", "browser.open"], {:ok, false})
+    assert offered == %{"files.read" => "offered", "browser.open" => "off"}
+
+    write = resolve!("files", %{"action" => "write", "path" => "a", "content" => "b"})
+    open = resolve!("browser", %{"action" => "open", "url" => "https://example.com/"})
+    tool = resolve!("github__search", %{})
+
+    for mode <- ["read-only", "auto"] do
+      assert {:deny, "files.write is not among the tools Aqua is offered"} =
+               Policy.decide(write, offered, mode, @opts)
+
+      assert {:deny, sentence} = Policy.decide(open, offered, mode, @opts)
+      assert sentence == Aqua.Providers.Browser.turned_off()
+
+      assert {:deny, "github:search is not among the tools Aqua is offered"} =
+               Policy.decide(tool, offered, mode, @opts)
+    end
+  end
+
+  test "a job narrowed to some tools refuses every other call, whatever its kind and mode" do
+    offered = offered(@rows)
+    narrowed = Keyword.put(@opts, :narrowed, ["files.read"])
+
+    assert :run =
              Policy.decide(
                resolve!("files", %{"action" => "read", "path" => "a"}),
-               policy,
+               offered,
+               "auto",
                narrowed
              )
 
@@ -58,49 +171,68 @@ defmodule Aqua.Loop.PolicyTest do
           {"notes", %{"action" => "keep"}},
           {"github__search", %{}},
           {"execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"}}
-        ] do
-      assert {:deny, sentence} = Policy.decide(resolve!(name, args), policy, narrowed)
+        ],
+        mode <- ["read-only", "auto"] do
+      assert {:deny, sentence} = Policy.decide(resolve!(name, args), offered, mode, narrowed)
       assert sentence =~ "outside the tools this job was narrowed to"
     end
 
-    assert :ask =
-             Policy.decide(resolve!("github__search", %{}), policy, narrowed: ["github:search"])
+    assert :run =
+             Policy.decide(
+               resolve!("github__search", %{"q" => "x"}),
+               offered,
+               "auto",
+               Keyword.put(@opts, :narrowed, ["github:search"])
+             )
 
-    assert :ask =
-             Policy.decide(resolve!("notes", %{"action" => "keep"}), policy, narrowed: ["notes"])
+    assert :run =
+             Policy.decide(
+               resolve!("ui", %{"kind" => "ui.navigate"}),
+               offered,
+               "read-only",
+               narrowed
+             )
 
-    assert :auto = Policy.decide(resolve!("ui", %{"kind" => "ui.navigate"}), policy, narrowed)
     assert Policy.within?(resolve!("request_setup.open", %{}), ["files.read"])
   end
 
-  test "a launch is decided by its own line: auto on its grant, ask asks, deny or no line denies" do
-    launch =
-      resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})
-
-    # Under auto a launch runs on its component's grant where that covers
-    # what the turn has read; with no turn whose sources can be read, none
-    # can be said to, and it asks.
-    assert :ask = Policy.decide(launch, @policy, [])
-    refute Policy.auto?(launch, Map.put(@policy, "execution.run", "ask"), [])
-    assert :ask = Policy.decide(launch, Map.put(@policy, "execution.run", "ask"), [])
-    assert {:deny, _} = Policy.decide(launch, Map.put(@policy, "execution.run", "deny"), [])
-
-    # Its card offers no standing answer, for a thread, a schedule or the
-    # agent, whatever its declaration says.
-    assert %{"action_kind" => "execute", "standing" => false} = Policy.standing_rule(launch)
-
-    for scope <- [:thread, :always, :schedule],
-        do: refute(Aqua.Standing.offered?(Policy.standing_rule(launch), scope))
-
-    # A policy that names no `execution.run` denies the launch: an agent
-    # launches only what its own policy grants.
-    for policy <- [%{}, Map.delete(@policy, "execution.run")] do
-      assert {:deny, "execution.run is not in the agent's policy"} =
-               Policy.decide(launch, policy, [])
-    end
-
+  test "a launch naming no component is refused before the mode" do
     bad = resolve!("execution", %{"action" => "run", "reference" => "not a ref"})
-    assert {:refuse, _} = Policy.decide(bad, @policy, [])
+    offered = Aqua.Offered.resolve(["execution.run"], {:ok, true})
+
+    for mode <- ["read-only", "auto"],
+        do: assert({:refuse, _} = Policy.decide(bad, offered, mode, @opts))
+  end
+
+  test "a launch binds the turn's sources as its row holds them, or an unnamed outside source" do
+    launch =
+      resolve!("execution", %{
+        "action" => "run",
+        "reference" => "reagent:local.app:1.0.0",
+        "input" => %{}
+      })
+
+    offered = Aqua.Offered.resolve(["execution.run"], {:ok, true})
+
+    assert {:run, %{binding: %{sources: [unnamed], consent_id: nil, classes: []}}} =
+             Policy.decide(launch, offered, "auto", title: "Aqua")
+
+    assert unnamed == Prima.Source.outside(nil)
+  end
+
+  test "the offered set expands a tool's glob, drops an action the tool lacks, and passes the rest" do
+    offered =
+      Aqua.Offered.resolve(
+        ["notes.*", "files.nope", "native_search", "github:search"],
+        {:ok, true}
+      )
+
+    assert Map.keys(offered) |> Enum.filter(&String.starts_with?(&1, "notes.")) |> Enum.sort() ==
+             Aqua.Kinds.actions_of("notes") |> Enum.map(&"notes.#{&1}") |> Enum.sort()
+
+    refute Map.has_key?(offered, "files.nope")
+    assert offered["native_search"] == "offered"
+    assert offered["github:search"] == "offered"
   end
 
   test "reads overlap; everything else runs alone" do
@@ -108,45 +240,6 @@ defmodule Aqua.Loop.PolicyTest do
     assert :concurrent = Policy.overlap(resolve!("notes", %{"action" => "read"}))
     assert :exclusive = Policy.overlap(resolve!("files", %{"action" => "write"}))
     assert :exclusive = Policy.overlap(resolve!("github__search", %{}))
-  end
-
-  test "a card carries the canonical proposal, the kind and the standing, and a stable digest" do
-    call =
-      resolve!("files", %{"action" => "write", "path" => "data/storage/k.json", "content" => "{}"})
-
-    card = Policy.card(call, id: "apr_1")
-
-    assert card["proposal"] == %{
-             "tool" => "storage",
-             "action" => "write",
-             "args" => %{"key" => "k", "value" => "{}"}
-           } or
-             card["proposal"]["tool"] == "storage"
-
-    assert card["action_kind"] == "write"
-    assert card["id"] == "apr_1"
-    assert Policy.proposal_digest(card) == Policy.proposal_digest(card["proposal"])
-    assert Policy.proposal_digest(card) =~ ~r/^sha256:[0-9a-f]{64}$/
-  end
-
-  test "a proposal with no null is digested as its canonical JSON; an external call's names no action" do
-    # sha256 of {"action":"keep","args":{"content":"c","name":"n"},"tool":"notes"}
-    assert Policy.proposal_digest(%{
-             "tool" => "notes",
-             "action" => "keep",
-             "args" => %{"name" => "n", "content" => "c"}
-           }) == "sha256:ac43e601c35efbc08e02b19ba2486c7badc2de62bfad576681ed3c6069ae3c34"
-
-    card = Policy.card(resolve!("github__search", %{"q" => "x"}), id: "apr_1")
-
-    assert card["proposal"] == %{
-             "tool" => "github:search",
-             "action" => nil,
-             "args" => %{"q" => "x"}
-           }
-
-    assert Policy.proposal_digest(card) ==
-             Policy.proposal_digest(%{"tool" => "github:search", "args" => %{"q" => "x"}})
   end
 
   # The loop runs only these in a restricted turn (loop_test's stopped
@@ -159,145 +252,6 @@ defmodule Aqua.Loop.PolicyTest do
            )
 
     refute Policy.replay_safe?(resolve!("ui", %{"kind" => "ui.navigate"}))
-  end
-
-  # ---------------------------------------------------------------------------
-  # What a launch's card binds
-  # ---------------------------------------------------------------------------
-
-  defp launch!(args \\ %{}) do
-    resolve!(
-      "execution",
-      Map.merge(
-        %{"action" => "run", "reference" => "reagent:local.app:1.0.0", "input" => %{}},
-        args
-      )
-    )
-  end
-
-  defp digest(call, opts), do: call |> Policy.card(opts) |> Policy.proposal_digest()
-
-  test "a launch's card binds the turn's sources, the grant's consent revision and the classes it lets flow" do
-    call = launch!()
-    pinned = Prima.Source.new(:pinned)
-    host = Prima.Source.outside("news.example")
-
-    shown = [
-      sources: [pinned, host],
-      launch: %{consent_id: "con_shown", classes: [:pinned, :outside]}
-    ]
-
-    card = Policy.card(call, shown)
-
-    assert card["proposal"] == %{
-             "tool" => "execution",
-             "action" => "run",
-             "args" => call.args,
-             "sources" => [
-               %{"class" => "pinned"},
-               %{"class" => "outside", "name" => "news.example"}
-             ],
-             "consent_id" => "con_shown",
-             "lets_flow" => ["pinned", "outside"]
-           }
-
-    # The binding reads back as what was bound.
-    assert Aqua.Launch.bound(card["proposal"]) == %{
-             sources: [pinned, host],
-             consent_id: "con_shown",
-             classes: [:pinned, :outside]
-           }
-
-    # Each of the three moves the digest: a card approved over one is not
-    # the card of another.
-    approved = digest(call, shown)
-    assert digest(call, Keyword.put(shown, :sources, [pinned])) != approved
-
-    assert digest(
-             call,
-             Keyword.put(shown, :launch, %{consent_id: "con_other", classes: [:pinned, :outside]})
-           ) !=
-             approved
-
-    assert digest(
-             call,
-             Keyword.put(shown, :launch, %{consent_id: "con_shown", classes: [:pinned]})
-           ) !=
-             approved
-
-    # A launch whose grant could not be loaded binds none, and still binds
-    # the sources; any other call's card binds nothing of a launch.
-    unloaded = Policy.card(call, sources: [pinned, host])["proposal"]
-    assert %{"lets_flow" => [], "sources" => [_, _]} = unloaded
-    refute Map.has_key?(unloaded, "consent_id")
-    assert Aqua.Launch.bound(unloaded).consent_id == nil
-
-    read = resolve!("files", %{"action" => "read", "path" => "a"})
-    refute Map.has_key?(Policy.card(read, sources: [pinned])["proposal"], "sources")
-  end
-
-  # A blob of one node whose edges are `edges` (`{key, edge}`).
-  defp blob(edges) do
-    %Prima.Authority.Blob{
-      nodes: %{
-        "reagent:local.app" => %Prima.Authority.Blob.Node{limits: nil, edges: Map.new(edges)}
-      }
-    }
-  end
-
-  defp egress(domains, flows),
-    do: %Prima.Authority.Blob.Edge{
-      egress: %{domains: domains, methods: [], schemes: [], private_ips: []},
-      flows: flows
-    }
-
-  defp server(name, flows),
-    do: %Prima.Authority.Blob.Edge{
-      tool_servers: [
-        %{
-          server_digest: "sha256:x",
-          server_name: name,
-          tool_patterns: ["*"],
-          descriptions_digest: nil
-        }
-      ],
-      flows: flows
-    }
-
-  test "a launch lets flow the classes some exit of the grant's tree declares no flow of" do
-    pinned = Prima.Source.new(:pinned)
-    filed = Prima.Source.new(:filed)
-    api = Prima.Source.outside("api.example.com")
-
-    covered = egress(["api.example.com"], [%{from: :pinned, to: "api.example.com"}])
-
-    # A class the edge's own flow covers at its one exit needs nothing.
-    assert Policy.lets_flow(blob([{"@ingress", covered}]), [pinned]) == []
-    assert Policy.lets_flow(blob([{"@ingress", covered}]), [pinned, filed]) == [:filed]
-
-    # Every exit of the tree counts: a tool server with no pinned flow lets
-    # pinned flow, whatever the domain's flow covers.
-    tree = blob([{"@ingress", covered}, {"catalyst:local.tool", server("github", [])}])
-    assert Policy.lets_flow(tree, [pinned]) == [:pinned]
-
-    github = server("github", [%{from: :pinned, to: "server:github"}])
-    assert Policy.lets_flow(blob([{"@ingress", covered}, {"tool", github}]), [pinned]) == []
-
-    # Material from a host may go back to it by name; a pattern never
-    # covers by name.
-    assert Policy.lets_flow(blob([{"@ingress", egress(["api.example.com"], [])}]), [api]) == []
-
-    assert Policy.lets_flow(blob([{"@ingress", egress(["*.example.com"], [])}]), [api]) == [
-             :outside
-           ]
-
-    # A domain narrowed under a flow's pattern keeps the pattern's flow.
-    narrowed = egress(["api.example.com"], [%{from: :filed, to: "*.example.com"}])
-    assert Policy.lets_flow(blob([{"@ingress", narrowed}]), [filed]) == []
-
-    # No exit, no flow to let; and a grant with no blob lets nothing.
-    assert Policy.lets_flow(blob([{"@ingress", %Prima.Authority.Blob.Edge{}}]), [pinned]) == []
-    assert Policy.lets_flow(:none, [pinned, filed]) == []
   end
 
   test "a child's answer carries its ledger, says nothing ran, or leaves it to the row" do

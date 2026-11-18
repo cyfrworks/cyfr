@@ -702,6 +702,7 @@ defmodule Aqua.TurnSourcesTest do
         attempt: attempt.attempt,
         profile_id: "prof_src",
         consent_id: "consent_src",
+        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 

@@ -2095,7 +2095,7 @@ defmodule Cyfr.DocsDriftTest do
     # Who reaches the tool: the CLI, the API and a glass paired with the
     # person from outside, and the assistant from a run. No tincture
     # declares it, a manifest of any type but an agent's may not name it,
-    # and the shipped soul asks the person before it edits.
+    # and the shipped soul is offered it and runs in auto.
     %Prima.Operation{planes: planes} = Map.fetch!(operations("layout"), "edit")
 
     assert :external in planes and :in_chain in planes,
@@ -2186,13 +2186,13 @@ defmodule Cyfr.DocsDriftTest do
         SourceTree.read(Path.join(@repo_root, "seed/aqua/aqua.md"))
       )
 
-    assert soul.tool_policy["layout.edit"] == "ask",
-           "the shipped soul's policy holds layout.edit at #{inspect(soul.tool_policy["layout.edit"])}; " <>
-             "tincture-guide.md's layout paragraph says it asks the person first"
+    assert "layout.edit" in soul.tools and soul.mode == "auto",
+           "the shipped soul is offered #{inspect(soul.tools)} in #{soul.mode}; " <>
+             "tincture-guide.md's layout paragraph says it is offered layout.edit and runs in auto"
 
     for writer <- [
           "The CLI, the API and a device paired with the person call it for the person",
-          "the assistant, whose shipped policy asks the person first",
+          "the assistant: the shipped Aqua is offered it and runs in auto",
           "No tincture declares `layout.edit`"
         ] do
       assert paragraph =~ writer,

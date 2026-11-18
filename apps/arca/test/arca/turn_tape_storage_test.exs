@@ -86,6 +86,7 @@ defmodule Arca.TurnTapeStorageTest do
         consent_id: "consent_x",
         agent_revision_digest: "sha256:rev",
         agent_capability_digest: "sha256:cap",
+        agent_mode: "auto",
         recovery_limit: 3,
         fence: turn.fence
       })
@@ -105,6 +106,7 @@ defmodule Arca.TurnTapeStorageTest do
         root_execution_id: root.execution.id,
         attempt: root.attempt.attempt,
         budget_id: root.budget_id,
+        agent_mode: "auto",
         recovery_limit: 3,
         fence: turn.fence
       })

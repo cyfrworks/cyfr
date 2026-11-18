@@ -111,6 +111,7 @@ defmodule Aqua.ApprovalsTest do
         Map.merge(pins, %{
           root_execution_id: execution.id,
           attempt: attempt.attempt,
+          agent_mode: "auto",
           recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
         })
       )
