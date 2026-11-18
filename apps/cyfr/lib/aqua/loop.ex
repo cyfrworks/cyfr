@@ -1823,7 +1823,7 @@ defmodule Aqua.Loop do
           _ = Tape.skip_steps(guest(state), state.turn, "the turn ran out of time")
           {:halt, {:ok, state}}
 
-        Tape.steer_pending?(guest(state), state.turn) ->
+        steered?(state) ->
           _ = Tape.skip_steps(guest(state), state.turn, "a newer message arrived")
           {:halt, {:ok, state}}
 
@@ -3019,8 +3019,8 @@ defmodule Aqua.Loop do
   # a flush's dispatched call closes with its outcome unknown and its
   # unstarted ones are skipped; a dispatched call whose effect is unknown
   # stops the turn on it — a person continues, never a replay; an approved
-  # or unstarted step is dispatched once; a steer that arrived while the
-  # turn was away skips them all.
+  # or unstarted step is dispatched once; a steer that arrived while a
+  # model's turn was away skips them all (`steered?/1`).
   defp settle(%State{} = state) do
     guest = guest(state)
 
@@ -3092,7 +3092,7 @@ defmodule Aqua.Loop do
           rest = Enum.map(others, &%{item: %{step: &1, call: recall(state, &1)}, task: nil})
           stop_uncertain(state, first, "the turn was interrupted", rest)
 
-        Tape.steer_pending?(guest, state.turn) ->
+        steered?(state) ->
           _ = Tape.skip_steps(guest, state.turn, "a newer message arrived")
           {:continue, %{state | model?: true}}
 
@@ -3486,6 +3486,13 @@ defmodule Aqua.Loop do
   end
 
   defp replay_safe?(%Call{} = call), do: Policy.replay_safe?(call)
+
+  # A post past a model turn's boundary skips what the turn had not run,
+  # since the model answers the newer message instead. A program turn's
+  # posts are deliveries its attendant writes once the turn's start is
+  # allowed (`Aqua.Program`), so none skips a step of it, its start least.
+  defp steered?(%State{program: %{}}), do: false
+  defp steered?(%State{} = state), do: Tape.steer_pending?(guest(state), state.turn)
 
   # A program brain's turn has no deadline: its job ends on Stop, with its
   # thread, or after the program's own silence (`Aqua.Program`).

@@ -644,6 +644,46 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
     end
 
+    test "a post written while the start's card waits skips nothing and is written nothing " <>
+           "until the start is allowed, then follows the post that opened the turn",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "hello")
+      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
+      %{approval: card} = pending_card(ctx, turn)
+      steer = steer!(ctx, thread, turn, "and this")
+
+      refute_receive {:session, "open", _wire, _fields}, 1_000
+      assert inputs(ctx, turn) == []
+      assert carried_by(ctx, steer.id) == nil
+      assert %{approval: %{id: card_id, status: "pending"}} = pending_card(ctx, turn)
+      assert card_id == card.id
+
+      approve!(ctx, card)
+      loop = resume(ctx, turn)
+      %{work: work} = started!(fake, row)
+      assert work["id"] == start_step(ctx, turn).id
+      first = sent()
+      [opening] = inputs(ctx, turn)
+      assert first == posted(opening, turn, "hello")
+      say(fake, row, accepted(opening))
+      second = sent()
+      [_opening, steered] = inputs(ctx, turn)
+      assert second == posted(steered, turn, "and this")
+      say(fake, row, accepted(steered))
+      say(fake, row, idle(turn, [opening.id, steered.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Map.take(start_step(ctx, turn), [:dispatch_state, :outcome, :approval_id]) ==
+               %{dispatch_state: "closed", outcome: "ok", approval_id: card.id}
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("post", steer.id, "ok")
+             ]
+
+      assert system_lines(ctx, thread, turn) == []
+    end
+
     test "a standing never recorded while the program works ends the turn at its next write, which is never written",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       allow!(ctx, thread, row)
@@ -715,7 +755,7 @@ defmodule Aqua.ProgramTest do
     end
 
     test "a session left from the turn before is written nothing while the next turn waits on " <>
-           "its own start's card, and once allowed takes the next turn's work",
+           "its own start's card, and once allowed takes the next turn's work, then its posts",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "first")
       assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
@@ -736,13 +776,15 @@ defmodule Aqua.ProgramTest do
       refute_receive {:session, "send", _wire, _fields}, 2_000
       assert {:paused, :approval} = Task.await(paused, 30_000)
       %{approval: card} = pending_card(ctx, next)
-      refute_received {:session, "send", _wire, _fields}
+      steer = steer!(ctx, thread, next, "and this")
+      refute_receive {:session, "send", _wire, _fields}, 1_000
       refute_received {:session, "close", _wire, _fields}
       assert [_held] = running_sessions(fake, row)
       assert inputs(ctx, next) == []
       assert carried_by(ctx, next.message_id) == nil
+      assert carried_by(ctx, steer.id) == nil
 
-      # Allowed, the same session takes the turn's work, then its post.
+      # Allowed, the same session takes the turn's work, then its posts.
       approve!(ctx, card)
       loop = resume(ctx, next)
       work = sent()
@@ -759,11 +801,16 @@ defmodule Aqua.ProgramTest do
       [second] = inputs(ctx, next)
       assert post == posted(second, next, "second")
       say(fake, row, accepted(second))
-      say(fake, row, idle(next, [second.id]))
+      post = sent()
+      [_second, steered] = inputs(ctx, next)
+      assert post == posted(steered, next, "and this")
+      say(fake, row, accepted(steered))
+      say(fake, row, idle(next, [second.id, steered.id]))
       assert :completed = Task.await(loop, 30_000)
 
       assert Enum.map(inputs(ctx, next), &step_fields/1) == [
-               input_fields("post", next.message_id, "ok")
+               input_fields("post", next.message_id, "ok"),
+               input_fields("post", steer.id, "ok")
              ]
 
       refute_received {:session, "open", _wire, _fields}
