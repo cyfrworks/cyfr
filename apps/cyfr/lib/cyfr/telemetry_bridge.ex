@@ -58,7 +58,6 @@ defmodule Cyfr.TelemetryBridge do
     Build,
     CallerInvalidated,
     Components,
-    Confirmation,
     Execution,
     FeedRun,
     FileListed,
@@ -66,6 +65,7 @@ defmodule Cyfr.TelemetryBridge do
     FrameCredential,
     Notify,
     PolicyDecision,
+    Prompt,
     Request,
     ScheduleRun,
     Session,
@@ -78,8 +78,8 @@ defmodule Cyfr.TelemetryBridge do
     Webhooks
   }
 
-  # What a pending confirmation's life announces, one event per kind of
-  # `Cyfr.Bus.Confirmation`.
+  # What a pending confirmation's life announces, one event per fact of
+  # its kind of `Cyfr.Bus.Prompt`.
   @confirmation_events [
     [:cyfr, :sanctum, :confirmation, :opened],
     [:cyfr, :sanctum, :confirmation, :confirmed],
@@ -429,18 +429,18 @@ defmodule Cyfr.TelemetryBridge do
        when is_binary(id) and id != "",
        do: [{:global, Bus.athanor_archived_global(), AthanorArchived.new(id)}]
 
-  # A pending confirmation moved: on its person's own topic, carrying its
-  # ref, operation and expiry and nothing else the emitter attached.
+  # A pending confirmation moved: a prompt on its person's own topic,
+  # carrying its ref and expiry and nothing else the emitter attached.
   defp messages(
          [:cyfr, :sanctum, :confirmation, stage] = event,
          _measurements,
          %{user_id: user_id} = meta
        )
        when event in @confirmation_events and is_binary(user_id) and user_id != "" do
-    fields = Map.take(meta, [:ref, :operation, :expires_at])
+    fields = Map.take(meta, [:ref, :expires_at])
 
     [
-      tenant(meta, &Bus.confirmations(&1, user_id), &Confirmation.new(&1, stage, fields))
+      tenant(meta, &Bus.prompts(&1, user_id), &Prompt.new(&1, :confirmation, stage, fields))
       | confirmation_attention(stage, meta)
     ]
   end

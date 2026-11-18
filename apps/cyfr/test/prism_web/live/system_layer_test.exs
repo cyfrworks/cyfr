@@ -153,7 +153,7 @@ defmodule PrismWeb.SystemLayerTest do
   asking layer keeps the signal's secret in its process and never
   renders it, shows the home's preview and the client that asked, takes
   a passkey's proof by the record's ref, and repeats the change once the
-  record reads confirmed on `confirmation.changes`. Another client of the
+  record reads confirmed on `prompt.changes`. Another client of the
   person, listening on the same stream, shows the same record before any
   proof and confirms it by its ref.
 
@@ -4538,8 +4538,9 @@ defmodule PrismWeb.SystemLayerTest do
 
     defp fact_for(ref, kind) do
       fn
-        {:phoenix, :send_update, {_target, %{fact: %{"ref" => ^ref, "kind" => fact_kind}}}} ->
-          to_string(fact_kind) == kind
+        {:phoenix, :send_update,
+         {_target, %{fact: %{"kind" => :confirmation, "ref" => ^ref, "fact" => happened}}}} ->
+          to_string(happened) == kind
 
         _other ->
           false
@@ -4730,12 +4731,11 @@ defmodule PrismWeb.SystemLayerTest do
     # be held still when it is sent.
     defp cancelled_fact(view, row) do
       ctx = view_context(view)
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "prompt.changes", nil)
 
       fact =
-        Cyfr.Bus.Confirmation.new(Context.actor(ctx), :cancelled,
+        Cyfr.Bus.Prompt.new(Context.actor(ctx), :confirmation, :cancelled,
           ref: row.ref,
-          operation: row.operation,
           expires_at: row.expires_at
         )
 
@@ -4988,6 +4988,47 @@ defmodule PrismWeb.SystemLayerTest do
       end_views()
     end
 
+    test "is followed by its own kind's facts alone: another kind's under its ref ends nothing",
+         %{view: view, ctx: ctx} do
+      other = other_session!(ctx)
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               PrismWeb.Ops.call_tool(other, "vault/create", %{
+                 "name" => "kinds-apart-#{System.unique_integer([:positive])}",
+                 "kind" => "api_key",
+                 "fields" => %{"KEY" => "x"},
+                 "destination" => %{"hosts" => ["api.example.com"]}
+               })
+
+      ref = Prima.Confirmation.ref(id)
+      prompt_id = Prompt.confirmation_id(ref)
+      wait_until(fn -> open_prompt(view) == prompt_id end, 2_000, "opened")
+
+      held = view_context(view)
+      actor = Context.actor(held)
+      topic = Cyfr.Bus.prompts(actor, held.user_id)
+
+      # A question's ending facts under the same ref, then the
+      # confirmation's own `confirmed`: the stream keeps their order, so
+      # had the layer taken the question's for the confirmation's, the
+      # prompt would be gone before `confirmed` reached it.
+      for fact <- [:expired, :withdrawn] do
+        :ok =
+          Cyfr.Bus.broadcast(actor, topic, Cyfr.Bus.Prompt.new(actor, :question, fact, ref: ref))
+      end
+
+      :ok =
+        Cyfr.Bus.broadcast(
+          actor,
+          topic,
+          Cyfr.Bus.Prompt.new(actor, :confirmation, :confirmed, ref: ref)
+        )
+
+      wait_until(fn -> render(view) =~ ~s(data-status="confirmed") end, 2_000, "confirmed")
+      assert open_prompt(view) == prompt_id
+      end_views()
+    end
+
     test "an answer that does not prove the record confirms nothing, and the prompt still waits",
          %{view: view, ctx: ctx} do
       other = other_session!(ctx)
@@ -5070,14 +5111,13 @@ defmodule PrismWeb.SystemLayerTest do
       ctx = view_context(view)
       tag = CyfrWeb.ContextGuard.capture(ctx)
       layer = "listener-probe"
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "prompt.changes", nil)
       {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, grant, tag)
       expires_at = DateTime.utc_now()
 
       fact =
-        Cyfr.Bus.Confirmation.new(Context.actor(ctx), :opened,
+        Cyfr.Bus.Prompt.new(Context.actor(ctx), :confirmation, :opened,
           ref: "rcf_listener_probe",
-          operation: "vault.create",
           expires_at: expires_at
         )
 
@@ -5090,9 +5130,9 @@ defmodule PrismWeb.SystemLayerTest do
 
       # The grant's fields alone: the payload's athanor never leaves.
       assert projected == %{
+               "kind" => :confirmation,
                "ref" => "rcf_listener_probe",
-               "kind" => :opened,
-               "operation" => "vault.create",
+               "fact" => :opened,
                "expires_at" => expires_at
              }
 
@@ -5112,7 +5152,7 @@ defmodule PrismWeb.SystemLayerTest do
       ctx = view_context(view)
       tag = CyfrWeb.ContextGuard.capture(ctx)
       layer = "listener-deadline"
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "prompt.changes", nil)
       due = %{grant | deadline: DateTime.add(DateTime.utc_now(), 300, :millisecond)}
       {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, due, tag)
       monitor = Process.monitor(pid)
@@ -5135,14 +5175,13 @@ defmodule PrismWeb.SystemLayerTest do
       ctx = view_context(view)
       tag = CyfrWeb.ContextGuard.capture(ctx)
       layer = "listener-overflow"
-      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "confirmation.changes", nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, "prompt.changes", nil)
       {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, grant, tag)
       monitor = Process.monitor(pid)
 
       fact =
-        Cyfr.Bus.Confirmation.new(Context.actor(ctx), :opened,
+        Cyfr.Bus.Prompt.new(Context.actor(ctx), :confirmation, :opened,
           ref: "rcf_listener_overflow",
-          operation: "vault.create",
           expires_at: DateTime.utc_now()
         )
 

@@ -989,27 +989,27 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       {grant_id, grant, state} = open_stream!(state, "s1")
 
-      assert grant.stream == "confirmation.changes"
+      assert grant.stream == "prompt.changes"
       assert grant.subject == user.id
-      assert grant.projection == ["ref", "kind", "operation", "expires_at"]
+      assert grant.projection == ["kind", "ref", "fact", "expires_at"]
       # Never later than the certificate it was opened under.
       assert grant.expires_at <= device.cert.expires_at
 
       # The gate recorded the open, as a stream's.
       assert Enum.any?(
                decisions_of(state.ctx.request_id),
-               &(&1.tool == "stream:confirmation.changes" and &1.admission == "admitted")
+               &(&1.tool == "stream:prompt.changes" and &1.admission == "admitted")
              )
 
       # A record of the person's opens: its fact arrives as an event under
-      # the grant, projected, and never carries the secret.
+      # the grant, projected, and never carries the secret or the operation.
       id = asked!(session_ctx)
 
       {payload, state} = event!(state, grant_id)
+      assert payload["kind"] == "confirmation"
       assert payload["ref"] == Prima.Confirmation.ref(id)
-      assert payload["kind"] == "opened"
-      assert payload["operation"] == "vault.create"
-      assert Map.keys(payload) |> Enum.sort() == ["expires_at", "kind", "operation", "ref"]
+      assert payload["fact"] == "opened"
+      assert Map.keys(payload) |> Enum.sort() == ["expires_at", "fact", "kind", "ref"]
       refute inspect(payload) =~ id
       refute state.closed
     end
@@ -1069,7 +1069,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {error, state} =
         answer_error!(
           state,
-          intent_message("s3", "streams.open", %{"stream" => "confirmation.changes", "extra" => 1})
+          intent_message("s3", "streams.open", %{"stream" => "prompt.changes", "extra" => 1})
         )
 
       assert error["class"] == "invalid_argument"
@@ -1091,7 +1091,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {error, state} =
         answer_error!(
           state,
-          intent_message("s17", "streams.open", %{"stream" => "confirmation.changes"})
+          intent_message("s17", "streams.open", %{"stream" => "prompt.changes"})
         )
 
       assert error["class"] == "rate_limited"
@@ -1132,9 +1132,8 @@ defmodule Emissary.Web.DeviceChannelTest do
       %{forwarder: forwarder} = state.grants[grant_id]
 
       fact =
-        Cyfr.Bus.Confirmation.new(Context.actor(state.client), :opened,
-          ref: "rcf_forwarded",
-          operation: "vault.create"
+        Cyfr.Bus.Prompt.new(Context.actor(state.client), :confirmation, :opened,
+          ref: "rcf_forwarded"
         )
 
       # In the forwarder's own mailbox, ahead of the granted struct: another
@@ -1223,7 +1222,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert {:push, [{:text, answer}, {:text, revoke}], state} =
                send_frame(
                  state,
-                 intent_message("s1", "streams.open", %{"stream" => "confirmation.changes"})
+                 intent_message("s1", "streams.open", %{"stream" => "prompt.changes"})
                )
 
       {:ok, _} = Supervisor.restart_child(Cyfr.WebSupervisor, id)
@@ -1308,9 +1307,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       :ok =
         ws_send(
           socket,
-          Jason.encode!(
-            intent_message("s1", "streams.open", %{"stream" => "confirmation.changes"})
-          )
+          Jason.encode!(intent_message("s1", "streams.open", %{"stream" => "prompt.changes"}))
         )
 
       {1, answer_json} = ws_recv(socket, two_second_deadline())
@@ -1418,9 +1415,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       :ok =
         ws_send(
           socket,
-          Jason.encode!(
-            intent_message("s1", "streams.open", %{"stream" => "confirmation.changes"})
-          )
+          Jason.encode!(intent_message("s1", "streams.open", %{"stream" => "prompt.changes"}))
         )
 
       assert_receive {:revoked_after_socket_admission, {:ok, %{standing: "revoked"}},
@@ -1510,7 +1505,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert_refused_answering(
         send_frame(
           state,
-          intent_message("i0", "streams.open", %{"stream" => "confirmation.changes"})
+          intent_message("i0", "streams.open", %{"stream" => "prompt.changes"})
         )
       )
 
@@ -1873,13 +1868,13 @@ defmodule Emissary.Web.DeviceChannelTest do
     message
   end
 
-  # Open `confirmation.changes` with intent `id`: the grant's id, the grant
+  # Open `prompt.changes` with intent `id`: the grant's id, the grant
   # message, and the channel's state.
   defp open_stream!(state, id) do
     assert {:push, [{:text, answer}, {:text, grant}], state} =
              send_frame(
                state,
-               intent_message(id, "streams.open", %{"stream" => "confirmation.changes"})
+               intent_message(id, "streams.open", %{"stream" => "prompt.changes"})
              )
 
     assert {:answer, %{id: ^id, result: %{"grant_id" => grant_id}}} = decoded(answer)
@@ -2655,7 +2650,7 @@ defmodule Emissary.Web.DeviceChannelTest do
   def revoke_after_admission(
         _event,
         _measurements,
-        %{tool: "stream:confirmation.changes"},
+        %{tool: "stream:prompt.changes"},
         _config
       ) do
     key = {__MODULE__, :revoke_after_admission}
@@ -2679,7 +2674,7 @@ defmodule Emissary.Web.DeviceChannelTest do
   def revoke_after_socket_admission(
         _event,
         _measurements,
-        %{tool: "stream:confirmation.changes"},
+        %{tool: "stream:prompt.changes"},
         {ctx, client_id, owner, marker}
       ) do
     unless Process.get(marker) do

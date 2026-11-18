@@ -1533,7 +1533,7 @@ defmodule Compendium.Tincture.RulesTest do
 
       for name <- [
             "mcp_servers.changes",
-            "confirmation.changes",
+            "prompt.changes",
             "feed.results",
             "runs.changes",
             "schedules.changes",
