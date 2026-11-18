@@ -1321,7 +1321,22 @@ defmodule Aqua.ProgramTest do
 
       Scripted.hold(fake, "close")
       {:ok, open} = Tape.turn(ctx, turn.id)
-      stopping = Task.async(fn -> Aqua.Loop.abort(ctx, open, "stopped") end)
+
+      # Closed on purpose, the session ends the loop's wait and the loop
+      # ends by itself, its late writes refused by the moved fence. The
+      # abort's stop waits for that end, so no process is stopped while
+      # it holds the test's shared connection.
+      stop = fn ->
+        monitor = Process.monitor(loop.pid)
+
+        receive do
+          {:DOWN, ^monitor, :process, _pid, _reason} -> :ok
+        after
+          10_000 -> :ok
+        end
+      end
+
+      stopping = Task.async(fn -> Aqua.Loop.abort(ctx, open, "stopped", stop) end)
 
       # The session's close is under way and nothing of the turn has
       # stopped: its loop still runs, and the abort waits on the close.
