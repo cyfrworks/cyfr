@@ -44,6 +44,9 @@ defmodule PrismWeb.FilesLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   require Logger
 
   alias Cyfr.Bus
@@ -1270,6 +1273,12 @@ defmodule PrismWeb.FilesLive do
           </section>
         </div>
       </.card>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+      />
     </div>
     """
   end

@@ -3,6 +3,9 @@
 
 defmodule PrismWeb.BuildsLive do
   use PrismWeb, :live_view
+
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
   require Logger
 
   @impl true
@@ -317,6 +320,12 @@ defmodule PrismWeb.BuildsLive do
           </div>
         </div>
       </.card>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+      />
     </div>
     """
   end

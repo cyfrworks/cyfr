@@ -303,11 +303,11 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
   describe "the pages that draw it" do
     # Every signed-in page of the console, mounted while a question and
-    # another client's confirmation both wait: a page draws the question
-    # exactly when it draws the confirmation, since one listening layer
-    # draws both. A page with none (the legal page among them) draws
-    # neither, and attention still lists the question.
-    test "are the pages that draw another client's confirmation", setup do
+    # another client's confirmation both wait, draws each once, in its one
+    # listening layer, and hears the layer's reports through its hook;
+    # `/chat` forwards to the desktop and draws nothing of its own. A page
+    # added without the layer, or without its hook, fails here.
+    test "are every signed-in page, each drawing another client's confirmation too", setup do
       other = other_session!(setup.ctx)
 
       assert {:error, {:confirmation_required, %{id: id}}} =
@@ -321,33 +321,43 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       confirmation = Prompt.confirmation_id(Prima.Confirmation.ref(id))
       {_run, ref} = Q.open!(setup.ctx, setup.component)
       question = Prompt.question_id(ref)
-      workspace = workspace!(setup.ctx)
+      pages = signed_in_pages(workspace!(setup.ctx))
 
-      drawn =
-        for {entry, url} <- signed_in_pages(workspace), into: %{} do
-          ids = drawn_on(setup.conn, url)
-          assert question in ids == confirmation in ids, "#{entry}: #{inspect(ids)}"
-          {entry, question in ids}
+      # The workspace's page is opened in both its states.
+      entries = Enum.map(pages, &elem(&1, 0))
+      assert "/a/:athanor/workspace/:id" in entries
+      assert "/a/:athanor/workspace/:id (missing)" in entries
+
+      for {entry, url} <- pages do
+        case drawn_on(setup.conn, url) do
+          :redirect ->
+            assert entry == "/chat"
+
+          {ids, hooked?} ->
+            assert Enum.count(ids, &(&1 == question)) == 1, "#{entry}: #{inspect(ids)}"
+            assert Enum.count(ids, &(&1 == confirmation)) == 1, "#{entry}: #{inspect(ids)}"
+            assert hooked?, "#{entry} draws the layer without its hook"
         end
+      end
 
-      # The pages and states that draw neither: no listening layer, a
-      # redirect, or a workspace that is not there.
-      neither = for {entry, false} <- drawn, do: entry
+      end_views()
+    end
 
-      assert Enum.sort(neither) ==
-               Enum.sort([
-                 "/chat",
-                 "/a/:athanor/workspace/:id (missing)"
-                 | Enum.map(
-                     ~w(files activities enforcements executions reports builds tips legal),
-                     &("/a/:athanor/" <> &1)
-                   )
-               ])
+    test "take the card's answer, and the page goes on", setup do
+      for {entry, url} <- signed_in_pages(workspace!(setup.ctx)), entry != "/chat" do
+        {:ok, view, _html} = live(setup.conn, url)
+        {_run, ref} = Q.open!(setup.ctx, setup.component)
+        id = Prompt.question_id(ref)
+        shows!(view, id, "the card on #{entry}")
 
-      # So the comparison above compares something on the pages that listen.
-      assert drawn["/a/:athanor/vault"]
-      assert drawn["/a/:athanor/components/:ref"]
-      assert drawn["/a/:athanor/workspace/:id"]
+        choose(view, "deny_once")
+        assert_receive {:answered, ^ref}, 2_000, entry
+        assert Q.row(setup.ctx, ref).state == "denied", entry
+        wait_until(fn -> open_prompt(view) != id end, 2_000, "the card leaving #{entry}")
+        assert Process.alive?(view.pid), entry
+      end
+
+      refute_received {:answered, _again}
       end_views()
     end
 
@@ -403,23 +413,29 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       |> Enum.uniq()
     end
 
-    # The prompts every system layer of the page holds, open or waiting;
-    # none for a route that sends the browser elsewhere.
+    # The prompts every system layer of the page holds, open or waiting,
+    # and whether the page mounts the layer's hook (`PrismWeb.SystemLayer.Hook`);
+    # `:redirect` for a route that sends the browser elsewhere.
     defp drawn_on(conn, url) do
       case live(conn, url) do
         {:ok, view, _html} ->
           render(view)
-          {by_cid, _ids, _next} = :sys.get_state(view.pid).components
+          state = :sys.get_state(view.pid)
+          {by_cid, _ids, _next} = state.components
 
-          for {_cid, entry} <- by_cid,
-              elem(entry, 0) == PrismWeb.SystemLayer,
-              %{current: current, queue: queue} = elem(entry, 2),
-              prompt <- [current | queue],
-              prompt != nil,
-              do: prompt.id
+          ids =
+            for {_cid, entry} <- by_cid,
+                elem(entry, 0) == PrismWeb.SystemLayer,
+                %{current: current, queue: queue} = elem(entry, 2),
+                prompt <- [current | queue],
+                prompt != nil,
+                do: prompt.id
+
+          hooks = state.socket.private.lifecycle.handle_info
+          {ids, Enum.any?(hooks, &(&1.id == PrismWeb.SystemLayer.Hook))}
 
         {:error, {_redirect, _to}} ->
-          []
+          :redirect
       end
     end
 
