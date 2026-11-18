@@ -80,6 +80,11 @@ type driver struct {
 	// Whether the session's total holds a sub-agent's counts is not
 	// established, so from then on its usage is partial.
 	others bool
+	// resumed is set while a resumed thread has sent no total yet: its
+	// first is partial, since it may end a stretch a sub-agent worked in
+	// whose total's event never committed, and nothing of `others`
+	// outlives the process that saw it.
+	resumed bool
 	// What the native turns name: each post by its uuid, each turn under
 	// way, the one Codex runs now, the harness's own tools running, and the
 	// calls of CYFR's tools it holds, by their call ids.
@@ -435,6 +440,7 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		d.starting = nil
 		d.session = r.Thread.ID
 		d.model = r.Model
+		d.resumed = s.resume
 		// `held` is delivery evidence and no more: the pending posts the
 		// thread's rollout was read to hold. A pending post it leaves out is
 		// not established, never proved absent.
@@ -562,9 +568,10 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 	case "thread/tokenUsage/updated":
 		usage := brainwire.NewEvent("usage").Set("gen", d.gen).SetOptional("work", work).Set("total", d.session)
 		read, models := threadTotal(n.TokenUsage, d.model)
-		if read == "complete" && d.others {
+		if read == "complete" && (d.others || d.resumed) {
 			read = "partial"
 		}
+		d.resumed = false
 		usage.Set("accounting", read)
 		if read != "unavailable" {
 			usage.Set("models", models)
@@ -670,6 +677,7 @@ func (d *driver) Close() {
 	d.waiting = nil
 	d.session = ""
 	d.others = false
+	d.resumed = false
 	d.active = ""
 	d.turns = map[string]*turn{}
 	d.own = map[string]string{}

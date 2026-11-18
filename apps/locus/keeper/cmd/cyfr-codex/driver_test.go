@@ -902,3 +902,51 @@ func TestUsageIsPartialOnceASubAgentWorks(t *testing.T) {
 		})
 	}
 }
+
+// A resumed thread's first total is partial: it may end a stretch a
+// sub-agent worked in whose total's event never committed, and nothing the
+// driver saw outlives its process. That first total is the one a resume
+// repeats, naming no work, or, when Codex repeats none, the first new one;
+// the totals after it are complete again while no sub-agent works.
+func TestTheFirstTotalAfterAResumeIsPartial(t *testing.T) {
+	for _, repeated := range []bool{true, false} {
+		t.Run(map[bool]string{true: "repeated", false: "new"}[repeated], func(t *testing.T) {
+			s := startDriver(t)
+			session := startFresh(s, map[string]any{})
+			work(s, "stp_work", "trn_1")
+			postText(s, "stp_first", "trn_1", "child")
+			s.until("idle")
+			s.end()
+			if !repeated {
+				t.Setenv("FAKE_NO_REPEAT", "1")
+			}
+			again := startDriverIn(t, s.home)
+			again.expect("hello")
+			again.send(map[string]any{"t": "start", "gen": 4, "session": session, "config": map[string]any{}})
+			if e := again.expect("started"); e["fresh"] != false || e["session"] != session {
+				t.Fatalf("the thread resumes: %v", e)
+			}
+			var got []string
+			if repeated {
+				e := again.expect("usage")
+				if _, named := e["work"]; named || e["total"] != session {
+					t.Fatalf("the repeated total is the thread's and names no work: %v", e)
+				}
+				got = append(got, fmt.Sprint(e["accounting"]))
+			}
+			work(again, "stp_work_2", "trn_2")
+			for _, id := range []string{"stp_second", "stp_third"} {
+				postText(again, id, "trn_2", "hello")
+				for _, e := range again.until("idle") {
+					if e["t"] == "usage" {
+						got = append(got, fmt.Sprint(e["accounting"]))
+					}
+				}
+			}
+			want := map[bool]string{true: "[partial complete complete]", false: "[partial complete]"}[repeated]
+			if fmt.Sprint(got) != want {
+				t.Fatalf("a resumed thread's first total is partial, the rest complete: %v, want %s", got, want)
+			}
+		})
+	}
+}

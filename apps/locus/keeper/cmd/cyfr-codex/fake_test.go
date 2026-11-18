@@ -41,7 +41,8 @@ import (
 // It refuses to start without `app-server` last, answers nothing before
 // `initialize`, writes a canary to its standard error, which the driver
 // must never pass on, and keeps a sign-in, `auth.json`, while
-// FAKE_SIGNED_OUT is unset.
+// FAKE_SIGNED_OUT is unset. A resume sends the thread's last total again
+// unless FAKE_NO_REPEAT is set.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -331,7 +332,7 @@ func fakeCodex() int {
 				}
 				thread.steered = make(chan string, 4)
 				ok(map[string]any{"thread": map[string]any{"id": thread.id, "turns": []any{}}, "model": thread.model, "approvalPolicy": thread.policy})
-				if m.Method == "thread/resume" {
+				if m.Method == "thread/resume" && os.Getenv("FAKE_NO_REPEAT") == "" {
 					// A resume sends the thread's last total again, naming the
 					// turn before it, as Codex 0.169.0 does.
 					usage("turn_before", 0, 0)

@@ -34,9 +34,10 @@ import (
 // snapshots, and the driver looks for the named thread's files alone.
 // Whether `thread/delete` removes a sub-agent's thread with its parent's is
 // not established for 0.169.0: no run of Codex itself here started a
-// sub-agent, and the app-server's own document does not say. If it does,
-// that thread's shell snapshots stay in the folder; if it does not, its
-// rollout and its rows stay as well.
+// sub-agent, and the app-server's own document does not say. The driver
+// neither removes nor verifies a sub-agent's thread's shell snapshots, so
+// they may remain; what else of that thread survives, its rollout and its
+// rows, depends on Codex's own deletion.
 
 // oneOffWait bounds a one-off app-server's answer: a first start fetches
 // the program.
