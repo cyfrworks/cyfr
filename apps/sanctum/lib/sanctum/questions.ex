@@ -51,8 +51,8 @@ defmodule Sanctum.Questions do
   given under equal to the running release's: a reworded title asks
   again, and a deny stays. The one for this caller beats the one for any
   caller; an unknown caller is covered only by an answer for any. A
-  person removes one (`forget/2`); a removed catalyst's go with it
-  (`component_removed/3`).
+  person removes one (`forget/2`); a catalyst's go in the transaction
+  that removes its last installed release (`Arca.ComponentStorage`).
 
   ## The answer door
 
@@ -255,17 +255,6 @@ defmodule Sanctum.Questions do
 
     :ok
   end
-
-  @doc """
-  Delete every standing answer of the catalyst `publisher` and `name` in
-  the context's athanor, whoever gave it: its last version left the
-  athanor (`Compendium.Cascade`). `{:ok, count}`.
-  """
-  @spec component_removed(Context.t(), String.t(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, term()}
-  def component_removed(%Context{} = ctx, publisher, name)
-      when is_binary(publisher) and is_binary(name),
-      do: Store.delete_component(Context.actor(ctx), publisher, name)
 
   # ---------------------------------------------------------------------------
   # The person's side

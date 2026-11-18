@@ -14,9 +14,9 @@ defmodule Arca.Questions do
   Every function takes the actor first. Every read, answer and deletion is
   bound to the actor's athanor, and to the actor's person or the `user_id`
   it is handed; an actor with no person is `{:error, :no_person}`.
-  `delete_component/3` alone is bound to the athanor only: it is the
-  component leaving the athanor, and the cascade calling it may hold no
-  person.
+  `lock_component!/3` and `delete_component!/3` alone are bound to the
+  athanor only: they are steps of the component leaving the athanor, in
+  the transaction that removes its releases, which may hold no person.
 
   ## A question's life
 
@@ -37,7 +37,8 @@ defmodule Arca.Questions do
   caller (`any`, `Prima.Question.Caller.any/0`, for every caller). A new
   answer with the same identity replaces the old one; a deny for any
   caller also deletes that action's allows for single callers, in the same
-  transaction.
+  transaction. A component's answers go in the transaction that removes
+  its last installed catalyst release (`Arca.ComponentStorage`).
   """
 
   import Ecto.Query
@@ -488,26 +489,48 @@ defmodule Arca.Questions do
   def delete_standing(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
-  Remove every standing answer of the component `publisher` and `name` in
-  the actor's athanor, whoever gave it: the component has left the
-  athanor. `{:ok, count}`.
-  """
-  @spec delete_component(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, term()}
-  def delete_component(actor, publisher, name)
-      when athanor(actor) and is_binary(publisher) and is_binary(name) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Questions.delete_component", fn ->
-      {count, _} =
-        QuestionAnswer
-        |> QueryHelpers.where_tenant(actor)
-        |> where([a], a.publisher == ^publisher and a.name == ^name)
-        |> Arca.Repo.delete_all()
+  Lock every standing answer of the component `publisher` and `name` in
+  the actor's athanor, inside the caller's transaction and until it ends:
+  the first step of a removal of its releases (`Arca.ComponentStorage`),
+  before any release row moves.
 
-      {:ok, count}
-    end)
+  The lock order is a standing answer's own write's: the answer, then the
+  releases its declaration hold reads (`Arca.ComponentStorage.hold_declaring/5`).
+  A removal that deleted a release first and then the answers would wait
+  for an answer whose replacing write waits for that release.
+  """
+  @spec lock_component!(Prima.Actor.t(), String.t(), String.t()) :: :ok
+  # arca:db-raise-ok inside the caller's transaction
+  def lock_component!(actor, publisher, name)
+      when athanor(actor) and is_binary(publisher) and is_binary(name) do
+    actor
+    |> component_answers(publisher, name)
+    |> select([a], a.id)
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.all()
+
+    :ok
   end
 
-  def delete_component(%Prima.Actor{}, _publisher, _name), do: {:error, :no_athanor}
+  @doc """
+  Delete every standing answer of the component `publisher` and `name` in
+  the actor's athanor, whoever gave it, inside the caller's transaction:
+  the transaction removed its last installed catalyst release
+  (`Arca.ComponentStorage`). Answers the count.
+  """
+  @spec delete_component!(Prima.Actor.t(), String.t(), String.t()) :: non_neg_integer()
+  # arca:db-raise-ok inside the caller's transaction
+  def delete_component!(actor, publisher, name)
+      when athanor(actor) and is_binary(publisher) and is_binary(name) do
+    {count, _} = actor |> component_answers(publisher, name) |> Arca.Repo.delete_all()
+    count
+  end
+
+  defp component_answers(actor, publisher, name) do
+    QuestionAnswer
+    |> QueryHelpers.where_tenant(actor)
+    |> where([a], a.publisher == ^publisher and a.name == ^name)
+  end
 
   # ---------------------------------------------------------------------------
   # The writes that end a run

@@ -9,9 +9,10 @@ defmodule Arca.QuestionDeclarationHoldTest do
   `Arca.Questions.put_standing/3`'s `verify`), on connections of their
   own: inside the sandbox one shared connection would serialize the two
   writers the test is about. A removal that comes while the answer is
-  being written waits for it, so the cleanup after the removal finds the
-  answer; a removal that committed first leaves nothing to hold, and the
-  answer is refused and rolled back.
+  being written waits for it and deletes the answer with the last
+  release; an answer that comes while a removal is under way waits for
+  it, and is refused and rolled back. Both take the answers before the
+  releases, so neither order deadlocks.
 
   PostgreSQL only: SQLite takes its one write lock at each transaction's
   start (`Arca.Repo.locking_transaction/2`), so the two never interleave
@@ -108,7 +109,7 @@ defmodule Arca.QuestionDeclarationHoldTest do
       )
     end
 
-  test "a removal that comes while the answer is written waits for it, and its cleanup finds it",
+  test "a removal that comes while the answer is written waits for it, and deletes it",
        %{actor: actor, name: name} do
     test = self()
 
@@ -148,8 +149,71 @@ defmodule Arca.QuestionDeclarationHoldTest do
     assert {:ok, %{name: ^name}} = Task.await(writing, 10_000)
     assert :ok = Task.await(removing, 10_000)
 
-    # The cleanup that follows a removal finds the answer the write left.
-    assert {:ok, 1} = unboxed(fn -> Questions.delete_component(actor, "acme", name) end)
+    # The removal of the last release deleted the answer the write left.
+    assert {:ok, []} = unboxed(fn -> Questions.standing(actor, @person, "acme", name) end)
+  end
+
+  test "an answer that comes while a removal is under way waits for it, and is refused",
+       %{actor: actor, name: name} do
+    test = self()
+
+    # An answer of the same identity already stands, so the second write
+    # replaces a row the removal deletes.
+    assert {:ok, _} =
+             unboxed(fn ->
+               Questions.put_standing(actor, standing(name), verify: held(actor, name))
+             end)
+
+    handler = {__MODULE__, :removing}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    removing =
+      Task.async(fn ->
+        unboxed(fn ->
+          remover = self()
+
+          # Held inside its transaction once the release is deleted.
+          :ok =
+            :telemetry.attach(
+              handler,
+              [:arca, :repo, :query],
+              fn _event, _measurements, meta, _config ->
+                if self() == remover and
+                     String.starts_with?(meta.query, ~s(DELETE FROM "components")) do
+                  :telemetry.detach(handler)
+                  send(test, :deleted)
+
+                  receive do
+                    :commit -> :ok
+                  after
+                    30_000 -> :ok
+                  end
+                end
+              end,
+              nil
+            )
+
+          ComponentStorage.delete_component(actor, name, "1.0.0", "acme", "catalyst")
+        end)
+      end)
+
+    assert_receive :deleted, 5_000
+
+    writing =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:writing, backend!()})
+          Questions.put_standing(actor, standing(name), verify: held(actor, name))
+        end)
+      end)
+
+    assert_receive {:writing, backend}, 5_000
+    Arca.Test.LockWait.await_lock_wait!(backend)
+
+    send(removing.pid, :commit)
+    assert :ok = Task.await(removing, 10_000)
+    assert {:error, :not_found} = Task.await(writing, 10_000)
+    assert {:ok, []} = unboxed(fn -> Questions.standing(actor, @person, "acme", name) end)
   end
 
   test "a removal that committed first leaves nothing to hold, and the answer is refused",
