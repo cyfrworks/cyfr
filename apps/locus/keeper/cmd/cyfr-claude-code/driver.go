@@ -46,6 +46,9 @@ type driver struct {
 	h        *brainwire.Process
 	starting *starting
 	gen      uint64
+	// readOnly is the running start's: every ask of the harness's own
+	// tools is denied.
+	readOnly bool
 	session  string
 	listing  json.RawMessage
 	// What the native turns under way name: each post's line by its uuid,
@@ -118,6 +121,15 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if raw, ok := members["pending"]; ok {
 		_ = json.Unmarshal(raw, &pending)
 	}
+	if config.ReadOnly && config.PermissionMode != "" {
+		return &brainwire.Fatal{Status: 2, Reason: "a read-only start names a permission mode"}
+	}
+	if config.ReadOnly && config.HarnessTools != nil {
+		return &brainwire.Fatal{Status: 2, Reason: "a read-only start names the harness's own tools"}
+	}
+	if config.ReadOnly && len(harnessOptions(d.harnessCommand)) > 0 {
+		return &brainwire.Fatal{Status: 2, Reason: "The program's command carries options a read-only crew member cannot run with, so nothing ran."}
+	}
 	session := str("session")
 	resume := session != ""
 	// A session that is no session id of Claude Code's has no transcript.
@@ -134,6 +146,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	d.h = h
 	d.gen = gen
+	d.readOnly = config.ReadOnly
 	d.starting = &starting{session: session, resume: resume, pending: pending, config: config}
 	// A harness started to resume a session it holds no transcript of
 	// says so and ends at once, perhaps before this line reached it: what
@@ -392,7 +405,11 @@ func (d *driver) controlRequest(l harnessLine) error {
 	name, ours := strings.CutPrefix(request.ToolName, toolPrefix)
 	if !ours {
 		// The harness's own tool runs in its box: allowed, and shown by its
-		// tool_use (assistant) by name only.
+		// tool_use (assistant) by name only; under a read-only start it is
+		// denied.
+		if d.readOnly {
+			return d.h.Write(denyLine(l.RequestID, readOnlyDenial))
+		}
 		return d.h.Write(allowLine(l.RequestID, request.Input))
 	}
 	arguments := callArguments(request.Input)

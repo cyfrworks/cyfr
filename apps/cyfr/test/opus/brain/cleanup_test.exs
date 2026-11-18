@@ -102,7 +102,12 @@ defmodule Opus.Brain.CleanupTest do
     Scripted.write(
       fake,
       row.id,
-      Jason.encode!(%{"t" => "hello", "v" => 1, "driver" => "cyfr-claude-code", "boot" => "b1"})
+      Jason.encode!(%{
+        "t" => "hello",
+        "v" => Opus.Brain.Wire.version(),
+        "driver" => "cyfr-claude-code",
+        "boot" => "b1"
+      })
     )
 
     assert_receive {:session, "send", %{"lines" => [line]}, _fields}, 5_000

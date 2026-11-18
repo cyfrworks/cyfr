@@ -34,7 +34,9 @@ with exactly its members.
   leaves, and leaves another thread's and the sign-in; the running thread
   is not forgotten.
 - Every command line the vectors refuse (their `refuse` lines from the
-  holder) ends the driver with no line written.
+  holder) ends the driver with no line written, and so does a read-only
+  start, fresh or resuming: Codex's read-only sandbox cannot start in the
+  box.
 - Nothing of the harness's standard error, its folder, its sign-in or its
   account reaches a line of the driver's.
 - On a terminal, the driver runs the harness's command unchanged: the
@@ -282,6 +284,15 @@ def main():
             expect(status == 200, f"the line is written: {refused['name']}", answer)
             lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
             expect(not running and lines == [], f"the driver ends on it and writes nothing: {refused['name']}", lines)
+            r.close()
+        for key, start in (("brain-read-only", {"t": "start", "gen": 7, "config": {"read_only": True}, "tools": [FILES]}),
+                           ("brain-read-only-resumed", {"t": "start", "gen": 7, "session": other, "config": {"read_only": True}})):
+            r = Driver(c, key)
+            r.expect("hello", f"{key}: a driver to refuse a read-only start")
+            status, answer = c.send(OWNER, r.session, [json.dumps(start)])
+            expect(status == 200, f"{key}: the start is written", answer)
+            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
+            expect(not running and lines == [], f"{key}: a read-only start ends the driver and writes nothing", lines)
             r.close()
 
         # ————— nothing of stderr, the folder, the sign-in or the account —————

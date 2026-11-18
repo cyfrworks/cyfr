@@ -25,7 +25,9 @@
 //   the stub with the allow's `updatedInput` and replies with what it
 //   answered (an allow carrying the result `RATE-LIMIT` ends the turn with
 //   the provider's rate limit instead, as the harness reports one); `first message` replies with the session's first message,
-//   from its folder. Each reply streams as `stream_event` text deltas, then
+//   from its folder; `modes` asks for its own `Write` and `Bash`
+//   and replies with its whole command line and the driver's two whole
+//   answers, as JSON. Each reply streams as `stream_event` text deltas, then
 //   the whole `assistant` message, then `result` with usage.
 // - What a turn writes names the user line it answers by that line's
 //   `uuid` (`user_message_uuids` on its init, its messages and its
@@ -104,6 +106,8 @@ const out = (event) => {
 };
 let appended = '';
 const asks = new Map();
+// The driver's answers as their whole lines, by request id.
+const wholes = new Map();
 let asked = 0;
 
 // ---- MCP servers set by the driver ----
@@ -221,6 +225,13 @@ async function turn(message) {
       said = `Denied: ${decision.message}`;
     }
     reply(said);
+  } else if (words.includes('modes')) {
+    const ids = [];
+    for (const [tool, input] of [['Write', { file_path: 'made.txt', content: 'x' }], ['Bash', { command: 'touch made.txt' }]]) {
+      await ask(tool, input);
+      ids.push(`ask-${asked}`);
+    }
+    reply(JSON.stringify({ argv: args, answers: ids.map((id) => wholes.get(id)) }));
   } else if (words.includes('first message')) {
     reply(`Your first message was: ${transcript[0].text}`);
   } else {
@@ -245,6 +256,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   } else if (message.type === 'control_response') {
     const resolve = asks.get(message.response.request_id);
     asks.delete(message.response.request_id);
+    wholes.set(message.response.request_id, message);
     resolve?.(message.response.response);
   } else if (message.type === 'user') {
     turns = turns.then(() => turn(message));

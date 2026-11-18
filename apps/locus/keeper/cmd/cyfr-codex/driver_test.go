@@ -235,7 +235,7 @@ func saidOf(events []map[string]any) string {
 func TestHelloFirstAndAnEmptyInputEndsIt(t *testing.T) {
 	s := startDriver(t)
 	hello := s.expect("hello")
-	if hello["v"] != float64(1) || hello["driver"] != "cyfr-codex" || len(hello["boot"].(string)) != 32 {
+	if hello["v"] != float64(brainwire.Version) || hello["driver"] != "cyfr-codex" || len(hello["boot"].(string)) != 32 {
 		t.Fatalf("hello names the version, the driver and a fresh boot: %v", hello)
 	}
 	if status := s.end(); status != 0 {
@@ -537,10 +537,13 @@ func TestDeliveriesBeforeAStartAndAnUntakeablePostAreRefused(t *testing.T) {
 }
 
 // A start Codex cannot honour ends the driver before anything starts: a
-// permission mode, the harness's own tools, a tool name Codex does not
+// read-only one, since Codex's read-only sandbox cannot start in the box,
+// a permission mode, the harness's own tools, a tool name Codex does not
 // take, or one named twice.
 func TestAStartCodexCannotHonourEndsTheDriver(t *testing.T) {
 	for name, start := range map[string]map[string]any{
+		"read-only":           {"t": "start", "gen": 0, "config": map[string]any{"read_only": true}},
+		"read-only resumed":   {"t": "start", "gen": 0, "session": "019a0000-0000-7000-8000-00000000aaaa", "config": map[string]any{"read_only": true}},
 		"a permission mode":   {"t": "start", "gen": 0, "config": map[string]any{"permission_mode": "plan"}},
 		"the harness's tools": {"t": "start", "gen": 0, "config": map[string]any{"harness_tools": []any{}}},
 		"a tool name":         {"t": "start", "gen": 0, "config": map[string]any{}, "tools": []any{map[string]any{"name": "files.read", "description": "", "parameters": map[string]any{}}}},
@@ -560,6 +563,24 @@ func TestAStartCodexCannotHonourEndsTheDriver(t *testing.T) {
 		if matches, _ := filepath.Glob(filepath.Join(s.home, ".codex", "sessions", "*", "*", "*", "*")); len(matches) != 0 {
 			t.Fatalf("%s: no thread was started: %v", name, matches)
 		}
+		if strings.HasPrefix(name, "read-only") && !strings.Contains(s.stderr.String(), "cyfr-codex: Codex cannot run read-only inside CYFR, so nothing ran.\n") {
+			t.Fatalf("%s: the driver says why in words a person reads: %q", name, s.stderr.String())
+		}
+	}
+}
+
+// A start whose read_only is false starts the thread exactly as one with
+// no read_only: never asking, outside any sandbox of Codex's own.
+func TestAStartWhoseReadOnlyIsFalseRunsAsBefore(t *testing.T) {
+	for _, config := range []map[string]any{{}, {"read_only": false}} {
+		s := startDriver(t)
+		startFresh(s, config)
+		work(s, "stp_work", "trn_1")
+		postText(s, "stp_post", "trn_1", "hello")
+		if said := saidOf(s.until("idle")); !strings.Contains(said, "policy never/danger-full-access,") {
+			t.Fatalf("%v: the thread never asks and runs outside Codex's sandbox: %q", config, said)
+		}
+		s.end()
 	}
 }
 

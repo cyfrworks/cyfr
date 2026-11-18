@@ -3,7 +3,7 @@
 
 defmodule Opus.Brain.Wire do
   @moduledoc """
-  The brain wire, version 1, the holder's side (`Opus.Brain`): one JSON
+  The brain wire, version 2, the holder's side (`Opus.Brain`): one JSON
   object per line over a brain driver's `run` session, commands from the
   holder and events from the driver. `tests/fixtures/brain_wire.json` binds
   this module and every driver's side (`apps/locus/keeper/internal/brainwire`,
@@ -21,7 +21,7 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 1
+  @version 2
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
@@ -31,7 +31,8 @@ defmodule Opus.Brain.Wire do
     "model" => :string,
     "effort" => :string,
     "permission_mode" => :string,
-    "harness_tools" => :strings
+    "harness_tools" => :strings,
+    "read_only" => :boolean
   }
   @counts ~w(input_tokens output_tokens cache_read_tokens cache_write_tokens)
   @accountings ~w(complete partial unavailable)
