@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -229,6 +230,47 @@ func TestHelloFirstAndAnEmptyInputEndsIt(t *testing.T) {
 	}
 }
 
+// The probe's first result counted 2 input tokens in `usage` and 1,185 in
+// `model_usage_since_last_result`: the side requests are in the latter
+// alone, and the main requests in both. Each model's four counts are
+// carried as the harness gives them, none added to another, and `usage` is
+// never added to them; a result with no per-model usage says so, and one
+// whose counts do not all read says which models did.
+func TestAResultsUsageIsEachModelsOnceAndUnknownStaysUnknown(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{"model": "fake-opus"})
+	work(s, "stp_work", []any{filesTool})
+	usageOf := func(post, words string) map[string]any {
+		postText(s, post, words)
+		for _, e := range s.until("idle") {
+			if e["t"] == "usage" {
+				return e
+			}
+		}
+		t.Fatalf("%s: a result is counted", post)
+		return nil
+	}
+	counts := func(input, output, read, write float64) map[string]any {
+		return map[string]any{"input_tokens": input, "output_tokens": output, "cache_read_tokens": read, "cache_write_tokens": write}
+	}
+	complete := usageOf("stp_post_1", "hello")
+	want := []any{
+		map[string]any{"model": "fake-haiku", "counts": counts(1173, 40, 0, 0)},
+		map[string]any{"model": "fake-opus", "counts": counts(12, 3, 5, 2)},
+	}
+	if complete["accounting"] != "complete" || !reflect.DeepEqual(complete["models"], want) {
+		t.Fatalf("every model's counts, the main requests' counted once: %v", complete)
+	}
+	unknown := usageOf("stp_post_2", "uncounted")
+	if _, named := unknown["models"]; unknown["accounting"] != "unavailable" || named {
+		t.Fatalf("a result with no usage is unavailable, never zeros: %v", unknown)
+	}
+	partial := usageOf("stp_post_3", "partial")
+	if partial["accounting"] != "partial" || !reflect.DeepEqual(partial["models"], want[1:]) {
+		t.Fatalf("a model whose counts do not read is left out, and the accounting says partial: %v", partial)
+	}
+}
+
 func TestATurnStreamsSaysCountsAndGoesIdleNamingThePost(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{"model": "fake-opus", "effort": "high", "permission_mode": "plan", "harness_tools": []any{"Read", "Grep"}})
@@ -259,9 +301,8 @@ func TestATurnStreamsSaysCountsAndGoesIdleNamingThePost(t *testing.T) {
 	if text != want || said != want {
 		t.Fatalf("the reply streams and is said whole, with the start's flags: %q %q", text, said)
 	}
-	counts := usage["counts"].(map[string]any)
-	if usage["result"] != "result-uuid-1" || counts["input_tokens"] != float64(12) || counts["cache_read_tokens"] != float64(5) || counts["cache_write_tokens"] != float64(2) {
-		t.Fatalf("usage names the native result and its counts: %v", usage)
+	if usage["result"] != "result-uuid-1" || usage["accounting"] != "complete" || len(usage["models"].([]any)) != 2 {
+		t.Fatalf("usage names the native result and its models' counts: %v", usage)
 	}
 	if idle["stop"] != "end_turn" || fmt.Sprint(idle["answered"]) != "[stp_post]" {
 		t.Fatalf("idle names the post the result answered: %v", idle)
@@ -553,6 +594,50 @@ func TestModelsAreListedWithOrWithoutAStart(t *testing.T) {
 	s.send(map[string]any{"t": "models", "id": "m2"})
 	if again := s.expect("models"); fmt.Sprint(again["models"]) != fmt.Sprint(listed["models"]) {
 		t.Fatalf("a running harness's listing is its start's: %v", again)
+	}
+}
+
+// A folder that cannot be looked into may hold the transcript: forget
+// says it could not look, and the transcript is there when the folder
+// opens again; once it can be looked into, the transcript goes.
+func TestForgetRefusesWhereItCannotLook(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder of mode 000, so no folder here is unreadable")
+	}
+	s := startDriver(t)
+	config := filepath.Join(s.home, ".claude")
+	projects := filepath.Join(config, "projects")
+	project := filepath.Join(projects, "-home-a")
+	session := "3b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	transcript := filepath.Join(project, session+".jsonl")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("the session"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.expect("hello")
+	for i, folder := range []string{project, projects} {
+		if err := os.Chmod(folder, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(folder, 0o700) })
+		id := fmt.Sprintf("obx_%d", i+1)
+		s.send(map[string]any{"t": "forget", "id": id, "session": session})
+		if e := s.expect("refused"); e["id"] != id {
+			t.Fatalf("a folder that cannot be read is no proof the transcript is gone: %v", e)
+		}
+		if err := os.Chmod(folder, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(transcript); err != nil {
+			t.Fatalf("the transcript is still there: %v", err)
+		}
+	}
+	s.send(map[string]any{"t": "forget", "id": "obx_3", "session": session})
+	s.expect("forgot")
+	if _, err := os.Stat(transcript); !os.IsNotExist(err) {
+		t.Fatalf("a folder that can be read again gives its transcript up: %v", err)
 	}
 }
 

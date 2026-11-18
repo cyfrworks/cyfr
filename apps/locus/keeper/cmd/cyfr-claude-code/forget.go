@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 )
 
 // A native session's transcript, as Claude Code keeps it in the folder:
@@ -31,35 +32,50 @@ func configDir(home string) string {
 	return filepath.Join(home, ".claude")
 }
 
-// transcripts are the session's transcript files and its folders, found
-// by its id in every project; a session id is a uuid, so it names no
-// other path.
-func transcripts(home, session string) (files, folders []string) {
+// transcripts are the paths of the session's own in the folder: its
+// transcript and its folder in each project, and its environment folder,
+// whatever is there under those names; a session id is a uuid, so it
+// names no other path. A folder or an entry that cannot be inspected is an
+// error, never an absence, since what cannot be looked at may hold the
+// transcript.
+func transcripts(home, session string) ([]string, error) {
 	if !isUUID(session) {
 		return nil, nil
 	}
 	projects := filepath.Join(configDir(home), "projects")
-	matches, _ := filepath.Glob(filepath.Join(projects, "*", session+".jsonl"))
-	for _, match := range matches {
-		if info, err := os.Lstat(match); err == nil && info.Mode().IsRegular() {
-			files = append(files, match)
+	entries, err := os.ReadDir(projects)
+	if err != nil && !absent(err) {
+		return nil, err
+	}
+	names := []string{filepath.Join(configDir(home), "session-env", session)}
+	for _, entry := range entries {
+		project := filepath.Join(projects, entry.Name())
+		names = append(names, filepath.Join(project, session+".jsonl"), filepath.Join(project, session))
+	}
+	var found []string
+	for _, name := range names {
+		if _, err := os.Lstat(name); err == nil {
+			found = append(found, name)
+		} else if !absent(err) {
+			return nil, err
 		}
 	}
-	matches, _ = filepath.Glob(filepath.Join(projects, "*", session))
-	matches = append(matches, filepath.Join(configDir(home), "session-env", session))
-	for _, match := range matches {
-		if info, err := os.Lstat(match); err == nil && info.IsDir() {
-			folders = append(folders, match)
-		}
-	}
-	sort.Strings(files)
-	sort.Strings(folders)
-	return files, folders
+	sort.Strings(found)
+	return found, nil
+}
+
+// absent is an inspection that found nothing under the name: it, or a
+// folder on its way, does not exist, or a step of it is no folder.
+func absent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 // forget removes the transcript of `session` from the folder, and nothing
 // else: another session's, and the sign-in, stay. A session the harness
-// runs now is not removed.
+// runs now is not removed. `forgot` says the session's paths are gone,
+// each removed or proved absent, looked at again after the removal; a
+// folder or an entry that cannot be inspected or removed is `refused`,
+// with its reason.
 func (d *driver) forget(id, session string) error {
 	if !isUUID(session) {
 		return d.refuse(id, "That names no session of Claude Code's.")
@@ -67,16 +83,17 @@ func (d *driver) forget(id, session string) error {
 	if d.h != nil && !d.h.expected && (d.session == session || (d.starting != nil && d.starting.session == session)) {
 		return d.refuse(id, "That session runs now; it is closed before it is forgotten.")
 	}
-	files, folders := transcripts(d.home, session)
-	for _, file := range files {
-		if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	found, err := transcripts(d.home, session)
+	if err != nil {
+		return d.refuse(id, "The folder could not be read to find the session's transcript, so it may still be there.")
+	}
+	for _, name := range found {
+		if err := os.RemoveAll(name); err != nil {
 			return d.refuse(id, "The session's transcript could not be removed from the folder.")
 		}
 	}
-	for _, folder := range folders {
-		if err := os.RemoveAll(folder); err != nil {
-			return d.refuse(id, "The session's folder could not be removed from the folder.")
-		}
+	if left, err := transcripts(d.home, session); err != nil || len(left) > 0 {
+		return d.refuse(id, "The session's transcript is still in the folder after its removal.")
 	}
 	return d.emit(newEvent("forgot").set("id", id).set("session", session))
 }
@@ -90,8 +107,14 @@ func heldPosts(home, session string, pending []string) []string {
 		want[postUUID(id)] = id
 	}
 	found := map[string]bool{}
-	files, _ := transcripts(home, session)
-	for _, file := range files {
+	// The harness resumes from the same folder under the same uid, so a
+	// transcript the driver cannot inspect is one the harness cannot read
+	// either: such a start ends as the harness's own failure to resume.
+	names, _ := transcripts(home, session)
+	for _, file := range names {
+		if filepath.Ext(file) != ".jsonl" {
+			continue
+		}
 		readTranscript(file, func(entry transcriptEntry) {
 			if id, ok := want[entry.UUID]; ok && entry.Type == "user" {
 				found[id] = true

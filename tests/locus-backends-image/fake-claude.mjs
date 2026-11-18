@@ -173,7 +173,14 @@ function reply(text) {
   out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'text', text }], usage: { input_tokens: 7, output_tokens: 3 } }, parent_tool_use_id: null, session_id: sessionId });
   transcript.push({ role: 'assistant', text });
   save();
-  out({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: text, session_id: sessionId, usage: { input_tokens: 12, output_tokens: text.length, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 } });
+  // The main requests' own usage, and every model's since the last result,
+  // a side request's among them, which holds the main requests' too, as
+  // Claude Code 2.1.323 reports them.
+  out({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: text, session_id: sessionId, usage: { input_tokens: 12, output_tokens: text.length, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 },
+    model_usage_since_last_result: {
+      [model]: { inputTokens: 12, outputTokens: text.length, cacheReadInputTokens: 5, cacheCreationInputTokens: 2, webSearchRequests: 0, costUSD: 0.01 },
+      'fake-side': { inputTokens: 30, outputTokens: 4, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.001 },
+    } });
 }
 
 async function turn(message) {

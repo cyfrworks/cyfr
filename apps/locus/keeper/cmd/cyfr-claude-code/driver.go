@@ -696,7 +696,13 @@ func (d *driver) result(l harnessLine) error {
 	if !isID(result) {
 		result = fmt.Sprintf("result-%s-%d", d.boot, d.results)
 	}
-	if err := d.emit(newEvent("usage").set("gen", d.gen).setOptional("work", work).set("result", result).set("counts", counts(l.Usage))); err != nil {
+	usage := newEvent("usage").set("gen", d.gen).setOptional("work", work).set("result", result)
+	read, models := accounting(l.ModelUsage)
+	usage.set("accounting", read)
+	if read != "unavailable" {
+		usage.set("models", models)
+	}
+	if err := d.emit(usage); err != nil {
 		return err
 	}
 	stop := stopEndTurn

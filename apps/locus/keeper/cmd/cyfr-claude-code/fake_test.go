@@ -27,6 +27,8 @@ import (
 //	own    runs its own Bash after asking, shows its result, then replies
 //	rate   ends with an errored message of the rate limit and an errored result
 //	late   replies, then writes a later result naming no line, as a background end
+//	uncounted  replies with a result that reports no model's usage
+//	partial    replies with a result one of whose models' counts does not read
 //	big    replies with 2 MiB of text
 //	other  asks the driver a control request of another kind, then replies
 //
@@ -97,7 +99,17 @@ func fakeClaude() int {
 		return <-ch
 	}
 	turns := 0
-	reply := func(uuids []string, text string) {
+	// Each result's usage as Claude Code 2.1.323 reports it: the main
+	// requests' own `usage`, and every model's since the last result, the
+	// side requests' among them, which holds the main requests' too.
+	modelUsage := map[string]any{
+		"fake-opus": map[string]any{"inputTokens": 12, "outputTokens": 3, "cacheReadInputTokens": 5, "cacheCreationInputTokens": 2,
+			"thinkingTokens": 1, "cacheCreationEphemeral5mInputTokens": 2, "webSearchRequests": 0, "costUSD": 0.01},
+		"fake-haiku": map[string]any{"inputTokens": 1173, "outputTokens": 40, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+			"webSearchRequests": 0, "costUSD": 0.001},
+	}
+	var reply func(uuids []string, text string)
+	replyWith := func(uuids []string, text string, usage map[string]any) {
 		turns++
 		message := fmt.Sprintf("msg_fake_%d", turns)
 		write(map[string]any{"type": "stream_event", "parent_tool_use_id": nil, "event": map[string]any{"type": "message_start", "message": map[string]any{"id": message}}})
@@ -106,9 +118,14 @@ func fakeClaude() int {
 			write(map[string]any{"type": "stream_event", "parent_tool_use_id": nil, "event": map[string]any{"type": "content_block_delta", "delta": map[string]any{"type": "text_delta", "text": piece}}})
 		}
 		write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": message, "content": []any{map[string]any{"type": "text", "text": text}}}})
-		write(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": fmt.Sprintf("result-uuid-%d", turns),
-			"user_message_uuids": uuids, "usage": map[string]any{"input_tokens": 12, "output_tokens": 3, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 2}})
+		result := map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": fmt.Sprintf("result-uuid-%d", turns),
+			"user_message_uuids": uuids, "usage": map[string]any{"input_tokens": 2, "output_tokens": 3, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 2}}
+		if usage != nil {
+			result["model_usage_since_last_result"] = usage
+		}
+		write(result)
 	}
+	reply = func(uuids []string, text string) { replyWith(uuids, text, modelUsage) }
 	turn := func(uuid, words string) {
 		uuids := []string{uuid}
 		write(map[string]any{"type": "system", "subtype": "init", "session_id": session, "user_message_uuids": uuids})
@@ -137,6 +154,11 @@ func fakeClaude() int {
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": "rate_limit", "message": map[string]any{"id": "msg_err", "content": []any{
 				map[string]any{"type": "text", "text": "API Error: please run /login HARNESS-WORDS"}}}})
 			write(map[string]any{"type": "result", "subtype": "success", "is_error": true, "num_turns": 1, "uuid": "result-err", "user_message_uuids": uuids, "usage": map[string]any{}})
+		case strings.Contains(words, "uncounted"):
+			replyWith(uuids, "no usage", nil)
+		case strings.Contains(words, "partial"):
+			replyWith(uuids, "some usage", map[string]any{"fake-opus": modelUsage["fake-opus"],
+				"fake-haiku": map[string]any{"inputTokens": 7, "outputTokens": -1, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}})
 		case strings.Contains(words, "late"):
 			reply(uuids, "early")
 			time.Sleep(50 * time.Millisecond)

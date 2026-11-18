@@ -23,6 +23,8 @@ type wireVectors struct {
 	MaxList      int                 `json:"max_list"`
 	Config       map[string]string   `json:"config"`
 	Counts       []string            `json:"counts"`
+	Accountings  []string            `json:"accountings"`
+	Stops        []string            `json:"stops"`
 	Phases       []string            `json:"phases"`
 	ErrorTypes   []string            `json:"error_types"`
 	Blocks       []json.RawMessage   `json:"blocks"`
@@ -75,7 +77,8 @@ func loadWireVectors(t *testing.T) wireVectors {
 var typeNames = map[fieldType]string{
 	tID: "id", tString: "string", tCount: "count", tBoolean: "boolean", tObject: "object", tIDs: "ids",
 	tStrings: "strings", tContent: "content", tTools: "tools", tConfig: "config", tCounts: "counts",
-	tModels: "models", tPhase: "phase", tErrorType: "error_type",
+	tModels: "models", tModelCounts: "model_counts", tPhase: "phase", tErrorType: "error_type",
+	tAccounting: "accounting", tStop: "stop",
 }
 
 func specOf(s spec) vector {
@@ -106,9 +109,10 @@ func TestTheWiresBoundsAndVocabulariesAreTheVectors(t *testing.T) {
 		config[name] = typeNames[ft]
 	}
 	if !reflect.DeepEqual(config, v.Config) || !reflect.DeepEqual(countNames, v.Counts) ||
+		!reflect.DeepEqual(accountings, v.Accountings) || !reflect.DeepEqual(stops, v.Stops) ||
 		!reflect.DeepEqual(phases, v.Phases) || !reflect.DeepEqual(errorTypes, v.ErrorTypes) ||
 		!reflect.DeepEqual(mediaTypes, v.MediaTypes) || !reflect.DeepEqual(nativeEvents, v.Native) {
-		t.Fatal("the configuration, counts, phases, error types, media types and native events are the vectors'")
+		t.Fatal("the configuration, counts, accountings, stops, phases, error types, media types and native events are the vectors'")
 	}
 	if v.UUID.Prefix != uuidPrefix {
 		t.Fatalf("the uuid's prefix is the vectors': %q", v.UUID.Prefix)

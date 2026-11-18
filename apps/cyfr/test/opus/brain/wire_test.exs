@@ -30,6 +30,8 @@ defmodule Opus.Brain.WireTest do
              Map.new(Wire.config(), fn {key, type} -> {key, Atom.to_string(type)} end)
 
     assert v["counts"] == Wire.counts()
+    assert v["accountings"] == Wire.accountings()
+    assert v["stops"] == Wire.stops()
     assert v["phases"] == Wire.phases()
     assert v["error_types"] == Wire.error_types()
     assert v["media_types"] == Wire.media_types()

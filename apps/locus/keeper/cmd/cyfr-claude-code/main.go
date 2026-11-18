@@ -6,7 +6,7 @@
 // Command cyfr-claude-code drives Claude Code as a brain of CYFR's. It is
 // the start of a `driven` program row's command, before the harness's own:
 //
-//	cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.318
+//	cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323
 //
 // On a terminal it runs the harness's command unchanged, in its place, so
 // the person signs in to Claude Code on the same row. Otherwise its one

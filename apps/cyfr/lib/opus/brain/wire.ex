@@ -33,6 +33,8 @@ defmodule Opus.Brain.Wire do
     "harness_tools" => :strings
   }
   @counts ~w(input_tokens output_tokens cache_read_tokens cache_write_tokens)
+  @accountings ~w(complete partial unavailable)
+  @stops ~w(end_turn limit error)
   @phases ~w(start end)
   @error_types ~w(invalid_request authentication rate_limited overloaded provider_error unknown_model)
   @media_types %{
@@ -82,11 +84,18 @@ defmodule Opus.Brain.Wire do
       {~w(t gen ask name arguments), ~w(work),
        %{"gen" => :count, "work" => :id, "ask" => :id, "name" => :string, "arguments" => :object}},
     "usage" =>
-      {~w(t gen counts), ~w(work result total),
-       %{"gen" => :count, "work" => :id, "result" => :id, "total" => :id, "counts" => :counts}},
+      {~w(t gen accounting), ~w(work result total models),
+       %{
+         "gen" => :count,
+         "work" => :id,
+         "result" => :id,
+         "total" => :id,
+         "accounting" => :accounting,
+         "models" => :model_counts
+       }},
     "idle" =>
       {~w(t gen answered stop), ~w(work),
-       %{"gen" => :count, "work" => :id, "answered" => :ids, "stop" => :string}},
+       %{"gen" => :count, "work" => :id, "answered" => :ids, "stop" => :stop}},
     "error" =>
       {~w(t gen type message), ~w(work),
        %{"gen" => :count, "work" => :id, "type" => :error_type, "message" => :string}},
@@ -129,9 +138,21 @@ defmodule Opus.Brain.Wire do
   @spec config() :: %{String.t() => atom()}
   def config, do: @config
 
-  @doc "The four counts a `usage` carries."
+  @doc "The four counts a `usage` carries for each model."
   @spec counts() :: [String.t()]
   def counts, do: @counts
+
+  @doc """
+  What a `usage` says of its counts: `complete`, `partial` (some did not
+  read), or `unavailable` (the harness gave none, and the event names no
+  models).
+  """
+  @spec accountings() :: [String.t()]
+  def accountings, do: @accountings
+
+  @doc "Why a native turn ended, as an `idle` names it."
+  @spec stops() :: [String.t()]
+  def stops, do: @stops
 
   @doc "The phases an `own` event names."
   @spec phases() :: [String.t()]
@@ -204,9 +225,12 @@ defmodule Opus.Brain.Wire do
       end) and one_measure?(message)
   end
 
-  # A usage names a native result or a cumulative total, exactly one.
+  # A usage names a native result or a cumulative total, exactly one, and
+  # names its models exactly when its accounting is not unavailable.
   defp one_measure?(%{"t" => "usage"} = usage),
-    do: Map.has_key?(usage, "result") != Map.has_key?(usage, "total")
+    do:
+      Map.has_key?(usage, "result") != Map.has_key?(usage, "total") and
+        Map.has_key?(usage, "models") != (usage["accounting"] == "unavailable")
 
   defp one_measure?(_message), do: true
 
@@ -220,8 +244,11 @@ defmodule Opus.Brain.Wire do
   defp of_type?(:content, value), do: list?(value, &block?/1)
   defp of_type?(:tools, value), do: list?(value, &tool?/1)
   defp of_type?(:models, value), do: list?(value, &model?/1)
+  defp of_type?(:model_counts, value), do: list?(value, &model_counts?/1)
   defp of_type?(:phase, value), do: value in @phases
   defp of_type?(:error_type, value), do: value in @error_types
+  defp of_type?(:accounting, value), do: value in @accountings
+  defp of_type?(:stop, value), do: value in @stops
 
   defp of_type?(:config, value) when is_map(value),
     do:
@@ -260,4 +287,9 @@ defmodule Opus.Brain.Wire do
     do: id?(id) and is_binary(name)
 
   defp model?(_model), do: false
+
+  defp model_counts?(%{"model" => model, "counts" => counts} = entry) when map_size(entry) == 2,
+    do: id?(model) and of_type?(:counts, counts)
+
+  defp model_counts?(_entry), do: false
 end

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"unicode/utf8"
 )
 
@@ -51,8 +52,11 @@ const (
 	tConfig
 	tCounts
 	tModels
+	tModelCounts
 	tPhase
 	tErrorType
+	tAccounting
+	tStop
 )
 
 // spec is one message: the members it always carries, those it may, and
@@ -71,6 +75,8 @@ var configTypes = map[string]fieldType{
 }
 
 var countNames = []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
+var accountings = []string{"complete", "partial", "unavailable"}
+var stops = []string{"end_turn", "limit", "error"}
 var phases = []string{"start", "end"}
 var errorTypes = []string{"invalid_request", "authentication", "rate_limited", "overloaded", "provider_error", "unknown_model"}
 var mediaTypes = map[string][]string{
@@ -108,10 +114,10 @@ var events = map[string]spec{
 		map[string]fieldType{"gen": tCount, "work": tID, "name": tString, "phase": tPhase}},
 	"ask": {[]string{"t", "gen", "ask", "name", "arguments"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "ask": tID, "name": tString, "arguments": tObject}},
-	"usage": {[]string{"t", "gen", "counts"}, []string{"work", "result", "total"},
-		map[string]fieldType{"gen": tCount, "work": tID, "result": tID, "total": tID, "counts": tCounts}},
+	"usage": {[]string{"t", "gen", "accounting"}, []string{"work", "result", "total", "models"},
+		map[string]fieldType{"gen": tCount, "work": tID, "result": tID, "total": tID, "accounting": tAccounting, "models": tModelCounts}},
 	"idle": {[]string{"t", "gen", "answered", "stop"}, []string{"work"},
-		map[string]fieldType{"gen": tCount, "work": tID, "answered": tIDs, "stop": tString}},
+		map[string]fieldType{"gen": tCount, "work": tID, "answered": tIDs, "stop": tStop}},
 	"error": {[]string{"t", "gen", "type", "message"}, []string{"work"},
 		map[string]fieldType{"gen": tCount, "work": tID, "type": tErrorType, "message": tString}},
 	"models": {[]string{"t", "id", "models", "efforts"}, nil,
@@ -146,17 +152,17 @@ func readLine(line []byte, messages map[string]spec) (string, map[string]json.Ra
 	return t, members, nil
 }
 
-// strictUnmarshal decodes one JSON value and nothing after it.
+// strictUnmarshal decodes one JSON value and nothing after it: the line
+// must end, white space apart, where the value does. Whatever follows it,
+// a stray `]` or `}` that does not read as a value included, refuses the
+// line.
 func strictUnmarshal(data []byte, v any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(v); err != nil {
 		return err
 	}
-	if decoder.More() {
-		return errUnreadable
-	}
 	var rest json.RawMessage
-	if decoder.Decode(&rest) == nil {
+	if err := decoder.Decode(&rest); err != io.EOF {
 		return errUnreadable
 	}
 	return nil
@@ -180,7 +186,8 @@ func messageOK(t string, members map[string]json.RawMessage, s spec) bool {
 	if t == "usage" {
 		_, result := members["result"]
 		_, total := members["total"]
-		return result != total
+		_, models := members["models"]
+		return result != total && models != oneOf(members["accounting"], []string{"unavailable"})
 	}
 	return true
 }
@@ -211,6 +218,8 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return listOf(raw, toolOK)
 	case tModels:
 		return listOf(raw, modelOK)
+	case tModelCounts:
+		return listOf(raw, modelCountsOK)
 	case tConfig:
 		var m map[string]json.RawMessage
 		if json.Unmarshal(raw, &m) != nil || m == nil {
@@ -239,6 +248,10 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return oneOf(raw, phases)
 	case tErrorType:
 		return oneOf(raw, errorTypes)
+	case tAccounting:
+		return oneOf(raw, accountings)
+	case tStop:
+		return oneOf(raw, stops)
 	}
 	return false
 }
@@ -332,6 +345,11 @@ func toolOK(raw json.RawMessage) bool {
 func modelOK(raw json.RawMessage) bool {
 	m, ok := objectOf(raw, "id", "name")
 	return ok && ofType(tID, m["id"]) && ofType(tString, m["name"])
+}
+
+func modelCountsOK(raw json.RawMessage) bool {
+	m, ok := objectOf(raw, "model", "counts")
+	return ok && ofType(tID, m["model"]) && ofType(tCounts, m["counts"])
 }
 
 // event is one event as the driver writes it: its members in order, `t`

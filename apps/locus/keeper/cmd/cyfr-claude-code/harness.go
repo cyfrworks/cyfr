@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf16"
 )
@@ -22,7 +23,8 @@ import (
 // tool list is not; the system prompt goes on the `initialize` request as
 // `appendSystemPrompt`, so the harness keeps its own prompt. These shapes
 // were read from Claude Code 2.1.318
-// (seed/components/catalysts/local/claude-code/0.1.8/src/src/harness.rs).
+// (seed/components/catalysts/local/claude-code/0.1.8/src/src/harness.rs)
+// and held on 2.1.323, the version a brain row pins, in the live probe.
 
 // baseArgv is what every session starts with: stream-json both ways,
 // partial messages for streaming, no MCP server but the ones the driver
@@ -47,8 +49,9 @@ const (
 	// bound on one argument, with its NUL (MAX_ARG_STRLEN).
 	maxToolArgBytes = 131071
 	// maxResultChars is what Claude Code takes from one tool call through
-	// `updatedInput`, measured on 2.1.318: 50,000 characters arrive whole,
-	// 50,625 are replaced by its own note.
+	// `updatedInput`, measured on 2.1.318 (not measured again on the pinned
+	// 2.1.323): 50,000 characters arrive whole, 50,625 are replaced by its
+	// own note.
 	maxResultChars = 50000
 )
 
@@ -287,7 +290,7 @@ type harnessLine struct {
 	IsError         *bool           `json:"is_error"`
 	NumTurns        *int            `json:"num_turns"`
 	Errors          []any           `json:"errors"`
-	Usage           json.RawMessage `json:"usage"`
+	ModelUsage      json.RawMessage `json:"model_usage_since_last_result"`
 	RequestID       string          `json:"request_id"`
 	Request         json.RawMessage `json:"request"`
 	Response        json.RawMessage `json:"response"`
@@ -297,7 +300,8 @@ type harnessLine struct {
 func (l *harnessLine) main() bool { return l.ParentToolUseID == nil || *l.ParentToolUseID == "" }
 
 // noTranscript is the result a `--resume` of a session the folder holds
-// no transcript of ends with, as Claude Code 2.1.318 wrote it: no turn
+// no transcript of ends with, as Claude Code 2.1.318 wrote it and the
+// pinned 2.1.323 still did in the live probe: no turn
 // ran, and its errors name the session in the harness's own words
 // (claude_words.go).
 func (l *harnessLine) noTranscript() bool {
@@ -312,21 +316,67 @@ func (l *harnessLine) noTranscript() bool {
 	return false
 }
 
-// counts are the wire's counts from the harness's (the Messages API's)
-// usage.
-func counts(raw json.RawMessage) map[string]uint64 {
-	var usage map[string]any
-	_ = json.Unmarshal(raw, &usage)
-	count := func(key string) uint64 {
-		if f, ok := usage[key].(float64); ok && f > 0 {
-			return uint64(f)
+// modelCounts are one model's counts in a `usage` event.
+type modelCounts struct {
+	Model  string            `json:"model"`
+	Counts map[string]uint64 `json:"counts"`
+}
+
+// harnessCounts are the wire's counts by the names the harness gives
+// them in each model's usage. Its thinking tokens are already inside its
+// output tokens and its cache writes of either lifetime inside its cache
+// writes, so neither is counted again.
+var harnessCounts = map[string]string{
+	"input_tokens":       "inputTokens",
+	"output_tokens":      "outputTokens",
+	"cache_read_tokens":  "cacheReadInputTokens",
+	"cache_write_tokens": "cacheCreationInputTokens",
+}
+
+// accounting reads a result's usage as Claude Code 2.1.323 reports it:
+// `model_usage_since_last_result`, each model's usage of every request
+// the harness made since its last result, its side requests included,
+// keyed by the model. The result's own `usage` counts the main requests
+// alone, which that already holds, so it is not read: adding it would
+// count them twice. A result with no such usage, as before the
+// harness's first request, is "unavailable", never zeros; one with an
+// entry or a count that does not read is "partial", with the models that
+// did; otherwise "complete".
+func accounting(raw json.RawMessage) (string, []modelCounts) {
+	var byModel map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &byModel) != nil || byModel == nil {
+		return "unavailable", nil
+	}
+	names := make([]string, 0, len(byModel))
+	for name := range byModel {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	read := "complete"
+	models := []modelCounts{}
+	for _, name := range names {
+		counts, ok := modelCountsOf(byModel[name])
+		if !ok || !isID(name) || len(models) == maxList {
+			read = "partial"
+			continue
 		}
-		return 0
+		models = append(models, modelCounts{Model: name, Counts: counts})
 	}
-	return map[string]uint64{
-		"input_tokens":       count("input_tokens"),
-		"output_tokens":      count("output_tokens"),
-		"cache_read_tokens":  count("cache_read_input_tokens"),
-		"cache_write_tokens": count("cache_creation_input_tokens"),
+	return read, models
+}
+
+func modelCountsOf(raw json.RawMessage) (map[string]uint64, bool) {
+	var usage map[string]json.RawMessage
+	if json.Unmarshal(raw, &usage) != nil || usage == nil {
+		return nil, false
 	}
+	counts := map[string]uint64{}
+	for name, key := range harnessCounts {
+		var n uint64
+		if !isCount(usage[key]) || json.Unmarshal(usage[key], &n) != nil {
+			return nil, false
+		}
+		counts[name] = n
+	}
+	return counts, true
 }

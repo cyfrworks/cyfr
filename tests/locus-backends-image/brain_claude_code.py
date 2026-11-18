@@ -17,8 +17,9 @@ its message is one of the events, with exactly its members.
   for the listing alone and leaves no process of it.
 - A start runs the harness with the start's configuration as its flags,
   and `started` names the new session; a work sets CYFR's tools on the stub;
-  a post is a turn, streamed as `text` and said whole, its usage counted and
-  its `idle` naming the post, every event naming the post's work.
+  a post is a turn, streamed as `text` and said whole, its usage each
+  model's, a side request's included and the main requests' counted once,
+  and its `idle` naming the post, every event naming the post's work.
 - An ask of CYFR's tool is passed up with its arguments, held, and answered
   by an `answer`, which reaches the harness through `cyfr-stub` as the
   tool's result.
@@ -29,6 +30,8 @@ its message is one of the events, with exactly its members.
   start runs in the same driver.
 - `forget` removes that session's transcript, and leaves another session's
   and the sign-in.
+- Every command line the vectors refuse (their `refuse` lines from the
+  holder) ends the driver with no line written.
 - Nothing of the harness's standard error, its folder or its sign-in reaches
   a line of the driver's.
 - On a terminal, the driver runs the harness's command unchanged: the
@@ -174,8 +177,11 @@ def main():
                "the reply streams and is said whole, the start's flags and prompt the harness's own, its own tool allowed",
                said)
         usage = [e for e in turn if e["t"] == "usage"]
-        expect(len(usage) == 1 and usage[0]["counts"]["input_tokens"] == 12 and usage[0]["counts"]["cache_read_tokens"] == 5,
-               "the result's usage is counted once", usage)
+        expect(len(usage) == 1 and usage[0]["accounting"] == "complete"
+               and {m["model"]: (m["counts"]["input_tokens"], m["counts"]["cache_read_tokens"]) for m in usage[0]["models"]}
+               == {"fake-haiku": (12, 5), "fake-side": (30, 0)},
+               "the result's usage is each model's, the side request's included and the main requests' counted once",
+               usage)
         expect(turn[-1]["answered"] == ["stp_post_1"] and turn[-1]["stop"] == "end_turn",
                "idle names the post the result answered", turn[-1])
         expect(all(e.get("work") == WORK and e.get("gen") == 4 for e in turn[1:]),
@@ -237,6 +243,16 @@ def main():
         expect(d.expect("refused", "the running session is not forgotten")["id"] == "obx_2", "by its id")
         seen += d.lines
         d.close()
+
+        # ————— a command the wire refuses ends the driver —————
+        for i, refused in enumerate(r for r in VECTORS["refuse"] if r["from"] == "holder"):
+            r = Driver(c, f"brain-refused-{i}")
+            r.expect("hello", "a driver to refuse a command")
+            status, answer = c.send(OWNER, r.session, [refused["line"]])
+            expect(status == 200, f"the line is written: {refused['name']}", answer)
+            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
+            expect(not running and lines == [], f"the driver ends on it and writes nothing: {refused['name']}", lines)
+            r.close()
 
         # ————— nothing of stderr, the folder or the sign-in —————
         expect(home_has(c, "canary.txt"), "the harness kept its folder's canary (a positive control)")
