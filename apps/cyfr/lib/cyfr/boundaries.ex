@@ -339,7 +339,7 @@ defmodule Cyfr.Boundaries do
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
     Arca.PersonIdentities Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates
-    Arca.PendingConfirmations Arca.InstallationClaims
+    Arca.PendingConfirmations Arca.InstallationClaims Arca.Questions
     Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.Shares Arca.ShareUsage
     Arca.SharedThreads Arca.SharedThreadMembers Arca.SharedMessages
@@ -413,7 +413,7 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
-        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning
+        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.Questions
         Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
         Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
@@ -432,7 +432,9 @@ defmodule Cyfr.Boundaries do
           "before the answer's tokens are stored. " <>
           "Removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
-          "(`Sanctum.Webhook.disable_for_component/2`). " <>
+          "(`Sanctum.Webhook.disable_for_component/2`); removing a catalyst's last version " <>
+          "deletes the standing answers its person gave its questions " <>
+          "(`Sanctum.Questions.component_removed/3`). " <>
           "`Sanctum.TinctureAuth` is a canvas activation's spend of the validation " <>
           "credential its trial ran under (`consume_validation/3`, from " <>
           "`Compendium.Canvas`), and nothing else of the frame credentials: the shell " <>
@@ -776,7 +778,8 @@ defmodule Cyfr.Boundaries do
           "the person's browser setting goes off. " <>
           "A program used as a brain is a session its holder (`Opus.Brain`) keeps, which " <>
           "Aqua's attendant (`Aqua.Program`) opens, writes and reads, each write checked " <>
-          "there against the work it is bound to. " <>
+          "there against the work it is bound to; a thread's deletion closes at once the " <>
+          "holders of the program sessions it owed their removal (`Opus.Brain.forgotten/2`). " <>
           "Boundary's exports are global, and `Opus` exports `Brain`, `Browser`, `Host.Children`, " <>
           "`Keys`, `Programs`, `Programs.Definition`, `Programs.Session`, " <>
           "`Programs.StatusRedaction`, `Programs.Words`, `Schedules.Scheduler` and " <>
@@ -2063,6 +2066,9 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
+    # A removed catalyst's standing answers go with its last version
+    # (`Compendium.Cascade`).
+    "Sanctum.Questions" => [component_removed: 3],
     "Sanctum.Session" => [cleanup: 0, destroy: 1, load_by_hash: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [
@@ -2509,6 +2515,7 @@ defmodule Cyfr.Boundaries do
     # all of them whatever its configuration says.
     cron_scheduler_enabled: :seam,
     schedule_notes_enabled: :seam,
+    brain_cleanup_enabled: :seam,
     schedule_turns_enabled: :seam,
     crew_delivery_enabled: :seam,
     nudge_enabled: :seam,

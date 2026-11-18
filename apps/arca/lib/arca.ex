@@ -191,6 +191,7 @@ defmodule Arca do
       ProviderCredentialStorage,
       Providers.Records,
       ProvisioningClaims,
+      Questions,
       RateWindows,
       RecordSink,
       RegistryTokenStorage,

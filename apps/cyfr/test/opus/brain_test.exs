@@ -168,6 +168,56 @@ defmodule Opus.BrainTest do
     grant
   end
 
+  # The thread's turn over, and the next one addressed to `agent`.
+  defp next_turn!(ctx, thread_id, turn, agent) do
+    set_turn(turn, status: "completed")
+
+    {:ok, %{turn: later}} =
+      TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread_id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "#{agent}, go on"},
+        turn: %{agent: agent, requested_by: ctx.user_id, origin: :interactive}
+      })
+
+    later
+  end
+
+  # `turn` running with its `program.start` of `row` admitted: its binding.
+  defp admitted!(ctx, binding, turn, row) do
+    set_turn(turn, status: "running")
+    {:ok, turn} = TurnStorage.get(Sanctum.Context.actor(ctx), turn.id)
+    step = start_step!(ctx, turn, row)
+
+    %{
+      binding
+      | agent: turn.agent,
+        turn_id: turn.id,
+        fence: turn.fence,
+        step: step.id,
+        row_id: row.id,
+        epoch: row.epoch
+    }
+  end
+
+  # The opens and closes the service saw so far, dropped.
+  defp flush_opens_and_closes do
+    receive do
+      {:session, op, _wire, _fields} when op in ["open", "close"] -> flush_opens_and_closes()
+    after
+      0 -> :ok
+    end
+  end
+
+  # The next `count` opens and closes the service saw, in its order.
+  defp opens_and_closes(count) do
+    for _ <- 1..count do
+      receive do
+        {:session, op, wire, _fields} when op in ["open", "close"] -> {op, wire}
+      after
+        5_000 -> flunk("the service saw no open or close")
+      end
+    end
+  end
+
   defp no_allows!(ctx),
     do:
       Arca.Repo.delete_all(
@@ -291,9 +341,9 @@ defmodule Opus.BrainTest do
   end
 
   # A held session whose harness has started.
-  defp started!(fake, row, binding, config \\ %{}) do
+  defp started!(fake, row, binding, config \\ %{}, gen \\ 0) do
     brain = opened!(fake, row, binding)
-    assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => config})
+    assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => gen, "config" => config})
     assert %{"t" => "start"} = sent()
 
     say(fake, row, %{
@@ -315,6 +365,13 @@ defmodule Opus.BrainTest do
       "work" => work || binding.turn_id,
       "content" => [%{"type" => "text", "text" => "hi"}]
     }
+
+  defp set_generation(thread, generation),
+    do:
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+          set: [brain_generation: generation]
+        )
 
   defp running_sessions(fake, row),
     do: fake |> Scripted.sessions(row.id) |> Enum.filter(fn {_id, s} -> s.running end)
@@ -1084,7 +1141,7 @@ defmodule Opus.BrainTest do
       assert Task.await(opening, 10_000) == {:error, {:not_admitted, :superseded}}
       assert_receive {:successor, {:ok, {holder, _ref}}}, 10_000
       assert Process.alive?(holder)
-      assert Brain.whereis(binding.ctx.athanor_id, binding.thread_id, binding.agent) == holder
+      assert Brain.whereis(binding.ctx.athanor_id, binding.thread_id) == holder
       send(successor, :done)
     end
 
@@ -1093,7 +1150,7 @@ defmodule Opus.BrainTest do
       Scripted.hold(fake, "opened")
       opening = Task.async(fn -> Brain.open(binding) end)
       assert_receive {:held, "opened", service}, 5_000
-      holder = Brain.whereis(binding.ctx.athanor_id, binding.thread_id, binding.agent)
+      holder = Brain.whereis(binding.ctx.athanor_id, binding.thread_id)
       monitor = Process.monitor(holder)
 
       set_turn(turn, fence: turn.fence + 1)
@@ -1104,6 +1161,42 @@ defmodule Opus.BrainTest do
       assert running_sessions(fake, row) == []
     end
 
+    test "another agent's work on the thread ends its holder first, so one driver process " <>
+           "runs the thread's session",
+         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
+      actor = Sanctum.Context.actor(ctx)
+      session = "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+      {aqua, aqua_ref} = started!(fake, row, binding)
+      [{first, _}] = running_sessions(fake, row)
+      keep_session!(actor, thread, row, turn.agent, session)
+      later = next_turn!(ctx, thread.id, turn, "planner")
+      planner = admitted!(ctx, binding, later, row)
+      flush_opens_and_closes()
+
+      assert {:ok, {holder, ref}} = Brain.open(planner)
+      assert_receive {Brain, ^aqua_ref, {:ended, :replaced}}, 5_000
+      refute Process.alive?(aqua)
+
+      assert [{"close", %{"session" => ^first}}, {"open", %{"home_id" => home}}] =
+               opens_and_closes(2)
+
+      assert home == row.id
+      assert [{second, %{running: true}}] = running_sessions(fake, row)
+      assert Brain.whereis(ctx.athanor_id, thread.id) == holder
+
+      # And back: Aqua's next turn ends the planner's holder the same way.
+      aqua_again =
+        admitted!(ctx, binding, next_turn!(ctx, thread.id, %{id: later.id}, "aqua"), row)
+
+      assert {:ok, {again, _ref}} = Brain.open(aqua_again)
+      assert_receive {Brain, ^ref, {:ended, :replaced}}, 5_000
+      refute Process.alive?(holder)
+      assert [{"close", %{"session" => ^second}}, {"open", _open}] = opens_and_closes(2)
+      assert [{third, %{running: true}}] = running_sessions(fake, row)
+      assert third not in [first, second]
+      assert Brain.whereis(ctx.athanor_id, thread.id) == again
+    end
+
     test "a stale open ends no holder: the successor's session stays",
          %{binding: binding, turn: turn} do
       set_turn(turn, fence: turn.fence + 1)
@@ -1112,6 +1205,650 @@ defmodule Opus.BrainTest do
       assert Brain.open(binding) == {:error, {:not_admitted, :superseded}}
       assert Process.alive?(holder)
       refute_received {Brain, ^ref, {:ended, _reason}}
+    end
+  end
+
+  describe "two paths no turn admits" do
+    @session "1b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+
+    # A removal owed for `thread`'s session on `row`, as a forgetting
+    # transaction records one.
+    defp owed!(ctx, thread_id, row, opts \\ []) do
+      record =
+        Prima.OutboxRecord.brain_forget(%{
+          athanor_id: ctx.athanor_id,
+          thread_id: thread_id,
+          row_id: row.id,
+          session: Keyword.get(opts, :session, @session),
+          generation: Keyword.get(opts, :generation, 0)
+        })
+
+      {:ok, :ok} =
+        Arca.Repo.transaction(fn -> Arca.Outbox.put!(Sanctum.Context.actor(ctx), record) end)
+
+      record
+    end
+
+    # The driver of a once-holder: its session opened, its hello written,
+    # the one command it is sent read back.
+    defp once_driver!(fake, row) do
+      assert_receive {:session, "open", %{"mode" => "run", "home_id" => home}, _fields}, 5_000
+      assert home == row.id
+      first_read!()
+      say(fake, row, hello())
+      sent()
+    end
+
+    # The session stands once its first read arrives: a line written
+    # before then has no session to land in.
+    defp first_read!,
+      do: assert_receive({:session, "recv", %{"after" => 0}, _fields}, 5_000)
+
+    # A take-over asked of `holder` waits in its mailbox.
+    defp taking_over!(holder, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
+      {:messages, messages} = Process.info(holder, :messages)
+
+      cond do
+        Enum.any?(messages, &match?({:"$gen_call", _from, {:replace, _binding}}, &1)) ->
+          :ok
+
+        System.monotonic_time(:millisecond) > deadline ->
+          flunk("no take-over waits on the holder")
+
+        true ->
+          Process.sleep(10)
+          taking_over!(holder, deadline)
+      end
+    end
+
+    # The reads an earlier holder made, told already.
+    defp flush_reads do
+      receive do
+        {:session, "recv", _read, _fields} -> flush_reads()
+      after
+        0 -> :ok
+      end
+    end
+
+    test "a successor that kept the session while the cleanup waited for the key is never removed",
+         %{fake: fake, ctx: ctx, row: row, thread: thread, binding: binding} do
+      # The session `started!/5` reports, so the successor keeps the one
+      # the record names.
+      session = "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+      record = owed!(ctx, thread.id, row, session: session)
+      test = self()
+      handler = "brain-cleanup-pause-#{System.unique_integer([:positive])}"
+
+      # The cleanup is held at its read of the row: past its first read of
+      # the record, before its holder takes the key.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measures, meta, _config ->
+            if Process.get(:cleanup_held) == true and meta[:source] == "mcp_servers" do
+              Process.delete(:cleanup_held)
+              send(test, {:row_read, self()})
+
+              receive do
+                :go_on -> :ok
+              after
+                15_000 -> raise "the cleanup was not let go on"
+              end
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      task =
+        Task.async(fn ->
+          Process.put(:cleanup_held, true)
+          Brain.forget(record)
+        end)
+
+      assert_receive {:row_read, cleanup}, 5_000
+
+      # A successor opens under the key, keeps the session and ends.
+      set_generation(thread, 1)
+      brain = started!(fake, row, %{binding | generation: 1}, %{}, 1)
+      assert_received {:session, "open", _successors, _fields}
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+          set: [brain_session: session]
+        )
+
+      assert :ok = Brain.close(brain)
+      flush_reads()
+      send(cleanup, :go_on)
+
+      # A cleanup that decided before the key was its own opens, and is
+      # answered forgot here, so the test fails on the answer.
+      ref = task.ref
+
+      answer =
+        receive do
+          {^ref, answer} ->
+            answer
+
+          {:session, "open", _open, _fields} ->
+            first_read!()
+            say(fake, row, hello())
+            %{"t" => "forget", "id" => id, "session" => ^session} = sent()
+            say(fake, row, %{"t" => "forgot", "id" => id, "session" => session})
+            Task.await(task, 10_000)
+        after
+          5_000 -> flunk("the cleanup neither answered nor opened")
+        end
+
+      Process.demonitor(ref, [:flush])
+      assert answer == {:error, :successor}
+      refute_received {:session, "open", _open, _fields}
+    end
+
+    test "a successor that opens while the cleanup holds the key waits for its end",
+         %{fake: fake, ctx: ctx, row: row, thread: thread, binding: binding} do
+      record = owed!(ctx, thread.id, row)
+      task = Task.async(fn -> Brain.forget(record) end)
+      assert %{"t" => "forget", "id" => id, "session" => @session} = once_driver!(fake, row)
+      cleanup = Brain.whereis(ctx.athanor_id, thread.id)
+      assert is_pid(cleanup)
+
+      # The forget is written; a successor's open waits on the cleanup's
+      # holder, which takes it up only once its one answer is read.
+      set_generation(thread, 1)
+      opener = Task.async(fn -> Brain.open(%{binding | generation: 1}) end)
+      taking_over!(cleanup)
+      assert Task.yield(opener, 0) == nil
+      refute_received {:session, "open", _open, _fields}
+
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 10_000) == :forgot
+      assert {:ok, {successor, _ref}} = Task.await(opener, 20_000)
+      assert successor != cleanup
+      refute Process.alive?(cleanup)
+    end
+
+    test "cleanup forgets the session the stored record names and nothing else",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+      task = Task.async(fn -> Brain.forget(record) end)
+
+      assert %{"t" => "forget", "id" => "obx_" <> _ = id, "session" => @session} =
+               forget = once_driver!(fake, row)
+
+      assert Map.keys(forget) == ["id", "session", "t"]
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 10_000) == :forgot
+      refute_sent()
+      assert running_sessions(fake, row) == []
+
+      # Every try of one record names the same id.
+      again = Task.async(fn -> Brain.forget(record) end)
+      assert %{"id" => ^id} = once_driver!(fake, row)
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(again, 10_000) == :forgot
+    end
+
+    test "a row of either driver is a brain's", %{fake: fake, ctx: ctx, thread: thread} do
+      codex = brain_row!(ctx, "openai-codex")
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^codex.id),
+          set: [
+            config_json:
+              Jason.encode!(%{"command" => "cyfr-codex npx -y @openai/codex", "env" => %{}})
+          ]
+        )
+
+      record = owed!(ctx, thread.id, codex)
+      task = Task.async(fn -> Brain.forget(record) end)
+      assert %{"t" => "forget", "id" => id, "session" => @session} = once_driver!(fake, codex)
+      say(fake, codex, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 10_000) == :forgot
+    end
+
+    test "cleanup takes no answer but forgot of that id and session as a removal",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+
+      for {answer, expected} <- [
+            {fn id -> %{"t" => "refused", "id" => id, "reason" => "cannot look"} end,
+             {:error, {:refused, "cannot look"}}},
+            {fn id ->
+               %{"t" => "forgot", "id" => id, "session" => "2b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"}
+             end, {:error, :unreadable}},
+            {fn _id -> %{"t" => "forgot", "id" => "obx_other", "session" => @session} end,
+             {:error, :unreadable}}
+          ] do
+        task = Task.async(fn -> Brain.forget(record) end)
+        %{"id" => id} = once_driver!(fake, row)
+        say(fake, row, answer.(id))
+        assert Task.await(task, 10_000) == expected
+        assert running_sessions(fake, row) == []
+      end
+    end
+
+    test "a lost answer, a box away and a write that may have landed are no removal",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+
+      task = Task.async(fn -> Brain.forget(record) end)
+      _forget = once_driver!(fake, row)
+      Scripted.end_sessions(fake, row.id)
+      assert Task.await(task, 10_000) == {:error, :lost}
+
+      Scripted.set(fake, :reset_send, true)
+      task = Task.async(fn -> Brain.forget(record) end)
+      assert_receive {:session, "open", _open, _fields}, 5_000
+      first_read!()
+      say(fake, row, hello())
+      assert Task.await(task, 70_000) == {:error, :lost}
+
+      Scripted.down(fake)
+      assert {:error, _away} = Brain.forget(record)
+      Scripted.up(fake)
+    end
+
+    test "cleanup acts only on a record still owed to the consumer",
+         %{fake: fake, ctx: ctx, row: row, thread: thread} do
+      # One the caller made up, never stored.
+      made_up =
+        Prima.OutboxRecord.brain_forget(%{
+          athanor_id: ctx.athanor_id,
+          thread_id: thread.id,
+          row_id: row.id,
+          session: @session,
+          generation: 0
+        })
+
+      assert Brain.forget(made_up) == {:error, :not_owed}
+
+      # A stored one whose copy names another session: the stored one is
+      # what is forgotten.
+      stored = owed!(ctx, thread.id, row)
+      altered = put_in(stored.snapshot["session"], "2b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30")
+      task = Task.async(fn -> Brain.forget(altered) end)
+      assert %{"session" => @session, "id" => id} = once_driver!(fake, row)
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 10_000) == :forgot
+
+      # One receipted is owed no more.
+      {:ok, claim} = Arca.JobClaims.claim("brain_cleanup", ctx.athanor_id, "boot_test", 60_000)
+
+      :ok =
+        Arca.ConsumerReceipts.record(
+          Sanctum.Context.actor(ctx),
+          claim,
+          :none,
+          Map.merge(Prima.OutboxRecord.source(stored), %{
+            consumer: "brain_cleanup",
+            outcome: "applied"
+          })
+        )
+
+      assert Brain.forget(stored) == {:error, :not_owed}
+      refute_received {:session, "open", _open, _fields}
+    end
+
+    test "a thread holding the record's session again is a successor's, never removed",
+         %{ctx: ctx, row: row, thread: thread} do
+      record = owed!(ctx, thread.id, row)
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+          set: [brain_session: @session, brain_generation: 1]
+        )
+
+      assert Brain.forget(record) == {:error, :successor}
+      refute_received {:session, "open", _open, _fields}
+    end
+
+    test "a row gone, one that runs no driver, another program and a disabled row open nothing",
+         %{ctx: ctx, row: row, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+      bare = brain_row!(ctx, "claude-code-bare")
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^bare.id),
+          set: [
+            config_json:
+              Jason.encode!(%{
+                "command" => "npx -y @anthropic-ai/claude-code@2.1.323",
+                "env" => %{}
+              })
+          ]
+        )
+
+      scratch = brain_row!(ctx, "claude-code-scratch")
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^scratch.id),
+          set: [home: "scratch"]
+        )
+
+      off = brain_row!(ctx, "claude-code-off")
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^off.id),
+          set: [enabled: false]
+        )
+
+      gone = brain_row!(ctx, "claude-code-gone")
+      {1, _} = Arca.Repo.delete_all(from(r in Arca.Schemas.McpServer, where: r.id == ^gone.id))
+
+      for {target, expected} <- [
+            {bare, {:error, :no_driver}},
+            {scratch, {:error, :not_a_brain_row}},
+            {off, {:error, :disabled}},
+            {gone, {:error, :row_gone}}
+          ] do
+        record = owed!(ctx, "thr_#{target.name}", target)
+        assert Brain.forget(record) == expected
+      end
+
+      refute_received {:session, "open", _open, _fields}
+      assert {:ok, %{}} = Arca.McpServerStorage.get_by_id(actor, row.id)
+      _ = thread
+    end
+
+    test "a removal owed on one row while the thread's holder runs on another stays owed, " <>
+           "and is done once that holder ends",
+         %{fake: fake, ctx: ctx, row: row, thread: thread, turn: turn, binding: binding} do
+      # Another agent's work on the thread, on another row, at the
+      # generation whose session the record names: its holder holds
+      # nothing of the record's folder, and the cleanup waits for it.
+      actor = Sanctum.Context.actor(ctx)
+      other = brain_row!(ctx, "claude-code-other")
+      planner = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "planner"), other)
+      {:ok, {pid, ref} = brain} = Brain.open(planner)
+      record = owed!(ctx, thread.id, row, generation: binding.generation)
+      flush_opens_and_closes()
+
+      assert Task.await(draining(ctx), 10_000) == {:ok, %{"owed" => 1}}
+      assert Process.alive?(pid)
+      refute_received {Brain, ^ref, {:ended, _reason}}
+      refute_received {:session, "open", _open, _fields}
+      assert {:ok, [^record]} = Arca.Outbox.pending(actor, "brain_cleanup", "brain_forget")
+
+      Brain.close(brain)
+      flush_opens_and_closes()
+      flush_reads()
+      drain = draining(ctx)
+      assert %{"t" => "forget", "id" => id, "session" => @session} = once_driver!(fake, row)
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(drain, 10_000) == {:ok, %{"applied" => 1}}
+      assert {:ok, []} = Arca.Outbox.pending(actor, "brain_cleanup", "brain_forget")
+    end
+
+    # A drain of the athanor's removals, run beside the test, which plays
+    # the row's driver.
+    defp draining(ctx), do: Task.async(fn -> Opus.Brain.Cleanup.drain(ctx.athanor_id) end)
+
+    test "a deletion after a turn addressed another agent ends the session's holder and its " <>
+           "driver process before the removal is sent",
+         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
+      actor = Sanctum.Context.actor(ctx)
+      {pid, _ref} = started!(fake, row, binding)
+      [{first, _}] = running_sessions(fake, row)
+      keep_session!(actor, thread, row, turn.agent, "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30")
+      later = next_turn!(ctx, thread.id, turn, "planner")
+      set_turn(later, status: "completed")
+
+      assert {:ok, %{cancelled: []}} = Aqua.Tape.delete_thread(ctx, thread.id)
+      {:ok, [record]} = Arca.Outbox.pending(actor, "brain_cleanup", "brain_forget")
+      flush_opens_and_closes()
+      flush_reads()
+      task = Task.async(fn -> Brain.forget(record) end)
+
+      # Read as the cleanup's process opens, before its hello, which the
+      # scripted service writes into every session of the row.
+      assert_receive {:session, "open", %{"mode" => "run", "home_id" => home}, _fields}, 5_000
+      at_the_open = {Scripted.sessions(fake, row.id)[first].running, Process.alive?(pid)}
+      assert home == row.id
+      first_read!()
+      say(fake, row, hello())
+      %{"t" => "forget", "id" => id, "session" => session} = sent()
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => session})
+      assert Task.await(task, 10_000) == :forgot
+      assert at_the_open == {false, false}
+    end
+
+    test "cleanup ends a holder of the record's generation first, and waits for a successor's",
+         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread} do
+      {_pid, ref} = started!(fake, row, binding)
+      [{old, %{running: true}}] = running_sessions(fake, row)
+      record = owed!(ctx, thread.id, row, generation: binding.generation)
+      flush_reads()
+      task = Task.async(fn -> Brain.forget(record) end)
+
+      # The old holder ends, and the process that ran the session is
+      # closed before the forget is written, on a process of the driver of
+      # its own under the same key: a close the box still owes when the
+      # cleanup opens is made first (`fresh/2`).
+      assert_receive {Brain, ^ref, {:ended, :forgotten}}, 5_000
+      assert_receive {:session, "close", %{"session" => ^old}, _fields}, 5_000
+      assert_receive {:session, "open", %{"key" => "brain-" <> _}, _fields}, 5_000
+      first_read!()
+      say(fake, row, hello())
+      assert %{"t" => "forget", "id" => id} = sent()
+      refute Scripted.sessions(fake, row.id)[old].running
+      say(fake, row, %{"t" => "forgot", "id" => id, "session" => @session})
+      assert Task.await(task, 10_000) == :forgot
+
+      # A holder of a later generation is a successor's: it runs on, and
+      # the removal waits.
+      set_generation(thread, binding.generation + 1)
+      {:ok, {pid, ref}} = Brain.open(%{binding | generation: binding.generation + 1})
+      assert Brain.forget(record) == {:error, :busy}
+      assert Process.alive?(pid)
+      refute_received {Brain, ^ref, {:ended, _reason}}
+    end
+
+    test "a forgetting closes at once the holders of the sessions it owed, a successor's apart",
+         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread} do
+      set_generation(thread, 1)
+      binding = %{binding | generation: 1}
+      {pid, ref} = started!(fake, row, binding, %{}, 1)
+      older = %{thread_id: thread.id, generation: 0}
+      assert :ok = Brain.forgotten(ctx.athanor_id, [older])
+      assert Process.alive?(pid)
+      refute_received {Brain, ^ref, {:ended, _reason}}
+
+      owed = %{thread_id: thread.id, generation: 1}
+      assert :ok = Brain.forgotten(ctx.athanor_id, [owed])
+      assert_receive {Brain, ^ref, {:ended, :forgotten}}, 5_000
+      assert_receive {:session, "close", _close, _fields}, 5_000
+      refute Process.alive?(pid)
+    end
+
+    test "no binding writes a models or a forget, however its turn stands",
+         %{fake: fake, row: row, binding: binding} do
+      brain = opened!(fake, row, binding)
+
+      for command <- [
+            %{"t" => "models", "id" => "mdl_1"},
+            %{"t" => "forget", "id" => "obx_1", "session" => @session}
+          ] do
+        assert Brain.write(brain, binding, command) == {:error, :not_a_delivery}
+      end
+
+      brain = started!(fake, row, binding)
+
+      for command <- [
+            %{"t" => "models", "id" => "mdl_2"},
+            %{"t" => "forget", "id" => "obx_2", "session" => @session}
+          ] do
+        assert Brain.write(brain, binding, command) == {:error, :not_a_delivery}
+      end
+
+      refute_sent()
+    end
+
+    test "discovery lists the harness's models for a person at a screen",
+         %{fake: fake, ctx: ctx, row: row} do
+      task = Task.async(fn -> Brain.models(ctx, row.id) end)
+      assert %{"t" => "models", "id" => "mdl_" <> _ = id} = models = once_driver!(fake, row)
+      assert Map.keys(models) == ["id", "t"]
+
+      say(fake, row, %{
+        "t" => "models",
+        "id" => id,
+        "models" => [%{"id" => "opus", "name" => "Opus"}, %{"id" => "haiku", "name" => "Haiku"}],
+        "efforts" => ["low", "high"]
+      })
+
+      assert Task.await(task, 10_000) ==
+               {:ok,
+                %{
+                  models: [%{id: "opus", name: "Opus"}, %{id: "haiku", name: "Haiku"}],
+                  efforts: ["low", "high"]
+                }}
+
+      assert running_sessions(fake, row) == []
+
+      task = Task.async(fn -> Brain.models(ctx, row.id) end)
+      %{"id" => id} = once_driver!(fake, row)
+      say(fake, row, %{"t" => "refused", "id" => id, "reason" => "not listed"})
+      assert Task.await(task, 10_000) == {:error, {:refused, "not listed"}}
+    end
+
+    test "discovery runs for no turn, no other athanor and no row but a brain's",
+         %{ctx: ctx, row: row} do
+      # A call in a turn's chain, as the gate hands a provider one.
+      assert Brain.models(Sanctum.Context.enter_guest(ctx), row.id) == {:error, :not_interactive}
+
+      {other, _user} = person!("brain-other")
+      theirs = brain_row!(other, "claude-code-theirs")
+      assert Brain.models(ctx, theirs.id) == {:error, :row_not_found}
+
+      {1, _} =
+        Arca.Repo.update_all(from(r in Arca.Schemas.McpServer, where: r.id == ^row.id),
+          set: [
+            config_json:
+              Jason.encode!(%{
+                "command" => "npx -y @anthropic-ai/claude-code@2.1.323",
+                "env" => %{}
+              })
+          ]
+        )
+
+      assert Brain.models(ctx, row.id) == {:error, :no_driver}
+      refute_received {:session, "open", _open, _fields}
+    end
+  end
+
+  describe "a thread's deletion" do
+    # A held session of `agent` in `thread`, on a row of its own so that
+    # one driver's hello reaches only its own session: a running turn
+    # whose start admitted that row, its holder opened, and the session
+    # kept on the thread; the turn then ends, as a session outlives it.
+    defp held!(fake, ctx, binding, thread, agent, name) do
+      actor = Sanctum.Context.actor(ctx)
+      row = brain_row!(ctx, name)
+
+      {:ok, %{turn: turn}} =
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "work on it"},
+          turn: %{agent: agent, requested_by: ctx.user_id, origin: :interactive}
+        })
+
+      set_turn(turn, status: "running")
+      {:ok, turn} = TurnStorage.get(actor, turn.id)
+      step = start_step!(ctx, turn, row)
+
+      bound = %{
+        binding
+        | thread_id: thread.id,
+          agent: agent,
+          turn_id: turn.id,
+          origin: turn.origin,
+          fence: turn.fence,
+          step: step.id,
+          row_id: row.id,
+          epoch: row.epoch,
+          generation: 0
+      }
+
+      brain = opened!(fake, row, bound)
+      keep_session!(actor, thread, row, agent, "#{name}-0000-4968-8776-000000000001")
+      {brain, turn}
+    end
+
+    # The session kept as the attendant keeps a driver's `started`, with
+    # the row it is stored with (`TurnStorage.commit_brain/3`).
+    defp keep_session!(actor, thread, row, agent, session) do
+      {:ok, %{seen: false}} =
+        TurnStorage.commit_brain(actor, thread.id, %{
+          agent: agent,
+          generation: 0,
+          boot: "boot-one",
+          hello: true,
+          seq: 1,
+          row_id: row.id,
+          epoch: row.epoch,
+          silence_ms: Opus.Brain.silence_ms(),
+          session: session
+        })
+    end
+
+    # The room, a crew member's thread under it and a thread that read it,
+    # each with its session held.
+    defp three_held!(fake, ctx, binding, thread) do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, child} = Arca.ThreadStorage.crew_thread(actor, thread.id, "planner")
+      {:ok, reader} = Arca.Test.Days.thread(actor)
+      room = held!(fake, ctx, binding, thread, "aqua", "6f1e2d3c")
+      crew = held!(fake, ctx, binding, child, "planner", "7f1e2d3c")
+      {_brain, reading} = read = held!(fake, ctx, binding, reader, "aqua", "8f1e2d3c")
+
+      set_turn(reading,
+        sources: Jason.encode!([Prima.Source.to_json(Prima.Source.thread(thread.id))])
+      )
+
+      {room, crew, read}
+    end
+
+    test "ends at once the holders of its thread's session, its child's and its reader's",
+         %{fake: fake, ctx: ctx, binding: binding, thread: thread, turn: setup_turn} do
+      set_turn(setup_turn, status: "completed")
+      held = three_held!(fake, ctx, binding, thread)
+      {{room, room_turn}, {crew, crew_turn}, {read, read_turn}} = held
+      for turn <- [room_turn, crew_turn, read_turn], do: set_turn(turn, status: "completed")
+
+      assert {:ok, %{cancelled: []}} = Aqua.Tape.delete_thread(ctx, thread.id)
+
+      # Told before the deletion answers: no consumer runs under the suite
+      # (`:brain_cleanup_enabled`), so no tick ended them.
+      for {pid, ref} <- [room, crew, read] do
+        assert_received {Brain, ^ref, {:ended, :forgotten}}
+        refute Process.alive?(pid)
+      end
+    end
+
+    test "a refused deletion ends none", %{
+      fake: fake,
+      ctx: ctx,
+      binding: binding,
+      thread: thread,
+      turn: setup_turn
+    } do
+      set_turn(setup_turn, status: "completed")
+
+      {{room, room_turn}, {crew, crew_turn}, {read, read_turn}} =
+        three_held!(fake, ctx, binding, thread)
+
+      for turn <- [room_turn, read_turn], do: set_turn(turn, status: "completed")
+      set_turn(crew_turn, status: "paused", paused_reason: "approval")
+
+      assert {:error, {:child_awaits_card, "planner"}} = Aqua.Tape.delete_thread(ctx, thread.id)
+
+      for {pid, ref} <- [room, crew, read] do
+        refute_received {Brain, ^ref, {:ended, _reason}}
+        assert Process.alive?(pid)
+      end
     end
   end
 

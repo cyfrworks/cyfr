@@ -110,6 +110,17 @@ defmodule Opus.ProviderRetryTest do
 
       # The failed run stands as it was; a retry is a run of its own.
       assert %Record{status: :failed, error_class: :internal} = original
+
+      # The failed run's caller is its schedule; the retry's is whoever
+      # retried it, here the person, read alike from the row and a listing.
+      assert Arca.Repo.get!(Arca.Schemas.Execution, failed).caller ==
+               "schedule:" <> original.schedule_id
+
+      assert Arca.Repo.get!(Arca.Schemas.Execution, again).caller == "person"
+      assert Record.caller(rerun) == {:ok, :person}
+      assert {:ok, listed} = Record.list(ctx, limit: 100)
+      assert [listed_rerun] = Enum.filter(listed, &(&1.id == again))
+      assert Record.caller(listed_rerun) == {:ok, :person}
     end
 
     test "answers accepted for a rerun that fails again, its failure the run's own event", %{

@@ -60,7 +60,7 @@ defmodule Opus.Lapse do
   # grant that still stands (`Cyfr.Boundaries.system_responsibilities/0`).
   # A failure here commits nothing, and the lapse did not happen.
   defp fail_row(record, now, duration_ms) do
-    {count, event_seq} =
+    {count, event_seq, _closed_questions} =
       Arca.Execution.mark_failed_if_running(
         record.id,
         %{

@@ -1735,6 +1735,43 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == []
     end
 
+    test "a session forgotten while its turn waits ends as a close does: it opens nothing " <>
+           "again and says nothing in the thread",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      allow!(ctx, thread, row)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      Prima.Test.Wait.wait_until(
+        fn -> Enum.map(inputs(ctx, turn), & &1.dispatch_state) == ["closed"] end,
+        10_000,
+        "the post's acceptance to commit"
+      )
+
+      # A home's reset forgets the thread's session and closes its holder
+      # once that commits (`Opus.Programs.home/3`).
+      thread_id = thread.id
+
+      assert {:ok, [%{thread_id: ^thread_id}] = forgotten} =
+               Arca.ThreadStorage.forget_sessions(Sanctum.Context.actor(ctx), [turn.agent])
+
+      :ok = Opus.Brain.forgotten(ctx.athanor_id, forgotten)
+
+      Prima.Test.Wait.wait_until(
+        fn -> not Aqua.Program.holding?(ctx.athanor_id, thread.id, turn.agent) end,
+        10_000,
+        "the attendant to let its session go"
+      )
+
+      :ok = Aqua.Program.close(ctx.athanor_id, thread.id, turn.agent)
+      assert :cancelled = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == []
+    end
+
     test "the silence does not run out while an ask's card waits",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       silence!(2_000)

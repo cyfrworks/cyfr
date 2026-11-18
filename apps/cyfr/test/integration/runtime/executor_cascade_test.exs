@@ -135,7 +135,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
       assert children == []
 
       # Verify mark_failed_if_running is a no-op
-      {count, _} =
+      {count, _, _} =
         Execution.mark_failed_if_running(child_id, %{
           completed_at: DateTime.utc_now(),
           duration_ms: 500,

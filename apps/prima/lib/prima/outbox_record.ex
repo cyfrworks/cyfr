@@ -74,12 +74,22 @@ defmodule Prima.OutboxRecord do
   objects), `person_id`, `origin`, and for `needs_you` the card's
   `approval_id`.
 
+  `brain_forget` is one owed removal of a program's native session from
+  its row's kept folder (`brain_forget/1`): a thread's `brain_session`
+  cleared or its row deleted while a program held it. Its source is the
+  thread (`thread`), its revision the session generation the thread held
+  the session under, so a thread owes at most one removal per
+  generation, and its snapshot holds `thread_id` (the holder's key),
+  `row_id` (the program row whose folder holds the transcript), `session`
+  (the native session) and `generation`. It outlives the thread: nothing of it is read again from
+  the thread's rows.
+
   A record's snapshot is canonical JSON text (`Prima.JCS`): the record
   as stored is the record as recorded, byte for byte. A field with no
   value is left out of the text and reads back as nil.
   """
 
-  @kinds ~w(schedule_outcome crew_request crew_reply workspace_open workspace_report)
+  @kinds ~w(schedule_outcome crew_request crew_reply workspace_open workspace_report brain_forget)
   @source_kinds ~w(schedule_occurrence message turn thread)
   @max_output_bytes 64 * 1024
   # A reply is delivered as a message to the asking thread, so it is cut
@@ -372,6 +382,39 @@ defmodule Prima.OutboxRecord do
           "origin" => Prima.Origin.to_wire(origin)
         }
         |> card(outcome, Map.get(attrs, :approval_id))
+    }
+  end
+
+  @doc """
+  The record of a program's native session owed removal from its row's
+  folder, from what the clearing transaction read of the thread before
+  it cleared or deleted it: `athanor_id`, `thread_id`, `row_id`,
+  `session` and `generation` (the thread's `brain_generation` the session
+  was held under).
+  """
+  @spec brain_forget(map()) :: t()
+  def brain_forget(%{
+        athanor_id: athanor_id,
+        thread_id: thread_id,
+        row_id: row_id,
+        session: session,
+        generation: generation
+      })
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             thread_id != "" and is_binary(row_id) and row_id != "" and is_binary(session) and
+             session != "" and is_integer(generation) and generation >= 0 do
+    %__MODULE__{
+      source_kind: "thread",
+      source_id: thread_id,
+      source_revision: Integer.to_string(generation),
+      athanor_id: athanor_id,
+      kind: "brain_forget",
+      snapshot: %{
+        "thread_id" => thread_id,
+        "row_id" => row_id,
+        "session" => session,
+        "generation" => generation
+      }
     }
   end
 

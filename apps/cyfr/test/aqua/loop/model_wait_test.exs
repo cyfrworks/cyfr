@@ -472,7 +472,7 @@ defmodule Aqua.Loop.ModelWaitTest do
 
     task = run(ctx, accept!(ctx, thread, "are you there?"))
     assert_receive {:scripted_probe, worker, _}, 30_000
-    assert {:ok, 1} = Threads.forget_sessions(actor, ["aqua"])
+    assert {:ok, []} = Threads.forget_sessions(actor, ["aqua"])
     send(worker, :continue)
     assert :completed = Task.await(task, 30_000)
 

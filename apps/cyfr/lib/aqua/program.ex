@@ -371,24 +371,28 @@ defmodule Aqua.Program do
     do: Opus.Brain.write(brain, bound(work), command, opts)
 
   # The harness starts, resuming the thread's native session if it keeps
-  # one, with the posts whose delivery its transcript says.
+  # one, with the posts whose delivery its transcript says. A read that
+  # did not answer says nothing of the session or of those posts: a fresh
+  # start would leave a kept session behind, and a resume naming none
+  # would leave the posts it holds unreconciled, so the work ends with
+  # nothing written.
   defp write_start(%{work: work} = state) do
-    session =
-      case Tape.brain(work.guest, state.thread_id) do
-        {:ok, %{session: session}} -> session
-        {:error, _unanswered} -> nil
-      end
+    with {:ok, %{session: session}} <- Tape.brain(work.guest, state.thread_id),
+         {:ok, pending} <- pending(work, session) do
+      write_start(state, session, pending)
+    else
+      {:error, _unanswered} ->
+        fail(
+          shut(state),
+          "#{work.title} could not start: this thread's session could not be read."
+        )
+    end
+  end
 
-    pending =
-      if session do
-        case Tape.brain_pending(work.guest, work.turn) do
-          {:ok, ids} -> ids
-          {:error, _} -> []
-        end
-      else
-        []
-      end
+  defp pending(_work, nil), do: {:ok, []}
+  defp pending(work, _session), do: Tape.brain_pending(work.guest, work.turn)
 
+  defp write_start(%{work: work} = state, session, pending) do
     command =
       %{
         "t" => "start",
@@ -474,9 +478,8 @@ defmodule Aqua.Program do
 
       {:error, reason} when reason in [:superseded, :generation_moved, :row_changed, :not_open] ->
         # The session is no longer this work's: its writes end here. A
-        # session the thread forgot keeps its transcript in the program's
-        # folder: removing it is the forget's, which this slice sends
-        # none of, as a catalyst's brain kept its own.
+        # session the thread forgot is owed its removal from the program's
+        # folder by the transaction that forgot it (`Opus.Brain.Cleanup`).
         shut(state)
 
       {:error, reason} ->
@@ -1044,7 +1047,7 @@ defmodule Aqua.Program do
   # ---------------------------------------------------------------------------
   # Its end, and the clock
 
-  defp ended(state, reason) when reason in [:closed, :replaced],
+  defp ended(state, reason) when reason in [:closed, :replaced, :forgotten],
     do: {:noreply, reply_waiting(%{state | phase: :closed}, {:error, "the session was closed"})}
 
   # A start the driver could not honour ends its process: the thread says

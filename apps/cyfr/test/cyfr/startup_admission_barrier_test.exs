@@ -101,7 +101,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
        {Opus.Programs,
         [Opus.Programs.Registry, Opus.Programs.Relays, {Opus.Programs.Box, "local"}]},
        {Opus.Browser.Tree, [Opus.Browser.Registry, Opus.Browser.Holders]},
-       {Opus.Brain.Tree, [Opus.Brain.Registry, Opus.Brain.Holders]}
+       {Opus.Brain.Tree, [Opus.Brain.Registry, Opus.Brain.Holders]},
+       Opus.Brain.Cleanup
      ]},
     {Aqua.Supervisor,
      [
@@ -189,6 +190,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Aqua.Crew,
     Aqua.ScheduleTurns,
     Aqua.ScheduleNotes,
+    Opus.Brain.Cleanup,
     Opus.Brain.Holders,
     Opus.Brain.Registry,
     Opus.Browser.Holders,

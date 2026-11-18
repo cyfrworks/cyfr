@@ -26,6 +26,8 @@ defmodule Sanctum.Provider do
     signed in at this CYFR: a device's certificate renewed, either revoked
   - `confirmation` - Pending confirmations of sensitive changes
   - `share` - A person's own keys offered to a thread they sit in or to everyone
+  - `question` - What components ask their person before an action, and the
+    permissions the answers leave
 
   ## Resources
 
@@ -100,7 +102,8 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.Profile.definition(),
       Sanctum.Providers.Pairing.definition(),
       Sanctum.Providers.Confirmation.definition(),
-      Sanctum.Providers.Share.definition()
+      Sanctum.Providers.Share.definition(),
+      Sanctum.Providers.Question.definition()
     ]
   end
 
@@ -136,6 +139,7 @@ defmodule Sanctum.Provider do
   def handle("pairing", ctx, args), do: Sanctum.Providers.Pairing.handle(ctx, args)
   def handle("confirmation", ctx, args), do: Sanctum.Providers.Confirmation.handle(ctx, args)
   def handle("share", ctx, args), do: Sanctum.Providers.Share.handle(ctx, args)
+  def handle("question", ctx, args), do: Sanctum.Providers.Question.handle(ctx, args)
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}

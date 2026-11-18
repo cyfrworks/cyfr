@@ -29,6 +29,7 @@
     "Sanctum.Directory",
     "Sanctum.Gate",
     "Sanctum.Pairing",
+    "Sanctum.Questions",
     "Sanctum.RegistryCredentials",
     "Sanctum.RequestLog",
     "Sanctum.Resources",
