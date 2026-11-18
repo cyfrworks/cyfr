@@ -4661,10 +4661,10 @@ defmodule Arca.TurnStorage do
     * `:answered`, the post and notice steps a native `idle` named: they
       leave the posts owed an answer, and a nudge among them is answered;
     * `:usage`, the `usage` events: each counted once, by its result's
-      identity or against the last total, against the work it names
-      (the open turn's, or one of this thread and agent that is over,
-      which reopens nothing), else kept as the session's unattributed
-      usage, never charged to later work;
+      identity or against its native thread's last usable total, against
+      the work it names (the open turn's, or one of this thread and agent
+      that is over, which reopens nothing), else kept as the session's
+      unattributed usage, never charged to later work;
     * `:busy`, whether the program owes output after the batch (`true`
       once a delivery was taken, `false` after an `idle`), and `:native`,
       whether a line of the program's own came, which restarts the
@@ -4846,10 +4846,10 @@ defmodule Arca.TurnStorage do
   end
 
   # Each usage event counted once: a result by its identity, among the
-  # newest kept, a total against the last one counted (one below it is a
-  # reset). What it counts goes to the work it names when that work is the
-  # open turn's or another of this thread's and agent's, else it stays the
-  # session's, unattributed.
+  # newest kept, a total against its native thread's last usable one (one
+  # below it is a reset). What it counts goes to the work it names when
+  # that work is the open turn's or another of this thread's and agent's,
+  # else it stays the session's, unattributed.
   # arca:db-raise-ok inside the caller's transaction
   defp counted!(progress, athanor_id, thread, turn, agent, usages) do
     Enum.reduce(usages, progress, fn usage, progress ->
@@ -4890,18 +4890,37 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  defp fresh(progress, %{"total" => _} = usage) do
+  # A total is its native thread's four counts so far across every model
+  # it ran, under the one it runs now (`brain_wire.json`): compared with
+  # that thread's last usable total whatever model either came under, one
+  # below it is a reset, and another thread's starts a baseline of its
+  # own. One with no counts is unknown and leaves the baseline as it was.
+  defp fresh(progress, %{"total" => thread, "models" => [_ | _] = models} = usage) do
     baseline = progress["baseline"] || %{}
-    total = counts(usage)
-    last = baseline["total"]
 
-    counts =
-      if is_map(last) and below?(total, last),
+    total =
+      Enum.reduce(models, %{}, fn %{"counts" => counts}, sum ->
+        Map.merge(sum, counts, fn _name, a, b -> a + b end)
+      end)
+
+    last =
+      case baseline["total"] do
+        %{"thread" => ^thread, "counts" => counts} -> counts
+        _another_thread_or_none -> %{}
+      end
+
+    added =
+      if Enum.any?(last, fn {name, n} -> (total[name] || 0) < n end),
         do: total,
-        else: subtract(total, last)
+        else: Map.new(total, fn {name, n} -> {name, n - (last[name] || 0)} end)
 
-    {:fresh, counts, Map.put(progress, "baseline", Map.put(baseline, "total", total))}
+    baseline = Map.put(baseline, "total", %{"thread" => thread, "counts" => total})
+
+    {:fresh, %{counts(usage) | "models" => %{List.last(models)["model"] => added}},
+     Map.put(progress, "baseline", baseline)}
   end
+
+  defp fresh(progress, %{"total" => _} = usage), do: {:fresh, counts(usage), progress}
 
   # An event's counts as one usage map: each model's four counts, and
   # whether the accounting was partial or unavailable, which is unknown and
@@ -4918,26 +4937,6 @@ defmodule Arca.TurnStorage do
       "partial" => if(accounting == "partial", do: 1, else: 0),
       "unknown" => if(accounting == "unavailable", do: 1, else: 0)
     }
-  end
-
-  defp below?(total, last) do
-    Enum.any?(last["models"] || %{}, fn {model, counts} ->
-      Enum.any?(counts, fn {name, n} -> get_in(total, ["models", model, name]) < n end)
-    end)
-  end
-
-  defp subtract(total, nil), do: total
-
-  defp subtract(total, last) do
-    models =
-      Map.new(total["models"], fn {model, counts} ->
-        {model,
-         Map.new(counts, fn {name, n} ->
-           {name, n - (get_in(last, ["models", model, name]) || 0)}
-         end)}
-      end)
-
-    %{total | "models" => models}
   end
 
   # Two usage maps added: counts by model and name, and the results, the

@@ -135,7 +135,7 @@ defmodule Arca.TurnInputsStorageTest do
           agent: "aqua",
           generation: 0,
           boot: "boot-1",
-          seq: System.unique_integer([:positive]),
+          seq: System.unique_integer([:positive, :monotonic]),
           row_id: "prg_brain",
           epoch: 1,
           silence_ms: @silence,
@@ -621,5 +621,83 @@ defmodule Arca.TurnInputsStorageTest do
              TurnStorage.brain_notices(actor, turn.id)
 
     assert row == second.id
+  end
+
+  # ---- running totals -----------------------------------------------------------
+
+  # A Codex `usage` of native thread `thread`: its running total, the counts
+  # so far across every model it ran, under the model it runs now.
+  defp total(turn, model, n, thread \\ "native-thread-1") do
+    %{
+      "t" => "usage",
+      "gen" => 0,
+      "work" => turn.id,
+      "total" => thread,
+      "accounting" => "complete",
+      "models" => [%{"model" => model, "counts" => tokens(n)}]
+    }
+  end
+
+  defp tokens(n) do
+    %{
+      "input_tokens" => n,
+      "output_tokens" => 0,
+      "cache_read_tokens" => 0,
+      "cache_write_tokens" => 0
+    }
+  end
+
+  test "a running total is counted against its native thread's last one, whatever model each " <>
+         "came under",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} = commit(actor, daily, turn, %{usage: [total(turn, "model-a", 100)]})
+    {:ok, _} = commit(actor, daily, turn, %{usage: [total(turn, "model-b", 150)]})
+
+    assert Jason.decode!(step(start.id).usage) == %{
+             "models" => %{"model-a" => tokens(100), "model-b" => tokens(50)},
+             "results" => 2,
+             "partial" => 0,
+             "unknown" => 0
+           }
+  end
+
+  test "a total with no counts is unknown and leaves the last usable total the baseline",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} = commit(actor, daily, turn, %{usage: [total(turn, "model-a", 100)]})
+
+    unavailable = %{
+      "t" => "usage",
+      "gen" => 0,
+      "work" => turn.id,
+      "total" => "native-thread-1",
+      "accounting" => "unavailable"
+    }
+
+    {:ok, _} = commit(actor, daily, turn, %{usage: [unavailable]})
+    {:ok, _} = commit(actor, daily, turn, %{usage: [total(turn, "model-a", 150)]})
+
+    assert Jason.decode!(step(start.id).usage) == %{
+             "models" => %{"model-a" => tokens(150)},
+             "results" => 3,
+             "partial" => 0,
+             "unknown" => 1
+           }
+  end
+
+  test "another native session's total starts a baseline of its own",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    {:ok, _} =
+      commit(actor, daily, turn, %{session: "old-session", usage: [total(turn, "m", 100)]})
+
+    {:ok, 1} = TurnStorage.forget_session(actor, turn.id, %{fence: turn.fence, generation: 0})
+    new = Map.put(total(turn, "m", 150, "native-thread-2"), "gen", 1)
+    {:ok, _} = commit(actor, daily, turn, %{generation: 1, session: "new-session", usage: [new]})
+
+    assert Jason.decode!(step(start.id).usage) == %{
+             "models" => %{"m" => tokens(250)},
+             "results" => 2,
+             "partial" => 0,
+             "unknown" => 0
+           }
   end
 end

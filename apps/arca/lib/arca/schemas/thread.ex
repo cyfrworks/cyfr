@@ -60,7 +60,9 @@ defmodule Arca.Schemas.Thread do
   JSON map: `row` and `epoch`, the program row it runs on; `boot`, the
   driver process, and `seq`, the last of its lines whose effects are
   committed; `baseline`, what usage was counted against (`results`, the
-  newest result identities, and `total`, the last running total);
+  newest result identities, and `total`, the last running total that
+  carried counts: the native `thread` it is of and its four `counts`,
+  whatever model it came under);
   `unattributed`, usage no work could be given, never charged to later
   work; `owed`, the post and notice `input` steps written and not yet
   named by the program's end of a turn; `notices`, the recovery prompts
