@@ -34,7 +34,7 @@ defmodule Aqua.AgentConfig do
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
   `"avoid"`, `"type"`, `"content"`, `"tool_policy"`, `"catalyst_ref"`,
-  `"model"`, `"options"`).
+  `"program"`, `"model"`, `"options"`).
 
   Fails as it reads: a tree that cannot be listed is
   `{:error, {:unavailable, _}}`, never an empty roster a turn would
@@ -81,6 +81,7 @@ defmodule Aqua.AgentConfig do
       "content" => agent.prompt,
       "tool_policy" => agent.tool_policy,
       "catalyst_ref" => agent.catalyst_ref,
+      "program" => agent.program,
       "model" => agent.model,
       "options" => agent.options,
       "disabled" => agent.disabled

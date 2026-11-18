@@ -14,8 +14,8 @@ defmodule Aqua.Models do
       installed catalyst that speaks the contract and has what it needs
       connected asked for its models;
     * `model_status/2` — whether each agent's brain is ready: installed,
-      and bound to a key or a program the agent runs it with
-      (`t:status/0`);
+      and bound to a key or a program the agent runs it with, or, for a
+      brain that is a program, its program row standing (`t:status/0`);
     * `providers/1` — every brain the athanor can connect, with what it
       needs and how it stands, which Aqua's setup offers;
     * `models/2` — one brain asked for its models, the answer connecting
@@ -54,6 +54,16 @@ defmodule Aqua.Models do
     * `:model_unavailable` — the athanor's catalysts could not be read,
       or its setup plan was refused for any other reason, so whether it is
       installed is not known.
+
+  A brain that is a program (the agent's `"program"`, a program row's id)
+  reads on its row alone, since each of its turns is admitted by that
+  turn's own `program.start` step: `:ready` when the row stands as a
+  brain's (the athanor's own, a driven program with a kept folder, not
+  Aqua's browser, enabled), `:program_unfit` when it is not a program a
+  brain runs in and `:program_disabled` when it is turned off, each
+  carrying the row's name; `:program_missing` when the athanor holds no
+  such row and `:model_unavailable` when the store could not answer, each
+  carrying the id the agent names.
   """
   @type status ::
           {:ready
@@ -64,7 +74,10 @@ defmodule Aqua.Models do
            | :consent_damaged
            | :consent_unavailable
            | :missing
-           | :model_unavailable, String.t()}
+           | :model_unavailable
+           | :program_missing
+           | :program_disabled
+           | :program_unfit, String.t()}
 
   # A listing runs every contract catalyst the athanor holds; each is one
   # root execution and one provider round trip.
@@ -205,9 +218,10 @@ defmodule Aqua.Models do
   string-keyed projection, its `"catalyst_ref"` and `"model"` — as the
   brain's `describe` of that model declares them (`capabilities/5`), read
   as the caller through the catalog like `catalogue/1`'s listing, within
-  30 seconds. An agent that names no brain declares none;
-  a catalyst the athanor does not hold is `{:error, :catalyst_not_found}`,
-  and a `describe` that fails is `capabilities/5`'s refusal.
+  30 seconds. An agent that names no catalyst, a program brain's
+  included, declares none; a catalyst the athanor does not hold is
+  `{:error, :catalyst_not_found}`, and a `describe` that fails is
+  `capabilities/5`'s refusal.
   """
   @spec brain_options(Context.t(), map()) :: {:ok, [map()]} | {:error, term()}
   def brain_options(%Context{} = ctx, %{"catalyst_ref" => ref, "model" => model})
@@ -510,13 +524,14 @@ defmodule Aqua.Models do
   end
 
   @doc """
-  For each agent given (the roster's string-keyed projection: `"name"`
-  and `"catalyst_ref"`), its brain: the installed release its catalyst
-  resolves to and whether the consent it runs under is complete —
+  For each agent given (the roster's string-keyed projection: `"name"`,
+  `"catalyst_ref"` and `"program"`), its brain: the installed release its
+  catalyst resolves to and whether the consent it runs under is complete —
   `%{name => t:status/0}`: `{:ready | :needs_key | :needs_grant |
   :needs_program | :consent_stale | :consent_damaged |
   :consent_unavailable, resolved_ref}`, or `{:missing | :model_unavailable,
-  catalyst_ref}`. An agent that names no catalyst has no entry. Each
+  catalyst_ref}` — or, for a brain that is a program, how its row stands
+  (`t:status/0`). An agent that names no brain has no entry. Each
   agent is read on its own consent, the soul's or the crew member's
   (`Compendium.AgentSource`), so a member whose brain is not installed
   or not bound reads so while the soul reads ready.
@@ -550,10 +565,58 @@ defmodule Aqua.Models do
     listing = Aqua.AgentConfig.catalyst_listing(ctx)
     programs = set_up_programs(ctx)
 
-    for %{"name" => name, "catalyst_ref" => ref} <- agents,
-        is_binary(name) and is_binary(ref) and ref != "",
+    for %{"name" => name} = agent <- agents,
+        is_binary(name),
+        brain <- List.wrap(brain_of(agent)),
         into: %{} do
-      {name, catalyst_status(ctx, listing, programs, name, ref)}
+      case brain do
+        {:program, id} -> {name, program_status(ctx, id)}
+        {:catalyst, ref} -> {name, catalyst_status(ctx, listing, programs, name, ref)}
+      end
+    end
+  end
+
+  # The brain an agent names: its program row, or its catalyst. A file
+  # names one at most (`Compendium.AquaAgent.check_brain/1`), and a map
+  # that carries no program names its catalyst.
+  defp brain_of(%{"program" => id}) when is_binary(id) and id != "", do: {:program, id}
+  defp brain_of(%{"catalyst_ref" => ref}) when is_binary(ref) and ref != "", do: {:catalyst, ref}
+  defp brain_of(_agent), do: nil
+
+  defp program_status(ctx, id) do
+    case program(ctx, id) do
+      {:ok, %{name: name}} -> {:ready, name}
+      {:error, {state, name}} when state in [:program_disabled, :program_unfit] -> {state, name}
+      {:error, :program_missing} -> {:program_missing, id}
+      {:error, :unavailable} -> {:model_unavailable, id}
+    end
+  end
+
+  @doc """
+  The program row a program brain names, as it stands now: `{:ok, %{row,
+  epoch, name}}` for an enabled driven program with a kept folder, else
+  `{:error, {:program_disabled | :program_unfit, name}}`,
+  `{:error, :program_missing}` or `{:error, :unavailable}`. The holder
+  checks the row again as it writes, and refuses Aqua's browser's rows
+  there (`Opus.Brain`).
+  """
+  @spec program(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def program(%Context{} = ctx, id) when is_binary(id) do
+    case Arca.McpServerStorage.get_by_id(Context.actor(ctx), id) do
+      {:ok, %{transport: "program", mark: "driven", home: "kept", enabled: true} = row} ->
+        {:ok, %{row: row.id, epoch: row.epoch, name: row.name}}
+
+      {:ok, %{transport: "program", mark: "driven", home: "kept"} = row} ->
+        {:error, {:program_disabled, row.name}}
+
+      {:ok, row} ->
+        {:error, {:program_unfit, row.name}}
+
+      {:error, :not_found} ->
+        {:error, :program_missing}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 

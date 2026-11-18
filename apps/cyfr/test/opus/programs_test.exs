@@ -2276,6 +2276,35 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
     end
 
+    # A brain that is a program names the row itself, with no consent edge
+    # to it: its session lived in the home and goes with it.
+    test "a reset forgets the brain session of every thread whose agent's brain is the row",
+         %{ctx: ctx, row: row} do
+      root = Path.join(System.tmp_dir!(), "programs_coder_#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(root) end)
+      Prima.Test.Env.put_app_env(:arca, :base_path, root)
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), "---\n---\n\nsoul\n")
+
+      :ok =
+        Arca.put(
+          actor,
+          Compendium.AquaPath.crew_file("coder"),
+          "---\nprogram: #{row.id}\nmodel: claude-opus-5-5\n---\n\nYou code.\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      {:ok, room} = Arca.Test.Days.thread(actor)
+      {:ok, coder} = Arca.ThreadStorage.crew_thread(actor, room.id, "coder")
+      {:ok, other} = Arca.ThreadStorage.crew_thread(actor, room.id, "elsewhere")
+      keep_session!(coder, "claude-session-1")
+      keep_session!(other, "other-session-1")
+
+      assert :ok = Programs.home(ctx.athanor_id, row.id, :reset)
+      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, coder.id)
+      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
+    end
+
     test "a retire that does not land is sent again on every tick until it does",
          %{ctx: ctx, fake: fake, controller: controller} do
       Scripted.refuse_once(fake, "home", "unavailable")

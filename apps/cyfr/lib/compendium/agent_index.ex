@@ -11,9 +11,10 @@ defmodule Compendium.AgentIndex do
   per soul or crew member, with the digest of the file's bytes (its
   revision) and of its security-relevant subset as it runs
   (`Compendium.AquaAgent.to_manifest/1`, its capability: a crew member's
-  names the soul's policy it runs under). Every revision's
-  bytes are kept by digest (`Arca.AgentRevisions`) before the row names
-  it, so a turn that pins a revision can always retrieve it. A file that
+  names the soul's policy it runs under), and the brain it names, its
+  catalyst or its program row. Every revision's bytes are kept by digest
+  (`Arca.AgentRevisions`) before the row names it, so a turn that pins a
+  revision can always retrieve it. A file that
   fails to parse leaves no row and is reported; the index is never a
   second mutable source, and a sync that cannot read the tree leaves the
   rows as they were.
@@ -118,6 +119,7 @@ defmodule Compendium.AgentIndex do
                 revision_digest: snap.revision_digest,
                 capability_digest: snap.capability_digest,
                 catalyst_ref: snap.agent.catalyst_ref,
+                program: snap.agent.program,
                 disabled: snap.agent.disabled == true,
                 synced_at: now
               }

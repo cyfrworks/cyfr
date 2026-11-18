@@ -443,6 +443,8 @@ type AquaCreateArgs struct {
 	Description Field[string] `json:"description,omitzero"`
 	// Versionless catalyst reference (for create/update actions)
 	CatalystRef Field[string] `json:"catalyst_ref,omitzero"`
+	// The id of the program row this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref (for create/update actions)
+	Program Field[string] `json:"program,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[string] `json:"model,omitzero"`
 	// What the soul should never hand a crew member (create/update; crew members only)
@@ -494,7 +496,7 @@ func (args AquaGetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaListArgs carries arguments for aqua.list.
 type AquaListArgs struct {
-	// For list: include each agent's full fields (model, catalyst_ref, options, avoid, tool_policy, content, disabled) — one call instead of a get per agent
+	// For list: include each agent's full fields (model, catalyst_ref, program, options, avoid, tool_policy, content, disabled) — one call instead of a get per agent
 	Detail Field[bool] `json:"detail,omitzero"`
 	// For list: include crew members set aside with disabled: true, which the roster otherwise leaves out
 	IncludeDisabled Field[bool] `json:"include_disabled,omitzero"`
@@ -645,6 +647,8 @@ type AquaUpdateArgs struct {
 	Description Field[*string] `json:"description,omitzero"`
 	// Versionless catalyst reference (for create/update actions)
 	CatalystRef Field[*string] `json:"catalyst_ref,omitzero"`
+	// The id of the program row this agent's brain runs in, a driven program with a kept folder, in place of catalyst_ref (for create/update actions)
+	Program Field[*string] `json:"program,omitzero"`
 	// Model identifier (for create/update actions)
 	Model Field[*string] `json:"model,omitzero"`
 	// What the soul should never hand a crew member (create/update; crew members only)
