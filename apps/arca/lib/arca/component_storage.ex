@@ -410,8 +410,8 @@ defmodule Arca.ComponentStorage do
     rescuing_db("delete_component", fn ->
       {:ok, :ok} =
         Arca.Repo.locking_transaction(fn ->
-          lock_removing!(actor, name, publisher, query)
-          removing = Arca.Repo.all(query)
+          locked = lock_removing!(actor, name, publisher, query)
+          removing = query |> where([c], c.publisher in ^locked) |> Arca.Repo.all()
           ids = Enum.map(removing, & &1.id)
           Arca.Repo.delete_all(from(c in Component, where: c.id in ^ids) |> where_tenant(actor))
           forget_answers!(actor, removing)
@@ -453,14 +453,19 @@ defmodule Arca.ComponentStorage do
   # release of (`Arca.Questions.lock_component!/3`, which says why), before
   # it reads a release. A removal that names no publisher reads which
   # publishers it matches to name them, then reads its rows again under
-  # the locks.
+  # the locks, of those publishers only: one that appeared in between is
+  # unlocked here and left for a later removal. Answers the publishers
+  # locked.
   # arca:db-raise-ok inside the caller's transaction
-  defp lock_removing!(actor, name, publisher, _query) when is_binary(publisher),
-    do: Arca.Questions.lock_component!(actor, publisher, name)
+  defp lock_removing!(actor, name, publisher, _query) when is_binary(publisher) do
+    :ok = Arca.Questions.lock_component!(actor, publisher, name)
+    [publisher]
+  end
 
   defp lock_removing!(actor, name, nil, query) do
     publishers = query |> select([c], c.publisher) |> distinct(true) |> Arca.Repo.all()
-    Arca.Questions.lock_components!(actor, Enum.map(publishers, &{&1, name}))
+    :ok = Arca.Questions.lock_components!(actor, Enum.map(publishers, &{&1, name}))
+    publishers
   end
 
   # A removal's last step, under the components' locks, once its removals

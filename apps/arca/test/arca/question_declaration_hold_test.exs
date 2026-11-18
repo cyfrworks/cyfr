@@ -70,15 +70,18 @@ defmodule Arca.QuestionDeclarationHoldTest do
     %{actor: actor, name: name}
   end
 
-  # A catalyst release of `name` at `version` that declares
-  # `delete_table` titled `title`.
-  defp release!(name, version, title) do
-    Arca.Repo.insert!(%Component{
+  # A catalyst release of `name` at `version` by `publisher` that
+  # declares `delete_table` titled `title`.
+  defp release!(name, version, title, publisher \\ "acme"),
+    do: Arca.Repo.insert!(struct(Component, row(name, version, title, publisher)))
+
+  defp row(name, version, title, publisher) do
+    %{
       id: "cmp_#{name}_#{version}_#{System.unique_integer([:positive])}",
       name: name,
       version: version,
       component_type: "catalyst",
-      publisher: "acme",
+      publisher: publisher,
       athanor_id: @athanor,
       digest: "sha256:" <> String.duplicate("b", 64),
       release_digest: "sha256:" <> String.duplicate("c", 64),
@@ -88,15 +91,15 @@ defmodule Arca.QuestionDeclarationHoldTest do
           "name" => name,
           "type" => "catalyst",
           "version" => version,
-          "publisher" => "acme",
+          "publisher" => publisher,
           "asks" => [%{"name" => "delete_table", "title" => title}]
         })
-    })
+    }
   end
 
-  defp standing(name) do
+  defp standing(name, publisher \\ "acme") do
     %{
-      publisher: "acme",
+      publisher: publisher,
       name: name,
       action: "delete_table",
       declaration_digest: Prima.Manifest.Asks.digest(@shown),
@@ -106,11 +109,11 @@ defmodule Arca.QuestionDeclarationHoldTest do
     }
   end
 
-  defp held(actor, name),
+  defp held(actor, name, publisher \\ "acme"),
     do: fn ->
       ComponentStorage.hold_declaring(
         actor,
-        "acme",
+        publisher,
         name,
         "delete_table",
         Prima.Manifest.Asks.digest(@shown)
@@ -569,5 +572,96 @@ defmodule Arca.QuestionDeclarationHoldTest do
       else: assert(Enum.sort(answers(actor, name)) == [{"any", "deny"}, {"key:key_1", "allow"}])
 
     assert allow_at == {:lock_wait, "advisory"}
+  end
+
+  test "a removal that names no publisher removes only the publishers whose locks it took",
+       %{actor: actor, name: name} do
+    discovers? = &(&1 =~ ~r/\ASELECT DISTINCT .*"publisher" FROM "components"/s)
+
+    removing =
+      actor!(:wild, [discovered: discovers?], fn ->
+        ComponentStorage.delete_component(actor, name, "1.0.0")
+      end)
+
+    wild_backend = backend_of!(:wild)
+    assert {:paused, :discovered} = state!(:wild, wild_backend)
+
+    # A second publisher's two versions and an allow arrive after the
+    # removal found its publishers; a removal of one of them holds that
+    # publisher's lock while it is still open.
+    unboxed(fn ->
+      release!(name, "1.0.0", "delete a table", "other")
+      release!(name, "2.0.0", "delete a table", "other")
+    end)
+
+    assert {:ok, _} =
+             unboxed(fn ->
+               Questions.put_standing(actor, standing(name, "other"),
+                 verify: held(actor, name, "other")
+               )
+             end)
+
+    remains? = &(&1 =~ ~r/\ASELECT c0\."id" FROM "components".*LIMIT 1/s)
+
+    other =
+      actor!(:other, [checked: remains?], fn ->
+        ComponentStorage.delete_component(actor, name, "2.0.0", "other", "catalyst")
+      end)
+
+    assert {:paused, :checked} = state!(:other, backend_of!(:other))
+
+    go(removing, :discovered)
+    assert {:done, :ok} = state!(:wild, wild_backend)
+    go(other, :checked)
+    assert %{other: :ok} = drive!(other: other)
+    Task.await(removing, 10_000)
+
+    # The other publisher's 1.0.0 is left for a later removal, and its
+    # allow with it; no allow outlives every release.
+    other_releases =
+      unboxed(fn ->
+        Arca.Repo.all(
+          from(c in Component,
+            where: c.athanor_id == ^@athanor and c.name == ^name and c.publisher == "other",
+            select: c.version
+          )
+        )
+      end)
+
+    assert other_releases == ["1.0.0"]
+
+    assert {:ok, [%{effect: "allow"}]} =
+             unboxed(fn -> Questions.standing(actor, @person, "other", name) end)
+
+    assert catalysts(name) == ["1.0.0"]
+  end
+
+  test "a publication that rewords an installed release waits for an answer being written",
+       %{actor: actor, name: name} do
+    holds? = &(&1 =~ ~r/\ASELECT c0\."manifest" FROM "components"/s)
+
+    writing =
+      actor!(:answer, [held: holds?], fn ->
+        Questions.put_standing(actor, standing(name), verify: held(actor, name))
+      end)
+
+    answer_backend = backend_of!(:answer)
+    assert {:paused, :held} = state!(:answer, answer_backend)
+
+    now = DateTime.utc_now()
+
+    reworded =
+      name
+      |> row("1.0.0", "delete every table", "acme")
+      |> Map.merge(%{inserted_at: now, updated_at: now})
+
+    publishing = actor!(:publish, [], fn -> ComponentStorage.put_component(actor, reworded) end)
+
+    publish_at = state!(:publish, backend_of!(:publish))
+
+    go(writing, :held)
+    results = drive!(answer: writing, publish: publishing)
+    assert %{answer: {:ok, %{effect: "allow"}}, publish: {:ok, _}} = results
+    assert {:lock_wait, _event} = publish_at
   end
 end
