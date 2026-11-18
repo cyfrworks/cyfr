@@ -742,6 +742,87 @@ func TestForgetRemovesThatTranscriptAndNothingElse(t *testing.T) {
 	}
 }
 
+// A session's plan files go with its transcript: the ones its slug names,
+// in the harness's plans folder and in the folder its plan-mode reminders
+// name, a subagent's among them; another session's, a file whose name
+// only begins with the slug, and the sign-in stay. A plans folder or a
+// transcript that cannot be read may hide one: forget refuses, and both
+// are there until it can look.
+func TestForgetRemovesTheSessionsPlanFiles(t *testing.T) {
+	s := startDriver(t)
+	config := filepath.Join(s.home, ".claude")
+	plans := filepath.Join(config, "plans")
+	moved := filepath.Join(s.home, "work", ".plans")
+	gone := "6b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	kept := "7b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+	entry := func(slug string, fields map[string]any) string {
+		fields["slug"] = slug
+		line, _ := json.Marshal(fields)
+		return string(line) + "\n"
+	}
+	transcript := filepath.Join(config, "projects", "-home-a", gone+".jsonl")
+	files := map[string]string{
+		transcript: "not an entry\n" + entry("brave-otter", map[string]any{"type": "user", "uuid": "u1"}) +
+			entry("brave-otter", map[string]any{"type": "attachment", "attachment": map[string]any{"type": "plan_mode", "planFilePath": filepath.Join(moved, "brave-otter.md")}}),
+		filepath.Join(config, "projects", "-home-a", kept+".jsonl"): entry("calm-fox", map[string]any{"type": "user"}),
+		filepath.Join(plans, "brave-otter.md"):                      "the forgotten session's plan",
+		filepath.Join(plans, "brave-otter-agent-a1b2.md"):           "its subagent's plan",
+		filepath.Join(moved, "brave-otter.md"):                      "its plan where the project's settings put plans",
+		filepath.Join(plans, "calm-fox.md"):                         "another session's plan",
+		filepath.Join(plans, "brave-otterish.md"):                   "a plan whose slug only begins so",
+		filepath.Join(config, ".credentials.json"):                  "the sign-in",
+	}
+	for path, body := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed := map[string]bool{
+		transcript:                             true,
+		filepath.Join(plans, "brave-otter.md"): true,
+		filepath.Join(plans, "brave-otter-agent-a1b2.md"): true,
+		filepath.Join(moved, "brave-otter.md"):            true,
+	}
+	present := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	s.expect("hello")
+	if os.Geteuid() != 0 {
+		for i, unreadable := range []string{plans, moved, transcript} {
+			if err := os.Chmod(unreadable, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(unreadable, 0o700) })
+			id := fmt.Sprintf("obx_%d", i+1)
+			s.send(map[string]any{"t": "forget", "id": id, "session": gone})
+			if e := s.expect("refused"); e["id"] != id {
+				t.Fatalf("%s past inspection is no proof the plan files are gone: %v", unreadable, e)
+			}
+			if err := os.Chmod(unreadable, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for path := range files {
+				if !present(path) {
+					t.Fatalf("a refused forget removes nothing: %s", path)
+				}
+			}
+		}
+	}
+	s.send(map[string]any{"t": "forget", "id": "obx_4", "session": gone})
+	if e := s.expect("forgot"); e["id"] != "obx_4" {
+		t.Fatalf("the session and its plan files are forgotten: %v", e)
+	}
+	for path := range files {
+		if present(path) == removed[path] {
+			t.Fatalf("only the forgotten session's transcript and plan files go: %s (present %v)", path, present(path))
+		}
+	}
+}
+
 // openPTY opens a pseudo-terminal pair: the driver's input is its other end.
 func openPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
@@ -855,9 +936,10 @@ func strs(xs ...string) []any {
 	return out
 }
 
-// A read-only start runs the harness in plan mode and denies its own
-// tools, ExitPlanMode among them; one whose read_only is false or absent
-// runs as it always did, its own tools allowed. Both are seen whole: the
+// A read-only start runs the harness in plan mode, loading no settings
+// file of the user's or the project's, and denies its own tools,
+// ExitPlanMode among them; one whose read_only is false or absent runs as
+// it always did, its own tools allowed. Both are seen whole: the
 // harness's command line and the driver's answers.
 func TestAReadOnlyStartRunsPlanModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
 	write := map[string]any{"file_path": "/work/new.txt", "content": "x"}
@@ -879,7 +961,7 @@ func TestAReadOnlyStartRunsPlanModeAndDeniesTheHarnessesOwnTools(t *testing.T) {
 		{"absent", map[string]any{"model": "fake-opus"}, nil, allowed},
 		{"false", map[string]any{"model": "fake-opus", "read_only": false}, nil, allowed},
 		{"false beside a permission mode", map[string]any{"model": "fake-opus", "read_only": false, "permission_mode": "acceptEdits"}, []string{"--permission-mode", "acceptEdits"}, allowed},
-		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "plan"}, denied},
+		{"true", map[string]any{"model": "fake-opus", "read_only": true}, []string{"--permission-mode", "plan", "--setting-sources", ""}, denied},
 	} {
 		s := startDriver(t)
 		session := startFresh(s, c.config)

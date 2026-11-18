@@ -138,7 +138,9 @@ func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 // start starts Codex's app-server, and in it a new thread with the start's
 // tools or the thread the start names. A configuration Codex cannot honour
 // ends the driver: Codex has no permission mode of CYFR's to take, since
-// the box is its one boundary, and its own tools have no switch.
+// the box is its one boundary, and its own tools have no switch; nor can
+// it run read-only, since its read-only sandbox needs the namespaces the
+// box refuses, so a read-only start starts nothing.
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
 	if d.h != nil {
 		return &brainwire.Fatal{Status: 2, Reason: "a start while the harness runs"}
@@ -153,6 +155,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	if raw, ok := members["tools"]; ok {
 		_ = json.Unmarshal(raw, &tools)
+	}
+	if config.ReadOnly {
+		return &brainwire.Fatal{Status: 2, Reason: "Codex cannot run read-only inside CYFR, so nothing ran."}
 	}
 	if config.PermissionMode != "" {
 		return &brainwire.Fatal{Status: 2, Reason: "a start names a permission mode, which Codex in its box does not take"}
@@ -454,13 +459,9 @@ func (d *driver) startStep(s *starting, m rpc) error {
 }
 
 // request is a request of Codex's: a call of CYFR's tool, held and shown
-// as an ask; an approval, allowed, or declined under a read-only start;
-// any other, refused.
+// as an ask; an approval, allowed; any other, refused.
 func (d *driver) request(m rpc) error {
 	if m.Method != "item/tool/call" {
-		if answer, ok := declined(m.Method); ok && d.config.ReadOnly {
-			return d.h.Write(answerLine(m.ID, answer))
-		}
 		if answer, ok := allowed(m.Method, m.Params, time.Now().Unix()); ok {
 			return d.h.Write(answerLine(m.ID, answer))
 		}

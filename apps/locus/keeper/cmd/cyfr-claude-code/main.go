@@ -30,11 +30,12 @@
 // CYFR's answer in its input; each is `accepted` once the harness's input
 // took it. The harness's own tools run in its box: their asks are allowed
 // and they are shown by name. A read-only start (`config.read_only`) runs
-// the harness in plan mode and denies every ask of its own tools,
-// ExitPlanMode included, so it stays there; one that also names a
-// permission mode ends the driver. The driver keeps no account of calls: which
-// post a result answers is the result's own naming of the posts' uuids,
-// which `idle` passes on.
+// the harness in plan mode, loading no settings file of the user's or the
+// project's, and denies every ask of its own tools, ExitPlanMode included,
+// so it stays there; one that also names a permission mode ends the
+// driver. The driver keeps no account of calls: which post a result
+// answers is the result's own naming of the posts' uuids, which `idle`
+// passes on.
 //
 // The driver ends when its input ends (the session is closed), when the
 // harness ends but after `gone`, with the harness's status, and on a

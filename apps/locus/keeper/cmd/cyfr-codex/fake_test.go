@@ -32,8 +32,6 @@ import (
 //	late      replies, then runs a turn of its own that no post started
 //	counts    sends a total missing a count, one with none, a reroute, then a whole one
 //	other     asks for the user's input and for an approval, then replies with the answers
-//	modes     asks every approval, permission and elicitation, then replies with the
-//	          thread's whole start or resume params and the driver's whole answers, as JSON
 //	stranger  calls CYFR's tool from another thread, then replies with the answer
 //	child     a sub-agent's thread starts a turn and counts its usage, then it replies
 //	agent     calls a sub-agent, with no line of the sub-agent's own, then replies
@@ -98,7 +96,6 @@ func fakeCodex() int {
 		sync.Mutex
 		id, model, instructions, policy, sandbox string
 		tools                                    []string
-		params                                   map[string]any
 		rollout                                  *os.File
 		active                                   string
 		steered                                  chan string
@@ -224,20 +221,6 @@ func fakeCodex() int {
 			decision := b["result"].(map[string]any)["decision"]
 			_, timed := c["result"].(map[string]any)["currentTimeAt"]
 			reply(turn, fmt.Sprintf("input refused %v, approval %v, time %v", refused, decision, timed))
-		case strings.Contains(words, "modes"):
-			answers := []any{}
-			for _, method := range []string{
-				"item/commandExecution/requestApproval", "item/fileChange/requestApproval",
-				"execCommandApproval", "applyPatchApproval",
-				"item/permissions/requestApproval", "mcpServer/elicitation/request",
-			} {
-				var whole any
-				_ = json.Unmarshal(ask(method, map[string]any{"threadId": thread.id, "turnId": turn, "itemId": "item_1",
-					"permissions": map[string]any{"network": map[string]any{"enabled": true}}}), &whole)
-				answers = append(answers, whole)
-			}
-			line, _ := json.Marshal(map[string]any{"params": thread.params, "answers": answers})
-			reply(turn, string(line))
 		case strings.Contains(words, "stranger"):
 			answered := ask("item/tool/call", map[string]any{"threadId": "019a0000-0000-7000-8000-000000000000", "turnId": turn, "callId": "call_x", "tool": "files", "arguments": map[string]any{}})
 			var a struct {
@@ -327,7 +310,6 @@ func fakeCodex() int {
 				}
 			case m.Method == "thread/start" || m.Method == "thread/resume":
 				thread.policy, thread.sandbox = str("approvalPolicy"), str("sandbox")
-				thread.params = m.Params
 				thread.instructions = str("developerInstructions")
 				thread.model = "fake-sol"
 				if model := str("model"); model != "" {

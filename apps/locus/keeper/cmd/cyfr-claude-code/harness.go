@@ -57,18 +57,24 @@ const (
 	maxResultChars = 50000
 )
 
-// readOnlyMode is the permission mode a read-only start runs in: plan
-// mode, in which the harness runs its reading tools and asks before any
-// other, and every ask is denied (readOnlyDenial).
-const readOnlyMode = "plan"
+// readOnlyArgv is what a read-only start adds: plan mode, in which the
+// harness runs its reading tools and asks before its editing tools and
+// ExitPlanMode, every ask denied (readOnlyDenial), and no settings file of
+// the user's or the project's, local ones included, so no hook of theirs
+// runs and no allow rule of theirs lets an edit through without asking.
+// The folder is the box's kept one, which the person, or an auto member's
+// session on the same row, may have written; the sign-in is no setting and
+// stays. Plan mode on 2.1.323 asks nothing before a Bash command, one that
+// writes included: the command runs as the box lets it.
+var readOnlyArgv = []string{"--permission-mode", "plan", "--setting-sources", ""}
 
 // readOnlyDenial is what the harness reads when a read-only start denies
 // one of its own tools.
 const readOnlyDenial = "This crew member is read-only."
 
 // harnessArgv is the harness's command line: its own command, then the
-// base, the session and the start's configuration; a read-only start's
-// permission mode is plan mode, since it names none of its own (start).
+// base, the session and the start's configuration, a read-only start's
+// last, since it names no permission mode of its own (start).
 func harnessArgv(command []string, session string, resume bool, config brainwire.Config) []string {
 	argv := append([]string{}, command...)
 	argv = append(argv, baseArgv...)
@@ -77,18 +83,17 @@ func harnessArgv(command []string, session string, resume bool, config brainwire
 	} else {
 		argv = append(argv, "--session-id", session)
 	}
-	mode := config.PermissionMode
-	if config.ReadOnly {
-		mode = readOnlyMode
-	}
 	for _, pair := range [][2]string{
 		{"--model", config.Model},
 		{"--effort", config.Effort},
-		{"--permission-mode", mode},
+		{"--permission-mode", config.PermissionMode},
 	} {
 		if pair[1] != "" {
 			argv = append(argv, pair[0], pair[1])
 		}
+	}
+	if config.ReadOnly {
+		argv = append(argv, readOnlyArgv...)
 	}
 	if config.HarnessTools != nil {
 		argv = append(argv, "--tools", strings.Join(*config.HarnessTools, ","))

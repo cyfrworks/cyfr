@@ -25,9 +25,6 @@
 //   approval's decision; `read` calls CYFR's `files` tool
 //   (`item/tool/call`), holds until the driver answers, and replies with
 //   the answer; `first message` replies with the thread's first message;
-//   `modes` asks every approval, permission and elicitation and replies
-//   with the last `thread/start` or `thread/resume`'s whole params and the
-//   driver's whole answers, as JSON;
 //   `sign out` removes the sign-in. Each reply streams as
 //   `item/agentMessage/delta`s, then the completed `agentMessage`, the
 //   thread's token usage sent again unchanged (as a rate-limit update sends
@@ -83,8 +80,6 @@ let initialized = false;
 let nextRequest = 0;
 const waiting = new Map();
 let thread = null;
-// The whole params of the last `thread/start` or `thread/resume`.
-let threadParams = null;
 
 const threadFile = (id) => path.join(threads, `${id}.json`);
 const save = () => fs.writeFileSync(threadFile(thread.id), JSON.stringify(thread));
@@ -168,13 +163,6 @@ async function turn(turnId, params) {
     const steer = await Promise.race([new Promise((resolve) => { steered = resolve; }), new Promise((resolve) => setTimeout(() => resolve(null), 20000))]);
     steered = null;
     reply(turnId, steer === null ? 'No steer came.' : `Read the steer: ${steer}`);
-  } else if (words.includes('modes')) {
-    const answers = [];
-    for (const method of ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'execCommandApproval',
-      'applyPatchApproval', 'item/permissions/requestApproval', 'mcpServer/elicitation/request']) {
-      answers.push(await request(method, { ...base, itemId: 'call_own_3', permissions: { network: { enabled: true } } }));
-    }
-    reply(turnId, JSON.stringify({ params: threadParams, answers }));
   } else if (words.includes('first message')) {
     reply(turnId, `Your first message was: ${thread.history[0].text}`);
   } else if (words.includes('sign out')) {
@@ -211,7 +199,6 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return ok({ data: MODELS, nextCursor: null });
     case 'thread/start': {
       const p = message.params;
-      threadParams = p;
       thread = { id: crypto.randomUUID(), model: p.model, dynamicTools: p.dynamicTools || [], approvalPolicy: p.approvalPolicy, sandbox: p.sandbox,
         developerInstructions: p.developerInstructions || '', history: [],
         total: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } };
@@ -225,7 +212,6 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       const file = threadFile(message.params.threadId);
       if (!fs.existsSync(file)) return fail(`no rollout found for thread id ${message.params.threadId}`);
       thread = JSON.parse(fs.readFileSync(file, 'utf8'));
-      threadParams = message.params;
       thread.approvalPolicy = message.params.approvalPolicy;
       thread.sandbox = message.params.sandbox;
       if (message.params.developerInstructions !== undefined) thread.developerInstructions = message.params.developerInstructions;

@@ -7,9 +7,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
@@ -22,6 +25,13 @@ import (
 // session, empty in the probe). `<config>` is CLAUDE_CONFIG_DIR, or
 // `.claude` in the home. The working folder's encoding is the harness's,
 // so a session is found in whichever project holds it.
+//
+// Plan mode writes a plan file of the session's own text without asking:
+// `<plans>/<slug>.md`, and a subagent's `<slug>-agent-<id>.md` beside it,
+// where `<slug>` is the session's, which every entry of its transcript
+// names (`slug`), and `<plans>` is `<config>/plans` or the folder the
+// project's settings name, which the transcript's plan-mode reminders
+// name with the file (`attachment.planFilePath`) (Claude Code 2.1.323).
 
 // configDir is where the harness keeps its sessions and its sign-in.
 func configDir(home string) string {
@@ -63,11 +73,65 @@ func transcripts(home, session string) (found []string, failed []error) {
 	return found, failed
 }
 
-// forget removes the transcript of `session` from the folder, and nothing
-// else: another session's, and the sign-in, stay. A session the harness
-// runs now is not removed. `forgot` says the session's paths are gone,
-// each removed or proved absent, looked at again after the removal; a
-// folder or an entry that cannot be inspected or removed is `refused`,
+// planFiles are the plan files of the session whose transcripts are
+// `found`: in each plans folder, the files named by a slug the
+// transcripts name. Beside them it answers each transcript or folder it
+// could not read: a plan file is tied to its session only by the
+// transcript, so one that cannot be read whole may name a slug, and a
+// folder past inspection may hold the file.
+func planFiles(home string, found []string) (plans []string, failed []error) {
+	slugs := map[string]bool{}
+	folders := map[string]bool{filepath.Join(configDir(home), "plans"): true}
+	for _, file := range found {
+		if filepath.Ext(file) != ".jsonl" {
+			continue
+		}
+		err := readTranscript(file, func(entry transcriptEntry) {
+			if entry.Slug != "" {
+				slugs[entry.Slug] = true
+			}
+			var attachment struct {
+				PlanFilePath string `json:"planFilePath"`
+			}
+			if json.Unmarshal(entry.Attachment, &attachment) == nil && attachment.PlanFilePath != "" {
+				folders[filepath.Dir(attachment.PlanFilePath)] = true
+			}
+		})
+		if err != nil {
+			failed = append(failed, err)
+		}
+	}
+	if len(slugs) == 0 {
+		return nil, failed
+	}
+	for folder := range folders {
+		entries, err := os.ReadDir(folder)
+		if err != nil {
+			if !brainwire.Absent(err) {
+				failed = append(failed, err)
+			}
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			for slug := range slugs {
+				if name == slug+".md" || (strings.HasPrefix(name, slug+"-agent-") && strings.HasSuffix(name, ".md")) {
+					plans = append(plans, filepath.Join(folder, name))
+				}
+			}
+		}
+	}
+	sort.Strings(plans)
+	return plans, failed
+}
+
+// forget removes the transcript of `session` from the folder, and its plan
+// files, and nothing else: another session's, and the sign-in, stay. A
+// session the harness runs now is not removed. The plan files go first,
+// so that a removal cut short leaves the transcript that ties them to the
+// session for the next forget. `forgot` says the session's paths are
+// gone, each removed or proved absent, looked at again after the removal;
+// a folder or an entry that cannot be inspected or removed is `refused`,
 // with its reason.
 func (d *driver) forget(id, session string) error {
 	if !brainwire.IsUUID(session) {
@@ -79,6 +143,20 @@ func (d *driver) forget(id, session string) error {
 	found, failed := transcripts(d.home, session)
 	if len(failed) > 0 {
 		return d.c.Refuse(id, "The folder could not be read to find the session's transcript, so it may still be there.")
+	}
+	plans, failed := planFiles(d.home, found)
+	if len(failed) > 0 {
+		return d.c.Refuse(id, "The session's plan file could not be looked for, so it may still be there.")
+	}
+	for _, name := range plans {
+		if err := os.Remove(name); err != nil && !brainwire.Absent(err) {
+			return d.c.Refuse(id, "The session's plan file could not be removed from the folder.")
+		}
+	}
+	for _, name := range plans {
+		if _, err := os.Lstat(name); !brainwire.Absent(err) {
+			return d.c.Refuse(id, "The session's plan file is still in the folder after its removal.")
+		}
 	}
 	for _, name := range found {
 		if err := os.RemoveAll(name); err != nil {
@@ -124,14 +202,20 @@ func heldPosts(home, session string, pending []string) []string {
 }
 
 type transcriptEntry struct {
-	Type string `json:"type"`
-	UUID string `json:"uuid"`
+	Type       string          `json:"type"`
+	UUID       string          `json:"uuid"`
+	Slug       string          `json:"slug"`
+	Attachment json.RawMessage `json:"attachment"`
 }
 
-func readTranscript(path string, each func(transcriptEntry)) {
+// readTranscript gives each entry of the transcript at `path` to `each`,
+// a line that is no entry skipped, and answers why it stopped short of
+// the end: a read that failed, or a line past every bound the harness
+// keeps to, after which the rest is not read.
+func readTranscript(path string, each func(transcriptEntry)) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return
+		return err
 	}
 	defer file.Close()
 	reader := brainwire.NewLineReader(file, brainwire.MaxHarnessLineBytes)
@@ -141,10 +225,11 @@ func readTranscript(path string, each func(transcriptEntry)) {
 		if line != nil && json.Unmarshal(line, &entry) == nil {
 			each(entry)
 		}
-		// The end, a read that fails, or a line past every bound the
-		// harness keeps to: the rest is not read.
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
 		if err != nil {
-			return
+			return err
 		}
 	}
 }

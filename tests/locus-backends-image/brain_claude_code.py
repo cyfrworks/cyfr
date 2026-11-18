@@ -15,8 +15,9 @@ its message is one of the events, with exactly its members.
 - A run session's first line is the driver's `hello`, naming the wire's
   version and a boot of its own; `models` with no harness running starts one
   for the listing alone and leaves no process of it.
-- A read-only start runs the harness in plan mode and denies its own
-  tools, ExitPlanMode among them; one with no read_only runs it as before,
+- A read-only start runs the harness in plan mode, loading no settings
+  file of the user's or the project's, and denies its own tools,
+  ExitPlanMode among them; one with no read_only runs it as before,
   its own tools allowed: both seen as the harness's whole command line and
   the driver's whole answers.
 - A start runs the harness with the start's configuration as its flags,
@@ -223,7 +224,7 @@ def main():
         d.close()
         for key, config, mode, behaviour in (
             ("brain-auto", {"model": "fake-haiku"}, [], "allow"),
-            ("brain-read-only", {"model": "fake-haiku", "read_only": True}, ["--permission-mode", "plan"], "deny"),
+            ("brain-read-only", {"model": "fake-haiku", "read_only": True}, ["--permission-mode", "plan", "--setting-sources", ""], "deny"),
         ):
             m = Driver(c, key)
             m.expect("hello", f"{key}: the driver says hello")
