@@ -280,7 +280,7 @@ defmodule Locus.Runtime.QuestionTest do
     assert [one, two] = questions(id)
     assert {one.ref, one.ask_no, one.action, one.state} == {first, 1, "delete_table", "allowed"}
     assert {two.ref, two.ask_no, two.action, two.state} == {second, 2, "delete_rows", "denied"}
-    assert one.summary == "Drop the table users"
+    assert one.summary == "drop the table users"
     assert one.operation == "DROP TABLE users"
     assert one.caller == "person"
     refute one.masked
