@@ -126,6 +126,21 @@
 # run <check> (<n> quarter[s]): <command>` or `would skip <check>:
 # <reason>` per row, and runs nothing.
 #
+# A handoff that made its log directory ends, at every exit, by writing
+# $STAGE_LOGDIR/receipt and printing on stderr `stage: receipt: handoff
+# <result>, commit <commit>, tree <tree>, <state>, logs <logdir>`. The
+# receipt's lines: `stage`, `result` (passed, or failed and the status),
+# `commit` and `commit-tree` (HEAD's, at the end), `start-tree` and
+# `end-tree` (the working files' tree before the changed set is read and
+# at the end, each as a commit of every file Git does not ignore would
+# hold it, computed in a copy of the index), `state` (committed when both
+# are HEAD's tree, uncommitted when they are one other tree, moved when
+# they differ, unknown when Git could not say), `tests <check> <adapter>
+# <files>` for each test row that ran, `left <name> <count>` for each name
+# the selection left to the pull request's run, and `row <line>` for each
+# summary line, the stdout's. The printed tree is the start tree, which a
+# reviewer holds against `git rev-parse <commit>^{tree}`. Save writes none.
+#
 # Exits 0 when every row that ran passed and 1 otherwise; 64 on usage, or
 # inside a heavy-check (HEAVY_CHECK_HELD set), since the stage queues its
 # own tickets; 65 for a table that is missing or unreadable, or a line of
@@ -143,14 +158,68 @@ set -uo pipefail
 
 # Each running heavy-check's pid, and the row index (or deps) it runs.
 declare -A running=()
-finished=false launched=false
+finished=false launched=false receipting=false start_tree=
 finish() {
   local status=$?
   trap - EXIT
   trap '' INT TERM HUP
   if [ "$status" = 0 ] && ! $finished; then status=1; fi
+  if $receipting; then receipt "$status"; fi
   printf '_EXIT=%s %s\n' "$$" "$status"
   exit "$status"
+}
+# The tree of the working files as a commit of them all would hold it now:
+# `git add -A` into a copy of the index, so the index, the working files,
+# the stash and every ref stay as they were. Empty when Git cannot say.
+work_tree() {
+  local copy tree=
+  copy=$(mktemp "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-stage-index.XXXXXX") || return 0
+  if cp "$(git rev-parse --path-format=absolute --git-path index)" "$copy" 2>/dev/null; then
+    tree=$(GIT_INDEX_FILE=$copy git add -A 2>/dev/null && GIT_INDEX_FILE=$copy git write-tree 2>/dev/null) || tree=
+  fi
+  rm -f "$copy"
+  printf '%s' "$tree"
+}
+# receipt STATUS: the handoff's receipt (the header's), written to its log
+# directory, and its one line on stderr.
+receipt() {
+  local result=passed commit head_tree end_tree state i check adapter named listed line
+  [ "$1" = 0 ] || result="failed $1"
+  commit=$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || commit=unknown
+  head_tree=$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null) || head_tree=unknown
+  end_tree=$(work_tree)
+  if [ -z "$start_tree" ] || [ -z "$end_tree" ]; then state=unknown
+  elif [ "$start_tree" != "$end_tree" ]; then state=moved
+  elif [ "$start_tree" = "$head_tree" ]; then state=committed
+  else state=uncommitted; fi
+  {
+    echo "stage $stage"
+    echo "result $result"
+    echo "commit $commit"
+    echo "commit-tree $head_tree"
+    echo "start-tree ${start_tree:-unknown}"
+    echo "end-tree ${end_tree:-unknown}"
+    echo "state $state"
+    for i in ${rows[@]+"${!rows[@]}"}; do
+      [ -z "${reasons[$i]-x}" ] && runner "$i" || continue
+      IFS=$'\t' read -r _ _ check _ <<<"${rows[$i]}"
+      adapter=sqlite
+      [[ " $r_options " =~ \ -a\ ([a-z]+)\  ]] && adapter=${BASH_REMATCH[1]}
+      listed=
+      for named in "${r_paths[@]}"; do
+        if [ "$named" = '$STAGE_TESTS' ]; then listed+=" ${row_tests[$i]-}"; else listed+=" $named"; fi
+      done
+      echo "tests $check $adapter${listed% }"
+    done
+    for line in ${left_names[@]+"${left_names[@]}"}; do echo "left $line"; done
+    [ -z "${deps_line:-}" ] || echo "row $deps_line"
+    for i in ${rows[@]+"${!rows[@]}"}; do
+      IFS=$'\t' read -r _ _ check _ <<<"${rows[$i]}"
+      echo "row ${lines[$i]-$check: no result}"
+    done
+    for line in ${tickets[@]+"${tickets[@]}"}; do echo "row $line"; done
+  } >"$logdir/receipt"
+  echo "stage: receipt: $stage $result, commit $commit, tree ${start_tree:-unknown}, $state, logs $logdir" >&2
 }
 on_signal() {
   trap '' INT TERM HUP
@@ -251,6 +320,9 @@ if [ "$stage" = save ] || [ "$stage" = handoff ]; then
   fi
   [ -n "$base" ] && git rev-parse --verify -q "$base^{commit}" >/dev/null ||
     refuse 69 "the base ${base:-of the handoff stage (origin/main or main)} is not a commit here"
+  # The tree handoff's receipt reads as the one it started on, taken before
+  # the changed set is.
+  if [ "$stage" = handoff ] && ! $dry; then start_tree=$(work_tree); fi
   while IFS= read -r -d '' path; do changed+=("$path"); done < <(
     git diff --name-only --no-renames -z "$base" --
     git ls-files -z --others --exclude-standard
@@ -282,7 +354,7 @@ fi
 # requests that went red on GitHub, selected each failing test, and at it
 # the median handoff of the 40 pull requests before it added about 220 s.
 SELECT_BUDGET=300
-left_out=()
+left_out=() left_names=()
 if [ "$stage" = handoff ] && ! $explicit; then
   # The changed paths and the touched tests reach the selection as
   # NUL-separated streams on fds 3 and 4, and its records come back NUL-
@@ -397,7 +469,10 @@ PY
   while [ "$k" -lt "${#records[@]}" ]; do
     case ${records[k]} in
       test) tests+=("${records[k + 1]}"); k=$((k + 2)) ;;
-      left) left_out+=("==> stage: ${records[k + 1]} (${records[k + 2]} test files) left to the pull request's run"); k=$((k + 3)) ;;
+      left)
+        left_out+=("==> stage: ${records[k + 1]} (${records[k + 2]} test files) left to the pull request's run")
+        left_names+=("${records[k + 1]} ${records[k + 2]}")
+        k=$((k + 3)) ;;
       *) refuse 69 "the test selection answered '${records[k]}'" ;;
     esac
   done
@@ -530,6 +605,7 @@ else
   logdir=$(mktemp -d "/tmp/cyfr-stage.$stage.XXXXXX") || refuse 69 'cannot make a log directory'
 fi
 echo "stage: $stage logs in $logdir" >&2
+[ "$stage" != handoff ] || receipting=true
 export STAGE="$stage" STAGE_TESTS="${tests[*]+${tests[*]}}" STAGE_LOGDIR="$logdir"
 
 # A row's summary line: result CHECK STATUS SECONDS.

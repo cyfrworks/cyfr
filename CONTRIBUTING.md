@@ -270,9 +270,16 @@ same worktree refuses, naming the run that holds it.
   stage's stderr and at the top of the test checks' logs, as left to the
   pull request's run. A module a macro defines, and a test that reaches a
   changed module only through another it names, are beyond it. Name
-  others after `--`. `scripts/stage.sh -n STAGE` lists what it would run. A branch stacked on another sets `STAGE_BASE`
-  to that branch, so the handoff stage runs its own changes alone rather
-  than everything since `origin/main`.
+  others after `--`. `scripts/stage.sh -n STAGE` lists what it would run.
+  A branch stacked on another sets `STAGE_BASE` to that branch, so the
+  handoff stage runs its own changes alone rather than everything since
+  `origin/main`.
+
+  A handoff ends with a receipt in its log folder and one line on stderr
+  naming its result, HEAD's commit, the tree it tested and whether that is
+  the commit's (committed), not yet committed (uncommitted) or changed
+  while it ran (moved); the ready report carries that line. The receipt is
+  evidence, not a lock: nothing refuses a push without one.
 
   The self-tests that need the whole machine, those a workflow runs and
   no handoff row does, and `go test ./... -race` are the pull request's

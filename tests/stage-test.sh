@@ -957,6 +957,94 @@ printf '# header\n1.5\tapps/a_test.exs\n0.4\tapps/b_test.exs\n3.0\tapps/c_test.e
 [ "$(cat "$S/wroot/scripts/test-partition-weights.tsv")" = "$(printf '# header\n1.5\tapps/a_test.exs\n0.2\tapps/b_test.exs')" ] ||
   fail 'the tracked table changed'
 
+begin "a handoff's receipt names HEAD's commit and tree and reads committed on a clean tree, and computing it leaves the index, the working files and the refs as they were; save writes none"
+# A repository of its own, with the toy's stand-ins, so what these cases
+# commit changes no other case's tree.
+rrepo="$S/receipt-repo"
+git init -q -b main "$rrepo"
+cp -R "$repo/scripts" "$rrepo/"
+printf '%s\n' \
+  'handoff|unit|1|60|-|tests|scripts/test-partitioned.sh -n 1 -a sqlite -- $STAGE_TESTS' \
+  'handoff|unit-pg|1|60|-|tests|scripts/test-partitioned.sh -n 1 -a postgres -- $STAGE_TESTS' \
+  'handoff|edit|1|60|-|always|if [ -n "${RECEIPT_EDIT:-}" ]; then echo edited >>"$RECEIPT_EDIT"; fi' \
+  'handoff|fail|1|60|-|always|exit "${RECEIPT_FAIL:-0}"' \
+  'save|unit|1|60|-|tests|scripts/test-partitioned.sh -n 1 -a sqlite -- $STAGE_TESTS' | tr '|' '\t' >"$rrepo/scripts/stages.tsv"
+printf '200.0\t%s\n' apps/cyfr/test/wide/w1_test.exs apps/cyfr/test/wide/w2_test.exs apps/cyfr/test/wide/w3_test.exs \
+  >"$rrepo/scripts/test-partition-weights.tsv"
+put "$rrepo/apps/cyfr/lib/cyfr/a.ex" 'defmodule Cyfr.A do end'
+put "$rrepo/apps/cyfr/test/cyfr/a_test.exs" '  Cyfr.A'
+put "$rrepo/apps/cyfr/lib/cyfr/wide.ex" 'defmodule Cyfr.Wide do end'
+for w in w1 w2 w3; do put "$rrepo/apps/cyfr/test/wide/${w}_test.exs" '  Cyfr.Wide.go()'; done
+put "$rrepo/notes.txt" 'notes'
+git -C "$rrepo" add -A
+git -C "$rrepo" -c user.name=test -c user.email=test@invalid commit -q -m receipt
+rstage() { # NAME ARGS...: the receipt repository's stage, logs in $S/logs-NAME; status to $rc
+  local name=$1
+  shift
+  rc=0
+  (cd "$rrepo" && scripts/stage.sh -l "$S/logs-$name" "$@") >"$S/$name.out" 2>"$S/$name.err" || rc=$?
+}
+# What a run could have touched: the index's bytes, the status of every
+# file, ignored ones too, and every ref, the stash's included.
+untouched() {
+  sha256sum "$(git -C "$rrepo" rev-parse --path-format=absolute --git-path index)" | cut -d' ' -f1
+  git -C "$rrepo" status --porcelain=v2 --branch --ignored --untracked-files=all
+  git -C "$rrepo" for-each-ref
+  git -C "$rrepo" stash list
+}
+untouched >"$S/before"
+rstage committed handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/committed.err")"
+untouched >"$S/after"
+diff "$S/before" "$S/after" >/dev/null || fail "the receipt touched the checkout: $(diff "$S/before" "$S/after")"
+head=$(git -C "$rrepo" rev-parse HEAD) tree=$(git -C "$rrepo" rev-parse 'HEAD^{tree}')
+printf '%s\n' 'stage handoff' 'result passed' "commit $head" "commit-tree $tree" "start-tree $tree" "end-tree $tree" \
+  'state committed' >"$S/want"
+head -n 7 "$S/logs-committed/receipt" | diff "$S/want" - >/dev/null || fail "the receipt opens: $(head -n 7 "$S/logs-committed/receipt")"
+grep -qx "stage: receipt: handoff passed, commit $head, tree $tree, committed, logs $S/logs-committed" "$S/committed.err" ||
+  fail "the receipt's line: $(grep receipt "$S/committed.err")"
+grep -qx 'row unit: skipped (no touched test) [0-9]*s' "$S/logs-committed/receipt" &&
+  grep -qx 'row fail: ok [0-9]*s' "$S/logs-committed/receipt" || fail "the receipt's rows: $(grep '^row' "$S/logs-committed/receipt")"
+rstage committed-save save
+[ "$rc" = 0 ] && [ ! -e "$S/logs-committed-save/receipt" ] && ! grep -q receipt "$S/committed-save.err" ||
+  fail "save wrote a receipt or exited $rc"
+
+begin "an uncommitted edit reads uncommitted with the tree it tested, and the receipt names each adapter's tests and each name left out with its count"
+printf '# edit\n' >>"$rrepo/apps/cyfr/lib/cyfr/a.ex"
+printf '# edit\n' >>"$rrepo/apps/cyfr/lib/cyfr/wide.ex"
+untouched >"$S/before"
+rstage uncommitted handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/uncommitted.err")"
+untouched >"$S/after"
+diff "$S/before" "$S/after" >/dev/null || fail "the receipt touched the checkout: $(diff "$S/before" "$S/after")"
+start=$(sed -n 's/^start-tree //p' "$S/logs-uncommitted/receipt")
+[ -n "$start" ] && [ "$start" != "$tree" ] && grep -qx "end-tree $start" "$S/logs-uncommitted/receipt" &&
+  grep -qx 'state uncommitted' "$S/logs-uncommitted/receipt" || fail "the receipt reads: $(head -n 7 "$S/logs-uncommitted/receipt")"
+# The tree it tested is the commit of the working files.
+git -C "$rrepo" add -A
+[ "$(git -C "$rrepo" write-tree)" = "$start" ] || fail "the start tree is not the working files' tree"
+git -C "$rrepo" reset -q
+grep -qx 'tests unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
+  grep -qx 'tests unit-pg postgres apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
+  grep -qx 'left Cyfr.Wide 3' "$S/logs-uncommitted/receipt" || fail "the receipt's selection: $(grep -E '^(tests|left)' "$S/logs-uncommitted/receipt")"
+grep -qx "stage: receipt: handoff passed, commit $head, tree $start, uncommitted, logs $S/logs-uncommitted" "$S/uncommitted.err" ||
+  fail "the receipt's line: $(grep receipt "$S/uncommitted.err")"
+git -C "$rrepo" checkout -q -- .
+
+begin 'a file changed while a row runs reads moved, and a failing row still leaves a receipt with its result'
+RECEIPT_EDIT="$rrepo/notes.txt" rstage moved handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/moved.err")"
+grep -qx "start-tree $tree" "$S/logs-moved/receipt" && ! grep -qx "end-tree $tree" "$S/logs-moved/receipt" &&
+  grep -qx 'state moved' "$S/logs-moved/receipt" || fail "the receipt reads: $(head -n 7 "$S/logs-moved/receipt")"
+grep -q ', moved, logs ' "$S/moved.err" || fail "the receipt's line: $(grep receipt "$S/moved.err")"
+git -C "$rrepo" checkout -q -- .
+RECEIPT_FAIL=3 rstage failing handoff
+[ "$rc" = 1 ] || fail "a failing row's stage exited $rc"
+grep -qx 'result failed 1' "$S/logs-failing/receipt" && grep -qx 'row fail: failed 3 [0-9]*s' "$S/logs-failing/receipt" &&
+  grep -qx 'state committed' "$S/logs-failing/receipt" || fail "the failing run's receipt: $(cat "$S/logs-failing/receipt")"
+grep -qx "stage: receipt: handoff failed 1, commit $head, tree $tree, committed, logs $S/logs-failing" "$S/failing.err" ||
+  fail "the receipt's line: $(grep receipt "$S/failing.err")"
+
 begin 'the real table reads whole, no save or handoff row takes more than one quarter, and every self-test a handoff row runs is one a pull-request workflow runs'
 status=0; (cd "$ROOT" && scripts/stage.sh -n release) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
