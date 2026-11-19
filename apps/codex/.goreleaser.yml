@@ -18,6 +18,14 @@ builds:
       - -X github.com/cyfr/codex/internal/version.Version={{.Version}}
       - -X github.com/cyfr/codex/internal/version.Commit={{.Commit}}
       - -X github.com/cyfr/codex/internal/version.Date={{.Date}}
+    # Every binary the release publishes, each target's as it is built:
+    # built with no build tag and holding none of the release proof, or the
+    # release fails before any archive or upload (the script's header).
+    # The path is from the workdir, apps/codex.
+    hooks:
+      post:
+        - cmd: ../../scripts/ci/release-binary-check.sh "{{ .Path }}"
+          output: true
 
 archives:
   - name_template: "cyfr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

@@ -2068,11 +2068,17 @@ jobs:
   seed-guards:
     name: Seed media (clean, immutable versions)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The CI guard scripts' cases build the command line, as the release
+      # binary check's own cases (tests/ci-guards-test.sh).
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
       # Install media must be clean: build droppings under seed/ would be
       # excluded from every copy-on-write materialization but still counted
       # by its cap pre-check (Arca.Overlay.check_commit_cap/2) — a spurious refusal.

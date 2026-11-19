@@ -332,7 +332,10 @@ same worktree refuses, naming the run that holds it.
   Besides `cargo-component` it needs `go` at the version both `go.mod`
   files name and a running Docker daemon, and it refuses to run without
   them; it installs `govulncheck` and the close's `trivy` itself, at the
-  versions CI pins.
+  versions CI pins. The tag's GoReleaser run checks every command line
+  binary it builds before archiving any (`scripts/ci/release-binary-check.sh`,
+  each build's post hook): one built with a build tag or holding the
+  update proof's code fails the release.
 - `scripts/heavy-check.sh` queues the checks of everyone sharing a host.
   It cuts the machine's cores into four quarters of whole cores. A check
   takes all four by default and runs alone: a gate, a full or
