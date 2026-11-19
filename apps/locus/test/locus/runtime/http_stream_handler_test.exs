@@ -461,8 +461,8 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
                 "connection: close\r\n\r\n" <> body
             )
 
-          # sleep-ok: the server keeps the socket open 200 ms after the 429, so the read sees the
-          # status before a close
+          # sleep-ok: no event yet for the client having read the 429; 200 ms with the socket
+          # open before the close
           Process.sleep(200)
           :gen_tcp.close(sock)
         end)

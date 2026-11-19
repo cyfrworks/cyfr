@@ -24,7 +24,7 @@ handoff	compile-sqlite	1	1200	dev	apps/**,config/**,mix.exs,mix.lock	env CYFR_DA
 # The project's own Credo check on planted sources. config/runtime.exs reads
 # the umbrella's own modules, so the row runs after the dev compile, and
 # compiles the umbrella itself when that compile was skipped.
-handoff	credo-check	1	600	dev	.credo.exs,tests/credo/**	env CYFR_DATABASE=sqlite MIX_ENV=dev mix run --no-start tests/credo/sleep-reason-test.exs
+handoff	credo-check	1	600	dev	.credo.exs,tests/credo/**	CYFR_DATABASE=sqlite MIX_ENV=dev mix run --no-start tests/credo/sleep-reason-test.exs
 handoff	compile-postgres	1	1200	dev_pg	apps/**,config/**,mix.exs,mix.lock	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev mix compile --warnings-as-errors
 handoff	generated	1	600	dev	apps/**,config/**	mix ops.gen.cli --check && mix cyfr.gen.configuration_guide --check
 handoff	tests-sqlite	1	2700	test	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS

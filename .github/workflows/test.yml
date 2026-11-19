@@ -302,7 +302,7 @@ jobs:
         run: mix credo --strict
       # The project's own Credo check, on planted sources.
       - name: The sleep-reason check refuses a sleep with no reason
-        run: mix run --no-compile --no-start tests/credo/sleep-reason-test.exs
+        run: mix run --no-start tests/credo/sleep-reason-test.exs
       - name: Check formatting
         run: mix format --check-formatted
       # The CLI's operation constants are generated from the server's

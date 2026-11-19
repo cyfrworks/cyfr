@@ -47,7 +47,9 @@ defmodule Cyfr.Credo.SleepReasonTest do
   end
 
   test "a reason on the line above, on the line, or in the comment above passes" do
-    check("    # sleep-ok: the one-millisecond lifespan under test has passed\n    Process.sleep(10)")
+    check(
+      "    # sleep-ok: the one-millisecond lifespan under test has passed\n    Process.sleep(10)"
+    )
     |> refute_issues()
 
     check("    Process.sleep(10) # sleep-ok: the window under test closes") |> refute_issues()
@@ -65,7 +67,45 @@ defmodule Cyfr.Credo.SleepReasonTest do
     |> assert_issue()
   end
 
-  test "a sleep of :infinity is exempt" do
+  test "a reason may begin with any character, so long as it holds a word" do
+    check("    # sleep-ok: `expires_at` has passed\n    Process.sleep(10)") |> refute_issues()
+    check("    # sleep-ok: --- ...\n    Process.sleep(10)") |> assert_issue()
+  end
+
+  test "only a comment is a reason: a string or heredoc that reads like one is not" do
+    check(~S|    Process.sleep(10); "# sleep-ok: this is a string"|) |> assert_issue()
+
+    check(~S|    _ = "# sleep-ok: a string above"
+    Process.sleep(10)|)
+    |> assert_issue()
+
+    check(~S|    _ = """
+    # sleep-ok: a heredoc line above
+    """
+    Process.sleep(10)|)
+    |> assert_issue()
+  end
+
+  test "a marker trailing code on the line above is no reason for the sleep" do
+    check("    x = 1 # sleep-ok: the window under test closes\n    Process.sleep(x)")
+    |> assert_issue()
+  end
+
+  test "a sleep of :infinity is exempt, piped or called" do
     check("    spawn(fn -> Process.sleep(:infinity) end)") |> refute_issues()
+    check("    spawn(fn -> :infinity |> Process.sleep() end)") |> refute_issues()
+    check("    10 |> Process.sleep()") |> assert_issue()
+  end
+
+  test "Elixir.Process.sleep is refused as Process.sleep is" do
+    check("    Elixir.Process.sleep(10)") |> assert_issue()
+  end
+
+  test "a bare sleep/1 is refused where Process or :timer is imported with it" do
+    check("    import Process\n    sleep(10)") |> assert_issue(&assert(&1.line_no == 6))
+    check("    import :timer, only: [sleep: 1]\n    10 |> sleep()") |> assert_issue()
+    check("    import Process, only: [sleep: 1]\n    Enum.each([1], &sleep/1)") |> assert_issue()
+    check("    import Process, except: [sleep: 1]\n    sleep(10)") |> refute_issues()
+    check("    sleep(10)") |> refute_issues()
   end
 end

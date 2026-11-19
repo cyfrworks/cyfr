@@ -821,8 +821,9 @@ defmodule Opus.ProgramsTest do
     Process.exit(reader, :kill)
 
     # Past the HTTP server's own wait for a request whose client is gone.
-    # sleep-ok: the HTTP server's own wait for a request whose client is gone passes, as the
-    # comment above says
+    # sleep-ok: 6 s, past the 5 s shutdown wait cowboy gave the handler of a request whose
+    # client was killed (the Bypass fake then failed the test as killed); the fake's own
+    # recv still long-polls its 25 s
     Process.sleep(6_000)
   end
 

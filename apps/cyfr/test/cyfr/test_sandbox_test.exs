@@ -25,8 +25,8 @@ defmodule Cyfr.Test.SandboxTest.WorkingView do
           ref = Process.monitor(view)
 
           receive do
-            # sleep-ok: the stand-in's work_ms of work after the view has gone, which the
-            # sandbox's end must outwait
+            # sleep-ok: the work the view leaves behind, work_ms after it has gone (100, or 700
+            # against end_views' 1 s deadline, which the view's 700 ms busy stop shares)
             {:DOWN, ^ref, :process, ^view, _reason} -> Process.sleep(work_ms)
           end
         end)
@@ -40,7 +40,8 @@ defmodule Cyfr.Test.SandboxTest.WorkingView do
   @impl true
   def handle_info({:busy, ms}, socket) do
     send(socket.assigns.test, {:busy, self()})
-    # sleep-ok: the view kept busy for the ms it is told, as the moduledoc above says
+    # sleep-ok: the view busy for the ms it is told before its stop: 700 beside 700 ms of
+    # work, each inside end_views' 1 s deadline alone and past it together
     Process.sleep(ms)
     {:noreply, socket}
   end

@@ -554,8 +554,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           tracker,
           fn ->
             send(test_pid, {:task_pid, self()})
-            # sleep-ok: the task runs on past await_all's timeout, so the tracker must kill it
-            # after
+            # sleep-ok: the task runs 60 s, past await_all's 200 ms timeout, so the tracker must
+            # kill it after
             Process.sleep(60_000)
             :slow
           end
@@ -592,7 +592,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
-            # sleep-ok: the mix's timed-out member, running on past await_all's timeout
+            # sleep-ok: the mix's timed-out member, running 10 s, past await_all's 200 ms timeout
             Process.sleep(10_000)
             :slow
           end
@@ -667,8 +667,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
-            # sleep-ok: the first task runs 200 ms, beside the second, then frees its slot, as the
-            # comment above says
+            # sleep-ok: no gate yet holding the first task until the third spawn is refused;
+            # 200 ms of both slots occupied, then it frees its own
             Process.sleep(200)
             :first
           end
