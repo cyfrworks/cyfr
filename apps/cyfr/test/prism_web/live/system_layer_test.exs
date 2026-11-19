@@ -6016,8 +6016,8 @@ defmodule PrismWeb.SystemLayerTest do
         text = described(view)
         assert String.starts_with?(text, opening), "#{kind}: #{text}"
 
-        # A question's card offers its choices, "Don't allow" among them,
-        # and no other close: it is closed as the browser's Escape closes it.
+        # A question's card offers its choices and no close: it is closed
+        # as the browser's Escape closes it.
         if kind == :question,
           do: view |> layer() |> render_click("dismiss", %{"id" => prompt.id}),
           else: view |> element(~s(button[phx-click="dismiss"])) |> render_click()

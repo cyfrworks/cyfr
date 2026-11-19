@@ -1565,38 +1565,22 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # A question's choice, sent as its answer (`Question.answer/2`), while no
-  # confirmation of an earlier choice waits in its card.
+  # A question's choice the card offers (`Question.offered/1`), sent as its
+  # answer (`Question.answer/1`), while no confirmation of an earlier
+  # choice waits in its card.
   def handle_event("question_answer", %{"id" => id, "choice" => choice}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, prompt} <- open(socket, id, [:question]),
            nil <- panel_of(socket.assigns.panels, prompt),
-           this_caller = Question.choice(prompt).this_caller and Question.switchable?(prompt),
-           {:ok, answer} <- Question.answer(choice, this_caller) do
+           true <- choice in Question.offered(prompt) do
         prompt = Map.delete(prompt, :said)
-        {:noreply, socket |> assign(:current, prompt) |> question_answer(prompt, answer)}
+
+        {:noreply,
+         socket |> assign(:current, prompt) |> question_answer(prompt, Question.answer(choice))}
       else
         _unanswerable -> {:noreply, socket}
       end
     end)
-  end
-
-  # The card's second press, and its switch, kept on the shown prompt.
-  def handle_event("question_more", %{"id" => id}, socket) do
-    case open(socket, id, [:question]) do
-      {:ok, prompt} -> {:noreply, put_question_choice(socket, prompt, more: true)}
-      :none -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("question_switch", %{"id" => id}, socket) do
-    with {:ok, prompt} <- open(socket, id, [:question]),
-         true <- Question.switchable?(prompt) do
-      choice = Question.choice(prompt)
-      {:noreply, put_question_choice(socket, prompt, this_caller: not choice.this_caller)}
-    else
-      _unswitchable -> {:noreply, socket}
-    end
   end
 
   def handle_event("confirm", %{"id" => id}, socket) do
@@ -2565,23 +2549,16 @@ defmodule PrismWeb.SystemLayer do
   # read of what waits if the answer did not land. Its page was told
   # `:dismissed`, so an answer that landed is not told again.
   defp dismiss_question(socket, %{kind: :question, subject: %{ref: ref}} = prompt) do
-    {:ok, answer} = Question.answer("deny_once", false)
-
-    case Ops.call_tool(socket, "question/answer", %{"ref" => ref, "answer" => answer}) do
+    case Ops.call_tool(socket, "question/answer", %{
+           "ref" => ref,
+           "answer" => Question.dismissal()
+         }) do
       {:ok, _answered} -> answered_here(socket, prompt.id)
       _unanswered -> socket
     end
   end
 
   defp dismiss_question(socket, _prompt), do: socket
-
-  defp put_question_choice(socket, prompt, change),
-    do:
-      assign(
-        socket,
-        :current,
-        Map.put(prompt, :choice, Enum.into(change, Question.choice(prompt)))
-      )
 
   # ---------------------------------------------------------------------------
   # Pairing

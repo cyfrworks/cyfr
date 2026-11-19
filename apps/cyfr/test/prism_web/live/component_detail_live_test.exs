@@ -639,7 +639,7 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       )
     end
 
-    for {choice, answer} <- [allow_once: "allowed", deny_once: "denied"] do
+    for {choice, answer} <- [allow_once: "allowed", deny_always_this_caller: "denied"] do
       test "the page stays live while its run waits on the card, draws the card itself, and " <>
              "shows the run's result once it is #{answer}",
            %{conn: conn} do
@@ -1025,11 +1025,11 @@ defmodule PrismWeb.ComponentDetailLiveTest do
         "the card"
       )
 
-      view |> element(~s([data-choice="allow_hour"])) |> render_click()
+      view |> element(~s([data-choice="allow_hour_this_caller"])) |> render_click()
       assert [_answer] = Q.standing(person)
 
       Prima.Test.Wait.wait_until(
-        fn -> answers(view, "delete_table") == [{"allow", "any"}] end,
+        fn -> answers(view, "delete_table") == [{"allow", "person"}] end,
         2_000,
         "the list read again"
       )
@@ -1071,11 +1071,11 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       card!(view, ref)
       card!(other, ref)
 
-      other |> element(~s([data-choice="allow_hour"])) |> render_click()
+      other |> element(~s([data-choice="allow_hour_this_caller"])) |> render_click()
       assert [_answer] = Q.standing(person)
 
       Prima.Test.Wait.wait_until(
-        fn -> answers(view, "delete_table") == [{"allow", "any"}] end,
+        fn -> answers(view, "delete_table") == [{"allow", "person"}] end,
         2_000,
         "the list read again"
       )
@@ -1091,12 +1091,12 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       :ok = :sys.suspend(view.pid)
       {_run, ref} = Q.open!(person, component)
       card!(other, ref)
-      other |> element(~s([data-choice="allow_hour"])) |> render_click()
+      other |> element(~s([data-choice="allow_hour_this_caller"])) |> render_click()
       assert [_answer] = Q.standing(person)
       :ok = :sys.resume(view.pid)
 
       Prima.Test.Wait.wait_until(
-        fn -> answers(view, "delete_table") == [{"allow", "any"}] end,
+        fn -> answers(view, "delete_table") == [{"allow", "person"}] end,
         2_000,
         "the list read again"
       )
@@ -1135,7 +1135,7 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       {_run, ref} = Q.open!(person, other_component)
       card!(view, ref)
 
-      other |> element(~s([data-choice="allow_hour"])) |> render_click()
+      other |> element(~s([data-choice="allow_hour_this_caller"])) |> render_click()
       card_gone!(view, ref)
 
       assert [_answer] = Q.standing(person, "rows")
