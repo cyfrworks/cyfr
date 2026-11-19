@@ -213,7 +213,7 @@ defmodule Aqua.ProgramToolTest do
         })
 
       script!([calls([start("c1", gh, ["--version"], 10_000)]), reply("gh is version 2.")])
-      prints(fake, gh, "gh version 2", exit: 0)
+      prints(fake, gh, "gh version 2")
       assert :completed = run(ctx, turn)
 
       assert {:ok, %{status: "completed", origin: "schedule", agent_mode: "auto", error: nil}} =
@@ -239,18 +239,22 @@ defmodule Aqua.ProgramToolTest do
          "wait_ms" => wait_ms
        }}
 
-  # The program prints `text` once its session opens and exits with
-  # `exit` in the same step, as a command that prints and ends: whatever
-  # read is answered the text is answered the exit with it, so the turn's
-  # wait never settles on the text with the program still running.
-  defp prints(fake, row, text, exit: exit) do
+  # The program prints `text` once its session opens and goes on running.
+  # Given `exit`, it exits with it in the same step, as a command that
+  # prints and ends: whatever read is answered the text is answered the
+  # exit with it, so the turn's wait never settles on the text with the
+  # program still running.
+  defp prints(fake, row, text, opts \\ []) do
     Task.start(fn ->
       Prima.Test.Wait.wait_until(
         fn -> Enum.any?(Scripted.sessions(fake, row.id), fn {_id, s} -> s.running end) end,
         30_000
       )
 
-      Scripted.write_and_exit(fake, row.id, text, exit)
+      case opts[:exit] do
+        nil -> Scripted.write(fake, row.id, text)
+        exit -> Scripted.write_and_exit(fake, row.id, text, exit)
+      end
     end)
   end
 
