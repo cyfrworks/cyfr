@@ -907,6 +907,17 @@ describe("times", () => {
     assert.equal(unreadable.textContent, "soon")
   })
 
+  test("a question's deadline shows its hour alone today, and its date beside it on another day", () => {
+    const now = new Date(2026, 10, 19, 9, 0)
+    const make = (at) => ({attrs: {datetime: at.toISOString(), "data-local": "clock"}, textContent: "", getAttribute(name) { return this.attrs[name] }})
+    const today = make(new Date(2026, 10, 19, 16, 14))
+    const tomorrow = make(new Date(2026, 10, 20, 0, 5))
+    localTimes({querySelectorAll: () => [today, tomorrow]}, "en-US", now)
+    // ICU's spacing before AM/PM differs between releases: the hour is read, not the space.
+    assert.match(today.textContent, /^4:14\s?PM$/u)
+    assert.match(tomorrow.textContent, /^Nov 20, 12:05\s?AM$/u)
+  })
+
   test("a page's own times are shown in the browser's own zone when it mounts and on every update", () => {
     const at = "2026-11-14T09:00:00Z"
     const time = {attrs: {datetime: at}, textContent: at, getAttribute(name) { return this.attrs[name] }}

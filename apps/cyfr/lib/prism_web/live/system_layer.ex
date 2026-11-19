@@ -2894,14 +2894,8 @@ defmodule PrismWeb.SystemLayer do
         role="dialog"
         aria-modal="true"
         aria-labelledby={"#{@id}-title"}
-        aria-describedby={"#{@id}-description"}
-        class={
-          [
-            "m-auto w-full rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70",
-            # A question's row of four answers stands on one line.
-            if(@shown && @shown.kind == :question, do: "max-w-xl", else: "max-w-lg")
-          ]
-        }
+        aria-describedby={@shown && @shown.kind != :question && "#{@id}-description"}
+        class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
           <div class="flex items-start justify-between gap-3">
@@ -2909,7 +2903,13 @@ defmodule PrismWeb.SystemLayer do
               id={"#{@id}-title"}
               tabindex={if @shown.kind == :question, do: "-1"}
               data-focus-first={@shown.kind == :question}
-              class="text-lg font-semibold focus:outline-none"
+              class={
+                [
+                  "text-lg font-semibold focus:outline-none",
+                  # A component's name is one word as long as the line at most.
+                  @shown.kind == :question && "min-w-0 [overflow-wrap:anywhere]"
+                ]
+              }
             >
               {title(@shown)}
             </h2>
@@ -2922,13 +2922,16 @@ defmodule PrismWeb.SystemLayer do
               phx-target={@myself}
               phx-value-id={@shown.id}
               aria-label="Close, and don't allow it this time"
+              title="Close, and don't allow it this time"
               data-test="question-close"
               class="-m-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-300 hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
             >
               <span aria-hidden="true" class="text-2xl leading-none">×</span>
             </button>
           </div>
-          <p id={"#{@id}-description"} class="text-sm text-gray-300">
+          <%!-- A question's card says what its cross does in the cross's
+            name and title alone. --%>
+          <p :if={@shown.kind != :question} id={"#{@id}-description"} class="text-sm text-gray-300">
             {description(@shown)}
           </p>
 
@@ -2970,6 +2973,7 @@ defmodule PrismWeb.SystemLayer do
 
           <Question.choices
             :if={@offered != []}
+            id={@id}
             prompt={@shown}
             offered={@offered}
             myself={@myself}
@@ -3624,11 +3628,6 @@ defmodule PrismWeb.SystemLayer do
     do:
       "Nothing runs until you approve. This is what CYFR would run, as CYFR shows it: " <>
         "the app that asked drew none of it."
-
-  defp description(%{kind: :question}),
-    do:
-      "It asks before it does this, and waits for your answer. Closing this with × " <>
-        "doesn't allow it, this time."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:
