@@ -1316,6 +1316,19 @@ test_run 7 2 success pull_request feature
 if [ "$code" -eq 0 ] && state '"    @someone'"'"'s job\n        (its log could not be read)" in issues["Flaky tests"][0]["comments"][0]' &&
   grep -qxF 'reds: the log of job 72 could not be read: gh api --allow-escape-sequences repos/{owner}/{repo}/actions/jobs/72/logs: gh: Not Found (HTTP 404)' "$scratch/out"; then pass "$label"; else fail "$label"; fi
 
+# A pull request's author writes its test names and log lines; the record
+# keeps their text and none of their control characters.
+label="reds: a failing-test line carrying control characters reaches the record without them"
+reds_state
+python3 -I - "$scratch/reds-state" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+s["logs"]["72"] = "2026-11-18T10:00:06.0000000Z   3) test \x1b[31mred\x1b[0m\x07 and\x7f\x00 bell\t(Color.Test)\n"
+json.dump(s, open(sys.argv[1], "w"))
+PY
+test_run 7 2 success pull_request feature
+if [ "$code" -eq 0 ] && state '"    @someone'"'"'s job\n        3) test [31mred[0m and bell(Color.Test)" in issues["Flaky tests"][0]["comments"][0] and not any(ord(c) < 32 and c != "\n" or ord(c) == 127 for c in issues["Flaky tests"][0]["comments"][0])'; then pass "$label"; else fail "$label"; fi
+
 label="reds: a passed rerun whose earlier attempt failed no job (a rerun by hand of a green or cancelled run) records nothing"
 reds_state
 test_run 8 2 success pull_request feature
