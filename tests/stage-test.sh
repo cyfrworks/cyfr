@@ -1143,8 +1143,8 @@ for spec in \
   'apps/codex/cmd/x.go|go-codex' \
   'seed/aqua/aqua.md|go-codex' \
   'apps/locus/keeper/main.go|go-keeper locus-alone' \
-  'tests/fixtures/brain_wire.json|go-codex go-keeper' \
-  'tests/fixtures/host_api.json|go-codex locus-alone' \
+  'tests/fixtures/residue-canary.go|go-codex go-keeper' \
+  'tests/fixtures/keeper_protocol.json|go-codex go-keeper locus-alone' \
   'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|catalysts' \
   'apps/cyfr/test/support/test_wasm/chat_fixture/chat_fixture.wasm|test-wasm' \
   'apps/prima/lib/prima/cargo_toml.ex|test-wasm' \

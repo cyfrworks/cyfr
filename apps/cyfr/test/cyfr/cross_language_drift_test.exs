@@ -736,6 +736,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
   @named_not_read %{
     {"keeper_protocol.json", "tests/builder-image/memory.py"} =>
       "its docstring names the protocol its keeper client speaks",
+    {"keeper_protocol.json", "tests/stage-test.sh"} =>
+      "a toy repository's changed path, to hold that handoff selects its readers",
     {"locus_builds.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
       "a planted harness text that reads it, for the drift check's own case",
     {"locus_roles.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
