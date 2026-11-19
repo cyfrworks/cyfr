@@ -238,10 +238,15 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
       for view <- [first, second] do
         shows!(view, id)
-        assert has_element?(view, "#system-layer-title", "tables wants to delete a table")
 
+        assert has_element?(
+                 view,
+                 "#system-layer-title",
+                 "You are trying to use tables to delete a table"
+               )
+
+        assert has_element?(view, ~s([data-test="question-component"]), "tables")
         assert has_element?(view, ~s([data-test="question-publisher"]), "local")
-        assert has_element?(view, ~s([data-test="question-caller"]), "you")
 
         frame =
           view
@@ -252,17 +257,22 @@ defmodule PrismWeb.SystemLayerQuestionTest do
           |> String.split()
           |> Enum.join(" ")
 
-        assert frame =~ ~r/^From local · started by you · waits until \S+/
+        assert frame =~ ~r/^tables is from local · waits until \S+/
+        refute frame =~ "started by"
 
         assert has_element?(
                  view,
                  ~s([data-test="question-frame"] time.whitespace-nowrap[data-local="clock"])
                )
 
+        # The component's words come straight under the headline, with no
+        # caption, and the line of its publisher after them.
+        refute render(view) =~ "The component says"
+        refute has_element?(view, "#system-layer figcaption")
+
         assert has_element?(
                  view,
-                 ~s([data-test="question-words"] figcaption),
-                 "The component says:"
+                 ~s([data-test="question-words"] + [data-test="question-frame"])
                )
 
         # In the person's own time zone, as the layer's script writes it.
@@ -298,7 +308,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert [heading] = find(render(view), "[data-focus-first]")
       assert LazyHTML.tag(heading) == ["h2"]
       assert LazyHTML.attribute(heading, "tabindex") == ["-1"]
-      assert LazyHTML.text(heading) =~ "wants to delete a table"
+      assert LazyHTML.text(heading) =~ "trying to use tables to delete a table"
       end_views()
     end
 
@@ -412,24 +422,34 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
-    test "says who started the run in a person's words, heading that caller's row, and " <>
-           "offers one unknown no answer that lasts for it",
+    test "is headed with who started the run in a person's words, as that caller's row is, " <>
+           "and offers one unknown no answer that lasts for it",
          setup do
       view = screen!(setup)
 
       known =
         ~w(deny_always_this_caller allow_once allow_hour_this_caller allow_always_this_caller)
 
-      for {caller, words, row} <- [
-            {"person", "you", known},
-            {"agent:aqua", "the assistant aqua", known},
-            {"tincture:local.board", "the app local.board", known},
-            {"device:pcl_0123456789abcdef", "a paired device (…abcdef)", known},
-            {"unknown", "someone CYFR does not know", ["allow_once"]}
+      for {caller, words, headline, row} <- [
+            {"person", "you", "You are trying to use tables to delete a table", known},
+            {"agent:aqua", "the assistant aqua",
+             "The assistant aqua is trying to use tables to delete a table", known},
+            {"tincture:local.board", "the app local.board",
+             "The app local.board is trying to use tables to delete a table", known},
+            {"device:pcl_0123456789abcdef", "a paired device (…abcdef)",
+             "A paired device (…abcdef) is trying to use tables to delete a table", known},
+            {"unknown", "someone CYFR does not know",
+             "Someone CYFR does not know is trying to use tables to delete a table",
+             ["allow_once"]}
           ] do
         {run, ref} = Q.open!(setup.ctx, setup.component, caller: caller)
         shows!(view, Prompt.question_id(ref))
-        assert has_element?(view, ~s([data-test="question-caller"]), words)
+        # The headline names who started it, whom the answers below cover;
+        # the line under it names the component, and not the caller again.
+        [title] = find(render(view), "#system-layer-title")
+        assert String.trim(LazyHTML.text(title)) == headline
+        refute has_element?(view, ~s([data-test="question-frame"]), words)
+        assert has_element?(view, ~s([data-test="question-frame"]), "tables is from local")
         # The row is a group named by its heading, holding the row's
         # buttons and not the answer for anyone below it.
         html = render(view)
@@ -734,7 +754,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
-    test "the block that scrolls and takes focus is named by the caption, The component says",
+    test "the block that scrolls and takes focus is named as what the component says it will do",
          setup do
       view = screen!(setup)
       {_run, ref} = Q.open!(setup.ctx, setup.component)
@@ -743,9 +763,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       [block] = find(html, ~s([data-test="question-block"]))
       assert LazyHTML.attribute(block, "tabindex") == ["0"]
       assert LazyHTML.attribute(block, "role") == ["region"]
-      [caption] = LazyHTML.attribute(block, "aria-labelledby")
-      [figcaption] = find(html, "figcaption##{caption}")
-      assert String.trim(LazyHTML.text(figcaption)) == "The component says:"
+      assert LazyHTML.attribute(block, "aria-label") == ["What tables says it will do"]
 
       end_views()
     end

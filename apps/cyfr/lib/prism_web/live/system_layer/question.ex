@@ -6,17 +6,21 @@ defmodule PrismWeb.SystemLayer.Question do
   A component's question as its card draws it, which only the system
   layer does: a frame of CYFR's own around the component's words.
 
-  The frame is fixed in place: the component's name and "wants to" with
-  the action's title its manifest declares (the layer's heading), then one
-  line of its publisher, who started the run (`caller_words/1`) and until
-  when it waits, in the person's own time, with the date only when it is
-  not today. The component's block sits inside the frame, captioned "The
-  component says:": its summary and its operation, as plain escaped text
-  with its line breaks kept. The one-line summary stays in view; the
+  The frame is fixed in place: who started the run (`caller_words/1`),
+  "is trying to use", the component's name, "to" and the action's title
+  its manifest declares (`headline/1`, the layer's heading), so a person
+  reads first who asks and what an answer that lasts is kept for. Under
+  it, the component's block, what it says of this one run: its summary
+  and its operation, as plain escaped text with its line breaks kept, set
+  apart by its own border. The one-line summary stays in view; the
   operation is in a region of a fixed height that scrolls on its own,
-  named by the caption, and breaks any line, so no length of text moves
-  the frame, the summary or the choices, and text that reads like a
-  button stays text inside the block. Masking is said.
+  named for a screen reader as what the component says it will do, and
+  breaks any line, so no length of text moves the frame, the summary or
+  the choices, and text that reads like a button stays text inside the
+  block. Masking is said. Then one line of the component's publisher, so
+  a component named like CYFR is seen for what it is, and until when it
+  waits, in the person's own time, with the date only when it is not
+  today.
 
   The choices (`offered/1`, each named for the answer it sends,
   `answer/1`), under "Allow this?": a group named for the caller that
@@ -110,6 +114,23 @@ defmodule PrismWeb.SystemLayer.Question do
         "not allow it."
 
   @doc """
+  The card's headline, for a question's preview: who started the run as
+  `caller_words/1` says it, with a capital, "is trying to use", the
+  component's name, "to" and the action's declared title, the words an
+  answer that lasts is kept for. The person who started it reads "You
+  are trying to use".
+  """
+  @spec headline(%{caller: String.t(), name: String.t(), title: String.t()}) :: String.t()
+  def headline(%{caller: caller, name: name, title: title}) do
+    case caller_words(caller) do
+      "you" -> "You are trying to use #{name} to #{title}"
+      words -> "#{capital(words)} is trying to use #{name} to #{title}"
+    end
+  end
+
+  defp capital(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
+
+  @doc """
   Who started a run, from its caller's text (`Prima.Question.Caller`), as
   a person reads it: "you", the assistant's name, the app's publisher and
   name, or for a device, a key, a schedule and a webhook the kind and the
@@ -143,42 +164,24 @@ defmodule PrismWeb.SystemLayer.Question do
 
   defp known_caller?(%{subject: %{caller: caller}}), do: caller != Caller.encode(:unknown)
 
-  attr :id, :string, required: true
   attr :prompt, :map, required: true
 
   @doc """
-  The frame's line and the component's block under it: who published it,
-  who started the run and until when it waits, in the person's own time,
-  on one line that wraps at a word; then what the component says.
+  The component's block, what it says of this one run, then the frame's
+  line: who published the component and until when it waits, in the
+  person's own time, on one line that wraps at a word.
   """
   def card(assigns) do
     assigns = assign(assigns, :subject, assigns.prompt.subject)
 
     ~H"""
     <section class="space-y-3" data-test="question" data-ref={@subject.ref}>
-      <p class="text-sm text-gray-300 [overflow-wrap:anywhere]" data-test="question-frame">
-        From <span data-test="question-publisher">{@subject.publisher}</span>
-        · started by <span data-test="question-caller">{caller_words(@subject.caller)}</span>
-        · waits until
-        <time
-          datetime={DateTime.to_iso8601(@subject.deadline)}
-          data-local="clock"
-          data-test="question-deadline"
-          class="whitespace-nowrap"
-        >
-          {DateTime.to_iso8601(@subject.deadline)}
-        </time>
-      </p>
-
-      <figure
+      <%!-- Set apart by its own border, scroll and plain text, so the
+        component's words never pass for CYFR's or for a button. --%>
+      <div
         class="rounded-md border border-dashed border-gray-600 bg-gray-950 p-3"
-        aria-labelledby={"#{@id}-question-words"}
         data-test="question-words"
       >
-        <%!-- The caption also names the block below for a screen reader. --%>
-        <figcaption id={"#{@id}-question-words"} class="mb-2 text-xs text-gray-400">
-          The component says:
-        </figcaption>
         <p class="text-sm text-gray-100 [overflow-wrap:anywhere]" data-test="question-summary">
           {@subject.summary}
         </p>
@@ -186,7 +189,7 @@ defmodule PrismWeb.SystemLayer.Question do
           class="mt-2 max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
           tabindex="0"
           role="region"
-          aria-labelledby={"#{@id}-question-words"}
+          aria-label={"What #{@subject.name} says it will do"}
           data-test="question-block"
         >
           <pre
@@ -197,7 +200,21 @@ defmodule PrismWeb.SystemLayer.Question do
         <p :if={@subject.masked} class="mt-2 text-xs text-gray-400" data-test="question-masked">
           CYFR hid credentials it gave this run from these words.
         </p>
-      </figure>
+      </div>
+
+      <p class="text-sm text-gray-300 [overflow-wrap:anywhere]" data-test="question-frame">
+        <span data-test="question-component">{@subject.name}</span>
+        is from <span data-test="question-publisher">{@subject.publisher}</span>
+        · waits until
+        <time
+          datetime={DateTime.to_iso8601(@subject.deadline)}
+          data-local="clock"
+          data-test="question-deadline"
+          class="whitespace-nowrap"
+        >
+          {DateTime.to_iso8601(@subject.deadline)}
+        </time>
+      </p>
     </section>
     """
   end

@@ -3298,7 +3298,7 @@ defmodule PrismWeb.SystemLayer do
   # A component's question: CYFR's frame around the component's words.
   defp body(%{prompt: %{kind: :question}} = assigns) do
     ~H"""
-    <Question.card id={@id} prompt={@prompt} />
+    <Question.card prompt={@prompt} />
     """
   end
 
@@ -3554,8 +3554,7 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :request, subject: %{asker: %{name: name}, operation: operation}}),
     do: "#{name} asks you to approve #{operation}"
 
-  defp title(%{kind: :question, subject: %{name: name, title: title}}),
-    do: "#{name} wants to #{title}"
+  defp title(%{kind: :question, subject: subject}), do: Question.headline(subject)
 
   # Where a grant lands, as the person reads it: their own athanor as
   # theirs, any other by its name.
