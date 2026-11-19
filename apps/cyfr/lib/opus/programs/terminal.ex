@@ -317,7 +317,7 @@ defmodule Opus.Programs.Terminal do
   # carried out here, so the caller leaving changes nothing, and answers
   # what the box answered. Nothing attaches to a session being closed.
   def handle_call({:close, _principal}, _from, %{ended: ended} = state) when ended != nil,
-    do: {:stop, :normal, {:ok, :already_gone}, state}
+    do: {:stop, :normal, {:ok, :already_gone}, unlisted(state)}
 
   def handle_call({:close, principal}, _from, state) do
     if listed?(state, principal) do
@@ -330,7 +330,7 @@ defmodule Opus.Programs.Terminal do
           {:error, _unanswered} -> {:error, :unanswered}
         end
 
-      state = ended(state, :closed)
+      state = state |> ended(:closed) |> unlisted()
       {:stop, :normal, answer, answer_waiters(%{state | session: nil, opening: nil})}
     else
       {:reply, {:ok, :already_gone}, state}
@@ -338,6 +338,16 @@ defmodule Opus.Programs.Terminal do
   end
 
   def handle_call(_request, _from, state), do: {:reply, {:error, :not_found}, state}
+
+  # A close that has answered has freed its slot: the session leaves the
+  # registry before the answer, since this process ends only after it, so
+  # a start made on that answer counts its turn's sessions without this one
+  # (`Opus.Programs.start/3`). Its session is closed by then, or the box
+  # owes the close; what is left is this process letting its owner go.
+  defp unlisted(state) do
+    Registry.unregister(Opus.Programs.Registry, {:terminal, state.id})
+    state
+  end
 
   # The start's caller stopped waiting: the session it asked for is
   # nobody's, and ends; whatever the box gave it, the box closes.
