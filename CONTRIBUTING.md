@@ -298,6 +298,17 @@ same worktree refuses, naming the run that holds it.
   workflow step runs it:
   `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or
   `scripts/heavy-check.sh bash -c 'cd apps/codex && go test ./... -race'`.
+
+  The Compose proof's update cases (`tests/compose-proof/run.sh --case
+  update`, `update-refused`, `update-fail` and `update-interrupt`: `cyfr
+  update` between two releases made from the tree) run on main's push
+  run, a release's and the nightly, never on a pull request's run; main's
+  push run is their check. To run one here, on all four quarters for the
+  shipped compose file's fixed subnets, with an app image and a Locus
+  image of the tree (`scripts/image.sh app`, `scripts/image.sh locus`):
+  `scripts/heavy-check.sh env COMPOSE_PROOF_IMAGE=cyfr:in-H
+  COMPOSE_PROOF_SKIP_BUILD=1 tests/compose-proof/run.sh --case update
+  --locus-image cyfr-locus:in-H`.
 - A release tag is cut on a tree its run on GitHub proved green, and
   that run is the release's proof: `scripts/release.sh`, which runs only
   on origin's main head (a detached checkout of it will do), reads HEAD's
@@ -321,7 +332,10 @@ same worktree refuses, naming the run that holds it.
   Besides `cargo-component` it needs `go` at the version both `go.mod`
   files name and a running Docker daemon, and it refuses to run without
   them; it installs `govulncheck` and the close's `trivy` itself, at the
-  versions CI pins.
+  versions CI pins. The tag's GoReleaser run checks every command line
+  binary it builds before archiving any (`scripts/ci/release-binary-check.sh`,
+  each build's post hook): one built with a build tag or holding the
+  update proof's code fails the release.
 - `scripts/heavy-check.sh` queues the checks of everyone sharing a host.
   It cuts the machine's cores into four quarters of whole cores. A check
   takes all four by default and runs alone: a gate, a full or

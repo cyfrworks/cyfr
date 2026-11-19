@@ -1520,7 +1520,7 @@ has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
   fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
-  'backends_image: test.yml locus-backends-image: 32 steps' 'browser_a: test.yml browser-tincture shard=a: 6 steps' \
+  'backends_image: test.yml locus-backends-image: 36 steps' 'browser_a: test.yml browser-tincture shard=a: 6 steps' \
   'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 4 steps' \
   'browser_d: test.yml browser shard=d: 6 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
   grep -qxF "    harness.$job passed" "$scratch/close.out" || fail "the close did not report $job passed: $(cat "$scratch/close.out")"
@@ -1564,6 +1564,10 @@ tests/compose-proof/run.sh --case shutdown|skip=unset browsers= join= db= case_i
 tests/compose-proof/run.sh --case restore|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case restore-person|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case runtime --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case update --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case update-refused --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case update-fail --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case update-interrupt --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/setup-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof
 tests/setup-proof/run.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof
 tests/browser/run.sh |skip= browsers= join= db= case_image=

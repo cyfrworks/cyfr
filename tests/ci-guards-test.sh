@@ -6,7 +6,9 @@
 # scripts/ci/retry.sh, scripts/ci/world-checks.sh,
 # scripts/ci/self-test-scope.sh, scripts/ci/storage-diagrams.py,
 # scripts/ci/main-run.py and scripts/ci/reds.py (the last two against a
-# stand-in gh, the last with the workflow that runs it), and for
+# stand-in gh, the last with the workflow that runs it),
+# scripts/ci/release-binary-check.sh (against real builds of the command
+# line, so it needs go and the module's dependencies), and for
 # scripts/release.sh's use of the seed guard.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
@@ -1480,6 +1482,50 @@ print("; ".join(errors) or "yes")
 PY
 )
 if [ "$rerun_ok" = yes ]; then pass "$label"; else fail "$label"; echo "  $rerun_ok"; fi
+
+# --- scripts/ci/release-binary-check.sh ---
+# Real builds of the command line: as the release builds it (.goreleaser.yml's
+# env and ldflags), and with the release proof's tag and folder as
+# tests/compose-proof/run.sh builds it. The marker check is shown alone on
+# the tagged binary, its build settings read through a go whose tag line is
+# masked, as a build that reached the proof file some other way would read.
+binary_check="$root/scripts/ci/release-binary-check.sh"
+bins="$scratch/bins"
+mkdir -p "$bins"
+built=1
+(cd "$root/apps/codex" &&
+  CGO_ENABLED=0 go build -mod=readonly -ldflags "-s -w -X github.com/cyfr/codex/internal/version.Version=0.1.0" -o "$bins/release" . &&
+  CGO_ENABLED=0 go build -mod=readonly -tags releaseproof \
+    -ldflags "-s -w -X github.com/cyfr/codex/cmd.proofReleases=$bins/releases" -o "$bins/proof" .) > "$scratch/out" 2> "$scratch/err" || built=0
+code=$built
+
+label="release-binary-check passes the command line built as the release builds it"
+if [ "$built" = 1 ]; then
+  run "$binary_check" "$bins/release"
+  if [ "$code" -eq 0 ] && grep -qF "release binary ok" "$scratch/out" && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
+else
+  fail "$label (the command line did not build)"
+fi
+
+label="release-binary-check refuses the command line built with the release proof's tag"
+if [ "$built" = 1 ]; then
+  run "$binary_check" "$bins/proof"
+  check refused "was built with build tags:  build -tags=releaseproof"
+else
+  fail "$label (the command line did not build)"
+fi
+
+label="release-binary-check refuses a binary holding the release proof's marker with no tag recorded"
+if [ "$built" = 1 ]; then
+  mkdir -p "$scratch/masked-go"
+  real_go=$(command -v go)
+  printf '#!/usr/bin/env bash\n"%s" "$@" | grep -vE "^[[:space:]]+build[[:space:]]+-tags="\n' "$real_go" > "$scratch/masked-go/go"
+  chmod +x "$scratch/masked-go/go"
+  PATH="$scratch/masked-go:$PATH" run "$binary_check" "$bins/proof"
+  check refused "holds the release proof"
+else
+  fail "$label (the command line did not build)"
+fi
 
 # --- scripts/release.sh runs the seed guard against the last tag ---
 

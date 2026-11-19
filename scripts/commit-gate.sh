@@ -93,7 +93,7 @@
 #             locus-backends-image job does), every image tag those jobs
 #             name under the gate's own namespace, test.yml's
 #             builder-image, locus-runtime-image and locus-backends-image
-#             jobs (every suite, the Compose proof's six cases, the setup
+#             jobs (every suite, every case of the Compose proof, the setup
 #             proof and each image's trivy scan), the browser jobs' four
 #             shards on this host's pull of the Playwright image, and
 #             security.yml's repo-scan job (trivy's secret and
@@ -1111,8 +1111,8 @@ leg_boot() {
 # With --close, after every other leg: trivy installed at the version the
 # workflows' trivy-action steps pin (scripts/lib/trivy-install.sh) into a
 # tool directory of the gate's ahead on PATH, both images built from the
-# tree, then test.yml's image jobs (each suite, the Compose proof's six
-# cases and the setup proof in the backends job, and each image's scan),
+# tree, then test.yml's image jobs (each suite, every case of the Compose
+# proof and the setup proof in the backends job, and each image's scan),
 # the browser jobs' four shards and security.yml's repository scans, each
 # job as CI runs it, every image tag the jobs name under the gate's
 # namespace (--image-namespace). A job whose image did not build fails at

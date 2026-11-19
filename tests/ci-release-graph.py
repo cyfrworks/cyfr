@@ -12,7 +12,9 @@
 # by exact name, attests the merge's printed digest and hands it to the
 # CLI release, which pins the scaffold's compose to the merged digests,
 # writes release.json with the schema fingerprint its merged cyfr image
-# answers, checks it and signs it before GoReleaser attaches both, and grants each job only what it needs. The build, and the
+# answers, checks it and signs it before GoReleaser attaches both, has every
+# command line binary checked before it is archived
+# (scripts/ci/release-binary-check.sh), and grants each job only what it needs. The build, and the
 # publication test in test.yml's static job, first switch the runner's
 # Docker daemon to the containerd image store, which alone can load an
 # image carrying its attestation.
@@ -875,7 +877,24 @@ def check_homebrew(wf, release):
     return None
 
 
+# Each build's one hook: scripts/ci/release-binary-check.sh on the binary
+# it built, which refuses one built with a build tag or holding the
+# release proof (apps/codex/cmd/release_proof.go), so the release fails
+# before any archive or upload. Held exactly on every build: a build's
+# hooks are its own, and GoReleaser refuses hooks in a per-target override.
+RELEASE_BINARY_HOOKS = {"post": [{"cmd": '../../scripts/ci/release-binary-check.sh "{{ .Path }}"', "output": True}]}
+
+
 def check_goreleaser(config):
+    builds = config.get("builds") or []
+    if not builds:
+        return ".goreleaser.yml has no builds"
+    for build in builds:
+        if build.get("hooks") != RELEASE_BINARY_HOOKS:
+            return (
+                f".goreleaser.yml's build {build.get('binary')!r} has hooks {build.get('hooks')!r}, "
+                f"not exactly {RELEASE_BINARY_HOOKS!r}"
+            )
     # The changelog step is what reads --release-notes (GoReleaser's
     # changelog pipe): disabled, it publishes an empty body.
     if "disable" in (config.get("changelog") or {}):
@@ -2771,6 +2790,11 @@ GORELEASER_MUTANTS = [
     ("no release a pre-release", lambda c: c["release"].update(prerelease=False)),
     ("no make_latest: false", lambda c: c["release"].pop("make_latest")),
     ("make_latest: true", lambda c: c["release"].update(make_latest=True)),
+    ("the release binary check removed", lambda c: c["builds"][0].pop("hooks")),
+    ("the release binary check on one of two builds",
+     lambda c: c["builds"].append({k: v for k, v in copy.deepcopy(c["builds"][0]).items() if k != "hooks"} | {"id": "second"})),
+    ("the release binary check's command changed",
+     lambda c: c["builds"][0]["hooks"]["post"][0].update(cmd='../../scripts/ci/release-binary-check.sh "{{ .Name }}"')),
 ]
 
 

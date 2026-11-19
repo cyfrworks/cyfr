@@ -3,7 +3,7 @@
 #
 # The Compose proof's teardown, sourced by tests/compose-proof/run.sh and
 # by its stand-in cases (tests/compose-proof/cleanup-test.sh). It reads the
-# run's RUN, WORK, IMAGE, UPSTREAM and STANDIN_IMAGE, and calls `compose`
+# run's RUN, WORK, IMAGE, UPSTREAM, STANDIN_IMAGE and RELEASE_IMAGES, and calls `compose`
 # and `docker`, which the caller defines or finds.
 #
 # A step that removes what the run made is tried up to three times,
@@ -69,6 +69,12 @@ cleanup() {
   if [ -n "${STANDIN_IMAGE:-}" ]; then
     cleanup_step "docker image rm $STANDIN_IMAGE" docker image rm --force "$STANDIN_IMAGE" || failed=1
   fi
+  # The update cases' release tags and the images built for them, once no
+  # container of the project holds one.
+  local made
+  for made in ${RELEASE_IMAGES[@]+"${RELEASE_IMAGES[@]}"}; do
+    cleanup_step "docker image rm $made" docker image rm "$made" || failed=1
+  done
   if [ "${COMPOSE_PROOF_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
