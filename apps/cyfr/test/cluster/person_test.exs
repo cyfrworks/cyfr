@@ -265,13 +265,6 @@ defmodule Cyfr.Cluster.PersonTest do
     do:
       Cell.call(member, Cyfr.Cluster.Boot, :start_worker!, [[ref: Person.model(), script: script]])
 
-  defp call(id, name, args),
-    do: %{
-      "content" => [%{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}],
-      "stop_reason" => "tool_call",
-      "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
-    }
-
   defp reply(text),
     do: %{
       "content" => [%{"type" => "text", "text" => text}],
