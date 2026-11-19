@@ -813,6 +813,56 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert_receive {:host, {:system_layer, ^id, :dismissed}}
       end_views()
     end
+
+    # The cross in the card's header closes it as Escape does, so a card
+    # can be closed without a keyboard: plain, for a caller CYFR does not
+    # know, and once only the answers given once are offered.
+    test "the cross in the card's header is Don't allow, once, on every question card", setup do
+      view = screen!(setup)
+
+      close = fn ref ->
+        id = Prompt.question_id(ref)
+
+        assert has_element?(
+                 view,
+                 ~s([data-test="question-close"][aria-label="Close, and don't allow it this time"])
+               )
+
+        view |> element(~s([data-test="question-close"])) |> render_click()
+        assert_receive {:answered, ^ref}
+        assert Q.row(setup.ctx, ref).state == "denied"
+        assert Q.standing(setup.ctx) == []
+        assert_receive {:host, {:system_layer, ^id, :dismissed}}
+        assert open_prompt(view) != id
+      end
+
+      {_run, plain} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(plain))
+      close.(plain)
+
+      {_run, unknown} = Q.open!(setup.ctx, setup.component, caller: "unknown")
+      shows!(view, Prompt.question_id(unknown))
+      close.(unknown)
+
+      {_run, once_only} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(once_only))
+
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Context.actor(setup.ctx),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      choose(view, "allow_hour_this_caller")
+      assert offered(view) == ["allow_once"]
+      close.(once_only)
+
+      refute_receive {:answered, _again}, 200
+      end_views()
+    end
   end
 
   # ---------------------------------------------------------------------------

@@ -231,7 +231,9 @@ defmodule PrismWeb.SystemLayer do
   `answered`, `expired` or `withdrawn` fact, letting go of any
   confirmation it waited on. The desktop's layer and the panel's draw
   none. A choice sends its answer through `question.answer`; closing the
-  card without choosing is "Don't allow", once. A card reports to the page
+  card without choosing, by the cross in its header or by Escape, is
+  "Don't allow", once, and the cross is the question card's one close
+  control. A card reports to the page
   `:confirmed` once its answer is kept, and `:dismissed` when it is
   closed, so a page that lists permissions reads them again; every other
   answer the layer hears of, given on another of the person's screens, is
@@ -2871,14 +2873,30 @@ defmodule PrismWeb.SystemLayer do
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
-          <h2
-            id={"#{@id}-title"}
-            tabindex={if @shown.kind == :question, do: "-1"}
-            data-focus-first={@shown.kind == :question}
-            class="text-lg font-semibold focus:outline-none"
-          >
-            {title(@shown)}
-          </h2>
+          <div class="flex items-start justify-between gap-3">
+            <h2
+              id={"#{@id}-title"}
+              tabindex={if @shown.kind == :question, do: "-1"}
+              data-focus-first={@shown.kind == :question}
+              class="text-lg font-semibold focus:outline-none"
+            >
+              {title(@shown)}
+            </h2>
+            <%!-- A question's one close, for a finger as for Escape: the
+              dismissal, "Don't allow", once. --%>
+            <button
+              :if={@shown.kind == :question}
+              type="button"
+              phx-click="dismiss"
+              phx-target={@myself}
+              phx-value-id={@shown.id}
+              aria-label="Close, and don't allow it this time"
+              data-test="question-close"
+              class="-m-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-300 hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+            >
+              <span aria-hidden="true" class="text-2xl leading-none">×</span>
+            </button>
+          </div>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">
             {description(@shown)}
           </p>
@@ -3385,7 +3403,7 @@ defmodule PrismWeb.SystemLayer do
     ~H"""
     <div class="flex flex-wrap justify-end gap-2">
       <button
-        :if={not (@prompt.kind == :question and @may)}
+        :if={@prompt.kind != :question}
         type="button"
         phx-click="dismiss"
         phx-target={@myself}
@@ -3561,7 +3579,9 @@ defmodule PrismWeb.SystemLayer do
         "the app that asked drew none of it."
 
   defp description(%{kind: :question}),
-    do: "It asks before it does this, and waits for your answer. Closing this is Don't allow."
+    do:
+      "It asks before it does this, and waits for your answer. Closing this with × " <>
+        "doesn't allow it, this time."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:
