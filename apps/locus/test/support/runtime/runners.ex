@@ -10,6 +10,10 @@ defmodule Locus.Runtime.Test.Runners do
   know no runner of the work it started is left, since one still running
   a subtree could make its next host call after the test moved on, and
   that no report of a runner it ended still lands after that.
+
+  And what a test waits on before it closes a socket whose descriptor it
+  gave a port: the port gone from the port table (`port_gone/1`), which
+  `control_gone_at_exit/1` registers for a runner process it started.
   """
 
   import Prima.Test.Wait
@@ -76,4 +80,29 @@ defmodule Locus.Runtime.Test.Runners do
   @spec reports_in_flight() :: [pid()]
   def reports_in_flight,
     do: Map.keys(:sys.get_state(Locus.Runtime.WorkerService).reports)
+
+  @doc """
+  Registers, for the test's end, the wait for the control port of the
+  runner process `runner` (`Locus.Runtime.Runner`, started by the test on
+  a descriptor of a socket the test holds) to have left the port table.
+
+  The port polls a descriptor it does not own. A port can outlive its
+  owner, writing out what it was given first, and has stopped polling only
+  once it has left the port table: a descriptor closed before then is
+  reused by the next test's sockets, and the port's late release takes the
+  descriptor from them. Called after the test has registered the close of
+  its sockets, this runs before that close, once the runner has stopped.
+  """
+  @spec control_gone_at_exit(pid()) :: :ok
+  def control_gone_at_exit(runner) when is_pid(runner) do
+    [control] =
+      for port <- Port.list(), Port.info(port, :connected) == {:connected, runner}, do: port
+
+    ExUnit.Callbacks.on_exit(fn -> port_gone(control) end)
+  end
+
+  @doc "Until `port` has left the port table, five seconds at most."
+  @spec port_gone(port()) :: :ok
+  def port_gone(port) when is_port(port),
+    do: wait_until(fn -> port not in Port.list() end, 5_000, "the port to leave the port table")
 end

@@ -18,7 +18,7 @@ defmodule Locus.Runtime.RunnerTest do
   import Prima.Test.Wait
 
   alias Prima.{Assignment, RunnerControl}
-  alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
+  alias Locus.Runtime.Test.{Runners, ScriptedHost, ScriptedKeeper}
 
   @echo File.read!(Path.expand("../../support/runtime/test_wasm/echo.wasm", __DIR__))
   @boot "boot_runner_test"
@@ -75,17 +75,9 @@ defmodule Locus.Runtime.RunnerTest do
          stop: fn status -> send(test, {:stopped, status}) end}
       )
 
-    # The runner's control port polls `runner_end`'s descriptor, which it
-    # does not own. A port can outlive its owner, writing out what it was
-    # given first, and has stopped polling only once it has left the port
-    # table: a descriptor closed before then is reused by the next test's
-    # sockets, and this port's late release takes the descriptor from them.
-    # Registered last, this runs first, once the runner has stopped and
-    # before the sockets close.
-    [control] =
-      for port <- Port.list(), Port.info(port, :connected) == {:connected, runner}, do: port
-
-    on_exit(fn -> wait_until(fn -> control not in Port.list() end, 5_000) end)
+    # The runner's control port polls `runner_end`'s descriptor, which the
+    # sockets' close above would otherwise hand to the next test under it.
+    Runners.control_gone_at_exit(runner)
 
     {:ok, host: host, service: service}
   end
