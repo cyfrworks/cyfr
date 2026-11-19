@@ -27,7 +27,7 @@ if [ "${#chats[@]}" -eq 0 ]; then
   echo "test-catalysts: no model catalyst source matched, so nothing would be tested" >&2
   exit 1
 fi
-target=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-catalysts.XXXXXX") || exit 1
+target=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-catalysts.XXXXXX") || exit 1
 trap 'rm -rf "$target"' EXIT
 for chat in "${chats[@]}"; do
   src=$(dirname "$(dirname "$chat")")

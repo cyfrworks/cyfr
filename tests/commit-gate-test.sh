@@ -1516,8 +1516,8 @@ has_line '^cluster=0$' "$scratch/close.log/cluster.summary" || fail "the cluster
 # The close runs test.yml's Locus step, whose script compiles and tests in
 # an island it makes under the log directory.
 has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
-  has_line "\|$scratch/close\.log/cyfr-locus-island\.[^/|]*/apps/locus\|compile --warnings-as-errors\$" "$ct/mix.calls" &&
-  has_line "\|$scratch/close\.log/cyfr-locus-island\.[^/|]*/apps/locus\|test\$" "$ct/mix.calls" ||
+  has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|compile --warnings-as-errors\$" "$ct/mix.calls" &&
+  has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|test\$" "$ct/mix.calls" ||
   fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \

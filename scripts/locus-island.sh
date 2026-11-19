@@ -31,7 +31,7 @@ cd "$(dirname "$0")/.."
 for path in mix.lock apps/prima apps/locus deps wit _tools tests/fixtures config/locus_runtime.exs; do
   [ -e "$path" ] || { echo "locus-island: $path is missing" >&2; exit 69; }
 done
-island=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-locus-island.XXXXXX")
+island=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-locus-island.XXXXXX")
 trap 'rm -rf "$island"' EXIT
 mkdir -p "$island/apps" "$island/config" "$island/tests"
 cp mix.lock "$island/"
