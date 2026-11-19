@@ -42,7 +42,7 @@ proof stops at the first row a later one rests on.
 | `operator` | `@join-op` is made at `dir.test`'s pages and sets H up through its setup link by signing in with the account (`admission` `setup`) |
 | `invited` | the operator makes an invitation on H's Settings page; a newcomer with no account opens the link, which names no code on the page, and taps "Create your account": the new page, holding H's sign-in request, makes `@join-b`, shows and saves its code, makes its passkey and then signs H's request with it ("Continue to https://h.test"); H admits the account under the invitation (`admission` `invitation`) and signs them in |
 | `spent` | the same link a second time says it can no longer be used |
-| `confirm` | the newcomer asks for an API key at H, which waits on a fresh confirmation: "Confirm with a passkey" opens the sign page in a new tab, which says "Confirm a change at https://h.test"; the passkey signs it, the tab returns to H, whose return page confirms the record and closes the tab, and the waiting page makes the key |
+| `confirm` | the newcomer asks for an API key at H, which waits on a fresh confirmation: "Confirm with a passkey" opens the sign page in a new tab, which says "Confirm a change at https://h.test"; the passkey signs it, the tab returns to H, whose return page confirms the record, the tab closes itself, and the waiting page makes the key |
 
 The refusals of a sign-in or confirmation answer (another browser's
 binding, a replay, another audience, no user verification, another

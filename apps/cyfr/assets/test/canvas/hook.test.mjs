@@ -210,8 +210,10 @@ function activation(state) {
 }
 const focus = (element) => (globalThis.window.document.activeElement = element)
 
-// An input of the person's in the frame, as the shell's page sees one:
-// the page holding activation, with the frame its active element.
+// An input of the person's in the frame, as the bridge reads one: the page
+// holding activation, with the frame its active element. That a person's
+// click in the frame gives the page exactly that is the browser's, shown by
+// the canvas proof's app_over_canvas step.
 function input(el) {
   activation("active")
   focus(el)
