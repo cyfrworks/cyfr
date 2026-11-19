@@ -1090,13 +1090,15 @@ interface ask {
 
 **The clock.** `ask` blocks until it is answered, and the run's timeout keeps running while the person reads: there is no separate question clock, and the card shows when the run's time ends. A component that asks declares a timeout long enough for a person to answer (`caps.limits.timeout`), up to the thirty-minute ceiling; the person's own settings may change it. When the run's time ends, or the run is stopped, the question ends with it and the card goes.
 
+**Answers that stand.** The person may let an answer stand, for an hour or always, for any caller or only the one that started this run. Your component is not told whether one stands: it asks every time, and a permission that covers the ask answers it with no card.
+
 **A run nobody can be asked for** (started by a key, a schedule or a webhook) is told `none(unattended)` at once, unless a permission of the person it acts as covers the action, which then answers `allowed` or `denied`. A webhook's run acts as no person, so nothing can be allowed for it beforehand.
 
 **Asking fast.** A run's asks are paced: past sixty a minute under one root, an ask waits its turn. Your component only sees a slower answer, so one that asks in a tight loop only slows itself.
 
 **How to try it.** From your component's page, as a person: run it and the card appears. A run started with a key is unattended, and a key cannot set a permission.
 
-**Versions.** A new version that keeps an action's name and title keeps the person's answers. A reworded title makes every allow ask again, while a deny stays; a renamed action loses its answers.
+**Versions.** A new version that keeps an action's name and title keeps the person's answers. A reworded title makes every allow ask again, while a deny stays; a renamed action loses its answers. When the component's last installed version is removed, its answers go with it: installed again, it asks again.
 
 **Who can ask.** A catalyst. A reagent does nothing outside itself and a formula acts through its children and CYFR's tools, so neither imports the interface.
 

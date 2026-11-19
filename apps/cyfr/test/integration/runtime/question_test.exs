@@ -437,12 +437,30 @@ defmodule Locus.Runtime.QuestionTest do
     {id, task} = start!(ctx, ref, ["DROP TABLE users"])
     question = opened!()
     assert_receive {:held, ^id, conn}, 30_000
+    test = self()
+    handler = {__MODULE__, :inside_the_wait}
+    on_exit(fn -> :telemetry.detach(handler) end)
 
-    # The person allows and stops the run while its wait is on the wire:
-    # the wait reaches the host after both, and is answered lost.
-    assert {:ok, %{state: "allowed"}} = answer(ctx, question, "allow")
-    assert {:ok, _} = Opus.cancel(ctx, id)
+    # The person allows and stops the run inside the host's wait: right
+    # after the wait's first read of its open question, in the wait's own
+    # process, so its next read finds the allow and the stop already
+    # made. The wait finds the allow, and is answered lost.
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() != test and meta[:source] == "questions" and
+               meta.query =~ ~s("ask_no") and not Arca.Repo.in_transaction?() do
+            :telemetry.detach(handler)
+            send(test, {:stopped, answer(ctx, question, "allow"), Opus.cancel(ctx, id)})
+          end
+        end,
+        nil
+      )
+
     TwoServices.release!(conn)
+    assert_receive {:stopped, {:ok, %{state: "allowed"}}, {:ok, _cancelled}}, 30_000
 
     Task.await(task, 120_000)
     TwoServices.settled!()
@@ -450,7 +468,20 @@ defmodule Locus.Runtime.QuestionTest do
     answers = wait_answers(id)
     refute Enum.any?(answers, &match?(%{"ok" => %{"answer" => "allowed"}}, &1)), inspect(answers)
     assert %{"error" => "lost"} = List.first(answers)
-    assert TwoServices.calls(:complete, id) == []
+
+    # The guest, told it cannot ask, may finish before its runner is
+    # killed and its completion be forwarded: none carries an allow.
+    completed =
+      for %{args: args} <- TwoServices.calls(:complete, id),
+          result <- get_in(args, ["outcome", "output", "data", "results"]) || [],
+          do: result["answer"]
+
+    refute "allowed" in completed, inspect(completed)
+
+    # The stop leaves the person's answer on its question and the run
+    # recorded as stopped.
+    assert %{state: "allowed"} = question!(question)
+    assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, id)
   end
 
   test "a stop ends the wait and announces it withdrawn", %{ctx: ctx, ref: ref} do

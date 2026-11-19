@@ -17,6 +17,9 @@ defmodule PrismWeb.EnforcementsLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   require Logger
 
   @page_size 100
@@ -338,6 +341,12 @@ defmodule PrismWeb.EnforcementsLive do
           </tbody>
         </table>
       </div>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+      />
     </div>
     """
   end

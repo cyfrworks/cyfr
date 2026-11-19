@@ -474,14 +474,16 @@ defmodule Arca.QuestionsTest do
       assert {:error, :not_found} = Questions.delete_standing(actor(), row.id)
     end
 
-    test "delete_component removes the component's answers in the athanor, whoever gave them" do
+    test "delete_component! removes the component's answers in the athanor, whoever gave them" do
       {:ok, _} = Questions.put_standing(actor(), standing(), verify: &ok/0)
       {:ok, _} = Questions.put_standing(actor(@athanor, "usr_two"), standing(), verify: &ok/0)
       {:ok, _} = Questions.put_standing(actor(), standing(%{name: "rows"}), verify: &ok/0)
       {:ok, _} = Questions.put_standing(actor(@other), standing(), verify: &ok/0)
 
       assert {:ok, 2} =
-               Questions.delete_component(Prima.Actor.in_athanor(@athanor), "acme", "tables")
+               Arca.Repo.transaction(fn ->
+                 Questions.delete_component!(Prima.Actor.in_athanor(@athanor), "acme", "tables")
+               end)
 
       assert {:ok, [%{name: "rows"}]} = Questions.standing(actor(), @person, "acme", "rows")
       assert {:ok, [_]} = Questions.standing(actor(@other), @person, "acme", "tables")

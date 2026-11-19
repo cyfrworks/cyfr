@@ -217,6 +217,13 @@ defmodule Sanctum.QuestionsTest do
     rows
   end
 
+  # The digest of an action's words as the fixture's catalyst declares
+  # them: what a page that rendered them sends.
+  defp shown(action) do
+    title = Enum.find_value(@asks, "drop a database", &(&1["name"] == action && &1["title"]))
+    Prima.Manifest.Asks.digest(%{name: action, title: title})
+  end
+
   defp answer(json), do: elem(Answer.decode(json), 1)
   defp once(effect), do: answer(%{"effect" => effect, "lasts" => "once"})
 
@@ -707,6 +714,7 @@ defmodule Sanctum.QuestionsTest do
            "publisher" => "local",
            "name" => "tables",
            "action_name" => "delete_table",
+           "declaration_digest" => shown("delete_table"),
            "standing" => %{"effect" => "allow", "caller" => "person"}
          }},
         {"forget", %{"id" => "qan_x"}}
@@ -729,10 +737,14 @@ defmodule Sanctum.QuestionsTest do
                Questions.answer(frame, ref, once("deny"))
 
       assert {:error, %Prima.Refusal{class: :unauthenticated}} =
-               Questions.set(chain, "local", "tables", "delete_table", %Prima.Question.Standing{
-                 effect: :allow,
-                 caller: :person
-               })
+               Questions.set(
+                 chain,
+                 "local",
+                 "tables",
+                 "delete_table",
+                 shown("delete_table"),
+                 %Prima.Question.Standing{effect: :allow, caller: :person}
+               )
 
       assert {:error, %Prima.Refusal{class: :unauthenticated}} = Questions.forget(chain, "qan_x")
 
@@ -879,12 +891,13 @@ defmodule Sanctum.QuestionsTest do
       assert standing(person.ctx) == []
     end
 
-    test "on question.set, is written only after its confirmation; a reworded title asks again",
+    test "on question.set, is written only after its confirmation, under the words shown",
          person do
       args = %{
         "publisher" => "local",
         "name" => "tables",
         "action_name" => "delete_table",
+        "declaration_digest" => shown("delete_table"),
         "standing" => %{"effect" => "allow", "until" => nil, "caller" => "any"}
       }
 
@@ -894,22 +907,26 @@ defmodule Sanctum.QuestionsTest do
       assert standing(person.ctx) == []
       proven!(person.ctx, id)
 
-      # A newer version rewords the action: the proof names the old words.
+      # A newer version rewords the action meanwhile: the words shown are
+      # still an installed version's, and they are what is kept.
       ship!(person.ctx, "catalyst", "tables", "1.1.0", [
         %{"name" => "delete_table", "title" => "remove a table"}
       ])
 
-      repeat = %{person.ctx | confirmation_id: id}
-      assert {:error, {:confirmation_required, %{id: fresh}}} = call(repeat, "set", args)
-      assert standing(person.ctx) == []
-
-      proven!(person.ctx, fresh)
-
       assert {:ok, %{caller: "any", effect: "allow", declaration_digest: digest}} =
-               call(%{person.ctx | confirmation_id: fresh}, "set", args)
+               call(%{person.ctx | confirmation_id: id}, "set", args)
 
-      assert digest ==
-               Prima.Manifest.Asks.digest(%{name: "delete_table", title: "remove a table"})
+      assert digest == shown("delete_table")
+
+      # The newer words are another answer, with a confirmation of their own.
+      reworded = %{
+        args
+        | "declaration_digest" =>
+            Prima.Manifest.Asks.digest(%{name: "delete_table", title: "remove a table"})
+      }
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} = call(person.ctx, "set", reworded)
+      refute fresh == id
     end
 
     test "every other answer set beforehand needs the session alone", person do
@@ -927,6 +944,7 @@ defmodule Sanctum.QuestionsTest do
                    "publisher" => "local",
                    "name" => "tables",
                    "action_name" => "delete_rows",
+                   "declaration_digest" => shown("delete_rows"),
                    "standing" => standing
                  })
       end
@@ -947,6 +965,7 @@ defmodule Sanctum.QuestionsTest do
           "publisher" => "local",
           "name" => "tables",
           "action_name" => action,
+          "declaration_digest" => shown(action),
           "standing" => standing
         })
 
@@ -966,6 +985,162 @@ defmodule Sanctum.QuestionsTest do
       assert {:ok, %{}} = call(person.ctx, "forget", %{"id" => id})
       assert standing(person.ctx) == []
       assert {:error, {:not_found, "permission", ^id}} = Questions.forget(person.ctx, id)
+    end
+
+    test "bind the words the person was shown, never another version's", person do
+      v2 =
+        ship!(person.ctx, "catalyst", "tables", "2.0.0", [
+          %{"name" => "delete_table", "title" => "delete every table"}
+        ])
+
+      until = DateTime.to_iso8601(hour_from_now())
+
+      assert {:ok, %{declaration_digest: digest}} =
+               set(person.ctx, "delete_table", %{
+                 "effect" => "allow",
+                 "until" => until,
+                 "caller" => "any"
+               })
+
+      assert digest == shown("delete_table")
+
+      # It covers a run of the version whose words were shown, and asks
+      # again in a run of the version that reworded them.
+      assert {:answer, :allowed} = Questions.ask(asking(person.ctx), run!(person), 1, request())
+
+      v2_run =
+        run!(person, reference: "catalyst:local.tables:2.0.0", release: v2.release_digest)
+
+      assert {:pending, _ref} = Questions.ask(asking(person.ctx), v2_run, 1, request())
+    end
+
+    test "are refused for another action's words, or the same words of another component",
+         person do
+      title = "delete the warehouse"
+
+      ship!(person.ctx, "catalyst", "warehouse", "1.0.0", [
+        %{"name" => "delete_table", "title" => title}
+      ])
+
+      for digest <- [
+            shown("delete_rows"),
+            Prima.Manifest.Asks.digest(%{name: "delete_table", title: title})
+          ] do
+        assert {:error, %Prima.Refusal{reason: :undeclared}} =
+                 call(person.ctx, "set", %{
+                   "publisher" => "local",
+                   "name" => "tables",
+                   "action_name" => "delete_table",
+                   "declaration_digest" => digest,
+                   "standing" => %{"effect" => "deny", "caller" => "any"}
+                 })
+      end
+
+      assert standing(person.ctx) == []
+    end
+
+    test "are refused while the component facts cannot be read", person do
+      port = Sanctum.Consent.Components
+
+      # The port with nothing installed, as before boot installs it, for
+      # this one call; restored as it was however the test ends.
+      Prima.Test.Env.without_persistent_term({port, :impl}, fn ->
+        assert {:error, :component_facts_unavailable} =
+                 port.get_latest(person.ctx, "tables", "local", "catalyst")
+
+        assert {:error, :unavailable} =
+                 set(person.ctx, "delete_table", %{
+                   "effect" => "allow",
+                   "caller" => "any",
+                   "until" => DateTime.to_iso8601(hour_from_now())
+                 })
+      end)
+
+      assert standing(person.ctx) == []
+    end
+
+    test "are refused when the version shown is removed after its words were read", person do
+      handler = {__MODULE__, :removed_after_read}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test = self()
+
+      # The first read of the registry that the set makes is followed at
+      # once by the version's removal, which finds no answer yet to delete.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] == "components" do
+              :telemetry.detach(handler)
+
+              :ok =
+                Arca.ComponentStorage.delete_component(
+                  Context.actor(person.ctx),
+                  "tables",
+                  "1.0.0",
+                  "local",
+                  "catalyst"
+                )
+
+              send(test, :removed)
+            end
+          end,
+          nil
+        )
+
+      {:ok, until_hour} =
+        Prima.Question.Standing.decode(%{
+          "effect" => "allow",
+          "caller" => "any",
+          "until" => DateTime.to_iso8601(hour_from_now())
+        })
+
+      result =
+        Questions.set(
+          person.ctx,
+          "local",
+          "tables",
+          "delete_table",
+          shown("delete_table"),
+          until_hour
+        )
+
+      assert_received :removed
+      assert {:error, %Prima.Refusal{reason: :undeclared}} = result
+      assert standing(person.ctx) == []
+    end
+
+    test "are refused when the words shown are no installed version's", person do
+      # A digest no version declares.
+      assert {:error, %Prima.Refusal{reason: :undeclared}} =
+               call(person.ctx, "set", %{
+                 "publisher" => "local",
+                 "name" => "tables",
+                 "action_name" => "delete_table",
+                 "declaration_digest" => String.duplicate("0", 64),
+                 "standing" => %{"effect" => "deny", "caller" => "any"}
+               })
+
+      # The version that was shown is replaced by one that rewords the
+      # action between the page's rendering and its submitting.
+      ship!(person.ctx, "catalyst", "tables", "2.0.0", [
+        %{"name" => "delete_table", "title" => "delete every table"}
+      ])
+
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Context.actor(person.ctx),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      assert {:error, %Prima.Refusal{reason: :undeclared}} =
+               set(person.ctx, "delete_table", %{"effect" => "deny", "caller" => "any"})
+
+      assert standing(person.ctx) == []
     end
 
     test "are refused for an undeclared action, an unknown caller or a passed time", person do
@@ -992,6 +1167,7 @@ defmodule Sanctum.QuestionsTest do
                  "publisher" => "local",
                  "name" => "absent",
                  "action_name" => "delete_table",
+                 "declaration_digest" => shown("delete_table"),
                  "standing" => %{"effect" => "deny", "caller" => "any"}
                })
 
@@ -1031,6 +1207,180 @@ defmodule Sanctum.QuestionsTest do
   # While the storage reserve is spent
   # ---------------------------------------------------------------------------
 
+  describe "the declaration a permission rests on" do
+    # A catalyst `local.archive` at 1.0.0 declaring `delete_table` titled
+    # `title`, published through the registry: its row as the port reads it.
+    defp publish_archive!(ctx, title) do
+      manifest = %{
+        "name" => "archive",
+        "publisher" => "local",
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "asks" => [%{"name" => "delete_table", "title" => title}]
+      }
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm("catalyst"), %{
+          type: "catalyst",
+          name: "archive",
+          publisher: "local",
+          version: "1.0.0",
+          manifest: Jason.encode!(manifest)
+        })
+
+      {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, "archive", "local", "catalyst")
+      row
+    end
+
+    defp archive_run!(person, release),
+      do:
+        run!(person,
+          reference: "catalyst:local.archive:1.0.0",
+          release: release.release_digest
+        )
+
+    defp for_an_hour(effect),
+      do: %{
+        "effect" => effect,
+        "lasts" => %{"until" => DateTime.to_iso8601(hour_from_now())},
+        "covers" => "any_caller"
+      }
+
+    test "a waiting card's lasting answer is refused once the component has left, and a reinstall asks again",
+         person do
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+
+      assert_receive {:question, :opened, %{ref: ^ref}, false}
+
+      assert {:ok, :deleted} = Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+
+      assert {:error, %Prima.Refusal{reason: :removed, message: message}} =
+               call(person.ctx, "answer", %{"ref" => ref, "answer" => for_an_hour("allow")})
+
+      assert message =~ "No installed version asks for this permission in these words"
+      assert standing(person.ctx, "local", "archive") == []
+      assert row(person.ctx, ref).state == "open"
+      refute_received {:question, :answered, _meta, _in_transaction}
+
+      # Installed again, its next run is asked: nothing stood in between.
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, _ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+    end
+
+    test "a release deleted and published again before anything after the removal asks starts again",
+         person do
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+
+      assert {:ok, _} =
+               call(person.ctx, "answer", %{"ref" => ref, "answer" => for_an_hour("allow")})
+
+      assert [_allow] = standing(person.ctx, "local", "archive")
+      handler = {__MODULE__, :reinstalled}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test = self()
+
+      # The removal's row is deleted; at the first read after it outside
+      # any transaction, before the registry's delete answers, the release
+      # is published again.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            cond do
+              self() != test ->
+                :ok
+
+              String.starts_with?(meta.query, ~s(DELETE FROM "components")) ->
+                Process.put(handler, :deleted)
+
+              Process.get(handler) == :deleted and not Arca.Repo.in_transaction?() ->
+                :telemetry.detach(handler)
+                send(test, {:reinstalled, publish_archive!(person.ctx, "delete a table")})
+
+              true ->
+                :ok
+            end
+          end,
+          nil
+        )
+
+      assert {:ok, :deleted} = Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+      assert_received {:reinstalled, release}
+      assert standing(person.ctx, "local", "archive") == []
+
+      assert {:pending, _ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+    end
+
+    test "a card whose component has left is still answered once, and leaves nothing standing",
+         person do
+      release = publish_archive!(person.ctx, "delete a table")
+
+      assert {:pending, ref} =
+               Questions.ask(asking(person.ctx), archive_run!(person, release), 1, request())
+
+      assert {:ok, :deleted} = Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+
+      assert {:ok, %{state: "allowed"}} =
+               call(person.ctx, "answer", %{
+                 "ref" => ref,
+                 "answer" => %{"effect" => "allow", "lasts" => "once"}
+               })
+
+      assert standing(person.ctx, "local", "archive") == []
+    end
+
+    test "a release published again under the same version in other words refuses the words shown",
+         person do
+      publish_archive!(person.ctx, "delete a table")
+      handler = {__MODULE__, :republished}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test = self()
+
+      # Right after the set reads the release, it is removed and published
+      # again under the same version, in other words.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] == "components" do
+              :telemetry.detach(handler)
+
+              {:ok, :deleted} =
+                Compendium.Registry.delete(person.ctx, "archive", "1.0.0", "local")
+
+              send(test, {:republished, publish_archive!(person.ctx, "delete every table")})
+            end
+          end,
+          nil
+        )
+
+      result =
+        call(person.ctx, "set", %{
+          "publisher" => "local",
+          "name" => "archive",
+          "action_name" => "delete_table",
+          "declaration_digest" => shown("delete_table"),
+          "standing" => %{"effect" => "deny", "caller" => "any"}
+        })
+
+      assert_received {:republished, %{manifest: manifest}}
+      assert inspect(manifest) =~ "delete every table"
+      assert {:error, %Prima.Refusal{reason: :undeclared}} = result
+      assert standing(person.ctx, "local", "archive") == []
+    end
+  end
+
   describe "below the storage reserve's mark" do
     test "the reads are admitted and the writes refused by the gate", person do
       {_run, ref} = open!(person)
@@ -1050,6 +1400,7 @@ defmodule Sanctum.QuestionsTest do
                "publisher" => "local",
                "name" => "tables",
                "action_name" => "delete_table",
+               "declaration_digest" => shown("delete_table"),
                "standing" => %{"effect" => "deny", "caller" => "any"}
              }},
             {"forget", %{"id" => "qan_x"}}
@@ -1093,46 +1444,96 @@ defmodule Sanctum.QuestionsTest do
   end
 
   describe "a removal" do
-    defp removed!(ctx, type, version) do
-      :ok =
-        Arca.ComponentStorage.delete_component(
-          Context.actor(ctx),
-          "tables",
-          version,
-          "local",
-          type
-        )
+    # `local.archive` of `type` at `version`, published through the
+    # registry into `ctx`'s athanor; a catalyst declares the fixture's
+    # actions.
+    defp publish!(ctx, type, version) do
+      manifest =
+        %{"name" => "archive", "publisher" => "local", "version" => version, "type" => type}
+        |> then(&if(type == "catalyst", do: Map.put(&1, "asks", @asks), else: &1))
 
-      Compendium.Cascade.name_removed(ctx, %{
-        name: "tables",
-        publisher: "local",
-        version: version,
-        component_type: type
-      })
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(type), %{
+          type: type,
+          name: "archive",
+          publisher: "local",
+          version: version,
+          manifest: Jason.encode!(manifest)
+        })
+
+      :ok
     end
 
-    test "of the last catalyst deletes its answers, though a reagent of its name remains",
+    defp delete!(ctx, version),
+      do: assert({:ok, :deleted} = Compendium.Registry.delete(ctx, "archive", version, "local"))
+
+    defp answers(ctx), do: standing(ctx, "local", "archive")
+
+    defp archive_answer!(ctx, attrs \\ %{}), do: put!(ctx, Map.put(attrs, :name, "archive"))
+
+    defp unit(type, version),
+      do: Compendium.ComponentPath.version_dir(type, "local", "archive", version)
+
+    # The catalyst `local.archive` at `version` committed into the tree as
+    # a unit lands, with `description`; the registry derives its row.
+    defp lay!(actor, version, description) do
+      manifest = %{
+        "name" => "archive",
+        "publisher" => "local",
+        "version" => version,
+        "type" => "catalyst",
+        "description" => description,
+        "asks" => @asks
+      }
+
+      files = [
+        {[Compendium.ComponentPath.wasm_name("catalyst")], Cyfr.Test.Guests.wasm("catalyst")},
+        {[Compendium.ComponentPath.manifest_name()], Jason.encode!(manifest)}
+      ]
+
+      {:ok, _written} =
+        Arca.Overlay.commit_unit(actor, unit("catalyst", version), {:files, files}, cap: :exempt)
+
+      :ok
+    end
+
+    test "of the last catalyst release deletes its answers, though a reagent of its name remains",
          person do
-      ship!(person.ctx, "reagent", "tables", "1.0.0", [])
-      put!(person.ctx, %{})
-      put!(person.ctx, %{action: "delete_rows", effect: "deny"})
+      publish!(person.ctx, "reagent", "2.0.0")
+      publish!(person.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+      archive_answer!(person.ctx, %{action: "delete_rows", effect: "deny"})
 
-      :ok = removed!(person.ctx, "catalyst", "1.0.0")
-      assert standing(person.ctx) == []
+      delete!(person.ctx, "1.0.0")
+      assert answers(person.ctx) == []
+
+      assert {:ok, _reagent} =
+               Arca.ComponentStorage.get_component(
+                 Context.actor(person.ctx),
+                 "archive",
+                 "2.0.0",
+                 "local",
+                 "reagent"
+               )
     end
 
-    test "of a catalyst version while another remains deletes nothing", person do
-      ship!(person.ctx, "catalyst", "tables", "1.1.0", @asks)
-      put!(person.ctx, %{})
+    test "of one of two catalyst releases keeps them, and of the second deletes them", person do
+      publish!(person.ctx, "catalyst", "1.0.0")
+      publish!(person.ctx, "catalyst", "1.1.0")
+      archive_answer!(person.ctx)
 
-      :ok = removed!(person.ctx, "catalyst", "1.0.0")
-      assert [_kept] = standing(person.ctx)
+      delete!(person.ctx, "1.0.0")
+      assert [_kept] = answers(person.ctx)
+
+      delete!(person.ctx, "1.1.0")
+      assert answers(person.ctx) == []
     end
 
     test "of a reagent version while another remains revokes nothing, as before", person do
-      ship!(person.ctx, "reagent", "tables", "1.0.0", [])
-      ship!(person.ctx, "reagent", "tables", "1.1.0", [])
-      put!(person.ctx, %{})
+      publish!(person.ctx, "reagent", "1.0.0")
+      publish!(person.ctx, "reagent", "1.1.0")
+      publish!(person.ctx, "catalyst", "2.0.0")
+      archive_answer!(person.ctx)
       events = [[:cyfr, :sanctum, :consent, :changed]]
       pid = self()
 
@@ -1145,9 +1546,82 @@ defmodule Sanctum.QuestionsTest do
 
       on_exit(fn -> :telemetry.detach({__MODULE__, :consent}) end)
 
-      :ok = removed!(person.ctx, "reagent", "1.0.0")
-      assert [_kept] = standing(person.ctx)
+      delete!(person.ctx, "1.0.0")
+      assert [_kept] = answers(person.ctx)
       refute_receive {:consent, _}, 50
+    end
+
+    test "of the last release by the projection's reconcile deletes its answers", person do
+      publish!(person.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+
+      :ok = Arca.delete_tree(Context.actor(person.ctx), unit("catalyst", "1.0.0"))
+
+      assert {:error, :not_found} =
+               Compendium.Registry.get(person.ctx, "archive", "1.0.0", "local")
+
+      assert answers(person.ctx) == []
+    end
+
+    test "of a release the reconcile replaces in the same transaction keeps its answers",
+         person do
+      actor = Context.actor(person.ctx)
+      laid = fn description -> lay!(actor, "1.0.0", description) end
+
+      # A unit the tree derives its row from, laid as a unit lands.
+      laid.("first")
+
+      assert {:ok, %{description: "first"}} =
+               Compendium.Registry.get(person.ctx, "archive", "1.0.0", "local")
+
+      archive_answer!(person.ctx)
+
+      # The same version's manifest rewritten in the tree: its row is
+      # removed and written again by one replacement.
+      laid.("rewritten")
+
+      assert {:ok, %{description: "rewritten"}} =
+               Compendium.Registry.get(person.ctx, "archive", "1.0.0", "local")
+
+      assert [_kept] = answers(person.ctx)
+    end
+
+    test "rolled back keeps the answers it deleted", person do
+      publish!(person.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+      actor = Context.actor(person.ctx)
+
+      assert {:error, :undone} =
+               Arca.Repo.transaction(fn ->
+                 :ok =
+                   Arca.ComponentStorage.delete_component(
+                     actor,
+                     "archive",
+                     "1.0.0",
+                     "local",
+                     "catalyst"
+                   )
+
+                 assert answers(person.ctx) == []
+                 Arca.Repo.rollback(:undone)
+               end)
+
+      assert [_kept] = answers(person.ctx)
+
+      assert {:ok, _release} =
+               Arca.ComponentStorage.get_component(actor, "archive", "1.0.0", "local", "catalyst")
+    end
+
+    test "in one athanor leaves another's answers for the same component", person do
+      other = person!("other-athanor")
+      publish!(person.ctx, "catalyst", "1.0.0")
+      publish!(other.ctx, "catalyst", "1.0.0")
+      archive_answer!(person.ctx)
+      archive_answer!(other.ctx)
+
+      delete!(person.ctx, "1.0.0")
+      assert answers(person.ctx) == []
+      assert [_kept] = answers(other.ctx)
     end
   end
 
@@ -1174,6 +1648,7 @@ defmodule Sanctum.QuestionsTest do
            "publisher" => "local",
            "name" => "tables",
            "action_name" => "delete_rows",
+           "declaration_digest" => shown("delete_rows"),
            "standing" => %{"effect" => "deny", "caller" => "person"}
          }},
         {"forget", %{"id" => fixture.id}}
@@ -1446,11 +1921,14 @@ defmodule Sanctum.QuestionsTest do
       # What they set is theirs: it covers no ask of the person's, and the
       # person's list does not show it.
       assert {:ok, %{user_id: user_id}} =
-               Questions.set(in_mine, "local", "tables", "delete_table", %Prima.Question.Standing{
-                 effect: :allow,
-                 caller: :person,
-                 until: nil
-               })
+               Questions.set(
+                 in_mine,
+                 "local",
+                 "tables",
+                 "delete_table",
+                 shown("delete_table"),
+                 %Prima.Question.Standing{effect: :allow, caller: :person, until: nil}
+               )
 
       assert user_id == other.ctx.user_id
       run = run!(person)
@@ -1470,6 +1948,7 @@ defmodule Sanctum.QuestionsTest do
                  "local",
                  "tables",
                  "delete_table",
+                 shown("delete_table"),
                  %Prima.Question.Standing{effect: :allow, caller: :person, until: nil}
                )
 
@@ -1490,6 +1969,8 @@ defmodule Sanctum.QuestionsTest do
       "publisher" => "local",
       "name" => "tables",
       "action_name" => "delete_table",
+      "declaration_digest" =>
+        Prima.Manifest.Asks.digest(%{name: "delete_table", title: "delete a table"}),
       "standing" => %{"effect" => "allow", "until" => nil, "caller" => "any"}
     }
 

@@ -3574,6 +3574,8 @@ type QuestionSetArgs struct {
 	Name string `json:"name"`
 	// set: the action, as the component's manifest names it under asks
 	ActionName string `json:"action_name"`
+	// set: the digest of the action's name and title as you were shown them (64 lowercase hexadecimal characters)
+	DeclarationDigest string `json:"declaration_digest"`
 	// set: {effect: allow or deny, until: null or a UTC time, caller: any or a caller}
 	Standing any `json:"standing"`
 }

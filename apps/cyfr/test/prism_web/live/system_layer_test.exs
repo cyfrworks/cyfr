@@ -5947,6 +5947,23 @@ defmodule PrismWeb.SystemLayerTest do
           false
         )
 
+      {:ok, question} =
+        Prompt.question(%{
+          ref: "q_kinds",
+          preview: %{
+            "publisher" => "local",
+            "name" => "tables",
+            "release_digest" => "sha256:" <> String.duplicate("0", 64),
+            "action" => "delete_table",
+            "title" => "delete a table",
+            "summary" => "Drop the table users",
+            "operation" => "DROP TABLE users;",
+            "caller" => "person",
+            "deadline" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 300)),
+            "masked" => false
+          }
+        })
+
       %{
         grant: {grant(ctx, "k-grant"), "Approve what this app may use and reach"},
         credential_entry:
@@ -5962,7 +5979,8 @@ defmodule PrismWeb.SystemLayerTest do
           {%{id: "k-pairing", kind: :pairing, action: :pairing_revocation, subject: %{}},
            "Sign a device out of this CYFR"},
         request: {request_prompt("k-request"), "Nothing runs until you approve."},
-        confirmation: {confirmation, "A client of yours asked for a change"}
+        confirmation: {confirmation, "A client of yours asked for a change"},
+        question: {question, "It asks before it does this"}
       }
     end
 
@@ -5998,7 +6016,11 @@ defmodule PrismWeb.SystemLayerTest do
         text = described(view)
         assert String.starts_with?(text, opening), "#{kind}: #{text}"
 
-        view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+        # A question's card offers its choices, "Don't allow" among them,
+        # and no other close: it is closed as the browser's Escape closes it.
+        if kind == :question,
+          do: view |> layer() |> render_click("dismiss", %{"id" => prompt.id}),
+          else: view |> element(~s(button[phx-click="dismiss"])) |> render_click()
 
         assert open_prompt(view) == nil, inspect(kind)
       end

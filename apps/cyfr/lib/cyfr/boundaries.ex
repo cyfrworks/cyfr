@@ -413,8 +413,8 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
-        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.Questions
-        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn
+        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.Refusals
+        Sanctum.RegistryCredentials Sanctum.SignIn
         Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
@@ -432,9 +432,7 @@ defmodule Cyfr.Boundaries do
           "before the answer's tokens are stored. " <>
           "Removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
-          "(`Sanctum.Webhook.disable_for_component/2`); removing a catalyst's last version " <>
-          "deletes the standing answers its person gave its questions " <>
-          "(`Sanctum.Questions.component_removed/3`). " <>
+          "(`Sanctum.Webhook.disable_for_component/2`). " <>
           "`Sanctum.TinctureAuth` is a canvas activation's spend of the validation " <>
           "credential its trial ran under (`consume_validation/3`, from " <>
           "`Compendium.Canvas`), and nothing else of the frame credentials: the shell " <>
@@ -529,6 +527,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Attach` is `Opus.Host.AttachedFetch`'s one resolution of the value " <>
           "an attached request carries (`resolve/5`): the vault decides, and the control " <>
           "plane attaches and performs. " <>
+          "`Sanctum.Questions` is attention's refresh of the person's open questions " <>
+          "(`waiting/1`, from `Cyfr.Providers.Attention`), as " <>
+          "`Sanctum.Consent.waiting_confirmations/1` is of their confirmations. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -2066,11 +2067,17 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
-    # A removed catalyst's standing answers go with its last version
-    # (`Compendium.Cascade`); a catalyst's ask is decided and waited on for
-    # the host's side of the call (`Opus.Host.Question`), and a run's end
-    # announces the questions it closed (`Opus.Record`).
-    "Sanctum.Questions" => [ask: 4, component_removed: 3, ended: 3, find: 4, wait: 4],
+    # A catalyst's ask is decided and waited on for the host's side of the
+    # call (`Opus.Host.Question`), and a run's end announces the questions
+    # it closed (`Opus.Record`); a person's open questions are attention's
+    # refresh (`Cyfr.Providers.Attention`).
+    "Sanctum.Questions" => [
+      ask: 4,
+      ended: 3,
+      find: 4,
+      wait: 4,
+      waiting: 1
+    ],
     "Sanctum.Session" => [cleanup: 0, destroy: 1, load_by_hash: 1, token_hash: 1],
     "Sanctum.Shares" => [announce_each: 3, sweep_usage: 0],
     "Sanctum.SharedThreads" => [

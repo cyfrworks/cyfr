@@ -21,6 +21,9 @@ defmodule PrismWeb.LegalLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   require Logger
 
   @tabs [
@@ -165,6 +168,12 @@ defmodule PrismWeb.LegalLive do
         >
         </div>
       </div>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+      />
     </div>
     """
   end

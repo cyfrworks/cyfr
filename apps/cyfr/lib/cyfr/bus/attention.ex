@@ -22,6 +22,7 @@ defmodule Cyfr.Bus.Attention do
     :approval,
     :grant_request,
     :confirmation,
+    :question,
     :failed_run,
     :failed_schedule,
     :file_offer,
@@ -37,6 +38,7 @@ defmodule Cyfr.Bus.Attention do
           :approval
           | :grant_request
           | :confirmation
+          | :question
           | :failed_run
           | :failed_schedule
           | :file_offer

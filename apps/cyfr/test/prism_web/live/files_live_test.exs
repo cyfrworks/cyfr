@@ -100,7 +100,6 @@ defmodule PrismWeb.FilesLiveTest do
     assert get_resp_header(response, "content-type") == ["text/plain"]
     assert [disposition] = get_resp_header(response, "content-disposition")
     assert disposition =~ ~s(attachment; filename="hello.txt")
-    settle_session_refresh()
 
     # Delete takes the file, and its open panel, away.
     view |> element("#files-entries button", "Delete") |> render_click()
@@ -304,14 +303,6 @@ defmodule PrismWeb.FilesLiveTest do
     assert get(conn, "/a/#{route}/files/download/payloads/sha256/abc").status == 404
     assert get(conn, "/a/#{route}/files/download/data/missing.txt").status == 404
     assert get(conn, "/a/#{route}/files/download/data").status == 404
-    settle_session_refresh()
-  end
-
-  # Each authenticated request starts a session-refresh task; a test that
-  # ends while one is mid-query leaves the shared sandbox connection busy
-  # for the next test.
-  defp settle_session_refresh do
-    Prima.Test.Wait.wait_until(fn -> Task.Supervisor.children(Prism.TaskSupervisor) == [] end)
   end
 
   test "a shaped folder says so, and a shipped unit refuses to go in words", %{conn: conn} do
