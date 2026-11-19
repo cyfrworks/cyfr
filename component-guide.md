@@ -1570,9 +1570,10 @@ The `file` tool (`list`, `read`, `write`, `delete`, `move`, and `offer`,
 same surface on the wire; reads take `storage_read`, changes
 `storage_write`. `move` takes a file or folder from `path` to `to`, a
 place that holds nothing yet, both under `data/`; a rename is a move
-within one folder. A move lands each file as a write would, and it happens
-at once: the files are at `path` or at `to`, never both. A source that changes while it moves, or
-a file that lands at `to` first, refuses the move and loses nothing.
+within one folder. A move lands each file as a write would, and it
+happens at once: the files are at `path` or at `to`, never both. A
+source that changes while it moves, or a file that lands at `to` first,
+refuses the move and loses nothing.
 
 Pick files under `data/` and choose **Send a copy**. The recipient picker
 lists the people who share a shared thread with you. The offer snapshots the
