@@ -31,9 +31,8 @@
 #            that name; or - for a row that uses none of them
 #   when     always; tests, when the stage's touched tests are not none;
 #            or comma-separated path globs with Git's :(glob) meaning,
-#            when a path of the changed set matches one and no glob of the
-#            row written !GLOB. Only save and handoff rows take tests or
-#            globs.
+#            when a path of the changed set matches one. Only save and
+#            handoff rows take tests or globs.
 #   command  the rest of the line, run as `bash -c` from the worktree's
 #            root
 # Lines that start with #, and blank lines, are skipped. The whole table
@@ -234,8 +233,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     tests) [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take tests" ;;
     *)
       [[ $r_when =~ ^[^,[:space:]]+(,[^,[:space:]]+)*$ ]] || refuse 65 "$table:$number: '$r_when' is not always, tests or comma-separated globs"
-      [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take globs"
-      [[ ,$r_when, =~ ,[^!,] ]] || refuse 65 "$table:$number: '$r_when' excludes paths and names none" ;;
+      [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take globs" ;;
   esac
   [ -n "${r_command//[[:space:]]/}" ] || refuse 65 "$table:$number: the command is empty"
   if [ "$r_stage" = "$stage" ]; then rows+=("$number"$'\t'"$line"); fi
@@ -416,12 +414,7 @@ fi
 matches() {
   local glob globs specs=() found
   IFS=, read -r -a globs <<<"$1"
-  for glob in "${globs[@]}"; do
-    case $glob in
-      '!'*) specs+=(":(exclude,glob)${glob#!}") ;;
-      *) specs+=(":(glob)$glob") ;;
-    esac
-  done
+  for glob in "${globs[@]}"; do specs+=(":(glob)$glob"); done
   found=$(git diff --name-only --no-renames "$base" -- "${specs[@]}" &&
     git ls-files --others --exclude-standard -- "${specs[@]}") ||
     refuse 69 "cannot list the changed paths that match $1"

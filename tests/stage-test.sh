@@ -234,7 +234,6 @@ refused 9 'a field is empty' 'handoff||1|60|-|always|echo x'
 refused 9 "the folder 'prod' is not dev, dev_pg, test, test_pg or -" 'handoff|x|1|60|prod|always|echo x'
 refused 9 "the folder '_build/test' is not dev, dev_pg, test, test_pg or -" 'handoff|x|1|60|_build/test|always|echo x'
 refused 9 'no check is called deps' 'handoff|deps|1|60|-|always|echo x'
-refused 9 "'!seed/**,!tests/**' excludes paths and names none" 'handoff|x|1|60|-|!seed/**,!tests/**|echo x'
 table "${toy_rows[@]}"
 
 begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'
@@ -1189,7 +1188,6 @@ for spec in \
   'tests/fixtures/residue-canary.go|go-codex go-keeper' \
   'apps/locus/lib/locus/x.ex|locus-alone' \
   'stray.wasm|test-wasm' \
-  'seed/components/catalysts/local/claude/1.4.3/catalyst.wasm|' \
   'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|catalysts' \
   'apps/cyfr/test/support/test_wasm/chat_fixture/chat_fixture.wasm|test-wasm' \
   'apps/prima/lib/prima/cargo_toml.ex|test-wasm' \
@@ -1245,17 +1243,19 @@ CARGO_EXIT=3 catalysts cats-fail
 catalysts cats-usage "$S/catalysts-tmp/kept"
 [ "$rc" = 64 ] && [ -d "$S/catalysts-tmp/kept" ] && [ ! -s "$S/cargo-calls" ] || fail "a directory argument gave $rc"
 
-begin 'the Locus island script compiles and tests in a folder of its own under TMPDIR and removes only that'
+begin "the Locus island script compiles and tests, in a folder of its own under TMPDIR that it removes alone, an island holding the lock, Locus, the deps and the WIT tree and no control plane"
 isle="$S/island-repo"
 mkdir -p "$isle/scripts" "$isle/bin" "$S/island-tmp/kept"
 cp "$ROOT/scripts/locus-island.sh" "$isle/scripts/"
-for f in mix.lock apps/prima/mix.exs apps/locus/mix.exs deps/jason/mix.exs wit/catalyst/world.wit _tools/wasm-tools \
-  tests/fixtures/toy_wire.json config/locus_runtime.exs; do
+for f in mix.lock apps/prima/mix.exs apps/locus/mix.exs apps/cyfr/mix.exs deps/jason/mix.exs wit/catalyst/world.wit \
+  _tools/wasm-tools tests/fixtures/toy_wire.json config/locus_runtime.exs; do
   put "$isle/$f" "$f"
 done
 cat >"$isle/bin/mix" <<'EOF'
 #!/usr/bin/env bash
 echo "${PWD#"$TMPDIR"/} ${MIX_ENV-} ${MIX_OS_CONCURRENCY_LOCK-} $*" >>"$MIX_CALLS"
+# What the island holds when the compile starts: its top level and apps/.
+[ "$1" != compile ] || (cd ../.. && { ls -A; ls -A apps | sed 's|^|apps/|'; }) >"$MIX_CALLS.tree"
 EOF
 chmod +x "$isle/bin/mix"
 : >"$S/island-mix"
@@ -1265,6 +1265,10 @@ sed -E 's/^cyfr-locus-island\.[A-Za-z0-9]+/ISLAND/' "$S/island-mix" >"$S/island-
 printf '%s\n' 'ISLAND/apps/locus test 0 compile --warnings-as-errors' 'ISLAND/apps/locus test 0 test' >"$S/want"
 diff "$S/want" "$S/island-mix.got" >/dev/null || fail "Mix ran as: $(tr '\n' ';' <"$S/island-mix")"
 [ "$(ls -A "$S/island-tmp")" = kept ] || fail "the island left or removed: $(ls -A "$S/island-tmp")"
+for want in mix.lock apps/locus deps wit; do
+  grep -qx "$want" "$S/island-mix.tree" || fail "the island lacks $want: $(tr '\n' ' ' <"$S/island-mix.tree")"
+done
+! grep -qx apps/cyfr "$S/island-mix.tree" || fail "the island holds the control plane: $(tr '\n' ' ' <"$S/island-mix.tree")"
 rc=0; (cd "$isle" && scripts/locus-island.sh "$S/island-tmp/kept") >/dev/null 2>&1 || rc=$?
 [ "$rc" = 64 ] && [ -d "$S/island-tmp/kept" ] || fail "a directory argument gave $rc"
 rm -r "$isle/_tools"

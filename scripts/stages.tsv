@@ -73,10 +73,9 @@ handoff	go-keeper	1	600	-	apps/locus/keeper/**,tests/fixtures/keeper_protocol.js
 # does, and read not run 69 on a host without the toolchain CONTRIBUTING.md
 # names. The test WASM fixtures' Rust recipes compile the umbrella under
 # MIX_ENV=test (build-fixture.sh), so that row runs in the test folder; it
-# runs for every .wasm the check enumerates, which is every one outside
-# seed/.
+# runs for every .wasm, seed/'s too, which the check passes over.
 handoff	catalysts	1	900	-	seed/components/catalysts/*/*/*/src/**,scripts/test-catalysts.sh,rust-toolchain.toml	env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" TMPDIR="$STAGE_LOGDIR" scripts/test-catalysts.sh
-handoff	test-wasm	1	900	test	apps/locus/test/support/runtime/test_wasm/**,apps/cyfr/test/support/test_wasm/**,apps/cyfr/test/integration/runtime/support/test_wasm/**,tests/locus-runtime-image/hog.wat,tests/locus-runtime-image/build.sh,**/*.wasm,!seed/**/*.wasm,wit/**,apps/prima/lib/prima/cargo_toml.ex,scripts/check-test-wasm.sh,scripts/wasm-tools.sh	scripts/wasm-tools.sh install _tools && env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" CYFR_DATABASE=sqlite RUSTUP_TOOLCHAIN="$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)" scripts/check-test-wasm.sh
+handoff	test-wasm	1	900	test	apps/locus/test/support/runtime/test_wasm/**,apps/cyfr/test/support/test_wasm/**,apps/cyfr/test/integration/runtime/support/test_wasm/**,tests/locus-runtime-image/hog.wat,tests/locus-runtime-image/build.sh,**/*.wasm,wit/**,apps/prima/lib/prima/cargo_toml.ex,scripts/check-test-wasm.sh,scripts/wasm-tools.sh	scripts/wasm-tools.sh install _tools && env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" CYFR_DATABASE=sqlite RUSTUP_TOOLCHAIN="$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)" scripts/check-test-wasm.sh
 # Locus compiled and tested from its declared apps alone, when what it alone
 # answers for changes: its app, the WIT tree, its runtime configuration and
 # the vector files its tests read. A change only under apps/prima or to

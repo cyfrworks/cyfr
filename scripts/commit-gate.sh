@@ -65,8 +65,10 @@
 #             test/support compiles with warnings as errors, from a copy
 #             that holds only what CI gives them (each read from its
 #             test.yml job), once the SQLite suite's partitions have
-#             exited; locus with --close, through the script its job
-#             runs (scripts/locus-island.sh)
+#             exited; with --close, test.yml's Locus step (its script,
+#             scripts/locus-island.sh, read by name as the vocabulary
+#             job's step is) under one deadline for its copy, compile
+#             and test
 #   go        codex-ci.yml's test job (go vet, gofmt, go test under -race,
 #             the Docker Compose and access-engine Docker tests with their
 #             ran-and-passed assertions, go build) and keeper-ci.yml's
@@ -324,7 +326,7 @@ deadline_for() {
   if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
     fossils|format|credo|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|account_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|registry_stand_in|island_compile|island_test) echo 600 ;;
-    compile_*|boundary_plants) echo 1200 ;;
+    compile_*|boundary_plants|locus_island) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
     # A database made or dropped in the postgres image, its first pull
@@ -536,9 +538,7 @@ island_phase() {
 # same name, `cd` into the application, `mix compile --warnings-as-errors`
 # and `mix test`) or setup that changes nothing the island holds (`set`,
 # `island=`, `mkdir -p`); any other line fails it, so the gate's island
-# cannot drift from CI's. A job whose step is the one line
-# `scripts/$1-island.sh` reads `$1 --script scripts/$1-island.sh` instead:
-# the gate runs that script, as CI does.
+# cannot drift from CI's.
 island_spec() {
   python3 -I - .github/workflows/test.yml "$1" <<'PY'
 import re, shlex, sys, yaml
@@ -547,13 +547,6 @@ path, app = sys.argv[1], sys.argv[2]
 job = (yaml.safe_load(open(path))["jobs"]).get(app + "-independence")
 if job is None:
     sys.exit(f"test.yml has no {app}-independence job")
-script = f"scripts/{app}-island.sh"
-runs = [shlex.split(s["run"]) for s in job.get("steps", []) if "run" in s and script in s["run"]]
-if runs:
-    if len(runs) != 1 or runs[0] != [script]:
-        sys.exit(f"test.yml's {app}-independence job runs {script} other than as the one line `{script}`")
-    print(f"{app} --script {script}")
-    sys.exit(0)
 steps = [s for s in job.get("steps", []) if f'cd "$island/apps/{app}"' in s.get("run", "")]
 if len(steps) != 1:
     sys.exit(f"test.yml's {app}-independence job has {len(steps)} steps that enter the island, not one")
@@ -583,8 +576,7 @@ PY
 
 # An island is an application compiled and tested from a copy holding only
 # what CI gives it (island_spec reads the list from test.yml): deps and
-# the pinned tools are linked in, the rest copied. An island whose job
-# runs its own script is that script's to copy, in the copy the gate makes.
+# the pinned tools are linked in, the rest copied.
 # Its build directory is the copy's own and one Mix process at a time
 # uses it, so Mix's build lock excludes no one there, and it is off: Mix
 # through 1.20.4 can wait forever on a lock it holds itself, the second
@@ -604,16 +596,6 @@ island() {
   fi
   ISLAND_COPY=$(mktemp -d "$LOGDIR/island_${name}.XXXX") || return 1
   read -r -a paths <<<"$spec"
-  if [ "${paths[1]-}" = --script ]; then
-    # The island's own script makes it under TMPDIR, here the gate's copy,
-    # compiles and tests in it, and removes it, under the test phase's
-    # deadline.
-    island_phase "$name" test env TMPDIR="$ISLAND_COPY" bash "${paths[2]}"
-    status=$?
-    echo "$name=$status" >> "$LOGDIR/islands.summary"
-    rm -rf "$ISLAND_COPY"
-    return "$status"
-  fi
   for a in "${paths[@]:1}"; do
     case "$a" in
       deps|_tools) ln -s "$ROOT/$a" "$ISLAND_COPY/$a" ;;
@@ -680,7 +662,11 @@ leg_islands() {
   if $CLOSE; then await_leg islands postgres || return; fi
   run_islands prima arca sanctum || status=1
   if $CLOSE; then
-    run_islands locus || status=1
+    # The island the step's script makes goes under the log directory,
+    # with the rest of what the gate makes.
+    local script="$LOGDIR/islands.locus.sh"
+    ci_step "Compile and test Locus from its declared apps alone" > "$script" || return 1
+    step islands locus_island env TMPDIR="$LOGDIR" bash "$script" || status=1
   fi
   # An island runs in a subshell of the leg, so its refused start comes
   # back through the summary.
