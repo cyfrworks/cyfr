@@ -7,13 +7,17 @@
 # and `docker`, which the caller defines or finds.
 #
 # sweep_dead_runs, which run.sh calls at its start, removes what an earlier
-# run killed before its teardown left of its own.
+# run killed before its teardown left of its own; it reads the run prefix's
+# grammar from scripts/lib/run-names.sh, which this file sources.
 #
 # A step that removes what the run made is tried up to three times,
 # COMPOSE_PROOF_CLEANUP_PAUSE seconds apart (default 5). A step that still
 # fails is named on stderr with the project it leaves behind, and the run
 # exits non-zero even when every case passed: a run that leaves its
 # project on the host does not pass.
+
+# shellcheck source=scripts/lib/run-names.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib" && pwd)/run-names.sh"
 
 # Runs the command after `$1`, the step's description, until it succeeds,
 # at most three times. Answers 1 after the third failure, its last error
@@ -97,40 +101,47 @@ cleanup() {
 
 # What an earlier run of this proof left when it was killed before its
 # teardown: its scratch directory and its update cases' release tags, each
-# named after its RUN, which carries the pid of the run.sh that made it. A
-# run whose pid lives keeps both, and so does a scratch directory holding
-# `kept`, which the teardown writes when COMPOSE_PROOF_KEEP=1 keeps it, or
-# one another user owns. A directory goes once the image's user has given
-# its data back, as the teardown takes its own; a tag goes without force,
-# so one a container still uses stays. The run's containers, networks,
-# volumes and stand-in image are scripts/janitor.sh's (rule 1), named under
-# the run prefix. A removal that fails is named on stderr and the run goes
-# on: an earlier run's leftovers do not fail this one.
+# named after its RUN, the run prefix (scripts/lib/run-names.sh) when the
+# run had one, then cyfr-compose-proof-<pid>-<hex>, where pid is the
+# run.sh that made it. A directory goes when its run's pid is gone, this
+# user owns it and it holds no `kept`, which the teardown writes when
+# COMPOSE_PROOF_KEEP=1 keeps it; it goes once the image's user has given
+# its data back, as the teardown takes its own. A tag has no owner of its
+# own, so a run's tags go only when this pass removed that run's
+# directory, and without force, so one a container still uses stays; a
+# tag whose directory is kept, another user's, or gone already stays. The
+# run's containers, networks, volumes and stand-in image are
+# scripts/janitor.sh's (rule 1), named under the run prefix. A removal
+# that fails is named on stderr and the run goes on: an earlier run's
+# leftovers do not fail this one.
 sweep_dead_runs() {
-  local dir name pid
-  local scratch_name='^(cyfr-[0-9a-f]{10}-[0-9]+-)?cyfr-compose-proof-([0-9]+)-[0-9a-f]{8}$'
-  local release_tag='^ghcr\.io/cyfrworks/cyfr(-locus)?:[0-9]+\.[0-9]+\.[0-9]+-(cyfr-[0-9a-f]{10}-[0-9]+-)?cyfr-compose-proof-([0-9]+)-[0-9a-f]{8}\.[12]$'
+  local dir base run name pid
+  local -A removed=()
+  local release_tag='^ghcr\.io/cyfrworks/cyfr(-locus)?:[0-9]+\.[0-9]+\.[0-9]+-(.+)\.[12]$'
   for dir in "${TMPDIR:-/tmp}"/*cyfr-compose-proof-*; do
     [ -d "$dir" ] && [ -O "$dir" ] && [ "$dir" != "$WORK" ] || continue
-    [[ ${dir##*/} =~ $scratch_name ]] || continue
-    pid=${BASH_REMATCH[2]}
+    run=${dir##*/}
+    base=$run
+    if [[ $base =~ $RUN_NAMES_PATTERN ]]; then base=${base:${#BASH_REMATCH[0]}}; fi
+    [[ $base =~ ^cyfr-compose-proof-([0-9]+)-[0-9a-f]{8}$ ]] || continue
+    pid=${BASH_REMATCH[1]}
     ! ps -p "$pid" >/dev/null 2>&1 || continue
     [ ! -e "$dir/kept" ] || continue
     if docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-sweep-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --volume "$dir:/work" \
       --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work >/dev/null 2>&1 && rm -rf "$dir"; then
+      removed[$run]=1
       echo "removed $dir, left by the run $pid, which is gone"
     else
       echo "::warning::compose proof: could not remove $dir, left by the run $pid" >&2
     fi
   done
+  [ "${#removed[@]}" -gt 0 ] || return 0
   while IFS= read -r name; do
-    [[ $name =~ $release_tag ]] || continue
-    pid=${BASH_REMATCH[3]}
-    ! ps -p "$pid" >/dev/null 2>&1 || continue
+    [[ $name =~ $release_tag ]] && [ -n "${removed[${BASH_REMATCH[2]}]+set}" ] || continue
     if docker image rm "$name" >/dev/null 2>&1; then
-      echo "removed the tag $name, left by the run $pid, which is gone"
+      echo "removed the tag $name, its run's directory removed"
     else
-      echo "::warning::compose proof: could not remove the tag $name, left by the run $pid" >&2
+      echo "::warning::compose proof: could not remove the tag $name" >&2
     fi
   done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
 }
