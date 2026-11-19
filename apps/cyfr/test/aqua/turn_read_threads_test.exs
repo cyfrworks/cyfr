@@ -7,10 +7,12 @@ defmodule Aqua.TurnReadThreadsTest do
   whose posts it came to hold, grown through the real loop by every way
   those posts reach it — a read or a search of a thread, a report a
   workspace thread delivered, another turn's reply, a file a launched app
-  wrote and the answer of a launched app that read it — and what deleting
-  one of them undoes: each result that carried its posts is blanked, and
-  each thread with a turn that read it loses the compactions written
-  since and its brain session.
+  wrote, the answer of a launched app that read it and a listing of the
+  turn's own runs, whose errors may quote them — and what deleting one of
+  them undoes: each result that carried its posts is blanked, and each
+  thread with a turn that read it loses the compactions written since and
+  its brain session. A file read and a run's logs, which declare the
+  threads they carry too, are refused to a turn.
 
   The model and a launched app are scripted, and so are the HTTP and
   files hands unless a test runs the files catalyst on the runtime;
@@ -26,6 +28,7 @@ defmodule Aqua.TurnReadThreadsTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
 
+  @soul "agent:local.aqua"
   @model "catalyst:local.claude"
   @http "catalyst:local.http"
   @files "catalyst:local.files"
@@ -142,6 +145,62 @@ defmodule Aqua.TurnReadThreadsTest do
       refute Enum.any?(later, fn s -> (s.excluded || "") =~ "room_excerpt" end)
 
       # Neither the excerpt nor the files list carried a thread's posts.
+      assert read_threads(ctx, turn) == []
+    end
+  end
+
+  # Two reads that declare the threads their answers carry, which a turn
+  # cannot make: each is refused before its handler answers, so nothing
+  # its declaration would name joins the turn.
+  describe "a read a turn cannot make" do
+    test "a file read is refused: the action is not reachable from a running chain",
+         %{ctx: ctx, thread: daily} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Arca.put(actor, ["data", "fares.txt"], "the fares rise", threads: ["thr_fares"])
+      read = %{"action" => "read", "path" => "data/fares.txt"}
+
+      # Read from outside a chain, its answer carries the file's thread.
+      assert {:ok, %{read_threads: ["thr_fares"]}} =
+               Arca.Providers.Files.handle("file", actor, read)
+
+      soul!(ctx, %{"tools_add" => ["file.read"]})
+      turn = accept!(ctx, daily, "@aqua read the fares file")
+
+      script!([
+        calls([{"r1", "file.read", %{"path" => "data/fares.txt"}}]),
+        reply("I could not read it.")
+      ])
+
+      assert :completed = run(ctx, turn)
+      assert %{outcome: "error"} = step(ctx, turn, "r1")
+
+      # Refused at admission, by the action's plane.
+      assert result(ctx, turn, "r1").content ==
+               "Tool action 'file.read' is not reachable from a running chain"
+
+      assert read_threads(ctx, turn) == []
+    end
+
+    test "a run's logs are refused: a call from inside a running component cannot use " <>
+           "storage_read",
+         %{ctx: ctx, thread: daily} do
+      logged = started!(ctx, ["thr_fares"])
+      actor = Sanctum.Context.actor(ctx)
+      assert Arca.Execution.read_threads(actor, logged) == {:ok, ["thr_fares"]}
+      turn = accept!(ctx, daily, "@aqua show that run's logs")
+
+      script!([
+        calls([{"g1", "execution.logs", %{"execution_id" => logged}}]),
+        reply("I could not read them.")
+      ])
+
+      assert :completed = run(ctx, turn)
+      assert %{outcome: "error"} = step(ctx, turn, "g1")
+
+      assert result(ctx, turn, "g1").content ==
+               "Error: Unauthorized: a call from inside a running component cannot use " <>
+                 "'storage_read'"
+
       assert read_threads(ctx, turn) == []
     end
   end
@@ -527,6 +586,50 @@ defmodule Aqua.TurnReadThreadsTest do
       assert result(ctx, reader, "s1") == control
       assert_forgotten(ctx, daily, kept)
     end
+
+    test "a listing of the turn's runs: a run of its chain failed quoting the thread, and the " <>
+           "turn listed its runs",
+         %{ctx: ctx, thread: daily} do
+      gone = fares!(ctx)
+      say!(ctx, daily, "call the plumber on Thursday")
+      soul!(ctx, %{"tools_add" => ["execution.list"]})
+      reader = accept!(ctx, daily, "@aqua fetch what the fares say, then list your runs")
+
+      # The fetch, a hand child of the turn's root, fails quoting the
+      # thread's words; the listing answers each run of the root's tree
+      # with its error.
+      failure = "the fetch failed on: the fares rise on Monday"
+
+      script!([
+        calls([{"e1", "thread", %{"action" => "events", "thread" => gone.id}}]),
+        calls([{"h1", "http", %{"action" => "get", "url" => "https://fares.example/today"}}]),
+        {:error, failure},
+        calls([{"l1", "execution.list", %{}}]),
+        calls([{"s1", "thread", %{"action" => "search", "q" => "plumber"}}]),
+        reply("The fetch failed.")
+      ])
+
+      assert :completed = run(ctx, reader)
+      assert read_threads(ctx, reader) == Enum.sort([daily.id, gone.id])
+
+      %{child_execution_id: failed} = step(ctx, reader, "h1")
+      listed = result(ctx, reader, "l1")
+      control = result(ctx, reader, "s1")
+      %{"executions" => runs} = Jason.decode!(listed.content)
+
+      assert [%{"status" => "failed", "error" => ^failure}] =
+               Enum.filter(runs, &(&1["execution_id"] == failed))
+
+      assert Threads.payload(listed)["threads"] == [gone.id]
+      assert control.content =~ "plumber"
+      kept = kept_since_reading!(ctx, daily)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, gone.id)
+
+      assert_blanked(ctx, reader, "l1", listed)
+      assert result(ctx, reader, "s1") == control
+      assert_forgotten(ctx, daily, kept)
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -683,6 +786,43 @@ defmodule Aqua.TurnReadThreadsTest do
       })
 
     app
+  end
+
+  # The soul's own file takes `edit` through the `aqua` tool, as the Aqua
+  # page edits it, and its grant is walked again for the capability that
+  # moved.
+  defp soul!(ctx, edit) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, Map.merge(%{"action" => "update", "name" => "aqua"}, edit))
+
+    decisions = %{ref: @soul, selections: [%{dep: @model, label: "default"}]}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  # A run of the athanor's own whose launch stamped it with `threads`,
+  # admitted as it is.
+  defp started!(ctx, threads) do
+    id = Opus.Record.generate_id()
+
+    record =
+      Opus.Record.new(ctx, "formula:local.read-threads:0.1.0", %{},
+        component_type: :formula,
+        execution_id: id,
+        launch: %{read_threads: threads, execution_id: id, agent: "aqua"}
+      )
+
+    :ok = Opus.Record.write_started(ctx, record)
+    id
   end
 
   defp workspace!(ctx, title, state \\ "done") do

@@ -98,6 +98,37 @@ defmodule Sanctum.Gate.CatalogThreadsTest do
     assert Prima.Operation.read_threads(list, actor, {:ok, %{executions: [], count: 0}}) == []
   end
 
+  # The declared functions themselves, without `Prima.Operation.read_threads/3`'s
+  # sort and filter between them and the caller.
+  test "the file and execution answer functions answer the threads their answer names, and " <>
+         "none for one that names none",
+       %{ctx: ctx, actor: actor} do
+    guest = %{path: "data/q3.csv", size: 4, content: "a,b\n", encoding: "utf8"}
+    named = Map.put(guest, :read_threads, ["thr_a", "thr_b"])
+
+    assert Arca.Providers.Files.read_threads(actor, named) == ["thr_a", "thr_b"]
+    assert Arca.Providers.Files.read_threads(nil, named) == ["thr_a", "thr_b"]
+
+    assert Arca.Providers.Files.read_threads(actor, %{"read_threads" => ["thr_a"]}) == ["thr_a"]
+    assert Arca.Providers.Files.read_threads(actor, guest) == []
+
+    first = started!(ctx, ["thr_b", "thr_a"])
+    second = started!(ctx, ["thr_c"])
+    bare = started!(ctx, [])
+
+    assert Opus.Provider.read_threads(actor, %{execution_id: first}) == ["thr_a", "thr_b"]
+    assert Opus.Provider.read_threads(actor, %{execution_id: bare}) == []
+
+    assert Opus.Provider.read_threads(actor, %{
+             executions: [%{execution_id: first}, %{execution_id: bare}, %{execution_id: second}]
+           }) == ["thr_a", "thr_b", "thr_c"]
+
+    # A run whose row cannot be read adds none, and no actor reads none.
+    assert Opus.Provider.read_threads(actor, %{execution_id: "exec_gone"}) == []
+    assert Opus.Provider.read_threads(nil, %{execution_id: first}) == []
+    assert Opus.Provider.read_threads(actor, %{executions: [], count: 0}) == []
+  end
+
   # A root a turn's launch stamped with `threads`, admitted as it is.
   defp started!(ctx, threads) do
     id = Record.generate_id()
