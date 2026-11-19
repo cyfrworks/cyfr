@@ -103,6 +103,7 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert rows(bucket) == 1
 
       # Two widths past its start, which is when the row decides nothing.
+      # sleep-ok: two widths of the 1 ms rate window pass, after which the row decides nothing
       Process.sleep(10)
 
       assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
@@ -313,6 +314,7 @@ defmodule Cyfr.RetentionSchedulerTest do
           })
         )
 
+      # sleep-ok: the 1 ms claim lapses, so the cycle finds the recorded cycle to resume
       Process.sleep(10)
 
       assert {:ok, summary} =
@@ -349,6 +351,7 @@ defmodule Cyfr.RetentionSchedulerTest do
           })
         )
 
+      # sleep-ok: the 1 ms claim lapses, so the cycle finds the stale cycle to judge
       Process.sleep(10)
 
       assert {:ok, summary} =

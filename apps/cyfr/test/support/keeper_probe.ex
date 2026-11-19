@@ -71,6 +71,8 @@ defmodule Cyfr.Test.KeeperProbe do
         if System.monotonic_time(:millisecond) >= deadline do
           :unknown
         else
+          # sleep-ok: poll interval of state/2's wait, bounded by @settle_ms, while the keeper
+          # settles
           Process.sleep(1)
           state(keeper, deadline)
         end

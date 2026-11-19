@@ -1356,6 +1356,7 @@ defmodule Opus.BrainTest do
           flunk("no take-over waits on the holder")
 
         true ->
+          # sleep-ok: poll interval of taking_over!'s bounded wait (5 s) on the holder's mailbox
           Process.sleep(10)
           taking_over!(holder, deadline)
       end

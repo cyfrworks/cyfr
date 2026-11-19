@@ -338,6 +338,8 @@ function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async ()
   const asked = []
   const opened = []
   const shell = {settings: [], ask: [], open: [], press: []}
+  // An app's opens, each waiting until the test answers it.
+  const openings = []
   const handlers = {}
   const ropes = []
   const cyfr = {
@@ -358,7 +360,7 @@ function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async ()
     press: (id, value) => (shell.press.push([id, value]), press(id, value)),
     settings: (...args) => shell.settings.push(args),
     ask: (widget) => shell.ask.push(widget),
-    open: (ref) => shell.open.push(ref),
+    open: (ref) => (shell.open.push(ref), new Promise((answer) => openings.push({ref, answer}))),
     prefs: async () => ({outcome: "saved"}),
     grant() {},
     ready() {}
@@ -395,7 +397,7 @@ function board({prefs = {}, protocol = "http/1.1", refuse = {}, press = async ()
     for (const fn of handlers[event] || []) fn(value)
     pump()
   }
-  return {asked, opened, ropes, shell, tell, pump, $, $$, readout: () => $(".readout-text").textContent}
+  return {asked, opened, openings, ropes, shell, tell, pump, $, $$, readout: () => $(".readout-text").textContent}
 }
 
 const settle = async () => {
@@ -806,17 +808,52 @@ describe("the switchboard desktop 0.2.0", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 0.3.3: a meter with no reading names its feed and how to bind one, the
+// 0.3.4: a meter with no reading names its feed and how to bind one, the
 // threads are Aqua's daily and workspace threads and shared ones, and the
 // threads strip's Archived key lists the archived ones instead.
 // ---------------------------------------------------------------------------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.3/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/switchboard/0.3.4/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // board's time zone here.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the switchboard 0.3.3", () => {
+describe("the switchboard 0.3.4", () => {
+  test("a cord patched to an app's jack that opens nothing says why on the readout, the shipped canvas's words, for four seconds from the last answer; it names the app only once it opened", async (t) => {
+    t.mock.timers.enable({apis: ["setTimeout", "Date"], now: Date.now()})
+    const b = board({version: V3})
+    await settle()
+    b.tell("installed", [{ref: "tincture:local.maps", name: "Maps", icon: null, open: false}])
+    const answer = async (a) => {
+      patch(b, line(b, "apps", "Maps"), "app")
+      // The patch claims nothing before the shell answers: the readout still
+      // asks where the lifted cord goes.
+      assert.equal(b.readout(), "Maps · patch to App, Settings, Aqua")
+      b.openings.at(-1).answer(a)
+      await settle()
+      b.pump()
+      return b.readout()
+    }
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Maps · Tap again in a moment")
+    assert.equal(await answer({outcome: "opened"}), "Maps → app")
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "Maps · It is no longer installed")
+    // Opened inside the four seconds after a refusal: its words go at once.
+    assert.equal(await answer({outcome: "opened"}), "Maps → app")
+    // An open never answered may have opened: it says only that no answer came.
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "Maps · No answer yet")
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
+    assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Maps · Not opened: tap again")
+    assert.deepEqual(b.openings.map((o) => o.ref), Array(7).fill("tincture:local.maps"))
+
+    // The same answer again three seconds on restarts the four seconds.
+    t.mock.timers.tick(3000)
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
+    t.mock.timers.tick(3999)
+    assert.equal(b.readout(), "Maps · Not opened: tap again")
+    t.mock.timers.tick(1)
+    assert.doesNotMatch(b.readout(), /Maps/)
+  })
+
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the weather and VPN meters with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {

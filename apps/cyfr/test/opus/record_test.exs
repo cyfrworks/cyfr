@@ -321,6 +321,8 @@ defmodule Opus.RecordTest do
 
     test "sets completed_at timestamp", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      # sleep-ok: the clock ticks between start and completion; the assertion allows equal
+      # instants, so it may need none
       :timer.sleep(1)
       completed = Record.complete(record, %{})
 
@@ -330,6 +332,7 @@ defmodule Opus.RecordTest do
 
     test "calculates duration_ms", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      # sleep-ok: 10 ms of run, so duration_ms is at least 10
       :timer.sleep(10)
       completed = Record.complete(record, %{})
 
@@ -354,6 +357,8 @@ defmodule Opus.RecordTest do
 
     test "sets completed_at timestamp", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      # sleep-ok: the clock ticks between start and failure; the test asserts only that
+      # completed_at is set, so it may need none
       :timer.sleep(1)
       failed = Record.fail(record, "error")
 
@@ -362,6 +367,7 @@ defmodule Opus.RecordTest do
 
     test "calculates duration_ms", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      # sleep-ok: 10 ms of run, so duration_ms is at least 10
       :timer.sleep(10)
       failed = Record.fail(record, "error")
 
@@ -865,6 +871,8 @@ defmodule Opus.RecordTest do
         for i <- 1..3 do
           record = Record.new(ctx, "reagent:local.test-#{i}:0.1.0", %{})
           :ok = Record.write_started(ctx, record)
+          # sleep-ok: the clock ticks between starts, so the three started_at values order the
+          # list
           :timer.sleep(10)
           record
         end

@@ -172,9 +172,13 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}, vers
   const els = new Map(["street", "header", "wall", "level", "puddle-index", "plate", "fusebox"].map((id) => [`#${id}`, stub()]))
   const frames = []
   const timers = []
+  // The page's clock, which only `elapse` moves.
+  let clock = 0
   const listeners = {}
   const handlers = {}
   const opened = []
+  // An app's opens, each waiting until the test answers it.
+  const openings = []
   const presses = []
   const pages = []
   const cyfr = {
@@ -192,7 +196,7 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}, vers
     press: async (control, value) => (presses.push([control, value]), typeof answer === "function" ? answer(control, value) : answer),
     settings: (...args) => pages.push(args),
     ask() {},
-    open() {},
+    open: (ref) => new Promise((answer) => openings.push({ref, answer})),
     grant() {},
     ready() {},
   }
@@ -210,7 +214,7 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}, vers
     innerWidth: 1024,
     innerHeight: 600,
     requestAnimationFrame: (f) => frames.push(f),
-    setTimeout: (fn, ms) => timers.push({fn, ms}),
+    setTimeout: (fn, ms) => timers.push({fn, ms, at: clock + (ms || 0)}),
     clearTimeout: (id) => timers[id - 1] && (timers[id - 1].cleared = true),
     setInterval: () => 0,
     addEventListener() {},
@@ -237,6 +241,12 @@ function night2({widgets = {}, refuse = {}, answer = {outcome: "accepted"}, vers
     runTimers() {
       for (const t of timers.splice(0)) if (!t.cleared) t.fn()
     },
+    // Moves the page's clock on by `ms`, running each timer then due.
+    elapse(ms) {
+      clock += ms
+      for (const t of timers) if (!t.cleared && !t.ran && t.at <= clock) (t.ran = true), t.fn()
+    },
+    openings,
     // A tap on an element carrying `attrs`, as the page's document hears it.
     tap(attrs) {
       const node = {
@@ -613,14 +623,100 @@ describe("the night desktop 0.2.0", () => {
   })
 })
 
-// ---------- 0.3.3: a feed's sign with no reading names its feed; Aqua's threads and shared ones; the Archived button ----------
+// ---------- 0.3.4: a feed's sign with no reading names its feed; Aqua's threads and shared ones; the Archived button ----------
 
-const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.3/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/night/0.3.4/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the night desktop 0.3.3", () => {
+describe("the night desktop 0.3.4", () => {
+  // What an app's shop window and its sign's card say of a tap to open it.
+  const MAPS = {ref: "tincture:local.maps", name: "Maps", icon: null, open: false}
+  const WORDS = /Tap again in a moment|It is no longer installed|No answer yet|Not opened: tap again|Opening/
+  const windowSays = (p) => (/shop__name">Maps<\/span>[\s\S]*?<\/button>(?:<p class="note" role="status">([^<]*)<\/p>)?<\/li>/.exec(p.street()) || [])[1] ?? null
+  async function shopWith() {
+    const p = await lit({version: V3, widgets: {apps: {on: true}}})
+    p.tell("installed", [MAPS])
+    p.draw()
+    assert.match(p.street(), /shop__name">Maps</)
+    return p
+  }
+
+  test("a tap on an app's shop window that opens nothing says why under it, the shipped canvas's words, for four seconds from the last answer; an open says nothing", async () => {
+    const p = await shopWith()
+    const answer = async (a) => {
+      const before = windowSays(p)
+      p.tap({"data-act": "open-app", "data-app": MAPS.ref})
+      await settle()
+      p.draw()
+      // The tap claims nothing before the shell answers.
+      assert.equal(windowSays(p), before)
+      p.openings.at(-1).answer(a)
+      await settle()
+      p.draw()
+      return windowSays(p)
+    }
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
+    assert.equal(await answer({outcome: "opened"}), null)
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
+    // Opened inside the four seconds after a refusal: its words go at once.
+    assert.equal(await answer({outcome: "opened"}), null)
+    // An open never answered may have opened: it says only that no answer came.
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
+    assert.doesNotMatch(p.street(), /Not opened/)
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Not opened: tap again")
+    assert.deepEqual(p.openings.map((o) => o.ref), Array(7).fill(MAPS.ref))
+
+    // The same answer again three seconds on restarts the four seconds.
+    p.elapse(3000)
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    p.elapse(3999)
+    p.draw()
+    assert.equal(windowSays(p), "Not opened: tap again")
+    p.elapse(1)
+    p.draw()
+    assert.equal(windowSays(p), null)
+    assert.doesNotMatch(p.street(), WORDS)
+  })
+
+  test("an app's card stays open until its open is answered: it closes once the app opened, and otherwise says why in its note line for four seconds from the last answer", async () => {
+    const p = await shopWith()
+    const card = () => {
+      p.tap({"data-target": `app:${MAPS.ref}`})
+      assert.equal(p.plate.hidden, false)
+    }
+    const answer = async (a) => {
+      const before = plateNote(p)
+      press(p, "Open Maps")
+      await settle()
+      // Still open, claiming nothing, until the shell answers.
+      assert.equal(p.plate.hidden, false)
+      assert.equal(plateNote(p), before)
+      p.openings.at(-1).answer(a)
+      await settle()
+      return p.plate.hidden ? "closed" : plateNote(p)
+    }
+    card()
+    assert.equal(await answer({outcome: "opened"}), "closed")
+    card()
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
+    // Opened inside the four seconds after a refusal: the card and its words go at once.
+    assert.equal(await answer({outcome: "opened"}), "closed")
+    card()
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    p.elapse(3000)
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    p.elapse(3999)
+    assert.equal(plateNote(p), "Not opened: tap again")
+    p.elapse(1)
+    assert.equal(plateNote(p), "")
+    assert.equal(p.plate.hidden, false)
+  })
+
   test("a feed sign with no reading names its feed and says to ask Aqua for one, from the moment it opens", async () => {
     const p = night2({version: V3, widgets: {vpn: {on: true}}})
     await settle()

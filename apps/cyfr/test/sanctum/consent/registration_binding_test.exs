@@ -228,6 +228,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
 
     case result do
       {:error, :database_error} when attempts > 1 ->
+        # sleep-ok: backoff of the fixture's bounded retry (3 attempts) after SQLite's busy
+        # answer, as the comment above says
         Process.sleep(50)
         publish_fixture(ctx, wasm, attempts - 1)
 

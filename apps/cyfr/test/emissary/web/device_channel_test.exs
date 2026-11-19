@@ -831,6 +831,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       {:ok, %{token: token}} = Sanctum.DeviceUnlock.redeem(ticket)
       before = Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at
+      # sleep-ok: the clock ticks so the slide's expiry comes after the one read before it
       Process.sleep(5)
 
       assert {:ok, state} = send_frame(state, standing_report())
@@ -868,6 +869,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       refute state.closed
       assert Arca.Repo.get!(Arca.Schemas.Session, session_id).expires_at == soon
 
+      # sleep-ok: the session's one-second bound (soon, above) passes with no report
       Process.sleep(1_100)
       assert {:error, :invalid_session} = Sanctum.Session.load(token)
     end
@@ -2464,6 +2466,8 @@ defmodule Emissary.Web.DeviceChannelTest do
         flunk("the certificate did not expire")
 
       true ->
+        # sleep-ok: poll interval of past_expiry's bounded wait (300 tries) for the certificate to
+        # expire
         Process.sleep(10)
         past_expiry(certificate, tries - 1)
     end
@@ -2622,6 +2626,8 @@ defmodule Emissary.Web.DeviceChannelTest do
   # replacement finds it expired.
   def hold_certificate_insert(_event, _measurements, %{source: "device_certificates"} = meta, me) do
     if self() == me and String.starts_with?(meta[:query] || "", "INSERT"),
+      # sleep-ok: the insert is held past the certificate's one-second life, as the comment above
+      # says
       do: Process.sleep(1_100)
 
     :ok

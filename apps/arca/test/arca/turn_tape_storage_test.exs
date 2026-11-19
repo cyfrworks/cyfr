@@ -612,6 +612,7 @@ defmodule Arca.TurnTapeStorageTest do
          %{actor: actor, thread: thread} do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
       {turn, root} = start!(actor, turn)
+      # sleep-ok: a running interval of at least 15 ms for the pause to account (active_ms >= 15)
       Process.sleep(15)
 
       paused = launch_paused!(actor, turn)

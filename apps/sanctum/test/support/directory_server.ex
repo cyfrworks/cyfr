@@ -109,6 +109,8 @@ defmodule Sanctum.Test.DirectoryServer do
             :ok
 
           :hang ->
+            # sleep-ok: the :hang handler holds the connection 30 s and answers nothing, the hang
+            # under test
             Process.sleep(30_000)
 
           {status, headers, body} ->

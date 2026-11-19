@@ -108,6 +108,8 @@ defmodule Arca.RecordSinkTest do
     assert Enum.any?(rows, &(&1.id == id)), "the buffered row was lost at shutdown"
 
     assert Enum.any?(1..200, fn _ ->
+             # sleep-ok: poll interval of a bounded wait (200 tries) for the supervisor to restart
+             # the stopped sink
              Process.sleep(25)
              is_pid(Process.whereis(Arca.RecordSink))
            end),
@@ -158,6 +160,8 @@ defmodule Arca.RecordSinkTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
 
     assert Enum.any?(1..200, fn _ ->
+             # sleep-ok: poll interval of a bounded wait (200 tries) for the supervisor to restart
+             # the killed sink
              Process.sleep(25)
              is_pid(Process.whereis(Arca.RecordSink))
            end),

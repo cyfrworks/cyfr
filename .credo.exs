@@ -22,6 +22,8 @@
         ],
         excluded: [~r"/_build/", ~r"/deps/", ~r"/node_modules/"]
       },
+      # The project's own checks, under tests/credo with their tests.
+      requires: ["tests/credo/sleep_reason.ex"],
       strict: true,
       checks: %{
         enabled: [
@@ -65,7 +67,10 @@
           # commit messages or separate design material": a TODO or FIXME is
           # a plan note in the source.
           {Credo.Check.Design.TagTODO, []},
-          {Credo.Check.Design.TagFIXME, []}
+          {Credo.Check.Design.TagFIXME, []},
+          # "Concurrent tests synchronize on observable events or bounded
+          # condition checks": a sleep in a test says why a clock is right.
+          {Cyfr.Credo.SleepReason, []}
         ]
       }
     }

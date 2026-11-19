@@ -58,6 +58,7 @@ defmodule Opus.ProgramsMountsTest do
         flunk("the controller did not settle")
 
       true ->
+        # sleep-ok: poll interval of await_idle's bounded wait (3 s) for the controller to settle
         Process.sleep(10)
         await_idle(controller, deadline)
     end
@@ -304,6 +305,7 @@ defmodule Opus.ProgramsMountsTest do
     cond do
       check.() -> :ok
       System.monotonic_time(:millisecond) > deadline -> flunk("timed out")
+      # sleep-ok: poll interval of eventually's bounded wait (3 s)
       true -> Process.sleep(10) && eventually(check, deadline)
     end
   end

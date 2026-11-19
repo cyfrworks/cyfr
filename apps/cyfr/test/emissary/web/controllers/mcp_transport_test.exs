@@ -469,6 +469,8 @@ defmodule Emissary.Web.MCPTransportTest do
         :sys.resume(Emissary.TaskSupervisor)
 
       deadline > 0 ->
+        # sleep-ok: poll interval of publish_when_listening's bounded wait (200 tries) for the
+        # connection to subscribe
         Process.sleep(10)
         publish_when_listening(conn_pid, phases, deadline - 1)
 

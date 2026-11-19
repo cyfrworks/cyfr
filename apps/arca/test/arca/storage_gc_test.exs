@@ -523,6 +523,8 @@ defmodule Arca.StorageGCTest do
 
     test "one sweep collects at most its limit, oldest first", %{actor: actor, unit: unit} do
       first = lay_prefix(actor, unit, StorageUnits.new_revision(), "first")
+      # sleep-ok: the clock ticks so "second" is laid after "first", for the oldest-first order
+      # under test
       Process.sleep(5)
       second = lay_prefix(actor, unit, StorageUnits.new_revision(), "second")
 

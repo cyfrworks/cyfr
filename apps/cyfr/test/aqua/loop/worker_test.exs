@@ -83,6 +83,8 @@ defmodule Aqua.Loop.WorkerTest do
     true = :erlang.suspend_process(outer)
     :ok = :sys.resume(manager)
     wait_until(fn -> waiting_worker(outer) end, 5_000, "the inner worker to await its release")
+    # sleep-ok: the six-second stall under test, longer than any bound this module keeps, as the
+    # comment above says
     Process.sleep(6_000)
     true = :erlang.resume_process(outer)
 

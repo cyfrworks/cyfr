@@ -1472,6 +1472,8 @@ defmodule Arca.SecurityTransitionsLockTest do
         flunk("a killed client's transaction still held the person after #{elapsed} ms")
 
       true ->
+        # sleep-ok: poll interval of await_release!'s wait, bounded by bound_ms, for the killed
+        # client's lock to go
         Process.sleep(50)
         await_release!(user_id, since, bound_ms)
     end

@@ -106,6 +106,7 @@ defmodule Sanctum.Consent.ProofTest do
   describe "expiry" do
     test "an expired proof is refused" do
       {:ok, token} = Proof.mint(@bindings, ttl_ms: 1)
+      # sleep-ok: the proof's 1 ms lifespan runs out before the consume
       Process.sleep(15)
 
       assert Proof.consume(token, @bindings) == {:error, :expired}

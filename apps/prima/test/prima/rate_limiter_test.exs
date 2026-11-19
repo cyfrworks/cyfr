@@ -75,6 +75,7 @@ defmodule Prima.RateLimiterTest do
       key = key()
       :ok = RateLimiter.check(key, 1, 1)
       before = counted(key)
+      # sleep-ok: the 1 ms window under test closes
       Process.sleep(5)
 
       assert RateLimiter.peek(key, 1, 1) == :ok

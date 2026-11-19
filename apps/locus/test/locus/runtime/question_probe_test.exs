@@ -141,6 +141,7 @@ defmodule Locus.Runtime.QuestionProbeTest do
     # waits for as long as it lives.
     ScriptedHost.script(host, "question_wait", fn _args, _caller ->
       send(test, :waiting)
+      # sleep-ok: the scripted wait's pace: each answers pending 50 ms after it is asked
       Process.sleep(50)
       {:answer, @pending}
     end)
@@ -167,6 +168,7 @@ defmodule Locus.Runtime.QuestionProbeTest do
     # Nothing asks again once the component is gone.
     flush_waiting()
     waits = length(ScriptedHost.requests(host, "question_wait"))
+    # sleep-ok: 300 ms after the kill in which no further question_wait must arrive
     Process.sleep(300)
     assert length(ScriptedHost.requests(host, "question_wait")) == waits
   end
@@ -182,6 +184,8 @@ defmodule Locus.Runtime.QuestionProbeTest do
         false
 
       true ->
+        # sleep-ok: poll interval of released?'s bounded wait (100 tries) for the store to be
+        # given back
         Process.sleep(50)
         released?(baseline, waiting, tries - 1)
     end

@@ -146,6 +146,8 @@ defmodule Sanctum.CallerFreshnessTest do
     cond do
       result = check.() -> result
       attempts == 0 -> flunk("condition never held")
+      # sleep-ok: poll interval of poll!'s bounded wait (5,000 tries), every millisecond as the
+      # comment above says
       true -> Process.sleep(1) && poll!(check, attempts - 1)
     end
   end
@@ -172,6 +174,7 @@ defmodule Sanctum.CallerFreshnessTest do
       %{session: session, athanor: athanor} = person!()
 
       {:ok, first} = Caller.establish(session.token, focus: athanor.id)
+      # sleep-ok: the clock moves 20 ms, so a reuse that answered its own instant would differ
       Process.sleep(20)
       {:ok, again} = Caller.establish(session.token, focus: athanor.id)
 
@@ -183,6 +186,8 @@ defmodule Sanctum.CallerFreshnessTest do
     test "a standing session is rebuilt from the store, focus and correlation kept" do
       %{ctx: ctx, athanor: athanor, user: user} = person!()
       held = %{ctx | request_id: "req_held", client_ip: "203.0.113.9"}
+      # sleep-ok: the clock ticks, so the rebuilt context's validation is later than the held
+      # one's
       Process.sleep(5)
 
       assert {:ok, %Context{} = fresh} = Caller.revalidate_session(held)
@@ -322,6 +327,7 @@ defmodule Sanctum.CallerFreshnessTest do
 
     test "a standing key is reread and comes back with a new validation" do
       %{key_ctx: key_ctx} = key!()
+      # sleep-ok: the clock ticks, so the reread key's validation is later than the first one's
       Process.sleep(5)
 
       assert {:ok, %Context{} = fresh} = Caller.revalidate_session(key_ctx)

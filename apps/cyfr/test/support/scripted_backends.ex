@@ -334,6 +334,7 @@ defmodule Cyfr.Test.ScriptedBackends do
         )
 
       true ->
+        # sleep-ok: poll interval of quiesce's deadline-bounded wait for the controller to settle
         Process.sleep(10)
         quiesce(deadline)
     end
@@ -870,6 +871,8 @@ defmodule Cyfr.Test.ScriptedBackends do
 
           session_answer(conn, st, answer)
         else
+          # sleep-ok: the fake service's long-poll recv: it looks every 10 ms for lines until its
+          # deadline
           Process.sleep(10)
           expire_idle(agent)
           recv(conn, agent, id, after_seq, deadline)

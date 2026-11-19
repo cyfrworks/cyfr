@@ -10,6 +10,7 @@ defmodule Arca.CacheEvictionTest do
 
     for i <- 1..5, do: Arca.Cache.put({:eviction_test, i}, "value_#{i}", 1)
     Arca.Cache.put({:eviction_test, :fresh}, "keep", 60_000)
+    # sleep-ok: the five entries' 1 ms lifespan runs out, so the sweep finds them expired
     Process.sleep(10)
 
     # Expired rows stay physically present until a sweep — get/1 would

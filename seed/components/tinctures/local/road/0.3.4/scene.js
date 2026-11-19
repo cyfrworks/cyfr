@@ -264,7 +264,16 @@ window.RoadScene = function () {
     wake();
   });
 
-  function say(text) { ticker = { text, t: 3.2 }; announce(text); }
+  // The ticker says `text` for `ms` of the clock from this call, each call starting it again.
+  const TICKER_MS = 3200;
+  // `about`: the app a tap to open it said this of, whose opening clears it.
+  function say(text, ms = TICKER_MS, about = null) { ticker = { text, until: performance.now() + ms, about }; announce(text); }
+  // What a tap to open app `a` says on the ticker, named for the app; its
+  // opening clears what an earlier tap to open it said.
+  function openTold(a, words) {
+    if (words) { say(a.name + ' · ' + words, R.OPEN_SAID_MS, a.ref); wake(); }
+    else if (ticker && ticker.about === a.ref) ticker = null;
+  }
   function askAqua(widget, from) {
     if (from) fx.push({ kind: 'drop', x: from.x, y: from.y, tx: W - 10, ty: 4, t: 0 });
     R.ask(widget);
@@ -387,7 +396,7 @@ window.RoadScene = function () {
         choices: [{ label: 'Open activities', primary: true, run: () => settings('activities', 'activities') }, ask('activity')] };
     }
     if (kind === 'market') return { title: 'Apps', portrait: 'market', lines: S.installed.length ? [] : ['No apps are installed yet.'],
-      rows: S.installed.map((a) => { const c = R.component(a.ref); return { text: a.name, sub: (a.open ? 'open' : 'tap to open') + (c && c.update ? ', update ready' : ''), dot: c && c.update ? P.wood : null, run: () => { R.open(a.ref); say('Opening ' + a.name + '.'); } }; }),
+      rows: S.installed.map((a) => { const c = R.component(a.ref); return { text: a.name, sub: (a.open ? 'open' : 'tap to open') + (c && c.update ? ', update ready' : ''), dot: c && c.update ? P.wood : null, run: () => R.open(a.ref).then((words) => openTold(a, words)) }; }),
       choices: [{ label: 'Components', run: () => settings('components', 'components') }, ask('components')] };
     if (kind === 'silo') {
       const s = sys();
@@ -1109,7 +1118,7 @@ window.RoadScene = function () {
       label(nt.text, Math.max(w / 2 + 2, Math.min(W - w / 2 - 2, at.x)), at.y, { align: 'center', bg: nt.state === 'stale' ? '#e8e0cc' : '#ffd9d2' });
     }
     // what the last tap asked CYFR to do
-    if (ticker && ticker.t > 0) { ticker.t -= 1 / 30; F.wrap(ticker.text, W - 24).slice(0, 3).forEach((ln, i) => label(ln, W / 2, (L.tall ? 44 : 34) + i * 13, { align: 'center', bg: '#fff8ec' })); }
+    if (ticker && performance.now() < ticker.until) { F.wrap(ticker.text, W - 24).slice(0, 3).forEach((ln, i) => label(ln, W / 2, (L.tall ? 44 : 34) + i * 13, { align: 'center', bg: '#fff8ec' })); }
   }
   function noteAt(p) {
     if (p === 'attention') { const h = L.blds.house; return h && { x: h.x + 31, y: h.ground - h.h - 12 }; }

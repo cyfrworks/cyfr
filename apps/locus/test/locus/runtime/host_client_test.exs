@@ -877,6 +877,7 @@ defmodule Locus.Runtime.HostClientTest do
                HostClient.attached_fetch(unreachable, attached(), options(sink()))
 
       # A host that answers nothing before the deadline.
+      # sleep-ok: the host answers nothing for 2 s, past the fetch's 300 ms deadline under test
       {port, _server} = raw_host!(fn socket -> Process.sleep(2_000) && socket end)
 
       assert {:error, "uncertain"} =
@@ -1031,6 +1032,8 @@ defmodule Locus.Runtime.HostClientTest do
         {:ok, socket} = :gen_tcp.accept(listen, 10_000)
         read_request(socket, "")
         answer.(socket)
+        # sleep-ok: the raw host keeps the socket open after its answer, so the client, not a
+        # close, ends the exchange
         Process.sleep(5_000)
       end)
 

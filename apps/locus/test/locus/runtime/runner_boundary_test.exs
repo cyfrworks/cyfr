@@ -192,6 +192,8 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     wait_until(fn -> not alive?(os_pid) end, 10_000, "the runner's process to be gone")
     assert :ok = WorkerService.kill(attempt.execution_id)
     wait_until(fn -> match?(%{busy: 0, tainted: 0, idle: 0}, runners()) end, 10_000)
+    # sleep-ok: 300 ms after the pool settled in which no second runner_exited and no complete
+    # must arrive
     Process.sleep(300)
     assert length(ScriptedHost.requests(host, "runner_exited")) == 1
     assert ScriptedHost.requests(host, "complete") == []

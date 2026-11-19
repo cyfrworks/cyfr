@@ -507,6 +507,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       cond do
         condition.() -> :ok
         attempts == 0 -> flunk("the condition did not hold in time")
+        # sleep-ok: poll interval of wait_for's bounded wait (200 tries)
         true -> Process.sleep(10) && wait_for(condition, attempts - 1)
       end
     end

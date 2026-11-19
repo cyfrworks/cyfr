@@ -1,7 +1,7 @@
 {
   "name": "night",
   "type": "tincture",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "local",
   "description": "A street at night where only what waits on you burns: an approval lights its thread's plaque, a failed run its row on the board, a file offered to you its locker and an app that needs your grant its awning, and answering one switches its light off. The board shows your schedules, paused or resumed with a tap, and your latest runs, a failed one run again with a tap; the crew's work, your apps, your vault and your feeds stand along the street; a breaker box turns each part off or on and moves it along the street.",
   "tags": ["canvas", "desktop"],

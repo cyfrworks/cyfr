@@ -2406,6 +2406,8 @@ defmodule Aqua.LoopTest do
         profile_id
 
       {:error, {:consent_conflict, %{cause: :stale_plan}}} when tries > 1 ->
+        # sleep-ok: backoff of walk!'s bounded retry (tries) after a stale plan, before planning
+        # again
         Process.sleep(50)
         walk!(ctx, decisions, tries - 1)
     end
@@ -3046,6 +3048,7 @@ defmodule Aqua.LoopTest do
       cond do
         fun.() -> :ok
         tries == 0 -> flunk("the rows never showed it")
+        # sleep-ok: poll interval of until!'s bounded wait (200 tries) on what the rows show
         true -> Process.sleep(50) && until!(fun, tries - 1)
       end
     end

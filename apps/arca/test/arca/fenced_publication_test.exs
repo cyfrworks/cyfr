@@ -1504,6 +1504,8 @@ defmodule Arca.FencedPublicationLockTest do
     taker = taking(ctx.node)
 
     publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
+    # sleep-ok: the publication's budget under test passes, with 200 ms to spare, while the taker
+    # holds it
     Process.sleep(FencedPublication.budget_ms() + 200)
     release(taker)
 

@@ -285,6 +285,7 @@ defmodule Sanctum.CallerTest do
       # member has heard nothing.
       assert {:ok, _stale} = Caller.establish(session.token)
 
+      # sleep-ok: the member's memo TTL under test runs out, as the comment above says
       Process.sleep(200)
       assert {:error, :unauthenticated} = Caller.establish(session.token)
     end

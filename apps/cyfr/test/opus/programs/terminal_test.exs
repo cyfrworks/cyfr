@@ -125,6 +125,7 @@ defmodule Opus.Programs.TerminalTest do
         if System.monotonic_time(:millisecond) > deadline,
           do: flunk("timed out waiting for #{what}")
 
+        # sleep-ok: poll interval of eventually's bounded wait (3 s)
         Process.sleep(10)
         eventually(check, what, deadline)
 
@@ -647,6 +648,8 @@ defmodule Opus.Programs.TerminalTest do
       )
 
       send(terminal(id), :standing)
+      # sleep-ok: 100 ms after the standing check in which a browser's sign-out must not end the
+      # terminal
       Process.sleep(100)
       refute gone?(id)
 
@@ -735,6 +738,8 @@ defmodule Opus.Programs.TerminalTest do
 
       for round <- 1..5 do
         for i <- 1..4, do: Scripted.write(fake, row.id, "round #{round} line #{i}")
+        # sleep-ok: 150 ms a round for the program's writes to pile up at the paused owner, if
+        # anything let them
         Process.sleep(150)
       end
 
@@ -878,6 +883,7 @@ defmodule Opus.Programs.TerminalTest do
         ExUnit.CaptureLog.capture_log([level: :error], fn ->
           send(pid, {:EXIT, self(), :boom})
           assert_receive {:DOWN, ^ref, :process, _pid, :boom}, 5_000
+          # sleep-ok: no event for the termination report's log yet; 200 ms after :DOWN
           Process.sleep(200)
         end)
 
@@ -991,6 +997,7 @@ defmodule Opus.Programs.TerminalTest do
         ExUnit.CaptureLog.capture_log([level: :error], fn ->
           send(pid, {:EXIT, self(), :boom})
           assert_receive {:DOWN, ^ref, :process, _pid, :boom}, 5_000
+          # sleep-ok: no event for the termination report's log yet; 200 ms after :DOWN
           Process.sleep(200)
         end)
 
@@ -1119,6 +1126,7 @@ defmodule Opus.Programs.TerminalTest do
 
       assert_receive {:attached, {:ok, _tail}}, 2_000
       Process.exit(watcher, :kill)
+      # sleep-ok: 100 ms after the watcher's kill in which the person's own session must not end
       Process.sleep(100)
       refute gone?(mine)
     end

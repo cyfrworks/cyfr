@@ -291,6 +291,8 @@ defmodule PrismWeb.ComponentDetailLiveTest do
 
         # Held past the browser's wait, and past it twice, the dialog still
         # waits for the registry.
+        # sleep-ok: twice the browser's 1 s push wait, in which the dialog must not leave
+        # "Sending…"
         Process.sleep(2 * @push_timeout_ms)
         assert render(view) =~ "Sending…"
       after

@@ -209,6 +209,7 @@ defmodule Opus.BrowserTest do
         if System.monotonic_time(:millisecond) > deadline,
           do: flunk("timed out waiting for #{what}")
 
+        # sleep-ok: poll interval of eventually's bounded wait (5 s)
         Process.sleep(10)
         eventually(check, what, deadline)
 
@@ -757,6 +758,7 @@ defmodule Opus.BrowserTest do
       eventually(fn -> lost?(ctx) end, "the tail")
 
       # Past the time the driver keeps an answer it was not told was held.
+      # sleep-ok: the driver's 50 ms keep_ms passes, so it no longer holds the answer
       Process.sleep(200)
       :sys.resume(holder)
 
@@ -774,6 +776,7 @@ defmodule Opus.BrowserTest do
 
       set_status(turn, "completed")
       :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+      # sleep-ok: 100 ms after the turn ended in which its browser session must not close
       Process.sleep(100)
       assert [%{session: ^session}] = browser_sessions(ctx)
 
@@ -1092,6 +1095,7 @@ defmodule Opus.BrowserTest do
         assert refusal(Task.await(open, 5_000)) == "The browser is turned off."
         refute_received {:session, "open", _open, _fields}
 
+        # sleep-ok: the start held held_ms (0 or 1,500) on the service, the hold under test
         Process.sleep(held_ms)
         send(service, :go)
         assert_receive {:session, "open", _open, _fields}, 5_000
@@ -2645,6 +2649,7 @@ defmodule Opus.BrowserTest do
       token = make_ref()
       :sys.replace_state(holder, &%{&1 | idle: {make_ref(), token}})
       send(holder, {:idle, token})
+      # sleep-ok: 100 ms after the idle message in which the holder must stop nothing
       Process.sleep(100)
       assert [_running] = browser_sessions(ctx)
       assert Process.alive?(holder)
@@ -2657,7 +2662,7 @@ defmodule Opus.BrowserTest do
       )
     end
 
-    test "after a tail an image cut there is never shown, the cast goes on anew, and a response cut by it is asked again",
+    test "after a tail an image lost to it is never shown, the response cut by it is asked again, an image whole in it is shown, and the cast goes on anew",
          %{ctx: ctx, driver: driver, lineage: lineage} = context do
       assert {:ok, _} = call(ctx, lineage, "open", %{"url" => "https://example.com/"})
       _watch = watch!(ctx, lineage["thread_id"])
@@ -2675,20 +2680,30 @@ defmodule Opus.BrowserTest do
 
       # The holder takes nothing while the driver pours out an image, the
       # whole answer and a second image: the last 256 KiB of it arrive as
-      # the tail, cut inside the first image.
+      # the tail. The answer's frames alone are more than that, so the
+      # first image is lost whole and the cut falls inside the answer.
       holder = holder(ctx)
       :sys.suspend(holder)
       :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "noise"}))
       eventually(fn -> outstanding?(ctx) end, "a delivery outstanding")
 
-      cut = :crypto.strong_rand_bytes(90_000)
+      lost = :crypto.strong_rand_bytes(90_000)
       whole = jpeg()
-      :ok = Driver.image(driver, cast, 1, cut)
+      :ok = Driver.image(driver, cast, 1, lost)
       answers(context, "read", {:ok, %{"text" => text}})
       :ok = Driver.flood(driver)
       :ok = Driver.release(driver, id)
       :ok = Driver.image(driver, cast, 2, whole)
-      eventually(fn -> lost?(ctx) end, "the tail")
+
+      # The terminal lets some go as soon as the answer passes what it
+      # keeps, which may be a read before it has the second image: the
+      # holder is let on only once the tail ends with that image, or it
+      # would meet it after the cast it belongs to had ended.
+      eventually(
+        fn -> tail_ends_with?(ctx, Driver.image_frame(cast, 2, whole)) end,
+        "the tail to end with the second image"
+      )
+
       :sys.resume(holder)
 
       assert {:ok, %{"text" => ^text}} = Task.await(task, 20_000)
@@ -2697,7 +2712,7 @@ defmodule Opus.BrowserTest do
       assert_receive {:driver, :req, _s, %{"op" => "cast", "id" => anew}}, 5_000
 
       assert_receive {Opus.Browser, _ref, {:image, 1, %Programs.Output{bytes: ^whole}}}, 5_000
-      refute_received {Opus.Browser, _ref, {:image, _n, %Programs.Output{bytes: ^cut}}}
+      refute_received {Opus.Browser, _ref, {:image, _n, %Programs.Output{bytes: ^lost}}}
 
       # The old cast's images go nowhere; the new cast's are handed once
       # the last was drawn.
@@ -3086,6 +3101,16 @@ defmodule Opus.BrowserTest do
   # taken, and whether it let some of what came meanwhile go.
   defp outstanding?(ctx), do: Enum.any?(subscribers(ctx), &(&1.outstanding != nil))
   defp lost?(ctx), do: Enum.any?(subscribers(ctx), & &1.lost)
+
+  # Whether what the terminal keeps for its holder is a tail, and `frame`
+  # the last of it. Read from the terminal's own state: no caller can see
+  # what it keeps for a holder that takes nothing.
+  defp tail_ends_with?(ctx, frame) do
+    Enum.any?(subscribers(ctx), fn subscriber ->
+      subscriber.lost and subscriber.pending != nil and
+        String.ends_with?(subscriber.pending.bytes, frame)
+    end)
+  end
 
   defp subscribers(ctx) do
     case browser_sessions(ctx) do

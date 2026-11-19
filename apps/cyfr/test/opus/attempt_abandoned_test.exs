@@ -223,6 +223,7 @@ defmodule Opus.AttemptAbandonedTest do
     cond do
       fun.() -> :ok
       System.monotonic_time(:millisecond) > deadline -> flunk("the condition never held")
+      # sleep-ok: poll interval of wait_until's bounded wait (2 s)
       true -> Process.sleep(5) && wait_until(fun, deadline)
     end
   end

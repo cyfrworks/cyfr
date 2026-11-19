@@ -54,6 +54,7 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
     end
 
     def handle(_tool, _ctx, %{"action" => "call", "value" => value}) do
+      # sleep-ok: the call's target, kept alive a second so the 20 ms call to it times out
       target = spawn(fn -> Process.sleep(1_000) end)
       GenServer.call(target, {:put, value}, 20)
     end

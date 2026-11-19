@@ -955,6 +955,7 @@ defmodule Arca.DecisionLogBudgetTest do
         flunk("the condition never held")
 
       true ->
+        # sleep-ok: poll interval of await_until's bounded wait (await/2, 5 s)
         Process.sleep(1)
         await_until(fun, deadline)
     end

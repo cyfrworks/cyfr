@@ -206,6 +206,8 @@ defmodule Arca.UnitHolderKilledTest do
   defp after_lock_down(action, remaining \\ 100) do
     case action.() do
       {:error, :stale_writer} when remaining > 0 ->
+        # sleep-ok: backoff of after_lock_down's bounded retry (100 tries) while global's monitor
+        # has not yet heard the DOWN
         Process.sleep(10)
         after_lock_down(action, remaining - 1)
 

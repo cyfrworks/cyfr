@@ -517,6 +517,7 @@ CI_RUNS = {
     ("test.yml", "static", "Compile with warnings as errors"): ["compile_sqlite_test"],
     ("test.yml", "static", "Boundary plants"): ["boundary_plants"],
     ("test.yml", "static", "Static analysis"): ["credo"],
+    ("test.yml", "static", "The sleep-reason check refuses a sleep with no reason"): ["credo_check"],
     ("test.yml", "static", "Check formatting"): ["format"],
     ("test.yml", "static", "The CLI catalog is the operation table's"): ["opsgen"],
     ("test.yml", "static", "The configuration guide is the roster's"): ["confguide"],
@@ -2404,7 +2405,7 @@ build_path '^test\|sqlite\|[^|]*\|[0-9]+\|[^|]*\|test ' _build/test
 build_path '^test\|sqlite\|[^|]*\|[^|]*\|[^|]*\|esbuild ' _build/test
 build_path "^dev\|sqlite\|[^|]*\|-\|$root\|compile --force" -
 build_path "^dev\|postgres\|[^|]*\|-\|$root\|compile --force" _build/dev_pg
-build_path "^-\|-\|[^|]*\|-\|$root\|(format|credo|ops.gen.cli|cyfr.gen.configuration_guide|dialyzer)" -
+build_path "^-\|-\|[^|]*\|-\|$root\|(format|credo|run --no-compile|ops.gen.cli|cyfr.gen.configuration_guide|dialyzer)" -
 build_path '^test\|postgres\|' _build/test_pg
 build_path '^[^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*/island_[^|]*\|' -
 # Every island phase runs under MIX_ENV=test, as CI's island jobs do, so

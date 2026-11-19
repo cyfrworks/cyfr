@@ -105,6 +105,7 @@ defmodule CyfrWeb.DeviceSessionPageTest do
     {:ok, [^session_id]} = Sanctum.DeviceUnlock.slide(ctx, [session_id])
 
     past = DateTime.diff(deadline, DateTime.utc_now(), :millisecond) + 500
+    # sleep-ok: the deadline the page was mounted under passes, by 500 ms
     if past > 0, do: Process.sleep(past)
     assert render(view) =~ "Settings"
   end

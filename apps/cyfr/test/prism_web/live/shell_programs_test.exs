@@ -168,6 +168,7 @@ defmodule PrismWeb.ShellProgramsTest do
     cond do
       fun.() -> true
       tries == 0 -> false
+      # sleep-ok: poll interval of eventually's bounded wait (50 tries)
       true -> Process.sleep(50) && eventually(fun, tries - 1)
     end
   end

@@ -85,6 +85,8 @@ defmodule Arca.Test.LockWait do
         """)
 
       true ->
+        # sleep-ok: poll interval of poll/4's deadline-bounded wait for the backend to wait on a
+        # lock
         Process.sleep(@poll_ms)
         poll(backend_pid, fragments, expected, deadline)
     end

@@ -118,6 +118,7 @@ defmodule Compendium.ProjectionReconcilerTest do
     cond do
       fun.() -> true
       attempts == 0 -> false
+      # sleep-ok: poll interval of eventually's bounded wait (100 tries, two seconds)
       true -> Process.sleep(20) && eventually(fun, attempts - 1)
     end
   end
@@ -372,6 +373,7 @@ defmodule Compendium.ProjectionReconcilerTest do
     test "not enabled, it starts, attaches nothing and ticks nothing", %{actor: actor, name: name} do
       {process, pid} = start!(enabled: false, interval_ms: 10)
       lay!(actor, name, "unwatched")
+      # sleep-ok: ten 10 ms ticks pass in which a reconciler not enabled must not catch up
       Process.sleep(100)
 
       refute caught_up?(actor)

@@ -84,8 +84,8 @@ class Element {
   addEventListener(type, handler) {
     ;(this.listeners[type] ||= []).push(handler)
   }
-  dispatch(type) {
-    for (const handler of this.listeners[type] || []) handler({target: this, key: "", preventDefault() {}, stopPropagation() {}})
+  dispatch(type, init = {}) {
+    for (const handler of this.listeners[type] || []) handler({target: this, key: "", preventDefault() {}, stopPropagation() {}, ...init})
   }
   elements() {
     return this.children.filter((c) => typeof c !== "string").flatMap((c) => [c, ...c.elements()])
@@ -142,10 +142,12 @@ function matches(e, selector) {
 }
 
 // The page of `version` at `width` by `height` CSS pixels, the person's preferences `document`, the
-// streams named in `refuse` refused at their first open with that class. Answers the streams it
-// opened (each a stand-in handle the test pushes events into), the presses and pages it asked for,
-// and a pump that runs the page's queued frames.
-async function street({version = "0.2.0", width = 1024, height = 600, protocol = "http/1.1", document: prefs = {}, refuse = {}} = {}) {
+// streams named in `refuse` refused at their first open with that class, the shell's `installed`
+// apps. Its timers run at once, or at their own delays on the test's clock with `clock`. Answers
+// the streams it opened (each a stand-in handle the test pushes events into), the presses and pages
+// it asked for, its opens of apps, each waiting until the test answers it (`openings`), and a pump
+// that runs the page's queued frames.
+async function street({version = "0.2.0", width = 1024, height = 600, protocol = "http/1.1", document: prefs = {}, refuse = {}, installed = null, clock = false} = {}) {
   const dir = new URL(`${version}/`, STREET)
   const html = readFileSync(new URL("index.html", dir), "utf8")
   const body = new Element("body")
@@ -155,12 +157,14 @@ async function street({version = "0.2.0", width = 1024, height = 600, protocol =
   const opened = []
   const presses = []
   const pages = []
-  const p = {opened, presses, pages, answer: {outcome: "accepted"}}
+  const openings = []
+  const p = {opened, presses, pages, openings, answer: {outcome: "accepted"}}
   const cyfr = {
     desktop: {prefs: {document: prefs, revision: 1}, appearance: {mode: "light", locale: "en", time_zone: "UTC", safe_areas: {}}, person: {name: "Noor"}},
     on(event, handler) {
       if (event === "state") (p.state = handler)("live")
       if (event === "posture") handler(width < 768 ? "hand" : "desk")
+      if (event === "installed" && installed) handler(installed)
       return () => {}
     },
     stream(name, subject, onEvent) {
@@ -180,7 +184,7 @@ async function street({version = "0.2.0", width = 1024, height = 600, protocol =
     settings: (...args) => pages.push(args),
     prefs: async (document) => ({outcome: "saved", document}),
     ask() {},
-    open() {},
+    open: (ref) => new Promise((answer) => openings.push({ref, answer})),
     grant() {},
     ready() {},
   }
@@ -199,7 +203,7 @@ async function street({version = "0.2.0", width = 1024, height = 600, protocol =
     addEventListener() {},
     // The page's pauses run at once here, so what it opens again is seen without waiting.
     setTimeout: (f, ms) => {
-      const t = setTimeout(f, Math.min(ms, 5))
+      const t = setTimeout(f, clock ? ms : Math.min(ms, 5))
       t.unref()
       return t
     },
@@ -630,11 +634,101 @@ describe("the street desktop 0.2.0", () => {
 // A daily thread's title: the ISO date `n` days from today, in UTC, the stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the street desktop 0.3.3", () => {
+describe("the street desktop 0.3.4", () => {
+  // An answer belongs to the board that asked: never another board, even
+  // the same app's opened again, and never the scrub view.
+  test("an open's answer shows only on the board that asked it, while it is the board shown and not scrubbed", async (t) => {
+    // The page's timers on the test's clock, which does not move here: every
+    // answer is inside its four seconds.
+    t.mock.timers.enable({apis: ["setTimeout", "Date"], now: Date.now()})
+    const MAPS = {ref: "tincture:local.maps", name: "Maps", icon: null, open: false}
+    const p = await street({version: "0.3.4", installed: [MAPS], clock: true})
+    const said = () => p.board().querySelector(".said")?.textContent ?? null
+    const tram = () => p.hits().find((h) => (h.getAttribute("aria-label") || "").startsWith("Now,"))
+
+    // Asked, then the board closed and the same app's board opened again.
+    tap(p, "App Maps")
+    await press(p, "Open Maps")
+    tap(p, "App Maps")
+    tap(p, "App Maps")
+    assert.ok(button(p, "Open Maps"))
+    p.openings.at(-1).answer({outcome: "refused", reason: "uncertain"})
+    await p.settle()
+    assert.equal(said(), null)
+    // Its own tap's answer still shows.
+    await press(p, "Open Maps")
+    p.openings.at(-1).answer({outcome: "cancelled"})
+    await p.settle()
+    assert.equal(said(), "Not opened: tap again")
+
+    // Words shown, then the day scrubbed: not on the scrub view, nor back on
+    // the board after it.
+    tram().dispatch("keydown", {key: "ArrowLeft"})
+    await p.settle()
+    assert.match(p.board().textContent, /^At /)
+    assert.equal(said(), null)
+    tram().dispatch("keydown", {key: "Escape"})
+    await p.settle()
+    assert.ok(button(p, "Open Maps"))
+    assert.equal(said(), null)
+
+    // Asked, then the day scrubbed before the answer: not on the scrub view,
+    // nor on the board after it.
+    await press(p, "Open Maps")
+    tram().dispatch("keydown", {key: "ArrowLeft"})
+    await p.settle()
+    p.openings.at(-1).answer({outcome: "refused", reason: "not_found"})
+    await p.settle()
+    assert.doesNotMatch(p.board().textContent, /It is no longer installed/)
+    tram().dispatch("keydown", {key: "Escape"})
+    await p.settle()
+    assert.ok(button(p, "Open Maps"))
+    assert.equal(said(), null)
+    assert.equal(p.openings.length, 3)
+  })
+
+  test("a tap on Open on an app's board that opens nothing says why on the board, the shipped canvas's words, for four seconds from the last answer; an open says nothing", async (t) => {
+    t.mock.timers.enable({apis: ["setTimeout", "Date"], now: Date.now()})
+    const MAPS = {ref: "tincture:local.maps", name: "Maps", icon: null, open: false}
+    const p = await street({version: "0.3.4", installed: [MAPS], clock: true})
+    tap(p, "App Maps")
+    const said = () => p.board().querySelector(".said")?.textContent ?? null
+    const answer = async (a) => {
+      const before = said()
+      await press(p, "Open Maps")
+      // The tap claims nothing before the shell answers.
+      assert.equal(said(), before)
+      p.openings.at(-1).answer(a)
+      await p.settle()
+      return said()
+    }
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
+    // Opened inside the four seconds: the earlier tap's words go at once.
+    assert.equal(await answer({outcome: "opened"}), null)
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
+    assert.equal(await answer({outcome: "opened"}), null)
+    // An open never answered may have opened: it says only that no answer came.
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
+    assert.doesNotMatch(p.board().textContent, /Not opened/)
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Not opened: tap again")
+    assert.deepEqual(p.openings.map((o) => o.ref), Array(7).fill(MAPS.ref))
+
+    // The same answer again three seconds on restarts the four seconds.
+    t.mock.timers.tick(3000)
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    t.mock.timers.tick(3999)
+    await p.settle()
+    assert.equal(said(), "Not opened: tap again")
+    t.mock.timers.tick(1)
+    await p.settle()
+    assert.equal(said(), null)
+  })
+
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the sky and the ferry with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
-    const p = await street({version: "0.3.3"})
+    const p = await street({version: "0.3.4"})
     assert.ok(labelled(p, sentence("weather")), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
     assert.ok(labelled(p, sentence("vpn")))
     // Their plates say it where the sun and the ferry stand, and their board when tapped.
@@ -653,14 +747,14 @@ describe("the street desktop 0.3.3", () => {
   })
 
   test("on a phone the board's cards say the same of a feed with no reading", async () => {
-    const p = await street({version: "0.3.3", width: 390, height: 844})
+    const p = await street({version: "0.3.4", width: 390, height: 844})
     assert.equal(p.plain(), false)
     assert.match(p.board().textContent, /No reading from the weather feed yet ?To bind one, ask Aqua for a feed named weather/)
     assert.match(p.board().textContent, /No reading from the vpn feed yet ?To bind one, ask Aqua for a feed named vpn/)
   })
 
   test("today's daily thread is a house read Today that opens Aqua, an earlier day's stands nowhere, a workspace thread opens Aqua and a shared one the chat", async () => {
-    const p = await street({version: "0.3.3"})
+    const p = await street({version: "0.3.4"})
     picture(p.stream("runs.changes"), [])
     picture(p.stream("threads.changes"), [
       {kind: "daily", id: "th-today", title: day(0), people: ["Noor"], last_activity: at(-30), waits_on_you: false, unread: 2},
@@ -691,7 +785,7 @@ describe("the street desktop 0.3.3", () => {
   test("the newest daily thread's house reads Yesterday a day back, and its date further back", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
-      const p = await street({version: "0.3.3"})
+      const p = await street({version: "0.3.4"})
       picture(p.stream("threads.changes"), [{kind: "daily", id: "th-1", title: day(n), people: ["Noor"], last_activity: at(-30), waits_on_you: false, unread: 0}])
       p.pump(5)
       assert.ok(labelled(p, `Thread ${words}, with Aqua`), p.hits().map((h) => h.getAttribute("aria-label")).join(" | "))
@@ -701,7 +795,7 @@ describe("the street desktop 0.3.3", () => {
   test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     const named = ["Today", "Yesterday", date, "builder"]
-    const p = await street({version: "0.3.3"})
+    const p = await street({version: "0.3.4"})
     picture(p.stream("attention.changes"), [[day(0), day(0), "th-0"], [day(-1), day(-1), "th-1"], [day(-3), day(-3), "th-3"], ["builder", null, "th-crew"]].map(([label, d, ref], i) =>
       waiting(`ap-${i}`, "approval", {kind: "page", page: "aqua", ref}, {label, day: d, since: at(i * 10 - 60)})))
     p.pump(5)
@@ -713,7 +807,7 @@ describe("the street desktop 0.3.3", () => {
   })
 
   test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
-    const p = await street({version: "0.3.3"})
+    const p = await street({version: "0.3.4"})
     picture(p.stream("attention.changes"), [waiting("ap-crew", "approval", {kind: "page", page: "aqua", ref: "th-crew"}, {label: "2026-11-15", day: null, since: at(-30)})])
     p.pump(5)
     const asks = p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Waiting on you: an approval"))
@@ -738,7 +832,7 @@ describe("the street desktop 0.3.3", () => {
   const houses = (p) => p.hits().map((h) => h.getAttribute("aria-label") || "").filter((l) => l.startsWith("Thread ")).map((l) => l.slice(7).split(", ")[0]).sort()
   const flip = (p) => (button(p, "Archived").dispatch("click"), p.pump())
   async function built(threads) {
-    const p = await street({version: "0.3.3"})
+    const p = await street({version: "0.3.4"})
     picture(p.stream("runs.changes"), [])
     picture(p.stream("threads.changes"), threads)
     p.pump(5)
@@ -801,7 +895,7 @@ describe("the street desktop 0.3.3", () => {
   })
 
   test("the Archived key stands on the board only while the thread houses are on", async () => {
-    const p = await street({version: "0.3.3", document: {widgets: {houses: {on: false}}}})
+    const p = await street({version: "0.3.4", document: {widgets: {houses: {on: false}}}})
     assert.ok(button(p, "Arrange"))
     assert.equal(button(p, "Archived"), undefined)
   })

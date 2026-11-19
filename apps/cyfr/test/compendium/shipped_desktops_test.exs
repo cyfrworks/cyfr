@@ -4,7 +4,7 @@
 defmodule Compendium.ShippedDesktopsTest do
   @moduledoc """
   The shipped desktops each ship a new version beside the one before it:
-  the five at 0.3.3 beside 0.2.0, and the shipped canvas at 0.6.4 beside
+  the five at 0.3.4 beside 0.2.0, and the shipped canvas at 0.6.4 beside
   0.6.0. An athanor filled while only the earlier version shipped sees an
   update once the seed carries the new one, and one filled from the seed
   holds both versions as the components list reads them, the earlier
@@ -18,11 +18,11 @@ defmodule Compendium.ShippedDesktopsTest do
   # Each desktop, the version before its newest and its newest.
   @shipped [
     {"canvas", "0.6.0", "0.6.4"},
-    {"line", "0.2.0", "0.3.3"},
-    {"night", "0.2.0", "0.3.3"},
-    {"road", "0.2.0", "0.3.3"},
-    {"street", "0.2.0", "0.3.3"},
-    {"switchboard", "0.2.0", "0.3.3"}
+    {"line", "0.2.0", "0.3.4"},
+    {"night", "0.2.0", "0.3.4"},
+    {"road", "0.2.0", "0.3.4"},
+    {"street", "0.2.0", "0.3.4"},
+    {"switchboard", "0.2.0", "0.3.4"}
   ]
   @names Enum.map(@shipped, &elem(&1, 0))
 

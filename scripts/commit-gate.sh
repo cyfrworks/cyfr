@@ -16,7 +16,8 @@
 # cyfr-gate-<pid>-gate-, whatever PROOF_RUN_PREFIX it was given. Legs:
 #   static    SQLite test compile and forced dev compile (warnings as
 #             errors, so every Boundary declaration is checked), format,
-#             credo, ops.gen.cli --check, cyfr.gen.configuration_guide
+#             credo and its own check's test (tests/credo),
+#             ops.gen.cli --check, cyfr.gen.configuration_guide
 #             --check, the dev stack's compose override
 #             (tests/dev-stack/compose-test.sh), the console's JavaScript tests and its lint (npm ci
 #             and npx eslint, as CI's JavaScript job), the test WASM
@@ -325,7 +326,7 @@ deadline_for() {
   # A step of a CI job (run_job) takes the job's own timeout.
   if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|account_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|registry_stand_in|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|credo_check|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|account_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|registry_stand_in|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants|locus_island) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -345,7 +346,7 @@ deadline_for() {
 PG_SERVER=postgres://cyfr:cyfr@localhost:5432
 
 # The steps of a leg, for the deadline of a leg that waits on it.
-STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide devstack js_suite eslint wasm_tools test_wasm sdk_bundle account_bundle seed_canvas boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check registry_stand_in dialyzer boundary_plants sqlite_suite'
+STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo credo_check opsgen confguide devstack js_suite eslint wasm_tools test_wasm sdk_bundle account_bundle seed_canvas boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check registry_stand_in dialyzer boundary_plants sqlite_suite'
 steps_of() {
   case "$1" in
     static) echo "$STATIC_STEPS" ;;
@@ -401,6 +402,7 @@ leg_static() {
   step static compile_sqlite_dev env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors || return
   step static format mix format --check-formatted || return
   step static credo mix credo --strict || return
+  step static credo_check mix run --no-compile --no-start tests/credo/sleep-reason-test.exs || return
   step static opsgen mix ops.gen.cli --check || return
   step static confguide mix cyfr.gen.configuration_guide --check || return
   step static devstack bash tests/dev-stack/compose-test.sh || return

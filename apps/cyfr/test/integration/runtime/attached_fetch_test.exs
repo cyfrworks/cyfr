@@ -82,6 +82,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
       <<first::binary-size(^half), second::binary>> = key
       conn = conn |> put_resp_header("x-echo", key) |> send_chunked(200)
       {:ok, conn} = chunk(conn, String.duplicate("a", 40_000) <> " key: " <> first)
+      # sleep-ok: the stub's two writes arrive apart, so no one piece holds the key whole
       Process.sleep(100)
       {:ok, conn} = chunk(conn, second <> " tail")
       conn

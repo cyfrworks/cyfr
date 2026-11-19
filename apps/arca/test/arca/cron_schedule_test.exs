@@ -1061,6 +1061,8 @@ defmodule Arca.CronScheduleTakeoverTest do
       end)
 
     unless expired? do
+      # sleep-ok: poll interval of await_expiry's bounded wait (500 tries) for the member's lease
+      # to run out
       Process.sleep(20)
       await_expiry(node, tries - 1)
     end

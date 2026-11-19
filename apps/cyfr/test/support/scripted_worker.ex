@@ -735,6 +735,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         next(runner, crash_after?)
 
       {:sleep, ms} ->
+        # sleep-ok: the {:sleep, ms} step a test's script asks for: the worker's own delay
         Process.sleep(ms)
         next(runner, crash_after?)
 

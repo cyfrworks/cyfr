@@ -1,7 +1,7 @@
 {
   "name": "road",
   "type": "tincture",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "local",
   "description": "Your place as a pixel village by a river. Your schedules are a cobbled road the capybara runs: it hops each firing that ran, trips on one that failed and steps over a paused one, and dragging the road looks back or ahead while the village shows that hour. What waits on you queues outside your house, your threads are post boxes, your crew walks the street, your apps fill the market, your vault is a strongroom, how CYFR stands is a silo, your files are an archive, and a weather feed and a vpn feed turn the windmill and run the tram. Pause or resume a schedule, or run a failed run again, with a tap; turn parts on or off and move them along the street.",
   "tags": ["canvas", "desktop"],
