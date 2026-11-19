@@ -450,6 +450,11 @@ framed() {
   [ "$(grep -c '^_START=' "$scratch/$1.out")" = 1 ] && [ "$(grep -c '^_EXIT=' "$scratch/$1.out")" = 1 ] ||
     fail "$1: a terminal line that is not the gate's own: $(grep -E '^_(START|EXIT)=' "$scratch/$1.out" | tr '\n' ' ')"
 }
+# What the gate NAME wrote, for the message of a case that failed.
+said() {
+  printf '\n--- the gate wrote on stdout ---\n'; cat "$scratch/$1.out"
+  printf -- '--- and on stderr ---\n'; cat "$scratch/$1.err"
+}
 
 # --- what the gate leaves out ------------------------------------------------
 # ci_roster GATE WORKFLOWS: every step of every workflow a pull request
@@ -2462,30 +2467,80 @@ start_gate int STUB_HOLD=sqlite_test_compile -- "$gate" -n 2 -l "$scratch/int.lo
 i=$gate_pid
 until_true 60 test -s "$scratch/int.trace/held.sqlite_test_compile" || fail "the INT case's step never started: $(cat "$scratch/int.err")"
 held=$(cat "$scratch/int.trace/held.sqlite_test_compile")
-alive "$held" || fail 'the held step was not running before the INT'
+alive "$held" || fail "the held step was not running before the INT$(said int)"
 kill -INT "$i"
-gate_status "$i"; [ "$gate_rc" = 130 ] || fail 'a gate given INT did not exit 130'
-framed int "$i" 130
-dead "$held" || fail 'a step outlived a gate given INT'
+gate_status "$i"
+# Whichever check fails says what the gate's wait returned and what the
+# gate wrote.
+got=": the gate's wait returned $gate_rc (130 expected, and 130 on its last line)$(said int)"
+[ "$gate_rc" = 130 ] || fail "a gate given INT did not exit 130$got"
+(framed int "$i" 130) || fail "the INT case's gate was not framed$got"
+dead "$held" || fail "a step outlived a gate given INT$got"
 echo 'ok: INT'
 
 # --- HUP, and a signal the gate does not trap --------------------------------------
 # HUP stops the gate as TERM does, with 129. USR1 is not trapped: Bash runs
 # the EXIT trap with $? at 0 and then dies of it, and the exit line must
-# still not say 0.
+# still not say 0: its wait returns 138 and its last line says 1.
 for spec in hup:HUP:129:129 usr1:USR1:1:138; do
   IFS=: read -r name sig line want <<<"$spec"
   start_gate "$name" STUB_HOLD=sqlite_test_compile -- "$gate" -n 2 -l "$scratch/$name.log"
   p=$gate_pid
   until_true 60 test -s "$scratch/$name.trace/held.sqlite_test_compile" || fail "the $sig case's step never started: $(cat "$scratch/$name.err")"
   held=$(cat "$scratch/$name.trace/held.sqlite_test_compile")
-  alive "$held" || fail "the held step was not running before the $sig"
+  alive "$held" || fail "the held step was not running before the $sig$(said "$name")"
   kill -"$sig" "$p"
-  gate_status "$p"; [ "$gate_rc" = "$want" ] || fail "a gate given $sig exited $gate_rc, not $want"
-  framed "$name" "$p" "$line"
-  dead "$held" || fail "a step outlived a gate given $sig"
+  gate_status "$p"
+  got=": the gate's wait returned $gate_rc ($want expected, and $line on its last line)$(said "$name")"
+  [ "$gate_rc" = "$want" ] || fail "a gate given $sig did not exit $want$got"
+  (framed "$name" "$p" "$line") || fail "the $sig case's gate was not framed$got"
+  dead "$held" || fail "a step outlived a gate given $sig$got"
 done
 echo 'ok: HUP, and an untrapped USR1 not reported as success'
+
+# --- a forked copy of the gate runs none of the gate's exit ----------------------
+# A child Bash has just forked is a copy of the gate until it first runs,
+# and a signal that ends it before then runs the gate's EXIT trap in it. So
+# the gate itself, once its fetch is held, forks twenty children and
+# signals each at once (a sleep it calls stands in for the place); what a
+# copy did would show as an exit line under the gate's pid and a stopped
+# fetch, with the gate still running.
+{
+  printf '. "%s"\n' "$scratch/stub.bash_env"
+  cat <<'FAKE'
+case "$0:${1:-}" in
+  */scripts/commit-gate.sh:--leg) ;;
+  */scripts/commit-gate.sh:*)
+    sleep() {
+      if [ "$BASHPID" = "$$" ] && [ -s "$TRACE/held.prebuilt_fetch" ] && [ ! -e "$TRACE/forking" ]; then
+        : > "$TRACE/forking"
+        local i=0 c
+        while [ "$i" -lt 20 ]; do
+          command sleep 1 &
+          c=$!
+          kill -USR1 "$c" 2>/dev/null
+          wait "$c" 2>/dev/null
+          i=$((i + 1))
+        done
+        : > "$TRACE/forked"
+      fi
+      command sleep "$@"
+    } ;;
+esac
+FAKE
+} > "$scratch/fork.bash_env"
+start_gate fork BASH_ENV="$scratch/fork.bash_env" STUB_HOLD=prebuilt_fetch -- "$gate" -n 2 -l "$scratch/fork.log"
+f=$gate_pid
+until_true 120 test -e "$scratch/fork.trace/forked" || fail "the fork case's gate never forked its children$(said fork)"
+no_line '^_EXIT=' "$scratch/fork.out" || fail "a forked copy of the gate wrote the gate's exit line$(said fork)"
+alive "$f" || fail "the gate did not outlive its forked copies$(said fork)"
+fetch=$(cat "$scratch/fork.trace/held.prebuilt_fetch")
+alive "$fetch" || fail "a forked copy of the gate stopped the fetch the gate runs$(said fork)"
+kill -TERM "$f"
+gate_status "$f"; [ "$gate_rc" = 143 ] || fail "the fork case's gate, given TERM, exited $gate_rc, not 143$(said fork)"
+(framed fork "$f" 143) || fail "the fork case's gate was not framed$(said fork)"
+dead "$fetch" || fail "the held fetch outlived the fork case's gate"
+echo 'ok: a forked copy of the gate runs none of its exit'
 
 # --- SIGKILL: the watchdogs stop every leg and step ------------------------------
 # What a SIGKILLed gate leaves is read from the sessions its registry names,
