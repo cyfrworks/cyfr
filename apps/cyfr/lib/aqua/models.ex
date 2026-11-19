@@ -735,6 +735,12 @@ defmodule Aqua.Models do
   driver, which must be one that starts its harness read-only. Codex's
   sandbox cannot start in the box, so its driver refuses a read-only
   start (`cyfr-codex`), and a member on such a row is refused before it.
+  The row's driver is the one `Arca.McpServerStorage.driver/1` names, by
+  its name or its installed path. A Codex row whose command reaches the
+  driver another way (through `env` or `sh -c`, or from another path)
+  names none, so it passes this check and is refused by the driver
+  itself when the program starts, which the person reads as a start that
+  could not be made.
   """
   @spec holds_read_only?({:needs, [map()] | nil} | {:driver, String.t() | nil}) :: boolean()
   def holds_read_only?({:needs, needs}), do: not Prima.Manifest.Needs.login?(needs)
