@@ -369,7 +369,7 @@ export default {
         break
 
       case "focus-first": {
-        const [first] = this.stops()
+        const first = firstFocus(this.dialog, this.stops())
         if (first) first.focus()
         break
       }
@@ -411,6 +411,17 @@ export default {
 }
 
 /**
+ * Where a prompt's focus starts: the element it marks `data-focus-first`,
+ * which a question's card marks on its heading so that neither a choice
+ * nor its scrolling block holds focus as it opens; otherwise its first
+ * stop.
+ */
+export function firstFocus(dialog, stops) {
+  const marked = dialog.querySelector("[data-focus-first]")
+  return marked || stops[0] || null
+}
+
+/**
  * Show each `time[data-local]` under `root` in the browser's own time zone
  * and locale: the server writes the instant as it answers it, in UTC, and
  * writes it again on every update, which this rewrites again.
@@ -419,6 +430,19 @@ export function localTimes(root, locale = undefined) {
   for (const time of root.querySelectorAll("time[data-local]")) {
     const at = new Date(time.getAttribute("datetime"))
     if (!Number.isNaN(at.getTime())) time.textContent = at.toLocaleString(locale)
+  }
+}
+
+/**
+ * A page's own `time[data-local]` shown in the browser's time zone, as the
+ * layer shows its prompts' (`localTimes/2`): on mount and on every update.
+ */
+export const LocalTimes = {
+  mounted() {
+    localTimes(this.el)
+  },
+  updated() {
+    localTimes(this.el)
   }
 }
 

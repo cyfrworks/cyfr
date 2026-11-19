@@ -233,8 +233,11 @@ defmodule PrismWeb.SystemLayer do
   none. A choice sends its answer through `question.answer`; closing the
   card without choosing is "Don't allow", once. A card reports to the page
   `:confirmed` once its answer is kept, and `:dismissed` when it is
-  closed, so a page that lists permissions reads them again; a card taken
-  away by its question's own end reports nothing.
+  closed, so a page that lists permissions reads them again; every other
+  answer the layer hears of, given on another of the person's screens, is
+  reported `:confirmed` under its card's id whether or not the layer drew
+  that card, once for each question. A question's expiry or withdrawal
+  reports nothing.
 
   "Always allow" for any caller needs a fresh confirmation. It is the
   layer's own change: its confirmation is drawn inside the card, which
@@ -248,7 +251,10 @@ defmodule PrismWeb.SystemLayer do
 
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
-  and returns focus on close; Escape dismisses every prompt.
+  and returns focus on close; Escape dismisses every prompt. Focus enters
+  at the prompt's first control, except on a question's card, where it
+  enters at the heading (`data-focus-first`), so that Enter answers
+  nothing and no choice or scrolling block is ringed as the card opens.
   While a modal prompt is open on any layer of the page, every frame is
   hidden and inert, so no frame holds the pointer or the screen over it.
   Every event the layer pushes names it (`layer`, its id), because a page
@@ -781,7 +787,8 @@ defmodule PrismWeb.SystemLayer do
        restore_places: %{},
        restore_notice: nil,
        restore_error: nil,
-       reenabling: %{}
+       reenabling: %{},
+       answered_here: MapSet.new()
      )}
   end
 
@@ -1001,8 +1008,14 @@ defmodule PrismWeb.SystemLayer do
       else: socket
   end
 
+  defp on_fact(socket, %{"kind" => :question, "ref" => ref, "fact" => :answered})
+       when is_binary(ref) do
+    id = Prompt.question_id(ref)
+    socket |> answered(id) |> end_question(id)
+  end
+
   defp on_fact(socket, %{"kind" => :question, "ref" => ref, "fact" => ended})
-       when is_binary(ref) and ended in [:answered, :expired, :withdrawn],
+       when is_binary(ref) and ended in [:expired, :withdrawn],
        do: end_question(socket, Prompt.question_id(ref))
 
   defp on_fact(socket, _fact), do: socket
@@ -1023,6 +1036,34 @@ defmodule PrismWeb.SystemLayer do
         socket
     end
   end
+
+  # A question of the person's was answered: the page is told
+  # `:confirmed`, since the answer may have left a permission, whether
+  # this layer drew its card or not, as when the question opened and was
+  # answered elsewhere before this page took its facts. An answer this
+  # layer sent itself was reported when it landed (`answered_here/2`), so
+  # its fact reports nothing again. A layer that draws no others' records
+  # tells its page nothing.
+  defp answered(socket, prompt_id) do
+    here = socket.assigns.answered_here
+
+    cond do
+      MapSet.member?(here, prompt_id) ->
+        assign(socket, :answered_here, MapSet.delete(here, prompt_id))
+
+      shows_others?(socket) ->
+        report(prompt_id, :confirmed)
+        socket
+
+      true ->
+        socket
+    end
+  end
+
+  # An answer this layer sent landed, and its page was told: its fact,
+  # arriving after, is not told again.
+  defp answered_here(socket, prompt_id),
+    do: assign(socket, :answered_here, MapSet.put(socket.assigns.answered_here, prompt_id))
 
   # A question that stopped waiting: its card goes, open or waiting, and
   # a confirmation it waited on is cancelled.
@@ -1509,7 +1550,7 @@ defmodule PrismWeb.SystemLayer do
           _settled = settle_request(prompt.subject, :resolved)
           socket = end_own_request(socket, prompt)
           if reports?(socket, prompt), do: report(id, :dismissed)
-          dismiss_question(socket, prompt)
+          socket = dismiss_question(socket, prompt)
 
           {:noreply,
            socket
@@ -2484,24 +2525,36 @@ defmodule PrismWeb.SystemLayer do
 
       {:done, {:ok, _answered}, socket} ->
         report(prompt.id, :confirmed)
-        remove_prompt(socket, prompt.id)
+        socket |> answered_here(prompt.id) |> remove_prompt(prompt.id)
 
       {:done, {:error, reason}, socket} ->
-        cond do
-          no_longer_waiting?(reason) -> remove_prompt(socket, prompt.id)
-          shown?(socket, prompt) -> assign(socket, :error, Ops.error_message(reason))
-          true -> socket
-        end
+        if no_longer_waiting?(reason),
+          do: remove_prompt(socket, prompt.id),
+          else: question_refused(socket, prompt.id, reason)
     end
+  end
+
+  # A refusal is said on its own card, kept by the card's id wherever it
+  # stands, shown or waiting behind another's confirmation, as an ended
+  # confirmation's words are (`confirmation_ended/3`). An answer that
+  # lasts refused because no installed version asks for the permission in
+  # these words would be refused again: from then on the card offers only
+  # the answers given once.
+  defp question_refused(socket, id, reason) do
+    once_only? = match?(%Prima.Refusal{reason: :removed}, reason)
+
+    update_prompt(socket, id, fn prompt ->
+      prompt = Map.put(prompt, :said, Ops.error_message(reason))
+
+      if once_only?,
+        do: Map.put(prompt, :choice, Map.put(Question.choice(prompt), :once_only, true)),
+        else: prompt
+    end)
   end
 
   defp ended_words(:cancelled), do: "The confirmation was cancelled."
   defp ended_words(:voided), do: "The confirmation was withdrawn."
   defp ended_words(:expired), do: "The confirmation expired."
-
-  # A refusal is said on the card only while it is the one shown.
-  defp shown?(%{assigns: %{current: %{id: id}}}, %{id: id}), do: true
-  defp shown?(_socket, _prompt), do: false
 
   defp no_longer_waiting?(%Prima.Refusal{reason: :not_pending}), do: true
   defp no_longer_waiting?({:not_found, "question", _ref}), do: true
@@ -2509,14 +2562,18 @@ defmodule PrismWeb.SystemLayer do
 
   # A card closed without a choice is "Don't allow", once, whatever its
   # store answers: the card goes either way, and comes back with the next
-  # read of what waits if the answer did not land.
-  defp dismiss_question(socket, %{kind: :question, subject: %{ref: ref}}) do
+  # read of what waits if the answer did not land. Its page was told
+  # `:dismissed`, so an answer that landed is not told again.
+  defp dismiss_question(socket, %{kind: :question, subject: %{ref: ref}} = prompt) do
     {:ok, answer} = Question.answer("deny_once", false)
-    _answered = Ops.call_tool(socket, "question/answer", %{"ref" => ref, "answer" => answer})
-    :ok
+
+    case Ops.call_tool(socket, "question/answer", %{"ref" => ref, "answer" => answer}) do
+      {:ok, _answered} -> answered_here(socket, prompt.id)
+      _unanswered -> socket
+    end
   end
 
-  defp dismiss_question(_socket, _prompt), do: :ok
+  defp dismiss_question(socket, _prompt), do: socket
 
   defp put_question_choice(socket, prompt, change),
     do:
@@ -2837,7 +2894,12 @@ defmodule PrismWeb.SystemLayer do
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
-          <h2 id={"#{@id}-title"} class="text-lg font-semibold">
+          <h2
+            id={"#{@id}-title"}
+            tabindex={if @shown.kind == :question, do: "-1"}
+            data-focus-first={@shown.kind == :question}
+            class="text-lg font-semibold focus:outline-none"
+          >
             {title(@shown)}
           </h2>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">

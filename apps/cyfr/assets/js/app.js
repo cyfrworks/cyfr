@@ -17,7 +17,7 @@ import FlashAutoHide from "./hooks/flash_auto_hide"
 import Terminal from "./hooks/terminal"
 import WorkspaceStream from "./hooks/workspace_stream"
 import Canvas from "./canvas/index"
-import SystemLayer from "./system_layer/index"
+import SystemLayer, {LocalTimes} from "./system_layer/index"
 import {completeUnlock} from "./device_unlock"
 
 // A protected device's unlock page posts the ticket its fragment carries,
@@ -44,6 +44,7 @@ Hooks.AquaPanelKeys = AquaPanelKeys
 Hooks.MarkdownContent = MarkdownContent
 Hooks.Canvas = Canvas
 Hooks.SystemLayer = SystemLayer
+Hooks.LocalTimes = LocalTimes
 
 Hooks.FlashAutoHide = FlashAutoHide
 Hooks.Terminal = Terminal

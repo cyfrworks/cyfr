@@ -15,6 +15,11 @@
 # within the last 26 hours; its own runs never count. It costs one failed
 # run a day while the host is off, asleep past the night or cannot reach
 # GitHub.
+#
+# Each job's red also reaches an issue of a fixed title, which its next
+# green closes (scripts/ci/reds.py nightly and watchdog): after the check,
+# whatever it answered, the job checks out that one script and runs it on
+# the check's outcome and the report's inputs.
 name: Host nightly
 run-name: ${{ github.event_name == 'schedule' && 'Host nightly watchdog' || format('Host nightly of {0}, exit {1}', inputs.commit, inputs.status) }}
 on:
@@ -46,6 +51,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
     steps:
       # The inputs are the host's, read only through the environment and
       # held to what scripts/nightly.sh sends before any is printed. The
@@ -54,6 +62,7 @@ jobs:
       # accepted input holds free text: a nightly row is never skipped, and
       # each pattern below admits neither # nor [ nor a carriage return.
       - name: The stage exited 0
+        id: check
         env:
           COMMIT: ${{ inputs.commit }}
           STATUS: ${{ inputs.status }}
@@ -87,6 +96,24 @@ jobs:
             echo "::error::the host's nightly of $COMMIT exited $STATUS: a check failed or did not run; its logs are in $LOGS on the host"
             exit 1
           fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          sparse-checkout: scripts/ci/reds.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: The night's issue
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OUTCOME: ${{ steps.check.outcome }}
+          COMMIT: ${{ inputs.commit }}
+          STATUS: ${{ inputs.status }}
+          SUMMARY: ${{ inputs.summary }}
+          LOGS: ${{ inputs.logs }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 -I scripts/ci/reds.py nightly
 
   watchdog:
     name: A report arrived from the host
@@ -95,10 +122,13 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
+      contents: read
+      issues: write
     steps:
       # The query asks GitHub for the completed workflow_dispatch runs, and
       # the filter holds each run to that itself.
       - name: A report run completed within 26 hours
+        id: check
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -115,3 +145,17 @@ jobs:
             exit 1
           fi
           echo "$count report runs from the host since $since"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          sparse-checkout: scripts/ci/reds.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: The silence's issue
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OUTCOME: ${{ steps.check.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 -I scripts/ci/reds.py watchdog

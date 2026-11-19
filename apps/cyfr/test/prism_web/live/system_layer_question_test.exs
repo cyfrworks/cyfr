@@ -152,6 +152,14 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
   defp more(view), do: view |> element(~s([data-test="question-more"])) |> render_click()
 
+  # The choices the card offers, in their order.
+  defp offered(view) do
+    view
+    |> render()
+    |> find(~s([data-test="question-choice"]))
+    |> Enum.map(&hd(LazyHTML.attribute(&1, "data-choice")))
+  end
+
   # A passkey's proof given from `view`: the layer opens the account pages
   # with the record's request, and the person's passkey answers it there.
   defp prove_here!(view, ref, authenticator) do
@@ -220,6 +228,21 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       # A screen opened while it waits reads it at its first open.
       third = screen!(setup)
       assert open_prompt(third) == id
+      end_views()
+    end
+
+    test "takes its first focus on its heading, which is no Tab stop, and not on a choice or the block",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+
+      # The browser half focuses the one element marked `data-focus-first`
+      # (`firstFocus` in assets/js/system_layer/index.js).
+      assert [heading] = find(render(view), "[data-focus-first]")
+      assert LazyHTML.tag(heading) == ["h2"]
+      assert LazyHTML.attribute(heading, "tabindex") == ["-1"]
+      assert LazyHTML.text(heading) =~ "wants to delete a table"
       end_views()
     end
 
@@ -541,7 +564,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
   # ---------------------------------------------------------------------------
 
   describe "the component's words" do
-    test "a long operation stays in its own scrolling block, below CYFR's rows and above the choices",
+    test "a long operation stays in its own scrolling block, below the summary, CYFR's rows and above the choices",
          setup do
       view = screen!(setup)
       operation = Enum.map_join(1..400, "\n", &"DELETE FROM t#{&1} WHERE true;")
@@ -558,6 +581,15 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
       assert block |> find(~s([data-test="question-operation"])) |> hd() |> LazyHTML.text() =~
                "t400 WHERE"
+
+      # The summary stays in view above the block, which scrolls the
+      # operation alone.
+      assert find(block, ~s([data-test="question-summary"])) == []
+
+      assert html
+             |> find(~s([data-test="question-words"] > [data-test="question-summary"]))
+             |> length() ==
+               1
 
       # The choices and CYFR's rows are outside the block, and the
       # masking is said.
@@ -718,6 +750,10 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         assert Q.standing(setup.ctx) == []
         refute_received {:answered, ^ref}
 
+        # Only the answers given once are offered from then on.
+        assert offered(view) == ["deny_once", "allow_once"]
+        refute has_element?(view, ~s([data-test="question-more"]))
+
         choose(view, "allow_once")
         assert_receive {:answered, ^ref}
         assert Q.row(setup.ctx, ref).state == "allowed"
@@ -765,6 +801,84 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         shows!(first, Prompt.question_id(ref))
         Q.end!(setup.ctx, run, stage)
         wait_until(fn -> open_prompt(first) == nil end, 2_000, "#{stage}")
+      end
+
+      end_views()
+    end
+
+    # A page that lists permissions reads them again on `:confirmed`. An
+    # answer given away from this screen (here no screen at all) is
+    # reported once, whether its card is drawn, queued or was never drawn
+    # here; one given or dismissed on this screen is reported once, as it
+    # landed; an expiry or a withdrawal reports nothing, since no
+    # permission can come of it.
+    test "each answer is reported once, wherever it was given; expired or withdrawn nothing",
+         setup do
+      view = screen!(setup)
+      {:ok, once} = PrismWeb.SystemLayer.Question.answer("allow_once", false)
+
+      answer_elsewhere = fn ref ->
+        assert {:ok, _answered} =
+                 PrismWeb.Ops.call_tool(setup.ctx, "question/answer", %{
+                   "ref" => ref,
+                   "answer" => once
+                 })
+      end
+
+      reported_once = fn id, outcome ->
+        assert_receive {:host, {:system_layer, ^id, ^outcome}}, 2_000
+        refute_receive {:host, {:system_layer, ^id, _again}}, 300
+      end
+
+      # Drawn, and a second queued behind it.
+      {_run, drawn} = Q.open!(setup.ctx, setup.component)
+      drawn_id = Prompt.question_id(drawn)
+      shows!(view, drawn_id)
+      {_run, queued} = Q.open!(setup.ctx, setup.component)
+      queued_id = Prompt.question_id(queued)
+
+      wait_until(
+        fn -> Enum.map(layer_assigns(view).queue, & &1.id) == [queued_id] end,
+        2_000,
+        "the second card queued"
+      )
+
+      answer_elsewhere.(queued)
+      reported_once.(queued_id, :confirmed)
+      assert %{current: %{id: ^drawn_id}, queue: []} = layer_assigns(view)
+
+      answer_elsewhere.(drawn)
+      reported_once.(drawn_id, :confirmed)
+      wait_until(fn -> open_prompt(view) == nil end, 2_000, "answered elsewhere")
+
+      # Never drawn: opened and answered while the page took no facts.
+      :ok = :sys.suspend(view.pid)
+      {_run, unseen} = Q.open!(setup.ctx, setup.component)
+      answer_elsewhere.(unseen)
+      :ok = :sys.resume(view.pid)
+      reported_once.(Prompt.question_id(unseen), :confirmed)
+      assert open_prompt(view) == nil
+
+      # Given here, and dismissed here.
+      {_run, here} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(here))
+      choose(view, "allow_once")
+      reported_once.(Prompt.question_id(here), :confirmed)
+
+      {_run, closed} = Q.open!(setup.ctx, setup.component)
+      closed_id = Prompt.question_id(closed)
+      shows!(view, closed_id)
+      view |> with_target("#system-layer") |> render_click("dismiss", %{"id" => closed_id})
+      assert Q.row(setup.ctx, closed).state == "denied"
+      reported_once.(closed_id, :dismissed)
+
+      for stage <- [:expired, :withdrawn] do
+        {run, ref} = Q.open!(setup.ctx, setup.component)
+        id = Prompt.question_id(ref)
+        shows!(view, id)
+        Q.end!(setup.ctx, run, stage)
+        wait_until(fn -> open_prompt(view) == nil end, 2_000, "#{stage}")
+        refute_receive {:host, {:system_layer, ^id, _outcome}}, 200
       end
 
       end_views()
@@ -890,6 +1004,71 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert Q.row(setup.ctx, first).state == "allowed"
       assert [%{action: "delete_table", caller: "any", until: nil}] = Q.standing(setup.ctx)
       assert Q.row(setup.ctx, second).state == "open"
+      end_views()
+    end
+
+    test "an answer refused while another's confirmation stands in front keeps its words and " <>
+           "the answers given once on its card",
+         setup do
+      authenticator = Sanctum.TestContext.passkey!(setup.user.user_id)
+      asking = screen!(setup)
+      proving = screen!(setup)
+      {_run, first} = Q.open!(setup.ctx, setup.component)
+      first_card = Prompt.question_id(first)
+      shows!(asking, first_card)
+      choose(asking, "allow_always")
+      original = waited_ref(asking)
+      shows!(proving, Prompt.confirmation_id(original), "the first confirmation")
+
+      {_run, second} =
+        Q.open!(setup.ctx, setup.component, request: %{action: "delete_rows"})
+
+      assert {:error, {:confirmation_required, %{id: second_id}}} =
+               PrismWeb.Ops.call_tool(view_context(proving), "question/answer", %{
+                 "ref" => second,
+                 "answer" => %{"effect" => "allow", "lasts" => "always", "covers" => "any_caller"}
+               })
+
+      in_front = Prompt.confirmation_id(Prima.Confirmation.ref(second_id))
+      shows!(asking, in_front, "in front")
+
+      # The release that declares the action leaves while the first card
+      # waits behind: its answer, repeated once proved, is refused there.
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Context.actor(setup.ctx),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      prove_here!(proving, original, authenticator)
+
+      wait_until(
+        fn ->
+          Enum.any?(layer_assigns(asking).queue, &(&1.id == first_card and &1[:said] != nil))
+        end,
+        2_000,
+        "the refusal kept on the waiting card"
+      )
+
+      asking
+      |> with_target("#system-layer")
+      |> render_click("dismiss", %{"id" => in_front})
+
+      shows!(asking, first_card, "the first card again")
+
+      assert has_element?(
+               asking,
+               ~s([data-test="question-said"]),
+               "No installed version asks for this permission in these words"
+             )
+
+      assert offered(asking) == ["deny_once", "allow_once"]
+      refute has_element?(asking, ~s([data-test="question-more"]))
+      assert Q.row(setup.ctx, first).state == "open"
+      assert Q.standing(setup.ctx) == []
       end_views()
     end
 

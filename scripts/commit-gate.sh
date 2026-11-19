@@ -65,7 +65,10 @@
 #             test/support compiles with warnings as errors, from a copy
 #             that holds only what CI gives them (each read from its
 #             test.yml job), once the SQLite suite's partitions have
-#             exited; locus with --close
+#             exited; with --close, test.yml's Locus step (its script,
+#             scripts/locus-island.sh, read by name as the vocabulary
+#             job's step is) under one deadline for its copy, compile
+#             and test
 #   go        codex-ci.yml's test job (go vet, gofmt, go test under -race,
 #             the Docker Compose and access-engine Docker tests with their
 #             ran-and-passed assertions, go build) and keeper-ci.yml's
@@ -323,7 +326,7 @@ deadline_for() {
   if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
     fossils|format|credo|opsgen|confguide|devstack|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|account_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|registry_stand_in|island_compile|island_test) echo 600 ;;
-    compile_*|boundary_plants) echo 1200 ;;
+    compile_*|boundary_plants|locus_island) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
     # A database made or dropped in the postgres image, its first pull
@@ -659,7 +662,11 @@ leg_islands() {
   if $CLOSE; then await_leg islands postgres || return; fi
   run_islands prima arca sanctum || status=1
   if $CLOSE; then
-    run_islands locus || status=1
+    # The island the step's script makes goes under the log directory,
+    # with the rest of what the gate makes.
+    local script="$LOGDIR/islands.locus.sh"
+    ci_step "Compile and test Locus from its declared apps alone" > "$script" || return 1
+    step islands locus_island env TMPDIR="$LOGDIR" bash "$script" || status=1
   fi
   # An island runs in a subshell of the leg, so its refused start comes
   # back through the summary.

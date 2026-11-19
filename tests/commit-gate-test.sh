@@ -484,7 +484,7 @@ for l in lines[start + 1:]:
     m = re.fullmatch(r"#   (\S+\.yml) ([a-z0-9_-]+)(?:: (.+))?", l)
     if m:
         roster[(m[1], m[2], m[3])] = 0
-have = set(re.findall(r"\bstep (?:static|postgres|vocab|cluster|boot) ([a-z_]+)", gate))
+have = set(re.findall(r"\bstep (?:static|postgres|vocab|islands|cluster|boot) ([a-z_]+)", gate))
 have |= {"islands:" + a for m in re.findall(r"^\s*run_islands ([a-z ]+)", gate, re.M) for a in m.split()}
 # The CI jobs the gate runs step by step (run_job LEG SLUG WORKFLOW JOB
 # ...): each covers every step of its job, or its --only step alone, less
@@ -539,7 +539,7 @@ CI_RUNS = {
     ("test.yml", "arca-independence", "Compile and test Arca from its declared apps alone"): ["islands:arca"],
     ("test.yml", "sanctum-independence", "Compile and test Sanctum from its declared apps alone"): ["islands:sanctum"],
     ("test.yml", "locus-independence", "Install the pinned wasm-tools"): ["wasm_tools"],
-    ("test.yml", "locus-independence", "Compile and test Locus from its declared apps alone"): ["islands:locus"],
+    ("test.yml", "locus-independence", "Compile and test Locus from its declared apps alone"): ["locus_island"],
     ("test.yml", "locus-runtime-image", "The credential canary's own checks"): ["canary_checks"],
     ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
     ("test.yml", "release-boot", "Boot the release against a fresh ${{ matrix.db }} database"): ["boot_sqlite", "boot_postgres"],
@@ -1164,9 +1164,10 @@ start_leg() {
 # Each island's list is read from its test.yml job: the application, the
 # lock, its apps, deps and the WIT tree at least. A planted copy reaches
 # the list; a line the gate does not mirror, a copy to another directory
-# and a missing job each fail it with the reason.
+# and a missing job each fail it with the reason. Locus's is its job's
+# step, which the close runs by name.
 island_list() { (cd "$1" && . "$gate" && island_spec "$2"); }
-for isl in prima arca sanctum locus; do
+for isl in prima arca sanctum; do
   spec=$(island_list "$root" "$isl") || fail "the $isl island's list could not be read from test.yml"
   [ "${spec%% *}" = "$isl" ] || fail "the $isl island's list names another application: $spec"
   for p in mix.lock "apps/$isl" deps wit; do
@@ -1512,6 +1513,12 @@ has_line "^run -d --name $ns-cluster-minio -p 127\.0\.0\.1::9000 -e MINIO_ROOT_U
   fail "the cluster leg did not start CI's object store under the gate's name: $(grep -- '-d' "$ct/docker.calls")"
 [ "$(sort -u "$ct/s3.endpoints")" = http://127.0.0.1:49999 ] || fail "the cluster suite ran against another object store: $(sort -u "$ct/s3.endpoints" 2>&1)"
 has_line '^cluster=0$' "$scratch/close.log/cluster.summary" || fail "the cluster suite did not pass: $(cat "$scratch/close.log/cluster.summary")"
+# The close runs test.yml's Locus step, whose script compiles and tests in
+# an island it makes under the log directory.
+has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
+  has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|compile --warnings-as-errors\$" "$ct/mix.calls" &&
+  has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|test\$" "$ct/mix.calls" ||
+  fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
   'backends_image: test.yml locus-backends-image: 32 steps' 'browser_a: test.yml browser-tincture shard=a: 6 steps' \
