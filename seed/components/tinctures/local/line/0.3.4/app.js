@@ -551,7 +551,7 @@
         : apps.length ? `${apps.length} installed` : "";
       const body = apps.length === 0 ? `<p class="empty">No apps yet. Ask Aqua to make you one.</p>`
         : `<ul class="apps">${apps.map((a) => `<li><button class="app" data-act="open" data-ref="${esc(a.ref)}" data-key="app-${esc(a.ref)}" aria-label="Open ${esc(a.name)}${a.open ? " (open)" : ""}">
-            <span class="app-ic">${esc(appMark(a))}</span><span class="app-name">${a.open ? '<span class="app-open" aria-hidden="true"></span>' : ""}${esc(a.name)}</span></button></li>`).join("")}</ul>`;
+            <span class="app-ic">${esc(appMark(a))}</span><span class="app-name">${a.open ? '<span class="app-open" aria-hidden="true"></span>' : ""}${esc(a.name)}</span></button>${said(`app-${a.ref}`)}</li>`).join("")}</ul>`;
       // The apps come from the shell; only their updates from the stream.
       return { meta, body, kept: "Updates" };
     },
@@ -927,6 +927,31 @@
     note(`sch:${id}`, `Did not start${why ? ` · ${why}` : ""}`, false, SAID_MS);
   }
 
+  // What a tap to open an app says where the person tapped, from the
+  // shell's answer to the open, or null when it opened: the shipped
+  // canvas's words. An open never answered (`uncertain`) may have opened,
+  // so it says only that no answer came. Each answer is said for
+  // OPEN_SAID_MS from that answer, the same words again included.
+  const OPEN_SAID_MS = 4000;
+  function openSaid(answer) {
+    if (answer && answer.outcome === 'opened') return null;
+    if (answer && answer.outcome === 'cancelled' && answer.reason === 'too_soon') return 'Tap again in a moment';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'not_found') return 'It is no longer installed';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'uncertain') return 'No answer yet';
+    return 'Not opened: tap again';
+  }
+
+  // An app opened from its button, which says why when nothing opened.
+  function openApp(ref) {
+    const key = `app-${ref}`;
+    sdk.open(ref).then((answer) => {
+      const words = openSaid(answer);
+      if (words === null) delete S.notes[key];
+      else note(key, words, false, OPEN_SAID_MS);
+      changed();
+    });
+  }
+
   function press(control, id) {
     const key = `sch:${id}`;
     S.busy[key] = true;
@@ -980,7 +1005,7 @@
       // thread of Aqua's, the chat at a shared one, a Dashboard page at its top.
       case "page": return b.dataset.ref ? sdk.settings(b.dataset.page, b.dataset.ref) : sdk.settings(b.dataset.page);
       case "grant": return sdk.grant(b.dataset.ref);
-      case "open": return sdk.open(b.dataset.ref);
+      case "open": return openApp(b.dataset.ref);
       case "ask": return sdk.ask(id);
       case "press": return press(b.dataset.control, id);
       case "retry": return retry(id);

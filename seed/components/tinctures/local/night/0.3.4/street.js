@@ -14,7 +14,8 @@
   const RETRY_MS = [2000, 5000, 15000, 60000];
 
   const state = N.EMPTY();
-  const ui = { now: Date.now(), going: {}, gone: {}, working: {}, fuse: false, note: null, selected: null, live: true, archived: false };
+  // `opened`: what an app's shop window says of the last tap to open it, by the app's ref.
+  const ui = { now: Date.now(), going: {}, gone: {}, working: {}, fuse: false, note: null, selected: null, live: true, archived: false, opened: {} };
   const els = {};
 
   // ---------- what the shell tells the page ----------
@@ -382,17 +383,53 @@
     if (control !== 'retry-run') return 'Refused · ' + N.words(answer.reason || 'refused');
     return answer.outcome === 'accepted' ? 'Running it again.' : RETRY_REFUSED[answer.reason] || 'It could not be run again.';
   }
+  // What a tap to open an app says where the person tapped, from the
+  // shell's answer to the open, or null when it opened: the shipped
+  // canvas's words. An open never answered (`uncertain`) may have opened,
+  // so it says only that no answer came. Each answer is said for
+  // OPEN_SAID_MS from that answer, the same words again included.
+  const OPEN_SAID_MS = 4000;
+  function openSaid(answer) {
+    if (answer && answer.outcome === 'opened') return null;
+    if (answer && answer.outcome === 'cancelled' && answer.reason === 'too_soon') return 'Tap again in a moment';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'not_found') return 'It is no longer installed';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'uncertain') return 'No answer yet';
+    return 'Not opened: tap again';
+  }
+  // An app opened from its shop window, which says why when nothing opened.
+  function openShop(ref) {
+    sdk.open(ref).then((answer) => {
+      const words = openSaid(answer);
+      const said = words === null ? null : { words };
+      if (said) ui.opened[ref] = said; else delete ui.opened[ref];
+      schedule();
+      if (said) setTimeout(() => { if (ui.opened[ref] === said) { delete ui.opened[ref]; schedule(); } }, OPEN_SAID_MS);
+    });
+  }
+  // An app opened from its sign's card: the card closes once it opened, and
+  // otherwise says why in its note line.
+  function openFromPlate(sel, ref) {
+    sdk.open(ref).then((answer) => {
+      if (ui.selected !== sel) return;
+      const words = openSaid(answer);
+      if (words === null) return closePlate();
+      const said = { words };
+      sel.note = words; sel.said = said;
+      drawPlate();
+      setTimeout(() => { if (ui.selected === sel && sel.said === said) { sel.note = ''; sel.said = null; drawPlate(); } }, OPEN_SAID_MS);
+    });
+  }
   // One tap, one verb: each act sends exactly one of the shell's verbs.
   function runPlateAct(a) {
     if (a.act === 'ask') { sdk.ask(a.widget); closePlate(); }
     else if (a.act === 'settings') { if (a.ref) sdk.settings(a.page, a.ref); else sdk.settings(a.page); closePlate(); }
-    else if (a.act === 'open') { sdk.open(a.app); closePlate(); }
+    else if (a.act === 'open') openFromPlate(ui.selected, a.app);
     else if (a.act === 'grant') { sdk.grant(a.ref); closePlate(); }
     else if (a.act === 'feed') { sdk.press(a.binding, a.action); ui.working[a.feed] = true; schedule(); closePlate(); }
     else if (a.act === 'press') {
       const sel = ui.selected;
       if (!sel || sel.busy >= 0) return;
-      sel.busy = sel.info.acts.indexOf(a); sel.note = '';
+      sel.busy = sel.info.acts.indexOf(a); sel.note = ''; sel.said = null;
       drawPlate();
       sdk.press(a.control, a.value).then((answer) => {
         if (ui.selected !== sel) return;
@@ -459,7 +496,7 @@
   function doAct(el) {
     const a = el.dataset.act;
     if (a === 'plate-close') return closePlate();
-    if (a === 'open-app') return sdk.open(el.dataset.app);
+    if (a === 'open-app') return openShop(el.dataset.app);
     if (a === 'ask') return sdk.ask(el.dataset.widget);
     if (a === 'settings') return sdk.settings(el.dataset.page);
     if (a === 'feed-press') { sdk.press(el.dataset.binding, el.dataset.action); if (el.dataset.feed) { ui.working[el.dataset.feed] = true; schedule(); } return; }

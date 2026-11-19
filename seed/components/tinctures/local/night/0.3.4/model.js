@@ -536,7 +536,8 @@
         '<span class="shutter" aria-hidden="true"></span>' + mark +
         '<span class="shop__name">' + esc(app.name) + '</span>' +
         (app.open ? '<span class="shop__state">open</span>' : '') +
-        (update ? '<span class="sticker">' + lamp('warn') + 'update</span>' : '') + '</button></li>';
+        (update ? '<span class="sticker">' + lamp('warn') + 'update</span>' : '') + '</button>' +
+        (ui.opened && ui.opened[app.ref] ? '<p class="note" role="status">' + esc(ui.opened[app.ref].words) + '</p>' : '') + '</li>';
     }).join('');
     return '<h2 class="vh" id="h-apps">Apps</h2>' + note(s, PARTS.apps.streams, C) + '<ul class="shops">' + (shops || '<li class="shop shop--none"><p class="meta">No apps yet. Ask Aqua to make you one.</p></li>') + '</ul>';
   }

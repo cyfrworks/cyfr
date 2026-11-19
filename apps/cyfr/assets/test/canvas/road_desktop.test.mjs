@@ -102,6 +102,8 @@ function page({version = "0.1.0", width = 1024, height = 600, protocol = "http/1
   const subs = {}
   const handlers = {}
   const calls = {press: [], settings: [], grant: []}
+  // An app's opens, each waiting until the test answers it.
+  const openings = []
   const answers = {press: {outcome: "accepted"}}
   let stored = {document: prefs, revision: 1}
   const cyfr = {
@@ -137,7 +139,7 @@ function page({version = "0.1.0", width = 1024, height = 600, protocol = "http/1
     },
     ask() {},
     settings: (...args) => calls.settings.push(args),
-    open() {},
+    open: (ref) => new Promise((answer) => openings.push({ref, answer})),
     grant: (ref) => calls.grant.push(ref),
     ready() {},
   }
@@ -170,7 +172,7 @@ function page({version = "0.1.0", width = 1024, height = 600, protocol = "http/1
       for (const f of due) f(now)
     }
   }
-  return {win, ids, opened, subs, handlers, calls, answers, pump}
+  return {win, ids, opened, openings, subs, handlers, calls, answers, pump}
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve))
@@ -717,16 +719,113 @@ describe("the road desktop 0.2.0 draws", () => {
   })
 })
 
-// ---- 0.3.3 -------------------------------------------------------------------------------------
+// ---- 0.3.4 -------------------------------------------------------------------------------------
 
 // A daily thread's title: the ISO date `n` days from today, in UTC, the stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the road desktop 0.3.3", () => {
+describe("the road desktop 0.3.4", () => {
+  const MAPS = {ref: "tincture:local.maps", name: "Maps", icon: null, open: false}
+  const WORDS = /Tap again in a moment|It is no longer installed|No answer yet|Not opened: tap again|Opening/
+  // The page on the test's clock, the market holding Maps, recording what the scene draws.
+  async function market(t) {
+    t.mock.timers.enable({apis: ["setTimeout", "Date"], now: Date.now()})
+    const p = page({version: "0.3.4", installed: [MAPS]})
+    await settle()
+    p.pump()
+    const drawn = []
+    const text = p.win.PixelFont.text
+    p.win.PixelFont.text = (g, str, ...rest) => (drawn.push(String(str)), text(g, str, ...rest))
+    // The words the ticker draws in the next frame, and what the page last said aloud.
+    p.ticker = () => {
+      drawn.length = 0
+      p.pump(1)
+      return drawn.find((line) => WORDS.test(line)) ?? null
+    }
+    p.aloud = () => {
+      t.mock.timers.tick(30)
+      return p.ids.live.textContent
+    }
+    return p
+  }
+
+  test("a tap on an app in the market that opens nothing says why on the ticker, the shipped canvas's words, for four seconds from the last answer; nothing says it opens before the answer", async (t) => {
+    const p = await market(t)
+    const answer = async (a) => {
+      const before = p.ticker()
+      if (!labels(p).some((l) => l.startsWith("Maps"))) tap(p, "Market")
+      tap(p, "Maps")
+      await settle()
+      // The tap claims nothing before the shell answers.
+      assert.equal(p.ticker(), before)
+      assert.doesNotMatch(p.aloud(), /Opening/)
+      p.openings.at(-1).answer(a)
+      await settle()
+      const said = p.ticker()
+      if (said !== null) assert.equal(p.aloud(), said)
+      return said
+    }
+    // The words name the app they are about, as the ticker is shared.
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Maps · Tap again in a moment")
+    // Opened inside the four seconds: the earlier tap's words go at once.
+    assert.equal(await answer({outcome: "opened"}), null)
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "Maps · It is no longer installed")
+    assert.equal(await answer({outcome: "opened"}), null)
+    // An open never answered may have opened: it says only that no answer came.
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "Maps · No answer yet")
+    assert.doesNotMatch(p.aloud(), /Not opened/)
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
+    assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Maps · Not opened: tap again")
+    assert.deepEqual(p.openings.map((o) => o.ref), Array(7).fill(MAPS.ref))
+
+    // The same answer again three seconds on restarts the four seconds.
+    t.mock.timers.tick(3000)
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
+    // `answer` heard the page aloud 30 ms after the answer.
+    t.mock.timers.tick(3999 - 30)
+    assert.equal(p.ticker(), "Maps · Not opened: tap again")
+    t.mock.timers.tick(1)
+    assert.equal(p.ticker(), null)
+  })
+
+  test("a tap on an app's Open in the plain list that opens nothing says why in the list's line, for four seconds from the last answer", async (t) => {
+    const p = await market(t)
+    p.win.RoadList.show()
+    const line = () => p.ids.lists.children[0].textContent
+    const open = () => {
+      const apps = p.ids.lists.children.find((c) => c.tagName === "SECTION" && c.children[0].textContent === "Apps")
+      const li = apps.children[1].children.find((c) => c.textContent.startsWith("Maps"))
+      return li.children.find((c) => c.textContent === "Open")
+    }
+    const answer = async (a) => {
+      const before = line()
+      open().dispatch("click")
+      await settle()
+      assert.equal(line(), before)
+      p.openings.at(-1).answer(a)
+      await settle()
+      return line()
+    }
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Maps · Tap again in a moment")
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "Maps · It is no longer installed")
+    // Opened inside the four seconds after a refusal: its words go at once.
+    assert.equal(await answer({outcome: "opened"}), "")
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "Maps · No answer yet")
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
+    t.mock.timers.tick(3000)
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
+    t.mock.timers.tick(3999)
+    assert.equal(line(), "Maps · Not opened: tap again")
+    t.mock.timers.tick(1)
+    assert.equal(line(), "")
+    // An open says nothing.
+    assert.equal(await answer({outcome: "opened"}), "")
+  })
+
   const sentence = (name) => `No reading from the ${name} feed yet. To bind one, ask Aqua for a feed named ${name}.`
 
   test("the windmill and the tram line with no reading name their feed and say to ask Aqua for one, until a reading comes", async () => {
-    const p = page({version: "0.3.3"})
+    const p = page({version: "0.3.4"})
     await settle()
     p.pump()
     assert.equal(label(p, "Windmill"), `Windmill: ${sentence("weather")}`)
@@ -744,7 +843,7 @@ describe("the road desktop 0.3.3", () => {
   })
 
   test("today's daily thread is a post box read Today that opens Aqua, an earlier day's is none, a workspace thread opens Aqua and a shared one the chat", async () => {
-    const p = page({version: "0.3.3"})
+    const p = page({version: "0.3.4"})
     await settle()
     picture(p, "threads.changes", [
       {kind: "daily", id: "t_today", title: day(0), people: ["Noor"], last_activity: iso(-5), waits_on_you: false, unread: 2},
@@ -768,7 +867,7 @@ describe("the road desktop 0.3.3", () => {
   test("the newest daily thread's post box reads Yesterday a day back, and its date further back", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     for (const [n, words] of [[-1, "Yesterday"], [-3, date]]) {
-      const p = page({version: "0.3.3"})
+      const p = page({version: "0.3.4"})
       await settle()
       picture(p, "threads.changes", [{kind: "daily", id: "t1", title: day(n), people: ["Noor"], last_activity: iso(-5), waits_on_you: false, unread: 0}])
       tap(p, "Post boxes")
@@ -779,7 +878,7 @@ describe("the road desktop 0.3.3", () => {
   test("an approval in a daily thread is named by its day as the thread is, and one in a crew thread by its title as given", async () => {
     const date = new Intl.DateTimeFormat("en", {timeZone: "UTC", day: "numeric", month: "short"}).format(Date.parse(day(-3)))
     const named = ["Today", "Yesterday", date, "builder"]
-    const p = page({version: "0.3.3"})
+    const p = page({version: "0.3.4"})
     await settle()
     picture(p, "attention.changes", [[day(0), day(0), "t0"], [day(-1), day(-1), "t1"], [day(-3), day(-3), "t3"], ["builder", null, "tc"]].map(([label, d, ref], i) =>
       ({kind: "approval", id: `a${i}`, label, day: d, since: iso(i - 20), destination: {kind: "page", page: "aqua", ref}})))
@@ -794,7 +893,7 @@ describe("the road desktop 0.3.3", () => {
   })
 
   test("a crew member named like a date keeps its name: only an item's day is worded as a day", async () => {
-    const p = page({version: "0.3.3"})
+    const p = page({version: "0.3.4"})
     await settle()
     picture(p, "attention.changes", [{kind: "approval", id: "a_crew", label: "2026-11-15", day: null, since: iso(-20), destination: {kind: "page", page: "aqua", ref: "tc"}}])
     assert.deepEqual(labels(p).filter((l) => l.startsWith("Approval in ")).map((l) => l.split(", since")[0]), ["Approval in 2026-11-15"])
@@ -821,7 +920,7 @@ describe("the road desktop 0.3.3", () => {
   const archived = (p) => hits(p).find((h) => h.label === "Archived")
   const flip = (p) => tap(p, "Archived")
   async function posted(threads) {
-    const p = page({version: "0.3.3"})
+    const p = page({version: "0.3.4"})
     await settle()
     picture(p, "threads.changes", threads)
     tap(p, "Post boxes")

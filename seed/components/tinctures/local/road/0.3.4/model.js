@@ -390,6 +390,20 @@
     return (answer && REFUSED[answer.reason]) || 'It could not be run again.';
   }
 
+  // What a tap to open an app says where the person tapped, from the
+  // shell's answer to the open, or null when it opened: the shipped
+  // canvas's words. An open never answered (`uncertain`) may have opened,
+  // so it says only that no answer came. Each answer is said for
+  // OPEN_SAID_MS from that answer, the same words again included.
+  const OPEN_SAID_MS = 4000;
+  function openSaid(answer) {
+    if (answer && answer.outcome === 'opened') return null;
+    if (answer && answer.outcome === 'cancelled' && answer.reason === 'too_soon') return 'Tap again in a moment';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'not_found') return 'It is no longer installed';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'uncertain') return 'No answer yet';
+    return 'Not opened: tap again';
+  }
+
   window.Road = {
     state, PARTS, PAUSE, RESUME, subscribe: (f) => listeners.add(f), start,
     nowLocal, utcOf, localOf, partOn, units, order, entry, write, note, waiting, component, retryable, retry, threads,
@@ -404,7 +418,12 @@
       return 'Refused: ' + (answer.reason || 'refused') + '.';
     },
     pressFeed(feed, action) { const f = state.feeds[feed]; if (sdk && f && f.binding) sdk.press(f.binding, action); },
-    open: (ref) => sdk && sdk.open(ref),
+    // The words for a tap to open an app, or null once it opened (openSaid).
+    async open(ref) {
+      if (!sdk) return null;
+      return openSaid(await sdk.open(ref));
+    },
+    OPEN_SAID_MS,
     ask: (widget) => sdk && sdk.ask(widget),
     // a page, at `ref` when there is one: Aqua's panel at a thread of Aqua's, the chat at a shared one
     settings: (page, ref) => sdk && (ref ? sdk.settings(page, ref) : sdk.settings(page)),
