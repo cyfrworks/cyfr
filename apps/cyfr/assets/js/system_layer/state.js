@@ -91,7 +91,7 @@ function sync(state, {open, promptId}) {
 
     default:
       if (promptId === state.promptId) return {state, effects: []}
-      // The next prompt in the queue: focus moves to its first control.
+      // The next prompt in the queue: focus moves into it (`firstFocus`).
       return {state: {...state, promptId}, effects: ["focus-first"]}
   }
 }

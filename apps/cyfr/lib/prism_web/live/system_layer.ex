@@ -248,7 +248,10 @@ defmodule PrismWeb.SystemLayer do
 
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
-  and returns focus on close; Escape dismisses every prompt.
+  and returns focus on close; Escape dismisses every prompt. Focus enters
+  at the prompt's first control, except on a question's card, where it
+  enters at the heading (`data-focus-first`), so that Enter answers
+  nothing and no choice or scrolling block is ringed as the card opens.
   While a modal prompt is open on any layer of the page, every frame is
   hidden and inert, so no frame holds the pointer or the screen over it.
   Every event the layer pushes names it (`layer`, its id), because a page
@@ -2488,12 +2491,25 @@ defmodule PrismWeb.SystemLayer do
 
       {:done, {:error, reason}, socket} ->
         cond do
-          no_longer_waiting?(reason) -> remove_prompt(socket, prompt.id)
-          shown?(socket, prompt) -> assign(socket, :error, Ops.error_message(reason))
-          true -> socket
+          no_longer_waiting?(reason) ->
+            remove_prompt(socket, prompt.id)
+
+          shown?(socket, prompt) ->
+            socket |> assign(:error, Ops.error_message(reason)) |> once_only(reason)
+
+          true ->
+            socket
         end
     end
   end
+
+  # An answer that lasts refused because no installed version asks for the
+  # permission in these words would be refused again: the card offers only
+  # the answers given once.
+  defp once_only(socket, %Prima.Refusal{reason: :removed}),
+    do: put_question_choice(socket, socket.assigns.current, once_only: true)
+
+  defp once_only(socket, _reason), do: socket
 
   defp ended_words(:cancelled), do: "The confirmation was cancelled."
   defp ended_words(:voided), do: "The confirmation was withdrawn."
@@ -2837,7 +2853,12 @@ defmodule PrismWeb.SystemLayer do
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
-          <h2 id={"#{@id}-title"} class="text-lg font-semibold">
+          <h2
+            id={"#{@id}-title"}
+            tabindex={if @shown.kind == :question, do: "-1"}
+            data-focus-first={@shown.kind == :question}
+            class="text-lg font-semibold focus:outline-none"
+          >
             {title(@shown)}
           </h2>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">

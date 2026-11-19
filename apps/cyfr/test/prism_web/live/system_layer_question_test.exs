@@ -152,6 +152,14 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
   defp more(view), do: view |> element(~s([data-test="question-more"])) |> render_click()
 
+  # The choices the card offers, in their order.
+  defp offered(view) do
+    view
+    |> render()
+    |> find(~s([data-test="question-choice"]))
+    |> Enum.map(&hd(LazyHTML.attribute(&1, "data-choice")))
+  end
+
   # A passkey's proof given from `view`: the layer opens the account pages
   # with the record's request, and the person's passkey answers it there.
   defp prove_here!(view, ref, authenticator) do
@@ -220,6 +228,21 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       # A screen opened while it waits reads it at its first open.
       third = screen!(setup)
       assert open_prompt(third) == id
+      end_views()
+    end
+
+    test "takes its first focus on its heading, which is no Tab stop, and not on a choice or the block",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+
+      # The browser half focuses the one element marked `data-focus-first`
+      # (`firstFocus` in assets/js/system_layer/index.js).
+      assert [heading] = find(render(view), "[data-focus-first]")
+      assert LazyHTML.tag(heading) == ["h2"]
+      assert LazyHTML.attribute(heading, "tabindex") == ["-1"]
+      assert LazyHTML.text(heading) =~ "wants to delete a table"
       end_views()
     end
 
@@ -541,7 +564,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
   # ---------------------------------------------------------------------------
 
   describe "the component's words" do
-    test "a long operation stays in its own scrolling block, below CYFR's rows and above the choices",
+    test "a long operation stays in its own scrolling block, below the summary, CYFR's rows and above the choices",
          setup do
       view = screen!(setup)
       operation = Enum.map_join(1..400, "\n", &"DELETE FROM t#{&1} WHERE true;")
@@ -558,6 +581,15 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
       assert block |> find(~s([data-test="question-operation"])) |> hd() |> LazyHTML.text() =~
                "t400 WHERE"
+
+      # The summary stays in view above the block, which scrolls the
+      # operation alone.
+      assert find(block, ~s([data-test="question-summary"])) == []
+
+      assert html
+             |> find(~s([data-test="question-words"] > [data-test="question-summary"]))
+             |> length() ==
+               1
 
       # The choices and CYFR's rows are outside the block, and the
       # masking is said.
@@ -717,6 +749,10 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         assert has_element?(view, ~s([data-test="question-choices"]))
         assert Q.standing(setup.ctx) == []
         refute_received {:answered, ^ref}
+
+        # Only the answers given once are offered from then on.
+        assert offered(view) == ["deny_once", "allow_once"]
+        refute has_element?(view, ~s([data-test="question-more"]))
 
         choose(view, "allow_once")
         assert_receive {:answered, ^ref}
