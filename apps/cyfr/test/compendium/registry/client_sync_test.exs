@@ -68,51 +68,6 @@ defmodule Compendium.Registry.ClientSyncTest do
   describe "request shapes" do
     setup :point_at_stub
 
-    test "search/2 sends every filter param", %{ctx: ctx, stub: stub} do
-      HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
-        assert query_pairs(conn) == [
-                 {"q", "data"},
-                 {"type", "reagent"},
-                 {"category", "data-processing"},
-                 {"license", "MIT"},
-                 {"limit", "10"},
-                 {"offset", "0"},
-                 {"tags", "wasm"},
-                 {"tags", "data"}
-               ]
-
-        json_resp(conn, 200, %{"components" => [], "total" => 0})
-      end)
-
-      assert {:ok, %{components: [], total: 0}} =
-               Client.search(ctx, %{
-                 query: "data",
-                 type: "reagent",
-                 category: "data-processing",
-                 tags: ["wasm", "data"],
-                 license: "MIT",
-                 limit: 10,
-                 offset: 0
-               })
-    end
-
-    test "get_component/5 puts the version in the path", %{
-      ctx: ctx,
-      stub: stub
-    } do
-      HTTPStub.expect_once(
-        stub,
-        "GET",
-        "/v1/components/reagent/cyfr/data-processor/1.0.0",
-        fn conn ->
-          json_resp(conn, 200, %{"name" => "data-processor", "version" => "1.0.0"})
-        end
-      )
-
-      assert {:ok, %{"name" => "data-processor", "version" => "1.0.0"}} =
-               Client.get_component(ctx, "reagent", "cyfr", "data-processor", "1.0.0")
-    end
-
     test "issue_additional_token/3 with a nil label sends device_label()", %{stub: stub} do
       label = CredentialStore.device_label()
 
@@ -125,33 +80,6 @@ defmodule Compendium.Registry.ClientSyncTest do
       end)
 
       assert {:ok, %{"id" => "t3"}} = Client.issue_additional_token("alice", "fake-bearer", nil)
-    end
-
-    test "deprecate_component/6 reaches the registry with the right path, bearer and reason", %{
-      stub: stub
-    } do
-      HTTPStub.expect_once(
-        stub,
-        "POST",
-        "/v1/components/alice/catalyst/widget/1.0.0/deprecate",
-        fn conn ->
-          assert auth_header(conn) == "Bearer cyfr_pt_x"
-          {body, conn} = read_json(conn)
-          assert body == %{"reason" => "use v2"}
-
-          json_resp(conn, 200, %{"status" => "deprecated"})
-        end
-      )
-
-      assert {:ok, %{"status" => "deprecated"}} =
-               Client.deprecate_component(
-                 "alice",
-                 "catalyst",
-                 "widget",
-                 "1.0.0",
-                 "use v2",
-                 "cyfr_pt_x"
-               )
     end
 
     test "deprecate_component/6 leaves a legitimate slug, name and version untouched", %{
@@ -197,29 +125,86 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert {:ok, %{"status" => "yanked"}} =
                Client.yank_component("alice", "catalyst", "widget", "1.0.0", "", "cyfr_pt_x")
     end
+  end
 
-    test "create_abuse_report/6 reaches the registry with its bearer, report and statement", %{
-      stub: stub
-    } do
-      HTTPStub.expect_once(stub, "POST", "/v1/abuse-reports", fn conn ->
-        assert auth_header(conn) == "Bearer cyfr_pt_x"
-        {body, conn} = read_json(conn)
+  # ============================================================================
+  # The component API — registry_wire.json's components, which cyfr.run's
+  # internal/api/components_wire_test.go reads too
+  # ============================================================================
 
-        assert body == %{
-                 "category" => "malware",
-                 "target_namespace" => "alice",
-                 "target_component_id" => nil,
-                 "details" => "d",
-                 "attestations_signed" => false
-               }
+  @wire Path.expand("../../../../../tests/fixtures/registry_wire.json", __DIR__)
+  @external_resource @wire
+  @components Jason.decode!(File.read!(@wire))["components"]
 
-        json_resp(conn, 201, %{"id" => "rep_1"})
-      end)
+  describe "the component API's vectors" do
+    setup :point_at_stub
 
-      assert {:ok, %{"id" => "rep_1"}} =
-               Client.create_abuse_report("malware", "alice", nil, "d", false, "cyfr_pt_x")
+    # A case's test is generated from the section, so a case the section
+    # gains or renames is a test here; this holds the file as it reads now
+    # to the tests this module was compiled with.
+    test "every case of the section is a test here" do
+      tests = for {name, 1} <- __MODULE__.__info__(:functions), do: Atom.to_string(name)
+
+      for %{"name" => name} <- Jason.decode!(File.read!(@wire))["components"] do
+        assert "test the component API's vectors #{name}" in tests,
+               "no test for the case #{inspect(name)}"
+      end
+    end
+
+    for vector <- @components do
+      @vector vector
+      test vector["name"], %{ctx: ctx, stub: stub} do
+        assert component_case(@vector, ctx, stub) == @vector["result"]
+      end
     end
   end
+
+  # A case with no call is only the registry's: CYFR never sends its
+  # request, and reads its answer as any call's.
+  defp component_case(%{"call" => nil, "answer" => answer, "result" => result}, _ctx, _stub) do
+    error = Errors.from_api_response(answer["status"], Jason.encode!(answer["body"]), "discover")
+    outcome({:error, error}, result)
+  end
+
+  defp component_case(%{"request" => request, "answer" => answer} = vector, ctx, stub) do
+    bearer = request["token_namespace"] && "cyfr_pt_" <> request["token_namespace"]
+
+    HTTPStub.expect_once(stub, request["method"], request["path"], fn conn ->
+      assert Enum.map(query_pairs(conn), &Tuple.to_list/1) == request["query"]
+      assert auth_header(conn) == (bearer && "Bearer " <> bearer)
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      assert if(raw == "", do: nil, else: Jason.decode!(raw)) == request["body"]
+      json_resp(conn, answer["status"], answer["body"])
+    end)
+
+    vector["call"] |> call(vector["args"], ctx, bearer) |> outcome(vector["result"])
+  end
+
+  defp call(name, [params], ctx, nil) when name in ~w(discover search) do
+    params = Map.new(params, fn {key, value} -> {String.to_existing_atom(key), value} end)
+    apply(Client, String.to_existing_atom(name), [ctx, params])
+  end
+
+  defp call(name, args, ctx, nil) when name in ~w(get_component get_latest_component),
+    do: apply(Client, String.to_existing_atom(name), [ctx | args])
+
+  defp call(name, args, _ctx, bearer) when name in ~w(deprecate_component create_abuse_report),
+    do: apply(Client, String.to_existing_atom(name), args ++ [bearer])
+
+  # What a call returns, as the vector writes it: a listing without the
+  # registry CYFR names it by, atom keys as strings; a refusal as its
+  # reason, and its sentence where the case names one (and always where
+  # the case is no refusal, so a failure says what refused it).
+  defp outcome({:ok, value}, _result), do: value |> Map.delete(:registry) |> string_keys()
+
+  defp outcome({:error, %Errors{reason: reason, message: message}}, result) do
+    refusal = %{"error" => Atom.to_string(reason), "message" => message}
+    if Map.has_key?(result, "error"), do: Map.take(refusal, Map.keys(result)), else: refusal
+  end
+
+  defp string_keys(%{} = map), do: Map.new(map, fn {k, v} -> {to_string(k), string_keys(v)} end)
+  defp string_keys(list) when is_list(list), do: Enum.map(list, &string_keys/1)
+  defp string_keys(value), do: value
 
   # ============================================================================
   # MCP Routing — a search asks cyfr.run beside the local index, as `source` says
@@ -318,23 +303,6 @@ defmodule Compendium.Registry.ClientSyncTest do
       for params <- [%{namespace: "a"}, %{namespace: "b"}] do
         assert {:error, %Errors{reason: :parse_error}} = Client.discover(ctx, params)
       end
-    end
-
-    # cyfr.run filters a listing by `namespace`; a key it does not read
-    # leaves the whole registry's newest components in the answer.
-    test "discover asks cyfr.run by namespace, with its type", %{ctx: ctx, stub: stub} do
-      HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
-        assert query_pairs(conn) == [{"namespace", "cyfr"}, {"type", "reagent"}]
-        json_resp(conn, 200, %{"components" => [], "total" => 0})
-      end)
-
-      assert {:ok,
-              %{registry: Compendium.RegistryHost.canonical_host(), components: [], total: 0}} ==
-               Provider.handle("component", ctx, %{
-                 "action" => "discover",
-                 "namespace" => "cyfr",
-                 "type" => "reagent"
-               })
     end
   end
 

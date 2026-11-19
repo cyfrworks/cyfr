@@ -655,7 +655,7 @@ defmodule Compendium.Registry.Client do
   # the row carries it under that name and as `publisher`, the name every
   # local row uses, so a merged listing reads one field for both.
   @component_fields ~w(id name version component_type namespace_slug description digest
-                       size tags category license status status_reason created_at updated_at)a
+                       size tags category license status status_reason)a
 
   # A `/v1/components` answer: its entries, each an object, and its total.
   defp listing(body) do
