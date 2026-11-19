@@ -213,9 +213,10 @@
 #          SIGINT while the new release starts is reported, and the update
 #          runs to its end, the new release serving. No signal lands in the
 #          snapshot: on SQLite it is the command line's own file copies,
-#          with no call the proof can pause, so the check after it is no
-#          case's; no Go test holds it either (TestUpdateOnASignal's last
-#          point is the offline read).
+#          with no call the proof can pause, so the cancellation check
+#          after the snapshot is held not by these cases but by
+#          apps/codex/cmd/update_test.go's TestUpdateOnASignal, its dump
+#          row signalling a PostgreSQL home's snapshot.
 #          What these cases cannot show: the program step that downloads
 #          and replaces the command line, the signature check of a real
 #          release's manifest and scaffold (a candidate has none), and a

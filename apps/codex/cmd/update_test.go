@@ -1571,20 +1571,28 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 }
 
 // A signal before the stop ends the update with nothing changed; from the
-// stop on, the running step finishes and the old stack starts again.
+// stop on, the running step finishes and the old stack starts again, a
+// snapshot the signal landed in kept complete and nothing switched. The
+// snapshot's one docker call is a PostgreSQL home's dump, so that row is
+// the one place the check after the snapshot is held (the Compose proof's
+// update cases run on SQLite and reach no further than the offline read).
 func TestUpdateOnASignal(t *testing.T) {
+	pg := map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}
 	cases := []struct {
 		at, want string
 		restart  bool
+		env      map[string]string
+		snapshot bool
 	}{
-		{"pull", "interrupted before anything stopped", false},
-		{"rpc", "interrupted before anything stopped", false},
-		{"stop-cyfr", "interrupted during the stop", true},
-		{"eval", "interrupted during the offline roster read", true},
+		{"pull", "interrupted before anything stopped", false, nil, false},
+		{"rpc", "interrupted before anything stopped", false, nil, false},
+		{"stop-cyfr", "interrupted during the stop", true, nil, false},
+		{"eval", "interrupted during the offline roster read", true, nil, false},
+		{"dump", "interrupted during the snapshot (complete at", true, pg, true},
 	}
 	for _, c := range cases {
 		t.Run(c.at, func(t *testing.T) {
-			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s := newUpdateScenario(t, shippedCompose(t), c.env)
 			s.answer(c.at+".signal", "")
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 			defer stop()
@@ -1611,7 +1619,13 @@ func TestUpdateOnASignal(t *testing.T) {
 				s.nothingStopped()
 			}
 			s.composeUnchanged()
-			s.noBackups()
+			if c.snapshot {
+				if _, err := os.Stat(filepath.Join(s.snapshotDir(), "snapshot.json")); err != nil {
+					t.Errorf("the snapshot the signal landed in is not complete (%v)", err)
+				}
+			} else {
+				s.noBackups()
+			}
 		})
 	}
 }
