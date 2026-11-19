@@ -360,7 +360,7 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
-        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Notify Sanctum.Provisioning
+        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Provisioning
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.SharedThreads Sanctum.Tenancy
         Sanctum.VirtualTools
       ),
@@ -2024,7 +2024,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Mount" => [agents_mounting: 2, granted_to: 2, orphaned_homes: 1, resolve: 5],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [setup_open: 1],
-    "Sanctum.Notify" => [broadcast: 3],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1, restore_checklist: 1],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],

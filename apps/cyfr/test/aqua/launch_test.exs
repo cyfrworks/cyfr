@@ -213,7 +213,7 @@ defmodule Aqua.LaunchTest do
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
     args = %{"reference" => @application, "input" => %{}}
     step = launch_step!(ctx, turn, args)
-    dispatched = Launch.dispatch(ctx, step, decided!(ctx, turn, args))
+    dispatched = Launch.run(ctx, step, decided!(ctx, turn, args))
 
     assert [%{user_id: user_id, origin: "interactive", parent: nil}] = launched(ctx),
            "launch answered #{inspect(dispatched)}"
@@ -494,7 +494,7 @@ defmodule Aqua.LaunchTest do
     decided = decided!(ctx, turn, args)
     assert {:run, decided} == run_on(args, [], %{vault_entry: named.id, name: "Supabase 2"})
 
-    assert {:ok, %{execution_id: execution_id}} = Launch.dispatch(ctx, step, decided)
+    assert {:ok, %{execution_id: execution_id}} = Launch.run(ctx, step, decided)
     assert is_binary(execution_id)
 
     # CYFR attached the named account's value to the request the app made,
@@ -1185,7 +1185,7 @@ defmodule Aqua.LaunchTest do
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
     step = launch_step!(ctx, turn, args)
     refused = {:consent_required, %{cause: :no_grant, ref: app}}
-    assert Launch.dispatch(ctx, step, decided!(ctx, turn, args)) == {:error, refused}
+    assert Launch.run(ctx, step, decided!(ctx, turn, args)) == {:error, refused}
     assert %Prima.Refusal{class: :consent_required} = Sanctum.Refusals.classify(refused)
     assert launched_of(ctx, app) == []
   end
@@ -1302,7 +1302,7 @@ defmodule Aqua.LaunchTest do
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert Launch.dispatch(ctx, step, decided) == {:error, {:head_corrupt, profile_id}}
+        assert Launch.run(ctx, step, decided) == {:refused, {:head_corrupt, profile_id}}
       end)
 
     assert launched_of(ctx, app) == []

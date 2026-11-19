@@ -91,10 +91,9 @@ defmodule Aqua.StepsTest do
 
     second = turn!(ctx, thread)
 
-    [denied, waiting, running, launched] =
+    [denied, running, launched] =
       steps!(ctx, second, [
         %{tool: "files", action: "delete", outcome: "denied"},
-        %{tool: "notes", action: "keep", approval_id: "apr_1", dispatch_state: "proposed"},
         %{tool: "http", action: "read"},
         %{kind: "launch", tool: "execution", action: "run", outcome: "error"}
       ])
@@ -105,7 +104,6 @@ defmodule Aqua.StepsTest do
     assert [
              %{id: ^launched, sentence: "Ran an app", status: :failed},
              %{id: ^running, sentence: "Read a page on the web", status: :running},
-             %{id: ^waiting, sentence: "Kept a note", status: :waiting},
              %{id: ^denied, sentence: "Deleted a file", status: :refused},
              %{id: ^read, sentence: "Read a file", status: :done, turn: turn_id}
            ] = steps
@@ -113,7 +111,7 @@ defmodule Aqua.StepsTest do
     assert turn_id == first.id
 
     # By cursor: the page after a step is the older ones.
-    assert {:ok, [%{id: ^waiting}, %{id: ^denied}]} =
+    assert {:ok, [%{id: ^denied}, %{id: ^read}]} =
              Aqua.steps(ctx, thread.id, before: running, limit: 2)
 
     # Another athanor's reader finds none of them.
@@ -374,7 +372,7 @@ defmodule Aqua.StepsTest do
       assert at == step_at(ctx, workspace.id, searching)
     end
 
-    test "a paused turn waits: by where it stands with no step, by its card's step with one",
+    test "a paused turn with no step waits by where it stands",
          %{ctx: ctx, thread: daily} do
       workspace = workspace!(ctx, daily)
       paused_at = DateTime.add(DateTime.utc_now(), -120, :second)
@@ -384,16 +382,6 @@ defmodule Aqua.StepsTest do
                Aqua.at_work(ctx, workspace.id)
 
       assert at == turn.paused_at
-
-      [card] =
-        steps!(ctx, turn, [
-          %{tool: "notes", action: "keep", approval_id: "apr_1", dispatch_state: "proposed"}
-        ])
-
-      assert {:ok, [%{agent: "aqua", sentence: "Kept a note", status: :waiting, at: at}]} =
-               Aqua.at_work(ctx, workspace.id)
-
-      assert at == step_at(ctx, workspace.id, card)
     end
 
     test "crew members at work in their threads under it each read by their own turn, Aqua first",

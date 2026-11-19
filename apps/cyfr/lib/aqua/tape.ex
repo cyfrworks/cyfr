@@ -4,15 +4,14 @@
 defmodule Aqua.Tape do
   @moduledoc """
   The one persistence port of the runner and the loop: every row a turn
-  writes — messages, turns, steps, approvals, events — goes through here,
+  writes — messages, turns, steps, events — goes through here,
   and nothing under `Aqua.Runner` or `Aqua.Loop` names a storage module.
 
   Each write is one storage transaction (`Arca.TurnStorage`), fenced on
   the turn's `fence`: a runner whose fence moved is refused
   `{:error, :superseded}`. The rows a person sees are broadcast on the
   thread's topic AFTER the transaction commits, as plain maps in
-  `Cyfr.Bus.ThreadEvent`s of kind `:message`; approvals are also
-  announced to the athanor (`Sanctum.Notify`), and after the same commits
+  `Cyfr.Bus.ThreadEvent`s of kind `:message`, and after the same commits
   a thread's place in its person's list (`Aqua.ThreadList`) and a crew
   member's job beginning and ending (`Aqua.Crew.Activity`). A
   guest-planed context writes here unchanged: the tape is a narrow
@@ -28,7 +27,7 @@ defmodule Aqua.Tape do
   Which turn may run at all is `threads.active_turn_id`, not a process on
   any member. `start_turn/3` takes it, `finish/4` gives it up,
   `bump_recovery/2` takes it from a turn whose holder is not a live
-  member, and `claim_holder/2` reads it. An approval pause keeps it.
+  member, and `claim_holder/2` reads it. A pause keeps it.
   """
 
   require Logger
@@ -44,7 +43,6 @@ defmodule Aqua.Tape do
   @type turn :: %{required(:id) => String.t(), optional(atom()) => term()}
   @type step :: %{required(:id) => String.t(), optional(atom()) => term()}
   @type row :: %{required(:id) => String.t(), optional(atom()) => term()}
-  @type approval :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @doc "Whether the turn has a terminal status in the durable lifecycle."
   @spec terminal?(turn()) :: boolean()
@@ -57,8 +55,7 @@ defmodule Aqua.Tape do
   @doc """
   Accept a message atomically with the work it opens. `attrs`:
   `:message` (`:author`, `:sent_by`, `:content`, `:payload`, optional
-  `:id`, `:client_id`, `:addressee`, `:reply_to`, `:outcome`, `:status`,
-  `:approval_id` for a card's notice),
+  `:id`, `:client_id`, `:addressee`, `:reply_to`, `:outcome`, `:status`),
   and one of `:turn` (`%{agent, requested_by, model, options}`) or
   `:steer_turn_id`, or neither for room content; and the crew members of
   `TurnStorage.accept_message/3` as they stand: `:reply_address`,
@@ -528,8 +525,8 @@ defmodule Aqua.Tape do
   Propose a page's call as a step of the running `turn`, under its fence
   (`TurnStorage.put_step/3`): `attrs` as `Aqua.PageCalls.proposal/3`
   makes them, with the call's own row or the row the turn opened on. A
-  turn that is not running, paused on a card or around a launch among
-  them, refuses it `{:error, :illegal_transition}`.
+  turn that is not running, paused around a launch among them, refuses
+  it `{:error, :illegal_transition}`.
   """
   @spec propose_call(Context.t(), turn(), map()) :: {:ok, step()} | {:error, term()}
   def propose_call(%Context{} = ctx, turn, attrs) when is_map(attrs),
@@ -693,24 +690,19 @@ defmodule Aqua.Tape do
              Map.put_new(attrs, :fence, turn.fence)
            ) do
       broadcast(ctx, turn.thread_id, :message, aborted)
-      announce_notices(ctx, [turn.id])
       {:ok, paused}
     end
   end
 
   @doc "Set down a running turn a dead runner left with an unacknowledged uncertainty (`TurnStorage.pause_recovered/3`)."
   @spec pause_recovered(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
-  def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content) do
-    with {:ok, _paused} = paused <-
-           TurnStorage.pause_recovered(
-             Sanctum.Context.actor(ctx),
-             turn.id,
-             standing(%{content: content, fence: turn.fence}, :current)
-           ) do
-      announce_notices(ctx, [turn.id])
-      paused
-    end
-  end
+  def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content),
+    do:
+      TurnStorage.pause_recovered(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        standing(%{content: content, fence: turn.fence}, :current)
+      )
 
   @doc "Whether the turn holds an uncertainty its sender has not acknowledged."
   @spec unacknowledged_episode?(Context.t(), turn()) :: boolean()
@@ -723,8 +715,8 @@ defmodule Aqua.Tape do
     do: TurnStorage.restricted?(Sanctum.Context.actor(ctx), turn.id) == true
 
   @doc """
-  Close every unstarted step as skipped and invalidate their cards; with
-  `only`, the ids of the steps to skip, those of them still unstarted.
+  Close every unstarted step as skipped; with `only`, the ids of the
+  steps to skip, those of them still unstarted.
   """
   @spec skip_steps(Context.t(), turn(), String.t(), [String.t()] | nil) ::
           {:ok, [step()]} | {:error, term()}
@@ -739,7 +731,6 @@ defmodule Aqua.Tape do
              do: broadcast(ctx, turn.thread_id, :message, row)
       end)
 
-      announce_notices(ctx, [turn.id])
       {:ok, steps}
     end
   end
@@ -747,23 +738,21 @@ defmodule Aqua.Tape do
   @doc """
   The page's call `request` in `thread_id` ended unanswered
   (`TurnStorage.end_call/4`): no step of it is recorded or dispatched
-  from now on, and its step still proposed is skipped with `reason`, its
-  card invalidated. Answers the call's turn and the steps skipped, or
-  `nil` for a call with no row yet.
+  from now on, and its step still proposed is skipped with `reason`.
+  Answers the call's turn and the steps skipped, or `nil` for a call
+  with no row yet.
   """
   @spec end_call(Context.t(), String.t(), String.t(), String.t()) ::
           {:ok, %{turn_id: String.t(), skipped: [step()]} | nil} | {:error, term()}
   def end_call(%Context{} = ctx, thread_id, request, reason) do
     with {:ok, ended} <-
            TurnStorage.end_call(Sanctum.Context.actor(ctx), thread_id, request, reason) do
-      for %{skipped: steps, turn_id: turn_id} <- List.wrap(ended), steps != [] do
+      for %{skipped: steps} <- List.wrap(ended), steps != [] do
         Enum.each(steps, fn step ->
           with {:ok, row} <-
                  Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
                do: broadcast(ctx, thread_id, :message, row)
         end)
-
-        announce_notices(ctx, [turn_id])
       end
 
       {:ok, ended}
@@ -790,80 +779,6 @@ defmodule Aqua.Tape do
         step.id,
         Map.put(attrs, :fence, turn.fence)
       )
-
-  # ---------------------------------------------------------------------------
-  # Approvals
-  # ---------------------------------------------------------------------------
-
-  @doc "Open a card for a proposed step; the athanor is told after commit."
-  @spec open_approval(Context.t(), turn(), step(), map()) ::
-          {:ok, %{approval: approval(), card: row()}} | {:error, term()}
-  def open_approval(%Context{} = ctx, turn, step, attrs) when is_map(attrs) do
-    with {:ok, %{card: card, approval: approval} = opened} <-
-           TurnStorage.open_approval(
-             Sanctum.Context.actor(ctx),
-             step.id,
-             Map.put_new(attrs, :fence, turn.fence)
-           ) do
-      announce_lists(ctx, turn.thread_id, nil)
-      broadcast(ctx, turn.thread_id, :message, card)
-
-      Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_pending, %{
-        thread_id: turn.thread_id,
-        message_id: card.id,
-        approval_id: approval.id
-      })
-
-      if turn.asking_thread_id || workspace?(ctx, turn.thread_id), do: wake_crew(ctx)
-      {:ok, opened}
-    end
-  end
-
-  @doc """
-  Consume a pending approval with the decision and its consequences, in one
-  transaction; the card's notices decided with it are announced on their
-  threads (`announce_notices/2`).
-  """
-  @spec resolve_approval(Context.t(), turn(), String.t(), String.t(), map()) ::
-          {:ok, %{approval: approval(), step: step(), card: row()}} | {:error, term()}
-  def resolve_approval(%Context{} = ctx, turn, approval_id, decision, attrs) when is_map(attrs) do
-    with {:ok, %{card: card, step: step} = resolved} <-
-           TurnStorage.resolve_approval(
-             Sanctum.Context.actor(ctx),
-             approval_id,
-             decision,
-             Map.put_new(attrs, :fence, turn.fence)
-           ) do
-      announce_lists(ctx, turn.thread_id, nil)
-      broadcast(ctx, turn.thread_id, :message, card)
-
-      if step.result_message_id do
-        with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
-             do: broadcast(ctx, turn.thread_id, :message, row)
-      end
-
-      Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_resolved, %{
-        thread_id: turn.thread_id,
-        message_id: card.id,
-        approval_id: approval_id,
-        decision: decision
-      })
-
-      announce_notices(ctx, [turn.id])
-
-      # The runner holding the turn learns the decision from the topic,
-      # after the commit like every row.
-      broadcast(ctx, turn.thread_id, :approval_resolved, %{
-        approval_id: approval_id,
-        turn_id: turn.id,
-        step_id: step.id,
-        decision: decision,
-        resolution_kind: Map.get(resolved.approval, :resolution_kind)
-      })
-
-      {:ok, resolved}
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # The crew
@@ -903,7 +818,6 @@ defmodule Aqua.Tape do
            Threads.retire(Sanctum.Context.actor(ctx), thread_id, standing(%{}, :retiring)) do
       if cancelled != [] do
         broadcast(ctx, thread_id, :turn_finished, nil)
-        announce_notices(ctx, Enum.map(cancelled, & &1.turn_id))
         wake_crew(ctx)
         Activity.cancelled(ctx, open, cancelled)
       end
@@ -941,14 +855,12 @@ defmodule Aqua.Tape do
       end
 
     open = open_jobs(ctx, children)
-    waiting = waiting_approvals(actor, [thread_id | children])
 
     with {:ok, %{cancelled: cancelled, forgotten: forgotten}} = deleted <-
            Threads.delete(actor, thread_id, standing(%{}, :retiring)) do
       :ok = Opus.Brain.forgotten(ctx.athanor_id, forgotten)
       ThreadList.removed(ctx, thread_id)
       Activity.cancelled(ctx, open, cancelled)
-      withdrawn(ctx, waiting)
       announce_ended(ctx, cancelled)
       deleted
     end
@@ -1015,31 +927,6 @@ defmodule Aqua.Tape do
       wake_crew(ctx)
       {:ok, thread}
     end
-  end
-
-  # The approvals still waiting in the threads a delete removes, read
-  # before it: their rows go with the threads, so nothing can be read of
-  # them after. A read that fails announces none of them.
-  defp waiting_approvals(actor, thread_ids) do
-    case TurnStorage.waiting_approvals(actor, DateTime.utc_now()) do
-      {:ok, approvals} -> Enum.filter(approvals, &(&1.thread_id in thread_ids))
-      {:error, _unread} -> []
-    end
-  end
-
-  # A deleted thread's approvals wait for no one: each is announced
-  # resolved, `withdrawn`, after the delete committed, so what lists it
-  # as waiting (`attention.changes`) lets it go.
-  defp withdrawn(ctx, approvals) do
-    for %{id: approval_id, thread_id: thread_id} <- approvals do
-      Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_resolved, %{
-        thread_id: thread_id,
-        approval_id: approval_id,
-        decision: "withdrawn"
-      })
-    end
-
-    :ok
   end
 
   # The open turns a write that may cancel them leaves no row of after it:
@@ -1220,26 +1107,6 @@ defmodule Aqua.Tape do
   @spec with_open_turns() :: {:ok, [{String.t(), String.t()}]} | {:error, :unavailable}
   def with_open_turns, do: TurnStorage.with_open_turns()
 
-  @doc "One approval."
-  @spec approval(Context.t(), String.t()) :: {:ok, approval()} | {:error, term()}
-  def approval(%Context{} = ctx, approval_id),
-    do: TurnStorage.approval(Sanctum.Context.actor(ctx), approval_id)
-
-  @doc "The approval a card references."
-  @spec approval_by_message(Context.t(), String.t()) :: {:ok, approval()} | {:error, term()}
-  def approval_by_message(%Context{} = ctx, message_id),
-    do: TurnStorage.approval_by_message(Sanctum.Context.actor(ctx), message_id)
-
-  @doc "A turn's pending approvals."
-  @spec pending_approvals(Context.t(), turn()) :: {:ok, [approval()]} | {:error, term()}
-  def pending_approvals(%Context{} = ctx, turn),
-    do: TurnStorage.pending_approvals(Sanctum.Context.actor(ctx), turn.id)
-
-  @doc "The athanor's pending approvals past their expiry."
-  @spec expired_approvals(Context.t()) :: {:ok, [approval()]} | {:error, term()}
-  def expired_approvals(%Context{} = ctx),
-    do: TurnStorage.expired_approvals(Sanctum.Context.actor(ctx), DateTime.utc_now())
-
   @doc "The agent bytes a turn pinned, by their digest."
   @spec agent_revision(Context.t(), turn()) :: {:ok, binary()} | {:error, term()}
   def agent_revision(%Context{} = ctx, %{agent_revision_digest: digest}) when is_binary(digest),
@@ -1335,18 +1202,6 @@ defmodule Aqua.Tape do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # The notices of the turns' cards, each announced on the thread that
-  # asked for its turn as it now stands: the one announcement after every
-  # write that settles a card (its decision, the skip a cancellation, a
-  # pause or an archive makes), so an open pane of that thread drops it.
-  # A read that fails announces nothing; the next load shows the store.
-  defp announce_notices(ctx, turn_ids) do
-    case TurnStorage.notices(Sanctum.Context.actor(ctx), turn_ids) do
-      {:ok, notices} -> Enum.each(notices, &broadcast(ctx, &1.thread_id, :notice, &1))
-      {:error, _unread} -> :ok
-    end
-  end
-
   # The thread's place in its person's list and, for a crew member's turn,
   # its job, announced before the thread's own events: a holder of the
   # thread acts on those, so nothing of this write is still reading once
@@ -1361,11 +1216,8 @@ defmodule Aqua.Tape do
     end
   end
 
-  # What a row is to a viewer: a request to a crew member, a reply or a
-  # notice answering one, or any other row.
-  defp row_kind(%{reply_to: reply_to, outcome: "needs_you"}) when is_binary(reply_to),
-    do: :notice
-
+  # What a row is to a viewer: a request to a crew member, a reply
+  # answering one, or any other row.
   defp row_kind(%{reply_to: reply_to}) when is_binary(reply_to), do: :reply
 
   defp row_kind(%{addressee: addressee, status: status})
@@ -1374,9 +1226,9 @@ defmodule Aqua.Tape do
 
   defp row_kind(_row), do: :message
 
-  # A workspace thread's turn ending or opening a card may have recorded a
-  # report (`Arca.TurnStorage`'s host moves); a read that fails wakes
-  # nobody, and the consumer's tick delivers it.
+  # A workspace thread's turn ending may have recorded a report
+  # (`Arca.TurnStorage`'s host moves); a read that fails wakes nobody, and
+  # the consumer's tick delivers it.
   defp workspace?(ctx, thread_id),
     do: match?({:ok, %{kind: "workspace"}}, Threads.get(Sanctum.Context.actor(ctx), thread_id))
 

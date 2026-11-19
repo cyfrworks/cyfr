@@ -500,14 +500,12 @@ defmodule PrismWeb.WorkspaceLive do
   # A step's state as a person reads it beside its sentence; a step done
   # says nothing more.
   defp step_words(:running), do: "Running"
-  defp step_words(:waiting), do: "Waits for you"
   defp step_words(:failed), do: "Failed"
   defp step_words(:refused), do: "Refused"
   defp step_words(:skipped), do: "Skipped"
   defp step_words(_done), do: nil
 
   defp step_dot(:running), do: "bg-green-400 animate-pulse"
-  defp step_dot(:waiting), do: "bg-amber-400"
   defp step_dot(:done), do: "bg-green-400"
   defp step_dot(:failed), do: "bg-red-400"
   defp step_dot(_other), do: "bg-gray-500"

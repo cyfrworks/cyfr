@@ -62,11 +62,7 @@ defmodule Aqua.Crew do
     * A reply lands on the request's room, sent by the member and
       addressed to the request's sender, and answers every request the
       record names. To the soul it opens or steers the soul's turn; to
-      the person it is room content and wakes nothing. A `needs_you`
-      record is a notice of a card in the child turn: it answers nothing,
-      waits `pending` with the card's approval, and is decided with the
-      card (`Arca.TurnStorage.resolve_approval/4`); a card decided before
-      its notice lands writes none (`:card_decided`).
+      the person it is room content and wakes nothing.
 
   The same consumer delivers what a workspace thread sends
   (`Aqua.Providers.Workspace`):
@@ -140,7 +136,6 @@ defmodule Aqua.Crew do
     :not_a_room,
     :empty,
     :message_too_long,
-    :card_decided,
     :workspace_gone,
     :not_a_workspace,
     :not_a_post,
@@ -710,21 +705,14 @@ defmodule Aqua.Crew do
   end
 
   defp work(%Prima.OutboxRecord{kind: "crew_reply", snapshot: snapshot} = record, held) do
-    [opening | _] = snapshot["request_ids"]
-    outcome = snapshot["outcome"]
-    answers = if outcome == "needs_you", do: [], else: snapshot["request_ids"]
+    [opening | _] = answers = snapshot["request_ids"]
 
     with {:ok, ctx} <- continuation(record),
          {:ok, request} <- request_row(ctx, opening) do
       ctx
       |> Runner.send_message(snapshot["asking_thread_id"], reply_text(snapshot),
         sent_by: snapshot["member"],
-        reply: %{
-          request: request,
-          outcome: outcome,
-          answers: answers,
-          approval_id: snapshot["approval_id"]
-        },
+        reply: %{request: request, outcome: snapshot["outcome"], answers: answers},
         payload: reply_payload(ctx, record, answers),
         receipt: receipt(record, held, "applied")
       )
@@ -915,8 +903,8 @@ defmodule Aqua.Crew do
 
   # What a report says: the summary the soul wrote in the workspace
   # thread; the server's `error` report says Aqua could not run there, and
-  # why; a card's notice, which carries no summary, says the thread needs
-  # the person, naming no card it does not have.
+  # why; a report with no summary says the thread is done or needs the
+  # person.
   defp report_text(%{"outcome" => "error", "title" => title} = snapshot) do
     case String.trim(snapshot["summary"] || "") do
       "" -> "Aqua could not run the workspace thread \"#{title}\"."
@@ -940,8 +928,8 @@ defmodule Aqua.Crew do
 
   # What a report row names beside its text: the workspace thread and its
   # title, the outcome, the turn it came from, whose sources a turn
-  # reading it joins (`from_turn`), the sources the record kept, whether
-  # its summary was cut, and for a card the approval that waits.
+  # reading it joins (`from_turn`), the sources the record kept, and
+  # whether its summary was cut.
   defp report_payload(snapshot) do
     %{
       "workspace" => snapshot["workspace_id"],
@@ -951,12 +939,6 @@ defmodule Aqua.Crew do
       "sources" => snapshot["sources"] || [],
       "truncated" => snapshot["truncated"] == true
     }
-    |> then(fn payload ->
-      case snapshot["approval_id"] do
-        id when is_binary(id) -> Map.put(payload, "approval_id", id)
-        _none -> payload
-      end
-    end)
   end
 
   # A send's answer: landed with its receipt, a receipt already there, a
@@ -1100,8 +1082,7 @@ defmodule Aqua.Crew do
 
   # What a reply row names beside its text: the child turn it came from,
   # whose sources a turn reading it joins, and the child thread to open;
-  # the requests it answers; whether its text was cut; and for a notice,
-  # the card that waits.
+  # the requests it answers; and whether its text was cut.
   defp reply_payload(ctx, %Prima.OutboxRecord{source_id: turn_id, snapshot: snapshot}, answers) do
     base = %{
       "from_turn" => turn_id,
@@ -1110,24 +1091,10 @@ defmodule Aqua.Crew do
     }
 
     case Tape.turn(ctx, turn_id) do
-      {:ok, turn} ->
-        base
-        |> Map.put("from_thread", turn.thread_id)
-        |> Map.merge(card(ctx, snapshot))
-
-      {:error, _} ->
-        base
+      {:ok, turn} -> Map.put(base, "from_thread", turn.thread_id)
+      {:error, _} -> base
     end
   end
-
-  defp card(ctx, %{"outcome" => "needs_you", "approval_id" => id}) when is_binary(id) do
-    case Tape.approval(ctx, id) do
-      {:ok, approval} -> %{"approval_id" => id, "card_message_id" => approval.message_id}
-      _ -> %{"approval_id" => id}
-    end
-  end
-
-  defp card(_ctx, _snapshot), do: %{}
 
   defp receipt(record, %{claim: claim, slot: slot}, outcome),
     do: %{receipt: receipt_of(record, outcome), claim: claim, slot: slot}

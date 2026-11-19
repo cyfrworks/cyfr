@@ -100,9 +100,9 @@ defmodule Aqua.Runner do
 
   ## Broadcasts — `Cyfr.Bus.ThreadEvent` on `Cyfr.Bus.thread/2`
 
-  The rows from the tape (`:message`, `:turn_finished`,
-  `:approval_resolved`), and from here `:turn_starting`, `:turn_started`,
-  `:turn_paused`, `:queued` and `:restart_prompt`; the loop
+  The rows from the tape (`:message`, `:turn_finished`), and from here
+  `:turn_starting`, `:turn_started`, `:turn_paused`, `:queued` and
+  `:restart_prompt`; the loop
   announces `:usage`, `:tool_activity`, `:intents`, `:consent_required`,
   the running loop's `:turn_fence`, a chat step's streamed text as
   `:delta` and its withdrawal as `:delta_abandoned` (`Aqua.Loop.Stream`),
@@ -517,7 +517,7 @@ defmodule Aqua.Runner do
           thread: Map.take(thread, [:id, :kind, :parent_id, :agent]),
           # The running loop: its turn, task, sender and agent.
           live: nil,
-          # A turn paused on a card or around a launch, waiting here.
+          # A turn paused around a launch or on an uncertain call, waiting here.
           paused: nil,
           # Turns accepted behind the running one, oldest first.
           queue: [],
@@ -975,9 +975,6 @@ defmodule Aqua.Runner do
       addressee: addressee,
       reply_to: reply && reply.request.id,
       outcome: reply && reply.outcome,
-      # A card's notice waits with its card until the card is decided.
-      approval_id: reply && reply[:approval_id],
-      status: if(reply && reply[:approval_id], do: "pending"),
       content: text,
       id: Keyword.get(opts, :id),
       client_id: Keyword.get(opts, :client_id),
@@ -1217,14 +1214,6 @@ defmodule Aqua.Runner do
     end
   end
 
-  # A card decided: the paused turn continues once none is pending.
-  defp handle_owned_info(
-         %ThreadEvent{kind: :approval_resolved, data: %{turn_id: turn_id}},
-         %{paused: %{turn_id: turn_id}} = state
-       ) do
-    {:noreply, settle_paused(state)}
-  end
-
   defp handle_owned_info(%ThreadEvent{kind: :usage, data: usage}, state),
     do: {:noreply, %{state | usage: usage}}
 
@@ -1267,13 +1256,6 @@ defmodule Aqua.Runner do
   end
 
   defp handle_owned_info(%ThreadEvent{}, state), do: {:noreply, state}
-
-  defp handle_owned_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
-    Aqua.Approvals.expire_due(state.ctx)
-    {:noreply, settle_paused(%{state | paused: %{state.paused | expiry: nil}})}
-  end
-
-  defp handle_owned_info({:expire, _turn_id}, state), do: {:noreply, state}
 
   defp handle_owned_info({:resume, turn_id}, %{paused: %{turn_id: turn_id}} = state),
     do: {:noreply, settle_paused(state)}
@@ -1333,8 +1315,7 @@ defmodule Aqua.Runner do
               job: live.job,
               agent: live.agent,
               origin: live.origin,
-              reason: reason,
-              expiry: nil
+              reason: reason
             }
         }
 
@@ -1374,8 +1355,7 @@ defmodule Aqua.Runner do
           job: live.job,
           agent: live.agent,
           origin: turn.origin,
-          reason: pause_reason(turn),
-          expiry: nil
+          reason: pause_reason(turn)
         }
 
         state = %{state | live: nil, paused: paused}
@@ -1392,10 +1372,9 @@ defmodule Aqua.Runner do
     end
   end
 
-  # A paused turn: with cards still pending the runner waits for the
-  # decision (and the expiry); stopped on a call whose outcome is unknown
-  # it waits for its sender's next line, unless one is already on the
-  # tape past the stop; with neither it continues as its sender.
+  # A paused turn: stopped on a call whose outcome is unknown it waits for
+  # its sender's next line, unless one is already on the tape past the
+  # stop; paused around a launch it continues as its sender.
   defp settle_paused(%{paused: %{turn_id: turn_id} = paused} = state) do
     case Tape.turn(state.ctx, turn_id) do
       {:ok, %{status: "paused", paused_reason: "uncertain"} = turn} ->
@@ -1403,14 +1382,8 @@ defmodule Aqua.Runner do
           do: continue(%{state | paused: nil}, entry_of(paused), :resume),
           else: touch(state)
 
-      {:ok, %{status: "paused"} = turn} ->
-        case Tape.pending_approvals(state.ctx, turn) do
-          {:ok, [_ | _] = pending} ->
-            arm_expiry(state, pending)
-
-          _ ->
-            continue(%{state | paused: nil}, entry_of(paused), :resume)
-        end
+      {:ok, %{status: "paused"}} ->
+        continue(%{state | paused: nil}, entry_of(paused), :resume)
 
       {:ok, %{status: "running"}} ->
         # The loop is still taking the root back around its launch.
@@ -1421,24 +1394,6 @@ defmodule Aqua.Runner do
         # Ended meanwhile (a failed pin, a stop): nothing to continue.
         start_next(%{state | paused: nil})
     end
-  end
-
-  defp arm_expiry(%{paused: paused} = state, pending) do
-    if paused.expiry, do: Process.cancel_timer(paused.expiry)
-
-    soonest =
-      pending
-      |> Enum.map(& &1.expires_at)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.min(DateTime, fn -> nil end)
-
-    ref =
-      if soonest do
-        delay = max(DateTime.diff(soonest, DateTime.utc_now(), :millisecond), 0)
-        Process.send_after(self(), {:expire, paused.turn_id}, delay)
-      end
-
-    touch(%{state | paused: %{paused | expiry: ref}})
   end
 
   # ---------------------------------------------------------------------------
@@ -1632,9 +1587,6 @@ defmodule Aqua.Runner do
   defp retire_turn(state, id) do
     if match?(%{turn_id: ^id}, state.live), do: Process.demonitor(state.live.task.ref, [:flush])
 
-    if match?(%{turn_id: ^id}, state.paused) and state.paused.expiry,
-      do: Process.cancel_timer(state.paused.expiry)
-
     if held = state.held[id], do: Process.demonitor(held.ref, [:flush])
 
     state = %{
@@ -1736,8 +1688,7 @@ defmodule Aqua.Runner do
           job: job_of(turn),
           agent: turn.agent,
           origin: turn.origin,
-          reason: pause_reason(turn),
-          expiry: nil
+          reason: pause_reason(turn)
         }
 
         settle_paused(%{state | paused: paused})
@@ -1830,7 +1781,6 @@ defmodule Aqua.Runner do
 
   defp pause_reason(%{paused_reason: "launch"}), do: :launch
   defp pause_reason(%{paused_reason: "uncertain"}), do: :uncertain
-  defp pause_reason(_turn), do: :approval
 
   # A queued turn recovered from its row runs as its sender's
   # continuation, under the origin its row stores; one that cannot is
@@ -2017,10 +1967,9 @@ defmodule Aqua.Runner do
   end
 
   # A request that ended: no step of it is recorded or dispatched from
-  # now on, and its step still proposed is skipped and its card withdrawn,
-  # so a late yes runs nothing. Withdrawing a card is no decision the tape
-  # announces: a turn paused on it is settled here, and goes on once no
-  # other card is pending.
+  # now on, and its step still proposed is skipped, which the tape
+  # announces to no runner: a paused turn whose step it skipped is
+  # settled here.
   defp withdraw(state, request) do
     with {:ok, %{turn_id: turn_id, skipped: [_ | _]}} <-
            Tape.end_call(state.ctx, state.id, request, "the page's request ended"),

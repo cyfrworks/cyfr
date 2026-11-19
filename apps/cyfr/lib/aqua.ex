@@ -16,9 +16,7 @@ defmodule Aqua do
     worked in a child thread of the room, and the delivery of requests
     and replies.
   - `Aqua.Tape` — the one persistence port of the runner and the loop.
-  - `Aqua.Launch` — the one dispatcher of a launch, run as a person;
-    `Aqua.Approvals` — a pending approval held to the proposal it was
-    opened for, and settled expired past its time.
+  - `Aqua.Launch` — the one dispatcher of a launch, run as a person.
   - `Aqua.Prompt` — the one composer of the system prompt, from the
     resolved agent and the turn's pinned authority.
   - `Aqua.Hands` — the pseudo-tools that run on the bundled catalysts, and

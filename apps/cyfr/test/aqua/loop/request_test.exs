@@ -467,7 +467,7 @@ defmodule Aqua.Loop.RequestTest do
       ])
     end
 
-    test "the reading agent's own speech is its own; a request, a reply, a notice and another agent's words are said to it" do
+    test "the reading agent's own speech is its own; a request, a reply and another agent's words are said to it" do
       rows = [
         crew(1, "person", "what next?", addressee: "aqua"),
         crew(2, "aqua", "Asking the planner.", payload: Jason.encode!(%{"step_id" => "s1"})),
@@ -477,19 +477,6 @@ defmodule Aqua.Loop.RequestTest do
           addressee: "person",
           reply_to: "msg_4",
           outcome: "done"
-        ),
-        crew(6, "planner", "Write the plan?",
-          addressee: "aqua",
-          reply_to: "msg_3",
-          outcome: "needs_you",
-          status: "pending"
-        ),
-        # A notice decided with its card waits for no one, and is not said.
-        crew(7, "planner", "Delete the draft?",
-          addressee: "aqua",
-          reply_to: "msg_3",
-          outcome: "needs_you",
-          status: "approved"
         )
       ]
 
@@ -505,8 +492,6 @@ defmodule Aqua.Loop.RequestTest do
       refute Enum.any?(texts, &(&1 =~ "plan it"))
       assert Enum.any?(texts, &(&1 =~ "usr_a asked builder (request msg_4, answered)"))
       assert Enum.any?(texts, &(&1 =~ "builder replied to request msg_4: done]\nLogs are clean."))
-      assert Enum.any?(texts, &(&1 =~ "planner needs the person on request msg_3"))
-      refute Enum.any?(texts, &(&1 =~ "Delete the draft?"))
 
       # In the member's thread the soul's task is said to the member.
       assert [%{"role" => "user", "content" => [%{"text" => "[aqua]\nplan it"}]}] =
@@ -1016,7 +1001,7 @@ defmodule Aqua.Loop.RequestTest do
     end
 
     test "a report names its outcome as the reader is told it: done, needing the person, " <>
-           "Aqua's error, or a card's notice" do
+           "or Aqua's error" do
       report = fn seq, payload ->
         %{
           row(seq, "report", @agent, "Summary #{seq}.", Map.put(payload, "title", "Moon report"))
@@ -1028,8 +1013,7 @@ defmodule Aqua.Loop.RequestTest do
       rows = [
         report.(1, %{"outcome" => "done"}),
         report.(2, %{"outcome" => "needs_you"}),
-        report.(3, %{"outcome" => "error"}),
-        report.(4, %{"outcome" => "needs_you", "approval_id" => "apr_1"})
+        report.(3, %{"outcome" => "error"})
       ]
 
       [%{"role" => "user", "content" => content}] = Request.messages(rows, %{}, me: "aqua")
@@ -1037,8 +1021,7 @@ defmodule Aqua.Loop.RequestTest do
       assert Enum.map(content, & &1["text"]) == [
                ~s|[Report from the workspace thread "Moon report" (thr_work): done]\nSummary 1.|,
                ~s|[Report from the workspace thread "Moon report" (thr_work): needs the person]\nSummary 2.|,
-               ~s|[Report from the workspace thread "Moon report" (thr_work): error, Aqua could not run it]\nSummary 3.|,
-               ~s|[Report from the workspace thread "Moon report" (thr_work): a card waits on the person]\nSummary 4.|
+               ~s|[Report from the workspace thread "Moon report" (thr_work): error, Aqua could not run it]\nSummary 3.|
              ]
     end
 

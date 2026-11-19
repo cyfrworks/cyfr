@@ -494,10 +494,6 @@ defmodule Cyfr.Telemetry.Catalog do
     },
 
     # ——— agents ———
-    [:cyfr, :aqua, :approval] => %{
-      consumers: [:audit],
-      note: "a person approved or declined an agent's proposed action"
-    },
     [:cyfr, :aqua, :recovery, :abandoned] => %{
       consumers: [:operator],
       note:

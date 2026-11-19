@@ -575,7 +575,7 @@ defmodule Aqua.PageCallsTest do
       assert {turn.status, turn.requested_by, turn.origin, turn.agent} ==
                {"completed", ctx.user_id, "interactive", "aqua"}
 
-      assert {:ok, []} = Tape.pending_approvals(ctx, turn)
+      assert {:ok, []} = Arca.TurnStorage.pending_approvals(Sanctum.Context.actor(ctx), turn.id)
       {:ok, [step]} = Tape.steps(ctx, turn)
 
       assert %{

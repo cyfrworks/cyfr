@@ -1644,13 +1644,7 @@ defmodule Aqua.RunnerTest do
 
     send(runner, {:DOWN, held_ref, :process, holder, :normal})
     send(runner, {:recover, turn.id})
-
-    send(runner, %ThreadEvent{
-      athanor_id: ctx.athanor_id,
-      thread_id: thread.id,
-      kind: :approval_resolved,
-      data: %{turn_id: turn.id}
-    })
+    send(runner, {:resume, turn.id})
 
     send(call, :continue)
     assert :ok = Runner.stop_turn(ctx, thread.id)
@@ -2687,8 +2681,7 @@ defmodule Aqua.RunnerTest do
 
   # A turn's steps as a case compares them: every field but those minted
   # (ids, clocks, digests, usage), which a case reads where it speaks of
-  # them, with the rows a step carries its call and its answer in, by kind,
-  # and its card's state.
+  # them, with the rows a step carries its call and its answer in, by kind.
   defp steps!(ctx, turn_id) do
     for step <- raw_steps!(ctx, turn_id) do
       %{
@@ -2706,7 +2699,7 @@ defmodule Aqua.RunnerTest do
         cancel_requested?: step.cancel_requested_at != nil,
         carried: kind_of(ctx, step.message_id),
         answered: kind_of(ctx, step.result_message_id),
-        card: card_of(ctx, step.approval_id)
+        approval_id: step.approval_id
       }
     end
   end
@@ -2720,13 +2713,6 @@ defmodule Aqua.RunnerTest do
   defp kind_of(ctx, id) do
     {:ok, row} = Tape.message(ctx, id)
     row.kind
-  end
-
-  defp card_of(_ctx, nil), do: nil
-
-  defp card_of(ctx, id) do
-    {:ok, approval} = Tape.approval(ctx, id)
-    approval.status
   end
 
   # A model step of `turn_id` that answered, on the catalyst the turn
@@ -2750,7 +2736,7 @@ defmodule Aqua.RunnerTest do
       cancel_requested?: false,
       carried: nil,
       answered: answered,
-      card: nil
+      approval_id: nil
     }
   end
 
@@ -2775,7 +2761,7 @@ defmodule Aqua.RunnerTest do
       cancel_requested?: false,
       carried: "tool_call",
       answered: "tool_result",
-      card: nil
+      approval_id: nil
     }
   end
 
@@ -2845,7 +2831,7 @@ defmodule Aqua.RunnerTest do
 
   # A page's step in `turn_id` for `call`; of the calls here only
   # `component.list` is replay-safe.
-  defp page_step(seq, turn_id, call, outcome, state \\ "closed", card \\ nil) do
+  defp page_step(seq, turn_id, call, outcome, state \\ "closed") do
     [tool, action] = String.split(call.name, ".")
 
     %{
@@ -2863,7 +2849,7 @@ defmodule Aqua.RunnerTest do
       cancel_requested?: false,
       carried: "page_call",
       answered: if(state == "closed", do: "page_result"),
-      card: card
+      approval_id: nil
     }
   end
 
