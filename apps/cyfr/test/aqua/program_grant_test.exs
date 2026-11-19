@@ -3,10 +3,10 @@
 
 defmodule Aqua.ProgramGrantTest do
   @moduledoc """
-  A standing answer to start a program: it covers the row the call names
-  and no other, whatever the card sent (`Aqua.Standing`), and it stands
-  on that row as the row's other grants do: the row's confirmation names
-  it (`Sanctum.Mount.granted_to/2`) and the row's removal ends it.
+  A standing answer to start a program covers the one row its constraint
+  names (`Sanctum.ToolGrants`), and it stands on that row as the row's
+  other grants do: the row's confirmation names it
+  (`Sanctum.Mount.granted_to/2`) and the row's removal ends it.
   """
   use ExUnit.Case, async: false
 
@@ -45,35 +45,26 @@ defmodule Aqua.ProgramGrantTest do
     row
   end
 
-  defp start(row_id),
-    do: %{"tool" => "program", "action" => "start", "args" => %{"program" => row_id}}
-
-  defp allow!(ctx, turn, row, scope \\ :always) do
-    {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start(row.id), scope)
-    {:ok, _} = Sanctum.ToolGrants.put(ctx, grant)
-    grant
+  # A standing allow to start `row`, at agent scope for `:always` and at
+  # thread scope for `:thread`, constrained to that row, with `bounds`.
+  defp start_grant(turn, row, scope, bounds \\ %{}) do
+    Map.merge(
+      %{
+        scope: if(scope == :thread, do: "thread", else: "agent"),
+        effect: "allow",
+        thread_id: turn.thread_id,
+        agent_name: turn.agent,
+        tool: "program",
+        action: "start",
+        constraint: %{kind: "program_row", patterns: [row.id]}
+      },
+      bounds
+    )
   end
 
-  test "an answer for every start covers the call's own row, whatever the card sent",
-       %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
-    for scope <- [:always, :thread] do
-      assert {:ok, [%{constraint: %{kind: "program_row", patterns: [id]}}]} =
-               Aqua.Standing.rows(ctx, turn, start(gh.id), scope)
-
-      assert id == gh.id
-
-      wider = %{constraint: %{kind: "program_row", patterns: [gh.id, jq.id]}}
-
-      assert {:ok, [%{constraint: %{patterns: [^id]}}]} =
-               Aqua.Standing.rows(ctx, turn, start(gh.id), scope, wider)
-    end
-
-    assert {:error, {:scope_not_permitted, :unconstrained_program}} =
-             Aqua.Standing.rows(ctx, turn, %{start(gh.id) | "args" => %{}}, :always)
-
-    # A never is a deny for every start, as any deny is.
-    assert {:ok, [%{effect: "deny"} = deny]} = Aqua.Standing.rows(ctx, turn, start(gh.id), :never)
-    refute Map.get(deny, :constraint)
+  defp allow!(ctx, turn, row, scope \\ :always) do
+    {:ok, grant} = Sanctum.ToolGrants.put(ctx, start_grant(turn, row, scope))
+    grant
   end
 
   test "the row's grants name the answer, and its removal ends it and leaves another row's",
@@ -167,8 +158,8 @@ defmodule Aqua.ProgramGrantTest do
       }
 
     defp allow_until!(ctx, turn, row, until) do
-      {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start(row.id), :always, %{until: until})
-      {:ok, _} = Sanctum.ToolGrants.put(ctx, grant)
+      {:ok, _} =
+        Sanctum.ToolGrants.put(ctx, start_grant(turn, row, :always, %{expires_at: until}))
     end
 
     defp stored(ctx) do
@@ -192,26 +183,6 @@ defmodule Aqua.ProgramGrantTest do
       assert stored(ctx) == %{gh.id => soon, jq.id => nil}
       assert Sanctum.ToolGrants.admits?(ctx, start_call(turn, gh))
       assert Sanctum.ToolGrants.admits?(ctx, start_call(turn, jq))
-
-      # The chat lists each by its program's name, its row behind it.
-      assert {:ok, listed} = Aqua.ToolGrants.allowed_by_agent(ctx, turn.thread_id)
-
-      assert listed ==
-               MapSet.new([
-                 {"aqua", "program", "start", %{id: gh.id, name: "gh"}, nil},
-                 {"aqua", "program", "start", %{id: jq.id, name: "jq"}, nil}
-               ])
-
-      # A renamed row's answer reads as the program it covers.
-      import Ecto.Query
-
-      {1, _} =
-        Arca.Repo.update_all(from(s in Arca.Schemas.McpServer, where: s.id == ^gh.id),
-          set: [name: "github"]
-        )
-
-      assert {:ok, renamed} = Aqua.ToolGrants.allowed_by_agent(ctx, turn.thread_id)
-      assert {"aqua", "program", "start", %{id: gh.id, name: "github"}, nil} in renamed
     end
 
     test "a second answer for gh replaces gh's alone", %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
@@ -240,55 +211,36 @@ defmodule Aqua.ProgramGrantTest do
       assert Sanctum.ToolGrants.admits?(ctx, start_call(turn, jq))
     end
 
-    test "the thread's revoke names the program, and refuses one that names none",
-         %{ctx: ctx, turn: turn, gh: gh, jq: jq} do
-      allow!(ctx, turn, gh, :thread)
-      allow!(ctx, turn, jq, :thread)
-
-      assert {:error, _named_none} =
-               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start")
-
-      assert Map.keys(stored(ctx)) == Enum.sort([gh.id, jq.id])
-
-      assert :ok =
-               Aqua.Runner.revoke_grant(ctx, turn.thread_id, "aqua", "program", "start", %{
-                 program: jq.id
-               })
-
-      assert Map.keys(stored(ctx)) == [gh.id]
-    end
-
     test "a never stays the one answer for every start, and beats each program's allow",
          %{ctx: ctx, turn: turn, gh: gh} do
       allow!(ctx, turn, gh)
-      {:ok, [deny]} = Aqua.Standing.rows(ctx, turn, start(gh.id), :never)
-      {:ok, _} = Sanctum.ToolGrants.put(ctx, deny)
+
+      {:ok, _} =
+        Sanctum.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "deny",
+          agent_name: turn.agent,
+          tool: "program",
+          action: "start"
+        })
 
       assert Map.keys(stored(ctx)) == ["", gh.id]
       refute Sanctum.ToolGrants.admits?(ctx, start_call(turn, gh))
-      assert {:ok, listed} = Aqua.ToolGrants.allowed_by_agent(ctx, turn.thread_id)
-      assert listed == MapSet.new()
     end
   end
 
   describe "an answer is written only for a program that stands as it was shown" do
-    defp start_at(row, epoch),
-      do: %{
-        "tool" => "program",
-        "action" => "start",
-        "args" => %{"program" => row.id, "epoch" => epoch}
-      }
+    # The allow a decision on the card's `epoch` of `row` builds.
+    defp start_at(turn, row, epoch),
+      do: start_grant(turn, row, :always, %{program_epoch: epoch})
 
     test "a program that does not exist, or is another athanor's, takes no answer",
          %{ctx: ctx, turn: turn} do
-      missing = %{
-        "tool" => "program",
-        "action" => "start",
-        "args" => %{"program" => "no_such_program"}
-      }
-
       assert {:error, {:scope_not_permitted, :no_program}} =
-               Aqua.Standing.rows(ctx, turn, missing, :always)
+               Sanctum.ToolGrants.grant_row(
+                 ctx,
+                 start_grant(turn, %{id: "no_such_program"}, :always)
+               )
 
       {:ok, other} =
         Sanctum.Test.People.linked(%{id: "grant-other", provider: "local", verified: true})
@@ -298,7 +250,7 @@ defmodule Aqua.ProgramGrantTest do
       theirs = row!(theirs_ctx, "theirs")
 
       assert {:error, {:scope_not_permitted, :no_program}} =
-               Aqua.Standing.rows(ctx, turn, start(theirs.id), :always)
+               Sanctum.ToolGrants.grant_row(ctx, start_grant(turn, theirs, :always))
 
       # The store refuses it too, whoever built the row.
       row = %{
@@ -329,7 +281,7 @@ defmodule Aqua.ProgramGrantTest do
       assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(actor, jq.id)
 
       # Decided before the removal, written after it: refused, nothing kept.
-      {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_at(gh, gh.epoch), :always)
+      {:ok, grant} = Sanctum.ToolGrants.grant_row(ctx, start_at(turn, gh, gh.epoch))
       {:ok, _} = Arca.McpServerStorage.delete(actor, "gh")
       assert {:error, :no_program} = Arca.ToolGrantStorage.put(grant)
 
@@ -345,13 +297,13 @@ defmodule Aqua.ProgramGrantTest do
       changed = fn name -> Jason.encode!(%{"command" => "#{name} --other", "env" => %{}}) end
 
       # Written first: the change ends it.
-      {:ok, [first]} = Aqua.Standing.rows(ctx, turn, start_at(jq, jq.epoch), :always)
+      {:ok, first} = Sanctum.ToolGrants.grant_row(ctx, start_at(turn, jq, jq.epoch))
       {:ok, _} = Sanctum.ToolGrants.put(ctx, first)
       {:ok, _} = Arca.McpServerStorage.update(actor, "jq", %{config_json: changed.("jq")})
       assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(actor, jq.id)
 
       # Decided on the card's epoch, written after the change: refused.
-      {:ok, [grant]} = Aqua.Standing.rows(ctx, turn, start_at(gh, gh.epoch), :always)
+      {:ok, grant} = Sanctum.ToolGrants.grant_row(ctx, start_at(turn, gh, gh.epoch))
       {:ok, moved} = Arca.McpServerStorage.update(actor, "gh", %{config_json: changed.("gh")})
       assert {:error, :program_changed} = Arca.ToolGrantStorage.put(grant)
 
@@ -360,10 +312,10 @@ defmodule Aqua.ProgramGrantTest do
 
       # Decided on the old epoch after the change: refused before anything.
       assert {:error, {:scope_not_permitted, :program_changed}} =
-               Aqua.Standing.rows(ctx, turn, start_at(gh, gh.epoch), :always)
+               Sanctum.ToolGrants.grant_row(ctx, start_at(turn, gh, gh.epoch))
 
       # On the epoch it holds now, it stands.
-      assert {:ok, [now]} = Aqua.Standing.rows(ctx, turn, start_at(gh, moved.epoch), :always)
+      assert {:ok, now} = Sanctum.ToolGrants.grant_row(ctx, start_at(turn, gh, moved.epoch))
       assert {:ok, _} = Sanctum.ToolGrants.put(ctx, now)
     end
   end
@@ -423,21 +375,17 @@ defmodule Aqua.ProgramGrantTest do
     end
   end
 
-  test "a program the store cannot read just now takes no standing answer, in words, and nothing is written",
+  test "a program the store cannot read just now takes no standing answer, and nothing is written",
        %{ctx: ctx, turn: turn, gh: gh} do
-    {:ok, [built]} = Aqua.Standing.rows(ctx, turn, start(gh.id), :always)
+    {:ok, built} = Sanctum.ToolGrants.grant_row(ctx, start_grant(turn, gh, :always))
     Arca.Repo.query!("ALTER TABLE mcp_servers RENAME TO unread_mcp_servers")
 
     try do
-      assert {:error, {:scope_not_permitted, :program_unavailable} = refusal} =
-               Aqua.Standing.rows(ctx, turn, start(gh.id), :always)
+      assert {:error, {:scope_not_permitted, :program_unavailable}} =
+               Sanctum.ToolGrants.grant_row(ctx, start_grant(turn, gh, :always))
 
       assert {:error, {:scope_not_permitted, :program_unavailable}} =
                Sanctum.ToolGrants.put(ctx, built)
-
-      assert Aqua.ToolGrants.refusal_message(refusal) ==
-               "The program could not be read just now, so no standing answer can be given " <>
-                 "for it yet; nothing was approved. Try again, or approve it once."
     after
       Arca.Repo.query!("ALTER TABLE unread_mcp_servers RENAME TO mcp_servers")
     end
@@ -445,9 +393,9 @@ defmodule Aqua.ProgramGrantTest do
     assert {:ok, []} = Arca.ToolGrantStorage.on_program_row(Sanctum.Context.actor(ctx), gh.id)
   end
 
-  test "the soul's policy asks for a start and a send, and never makes a start automatic" do
-    refute Aqua.Kinds.auto_permitted?("program", "start")
-    assert Aqua.Kinds.auto_permitted?("program", "list")
-    assert Aqua.Kinds.standing_for("program", "send") == :thread
+  test "a start is never auto-permitted, a list is, and a send stands for one thread only" do
+    refute Sanctum.Catalog.auto_permitted?("program", "start")
+    assert Sanctum.Catalog.auto_permitted?("program", "list")
+    assert {:ok, %{standing: :thread}} = Sanctum.Catalog.action_declaration("program.send")
   end
 end

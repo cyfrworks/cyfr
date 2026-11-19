@@ -1659,7 +1659,7 @@ defmodule Aqua.RunnerTest do
   end
 
   for loss <- [:lost, :expired],
-      operation <- [:send, :stop, :revoke_grant, :restart_for_consent] do
+      operation <- [:send, :stop, :restart_for_consent] do
     @tag :stop_handoff
     test "a queued #{operation} call refuses without mutation after ownership is #{loss}", %{
       ctx: ctx,
@@ -1676,7 +1676,6 @@ defmodule Aqua.RunnerTest do
         case unquote(operation) do
           :send -> {:send, ctx, "@aqua late", [agents: [%{"name" => "aqua"}]]}
           :stop -> {:stop, ctx}
-          :revoke_grant -> {:revoke_grant, ctx, "aqua", "notes", "keep", nil}
           :restart_for_consent -> {:restart_for_consent, ctx, %{}}
         end
 

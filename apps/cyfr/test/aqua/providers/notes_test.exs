@@ -803,8 +803,9 @@ defmodule Aqua.Providers.NotesTest do
     # an endorsement is one click at a time; forget is destructive and
     # already takes no standing allow. The about-you page and a workspace
     # thread's notes are Aqua's to keep current: no standing rule of
-    # their own, so an authored `auto` runs them with no card, and the
-    # workspace notes are a chain's alone.
+    # their own, so the catalog's auto rule admits them
+    # (`Sanctum.Catalog.auto_permitted?/2`), and the workspace notes are a
+    # chain's alone.
     assert actions["keep"].standing == :thread
     assert actions["endorse"].standing == false
     assert actions["forget"].kind == :destructive
@@ -814,8 +815,11 @@ defmodule Aqua.Providers.NotesTest do
       refute Map.has_key?(actions[name], :standing), "#{name} declares a standing rule"
     end
 
-    for action <- ~w(pin workspace), do: assert(Aqua.Kinds.auto_permitted?("notes", action))
-    for action <- ~w(keep endorse forget), do: refute(Aqua.Kinds.auto_permitted?("notes", action))
+    for action <- ~w(pin workspace),
+        do: assert(Sanctum.Catalog.auto_permitted?("notes", action))
+
+    for action <- ~w(keep endorse forget),
+        do: refute(Sanctum.Catalog.auto_permitted?("notes", action))
   end
 
   describe "a workspace thread's notes" do

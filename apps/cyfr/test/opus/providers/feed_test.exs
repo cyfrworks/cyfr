@@ -307,23 +307,14 @@ defmodule Opus.Providers.FeedTest do
                Enum.find(feeds, &(&1.binding_id == answer.binding))
     end
 
-    test "an in-chain bind is never admitted without an approval" do
-      # External in kind: no policy makes it automatic, and no standing
-      # allow is ever taken for it, so each in-chain bind waits on a
-      # person's approval of that call.
+    test "an in-chain bind is external and takes no standing allow" do
       assert Aqua.Kinds.kind_for("feed", "bind") == :external
-      refute Aqua.Kinds.auto_permitted?("feed", "bind")
+      refute Sanctum.Catalog.auto_permitted?("feed", "bind")
 
       allow = %{scope: "athanor", effect: "allow", tool: "feed", action: "bind"}
 
       assert {:error, _not_standing} =
                Sanctum.ToolGrants.check_standing(allow, DateTime.utc_now())
-
-      assert Aqua.ToolGrants.resolve(%{"feed.bind" => "auto"}, [], {:ok, true})["feed.bind"] ==
-               "ask"
-
-      assert Aqua.ToolGrants.resolve(%{"feed.*" => "auto"}, [allow], {:ok, true})["feed.bind"] ==
-               "ask"
     end
 
     test "refuses an uninstalled reference, an operation with no declared result, and a binding " <>

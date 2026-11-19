@@ -3,9 +3,8 @@
 
 defmodule Aqua.Kinds do
   @moduledoc """
-  What an operation is to the assistant: its kind, whether it may ever
-  run without a card, the verbs a tool has and the standing it takes —
-  read from the catalog's annotations and the virtual-tool
+  What an operation is to the assistant: its kind and the verbs a tool
+  has — read from the catalog's annotations and the virtual-tool
   catalog, one rule for the Aqua page and the runtime alike, whose
   read-only mode runs an action only when its kind is a read. The
   classification is the gate's (`Sanctum.Catalog.tool_kind/2`,
@@ -22,23 +21,6 @@ defmodule Aqua.Kinds do
   defdelegate kind_for(tool, action), to: Sanctum.Catalog, as: :tool_kind
 
   @doc """
-  Whether `tool.action` may ever run without a card: only a read, write or
-  execute kind whose declaration takes a standing allow at agent scope
-  (`Sanctum.Catalog.auto_permitted?/2`). Destructive and external actions
-  always ask, so does an action declared `standing: false` (a pin, a
-  scroll's write) or `standing: :thread` (a kept note), and an action
-  whose kind is unknown is refused too — "not known" and "not yet
-  loaded" read the same here, and only the second could otherwise run
-  something destructive with no card. The one rule the Aqua page and the
-  runtime ceiling (`Aqua.ToolGrants.effective/3`) read; the kinds it
-  admits are `Sanctum.VirtualTools.auto_permitted_kind?/1`'s. The browser
-  tool's own actions are decided over it by the person's browser setting,
-  in that ceiling alone.
-  """
-  @spec auto_permitted?(String.t(), String.t()) :: boolean()
-  defdelegate auto_permitted?(tool, action), to: Sanctum.Catalog
-
-  @doc """
   The action verbs a catalogued tool has — the virtual catalog's for a
   virtual tool, the registry's `action` enum otherwise — and `[]` for a
   tool neither holds: an entry of the soul's `tools` naming an action
@@ -53,21 +35,4 @@ defmodule Aqua.Kinds do
     do: Sanctum.VirtualTools.tool?(tool) or actions_of(tool) != []
 
   def catalogued?(_tool), do: false
-
-  @doc """
-  The standing rule of a `tool.action`, from the same declaration
-  `kind_for/2` reads. The virtual catalog and the external namespace
-  declare none, so both keep the default (any standing scope); an
-  internal tool answers from its registry annotation.
-  """
-  @spec standing_for(String.t(), String.t()) :: :thread | false | nil
-  def standing_for(tool, action) when is_binary(tool) and is_binary(action) do
-    cond do
-      Sanctum.VirtualTools.tool?(tool) -> nil
-      String.contains?(tool, ":") -> nil
-      true -> Aqua.Ops.action_standing(tool, action)
-    end
-  end
-
-  def standing_for(_, _), do: nil
 end

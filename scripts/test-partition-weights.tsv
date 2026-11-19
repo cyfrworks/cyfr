@@ -156,7 +156,6 @@
 0.6	apps/cyfr/test/aqua/models_test.exs
 1.2	apps/cyfr/test/aqua/notes_test.exs
 3.9	apps/cyfr/test/aqua/prompt_test.exs
-0.4	apps/cyfr/test/aqua/providers/approval_test.exs
 1.9	apps/cyfr/test/aqua/providers/notes_test.exs
 26.8	apps/cyfr/test/aqua/providers/status_test.exs
 2.5	apps/cyfr/test/aqua/providers/thread_test.exs
@@ -170,7 +169,6 @@
 0.1	apps/cyfr/test/aqua/schedule_notes_sandbox_test.exs
 2.9	apps/cyfr/test/aqua/schedule_notes_test.exs
 1.2	apps/cyfr/test/aqua/seed_contract_test.exs
-0.1	apps/cyfr/test/aqua/standing_test.exs
 5.1	apps/cyfr/test/aqua/status_test.exs
 3.8	apps/cyfr/test/aqua/streams_test.exs
 0.1	apps/cyfr/test/aqua/supervisor_test.exs

@@ -362,13 +362,10 @@ defmodule Cyfr.Boundaries do
         Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Notify Sanctum.Provisioning
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.SharedThreads Sanctum.Tenancy
-        Sanctum.ToolGrants Sanctum.VirtualTools
+        Sanctum.VirtualTools
       ),
       reason:
-        "`Sanctum.ToolGrants` holds the standing answers a person gave, which are " <>
-          "consent state: the assistant composes them with an agent's policy and " <>
-          "checks which may stand, and reads and writes the rows only through it. " <>
-          "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s in-process agent read " <>
+        "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s in-process agent read " <>
           "alone — the first-need hook: a turn reads its athanor's tree in-process " <>
           "rather than through the `aqua` tool, and the bundle an unfilled athanor " <>
           "is filled with on first read has to be there before the turn roots an " <>
@@ -380,7 +377,7 @@ defmodule Cyfr.Boundaries do
           "row below narrows it. " <>
           "`Sanctum.Gate` is the gate a turn's tool calls pass. `Sanctum.Catalog` is the " <>
           "table's tool definitions, kinds and actions the assistant reads, and " <>
-          "`Sanctum.Annotations` an action's declared kind, standing and recovery. " <>
+          "`Sanctum.Annotations` an action's declared kind and recovery. " <>
           "`Sanctum.RunningTasks` cancels and releases a call a turn runs, and " <>
           "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
           "declares the assistant's virtual tools, which its hands, kinds and policy read. " <>
@@ -1864,9 +1861,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Annotations" => [
       actions_of: 1,
       kind: 2,
-      recovery: 2,
-      standing: 1,
-      standing: 2
+      recovery: 2
     ],
     "Sanctum.ApiKey" => [admit_tool: 2, looks_like_key?: 1, permissions: 0, presets: 0],
     "Sanctum.Attach" => [resolve: 5],
@@ -1891,13 +1886,11 @@ defmodule Cyfr.Boundaries do
     # a frame's request is held to its operation's declaration before the
     # person is asked, so an approval never meets a refusal the request
     # could have had. `follows_setting?/2`: the actions that follow the
-    # person's browser setting are decided by it in the turn's policy
-    # (`Aqua.ToolGrants.effective/3`), and the Aqua page leaves them out
-    # of the capability list.
+    # person's browser setting are offered as it says (`Aqua.Offered`), and
+    # the Aqua page leaves them out of the capability list.
     "Sanctum.Catalog" => [
       action_declaration: 1,
       authorize_stream: 2,
-      auto_permitted?: 2,
       chain_reachable?: 2,
       configured_providers: 0,
       follows_setting?: 2,
@@ -2106,8 +2099,7 @@ defmodule Cyfr.Boundaries do
       get_by_owner: 1,
       list_active: 0,
       provisioning_failure: 1,
-      route_slug: 1,
-      settings: 1
+      route_slug: 1
     ],
     "Sanctum.Tenancy.Users" => [
       display_name: 1,
@@ -2131,12 +2123,6 @@ defmodule Cyfr.Boundaries do
       revoke_frame: 2,
       suspend_frame: 2,
       verify_asset_credential: 2
-    ],
-    "Sanctum.ToolGrants" => [
-      check_standing: 2,
-      for_thread: 2,
-      grant_row: 2,
-      revoke: 2
     ],
     # `definition/1`: the one digest a program's confirmation and its
     # grants are both held to, which Emissary's provider compares to decide

@@ -5,9 +5,8 @@ defmodule Cyfr.DeclaredOperationsTest do
   @moduledoc """
   The identity, device and grant operations: each is on the operation
   table with the annotations it is admitted under, and each argument that
-  names a subject, narrows a grant or bounds an approval is decided, never
-  dropped, so nothing reads as narrower, bounded or admitted when it is
-  not.
+  names a subject or narrows a grant is decided, never dropped, so nothing
+  reads as narrower, bounded or admitted when it is not.
   """
 
   use ExUnit.Case, async: false
@@ -128,20 +127,6 @@ defmodule Cyfr.DeclaredOperationsTest do
       # (`Opus.UsageTest`).
       assert call(ctx, "execution", "usage", %{"profile_id" => "prf_1"}) ==
                {:error, {:not_found, "Profile", "prf_1"}}
-    end
-
-    test "an approval's bounds are decided", %{ctx: ctx} do
-      for bound <- [
-            %{"lifecycle" => "turn"},
-            %{"until" => "2026-10-01T00:00:00Z"},
-            %{"constraint" => %{"kind" => "storage_path", "patterns" => ["data/notes/"]}}
-          ] do
-        args = Map.merge(%{"approval" => "apr_1", "decision" => "approve"}, bound)
-
-        # Carried into the decision, which finds no such approval.
-        assert call(ctx, "approval", "resolve", args) ==
-                 {:error, {:not_found, "approval", "apr_1"}}
-      end
     end
 
     test "a narrowing names the limits in their own vocabulary, and the decisions no origins" do

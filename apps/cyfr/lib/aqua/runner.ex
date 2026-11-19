@@ -11,9 +11,8 @@ defmodule Aqua.Runner do
   it on the tape with the turn it opens, runs the loop in a worker of
   its own (`Aqua.Loop`, the process that holds the turn's root, which
   dies with the runner — `Aqua.Loop.Worker`), and keeps what a viewer
-  joining now needs — whether a turn runs, the tool activity, the usage,
-  the standing grants. Every row is the tape's; every viewer reads the
-  same topic.
+  joining now needs — whether a turn runs, the tool activity, the usage.
+  Every row is the tape's; every viewer reads the same topic.
 
   ## Admission
 
@@ -103,7 +102,7 @@ defmodule Aqua.Runner do
 
   The rows from the tape (`:message`, `:turn_finished`,
   `:approval_resolved`), and from here `:turn_starting`, `:turn_started`,
-  `:turn_paused`, `:queued`, `:grants` and `:restart_prompt`; the loop
+  `:turn_paused`, `:queued` and `:restart_prompt`; the loop
   announces `:usage`, `:tool_activity`, `:intents`, `:consent_required`,
   the running loop's `:turn_fence`, a chat step's streamed text as
   `:delta` and its withdrawal as `:delta_abandoned` (`Aqua.Loop.Stream`),
@@ -419,26 +418,6 @@ defmodule Aqua.Runner do
     end)
   end
 
-  @doc """
-  Stop auto-approving `{tool, action}` for `agent` in this thread: the
-  answer `key` names, `%{program, schedule}`, each nil for none. For an
-  action whose answer is one program's, that program's answer, and none
-  without it (`Sanctum.ToolGrants.revoke/2`); for an answer that ends with
-  a schedule, that schedule's alone, which stands beside the others.
-  """
-  @spec revoke_grant(
-          Context.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          %{optional(:program) => String.t() | nil, optional(:schedule) => String.t() | nil}
-        ) ::
-          :ok | {:error, term()}
-  def revoke_grant(%Context{} = ctx, thread_id, agent, tool, action, key \\ %{})
-      when is_binary(agent) and is_binary(tool) and is_binary(action) and is_map(key),
-      do: call(ctx, thread_id, {:revoke_grant, ctx, agent, tool, action, key})
-
   @doc "A consent granted mid-turn applies to future roots: the turn is cut and the sender asked to re-send."
   @spec restart_for_consent(Context.t(), String.t(), map()) :: :ok | {:error, term()}
   def restart_for_consent(%Context{} = ctx, thread_id, result) when is_map(result),
@@ -549,7 +528,6 @@ defmodule Aqua.Runner do
           tool_activity: [],
           # The running turn's streamed answers (`Aqua.Loop.Stream`).
           partials: Aqua.Loop.Stream.new(),
-          grants: MapSet.new(),
           agent: thread.agent,
           idle_ref: nil,
           # A page's calls waiting to become steps, oldest first.
@@ -659,30 +637,6 @@ defmodule Aqua.Runner do
 
       {:error, reason, state} ->
         {:stop, :normal, {:error, reason}, retire_runtime(state)}
-    end
-  end
-
-  defp handle_owned_call({:revoke_grant, ctx, agent, tool, action, key}, _from, state) do
-    case Admission.standing(ctx, state.athanor_id) do
-      :ok ->
-        revoked =
-          for scope <- Aqua.ToolGrants.scopes() do
-            Aqua.ToolGrants.revoke(ctx, %{
-              scope: scope,
-              thread_id: state.id,
-              agent_name: agent,
-              tool: tool,
-              action: action,
-              program_row: Map.get(key, :program),
-              schedule_id: Map.get(key, :schedule)
-            })
-          end
-
-        answer = Enum.find(revoked, :ok, &(&1 != :ok))
-        {:reply, answer, refresh_grants(state, ctx)}
-
-      refusal ->
-        {:reply, refusal, state}
     end
   end
 
@@ -2093,23 +2047,10 @@ defmodule Aqua.Runner do
       partials: if(state.live, do: state.partials, else: Aqua.Loop.Stream.new()),
       tool_activity: state.tool_activity,
       usage: state.usage,
-      grants: state.grants,
       agent: state.agent && %{"name" => state.agent, "title" => state.agent},
       turn_user: current && current.user_id,
       queued: length(state.queue)
     }
-  end
-
-  defp refresh_grants(state, ctx) do
-    case Aqua.ToolGrants.allowed_by_agent(ctx, state.id) do
-      {:ok, grants} ->
-        state = %{state | grants: grants}
-        broadcast(state, :grants, grants)
-        state
-
-      {:error, _} ->
-        state
-    end
   end
 
   defp broadcast(state, kind, data), do: Tape.announce(state.ctx, state.id, kind, data)

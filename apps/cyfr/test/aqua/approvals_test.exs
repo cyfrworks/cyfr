@@ -3,17 +3,13 @@
 
 defmodule Aqua.ApprovalsTest do
   @moduledoc """
-  A card is decided once, from its own rows: a decline closes its step
-  denied with a tool result, and one answered never records a deny; an
-  approval opens only with the digest it is consumed by; a moved proposal
-  or an expiry settles the card without running anything; and a stale,
-  declined or expired card writes no answer for a schedule. No turn opens
-  a card; each case lays its own (`card!/4`).
+  An approval opens only with the digest it is consumed by, and a card
+  past its expiry is swept expired without running anything, its step
+  closed denied with an answer for the model. No turn opens a card; each
+  case lays its own (`card!/4`).
   """
 
   use ExUnit.Case, async: false
-
-  import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Tape}
   alias Arca.ThreadStorage, as: Threads
@@ -160,92 +156,6 @@ defmodule Aqua.ApprovalsTest do
   end
 
   @keep %{tool: "notes", action: "keep", args: %{"name" => "n", "content" => "c"}}
-  @wipe %{tool: "files", action: "delete", args: %{"path" => "data/x"}}
-
-  describe "an answer for a schedule" do
-    @aqua_line Arca.CronSchedule.aqua_line()
-
-    # A schedule of `user_id`'s in the actor's athanor holding a line for
-    # Aqua, written straight to its row as that person's own act.
-    defp aqua_line!(actor, user_id) do
-      {:ok, row} =
-        Arca.CronSchedule.create(actor, %{
-          user_id: user_id,
-          name: "line-#{System.unique_integer([:positive])}",
-          cron_expression: Cyfr.Test.Cron.hourly_away(),
-          reference: @aqua_line,
-          resolved_reference: @aqua_line,
-          input: Jason.encode!(%{"line" => "keep the plan"}),
-          next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-          cap: 0,
-          by_person: true
-        })
-
-      row
-    end
-
-    defp for_schedule(id),
-      do: %{decision: :approved, scope: :always, lifecycle: :schedule, schedule: id}
-
-    defp schedule_rows(id),
-      do: Arca.Repo.all(from(g in Arca.Schemas.ToolGrant, where: g.schedule_id == ^id))
-
-    test "a stale, a declined and an expired card write no row for it", %{
-      ctx: ctx,
-      thread: thread,
-      pins: pins
-    } do
-      keeper = aqua_line!(Sanctum.Context.actor(ctx), ctx.user_id)
-      turn = started!(ctx, thread, pins)
-      past = DateTime.add(DateTime.utc_now(), -60, :second)
-
-      %{approval: stale} = card!(ctx, turn, @keep, standing: "thread", digest: "sha256:elsewhere")
-      %{approval: declined} = card!(ctx, turn, @keep, standing: "thread")
-      %{approval: expired} = card!(ctx, turn, @keep, standing: "thread", expires_at: past)
-
-      assert {:ok, %{decision: "error"}} =
-               Approvals.resolve(ctx, stale.id, for_schedule(keeper.id))
-
-      assert {:ok, %{decision: "declined"}} =
-               Approvals.resolve(ctx, declined.id, %{decision: :declined})
-
-      assert {:ok, %{decision: "declined", replayed: true}} =
-               Approvals.resolve(ctx, declined.id, for_schedule(keeper.id))
-
-      assert {:ok, %{decision: "expired"}} =
-               Approvals.resolve(ctx, expired.id, for_schedule(keeper.id))
-
-      assert schedule_rows(keeper.id) == []
-      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
-    end
-  end
-
-  test "declining closes the step denied with a tool result, and never records a deny", %{
-    ctx: ctx,
-    thread: thread,
-    pins: pins
-  } do
-    turn = started!(ctx, thread, pins)
-    %{approval: approval, step: step} = card!(ctx, turn, @wipe, kind: "destructive")
-
-    assert {:ok, %{decision: "declined", resolution_kind: "denied"}} =
-             Approvals.resolve(ctx, approval.id, %{
-               decision: :declined,
-               scope: :never,
-               reason: "not that"
-             })
-
-    assert {:ok, %{dispatch_state: "closed", outcome: "denied", result_message_id: rid}} =
-             Tape.step(ctx, step.id)
-
-    assert {:ok, %{kind: "tool_result", content: "declined: not that"} = row} =
-             Tape.message(ctx, rid)
-
-    assert Threads.payload(row)["is_error"] == true
-
-    assert {:ok, [%{tool: "files", action: "delete", effect: "deny", scope: "agent"}]} =
-             Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
-  end
 
   test "an approval opens only with the digest it is consumed by", %{
     ctx: ctx,
@@ -270,36 +180,17 @@ defmodule Aqua.ApprovalsTest do
     refute Approvals.proposal?(%{proposal_digest: nil}, %{"tool" => "notes"})
   end
 
-  test "a card whose proposal no longer matches its approval settles as an error", %{
-    ctx: ctx,
-    thread: thread,
-    pins: pins
-  } do
-    turn = started!(ctx, thread, pins)
-    %{approval: approval, step: step} = card!(ctx, turn, @keep, digest: "sha256:elsewhere")
-
-    assert {:ok, %{decision: "error"}} =
-             Approvals.resolve(ctx, approval.id, %{decision: :approved})
-
-    assert {:ok, %{dispatch_state: "closed", outcome: "denied"}} = Tape.step(ctx, step.id)
-    assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
-  end
-
-  test "a card past its expiry settles expired, decided or swept", %{
+  test "a card past its expiry is swept expired, and one still open stays pending", %{
     ctx: ctx,
     thread: thread,
     pins: pins
   } do
     turn = started!(ctx, thread, pins)
     past = DateTime.add(DateTime.utc_now(), -60, :second)
-    %{approval: decided} = card!(ctx, turn, @keep, expires_at: past)
     %{approval: swept} = card!(ctx, turn, @keep, expires_at: past)
 
     %{approval: live} =
       card!(ctx, turn, @keep, expires_at: DateTime.add(DateTime.utc_now(), 3600))
-
-    assert {:ok, %{decision: "expired", resolution_kind: "expired"}} =
-             Approvals.resolve(ctx, decided.id, %{decision: :approved})
 
     assert {:ok, 1} = Approvals.expire_due(ctx)
     assert {:ok, %{status: "expired"}} = Tape.approval(ctx, swept.id)
@@ -334,32 +225,4 @@ defmodule Aqua.ApprovalsTest do
   defp payload_of(%{payload: payload}) when is_map(payload), do: payload
   defp payload_of(%{payload: json}) when is_binary(json), do: Jason.decode!(json)
   defp payload_of(_), do: %{}
-
-  describe "ttl_seconds/1" do
-    test "is the athanor's setting in hours, else 24, never a bad value" do
-      ctx = Sanctum.TestContext.local(:prism)
-      assert Approvals.ttl_seconds(ctx) == 24 * 3600
-
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 2}})
-
-      assert Approvals.ttl_seconds(ctx) == 7200
-
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => "x"}})
-
-      assert Approvals.ttl_seconds(ctx) == 24 * 3600
-
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 0}})
-
-      assert Approvals.ttl_seconds(ctx) == 24 * 3600
-    end
-  end
 end

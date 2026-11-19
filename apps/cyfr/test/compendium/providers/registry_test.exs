@@ -676,7 +676,7 @@ defmodule Compendium.Providers.RegistryTest do
          %{ctx: ctx} do
       for action <- @remote_changes ++ @remote_deletes do
         kind = if action in @remote_deletes, do: :destructive, else: :external
-        refute Aqua.Kinds.auto_permitted?("registry", action), action
+        refute Sanctum.Catalog.auto_permitted?("registry", action), action
 
         for place <- [%{scope: "thread", thread_id: "thr_registry"}, %{scope: "agent"}] do
           grant = Map.merge(place, %{agent_name: "aqua", tool: "registry", action: action})
