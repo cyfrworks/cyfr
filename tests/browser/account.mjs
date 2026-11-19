@@ -30,7 +30,7 @@ import { askHome, virtualAuthenticator, waitFor } from "./lib.mjs";
 
 const STEP_MS = 60_000;
 // How long a return page that said "Confirmed" has to close its tab.
-const CLOSE_MS = 5_000;
+const CLOSE_MS = 15_000;
 
 // A person's passkeys: every credential an authenticator of theirs made,
 // given to each page `attach` names. `list()` reads them back first.

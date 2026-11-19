@@ -790,7 +790,7 @@ describe("the account pages' hop and return", () => {
 
   // Whether the tab then closes is the browser's: the approval, share and
   // join proofs show it.
-  test("the return asks its window to close once its page says the confirmation is done", () => {
+  test("the return asks its window to close on account:close", () => {
     address("")
     const {listeners} = account("return")
     const original = globalThis.close

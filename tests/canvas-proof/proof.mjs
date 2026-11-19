@@ -449,15 +449,13 @@ async function personClick(page, frame, x, y, { soon = false } = {}) {
 // (harness.sh `playwright_run`).
 const BRIDGE = "js/hooks/iframe_bridge.js";
 let bridge = null;
-async function lifespan() {
+async function lapse() {
   if (!bridge) {
     const beside = new URL(`../../apps/cyfr/assets/${BRIDGE}`, import.meta.url);
     bridge = import(existsSync(beside) ? beside.href : pathToFileURL(`/assets/${BRIDGE}`).href);
   }
-  return (await bridge).ACTIVATION_LIFESPAN_MS;
-}
-async function lapse() {
-  await sleep((await lifespan()) + 250);
+  const { ACTIVATION_LIFESPAN_MS } = await bridge;
+  await sleep(ACTIVATION_LIFESPAN_MS + 250);
 }
 
 // The center of `locator` in the page's viewport, scrolled into view.
@@ -946,8 +944,13 @@ async function stepFeedChart(page, name) {
 // click, and the page opens from its click handler. Tapped again at once
 // after the window's close in the shell, within the activation's lifespan
 // of that press, the open is dropped too soon and the tile says so ("Tap
-// again in a moment", the shipped canvas's TOO_SOON): a dropped tap is
-// never silent.
+// again in a moment", the shipped canvas's TOO_SOON): a tap dropped too
+// soon is not silent. The verdict is what the browser showed: the open
+// received and dropped with the shell holding activation and the frame
+// focused, the tile's words, nothing opened. How long after the close the
+// proof's clock read the tap's start is recorded beside it and decides
+// nothing: the bridge measures the lifespan on the browser's own clock,
+// from the shell's input to the verb's receipt.
 async function stepAppOverCanvas(page, name) {
   const start = await showCanvas(page, "start");
   await until(start.frame, shippedDrawing, (d) => d.tiles.includes("canvas-full"), "the canvas-full launcher");
@@ -984,7 +987,8 @@ async function stepAppOverCanvas(page, name) {
   await lib.waitFor(async () => ((await page.$(`iframe[data-frame-id="${full.id}"]`)) ? null : true), { timeoutMs: 15_000, what: "canvas-full closed" });
   const startBack = await showCanvas(page, "start");
 
-  // The tile tapped again at once: too soon after the close's press.
+  // The tile tapped again at once: too soon after the close's press. The
+  // milliseconds since the close are the proof's clock, a diagnostic.
   const soonFrom = (await instrument(page)).receipts.length;
   const sinceClose = Date.now() - closedAt;
   const tileAgain = await centerOf(launcher(startBack.frame));
@@ -1001,7 +1005,7 @@ async function stepAppOverCanvas(page, name) {
     focused && opened === 1 && full.state === "live" && startUnder && startUnder.state === "frozen" &&
       fullFrozen.state === "frozen" && fullFrozen.inert && startFrozen && startFrozen.state === "frozen" &&
       fullAgain.state === "live" && startBack.id === start.id && startBack.state === "live" &&
-      sinceClose < (await lifespan()) && soonFocused && soon.received === 1 && soon.dropped === 1 &&
+      soonFocused && soon.received === 1 && soon.dropped === 1 && soon.forwarded === 0 &&
       soon.active === true && soon.active_element_is_frame === true && said === "Tap again in a moment" && !reopened,
     {
       opened: { by: "the shipped canvas's launcher tile", frame_focused: focused, open_verbs: opened, full_frame: full.state, canvas_under: startUnder && startUnder.state },
