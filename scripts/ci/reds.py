@@ -152,10 +152,15 @@ def failed_jobs(run_id, attempt):
 
 def failing_tests(job_id):
     """The failing tests the job's log names, in order and once each, or None
-    when the log cannot be read."""
+    when the log cannot be read, saying why on this script's output.
+
+    gh api refuses to print a response holding a terminal escape sequence
+    unless told it may (gh 2.97.0 and later), and every job log holds one:
+    the runner colours each step's command. Nothing here prints the log."""
     try:
-        text = gh(f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs")
-    except Unreadable:
+        text = gh("--allow-escape-sequences", f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs")
+    except Unreadable as e:
+        print(f"reds: the log of job {job_id} could not be read: {e}")
         return None
     seen = []
     for line in text.splitlines():
