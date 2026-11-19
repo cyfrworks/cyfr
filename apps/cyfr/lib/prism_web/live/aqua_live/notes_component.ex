@@ -9,9 +9,9 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   calls in a thread, so one gate answers for both; a write here
   changes nothing another section shows, so the section reloads itself.
 
-  Aqua keeps the page current itself, so the section says when Aqua wrote
-  it and what outside material it had read, and marks a page Aqua learned
-  in a thread since deleted, with Remove. A save and a Remove each name
+  Aqua keeps the page current itself, so the section says so when Aqua
+  wrote it, and marks a page Aqua learned in a thread since deleted, with
+  Remove. A save and a Remove each name
   the revision the section read, so neither writes over a page Aqua or
   another device wrote since: that one is refused and the section reads
   the page again.
