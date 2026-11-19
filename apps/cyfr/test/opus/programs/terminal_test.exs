@@ -884,7 +884,15 @@ defmodule Opus.Programs.TerminalTest do
           # A cast no clause takes: the failed callback's frame carries the
           # state, which is where a crash report can print it.
           GenServer.cast(pid, :no_such_cast)
-          assert_receive {:DOWN, ^ref, :process, _pid, _crash}, 5_000
+
+          assert_receive {:DOWN, ^ref, :process, _pid,
+                          {:function_clause,
+                           [
+                             {Opus.Programs.Terminal, :handle_cast, [:no_such_cast, _state],
+                              _where}
+                             | _stack
+                           ]}},
+                         5_000
         end)
 
       assert log =~ "Opus.Programs.Terminal.handle_cast/2"
@@ -998,7 +1006,15 @@ defmodule Opus.Programs.TerminalTest do
           # A cast no clause takes: the failed callback's frame carries the
           # state, which is where a crash report can print it.
           GenServer.cast(pid, :no_such_cast)
-          assert_receive {:DOWN, ^ref, :process, _pid, _crash}, 5_000
+
+          assert_receive {:DOWN, ^ref, :process, _pid,
+                          {:function_clause,
+                           [
+                             {Opus.Programs.Terminal, :handle_cast, [:no_such_cast, _state],
+                              _where}
+                             | _stack
+                           ]}},
+                         5_000
         end)
 
       assert log =~ "Opus.Programs.Terminal.handle_cast/2"
