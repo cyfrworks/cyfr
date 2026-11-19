@@ -915,37 +915,6 @@ defmodule Sanctum.Consent.CommitTest do
       assert unclamped_narrowing(narrowed.resolved_policy, asked_policy, ref) == narrowing
     end
 
-    test "a grant keeps the flows its head kept, never the whole ask", %{ctx: ctx} do
-      publish!(ctx, "commit-grant-flows", "1.0.0", %{
-        "caps" => %{
-          "egress" => %{"domains" => ["api.one.example"]},
-          "flows" => [
-            %{"from" => "pinned", "to" => "api.one.example"},
-            %{"from" => "filed", "to" => "api.one.example"}
-          ]
-        }
-      })
-
-      ref = "reagent:local.commit-grant-flows"
-      entry = entry!(ctx)
-      kept = %{ref => %{"exits" => [%{"from" => "pinned", "to" => "api.one.example"}]}}
-      {:ok, %{profile_id: profile_id, revision: 1}} = walk!(ctx, ref, %{subset: kept})
-
-      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
-      assert plan.head_narrowing == kept
-
-      assert {:ok, %{revision: 2}} =
-               Commit.grant(ctx, %{
-                 profile_id: profile_id,
-                 bindings: [%{need: "@ingress", entry_id: entry.id}],
-                 expected_consent_revision: 1
-               })
-
-      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
-      {:ok, ingress} = Prima.Authority.Blob.ingress(blob, ref)
-      assert Prima.Authority.Blob.Edge.flows(ingress) == [%{from: :pinned, to: "api.one.example"}]
-    end
-
     test "a head no narrowing touched is re-issued whole", %{ctx: ctx} do
       publish!(ctx, "commit-grant-whole")
       ref = "reagent:local.commit-grant-whole"
@@ -1121,50 +1090,6 @@ defmodule Sanctum.Consent.CommitTest do
                ])
 
       assert named =~ "named accounts"
-    end
-
-    test "keeps the owner's flows its edges still bind: a need's only beside its binding",
-         %{ctx: ctx} do
-      ref = "reagent:local.commit-public-flows"
-
-      manifest =
-        put_in(keyed_manifest(), ["caps", "flows"], [
-          %{"from" => "pinned", "to" => "api.openai.com"},
-          %{"from" => "vault_disclosed", "to" => "need:api_key"}
-        ])
-
-      publish!(ctx, "commit-public-flows", "1.0.0", manifest)
-      standing = key!(ctx)
-
-      {:ok, %{profile_id: owner}} =
-        walk!(ctx, ref, %{bindings: [%{need: "api_key", entry_id: standing.id}]})
-
-      # The owner's edge binds the need, so it keeps the flow to it.
-      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, owner).resolved_policy)
-      {:ok, ingress} = Prima.Authority.Blob.ingress(blob, ref)
-
-      assert Prima.Authority.Blob.Edge.flows(ingress) == [
-               %{from: :pinned, to: "api.openai.com"},
-               %{from: :vault_disclosed, to: "need:api_key"}
-             ]
-
-      exits = fn rows ->
-        for %{"kind" => "exits", "values" => %{"exit" => exit, "flows" => flows}} <- rows,
-            into: %{},
-            do: {exit, flows}
-      end
-
-      # A twin keeping the binding keeps the need's flow; one dropping it
-      # does not, and keeps the domain's either way.
-      {:ok, keeping} = Commit.stage_publish(ctx, %{profile_id: owner, need_ids: ["@ingress"]})
-
-      assert exits.(keeping.rows) == %{
-               "api.openai.com" => ["pinned"],
-               "need:api_key" => ["vault_disclosed"]
-             }
-
-      {:ok, dropping} = Commit.stage_publish(ctx, %{profile_id: owner, need_ids: []})
-      assert exits.(dropping.rows) == %{"api.openai.com" => ["pinned"]}
     end
 
     test "a public profile is never staged for a canvas", %{ctx: ctx} do

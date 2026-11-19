@@ -114,12 +114,10 @@ defmodule PrismWeb.ConsentSheetComponent do
       wildcard host the ask carries (the preview says whether it lies
       inside the ask, as the commit does), the storage paths through a picker
       over `file.list` inside each asked folder, the tools per action (a
-      wildcard ask whole or none), the limits, each capped at the ask
-      and sent only when lowered, and the flows to each exit, one class at
-      a time, removed or kept again but never one the ask does not name
-      (`Prism.ConsentChoices.toggle_flow/4`). Where a catalyst's network
-      ask names methods beside GET and HEAD, one control narrows it to the
-      GET and HEAD it asks for, named by those methods.
+      wildcard ask whole or none), and the limits, each capped at the ask
+      and sent only when lowered. Where a catalyst's network ask names
+      methods beside GET and HEAD, one control narrows it to the GET and
+      HEAD it asks for, named by those methods.
 
   It never asks who may start the component: a grant is what it may reach
   and use, and every run of the person's stands on it, whatever started
@@ -167,7 +165,6 @@ defmodule PrismWeb.ConsentSheetComponent do
       account_problem: 2,
       accounts_on: 2,
       answer_map: 5,
-      asked_flows: 2,
       candidates_of: 1,
       choices_of: 2,
       decisions: 4,
@@ -190,7 +187,6 @@ defmodule PrismWeb.ConsentSheetComponent do
       session_until: 2,
       subset_of: 1,
       suggested: 1,
-      toggle_flow: 4,
       walk_account: 4
     ]
 
@@ -691,26 +687,6 @@ defmodule PrismWeb.ConsentSheetComponent do
     end)
   end
 
-  # One class's flow to one exit, removed or kept again; never a flow the
-  # ask does not name.
-  def handle_event(
-        "toggle_flow",
-        %{"node" => node, "exit" => exit, "choice" => class},
-        socket
-      ) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      asked = asked_flows(plan_rows(socket.assigns.plan), node)
-      flow = %{"from" => class, "to" => exit}
-
-      if flow in asked do
-        subset = toggle_flow(socket.assigns.subset, node, asked, flow)
-        {:noreply, socket |> assign(:subset, subset) |> walk_again({"exits", node})}
-      else
-        {:noreply, socket}
-      end
-    end)
-  end
-
   # A wildcard ask is granted whole or not at all: no tool, or every one.
   def handle_event("toggle_every_tool", %{"node" => node}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -1003,17 +979,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp ask_row(plan, kind, node),
     do: Enum.find(plan_rows(plan), &(&1["kind"] == kind and &1["node"] == node))
-
-  # The ask a row is drawn against: its node's row of its kind, and for an
-  # exit, its node's row of that exit.
-  defp row_ask(plan, %{"kind" => "exits", "node" => node, "values" => %{"exit" => exit}}) do
-    Enum.find(
-      plan_rows(plan),
-      &(&1["kind"] == "exits" and &1["node"] == node and get_in(&1, ["values", "exit"]) == exit)
-    )
-  end
-
-  defp row_ask(plan, row), do: ask_row(plan, row["kind"], row["node"])
 
   defp plan_rows(%{rows: rows}) when is_list(rows), do: rows
   defp plan_rows(_plan), do: []
@@ -1465,7 +1430,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             <.row
               :for={row <- rows}
               row={row}
-              ask={row_ask(@plan, row)}
+              ask={ask_row(@plan, kind, row["node"])}
               myself={@myself}
               approving?={@approving?}
               refusal={@refusal}
@@ -2345,49 +2310,6 @@ defmodule PrismWeb.ConsentSheetComponent do
     """
   end
 
-  # One exit and the classes its flows let reach it. Approving, each class
-  # the ask lets reach it is a box: unticking removes that flow, ticking
-  # keeps it again, and nothing adds a flow the ask does not name.
-  defp row(%{row: %{"kind" => "exits"}} = assigns) do
-    assigns =
-      assign(assigns,
-        controls?: assigns.approving? and is_map(assigns.ask),
-        classes: choices(assigns.row, assigns.ask, "flows")
-      )
-
-    ~H"""
-    <div
-      class="consent-sheet__row"
-      data-row="exits"
-      data-node={@row["node"]}
-      data-exit={@row["values"]["exit"]}
-    >
-      <.node_line row={@row} />
-      <div>
-        <span class="font-mono">{@row["values"]["exit"]}</span> — {exit_label(@row["values"]["exit"])}
-      </div>
-      <div class="consent-sheet__field" data-field="flows">
-        <span>May carry what it read from:</span>
-        <span :if={@classes == []}>nothing it reads</span>
-        <label :for={{class, on?} <- @classes} class="consent-sheet__value">
-          <input
-            :if={@controls?}
-            type="checkbox"
-            phx-click="toggle_flow"
-            phx-target={@myself}
-            phx-value-node={@row["node"]}
-            phx-value-exit={@row["values"]["exit"]}
-            phx-value-choice={class}
-            checked={on?}
-          />
-          <span>{class_words(class)}</span>
-        </label>
-      </div>
-      <.refusal refusal={@refusal} at={{"exits", @row["node"]}} />
-    </div>
-    """
-  end
-
   defp row(%{row: %{"kind" => "system_actions"}} = assigns) do
     ~H"""
     <div class="consent-sheet__row" data-row="system_actions" data-node={@row["node"]}>
@@ -2697,19 +2619,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp folders(ask), do: Enum.filter(ask["values"]["paths"] || [], &String.ends_with?(&1, "/"))
 
-  # A class of what a run read (`Prima.Source`), in the person's words.
-  defp class_words("pinned"), do: "the pinned page"
-  defp class_words("filed"), do: "filed notes"
-  defp class_words("files_by_grant"), do: "files its grant reads"
-  defp class_words("vault_disclosed"), do: "values the vault disclosed"
-  defp class_words("outside"), do: "anything from outside this athanor"
-  defp class_words(class), do: class
-
-  # What kind of place an exit is, in the person's words.
-  defp exit_label("need:" <> need), do: "where its #{need} credential goes"
-  defp exit_label("server:" <> server), do: "the tool server #{server}"
-  defp exit_label(_domain), do: "a network destination"
-
   defp wildcard_row?(%{"values" => %{"tools" => tools}}), do: tools == wildcard()
   defp wildcard_row?(_row), do: false
 
@@ -2743,7 +2652,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp kind_heading("streams"), do: "Streams it listens to"
   defp kind_heading("system_actions"), do: "System actions it may call"
   defp kind_heading("controls"), do: "Controls you can tap"
-  defp kind_heading("exits"), do: "Where what it reads may go"
   defp kind_heading(kind), do: kind
 
   # One binding in one sentence: the app or the dependency that uses it,

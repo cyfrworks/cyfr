@@ -29,7 +29,7 @@ defmodule Locus.Runtime.HttpStreamHandler do
   after the last buffered chunk with `{"error": {"type", "message"}}`
   (`request_failed`, `timeout`, `stream_error`); a pin refused right
   before the request is sent answers it with the refusal's own type, as
-  a refused fetch does (`flow_blocked`, say).
+  a refused fetch does (`redirect_credentials`, say).
 
   ## Security
 

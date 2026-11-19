@@ -1597,10 +1597,6 @@ defmodule Compendium.Tincture.RulesTest do
     assert Compendium.tincture_connect_origins(declared) == Rules.connect_origins(declared)
     assert Compendium.tincture_frame_classes(declared) == Rules.frame_classes(declared)
 
-    for read <- [:invoke, :storage, {:action, "system.status"}, {:stream, "thread.messages"}] do
-      assert Compendium.tincture_read_classes(read) == Rules.read_classes(read)
-    end
-
     assert Compendium.tincture_served_types() == Rules.served_types()
 
     assert Compendium.tincture_sandbox_tokens(["pointer_lock"]) ==

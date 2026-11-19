@@ -66,8 +66,8 @@ defmodule Aqua.Loop do
   run was asked for — says nothing ran, and joins nothing. A join that
   cannot be written leaves the answer unused.
 
-  A launch's decision binds the turn's sources; `Aqua.Launch` refuses it
-  as stale when they moved, and seeds the launched root with them.
+  `Aqua.Launch` seeds a launched root with the turn's sources as its row
+  holds them when the launch is dispatched.
   """
 
   require Logger
@@ -1786,10 +1786,8 @@ defmodule Aqua.Loop do
   end
 
   # Where a call is made (`Aqua.Loop.Policy.decide/4`): the job's
-  # narrowing, the member's title a read-only refusal names, the member's
-  # context a launch's account is resolved under, and the turn whose
-  # sources a launch binds, read from its row as each call is decided, so
-  # a source a concurrent call joined counts. The host's `program.start`
+  # narrowing, the member's title a read-only refusal names and the
+  # member's context a launch's account is resolved under. The host's `program.start`
   # of a program brain is the brain's own start, not a call of its job, so
   # no narrowing covers it and the mode does not refuse it: the holder
   # starts it as the mode says (`Opus.Brain`).
@@ -1799,13 +1797,8 @@ defmodule Aqua.Loop do
       else: place(state)
   end
 
-  defp place(%State{spec: spec, turn: turn}) do
-    [
-      narrowed: spec.narrowed,
-      title: spec.agent["title"],
-      ctx: spec.ctx,
-      turn_id: turn.id
-    ]
+  defp place(%State{spec: spec}) do
+    [narrowed: spec.narrowed, title: spec.agent["title"], ctx: spec.ctx]
   end
 
   # The host's own `program.start` of a program brain's turn.

@@ -36,7 +36,11 @@ defmodule Sanctum.Consent.Loader do
      with unequal binding digests is refused; the loader never picks
   9. the `Sanctum.Consent.Loader.Decision` table over granted vs
      installed activation
-  10. `Prima.Authority.root/3` — ceiling clamping happens inside
+  10. **the source's own grant** — the blob holds a node for the
+     profile's source and that node's ingress; a head without either is
+     damaged (`{:unknown_source_node, ref}`, `{:missing_ingress, ref}`),
+     and a frame's grant (`evaluate_head/4`) is refused for it as a run is
+  11. `Prima.Authority.root/3` — ceiling clamping happens inside
 
   Checks 3 to 8 are the stored head's own (`admitted_blob/3`), the one
   rule every read of what a grant reaches applies. A run's origin
@@ -189,14 +193,27 @@ defmodule Sanctum.Consent.Loader do
   end
 
   # What `load_root/3` and `evaluate_head/4` hold a head to once it is
-  # read, in the one order: the head's own checks, then the decision
-  # table over the live release.
+  # read, in the one order: the head's own checks, the decision table
+  # over the live release, then the source's own node and ingress.
   defp head_stands(ctx, profile, consent, opts) do
     with {:ok, blob} <- admitted_blob(ctx, profile, consent),
-         {:ok, running} <- evaluate_activation(ctx, profile, consent, opts) do
+         {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
+         :ok <- source_granted(blob, profile) do
       {:ok, blob, running}
     end
   end
+
+  defp source_granted(blob, %{source_ref: source_ref}) when is_binary(source_ref) do
+    with {:ok, _node} <- Blob.node(blob, source_ref),
+         {:ok, _ingress} <- Blob.ingress(blob, source_ref) do
+      :ok
+    else
+      {:error, :unknown_node} -> {:error, {:unknown_source_node, source_ref}}
+      {:error, :missing_ingress} -> {:error, {:missing_ingress, source_ref}}
+    end
+  end
+
+  defp source_granted(_blob, _profile), do: {:error, {:invalid_profile, :source_ref}}
 
   @doc """
   Whether `consent`, the head of `profile`, stands for the installed
@@ -205,7 +222,7 @@ defmodule Sanctum.Consent.Loader do
   own checks (`admitted_blob/3`),
   then the `Sanctum.Consent.Loader.Decision` table over the granted
   activation and shape against `:live` and `:live_shape_digest` (the
-  options `load_root/3` takes). A release whose shape differs from the
+  options `load_root/3` takes), then the source's own node and ingress. A release whose shape differs from the
   consent's, or whose shape is unknown, is `{:consent_required, …}` as a
   run's is; a pinned consent asks again for any other release.
   """

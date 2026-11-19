@@ -674,37 +674,6 @@ defmodule Arca.Execution do
 
   def row_ledger(_row), do: [Prima.Source.outside(nil)]
 
-  # The key of the classes a launch let flow, in its root's
-  # `host_policy`.
-  @launch_key "launch_flows"
-
-  @doc """
-  What a send of the run `id` is decided on: its ledger (`sources/2`) and
-  the classes the launch that started its tree let flow to every exit of
-  that tree (`:launch_classes`, from the root's `host_policy`, written by
-  its admission; empty for a tree no launch started or a root no row
-  holds). `{:error, :not_found}` for no such row.
-  """
-  @spec flow_state(Prima.Actor.t(), String.t()) ::
-          {:ok, %{sources: [Prima.Source.t()], launch_classes: [Prima.Source.class()]}}
-          | {:error, :not_found | :database_error}
-  def flow_state(%Prima.Actor{} = actor, id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Execution.flow_state", fn ->
-      case row_of(actor, id) do
-        nil ->
-          {:error, :not_found}
-
-        %Row{} = row ->
-          root =
-            if row.root_execution_id == row.id,
-              do: row,
-              else: row_of(actor, row.root_execution_id)
-
-          {:ok, %{sources: ledger!(row), launch_classes: launch_classes(root)}}
-      end
-    end)
-  end
-
   @doc """
   The consent revision the root `id` was admitted at (its authority's,
   written by its admission), or nil for a row that records none: a child,
@@ -720,22 +689,6 @@ defmodule Arca.Execution do
       end
     end)
   end
-
-  defp launch_classes(%Row{host_policy: policy}) do
-    with {:ok, map} <- decoded_policy(policy),
-         classes when is_list(classes) <- Map.get(map, @launch_key) do
-      by_spelling = Map.new(Prima.Source.classes(), &{Atom.to_string(&1), &1})
-      for class <- classes, Map.has_key?(by_spelling, class), do: Map.fetch!(by_spelling, class)
-    else
-      _none -> []
-    end
-  end
-
-  defp launch_classes(nil), do: []
-
-  @doc "The key a launch's classes are written under in its root's `host_policy`."
-  @spec launch_key() :: String.t()
-  def launch_key, do: @launch_key
 
   @doc """
   Join `sources` into the ledger of the run `id` and of every ancestor up

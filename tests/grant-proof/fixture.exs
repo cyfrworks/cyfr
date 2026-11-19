@@ -14,13 +14,12 @@
 #       local tincture NAME at VERSION, one unit, and registered from the
 #       tree, its manifest as DIR has it but for its version and VARIANT:
 #       `base` as it is, `background` asking to keep running when hidden,
-#       `reworded` that and its need's reason in other words, and `flows`
-#       that and a flow of outside material to the host it keeps.
+#       and `reworded` that and its need's reason in other words.
 #
 #   head USER_ID REF
 #       The head of the person's active owner profile of REF: its
-#       revision, digests, and the hosts, storage paths, flows and
-#       background permission its policy grants.
+#       revision, digests, and the hosts and storage paths its policy
+#       grants.
 #
 #   plan SESSION_TOKEN REF
 #       The consent walk's plan for REF, as the console asks for it under
@@ -161,7 +160,7 @@ fn args ->
 
   case args do
     ["publish", user_id, dir, name, version, variant]
-    when variant in ["base", "background", "reworded", "flows"] ->
+    when variant in ["base", "background", "reworded"] ->
       ctx = person_ctx.(user_id)
       actor = Sanctum.Context.actor(ctx)
       unit = ["components", "tinctures", "local", name, version]
@@ -179,15 +178,6 @@ fn args ->
             manifest
             |> put_in(["tincture", "frame"], %{"background" => true})
             |> put_in(["needs", "feed", "reason"], "so it can show you the feed it reads")
-
-          "flows" ->
-            manifest
-            |> put_in(["tincture", "frame"], %{"background" => true})
-            |> put_in(["needs", "feed", "reason"], "so it can show you the feed it reads")
-            |> update_in(
-              ["caps", "flows"],
-              &(&1 ++ [%{"from" => "outside", "to" => "alpha.grant.test"}])
-            )
         end
         |> Map.put("version", version)
 
@@ -224,8 +214,7 @@ fn args ->
             commit_digest: head.commit_digest,
             shape_digest: head.shape_digest,
             domains: (ingress.egress && ingress.egress.domains) || [],
-            paths: Prima.Authority.Blob.Edge.paths(ingress),
-            flows: Enum.map(ingress.flows, &"#{&1.from} to #{&1.to}")
+            paths: Prima.Authority.Blob.Edge.paths(ingress)
           })
       end
 

@@ -39,9 +39,8 @@ defmodule Emissary.Web.FrameSocket do
   read (a canvas on its own path alone, `not_a_canvas` and
   `canvas_path_required`); the bind; the declaration (a stream the
   tincture declares with a subject that declaration takes, and none for a
-  stream bound to its holder, whose subject the gate supplies); and what
-  its events may carry to the origins the frame connects to
-  (`Emissary.Web.FrameAdmission.flowing/2`). Then the gate's one stream
+  stream bound to its holder, whose subject the gate supplies). Then the
+  gate's one stream
   entry opens it (`Sanctum.Gate.open_stream/3`), which records it. A
   refusal before the gate is recorded once as an admission decision of
   its own, and the gate's is the gate's; either is answered `ended` with
@@ -409,14 +408,15 @@ defmodule Emissary.Web.FrameSocket do
   end
 
   defp admitted(%{sub: sub, stream: name, subject: subject} = fields, caller, state) do
-    with :ok <- granted(name, subject, caller),
-         :ok <- FrameAdmission.flowing({:stream, name}, caller) do
-      case caller.ctx.frame.mode do
-        :validation -> validation(fields, caller, state)
-        :live -> open(fields, caller, state)
-      end
-    else
-      {:error, refusal} -> refuse(sub, refusal, state, caller.ctx)
+    case granted(name, subject, caller) do
+      :ok ->
+        case caller.ctx.frame.mode do
+          :validation -> validation(fields, caller, state)
+          :live -> open(fields, caller, state)
+        end
+
+      {:error, refusal} ->
+        refuse(sub, refusal, state, caller.ctx)
     end
   end
 
@@ -926,21 +926,14 @@ defmodule Emissary.Web.FrameSocket do
 
   # The frame established again, held to its credential's row under the
   # newest bearer it sent, with its version and grant: a refusal ends every
-  # subscription, a flow that no longer covers a stream ends that one, and
-  # each grant's deadline follows the row's.
+  # subscription, and each grant's deadline follows the row's.
   defp revalidate(%{caller: caller} = state) do
     case FrameAdmission.frame(caller.bearer, state.client_ip, path: state.path, held: true) do
       {:ok, held} ->
         state = %{state | caller: held}
 
         Enum.reduce(state.subs, {[], state}, fn {sub, entry}, {frames, state} ->
-          case FrameAdmission.flowing({:stream, entry.stream}, held) do
-            :ok ->
-              {frames, extend(state, sub, entry, held.ctx)}
-
-            {:error, refusal} ->
-              {frames ++ [text(TinctureWire.ended(sub, refusal))], drop(state, sub)}
-          end
+          {frames, extend(state, sub, entry, held.ctx)}
         end)
 
       {:error, refusal} ->

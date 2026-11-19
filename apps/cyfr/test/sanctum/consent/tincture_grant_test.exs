@@ -67,6 +67,47 @@ defmodule Sanctum.Consent.TinctureGrantTest do
     "tincture:local.#{name}"
   end
 
+  for lost <- [:node, :ingress] do
+    test "a head that lost its own #{lost} is refused as the damaged head", %{ctx: ctx} do
+      ref = tincture_row!(ctx, "grant-lost-#{unquote(lost)}")
+      profile_id = Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, ref)
+      assert {:ok, %{revision: 1}} = Sanctum.Consent.tincture_grant(ctx, ref <> ":1.0.0")
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{id: profile_id, kind: :owner, source_ref: ref, label: "default", status: :active},
+          %{
+            id: "cons_grant_lost_#{unquote(lost)}",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: :live,
+            commit_digest: "sha256:commit",
+            resolved_policy: lost_policy(unquote(lost), ref),
+            activation: %{ref => "sha256:act"}
+          }
+        )
+
+      assert Sanctum.Consent.tincture_grant(ctx, ref <> ":1.0.0") ==
+               {:error, {:refused, {:head_corrupt, profile_id}}}
+    end
+  end
+
+  # A head's policy that lost the tincture's own node, or kept the node and
+  # lost its ingress.
+  defp lost_policy(:node, _ref), do: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => %{}})
+
+  defp lost_policy(:ingress, ref),
+    do:
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          ref => %{"limits" => Prima.Test.AuthorityFixtures.limits_map(), "edges" => %{}}
+        }
+      })
+
   test "a version whose stored manifest does not decode is refused as that damage", %{ctx: ctx} do
     ref = tincture_row!(ctx, "grant-damaged")
     Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, ref)

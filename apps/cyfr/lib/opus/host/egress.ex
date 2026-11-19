@@ -21,31 +21,21 @@ defmodule Opus.Host.Egress do
        (`Prima.Network.domain_allowed?/2`, where `"*"` matches every
        host); an authority with no edge, an edge with no egress, and a
        host no pattern matches are `denied`;
-    2. the run's source ledger, read as it stands now
-       (`Opus.Ledger.check/4`), holds no class the edge's flows
-       (`Prima.Flow`) do not let reach the URL's host, or, for an
-       attached request, its host or the need whose credential it
-       carries — an outside source named by that exact host is its own,
-       and the classes a launch let flow count — else `flow`;
-       a ledger that cannot be read is `unavailable`. A grant that
-       declares no flow keeps sending until its run reads a source. The
-       ledger is read and decided once more after the address is checked
-       (below), and the pin is answered only on that second decision;
-    3. a `redirect` names, as `from`, a pin this attempt was answered
+    2. a `redirect` names, as `from`, a pin this attempt was answered
        within the last two windows, and its URL has that pin's origin
        (`Prima.Network.same_origin?/2`: scheme, host and effective port);
        anything else is `redirect_credentials`. The engine carries the
        request's credentials on a guest's redirect, so the hop stays on
        its pin's origin: a hop elsewhere is refused, not stripped;
-    4. only then is the host resolved, once, through
+    3. only then is the host resolved, once, through
        `Sanctum.Network.pin/2`, IPv4 first and IPv6 only when no IPv4
        address resolves, and a name that resolves to nothing is
        `resolution`. A host the names refused is never resolved, so a
        guest cannot carry data out in the labels of a name its policy
        refuses;
-    5. a metadata address (`Prima.Cidr.metadata?/1`) is `metadata`,
+    4. a metadata address (`Prima.Cidr.metadata?/1`) is `metadata`,
        whatever the policy grants;
-    6. a private address (`Prima.Cidr.private_ip?/1`) is `denied` unless
+    5. a private address (`Prima.Cidr.private_ip?/1`) is `denied` unless
        the edge grants it (`egress.private_ips`, IPs and CIDRs); an
        authority with no edge, or an edge with no egress, grants no
        private address. The operator's `CYFR_PRIVATE_EGRESS_TARGETS` is
@@ -58,10 +48,8 @@ defmodule Opus.Host.Egress do
   source (`Opus.Ledger.join/3`): what the request brings back comes from
   that host, and the ledger holds it before any byte of the answer can
   exist. A join that cannot be written answers `unavailable`. Every
-  request is decided here afresh — the relay asks again at the moment it
-  sends (`Locus.Runtime.Relay`) — so a send is decided on the ledger as
-  it stands then, never on a pin taken before a read. Each of
-  the five refusals is recorded as a denial of the attempt's component in
+  request is decided here afresh: the relay asks again at the moment it
+  sends (`Locus.Runtime.Relay`). Each of the four refusals is recorded as a denial of the attempt's component in
   its athanor (`Sanctum.Policy.Enforcement.record/1`, as
   `Opus.Host.Storage` records a runner's `record_denial`), its reason
   led by the request's purpose (`fetch: …`, `attached: …`) and naming the
@@ -69,8 +57,8 @@ defmodule Opus.Host.Egress do
 
   `pin/2` takes the purposes a runner may ask for and `:attached`, the pin
   CYFR takes for an attached request (`Opus.Host.AttachedFetch`), which
-  names the need it carries (`:need`), is decided the same way with that
-  need as an exit beside its host, and is recorded as its own; a runner's
+  names the need it carries (`:need`), is decided the same way and is
+  recorded as its own; a runner's
   `egress_pin` naming `attached` never reaches here, since its args do not
   read (`Prima.PinnedTarget.read_request/1`).
 
@@ -128,9 +116,6 @@ defmodule Opus.Host.Egress do
         {:refused, :malformed, _sentence} ->
           {:error, :malformed}
 
-        {:unavailable, :ledger} ->
-          {:error, :unavailable}
-
         {:refused, refusal, sentence} ->
           record(chain, request.purpose, sentence)
           {:error, refusal}
@@ -157,46 +142,15 @@ defmodule Opus.Host.Egress do
     edge = edge(chain.authority)
 
     # The name checks come before the resolution: a refused host is never
-    # looked up, and neither is one the run's ledger may not reach.
+    # looked up.
     with {:ok, uri} <- parse(request.url),
          :ok <- domain_allowed(uri, edge),
-         :ok <- flows(caller, request, chain, edge, uri),
          :ok <- same_origin(caller, request, uri, now),
          {:ok, pinned} <- resolve(request.url, resolver),
-         :ok <- permitted(pinned, private_ips(edge)),
-         # Decided again once the name has resolved: a source the run
-         # joined while it resolved is in the ledger the pin is answered
-         # on, and the pin is answered only on this second decision.
-         :ok <- flows(caller, request, chain, edge, uri) do
+         :ok <- permitted(pinned, private_ips(edge)) do
       pinned(pinned, now)
     end
   end
-
-  # The run's ledger as it stands, against the edge's flows to this host,
-  # and for an attached request to the need it carries as well.
-  # No send here, an attached fetch's pin included, carries bytes of a
-  # guest object's generation that never settled: a reader is handed only
-  # a settled generation (`Arca.ObjectRevisions`), so no ledger holds
-  # unsettled material and `unsettled` needs no refusal of its own.
-  defp flows(caller, request, chain, edge, uri) do
-    case Opus.Ledger.check(
-           Sanctum.Context.actor(chain.ctx),
-           caller.execution_id,
-           edge,
-           flow_exit(request, canonical_host(host_of(uri)))
-         ) do
-      :ok -> :ok
-      {:refused, refusal} -> {:refused, :flow, Prima.Refusal.message(refusal)}
-      {:error, :unavailable} -> {:unavailable, :ledger}
-    end
-  end
-
-  # An attached request reaches the need whose credential it carries as
-  # well as its host; anything else reaches its host.
-  defp flow_exit(%{purpose: :attached, need: need}, host) when is_binary(need),
-    do: {:need, need, host}
-
-  defp flow_exit(_request, host), do: {:domain, host}
 
   defp parse(url) do
     case Prima.Network.parse_url(url) do

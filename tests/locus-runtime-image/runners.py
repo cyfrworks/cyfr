@@ -122,7 +122,7 @@ FIXTURES = {
     "echo": os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "echo.wasm"),
     "stub": os.path.join(ROOT, "apps", "cyfr", "test", "support", "test_wasm", "step_stub", "step_stub.wasm"),
     "probe": os.path.join(ROOT, "apps", "cyfr", "test", "integration", "runtime", "support", "test_wasm", "nested_probe", "nested_probe.wasm"),
-    "web": os.path.join(ROOT, "seed", "components", "catalysts", "local", "http", "1.1.4", "catalyst.wasm"),
+    "web": os.path.join(ROOT, "seed", "components", "catalysts", "local", "http", "1.1.5", "catalyst.wasm"),
     "attached": os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "hostile", "attached_header_probe.wasm"),
     "vault": os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "hostile", "vault_probe.wasm"),
 }
@@ -131,7 +131,7 @@ REFS = {
     "echo": "reagent:local.echo:0.1.0",
     "stub": "catalyst:local.step-stub:0.1.0",
     "probe": "formula:local.nested-probe:0.1.0",
-    "web": "catalyst:local.http:1.1.4",
+    "web": "catalyst:local.http:1.1.5",
     "attached": "catalyst:local.attached-header-probe:0.1.0",
     "vault": "catalyst:local.vault-probe:0.1.0",
 }
@@ -183,7 +183,7 @@ ATTACHED_AUTHORITY = {
 }
 # The shipped model catalysts at the version whose `api_key` need CYFR
 # attaches, each run as its seed artifact: the seed refs this suite names.
-SHIPPED_MODELS = {name: "1.4.3" for name in ("claude", "gemini", "grok", "openai", "openrouter")}
+SHIPPED_MODELS = {name: "1.4.4" for name in ("claude", "gemini", "grok", "openai", "openrouter")}
 SHIPPED = {name: os.path.join(ROOT, "seed", "components", "catalysts", "local", name, version)
            for name, version in SHIPPED_MODELS.items()}
 SHIPPED_MANIFESTS = {}

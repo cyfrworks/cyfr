@@ -32,7 +32,7 @@ apps/cyfr/test/opus/guest_storage_test.exs	3	pending
 apps/cyfr/test/opus/host/attached_fetch_test.exs	2	pending
 apps/cyfr/test/opus/host/children_test.exs	1	pending
 apps/cyfr/test/opus/host/storage_test.exs	3	pending
-apps/cyfr/test/opus/host/tool_flow_test.exs	4	pending
+apps/cyfr/test/opus/host/tool_flow_test.exs	1	pending
 apps/cyfr/test/opus/host_egress_test.exs	6	pending
 apps/cyfr/test/opus/host_test.exs	1	pending
 apps/cyfr/test/opus/keys_test.exs	3	pending

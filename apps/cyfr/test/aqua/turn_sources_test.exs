@@ -217,7 +217,9 @@ defmodule Aqua.TurnSourcesTest do
              ]
 
       [request] = chat_requests()
-      assert Jason.encode!(request) =~ "kept after reading outside material: news.example"
+      text = Jason.encode!(request)
+      assert text =~ "- clip — Fares rise on Monday\\n"
+      refute text =~ "outside material"
     end
 
     test "the room excerpt is sent once, marked excluded, and adds no source",

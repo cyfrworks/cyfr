@@ -20,8 +20,7 @@ defmodule Prima.Manifest.Caps do
         "storage": { "paths": ["data/"], "actions": ["read", "write"] },
         "tools":   ["execution.run", "component.*"],
         "limits":  { "timeout": "3m",
-                     "rate_limit": { "requests": 100, "window": "1m" } },
-        "flows":   [{ "from": "filed", "to": "api.example" }]
+                     "rate_limit": { "requests": 100, "window": "1m" } }
       }
 
   Closed vocabulary at every level; everything optional. `tools` speaks
@@ -38,17 +37,6 @@ defmodule Prima.Manifest.Caps do
   `limits` carries the `Prima.Limits` field names — suggestions under
   the platform ceiling, operator-adjustable at commit. `schemes` absent
   means `["https"]` at consent.
-
-  `flows` (`Prima.Flow`) names which source classes may reach which of
-  the component's exits: each entry's `to` is a domain `egress.domains`
-  declares or an origin `tincture.connect` declares, spelled as declared,
-  `need:<name>` for a need its `needs` block declares, or
-  `server:<name>` for a tool server its consent may bind. A `from` that
-  is no class, `unsettled` among them, a `to` naming an exit the manifest
-  does not declare, a malformed entry or one with other keys is refused
-  (`{:invalid_caps, reason}`, the reason `Prima.Flow.parse/2`'s). A flow
-  lets material reach an exit the grant otherwise allows, and allows no
-  exit itself.
 
   ## Storage paths
 
@@ -96,6 +84,23 @@ defmodule Prima.Manifest.Caps do
   def agent_only_tools, do: @agent_only_tools
 
   @doc """
+  A `validate/2` refusal in a person's words: the storage path or the key
+  it refused, named with the block it sits in, and otherwise that the caps
+  are not valid. Never its term.
+  """
+  @spec words(error()) :: String.t()
+  def words({:invalid_caps, {:invalid_storage_path, path}}) when is_binary(path),
+    do: "caps.storage.paths names #{path}, which is no guest scope"
+
+  def words({:invalid_caps, {:unknown_keys, block, [_ | _] = keys}}) when is_atom(block),
+    do: "#{block_name(block)} has no key #{Enum.join(keys, ", ")}"
+
+  def words({:invalid_caps, _detail}), do: "its caps are not valid"
+
+  defp block_name(:caps), do: "caps"
+  defp block_name(block), do: "caps.#{block}"
+
+  @doc """
   Validate a decoded manifest's `caps` block. Absent is valid.
   `storage_path_ok?` decides whether a declared storage path names a
   guest scope.
@@ -107,13 +112,12 @@ defmodule Prima.Manifest.Caps do
 
   def validate(%{"caps" => caps} = manifest, storage_path_ok?)
       when is_map(caps) and is_function(storage_path_ok?, 1) do
-    with :ok <- only_keys(caps, ~w(egress storage tools limits flows), :caps),
+    with :ok <- only_keys(caps, ~w(egress storage tools limits), :caps),
          :ok <- validate_egress(caps["egress"]),
          :ok <- validate_storage(caps["storage"], storage_path_ok?),
          :ok <- validate_tools(caps["tools"]),
          :ok <- agent_only_tools(caps["tools"], manifest["type"]),
-         :ok <- validate_limits(caps["limits"]),
-         {:ok, _flows} <- flows(caps, manifest) do
+         :ok <- validate_limits(caps["limits"]) do
       need_hosts_within(manifest, egress_domains(caps["egress"]))
     end
   end
@@ -156,7 +160,7 @@ defmodule Prima.Manifest.Caps do
 
   @doc """
   The normalized caps for a decoded manifest: string sets sorted and
-  deduplicated, `flows` a `Prima.Flow` set, every key present with its
+  deduplicated, every key present with its
   empty default. Returns `nil` when the manifest declares no `caps` block
   — callers branch on that for source priority.
   """
@@ -165,8 +169,7 @@ defmodule Prima.Manifest.Caps do
 
   def from_manifest(%{"caps" => caps} = manifest, storage_path_ok?)
       when is_map(caps) and is_function(storage_path_ok?, 1) do
-    with :ok <- validate(manifest, storage_path_ok?),
-         {:ok, flows} <- flows(caps, manifest) do
+    with :ok <- validate(manifest, storage_path_ok?) do
       egress = caps["egress"] || %{}
       storage = caps["storage"] || %{}
 
@@ -182,8 +185,7 @@ defmodule Prima.Manifest.Caps do
           actions: string_set(storage["actions"])
         },
         tools: string_set(caps["tools"]),
-        limits: normalize_limits(caps["limits"] || %{}),
-        flows: flows
+        limits: normalize_limits(caps["limits"] || %{})
       }
     else
       {:error, _} -> nil
@@ -289,21 +291,6 @@ defmodule Prima.Manifest.Caps do
   end
 
   defp agent_only_tools(_tools, _type), do: :ok
-
-  # Every flow's `to` names an exit the manifest declares: an egress
-  # domain or a connect origin as spelled, or a need it declares
-  # (`Prima.Flow.parse/2`, which also admits a well-formed tool server).
-  defp flows(caps, manifest) do
-    declared = %{
-      domains: egress_domains(caps["egress"]) ++ Prima.Manifest.Tincture.connect(manifest),
-      needs: Enum.map(Prima.Manifest.Needs.from_manifest(manifest) || [], & &1.name)
-    }
-
-    case Prima.Flow.parse(caps["flows"], declared) do
-      {:ok, flows} -> {:ok, flows}
-      {:error, reason} -> {:error, {:invalid_caps, reason}}
-    end
-  end
 
   defp validate_limits(nil), do: :ok
 

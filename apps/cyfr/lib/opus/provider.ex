@@ -894,11 +894,6 @@ defmodule Opus.Provider do
   # (`Prima.Refusal`).
   defp format_root_result({:error, :approved_entry_moved} = refused), do: refused
 
-  # A root whose loaded consent revision is not the one a launch bound
-  # stays typed, so the launch answers it as stale with
-  # nothing run.
-  defp format_root_result({:error, :approved_grant_moved} = refused), do: refused
-
   # A retry's grant with a new revision since its run stays typed, a
   # conflict in its own sentence, with nothing run.
   defp format_root_result({:error, :retry_grant_moved} = refused), do: refused

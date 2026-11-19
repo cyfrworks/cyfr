@@ -58,7 +58,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # the sentence; a vault binding's scope, binding key, destination,
     # attach rule, field map, named accounts, provided configuration,
     # lender and flows each say theirs, and so does a tool server's record.
-    "apps/prima/lib/prima/authority/blob.ex" => 26,
+    "apps/prima/lib/prima/authority/blob.ex" => 25,
     "apps/prima/lib/prima/component_ref.ex" => 19,
     # An external MCP server's own faults, said to the operator: among
     # them a session id it issued that is not visible ASCII or too short

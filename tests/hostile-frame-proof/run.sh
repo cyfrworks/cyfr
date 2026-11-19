@@ -91,13 +91,9 @@ status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cell_
 status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cell_port "$CELL")$neighbour_path/neighbour.js")"
 [ "$status" = 200 ] || fail "the public neighbour's script answered $status"
 
-step "a frame that connects to one origin and lists files, with and without a flow to it"
-server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe" flow-probe private >/dev/null
-server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe-flowed" flow-probe-flowed private >/dev/null
-# Each granted its whole ask: the flowed control's holds its declared
-# flows, and the probe's, declaring none, holds none.
-server_fixture "$CELL" grant "$token" flow-probe >/dev/null
-server_fixture "$CELL" grant "$token" flow-probe-flowed >/dev/null
+step "a frame that connects to one origin, lists files and sends to it"
+server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/declared-origin-probe" declared-origin-probe private >/dev/null
+server_fixture "$CELL" grant "$token" declared-origin-probe >/dev/null
 
 step "the malicious fullscreen frame, and a tincture waiting for its grant"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/fullscreen-probe" fullscreen-probe private >/dev/null

@@ -829,12 +829,6 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert workspace.id in Prima.Source.threads(read)
       assert :outside in Prima.Source.classes_of(read)
       refute :thread in Prima.Source.classes_of(read)
-
-      # A flow decision over what the daily turn read holds the outside
-      # source to a declared flow, and asks nothing of the thread source.
-      uncovered = Prima.Flow.uncovered(read, {:domain, "other.example"})
-      assert outside in uncovered
-      refute Enum.any?(uncovered, &Prima.Source.thread?/1)
     end
 
     test "a report delivered after midnight lands on the new day's daily thread",

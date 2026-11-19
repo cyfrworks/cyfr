@@ -181,7 +181,7 @@ defmodule Aqua.PageCallsTest do
   @html %{"html" => "<p>a page Aqua wrote</p>"}
 
   # An app of the person's own, granted with nothing to bind: with no
-  # exit at all, or with the exit and the flows `caps` declare.
+  # egress at all, or with the egress `caps` declare.
   defp app!(ctx, caps \\ nil, grant? \\ true) do
     name = "page-app-#{System.unique_integer([:positive])}"
 
@@ -205,16 +205,8 @@ defmodule Aqua.PageCallsTest do
     ref
   end
 
-  # One exit; a grant of it covers outside material only where the
-  # manifest declares that flow.
+  # One egress domain.
   @exit %{"egress" => %{"domains" => ["api.example.com"]}}
-  # A turn that asked a model holds what its model's key disclosed, and
-  # work with no model starts with the putting turn's sources: a grant
-  # lets the page out only where it lets both flow.
-  @flowing Map.put(@exit, "flows", [
-             %{"from" => "outside", "to" => "api.example.com"},
-             %{"from" => "vault_disclosed", "to" => "api.example.com"}
-           ])
 
   # A grant through the consent walk, as a person makes it.
   defp walk!(ctx, decisions) do
@@ -549,15 +541,15 @@ defmodule Aqua.PageCallsTest do
   # On auto
   # ---------------------------------------------------------------------------
 
-  test "a granted component with no exit, or whose grant lets the page out, runs once in " <>
-         "two workspace threads, as a model's launch runs",
+  test "a granted component with no egress, or with egress, runs once in two workspace " <>
+         "threads, as a model's launch runs",
        %{ctx: ctx, driver: driver} do
     quiet = app!(ctx)
-    flowing = app!(ctx, @flowing)
-    worker!([quiet, flowing])
+    reaching = app!(ctx, @exit)
+    worker!([quiet, reaching])
 
     for {{app, room}, id} <-
-          Enum.with_index([{quiet, workspace!(ctx)}, {flowing, workspace!(ctx)}], 1) do
+          Enum.with_index([{quiet, workspace!(ctx)}, {reaching, workspace!(ctx)}], 1) do
       put = put!(ctx, room, @html)
       ScriptedWorker.script([{:output, %{"answered" => id}}])
       asked = chats()
@@ -810,8 +802,7 @@ defmodule Aqua.PageCallsTest do
     assert runs_of(ctx, app) == [] and app_runs() == 0
   end
 
-  test "a component whose grant lets nothing of the page out runs at once each time, once, " <>
-         "with nothing asked",
+  test "a component with egress runs at once each time, once, with nothing asked",
        %{ctx: ctx, driver: driver} do
     app = app!(ctx, @exit)
     worker!([app])

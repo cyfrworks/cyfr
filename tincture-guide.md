@@ -380,7 +380,7 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 | `icon` | string | `"palette"` | Glyph fallback for the picker when no `public/media/icon.{svg,png}` exists: an emoji or a Lucide icon name |
 | `tagline` | string | — | One line under the title in the picker |
 | `public` | boolean | `false` | Metadata hint. Public access is an active public consent profile (`profile.publish`) |
-| `connect` | string[] | `[]` | Bare external domains added to the page's `connect-src` over `https` (e.g. `["api.example.com"]`). Each origin is an exit of the frame: what the frame reads may reach it only through a flow your `caps.flows` declares to that origin as spelled here, from each source class the frame's reads may carry. The consent shows each origin with its flows, and a data request whose classes have no flow to every origin is refused |
+| `connect` | string[] | `[]` | Bare external domains added to the page's `connect-src` over `https` (e.g. `["api.example.com"]`) |
 | `media` | object | — | Overrides for the auto-discovered media; the `public/media/` convention needs none |
 | `frame` | object | — | The frame's capabilities, background flag and size hint (below) |
 | `streams` | object[] | `[]` | The streams an app may open (below) |
@@ -557,7 +557,7 @@ The frame's document is sandboxed without `allow-same-origin`, so its origin is 
 |---|---|---|
 | `script-src` | `'self'`, the page's nonce, `'wasm-unsafe-eval'` | loads scripts and module scripts from the origin and compiles WebAssembly; no inline script but the SDK, no `eval` |
 | `worker-src` | `'self' blob:` | runs workers from `blob:` URLs its page makes from code the site served: a frame's origin is `null`, so it starts no worker from a URL of the site |
-| `connect-src` | the endpoint's origin, its WebSocket origin (`ws://` or `wss://`, for the stream connection) and `https://` each `tincture.connect` domain | fetches only its own files, the endpoint and the domains it declares; each declared domain is an exit, reached only by the source classes its `caps.flows` lets go there |
+| `connect-src` | the endpoint's origin, its WebSocket origin (`ws://` or `wss://`, for the stream connection) and `https://` each `tincture.connect` domain | fetches only its own files, the endpoint and the domains it declares |
 | `img-src`, `media-src`, `font-src` | the origin, plus `data:` and `blob:` where they apply | decodes images, audio and fonts it ships or generates |
 | `style-src` | `'self' 'unsafe-inline'` | uses stylesheets and inline styles |
 | `form-action` | `'none'` | submits no form (the sandbox has no `allow-forms` either) |

@@ -158,18 +158,11 @@ defmodule Compendium do
   defdelegate tincture_invokes?(manifest, ref), to: Rules, as: :invokes?
 
   @doc """
-  The origins a tincture's page connects to beyond its endpoint, each an
-  exit of its frame (`Compendium.Tincture.Rules.connect_origins/1`).
+  The origins a tincture's page connects to beyond its endpoint
+  (`Compendium.Tincture.Rules.connect_origins/1`).
   """
   @spec tincture_connect_origins(term()) :: [String.t()]
   defdelegate tincture_connect_origins(manifest), to: Rules, as: :connect_origins
-
-  @doc """
-  The source classes one read of a frame may carry, known before it is
-  made (`Compendium.Tincture.Rules.read_classes/1`).
-  """
-  @spec tincture_read_classes(Rules.read()) :: [Prima.Source.class()]
-  defdelegate tincture_read_classes(read), to: Rules, as: :read_classes
 
   @doc """
   The source classes any read a tincture's manifest declares may carry

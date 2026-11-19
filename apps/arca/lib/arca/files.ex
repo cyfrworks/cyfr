@@ -765,18 +765,13 @@ defmodule Arca.Files do
       {:error, {:invalid_manifest, [{_block, detail} | _]}} when is_binary(detail) ->
         {:error, {:invalid_argument, "#{name}: #{detail}"}}
 
-      {:error, {:invalid_manifest, [failure | _]}} ->
-        {:error, {:invalid_argument, "#{name}#{failure_words(failure)}"}}
+      {:error, {:invalid_manifest, [{:invalid_caps, _detail} = failure | _]}} ->
+        {:error, {:invalid_argument, "#{name}: #{Prima.Manifest.Caps.words(failure)}"}}
+
+      {:error, {:invalid_manifest, [_failure | _]}} ->
+        {:error, {:invalid_argument, "#{name} is not a valid manifest"}}
     end
   end
-
-  # A validator's typed failure in words, never its term: the storage
-  # predicate's refusal names the path it refused.
-  defp failure_words({:invalid_caps, {:invalid_storage_path, path}}) when is_binary(path),
-    do: ": caps.storage.paths names #{path}, which is no guest scope"
-
-  defp failure_words({:invalid_caps, _detail}), do: ": its caps are not valid"
-  defp failure_words(_failure), do: " is not a valid manifest"
 
   defp text?(bytes), do: String.valid?(bytes) and not String.contains?(bytes, <<0>>)
 end

@@ -27,11 +27,11 @@ defmodule Emissary.Web.FrameSocketTest do
   while an admitted subscription is held to the row up to its own bound;
   a stream's refresh comes first, marked, and one that cannot be read
   ends it; a filtering stream delivers only its subject's payloads; an
-  app that connects to an origin opens a stream only while its grant lets
-  what the stream carries flow there; a validation trial is answered from
-  fixtures, a feed's from the binding the athanor holds, and holds
-  nothing; and over a real listener eight streams share one connection,
-  and a message over the wire's bound closes it.
+  app that connects to an origin opens and keeps a stream under its grant
+  alone; a validation trial is answered from fixtures, a feed's from the
+  binding the athanor holds, and holds nothing; and over a real listener
+  eight streams share one connection, and a message over the wire's bound
+  closes it.
   """
 
   # Mints and suspends frame credentials, writes platform settings and
@@ -216,7 +216,7 @@ defmodule Emissary.Web.FrameSocketTest do
 
   @version "1.0.0"
   @wire Path.expand("../../../../../tests/fixtures/tincture_wire.json", __DIR__)
-  @origin "api.flows.example"
+  @origin "api.beyond.example"
 
   # How long an admission or a delivery may take on a loaded host. Each
   # wait ends on the answer itself; this bounds one that never comes.
@@ -232,6 +232,55 @@ defmodule Emissary.Web.FrameSocketTest do
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)
     {:ok, source: source}
+  end
+
+  test "a stream ends as a damaged head when its grant loses its own ingress", %{source: source} do
+    name = "socket-lost-ingress"
+    ref = "tincture:local.#{name}"
+    digest = app!(source, name, [%{"name" => "mcp_servers.changes"}], [@origin])
+    frame = frame!(source, name, digest)
+    socket = Socket.connect(:shared)
+    Socket.subscribe(socket, 1, frame.bearer, "mcp_servers.changes")
+    assert answer(socket, 1) == TinctureWire.subscribed(1)
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        source,
+        %{
+          id: "prof_" <> String.replace(name, "-", "_"),
+          kind: :owner,
+          source_ref: ref,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "cons_socket_lost_ingress",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: :live,
+          commit_digest: "sha256:commit",
+          resolved_policy:
+            Jason.encode!(%{
+              "canonical" => "jcs-1",
+              "nodes" => %{
+                ref => %{"limits" => Prima.Test.AuthorityFixtures.limits_map(), "edges" => %{}}
+              }
+            }),
+          activation: %{ref => "sha256:act"}
+        }
+      )
+
+    :ok =
+      Phoenix.PubSub.broadcast(
+        Cyfr.PubSub,
+        Cyfr.Bus.caller_invalidated_global(),
+        Cyfr.Bus.CallerInvalidated.new(source.session_token_hash)
+      )
+
+    assert Socket.state(socket).subs == %{}
+    assert %{"type" => "ended", "error" => %{"class" => "corrupt"}} = answer(socket, 1)
   end
 
   # ---------------------------------------------------------------------------
@@ -1339,101 +1388,46 @@ defmodule Emissary.Web.FrameSocketTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The frame's flows
+  # An app that connects beyond its endpoint
   # ---------------------------------------------------------------------------
 
-  test "an app that connects to an origin opens a stream only while its grant lets what the stream carries flow there",
+  test "an app that connects to an origin opens a stream it declares under its grant, and its revalidation keeps it",
        %{source: source} do
-    name = "sock-flow-#{System.unique_integer([:positive])}"
+    name = "sock-beyond-#{System.unique_integer([:positive])}"
     digest = app!(source, name, [%{"name" => "mcp_servers.changes"}], [@origin])
 
-    # The grant the frame opens under declares no flow.
-    refused = frame!(source, name, digest)
-    socket = Socket.connect(:shared)
-    Socket.subscribe(socket, 1, refused.bearer, "mcp_servers.changes")
-
-    assert %{"type" => "ended", "error" => %{"class" => "forbidden", "message" => message}} =
-             answer(socket, 1)
-
-    assert message == Prima.Flow.sentence([:outside], @origin)
-    assert stream_decisions() == []
-
-    # Granted again with what the stream carries let flow to the origin, a
-    # frame opened under it subscribes through the gate.
-    grant_flows!(source, name, [{:outside, @origin}])
+    # Under the grant the person gives by default, whose ingress edge holds
+    # nothing.
     frame = frame!(source, name, digest)
     socket = Socket.connect(:shared)
     Socket.subscribe(socket, 1, frame.bearer, "mcp_servers.changes")
-    assert %{"type" => "subscribed"} = answer(socket, 1)
+
+    assert answer(socket, 1) == TinctureWire.subscribed(1)
     assert [%{tool: "stream:mcp_servers.changes", admission: "admitted"}] = stream_decisions()
+    wait_until(fn -> listeners(source) == 1 end, @answer_ms)
 
-    # The grant rewritten in place, at the revision the frame names, to
-    # declare no flow: the connection's next revalidation ends the
-    # subscription with the flow's refusal.
-    policy = policy(name, [])
-
+    # Every connection holding a subscription reads its frame again on
+    # this announcement. The state is read after the connection handled
+    # it, so anything the revalidation ended has reached the case by then.
     :ok =
-      Sanctum.Test.ConsentFixtures.hand_edit_head!(
-        source,
-        profile_id(name),
-        resolved_policy: policy,
-        blob_digest: Prima.Digest.sha256(policy)
+      Phoenix.PubSub.broadcast(
+        Cyfr.PubSub,
+        Cyfr.Bus.caller_invalidated_global(),
+        Cyfr.Bus.CallerInvalidated.new(source.session_token_hash)
       )
 
-    assert %{"type" => "ended", "error" => %{"class" => "forbidden", "message" => ^message}} =
-             answer(socket, 1)
+    assert Map.keys(Socket.state(socket).subs) == [1]
+    refute_received {:socket, ^socket, %{"type" => "ended"}}
+    assert listeners(source) == 1
 
-    wait_until(fn -> listeners(source) == 0 end, @answer_ms)
-  end
+    changed(source)
 
-  # The owner grant `frame!/4` opens `name` under, granted again at its
-  # revision with its own node's ingress edge declaring `flows`
-  # (`{class, origin}` pairs).
-  defp grant_flows!(source, name, flows) do
-    node = "tincture:local.#{name}"
-    {:ok, %{revision: revision}} = Sanctum.Consent.tincture_grant(source, "#{node}:#{@version}")
-
-    :ok =
-      Sanctum.Test.ConsentFixtures.seed_head!(
-        source,
-        %{id: profile_id(name), kind: :owner, source_ref: node, label: "owner", status: :active},
-        %{
-          id: "cons_#{profile_id(name)}_flows",
-          revision: revision,
-          scope: :versionless,
-          pinned_version: "",
-          invoke_mode: :open_inert,
-          shape_digest: :live,
-          commit_digest: "sha256:commit",
-          resolved_policy: policy(name, flows),
-          activation: %{node => "sha256:act"}
-        }
-      )
-  end
-
-  # `Sanctum.Test.ConsentFixtures.grant_tincture!/3`'s profile of `name`.
-  defp profile_id(name), do: "prof_" <> String.replace(name, "-", "_")
-
-  # A grant of the tincture `name` whose own node's ingress edge declares
-  # `flows` and nothing else.
-  defp policy(name, flows) do
-    ingress =
-      if flows == [],
-        do: %{},
-        else: %{
-          "flows" =>
-            Enum.map(flows, fn {class, to} -> %{"from" => Atom.to_string(class), "to" => to} end)
-        }
-
-    Jason.encode!(%{
-      "canonical" => "jcs-1",
-      "nodes" => %{
-        "tincture:local.#{name}" => %{
-          "limits" => Prima.Test.AuthorityFixtures.limits_map(),
-          "edges" => %{"@ingress" => ingress}
-        }
-      }
-    })
+    assert %{
+             "type" => "event",
+             "sub" => 1,
+             "stream" => "mcp_servers.changes",
+             "data" => %{"kind" => "changed"}
+           } = answer(socket, 1)
   end
 
   # ---------------------------------------------------------------------------

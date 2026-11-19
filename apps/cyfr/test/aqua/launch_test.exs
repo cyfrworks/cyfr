@@ -8,16 +8,17 @@ defmodule Aqua.LaunchTest do
   as the turn's person, under the origin the turn's row stores — a
   programmatic turn's launch stays programmatic, and no turn is written
   without an origin — under the account its decision resolved, seeded
-  with the turn's sources and letting no class flow, on whatever grant
-  its app roots at when it runs. An app with no grant is answered by the
-  gate that it is not granted, a grant that cannot be read refuses as the
-  damage it is, and what the grant does not let out of the turn's
-  material is refused at egress.
+  with the turn's sources as its row holds them when the launch is
+  dispatched, on whatever grant its app roots at when it runs. An app
+  with no grant is answered by the gate that it is not granted, and a
+  grant that cannot be read refuses as the damage it is. Nothing is
+  checked of where the turn's material came from: no class is let flow,
+  egress refuses no send for what the run read, and a source the turn
+  read since the decision is one more source the root is seeded with.
 
-  Anything the decision read that moved before the launch runs runs
-  nothing: a source the turn read since, refused by the dispatcher before
-  the gate is asked, or the account its name resolved to, refused there
-  or at the run's root.
+  A launch runs nothing when the account its name resolved to moved
+  before it runs: refused by the dispatcher before the gate is asked, or
+  at the run's root.
   """
 
   use ExUnit.Case, async: false
@@ -168,24 +169,18 @@ defmodule Aqua.LaunchTest do
 
   @offered %{"execution.run" => "offered"}
 
-  # The loop's decision for a launch of `args` in `turn` under `mode`,
-  # among `offered`, where the turn's sources are read from its row.
-  defp decide(ctx, turn, args, mode \\ "auto", offered \\ @offered) do
+  # The loop's decision for a launch of `args` in a turn under `mode`,
+  # among `offered`: made on the call and the account it names, reading
+  # nothing of the turn.
+  defp decide(ctx, _turn, args, mode \\ "auto", offered \\ @offered) do
     {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", args)
-    Aqua.Loop.Policy.decide(call, offered, mode, ctx: ctx, title: "Aqua", turn_id: turn.id)
+    Aqua.Loop.Policy.decide(call, offered, mode, ctx: ctx, title: "Aqua")
   end
 
-  # The decision a launch of `args` runs on: its call, the account it
-  # names as resolved, and the turn's `sources`, with no grant revision
-  # and no class let flow.
-  defp run_on(args, sources, account \\ nil) do
-    {:run,
-     %{
-       call: %{action: "run", args: args},
-       account: account,
-       binding: %{sources: sources, consent_id: nil, classes: []}
-     }}
-  end
+  # The decision a launch of `args` runs on: its call and the account it
+  # names as resolved, and nothing of what the turn read.
+  defp run_on(args, account \\ nil),
+    do: {:run, %{call: %{action: "run", args: args}, account: account}}
 
   # What the loop hands the dispatcher for a launch of `args` in `turn`.
   defp decided!(ctx, turn, args) do
@@ -283,10 +278,9 @@ defmodule Aqua.LaunchTest do
   end
 
   # The attached-request probe, published as an app of the person's own
-  # whose need `api_key` is attached by the rule, its manifest declaring
-  # `flows`: it sends its input as its one request and answers what it
-  # got.
-  defp publish_probe!(ctx, flows \\ []) do
+  # whose need `api_key` is attached by the rule: it sends its input as
+  # its one request and answers what it got.
+  defp publish_probe!(ctx) do
     name = "launch-probe-#{System.unique_integer([:positive])}"
 
     egress = %{
@@ -309,11 +303,7 @@ defmodule Aqua.LaunchTest do
           "hosts" => ["127.0.0.1"]
         }
       },
-      "caps" =>
-        if(flows == [],
-          do: %{"egress" => egress},
-          else: %{"egress" => egress, "flows" => flows}
-        )
+      "caps" => %{"egress" => egress}
     }
 
     {:ok, _component} =
@@ -439,8 +429,6 @@ defmodule Aqua.LaunchTest do
     end
   end
 
-  @decided_sources "This turn read more since the run was decided, so nothing ran: propose it " <>
-                     "again to decide it on what the turn has read now."
   @decided_work "The account \"Work\" is not the one this run was decided on, so nothing " <>
                   "ran: propose it again to run it on the account as it stands now"
   @decided_default "The default account is not the one this run was decided on, so nothing " <>
@@ -492,7 +480,7 @@ defmodule Aqua.LaunchTest do
     args = Map.put(probe_args(probe, port), "connection", "Supabase 2")
     step = launch_step!(ctx, turn, args)
     decided = decided!(ctx, turn, args)
-    assert {:run, decided} == run_on(args, [], %{vault_entry: named.id, name: "Supabase 2"})
+    assert {:run, decided} == run_on(args, %{vault_entry: named.id, name: "Supabase 2"})
 
     assert {:ok, %{execution_id: execution_id}} = Launch.run(ctx, step, decided)
     assert is_binary(execution_id)
@@ -539,7 +527,7 @@ defmodule Aqua.LaunchTest do
     # Decided on Work's entry; the grant has since moved Work to another.
     step = launch_step!(ctx, turn, named)
     decided = decided!(ctx, turn, named)
-    assert {:run, decided} == run_on(named, [], %{vault_entry: work.id, name: "Work"})
+    assert {:run, decided} == run_on(named, %{vault_entry: work.id, name: "Work"})
     grant!(ctx, app, work_on.("Work", other.id))
     ran_nothing!(ctx, step, decided, app, @decided_work)
 
@@ -570,7 +558,7 @@ defmodule Aqua.LaunchTest do
     # A launch the model spells in yet another case is decided under the
     # stored name, on its entry, and launches.
     lower = %{named | "connection" => "work"}
-    assert decide(ctx, turn, lower) == run_on(lower, [], %{vault_entry: other.id, name: "WORK"})
+    assert decide(ctx, turn, lower) == run_on(lower, %{vault_entry: other.id, name: "WORK"})
     step = launch_step!(ctx, turn, lower)
     _ = Launch.run(ctx, step, decided!(ctx, turn, lower))
     assert [_launched] = launched_of(ctx, app)
@@ -659,7 +647,7 @@ defmodule Aqua.LaunchTest do
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
     step = launch_step!(ctx, turn, args)
     decided = decided!(ctx, turn, args)
-    assert {:run, decided} == run_on(args, [], %{vault_entry: work.id, name: "Work"})
+    assert {:run, decided} == run_on(args, %{vault_entry: work.id, name: "Work"})
     Map.merge(fixture, %{step: step, decided: decided})
   end
 
@@ -830,7 +818,7 @@ defmodule Aqua.LaunchTest do
   @news Prima.Source.outside("news.example")
 
   # An app of the person's own granted with a default entry alone: its one
-  # exit is `api.example.com`, and its grant declares no flow to it.
+  # exit is `api.example.com`.
   defp granted_app!(ctx) do
     app = publish_app!(ctx)
     default = disclosed_entry!(ctx, "default")
@@ -856,41 +844,13 @@ defmodule Aqua.LaunchTest do
     %{app: app, args: %{"reference" => app <> ":1.0.0", "input" => %{}}}
   end
 
-  # `granted_app!/1`'s app whose manifest declares that outside material
-  # may reach its one exit, granted.
-  defp flowing_app!(ctx) do
-    name = "flowing-app-#{System.unique_integer([:positive])}"
-
-    manifest = %{
-      "name" => name,
-      "version" => "1.0.0",
-      "type" => "reagent",
-      "caps" => %{
-        "egress" => %{"domains" => ["api.example.com"]},
-        "flows" => [%{"from" => "outside", "to" => "api.example.com"}]
-      }
-    }
-
-    {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
-        name: name,
-        version: "1.0.0",
-        type: "reagent",
-        manifest: Jason.encode!(manifest)
-      })
-
-    app = "reagent:local." <> name
-    grant!(ctx, app, [])
-    %{app: app, args: %{"reference" => app <> ":1.0.0", "input" => %{}}}
-  end
-
   defp consent_of(ctx, app) do
     {:ok, %{consent_id: consent_id}} = Opus.authority_for(ctx, :default, app)
     consent_id
   end
 
   test "a decided launch runs on the grant its app roots at when it runs: one granted since " <>
-         "the decision runs on that grant, seeded with the turn's sources, letting nothing flow",
+         "the decision runs on that grant, seeded with the turn's sources",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
@@ -905,29 +865,25 @@ defmodule Aqua.LaunchTest do
     root_id = Prima.UUID7.execution_id()
     step = launch_step!(ctx, turn, args, root_id)
     decided = decided!(ctx, turn, args)
-    assert {:run, decided} == run_on(args, [pinned])
+    assert {:run, decided} == run_on(args)
 
     default = disclosed_entry!(ctx, "default")
     grant!(ctx, app, [%{need: "api_key", entry_id: default.id}])
     dispatched = Launch.run(ctx, step, decided)
 
-    # The grant made since is the one the root loads, and decides the run's
-    # sends alone: seeded with the turn's sources, the root lets no class
-    # flow.
+    # The grant made since is the one the root loads, and the root is
+    # seeded with the turn's sources; its ledger also holds what its run
+    # was handed of the disclosed entry.
     assert launched_of(ctx, app) == [root_id], "launch answered #{inspect(dispatched)}"
     actor = Sanctum.Context.actor(ctx)
     assert %{consent_id: consent_id} = Arca.Execution.get_tenant(actor, root_id)
     assert consent_id == consent_of(ctx, app)
-
-    assert {:ok, %{launch_classes: [], sources: seeded}} =
-             Arca.Execution.flow_state(actor, root_id)
-
+    assert {:ok, seeded} = Arca.Execution.sources(actor, root_id)
     assert pinned in seeded
   end
 
   test "a decided launch runs once as the turn's person, under its stored origin, with its " <>
-         "recorded call's arguments, under the step's id, seeded with the turn's sources and " <>
-         "letting nothing flow",
+         "recorded call's arguments, under the step's id, seeded with the turn's sources",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
@@ -955,11 +911,7 @@ defmodule Aqua.LaunchTest do
 
     assert user_id == turn.requested_by
     actor = Sanctum.Context.actor(ctx)
-
-    assert {:ok, %{launch_classes: [], sources: seeded}} =
-             Arca.Execution.flow_state(actor, root_id)
-
-    assert pinned in seeded and @news in seeded
+    assert Arca.Execution.sources(actor, root_id) == {:ok, [pinned, @news]}
 
     assert {:ok, [%{type: "execution.started"} = started | _]} =
              Arca.ExecutionEvents.since(actor, root_id, 0)
@@ -973,19 +925,31 @@ defmodule Aqua.LaunchTest do
     assert caller == "agent:" <> turn.agent
   end
 
-  test "a decided launch whose turn read a source since its decision runs nothing",
+  test "a decided launch whose turn read a source since its decision runs, seeded with every " <>
+         "source the turn holds when it is dispatched",
        %{ctx: ctx, thread: thread, pins: pins} do
-    %{app: app, args: args} = granted_app!(ctx)
-    turn = started!(%{ctx | origin: :interactive}, thread, pins)
-    step = launch_step!(ctx, turn, args)
-    decided = decided!(ctx, turn, args)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
-    # A source the turn read since, even one no grant must cover: nothing
-    # ran, and proposed again it is decided on it.
+    %{app: app, args: args} = quiet_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    pinned = Prima.Source.new(:pinned)
+    read!(ctx, turn, [pinned])
+    root_id = Prima.UUID7.execution_id()
+    step = launch_step!(ctx, turn, args, root_id)
+    decided = decided!(ctx, turn, args)
+    assert {:run, decided} == run_on(args)
+
+    # Another thread's posts and outside material, read since the
+    # decision: the launch runs all the same, its root seeded with them
+    # beside what the turn read before it.
     other = Prima.Source.thread("thr_other")
-    read!(ctx, turn, [other])
-    ran_nothing!(ctx, step, decided, app, @decided_sources)
-    assert decide(ctx, turn, args) == run_on(args, [other])
+    read!(ctx, turn, [other, @news])
+    assert {:ok, %{execution_id: ^root_id}} = Launch.run(ctx, step, decided)
+    assert launched_of(ctx, app) == [root_id]
+
+    assert Arca.Execution.sources(Sanctum.Context.actor(ctx), root_id) ==
+             {:ok, [pinned, @news, other]}
   end
 
   test "a decided launch whose turn's person was denied since its decision runs nothing and " <>
@@ -1007,18 +971,17 @@ defmodule Aqua.LaunchTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The decision, and what flows at egress
+  # The decision, and what a launch's sends reach
   # ---------------------------------------------------------------------------
 
-  test "under auto a launch is decided to run whatever its app's grant lets out, or with no " <>
-         "grant, binding the turn's sources and no grant; read-only refuses it, and one not " <>
-         "offered is denied",
+  test "under auto a launch is decided to run on its call whatever the turn read, with a " <>
+         "grant or with none, binding no grant; read-only refuses it, and one not offered is " <>
+         "denied",
        %{ctx: ctx, thread: thread, pins: pins} do
     ungranted = publish_app!(ctx)
 
     apps = [
       granted_app!(ctx).args,
-      flowing_app!(ctx).args,
       quiet_app!(ctx).args,
       %{"reference" => ungranted <> ":1.0.0", "input" => %{}}
     ]
@@ -1027,11 +990,11 @@ defmodule Aqua.LaunchTest do
     pinned = Prima.Source.new(:pinned)
 
     # Nothing read, outside material read, the pinned page read beside it:
-    # each launch is decided on the turn's sources as they stand, whatever
-    # its grant would let out of them.
-    for {read, sources} <- [{[], []}, {[@news], [@news]}, {[pinned], [pinned, @news]}] do
+    # each launch is decided the same, on its call and nothing of what the
+    # turn read.
+    for read <- [[], [@news], [pinned]] do
       if read != [], do: read!(ctx, turn, read)
-      for args <- apps, do: assert(decide(ctx, turn, args) == run_on(args, sources))
+      for args <- apps, do: assert(decide(ctx, turn, args) == run_on(args))
     end
 
     for args <- apps do
@@ -1057,13 +1020,26 @@ defmodule Aqua.LaunchTest do
   test "an about-you page Aqua wrote after reading outside material carries it into every " <>
          "later turn's launch; the person's own write or Remove on the Aqua page ends it",
        %{ctx: ctx, thread: thread, pins: pins} do
-    %{args: args} = granted_app!(ctx)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
+
+    %{args: args} = quiet_app!(ctx)
     pinned = Prima.Source.new(:pinned)
-    launches = fn -> decide(ctx, prompted!(ctx, pins), args) end
+    actor = Sanctum.Context.actor(ctx)
+
+    # A launch dispatched in a later turn: the sources its root is seeded
+    # with.
+    launches = fn ->
+      turn = prompted!(ctx, pins)
+      root_id = Prima.UUID7.execution_id()
+      step = launch_step!(ctx, turn, args, root_id)
+      assert {:ok, %{execution_id: ^root_id}} = Launch.run(ctx, step, decided!(ctx, turn, args))
+      Arca.Execution.sources(actor, root_id)
+    end
 
     # The person's own page: the launch carries the page alone.
     {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd.")
-    assert launches.() == run_on(args, [pinned])
+    assert launches.() == {:ok, [pinned]}
 
     # Aqua rewrites it after reading the news: every turn that reads the
     # page from then on carries the news into its launch.
@@ -1074,7 +1050,7 @@ defmodule Aqua.LaunchTest do
         sources: [@news]
       )
 
-    for _turn <- 1..2, do: assert(launches.() == run_on(args, [pinned, @news]))
+    for _turn <- 1..2, do: assert(launches.() == {:ok, [pinned, @news]})
 
     # The person saves the page as their own on the Aqua page: the next
     # turn's launch carries the page alone again.
@@ -1085,7 +1061,7 @@ defmodule Aqua.LaunchTest do
         revision: revision
       )
 
-    assert launches.() == run_on(args, [pinned])
+    assert launches.() == {:ok, [pinned]}
 
     # Or removes Aqua's page, over the revision the Aqua page read.
     {:ok, _} =
@@ -1095,51 +1071,36 @@ defmodule Aqua.LaunchTest do
         sources: [@news]
       )
 
-    assert launches.() == run_on(args, [pinned, @news])
+    assert launches.() == {:ok, [pinned, @news]}
     {:ok, %{revision: revision}} = Aqua.Notes.read(ctx, "about-you")
     {:ok, %{cleared: "about-you"}} = Aqua.Notes.pin(ctx, "about-you", "", [], revision: revision)
-    assert launches.() == run_on(args, [])
+    assert launches.() == {:ok, []}
   end
 
-  test "a decided launch's sends are held at egress to its grant's flows: outside material " <>
-         "with no flow to the host stays in, a declared flow lets it out, and a thread is no " <>
-         "material",
+  test "a decided launch's sends reach the host its grant allows whatever the turn read: " <>
+         "another thread's posts or outside material from another host",
        %{ctx: ctx, thread: thread, pins: pins} do
     port = upstream_port!(ctx)
     default = attached_entry!(ctx, port, "default", @default_secret)
-    closed = publish_probe!(ctx)
-    open = publish_probe!(ctx, [%{"from" => "outside", "to" => "127.0.0.1"}])
-
-    for probe <- [closed, open],
-        do: grant!(ctx, probe, [%{need: "api_key", entry_id: default.id}])
-
+    probe = publish_probe!(ctx)
+    grant!(ctx, probe, [%{need: "api_key", entry_id: default.id}])
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
 
-    launch = fn probe ->
+    launch = fn ->
       args = probe_args(probe, port)
       step = launch_step!(ctx, turn, args)
       Launch.run(ctx, step, decided!(ctx, turn, args))
     end
 
-    # The turn read another thread's posts: the send goes out under a
-    # grant that declares no flow at all.
+    # The turn read another thread's posts: the send goes out.
     read!(ctx, turn, [Prima.Source.thread("thr_other")])
-    assert {:ok, _} = launch.(closed)
+    assert {:ok, _} = launch.()
     assert %{path: "/hello"} = upstream!()
 
-    # Then outside material from another host: the grant that declares no
-    # flow of it to the upstream keeps the send in; the one that does lets
-    # it out.
+    # Then outside material from another host: the send goes out all the
+    # same.
     read!(ctx, turn, [@news])
-
-    assert launch.(closed) ==
-             {:error,
-              "Request to 127.0.0.1 refused: this run read material its grant declares no " <>
-                "flow of to it"}
-
-    refute_received {:upstream, _}
-
-    assert {:ok, _} = launch.(open)
+    assert {:ok, _} = launch.()
     assert %{path: "/hello"} = upstream!()
   end
 
@@ -1150,7 +1111,7 @@ defmodule Aqua.LaunchTest do
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
     lower = %{args | "connection" => "work"}
 
-    assert decide(ctx, turn, lower) == run_on(lower, [], %{vault_entry: work.id, name: "Work"})
+    assert decide(ctx, turn, lower) == run_on(lower, %{vault_entry: work.id, name: "Work"})
     versioned = app <> ":1.0.0"
 
     assert decide(ctx, turn, %{args | "connection" => "Home"}) ==
@@ -1338,9 +1299,9 @@ defmodule Aqua.LaunchTest do
       %{app: app, work: work, args: args} = work_app!(ctx)
       profile_id = own_profile_id(ctx, app)
       {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", args)
-      decide = fn -> Aqua.Loop.Policy.decide(call, @offered, "auto", ctx: ctx, sources: []) end
+      decide = fn -> Aqua.Loop.Policy.decide(call, @offered, "auto", ctx: ctx) end
 
-      assert decide.() == run_on(args, [], %{vault_entry: work.id, name: "Work"})
+      assert decide.() == run_on(args, %{vault_entry: work.id, name: "Work"})
 
       damage.(profile_id)
 
@@ -1364,7 +1325,7 @@ defmodule Aqua.LaunchTest do
 
     step = launch_step!(ctx, turn, args)
     decided = decided!(ctx, turn, args)
-    assert {:run, decided} == run_on(args, [])
+    assert {:run, decided} == run_on(args)
     assert Launch.run(ctx, step, decided) == {:error, {:head_corrupt, profile_id}}
     assert launched_of(ctx, app) == []
 

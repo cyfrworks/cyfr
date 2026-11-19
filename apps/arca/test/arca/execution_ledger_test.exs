@@ -150,22 +150,6 @@ defmodule Arca.ExecutionLedgerTest do
     assert sources!(child.id) == [Source.outside(nil)]
   end
 
-  test "flow_state carries the classes the tree's launch let flow, from its root's policy" do
-    root =
-      admit!(%{
-        host_policy: Jason.encode!(%{Execution.launch_key() => ["filed", "bogus", "outside"]})
-      })
-
-    child = admit!(%{parent_execution_id: root.id, root_execution_id: root.id})
-
-    assert {:ok, %{sources: [], launch_classes: [:filed, :outside]}} =
-             Execution.flow_state(actor(), child.id)
-
-    plain = admit!(%{})
-    assert {:ok, %{launch_classes: []}} = Execution.flow_state(actor(), plain.id)
-    assert Execution.flow_state(actor(), "exec_none") == {:error, :not_found}
-  end
-
   test "sources admitted that are not Prima.Source values refuse the admission, writing nothing" do
     id = "exec_ledger_bad_#{System.unique_integer([:positive])}"
 

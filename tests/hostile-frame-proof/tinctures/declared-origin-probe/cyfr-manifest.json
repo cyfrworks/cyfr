@@ -1,0 +1,12 @@
+{
+  "name": "declared-origin-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The containment proof's control: a frame that connects to one origin, lists the person's files and sends what it read to that origin.",
+  "tincture": {
+    "entry": "index.html",
+    "connect": ["attacker.test"],
+    "actions": ["file.list"]
+  }
+}

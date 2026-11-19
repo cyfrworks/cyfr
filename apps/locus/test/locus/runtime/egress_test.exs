@@ -9,8 +9,8 @@ defmodule Locus.Runtime.EgressTest do
   connection to exactly the pinned address with the hostname kept for TLS
   and the fail-closed transport policy set (`Locus.Runtime.Egress.connect_options/3`). A metadata address is refused even when the host
   answers one; a pin that names another target than the URL is refused;
-  the host's own refusals, a flow it refuses among them, are answered as
-  the guest's typed errors, marked as the host's. No pin is reused: every
+  the host's own refusals are answered as the guest's typed errors,
+  marked as the host's. No pin is reused: every
   request asks the host for its own, and a request asked again before it
   is sent is asked as it was. Every pin here is the scripted host's, from
   the table each test sets.
@@ -233,20 +233,6 @@ defmodule Locus.Runtime.EgressTest do
              ScriptedHost.requests(host, "egress_pin")
   end
 
-  test "a host refused for want of a flow is the guest's flow_blocked, marked as the host's", %{
-    host: host,
-    client: client
-  } do
-    ScriptedHost.pins(host, %{"collector.test" => :flow})
-
-    assert {:refused, :flow_blocked, message} =
-             Egress.pin(client, "https://collector.test/in?k=v")
-
-    assert message ==
-             "HTTP egress to collector.test refused: this run read material its grant " <>
-               "declares no flow of to that host"
-  end
-
   test "a request asked again is asked as it was, its redirect hop from the same pin, consuming no hop",
        %{host: host, client: client} do
     ScriptedHost.pins(host, %{"public.test" => "203.0.113.10"})
@@ -268,9 +254,9 @@ defmodule Locus.Runtime.EgressTest do
     assert hop_args["from"] == origin.target.id
 
     # Asked again, a request is decided again: a host refused since is refused.
-    ScriptedHost.pins(host, %{"public.test" => :flow})
+    ScriptedHost.pins(host, %{"public.test" => :denied})
 
-    assert {:refused, :flow_blocked, _} =
+    assert {:refused, :private_ip_blocked, _} =
              Egress.repin(client, "https://public.test/start", origin)
   end
 

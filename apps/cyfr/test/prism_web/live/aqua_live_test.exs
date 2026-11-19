@@ -558,7 +558,7 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-notes button[phx-value-name=about-you]")
     end
 
-    test "a page Aqua wrote says so and what it read; learned in a deleted thread it is " <>
+    test "a page Aqua wrote says so and not what it read; learned in a deleted thread it is " <>
            "marked with Remove, which removes it as read and no newer page",
          %{conn: conn, ctx: ctx} do
       actor = Sanctum.Context.actor(ctx)
@@ -574,7 +574,8 @@ defmodule PrismWeb.AquaLiveTest do
 
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "Flies to Lisbon."
-      assert has_element?(view, "#aqua-about-by", "Written by Aqua after reading news.example")
+      assert has_element?(view, "#aqua-about-by", "Written by Aqua. Edit it to make it yours.")
+      refute html =~ "news.example"
       refute has_element?(view, "#aqua-about-deleted")
 
       {:ok, _} = Arca.ThreadStorage.delete(actor, learned.id)

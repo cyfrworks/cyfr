@@ -620,16 +620,11 @@ The declared capability **ask**. `caps` is never applied by itself — it is ren
 | `limits.timeout`, `limits.batch_timeout` | string | Durations like `"30s"`, `"3m"` |
 | `limits.max_memory_bytes`, `.max_request_size`, `.max_response_size`, `.max_concurrent_tasks` | int | Positive integers |
 | `limits.rate_limit` | object | `{"requests": N, "window": "1m"}` |
-| `flows` | object[] | Which source classes may reach which exit, each `{"from": class, "to": exit}`. `from` is one of `pinned`, `filed`, `files_by_grant`, `vault_disclosed`, `outside`. `to` is an exit: a domain `egress.domains` names (for a tincture, also an origin `tincture.connect` names), spelled exactly as declared; `need:<name>` for a credential need the `needs` block declares; or `server:<name>` for a tool server a consent may bind. A `from` that is no class, a `to` the manifest does not declare, or an entry with other keys is refused at registration. See [Flows](#flows-capsflows) |
 
 ```json
 "caps": {
   "egress": { "domains": ["api.anthropic.com"], "methods": ["GET", "POST"] },
-  "limits": { "timeout": "3m", "rate_limit": { "requests": 100, "window": "1m" } },
-  "flows": [
-    { "from": "pinned", "to": "api.anthropic.com" },
-    { "from": "filed", "to": "api.anthropic.com" }
-  ]
+  "limits": { "timeout": "3m", "rate_limit": { "requests": 100, "window": "1m" } }
 }
 ```
 
@@ -803,10 +798,10 @@ Shapes nest at most 8 deep, and a manifest whose `results` does not hold this gr
 ### `cyfr:http/fetch` — `request(json) -> string`
 Request: `{"connection": "api_key", "method": "POST", "url": "...", "headers": {...}, "body": "..."}`
 Success: `{"status": 200, "headers": {...}, "body": "..."}`
-Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|redirect_credentials|flow_blocked|request_too_large|response_too_large|http_error", "message": "..."}}`
+Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|redirect_credentials|request_too_large|response_too_large|http_error", "message": "..."}}`
 (`invalid_json`/`invalid_request` are the same malformed-input types every host interface uses; `http_error` is a transport failure after validation passed.)
 
-The engine resolves no name: CYFR resolves each request's host and pins the address it connects to under the run's consent, deciding every request again as it is sent, and a pin it refuses reaches the component as `private_ip_blocked` (a metadata address, or a private one the consent does not grant), `dns_error` (a host that resolves to nothing), `flow_blocked` (the run has read material its grant declares no flow of to that host) or `redirect_credentials`. The host follows no redirect: a `3xx` answer is the component's, and its next request to the `Location` is the redirect's next hop, pinned from the request it came from. A hop to another scheme or host is refused as `redirect_credentials`, since it would carry the request's credentials to another origin, and the engine never sends `Authorization` or `Cookie` across origins.
+The engine resolves no name: CYFR resolves each request's host and pins the address it connects to under the run's consent, deciding every request again as it is sent, and a pin it refuses reaches the component as `private_ip_blocked` (a metadata address, or a private one the consent does not grant), `dns_error` (a host that resolves to nothing) or `redirect_credentials`. The host follows no redirect: a `3xx` answer is the component's, and its next request to the `Location` is the redirect's next hop, pinned from the request it came from. A hop to another scheme or host is refused as `redirect_credentials`, since it would carry the request's credentials to another origin, and the engine never sends `Authorization` or `Cookie` across origins.
 
 **Binary data** — base64 encode request body and/or request base64 response:
 ```json
@@ -1494,14 +1489,6 @@ Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`)
 
 **Refused features.** A component may not use the component-model async features (async lifts and lowers, their callbacks, streams, futures and the other async builtins), GC or its reference types (`struct`, `array`, `externref` and the other GC-heap types), or exception handling (tags, `throw`, `try_table`). Each is refused when the component is published, registered or built, and again before it is compiled, with one sentence naming the component's digest. The engine's Wasmtime release has open security advisories in exactly these features, and a GC heap would sit outside the one linear memory above. The shipped components use none of them. Check yours with `wasm-tools validate --features=-cm-async,-cm-async-stackful,-cm-more-async-builtins,-cm-error-context,-cm-threading,-gc,-gc-types,-exceptions,-legacy-exceptions <component>.wasm`.
 
-### Flows (`caps.flows`)
-
-Every run keeps a ledger of the source classes it has read: `pinned` and `filed` (what the person pinned or filed), `files_by_grant` (storage a grant reaches), `vault_disclosed` (a vault value disclosed to the component) and `outside` (anything from outside, named by its tool, host or feed). A run starts with the classes of the turn or parent that started it, a child's classes join its parent's before any of the child's bytes reach it, and anything with no recorded source counts as `outside`.
-
-An exit is a place the component's bytes can leave: each egress domain, each credential need (`need:<name>`), each tool server its consent binds (`server:<name>`) and, for a tincture, each `tincture.connect` origin. A flow `{"from": class, "to": exit}` lets material of that class go to that exit. The consent sheet shows every exit with the classes allowed to reach it. The person may untick any of them but can never add one, and the consent binds what they keep. A host narrowed under a declared pattern keeps that pattern's flows.
-
-A flow only lets material reach an exit the grant already allows. It grants no domain, method, credential, tool server or storage path. Once a run's ledger holds a class, a request to an exit with no flow for that class is refused, and the refusal is recorded. Ordinary fetches and attached fetches are both checked. The refusal names the classes and the host, the need and its host, or the server, never the URL. A component that declares no flows keeps working until its run reads a source, so declare a flow for every class your requests may carry. Material a host returned may always go back to that same host, matched by its exact name, never by a wildcard pattern. An attached request reaches two exits, the need whose credential it carries and its destination host, so a flow of a class to either one lets that class through it; a `need:` flow covers only attached requests carrying that need, never an ordinary fetch.
-
 ### Versionless by default
 
 A consent covers every release of the component line unless the operator pins a version. This is safe because the resolved capability is an allowlist: a newer release can only receive less than the consent names, never more. A release that asks for *more* triggers `consent_required` with the shape diff — the operator approves a new revision or the component doesn't run.
@@ -1695,7 +1682,6 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `resource_limit` | `max_concurrent_tasks`, emit size, or emit rate exceeded |
 | `timeout` | Exceeded `batch_timeout` |
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
-| `flow_blocked` | A tool server's tool refused before its arguments left: the run read a source class its grant declares no flow of to `server:<name>` |
 | `encoding_error` | A tool's result could not be encoded as JSON |
 | `uncertain` | The call may have taken effect and no result says whether it did: its handler stopped once it may have acted ("Tool <name> crashed; its outcome is unknown", or exited, timed out or was cancelled), a component it ran was stopped with its work possibly still running ("Execution timeout after Nms", or cancelled before it completed), or the host call's answer was lost. Check before repeating it |
 | `unknown` | The host produced a result in an unexpected shape |

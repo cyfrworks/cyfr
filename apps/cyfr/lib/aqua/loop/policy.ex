@@ -30,8 +30,8 @@ defmodule Aqua.Loop.Policy do
   entry the launched app's own profile binds under that name, and the
   name as the binding stores it. A name the profile does not bind ends
   the call as setup required. A launch that runs is decided `{:run,
-  decided}`: the call, its account and the turn's sources, which
-  `Aqua.Launch` holds the run to as it dispatches (`t:Aqua.Launch.decided/0`).
+  decided}`: the call and its account, which `Aqua.Launch` holds the run
+  to as it dispatches (`t:Aqua.Launch.decided/0`).
   It pins no grant: the grant the app roots at when it runs decides its
   sends, and a component with none is answered `consent_required` by the
   gate.
@@ -76,10 +76,9 @@ defmodule Aqua.Loop.Policy do
   first). `opts`: `:narrowed` (the tools a crew request narrowed the job
   to, nil for none), `:host_start` (true for the turn's own start of its
   program brain), `:title` (the member's title, which a read-only
-  refusal names), `:ctx` (the member's context a launch's account is
-  resolved under) and `:turn_id` (whose sources a launch binds, read as
-  the call is decided unless `:sources` names them). Without a context a
-  launch naming an account is refused.
+  refusal names) and `:ctx` (the member's context a launch's account is
+  resolved under). Without a context a launch naming an account is
+  refused.
   """
   @spec decide(Call.t(), Aqua.Offered.t(), String.t(), keyword()) :: decision()
   def decide(%Call{} = call, offered, mode, opts) when is_map(offered) do
@@ -181,37 +180,11 @@ defmodule Aqua.Loop.Policy do
 
   defp title(opts), do: Keyword.get(opts, :title) || "Aqua"
 
-  # A launch that runs binds what its decision read: its call, the
-  # account it names as resolved now, and the turn's sources.
+  # A launch that runs binds what its decision read: its call and the
+  # account it names as resolved now.
   defp launch(%Call{} = call, opts) do
-    ctx = Keyword.get(opts, :ctx)
-
-    with {:ok, account} <- decided_account(call, ctx) do
-      {:run,
-       %{
-         call: %{action: call.action, args: call.args},
-         account: account,
-         binding: %{sources: turn_sources(ctx, opts), consent_id: nil, classes: []}
-       }}
-    end
-  end
-
-  # The turn's sources: those the place names, else the turn's row read
-  # now, so a source a concurrent call joined counts. A turn whose row
-  # cannot be read binds an unnamed outside source.
-  defp turn_sources(ctx, opts) do
-    case Keyword.fetch(opts, :sources) do
-      {:ok, sources} ->
-        sources
-
-      :error ->
-        with %Sanctum.Context{} <- ctx,
-             turn_id when is_binary(turn_id) <- Keyword.get(opts, :turn_id),
-             {:ok, %{sources: sources}} <- Aqua.Tape.turn(ctx, turn_id) do
-          Prima.Source.decode(sources)
-        else
-          _unknown -> [Prima.Source.outside(nil)]
-        end
+    with {:ok, account} <- decided_account(call, Keyword.get(opts, :ctx)) do
+      {:run, %{call: %{action: call.action, args: call.args}, account: account}}
     end
   end
 

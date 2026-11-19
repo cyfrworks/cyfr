@@ -10,12 +10,8 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   dispatch; a public tincture's page admitted under its public profile
   only; and the per-frame invocation rate.
 
-  A frame that connects to origins beyond the endpoint: an invoke or an
-  action is refused before anything is read or run unless every class it
-  may carry has a flow to every origin on its grant's ingress edge (the
-  owner head's for a frame, the public profile's for a public page), a
-  grant that cannot be trusted refuses as damage, and a frame that
-  connects nowhere reads nothing of its grant.
+  A frame whose page connects to origins beyond the endpoint is admitted
+  as any frame is: by its credential, its version and its grant.
 
   A canvas's credential, a validation trial's among them, is refused on
   these routes (`canvas_path_required`) before any charge, and a canvas's
@@ -34,7 +30,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
   # A provider of one read whose answers are filed material, as its
   # operation declares (`Prima.Operation`'s `sources`). Each read tells
-  # the process registered as `:tincture_flow_probe`, so a case sees
+  # the process registered as `:tincture_filed_probe`, so a case sees
   # whether the read was made at all.
   defmodule FiledProbe do
     @moduledoc false
@@ -49,7 +45,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     def tools do
       [
         Operation.tool([
-          Operation.new("flow_probe", "filed", "Read filed material", [],
+          Operation.new("filed_probe", "filed", "Read filed material", [],
             kind: :read,
             planes: [:external],
             sources: [:filed]
@@ -59,8 +55,8 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     end
 
     @impl true
-    def handle("flow_probe", _ctx, %{"action" => "filed"}) do
-      if observer = Process.whereis(:tincture_flow_probe), do: send(observer, :flow_probe_read)
+    def handle("filed_probe", _ctx, %{"action" => "filed"}) do
+      if observer = Process.whereis(:tincture_filed_probe), do: send(observer, :filed_probe_read)
       {:ok, %{"filed" => true}}
     end
   end
@@ -86,6 +82,75 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
     {:ok, source: source, session: session}
   end
+
+  for damage <- [:node, :ingress], route <- [:action, :invoke] do
+    test "a frame whose grant lost its own #{damage} is refused its #{route} as a damaged head",
+         %{source: source} do
+      damage = unquote(damage)
+      route = unquote(route)
+      name = "lost-#{damage}-#{route}"
+      ref = "tincture:local.#{name}"
+
+      digest =
+        tincture!(
+          source,
+          name,
+          %{"connect" => ["api.beyond.example"], "actions" => ["system.status"]},
+          [%{"ref" => "reagent:local.echo", "reason" => "echo"}]
+        )
+
+      frame = frame!(source, name, digest)
+      assert action(frame.bearer, "system.status").status == 200
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          source,
+          %{
+            id: "prof_" <> String.replace(name, "-", "_"),
+            kind: :owner,
+            source_ref: ref,
+            label: "default",
+            status: :active
+          },
+          %{
+            id: "cons_lost_#{damage}_#{route}",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: :live,
+            commit_digest: "sha256:commit",
+            resolved_policy: lost_policy(damage, ref),
+            activation: %{ref => "sha256:act"}
+          }
+        )
+
+      assert %{class: "corrupt"} = refused(lost_request(route, frame.bearer), route)
+    end
+  end
+
+  # A head's policy that lost the tincture's own node, or kept the node and
+  # lost its ingress.
+  defp lost_policy(:node, _ref), do: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => %{}})
+
+  defp lost_policy(:ingress, ref),
+    do:
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          ref => %{"limits" => Prima.Test.AuthorityFixtures.limits_map(), "edges" => %{}}
+        }
+      })
+
+  defp lost_request(:action, bearer), do: action(bearer, "system.status")
+
+  defp lost_request(:invoke, bearer),
+    do:
+      data(
+        :invoke,
+        TinctureWire.request(:invoke, %{ref: "r:local.echo:1.0.0", operation: "run", args: %{}}),
+        bearer: bearer
+      )
 
   # ---------------------------------------------------------------------------
   # Fixtures
@@ -734,310 +799,112 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The frame's flows
+  # A frame that connects beyond its endpoint
   # ---------------------------------------------------------------------------
 
-  @origin "api.flows.example"
-  @elsewhere "*.elsewhere.example"
-  @echo %{"ref" => "reagent:local.echo", "reason" => "echo"}
-
-  # The tincture's head grant of `kind` at `revision`, whose ingress edge
-  # on the tincture's own node declares `flows` (`{class, exit}` pairs);
-  # its policy is `policy` when a case spells one. A second grant of the
-  # same tincture and kind replaces the first. Answers the revision.
-  defp grant!(source, name, kind, flows, revision \\ 1, policy \\ nil) do
-    node = "tincture:local.#{name}"
-    policy = policy || policy(name, flows)
-
-    # An owner grant replaces the one a frame was granted under
-    # (`Sanctum.Test.ConsentFixtures.grant_tincture!/3`'s profile).
-    id =
-      if kind == :owner,
-        do: "prof_" <> String.replace(name, "-", "_"),
-        else: "prof_flows_#{name}_#{kind}"
-
-    :ok =
-      Sanctum.Test.ConsentFixtures.seed_head!(
-        source,
-        %{id: id, kind: kind, source_ref: node, label: to_string(kind), status: :active},
-        %{
-          id: "cons_#{id}_#{revision}",
-          revision: revision,
-          scope: :versionless,
-          pinned_version: "",
-          invoke_mode: if(kind == :public, do: :edge_only, else: :open_inert),
-          shape_digest: :live,
-          commit_digest: "sha256:commit",
-          resolved_policy: policy,
-          activation: %{node => "sha256:act"}
-        }
-      )
-
-    revision
-  end
-
-  # A grant of the tincture `name` whose own node's ingress edge declares
-  # `flows` and nothing else.
-  defp policy(name, flows) do
-    ingress = if flows == [], do: %{}, else: %{"flows" => Enum.map(flows, &flow/1)}
-
-    Jason.encode!(%{
-      "canonical" => "jcs-1",
-      "nodes" => %{
-        "tincture:local.#{name}" => %{
-          "limits" => Prima.Test.AuthorityFixtures.limits_map(),
-          "edges" => %{"@ingress" => ingress}
-        }
-      }
-    })
-  end
-
-  defp flow({class, exit}), do: %{"from" => Atom.to_string(class), "to" => exit}
-
-  # A flow of every class to `exit`.
-  defp every_class_to(exit), do: Enum.map(Prima.Source.classes(), &{&1, exit})
-
-  defp invoke(opts) do
-    body =
-      TinctureWire.request(
-        :invoke,
-        Map.merge(
-          %{ref: "reagent:local.echo:1.0.0", operation: "run", args: %{}},
-          Map.new(Keyword.take(opts, [:public]))
-        )
-      )
-
-    data(:invoke, body, Keyword.take(opts, [:bearer]))
-  end
-
-  defp executions, do: Arca.Repo.all(Arca.Schemas.Execution)
-
-  # The request-log rows of the gate's `tincture` operation called on
-  # `route` (`invoke_protected`, `invoke_public`): a refusal made here is
-  # the route's own row, named `invoke`.
-  defp invoked(route), do: Enum.filter(mcp_rows("tincture"), &(&1.action == route))
-
-  # A tincture `name` reading `flow_probe.filed` that connects to
-  # `connect` and declares `flows` (`{class, to}` pairs), granted through
-  # the consent commit the person makes from its preview: its frame, and
-  # the classes the preview showed flowing to each exit.
-  defp previewed_frame!(source, name, connect, flows) do
-    manifest = %{
-      "name" => name,
-      "type" => "tincture",
-      "version" => @version,
-      "publisher" => "local",
-      "tincture" => %{
-        "entry" => "index.html",
-        "connect" => connect,
-        "actions" => ["flow_probe.filed"]
-      },
-      "caps" => %{"flows" => Enum.map(flows, &flow/1)}
-    }
-
-    assert :ok = Prima.Manifest.validate(manifest, fn _ -> true end)
-    digest = put_version!(source, name, manifest)
-    decisions = %{ref: "tincture:local.#{name}"}
-    {:ok, plan} = Sanctum.Consent.Plan.plan(source, decisions)
-    {:ok, preview} = Sanctum.Consent.Commit.preview(source, decisions)
-
-    {:ok, committed} =
-      Sanctum.Consent.Commit.commit(source, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
-
-    shown =
-      for %{"kind" => "exits", "values" => %{"exit" => exit, "flows" => classes}} <- plan.rows,
-          into: %{},
-          do: {exit, classes}
-
-    {frame!(source, name, digest, committed.revision), shown}
-  end
-
   describe "a frame that connects beyond its endpoint" do
-    test "an origin under a declared pattern is read with the pattern's flows, as the preview " <>
-           "showed them flowing to it",
+    # Under the grant the person gives by default, whose ingress edge holds
+    # nothing. The action is the probe's, whose answer is filed material,
+    # where `system.status` declares none.
+    test "reads an action and invokes a component under the grant it opened with",
          %{source: source} do
       Sanctum.Catalog.with_providers([FiledProbe], fn ->
-        Process.register(self(), :tincture_flow_probe)
-
-        {frame, shown} =
-          previewed_frame!(source, "inherited-origin", ["*.flows.example", @origin], [
-            {:filed, "*.flows.example"}
-          ])
-
-        assert shown[@origin] == ["filed"]
-        conn = action(frame.bearer, "flow_probe.filed")
-
-        assert conn.status == 200
-        assert {:ok, _answer} = answer(conn, :action)
-        assert_receive :flow_probe_read, @answer_ms
-      end)
-    end
-
-    test "an origin under no declared pattern is shown no flow and refused the read",
-         %{source: source} do
-      Sanctum.Catalog.with_providers([FiledProbe], fn ->
-        Process.register(self(), :tincture_flow_probe)
-        unflowed = "api.unflowed.example"
-
-        {frame, shown} =
-          previewed_frame!(source, "uncovered-origin", ["*.flows.example", unflowed], [
-            {:filed, "*.flows.example"}
-          ])
-
-        assert shown[unflowed] == []
-        conn = action(frame.bearer, "flow_probe.filed")
-
-        assert conn.status == 403
-        assert %{class: "forbidden", message: message} = refused(conn, :action)
-        assert message == Prima.Flow.sentence([:filed], unflowed)
-        refute_received :flow_probe_read
-      end)
-    end
-
-    test "a file read carries what an unrecorded file is, outside material, beside the grant's own class",
-         %{source: source} do
-      actor = Sanctum.Context.actor(source)
-      assert {:ok, _} = Arca.Files.write(actor, "data/legacy-outside.txt", "OUTSIDE-BYTES")
-      name = "file-flow"
-      digest = tincture!(source, name, %{"connect" => [@origin], "actions" => ["file.read"]}, [])
-      revision = grant!(source, name, :owner, [{:files_by_grant, @origin}])
-      frame = frame!(source, name, digest, revision)
-
-      body =
-        TinctureWire.request(:action, %{
-          operation: "file.read",
-          args: %{"path" => "data/legacy-outside.txt"}
-        })
-
-      conn = data(:action, body, bearer: frame.bearer)
-      assert conn.status == 403
-      assert %{class: "forbidden", message: message} = refused(conn, :action)
-      assert message =~ "outside"
-    end
-
-    test "an action whose answer may carry a class with no flow to the origin is refused " <>
-           "before it is read; with the flow it is read",
-         %{source: source} do
-      Sanctum.Catalog.with_providers([FiledProbe], fn ->
-        Process.register(self(), :tincture_flow_probe)
-        name = "flow-act"
+        Process.register(self(), :tincture_filed_probe)
+        name = "beyond-dash"
 
         digest =
           tincture!(
             source,
             name,
-            %{"connect" => [@origin], "actions" => ["flow_probe.filed"]},
-            []
+            %{"connect" => ["api.beyond.example"], "actions" => ["filed_probe.filed"]},
+            [%{"ref" => "reagent:local.echo", "reason" => "echo"}]
           )
 
-        # Outside material may reach the origin; filed material may not.
-        frame = frame!(source, name, digest, grant!(source, name, :owner, [{:outside, @origin}]))
-        conn = action(frame.bearer, "flow_probe.filed")
-
-        assert conn.status == 403
-
-        assert %{class: "forbidden", stage: "admission", message: message} =
-                 refused(conn, :action)
-
-        assert message == Prima.Flow.sentence([:filed], @origin)
-        refute_received :flow_probe_read
-
-        # The one decision is this route's refusal, recorded as the frame's
-        # person's: the gate never saw the read.
-        assert [row] = Arca.Repo.all(Arca.Schemas.DecisionLog)
-
-        assert {row.tool, row.action, row.admission, row.refusal_class, row.user_id} ==
-                 {"tincture", "system_action", "refused", "forbidden", source.user_id}
-
-        assert row.reason == message
-
-        # Granted again with filed material let flow there, it is read.
-        revision = grant!(source, name, :owner, [{:filed, @origin}], 2)
-        conn = action(frame!(source, name, digest, revision).bearer, "flow_probe.filed")
+        frame = frame!(source, name, digest)
+        conn = action(frame.bearer, "filed_probe.filed")
 
         assert conn.status == 200
         assert {:ok, _answer} = answer(conn, :action)
-        assert_receive :flow_probe_read, @answer_ms
+        assert_receive :filed_probe_read, @answer_ms
+
+        body =
+          TinctureWire.request(:invoke, %{
+            ref: "r:local.echo:1.0.0",
+            operation: "run",
+            args: %{"x" => 1}
+          })
+
+        data(:invoke, body, bearer: frame.bearer)
+
+        # The route admitted it: its one row is the gate's tincture
+        # operation, called with the frame's input.
+        assert [row] = mcp_rows("tincture")
+        assert row.action == "invoke_protected"
+
+        assert %{
+                 "publisher" => "local",
+                 "tincture_name" => "beyond-dash",
+                 "reference" => "r:local.echo:1.0.0",
+                 "input" => %{"operation" => "run", "params" => %{"x" => 1}}
+               } = Jason.decode!(row.input)
       end)
     end
 
-    test "an invoke, whose result may carry every class, needs a flow of each to every origin " <>
-           "before it runs",
-         %{source: source} do
-      name = "flow-inv"
-      digest = tincture!(source, name, %{"connect" => [@origin, @elsewhere]}, [@echo])
+    # A public page roots at its public profile, whose head here grants
+    # its ingress nothing: nothing of where the page's material goes is
+    # read before the invoke is handed to the gate.
+    test "a public page's invoke runs on its public profile's grant", %{source: source} do
+      name = "beyond-pub"
+      node = "tincture:local.#{name}"
 
-      # Every class may reach the first origin, none the second.
-      revision = grant!(source, name, :owner, every_class_to(@origin))
-      conn = invoke(bearer: frame!(source, name, digest, revision).bearer)
+      tincture!(source, name, %{"connect" => ["api.beyond.example"]}, [
+        %{"ref" => "reagent:local.echo", "reason" => "echo"}
+      ])
 
-      assert conn.status == 403
-      assert %{class: "forbidden", message: message} = refused(conn, :invoke)
-      assert message == Prima.Flow.sentence(Prima.Source.classes(), @elsewhere)
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          source,
+          %{
+            id: "prof_beyond_pub_public",
+            kind: :public,
+            source_ref: node,
+            label: "public",
+            status: :active
+          },
+          %{
+            id: "cons_beyond_pub_public",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :edge_only,
+            shape_digest: :live,
+            commit_digest: "sha256:commit",
+            resolved_policy: Sanctum.Test.ConsentFixtures.empty_policy(node),
+            activation: %{node => "sha256:act"}
+          }
+        )
 
-      # Nothing ran: the one row is the route's refusal, the gate's tincture
-      # operation was never called, and no run was admitted.
-      assert [%{action: "invoke", refusal_class: "forbidden", error: ^message}] =
-               mcp_rows("tincture")
+      address = address(source)
 
-      assert executions() == []
+      body =
+        TinctureWire.request(:invoke, %{
+          ref: "r:local.echo:1.0.0",
+          operation: "run",
+          args: %{"x" => 1},
+          public: public(address, name)
+        })
 
-      revision =
-        grant!(source, name, :owner, every_class_to(@origin) ++ every_class_to(@elsewhere), 2)
+      data(:invoke, body)
 
-      conn = invoke(bearer: frame!(source, name, digest, revision).bearer)
-      refute conn.resp_body =~ "declares no flow"
-      assert [_called] = invoked("invoke_protected")
-    end
+      assert [row] = mcp_rows("tincture")
+      assert row.action == "invoke_public"
 
-    test "a public page's invoke is held to its public profile's flows", %{source: source} do
-      name = "flow-pub"
-      tincture!(source, name, %{"connect" => [@origin]}, [@echo])
-      public = public(address(source), name)
-
-      grant!(source, name, :public, [])
-      conn = invoke(public: public)
-
-      assert conn.status == 403
-      assert %{class: "forbidden", message: message} = refused(conn, :invoke)
-      assert message == Prima.Flow.sentence(Prima.Source.classes(), @origin)
-      assert invoked("invoke_public") == []
-
-      grant!(source, name, :public, every_class_to(@origin), 2)
-      conn = invoke(public: public)
-
-      refute conn.resp_body =~ "declares no flow"
-      assert [_called] = invoked("invoke_public")
-    end
-
-    test "a grant that cannot be trusted refuses the read as damage", %{source: source} do
-      name = "flow-damaged"
-      digest = tincture!(source, name, %{"connect" => [@origin]}, [@echo])
-
-      # A head whose grant holds no node of its own, so no ingress.
-      revision =
-        grant!(source, name, :owner, [], 1, ~s({"canonical":"jcs-1","nodes":{}}))
-
-      conn = invoke(bearer: frame!(source, name, digest, revision).bearer)
-
-      assert %{class: "corrupt"} = refused(conn, :invoke)
-      assert invoked("invoke_protected") == []
-    end
-
-    test "a tincture that connects nowhere reads nothing of the grant", %{source: source} do
-      # A head whose ingress declares no flow at all, which the frame's
-      # revision names: nothing it reads needs one.
-      digest = declared!(source, "plain-flows")
-      revision = grant!(source, "plain-flows", :owner, [])
-      frame = frame!(source, "plain-flows", digest, revision)
-
-      assert action(frame.bearer, "system.status").status == 200
+      assert %{
+               "athanor" => ^address,
+               "tincture_name" => "beyond-pub",
+               "reference" => "r:local.echo:1.0.0",
+               "input" => %{"operation" => "run", "params" => %{"x" => 1}}
+             } = Jason.decode!(row.input)
     end
   end
 

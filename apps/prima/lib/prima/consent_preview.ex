@@ -63,18 +63,12 @@ defmodule Prima.ConsentPreview do
       `subject` for a feed's results, and the RFC 6901 pointer `field`
       into that stream's shape (`Prima.Manifest.Tincture`). One row per
       desktop that offers any control.
-    * `exits` — `exit`, one place the node's bytes may leave
-      (`Prima.Flow`): an egress domain or a tincture's connect origin as
-      declared, `need:<name>` or `server:<name>`; and `flows`, the source
-      classes (`Prima.Source.classes/0`) its flows let reach that exit,
-      spelled as declared, empty for an exit no flow names. One row per
-      node and exit, so two exits of one node are two rows.
 
-  Only `egress`, `storage`, `tools`, `limits` and `exits` can be narrowed
+  Only `egress`, `storage`, `tools` and `limits` can be narrowed
   (`narrowable_kinds/0`); a row of another kind is granted whole or not at
   all and is never marked narrowed, and neither is a wildcard tools row,
   which is the whole ask. Lists of names are sets: no name twice, and at
-  most 256. A kind outside these eleven is refused, and so is a field a
+  most 256. A kind outside these ten is refused, and so is a field a
   kind does not carry.
 
   ## Removed bindings
@@ -108,10 +102,9 @@ defmodule Prima.ConsentPreview do
     :frame,
     :streams,
     :system_actions,
-    :controls,
-    :exits
+    :controls
   ]
-  @narrowable [:egress, :storage, :tools, :limits, :exits]
+  @narrowable [:egress, :storage, :tools, :limits]
 
   @type kind ::
           :credential
@@ -124,7 +117,6 @@ defmodule Prima.ConsentPreview do
           | :streams
           | :system_actions
           | :controls
-          | :exits
 
   @typedoc "A removed binding in its JSON form (`check_removed/1`)."
   @type removed :: %{required(String.t()) => String.t() | nil}
@@ -149,7 +141,7 @@ defmodule Prima.ConsentPreview do
   @spec version() :: pos_integer()
   def version, do: @version
 
-  @doc "The eleven row kinds."
+  @doc "The ten row kinds."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
 
@@ -287,7 +279,6 @@ defmodule Prima.ConsentPreview.Row do
   @wildcard "*"
   @sources ~w(own share provided)
   @lifetimes ~w(standing until once)
-  @classes Enum.map(Prima.Source.classes(), &Atom.to_string/1)
 
   @type t :: %__MODULE__{
           kind: Prima.ConsentPreview.kind(),
@@ -329,8 +320,8 @@ defmodule Prima.ConsentPreview.Row do
   @doc """
   What makes a row one of a kind: its kind and node, and for a kind with
   one row per resource, the resource's name too, with the subject a
-  stream names; a credential is its binding's key, and an exit the exit
-  it names. A preview holds each once.
+  stream names, and a credential is its binding's key. A preview holds
+  each once.
   """
   @spec identity(t()) :: tuple()
   def identity(%__MODULE__{kind: kind, node: node}) when kind in @one_per_node, do: {kind, node}
@@ -340,9 +331,6 @@ defmodule Prima.ConsentPreview.Row do
 
   def identity(%__MODULE__{kind: :streams, node: node, values: values}),
     do: {:streams, node, values["name"], values["subject"]}
-
-  def identity(%__MODULE__{kind: :exits, node: node, values: values}),
-    do: {:exits, node, values["exit"]}
 
   def identity(%__MODULE__{kind: kind, node: node, values: values}),
     do: {kind, node, values["name"]}
@@ -441,8 +429,6 @@ defmodule Prima.ConsentPreview.Row do
 
   defp spec(:system_actions), do: {~w(actions), [], %{"actions" => &operations?/1}}
   defp spec(:controls), do: {~w(controls), [], %{"controls" => &controls?/1}}
-
-  defp spec(:exits), do: {~w(exit flows), [], %{"exit" => &exit?/1, "flows" => &classes?/1}}
 
   defp each(values, checks) do
     fields = values |> Map.keys() |> Enum.sort()
@@ -547,18 +533,6 @@ defmodule Prima.ConsentPreview.Row do
   end
 
   defp pick?(_pick), do: false
-
-  # An exit as a flow names it: a declared domain or origin, `need:<name>`
-  # or `server:<name>`, held to the flow grammar's own reading of a `to`.
-  defp exit?(value) do
-    text?(value) and
-      match?({:ok, [_flow]}, Prima.Flow.parse([%{"from" => "outside", "to" => value}], :any))
-  end
-
-  # The source classes a flow names, each once; `unsettled` is no class.
-  defp classes?(values) do
-    set?(values) and Enum.all?(values, &(&1 in @classes))
-  end
 
   # The wildcard stands alone: beside a named tool it would read as both
   # every tool and a list of some.

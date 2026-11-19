@@ -771,11 +771,11 @@ defmodule Locus.Runtime.HttpHandlerTest do
       pin = fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 30_000) end
 
       # The runner's pin is granted; the relay's own ask, as the request
-      # leaves, is refused for want of a flow, then lost twice.
-      ScriptedHost.script(context.host, "egress_pin", [pin, {:error, :flow}, pin, :drop, :drop])
+      # leaves, is refused, then lost twice.
+      ScriptedHost.script(context.host, "egress_pin", [pin, {:error, :denied}, pin, :drop, :drop])
       url = "http://api.test:#{context.port}/hello"
 
-      assert %{"error" => %{"type" => "flow_blocked", "message" => message}} =
+      assert %{"error" => %{"type" => "private_ip_blocked", "message" => message}} =
                fetch(context, edge, url)
 
       assert message =~ "api.test"

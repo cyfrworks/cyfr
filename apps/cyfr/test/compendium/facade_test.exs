@@ -141,7 +141,6 @@ defmodule Compendium.FacadeTest do
     tincture_invokes?: 2,
     tincture_lockfile_required?: 1,
     tincture_media: 2,
-    tincture_read_classes: 1,
     tincture_request_operation: 1,
     tincture_sandbox_tokens: 1,
     tincture_sdk: 0,

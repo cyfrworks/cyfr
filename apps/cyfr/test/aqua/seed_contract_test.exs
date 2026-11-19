@@ -64,10 +64,8 @@ defmodule Aqua.SeedContractTest do
 
     assert soul.tools == @shipped_tools
     assert length(soul.tools) == 90
-    # The browser's switch is the person's alone, and an endorsement is a
-    # person's act: neither is a tool any member is offered.
+    # The browser's switch is the person's alone: no member is offered it.
     refute "browser.turn_on" in soul.tools
-    refute "notes.endorse" in soul.tools
 
     # Each file names its mode, so the shipped mode is the file's word and
     # not the parser's default.

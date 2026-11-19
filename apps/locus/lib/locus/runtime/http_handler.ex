@@ -13,8 +13,7 @@ defmodule Locus.Runtime.HttpHandler do
 
   - **SSRF Prevention**: the engine resolves no name, and the runner has no
     network. CYFR pins the address each request connects to under the
-    attempt's authority, applying its private-address policy and the
-    flows its grant declares for what the run has read
+    attempt's authority, applying its private-address policy
     (`Locus.Runtime.HostClient.egress_pin/3`); the request goes through the runner's
     relay naming that pin, and the relay's service end (`Locus.Runtime.Relay`)
     asks CYFR for it once more as it sends, and connects to exactly the

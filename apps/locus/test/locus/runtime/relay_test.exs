@@ -620,11 +620,10 @@ defmodule Locus.Runtime.RelayTest do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
 
-      # The runner's pin is taken before the run reads more; by the send,
-      # CYFR refuses the host for want of a flow.
+      # The runner's pin is taken first; by the send, CYFR refuses the host.
       ScriptedHost.script(host, "egress_pin", [
         fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 30_000) end,
-        {:error, :flow}
+        {:error, :denied}
       ])
 
       url = "http://api.test:#{port}/send?q=1"
@@ -641,7 +640,7 @@ defmodule Locus.Runtime.RelayTest do
                  ""
                )
 
-      assert {[], "pin_flow"} = events(attempt.endpoint, ref)
+      assert {[], "pin_denied"} = events(attempt.endpoint, ref)
       refute_received {:upstream, _, _, _}
 
       # Asked for the request's own URL and purpose, presenting as the

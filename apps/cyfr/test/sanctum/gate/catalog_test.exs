@@ -344,8 +344,7 @@ defmodule Sanctum.Gate.CatalogTest do
       assert {:ok, %{kind: :write, resource: nil}} =
                Sanctum.Catalog.action_declaration("notes.keep")
 
-      assert {:ok, %{kind: :write, resource: nil}} =
-               Sanctum.Catalog.action_declaration("notes.endorse")
+      assert {:error, :not_found} = Sanctum.Catalog.action_declaration("notes.endorse")
 
       assert {:ok, %{kind: :external, resource: nil}} =
                Sanctum.Catalog.action_declaration("srv:repos.list.do")

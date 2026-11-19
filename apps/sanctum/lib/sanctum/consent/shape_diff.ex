@@ -57,15 +57,14 @@ defmodule Sanctum.Consent.ShapeDiff do
   @storage ~w(paths actions)
 
   # The side of a node the head never held, or the ask no longer names.
-  @none %{"tools" => [], "egress" => %{}, "storage" => %{}, "flows" => []}
+  @none %{"tools" => [], "egress" => %{}, "storage" => %{}}
 
   @typedoc """
   One capability of one node that changed since the head: `node` the
   node's ref; `capability` `"tools"`, `"egress.<field>"`,
-  `"storage.<field>"`, `"flows"` (each a source class and the exit it may
-  reach, `"<class> to <exit>"`), `"native_search"` (an agent's provider
-  search, switched on or off: `native_search` added or removed, apart
-  from its other tools) or `"provided.<dep>"`; `change`
+  `"storage.<field>"`, `"native_search"` (an agent's provider search,
+  switched on or off: `native_search` added or removed, apart from its
+  other tools) or `"provided.<dep>"`; `change`
   `:widened`, `:narrowed` or `:changed`; `added` and `removed` the values;
   `new` a dependency the head never held, `dropped` one the ask no longer
   names; and, on a `provided.<dep>` entry, `need`.
@@ -161,8 +160,7 @@ defmodule Sanctum.Consent.ShapeDiff do
     %{
       "tools" => resources["tools"] || [],
       "egress" => Map.take(resources["egress"] || %{}, @egress),
-      "storage" => Map.take(resources["storage"] || %{}, @storage),
-      "flows" => flow_tokens(resources["flows"])
+      "storage" => Map.take(resources["storage"] || %{}, @storage)
     }
   end
 
@@ -173,8 +171,7 @@ defmodule Sanctum.Consent.ShapeDiff do
        %{
          "tools" => resources["tools"] || [],
          "egress" => Map.take(resources["egress"] || %{}, @egress),
-         "storage" => Map.take(resources["storage"] || %{}, @storage),
-         "flows" => flow_tokens(resources["flows"])
+         "storage" => Map.take(resources["storage"] || %{}, @storage)
        }}
     end
   end
@@ -269,20 +266,9 @@ defmodule Sanctum.Consent.ShapeDiff do
       "storage" => %{
         "paths" => get_in(edge.storage, [:paths]) || [],
         "actions" => get_in(edge.storage, [:actions]) || []
-      },
-      "flows" => edge.flows |> Prima.Flow.to_json() |> flow_tokens()
+      }
     }
   end
-
-  # Flows as the values a change names: each pair as one line.
-  defp flow_tokens(flows) when is_list(flows) do
-    case Prima.Flow.parse(flows, :any) do
-      {:ok, set} -> Enum.map(set, &"#{&1.from} to #{&1.to}")
-      {:error, _unread} -> []
-    end
-  end
-
-  defp flow_tokens(_none), do: []
 
   defp diff_caps(granted, live) do
     {granted_search, granted_tools} = split_search(granted["tools"])
@@ -300,9 +286,7 @@ defmodule Sanctum.Consent.ShapeDiff do
         entry("storage.#{key}", get_in(granted, ["storage", key]), get_in(live, ["storage", key]))
       end)
 
-    flows = entry("flows", granted["flows"], live["flows"])
-
-    ([tools, search] ++ egress ++ storage ++ [flows]) |> Enum.reject(&is_nil/1)
+    ([tools, search] ++ egress ++ storage) |> Enum.reject(&is_nil/1)
   end
 
   # An agent's provider search is its own row, switched on or off, never

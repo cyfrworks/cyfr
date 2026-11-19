@@ -35,8 +35,7 @@ defmodule Emissary.Web.TinctureDataController do
   through the gate's `tincture` operation (`invoke_protected` for a frame,
   `invoke_public` for a public page) with the input
   `{"operation": …, "params": …}`; an action through the gate under the
-  frame's context. A read is admitted only when what it carries may flow
-  to every origin the frame connects to (`Emissary.Web.FrameAdmission.flowing/2`).
+  frame's context.
 
   A canvas (a tincture that declares the `tincture.desktop` block) invokes
   no component and runs no operation, whatever its declaration names:
@@ -157,10 +156,9 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
-  # In order: the body, who is asking, where it may ask, the charge, the
-  # grant, then whether what the read may carry may reach every origin
-  # the frame connects to. The charge follows the caller, so a frame's
-  # undeclared attempts count against it too.
+  # In order: the body, who is asking, where it may ask, the charge, then
+  # the grant. The charge follows the caller, so a frame's undeclared
+  # attempts count against it too.
   defp admit(conn, kind) do
     with {:ok, request} <- decode(conn, kind),
          {:ok, caller} <- caller(conn, request) do
@@ -168,8 +166,7 @@ defmodule Emissary.Web.TinctureDataController do
 
       with :ok <- placed(caller),
            :ok <- FrameAdmission.charge(caller),
-           :ok <- granted(kind, request, caller),
-           :ok <- FrameAdmission.flowing(read(kind, request), caller) do
+           :ok <- granted(kind, request, caller) do
         {:ok, conn, request, caller}
       else
         {:error, refusal} -> {:error, conn, refusal}
@@ -284,9 +281,6 @@ defmodule Emissary.Web.TinctureDataController do
       do: :ok,
       else: {:error, Prima.Refusal.undeclared(:action)}
   end
-
-  defp read(:invoke, _request), do: :invoke
-  defp read(:action, %{operation: operation}), do: {:action, operation}
 
   # ---------------------------------------------------------------------------
   # Dispatch

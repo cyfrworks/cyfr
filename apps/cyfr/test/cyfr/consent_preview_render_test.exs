@@ -232,10 +232,6 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "background", true), do: ["Keeps running in the background"]
   defp expected(_row, "background", false), do: ["Stops when hidden"]
 
-  # What an exit may carry, each class of what a run read (`Prima.Source`)
-  # in the person's words.
-  defp expected(_row, "flows", classes), do: Enum.map(classes, &class_words/1)
-
   # Memory is shown in MiB, by the sheet's own rule, beside its label.
   defp expected(_row, "max_memory_bytes", bytes),
     do: ["Memory (MiB): #{Prism.ConsentChoices.mib(bytes)}"]
@@ -332,12 +328,6 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
   defp expected(_row, _field, values) when is_list(values), do: values
   defp expected(_row, _field, value), do: [to_string(value)]
-
-  defp class_words("pinned"), do: "the pinned page"
-  defp class_words("filed"), do: "filed notes"
-  defp class_words("files_by_grant"), do: "files its grant reads"
-  defp class_words("vault_disclosed"), do: "values the vault disclosed"
-  defp class_words("outside"), do: "anything from outside this athanor"
 
   test "the vectors' preview holds a row of every kind" do
     kinds = preview().rows |> Enum.map(& &1["kind"]) |> Enum.uniq() |> Enum.sort()
