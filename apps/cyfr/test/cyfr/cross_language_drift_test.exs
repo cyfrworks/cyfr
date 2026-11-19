@@ -623,12 +623,14 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/recovery_code_test.exs", ~w(protocol refused spellings valid)}
     ],
     # cyfr.run reads its vendored copy too (internal/identity/vectors_test.go,
-    # beside internal/identity/testdata/SOURCE, which names this file's
-    # SHA-256), outside this roster's reach.
+    # and internal/api/components_wire_test.go its components, beside
+    # internal/identity/testdata/SOURCE, which names this file's SHA-256),
+    # outside this roster's reach.
     "registry_wire.json" => [
       {"apps/codex/internal/account/wire_test.go", ~w(answers envelopes keys requests slugs)},
       {"apps/cyfr/assets/test/account/registry.test.mjs",
        ~w(answers codes envelopes keys requests)},
+      {"apps/cyfr/test/compendium/registry/client_sync_test.exs", ~w(components)},
       {"apps/prima/test/prima/handle_answer_test.exs", ~w(answers identity slugs)},
       {"apps/prima/test/prima/registry_request_test.exs",
        ~w(answers codes envelopes identity keys refusals requests slugs verify)},
