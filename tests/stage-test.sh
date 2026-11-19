@@ -631,8 +631,8 @@ for sig in INT:130 TERM:143; do
 done
 reset_tree
 
-begin 'the host nightly workflow holds no expression inside a script and asks for no permission but the watchdog read of the runs'
-# Its two steps are written out to be run as the runner runs a step.
+begin "the host nightly workflow holds no expression inside a script, asks for no permission but the watchdog's read of the runs and the issues, and carries each check's outcome to its issue"
+# Each job's check is written out to be run as the runner runs a step.
 python3 -I - "$ROOT/.github/workflows/host-nightly.yml" "$S/wf" <<'WF' || fail "the host nightly workflow: $(cat "$S/wf.err" 2>/dev/null)"
 import sys, yaml
 spec = yaml.safe_load(open(sys.argv[1]))
@@ -643,17 +643,35 @@ if sorted(on) != ["schedule", "workflow_dispatch"]:
 if spec.get("permissions") != {}:
     errors.append(f"the workflow's permissions are {spec.get('permissions')}")
 jobs = spec["jobs"]
-if "permissions" in jobs["report"]:
-    errors.append("the report job asks for permissions")
-if jobs["watchdog"].get("permissions") != {"actions": "read"}:
-    errors.append(f"the watchdog's permissions are {jobs['watchdog'].get('permissions')}")
-for name, job in jobs.items():
-    if len(job["steps"]) != 1:
-        errors.append(f"{name} has {len(job['steps'])} steps")
-    for step in job["steps"]:
-        if "${{" in step["run"]:
+issues = {"contents": "read", "issues": "write"}
+for name, want in (("report", issues), ("watchdog", {"actions": "read", **issues})):
+    if jobs[name].get("permissions") != want:
+        errors.append(f"the {name} job's permissions are {jobs[name].get('permissions')}")
+base = {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}", "OUTCOME": "${{ steps.check.outcome }}",
+        "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}
+facts = {"report": {**base, **{k.upper(): f"${{{{ inputs.{k} }}}}" for k in ("commit", "status", "summary", "logs")}},
+         "watchdog": base}
+for name, command in (("report", "nightly"), ("watchdog", "watchdog")):
+    steps = jobs[name]["steps"]
+    if len(steps) != 3:
+        errors.append(f"{name} has {len(steps)} steps")
+        continue
+    check, checkout, issue = steps
+    for step in steps:
+        if "${{" in step.get("run", ""):
             errors.append(f"{name}'s script holds an expression")
-    open(f"{sys.argv[2]}-{name}.sh", "w").write(job["steps"][0]["run"])
+    if check.get("id") != "check" or "if" in check:
+        errors.append(f"{name}'s first step is not its check, always run")
+    if not checkout.get("uses", "").startswith("actions/checkout@") or checkout.get("with", {}).get("sparse-checkout") != "scripts/ci/reds.py":
+        errors.append(f"{name}'s second step does not check out scripts/ci/reds.py alone")
+    for step in (checkout, issue):
+        if step.get("if") != "${{ !cancelled() }}":
+            errors.append(f"{name}'s step {step.get('name') or step.get('uses')} does not run after a failed check")
+    # Every fact reds.py reads in that step, each bound to its source: one
+    # left out reaches the script as empty.
+    if issue.get("run") != f"python3 -I scripts/ci/reds.py {command}" or issue.get("env") != facts[name]:
+        errors.append(f"{name}'s last step does not hand reds.py {command} the check's outcome and its facts: {issue.get('env')}")
+    open(f"{sys.argv[2]}-{name}.sh", "w").write(check["run"])
 if errors:
     open(sys.argv[2] + ".err", "w").write("; ".join(errors))
     sys.exit(1)

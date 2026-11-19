@@ -230,7 +230,17 @@ same worktree refuses, naming the run that holds it.
     says whether every run is green, one still runs, a rerun started, or
     one is red twice, which opens a regression job. It reads only the
     runs GitHub made, so a run that was due and never made is not
-    detected;
+    detected. A Test run, a pull request's or a push's on main, that
+    fails its first attempt has its failed jobs rerun once without a
+    person (`.github/workflows/rerun.yml`, which decides through
+    `scripts/ci/reds.py`), so `main-run.py` usually reads such a run
+    already rerun, green or red twice. A rerun that passes is a flake:
+    it adds a comment naming the run, the commit, the jobs that failed
+    and the failing tests their logs name to the open issue "Flaky
+    tests". A rerun that fails again on main adds one to "Test is red
+    twice on main"; on a pull request it stands for its author. An
+    intermittent defect in the product gets the same second chance to
+    pass as a flaky test, and the flake record is what keeps it visible;
   - `release`: the gate's close, which holds the host for over an hour,
     run by `scripts/release.sh --gate` for a HEAD with no run on GitHub;
   - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
@@ -333,7 +343,11 @@ same worktree refuses, naming the run that holds it.
   GitHub tells the account that triggered it, the one `gh` is logged in as
   here, of a failed run as of any it triggered. The workflow's watchdog
   fails each day no report has arrived from the host within 26 hours, as
-  after a night the unit could not fetch, which runs and reports nothing. A
+  after a night the unit could not fetch, which runs and reports nothing.
+  A failed report also comments on the open issue "Host nightly is red",
+  or opens it, with the commit, the rows that did not pass and the logs'
+  folder on the host, and the next passing report closes it; the
+  watchdog does the same under "Host nightly sent no report". A
   host sets it up by making the two worktrees (`git -C ~/Projects/cyfr
   worktree add --detach ~/Projects/cyfr-nightly origin/main`, and the same
   from its cyfr.run checkout), logging `gh` in with the workflow scope, and

@@ -4,9 +4,10 @@
 #
 # Regression cases for scripts/ci/seed-guard.sh, scripts/ci/config-seam.sh,
 # scripts/ci/retry.sh, scripts/ci/world-checks.sh,
-# scripts/ci/self-test-scope.sh, scripts/ci/storage-diagrams.py and
-# scripts/ci/main-run.py (against a stand-in gh), and for scripts/release.sh's
-# use of the seed guard.
+# scripts/ci/self-test-scope.sh, scripts/ci/storage-diagrams.py,
+# scripts/ci/main-run.py and scripts/ci/reds.py (the last two against a
+# stand-in gh, the last with the workflow that runs it), and for
+# scripts/release.sh's use of the seed guard.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -1009,6 +1010,13 @@ runs "test.yml C completed failure 2" "codex.yml C completed success 1"
 main_run_at "$C"
 if [ "$code" -eq 4 ] && line 'Test: red twice \(failure\), run 101 .*attempt 2: .*: open a regression job' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
 
+# A run .github/workflows/rerun.yml already reran reads as its rerun ended.
+label="main-run: a run green on its rerun is green, and nothing is rerun"
+main_run_repo
+runs "test.yml C completed success 2"
+main_run_at "$C"
+if [ "$code" -eq 0 ] && line 'Test: green, run 101 .*attempt 2: .*' && [ "$(posts)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
 for conclusion in timed_out action_required startup_failure stale; do
   label="main-run: a whole run concluded $conclusion is red"
   main_run_repo
@@ -1102,6 +1110,354 @@ main_run_repo
 runs
 main_run_at "$C" --wait
 if [ "$code" -eq 64 ] && has_err 'usage:' && [ "$(grep -c '' "$scratch/gh-calls")" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+# --- scripts/ci/reds.py ---
+
+reds="$root/scripts/ci/reds.py"
+# The stand-in gh answers from $GH_STATE, a JSON object: "issues", the
+# repository's issues and pull requests (each {number, title, state,
+# comments[, pull_request]}), "jobs", each run attempt's jobs by
+# "RUN/ATTEMPT", and "logs", each job's log by id (a job without one is a
+# log that cannot be read). It lists the open issues and an attempt's
+# jobs two to a page, as gh prints pages; opens, comments on and closes
+# issues; and adds each run whose failed jobs it is asked to rerun to
+# "reruns". Every call is a line of $GH_CALLS; under GH_FAIL every call
+# fails. Calls take turns on the state, and under GH_BARRIER, a file, the
+# first two listings of the open issues each read the issues, then wait
+# for the other before answering, as two runs that list at one moment.
+mkdir -p "$scratch/reds-bin"
+cat > "$scratch/reds-bin/gh" <<'GH'
+#!/usr/bin/env python3
+import json, os, re, sys
+args = sys.argv[1:]
+with open(os.environ["GH_CALLS"], "a") as f:
+    f.write(" ".join(a.replace("\n", "\\n") for a in args) + "\n")
+if os.environ.get("GH_FAIL") or args[:1] != ["api"]:
+    sys.exit("gh: stand-in refused")
+import fcntl, time
+path = os.environ["GH_STATE"]
+lock = open(path + ".lock", "a")
+fcntl.flock(lock, fcntl.LOCK_EX)
+state = json.load(open(path))
+barrier = os.environ.get("GH_BARRIER")
+args = args[1:]
+method = "GET"
+if args[:1] == ["-X"]:
+    method, args = args[1], args[2:]
+paginate = args[:1] == ["--paginate"]
+url, fields = (args[1:] if paginate else args)[0], {}
+rest = (args[1:] if paginate else args)[1:]
+while rest:
+    flag, value, rest = rest[0], rest[1], rest[2:]
+    assert flag == "-f", rest
+    k, _, v = value.partition("=")
+    fields[k] = v
+issue = lambda n: next(i for i in state["issues"] if i["number"] == n)
+def save():
+    json.dump(state, open(path, "w"))
+def pages(items, wrap):
+    for i in range(0, max(len(items), 1), 2):
+        print(json.dumps(wrap(items[i:i + 2])))
+r = "repos/{owner}/{repo}/"
+if method == "GET" and paginate and url == r + "issues?state=open&per_page=100":
+    listed = [i for i in state["issues"] if i["state"] == "open"]
+    if barrier:
+        with open(barrier, "a") as f:
+            f.write("listed\n")
+        arrived = len(open(barrier).read().split())
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        until = time.time() + 10
+        while arrived <= 2 and len(open(barrier).read().split()) < 2 and time.time() < until:
+            time.sleep(0.05)
+    pages(listed, lambda p: p)
+elif method == "GET" and paginate and (m := re.fullmatch(re.escape(r) + r"actions/runs/(\d+)/attempts/(\d+)/jobs\?per_page=100", url)):
+    jobs = state["jobs"].get(f"{m[1]}/{m[2]}", [])
+    pages(jobs, lambda p: {"total_count": len(jobs), "jobs": p})
+elif method == "GET" and (m := re.fullmatch(re.escape(r) + r"actions/jobs/(\d+)/logs", url)):
+    if m[1] not in state["logs"]:
+        sys.exit("gh: HTTP 404: Not Found")
+    sys.stdout.write(state["logs"][m[1]])
+elif method == "POST" and (m := re.fullmatch(re.escape(r) + r"actions/runs/(\d+)/rerun-failed-jobs", url)) and not fields:
+    state["reruns"].append(int(m[1])); save()
+elif method == "POST" and url == r + "issues" and sorted(fields) == ["body", "title"]:
+    n = 1 + max((i["number"] for i in state["issues"]), default=0)
+    state["issues"].append({"number": n, "title": fields["title"], "state": "open", "comments": [fields["body"]]}); save()
+    print(json.dumps({"number": n}))
+elif method == "POST" and (m := re.fullmatch(re.escape(r) + r"issues/(\d+)/comments", url)) and sorted(fields) == ["body"]:
+    issue(int(m[1]))["comments"].append(fields["body"]); save()
+elif method == "PATCH" and (m := re.fullmatch(re.escape(r) + r"issues/(\d+)", url)) and fields in ({"state": "closed", "state_reason": "completed"}, {"state": "closed", "state_reason": "not_planned"}):
+    issue(int(m[1]))["state"] = "closed"; save()
+else:
+    sys.exit(f"gh: stand-in does not answer {sys.argv[1:]}")
+GH
+chmod +x "$scratch/reds-bin/gh"
+
+# reds_state [ISSUE...]: a fresh stand-in state, each ISSUE 'NUMBER
+# open|closed|pr TITLE'. Run 7's attempt 1 failed two jobs and passed one:
+# job 71's log names ExUnit failures, one twice, and a harness FAIL line
+# under the runner's timestamps, with a mention and a link; job 72's log
+# names none; job 73 passed. Its attempt 2 failed job 75 again; job 74's
+# log cannot be read. Run 8's attempt 1 failed no job.
+reds_state() {
+  : > "$scratch/reds-calls"
+  python3 -I - "$scratch/reds-state" "$@" <<'PY'
+import json, sys
+issues = []
+for spec in sys.argv[2:]:
+    n, kind, title = spec.split(" ", 2)
+    issue = {"number": int(n), "title": title, "state": "closed" if kind == "closed" else "open", "comments": []}
+    if kind == "pr":
+        issue["pull_request"] = {}
+    issues.append(issue)
+log71 = "\n".join([
+    "2026-11-18T10:00:00.1234567Z ==> partition 2/4",
+    "2026-11-18T10:00:01.0000000Z   1) test a session ends on sign-out (CyfrWeb.SessionTest)",
+    "2026-11-18T10:00:01.1000000Z      apps/cyfr/test/cyfr_web/session_test.exs:41",
+    "2026-11-18T10:00:02.0000000Z   2) test @someone [x](https://example.invalid) (Aqua.RunnerTest)",
+    "2026-11-18T10:00:03.0000000Z   1) test a session ends on sign-out (CyfrWeb.SessionTest)",
+    "2026-11-18T10:00:04.0000000Z FAIL: main-run: a run in progress waits",
+    "2026-11-18T10:00:05.0000000Z 3 tests, 2 failures",
+])
+json.dump({"issues": issues, "reruns": [], "logs": {"71": log71, "72": "all quiet\n", "73": "ok\n"},
+           "jobs": {"7/1": [{"id": 71, "name": "Elixir Tests (postgres, shard 2)", "conclusion": "failure"},
+                            {"id": 72, "name": "@someone's job", "conclusion": "timed_out"},
+                            {"id": 73, "name": "Static checks", "conclusion": "success"}],
+                    "7/2": [{"id": 74, "name": "Elixir Tests (postgres, shard 2)", "conclusion": "success"},
+                            {"id": 75, "name": "Browser harness (canvas)", "conclusion": "failure"},
+                            {"id": 76, "name": "Static checks", "conclusion": "success"}],
+                    "8/1": [{"id": 81, "name": "Static checks", "conclusion": "success"}]}},
+          open(sys.argv[1], "w"))
+PY
+}
+# reds_run COMMAND [NAME=VALUE...]: runs the script with only those facts.
+reds_run() {
+  local command=$1; shift
+  env -i PATH="$scratch/reds-bin:$PATH" GH_STATE="$scratch/reds-state" GH_CALLS="$scratch/reds-calls" ${REDS_ENV:-} "$@" \
+    python3 -I "$reds" "$command" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+}
+sha=0123456789abcdef0123456789abcdef01234567
+# test_run RUN ATTEMPT CONCLUSION EVENT BRANCH: a completed Test run's facts.
+test_run() {
+  reds_run test-run RUN_ID="$1" RUN_ATTEMPT="$2" CONCLUSION="$3" EVENT="$4" HEAD_BRANCH="$5" HEAD_SHA="$sha" \
+    RUN_URL="https://example.invalid/runs/$1"
+}
+# state EXPRESSION: the Python expression over the stand-in's state `s`,
+# `issues` its issues by title, holds.
+state() {
+  python3 -I - "$scratch/reds-state" "$1" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+issues = {}
+for i in s["issues"]:
+    issues.setdefault(i["title"], []).append(i)
+sys.exit(0 if eval(sys.argv[2]) else 1)
+PY
+}
+writes() { grep -c -- '^api -X ' "$scratch/reds-calls"; }
+calls() { grep -c '' "$scratch/reds-calls"; }
+flakes="Flaky tests"
+red_twice="Test is red twice on main"
+nightly_red="Host nightly is red"
+silent="Host nightly sent no report"
+
+for spec in "pull_request feature:for a pull request" "push main:on main"; do
+  event=${spec%%:*} where=${spec#*:}
+  label="reds: a Test run that failed its first attempt $where has its failed jobs rerun once, and nothing else"
+  reds_state
+  test_run 7 1 failure $event
+  if [ "$code" -eq 0 ] && state 's["reruns"] == [7] and not s["issues"]' && [ "$(writes)" = 1 ] &&
+    grep -qxF "reds: run 7, attempt 1, failure $where: its failed jobs rerun once" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done
+
+label="reds: a rerun that passed records a flake naming the run, the commit, the jobs that failed and the tests their logs name"
+reds_state "1 closed $flakes" "2 pr $flakes"
+test_run 7 2 success pull_request feature
+body_ok=$(python3 -I - "$scratch/reds-state" "$sha" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+new = [i for i in s["issues"] if i["number"] == 3]
+body = new[0]["comments"][0] if new and len(new[0]["comments"]) == 1 else ""
+head = f"A flake for a pull request: [run 7](https://example.invalid/runs/7) of commit {sys.argv[2]} failed on attempt 1 and passed on attempt 2, nothing changed."
+block = ["    Elixir Tests (postgres, shard 2)",
+         "        1) test a session ends on sign-out (CyfrWeb.SessionTest)",
+         "        2) test @someone [x](https://example.invalid) (Aqua.RunnerTest)",
+         "        FAIL: main-run: a run in progress waits",
+         "    @someone's job",
+         "        (its log names no failing test)"]
+lines = body.split("\n")
+print("yes" if new and new[0]["title"] == "Flaky tests" and lines[0].startswith(head) and lines[1] == "" and lines[2:] == block
+      and [i["comments"] for i in s["issues"][:2]] == [[], []] and not s["reruns"] else f"no: {s}")
+PY
+)
+if [ "$code" -eq 0 ] && [ "$body_ok" = yes ] && grep -qxF "reds: opened #3, $flakes" "$scratch/out"; then pass "$label"; else fail "$label"; echo "  state: $body_ok"; fi
+
+label="reds: a second flake is one more comment on the open record, the oldest when two are open"
+reds_state "4 open $flakes" "5 open $flakes"
+test_run 7 2 success push main
+if [ "$code" -eq 0 ] && state 'len(issues["Flaky tests"]) == 2 and len(issues["Flaky tests"][0]["comments"]) == 1 and not issues["Flaky tests"][1]["comments"]' &&
+  state 'issues["Flaky tests"][0]["comments"][0].startswith("A flake on main: ")' && [ "$(writes)" = 1 ]; then pass "$label"; else fail "$label"; fi
+
+label="reds: a flake's job whose log cannot be read is still named"
+reds_state
+python3 -I - "$scratch/reds-state" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1])); del s["logs"]["72"]; json.dump(s, open(sys.argv[1], "w"))
+PY
+test_run 7 2 success pull_request feature
+if [ "$code" -eq 0 ] && state '"    @someone'"'"'s job\n        (its log could not be read)" in issues["Flaky tests"][0]["comments"][0]'; then pass "$label"; else fail "$label"; fi
+
+label="reds: a passed rerun whose earlier attempt failed no job (a rerun by hand of a green or cancelled run) records nothing"
+reds_state
+test_run 8 2 success pull_request feature
+if [ "$code" -eq 0 ] && state 'not s["issues"] and not s["reruns"]' && [ "$(writes)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+label="reds: a rerun red again on main is not rerun, and opens the red-twice issue naming the run and its failed jobs"
+reds_state "1 open $flakes"
+test_run 7 2 failure push main
+if [ "$code" -eq 0 ] && state 'not s["reruns"] and [i["comments"] for i in issues["Test is red twice on main"]] == [[
+  f"[Run 7](https://example.invalid/runs/7) of commit '"$sha"' on main failed again on attempt 2, and is not rerun: open a regression job. Its failed jobs:\n\n    Browser harness (canvas)"]]' &&
+  state 'not issues["Flaky tests"][0]["comments"]'; then pass "$label"; else fail "$label"; fi
+
+for conclusion in failure success; do
+  for spec in "push main" "pull_request feature"; do
+    read -r event branch <<<"$spec"
+    label="reds: a third attempt, $conclusion on $branch, is a person's: nothing is read, rerun or written"
+    reds_state "3 open $red_twice" "4 open $flakes"
+    test_run 7 3 "$conclusion" "$event" "$branch"
+    if [ "$code" -eq 0 ] && [ "$(calls)" = 0 ] && grep -qF 'an attempt after the second is a person' "$scratch/out"; then pass "$label"; else fail "$label"; fi
+  done
+done
+
+# Two flakes recorded at one moment: both find no record open and both
+# open one; the later, listing again, moves its text to the earlier and
+# closes its own.
+label="reds: two flakes recorded at one moment end in one open record holding both"
+reds_state "1 closed $flakes"
+: > "$scratch/reds-barrier"
+racers=()
+for spec in "pull_request feature" "push main"; do
+  read -r event branch <<<"$spec"
+  env -i PATH="$scratch/reds-bin:$PATH" GH_STATE="$scratch/reds-state" GH_CALLS="$scratch/reds-calls" GH_BARRIER="$scratch/reds-barrier" \
+    RUN_ID=7 RUN_ATTEMPT=2 CONCLUSION=success EVENT="$event" HEAD_BRANCH="$branch" HEAD_SHA="$sha" RUN_URL=https://example.invalid/runs/7 \
+    python3 -I "$reds" test-run > "$scratch/out-$branch" 2> "$scratch/err-$branch" &
+  racers+=("$!")
+done
+wait "${racers[0]}"; first=$?
+wait "${racers[1]}"; code=$?
+cat "$scratch/out-feature" "$scratch/out-main" > "$scratch/out"
+cat "$scratch/err-feature" "$scratch/err-main" > "$scratch/err"
+if [ "$first" -eq 0 ] && [ "$code" -eq 0 ] && [ "$(grep -c '^listed$' "$scratch/reds-barrier")" -ge 2 ] &&
+  state '[(i["number"], i["state"]) for i in issues["Flaky tests"]] == [(1, "closed"), (2, "open"), (3, "closed")] and sorted(c.split(":")[0] for c in issues["Flaky tests"][1]["comments"]) == ["A flake for a pull request", "A flake on main"]'; then pass "$label"; else fail "$label"; fi
+
+label="reds: a pull request's rerun red again is left red, with nothing rerun or written"
+reds_state
+test_run 7 2 failure pull_request feature
+if [ "$code" -eq 0 ] && [ "$(calls)" = 0 ] && grep -qxF 'reds: run 7, attempt 2, failure for a pull request: not rerun again, the red stands for its author' "$scratch/out"; then pass "$label"; else fail "$label"; fi
+
+for spec in "cancelled 1 pull_request feature" "cancelled 2 push main" "action_required 1 pull_request feature" "success 1 push main"; do
+  read -r conclusion attempt event branch <<<"$spec"
+  label="reds: a run concluded $conclusion on attempt $attempt is left alone"
+  reds_state
+  test_run 7 "$attempt" "$conclusion" "$event" "$branch"
+  if [ "$code" -eq 0 ] && [ "$(calls)" = 0 ]; then pass "$label"; else fail "$label"; fi
+done
+
+for spec in "push 0.6.0-alpha.15" "push feature" "schedule main" "workflow_dispatch main"; do
+  read -r event branch <<<"$spec"
+  label="reds: a failed $event run on $branch is neither a pull request's nor a push on main, and is left alone"
+  reds_state
+  test_run 7 1 failure "$event" "$branch"
+  if [ "$code" -eq 0 ] && [ "$(calls)" = 0 ] && grep -qF 'left alone' "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done
+
+label="reds: a rerun that cannot be started, or records that cannot be read, is an error"
+reds_state
+REDS_ENV=GH_FAIL=1 test_run 7 1 failure push main
+first=$code
+REDS_ENV=GH_FAIL=1 test_run 7 2 success push main
+if [ "$first" -eq 1 ] && [ "$code" -eq 1 ] && has_err 'reds: gh api'; then pass "$label"; else fail "$label"; fi
+
+label="reds: a malformed fact or an unknown command is refused before any call"
+reds_state
+reds_run test-run RUN_ID=7 RUN_ATTEMPT=one CONCLUSION=failure EVENT=push HEAD_BRANCH=main HEAD_SHA="$sha" RUN_URL=u
+first=$code
+reds_run rerun
+if [ "$first" -eq 64 ] && [ "$code" -eq 64 ] && has_err 'usage:' && [ "$(calls)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+# The host's nightly report and its watchdog.
+night() { # OUTCOME STATUS: the report job's facts
+  reds_run nightly OUTCOME="$1" COMMIT="$sha" STATUS="$2" LOGS=/tmp/cyfr-stage.nightly.Ab1sCd \
+    SUMMARY=$'janitor: ok 9s\nhandle-proof: failed 1 312s\ncanvas-proof-desktop: not run 69 0s' RUN_URL=https://example.invalid/runs/9
+}
+label="reds: a red night opens the nightly issue naming the commit, the exit, the rows that did not pass and the host's log folder"
+reds_state "1 open $silent"
+night failure 1
+if [ "$code" -eq 0 ] && state '[i["comments"] for i in issues["Host nightly is red"]] == [["The host'"'"'s [nightly report](https://example.invalid/runs/9) failed:\n\n" + "\n".join([
+  "    commit: '"$sha"'", "    exit: 1", "    logs on the host: /tmp/cyfr-stage.nightly.Ab1sCd", "    rows that did not pass:",
+  "      handle-proof: failed 1 312s", "      canvas-proof-desktop: not run 69 0s"])]]' && state 'not s["issues"][0]["comments"]'; then pass "$label"; else fail "$label"; fi
+
+label="reds: a second red night is one more comment on the open nightly issue"
+reds_state "2 open $nightly_red"
+night failure 69
+if [ "$code" -eq 0 ] && state 'len(s["issues"]) == 1 and len(s["issues"][0]["comments"]) == 1 and "    exit: 69" in s["issues"][0]["comments"][0]'; then pass "$label"; else fail "$label"; fi
+
+label="reds: a green night closes the open nightly issue with a comment, and leaves the watchdog's open"
+reds_state "2 open $nightly_red" "3 open $silent"
+night success 0
+if [ "$code" -eq 0 ] && state '[(i["state"], i["comments"]) for i in s["issues"]] == [("closed", ["The host'"'"'s [nightly](https://example.invalid/runs/9) of '"$sha"' exited 0."]), ("open", [])]'; then pass "$label"; else fail "$label"; fi
+
+label="reds: a green night with no issue open writes nothing"
+reds_state "2 closed $nightly_red"
+night success 0
+if [ "$code" -eq 0 ] && [ "$(writes)" = 0 ] && state 's["issues"][0]["state"] == "closed"'; then pass "$label"; else fail "$label"; fi
+
+label="reds: the watchdog's red opens its own issue, then comments on it, and its green closes it alone"
+reds_state "1 open $nightly_red"
+reds_run watchdog OUTCOME=failure RUN_URL=https://example.invalid/runs/10
+first=$code
+reds_run watchdog OUTCOME=failure RUN_URL=https://example.invalid/runs/11
+second=$code
+red_ok=false
+state '[len(i["comments"]) for i in issues["Host nightly sent no report"]] == [2] and "[watchdog](https://example.invalid/runs/11)" in issues["Host nightly sent no report"][0]["comments"][1]' && red_ok=true
+reds_run watchdog OUTCOME=success RUN_URL=https://example.invalid/runs/12
+if [ "$first" -eq 0 ] && [ "$second" -eq 0 ] && $red_ok && [ "$code" -eq 0 ] &&
+  state '[(i["title"], i["state"]) for i in s["issues"]] == [("Host nightly is red", "open"), ("Host nightly sent no report", "closed")]'; then pass "$label"; else fail "$label"; fi
+
+label="reds: a check outcome other than success or failure is refused"
+reds_state
+reds_run watchdog OUTCOME=skipped RUN_URL=u
+if [ "$code" -eq 64 ] && [ "$(calls)" = 0 ]; then pass "$label"; else fail "$label"; fi
+
+# The workflow that runs it: on each completed Test run, with write
+# permissions on its job alone, from the script alone checked out of the
+# default branch, the event's facts handed over through the environment.
+label="reds: rerun.yml follows every completed Test run and runs nothing of the run's own"
+rerun_ok=$(python3 -I - "$root/.github/workflows/rerun.yml" <<'PY'
+import sys, yaml
+spec = yaml.safe_load(open(sys.argv[1]))
+on, errors = spec.get(True, spec.get("on")), []
+if on != {"workflow_run": {"workflows": ["Test"], "types": ["completed"]}}:
+    errors.append(f"it runs on {on}")
+if spec.get("permissions") != {}:
+    errors.append(f"its permissions are {spec.get('permissions')}")
+(job,) = spec["jobs"].values()
+if job.get("permissions") != {"contents": "read", "actions": "write", "issues": "write"}:
+    errors.append(f"its job's permissions are {job.get('permissions')}")
+checkout, step = job["steps"]
+if not checkout["uses"].startswith("actions/checkout@") or checkout.get("with") != {
+        "ref": "${{ github.event.repository.default_branch }}", "sparse-checkout": "scripts/ci/reds.py",
+        "sparse-checkout-cone-mode": False, "persist-credentials": False}:
+    errors.append(f"it checks out {checkout}")
+facts = {k: f"${{{{ github.event.workflow_run.{v} }}}}" for k, v in (("RUN_ID", "id"), ("RUN_ATTEMPT", "run_attempt"),
+         ("CONCLUSION", "conclusion"), ("EVENT", "event"), ("HEAD_BRANCH", "head_branch"), ("HEAD_SHA", "head_sha"), ("RUN_URL", "html_url"))}
+if step.get("run") != "python3 -I scripts/ci/reds.py test-run" or step.get("env") != {
+        "GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}", **facts}:
+    errors.append(f"its step is {step}")
+print("; ".join(errors) or "yes")
+PY
+)
+if [ "$rerun_ok" = yes ]; then pass "$label"; else fail "$label"; echo "  $rerun_ok"; fi
 
 # --- scripts/release.sh runs the seed guard against the last tag ---
 
