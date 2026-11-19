@@ -24,13 +24,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
   limits are omitted: declaring nothing and asking for nothing are the
   same shape.
 
-  A component's exits and flows (`Prima.Flow`) are shape too: `"flows"`
-  lists each declared flow as `<class>><exit>` (a class spells no `>`, so
-  each string is one flow), and `"tincture.connect"` the origins a
-  tincture's frame may reach (`Prima.Manifest.Tincture.connect/1`), which
-  are exits of that frame. Both keys are in every shape, empty for a
-  component that declares none: flows are part of what a person consents
-  to, so a version that declares another flow or origin asks again.
+  A tincture's connect origins are shape too: `"tincture.connect"` lists
+  the origins its frame may reach (`Prima.Manifest.Tincture.connect/1`),
+  in every shape and empty for a component that declares none, so a
+  version that declares another origin asks again.
 
   A stored manifest that does not decode has no shape: every entry here
   answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
@@ -531,9 +528,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
     |> put_list("egress.private_ips", caps.egress.private_ips)
     |> put_list("storage.paths", caps.storage.paths)
     |> put_list("storage.actions", caps.storage.actions)
-    # Present even when empty: a shape names the flows and exits it was
-    # consented under, none included (see the moduledoc).
-    |> Map.put("flows", Enum.map(caps.flows, &"#{&1.from}>#{&1.to}"))
+    # Present even when empty: a shape names the origins it was consented
+    # under, none included (see the moduledoc).
     |> Map.put("tincture.connect", connect)
     # The provider's own search, which no catalog action is, so
     # `tool_actions` cannot hold it: switching it moves the shape.

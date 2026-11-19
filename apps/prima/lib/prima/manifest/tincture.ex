@@ -321,10 +321,8 @@ defmodule Prima.Manifest.Tincture do
   The external origins the manifest's `tincture.connect` declares: the
   domains the served page's CSP `connect-src` admits over `https`, each a
   bare domain `Prima.Manifest.valid_connect_domain?/1` reads, sorted and
-  without duplicates. They are exits of the tincture's frame
-  (`Prima.Flow`): a flow names one as spelled here, and the consent shape
-  carries them. An entry that does not read is no origin, as the CSP
-  drops it; a manifest write refuses it first.
+  without duplicates. An entry that does not read is no origin, as the
+  CSP drops it; a manifest write refuses it first.
   """
   @spec connect(term()) :: [String.t()]
   def connect(%{"tincture" => %{"connect" => connect}}) when is_list(connect),

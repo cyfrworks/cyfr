@@ -46,10 +46,6 @@ defmodule Cyfr.Test.SeedBundleTest do
     end
   end
 
-  # Every assistant turn's sources hold `pinned`, and its model calls and
-  # hands run as children seeded with them, so a stock catalyst that left
-  # any class without a flow to its own egress would have every send of
-  # every turn refused.
   test "each harness adapter's newest version runs one program on a login need and reaches no host" do
     adapters = Enum.filter(SeedBundle.model_chat_units(), &adapter?/1)
     assert [_ | _] = adapters
@@ -61,35 +57,18 @@ defmodule Cyfr.Test.SeedBundleTest do
 
       assert is_binary(program), unit.rel
       refute get_in(unit.manifest, ["caps", "egress"]), unit.rel
-      refute get_in(unit.manifest, ["caps", "flows"]), unit.rel
     end
   end
 
-  test "each stock catalyst's newest version lets every source class reach its egress, and only that" do
-    units =
-      Enum.reject(SeedBundle.model_chat_units(), &adapter?/1) ++
-        [SeedBundle.local_unit!("catalysts", "http")]
+  test "no shipped manifest declares flows, and each passes the manifest validator" do
+    components = Path.expand("../../../../seed/components", __DIR__)
+    manifests = Path.join(components, "*/local/*/*/cyfr-manifest.json")
 
-    ledger = Enum.map(Prima.Source.classes(), &Prima.Source.new/1)
-
-    for unit <- units do
-      caps = unit.manifest["caps"]
-      domains = caps["egress"]["domains"]
-      declared = %{domains: domains, needs: Map.keys(unit.manifest["needs"] || %{})}
-
-      assert {:ok, flows} = Prima.Flow.parse(caps["flows"], declared), unit.rel
-
-      expected =
-        for class <- Prima.Source.classes(), domain <- domains, do: %{from: class, to: domain}
-
-      assert {unit.rel, flows} == {unit.rel, Prima.Flow.set(expected)}
-
-      for domain <- domains do
-        host = String.replace_prefix(domain, "*", "any.example")
-
-        assert {unit.rel, Prima.Flow.uncovered(ledger, {:domain, host}, flows: flows)} ==
-                 {unit.rel, []}
-      end
+    for path <- Prima.Test.SourceTree.files!(manifests) do
+      rel = Path.relative_to(Path.dirname(path), components)
+      manifest = path |> File.read!() |> Jason.decode!()
+      refute Map.has_key?(manifest["caps"] || %{}, "flows"), rel
+      assert {rel, Prima.Manifest.validate(manifest, fn _ -> true end)} == {rel, :ok}
     end
   end
 

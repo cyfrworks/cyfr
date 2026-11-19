@@ -4,10 +4,10 @@
 // The head predicates of the grant proof (proof.mjs): what two heads hold in
 // common (sameHead), what the head the first grant commits holds
 // (grantedHeld), what the command line's preview of a grant answers
-// (previewHeld), what the head a re-grant commits holds (regrantHeld,
-// flowsHeld), and what a revocation answers (revokedHeld), with the copies of
-// each object its predicate must refuse. They are kept apart from the proof so
-// heads-test.mjs can run them without a browser.
+// (previewHeld), what the head a re-grant commits holds (regrantHeld), and
+// what a revocation answers (revokedHeld), with the copies of each object its
+// predicate must refuse. They are kept apart from the proof so heads-test.mjs
+// can run them without a browser.
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 // An id as the home mints one: its kind's prefix and a UUIDv7
@@ -22,7 +22,7 @@ const PROOF = /^[A-Za-z0-9_-]{43}$/;
 const PREVIEW_KEYS = ["commit_digest", "expected_consent_revision", "proof", "removed", "rows", "v"];
 const ROW_KEYS = ["kind", "narrowed", "node", "values"];
 
-// Arrays as sets, so an extra or a missing flow, domain or path differs.
+// Arrays as sets, so an extra or a missing domain or path differs.
 export const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
 
 // Two heads hold the same fields, arrays as sets and every other field exactly.
@@ -37,20 +37,16 @@ export const sameHead = (a, b) =>
 const changing = (object, copies) => copies.filter((copy) => !sameHead(copy, object));
 
 // Copies of a head a change of permission would leave behind, each of which
-// a row's predicate must refuse: another revision, a host added or removed,
-// and a flow added or removed (no removal from an empty list, which changes
-// nothing). A head with no hosts or flows, as the answer for no profile is,
-// still has its copies, so its row records the refusal rather than the proof
-// throwing before it.
+// a row's predicate must refuse: another revision, and a host added or
+// removed (no removal from an empty list, which changes nothing). A head with
+// no hosts, as the answer for no profile is, still has its copies, so its row
+// records the refusal rather than the proof throwing before it.
 export const changedCopies = (head, dropped) => {
   const domains = Array.isArray(head.domains) ? head.domains : [];
-  const flows = Array.isArray(head.flows) ? head.flows : [];
   return changing(head, [
     { ...head, revision: head.revision + 1 },
     { ...head, domains: [...domains, dropped] },
     { ...head, domains: domains.slice(1) },
-    { ...head, flows: [...flows, `outside to ${dropped}`] },
-    { ...head, flows: flows.slice(1) },
   ]);
 };
 
@@ -62,14 +58,14 @@ export const digestCopies = (head, previous) =>
     .map((commit_digest) => ({ ...head, commit_digest })));
 
 // The head the first grant commits: revision 1 and exactly the decisions the
-// person made (hosts, folders and flows, as sets), under the shape the
-// version's plan asks and `digest`, the command line's preview of the same
-// decisions, held by an owner profile and a consent of their own.
-export const grantedHeld = (head, { shape, digest, domains, paths, flows }) =>
+// person made (hosts and folders, as sets), under the shape the version's plan
+// asks and `digest`, the command line's preview of the same decisions, held by
+// an owner profile and a consent of their own.
+export const grantedHeld = (head, { shape, digest, domains, paths }) =>
   PROFILE.test(head.profile_id) && CONSENT.test(head.consent_id) && DIGEST.test(digest) && DIGEST.test(shape) &&
   sameHead(head, {
     profile_id: head.profile_id, consent_id: head.consent_id, commit_digest: digest,
-    revision: 1, shape_digest: shape, domains, paths, flows,
+    revision: 1, shape_digest: shape, domains, paths,
   });
 
 // The one row of `kind` among a preview's rows, or none.
@@ -134,21 +130,13 @@ export const previewCopies = (answer, dropped) => {
 // The head a re-grant commits: `before`, the head it replaces, one revision
 // on, under a consent of its own, the shape the new version's plan asks and
 // `digest`, the command line's preview of the decisions the grant committed.
-// `changes` are its only other differences; the profile and every other field
-// are `before`'s. No digest to bind to refuses every head, and so does a head
-// with no digest.
-export const regrantHeld = (head, { before, shape, digest, changes = {} }) =>
+// The profile and every other field are `before`'s. No digest to bind to
+// refuses every head, and so does a head with no digest.
+export const regrantHeld = (head, { before, shape, digest }) =>
   DIGEST.test(digest) && DIGEST.test(shape) && CONSENT.test(head.consent_id) &&
   head.consent_id !== before.consent_id && head.commit_digest !== before.commit_digest &&
   sameHead({ ...head, consent_id: before.consent_id },
-    { ...before, ...changes, revision: before.revision + 1, shape_digest: shape, commit_digest: digest });
-
-// The head after the flows grant: a re-grant of the regranted head whose flows
-// are exactly the two granted.
-export const flowsHeld = (head, { regranted, shape, kept, digest }) =>
-  regrantHeld(head, {
-    before: regranted, shape, digest, changes: { flows: [`files_by_grant to ${kept}`, `outside to ${kept}`] },
-  });
+    { ...before, revision: before.revision + 1, shape_digest: shape, commit_digest: digest });
 
 // A bound on the time from a revocation's answer to its refusal, not a
 // measure of it: one admission on a loaded host. The single attempt is what

@@ -88,13 +88,10 @@ defmodule Sanctum.Consent.Commit do
 
     * `:subset` — a narrowing: per consent-graph node, the part of the ask
       granted for each kind its enforcement point can narrow, in the wire's
-      string-keyed form (`Sanctum.Consent.Normalize.subset/3`), the flows
-      kept to the node's exits (`exits`) among them. Each value must lie
-      inside the ask, and a limit inside the ceiling too
+      string-keyed form (`Sanctum.Consent.Normalize.subset/3`). Each value
+      must lie inside the ask, and a limit inside the ceiling too
       (`Sanctum.Consent.BlobBuilder.narrow/5`); a superset is refused, since
-      granting more than the ask is the `:override` decision. The blob
-      holds what a narrowing keeps, so the commit digest binds every flow
-      the revision grants.
+      granting more than the ask is the `:override` decision.
 
   ## What preview answers
 
@@ -1494,47 +1491,12 @@ defmodule Sanctum.Consent.Commit do
     # is public by its publisher's declaration and is kept.
     edge = Map.delete(edge, "tool_servers")
 
-    edge =
-      case Map.get(edge, "vault") do
-        %{"entry_id" => _} -> if edge_key in need_ids, do: edge, else: Map.delete(edge, "vault")
-        %{"provided" => _} -> edge
-        _ -> Map.delete(edge, "vault")
-      end
-
-    public_flows(edge)
+    case Map.get(edge, "vault") do
+      %{"entry_id" => _} -> if edge_key in need_ids, do: edge, else: Map.delete(edge, "vault")
+      %{"provided" => _} -> edge
+      _ -> Map.delete(edge, "vault")
+    end
   end
-
-  # A public edge keeps the owner's flows whose exit it still binds
-  # (`Prima.Flow.bound/2`): its domain flows; a need flow only while it
-  # keeps the binding the owner's edge kept that flow for; and no server
-  # flow, since it grants no tool server. Flows that do not read are
-  # dropped, which allows less.
-  defp public_flows(%{"flows" => raw} = edge) do
-    kept =
-      case Prima.Flow.parse(raw, :any) do
-        {:ok, flows} ->
-          needs =
-            if Map.has_key?(edge, "vault"),
-              do: for(%{to: "need:" <> need} <- flows, do: need),
-              else: []
-
-          domains =
-            for %{to: exit} <- flows,
-                not String.starts_with?(exit, ["need:", "server:"]),
-                do: exit
-
-          Prima.Flow.bound(flows, %{domains: domains, needs: needs, servers: []})
-
-        {:error, _unread} ->
-          []
-      end
-
-    if kept == [],
-      do: Map.delete(edge, "flows"),
-      else: Map.put(edge, "flows", Prima.Flow.to_json(kept))
-  end
-
-  defp public_flows(edge), do: edge
 
   defp collect_publish_bindings(ctx, nodes) do
     vaults =
@@ -2751,8 +2713,7 @@ defmodule Sanctum.Consent.Commit do
       via: selection.label,
       binding_digest: selection.binding_digest,
       lifetime: selection.lifetime,
-      renew: selection.renew,
-      need: selection_need(selection)
+      renew: selection.renew
     })
   end
 

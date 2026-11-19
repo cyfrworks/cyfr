@@ -4,20 +4,19 @@
 // The grant proof's predicates (heads.mjs), on heads and answers shaped as the
 // proof records them: two heads the same (`sameHead`, arrays as sets); the
 // head the first grant commits (`grantedHeld`); the command line's preview of
-// a grant, whole (`previewHeld`); the head a re-grant commits, and the flows
-// grant's as one (`regrantHeld`, `flowsHeld`); and the revocation's answer
-// (`revokedHeld`); the share step's stored rows, every field classified
-// (`rowsHeld`, `SHARE_FIELDS`), and what an attached request carried
-// (`attachHeld`). Each holds its object and refuses every copy that changes
-// it (`changedCopies`, `digestCopies`, `previewCopies`, which make no copy
-// equal to its object).
+// a grant, whole (`previewHeld`); the head a re-grant commits (`regrantHeld`);
+// and the revocation's answer (`revokedHeld`); the share step's stored rows,
+// every field classified (`rowsHeld`, `SHARE_FIELDS`), and what an attached
+// request carried (`attachHeld`). Each holds its object and refuses every copy
+// that changes it (`changedCopies`, `digestCopies`, `previewCopies`, which
+// make no copy equal to its object).
 //
 // Usage: node --test tests/grant-proof/heads-test.mjs
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  REVOKE_BOUND_US, SHARE_FIELDS, attachCopies, attachHeld, changedCopies, digestCopies, flowsHeld, grantedHeld,
+  REVOKE_BOUND_US, SHARE_FIELDS, attachCopies, attachHeld, changedCopies, digestCopies, grantedHeld,
   previewCopies, previewHeld, regrantHeld, revokedHeld, rowCopies, rowsHeld, sameHead,
 } from "./heads.mjs";
 
@@ -29,58 +28,59 @@ const id = (prefix, n) => `${prefix}_0000000${n}-0000-7000-8000-000000000000`;
 
 const regranted = {
   revision: 2, consent_id: id("cons", 2), profile_id: id("prof", 1),
-  domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`],
+  domains: [KEPT], paths: ["data/probe/notes/"],
   shape_digest: digest("1"), commit_digest: digest("2"),
 };
 const shape = digest("3");
 const previewed = digest("4");
-const flowHead = {
+// The head the share grant commits: the regranted head one revision on, under
+// the shape it was granted under, since the share step publishes no version.
+const shareHead = {
   revision: 3, consent_id: id("cons", 3), profile_id: id("prof", 1),
-  domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`, `outside to ${KEPT}`],
-  shape_digest: shape, commit_digest: previewed,
+  domains: [KEPT], paths: ["data/probe/notes/"],
+  shape_digest: regranted.shape_digest, commit_digest: previewed,
 };
-const grant = { regranted, shape, kept: KEPT, digest: previewed };
+const grant = { before: regranted, shape: regranted.shape_digest, digest: previewed };
 
-test("the head the flows grant commits is held under the digest its decisions preview to", () => {
-  assert.equal(flowsHeld(flowHead, grant), true);
+test("the head the share grant commits is held under the digest its decisions preview to", () => {
+  assert.equal(regrantHeld(shareHead, grant), true);
 });
 
 test("a head committed under no digest, an empty or malformed one, or another digest is refused", () => {
-  const { commit_digest: _omitted, ...withoutDigest } = flowHead;
+  const { commit_digest: _omitted, ...withoutDigest } = shareHead;
   const others = [null, "", "sha256:wrong", digest("0"), regranted.commit_digest, undefined];
-  for (const bad of [withoutDigest, ...others.map((commit_digest) => ({ ...flowHead, commit_digest }))]) {
-    assert.equal(flowsHeld(bad, grant), false, `commit_digest ${JSON.stringify(bad.commit_digest)}`);
+  for (const bad of [withoutDigest, ...others.map((commit_digest) => ({ ...shareHead, commit_digest }))]) {
+    assert.equal(regrantHeld(bad, grant), false, `commit_digest ${JSON.stringify(bad.commit_digest)}`);
   }
 });
 
 test("with no digest to bind the head to, every head is refused", () => {
-  const { commit_digest: _omitted, ...withoutDigest } = flowHead;
+  const { commit_digest: _omitted, ...withoutDigest } = shareHead;
   for (const missing of [undefined, null, "", "sha256:wrong"]) {
-    assert.equal(flowsHeld(flowHead, { ...grant, digest: missing }), false, `digest ${JSON.stringify(missing)}`);
-    assert.equal(flowsHeld(withoutDigest, { ...grant, digest: missing }), false, `digest ${JSON.stringify(missing)}`);
+    assert.equal(regrantHeld(shareHead, { ...grant, digest: missing }), false, `digest ${JSON.stringify(missing)}`);
+    assert.equal(regrantHeld(withoutDigest, { ...grant, digest: missing }), false, `digest ${JSON.stringify(missing)}`);
   }
 });
 
-test("a head with an extra flow, an added domain or another revision is refused", () => {
+test("a head with an added domain or another revision is refused", () => {
   const copies = [
-    { ...flowHead, flows: [...flowHead.flows, `outside to ${DROPPED}`] },
-    { ...flowHead, domains: [...flowHead.domains, DROPPED] },
-    { ...flowHead, revision: flowHead.revision + 1 },
+    { ...shareHead, domains: [...shareHead.domains, DROPPED] },
+    { ...shareHead, revision: shareHead.revision + 1 },
   ];
-  for (const copy of copies) assert.equal(flowsHeld(copy, grant), false);
+  for (const copy of copies) assert.equal(regrantHeld(copy, grant), false);
 });
 
-test("a head with a host or a flow removed is refused, beside one with a host or a flow added", () => {
-  const removed = [{ ...flowHead, domains: [] }, { ...flowHead, flows: [`outside to ${KEPT}`] }];
-  for (const copy of removed) assert.equal(flowsHeld(copy, grant), false, JSON.stringify(copy));
-  for (const copy of changedCopies(flowHead, DROPPED)) assert.equal(flowsHeld(copy, grant), false, JSON.stringify(copy));
+test("a head with a host removed is refused, beside one with a host added", () => {
+  const removed = [{ ...shareHead, domains: [] }];
+  for (const copy of removed) assert.equal(regrantHeld(copy, grant), false, JSON.stringify(copy));
+  for (const copy of changedCopies(shareHead, DROPPED)) assert.equal(regrantHeld(copy, grant), false, JSON.stringify(copy));
   for (const copy of changedCopies(regranted, DROPPED)) assert.equal(sameHead(copy, regranted), false, JSON.stringify(copy));
 });
 
-test("a head with no hosts or flows, as the answer for no profile, still has copies, each refused", () => {
+test("a head with no hosts, as the answer for no profile, still has copies, each refused", () => {
   const none = { profile_id: null };
   const copies = changedCopies(none, DROPPED);
-  assert.equal(copies.length, 5);
+  assert.equal(copies.length, 3);
   for (const copy of copies) assert.equal(grantedHeld(copy, firstGrant), false, JSON.stringify(copy));
 });
 
@@ -90,10 +90,9 @@ test("the ids the home recorded are of its form, and a head carrying them is hel
 });
 
 test("no copy equals its object: a removal from an empty list and a head's own digest are not copies", () => {
-  const empty = { ...first, domains: [], flows: [] };
+  const empty = { ...first, domains: [] };
   const copies = changedCopies(empty, DROPPED);
-  assert.deepEqual(copies.map((copy) => [copy.revision, copy.domains, copy.flows]),
-    [[2, [], []], [1, [DROPPED], []], [1, [], [`outside to ${DROPPED}`]]]);
+  assert.deepEqual(copies.map((copy) => [copy.revision, copy.domains]), [[2, []], [1, [DROPPED]]]);
   for (const copy of copies) assert.equal(sameHead(copy, empty), false, JSON.stringify(copy));
   const unsigned = { ...first, commit_digest: null };
   assert.deepEqual(digestCopies(unsigned).map((copy) => copy.commit_digest), ["", "sha256:wrong", digest("0")]);
@@ -101,30 +100,27 @@ test("no copy equals its object: a removal from an empty list and a head's own d
     [null, "", "sha256:wrong", digest("0")]);
 });
 
-test("the changed copies are another revision and a host and a flow each added and removed", () => {
-  const [revision, hostAdded, hostRemoved, flowAdded, flowRemoved] = changedCopies(flowHead, DROPPED);
-  assert.equal(revision.revision, flowHead.revision + 1);
+test("the changed copies are another revision and a host added and removed", () => {
+  const [revision, hostAdded, hostRemoved] = changedCopies(shareHead, DROPPED);
+  assert.equal(revision.revision, shareHead.revision + 1);
   assert.deepEqual(hostAdded.domains, [KEPT, DROPPED]);
   assert.deepEqual(hostRemoved.domains, []);
-  assert.deepEqual(flowAdded.flows, [...flowHead.flows, `outside to ${DROPPED}`]);
-  assert.deepEqual(flowRemoved.flows, [`outside to ${KEPT}`]);
-  assert.deepEqual(digestCopies(flowHead, regranted.commit_digest).map((copy) => copy.commit_digest),
+  assert.deepEqual(digestCopies(shareHead, regranted.commit_digest).map((copy) => copy.commit_digest),
     [null, "", "sha256:wrong", digest("0"), regranted.commit_digest]);
 });
 
 test("a head that keeps the regranted head's consent is refused", () => {
-  assert.equal(flowsHeld({ ...flowHead, consent_id: regranted.consent_id }, grant), false);
+  assert.equal(regrantHeld({ ...shareHead, consent_id: regranted.consent_id }, grant), false);
 });
 
 const basePlan = digest("5");
 const first = {
   revision: 1, consent_id: id("cons", 1), profile_id: id("prof", 1),
-  domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`],
+  domains: [KEPT], paths: ["data/probe/notes/"],
   shape_digest: basePlan, commit_digest: digest("6"),
 };
 const firstGrant = {
   shape: basePlan, digest: first.commit_digest, domains: [KEPT], paths: ["data/probe/notes/"],
-  flows: [`files_by_grant to ${KEPT}`],
 };
 
 test("the head the first grant commits is held whole: revision 1, the decisions made, the plan's shape, a profile and a consent", () => {
@@ -175,8 +171,8 @@ const preview = {
       values: { domains: [KEPT], methods: ["GET"], schemes: ["https"], private_ips: [] } },
     { kind: "storage", node: "tincture:local.grant-probe", narrowed: true,
       values: { paths: ["data/probe/notes/"], actions: ["read"] } },
-    { kind: "exits", node: "tincture:local.grant-probe", narrowed: false,
-      values: { exit: KEPT, flows: ["files_by_grant"] } },
+    { kind: "frame", node: "tincture:local.grant-probe", narrowed: false,
+      values: { capabilities: [], background: false } },
   ],
 };
 const previewWant = { digest: first.commit_digest, revision: 1, domains: [KEPT], paths: ["data/probe/notes/"] };
@@ -203,16 +199,16 @@ test("each copy of a preview changes it and is refused", () => {
 });
 
 test("a preview with a malformed proof, an unnarrowed or doubled row, or a row of another shape is refused", () => {
-  const [egress, storage, exits] = preview.rows;
+  const [egress, storage, frame] = preview.rows;
   const copies = [
     { ...preview, proof: PROOF_TOKEN.slice(1) },
     { ...preview, proof: `${PROOF_TOKEN.slice(1)}+` },
     { ...preview, proof: null },
-    { ...preview, rows: [egress, egress, storage, exits] },
-    { ...preview, rows: [egress, exits] },
-    { ...preview, rows: [egress, { ...storage, narrowed: false }, exits] },
-    { ...preview, rows: [egress, storage, { ...exits, also: true }] },
-    { ...preview, rows: [egress, storage, { ...exits, narrowed: "no" }] },
+    { ...preview, rows: [egress, egress, storage, frame] },
+    { ...preview, rows: [egress, frame] },
+    { ...preview, rows: [egress, { ...storage, narrowed: false }, frame] },
+    { ...preview, rows: [egress, storage, { ...frame, also: true }] },
+    { ...preview, rows: [egress, storage, { ...frame, narrowed: "no" }] },
     { ...preview, rows: [egress, storage, null] },
     { ...preview, rows: "rows" },
   ];
@@ -247,7 +243,7 @@ test("an admission or a plan is compared whole: another value, a missing field o
   const admitted = { admitted: true, consent_id: regranted.consent_id };
   assert.equal(sameHead({ ...admitted }, admitted), true);
   for (const other of [
-    { ...admitted, consent_id: flowHead.consent_id }, { admitted: true }, { ...admitted, refusal: "consent_required" },
+    { ...admitted, consent_id: shareHead.consent_id }, { admitted: true }, { ...admitted, refusal: "consent_required" },
     { admitted: false, refusal: "consent_required" },
   ]) assert.equal(sameHead(other, admitted), false, JSON.stringify(other));
   const plan = { shape_digest: shape, background: true };
@@ -264,10 +260,10 @@ test("two heads hold the same fields, arrays as sets", () => {
 });
 
 const revokedAnswer = {
-  before: { admitted: true, consent_id: flowHead.consent_id }, refused: { admitted: false, refusal: ":no_profile" },
+  before: { admitted: true, consent_id: shareHead.consent_id }, refused: { admitted: false, refusal: ":no_profile" },
   attempts: 1, refused_after_us: 95,
 };
-const revocation = { consent: flowHead.consent_id, refusal: ":no_profile", boundUs: REVOKE_BOUND_US };
+const revocation = { consent: shareHead.consent_id, refusal: ":no_profile", boundUs: REVOKE_BOUND_US };
 
 test("a revocation's answer is held whole: admitted before under the last consent, refused next for want of a profile, one attempt, within the bound", () => {
   for (const refused_after_us of [95, 0, REVOKE_BOUND_US]) {
@@ -285,7 +281,7 @@ test("a revocation's answer with a field changed, missing or added is refused", 
     { ...revokedAnswer, before: { admitted: false, refusal: ":no_profile" } },
     { ...revokedAnswer, before: null },
     { ...revokedAnswer, refused: { admitted: false, refusal: "consent_required" } },
-    { ...revokedAnswer, refused: { admitted: true, consent_id: flowHead.consent_id } },
+    { ...revokedAnswer, refused: { admitted: true, consent_id: shareHead.consent_id } },
     { ...revokedAnswer, refused: { admitted: false, refusal: ":no_profile", reason: "revoked" } },
     { ...revokedAnswer, refused: null },
     { ...revokedAnswer, refused_after_us: REVOKE_BOUND_US + 1 },

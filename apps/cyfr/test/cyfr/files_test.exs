@@ -877,6 +877,16 @@ defmodule Arca.FilesTest do
 
     assert message == "cyfr-manifest.json: its caps are not valid"
 
+    # A key the caps grammar does not hold is named, `flows` among them.
+    assert {:error, {:invalid_argument, message}} =
+             Files.write(
+               actor,
+               manifest,
+               ~s({"type":"reagent","caps":{"flows":[{"from":"filed","to":"a.example"}]}})
+             )
+
+    assert message == "cyfr-manifest.json: caps has no key flows"
+
     # The storage-path predicate is the storage layer's own.
     assert {:error, {:invalid_argument, message}} =
              Files.write(

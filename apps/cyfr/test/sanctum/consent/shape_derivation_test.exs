@@ -598,8 +598,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-empty")
 
       assert input.needs == []
-      # Flows and connect origins are named even when none are declared.
-      assert input.caps == %{"flows" => [], "tincture.connect" => []}
+      # Connect origins are named even when none are declared.
+      assert input.caps == %{"tincture.connect" => []}
       assert input.slots == []
       assert input.tool_actions == []
 
@@ -681,7 +681,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     test "a fixed manifest's shape digest is stable", %{ctx: ctx} do
       publish!(ctx, "shape-pinned", "1.0.0", %{manifest: Jason.encode!(@pinned_manifest)})
 
-      assert {:ok, "sha256:792297ccae30588d31120c93482205249371145d0ba9de38ce7cbfb5ced81f10"} =
+      assert {:ok, "sha256:499655ff5e0f68dae995bd802d00f4b71828008fdb87cf601aa592ac53f85657"} =
                ShapeDerivation.live_digest(ctx, "reagent:local.shape-pinned")
     end
 
@@ -915,50 +915,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     end
   end
 
-  describe "a component's exits and flows are part of the shape" do
-    @flowing %{
-      "caps" => %{
-        "egress" => %{"domains" => ["api.one.example"]},
-        "flows" => [
-          %{"from" => "filed", "to" => "api.one.example"},
-          %{"from" => "pinned", "to" => "api.one.example"}
-        ]
-      }
-    }
-
-    test "each declared flow joins the shape, in one spelling whatever its order", %{ctx: ctx} do
-      publish!(ctx, "shape-flows", "1.0.0", %{manifest: @flowing})
-      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-flows")
-      assert input.caps["flows"] == ["pinned>api.one.example", "filed>api.one.example"]
-      {:ok, before_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-flows")
-
-      reordered = update_in(@flowing, ["caps", "flows"], &(Enum.reverse(&1) ++ &1))
-      publish!(ctx, "shape-flows", "1.1.0", %{manifest: reordered})
-      Arca.Cache.delete_match(:_)
-      assert {:ok, ^before_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-flows")
-
-      # Another class to the same exit is another question, asked again.
-      wider =
-        update_in(
-          @flowing,
-          ["caps", "flows"],
-          &[%{"from" => "outside", "to" => "api.one.example"} | &1]
-        )
-
-      publish!(ctx, "shape-flows", "1.2.0", %{manifest: wider})
-      Arca.Cache.delete_match(:_)
-      {:ok, wider_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-flows")
-      refute wider_digest == before_digest
-
-      # And a flow fewer is too.
-      fewer = update_in(@flowing, ["caps", "flows"], &tl/1)
-      publish!(ctx, "shape-flows", "1.3.0", %{manifest: fewer})
-      Arca.Cache.delete_match(:_)
-      {:ok, fewer_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-flows")
-      refute fewer_digest in [before_digest, wider_digest]
-    end
-
-    test "a tincture's connect origins are exits of its frame, and join the shape", %{ctx: ctx} do
+  describe "a tincture's connect origins are part of the shape" do
+    test "each joins the shape, so another origin moves its digest", %{ctx: ctx} do
       ref =
         tincture!(ctx, "shape-origins", "1.0.0", %{
           "connect" => ["two.example.com", "one.example.com"]
@@ -982,28 +940,27 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert bare_input.caps["tincture.connect"] == []
     end
 
-    test "a component that declares no flow and no origin names both as empty, so a shape " <>
-           "without the two keys is another digest",
+    test "a component that declares no origin names it as empty, so a shape without the key " <>
+           "is another digest",
          %{ctx: ctx} do
-      publish!(ctx, "shape-flowless", "1.0.0", %{
+      publish!(ctx, "shape-originless", "1.0.0", %{
         manifest: %{"caps" => %{"egress" => %{"domains" => ["api.example.test"]}}}
       })
 
-      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-flowless")
-      assert input.caps["flows"] == []
-      assert input.caps["tincture.connect"] == []
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-originless")
+      assert input.caps == %{"egress.domains" => ["api.example.test"], "tincture.connect" => []}
 
-      # The same shape without the two keys digests differently, so a
-      # consent to it does not answer for this shape.
+      # The same shape without the key digests differently, so a consent to
+      # it does not answer for this shape.
       {:ok, digest} = Sanctum.Consent.ShapeDigest.compute(input)
 
-      {:ok, without_keys} =
+      {:ok, without_key} =
         Sanctum.Consent.ShapeDigest.compute(%{
           input
-          | caps: Map.drop(input.caps, ["flows", "tincture.connect"])
+          | caps: Map.drop(input.caps, ["tincture.connect"])
         })
 
-      refute digest == without_keys
+      refute digest == without_key
     end
   end
 
