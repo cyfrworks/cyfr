@@ -755,7 +755,9 @@ defmodule Arca.StandaloneWriteLockTest do
   end
 
   # The case's row, by a query that steps about `@slow_ms` before it
-  # matches: a recursive count, sized by one measured on this machine.
+  # matches: a recursive count, sized by the fastest of five measured on
+  # this machine. One measure taken while the machine was busy reads slow,
+  # and sizes a query that ends before the pool's deadline once it is not.
   defp slow(node) do
     rows = rows_for(@slow_ms)
 
@@ -772,14 +774,21 @@ defmodule Arca.StandaloneWriteLockTest do
   defp rows_for(ms) do
     {:ok, raw} = Sqlite3.open(Arca.Repo.config()[:database])
 
-    {us, :ok} =
-      :timer.tc(fn ->
-        Sqlite3.execute(
-          raw,
-          "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 500000) " <>
-            "SELECT count(*) FROM c"
-        )
-      end)
+    us =
+      Enum.min(
+        for _ <- 1..5 do
+          {us, :ok} =
+            :timer.tc(fn ->
+              Sqlite3.execute(
+                raw,
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 500000) " <>
+                  "SELECT count(*) FROM c"
+              )
+            end)
+
+          us
+        end
+      )
 
     :ok = Sqlite3.close(raw)
     max(div(ms * 500_000 * 1_000, max(us, 1)), 500_000)

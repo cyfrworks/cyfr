@@ -311,11 +311,13 @@ defmodule Locus.Runtime.RunnerTest do
     # The guest's bytes are held, so its call outlasts the attempt's bound.
     # A guest spinning past it instead would keep its native thread, and
     # the engine worker under it, for the rest of this VM's run: the kill
-    # frees only its BEAM process.
+    # frees only its BEAM process. The bound is counted from the attempt's
+    # making, so on a loaded host it can run out before the guest asks for
+    # its bytes: the attempt fails either way, and its held report keeps it
+    # open past the deadline.
     attempt = echo!(host, timeout_ms: 300)
     hold_artifact!(host, @echo)
     assign(service, attempt)
-    assert_receive {:held, _fetch}, 5_000
 
     assert %{type: :exit, runner: "runner_under_test", open: [held]} = frame(service)
     assert held == attempt.attempt
