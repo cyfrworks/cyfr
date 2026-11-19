@@ -30,8 +30,8 @@
 # The gate job's paths are narrower than what its self-test reads, on
 # purpose: that is every workflow and every script and test, and a set
 # that wide ran it on nearly every pull request. They are the gate, its
-# self-test, the library they share, the workflows the gate replays and
-# this script. A change elsewhere that breaks the gate's self-test shows
+# self-test, the library they share, the workflows the gate replays, the
+# setup-elixir action and this script. A change elsewhere that breaks the gate's self-test shows
 # on main's push run after the merge, where a red job is rerun once and a
 # second red opens an issue.
 #
@@ -74,11 +74,14 @@ partitions=(
 )
 
 # The commit gate and its self-test, the library they share, and the
-# workflows the gate replays.
+# workflows the gate replays; and the setup-elixir action, to which this
+# job alone passes the mix-harness-tests prefix, so a change to its prefix
+# check or cache can fail this job while every other job passes.
 gate=(
   scripts/commit-gate.sh tests/commit-gate-test.sh
   scripts/lib
   .github/workflows
+  .github/actions/setup-elixir
 )
 
 [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || exit 0

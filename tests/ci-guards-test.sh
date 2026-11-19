@@ -687,7 +687,7 @@ scripts/commit-gate.sh|partitions=false
 config/test.exs|host=false gate=false
 config/database_choice.exs|host=false gate=false
 scripts/test-partition-weights.tsv|host=false gate=false
-.github/actions/setup-elixir/action.yml|host=false gate=false
+.github/actions/setup-elixir/action.yml|host=false
 tests/commit-gate-test.sh|host=false partitions=false
 CASES
 
@@ -817,6 +817,28 @@ PY
 }
 label="self-test-scope: test.yml skips a scoped job only after a scope job that succeeded and answered false"
 scope_conditions > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+
+# self-test-scope answers for a change to any workflow, so test.yml starts
+# on one: both its path filters name every file under .github/workflows.
+label="self-test-scope: test.yml starts on a push or a pull request that changes any workflow"
+python3 -I - "$root/.github/workflows/test.yml" > "$scratch/out" 2> "$scratch/err" <<'PY'
+import re, sys
+
+lines = open(sys.argv[1]).read().split("\n")
+for event in ("push", "pull_request"):
+    start = lines.index(f"  {event}:")
+    paths = []
+    for line in lines[start + 1:]:
+        if re.match(r"  \S", line) or re.match(r"\S", line):
+            break
+        m = re.fullmatch(r"      - '([^']*)'", line)
+        if m:
+            paths.append(m[1])
+    if ".github/workflows/**" not in paths:
+        print(f"{event}: its paths do not name .github/workflows/**")
+PY
 code=$?
 if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
 

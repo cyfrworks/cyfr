@@ -302,8 +302,9 @@ same worktree refuses, naming the run that holds it.
   run's alone: a defect in one shows there. A pull request's run starts
   the host and partitions harness self-test jobs only when it changes a
   path their scripts read, and the commit gate's only when it changes
-  the gate, its self-test, `scripts/lib` or a workflow
-  (`scripts/ci/self-test-scope.sh` holds each job's paths); it shows a
+  the gate, its self-test, `scripts/lib`, a workflow or the
+  setup-elixir action (`scripts/ci/self-test-scope.sh` holds each job's
+  paths); it shows a
   job it leaves out as skipped, not needed, and a push to main, a
   release and the nightly run all three. The gate's paths are narrower
   than what its self-test reads, so a change elsewhere that breaks it

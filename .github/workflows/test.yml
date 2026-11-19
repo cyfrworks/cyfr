@@ -23,7 +23,7 @@ on:
       # (tests/ci-publish-test.sh) read release.yml, and the commit gate's
       # test reads them all (tests/commit-gate-test.sh); the image scans
       # read .trivyignore.yaml and trivy-secret.yaml.
-      - '.github/workflows/*.yml'
+      - '.github/workflows/**'
       # The setup-elixir action every BEAM job here runs.
       - '.github/actions/**'
       - '.trivyignore.yaml'
@@ -83,7 +83,7 @@ on:
       # (tests/ci-publish-test.sh) read release.yml, and the commit gate's
       # test reads them all (tests/commit-gate-test.sh); the image scans
       # read .trivyignore.yaml and trivy-secret.yaml.
-      - '.github/workflows/*.yml'
+      - '.github/workflows/**'
       # The setup-elixir action every BEAM job here runs.
       - '.github/actions/**'
       - '.trivyignore.yaml'
