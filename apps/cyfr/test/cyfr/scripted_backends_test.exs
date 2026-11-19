@@ -105,25 +105,15 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
 
       Scripted.hold(fake, "send")
 
-      # The send's connection ends with its answer, and its handler with
-      # the connection: the handler is suspended below, and one suspended
-      # once it had answered would be handed the next request of a
-      # connection that was kept.
       sending =
         Task.async(fn ->
-          session(
-            fake,
-            root,
-            %{
-              type: :send,
-              owner: owner(),
-              e: 1,
-              session: id,
-              lines:
-                List.duplicate(Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "ping"}), 1_000)
-            },
-            [{"connection", "close"}]
-          )
+          session(fake, root, %{
+            type: :send,
+            owner: owner(),
+            e: 1,
+            session: id,
+            lines: List.duplicate(Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "ping"}), 1_000)
+          })
         end)
 
       assert_receive {:held, "send", handler}, 2_000
@@ -133,14 +123,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
       # The first invoke follows the session read. Pause the handler while
       # the remaining batch is delivered, before a split write can land.
       assert_receive {:invoke, "ping", _fields}, 2_000
-
-      paused? =
-        try do
-          :erlang.suspend_process(handler)
-        rescue
-          # It answered already, and is gone: the send ended first.
-          ArgumentError -> false
-        end
+      assert :erlang.suspend_process(handler)
 
       try do
         case ending do
@@ -167,7 +150,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
                      control(fake, root, 2, %{type: :status, owners: [owner()]})
         end
       after
-        if paused?, do: :erlang.resume_process(handler)
+        :erlang.resume_process(handler)
         Process.flag(:priority, priority)
       end
 
@@ -242,7 +225,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
   defp open(fake, root, nonce),
     do: session(fake, root, %{open_message() | key: "key-#{nonce}"})
 
-  defp session(fake, root, message, headers \\ []) do
+  defp session(fake, root, message) do
     {:ok, body} = Wire.encode_session(message)
     {:ok, key} = Wire.owner_key(root, @owner)
     nonce = Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
@@ -256,7 +239,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
 
     Req.post!(fake.url <> Wire.route(:session),
       body: body,
-      headers: [{Wire.auth_header(), header} | headers],
+      headers: [{Wire.auth_header(), header}],
       retry: false
     )
   end
