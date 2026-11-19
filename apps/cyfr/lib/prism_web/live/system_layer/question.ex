@@ -16,16 +16,18 @@ defmodule PrismWeb.SystemLayer.Question do
   length of text moves the frame, the summary or the choices, and text
   that reads like a button stays text inside the block. Masking is said.
 
-  The choices are a phone's (`answer/2`): Don't allow; Allow once; Allow
-  for an hour; Always allow; and, under a second press ("More choices"),
-  Never allow and the switch "only when this caller starts it", offered
-  only when the caller is known. An answer that lasts covers every caller
-  unless the switch is on. Once an answer that lasts is refused because
-  no installed version asks for the permission in these words, the card
-  offers only Don't allow and Allow once (`once_only`). Closing the card
-  without choosing is "Don't allow", once. The choice the card shows
-  (`choice/1`: the second press, the switch and `once_only`) is kept on
-  the shown prompt by the layer, so it ends with the prompt.
+  The choices (`offered/1`, each named for the answer it sends,
+  `answer/1`): a row for the caller that started the run, headed with who
+  that is, of Never allow, Allow once, Allow for an hour and Always allow,
+  the three that last covering that caller alone; and below it Always
+  allow whoever starts it, which covers every caller and needs a fresh
+  confirmation, drawn inside the card. A caller CYFR does not know cannot
+  be named in an answer that lasts, so its row offers Allow once alone.
+  Once an answer that lasts is refused because no installed version asks
+  for the permission in these words, the card offers only Allow once
+  (`once_only`, kept on the shown prompt by the layer, so it ends with
+  the prompt). Closing the card without choosing is "Don't allow", once
+  (`dismissal/0`).
   """
 
   use Phoenix.Component
@@ -35,49 +37,56 @@ defmodule PrismWeb.SystemLayer.Question do
   # How long "Allow for an hour" lasts.
   @hour_s 3600
 
-  @choices ~w(deny_once allow_once allow_hour allow_always deny_always)
-
-  @doc "The choices a card sends, by the names its buttons carry."
-  @spec choices() :: [String.t()]
-  def choices, do: @choices
+  @caller_row ~w(deny_always_this_caller allow_once allow_hour_this_caller allow_always_this_caller)
+  @any_caller "allow_always_any_caller"
 
   @doc """
-  The card's choice as it starts: the second press not made, the switch
-  off, and every choice offered.
+  The card's kept choice as it starts: every choice offered.
   """
-  @spec choice(map()) :: %{more: boolean(), this_caller: boolean(), once_only: boolean()}
-  def choice(prompt),
-    do: Map.get(prompt, :choice, %{more: false, this_caller: false, once_only: false})
+  @spec choice(map()) :: %{once_only: boolean()}
+  def choice(prompt), do: Map.get(prompt, :choice, %{once_only: false})
 
   @doc """
-  The `question.answer` JSON a choice names (`Prima.Question.Answer`),
-  covering the asking run's caller alone when `this_caller` is true, and
-  every caller otherwise. `:error` for a name `choices/0` does not list.
+  The choices the card offers, in their order, by the names its buttons
+  carry: the caller's row, then the answer for any caller. The layer
+  sends no other.
   """
-  @spec answer(String.t(), boolean()) :: {:ok, map()} | :error
-  def answer("deny_once", _this_caller), do: {:ok, %{"effect" => "deny", "lasts" => "once"}}
-  def answer("allow_once", _this_caller), do: {:ok, %{"effect" => "allow", "lasts" => "once"}}
+  @spec offered(map()) :: [String.t()]
+  def offered(prompt) do
+    cond do
+      choice(prompt).once_only -> ["allow_once"]
+      known_caller?(prompt) -> @caller_row ++ [@any_caller]
+      true -> ["allow_once", @any_caller]
+    end
+  end
 
-  def answer("allow_hour", this_caller) do
+  @doc """
+  The `question.answer` JSON a choice `offered/1` names
+  (`Prima.Question.Answer`): `_this_caller` covers the asking run's caller
+  alone, `_any_caller` every caller.
+  """
+  @spec answer(String.t()) :: map()
+  def answer("allow_once"), do: %{"effect" => "allow", "lasts" => "once"}
+  def answer("deny_always_this_caller"), do: lasting("deny", "always", "this_caller")
+  def answer("allow_always_this_caller"), do: lasting("allow", "always", "this_caller")
+  def answer("allow_always_any_caller"), do: lasting("allow", "always", "any_caller")
+
+  def answer("allow_hour_this_caller") do
     until =
       DateTime.utc_now()
       |> DateTime.add(@hour_s, :second)
       |> DateTime.truncate(:second)
       |> DateTime.to_iso8601()
 
-    {:ok, lasting("allow", %{"until" => until}, this_caller)}
+    lasting("allow", %{"until" => until}, "this_caller")
   end
 
-  def answer("allow_always", this_caller), do: {:ok, lasting("allow", "always", this_caller)}
-  def answer("deny_always", this_caller), do: {:ok, lasting("deny", "always", this_caller)}
-  def answer(_choice, _this_caller), do: :error
+  defp lasting(effect, lasts, covers),
+    do: %{"effect" => effect, "lasts" => lasts, "covers" => covers}
 
-  defp lasting(effect, lasts, this_caller),
-    do: %{
-      "effect" => effect,
-      "lasts" => lasts,
-      "covers" => if(this_caller, do: "this_caller", else: "any_caller")
-    }
+  @doc "The answer a card closed without a choice gives: Don't allow, once."
+  @spec dismissal() :: map()
+  def dismissal, do: %{"effect" => "deny", "lasts" => "once"}
 
   @doc """
   Who started a run, from its caller's text (`Prima.Question.Caller`), as
@@ -111,9 +120,7 @@ defmodule PrismWeb.SystemLayer.Question do
     if String.length(id) > 8, do: "…" <> String.slice(id, -6, 6), else: id
   end
 
-  @doc "Whether the card offers its switch: only for a caller it knows."
-  @spec switchable?(map()) :: boolean()
-  def switchable?(%{subject: %{caller: caller}}), do: caller != Caller.encode(:unknown)
+  defp known_caller?(%{subject: %{caller: caller}}), do: caller != Caller.encode(:unknown)
 
   attr :id, :string, required: true
   attr :prompt, :map, required: true
@@ -171,92 +178,65 @@ defmodule PrismWeb.SystemLayer.Question do
   end
 
   attr :prompt, :map, required: true
+  attr :offered, :list, required: true
   attr :myself, :any, required: true
   attr :button_class, :any, required: true
 
   @doc """
-  The choices, each sending `question_answer` with its name; the second
-  press shows Never allow and, for a caller the card knows, the switch.
-  Under `once_only`, Don't allow and Allow once alone.
+  The choices `offered` names (`offered/1`, as the layer draws them), each
+  sending `question_answer` with its name: the caller's row, a group named
+  by its heading, and the answer for any caller below it, outside the
+  group.
   """
   def choices(assigns) do
     assigns =
       assign(assigns,
-        choice: choice(assigns.prompt),
-        switchable: switchable?(assigns.prompt)
+        row: Enum.filter(assigns.offered, &(&1 != @any_caller)),
+        any_caller: @any_caller in assigns.offered
       )
 
     ~H"""
     <div class="space-y-3" data-test="question-choices">
-      <div class="flex flex-wrap justify-end gap-2">
-        <.option prompt={@prompt} myself={@myself} name="deny_once" class={@button_class.(false)}>
-          Don't allow
-        </.option>
-        <.option prompt={@prompt} myself={@myself} name="allow_once" class={@button_class.(false)}>
-          Allow once
-        </.option>
-        <.option
-          :if={not @choice.once_only}
-          prompt={@prompt}
-          myself={@myself}
-          name="allow_hour"
-          class={@button_class.(false)}
-        >
-          Allow for an hour
-        </.option>
-        <.option
-          :if={not @choice.once_only}
-          prompt={@prompt}
-          myself={@myself}
-          name="allow_always"
-          class={@button_class.(true)}
-        >
-          Always allow
-        </.option>
-      </div>
+      <fieldset class="m-0 min-w-0 space-y-2 border-0 p-0" data-test="question-caller-row">
+        <legend class="mb-2 text-sm text-gray-300 [overflow-wrap:anywhere]">
+          For {caller_words(@prompt.subject.caller)}:
+        </legend>
+        <div class="flex flex-wrap justify-end gap-2">
+          <.option
+            :for={name <- @row}
+            prompt={@prompt}
+            myself={@myself}
+            name={name}
+            class={@button_class.(name == "allow_always_this_caller")}
+          >
+            {label(name)}
+          </.option>
+        </div>
+      </fieldset>
 
-      <div :if={not @choice.once_only} class="flex flex-wrap items-center justify-end gap-2">
-        <button
-          :if={not @choice.more}
-          type="button"
-          phx-click="question_more"
-          phx-target={@myself}
-          phx-value-id={@prompt.id}
-          data-test="question-more"
-          class="text-sm text-blue-300 underline underline-offset-2 hover:text-blue-200"
-        >
-          More choices
-        </button>
-        <button
-          :if={@choice.more and @switchable}
-          type="button"
-          role="switch"
-          aria-checked={to_string(@choice.this_caller)}
-          phx-click="question_switch"
-          phx-target={@myself}
-          phx-value-id={@prompt.id}
-          data-test="question-switch"
-          class="flex items-center gap-2 text-sm"
-        >
-          <span class={[
-            "inline-block h-4 w-7 rounded-full border border-gray-500",
-            if(@choice.this_caller, do: "bg-blue-600", else: "bg-gray-800")
-          ]}></span>
-          Only when this caller starts it
-        </button>
+      <div
+        :if={@any_caller}
+        class="flex justify-end border-t border-gray-700 pt-3"
+        data-test="question-any-caller"
+      >
         <.option
-          :if={@choice.more}
           prompt={@prompt}
           myself={@myself}
-          name="deny_always"
+          name="allow_always_any_caller"
           class={@button_class.(false)}
         >
-          Never allow
+          Always allow, whoever starts it
+          <span class="block text-xs font-normal text-gray-400">Needs a fresh confirmation</span>
         </.option>
       </div>
     </div>
     """
   end
+
+  defp label("deny_always_this_caller"), do: "Never allow"
+  defp label("allow_once"), do: "Allow once"
+  defp label("allow_hour_this_caller"), do: "Allow for an hour"
+  defp label("allow_always_this_caller"), do: "Always allow"
 
   attr :prompt, :map, required: true
   attr :myself, :any, required: true
