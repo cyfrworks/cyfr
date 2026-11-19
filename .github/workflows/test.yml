@@ -220,7 +220,7 @@ jobs:
       # Each model catalyst's `model/chat@1` mapping runs on the host
       # target; the shipped binaries are not rebuilt here.
       - name: Test the model catalysts
-        run: scripts/test-catalysts.sh "$RUNNER_TEMP/catalyst-guest-target"
+        run: scripts/test-catalysts.sh
       # Every shipped binary is the build of its source: the stamp the build
       # script writes binds the binary's digest to the source tree's, so a
       # guest edit without a rebuild fails here, toolchain or not.
@@ -1096,7 +1096,7 @@ jobs:
       # Locus compiled and tested from a copy holding only what it declares
       # (the script's header lists it).
       - name: Compile and test Locus from its declared apps alone
-        run: scripts/locus-island.sh "$RUNNER_TEMP/locus-island"
+        run: scripts/locus-island.sh
 
   s3-minio:
     name: S3 adapter vs MinIO

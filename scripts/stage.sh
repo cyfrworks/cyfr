@@ -31,8 +31,9 @@
 #            that name; or - for a row that uses none of them
 #   when     always; tests, when the stage's touched tests are not none;
 #            or comma-separated path globs with Git's :(glob) meaning,
-#            when a path of the changed set matches one. Only save and
-#            handoff rows take tests or globs.
+#            when a path of the changed set matches one and no glob of the
+#            row written !GLOB. Only save and handoff rows take tests or
+#            globs.
 #   command  the rest of the line, run as `bash -c` from the worktree's
 #            root
 # Lines that start with #, and blank lines, are skipped. The whole table
@@ -70,8 +71,10 @@
 # -a postgres --only cluster and an object store); sorted, each once.
 # Handoff's take, besides, the test files that name what the change
 # defines or reads: for each changed apps/*/lib/**.ex and
-# apps/*/test/support/**.ex or .exs, deleted or not, each module it defines,
-# which a test file names by its whole dotted name or as Parent.{..., Rest};
+# apps/*/test/support/**.ex or .exs, deleted or not, each module and
+# protocol it declares (defmodule, defprotocol) and each defimpl's protocol
+# and for: targets, which a test file names by its whole dotted name or as
+# Parent.{..., Rest};
 # for a changed apps/<app>/test/test_helper.exs, every test file of the app;
 # and for any other changed path but a test, the test files that hold its
 # basename. Each name's test files join, the names with the fewest first,
@@ -79,7 +82,9 @@
 # lacks weighing its median) stay within SELECT_BUDGET below; each name
 # left out is named with its count of test files, as left to the pull
 # request's run, on stderr and at the top of the log of every row that
-# runs $STAGE_TESTS. Save's stay the changed tests and their lib mirrors.
+# runs $STAGE_TESTS. Out of its reach: a module a macro defines, and a test
+# that reaches a changed module only through another it names (a facade).
+# Save's stay the changed tests and their lib mirrors.
 # PATHS after `--` replace them. A touched path with whitespace is refused.
 #
 # A row whose command is scripts/test-partitioned.sh, its options, then
@@ -229,7 +234,8 @@ while IFS= read -r line || [ -n "$line" ]; do
     tests) [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take tests" ;;
     *)
       [[ $r_when =~ ^[^,[:space:]]+(,[^,[:space:]]+)*$ ]] || refuse 65 "$table:$number: '$r_when' is not always, tests or comma-separated globs"
-      [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take globs" ;;
+      [ "$r_stage" = save ] || [ "$r_stage" = handoff ] || refuse 65 "$table:$number: only save and handoff rows take globs"
+      [[ ,$r_when, =~ ,[^!,] ]] || refuse 65 "$table:$number: '$r_when' excludes paths and names none" ;;
   esac
   [ -n "${r_command//[[:space:]]/}" ] || refuse 65 "$table:$number: the command is empty"
   if [ "$r_stage" = "$stage" ]; then rows+=("$number"$'\t'"$line"); fi
@@ -280,24 +286,32 @@ fi
 SELECT_BUDGET=300
 left_out=()
 if [ "$stage" = handoff ] && ! $explicit; then
-  selection=$(python3 -I - "$base" "$SELECT_BUDGET" scripts/test-partition-weights.tsv \
-    ${changed[@]+"${changed[@]}"} -- ${tests[@]+"${tests[@]}"} <<'PY'
+  # The changed paths and the touched tests reach the selection as
+  # NUL-separated streams on fds 3 and 4, and its records come back NUL-
+  # separated, so no path is read as an option or split at a tab.
+  records=()
+  mapfile -d '' -t records < <(python3 -I - "$base" "$SELECT_BUDGET" scripts/test-partition-weights.tsv \
+    3< <(printf '%s\0' ${changed[@]+"${changed[@]}"}) 4< <(printf '%s\0' ${tests[@]+"${tests[@]}"}) <<'PY'
 import os, re, subprocess, sys
 
 base, budget, table = sys.argv[1], float(sys.argv[2]), sys.argv[3]
-cut = sys.argv.index("--", 4)
-changed, touched = sys.argv[4:cut], set(sys.argv[cut + 1:])
+def paths(fd):
+    with os.fdopen(fd, "rb") as stream:
+        return [os.fsdecode(p) for p in stream.read().split(b"\0") if p]
+changed, touched = paths(3), set(paths(4))
 
 def git(*args):
     return subprocess.run(["git", *args], capture_output=True, check=True).stdout.decode("utf-8", "replace")
 
 def cluster(path): return path.startswith("apps/cyfr/test/cluster/")
-def is_test(path): return re.fullmatch(r"apps/[^/]+/test/.*_test\.exs", path) is not None
+def is_test(path): return re.fullmatch(r"apps/[^/]+/test/.*_test\.exs", path, re.S) is not None
 def is_source(path):
-    return not is_test(path) and re.fullmatch(r"apps/[^/]+/(lib/.*\.ex|test/support/.*\.exs?)", path) is not None
+    return not is_test(path) and re.fullmatch(r"apps/[^/]+/(lib/.*\.ex|test/support/.*\.exs?)", path, re.S) is not None
 
-suite = sorted(p for p in git("ls-files", "-co", "--exclude-standard", "-z", "--", ":(glob)apps/*/test/**/*_test.exs").split("\0")
-               if p and not cluster(p) and os.path.isfile(p))
+suite = sorted(os.fsdecode(p) for p in subprocess.run(
+    ["git", "ls-files", "-co", "--exclude-standard", "-z", "--", ":(glob)apps/*/test/**/*_test.exs"],
+    capture_output=True, check=True).stdout.split(b"\0") if p)
+suite = [p for p in suite if not cluster(p) and os.path.isfile(p)]
 text = {p: open(p, encoding="utf-8", errors="replace").read() for p in suite}
 
 # A module is named by its whole dotted name, never as the prefix of a
@@ -312,16 +326,26 @@ for p, t in text.items():
     for n in names:
         named.setdefault(n, set()).add(p)
 
-def modules(source):
+# What a source defines: each defmodule and defprotocol, nested by
+# indentation, and for each defimpl its protocol and its for: targets.
+DECLARE = re.compile(r"^([ \t]*)(defmodule|defprotocol|defimpl)[ \t]+([A-Z][\w.]*)(?![\w.])(.*)$", re.M)
+TARGETS = re.compile(r"\bfor:\s*(\[[^\]]*\]|[A-Z][\w.]*)")
+def defined(source):
     found, stack = [], []
-    for m in re.finditer(r"^([ \t]*)defmodule[ \t]+([A-Z][\w.]*)(?![\w.])", source, re.M):
-        indent, name = len(m.group(1)), m.group(2)
+    for m in DECLARE.finditer(source):
+        indent, kind, name, rest = len(m.group(1)), m.group(2), m.group(3), m.group(4)
         while stack and stack[-1][0] >= indent:
             stack.pop()
+        if kind == "defimpl":
+            found.append(name)
+            target = TARGETS.search(rest)
+            if target:
+                found += re.findall(r"[A-Z][\w.]*", target.group(1))
+            continue
         full = stack[-1][1] + "." + name if stack and indent > 0 else name
         stack.append((indent, full))
         found.append(full)
-    return found
+    return list(dict.fromkeys(found))
 
 consumers = []
 for path in changed:
@@ -329,7 +353,7 @@ for path in changed:
         continue
     if is_source(path):
         source = open(path, encoding="utf-8", errors="replace").read() if os.path.isfile(path) else git("show", f"{base}:{path}")
-        consumers += [(m, named.get(m, set())) for m in modules(source)]
+        consumers += [(m, named.get(m, set())) for m in defined(source)]
         continue
     helper = re.fullmatch(r"apps/([^/]+)/test/test_helper\.exs", path)
     if helper:
@@ -348,28 +372,34 @@ ordered = sorted(weights.values())
 n = len(ordered)
 median = 1.0 if n == 0 else ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
 
-# Fewest consumers first, so a narrow name is never crowded out by a wide one.
+out = sys.stdout.buffer
+# Fewest consumers first, so a narrow name is never crowded out by a wide
+# one; each cost is summed in path order, so the budget's edge is the same
+# on every run.
 selected, spent = set(touched), 0.0
 for name, files in sorted(consumers, key=lambda c: (len(c[1]), c[0])):
     new = files - selected
     if not new:
         continue
-    cost = sum(weights.get(p, median) for p in new)
+    cost = sum(weights.get(p, median) for p in sorted(new))
     if spent + cost > budget:
-        print(f"left\t{name}\t{len(files)}")
+        out.write(b"left\0" + os.fsencode(name) + b"\0" + str(len(files)).encode() + b"\0")
         continue
     spent += cost
     selected |= new
 for p in sorted(selected - touched):
-    print(f"test\t{p}")
+    out.write(b"test\0" + os.fsencode(p) + b"\0")
 PY
-  ) || refuse 69 "cannot select the tests the change can break"
-  while IFS=$'\t' read -r kind a b; do
-    case $kind in
-      test) tests+=("$a") ;;
-      left) left_out+=("==> stage: $a ($b test files) left to the pull request's run") ;;
+  )
+  wait "$!" || refuse 69 "cannot select the tests the change can break"
+  k=0
+  while [ "$k" -lt "${#records[@]}" ]; do
+    case ${records[k]} in
+      test) tests+=("${records[k + 1]}"); k=$((k + 2)) ;;
+      left) left_out+=("==> stage: ${records[k + 1]} (${records[k + 2]} test files) left to the pull request's run"); k=$((k + 3)) ;;
+      *) refuse 69 "the test selection answered '${records[k]}'" ;;
     esac
-  done <<<"$selection"
+  done
   if [ "${#left_out[@]}" -gt 0 ]; then printf '%s\n' "${left_out[@]}" >&2; fi
 fi
 for path in ${tests[@]+"${tests[@]}"}; do
@@ -386,7 +416,12 @@ fi
 matches() {
   local glob globs specs=() found
   IFS=, read -r -a globs <<<"$1"
-  for glob in "${globs[@]}"; do specs+=(":(glob)$glob"); done
+  for glob in "${globs[@]}"; do
+    case $glob in
+      '!'*) specs+=(":(exclude,glob)${glob#!}") ;;
+      *) specs+=(":(glob)$glob") ;;
+    esac
+  done
   found=$(git diff --name-only --no-renames "$base" -- "${specs[@]}" &&
     git ls-files --others --exclude-standard -- "${specs[@]}") ||
     refuse 69 "cannot list the changed paths that match $1"

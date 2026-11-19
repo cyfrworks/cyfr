@@ -261,13 +261,15 @@ same worktree refuses, naming the run that holds it.
   The touched tests are the changed test files and, for each changed or
   deleted `apps/<app>/lib/<path>.ex`, `apps/<app>/test/<path>_test.exs`
   where it exists. Handoff adds the test files, in any app, that name a
-  module a changed `lib` or `test/support` file defines, or hold the file
-  name of another changed file (a fixture, a configuration file); a
+  module or protocol a changed `lib` or `test/support` file declares (an
+  implementation's protocol and target among them), or hold the file name
+  of another changed file (a fixture, a configuration file); a
   changed `test_helper.exs` stands for its app's suite. The names with the
   fewest such files come first, within a budget of added seconds the
   script's `SELECT_BUDGET` states, and each name left out is named, on the
   stage's stderr and at the top of the test checks' logs, as left to the
-  pull request's run. Name
+  pull request's run. A module a macro defines, and a test that reaches a
+  changed module only through another it names, are beyond it. Name
   others after `--`. `scripts/stage.sh -n STAGE` lists what it would run. A branch stacked on another sets `STAGE_BASE`
   to that branch, so the handoff stage runs its own changes alone rather
   than everything since `origin/main`.

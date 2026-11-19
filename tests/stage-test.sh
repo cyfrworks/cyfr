@@ -234,6 +234,7 @@ refused 9 'a field is empty' 'handoff||1|60|-|always|echo x'
 refused 9 "the folder 'prod' is not dev, dev_pg, test, test_pg or -" 'handoff|x|1|60|prod|always|echo x'
 refused 9 "the folder '_build/test' is not dev, dev_pg, test, test_pg or -" 'handoff|x|1|60|_build/test|always|echo x'
 refused 9 'no check is called deps' 'handoff|deps|1|60|-|always|echo x'
+refused 9 "'!seed/**,!tests/**' excludes paths and names none" 'handoff|x|1|60|-|!seed/**,!tests/**|echo x'
 table "${toy_rows[@]}"
 
 begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'
@@ -443,11 +444,16 @@ for f in \
   'apps/cyfr/test/sanctum/grouped_test.exs|  alias Sanctum.{\n    Context,\n    Provider\n  }' \
   'apps/cyfr/test/sanctum/tools_test.exs|  Sanctum.Provider.Tools.list()' \
   'apps/cyfr/test/sanctum/longer_test.exs|  Sanctum.ProviderSet.new() and Sanctum.Provider.Other.list()' \
+  'apps/prima/lib/prima/probe.ex|defprotocol Prima.Probe do\n  def probe(term)\nend' \
+  'apps/arca/lib/arca/probe_impl.ex|defimpl Prima.Probe, for: Arca.Thing do\n  def probe(_), do: :ok\nend' \
+  'apps/cyfr/test/prima/probe_test.exs|  Prima.Probe.probe(1)' \
+  'apps/cyfr/test/arca/thing_test.exs|  %Arca.Thing{}' \
+  'apps/cyfr/test/prima/fresh_test.exs|  Prima.Fresh.new()' \
   'config/runtime.exs|import Config' \
   'apps/cyfr/test/cyfr/runtime_config_test.exs|  File.read!("config/runtime.exs")' \
-  'tests/fixtures/keeper_protocol.json|{}' \
-  'apps/cyfr/test/opus/keeper_vectors_test.exs|  Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)' \
-  'apps/locus/test/locus/keeper_wire_test.exs|  vectors.("keeper_protocol.json")' \
+  'tests/fixtures/toy_wire.json|{}' \
+  'apps/cyfr/test/opus/keeper_vectors_test.exs|  Path.expand("../../../../tests/fixtures/toy_wire.json", __DIR__)' \
+  'apps/locus/test/locus/keeper_wire_test.exs|  vectors.("toy_wire.json")' \
   'apps/cyfr/test/test_helper.exs|ExUnit.start()' \
   'apps/cyfr/lib/cyfr/narrow.ex|defmodule Cyfr.Narrow do\nend' \
   'apps/cyfr/lib/cyfr/wide.ex|defmodule Cyfr.Wide do\nend' \
@@ -458,14 +464,15 @@ for f in \
   mkdir -p "$(dirname "$repo/${f%%|*}")"
   printf '%b\n' "${f#*|}" >"$repo/${f%%|*}"
 done
-# The narrow and wide consumers weigh 120 s each, so the wide name's
-# three are over the budget; the rest weigh 1 s, the table's median.
+# The narrow name's one test weighs 200 s and the wide name's three 50 s
+# each: either fits the 300 s budget alone, both do not, so which is taken
+# shows the order. The rest weigh 1 s, the table's median.
 {
-  printf '1.0\t%s\n' apps/cyfr/test/cyfr/runtime_config_test.exs apps/cyfr/test/opus/keeper_vectors_test.exs \
-    apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/longer_test.exs apps/cyfr/test/sanctum/provider_test.exs \
+  printf '1.0\t%s\n' apps/cyfr/test/arca/thing_test.exs apps/cyfr/test/cyfr/runtime_config_test.exs \
+    apps/cyfr/test/opus/keeper_vectors_test.exs apps/cyfr/test/prima/fresh_test.exs apps/cyfr/test/prima/probe_test.exs apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/longer_test.exs apps/cyfr/test/sanctum/provider_test.exs \
     apps/cyfr/test/sanctum/tools_test.exs apps/locus/test/locus/keeper_wire_test.exs
-  printf '120.0\t%s\n' apps/cyfr/test/narrow/n_test.exs apps/cyfr/test/wide/w1_test.exs apps/cyfr/test/wide/w2_test.exs \
-    apps/cyfr/test/wide/w3_test.exs
+  printf '200.0\t%s\n' apps/cyfr/test/narrow/n_test.exs
+  printf '50.0\t%s\n' apps/cyfr/test/wide/w1_test.exs apps/cyfr/test/wide/w2_test.exs apps/cyfr/test/wide/w3_test.exs
 } | LC_ALL=C sort -t "$(printf '\t')" -k2 >"$repo/scripts/test-partition-weights.tsv"
 git -C "$repo" add -A
 git -C "$repo" -c user.name=test -c user.email=test@invalid commit -q -m consumers
@@ -477,17 +484,36 @@ select_rows=(
 table "${select_rows[@]}"
 printf '# edit\n' >>"$repo/apps/sanctum/lib/sanctum/provider.ex"
 printf '# edit\n' >>"$repo/config/runtime.exs"
-printf '{"edit": 1}\n' >"$repo/tests/fixtures/keeper_protocol.json"
+printf '{"edit": 1}\n' >"$repo/tests/fixtures/toy_wire.json"
+printf '# edit\n' >>"$repo/apps/prima/lib/prima/probe.ex"
+printf '# edit\n' >>"$repo/apps/arca/lib/arca/probe_impl.ex"
+# A file named -- is a changed path like any other, never an option: the
+# new module after it in Git's listing still selects its reader.
+: >"$repo/--"
+printf 'defmodule Prima.Fresh do\nend\n' >"$repo/apps/prima/lib/prima/fresh.ex"
 stage selected -l "$S/logs-selected" handoff
 [ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/selected.err")"
-printf '%s\n' apps/cyfr/test/cyfr/runtime_config_test.exs apps/cyfr/test/opus/keeper_vectors_test.exs \
-  apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/provider_test.exs apps/cyfr/test/sanctum/tools_test.exs \
+printf '%s\n' apps/cyfr/test/arca/thing_test.exs apps/cyfr/test/cyfr/runtime_config_test.exs \
+  apps/cyfr/test/opus/keeper_vectors_test.exs apps/cyfr/test/prima/fresh_test.exs apps/cyfr/test/prima/probe_test.exs apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/provider_test.exs apps/cyfr/test/sanctum/tools_test.exs \
   apps/locus/test/locus/keeper_wire_test.exs >"$S/want"
 diff "$S/want" "$S/logs-selected/listed.txt" >/dev/null || fail "handoff selected: $(tr '\n' ' ' <"$S/logs-selected/listed.txt")"
 [ ! -s "$S/logs-selected/unit.log" ] || fail "a selection within the budget left a name out: $(cat "$S/logs-selected/unit.log")"
+rm -f "$repo/--" "$repo/apps/prima/lib/prima/fresh.ex"
 stage selected-save -l "$S/logs-selected-save" save
 [ "$rc" = 0 ] || fail "save exited $rc: $(cat "$S/selected-save.err")"
 grep -qx 'listed: skipped (no touched test) [0-9]*s' "$S/selected-save.out" || fail "save selected tests: $(cat "$S/selected-save.out")"
+# A selected test whose path holds a tab comes back whole and is refused.
+reset_tree
+tabbed="apps/cyfr/test/sanctum/tab$(printf '\t')name_test.exs"
+printf '  alias Sanctum.Provider\n' >"$repo/$tabbed"
+git -C "$repo" add -A && git -C "$repo" -c user.name=test -c user.email=test@invalid commit -q -m tabbed
+table "${select_rows[@]}"
+printf '# edit\n' >>"$repo/apps/sanctum/lib/sanctum/provider.ex"
+stage tabbed -l "$S/logs-tabbed" handoff
+[ "$rc" = 65 ] && grep -qF "a touched test path holds whitespace: '$tabbed'" "$S/tabbed.err" ||
+  fail "a selected path with a tab gave $rc: $(cat "$S/tabbed.err")"
+reset_tree
+git -C "$repo" rm -q -- "$tabbed" && git -C "$repo" -c user.name=test -c user.email=test@invalid commit -q -m untabbed
 
 begin "handoff's budget takes the names with the fewest test files first and names each it leaves out, with its count, on stderr and in the test rows' logs; a test_helper.exs stands for its app's suite"
 reset_tree
@@ -497,10 +523,9 @@ printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/narrow.ex"
 stage budget -l "$S/logs-budget" handoff
 [ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/budget.err")"
 [ "$(cat "$S/logs-budget/listed.txt")" = apps/cyfr/test/narrow/n_test.exs ] || fail "handoff selected: $(tr '\n' ' ' <"$S/logs-budget/listed.txt")"
-[ "$(cat "$S/logs-budget/unit.log")" = "==> stage: Cyfr.Wide (3 test files) left to the pull request's run" ] ||
-  fail "the test row's log says: $(cat "$S/logs-budget/unit.log")"
-grep -qxF "==> stage: Cyfr.Wide (3 test files) left to the pull request's run" "$S/budget.err" ||
-  fail "the stage's stderr says: $(cat "$S/budget.err")"
+grep -qF 'Cyfr.Wide (3 ' "$S/logs-budget/unit.log" && [ "$(grep -c . "$S/logs-budget/unit.log")" = 1 ] ||
+  fail "the test row's log does not name the one name left out with its count: $(cat "$S/logs-budget/unit.log")"
+grep -qF 'Cyfr.Wide (3 ' "$S/budget.err" || fail "the stage's stderr does not name the name left out: $(cat "$S/budget.err")"
 reset_tree
 table "${select_rows[@]}"
 printf '# edit\n' >>"$repo/apps/cyfr/test/test_helper.exs"
@@ -508,7 +533,7 @@ stage helper -l "$S/logs-helper" handoff
 [ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/helper.err")"
 grep -qx 'unit: skipped (no touched test) [0-9]*s' "$S/helper.out" || fail "a changed test_helper.exs selected tests: $(cat "$S/helper.out")"
 suite=$(git -C "$repo" ls-files 'apps/cyfr/test/*_test.exs' | grep -vc '^apps/cyfr/test/cluster/')
-grep -qxF "==> stage: apps/cyfr/test/test_helper.exs ($suite test files) left to the pull request's run" "$S/helper.err" ||
+grep -qF "apps/cyfr/test/test_helper.exs ($suite " "$S/helper.err" ||
   fail "the stage did not name the suite it left out: $(cat "$S/helper.err")"
 reset_tree
 table "${toy_rows[@]}"
@@ -1162,7 +1187,9 @@ for spec in \
   'seed/aqua/aqua.md|go-codex' \
   'apps/locus/keeper/main.go|go-keeper locus-alone' \
   'tests/fixtures/residue-canary.go|go-codex go-keeper' \
-  'tests/fixtures/keeper_protocol.json|go-codex go-keeper locus-alone' \
+  'apps/locus/lib/locus/x.ex|locus-alone' \
+  'stray.wasm|test-wasm' \
+  'seed/components/catalysts/local/claude/1.4.3/catalyst.wasm|' \
   'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|catalysts' \
   'apps/cyfr/test/support/test_wasm/chat_fixture/chat_fixture.wasm|test-wasm' \
   'apps/prima/lib/prima/cargo_toml.ex|test-wasm' \
@@ -1185,6 +1212,64 @@ for spec in \
   done
   [ "$got" = "${want:+$want }" ] || fail "a change to $path runs '${got% }', not '$want'"
 done
+
+begin 'the catalysts script tests every crate, stops at the first that fails with its status, and removes only the target folder it made'
+cats="$S/catalysts"
+mkdir -p "$cats/scripts" "$cats/bin" "$S/catalysts-tmp/kept"
+cp "$ROOT/scripts/test-catalysts.sh" "$cats/scripts/"
+for c in a b; do put "$cats/seed/components/catalysts/local/$c/1.0.0/src/src/chat.rs" '// chat'; done
+cat >"$cats/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+echo "${PWD##*/local/} $*" >>"$CARGO_CALLS"
+target=${!#}
+mkdir -p "$target" && touch "$target/built"
+exit "${CARGO_EXIT:-0}"
+EOF
+chmod +x "$cats/bin/cargo"
+catalysts() { # NAME ARGS...: the script with the stand-in cargo; status to $rc
+  local name=$1
+  shift
+  : >"$S/cargo-calls"
+  rc=0
+  (cd "$cats" && PATH="$cats/bin:$PATH" TMPDIR="$S/catalysts-tmp" CARGO_CALLS="$S/cargo-calls" scripts/test-catalysts.sh "$@") \
+    >"$S/$name.out" 2>"$S/$name.err" || rc=$?
+}
+catalysts cats-pass
+[ "$rc" = 0 ] && [ "$(cut -d' ' -f1 "$S/cargo-calls" | tr '\n' ' ')" = 'a/1.0.0/src b/1.0.0/src ' ] ||
+  fail "a passing run exited $rc after: $(tr '\n' ';' <"$S/cargo-calls")"
+[ "$(ls -A "$S/catalysts-tmp")" = kept ] || fail "the passing run left or removed: $(ls -A "$S/catalysts-tmp")"
+CARGO_EXIT=3 catalysts cats-fail
+[ "$rc" = 3 ] && [ "$(wc -l <"$S/cargo-calls")" = 1 ] && grep -qF 'a/1.0.0/src failed' "$S/cats-fail.err" ||
+  fail "a failing crate gave $rc after: $(tr '\n' ';' <"$S/cargo-calls") $(cat "$S/cats-fail.err")"
+[ "$(ls -A "$S/catalysts-tmp")" = kept ] || fail "the failing run left or removed: $(ls -A "$S/catalysts-tmp")"
+catalysts cats-usage "$S/catalysts-tmp/kept"
+[ "$rc" = 64 ] && [ -d "$S/catalysts-tmp/kept" ] && [ ! -s "$S/cargo-calls" ] || fail "a directory argument gave $rc"
+
+begin 'the Locus island script compiles and tests in a folder of its own under TMPDIR and removes only that'
+isle="$S/island-repo"
+mkdir -p "$isle/scripts" "$isle/bin" "$S/island-tmp/kept"
+cp "$ROOT/scripts/locus-island.sh" "$isle/scripts/"
+for f in mix.lock apps/prima/mix.exs apps/locus/mix.exs deps/jason/mix.exs wit/catalyst/world.wit _tools/wasm-tools \
+  tests/fixtures/toy_wire.json config/locus_runtime.exs; do
+  put "$isle/$f" "$f"
+done
+cat >"$isle/bin/mix" <<'EOF'
+#!/usr/bin/env bash
+echo "${PWD#"$TMPDIR"/} ${MIX_ENV-} ${MIX_OS_CONCURRENCY_LOCK-} $*" >>"$MIX_CALLS"
+EOF
+chmod +x "$isle/bin/mix"
+: >"$S/island-mix"
+rc=0; (cd "$isle" && PATH="$isle/bin:$PATH" TMPDIR="$S/island-tmp" MIX_CALLS="$S/island-mix" scripts/locus-island.sh) >"$S/island.out" 2>&1 || rc=$?
+[ "$rc" = 0 ] || fail "the island exited $rc: $(cat "$S/island.out")"
+sed -E 's/^cyfr-locus-island\.[A-Za-z0-9]+/ISLAND/' "$S/island-mix" >"$S/island-mix.got"
+printf '%s\n' 'ISLAND/apps/locus test 0 compile --warnings-as-errors' 'ISLAND/apps/locus test 0 test' >"$S/want"
+diff "$S/want" "$S/island-mix.got" >/dev/null || fail "Mix ran as: $(tr '\n' ';' <"$S/island-mix")"
+[ "$(ls -A "$S/island-tmp")" = kept ] || fail "the island left or removed: $(ls -A "$S/island-tmp")"
+rc=0; (cd "$isle" && scripts/locus-island.sh "$S/island-tmp/kept") >/dev/null 2>&1 || rc=$?
+[ "$rc" = 64 ] && [ -d "$S/island-tmp/kept" ] || fail "a directory argument gave $rc"
+rm -r "$isle/_tools"
+rc=0; (cd "$isle" && TMPDIR="$S/island-tmp" scripts/locus-island.sh) >"$S/island-missing.err" 2>&1 || rc=$?
+[ "$rc" = 69 ] && grep -qF '_tools is missing' "$S/island-missing.err" || fail "a missing _tools gave $rc: $(cat "$S/island-missing.err")"
 
 begin "the real table's nightly runs the janitor, install and handle on one quarter, then both reference canvas viewports on four, one after another"
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/nightly-real.out" 2>"$S/nightly-real.err" || status=$?

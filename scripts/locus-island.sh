@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Compile and test Locus from its declared apps alone: scripts/locus-island.sh DIR
+# Compile and test Locus from its declared apps alone: scripts/locus-island.sh
 #
 # Locus releases without the control plane: a checkout holding only the
 # lock, the contracts, Locus, the fetched deps, the WIT tree (`Prima.WIT`
@@ -16,28 +16,22 @@
 # scripts/commit-gate.sh's close and handoff's locus-alone row
 # (scripts/stages.tsv) run this.
 #
-# DIR is an absent or empty directory the island is copied into; the
-# script removes it at exit. Mix runs under MIX_ENV=test with its build
-# lock off, as test.yml's environment sets them, and in the island's own
-# build directory.
+# The island is a directory the script makes under TMPDIR and removes at
+# exit. Mix runs under MIX_ENV=test with its build lock off, as test.yml's
+# environment sets them, and in the island's own build directory.
 #
-# Exit 0 passed, 1 the compile or a test failed, 64 on usage or a DIR that
-# is not empty, 69 a path the island copies is missing (mix deps.get,
-# scripts/fetch-prebuilt-binaries.sh and scripts/wasm-tools.sh install
-# _tools make them).
+# Exit 0 passed, 1 the compile or a test failed, 64 on usage, 69 a path the
+# island copies is missing (mix deps.get, scripts/fetch-prebuilt-binaries.sh
+# and scripts/wasm-tools.sh install _tools make them).
 set -euo pipefail
 
-[ "$#" -eq 1 ] && [ -n "$1" ] || { echo "usage: $0 DIR" >&2; exit 64; }
-island=$1
+[ "$#" -eq 0 ] || { echo "usage: $0" >&2; exit 64; }
 cd "$(dirname "$0")/.."
 
 for path in mix.lock apps/prima apps/locus deps wit _tools tests/fixtures config/locus_runtime.exs; do
   [ -e "$path" ] || { echo "locus-island: $path is missing" >&2; exit 69; }
 done
-if [ -e "$island" ] && [ -n "$(ls -A "$island")" ]; then
-  echo "locus-island: $island is not empty" >&2
-  exit 64
-fi
+island=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-locus-island.XXXXXX")
 trap 'rm -rf "$island"' EXIT
 mkdir -p "$island/apps" "$island/config" "$island/tests"
 cp mix.lock "$island/"

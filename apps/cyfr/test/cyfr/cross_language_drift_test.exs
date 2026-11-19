@@ -736,8 +736,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
   @named_not_read %{
     {"keeper_protocol.json", "tests/builder-image/memory.py"} =>
       "its docstring names the protocol its keeper client speaks",
-    {"keeper_protocol.json", "tests/stage-test.sh"} =>
-      "a toy repository's changed path, to hold that handoff selects its readers",
     {"locus_builds.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
       "a planted harness text that reads it, for the drift check's own case",
     {"locus_roles.json", "apps/cyfr/test/cyfr/stack_shape_test.exs"} =>
@@ -874,6 +872,27 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "apps/prima/test/prima/recovery_code_test.exs does not read recovery_code.json's no_such_section",
              "apps/prima/test/prima/planted_test.exs is gone"
            ]
+  end
+
+  # Handoff's locus-alone row (scripts/stages.tsv) compiles and tests Locus
+  # alone when a vector its tests read changes, so its fixture paths are
+  # the vectors this roster gives a reader under apps/locus/test.
+  test "handoff's locus-alone row names the vectors Locus's tests read, and no other" do
+    row =
+      read!("scripts/stages.tsv")
+      |> String.split("\n")
+      |> Enum.map(&String.split(&1, "\t"))
+      |> Enum.find(&match?(["handoff", "locus-alone" | _], &1))
+
+    assert [_, _, _, _, _, globs, _] = row
+    named = for "tests/fixtures/" <> vector <- String.split(globs, ","), do: vector
+
+    read =
+      for {vector, readers} <- @vector_readers,
+          Enum.any?(readers, fn {file, _} -> String.starts_with?(file, "apps/locus/test/") end),
+          do: vector
+
+    assert Enum.sort(named) == Enum.sort(read)
   end
 
   test "every file under a test path that names a vector file is a row of it" do

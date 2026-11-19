@@ -72,14 +72,16 @@ handoff	go-keeper	1	600	-	apps/locus/keeper/**,tests/fixtures/keeper_protocol.js
 # The Rust rows take rustup's bin directory on PATH, as scripts/commit-gate.sh
 # does, and read not run 69 on a host without the toolchain CONTRIBUTING.md
 # names. The test WASM fixtures' Rust recipes compile the umbrella under
-# MIX_ENV=test (build-fixture.sh), so that row runs in the test folder.
-handoff	catalysts	1	900	-	seed/components/catalysts/*/*/*/src/**,scripts/test-catalysts.sh,rust-toolchain.toml	PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" scripts/test-catalysts.sh "$STAGE_LOGDIR/catalysts-target"
-handoff	test-wasm	1	900	test	apps/locus/test/support/runtime/test_wasm/**,apps/cyfr/test/support/test_wasm/**,apps/cyfr/test/integration/runtime/support/test_wasm/**,tests/locus-runtime-image/hog.wat,tests/locus-runtime-image/hog.wasm,tests/locus-runtime-image/build.sh,apps/**/*.wasm,tests/**/*.wasm,wit/**,apps/prima/lib/prima/cargo_toml.ex,scripts/check-test-wasm.sh,scripts/wasm-tools.sh	scripts/wasm-tools.sh install _tools && env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" CYFR_DATABASE=sqlite RUSTUP_TOOLCHAIN="$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)" scripts/check-test-wasm.sh
+# MIX_ENV=test (build-fixture.sh), so that row runs in the test folder; it
+# runs for every .wasm the check enumerates, which is every one outside
+# seed/.
+handoff	catalysts	1	900	-	seed/components/catalysts/*/*/*/src/**,scripts/test-catalysts.sh,rust-toolchain.toml	env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" TMPDIR="$STAGE_LOGDIR" scripts/test-catalysts.sh
+handoff	test-wasm	1	900	test	apps/locus/test/support/runtime/test_wasm/**,apps/cyfr/test/support/test_wasm/**,apps/cyfr/test/integration/runtime/support/test_wasm/**,tests/locus-runtime-image/hog.wat,tests/locus-runtime-image/build.sh,**/*.wasm,!seed/**/*.wasm,wit/**,apps/prima/lib/prima/cargo_toml.ex,scripts/check-test-wasm.sh,scripts/wasm-tools.sh	scripts/wasm-tools.sh install _tools && env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" CYFR_DATABASE=sqlite RUSTUP_TOOLCHAIN="$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)" scripts/check-test-wasm.sh
 # Locus compiled and tested from its declared apps alone, when what it alone
 # answers for changes: its app, the WIT tree, its runtime configuration and
 # the vector files its tests read. A change only under apps/prima or to
 # mix.lock is left to the pull request's island job.
-handoff	locus-alone	1	900	-	apps/locus/**,wit/**,config/locus_runtime.exs,tests/fixtures/guest_error.json,tests/fixtures/host_api.json,tests/fixtures/keeper_protocol.json,tests/fixtures/locus_backends.json,tests/fixtures/locus_builds.json,tests/fixtures/runner_control.json,tests/fixtures/runner_relay.json,tests/fixtures/worker_api.json,tests/fixtures/worker_auth.json,scripts/locus-island.sh	scripts/locus-island.sh "$STAGE_LOGDIR/locus-island"
+handoff	locus-alone	1	900	-	apps/locus/**,wit/**,config/locus_runtime.exs,tests/fixtures/guest_error.json,tests/fixtures/host_api.json,tests/fixtures/keeper_protocol.json,tests/fixtures/locus_backends.json,tests/fixtures/locus_builds.json,tests/fixtures/runner_control.json,tests/fixtures/runner_relay.json,tests/fixtures/worker_api.json,tests/fixtures/worker_auth.json,scripts/locus-island.sh	env TMPDIR="$STAGE_LOGDIR" scripts/locus-island.sh
 
 pull-request	gate	4	2700	-	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
 

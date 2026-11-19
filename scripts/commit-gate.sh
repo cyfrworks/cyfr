@@ -537,8 +537,8 @@ island_phase() {
 # and `mix test`) or setup that changes nothing the island holds (`set`,
 # `island=`, `mkdir -p`); any other line fails it, so the gate's island
 # cannot drift from CI's. A job whose step is the one line
-# `scripts/$1-island.sh DIR` reads `$1 --script scripts/$1-island.sh`
-# instead: the gate runs that script, as CI does.
+# `scripts/$1-island.sh` reads `$1 --script scripts/$1-island.sh` instead:
+# the gate runs that script, as CI does.
 island_spec() {
   python3 -I - .github/workflows/test.yml "$1" <<'PY'
 import re, shlex, sys, yaml
@@ -550,8 +550,8 @@ if job is None:
 script = f"scripts/{app}-island.sh"
 runs = [shlex.split(s["run"]) for s in job.get("steps", []) if "run" in s and script in s["run"]]
 if runs:
-    if len(runs) != 1 or len(runs[0]) != 2 or runs[0][0] != script:
-        sys.exit(f"test.yml's {app}-independence job runs {script} other than as the one line `{script} DIR`")
+    if len(runs) != 1 or runs[0] != [script]:
+        sys.exit(f"test.yml's {app}-independence job runs {script} other than as the one line `{script}`")
     print(f"{app} --script {script}")
     sys.exit(0)
 steps = [s for s in job.get("steps", []) if f'cd "$island/apps/{app}"' in s.get("run", "")]
@@ -605,9 +605,10 @@ island() {
   ISLAND_COPY=$(mktemp -d "$LOGDIR/island_${name}.XXXX") || return 1
   read -r -a paths <<<"$spec"
   if [ "${paths[1]-}" = --script ]; then
-    # The island's own script copies it, compiles and tests in it, and
-    # removes it, under the test phase's deadline.
-    island_phase "$name" test bash "${paths[2]}" "$ISLAND_COPY"
+    # The island's own script makes it under TMPDIR, here the gate's copy,
+    # compiles and tests in it, and removes it, under the test phase's
+    # deadline.
+    island_phase "$name" test env TMPDIR="$ISLAND_COPY" bash "${paths[2]}"
     status=$?
     echo "$name=$status" >> "$LOGDIR/islands.summary"
     rm -rf "$ISLAND_COPY"
