@@ -63,12 +63,12 @@ fn run_one(statement: &str) -> &'static str {
     let request = match parsed {
         Statement::DropTable { table } => Request {
             action: "delete_table".to_string(),
-            summary: format!("Drop the table {table}"),
+            summary: format!("drop the table {table}"),
             operation: statement.to_string(),
         },
         Statement::DeleteRow { table, id } => Request {
             action: "delete_rows".to_string(),
-            summary: format!("Delete the row {id} from the table {table}"),
+            summary: format!("delete the row {id} from the table {table}"),
             operation: statement.to_string(),
         },
     };

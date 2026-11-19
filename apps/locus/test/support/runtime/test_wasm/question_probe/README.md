@@ -53,7 +53,7 @@ is the one pin of the toolchain.
 ## Digests
 
 ```
-src/lib.rs          sha256:b68ac7e7d929c5ca7391e73fd673425588e84c219b7b97ec1fac2d0e68ca9e71
+src/lib.rs          sha256:3aefab417cab1ecf83c694599c8c32c9ae9f9179c0e0f626ad55e7ef6d714d46
 Cargo.lock          sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-question_probe.wasm sha256:b9b3f4cd0372c2ff3513742843b7ae4f4b1fde25f89432ca99d4cbcfcdcfed0b
+question_probe.wasm sha256:977f0c21c37167a57daaef74cdde51fd5841bdc46390c6a1e1b4e487dc272fdf
 ```

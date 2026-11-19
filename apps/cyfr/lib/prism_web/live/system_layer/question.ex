@@ -6,21 +6,23 @@ defmodule PrismWeb.SystemLayer.Question do
   A component's question as its card draws it, which only the system
   layer does: a frame of CYFR's own around the component's words.
 
-  The frame is fixed in place: who started the run (`caller_words/1`),
-  "is trying to use", the component's name, "to" and the action's title
-  its manifest declares (`headline/1`, the layer's heading), so a person
-  reads first who asks and what an answer that lasts is kept for. Under
-  it, the component's block, what it says of this one run: its summary
-  and its operation, as plain escaped text with its line breaks kept, set
-  apart by its own border. The one-line summary stays in view; the
-  operation is in a region of a fixed height that scrolls on its own,
-  named for a screen reader as what the component says it will do, and
-  breaks any line, so no length of text moves the frame, the summary or
+  The frame is fixed in place. Its heading is one sentence of CYFR's
+  around the developer's words (`headline/1`): who started the run
+  (`caller_words/1`), "is trying to use" the component's name, "to" the
+  action's title its manifest declares, the words an answer that lasts is
+  kept for, "and it will" this run's summary, and a full stop, so a person
+  reads first who asks and for what. The title and the summary are drawn
+  apart from CYFR's words, so a summary that reads like CYFR speaking is
+  still seen as the component's. Under it, the component's block: its
+  exact operation alone, as plain escaped text with its line breaks kept,
+  set apart by its own border, in a region of a fixed height that scrolls
+  on its own, named for a screen reader as what the component says it
+  will run, and breaks any line, so no length of text moves the frame or
   the choices, and text that reads like a button stays text inside the
-  block. Masking is said. Then one line of the component's publisher, so
-  a component named like CYFR is seen for what it is, and until when it
-  waits, in the person's own time, with the date only when it is not
-  today.
+  block. Masking is said. Then one line of the component's name and
+  publisher, so a component named like CYFR is seen for what it is, and
+  until when it waits, in the person's own time, with the date only when
+  it is not today.
 
   The choices (`offered/1`, each named for the answer it sends,
   `answer/1`), under "Allow this?": a group named for the caller that
@@ -113,22 +115,61 @@ defmodule PrismWeb.SystemLayer.Question do
         "cannot be kept: you can still allow it just once, or close this card with × to " <>
         "not allow it."
 
+  # How the developer's words inside CYFR's sentence are drawn.
+  @developer "font-normal text-amber-100"
+
+  attr :subject, :map, required: true
+
   @doc """
-  The card's headline, for a question's preview: who started the run as
-  `caller_words/1` says it, with a capital, "is trying to use", the
-  component's name, "to" and the action's declared title, the words an
-  answer that lasts is kept for. The person who started it reads "You
-  are trying to use".
+  The card's heading, one sentence of CYFR's around the developer's words:
+  who started the run as `caller_words/1` says it, with a capital, "is
+  trying to use" the component's name, "to" the action's declared title,
+  the words an answer that lasts is kept for, "and it will" this run's
+  summary, and a full stop when the summary ends with none. The person
+  who started it reads "You are trying to use". The title and the summary
+  are drawn apart from CYFR's words, in one way for both, so a summary
+  that reads like CYFR speaking is still seen as the component's, and
+  stay plain escaped text, so nothing in them is a control.
   """
-  @spec headline(%{caller: String.t(), name: String.t(), title: String.t()}) :: String.t()
-  def headline(%{caller: caller, name: name, title: title}) do
+  def headline(assigns) do
+    summary = assigns.subject.summary
+
+    assigns =
+      assign(assigns,
+        who: who(assigns.subject.caller),
+        summary: summary,
+        # CYFR's words between the title and the summary, when there is one.
+        joined: if(summary != "", do: " and it will "),
+        stop: if(ends_unstopped?(summary), do: "."),
+        developer: @developer
+      )
+
+    ~H"""
+    {@who} trying to use {@subject.name} to <span
+      class={@developer}
+      data-test="question-title"
+    >{@subject.title}</span>{@joined}<span
+      :if={@summary != ""}
+      class={@developer}
+      data-test="question-summary"
+    >{@summary}</span>{@stop}
+    """
+  end
+
+  # The sentence's subject and its verb: "You are", "The app local.board is".
+  defp who(caller) do
     case caller_words(caller) do
-      "you" -> "You are trying to use #{name} to #{title}"
-      words -> "#{capital(words)} is trying to use #{name} to #{title}"
+      "you" -> "You are"
+      words -> capital(words) <> " is"
     end
   end
 
   defp capital(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
+
+  # The card ends the sentence with a full stop unless the component's last
+  # words end it already: after the summary, or after the title when there
+  # is no summary.
+  defp ends_unstopped?(summary), do: not String.ends_with?(summary, [".", "!", "?"])
 
   @doc """
   Who started a run, from its caller's text (`Prima.Question.Caller`), as
@@ -167,9 +208,9 @@ defmodule PrismWeb.SystemLayer.Question do
   attr :prompt, :map, required: true
 
   @doc """
-  The component's block, what it says of this one run, then the frame's
-  line: who published the component and until when it waits, in the
-  person's own time, on one line that wraps at a word.
+  The component's block, the exact operation of this one run, then the
+  frame's line: who published the component and until when it waits, in
+  the person's own time, on one line that wraps at a word.
   """
   def card(assigns) do
     assigns = assign(assigns, :subject, assigns.prompt.subject)
@@ -182,14 +223,11 @@ defmodule PrismWeb.SystemLayer.Question do
         class="rounded-md border border-dashed border-gray-600 bg-gray-950 p-3"
         data-test="question-words"
       >
-        <p class="text-sm text-gray-100 [overflow-wrap:anywhere]" data-test="question-summary">
-          {@subject.summary}
-        </p>
         <div
-          class="mt-2 max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
+          class="max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
           tabindex="0"
           role="region"
-          aria-label={"What #{@subject.name} says it will do"}
+          aria-label={"What #{@subject.name} says it will run"}
           data-test="question-block"
         >
           <pre

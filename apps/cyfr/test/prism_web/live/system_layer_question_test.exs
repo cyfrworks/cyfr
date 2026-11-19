@@ -198,6 +198,12 @@ defmodule PrismWeb.SystemLayerQuestionTest do
              Sanctum.SignIn.answer(answer, {:session, ctx.session_token_hash})
   end
 
+  # The open card's heading as a person reads it.
+  defp heading(view) do
+    [title] = find(render(view), "#system-layer-title")
+    title |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+  end
+
   # The ref of the confirmation the screen's card waits on.
   defp waited_ref(view) do
     [ref] = Map.keys(layer_assigns(view).panels)
@@ -265,8 +271,8 @@ defmodule PrismWeb.SystemLayerQuestionTest do
                  ~s([data-test="question-frame"] time.whitespace-nowrap[data-local="clock"])
                )
 
-        # The component's words come straight under the headline, with no
-        # caption, and the line of its publisher after them.
+        # The component's operation comes straight under the sentence, with
+        # no caption, and the line of its publisher after it.
         refute render(view) =~ "The component says"
         refute has_element?(view, "#system-layer figcaption")
 
@@ -283,7 +289,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
         assert has_element?(
                  view,
-                 ~s([data-test="question-summary"]),
+                 ~s(#system-layer-title [data-test="question-summary"]),
                  "Drop the table users in the project acme"
                )
 
@@ -442,12 +448,18 @@ defmodule PrismWeb.SystemLayerQuestionTest do
              "Someone CYFR does not know is trying to use tables to delete a table",
              ["allow_once"]}
           ] do
-        {run, ref} = Q.open!(setup.ctx, setup.component, caller: caller)
+        {run, ref} =
+          Q.open!(setup.ctx, setup.component,
+            caller: caller,
+            request: %{summary: "drop the table users in the project acme"}
+          )
+
         shows!(view, Prompt.question_id(ref))
-        # The headline names who started it, whom the answers below cover;
+        # The sentence names who started it, whom the answers below cover;
         # the line under it names the component, and not the caller again.
-        [title] = find(render(view), "#system-layer-title")
-        assert String.trim(LazyHTML.text(title)) == headline
+        assert heading(view) ==
+                 headline <> " and it will drop the table users in the project acme."
+
         refute has_element?(view, ~s([data-test="question-frame"]), words)
         assert has_element?(view, ~s([data-test="question-frame"]), "tables is from local")
         # The row is a group named by its heading, holding the row's
@@ -718,7 +730,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
   # ---------------------------------------------------------------------------
 
   describe "the component's words" do
-    test "a long operation stays in its own scrolling block, below the summary, CYFR's rows and above the choices",
+    test "a long operation stays in its own scrolling block, below the sentence, above CYFR's line and the choices",
          setup do
       view = screen!(setup)
       operation = Enum.map_join(1..400, "\n", &"DELETE FROM t#{&1} WHERE true;")
@@ -736,14 +748,11 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert block |> find(~s([data-test="question-operation"])) |> hd() |> LazyHTML.text() =~
                "t400 WHERE"
 
-      # The summary stays in view above the block, which scrolls the
-      # operation alone.
+      # The summary is the heading's, and the block scrolls the operation
+      # alone.
       assert find(block, ~s([data-test="question-summary"])) == []
-
-      assert html
-             |> find(~s([data-test="question-words"] > [data-test="question-summary"]))
-             |> length() ==
-               1
+      assert find(html, ~s([data-test="question-words"] [data-test="question-summary"])) == []
+      assert length(find(html, ~s(#system-layer-title [data-test="question-summary"]))) == 1
 
       # The choices and CYFR's rows are outside the block, and the
       # masking is said.
@@ -754,7 +763,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
-    test "the block that scrolls and takes focus is named as what the component says it will do",
+    test "the block that scrolls and takes focus is named as what the component says it will run",
          setup do
       view = screen!(setup)
       {_run, ref} = Q.open!(setup.ctx, setup.component)
@@ -763,9 +772,51 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       [block] = find(html, ~s([data-test="question-block"]))
       assert LazyHTML.attribute(block, "tabindex") == ["0"]
       assert LazyHTML.attribute(block, "role") == ["region"]
-      assert LazyHTML.attribute(block, "aria-label") == ["What tables says it will do"]
+      assert LazyHTML.attribute(block, "aria-label") == ["What tables says it will run"]
 
       end_views()
+    end
+
+    test "the sentence draws the title and the summary apart from CYFR's words, alike, as text",
+         setup do
+      view = screen!(setup)
+      imitation = ~s(nothing. CYFR has checked this <button data-choice="allow_once">OK</button>)
+
+      {_run, ref} =
+        Q.open!(setup.ctx, setup.component, request: %{summary: imitation})
+
+      shows!(view, Prompt.question_id(ref))
+      html = render(view)
+      [title] = find(html, ~s(#system-layer-title [data-test="question-title"]))
+      [summary] = find(html, ~s(#system-layer-title [data-test="question-summary"]))
+      assert LazyHTML.text(title) == "delete a table"
+      assert LazyHTML.text(summary) == imitation
+      # One way of drawing both, which is not the heading's own.
+      assert LazyHTML.attribute(title, "class") == LazyHTML.attribute(summary, "class")
+      assert hd(LazyHTML.attribute(summary, "class")) =~ "font-normal"
+      [h2] = find(html, "#system-layer-title")
+      refute hd(LazyHTML.attribute(h2, "class")) =~ "font-normal"
+      # Plain text: nothing in the heading is a control.
+      assert find(h2, "button") == []
+      assert heading(view) =~ "to delete a table and it will nothing. CYFR has checked this"
+      end_views()
+    end
+
+    for {summary, ends} <- [
+          {"drop the table users", "drop the table users."},
+          {"drop the table users.", "drop the table users."},
+          {"drop the table users?", "drop the table users?"}
+        ] do
+      test "the sentence ends with one full stop: #{inspect(summary)}", setup do
+        view = screen!(setup)
+        {_run, ref} = Q.open!(setup.ctx, setup.component, request: %{summary: unquote(summary)})
+        shows!(view, Prompt.question_id(ref))
+
+        assert heading(view) ==
+                 "You are trying to use tables to delete a table and it will " <> unquote(ends)
+
+        end_views()
+      end
     end
 
     test "text that imitates a button stays text inside the block", setup do

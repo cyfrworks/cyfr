@@ -9,7 +9,9 @@ interface ask {
     record request {
         /// A name this component's manifest declares under `asks`.
         action: string,
-        /// One line, at most 200 characters: "Drop the table users in the project acme".
+        /// One line, at most 200 characters, that finishes the person's
+        /// card after "and it will", lower-case and with no full stop of
+        /// its own: "drop the table users in the project acme".
         /// A control or format character refuses the request.
         summary: string,
         /// The exact operation, shown whole. Line breaks and

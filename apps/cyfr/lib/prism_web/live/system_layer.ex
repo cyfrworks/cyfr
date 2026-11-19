@@ -2904,14 +2904,19 @@ defmodule PrismWeb.SystemLayer do
               tabindex={if @shown.kind == :question, do: "-1"}
               data-focus-first={@shown.kind == :question}
               class={
-                [
-                  "text-lg font-semibold focus:outline-none",
-                  # A component's name is one word as long as the line at most.
-                  @shown.kind == :question && "min-w-0 [overflow-wrap:anywhere]"
-                ]
+                if @shown.kind == :question,
+                  # A sentence of up to some four hundred characters, which a
+                  # phone holds above the choices; a name is one word as long
+                  # as the line at most.
+                  do: "min-w-0 text-base font-semibold [overflow-wrap:anywhere] focus:outline-none",
+                  else: "text-lg font-semibold focus:outline-none"
               }
             >
-              {title(@shown)}
+              <%= if @shown.kind == :question do %>
+                <Question.headline subject={@shown.subject} />
+              <% else %>
+                {title(@shown)}
+              <% end %>
             </h2>
             <%!-- A question's one close, for a finger as for Escape: the
               dismissal, "Don't allow", once. --%>
@@ -3553,8 +3558,6 @@ defmodule PrismWeb.SystemLayer do
 
   defp title(%{kind: :request, subject: %{asker: %{name: name}, operation: operation}}),
     do: "#{name} asks you to approve #{operation}"
-
-  defp title(%{kind: :question, subject: subject}), do: Question.headline(subject)
 
   # Where a grant lands, as the person reads it: their own athanor as
   # theirs, any other by its name.
