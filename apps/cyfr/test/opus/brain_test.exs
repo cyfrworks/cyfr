@@ -593,6 +593,19 @@ defmodule Opus.BrainTest do
     end
   end
 
+  # The holder's own guarantee: the stored mode is set in every work's
+  # configuration, so a caller that names none cannot keep auto running.
+  describe "the stored mode on every work" do
+    test "a new read-only work restarts an auto session even without caller config",
+         %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
+      brain = started!(fake, row, binding)
+      other = admitted!(ctx, binding, next_turn!(ctx, thread.id, turn, "aqua"), row, "read-only")
+      work = %{"t" => "work", "id" => "stp_no_config", "work" => other.turn_id, "tools" => []}
+      assert {:ok, :restarted} = Brain.write(brain, other, work)
+      refute_sent()
+    end
+  end
+
   describe "the binding to admitted work" do
     setup %{fake: fake, row: row, binding: binding} do
       {:ok, brain: started!(fake, row, binding)}

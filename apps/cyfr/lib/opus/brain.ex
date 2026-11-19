@@ -56,9 +56,10 @@ defmodule Opus.Brain do
   next start resumes the native session, whose transcript says what it
   holds (`started.held`).
 
-  A `work` names the configuration its turn runs with. One that differs
-  from the configuration the running harness was started with writes
-  nothing: the driver's process is closed and a new one opened in the same
+  A `work` runs with the configuration its caller names, or the running
+  harness's own when it names none, with the turn's stored mode set in it
+  (below). One that differs from the configuration the running harness
+  was started with writes nothing: the driver's process is closed and a new one opened in the same
   holder, `{:ok, :restarted}`, and the attendant starts it again, resuming.
 
   The configuration's `read_only` is the holder's to set, never the
@@ -249,9 +250,10 @@ defmodule Opus.Brain do
   Write `command` (a brain wire command: `start`, `work`, `post` or
   `answer`) under `binding`, read again from the store just before it is
   written (moduledoc). `opts`: `config`, the configuration a `work`'s turn
-  runs with. Answers `:ok` once the service took it, `{:ok, :restarted}`
-  for a `work` whose configuration differs from the running harness's
-  (nothing written; a new process runs), or `{:error, reason}` with
+  runs with, the running harness's own when absent. Answers `:ok` once the
+  service took it, `{:ok, :restarted}` for a `work` whose configuration,
+  with the turn's stored mode set in it, differs from the running
+  harness's (nothing written; a new process runs), or `{:error, reason}` with
   nothing written: `:not_a_delivery` (a `models` or a `forget`, which no
   binding writes), `:busy` (before the `hello`, or while the last
   command's answer is outstanding), `:not_attached`, `:unreadable`,
@@ -1240,10 +1242,9 @@ defmodule Opus.Brain do
          {:ok, turn} <- admitted(binding, t),
          command = held(command, turn),
          {:ok, line} <- encode(command) do
-      if t == "work" and Keyword.has_key?(opts, :config) and
-           state.config != held_config(opts[:config], turn),
-         do: restarted(state),
-         else: send_line(state, command, line)
+      if t == "work" and state.config != held_config(opts[:config] || state.config, turn),
+        do: restarted(state),
+        else: send_line(state, command, line)
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
