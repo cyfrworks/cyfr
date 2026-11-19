@@ -250,6 +250,9 @@ defmodule PrismWeb.SystemLayer do
   that confirmation arrives from the stream, and goes in front of an open
   question card, which waits first in line and comes back when the
   confirmation leaves: closing the confirmation there answers nothing.
+  Drawn as its own prompt, that confirmation, and the one the component's
+  page asks for when its form sets the same answer, is titled by what it
+  allows: the component, the action's title and whoever starts it.
 
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
@@ -2544,7 +2547,8 @@ defmodule PrismWeb.SystemLayer do
     once_only? = match?(%Prima.Refusal{reason: :removed}, reason)
 
     update_prompt(socket, id, fn prompt ->
-      prompt = Map.put(prompt, :said, Ops.error_message(reason))
+      said = if once_only?, do: Question.once_only_words(), else: Ops.error_message(reason)
+      prompt = Map.put(prompt, :said, said)
 
       if once_only?,
         do: Map.put(prompt, :choice, Map.put(Question.choice(prompt), :once_only, true)),
@@ -2891,7 +2895,13 @@ defmodule PrismWeb.SystemLayer do
         aria-modal="true"
         aria-labelledby={"#{@id}-title"}
         aria-describedby={"#{@id}-description"}
-        class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
+        class={
+          [
+            "m-auto w-full rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70",
+            # A question's row of four answers stands on one line.
+            if(@shown && @shown.kind == :question, do: "max-w-xl", else: "max-w-lg")
+          ]
+        }
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
           <div class="flex items-start justify-between gap-3">
@@ -3529,6 +3539,11 @@ defmodule PrismWeb.SystemLayer do
        }),
        do: program_title(operation)
 
+  # The one answer to a component's question that needs a fresh
+  # confirmation, from its card or from the component's page alike.
+  defp title(%{kind: :confirmation, action: :question_always_any, subject: subject}),
+    do: always_any_title(subject[:preview])
+
   defp title(%{kind: :confirmation, subject: %{operation: operation}}),
     do: operation_title(operation)
 
@@ -3569,6 +3584,16 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp operation_title(_operation), do: "Confirm a change"
+
+  # An allow, always, for whoever starts the component, named by the
+  # component and the action's declared title its preview carries.
+  defp always_any_title(%{"resource" => resource, "details" => %{"action" => action}})
+       when is_binary(resource) and is_binary(action) do
+    name = resource |> String.split(".", parts: 2) |> List.last()
+    "Always allow #{name} to #{action}, whoever starts it"
+  end
+
+  defp always_any_title(_preview), do: "Always allow a component's action, whoever starts it"
 
   # A program's definition, by what its confirmation does to it.
   defp program_title("mcp_servers.create"), do: "Add a program"

@@ -26,8 +26,14 @@ defmodule PrismWeb.SystemLayer.Question do
   Once an answer that lasts is refused because no installed version asks
   for the permission in these words, the card offers only Allow once
   (`once_only`, kept on the shown prompt by the layer, so it ends with
-  the prompt). Closing the card without choosing is "Don't allow", once
-  (`dismissal/0`).
+  the prompt) and says so (`once_only_words/0`). Closing the card without
+  choosing is "Don't allow", once (`dismissal/0`).
+
+  The row's four buttons are drawn alike, so no answer, the one that
+  lasts longest least of all, looks like the card's default; they stand
+  on one line on a screen as wide as a small tablet's, and two by two,
+  each a finger's height, on a narrower one, where a row of one button
+  is as wide as the row.
   """
 
   use Phoenix.Component
@@ -36,6 +42,10 @@ defmodule PrismWeb.SystemLayer.Question do
 
   # How long "Allow for an hour" lasts.
   @hour_s 3600
+
+  # What a screen reader says of the block that scrolls and takes focus:
+  # whose words it holds.
+  @block_name "The operation, in the component's own words"
 
   @caller_row ~w(deny_always_this_caller allow_once allow_hour_this_caller allow_always_this_caller)
   @any_caller "allow_always_any_caller"
@@ -89,6 +99,17 @@ defmodule PrismWeb.SystemLayer.Question do
   def dismissal, do: %{"effect" => "deny", "lasts" => "once"}
 
   @doc """
+  The card's sentence once an answer that lasts is refused because no
+  installed version asks for the permission in these words: what the card
+  then offers, by what is on it.
+  """
+  @spec once_only_words() :: String.t()
+  def once_only_words,
+    do:
+      "No installed version asks for this permission in these words, so this answer " <>
+        "cannot be kept: allow it once, or close this card with × to not allow it."
+
+  @doc """
   Who started a run, from its caller's text (`Prima.Question.Caller`), as
   a person reads it: "you", the assistant's name, the app's publisher and
   name, or for a device, a key, a schedule and a webhook the kind and the
@@ -127,13 +148,13 @@ defmodule PrismWeb.SystemLayer.Question do
 
   @doc "The frame's rows and the component's block inside it."
   def card(assigns) do
-    assigns = assign(assigns, :subject, assigns.prompt.subject)
+    assigns = assign(assigns, subject: assigns.prompt.subject, block_name: @block_name)
 
     ~H"""
     <section class="space-y-3" data-test="question" data-ref={@subject.ref}>
       <dl class="grid grid-cols-3 gap-1 text-sm" data-test="question-frame">
         <dt class="text-gray-400">Component</dt>
-        <dd class="col-span-2 break-all" data-test="question-component">
+        <dd class="col-span-2 [overflow-wrap:anywhere]" data-test="question-component">
           {@subject.name}, published by {@subject.publisher}
         </dd>
         <dt class="text-gray-400">Started by</dt>
@@ -162,6 +183,8 @@ defmodule PrismWeb.SystemLayer.Question do
         <div
           class="mt-2 max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
           tabindex="0"
+          role="region"
+          aria-label={@block_name}
           data-test="question-block"
         >
           <pre
@@ -201,13 +224,13 @@ defmodule PrismWeb.SystemLayer.Question do
         <legend class="mb-2 text-sm text-gray-300 [overflow-wrap:anywhere]">
           For {caller_words(@prompt.subject.caller)}:
         </legend>
-        <div class="flex flex-wrap justify-end gap-2">
+        <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-nowrap sm:justify-end">
           <.option
             :for={name <- @row}
             prompt={@prompt}
             myself={@myself}
             name={name}
-            class={@button_class.(name == "allow_always_this_caller")}
+            class={[@button_class.(false), "min-h-11 only:col-span-2"]}
           >
             {label(name)}
           </.option>

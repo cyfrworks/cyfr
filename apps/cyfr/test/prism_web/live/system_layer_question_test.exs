@@ -284,6 +284,42 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
+    test "draws the row's four answers alike, on one line wide and two by two narrow, " <>
+           "and wraps the component's name at a word",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+      html = render(view)
+
+      # No answer in the row is the filled one: the most lasting is no default.
+      buttons = find(html, ~s([data-test="question-caller-row"] [data-test="question-choice"]))
+      classes = Enum.map(buttons, &hd(LazyHTML.attribute(&1, "class")))
+      assert length(classes) == 4
+      assert classes |> Enum.uniq() |> length() == 1
+      refute hd(classes) =~ "bg-blue-600"
+      assert hd(classes) =~ "min-h-11"
+
+      [row] = find(html, ~s([data-test="question-caller-row"] > div))
+      row = row |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "grid-cols-2" in row
+      assert "sm:flex-nowrap" in row
+
+      [dialog] = find(html, "#system-layer-dialog")
+
+      assert dialog
+             |> LazyHTML.attribute("class")
+             |> hd()
+             |> String.split()
+             |> Enum.member?("max-w-xl")
+
+      [component] = find(html, ~s([data-test="question-component"]))
+      component = component |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "[overflow-wrap:anywhere]" in component
+      refute "break-all" in component
+      end_views()
+    end
+
     test "is drawn by neither the desktop's layer nor the panel's", setup do
       desktop = screen!(setup, %{"listen" => :own})
       panel = screen!(setup, %{"listen" => false})
@@ -657,6 +693,21 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
+    test "the block that scrolls and takes focus is named as the component's words", setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+      [block] = find(render(view), ~s([data-test="question-block"]))
+      assert LazyHTML.attribute(block, "tabindex") == ["0"]
+      assert LazyHTML.attribute(block, "role") == ["region"]
+
+      assert LazyHTML.attribute(block, "aria-label") == [
+               "The operation, in the component's own words"
+             ]
+
+      end_views()
+    end
+
     test "text that imitates a button stays text inside the block", setup do
       view = screen!(setup)
 
@@ -799,8 +850,8 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         assert has_element?(
                  view,
                  ~s([role="alert"]),
-                 "No installed version asks for this permission in these words, " <>
-                   "so this answer cannot be kept. You can still allow it once, or not allow it."
+                 "No installed version asks for this permission in these words, so this " <>
+                   "answer cannot be kept: allow it once, or close this card with × to not allow it."
                )
 
         refute render(view) =~ "no longer installed"
@@ -1428,6 +1479,13 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       confirmation = waited_ref(asking)
       shows!(other, Prompt.confirmation_id(confirmation), "the confirmation in front")
       assert [%{id: ^id}] = layer_assigns(other).queue
+
+      # Titled by what it allows, not by the operation that carries it.
+      assert has_element?(
+               other,
+               "#system-layer-title",
+               "Always allow tables to delete a table, whoever starts it"
+             )
 
       prove_here!(other, confirmation, authenticator)
 
