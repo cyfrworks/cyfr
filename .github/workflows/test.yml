@@ -1686,6 +1686,31 @@ jobs:
         env:
           COMPOSE_PROOF_SKIP_BUILD: '1'
         run: tests/compose-proof/run.sh --case runtime --locus-image cyfr-locus:backends
+      # The update cases: cyfr update between two releases made from the
+      # tree (the script's header), on main's push run, the tag's and the
+      # nightly, not on a pull request. Their releases' images are named by
+      # digest from the local store, which only the containerd image store
+      # gives a loaded or built image; the runner's daemon uses it.
+      - name: The Compose proof (update)
+        if: github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update --locus-image cyfr-locus:backends
+      - name: The Compose proof (update-refused)
+        if: github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update-refused --locus-image cyfr-locus:backends
+      - name: The Compose proof (update-fail)
+        if: github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update-fail --locus-image cyfr-locus:backends
+      - name: The Compose proof (update-interrupt)
+        if: github.event_name != 'pull_request'
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case update-interrupt --locus-image cyfr-locus:backends
       # The setup proof (tests/setup-proof/run.sh) on the same image:
       # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
       # the browser harness, ask nothing, set up a CYFR reached from this

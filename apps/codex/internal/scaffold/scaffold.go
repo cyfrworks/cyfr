@@ -331,6 +331,14 @@ func Fetch(version string) (*Release, error) {
 		return nil, fmt.Errorf("%w: scaffold checksum mismatch for %s: the download does not match the release's signed checksums.txt", release.ErrUnverified, version)
 	}
 
+	return Parse(tarball)
+}
+
+// Parse reads a scaffold tarball's bytes whole, keeping its directories
+// and regular files and skipping any entry whose path is absolute or climbs
+// out of the project; it verifies nothing, so a caller reads only bytes
+// it has verified (Fetch: against the release's signed checksums.txt).
+func Parse(tarball []byte) (*Release, error) {
 	gr, err := gzip.NewReader(bytes.NewReader(tarball))
 	if err != nil {
 		return nil, fmt.Errorf("decompress scaffold: %w", err)

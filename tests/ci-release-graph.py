@@ -12,7 +12,8 @@
 # by exact name, attests the merge's printed digest and hands it to the
 # CLI release, which pins the scaffold's compose to the merged digests,
 # writes release.json with the schema fingerprint its merged cyfr image
-# answers, checks it and signs it before GoReleaser attaches both, and grants each job only what it needs. The build, and the
+# answers, checks it and signs it before GoReleaser attaches both, builds the
+# command line with no build tag, and grants each job only what it needs. The build, and the
 # publication test in test.yml's static job, first switch the runner's
 # Docker daemon to the containerd image store, which alone can load an
 # image carrying its attestation.
@@ -876,6 +877,14 @@ def check_homebrew(wf, release):
 
 
 def check_goreleaser(config):
+    # A release build passes no build tag and sets no variable of the
+    # command line's package: the releaseproof tag (apps/codex/cmd/
+    # release_proof.go) reads every release from a local folder, unsigned.
+    for build in config.get("builds") or []:
+        if build.get("tags") or any("-tags" in str(f) for f in build.get("flags") or []):
+            return f".goreleaser.yml builds {build.get('binary')!r} with build tags ({build.get('tags')!r}, {build.get('flags')!r})"
+        if any("codex/cmd." in str(f) for f in build.get("ldflags") or []):
+            return f".goreleaser.yml's ldflags set a variable of the command line's package: {build.get('ldflags')!r}"
     # The changelog step is what reads --release-notes (GoReleaser's
     # changelog pipe): disabled, it publishes an empty body.
     if "disable" in (config.get("changelog") or {}):
@@ -2771,6 +2780,10 @@ GORELEASER_MUTANTS = [
     ("no release a pre-release", lambda c: c["release"].update(prerelease=False)),
     ("no make_latest: false", lambda c: c["release"].pop("make_latest")),
     ("make_latest: true", lambda c: c["release"].update(make_latest=True)),
+    ("the release proof's tag", lambda c: c["builds"][0].update(tags=["releaseproof"])),
+    ("the release proof's tag as a flag", lambda c: c["builds"][0].update(flags=["-tags=releaseproof"])),
+    ("the release proof's folder in the ldflags",
+     lambda c: c["builds"][0]["ldflags"].append("-X github.com/cyfr/codex/cmd.proofReleases=/tmp/releases")),
 ]
 
 
