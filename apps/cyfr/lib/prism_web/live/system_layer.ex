@@ -2908,7 +2908,7 @@ defmodule PrismWeb.SystemLayer do
                   # A sentence of up to some four hundred characters, which a
                   # phone holds above the choices; a name is one word as long
                   # as the line at most.
-                  do: "min-w-0 text-base font-semibold [overflow-wrap:anywhere] focus:outline-none",
+                  do: "min-w-0 text-base font-normal [overflow-wrap:anywhere] focus:outline-none",
                   else: "text-lg font-semibold focus:outline-none"
               }
             >

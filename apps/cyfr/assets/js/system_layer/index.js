@@ -77,7 +77,7 @@ import {initial, transition} from "./state.js"
  * into a prompt stay in it: none drives the page behind it.
  */
 
-const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]"
+const FOCUSABLE = "a[href], button, input, select, summary, textarea, [tabindex]"
 
 // ---------------------------------------------------------------------------
 // The frames, hidden while any layer on the page has a modal prompt open
@@ -215,6 +215,11 @@ export default {
     globalThis.document.addEventListener("pointerlockchange", this.onEscalated)
 
     localTimes(this.dialog)
+    countdowns(this.dialog)
+    // A question's time left moves each second here, in the browser: the
+    // server sent its deadline once. The ticker never holds a process open.
+    this.ticker = setInterval(() => countdowns(this.dialog), 1000)
+    if (this.ticker && typeof this.ticker.unref === "function") this.ticker.unref()
     this.sync()
   },
 
@@ -222,6 +227,7 @@ export default {
     if (this.el.dataset.account) return
     this.dialog = this.el.querySelector("dialog")
     localTimes(this.dialog)
+    countdowns(this.dialog)
     this.sync()
   },
 
@@ -231,6 +237,7 @@ export default {
     // A layer that goes covers nothing and does nothing more: its state
     // machine ends, and a fullscreen exit still settling finds it gone.
     this.gone = true
+    clearInterval(this.ticker)
     this.layer = {...initial, attempt: this.layer ? this.layer.attempt + 1 : 0}
     this.cover(false)
     this.dialog.removeEventListener("cancel", this.onCancel)
@@ -444,6 +451,35 @@ function clock(at, now, locale) {
 }
 
 /**
+ * How long a deadline still is from `now`, as a person reads a countdown:
+ * minutes and seconds ("9:41 left"), hours first only when there are any
+ * ("1:02:03 left"), and "0:00 left" from the deadline on.
+ */
+export function countdown(deadline, now) {
+  const left = Math.max(0, Math.floor((deadline - now) / 1000))
+  const hours = Math.floor(left / 3600)
+  const minutes = Math.floor((left % 3600) / 60)
+  const seconds = String(left % 60).padStart(2, "0")
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds} left`
+    : `${minutes}:${seconds} left`
+}
+
+/**
+ * Write each `time[data-countdown]` under `root` as the time left until its
+ * `datetime` (`countdown/2`), touching only a text that changed.
+ */
+export function countdowns(root, now = Date.now()) {
+  if (!root || typeof root.querySelectorAll !== "function") return
+  for (const time of root.querySelectorAll("time[data-countdown]")) {
+    const at = Date.parse(time.getAttribute("datetime"))
+    if (Number.isNaN(at)) continue
+    const text = countdown(at, now)
+    if (time.textContent !== text) time.textContent = text
+  }
+}
+
+/**
  * A page's own `time[data-local]` shown in the browser's time zone, as the
  * layer shows its prompts' (`localTimes/2`): on mount and on every update.
  */
@@ -536,8 +572,17 @@ function describe(element) {
   return {
     tabIndex: element.tabIndex,
     disabled: Boolean(element.disabled),
-    hidden: element.type === "hidden" || Boolean(element.hidden)
+    hidden: element.type === "hidden" || Boolean(element.hidden) || folded(element)
   }
+}
+
+// Inside a closed `details` and not its own summary: not drawn, so no stop
+// (a question card's Details holds its operation's block).
+function folded(element) {
+  const details = typeof element.closest === "function" ? element.closest("details:not([open])") : null
+  if (!details) return false
+  const summary = details.querySelector(":scope > summary")
+  return !(summary && (summary === element || summary.contains(element)))
 }
 
 // Leave fullscreen and answer once the exit settled, or at once when the

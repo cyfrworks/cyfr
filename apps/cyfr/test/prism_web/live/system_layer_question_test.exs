@@ -251,8 +251,8 @@ defmodule PrismWeb.SystemLayerQuestionTest do
                  "You are trying to use tables to delete a table"
                )
 
-        assert has_element?(view, ~s([data-test="question-component"]), "tables")
-        assert has_element?(view, ~s([data-test="question-publisher"]), "local")
+        assert has_element?(view, ~s([data-test="question-component"]), "local.tables")
+        assert has_element?(view, ~s([data-test="question-started-by"]), "you")
 
         frame =
           view
@@ -263,8 +263,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
           |> String.split()
           |> Enum.join(" ")
 
-        assert frame =~ ~r/^tables is from local · waits until \S+/
-        refute frame =~ "started by"
+        assert frame =~ ~r/^Started by you Component local\.tables Waits until \S+/
 
         assert has_element?(
                  view,
@@ -314,7 +313,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert [heading] = find(render(view), "[data-focus-first]")
       assert LazyHTML.tag(heading) == ["h2"]
       assert LazyHTML.attribute(heading, "tabindex") == ["-1"]
-      assert LazyHTML.text(heading) =~ "trying to use tables to delete a table"
+      assert heading(view) =~ "trying to use tables to delete a table"
       end_views()
     end
 
@@ -366,10 +365,83 @@ defmodule PrismWeb.SystemLayerQuestionTest do
                                             |> hd()
                                             |> String.split())
 
-      [line] = find(html, ~s([data-test="question-frame"]))
-      line = line |> LazyHTML.attribute("class") |> hd() |> String.split()
-      assert "[overflow-wrap:anywhere]" in line
-      refute "break-all" in line
+      # The full names in Details wrap at a word, as the sentence does.
+      for hook <- ~w(question-started-by question-component) do
+        [name] = find(html, ~s([data-test="#{hook}"]))
+        name = name |> LazyHTML.attribute("class") |> hd() |> String.split()
+        assert "[overflow-wrap:anywhere]" in name
+        refute "break-all" in name
+      end
+
+      end_views()
+    end
+
+    test "keeps its operation, full names and deadline behind Details, closed on each new card " <>
+           "and left as the person sets it through every re-render, with the time left beside it",
+         setup do
+      view = screen!(setup)
+      {first_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+      html = render(view)
+
+      [details] = find(html, ~s(details[data-test="question-details"]))
+      assert LazyHTML.attribute(details, "open") == []
+      assert details |> find("summary") |> hd() |> LazyHTML.text() |> String.trim() == "Details"
+
+      for hook <-
+            ~w(question-block question-started-by question-component question-deadline question-operation),
+          do: assert(length(find(details, ~s([data-test="#{hook}"]))) == 1, hook)
+
+      # The browser's `open` is the person's: no patch of the card sets it.
+      [mounted] = LazyHTML.attribute(details, "phx-mounted")
+      assert mounted =~ "ignore_attrs"
+      assert mounted =~ ~s("open")
+      [id] = LazyHTML.attribute(details, "id")
+
+      # The time left, outside Details, from the deadline the card carries.
+      deadline = DateTime.to_iso8601(Q.row(setup.ctx, ref).deadline)
+      [countdown] = find(html, ~s(time[data-test="question-countdown"][data-countdown]))
+      assert LazyHTML.attribute(countdown, "datetime") == [deadline]
+      assert find(details, ~s([data-test="question-countdown"])) == []
+
+      # Another card queuing behind re-renders this one: the same Details.
+      {_second_run, second} = Q.open!(setup.ctx, setup.component)
+
+      wait_until(
+        fn -> length(layer_assigns(view).queue) == 1 end,
+        2_000,
+        "the second card queued"
+      )
+
+      [again] = find(render(view), ~s(details[data-test="question-details"]))
+      assert LazyHTML.attribute(again, "id") == [id]
+
+      # The next card is a new Details, closed again.
+      Q.end!(setup.ctx, first_run, :withdrawn)
+      shows!(view, Prompt.question_id(second), "the second card")
+      [next] = find(render(view), ~s(details[data-test="question-details"]))
+      refute LazyHTML.attribute(next, "id") == [id]
+      assert LazyHTML.attribute(next, "open") == []
+      end_views()
+    end
+
+    test "takes focus on its sentence, then Tab to the cross, Details, its operation and the groups",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+
+      # In document order, which is the order Tab takes: the sentence the
+      # browser half focuses first, then each stop.
+      stops =
+        render(view)
+        |> find("#system-layer-dialog :is(button, summary, [tabindex])")
+        |> Enum.map(&(List.first(LazyHTML.attribute(&1, "data-test")) || hd(LazyHTML.tag(&1))))
+
+      assert ["h2", "question-close", "summary", "question-block", "question-choice" | choices] =
+               stops
+
+      assert Enum.uniq(choices) == ["question-choice"]
       end_views()
     end
 
@@ -436,15 +508,19 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       known =
         ~w(deny_always_this_caller allow_once allow_hour_this_caller allow_always_this_caller)
 
-      for {caller, words, headline, row} <- [
-            {"person", "you", "You are trying to use tables to delete a table", known},
-            {"agent:aqua", "the assistant aqua",
-             "The assistant aqua is trying to use tables to delete a table", known},
-            {"tincture:local.board", "the app local.board",
-             "The app local.board is trying to use tables to delete a table", known},
+      # Each caller: its full words (Details), its name in the sentence and
+      # in its group (italic), the sentence, and its row.
+      for {caller, words, name, group_word, headline, row} <- [
+            {"person", "you", nil, nil, "You are trying to use tables to delete a table", known},
+            {"agent:aqua", "the assistant aqua", "aqua", "aqua",
+             "aqua is trying to use tables to delete a table", known},
+            {"tincture:local.board", "the app local.board", "board", "board",
+             "board is trying to use tables to delete a table", known},
             {"device:pcl_0123456789abcdef", "a paired device (…abcdef)",
+             "A paired device (…abcdef)", "a paired device (…abcdef)",
              "A paired device (…abcdef) is trying to use tables to delete a table", known},
-            {"unknown", "someone CYFR does not know",
+            {"unknown", "someone CYFR does not know", "Someone CYFR does not know",
+             "someone CYFR does not know",
              "Someone CYFR does not know is trying to use tables to delete a table",
              ["allow_once"]}
           ] do
@@ -460,15 +536,36 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         assert heading(view) ==
                  headline <> " and it will drop the table users in the project acme."
 
-        refute has_element?(view, ~s([data-test="question-frame"]), words)
-        assert has_element?(view, ~s([data-test="question-frame"]), "tables is from local")
+        # The caller's own name, in italics; the card's words for one with
+        # none, the same way; and its full name in Details.
+        html = render(view)
+
+        assert Enum.map(
+                 find(html, ~s(#system-layer-title em[data-test="question-caller"])),
+                 &LazyHTML.text/1
+               ) ==
+                 List.wrap(name)
+
+        assert [component] =
+                 find(html, ~s(#system-layer-title strong[data-test="question-component-name"]))
+
+        assert LazyHTML.text(component) == "tables"
+        [started_by] = find(html, ~s([data-test="question-started-by"]))
+        assert String.trim(LazyHTML.text(started_by)) == words
+        assert has_element?(view, ~s([data-test="question-component"]), "local.tables")
         # The row is a group named by its heading, holding the row's
         # buttons and not the answer for anyone below it.
         html = render(view)
         [group] = find(html, ~s([data-test="question-caller-row"]))
         assert LazyHTML.tag(group) == ["fieldset"]
         [legend] = find(html, ~s(fieldset[data-test="question-caller-row"] > legend))
-        assert String.trim(LazyHTML.text(legend)) == "For #{words}"
+
+        assert legend |> LazyHTML.text() |> String.split() |> Enum.join(" ") ==
+                 "For #{group_word || "you"}"
+
+        assert Enum.map(find(legend, ~s(em[data-test="question-group-caller"])), &LazyHTML.text/1) ==
+                 List.wrap(group_word)
+
         assert Enum.map(find(group, "button"), &hd(LazyHTML.attribute(&1, "data-choice"))) == row
         assert row_offered(view) == row
         assert offered(view) == row ++ ["allow_always_any_caller"]
@@ -791,11 +888,13 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       [summary] = find(html, ~s(#system-layer-title [data-test="question-summary"]))
       assert LazyHTML.text(title) == "delete a table"
       assert LazyHTML.text(summary) == imitation
-      # One way of drawing both, which is not the heading's own.
+      # One way of drawing both, which is not the heading's own: CYFR's
+      # words are plain weight, its names apart in italics and bold.
       assert LazyHTML.attribute(title, "class") == LazyHTML.attribute(summary, "class")
-      assert hd(LazyHTML.attribute(summary, "class")) =~ "font-normal"
+      assert hd(LazyHTML.attribute(summary, "class")) =~ "text-amber-100"
       [h2] = find(html, "#system-layer-title")
-      refute hd(LazyHTML.attribute(h2, "class")) =~ "font-normal"
+      assert "font-normal" in String.split(hd(LazyHTML.attribute(h2, "class")))
+      refute hd(LazyHTML.attribute(h2, "class")) =~ "text-amber-100"
       # Plain text: nothing in the heading is a control.
       assert find(h2, "button") == []
       assert heading(view) =~ "to delete a table and it will nothing. CYFR has checked this"

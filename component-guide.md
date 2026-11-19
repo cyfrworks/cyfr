@@ -1025,11 +1025,11 @@ A catalyst that never imports the interface is unchanged by it.
 
 ### `cyfr:question/ask` — asking before an action
 
-A catalyst can ask its person before it does something it cannot undo, such as dropping a table, and wait for the answer. CYFR draws the question as a card above whatever the person has open. Its heading is one sentence of CYFR's around your words, which it draws apart from its own:
+A catalyst can ask its person before it does something it cannot undo, such as dropping a table, and wait for the answer. CYFR draws the question as a card above whatever the person has open. Its heading is one sentence of CYFR's around two names and your words:
 
-> The assistant aqua is trying to use supabase to **delete a table** and it will **drop the table users in the project acme**.
+> *aqua* is trying to use **supabase** to delete a table and it will drop the table users in the project acme.
 
-CYFR writes who started the run ("You are", "The assistant aqua is"), "trying to use", your component's name, "to", "and it will" and the full stop; your action's title and this run's summary fill the rest. Under the sentence your operation stands in a block of its own, then your publisher and until when the card waits. Asked "Allow this?", the person answers for whoever started the run, *Never*, *Just once*, *For an hour* or *Always*, or for everyone, *Always*, which asks for their passkey. Closing the card refuses once. An answer that lasts stands as a permission for that action, listed on your component's page, where the person can also answer before any card has appeared.
+CYFR writes who started the run by its short name in italics ("You are", "*aqua* is", "*my-board* is"), "trying to use", your component's name in bold, "to", "and it will" and the full stop; your action's title and this run's summary fill the rest, drawn apart from CYFR's words in a colour of their own, as plain text: CYFR reads no markup in them. Under the sentence, beside a countdown of how long the card still waits, *Details* opens to your operation in a block of its own, then who started it and your component by their full names with their publishers, and the time the card waits until. Asked "Allow this?", the person answers for whoever started the run, *Never*, *Just once*, *For an hour* or *Always*, or for everyone, *Always*, which asks for their passkey. Closing the card refuses once. An answer that lasts stands as a permission for that action, listed on your component's page, where the person can also answer before any card has appeared.
 
 **You write the prompt.** Which actions your component has, what each is called, when it asks and what its summary and operation say are yours to define: CYFR adds only the frame. Everything below is about writing those words well.
 

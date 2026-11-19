@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import SystemLayer, {LocalTimes, clearAllMarked, clearForms, clearMarked, hop, localTimes, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
+import SystemLayer, {LocalTimes, clearAllMarked, countdown, countdowns, clearForms, clearMarked, hop, localTimes, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
 
 // A document with a frame in fullscreen and pointer lock. Every call the
 // hook makes on it, and on the dialog, is recorded in `calls`, in order.
@@ -65,8 +65,8 @@ function fakeDialog(doc, calls, controls) {
       calls.push("close")
       dialog.open = false
     },
-    // The prompt's controls; it holds no time to show in local time.
-    querySelectorAll: (selector) => (selector === "time[data-local]" ? [] : controls),
+    // The prompt's controls; it holds no time to show in local time or count down.
+    querySelectorAll: (selector) => (selector.startsWith("time[") ? [] : controls),
     // The element the prompt marks for its first focus, if any.
     marked: null,
     querySelector: (selector) => (selector === "[data-focus-first]" ? dialog.marked : null)
@@ -199,6 +199,28 @@ describe("focus", () => {
     doc.activeElement = doc.frame
     tab(false)
     assert.equal(doc.activeElement.name, "secret", "focus outside the prompt is brought back in")
+  })
+
+  test("a question's Details is a stop, and what it holds is one only while it is open", async () => {
+    const details = {open: false, querySelector: (selector) => (selector === ":scope > summary" ? summary : null)}
+    const inside = () => (details.open ? null : details)
+    const summary = control(doc, "details", {closest: inside, contains: (element) => element === summary})
+    const block = control(doc, "block", {closest: inside})
+    controls.splice(0, controls.length, control(doc, "close"), summary, block, control(doc, "never"))
+    const asked = []
+    const all = dialog.querySelectorAll
+    dialog.querySelectorAll = (selector) => (asked.push(selector), all(selector))
+    await shown()
+
+    doc.activeElement = summary
+    tab(false)
+    assert.equal(doc.activeElement.name, "never", "a closed Details' operation is no stop")
+    assert.ok(asked.some((selector) => selector.split(", ").includes("summary")), "a summary is asked for as a stop")
+
+    details.open = true
+    doc.activeElement = summary
+    tab(false)
+    assert.equal(doc.activeElement.name, "block", "an open Details' operation is the next stop")
   })
 
   test("focus returns to where it was when the prompt closes", async () => {
@@ -916,6 +938,34 @@ describe("times", () => {
     // ICU's spacing before AM/PM differs between releases: the hour is read, not the space.
     assert.match(today.textContent, /^4:14\s?PM$/u)
     assert.match(tomorrow.textContent, /^Nov 20, 12:05\s?AM$/u)
+  })
+
+  test("a question's countdown reads the time left until its deadline, and stays at zero past it", () => {
+    const deadline = Date.UTC(2026, 10, 19, 10, 0, 0)
+    for (const [secondsBefore, text] of [
+      [581, "9:41 left"],
+      [600, "10:00 left"],
+      [59.5, "0:59 left"],
+      [3723, "1:02:03 left"],
+      [1, "0:01 left"],
+      [0, "0:00 left"],
+      [-5, "0:00 left"]
+    ]) assert.equal(countdown(deadline, deadline - secondsBefore * 1000), text, String(secondsBefore))
+  })
+
+  test("each countdown the layer marks is written from its deadline on a fixed clock, and any other is left", () => {
+    const at = "2026-11-19T10:00:00Z"
+    const make = (datetime) => ({attrs: {datetime, "data-countdown": ""}, textContent: "", getAttribute(name) { return this.attrs[name] }})
+    const marked = make(at)
+    const unreadable = make("soon")
+    const asked = []
+    const root = {querySelectorAll: (selector) => (asked.push(selector), [marked, unreadable])}
+    countdowns(root, Date.parse(at) - 125000)
+    assert.deepEqual(asked, ["time[data-countdown]"])
+    assert.equal(marked.textContent, "2:05 left")
+    assert.equal(unreadable.textContent, "")
+    countdowns(root, Date.parse(at) - 124000)
+    assert.equal(marked.textContent, "2:04 left")
   })
 
   test("a page's own times are shown in the browser's own zone when it mounts and on every update", () => {

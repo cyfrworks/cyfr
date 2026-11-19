@@ -7,26 +7,32 @@ defmodule PrismWeb.SystemLayer.Question do
   layer does: a frame of CYFR's own around the component's words.
 
   The frame is fixed in place. Its heading is one sentence of CYFR's
-  around the developer's words (`headline/1`): who started the run
-  (`caller_words/1`), "is trying to use" the component's name, "to" the
+  around the names and the developer's words (`headline/1`): who started
+  the run by its short name in italics (`name/1`), "is trying to use"
+  the component's name in bold, "to" the
   action's title its manifest declares, the words an answer that lasts is
   kept for, "and it will" this run's summary, and a full stop, so a person
   reads first who asks and for what. The title and the summary are drawn
   apart from CYFR's words, so a summary that reads like CYFR speaking is
-  still seen as the component's. Under it, the component's block: its
-  exact operation alone, as plain escaped text with its line breaks kept,
-  set apart by its own border, in a region of a fixed height that scrolls
-  on its own, named for a screen reader as what the component says it
-  will run, and breaks any line, so no length of text moves the frame or
-  the choices, and text that reads like a button stays text inside the
-  block. Masking is said. Then one line of the component's name and
+  still seen as the component's. Under it, Details, closed as each card
+  opens and left as the person sets it while the card is shown, and
+  beside it the time the question still waits, which the browser counts
+  down each second from the deadline. Opened, Details shows the
+  component's block: its exact operation alone, as plain escaped text
+  with its line breaks kept, set apart by its own border, in a region of
+  a fixed height that scrolls on its own, named for a screen reader as
+  what the component says it will run, and breaks any line, so no length
+  of text moves the frame or the choices, and text that reads like a
+  button stays text inside the block. Masking is said. Then, each with
+  its label, the full names the sentence shortens: who started it by its
+  kind and publisher (`caller_words/1`), the component with its
   publisher, so a component named like CYFR is seen for what it is, and
   until when it waits, in the person's own time, with the date only when
   it is not today.
 
   The choices (`offered/1`, each named for the answer it sends,
   `answer/1`), under "Allow this?": a group named for the caller that
-  started the run ("For you"), of Never, Just once, For an hour and
+  started the run ("For you", "For *q-asker*"), of Never, Just once, For an hour and
   Always, the three that last covering that caller alone; and a group
   "For everyone" of one button, Always, which covers every caller and
   asks for the person's passkey, a fresh confirmation drawn inside the
@@ -47,6 +53,7 @@ defmodule PrismWeb.SystemLayer.Question do
 
   use Phoenix.Component
 
+  alias Phoenix.LiveView.JS
   alias Prima.Question.Caller
 
   # How long "For an hour" lasts.
@@ -121,22 +128,25 @@ defmodule PrismWeb.SystemLayer.Question do
   attr :subject, :map, required: true
 
   @doc """
-  The card's heading, one sentence of CYFR's around the developer's words:
-  who started the run as `caller_words/1` says it, with a capital, "is
-  trying to use" the component's name, "to" the action's declared title,
-  the words an answer that lasts is kept for, "and it will" this run's
-  summary, and a full stop when the summary ends with none. The person
-  who started it reads "You are trying to use". The title and the summary
-  are drawn apart from CYFR's words, in one way for both, so a summary
-  that reads like CYFR speaking is still seen as the component's, and
-  stay plain escaped text, so nothing in them is a control.
+  The card's heading, one sentence of CYFR's around the names and the
+  developer's words: who started the run by its short name in italics
+  (`name/1`), "is trying to use" the component's name in bold, "to" the
+  action's declared title, the words an answer that lasts is kept for,
+  "and it will" this run's summary, and a full stop when the summary ends
+  with none. The person who started it reads "You are trying to use".
+  CYFR's own words are plain weight; the title and the summary are drawn
+  apart from them, in one way for both, so a summary that reads like
+  CYFR speaking is still seen as the component's. Every part is plain
+  escaped text: nothing in a component's words is read as markup.
   """
   def headline(assigns) do
     summary = assigns.subject.summary
+    {caller, verb} = subject(name(assigns.subject.caller))
 
     assigns =
       assign(assigns,
-        who: who(assigns.subject.caller),
+        caller: caller,
+        verb: verb,
         summary: summary,
         # CYFR's words between the title and the summary, when there is one.
         joined: if(summary != "", do: " and it will "),
@@ -145,7 +155,12 @@ defmodule PrismWeb.SystemLayer.Question do
       )
 
     ~H"""
-    {@who} trying to use {@subject.name} to <span
+    <em :if={@caller} class="italic" data-test="question-caller">{@caller}</em>{@verb} trying to use
+    <strong
+      class="font-bold"
+      data-test="question-component-name"
+    >{@subject.name}</strong>
+    to <span
       class={@developer}
       data-test="question-title"
     >{@subject.title}</span>{@joined}<span
@@ -156,11 +171,26 @@ defmodule PrismWeb.SystemLayer.Question do
     """
   end
 
-  # The sentence's subject and its verb: "You are", "The app local.board is".
-  defp who(caller) do
-    case caller_words(caller) do
-      "you" -> "You are"
-      words -> capital(words) <> " is"
+  # The sentence's subject and its verb: "You are", or the caller's name,
+  # drawn apart, then " is". The card's own words for a caller start the
+  # sentence with a capital; a caller's own name is written as it is.
+  defp subject(:you), do: {nil, "You are"}
+  defp subject({:named, name}), do: {name, " is"}
+  defp subject({:words, words}), do: {capital(words), " is"}
+
+  @doc """
+  Who started a run, by the name a person knows it by: `:you`; an app or
+  an assistant by its own name alone (`{:named, "q-asker"}`), which
+  Details names in full (`caller_words/1`); and a caller with no name of
+  its own by the card's words for it (`{:words, "a schedule (…abc123)"}`).
+  """
+  @spec name(String.t()) :: :you | {:named, String.t()} | {:words, String.t()}
+  def name(text) do
+    case Caller.decode(text) do
+      {:ok, :person} -> :you
+      {:ok, {:agent, name}} -> {:named, name}
+      {:ok, {:tincture, ref}} -> {:named, ref |> String.split(".", parts: 2) |> List.last()}
+      _other -> {:words, caller_words(text)}
     end
   end
 
@@ -208,51 +238,95 @@ defmodule PrismWeb.SystemLayer.Question do
   attr :prompt, :map, required: true
 
   @doc """
-  The component's block, the exact operation of this one run, then the
-  frame's line: who published the component and until when it waits, in
-  the person's own time, on one line that wraps at a word.
+  Details, holding the component's block, the exact operation of this one
+  run, and the frame's line: who published the component and until when
+  it waits, in the person's own time, on one line that wraps at a word;
+  and beside it the time left.
   """
   def card(assigns) do
     assigns = assign(assigns, :subject, assigns.prompt.subject)
 
     ~H"""
-    <section class="space-y-3" data-test="question" data-ref={@subject.ref}>
-      <%!-- Set apart by its own border, scroll and plain text, so the
-        component's words never pass for CYFR's or for a button. --%>
-      <div
-        class="rounded-md border border-dashed border-gray-600 bg-gray-950 p-3"
-        data-test="question-words"
-      >
-        <div
-          class="max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
-          tabindex="0"
-          role="region"
-          aria-label={"What #{@subject.name} says it will run"}
-          data-test="question-block"
+    <section data-test="question" data-ref={@subject.ref}>
+      <div class="relative">
+        <%!-- Closed as each card opens: a new question is a new element (its
+          ref in its id), and once the person opens or closes it the
+          browser's `open` is theirs, kept through every patch of the card. --%>
+        <details
+          id={"question-details-#{@subject.ref}"}
+          phx-mounted={JS.ignore_attributes(["open"])}
+          data-test="question-details"
         >
-          <pre
-            class="whitespace-pre-wrap font-mono text-xs text-gray-200"
-            data-test="question-operation"
-          >{@subject.operation}</pre>
-        </div>
-        <p :if={@subject.masked} class="mt-2 text-xs text-gray-400" data-test="question-masked">
-          CYFR hid credentials it gave this run from these words.
-        </p>
-      </div>
+          <summary class="cursor-pointer rounded py-2 pr-24 text-sm text-gray-300 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
+            Details
+          </summary>
+          <div class="space-y-3 pt-1">
+            <%!-- Set apart by its own border, scroll and plain text, so the
+              component's words never pass for CYFR's or for a button. --%>
+            <div
+              class="rounded-md border border-dashed border-gray-600 bg-gray-950 p-3"
+              data-test="question-words"
+            >
+              <div
+                class="max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
+                tabindex="0"
+                role="region"
+                aria-label={"What #{@subject.name} says it will run"}
+                data-test="question-block"
+              >
+                <pre
+                  class="whitespace-pre-wrap font-mono text-xs text-gray-200"
+                  data-test="question-operation"
+                >{@subject.operation}</pre>
+              </div>
+              <p
+                :if={@subject.masked}
+                class="mt-2 text-xs text-gray-400"
+                data-test="question-masked"
+              >
+                CYFR hid credentials it gave this run from these words.
+              </p>
+            </div>
 
-      <p class="text-sm text-gray-300 [overflow-wrap:anywhere]" data-test="question-frame">
-        <span data-test="question-component">{@subject.name}</span>
-        is from <span data-test="question-publisher">{@subject.publisher}</span>
-        · waits until
+            <%!-- The full names the sentence shortens: who started it, by its
+              kind and publisher, and the component with its publisher, so a
+              component named like CYFR is seen for what it is. --%>
+            <dl
+              class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm text-gray-300"
+              data-test="question-frame"
+            >
+              <dt class="text-gray-400">Started by</dt>
+              <dd class="[overflow-wrap:anywhere]" data-test="question-started-by">
+                {caller_words(@subject.caller)}
+              </dd>
+              <dt class="text-gray-400">Component</dt>
+              <dd class="[overflow-wrap:anywhere]" data-test="question-component">
+                {@subject.publisher}.{@subject.name}
+              </dd>
+              <dt class="text-gray-400">Waits until</dt>
+              <dd>
+                <time
+                  datetime={DateTime.to_iso8601(@subject.deadline)}
+                  data-local="clock"
+                  data-test="question-deadline"
+                  class="whitespace-nowrap"
+                >
+                  {DateTime.to_iso8601(@subject.deadline)}
+                </time>
+              </dd>
+            </dl>
+          </div>
+        </details>
+        <%!-- How long it still waits, which the layer's script counts down
+          each second; plain text, read once where a screen reader reaches
+          it, never announced as it changes. --%>
         <time
           datetime={DateTime.to_iso8601(@subject.deadline)}
-          data-local="clock"
-          data-test="question-deadline"
-          class="whitespace-nowrap"
-        >
-          {DateTime.to_iso8601(@subject.deadline)}
-        </time>
-      </p>
+          data-countdown
+          data-test="question-countdown"
+          class="absolute right-0 top-0 py-2 text-xs tabular-nums text-gray-400"
+        ></time>
+      </div>
     </section>
     """
   end
@@ -283,7 +357,7 @@ defmodule PrismWeb.SystemLayer.Question do
 
       <fieldset class="min-w-0 border-0 p-0" data-test="question-caller-row">
         <legend class="mb-2 text-sm text-gray-300 [overflow-wrap:anywhere]">
-          For {caller_words(@prompt.subject.caller)}
+          <.group_name caller={@prompt.subject.caller} />
         </legend>
         <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-nowrap">
           <.option
@@ -318,6 +392,25 @@ defmodule PrismWeb.SystemLayer.Question do
         </fieldset>
       </div>
     </div>
+    """
+  end
+
+  attr :caller, :string, required: true
+
+  # The caller's group's name: "For you", or "For" and the caller's name in
+  # italics, as the sentence draws it.
+  defp group_name(assigns) do
+    {name, you} =
+      case name(assigns.caller) do
+        :you -> {nil, "you"}
+        {:named, name} -> {name, nil}
+        {:words, words} -> {words, nil}
+      end
+
+    assigns = assign(assigns, name: name, you: you)
+
+    ~H"""
+    For {@you}<em :if={@name} class="italic" data-test="question-group-caller">{@name}</em>
     """
   end
 
