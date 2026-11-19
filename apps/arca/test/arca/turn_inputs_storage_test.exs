@@ -99,6 +99,25 @@ defmodule Arca.TurnInputsStorageTest do
     step
   end
 
+  # The turn paused around a launch it handed to a person.
+  defp launch_paused!(actor, turn) do
+    {:ok, launch} =
+      TurnStorage.put_step(actor, turn.id, %{
+        kind: "launch",
+        idempotency_key: "launch:1",
+        fence: turn.fence
+      })
+
+    {:ok, paused} =
+      TurnStorage.pause(actor, turn.id, %{
+        fence: turn.fence,
+        reason: "launch",
+        launch_step_id: launch.id
+      })
+
+    paused
+  end
+
   # A person's post into the running turn.
   defp steer!(actor, thread, turn, content) do
     {:ok, %{message: row}} =
@@ -233,8 +252,8 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:error, :not_running} = carry(actor, turn, "post", later)
   end
 
-  test "a turn paused on its own program.start's card is written nothing; one paused on an " <>
-         "ask's card takes a post or an answer, never a notice",
+  test "a turn whose own program.start is still proposed is written nothing; one paused " <>
+         "around a launch takes a post or an answer, never a notice",
        %{actor: actor, daily: daily, turn: first} do
     {:ok, _} = finish(actor, first, "cancelled")
     carded = running!(actor, daily)
@@ -245,7 +264,7 @@ defmodule Arca.TurnInputsStorageTest do
     turn = running!(actor, daily)
     _start = start!(actor, turn)
     row = opening(actor, turn)
-    {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
+    paused = launch_paused!(actor, turn)
     assert paused.status == "paused"
 
     assert {:ok, %{step: step}} = carry(actor, paused, "post", row)
@@ -341,7 +360,7 @@ defmodule Arca.TurnInputsStorageTest do
     assert %TurnStep{purpose: "brain", dispatch_state: "proposed", tool: "files"} = step(first.id)
     assert %Message{kind: "tool_call"} = Arca.Repo.get!(Message, step(first.id).message_id)
 
-    {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
+    paused = launch_paused!(actor, turn)
     assert {:ok, %{asks: [held]}} = commit(actor, daily, paused, %{asks: [ask.("toolu_2")]})
     assert step(held.id).dispatch_state == "proposed"
     assert fresh(actor, turn).status == "paused"

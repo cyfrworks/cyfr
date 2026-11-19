@@ -917,11 +917,6 @@ defmodule Aqua.CrewTest do
 
     assert %{content: content} = row(ctx, rid)
     assert content =~ "The browser was not found."
-
-    for turn_id <- [off, on] do
-      {:ok, turn} = Tape.turn(ctx, turn_id)
-      assert {:ok, []} = TurnStorage.pending_approvals(actor(ctx), turn.id)
-    end
   end
 
   describe "a delivery that steers a turn a direct post opened" do
@@ -1078,8 +1073,6 @@ defmodule Aqua.CrewTest do
     assert %{outcome: "ok", approval_id: nil, child_execution_id: ^root} =
              Enum.find(steps, &(&1.kind == "launch"))
 
-    assert {:ok, []} = TurnStorage.pending_approvals(actor(ctx), turn.id)
-
     {:ok, turn} = Tape.turn(ctx, second)
     {:ok, steps} = Tape.steps(ctx, turn)
 
@@ -1087,7 +1080,6 @@ defmodule Aqua.CrewTest do
              Enum.find(steps, &(&1.kind == "launch"))
 
     assert said == "execution.run is outside the tools this job was narrowed to"
-    assert {:ok, []} = TurnStorage.pending_approvals(actor(ctx), turn.id)
     assert runs_of(ctx, app) == [root]
   end
 
@@ -1106,7 +1098,6 @@ defmodule Aqua.CrewTest do
     {:ok, turn} = Tape.turn(ctx, turn_id)
     {:ok, steps} = Tape.steps(ctx, turn)
     assert %{outcome: "denied", approval_id: nil} = Enum.find(steps, &(&1.action == "keep"))
-    assert {:ok, []} = TurnStorage.pending_approvals(actor(ctx), turn.id)
   end
 
   test "retiring cancels every open turn in its own transaction, the running one included, and leaves none open",

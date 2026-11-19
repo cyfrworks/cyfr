@@ -235,9 +235,8 @@ defmodule Arca.McpServerStorage do
   In one transaction the row is locked, every profile whose head stands
   on it is blocked to ask again (`Arca.ConsentStorage.head_profiles_on_row/2`
   through `block_dependents/4`, the order a revision binding the row
-  takes), every standing answer constrained to the row goes
-  (`Arca.ToolGrantStorage.delete_on_program_row/2`), and then the row is
-  deleted; a login need's bindings go with it (the baseline's cascade).
+  takes), and then the row is deleted; a login need's bindings go with it
+  (the baseline's cascade).
 
   With `expected` (`%{id, epoch}`, the row a person confirmed removing),
   the row under `name` must still be that row at that epoch, compared
@@ -261,7 +260,6 @@ defmodule Arca.McpServerStorage do
                  [],
                  Arca.StatusTransitions.blocked_profile_status()
                ),
-             {:ok, _ended} <- Arca.ToolGrantStorage.delete_on_program_row(actor, id),
              {1, [server]} <-
                Arca.Repo.delete_all(
                  from(s in McpServer, where: s.id == ^id, select: s)
@@ -307,10 +305,7 @@ defmodule Arca.McpServerStorage do
   @doc """
   Update fields of a server config (`:transport`, `:url`, `:config_json`,
   `:enabled` and the program columns, `@program_columns`) and raise its
-  epoch, in one transaction under the row's lock. A write that changes
-  anything but `enabled` also ends every standing answer constrained to
-  the row (`Arca.ToolGrantStorage.delete_on_program_row/2`), as a
-  profile's grant on it asks again when its definition's digest moves.
+  epoch, in one transaction under the row's lock.
 
   With `expected` (`%{id, epoch}`, the row the caller read and a person
   confirmed changing), the write happens only while the row under `name`
@@ -355,8 +350,7 @@ defmodule Arca.McpServerStorage do
                  from(s in McpServer, where: s.id == ^id, select: s) |> where_tenant(actor),
                  set: set,
                  inc: [epoch: 1, revision: 1]
-               ),
-             {:ok, _ended} <- end_constrained(actor, row, written) do
+               ) do
           server
         else
           {:error, reason} -> Arca.Repo.rollback(reason)
@@ -367,19 +361,6 @@ defmodule Arca.McpServerStorage do
   end
 
   def update(%Prima.Actor{}, _name, _updates, _expected), do: {:error, :no_athanor}
-
-  # A row's definition moving ends every standing answer constrained to
-  # it, as a profile's grant on it asks again when its digest moves:
-  # whatever but `enabled` the write changes. Enabling or disabling keeps
-  # them.
-  defp end_constrained(actor, row, written) do
-    moved? =
-      Enum.any?(written, fn {column, value} ->
-        column != :enabled and Map.get(row, column) != value
-      end)
-
-    if moved?, do: Arca.ToolGrantStorage.delete_on_program_row(actor, row.id), else: {:ok, 0}
-  end
 
   @doc """
   Raise a row's epoch, found by id in the actor's athanor, with nothing

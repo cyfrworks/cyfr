@@ -413,8 +413,8 @@ defmodule Aqua.StreamsTest do
                  "waits_on_you" => true
                }),
                listed_as(ada, work.id, %{"kind" => "workspace", "title" => "Book the trip"}),
-               # The card is not the person's own line, so it is unread to them.
-               listed_as(ada, carded, %{"kind" => "daily", "title" => carded_title, "unread" => 1}),
+               # The card row is no post, so it is unread to no one.
+               listed_as(ada, carded, %{"kind" => "daily", "title" => carded_title}),
                listed_as(ada, plans, %{"kind" => "daily", "title" => plans_title})
              ]
 

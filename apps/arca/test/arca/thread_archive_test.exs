@@ -132,57 +132,9 @@ defmodule Arca.ThreadArchiveTest do
     started
   end
 
-  # A card in `turn`, as the loop opens one.
-  defp card!(actor, turn, key) do
-    {:ok, model} =
-      TurnStorage.put_step(actor, turn.id, %{
-        kind: "model",
-        idempotency_key: "model:#{key}",
-        fence: turn.fence
-      })
-
-    {:ok, %{calls: [%{step: call}]}} =
-      TurnStorage.record_response(actor, turn.id, model.id, %{
-        fence: turn.fence,
-        text: nil,
-        usage: %{},
-        stop_reason: "tool_call",
-        tool_calls: [
-          %{
-            tool_call_id: key,
-            name: "notes",
-            tool: "notes",
-            action: "keep",
-            arguments: %{},
-            kind: "write",
-            idempotency_key: "call:#{key}",
-            proposal_digest: "sha256:#{key}"
-          }
-        ]
-      })
-
-    {:ok, %{approval: approval}} =
-      TurnStorage.open_approval(actor, call.id, %{
-        proposal_digest: "sha256:#{key}",
-        card: %{content: "Keep the note?"},
-        fence: turn.fence
-      })
-
-    approval
-  end
-
-  defp decline!(actor, turn, approval) do
-    {:ok, _} =
-      TurnStorage.resolve_approval(actor, approval.id, "declined", %{
-        fence: turn.fence,
-        resolution_kind: Prima.TurnState.resolution_kind("declined", "tool"),
-        denied_result: %{content: "declined", payload: %{}}
-      })
-  end
-
-  # A workspace thread that needs its person for one card and has no
-  # other work: its opening no longer waits, and its one turn waits on the
-  # card.
+  # A workspace thread that needs its person and has no other work: its
+  # opening no longer waits, and its one turn reported that its work waits
+  # on the person.
   defp needs_you!(actor, daily) do
     workspace = open!(actor, daily)
 
@@ -190,8 +142,14 @@ defmodule Arca.ThreadArchiveTest do
     |> Arca.Repo.update_all(set: [status: "expired"])
 
     turn = running!(actor, workspace)
-    approval = card!(actor, turn, "keep-#{System.unique_integer([:positive])}")
-    {workspace, turn, approval}
+
+    {:ok, _} =
+      TurnStorage.report_workspace(actor, turn.id, "needs_you", %{
+        fence: turn.fence,
+        summary: "Which date?"
+      })
+
+    workspace
   end
 
   defp archived?(actor, id), do: Threads.archived?(elem(Threads.get(actor, id), 1))
@@ -240,8 +198,8 @@ defmodule Arca.ThreadArchiveTest do
     _running = running!(actor, daily)
     assert {:error, :working} = Threads.archive(actor, daily.id)
 
-    # Needs you for a card while a crew member still works.
-    {waiting, _turn, _approval} = needs_you!(actor, daily)
+    # Needs you by Aqua's report while a crew member still works.
+    waiting = needs_you!(actor, daily)
     assert {:ok, %{workspace_state: "needs_you"}} = Threads.get(actor, waiting.id)
     {:ok, child} = Threads.crew_thread(actor, waiting.id, "planner")
     _crew = running!(actor, child)
@@ -252,14 +210,12 @@ defmodule Arca.ThreadArchiveTest do
     assert {:error, :not_a_room} = Threads.archive(actor, child.id)
   end
 
-  test "a thread that needs its person for a card and has no other work is archived, and the card still waits",
+  test "a thread that needs its person and has no other work is archived, and still needs them",
        %{actor: actor, daily: daily} do
-    {workspace, _turn, approval} = needs_you!(actor, daily)
+    workspace = needs_you!(actor, daily)
 
     assert {:ok, _} = Threads.archive(actor, workspace.id)
     assert {:ok, %{workspace_state: "needs_you"}} = Threads.get(actor, workspace.id)
-    assert [%{id: id}] = Threads.pending_approvals(actor, workspace.id)
-    assert id == approval.message_id
   end
 
   # ---------------------------------------------------------------------------
@@ -304,24 +260,6 @@ defmodule Arca.ThreadArchiveTest do
 
     assert {:ok, %{turn: %{}}} = post(actor, child)
     refute archived?(actor, workspace.id)
-  end
-
-  test "deciding a card resumes its turn and takes its thread out of the archive at once, the crew's room among them",
-       %{actor: actor, daily: daily} do
-    {workspace, turn, approval} = needs_you!(actor, daily)
-    {:ok, _} = Threads.archive(actor, workspace.id)
-    decline!(actor, turn, approval)
-    refute archived?(actor, workspace.id)
-
-    # A crew member's card under a room with no other work: its decision
-    # takes the room out.
-    room = daily |> then(&open!(actor, &1)) |> finished!()
-    {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
-    crew_turn = running!(actor, child)
-    crew_card = card!(actor, crew_turn, "crew-keep")
-    {:ok, _} = Threads.archive(actor, room.id)
-    decline!(actor, crew_turn, crew_card)
-    refute archived?(actor, room.id)
   end
 
   test "a page's call in a crew member's thread is no work: the room is archived by hand and by the setting",
@@ -400,7 +338,7 @@ defmodule Arca.ThreadArchiveTest do
     daily: daily
   } do
     working = open!(actor, daily)
-    {waiting, _turn, _approval} = needs_you!(actor, daily)
+    waiting = needs_you!(actor, daily)
     {:ok, child} = Threads.crew_thread(actor, waiting.id, "planner")
     _crew = running!(actor, child)
     aged!([working.id, waiting.id, child.id], 10)
@@ -551,10 +489,7 @@ defmodule Arca.ThreadArchiveTest do
   @writes [
     post: "a person's post in the thread",
     crew_post: "a post in a crew member's thread under it",
-    opening: "a further opening of the workspace thread",
-    decision: "a decision in the daily thread",
-    workspace_decision: "a decision in the workspace thread",
-    crew_decision: "a decision in a crew member's thread under it"
+    opening: "a further opening of the workspace thread"
   ]
 
   for {write, words} <- @writes,
@@ -627,24 +562,6 @@ defmodule Arca.ThreadArchiveTest do
      fn ->
        TurnStorage.open_workspace(actor, opening(actor, daily, %{workspace_id: workspace.id}))
      end}
-  end
-
-  defp racing(:decision, actor, daily) do
-    turn = running!(actor, daily)
-    card = card!(actor, turn, "race")
-    {daily, fn -> decline!(actor, turn, card) end}
-  end
-
-  defp racing(:workspace_decision, actor, daily) do
-    {workspace, turn, card} = needs_you!(actor, daily)
-    {workspace, fn -> decline!(actor, turn, card) end}
-  end
-
-  defp racing(:crew_decision, actor, daily) do
-    {:ok, crew} = Threads.crew_thread(actor, daily.id, "planner")
-    turn = running!(actor, crew)
-    card = card!(actor, turn, "race")
-    {daily, fn -> decline!(actor, turn, card) end}
   end
 
   defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)

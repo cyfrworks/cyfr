@@ -19,10 +19,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
   the transition once. The shared threads, a pair among them and an
   invitation into one stay as they were. Every device certificate is
   revoked and every paired client suspended, for good: a device comes
-  back by a fresh hello. A home holding no tool grant and no approval,
-  as no turn writes either now, is restored all the same, its result
-  naming none. What the person re-enables is listed in their checklist
-  (`restore_checklist/2`).
+  back by a fresh hello. What the person re-enables is listed in their
+  checklist (`restore_checklist/2`).
   """
 
   use ExUnit.Case, async: false
@@ -268,24 +266,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     ref
   end
 
-  defp grant!(athanor_id, effect) do
-    id = Prima.UUID7.generate_id("tgr")
-
-    insert!(Schemas.ToolGrant, %{
-      id: id,
-      athanor_id: athanor_id,
-      scope: "agent",
-      effect: effect,
-      agent_name: "assistant",
-      tool: "files",
-      action: "read#{uniq()}",
-      granted_at: now(),
-      sources: "[]"
-    })
-
-    id
-  end
-
   defp destination,
     do: ~s({"hosts":["api.example.com"],"scheme":"https"})
 
@@ -420,21 +400,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     id
   end
 
-  defp approval!(athanor_id, turn_id, status) do
-    id = Prima.UUID7.generate_id("apr")
-
-    insert!(Schemas.Approval, %{
-      id: id,
-      athanor_id: athanor_id,
-      turn_id: turn_id,
-      status: status,
-      proposal_digest: "sha256:proposal",
-      inserted_at: now()
-    })
-
-    id
-  end
-
   # An execution with its current attempt, admitted under the athanor's
   # standing as it reads now.
   defp run!(athanor_id, user_id, status, attempt_state) do
@@ -517,9 +482,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
   # A home as a backup holds it: two people, each with their own athanor,
   # Alice the installation's administrator, a shared thread they sit in,
   # their pair and an invitation into the thread, and in every store the
-  # transition moves an active, a blocked and a terminal row;
-  # `grants_and_approvals: false` writes no tool grant and no approval.
-  defp home!(opts \\ []) do
+  # transition moves an active, a blocked and a terminal row.
+  defp home! do
     alice = person!()
     :ok = administrator!(alice.id)
     bob = person!()
@@ -599,16 +563,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       done_execution: done_execution,
       done_attempt: done_attempt
     }
-    |> Map.merge(
-      if Keyword.get(opts, :grants_and_approvals, true),
-        do: %{
-          allow: grant!(own.id, "allow"),
-          deny: grant!(own.id, "deny"),
-          approval: approval!(own.id, open_turn, "pending"),
-          decided_approval: approval!(own.id, open_turn, "approved")
-        },
-        else: %{}
-    )
   end
 
   defp marked! do
@@ -747,11 +701,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Profile, fixture.revoked_profile).status == "revoked"
       assert change.needs_consent_profile_ids == [fixture.profile]
 
-      # Standing allows go, denies stay.
-      refute get(Schemas.ToolGrant, fixture.allow)
-      assert get(Schemas.ToolGrant, fixture.deny)
-      assert change.dropped_grant_ids == [fixture.allow]
-
       # An unconsumed once binding is consumed under the restore; a consumed
       # one keeps its root, and a standing binding is untouched.
       assert binding_root(fixture.consent, fixture.once) == "restore:" <> restore_id
@@ -791,9 +740,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Turn, fixture.done_turn).status == "completed"
       assert get(Schemas.TurnStep, fixture.open_step).dispatch_state == "uncertain"
       assert get(Schemas.TurnStep, fixture.closed_step).dispatch_state == "closed"
-      assert get(Schemas.Approval, fixture.approval).status == "expired"
-      assert get(Schemas.Approval, fixture.decided_approval).status == "approved"
-      assert change.expired_approval_ids == [fixture.approval]
 
       # The shared thread, the pair and the invitation into the thread stay
       # the rows they were: no shared thread's standing moves with a
@@ -830,27 +776,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert {:ok, :none} = SecurityTransitions.restore(slot: :none)
       assert get(Schemas.ApiKey, fixture.key).suspended == false
       assert get(Schemas.User, fixture.alice.id).security_generation == generation
-    end
-
-    test "a home holding no tool grant and no approval is restored, its result naming none" do
-      fixture = home!(grants_and_approvals: false)
-      assert Arca.Repo.all(Schemas.ToolGrant) == []
-      assert Arca.Repo.all(Schemas.Approval) == []
-      restore_id = marked!()
-
-      assert {:ok, change} = SecurityTransitions.restore(slot: :none)
-      assert change.restore_id == restore_id
-      assert change.dropped_grant_ids == []
-      assert change.expired_approval_ids == []
-
-      # The rest of the transition ran.
-      assert change.suspended_api_key_ids == [fixture.key]
-
-      assert change.uncertain_turn_ids ==
-               Enum.sort([fixture.open_turn, fixture.paused_turn])
-
-      assert get(Schemas.Turn, fixture.open_turn).status == "uncertain"
-      assert is_nil(marker())
     end
 
     test "no open run resumes, even after its profile is re-consented and the home boots again" do

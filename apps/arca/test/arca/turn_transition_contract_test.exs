@@ -121,6 +121,20 @@ defmodule Arca.TurnTransitionContractTest do
     step
   end
 
+  # The turn paused around a launch it handed to a person.
+  defp launch_paused!(actor, turn) do
+    launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
+
+    {:ok, paused} =
+      TurnStorage.pause(actor, turn.id, %{
+        fence: turn.fence,
+        reason: "launch",
+        launch_step_id: launch.id
+      })
+
+    paused
+  end
+
   defp row(id), do: Arca.Repo.get!(Turn, id)
   defp execution(id), do: Arca.Repo.get!(Execution, id)
   defp step_row(id), do: Arca.Repo.get!(TurnStep, id)
@@ -228,7 +242,7 @@ defmodule Arca.TurnTransitionContractTest do
     test "a resume, a completion, a takeover and a set-down without a check are refused",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
-      {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
+      paused = launch_paused!(actor, turn)
 
       assert {:error, :missing_grant} = TurnStorage.resume(actor, turn.id, %{fence: paused.fence})
 
@@ -264,7 +278,7 @@ defmodule Arca.TurnTransitionContractTest do
     test "the check's refusal writes nothing, and it runs after the turn row is read again",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
-      {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
+      paused = launch_paused!(actor, turn)
       test = self()
 
       refuse = fn grant ->
@@ -287,7 +301,7 @@ defmodule Arca.TurnTransitionContractTest do
     test "a lease the caller names is not the one written: the database's clock is",
          %{actor: actor, thread: thread} do
       {turn, root} = started!(actor, thread)
-      {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
+      paused = launch_paused!(actor, turn)
       stale = DateTime.add(DateTime.utc_now(), -3_600, :second)
 
       assert {:ok, _} =
@@ -419,7 +433,7 @@ defmodule Arca.TurnTransitionContractTest do
   # ---------------------------------------------------------------------------
 
   describe "a pause names a runner's reason and its own launch step" do
-    test "an unknown reason, a launch without its step and a step that is not a launch are refused",
+    test "an unknown reason, no reason, a launch without its step and a step that is not a launch are refused",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
       tool = call_step!(actor, turn)
@@ -438,11 +452,7 @@ defmodule Arca.TurnTransitionContractTest do
                })
 
       assert {:error, :illegal_transition} =
-               TurnStorage.pause(actor, turn.id, %{
-                 fence: turn.fence,
-                 reason: "approval",
-                 launch_step_id: tool.id
-               })
+               TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
 
       launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
 
@@ -459,6 +469,7 @@ defmodule Arca.TurnTransitionContractTest do
     test "a root attempt that is not the running owner refuses the pause",
          %{actor: actor, thread: thread} do
       {turn, root} = started!(actor, thread)
+      launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
 
       {1, _} =
         Arca.Repo.update_all(
@@ -467,7 +478,11 @@ defmodule Arca.TurnTransitionContractTest do
         )
 
       assert {:error, :attempt_not_owner} =
-               TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
+               TurnStorage.pause(actor, turn.id, %{
+                 fence: turn.fence,
+                 reason: "launch",
+                 launch_step_id: launch.id
+               })
 
       assert %{status: "running"} = row(turn.id)
       assert execution(root.execution.id).status == "running"
@@ -585,115 +600,10 @@ defmodule Arca.TurnTransitionContractTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Approvals
-  # ---------------------------------------------------------------------------
-
-  describe "an approval is opened on a proposed step and resolved as its kind allows" do
-    defp card!(actor, turn, step) do
-      {:ok, %{approval: approval}} =
-        TurnStorage.open_approval(actor, step.id, %{
-          proposal_digest: "sha256:proposal",
-          card: %{content: "may I?"},
-          fence: turn.fence
-        })
-
-      approval
-    end
-
-    test "a card is opened only for a proposed step", %{actor: actor, thread: thread} do
-      {turn, _root} = started!(actor, thread)
-      step = call_step!(actor, turn)
-      {:ok, _} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
-
-      assert {:error, :not_proposed} =
-               TurnStorage.open_approval(actor, step.id, %{
-                 proposal_digest: "sha256:proposal",
-                 fence: turn.fence
-               })
-    end
-
-    test "an approval never turns a step into a launch, and a launch stays one",
-         %{actor: actor, thread: thread} do
-      {turn, _root} = started!(actor, thread)
-      step = call_step!(actor, turn)
-      approval = card!(actor, turn, step)
-
-      assert {:error, :illegal_transition} =
-               TurnStorage.resolve_approval(actor, approval.id, "approved", %{
-                 resolution_kind: "launch",
-                 fence: turn.fence
-               })
-
-      assert {:error, :illegal_transition} =
-               TurnStorage.resolve_approval(actor, approval.id, "declined", %{
-                 resolution_kind: "continue",
-                 fence: turn.fence
-               })
-
-      assert {:ok, %{step: %{kind: "tool", dispatch_state: "proposed"}}} =
-               TurnStorage.resolve_approval(actor, approval.id, "approved", %{
-                 resolution_kind: "continue",
-                 fence: turn.fence
-               })
-
-      launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
-      approval = card!(actor, turn, launch)
-
-      assert {:ok, %{approval: %{resolution_kind: "launch"}, step: %{kind: "launch"}}} =
-               TurnStorage.resolve_approval(actor, approval.id, "approved", %{
-                 resolution_kind: "launch",
-                 fence: turn.fence
-               })
-    end
-
-    test "a scope outside the vocabulary and a grant that is not this turn's are refused",
-         %{actor: actor, thread: thread} do
-      {turn, _root} = started!(actor, thread)
-      step = call_step!(actor, turn)
-      approval = card!(actor, turn, step)
-
-      grant = %{
-        athanor_id: actor.athanor_id,
-        scope: "thread",
-        agent_name: turn.agent,
-        tool: step.tool,
-        action: step.action,
-        thread_id: turn.thread_id,
-        effect: "allow",
-        granted_by: actor.user_id
-      }
-
-      resolve = fn attrs ->
-        TurnStorage.resolve_approval(
-          actor,
-          approval.id,
-          "approved",
-          Map.merge(%{resolution_kind: "continue", fence: turn.fence}, attrs)
-        )
-      end
-
-      assert {:error, :illegal_transition} = resolve.(%{scope: "forever"})
-
-      for foreign <- [
-            %{grant | athanor_id: "ath_other"},
-            %{grant | agent_name: "someone"},
-            %{grant | tool: "http"},
-            %{grant | action: "delete"},
-            %{grant | thread_id: "thr_other"}
-          ] do
-        assert {:error, :illegal_transition} = resolve.(%{scope: "thread", grants: [foreign]})
-      end
-
-      assert %{status: "pending"} = Arca.Repo.get!(Arca.Schemas.Approval, approval.id)
-      assert {:ok, _} = resolve.(%{scope: "thread", grants: [grant]})
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # A turn that is over
   # ---------------------------------------------------------------------------
 
-  describe "a turn that is over takes no row, pin, card or bookkeeping" do
+  describe "a turn that is over takes no row, pin or bookkeeping" do
     test "each write is refused :not_open under the fence that still matches",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
@@ -722,13 +632,6 @@ defmodule Arca.TurnTransitionContractTest do
 
       assert {:error, :not_open} =
                TurnStorage.update_step(actor, step.id, Map.put(held, :error, "late"))
-
-      assert {:error, :not_open} =
-               TurnStorage.open_approval(
-                 actor,
-                 step.id,
-                 Map.put(held, :proposal_digest, "sha256:p")
-               )
     end
   end
 

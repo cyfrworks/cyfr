@@ -1941,9 +1941,11 @@ defmodule Opus.BrainTest do
         three_held!(fake, ctx, binding, thread)
 
       for turn <- [room_turn, read_turn], do: set_turn(turn, status: "completed")
-      set_turn(crew_turn, status: "paused", paused_reason: "approval")
+      # A running child turn ends only under the stamp its root's attempt
+      # stores, and the store holds none for this one.
+      set_turn(crew_turn, status: "running", attempt: "att_planner")
 
-      assert {:error, {:child_awaits_card, "planner"}} = Aqua.Tape.delete_thread(ctx, thread.id)
+      assert {:error, :missing_grant} = Aqua.Tape.delete_thread(ctx, thread.id)
 
       for {pid, ref} <- [room, crew, read] do
         refute_received {Brain, ^ref, {:ended, _reason}}

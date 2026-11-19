@@ -205,34 +205,6 @@ defmodule Cyfr.Cluster.Fixtures do
   def messages(athanor_id, thread_id),
     do: length(Arca.ThreadStorage.messages(actor(athanor_id), thread_id))
 
-  @doc "A pending approval on `thread_id`, as a row a decision is a compare-and-set on."
-  @spec approval!(String.t(), String.t()) :: String.t()
-  def approval!(athanor_id, thread_id) do
-    id = Prima.UUID7.generate_id("msg")
-
-    {:ok, _row} =
-      Arca.ThreadStorage.append(actor(athanor_id), thread_id, %{
-        id: id,
-        author: "usr_cluster",
-        sent_by: "person",
-        kind: "approval",
-        status: "pending",
-        content: "may I?",
-        approval_id: id
-      })
-
-    id
-  end
-
-  @doc "The pending approvals of `thread_id`, as this member reads them."
-  @spec pending_approvals(String.t(), String.t()) :: [String.t()]
-  def pending_approvals(athanor_id, thread_id) do
-    athanor_id
-    |> actor()
-    |> Arca.ThreadStorage.pending_approvals(thread_id)
-    |> Enum.map(& &1.id)
-  end
-
   @doc "Who holds `thread_id`'s claim, as this member reads it."
   @spec claim_holder(String.t(), String.t()) :: map() | {:error, term()}
   def claim_holder(athanor_id, thread_id) do

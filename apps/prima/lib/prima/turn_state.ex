@@ -25,7 +25,7 @@ defmodule Prima.TurnState do
   @decisions ["approved", "declined", "expired", "error"]
   @invalidated "invalidated"
   @approval_statuses ["pending" | @decisions] ++ [@invalidated]
-  @pause_reasons ["approval", "launch"]
+  @pause_reasons ["launch"]
   @opening_states ["proposed", "dispatched"]
   @recoveries ["replay_safe"]
   @approval_scopes ["once", "thread", "always", "never"]
@@ -77,9 +77,9 @@ defmodule Prima.TurnState do
   def invalidated, do: @invalidated
 
   @doc """
-  The reasons a runner pauses its running turn for: a card waiting on a
-  person, or a launch it handed to a person. A suspension and an unknown
-  outcome pause a turn too, but only their own transitions write them.
+  The reasons a runner pauses its running turn for: a launch it handed
+  to a person. A suspension and an unknown outcome pause a turn too, but
+  only their own transitions write them.
   """
   @spec pause_reasons() :: [String.t()]
   def pause_reasons, do: @pause_reasons

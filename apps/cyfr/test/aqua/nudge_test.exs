@@ -20,7 +20,7 @@ defmodule Aqua.NudgeTest do
 
   alias Aqua.{Crew, Nudge, Tape}
   alias Aqua.Providers.Workspace
-  alias Arca.Schemas.{Approval, Message, Thread, Turn, TurnStep}
+  alias Arca.Schemas.{Message, Thread, Turn, TurnStep}
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
   alias Cyfr.Bus.ThreadEvent
@@ -120,8 +120,7 @@ defmodule Aqua.NudgeTest do
           [
             {Message, [:inserted_at]},
             {Turn, [:accepted_at, :ended_at]},
-            {TurnStep, [:started_at, :ended_at]},
-            {Approval, [:inserted_at, :decided_at]}
+            {TurnStep, [:started_at, :ended_at]}
           ] ++ waits,
         field <- fields do
       from(r in schema, where: r.athanor_id == ^ctx.athanor_id and not is_nil(field(r, ^field)))

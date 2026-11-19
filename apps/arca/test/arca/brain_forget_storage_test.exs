@@ -249,9 +249,11 @@ defmodule Arca.BrainForgetStorageTest do
           turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
         })
 
-      set_turn!(turn, status: "paused", paused_reason: "approval")
+      # A running child turn ends only under its root's grant, which this
+      # deletion does not carry.
+      set_turn!(turn, status: "running", attempt: "att_planner")
 
-      assert {:error, {:child_awaits_card, "planner"}} = Threads.delete(actor, room.id)
+      assert {:error, :missing_grant} = Threads.delete(actor, room.id)
       assert owed(actor) == []
 
       assert {:ok, %{brain_session: "6f1e2d3c-0000-4968-8776-000000000001"}} =
