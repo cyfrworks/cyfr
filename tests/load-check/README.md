@@ -122,7 +122,7 @@ the four subjects that also run on the whole machine.
 | `handle`, `join`, `pairing`, `identity`, `approval`, `file-offer`, `share`, `grant`, `hostile-frame`, `multi-home-smoke`, `tincture`, `frame-facts`, `release-boot-sqlite` | 1 | pair | the SQLite release |
 | `release-boot-postgres` | 1 | pair | the PostgreSQL release |
 | `install-screen`, `markdown`, `setup`, `proxy-hsts`, `tailnet-real` | 1 | pair | nothing |
-| `compose` | 4 | listed, not measured: it publishes the fixed port `127.0.0.1:1055` | |
+| `compose` | 4 | listed, not measured: it keeps the shipped networks' fixed subnets, which Docker gives one project at a time | |
 | `canvas` (both viewports, the reference budget) | 4 | listed, not measured: it is held to speed budgets, which it failed on one quarter beside a busy machine | |
 
 The gate's close is not a subject: it holds the host for hours and runs

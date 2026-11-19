@@ -1010,6 +1010,17 @@ async function stepAppOverCanvas(page, name) {
   }, { timeoutMs: 20_000, what: "canvas-full opened full" });
   const opened = receiptsOf(await instrument(page), from, start.id, "open").filter((r) => r.dropped === false).length;
   const startUnder = await canvasFrame(page, start.id);
+  // The full app fills the apps' area: from the top bar's bottom edge to
+  // the shelf's top edge, the area's whole width, its capsule inside it.
+  const place = '[data-canvas-place="full"][data-canvas-shown="true"]';
+  const area = await boxesOn(page, {
+    top_bar: "#chrome-top", frames: "#canvas-frames", shelf: "#canvas-shelf", full: place,
+    capsule: `${place} [role="toolbar"][aria-label="Tincture controls"]`,
+  });
+  const b = (area && area.boxes) || {};
+  const fills = !!(b.top_bar && b.frames && b.shelf && b.full) &&
+    near(b.full.y, b.top_bar.y + b.top_bar.height, 1) && near(b.full.y + b.full.height, b.shelf.y, 1) &&
+    near(b.full.x, b.frames.x, 1) && near(b.full.width, b.frames.width, 1) && within(b.capsule, b.full);
 
   await showCanvasAway(page, "markets");
   const fullFrozen = await lib.waitFor(async () => {
@@ -1058,7 +1069,7 @@ async function stepAppOverCanvas(page, name) {
   const openedUnfocused = (await page.$('[data-canvas-place="full"] iframe')) !== null;
 
   note("app_over_canvas", name,
-    focused && opened === 1 && full.state === "live" && startUnder && startUnder.state === "frozen" &&
+    focused && opened === 1 && full.state === "live" && startUnder && startUnder.state === "frozen" && fills &&
       fullFrozen.state === "frozen" && fullFrozen.inert && startFrozen && startFrozen.state === "frozen" &&
       fullAgain.state === "live" && startBack.id === start.id && startBack.state === "live" &&
       soonFocused && soon.received === 1 && soon.dropped === 1 && soon.forwarded === 0 &&
@@ -1067,6 +1078,7 @@ async function stepAppOverCanvas(page, name) {
       dropped.active === true && dropped.active_element_is_frame === false && unfocusedSaid === "Not opened: tap again" && !openedUnfocused,
     {
       opened: { by: "the shipped canvas's launcher tile", frame_focused: focused, open_verbs: opened, full_frame: full.state, canvas_under: startUnder && startUnder.state },
+      full_area: { fills_from_top_bar_to_shelf: fills, boxes: b },
       on_switch: { full_frame: { state: fullFrozen.state, inert: fullFrozen.inert, shown: fullFrozen.shown }, canvas: startFrozen && startFrozen.state },
       switched_back: { full_frame: fullAgain.state },
       closed: { canvas_shown_again: startBack.state, same_frame: startBack.id === start.id },
@@ -1162,6 +1174,32 @@ async function layoutRead() {
 const boxOn = (page, selector) =>
   page.$eval(selector, (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }).catch(() => null);
 
+// The boxes of the elements `selectors` name, by name, each null when
+// absent; and, for each name in `hits`, whether the element at that box's
+// centre is the element itself or inside it, so nothing stands over it.
+const boxesOn = (page, selectors, hits = []) =>
+  page.evaluate(({ selectors, hits }) => {
+    const out = { boxes: {}, hit: {} };
+    for (const [name, selector] of Object.entries(selectors)) {
+      const el = document.querySelector(selector);
+      const r = el && el.getBoundingClientRect();
+      out.boxes[name] = r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+      if (r && hits.includes(name)) {
+        const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        out.hit[name] = !!at && (at === el || el.contains(at));
+      }
+    }
+    return out;
+  }, { selectors, hits }).catch(() => null);
+
+// Whether box `a` lies inside box `b`, a pixel's rounding allowed.
+const within = (a, b) => !!a && !!b && a.x >= b.x - 1 && a.y >= b.y - 1 &&
+  a.x + a.width <= b.x + b.width + 1 && a.y + a.height <= b.y + b.height + 1;
+
+// Whether boxes `a` and `b` share any area.
+const overlap = (a, b) => !!a && !!b && a.x < b.x + b.width - 1 && b.x < a.x + a.width - 1 &&
+  a.y < b.y + b.height - 1 && b.y < a.y + a.height - 1;
+
 // What the hook last told canvas frame `frame` covers it.
 async function lastCovered(page, frame) {
   const told = ((await instrument(page)) || { covered: [] }).covered.filter((c) => c.frame === frame);
@@ -1197,6 +1235,9 @@ async function stepWindows(page, name, viewport) {
   const frame = await page.$eval(wrapperSel, (e) => e.getAttribute("data-canvas-frame"));
   const wrapper = `[data-canvas-frame="${frame}"]`;
   const before = await layoutRead();
+  // The switcher stays above the window: nothing stands over its button.
+  const reach = await boxesOn(page, { switcher: '#canvas-switcher button[aria-pressed="true"]' }, ["switcher"]);
+  const switcherOnTop = !!reach && reach.hit.switcher === true;
 
   // Drag the window by its title bar, 200 pixels left and 40 down.
   const title = await boxOn(page, `${wrapper} .canvas-app-name`);
@@ -1221,8 +1262,8 @@ async function stepWindows(page, name, viewport) {
   }, { timeoutMs: 20_000, what: "the dragged window read back through the layout tool" }).catch(() => null);
 
   note("window_drag", name,
-    shieldMidDrag && read !== null && read.placement === "window" && read.geometry.x < 5000,
-    { shield_mid_drag: shieldMidDrag, before: { revision: before.revision, geometry: "5000 0 5000 10000" }, drawn, read_back: read });
+    switcherOnTop && shieldMidDrag && read !== null && read.placement === "window" && read.geometry.x < 5000,
+    { switcher_on_top: switcherOnTop, switcher: reach && reach.boxes.switcher, shield_mid_drag: shieldMidDrag, before: { revision: before.revision, geometry: "5000 0 5000 10000" }, drawn, read_back: read });
 
   // What covers the canvas: the window's rectangle, in the canvas frame's
   // own pixels, and nothing else.
@@ -1511,6 +1552,26 @@ async function stepCrashFallback(page, name, viewport) {
   const windowBefore = desk ? await lib.waitFor(() => shownWindow(page), { timeoutMs: 30_000, what: "the crash canvas's window" }) : null;
   const aquaBefore = await aquaState(page);
   const line = await fallbackNotice(page, 40_000);
+  // The line stands in the shelf's strip, level with the Devices chip after
+  // which it stands, over none of the shelf's own controls nor the Devices
+  // chip, and under nothing. The buttons at the shelf's right end
+  // (#shelf-end) are left out: its width varies with the chat's and Aqua's
+  // counts, and the line's room beside it is not settled.
+  const strip = await boxesOn(page, {
+    notice: "#system-layer-desktop-notice", shelf: "#canvas-shelf", devices: "#shell-devices",
+  }, ["notice"]);
+  const s = (strip && strip.boxes) || {};
+  const controls = await page.$$eval("#canvas-shelf button, #shell-devices", (els) =>
+    els.filter((e) => e.getClientRects().length > 0).map((e) => {
+      const r = e.getBoundingClientRect();
+      return { control: e.id || e.getAttribute("aria-label") || e.getAttribute("data-canvas") || e.tagName, x: r.x, y: r.y, width: r.width, height: r.height };
+    })).catch(() => null);
+  const under = (controls || []).filter((c) => overlap(s.notice, c)).map((c) => c.control);
+  const centre = (box) => box.y + box.height / 2;
+  const inStrip = !!(s.notice && s.shelf && s.devices) && Array.isArray(controls) && controls.length > 1 &&
+    s.notice.y >= s.shelf.y - 1 && s.notice.y + s.notice.height <= s.shelf.y + s.shelf.height + 1 &&
+    near(centre(s.notice), centre(s.devices), 1) && s.notice.x >= s.devices.x + s.devices.width - 1 &&
+    under.length === 0 && strip.hit.notice === true;
   const marks = await instrument(page);
   // The loads of each frame since the switch, by place: the validation
   // frame loads once; the live canvas frame, which reloaded itself, twice;
@@ -1546,7 +1607,7 @@ async function stepCrashFallback(page, name, viewport) {
     activated.working === written.ok.version && activated.kept === before.working &&
       receiptsOf(marks, from, null, "ready").length >= 1 && reloaded === 1 &&
       receiptsOf(marks, from, null, "failed").length === 0 &&
-      line.text.startsWith("Your canvas stopped. Showing the standard one.") &&
+      line.text.startsWith("Your canvas stopped. Showing the standard one.") && inStrip &&
       !!kept && kept.label === "Restore the last working one" && line.offers.map((o) => o.offer).join(",") === "retry,kept" &&
       drawn.headings.includes("Apps") && windowKept && JSON.stringify(aquaAfter) === JSON.stringify(aquaBefore) &&
       regrant.asked_for && regrant.meanwhile.working === written.ok.version && regrant.meanwhile.kept === before.working &&
@@ -1554,6 +1615,7 @@ async function stepCrashFallback(page, name, viewport) {
     {
       activated: { version: written.ok.version, working: activated.working, kept: activated.kept, validation_readies: receiptsOf(marks, from, null, "ready").length },
       crashed: { canvas_frame_loads: loadsOf("canvas"), validation_frame_loads: loadsOf("validation"), canvas_frames_loaded_twice: reloaded, failed_verbs: receiptsOf(marks, from, null, "failed").length },
+      fallback_strip: { in_the_shelf_strip: inStrip, nothing_over_it: strip && strip.hit.notice, controls_under_it: under, boxes: s, controls },
       fallback: { line: line.text, offers: line.offers.map((o) => o.offer), kept_offer: kept && kept.label, in_place: drawn.headings.slice(0, 3), window: desk ? { before: windowBefore, after: windowAfter, kept: windowKept } : "none in the hand", aqua: { before: aquaBefore, after: aquaAfter } },
       regrant: { title: regrant.title, asked_for: regrant.asked_for, place: regrant.place, working: regrant.meanwhile.working, kept: regrant.meanwhile.kept },
       restored: { working: restored.working, kept: restored.kept, opened: text },

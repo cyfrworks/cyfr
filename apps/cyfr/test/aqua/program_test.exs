@@ -1104,9 +1104,11 @@ defmodule Aqua.ProgramTest do
                "is_error" => false
              }
 
-      committed!(ctx, thread, 5)
-
-      # The answer was written and never taken when the driver ends.
+      # The answer was written and never taken when the driver ends: the
+      # attendant commits the program's next line only once its write of
+      # the answer has returned.
+      say(fake, row, said(turn, "msg_1", "looking"))
+      committed!(ctx, thread, 6)
       Scripted.end_sessions(fake, row.id)
       opened!(fake, row, "boot-two")
       assert sent() == Map.merge(first_start, %{"session" => @session, "pending" => [input.id]})

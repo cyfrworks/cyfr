@@ -21,10 +21,11 @@ defmodule Arca.Storage do
 
   The seam is the filesystem row of `Cyfr.Boundaries` (`filesystem_seam/0`),
   and `Cyfr.BoundariesTest` holds every application's `lib` to it: a direct
-  filesystem call fails unless an `# arca:bypass-ok=<group>` tag is on its
-  line or within the four lines above it, or its module says
-  `arca:bypass-ok=<group> — entire module` once. To intentionally bypass,
-  mark the call with a comment like `# arca:bypass-ok=B` (matching the group
+  filesystem call fails unless a comment `# arca:bypass-ok=<group>` is on
+  its line or within the four lines above it, or a comment of its module
+  says `# arca:bypass-ok=<group> — entire module` once. The words in a
+  string or a document are not a marker. To intentionally bypass, mark the
+  call with a comment like `# arca:bypass-ok=B` (matching the group
   letter).
 
   | Group | When | Why bypass is OK | Examples |

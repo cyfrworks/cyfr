@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# arca:bypass-ok=D — entire module: `:erl_tar` writes to a RAM file and
+# reads from a binary; no path on disk is opened.
 defmodule Locus.Archive do
   @moduledoc """
   The tar streams a build's sources enter it in and its outputs leave it
   in. Both are built and read in memory.
-
-  ## arca:bypass-ok=D — entire module
-
-  `:erl_tar` writes to a RAM file and reads from a binary; no path on disk
-  is opened.
 
   An output archive is written by the build and is untrusted: only its
   regular files are read, each name must be a safe relative path

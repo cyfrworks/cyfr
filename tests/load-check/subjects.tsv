@@ -91,9 +91,10 @@ subject	setup	1	pair	-	15	1800	-	PROOF_OUT="$LOAD_CHECK_OUT" tests/setup-proof/r
 subject	proxy-hsts	1	pair	-	30	600	-	tests/proxy-hsts/run.sh
 subject	tailnet-real	1	pair	-	300	1800	tests/load-check/needs.sh env TAILNET_REAL_AUTH_KEY_FILE	tests/tailnet-real/run.sh
 
-# The Compose proof publishes the shipped compose file's fixed port
-# (127.0.0.1:1055 in docker-compose.yml), so two copies never run at once:
-# it takes the whole machine and is listed, not measured. Recorded median 89.
+# The Compose proof keeps the shipped compose file's networks at their
+# fixed subnets (docker-compose.yml), which Docker gives one project at a
+# time, so two copies never run at once: it takes the whole machine and is
+# listed, not measured. Recorded median 89.
 subject	compose	4	-	-	89	1800	-	tests/compose-proof/run.sh
 
 # The canvas proof is held to speed budgets (tests/canvas-proof/README.md),

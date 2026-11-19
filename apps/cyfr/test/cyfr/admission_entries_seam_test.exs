@@ -480,9 +480,18 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     Prima.Test.RateLimiter.reset!()
     %{slug: slug, secret: secret} = hook!(ctx, %{replay_protection: "none"})
 
-    _first = post_signed(conn, slug, secret, ~s({}))
+    first = post_signed(conn, slug, secret, ~s({}))
     second = conn |> recycle() |> post_signed(slug, secret, ~s({}))
     assert second.status == 429
+
+    # The first delivery was admitted, and its run goes on after its answer:
+    # the run has ended once its decision carries a completion.
+    wait_until(
+      fn -> match?([%{completion: done}] when done != nil, decisions(request_id_of(first))) end,
+      10_000,
+      "the first delivery's run to end"
+    )
+
     {request_id_of(second), refused("rate_limited", :none)}
   end
 

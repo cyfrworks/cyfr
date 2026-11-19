@@ -54,12 +54,18 @@ defmodule Prima.Test.CodeLines do
     code = code_line_numbers(tokens)
     prose = doc_line_numbers(tokens)
 
+    # The first comment's column on each line, where the line is cut.
+    columns =
+      Enum.reduce(comments, %{}, fn {line, column, _text}, acc ->
+        Map.put_new(acc, line, column)
+      end)
+
     source
     |> String.split("\n")
     |> Enum.with_index(1)
     |> Enum.filter(fn {_line, n} -> MapSet.member?(code, n) and not MapSet.member?(prose, n) end)
     |> Enum.map(fn {line, n} ->
-      {line |> cut_comment(Map.get(comments, n)) |> expand_multi_alias(), n}
+      {line |> cut_comment(Map.get(columns, n)) |> expand_multi_alias(), n}
     end)
   end
 
@@ -135,25 +141,40 @@ defmodule Prima.Test.CodeLines do
   defp add_member([], members), do: members
   defp add_member(current, members), do: [current |> Enum.reverse() |> Enum.join(".") | members]
 
+  @doc """
+  The comments with their 1-based line numbers, in file order:
+  `[{comment, n}]`, each from its `#` to the end of its line. A `#` inside
+  a string, a heredoc, a sigil or a documentation attribute is not one,
+  since the tokenizer reports only the comments it skips.
+
+  Raises when the source does not tokenize.
+  """
+  @spec comments(String.t()) :: [{String.t(), pos_integer()}]
+  def comments(source) do
+    {_tokens, comments} = tokenize!(source)
+    for {line, _column, text} <- comments, do: {text, line}
+  end
+
   @doc "Just the kept code lines, in file order."
   @spec lines(String.t()) :: [String.t()]
   def lines(source), do: source |> code_lines() |> Enum.map(&elem(&1, 0))
 
-  # The tokens in file order, and the first comment column on each line.
-  # `preserve_comments` is how the tokenizer reports a comment it would
-  # otherwise drop; the accumulator is a process-dictionary key of this
-  # call alone, so two scans in one process cannot see each other's.
+  # The tokens in file order, and the comments as `{line, column, text}`
+  # in file order. `preserve_comments` is how the tokenizer reports a
+  # comment it would otherwise drop; the accumulator is a
+  # process-dictionary key of this call alone, so two scans in one process
+  # cannot see each other's.
   defp tokenize!(source) do
     key = {__MODULE__, make_ref()}
-    Process.put(key, %{})
+    Process.put(key, [])
 
-    collect = fn line, column, _tokens, _comment, _rest ->
-      Process.put(key, Map.put_new(Process.get(key), line, column))
+    collect = fn line, column, _tokens, comment, _rest ->
+      Process.put(key, [{line, column, IO.chardata_to_string(comment)} | Process.get(key)])
       :ok
     end
 
     result = :elixir_tokenizer.tokenize(String.to_charlist(source), 1, preserve_comments: collect)
-    comments = Process.delete(key)
+    comments = key |> Process.delete() |> Enum.reverse()
 
     case result do
       {:ok, _line, _column, _warnings, tokens, _terminators} -> {Enum.reverse(tokens), comments}
