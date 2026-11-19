@@ -1792,7 +1792,7 @@ defmodule Cyfr.BoundariesTest do
          CodeLines.aliases(~S'''
          defmodule Emissary.Web.PlantedController do
            alias Aqua.Notes
-           def kind(tool, action), do: Aqua.tool_kind(tool, action)
+           def work(ctx, id), do: Aqua.workspace(ctx, id)
            def turn(ctx, id), do: Aqua.Runner.state(id, ctx.athanor_id)
            def pinned(ctx), do: Notes.pinned_page(ctx)
          end
@@ -3128,7 +3128,7 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       "opus/boundary_plant.ex",
       """
       defmodule Opus.BoundaryPlant do
-        def plant(tool, action), do: Aqua.tool_kind(tool, action)
+        def plant(ctx, thread_id), do: Aqua.workspace(ctx, thread_id)
       end
       """,
       [
