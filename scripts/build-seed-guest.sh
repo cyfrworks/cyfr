@@ -8,7 +8,7 @@
 # Usage: scripts/build-seed-guest.sh <version-dir> [--check]
 #   <version-dir>: a seed component version directory, e.g.
 #                  seed/components/formulas/local/list-models/0.6.4 or
-#                  seed/components/catalysts/local/claude/1.4.3
+#                  seed/components/catalysts/local/claude/1.4.4
 #   --check: verify digests against the stamp without a toolchain.
 #
 # Requires Rust with wasm32-wasip2 and cargo-component:
@@ -80,7 +80,7 @@ case "${2:-}" in
       echo "rustc $(rustc --version | cut -d' ' -f2-)"
       echo "cargo-component $(cargo component --version | awk '{print $NF}')"
     } > "$stamp"
-    echo "wrote $shipped ($(stat -f '%z' "$shipped" 2>/dev/null || stat -c '%s' "$shipped") bytes)"
+    echo "wrote $shipped ($(wc -c < "$shipped" | tr -d ' ') bytes)"
     echo "stamped $stamp"
     (cd "$src" && cargo clean --quiet)
     ;;
