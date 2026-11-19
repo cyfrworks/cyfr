@@ -806,28 +806,71 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
-    # A page that lists permissions reads them again on `:confirmed`: an
-    # answer given away from this screen (here no screen at all) reports
-    # it as one given on it would, and an expiry or a withdrawal reports
-    # nothing, since no permission can come of it.
-    test "answered elsewhere it reports confirmed; expired or withdrawn it reports nothing",
+    # A page that lists permissions reads them again on `:confirmed`. An
+    # answer given away from this screen (here no screen at all) is
+    # reported once, whether its card is drawn, queued or was never drawn
+    # here; one given or dismissed on this screen is reported once, as it
+    # landed; an expiry or a withdrawal reports nothing, since no
+    # permission can come of it.
+    test "each answer is reported once, wherever it was given; expired or withdrawn nothing",
          setup do
       view = screen!(setup)
-      {_run, ref} = Q.open!(setup.ctx, setup.component)
-      id = Prompt.question_id(ref)
-      shows!(view, id)
+      {:ok, once} = PrismWeb.SystemLayer.Question.answer("allow_once", false)
 
-      {:ok, answer} = PrismWeb.SystemLayer.Question.answer("allow_once", false)
+      answer_elsewhere = fn ref ->
+        assert {:ok, _answered} =
+                 PrismWeb.Ops.call_tool(setup.ctx, "question/answer", %{
+                   "ref" => ref,
+                   "answer" => once
+                 })
+      end
 
-      assert {:ok, _answered} =
-               PrismWeb.Ops.call_tool(setup.ctx, "question/answer", %{
-                 "ref" => ref,
-                 "answer" => answer
-               })
+      reported_once = fn id, outcome ->
+        assert_receive {:host, {:system_layer, ^id, ^outcome}}, 2_000
+        refute_receive {:host, {:system_layer, ^id, _again}}, 300
+      end
 
+      # Drawn, and a second queued behind it.
+      {_run, drawn} = Q.open!(setup.ctx, setup.component)
+      drawn_id = Prompt.question_id(drawn)
+      shows!(view, drawn_id)
+      {_run, queued} = Q.open!(setup.ctx, setup.component)
+      queued_id = Prompt.question_id(queued)
+
+      wait_until(
+        fn -> Enum.map(layer_assigns(view).queue, & &1.id) == [queued_id] end,
+        2_000,
+        "the second card queued"
+      )
+
+      answer_elsewhere.(queued)
+      reported_once.(queued_id, :confirmed)
+      assert %{current: %{id: ^drawn_id}, queue: []} = layer_assigns(view)
+
+      answer_elsewhere.(drawn)
+      reported_once.(drawn_id, :confirmed)
       wait_until(fn -> open_prompt(view) == nil end, 2_000, "answered elsewhere")
-      assert_receive {:host, {:system_layer, ^id, :confirmed}}
-      refute_receive {:host, {:system_layer, ^id, _again}}, 200
+
+      # Never drawn: opened and answered while the page took no facts.
+      :ok = :sys.suspend(view.pid)
+      {_run, unseen} = Q.open!(setup.ctx, setup.component)
+      answer_elsewhere.(unseen)
+      :ok = :sys.resume(view.pid)
+      reported_once.(Prompt.question_id(unseen), :confirmed)
+      assert open_prompt(view) == nil
+
+      # Given here, and dismissed here.
+      {_run, here} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(here))
+      choose(view, "allow_once")
+      reported_once.(Prompt.question_id(here), :confirmed)
+
+      {_run, closed} = Q.open!(setup.ctx, setup.component)
+      closed_id = Prompt.question_id(closed)
+      shows!(view, closed_id)
+      view |> with_target("#system-layer") |> render_click("dismiss", %{"id" => closed_id})
+      assert Q.row(setup.ctx, closed).state == "denied"
+      reported_once.(closed_id, :dismissed)
 
       for stage <- [:expired, :withdrawn] do
         {run, ref} = Q.open!(setup.ctx, setup.component)

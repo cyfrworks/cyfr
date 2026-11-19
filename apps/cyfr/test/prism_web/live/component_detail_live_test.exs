@@ -1081,6 +1081,29 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       )
     end
 
+    # The first screen busy while the question opens and is answered on
+    # the second: it never draws the card, and still reads its list again.
+    test "a permission given on another screen while this one was busy is listed without a reload",
+         %{conn: conn, user: user, person: person, component: component} do
+      {view, _html} = mount_athanor(conn, @page)
+      other = other_screen!(user)
+
+      :ok = :sys.suspend(view.pid)
+      {_run, ref} = Q.open!(person, component)
+      card!(other, ref)
+      other |> element(~s([data-choice="allow_hour"])) |> render_click()
+      assert [_answer] = Q.standing(person)
+      :ok = :sys.resume(view.pid)
+
+      Prima.Test.Wait.wait_until(
+        fn -> answers(view, "delete_table") == [{"allow", "any"}] end,
+        2_000,
+        "the list read again"
+      )
+
+      refute has_element?(view, ~s([data-test="question"]))
+    end
+
     test "an answer given once on another screen leaves the list as it was", %{
       conn: conn,
       user: user,
