@@ -88,8 +88,7 @@ defmodule Aqua.Loop.PolicyTest do
           assert read_only == {:read_only, Policy.read_only_sentence("Aqua")}, label
 
           assert auto ==
-                   {:run,
-                    %{call: %{action: call.action, args: call.args}, account: nil}},
+                   {:run, %{call: %{action: call.action, args: call.args}, account: nil}},
                  label
 
         :other ->
