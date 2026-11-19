@@ -270,9 +270,22 @@ same worktree refuses, naming the run that holds it.
   stage's stderr and at the top of the test checks' logs, as left to the
   pull request's run. A module a macro defines, and a test that reaches a
   changed module only through another it names, are beyond it. Name
-  others after `--`. `scripts/stage.sh -n STAGE` lists what it would run. A branch stacked on another sets `STAGE_BASE`
-  to that branch, so the handoff stage runs its own changes alone rather
-  than everything since `origin/main`.
+  others after `--`. `scripts/stage.sh -n STAGE` lists what it would run.
+  A branch stacked on another sets `STAGE_BASE` to that branch, so the
+  handoff stage runs its own changes alone rather than everything since
+  `origin/main`.
+
+  A handoff ends with a receipt in its log folder and one line on stderr
+  naming its result, HEAD's commit at the end, that commit's tree and one
+  word for the two snapshots the receipt file holds: the working files'
+  tree when the stage started, before it read its table, and when it
+  ended. It reads committed when that commit's tree is both, uncommitted
+  when both are one other tree, and moved when they differ; the ready
+  report carries that line. A log folder inside the checkout (`-l`) must
+  be one Git ignores, or its files count as uncommitted. An input Git ignores or is told to
+  assume unchanged, a file changed and restored in between, and a
+  submodule's contents are outside the snapshots. The receipt is evidence,
+  not a lock: nothing refuses a push without one.
 
   The self-tests that need the whole machine, those a workflow runs and
   no handoff row does, and `go test ./... -race` are the pull request's

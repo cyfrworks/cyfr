@@ -38,8 +38,8 @@ check comments on SILENT; a passed one closes it.
 
 Text a run carries (job names, log lines, the host's rows) reaches an issue
 only inside an indented code block, where GitHub renders no mention, link
-or markup: a pull request from a fork names its own jobs and prints its own
-logs.
+or markup, and with its control characters removed: a pull request from a
+fork names its own jobs and prints its own logs.
 
 Exit 0 when every action was taken, 1 when gh could not read or write, 64
 for a usage error or a missing or malformed fact.
@@ -62,6 +62,8 @@ FAILED_JOB = {"failure", "timed_out"}
 STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[0-9:.]+Z ?")
 TEST_LINE = re.compile(r"^\s*(\d+\) (?:(?:test|doctest|property) .*\(\S+\)|\S+: failure on setup_all callback.*))\s*$"
                        r"|^\s*(FAIL: .+?)\s*$")
+# What block() removes from text a run carries.
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # What one comment names of one job's log, and of one line.
 MOST_TESTS, LONGEST = 30, 300
 
@@ -90,10 +92,11 @@ def pages(url):
 
 
 def block(lines):
-    """Lines as an indented code block; a carriage return ends a line."""
+    """Lines as an indented code block; a carriage return ends a line, and
+    every other control character (below 0x20, and 0x7f) is removed."""
     out = []
     for line in lines:
-        out += ["    " + part[:LONGEST] for part in str(line).replace("\r", "\n").split("\n")]
+        out += ["    " + CONTROL.sub("", part)[:LONGEST] for part in str(line).replace("\r", "\n").split("\n")]
     return "\n".join(out)
 
 
@@ -152,10 +155,15 @@ def failed_jobs(run_id, attempt):
 
 def failing_tests(job_id):
     """The failing tests the job's log names, in order and once each, or None
-    when the log cannot be read."""
+    when the log cannot be read, saying why on this script's output.
+
+    gh api refuses to print a response holding a terminal escape sequence
+    unless told it may (gh 2.97.0 and later), and every job log holds one:
+    the runner colours each step's command. Nothing here prints the log."""
     try:
-        text = gh(f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs")
-    except Unreadable:
+        text = gh("--allow-escape-sequences", f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs")
+    except Unreadable as e:
+        print(f"reds: the log of job {job_id} could not be read: {e}")
         return None
     seen = []
     for line in text.splitlines():

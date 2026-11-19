@@ -33,6 +33,28 @@ defmodule PrismWeb.SystemLayerQuestionTest.Host do
   end
 end
 
+defmodule PrismWeb.SystemLayerQuestionTest.GuestHost do
+  @moduledoc false
+  # A page holding a context it was handed, with a layer that does not
+  # listen: a client no session backs, whose prompts the test places.
+  use Phoenix.LiveView
+
+  @impl true
+  def mount(_params, session, socket), do: {:ok, assign(socket, context: session["context"])}
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <.live_component
+      module={PrismWeb.SystemLayer}
+      id="system-layer"
+      context={@context}
+      listen={false}
+    />
+    """
+  end
+end
+
 defmodule PrismWeb.SystemLayerQuestionTest do
   @moduledoc """
   A component's question as the page's layer draws it: on every open
@@ -53,7 +75,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
   alias Cyfr.Test.QuestionFixtures, as: Q
   alias PrismWeb.SystemLayer.Prompt
-  alias PrismWeb.SystemLayerQuestionTest.Host
+  alias PrismWeb.SystemLayerQuestionTest.{GuestHost, Host}
   alias Sanctum.Context
   alias Sanctum.TestContext.Authenticator
 
@@ -150,15 +172,16 @@ defmodule PrismWeb.SystemLayerQuestionTest do
     view |> element(~s([data-test="question-choice"][data-choice="#{choice}"])) |> render_click()
   end
 
-  defp more(view), do: view |> element(~s([data-test="question-more"])) |> render_click()
+  # The choices the card offers, in their order: every one, and the
+  # caller's row alone.
+  defp offered(view, within \\ ""),
+    do:
+      view
+      |> render()
+      |> find(within <> ~s([data-test="question-choice"]))
+      |> Enum.map(&hd(LazyHTML.attribute(&1, "data-choice")))
 
-  # The choices the card offers, in their order.
-  defp offered(view) do
-    view
-    |> render()
-    |> find(~s([data-test="question-choice"]))
-    |> Enum.map(&hd(LazyHTML.attribute(&1, "data-choice")))
-  end
+  defp row_offered(view), do: offered(view, ~s([data-test="question-caller-row"] ))
 
   # A passkey's proof given from `view`: the layer opens the account pages
   # with the record's request, and the person's passkey answers it there.
@@ -182,6 +205,21 @@ defmodule PrismWeb.SystemLayerQuestionTest do
   end
 
   defp end_views, do: Cyfr.Test.Sandbox.end_views()
+
+  # The person's athanor under a client that cannot confirm: a guest's
+  # context, as a frame's is.
+  defp guest_context(ctx) do
+    [
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      permissions: [:*],
+      scope: :athanor,
+      auth_method: :tincture,
+      authenticated: true
+    ]
+    |> Context.build()
+    |> Context.enter_guest()
+  end
 
   # The elements `selector` matches in rendered HTML or in one element.
   defp find(html, selector) when is_binary(html), do: find(LazyHTML.from_fragment(html), selector)
@@ -222,7 +260,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
                )
 
         assert has_element?(view, ~s([data-test="question-operation"]), "DROP TABLE users;")
-        assert length(find(render(view), ~s([data-test="question-choice"]))) == 4
+        assert length(find(render(view), ~s([data-test="question-choice"]))) == 5
       end
 
       # A screen opened while it waits reads it at its first open.
@@ -301,21 +339,40 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
-    test "says who started the run in a person's words, and offers no switch for one unknown",
+    test "says who started the run in a person's words, heading that caller's row, and " <>
+           "offers one unknown no answer that lasts for it",
          setup do
       view = screen!(setup)
 
-      for {caller, words, switch?} <- [
-            {"agent:aqua", "the assistant aqua", true},
-            {"tincture:local.board", "the app local.board", true},
-            {"device:pcl_0123456789abcdef", "a paired device (…abcdef)", true},
-            {"unknown", "someone CYFR does not know", false}
+      known =
+        ~w(deny_always_this_caller allow_once allow_hour_this_caller allow_always_this_caller)
+
+      for {caller, words, row} <- [
+            {"person", "you", known},
+            {"agent:aqua", "the assistant aqua", known},
+            {"tincture:local.board", "the app local.board", known},
+            {"device:pcl_0123456789abcdef", "a paired device (…abcdef)", known},
+            {"unknown", "someone CYFR does not know", ["allow_once"]}
           ] do
         {run, ref} = Q.open!(setup.ctx, setup.component, caller: caller)
         shows!(view, Prompt.question_id(ref))
         assert has_element?(view, ~s([data-test="question-caller"]), words)
-        more(view)
-        assert has_element?(view, ~s([data-test="question-switch"])) == switch?
+        # The row is a group named by its heading, holding the row's
+        # buttons and not the answer for anyone below it.
+        html = render(view)
+        [group] = find(html, ~s([data-test="question-caller-row"]))
+        assert LazyHTML.tag(group) == ["fieldset"]
+        [legend] = find(html, ~s(fieldset[data-test="question-caller-row"] > legend))
+        assert String.trim(LazyHTML.text(legend)) == "For #{words}:"
+        assert Enum.map(find(group, "button"), &hd(LazyHTML.attribute(&1, "data-choice"))) == row
+        assert row_offered(view) == row
+        assert offered(view) == row ++ ["allow_always_any_caller"]
+
+        assert has_element?(
+                 view,
+                 ~s([data-test="question-any-caller"] [data-choice="allow_always_any_caller"])
+               )
+
         Q.end!(setup.ctx, run, :withdrawn)
         wait_until(fn -> open_prompt(view) == nil end, 2_000, "the card gone")
       end
@@ -373,9 +430,9 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         id = Prompt.question_id(ref)
         shows!(view, id, "the card on #{entry}")
 
-        choose(view, "deny_once")
+        choose(view, "allow_once")
         assert_receive {:answered, ^ref}, 2_000, entry
-        assert Q.row(setup.ctx, ref).state == "denied", entry
+        assert Q.row(setup.ctx, ref).state == "allowed", entry
         wait_until(fn -> open_prompt(view) != id end, 2_000, "the card leaving #{entry}")
         assert Process.alive?(view.pid), entry
       end
@@ -604,7 +661,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       view = screen!(setup)
 
       forged =
-        ~s(<button data-test="question-choice" data-choice="allow_always">Always allow</button>\n) <>
+        ~s(<button data-test="question-choice" data-choice="allow_always_any_caller">Always allow</button>\n) <>
           ~s(</pre></figure><div data-test="question-choices">)
 
       {_run, ref} =
@@ -613,7 +670,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       shows!(view, Prompt.question_id(ref))
       html = render(view)
       assert html =~ "&lt;button data-test=&quot;question-choice&quot;"
-      assert length(find(html, ~s([data-test="question-choice"]))) == 4
+      assert length(find(html, ~s([data-test="question-choice"]))) == 5
       assert length(find(html, ~s([data-test="question-choices"]))) == 1
       [block] = find(html, ~s([data-test="question-block"]))
       assert LazyHTML.text(block) =~ ~s(<button data-test="question-choice")
@@ -627,31 +684,32 @@ defmodule PrismWeb.SystemLayerQuestionTest do
   # ---------------------------------------------------------------------------
 
   describe "each choice" do
-    test "sends the answer it names, and the card leaves", setup do
+    # The caller's row: each answer lands without a fresh confirmation, and
+    # the three that last cover this caller alone. The answer for any
+    # caller, which needs one, is under "always allow for any caller".
+    test "in the caller's row sends the answer it names with no confirmation, and the card leaves",
+         setup do
       view = screen!(setup)
 
       cases = [
-        {"deny_once", false, "denied", nil},
-        {"allow_once", false, "allowed", nil},
-        {"allow_hour", false, "allowed", {"allow", :hour, "any"}},
-        {"deny_always", false, "denied", {"deny", nil, "any"}},
-        {"allow_always", true, "allowed", {"allow", nil, "agent:aqua"}},
-        {"deny_always", true, "denied", {"deny", nil, "agent:aqua"}}
+        {"deny_always_this_caller", "denied", {"deny", nil, "agent:aqua"}},
+        {"allow_once", "allowed", nil},
+        {"allow_hour_this_caller", "allowed", {"allow", :hour, "agent:aqua"}},
+        {"allow_always_this_caller", "allowed", {"allow", nil, "agent:aqua"}}
       ]
 
-      for {choice, this_caller, state, standing} <- cases do
+      for {choice, state, standing} <- cases do
         {_run, ref} = Q.open!(setup.ctx, setup.component, caller: "agent:aqua")
         id = Prompt.question_id(ref)
         shows!(view, id)
 
-        if choice == "deny_always" or this_caller, do: more(view)
-
-        if this_caller do
-          view |> element(~s([data-test="question-switch"])) |> render_click()
-          assert has_element?(view, ~s([data-test="question-switch"][aria-checked="true"]))
-        end
+        assert has_element?(
+                 view,
+                 ~s([data-test="question-caller-row"] [data-choice="#{choice}"])
+               )
 
         choose(view, choice)
+        refute has_element?(view, ~s([data-test="confirmation"]))
         assert_receive {:answered, ^ref}
         assert_receive {:host, {:system_layer, ^id, :confirmed}}
         assert Q.row(setup.ctx, ref).state == state
@@ -695,7 +753,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         %{"name" => "delete_table", "title" => "delete every table"}
       ])
 
-      choose(view, "allow_hour")
+      choose(view, "allow_hour_this_caller")
       assert_receive {:answered, ^ref}
 
       assert [%{declaration_digest: digest}] = Q.standing(setup.ctx)
@@ -735,7 +793,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
             "catalyst"
           )
 
-        choose(view, "allow_hour")
+        choose(view, "allow_hour_this_caller")
         assert open_prompt(view) == id
 
         assert has_element?(
@@ -751,8 +809,8 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         refute_received {:answered, ^ref}
 
         # Only the answers given once are offered from then on.
-        assert offered(view) == ["deny_once", "allow_once"]
-        refute has_element?(view, ~s([data-test="question-more"]))
+        assert offered(view) == ["allow_once"]
+        refute has_element?(view, ~s([data-test="question-any-caller"]))
 
         choose(view, "allow_once")
         assert_receive {:answered, ^ref}
@@ -760,6 +818,27 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         assert Q.standing(setup.ctx) == []
         end_views()
       end
+    end
+
+    # The layer sends only what the card offers: an event naming another
+    # choice, as no button on this card does, answers nothing.
+    test "a choice the card does not offer sends nothing", setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component, caller: "unknown")
+      id = Prompt.question_id(ref)
+      shows!(view, id)
+
+      for choice <-
+            ~w(allow_hour_this_caller allow_always_this_caller deny_always_this_caller deny_once) do
+        view
+        |> with_target("#system-layer")
+        |> render_click("question_answer", %{"id" => id, "choice" => choice})
+      end
+
+      refute_received :answer_dispatched
+      assert open_prompt(view) == id
+      assert Q.row(setup.ctx, ref).state == "open"
+      end_views()
     end
 
     test "closing the card without a choice is Don't allow, once", setup do
@@ -776,6 +855,137 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert Q.standing(setup.ctx) == []
       assert open_prompt(view) == nil
       assert_receive {:host, {:system_layer, ^id, :dismissed}}
+      end_views()
+    end
+
+    # The layer sends only what the card draws: under a covered layer the
+    # card is not drawn, and on a client that cannot confirm its choices
+    # are not, so an event for its id answers nothing in either.
+    test "a choice sent while the card's choices are not drawn sends nothing", setup do
+      test = self()
+      handler = "question-tried-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach_many(
+          handler,
+          [[:cyfr, :sanctum, :decision, :admitted], [:cyfr, :sanctum, :decision, :refused]],
+          fn _event, _measurements, meta, _config ->
+            if meta[:tool] == "question" and meta[:action] == "answer",
+              do: send(test, :answer_tried)
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      send_once = fn view, id ->
+        view
+        |> with_target("#system-layer")
+        |> render_click("question_answer", %{"id" => id, "choice" => "allow_once"})
+      end
+
+      # Covered: the question stays current, drawn again once uncovered.
+      view = screen!(setup)
+      {_run, covered} = Q.open!(setup.ctx, setup.component)
+      covered_id = Prompt.question_id(covered)
+      shows!(view, covered_id)
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer,
+        id: "system-layer",
+        covered: true
+      )
+
+      refute has_element?(view, ~s([data-test="question"]))
+      assert %{current: %{id: ^covered_id} = held} = layer_assigns(view)
+      send_once.(view, covered_id)
+      assert layer_assigns(view).current == held
+
+      # A client that cannot confirm: the card is drawn without choices.
+      guest = guest_context(setup.ctx)
+      refute Sanctum.Pairing.can_confirm?(guest)
+
+      {:ok, guest_view, _html} =
+        live_isolated(setup.conn, GuestHost, session: %{"context" => guest})
+
+      {_run, unconfirmable} =
+        Q.open!(setup.ctx, setup.component, request: %{action: "delete_rows"})
+
+      unconfirmable_id = Prompt.question_id(unconfirmable)
+
+      {:ok, %{questions: [entry]}} =
+        PrismWeb.Ops.call_tool(setup.ctx, "question/pending", %{"ref" => unconfirmable})
+
+      {:ok, prompt} = Prompt.question(entry)
+
+      Phoenix.LiveView.send_update(guest_view.pid, PrismWeb.SystemLayer,
+        id: "system-layer",
+        prompt: prompt
+      )
+
+      shows!(guest_view, unconfirmable_id)
+      refute has_element?(guest_view, ~s([data-test="question-choices"]))
+      shown = layer_assigns(guest_view).current
+      send_once.(guest_view, unconfirmable_id)
+
+      # Nothing was tried for it: no refusal is kept on the card either.
+      assert layer_assigns(guest_view).current == shown
+      refute has_element?(guest_view, ~s([data-test="question-said"]))
+
+      refute_received :answer_tried
+      refute_received :answer_dispatched
+      assert Q.row(setup.ctx, covered).state == "open"
+      assert Q.row(setup.ctx, unconfirmable).state == "open"
+      assert Q.standing(setup.ctx) == []
+      end_views()
+    end
+
+    # The cross in the card's header closes it as Escape does, so a card
+    # can be closed without a keyboard: plain, for a caller CYFR does not
+    # know, and once only the answers given once are offered.
+    test "the cross in the card's header is Don't allow, once, on every question card", setup do
+      view = screen!(setup)
+
+      close = fn ref ->
+        id = Prompt.question_id(ref)
+
+        assert has_element?(
+                 view,
+                 ~s([data-test="question-close"][aria-label="Close, and don't allow it this time"])
+               )
+
+        view |> element(~s([data-test="question-close"])) |> render_click()
+        assert_receive {:answered, ^ref}
+        assert Q.row(setup.ctx, ref).state == "denied"
+        assert Q.standing(setup.ctx) == []
+        assert_receive {:host, {:system_layer, ^id, :dismissed}}
+        assert open_prompt(view) != id
+      end
+
+      {_run, plain} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(plain))
+      close.(plain)
+
+      {_run, unknown} = Q.open!(setup.ctx, setup.component, caller: "unknown")
+      shows!(view, Prompt.question_id(unknown))
+      close.(unknown)
+
+      {_run, once_only} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(once_only))
+
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Context.actor(setup.ctx),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      choose(view, "allow_hour_this_caller")
+      assert offered(view) == ["allow_once"]
+      close.(once_only)
+
+      refute_receive {:answered, _again}, 200
       end_views()
     end
   end
@@ -815,7 +1025,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
     test "each answer is reported once, wherever it was given; expired or withdrawn nothing",
          setup do
       view = screen!(setup)
-      {:ok, once} = PrismWeb.SystemLayer.Question.answer("allow_once", false)
+      once = PrismWeb.SystemLayer.Question.answer("allow_once")
 
       answer_elsewhere = fn ref ->
         assert {:ok, _answered} =
@@ -947,7 +1157,19 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       id = Prompt.question_id(ref)
       shows!(view, id)
 
-      choose(view, "allow_always")
+      assert has_element?(
+               view,
+               ~s([data-test="question-any-caller"] [data-choice="allow_always_any_caller"]),
+               "Always allow, whoever starts it"
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-test="question-any-caller"]),
+               "Needs a fresh confirmation"
+             )
+
+      choose(view, "allow_always_any_caller")
       assert_received :answer_dispatched
 
       # The confirmation is drawn in the card, whose choices step aside.
@@ -979,7 +1201,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       proving = screen!(setup)
       {_run, first} = Q.open!(setup.ctx, setup.component)
       shows!(asking, Prompt.question_id(first))
-      choose(asking, "allow_always")
+      choose(asking, "allow_always_any_caller")
       original = waited_ref(asking)
       shows!(proving, Prompt.confirmation_id(original), "the first confirmation")
 
@@ -1016,7 +1238,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       {_run, first} = Q.open!(setup.ctx, setup.component)
       first_card = Prompt.question_id(first)
       shows!(asking, first_card)
-      choose(asking, "allow_always")
+      choose(asking, "allow_always_any_caller")
       original = waited_ref(asking)
       shows!(proving, Prompt.confirmation_id(original), "the first confirmation")
 
@@ -1065,8 +1287,8 @@ defmodule PrismWeb.SystemLayerQuestionTest do
                "No installed version asks for this permission in these words"
              )
 
-      assert offered(asking) == ["deny_once", "allow_once"]
-      refute has_element?(asking, ~s([data-test="question-more"]))
+      assert offered(asking) == ["allow_once"]
+      refute has_element?(asking, ~s([data-test="question-any-caller"]))
       assert Q.row(setup.ctx, first).state == "open"
       assert Q.standing(setup.ctx) == []
       end_views()
@@ -1084,7 +1306,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         {_run, first} = Q.open!(setup.ctx, setup.component)
         first_card = Prompt.question_id(first)
         shows!(asking, first_card)
-        choose(asking, "allow_always")
+        choose(asking, "allow_always_any_caller")
         original = waited_ref(asking)
 
         # A second question's confirmation, asked from the other screen,
@@ -1141,7 +1363,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       view = screen!(setup)
       {_run, ref} = Q.open!(setup.ctx, setup.component)
       shows!(view, Prompt.question_id(ref))
-      choose(view, "allow_always")
+      choose(view, "allow_always_any_caller")
       confirmation = waited_ref(view)
       ctx = view_context(view)
       actor = Context.actor(ctx)
@@ -1172,7 +1394,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       other = screen!(setup)
       {run, ref} = Q.open!(setup.ctx, setup.component)
       shows!(asking, Prompt.question_id(ref))
-      choose(asking, "allow_always")
+      choose(asking, "allow_always_any_caller")
       confirmation = waited_ref(asking)
       shows!(other, Prompt.confirmation_id(confirmation), "the confirmation in front")
 
@@ -1202,7 +1424,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       shows!(asking, id)
       shows!(other, id)
 
-      choose(asking, "allow_always")
+      choose(asking, "allow_always_any_caller")
       confirmation = waited_ref(asking)
       shows!(other, Prompt.confirmation_id(confirmation), "the confirmation in front")
       assert [%{id: ^id}] = layer_assigns(other).queue
@@ -1226,7 +1448,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       shows!(asking, id)
       shows!(other, id)
 
-      choose(asking, "allow_always")
+      choose(asking, "allow_always_any_caller")
       confirmation = waited_ref(asking)
       shows!(other, Prompt.confirmation_id(confirmation), "the confirmation in front")
 
@@ -1257,7 +1479,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       shows!(asking, id)
       shows!(other, id)
 
-      choose(asking, "allow_always")
+      choose(asking, "allow_always_any_caller")
       confirmation = waited_ref(asking)
       shows!(other, Prompt.confirmation_id(confirmation), "the confirmation in front")
 
@@ -1276,7 +1498,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       refute_received {:answered, ^ref}
 
       # Asked again, it asks for a new confirmation and repeats only that.
-      choose(asking, "allow_always")
+      choose(asking, "allow_always_any_caller")
       refute waited_ref(asking) == confirmation
       end_views()
     end
@@ -1286,7 +1508,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       view = screen!(setup)
       {_run, ref} = Q.open!(setup.ctx, setup.component)
       shows!(view, Prompt.question_id(ref))
-      choose(view, "allow_always")
+      choose(view, "allow_always_any_caller")
       confirmation = waited_ref(view)
 
       ctx = view_context(view)
