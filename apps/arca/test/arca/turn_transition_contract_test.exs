@@ -503,6 +503,38 @@ defmodule Arca.TurnTransitionContractTest do
                })
     end
 
+    test "a turn paused around a launch records no step until it runs again",
+         %{actor: actor, thread: thread} do
+      {turn, _root} = started!(actor, thread)
+      launch = call_step!(actor, turn, %{tool_call_id: "l1", step_kind: "launch"})
+
+      assert {:ok, %{status: "paused"}} =
+               TurnStorage.pause(actor, turn.id, %{
+                 fence: turn.fence,
+                 reason: "launch",
+                 launch_step_id: launch.id
+               })
+
+      steps = Arca.Repo.aggregate(from(s in TurnStep, where: s.turn_id == ^turn.id), :count)
+
+      for state <- ["proposed", "dispatched"] do
+        assert {:error, :illegal_transition} =
+                 TurnStorage.put_step(actor, turn.id, %{
+                   kind: "tool",
+                   tool: "files",
+                   action: "read",
+                   tool_call_id: "page-#{state}",
+                   dispatch_state: state,
+                   fence: turn.fence
+                 })
+      end
+
+      assert Arca.Repo.aggregate(from(s in TurnStep, where: s.turn_id == ^turn.id), :count) ==
+               steps
+
+      assert %{status: "paused", paused_reason: "launch"} = row(turn.id)
+    end
+
     test "a response answers this turn's model step, with a recovery of the vocabulary",
          %{actor: actor, thread: thread} do
       {turn, _root} = started!(actor, thread)
