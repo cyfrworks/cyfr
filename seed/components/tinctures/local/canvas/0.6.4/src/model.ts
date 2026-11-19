@@ -219,11 +219,22 @@ export function start(sdk: Sdk, onChange: (state: State) => void): () => void {
 // where the person tapped.
 export const TOO_SOON = "Tap again in a moment";
 
+// What a tap on an app's tile says when the shell opened nothing for
+// another reason: it did not take that tap, or could not open the app.
+export const NOT_OPENED = "Not opened: tap again";
+
+// What a tap on the tile of an app the shell no longer lists says.
+export const NOT_INSTALLED = "It is no longer installed";
+
 // Opens an app, for the person's tap on its tile. Answers what the tile
-// says, or null: an app the shell opened shows as its window.
+// says, or null: an app the shell opened shows as its window. Every other
+// answer says something, so a tap that opens nothing is never silent.
 export async function openApp(sdk: Sdk, app: InstalledApp): Promise<string | null> {
   const answer = await sdk.open(app.ref);
-  return answer.outcome === "cancelled" && answer.reason === "too_soon" ? TOO_SOON : null;
+  if (answer.outcome === "opened") return null;
+  if (answer.outcome === "cancelled" && answer.reason === "too_soon") return TOO_SOON;
+  if (answer.outcome === "refused" && answer.reason === "not_found") return NOT_INSTALLED;
+  return NOT_OPENED;
 }
 
 // Opens a run's page, the Dashboard's Executions page at that run, where

@@ -438,6 +438,40 @@ async function personClick(page, frame, x, y, { soon = false } = {}) {
   return focused;
 }
 
+// A person's click at (x, y) in the frame with id `frame` that the shell
+// takes before it knows the frame has focus: as personClick, the
+// activation's lifespan waited out and the button held down until the
+// shell holds the frame as its active element; then a script on the shell
+// moves the shell's focus off the frame, and the button comes up once the
+// shell no longer holds it, so the page sends its verb from its click
+// handler with another element the shell's active element. That is the
+// state the bridge reads when the frame's click reaches the shell before
+// the shell knows of the focus, made by the shell's focus rather than by
+// the browser's timing. Nothing is evaluated on the frame. Answers whether
+// the shell held the frame as its active element at the press and had
+// moved off it before the release.
+async function unfocusedClick(page, frame, x, y) {
+  await lapse();
+  const holds = (id) => {
+    const el = document.activeElement;
+    return el !== null && el.tagName === "IFRAME" && el.getAttribute("data-frame-id") === id;
+  };
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  const focused = await lib.waitFor(
+    () => page.evaluate(holds, frame).catch(() => false),
+    { timeoutMs: 2_000, stepMs: 10, what: "the shell's focus on the frame clicked" },
+  ).then(() => true, () => false);
+  const movedOff = await page.evaluate((id) => {
+    const el = document.querySelector(`iframe[data-frame-id="${id}"]`);
+    if (el) el.blur();
+    const now = document.activeElement;
+    return !(now !== null && now.tagName === "IFRAME" && now.getAttribute("data-frame-id") === id);
+  }, frame).catch(() => false);
+  await page.mouse.up();
+  return { focused, moved_off: movedOff };
+}
+
 // The bridge spends the shell page's activation on an input in its chrome
 // (a switch of canvas, a dismissal), on a frame's opening and on each verb
 // it forwards, and drops a person's verb sent within its activation
@@ -806,7 +840,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.3" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.4" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -950,7 +984,15 @@ async function stepFeedChart(page, name) {
 // focused, the tile's words, nothing opened. How long after the close the
 // proof's clock read the tap's start is recorded beside it and decides
 // nothing: the bridge measures the lifespan on the browser's own clock,
-// from the shell's input to the verb's receipt.
+// from the shell's input to the verb's receipt. Tapped once more past the
+// lifespan, the shell's focus moved off the frame while the button is down
+// (unfocusedClick), the open is dropped as one from a frame the shell
+// does not hold focused and the tile says so ("Not opened: tap again", the
+// shipped canvas's NOT_OPENED): that drop is not silent either. Its verdict
+// too is what the browser showed: the shell holding the frame focused as
+// the button went down and not as it came up, the open received and
+// dropped with the shell holding activation and the frame not its active
+// element, the tile's words, nothing opened.
 async function stepAppOverCanvas(page, name) {
   const start = await showCanvas(page, "start");
   await until(start.frame, shippedDrawing, (d) => d.tiles.includes("canvas-full"), "the canvas-full launcher");
@@ -1001,18 +1043,35 @@ async function stepAppOverCanvas(page, name) {
   const soon = receiptFacts(await handled(page, soonFrom, startBack.id, "open", 1));
   const reopened = (await page.$('[data-canvas-place="full"] iframe')) !== null;
 
+  // The tile tapped past the lifespan, the shell's focus moved off the
+  // frame before the button comes up.
+  const unfocusedFrom = (await instrument(page)).receipts.length;
+  const tileOnce = await centerOf(launcher(startBack.frame));
+  if (!tileOnce) throw new Error("the canvas-full launcher could not be measured once more");
+  const unfocused = await unfocusedClick(page, startBack.id, tileOnce.x, tileOnce.y);
+  const unfocusedSaid = await lib.waitFor(async () => {
+    const text = await launcher(startBack.frame).locator(".said").innerText({ timeout: 100 }).catch(() => "");
+    return text.trim() === "Not opened: tap again" ? text.trim() : null;
+  }, { timeoutMs: 3_000, stepMs: 50, what: "the canvas-full tile's answer to an unfocused tap" }).catch(async () =>
+    (await launcher(startBack.frame).locator(".said").innerText({ timeout: 100 }).catch(() => "")).trim() || null);
+  const dropped = receiptFacts(await handled(page, unfocusedFrom, startBack.id, "open", 1));
+  const openedUnfocused = (await page.$('[data-canvas-place="full"] iframe')) !== null;
+
   note("app_over_canvas", name,
     focused && opened === 1 && full.state === "live" && startUnder && startUnder.state === "frozen" &&
       fullFrozen.state === "frozen" && fullFrozen.inert && startFrozen && startFrozen.state === "frozen" &&
       fullAgain.state === "live" && startBack.id === start.id && startBack.state === "live" &&
       soonFocused && soon.received === 1 && soon.dropped === 1 && soon.forwarded === 0 &&
-      soon.active === true && soon.active_element_is_frame === true && said === "Tap again in a moment" && !reopened,
+      soon.active === true && soon.active_element_is_frame === true && said === "Tap again in a moment" && !reopened &&
+      unfocused.focused && unfocused.moved_off && dropped.received === 1 && dropped.dropped === 1 && dropped.forwarded === 0 &&
+      dropped.active === true && dropped.active_element_is_frame === false && unfocusedSaid === "Not opened: tap again" && !openedUnfocused,
     {
       opened: { by: "the shipped canvas's launcher tile", frame_focused: focused, open_verbs: opened, full_frame: full.state, canvas_under: startUnder && startUnder.state },
       on_switch: { full_frame: { state: fullFrozen.state, inert: fullFrozen.inert, shown: fullFrozen.shown }, canvas: startFrozen && startFrozen.state },
       switched_back: { full_frame: fullAgain.state },
       closed: { canvas_shown_again: startBack.state, same_frame: startBack.id === start.id },
       tapped_too_soon: { since_close_ms: sinceClose, frame_focused: soonFocused, open: soon, tile_said: said, opened: reopened },
+      tapped_unfocused: { frame_focused_at_press: unfocused.focused, focus_moved_off: unfocused.moved_off, open: dropped, tile_said: unfocusedSaid, opened: openedUnfocused },
     });
 }
 
