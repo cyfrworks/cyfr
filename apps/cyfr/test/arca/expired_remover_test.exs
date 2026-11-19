@@ -146,6 +146,7 @@ defmodule Arca.ExpiredRemoverTest do
       do: :ok,
       else:
         (
+          # sleep-ok: poll interval of until/2's bounded wait (100 tries)
           Process.sleep(10)
           until(fun, tries - 1)
         )

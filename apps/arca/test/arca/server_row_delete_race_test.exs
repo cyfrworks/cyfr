@@ -198,6 +198,8 @@ defmodule Arca.ServerRowDeleteRaceTest do
         :ok
 
       Process.alive?(task.pid) and System.monotonic_time(:millisecond) < deadline ->
+        # sleep-ok: poll interval of waits_on_lock!'s deadline-bounded wait for the backend to
+        # wait on the row lock
         Process.sleep(20)
         waits_on_lock!(pid, task, deadline)
 

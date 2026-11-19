@@ -209,6 +209,7 @@ defmodule Opus.BrowserTest do
         if System.monotonic_time(:millisecond) > deadline,
           do: flunk("timed out waiting for #{what}")
 
+        # sleep-ok: poll interval of eventually's bounded wait (5 s)
         Process.sleep(10)
         eventually(check, what, deadline)
 
@@ -757,6 +758,7 @@ defmodule Opus.BrowserTest do
       eventually(fn -> lost?(ctx) end, "the tail")
 
       # Past the time the driver keeps an answer it was not told was held.
+      # sleep-ok: the driver's 50 ms keep_ms passes, so it no longer holds the answer
       Process.sleep(200)
       :sys.resume(holder)
 
@@ -774,6 +776,7 @@ defmodule Opus.BrowserTest do
 
       set_status(turn, "completed")
       :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+      # sleep-ok: 100 ms after the turn ended in which its browser session must not close
       Process.sleep(100)
       assert [%{session: ^session}] = browser_sessions(ctx)
 
@@ -1092,6 +1095,7 @@ defmodule Opus.BrowserTest do
         assert refusal(Task.await(open, 5_000)) == "The browser is turned off."
         refute_received {:session, "open", _open, _fields}
 
+        # sleep-ok: the start held held_ms (0 or 1,500) on the service, the hold under test
         Process.sleep(held_ms)
         send(service, :go)
         assert_receive {:session, "open", _open, _fields}, 5_000
@@ -2645,6 +2649,7 @@ defmodule Opus.BrowserTest do
       token = make_ref()
       :sys.replace_state(holder, &%{&1 | idle: {make_ref(), token}})
       send(holder, {:idle, token})
+      # sleep-ok: 100 ms after the idle message in which the holder must stop nothing
       Process.sleep(100)
       assert [_running] = browser_sessions(ctx)
       assert Process.alive?(holder)

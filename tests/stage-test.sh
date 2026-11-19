@@ -1136,11 +1136,21 @@ handoff = [row[6] for row in rows if row[0] == "handoff"]
 # A self-test is a script under tests/ that a command runs, named *-test.sh,
 # *_test.py or *-test.exs; or a Python script under tests/ run with no
 # argument, or with --self-check alone. A Python script given anything else
-# (an image suite, given its image) is not one. A command counts only where
+# (an image suite, given its image) is not one. A -test.exs script under
+# `mix run` counts in one spelling, `mix run --no-start PATH` after
+# VAR=value words at most; any other command holding `mix run` and such a
+# path is refused by name, in a handoff row or a workflow's step, since
+# Mix may take the path as an argument (after --) or run something else
+# (--eval). A command counts only where
 # the shell would run it, in a handoff row as in a workflow's step: comments
 # and heredoc bodies are not read, and a script named among another
 # command's arguments (echo's, a comment's) is not a command.
 TEST_FILE = re.compile(r"tests/[\w./-]+?(?:-test\.sh|_test\.py|-test\.exs)")
+EXS_TEST = re.compile(r"(?:\./)?tests/[\w./-]+?-test\.exs")
+
+
+class Misspelled(Exception):
+    """A command holding `mix run` and a -test.exs path in another spelling."""
 RESERVED = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}", "time", "exec"}
 
 
@@ -1226,6 +1236,15 @@ def commands(text):
 
 def self_tests(words):
     """The self-test a simple command runs, as the guard names it, or none."""
+    if any(words[i:i + 2] == ["mix", "run"] for i in range(len(words))):
+        w = list(words)
+        while w and re.match(r"[A-Za-z_]\w*=", w[0]):
+            w.pop(0)
+        if len(w) == 4 and w[:3] == ["mix", "run", "--no-start"] and EXS_TEST.fullmatch(w[3]):
+            return [w[3][2:] if w[3].startswith("./") else w[3]]
+        if any(EXS_TEST.fullmatch(word) for word in words):
+            raise Misspelled(" ".join(words))
+        return []
     w = list(words)
     while w and (w[0] in RESERVED or re.match(r"[A-Za-z_]\w*=", w[0])):
         w.pop(0)
@@ -1255,22 +1274,39 @@ def self_tests(words):
             return [script + " --self-check"]
     return []
 
+misspelled = []
+
+
+def read(where, text):
+    names = set()
+    for command in commands(text):
+        try:
+            names.update(self_tests(command))
+        except Misspelled as e:
+            misspelled.append(f"mix run not spelled 'mix run --no-start PATH' in {where}: {e}")
+    return names
+
+
 ci = set()
 for path in sorted(glob.glob(os.path.join(workflows, "*.yml"))):
     spec = yaml.safe_load(open(path))
     on = spec.get(True, spec.get("on")) or {}
     if "pull_request" not in on:
         continue
-    for job in spec["jobs"].values():
+    for job_id, job in spec["jobs"].items():
         for step in job.get("steps", []):
-            for command in commands(step.get("run") or ""):
-                ci.update(self_tests(command))
-local = {name for row in handoff for command in commands(row) for name in self_tests(command)}
-print("\n".join(sorted(local - ci)))
+            where = f"{os.path.basename(path)} {job_id} '{step.get('name') or step.get('run', '').strip()}'"
+            ci.update(read(where, step.get("run") or ""))
+local = set()
+for n, line in enumerate(open(table), 1):
+    row = line.rstrip("\n").split("\t")
+    if line.strip() and not line.startswith("#") and row[0] == "handoff":
+        local.update(read(f"{os.path.basename(table)}:{n} ({row[1]})", row[6]))
+print("\n".join(misspelled + sorted(local - ci)))
 PY
 }
 left=$(guard "$ROOT/scripts/stages.tsv")
-[ -z "$left" ] || fail "a handoff row runs a self-test no pull-request workflow runs: $left"
+[ -z "$left" ] || fail "a handoff row runs a self-test no pull-request workflow runs, or a mix run the guard does not read: $left"
 # The control: a handoff row running a self-test no workflow runs is caught,
 # a shell one, and a Python one run with --self-check alone or with no
 # argument; a Python script given its image is no self-test.
@@ -1282,6 +1318,25 @@ probe_table 'bash tests/stage-probe-test.sh'
 probe_table 'python3 -I tests/stage-probe.py --self-check && python3 -I tests/stage-probe_test.py'
 [ "$(guard "$S/stages-probe.tsv")" = "$(printf '%s\n' 'tests/stage-probe.py --self-check' tests/stage-probe_test.py)" ] ||
   fail "a row running Python self-tests no workflow runs was not caught: $(guard "$S/stages-probe.tsv")"
+probe_table 'CYFR_DATABASE=sqlite MIX_ENV=dev mix run --no-start tests/stage-probe-test.exs'
+[ "$(guard "$S/stages-probe.tsv")" = tests/stage-probe-test.exs ] || fail "a row running a script under mix run no workflow runs was not caught: $(guard "$S/stages-probe.tsv")"
+# Any other spelling of mix run with a -test.exs path is refused by name,
+# in a row and in a workflow's step: after --, Mix takes the path as an
+# argument; with --eval it runs the eval; env -i is no form the guard reads.
+# A refusal names the command as the shell splits it, its quotes removed.
+mkdir -p "$S/probe-workflows"
+for form in 'mix run --no-start -- tests/stage-probe-test.exs' \
+  "mix run --no-start --eval=':ok' tests/stage-probe-test.exs" \
+  'env -i mix run --no-start tests/stage-probe-test.exs'; do
+  probe_table "$form"
+  guard "$S/stages-probe.tsv" | grep -qxF "mix run not spelled 'mix run --no-start PATH' in stages-probe.tsv:$(wc -l <"$S/stages-probe.tsv" | tr -d ' ') (probe): ${form//\'/}" ||
+    fail "a row's mix run spelled '$form' was not refused: $(guard "$S/stages-probe.tsv")"
+  rm -f "$S/probe-workflows"/*.yml
+  cp "$ROOT"/.github/workflows/*.yml "$S/probe-workflows/"
+  printf 'on: [pull_request]\njobs:\n  probe:\n    steps:\n      - name: probe\n        run: %s\n' "$form" >"$S/probe-workflows/probe.yml"
+  [ "$(guard "$ROOT/scripts/stages.tsv" "$S/probe-workflows")" = "mix run not spelled 'mix run --no-start PATH' in probe.yml probe 'probe': ${form//\'/}" ] ||
+    fail "a workflow's mix run spelled '$form' was not refused: $(guard "$ROOT/scripts/stages.tsv" "$S/probe-workflows")"
+done
 probe_table 'python3 -I tests/stage-probe.py cyfr-locus:review'
 [ -z "$(guard "$S/stages-probe.tsv")" ] || fail "an image suite given its image was counted as a self-test: $(guard "$S/stages-probe.tsv")"
 # The roster tests are application tests, which the guard does not read:

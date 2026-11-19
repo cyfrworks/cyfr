@@ -403,6 +403,8 @@ defmodule CyfrWeb.ContextGuardTest do
 
       # Busy inside the bound: every read goes on with the context as it was.
       for _ <- 1..3 do
+        # sleep-ok: 150 ms of use inside the 60 s bound, so a reuse comes after the validation it
+        # reads
         Process.sleep(150)
         send(view.pid, :load)
         assert render(view) =~ "Settings"

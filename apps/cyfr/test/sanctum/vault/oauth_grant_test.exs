@@ -1434,6 +1434,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     cond do
       match?({:monitored_by, [_ | _]}, Process.info(leader, :monitored_by)) -> :ok
       tries == 0 -> flunk("no dispense came to wait on the lock")
+      # sleep-ok: poll interval of await_waiting!'s bounded wait (500 tries) for a dispense to
+      # wait on the lock
       true -> Process.sleep(10) && await_waiting!(leader, tries - 1)
     end
   end

@@ -458,6 +458,8 @@ defmodule Sanctum.Gate.CatalogTest do
         :ok = Arca.Cache.Sweeper.ensure_table()
 
       _ when attempts > 0 ->
+        # sleep-ok: poll interval of wait_for_cache_owner's bounded wait (100 tries) for the
+        # restarted sweeper
         Process.sleep(20)
         wait_for_cache_owner(dead, attempts - 1)
 

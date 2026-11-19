@@ -225,6 +225,7 @@ defmodule Sanctum.ApiKeyTest do
 
     test "returns keys sorted by creation time", %{ctx: ctx} do
       create_key(ctx, %{name: "first", scope: []})
+      # sleep-ok: the clock ticks between the two keys, so creation time orders them
       :timer.sleep(10)
       create_key(ctx, %{name: "second", scope: []})
 

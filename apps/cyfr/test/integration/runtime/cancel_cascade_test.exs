@@ -171,6 +171,7 @@ defmodule Locus.Runtime.CancelCascadeTest do
       test_pid = self()
 
       spawn(fn ->
+        # sleep-ok: the cancel's stagger under test, delay ms into the run's close
         Process.sleep(delay)
         send(test_pid, {:cancelled, Opus.cancel(ctx, root_id)})
       end)

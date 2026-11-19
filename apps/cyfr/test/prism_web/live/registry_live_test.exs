@@ -382,6 +382,7 @@ defmodule PrismWeb.RegistryLiveTest do
 
         # Held past the browser's wait, and past it twice, the page still
         # says it is yanking.
+        # sleep-ok: twice the browser's 1 s push wait, in which the page must not leave "Yanking…"
         Process.sleep(2 * @push_timeout_ms)
         assert render(view) =~ "Yanking…"
       after

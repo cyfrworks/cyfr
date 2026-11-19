@@ -160,6 +160,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
 
     case find_live_child(parent, id) do
       nil when tries > 0 ->
+        # sleep-ok: poll interval of child!'s bounded wait (50 tries) for the nested view to mount
         Process.sleep(20)
         child!(parent, id, tries - 1)
 

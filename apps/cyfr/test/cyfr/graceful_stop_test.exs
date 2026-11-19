@@ -159,6 +159,7 @@ defmodule Cyfr.GracefulStopTest do
         flunk("the condition did not hold in time")
 
       true ->
+        # sleep-ok: poll interval of await's bounded wait (5 s)
         Process.sleep(10)
         await(condition, deadline_ms - 10)
     end

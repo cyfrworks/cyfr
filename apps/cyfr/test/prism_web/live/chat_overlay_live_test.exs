@@ -109,6 +109,8 @@ defmodule PrismWeb.ChatOverlayLiveTest do
       assert is_binary(html), "the overlay did not answer while the registry held the name"
       assert html =~ "Starting the thread…"
       assert is_binary(start.())
+      # sleep-ok: two seconds held, past the browser's wait twice, in which the overlay must not
+      # leave "Starting the thread…"
       Process.sleep(2_000)
       assert render(view) =~ "Starting the thread…"
     after

@@ -326,6 +326,8 @@ defmodule PrismWeb.ProgramsLiveTest do
 
       # Held past the browser's wait, and past it twice, the page still
       # says it is testing.
+      # sleep-ok: twice the browser's 1 s push wait, in which the page must not leave "Testing
+      # slow…"
       Process.sleep(2 * @push_timeout_ms)
       assert render(view) =~ "Testing slow…"
     after
@@ -614,6 +616,7 @@ defmodule PrismWeb.ProgramsLiveTest do
     cond do
       fun.() -> true
       tries == 0 -> false
+      # sleep-ok: poll interval of eventually's bounded wait (50 tries)
       true -> Process.sleep(50) && eventually(fun, tries - 1)
     end
   end
@@ -792,6 +795,7 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert Base.decode64!(data) == "one\r\n"
     Scripted.write(fake, row.id, "two")
+    # sleep-ok: no event for the page holding the second output yet; 200 ms after the write
     Process.sleep(200)
 
     for guess <- ["1", "2", delivery <> "x"],
@@ -982,6 +986,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       ExUnit.CaptureLog.capture_log([level: :error], fn ->
         catch_exit(GenServer.call(view.pid, :crash_the_page, 5_000))
         assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 5_000
+        # sleep-ok: no event for the termination report's log yet; 200 ms after :DOWN
         Process.sleep(200)
       end)
 

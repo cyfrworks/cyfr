@@ -161,6 +161,8 @@ defmodule PrismWeb.SharedThreadLiveTest do
       assert is_binary(html), "the pane did not answer while the registry held the name"
       assert html =~ "Adding…"
       assert is_binary(add.())
+      # sleep-ok: two seconds held, past the browser's wait twice, in which the pane must not
+      # leave "Adding…"
       Process.sleep(2_000)
       assert render(pane) =~ "Adding…"
     after

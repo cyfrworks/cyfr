@@ -502,6 +502,8 @@ defmodule Prima.SlotsTest do
 
           with {:ok, ref} <- result do
             # Hold the slot a moment so the cap is really hit.
+            # sleep-ok: each schedule holds its slot 20 ms so the key cap of 16 is really hit, as
+            # the comment above says
             Process.sleep(20)
             Slots.release(server, ref)
           end
@@ -735,6 +737,7 @@ defmodule Prima.SlotsTest do
     test "a live holder past the hold keeps its slot and is reported wedged" do
       server = start_slots(max: 4, hold_ms: 1)
       holder = hold(server, nil, :root)
+      # sleep-ok: the 1 ms hold passes, so the live holder is past it and reported wedged
       Process.sleep(10)
 
       assert {:ok, %{reclaimed: 0, wedged: 1}} = Slots.sweep(server)
@@ -751,6 +754,7 @@ defmodule Prima.SlotsTest do
       # arrives: exactly the leak the sweep exists to clean up.
       swallow_down(server, holder)
       kill_and_wait(holder)
+      # sleep-ok: the 1 ms hold passes, so the sweep may reclaim the dead holder's slots
       Process.sleep(10)
       assert %{active: 2} = Slots.status(server)
 
@@ -776,6 +780,7 @@ defmodule Prima.SlotsTest do
 
       swallow_down(server, holder)
       kill_and_wait(holder)
+      # sleep-ok: the 1 ms hold passes, so the sweep reclaims the slot for the waiter
       Process.sleep(10)
 
       assert {:ok, %{reclaimed: 1}} = Slots.sweep(server)

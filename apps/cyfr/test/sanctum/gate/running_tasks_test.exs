@@ -25,6 +25,8 @@ defmodule Sanctum.Gate.RunningTasksTest do
     Enum.reduce_while(1..200, nil, fn _, _ ->
       case GenServer.whereis(RunningTasks) do
         pid when is_pid(pid) and pid != replacing -> {:halt, pid}
+        # sleep-ok: poll interval of await_running's bounded wait (200 tries) for the supervisor's
+        # restart
         _ -> Process.sleep(10) && {:cont, nil}
       end
     end) || flunk("RunningTasks was not (re)started by its supervisor")

@@ -62,6 +62,7 @@ defmodule Cyfr.Cluster.Wait do
           raise "waited #{System.monotonic_time(:millisecond) - started} ms: #{message}" <>
                   last_raise(not_yet)
         else
+          # sleep-ok: poll interval of poll/4, the deadline-bounded wait of the cluster suite
           Process.sleep(@poll_ms)
           poll(condition, message, started, deadline)
         end
@@ -106,6 +107,8 @@ defmodule Cyfr.Cluster.Wait do
           raise message
 
         {:held, _still_false} ->
+          # sleep-ok: poll interval of hold/3, which checks until its deadline that a condition
+          # stays false
           Process.sleep(@poll_ms)
           hold(condition, message, deadline)
       end

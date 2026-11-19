@@ -51,6 +51,8 @@ defmodule Emissary.External.ServerEraTest do
 
     conn =
       Enum.reduce(1..12, conn, fn _, conn ->
+        # sleep-ok: the stub's 75 ms between chunks, each inside the 300 ms receive timeout under
+        # test
         Process.sleep(75)
 
         case Plug.Conn.chunk(conn, " ") do
@@ -168,6 +170,8 @@ defmodule Emissary.External.ServerEraTest do
       HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
         :counters.add(pages, 1, 1)
+        # sleep-ok: the stub's 300 ms per page, so the listing outlasts its one-second deadline
+        # under test
         Process.sleep(300)
         page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
         json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})

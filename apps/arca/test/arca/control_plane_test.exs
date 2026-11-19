@@ -115,6 +115,7 @@ defmodule Arca.ControlPlaneTest do
       :ok = ControlPlane.record({:held, 60})
       assert ControlPlane.held?()
 
+      # sleep-ok: the 60 ms hold under test runs out on the local clock
       Process.sleep(100)
       refute ControlPlane.held?()
 
@@ -691,6 +692,8 @@ defmodule Arca.ControlPlaneLockTest do
     refute Task.yield(verifier, 300), "the verify answered while the release held the row"
     # The release instant is now in the past on every clock the verify
     # could read after its wait.
+    # sleep-ok: the release instant falls into the past on every clock the verify reads, as the
+    # comment above says
     Process.sleep(20)
     send(releaser.pid, :commit)
     assert {:ok, :ok} = Task.await(releaser, 25_000)
@@ -1566,6 +1569,8 @@ defmodule Arca.ControlPlaneOwnPoolTest do
     case Exqlite.Sqlite3.execute(probe, "BEGIN IMMEDIATE") do
       :ok ->
         :ok = Exqlite.Sqlite3.execute(probe, "ROLLBACK")
+        # sleep-ok: poll interval of await_held!'s bounded probe (3,000 tries) until a repo
+        # connection holds the lock
         Process.sleep(1)
         probe(probe, tries - 1)
 
@@ -1646,6 +1651,7 @@ defmodule Arca.ControlPlaneOwnPoolTest do
         flunk("the condition never held")
 
       true ->
+        # sleep-ok: poll interval of await_until's bounded wait (await/2, 5 s)
         Process.sleep(1)
         await_until(fun, deadline)
     end

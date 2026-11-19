@@ -148,6 +148,8 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
     test "refuses an execution this service already runs", %{host: host, boot: boot} do
       ScriptedHost.script(host, "attach", fn _args, _caller ->
+        # sleep-ok: the attach answers after 500 ms, so the first start still holds its attempt at
+        # the second
         Process.sleep(500)
         {:error, :lost}
       end)
@@ -196,6 +198,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
     boot: boot
   } do
     ScriptedHost.script(host, "attach", fn _args, _caller ->
+      # sleep-ok: the attach is held 2 s, so the attempt is running when the kill comes
       Process.sleep(2_000)
       {:ok, %{}}
     end)

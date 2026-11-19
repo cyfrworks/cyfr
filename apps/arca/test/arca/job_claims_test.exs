@@ -320,6 +320,7 @@ defmodule Arca.JobClaimsLockTest do
 
     refute Task.yield(waiting, 200)
     # Past the lease on every clock, then the lock is given up.
+    # sleep-ok: the 400 ms lease under test runs out while the holder waits for the row
     Process.sleep(400)
     send(blocking.pid, :commit)
     assert {:ok, :ok} = Task.await(blocking, 25_000)

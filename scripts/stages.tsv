@@ -13,14 +13,18 @@
 # tests/stage-test.sh holds that, and that every self-test a handoff row runs is
 # one a pull-request workflow runs too.
 save	format	1	600	dev	always	mix format --check-formatted
-save	credo	1	600	dev	apps/**,config/**	mix credo --strict
+save	credo	1	600	dev	apps/**,config/**,.credo.exs,tests/credo/**	mix credo --strict
 save	compile	1	1200	dev	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors
 save	tests	1	1800	test	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
 save	go-cmd	1	1200	-	apps/codex/**	cd apps/codex && go test ./cmd/...
 
 handoff	format	1	600	dev	always	mix format --check-formatted
-handoff	credo	1	600	dev	apps/**,config/**	mix credo --strict
+handoff	credo	1	600	dev	apps/**,config/**,.credo.exs,tests/credo/**	mix credo --strict
 handoff	compile-sqlite	1	1200	dev	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors
+# The project's own Credo check on planted sources. config/runtime.exs reads
+# the umbrella's own modules, so the row runs after the dev compile, and
+# compiles the umbrella itself when that compile was skipped.
+handoff	credo-check	1	600	dev	.credo.exs,tests/credo/**	CYFR_DATABASE=sqlite MIX_ENV=dev mix run --no-start tests/credo/sleep-reason-test.exs
 handoff	compile-postgres	1	1200	dev_pg	apps/**,config/**,mix.exs,mix.lock	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev mix compile --warnings-as-errors
 handoff	generated	1	600	dev	apps/**,config/**	mix ops.gen.cli --check && mix cyfr.gen.configuration_guide --check
 handoff	tests-sqlite	1	2700	test	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS

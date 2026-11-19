@@ -94,6 +94,7 @@ defmodule Opus.LeaseWatchTest do
   } do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
     {pid, ref, _watch} = holder!(id, attempt)
+    # sleep-ok: renewal ticks run for 100 ms, in which a raising renewal must not end the holder
     Process.sleep(100)
     refute_received {:DOWN, ^ref, :process, _, _}
     assert Process.alive?(pid)
@@ -110,6 +111,8 @@ defmodule Opus.LeaseWatchTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
     {pid, ref, _watch} = holder!(id, attempt, until: DateTime.add(DateTime.utc_now(), -60))
     # Five renewal ticks, each refused by the store.
+    # sleep-ok: five renewal ticks pass, in which a store that cannot answer must not end the
+    # holder
     Process.sleep(100)
     refute_received {:DOWN, ^ref, :process, _, _}
     assert Process.alive?(pid)
@@ -125,6 +128,7 @@ defmodule Opus.LeaseWatchTest do
     :ok = LeaseWatch.suspend(watch)
     %{lease_until: suspended} = Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), attempt)
 
+    # sleep-ok: 100 ms of renewal ticks in which the suspended keeper must renew nothing
     Process.sleep(100)
 
     assert %{lease_until: ^suspended} =
