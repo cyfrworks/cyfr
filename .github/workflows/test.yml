@@ -23,7 +23,7 @@ on:
       # (tests/ci-publish-test.sh) read release.yml, and the commit gate's
       # test reads them all (tests/commit-gate-test.sh); the image scans
       # read .trivyignore.yaml and trivy-secret.yaml.
-      - '.github/workflows/*.yml'
+      - '.github/workflows/**'
       # The setup-elixir action every BEAM job here runs.
       - '.github/actions/**'
       - '.trivyignore.yaml'
@@ -83,7 +83,7 @@ on:
       # (tests/ci-publish-test.sh) read release.yml, and the commit gate's
       # test reads them all (tests/commit-gate-test.sh); the image scans
       # read .trivyignore.yaml and trivy-secret.yaml.
-      - '.github/workflows/*.yml'
+      - '.github/workflows/**'
       # The setup-elixir action every BEAM job here runs.
       - '.github/actions/**'
       - '.trivyignore.yaml'
@@ -410,11 +410,10 @@ jobs:
       - name: The tag pipeline's image publication
         run: bash tests/ci-publish-test.sh
 
-  # Which of the host and partitions self-test jobs this run needs: on a
-  # pull request, those whose scripts read a file it changes; everywhere
-  # else, both (scripts/ci/self-test-scope.sh, which holds each job's
-  # paths). A job it leaves out is skipped; one this job fails to decide
-  # runs.
+  # Which harness self-test jobs this run needs: on a pull request, those
+  # whose paths it changes; everywhere else, all three
+  # (scripts/ci/self-test-scope.sh, which holds each job's paths). A job
+  # it leaves out is skipped; one this job fails to decide runs.
   self-test-scope:
     name: Which harness self-tests this change needs
     runs-on: ubuntu-latest
@@ -422,6 +421,7 @@ jobs:
     outputs:
       host: ${{ steps.scope.outputs.host }}
       partitions: ${{ steps.scope.outputs.partitions }}
+      gate: ${{ steps.scope.outputs.gate }}
     steps:
       # The merge commit and its two parents, the base and the head.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -437,10 +437,10 @@ jobs:
   # runs. They run stand-in gates and queues with real deadlines, so they
   # take jobs of their own beside the others, split three ways by how long
   # each script takes, each job with only the setup its scripts need.
-  # The host and partitions jobs are skipped only when self-test-scope
-  # succeeded and answered false for them: a scope job that failed, even
-  # after writing an answer (GitHub keeps a failed job's outputs), runs
-  # both. tests/ci-guards-test.sh holds both conditions to that.
+  # Each is skipped only when self-test-scope succeeded and answered false
+  # for it: a scope job that failed, even after writing an answer (GitHub
+  # keeps a failed job's outputs), runs all three. tests/ci-guards-test.sh
+  # holds the three conditions to that.
   #
   # The containment library and the host queue need Bash, flock, perl and
   # Python, which the runner ships.
@@ -499,6 +499,8 @@ jobs:
   # the build, the pinned Rust toolchain and cargo-component those need.
   harness-tests-gate:
     name: Harness self-tests (commit gate)
+    needs: self-test-scope
+    if: ${{ !cancelled() && (needs.self-test-scope.result != 'success' || needs.self-test-scope.outputs.gate != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -563,6 +565,13 @@ jobs:
       # The fixtures' recipe runs the real Mix against the test build.
       - name: Compile
         run: mix compile
+      # The self-test replays codex-ci.yml's test job with GITHUB_ACTIONS
+      # set, and that job's swtpm step installs nothing when swtpm is on the
+      # PATH, so the replay asks no mirror for it.
+      - name: swtpm, which the gate's replay of codex-ci.yml finds installed
+        run: |
+          scripts/ci/retry.sh sudo apt-get update
+          scripts/ci/retry.sh sudo apt-get install -y --no-install-recommends swtpm
       - name: The commit gate
         run: bash tests/commit-gate-test.sh
 
