@@ -28,7 +28,8 @@ defmodule Compendium.ProviderTest do
             disabled: false,
             catalyst_ref: nil,
             model: nil,
-            tool_policy: %{},
+            mode: "auto",
+            tools: [],
             prompt: prompt
           },
           attrs
@@ -48,7 +49,7 @@ defmodule Compendium.ProviderTest do
         title: "A.Q.U.A.",
         catalyst_ref: "catalyst:moonmoon69.claude",
         model: "claude-opus-4-6",
-        tool_policy: %{"component.list" => "auto", "build.compile" => "auto"}
+        tools: ["component.list", "build.compile"]
       },
       "# A.Q.U.A.\n\nYou are A.Q.U.A."
     )
@@ -1684,129 +1685,162 @@ defmodule Compendium.ProviderTest do
       assert result.model == "claude-opus-4-6"
     end
 
-    test "get explorer returns a crew member with metadata, under the soul's policy", %{ctx: ctx} do
+    test "get explorer returns a crew member with metadata, offered the soul's tools", %{ctx: ctx} do
       {:ok, result} =
         Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
 
       {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+      assert soul.tools == ["build.compile", "component.list"]
+      prompt = "# Explorer Agent\n\nYou are the Explorer."
 
-      assert result.name == "explorer"
-      assert result.type == "crew"
-      refute Map.has_key?(result, :parent)
-      assert result.format == "markdown"
-      assert result.content =~ "Explorer Agent"
-      assert result.avoid == "Changing files"
-      assert result.options == %{}
-      assert result.tool_policy == soul.tool_policy
+      assert result == %{
+               name: "explorer",
+               format: "markdown",
+               content: prompt,
+               type: "crew",
+               title: "Explorer",
+               description: "Research and web search",
+               avoid: "Changing files",
+               mode: "auto",
+               tools: soul.tools,
+               catalyst_ref: nil,
+               program: nil,
+               model: nil,
+               options: %{},
+               disabled: false,
+               content_digest: Prima.Digest.sha256_hex(prompt)
+             }
     end
 
-    test "get returns the athanor's declared policy — one allowlist for every member", %{
+    test "get returns the soul's declared tools — one list every member is offered", %{
       ctx: ctx
     } do
       {:ok, before} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
-      assert before.tool_policy["build.compile"] == "auto"
+      assert "build.compile" in before.tools
 
-      # Editing declared policy goes through the tool — the agents page's
-      # path. A chat decision does NOT come here; those are
-      # `Aqua.ToolGrants` rows composed over this at use time.
-      edited =
-        before.tool_policy
-        |> Map.delete("build.compile")
-        |> Map.put("files.write", "auto")
+      # Editing the declared list goes through the tool — the Aqua page's
+      # path — and is written in its one form, sorted.
+      edited = ["files.write" | before.tools -- ["build.compile"]]
 
       {:ok, _} =
         Provider.handle("aqua", ctx, %{
           "action" => "update",
           "name" => "aqua",
-          "tool_policy" => edited
+          "tools" => edited
         })
 
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
 
-      refute Map.has_key?(result.tool_policy, "build.compile")
-      assert result.tool_policy["files.write"] == "auto"
-      assert result.tool_policy["component.list"] == "auto"
-      refute Map.has_key?(result, :effective_tool_policy)
+      assert result.tools == ["component.list", "files.write"]
+      refute Map.has_key?(result, :tool_policy)
 
-      # Every crew member runs under it.
+      # Every crew member is offered it.
       {:ok, member} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
-      assert member.tool_policy == result.tool_policy
+      assert member.tools == result.tools
     end
 
-    test "update refuses a tool_policy value other than ask or auto", %{ctx: ctx} do
-      assert {:error, msg} =
+    test "update refuses a mode other than read-only or auto", %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+
+      for name <- ["aqua", "explorer"] do
+        {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.agent_file(name))
+
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  reason: {:invalid_argument, "Field 'mode' is not an allowed value"}
+                }} =
+                 Cyfr.Test.AquaTool.call(ctx, %{
+                   "action" => "update",
+                   "name" => name,
+                   "mode" => "ask"
+                 })
+
+        # The door refuses it on its own too, for a caller past the gate.
+        assert {:error, {:invalid_argument, "mode must be \"read-only\" or \"auto\""}} =
+                 Provider.handle("aqua", ctx, %{
+                   "action" => "update",
+                   "name" => name,
+                   "mode" => "ask"
+                 })
+
+        assert {:ok, ^bytes} = Arca.get(actor, Compendium.AquaPath.agent_file(name))
+      end
+
+      assert {:error, {:invalid_argument, "mode must be \"read-only\" or \"auto\""}} =
                Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "aqua",
-                 "tool_policy" => %{"files.delete" => "sometimes"}
+                 "action" => "create",
+                 "name" => "reader",
+                 "mode" => "Auto"
                })
 
-      assert err_msg(msg) =~ ~s{use "ask" or "auto"}
+      assert {:error, :not_found} = Arca.get(actor, Compendium.AquaPath.crew_file("reader"))
     end
 
-    test "update rejects malformed tool_policy keys", %{ctx: ctx} do
-      assert {:error, msg} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "aqua",
-                 "tool_policy" => %{"no-dot-here" => "auto"}
-               })
+    test "update rejects a malformed tools entry, whole or patched", %{ctx: ctx} do
+      {:ok, bytes} = Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
 
-      assert err_msg(msg) =~ "Invalid tool_policy key"
-    end
-
-    test "the door refuses any policy for a crew member — whole, patched or on create",
-         %{ctx: ctx} do
       sentence =
-        "A crew member runs under the soul's tool policy and has none of its own — " <>
-          "edit the soul's"
+        ~s{Invalid tool "no-dot-here" — use "tool.action", "tool.*", "native_search" or "server:tool"}
 
-      for mode <- ["auto", "ask"] do
-        policy = %{"build.compile" => mode}
-
+      for arg <- ["tools", "tools_add", "tools_remove"] do
         assert {:error, {:invalid_argument, ^sentence}} =
                  Provider.handle("aqua", ctx, %{
                    "action" => "update",
-                   "name" => "explorer",
-                   "tool_policy" => policy
-                 })
-
-        assert {:error, {:invalid_argument, ^sentence}} =
-                 Provider.handle("aqua", ctx, %{
-                   "action" => "update",
-                   "name" => "explorer",
-                   "tool_policy_patch" => %{"execution.run" => mode}
-                 })
-
-        assert {:error, {:invalid_argument, ^sentence}} =
-                 Provider.handle("aqua", ctx, %{
-                   "action" => "create",
-                   "name" => "launcher",
-                   "tool_policy" => policy
+                   "name" => "aqua",
+                   arg => ["no-dot-here"]
                  })
       end
 
-      # The member's file holds no policy still.
+      assert {:ok, ^bytes} =
+               Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+    end
+
+    test "the door refuses any tools for a crew member — whole, added, removed or on create",
+         %{ctx: ctx} do
+      sentence =
+        "A crew member is offered the soul's tools and has none of its own — edit the soul's"
+
       {:ok, bytes} =
         Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("explorer"))
 
-      refute bytes =~ "tool_policy"
+      for arg <- ["tools", "tools_add", "tools_remove"] do
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Provider.handle("aqua", ctx, %{
+                   "action" => "update",
+                   "name" => "explorer",
+                   arg => ["build.compile"]
+                 })
+      end
+
+      assert {:error, {:invalid_argument, ^sentence}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "create",
+                 "name" => "launcher",
+                 "tools" => ["build.compile"]
+               })
+
+      # The member's file is as it was, and holds no tools.
+      assert {:ok, ^bytes} =
+               Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("explorer"))
+
+      refute bytes =~ "tools"
 
       # Nothing was created either.
       assert {:error, _} =
                Provider.handle("aqua", ctx, %{"action" => "get", "name" => "launcher"})
 
-      # The soul's own key is still the soul's to write, and the crew runs
-      # under it.
+      # The soul's own list is still the soul's to write, and the crew is
+      # offered it.
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "aqua",
-                 "tool_policy_patch" => %{"execution.run" => "ask"}
+                 "tools_add" => ["execution.run"]
                })
 
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
-      assert result.tool_policy["execution.run"] == "ask"
+      assert result.tools == ["build.compile", "component.list", "execution.run"]
     end
 
     test "a crew file holding a policy is refused as damage, and a patch cannot reach it",
@@ -1829,82 +1863,83 @@ defmodule Compendium.ProviderTest do
                })
     end
 
-    test "a patch value outside ask, auto and null is the patch's own refusal, whatever the key",
+    test "a list given beside its patch is the patch's own refusal, whatever the entries",
          %{ctx: ctx} do
-      # The patch's shape is checked before any policy is merged, so an
-      # unknown value is refused as a patch value.
-      assert {:error,
-              {:invalid_argument,
-               ~s{tool_policy_patch: "execution.run" must be ask, auto or null}}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "aqua",
-                 "tool_policy_patch" => %{"execution.run" => "never"}
-               })
+      # The arguments' shape is checked before any list is merged, so
+      # entries the grammar admits are refused for being given both ways.
+      for patch <- [%{"tools_add" => ["files.read"]}, %{"tools_remove" => ["component.list"]}] do
+        assert {:error,
+                {:invalid_argument, "Give tools, or tools_add and tools_remove, not both"}} =
+                 Provider.handle(
+                   "aqua",
+                   ctx,
+                   Map.merge(
+                     %{"action" => "update", "name" => "aqua", "tools" => ["files.read"]},
+                     patch
+                   )
+                 )
+      end
 
       {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
-      refute Map.has_key?(result.tool_policy, "execution.run")
+      assert result.tools == ["build.compile", "component.list"]
     end
 
-    test "update accepts ask/auto and the bare native_search key", %{ctx: ctx} do
+    test "update accepts a member's mode, and a glob, the bare native_search and an outside server's tool",
+         %{ctx: ctx} do
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "aqua",
-                 "tool_policy" => %{
-                   "files.read" => "auto",
-                   "files.delete" => "ask",
-                   "native_search" => "auto"
-                 }
+                 "mode" => "read-only",
+                 "tools" => ["native_search", "github:list_issues", "files.read", "files.*"]
                })
 
-      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
-      assert result.tool_policy["native_search"] == "auto"
-      assert result.tool_policy["files.delete"] == "ask"
-    end
-
-    test "the door refuses what no agent may hold: destructive auto, a UI event at ask",
-         %{ctx: ctx} do
-      # Kind always wins.
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "aqua",
-                 "tool_policy" => %{"files.delete" => "auto"}
-               })
-
-      assert msg =~ "always asks"
-
-      # A glob at auto that would cover a destructive action names it.
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "aqua",
-                 "tool_policy" => %{"files.*" => "auto"}
-               })
-
-      assert msg =~ "files.delete"
-
-      # A UI event is auto or absent.
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "aqua",
-                 "tool_policy" => %{"request_setup.open" => "ask"}
-               })
-
-      assert msg =~ "runs on its own"
-
-      # What the soul may hold is written whole, an action at ask among it.
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
-                 "name" => "aqua",
-                 "tool_policy" => %{"files.write" => "ask", "files.read" => "auto"}
+                 "name" => "claude-code",
+                 "mode" => "read-only"
                })
 
-      assert {:ok, %{tool_policy: %{"files.write" => "ask"}}} =
-               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+      tools = ["files.*", "files.read", "github:list_issues", "native_search"]
+      {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+      assert Map.take(soul, [:mode, :tools]) == %{mode: "read-only", tools: tools}
+
+      # A mode is each member's own; the tools are the soul's.
+      for {name, mode} <- [{"claude-code", "read-only"}, {"explorer", "auto"}] do
+        {:ok, member} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => name})
+        assert Map.take(member, [:mode, :tools]) == %{mode: mode, tools: tools}
+      end
+    end
+
+    test "the door refuses what no file may hold: an entry the file's grammar refuses",
+         %{ctx: ctx} do
+      {:ok, bytes} = Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+
+      for entry <- ["no-dot-here", "a.b.c", ".read", "files.", ":tool", "srv.x:tool", 7] do
+        assert {:error, {:invalid_argument, "Invalid tool " <> _}} =
+                 Provider.handle("aqua", ctx, %{
+                   "action" => "update",
+                   "name" => "aqua",
+                   "tools" => [entry]
+                 })
+
+        # The file's parser refuses the same entry: the one rule both apply.
+        file = "---\ntools:\n  - #{Jason.encode!(entry)}\n---\n\nx\n"
+
+        assert Compendium.AquaAgent.parse("aqua", file) ==
+                 {:error, {:tools_invalid_entry, entry}}
+      end
+
+      assert {:error, {:invalid_argument, "tools must be a list"}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "tools" => "files.read"
+               })
+
+      assert {:ok, ^bytes} =
+               Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
     end
 
     test "get claude-code returns a crew member prompt", %{ctx: ctx} do

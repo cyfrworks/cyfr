@@ -3,9 +3,9 @@
 
 defmodule Aqua.AquaToolEditsTest do
   @moduledoc """
-  The `aqua` tool's edits meet under the lock: a per-key patch of the
-  soul's policy keeps a concurrent member's toggle, a prompt save names
-  the version it edited, a crew member holds no policy to edit, and a new
+  The `aqua` tool's edits meet under the lock: an add or a remove of the
+  soul's tools keeps a concurrent member's toggle, a prompt save names
+  the version it edited, a crew member holds no tools to edit, and a new
   crew member is its own file and nothing else.
   """
   use ExUnit.Case, async: false
@@ -36,9 +36,9 @@ defmodule Aqua.AquaToolEditsTest do
 
   defp call(ctx, args), do: Cyfr.Test.AquaTool.call(ctx, args)
 
-  defp policy(ctx, name) do
-    {:ok, %{"tool_policy" => policy}} = call(ctx, %{"action" => "get", "name" => name})
-    policy
+  defp tools(ctx, name) do
+    {:ok, %{"tools" => tools}} = call(ctx, %{"action" => "get", "name" => name})
+    tools
   end
 
   @soul "aqua"
@@ -47,13 +47,15 @@ defmodule Aqua.AquaToolEditsTest do
        %{ctx: ctx} do
     actor = Sanctum.Context.actor(ctx)
     {:ok, soul} = Arca.get(actor, AquaPath.soul_file())
+    before = tools(ctx, @soul)
 
     assert {:ok, %{"created" => "sentry", "type" => "crew"} = created} =
              call(ctx, %{"action" => "create", "name" => "sentry"})
 
     assert map_size(created) == 2
     assert {:ok, ^soul} = Arca.get(actor, AquaPath.soul_file())
-    refute Map.has_key?(policy(ctx, AquaPath.soul_name()), "sentry.*")
+    assert tools(ctx, @soul) == before
+    assert tools(ctx, "sentry") == before
   end
 
   # The derived index follows every write to the tree: a created member has
@@ -72,13 +74,15 @@ defmodule Aqua.AquaToolEditsTest do
     refute edited.revision_digest == scout.revision_digest
     refute edited.capability_digest == scout.capability_digest
 
-    # The member runs under the soul's policy: an edit of the soul moves
-    # the member's capability, never its file.
+    # The member is offered the soul's tools: an edit of the soul's list
+    # moves the member's capability, never its file.
+    refute "storage.write" in tools(ctx, @soul)
+
     assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
                "name" => @soul,
-               "tool_policy_patch" => %{"storage.write" => "ask"}
+               "tools_add" => ["storage.write"]
              })
 
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
@@ -104,90 +108,96 @@ defmodule Aqua.AquaToolEditsTest do
     assert Enum.any?(rows, &(&1.name == AquaPath.soul_name()))
   end
 
-  test "two members toggling different keys of the soul's policy keep both", %{ctx: ctx} do
-    before = policy(ctx, @soul)
-    refute Map.has_key?(before, "storage.write") or Map.has_key?(before, "custom.thing")
+  test "two members toggling different tools of the soul's list at once keep both", %{ctx: ctx} do
+    before = tools(ctx, @soul)
+    refute "storage.write" in before or "custom.thing" in before
+
+    ["storage.write", "custom.thing"]
+    |> Enum.map(fn tool ->
+      Task.async(fn ->
+        call(ctx, %{"action" => "update", "name" => @soul, "tools_add" => [tool]})
+      end)
+    end)
+    |> Task.await_many(30_000)
+    |> Enum.each(&assert({:ok, %{"updated" => @soul}} = &1))
+
+    assert tools(ctx, @soul) == Enum.sort(before ++ ["custom.thing", "storage.write"])
 
     assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
                "name" => @soul,
-               "tool_policy_patch" => %{"storage.write" => "ask"}
+               "tools_remove" => ["storage.write"]
              })
 
-    assert {:ok, _} =
-             call(ctx, %{
-               "action" => "update",
-               "name" => @soul,
-               "tool_policy_patch" => %{"custom.thing" => "auto"}
-             })
+    assert tools(ctx, @soul) == Enum.sort(["custom.thing" | before])
 
-    assert policy(ctx, @soul) ==
-             Map.merge(before, %{"storage.write" => "ask", "custom.thing" => "auto"})
-
-    assert {:ok, _} =
-             call(ctx, %{
-               "action" => "update",
-               "name" => @soul,
-               "tool_policy_patch" => %{"storage.write" => nil}
-             })
-
-    assert policy(ctx, @soul) == Map.put(before, "custom.thing", "auto")
-
-    # The crew runs under it.
-    assert policy(ctx, "scout") == policy(ctx, @soul)
+    # The crew is offered it.
+    assert tools(ctx, "scout") == tools(ctx, @soul)
   end
 
-  test "a patch is judged as the whole it makes, and a crew member holds none", %{ctx: ctx} do
-    before = policy(ctx, @soul)
+  test "a patch is applied to the list as it is, in its one form, and a crew member holds none",
+       %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, scout} = Arca.get(actor, AquaPath.crew_file("scout"))
+    [first | _] = before = tools(ctx, @soul)
 
-    # The kind ceiling holds for a patched key exactly as for a replaced map.
-    assert {:error, {:invalid_argument, _}} =
+    # An add of a tool the list holds, and a remove of one it does not,
+    # leave it as it was.
+    for patch <- [%{"tools_add" => [first]}, %{"tools_remove" => ["custom.thing"]}] do
+      assert {:ok, %{"updated" => @soul}} =
+               call(ctx, Map.merge(%{"action" => "update", "name" => @soul}, patch))
+
+      assert tools(ctx, @soul) == before
+    end
+
+    # One write adds and removes.
+    assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
                "name" => @soul,
-               "tool_policy_patch" => %{"files.delete" => "auto"}
+               "tools_add" => ["custom.thing"],
+               "tools_remove" => [first]
              })
 
-    # A launch is patched to ask and back to auto, the person's choice of
-    # a card before every run.
-    for mode <- ["ask", "auto"] do
-      assert {:ok, %{"updated" => "aqua"}} =
-               call(ctx, %{
-                 "action" => "update",
-                 "name" => @soul,
-                 "tool_policy_patch" => %{"execution.run" => mode}
-               })
+    after_patch = Enum.sort(["custom.thing" | before -- [first]])
+    assert tools(ctx, @soul) == after_patch
 
-      assert policy(ctx, @soul)["execution.run"] == mode
-    end
+    # An entry outside the grammar is refused at the door, one that is no
+    # string by the tool's schema; a list beside its patch is refused.
+    assert {:error,
+            {:invalid_argument,
+             ~s{Invalid tool "no-dot-here" — use "tool.action", "tool.*", "native_search" or "server:tool"}}} =
+             call(ctx, %{"action" => "update", "name" => @soul, "tools_add" => ["no-dot-here"]})
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+             call(ctx, %{"action" => "update", "name" => @soul, "tools_add" => [7]})
+
+    assert {:error, {:invalid_argument, "Give tools, or tools_add and tools_remove, not both"}} =
              call(ctx, %{
                "action" => "update",
                "name" => @soul,
-               "tool_policy_patch" => %{"files.read" => "maybe"}
+               "tools" => [],
+               "tools_add" => ["files.read"]
              })
 
-    assert {:error, {:invalid_argument, _}} =
-             call(ctx, %{
-               "action" => "update",
-               "name" => @soul,
-               "tool_policy" => %{},
-               "tool_policy_patch" => %{"files.read" => "auto"}
-             })
+    # A crew member is offered the soul's tools and holds none to write.
+    crew =
+      "A crew member is offered the soul's tools and has none of its own — edit the soul's"
 
-    # A crew member runs under the soul's policy and holds none to write.
-    for args <- [%{"tool_policy_patch" => %{"files.read" => "auto"}}, %{"tool_policy" => %{}}] do
-      assert {:error, {:invalid_argument, message}} =
+    for args <- [
+          %{"tools_add" => ["files.read"]},
+          %{"tools_remove" => [first]},
+          %{"tools" => []}
+        ] do
+      assert {:error, {:invalid_argument, ^crew}} =
                call(ctx, Map.merge(%{"action" => "update", "name" => "scout"}, args))
-
-      assert message =~ "runs under the soul's tool policy"
     end
 
-    assert policy(ctx, @soul) == before
-    {:ok, bytes} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.crew_file("scout"))
-    refute bytes =~ "tool_policy"
+    assert tools(ctx, @soul) == after_patch
+    assert {:ok, ^scout} = Arca.get(actor, AquaPath.crew_file("scout"))
+    refute scout =~ "tools"
+    assert tools(ctx, "scout") == after_patch
   end
 
   # A brain-option edit is a patch applied to the options as the write

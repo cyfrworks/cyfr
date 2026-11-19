@@ -548,6 +548,7 @@ defmodule Compendium.Providers.Aqua do
     with :ok <- validate_name(name),
          :ok <- refute_reserved(name),
          :ok <- no_crew_tools(name, args),
+         :ok <- validate_mode(args["mode"]),
          :ok <- validate_options(args["options"]),
          :ok <- one_brain(%{catalyst_ref: args["catalyst_ref"], program: args["program"]}) do
       create_member(ctx, name, args)
@@ -582,6 +583,7 @@ defmodule Compendium.Providers.Aqua do
     with :ok <- validate_name(name),
          :ok <- no_crew_tools(name, args),
          :ok <- one_tools_argument(args),
+         :ok <- validate_mode(args["mode"]),
          :ok <- validate_tools(args["tools"]),
          :ok <- validate_tools(args["tools_add"]),
          :ok <- validate_tools(args["tools_remove"]),
@@ -1121,6 +1123,17 @@ defmodule Compendium.Providers.Aqua do
   # grammar the file parser applies, so nothing this door admits can fail
   # to parse back. An absent argument leaves the list alone
   # (`apply_updates/2`).
+  # A member's mode at this door as the file parser reads it, whoever
+  # calls it: one of the file's two, so no write lands a mode its next
+  # read refuses.
+  defp validate_mode(nil), do: :ok
+
+  defp validate_mode(mode) do
+    if mode in AquaAgent.modes(),
+      do: :ok,
+      else: {:error, {:invalid_argument, "mode must be \"read-only\" or \"auto\""}}
+  end
+
   defp validate_tools(nil), do: :ok
 
   defp validate_tools(tools) do

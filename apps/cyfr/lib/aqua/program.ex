@@ -6,7 +6,7 @@ defmodule Aqua.Program do
   The attendant of a program used as a brain: the one process that takes
   what a held session (`Opus.Brain`) says and writes what Aqua owes it,
   for one thread and agent, from the session's start to its end, through
-  tool runs, card waits and the turns between.
+  tool runs, launch waits and the turns between.
 
   ## One attendant
 
@@ -35,7 +35,7 @@ defmodule Aqua.Program do
   ask's result as its `answer`, then each post of the open turn that
   waits, each first recorded as an `input` step (`carry/3`) whose id the
   command carries, so a delivery is attempted once whatever restarts
-  follow. A post written while the turn waits on a card approves nothing.
+  follow.
   `accepted` says the write was taken and nothing more: a post's
   obligation ends when an `idle` names it.
 

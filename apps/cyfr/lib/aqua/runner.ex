@@ -36,8 +36,9 @@ defmodule Aqua.Runner do
   ## Turns
 
   One turn runs at a time. The loop ends the turn itself on every
-  outcome but a pause; a turn paused on a card waits for the decision —
-  the tape tells the runner — and continues as the person who sent it
+  outcome but a pause; a turn paused around a launch or on an uncertain
+  outcome waits for what continues it — the tape tells the runner — and
+  continues as the person who sent it
   (`Sanctum.Tenancy.continuation/3`), or ends uncertain when the athanor
   is no longer that person's. A loop that dies without an answer is aborted
   from here (`Aqua.Loop.abort/4`) and its turn ended uncertain, or
@@ -68,7 +69,7 @@ defmodule Aqua.Runner do
   the moment it takes a call of it, is dropped while it waits here; once
   it has a row, the row records the end (`Aqua.Tape.end_call/4`), so no
   step of it is recorded or dispatched after, however far it had got,
-  and its step still proposed is skipped, its card withdrawn. A runner
+  and its step still proposed is skipped. A runner
   that recovers a thread's turns holds no call of its predecessor, whose
   requests were answered unavailable when it died: their steps still
   proposed are skipped, and a turn one opened that never ran is

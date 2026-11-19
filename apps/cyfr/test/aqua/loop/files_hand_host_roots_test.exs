@@ -52,7 +52,8 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
 
   test "a files.write to the soul's file is refused at the storage door, and one under data/ is made",
        %{ctx: ctx, thread: thread} do
-    soul_policy!(ctx, %{"files.write" => "auto"})
+    # The shipped soul is offered files.write on auto: only the door stands
+    # between the hand and the soul's file.
     before = soul_file!(ctx)
 
     turn = accept!(ctx, thread, "@aqua rewrite yourself")
@@ -61,7 +62,10 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
     script!([
       calls([
         {"c1", "files.write",
-         %{"path" => "aqua/aqua.md", "content" => "---\ntool_policy:\n  notes.pin: auto\n---\n"}}
+         %{
+           "path" => "aqua/aqua.md",
+           "content" => "---\nmode: auto\ntools:\n  - browser.turn_on\n---\n"
+         }}
       ]),
       calls([{"c2", "files.write", %{"path" => "data/control.md", "content" => "control"}}]),
       reply("done")
@@ -87,30 +91,6 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
   defp soul_file!(ctx) do
     {:ok, binary} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.soul_file())
     binary
-  end
-
-  # The soul's own definition gains `patch` through the door, and its grant
-  # is walked again for the shape that moved.
-  defp soul_policy!(ctx, patch) do
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
-        "tool_policy_patch" => patch
-      })
-
-    decisions = %{ref: @soul, selections: [%{dep: @model, label: "default"}]}
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
   end
 
   defp accept!(ctx, thread, text) do

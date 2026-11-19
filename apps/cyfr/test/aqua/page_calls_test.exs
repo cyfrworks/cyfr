@@ -11,13 +11,15 @@ defmodule Aqua.PageCallsTest do
   and the page is answered that step's result through the browser.
 
   A tincture's page calls only what its manifest declares, and a call it
-  does not declare leaves no step; a plain page's call is decided by
-  policy alone. A granted component whose grant covers the page, which a
-  call carries as outside material, runs with no card; one whose grant
-  does not asks on a card of its own each time while the page waits, and
-  the yes runs that one call once. A turn a schedule started asks nobody.
-  A request that is gone runs nothing, a call its runner dies holding is
-  answered unavailable, and a call over the rate is refused.
+  does not declare leaves no step; a plain page's call is held to no
+  declaration. A call is decided under Aqua's mode in the turn it joins
+  or opens, and nothing asks: on auto what Aqua is offered runs at once,
+  a component whatever of the page its grant lets out, and on read-only
+  a read runs and any other call is refused in the read-only sentence,
+  the thread told once. A call Aqua is not offered is refused, and a turn
+  a schedule started is decided as any other. A request that is gone
+  runs nothing, a call its runner dies holding is answered unavailable,
+  and a call over the rate is refused.
   """
 
   use ExUnit.Case, async: false
@@ -25,7 +27,7 @@ defmodule Aqua.PageCallsTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait, only: [wait_until: 3]
 
-  alias Aqua.{Approvals, Runner, Tape}
+  alias Aqua.{Runner, Tape}
   alias Aqua.Providers.Browser, as: Provider
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
@@ -36,6 +38,7 @@ defmodule Aqua.PageCallsTest do
 
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
+  @http "catalyst:local.http"
   @root :crypto.strong_rand_bytes(32)
 
   setup do
@@ -230,15 +233,25 @@ defmodule Aqua.PageCallsTest do
     profile_id
   end
 
-  # Aqua's policy with `patch` over it, as the Aqua page writes it, and the
-  # soul's grant walked again for the shape that moved.
-  defp policy!(ctx, patch) do
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
-        "tool_policy_patch" => patch
-      })
+  # Aqua switched to `mode`, as the Aqua page switches it.
+  defp mode!(ctx, mode) do
+    assert {:ok, %{"updated" => "aqua"}} =
+             Cyfr.Test.AquaTool.call(ctx, %{
+               "action" => "update",
+               "name" => "aqua",
+               "mode" => mode
+             })
+  end
+
+  # Aqua offered its tools less `tools`, as the Aqua page writes it, and
+  # its grant walked again for the shape that moved.
+  defp unoffer!(ctx, tools) do
+    assert {:ok, %{"updated" => "aqua"}} =
+             Cyfr.Test.AquaTool.call(ctx, %{
+               "action" => "update",
+               "name" => "aqua",
+               "tools_remove" => tools
+             })
 
     walk!(ctx, %{ref: @soul, selections: [%{dep: @model, label: "default"}]})
   end
@@ -292,17 +305,90 @@ defmodule Aqua.PageCallsTest do
 
   defp result(value), do: %{"v" => 1, "ok" => true, "result" => value}
 
-  # The turn a card paused, and its one card waiting.
-  defp paused!(ctx) do
-    assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: turn_id}}, 60_000
-    {:ok, turn} = Tape.turn(ctx, turn_id)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, turn)
-    {turn, approval}
+  # The wire's answer to a call its step refused in `message`.
+  defp refused(message),
+    do: %{
+      "v" => 1,
+      "ok" => false,
+      "error" => %{"class" => "forbidden", "message" => message, "stage" => "execution"}
+    }
+
+  # What a fetch the page asked for answers it: the fetch's data.
+  @fetched %{"body" => "x", "status" => 200}
+  @get %{"url" => "https://example.test/x"}
+  @keep %{"name" => "from-page", "content" => "x"}
+
+  # Work of its own opened on the page's fetch, the fetch held, and a
+  # `notes.keep` after it proposed as a step of that work, which waits
+  # for the work's next round. Answers the held fetch and the work.
+  defp held_fetch!(ctx, driver, room, put) do
+    ScriptedWorker.script([{:hold, self()}, @fetched])
+    action(driver, room, 1, "http.get", @get)
+    assert_receive {:scripted_probe, fetch, _child}, 60_000
+    action(driver, room, 2, "notes.keep", @keep)
+    proposed!(ctx, room, put, 1)
+    [{%{id: work}, _steps}] = turns_after(ctx, room, put)
+    {fetch, work}
   end
 
-  defp intent!(ctx, approval) do
-    {:ok, card} = Tape.message(ctx, approval.message_id)
-    Tape.payload(card)["intent"]
+  # The work after the put's, `n` of its steps proposed behind the first.
+  defp proposed!(ctx, room, put, n) do
+    wait_until(
+      fn ->
+        case turns_after(ctx, room, put) do
+          [{_turn, [%{dispatch_state: "dispatched"} | rest]}] ->
+            length(rest) == n and Enum.all?(rest, &(&1.dispatch_state == "proposed"))
+
+          _other ->
+            false
+        end
+      end,
+      10_000,
+      "#{n} calls to be steps of the work"
+    )
+  end
+
+  # Work of its own opened on the page's launch of `app`, the app's run
+  # held with the work paused around it, and a second launch of it
+  # waiting in the runner, no step yet. Answers the held run and the work.
+  defp held_launch!(ctx, driver, room, put, app) do
+    ScriptedWorker.script([{:hold, self()}, {:output, %{"run" => 1}}, {:output, %{"run" => 2}}])
+    invoke(driver, room, 1, app <> ":1.0.0")
+    assert_receive {:scripted_probe, launched, _child}, 60_000
+
+    assert [{%{id: work, status: "paused", paused_reason: "launch"}, _}] =
+             turns_after(ctx, room, put)
+
+    invoke(driver, room, 2, app <> ":1.0.0")
+    waiting!(room, 1)
+    {launched, work}
+  end
+
+  # The step at `seq` of `work` skipped.
+  defp skipped!(ctx, work, seq) do
+    wait_until(
+      fn -> match?(%{outcome: "skipped"}, Enum.at(steps!(ctx, work), seq - 1)) end,
+      10_000,
+      "step #{seq} to be skipped"
+    )
+  end
+
+  # The browser of `chrome` killed outright, with no word of its calls.
+  defp kill_browser!(ctx, chrome) do
+    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, chrome})
+    ref = Process.monitor(holder)
+    Process.exit(holder, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+  end
+
+  # The thread's runner has taken the end of its work: the next call
+  # opens work of its own.
+  defp settled!(ctx, room) do
+    wait_until(
+      fn -> match?(%{running: false, paused: false}, Runner.state(room.id, ctx.athanor_id)) end,
+      30_000,
+      "the thread's work to settle"
+    )
   end
 
   @terminal ~w(completed failed cancelled uncertain)
@@ -365,8 +451,104 @@ defmodule Aqua.PageCallsTest do
   defp app_runs, do: Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "go"))
   defp chats, do: Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
+  # The requests of the page's calls in `thread`, as their rows name them,
+  # oldest first.
+  defp requests(ctx, thread),
+    do: for(%{kind: "page_call", client_id: request} <- page_rows(ctx, thread), do: request)
+
+  # A turn's steps as a case compares them: every field but those minted
+  # (ids, clocks, digests, child runs), with the kinds of the rows a step
+  # carries its call and its answer in.
+  defp steps!(ctx, turn_id) do
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    for step <- steps do
+      %{
+        seq: step.seq,
+        kind: step.kind,
+        purpose: step.purpose,
+        tool: step.tool,
+        action: step.action,
+        dispatch_state: step.dispatch_state,
+        outcome: step.outcome,
+        generation: step.generation,
+        recovery: step.recovery,
+        idempotency_key: step.idempotency_key,
+        error: step.error,
+        cancel_requested?: step.cancel_requested_at != nil,
+        carried: kind_of(ctx, step.message_id),
+        answered: kind_of(ctx, step.result_message_id)
+      }
+    end
+  end
+
+  defp kind_of(_ctx, nil), do: nil
+
+  defp kind_of(ctx, id) do
+    {:ok, row} = Tape.message(ctx, id)
+    row.kind
+  end
+
+  # The step of the page's call `request` of `name` in `turn_id`, closed
+  # with `outcome` and `error`; of the calls here only the lists are
+  # replay-safe.
+  defp page_step(seq, turn_id, request, name, outcome, error \\ nil) do
+    [tool, action] = String.split(name, ".")
+
+    %{
+      seq: seq,
+      kind: if(name == "execution.run", do: "launch", else: "tool"),
+      purpose: "page",
+      tool: tool,
+      action: action,
+      dispatch_state: "closed",
+      outcome: outcome,
+      generation: 0,
+      recovery: if(name in ["component.list", "crew.list"], do: "replay_safe"),
+      idempotency_key: "page_call:#{turn_id}:#{request}",
+      error: error,
+      cancel_requested?: false,
+      carried: "page_call",
+      answered: "page_result"
+    }
+  end
+
+  # The thread's rows, oldest first, each whole but for its id and clock,
+  # which are minted.
+  defp rows!(ctx, thread) do
+    for row <- Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+        do: Map.drop(row, [:id, :inserted_at])
+  end
+
+  # A row of `thread` as `rows!/2` reads it: `fields` over the columns a
+  # row leaves empty.
+  defp row(thread, fields) do
+    Map.merge(
+      %{
+        thread_id: thread.id,
+        athanor_id: thread.athanor_id,
+        payload: nil,
+        status: nil,
+        resolved_by: nil,
+        carried_by: nil,
+        resolved_at: nil,
+        resolution: nil,
+        execution_id: nil,
+        turn_id: nil,
+        approval_id: nil,
+        client_id: nil,
+        addressee: nil,
+        reply_to: nil,
+        outcome: nil,
+        workspace_id: nil
+      },
+      fields
+    )
+  end
+
   # ---------------------------------------------------------------------------
-  # With no card
+  # On auto
   # ---------------------------------------------------------------------------
 
   test "a granted component with no exit, or whose grant lets the page out, runs once with " <>
@@ -481,7 +663,8 @@ defmodule Aqua.PageCallsTest do
     assert [_one] = runs_of(ctx, declared)
   end
 
-  test "a plain page's call is held to no declaration and is decided by policy alone",
+  test "a plain page's call is held to no declaration and is decided by Aqua's mode alone: " <>
+         "on auto each runs at once, a step that does more than read among them",
        %{ctx: ctx, driver: driver} do
     app = app!(ctx)
     worker!([app])
@@ -491,350 +674,269 @@ defmodule Aqua.PageCallsTest do
     ScriptedWorker.script([{:output, %{"plain" => true}}])
     invoke(driver, room, 1, app <> ":1.0.0")
     assert answered!(1) == {200, result(%{"plain" => true})}
+    settled!(ctx, room)
     action(driver, room, 2, "crew.list")
     assert {200, %{"ok" => true}} = answered!(2)
+    settled!(ctx, room)
+    action(driver, room, 3, "notes.keep", @keep)
+    assert {200, %{"ok" => true}} = answered!(3)
+    settled!(ctx, room)
 
-    # An action Aqua's policy asks for asks.
-    action(driver, room, 3, "notes.keep", %{"name" => "from-page", "content" => "x"})
-    {_turn, approval} = paused!(ctx)
+    # Each opened work of its own on auto, which ran it at once.
+    [launch, list, keep] = requests(ctx, room)
 
-    assert %{"purpose" => "page", "proposal" => %{"tool" => "notes", "action" => "keep"}} =
-             intent!(ctx, approval)
+    assert [{%{id: first}, _}, {%{id: second}, _}, {%{id: third}, _}] =
+             turns_after(ctx, room, put)
 
-    steps = for {_turn, steps} <- turns_after(ctx, room, put), step <- steps, do: step
+    for id <- [first, second, third],
+        do: assert(%{status: "completed", agent_mode: "auto", error: nil} = ended!(ctx, id))
 
-    assert [
-             %{purpose: "page", kind: "launch", outcome: "ok", approval_id: nil},
-             %{purpose: "page", tool: "crew", action: "list", outcome: "ok", approval_id: nil},
-             %{purpose: "page", tool: "notes", dispatch_state: "proposed", approval_id: card}
-           ] = steps
+    assert [steps!(ctx, first), steps!(ctx, second), steps!(ctx, third)] == [
+             [page_step(1, first, launch, "execution.run", "ok")],
+             [page_step(1, second, list, "crew.list", "ok")],
+             [page_step(1, third, keep, "notes.keep", "ok")]
+           ]
 
-    assert card == approval.id
+    assert {:ok, %{content: "x"}} = Aqua.Notes.read(ctx, "from-page")
+    assert app_runs() == 1
   end
 
   # ---------------------------------------------------------------------------
-  # A card for one run
+  # Aqua's mode and its tools
   # ---------------------------------------------------------------------------
 
-  test "a component whose grant lets nothing of the page out asks on one card while the page " <>
-         "waits, the yes runs it once, and its next call asks on a card of its own",
+  test "on read-only a page's read runs and any other call is refused in the read-only " <>
+         "sentence, the thread told once, and nothing pauses",
        %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
-    worker!([app])
+    app = app!(ctx)
+    worker!([@http, app])
     room = workspace!(ctx)
     put = put!(ctx, room, @html)
+    mode!(ctx, "read-only")
 
-    approvals =
-      for id <- [1, 2] do
-        invoke(driver, room, id, app <> ":1.0.0", %{"n" => id})
-        {turn, approval} = paused!(ctx)
+    # The page's fetch opens work of its own and is held there, so the
+    # keep and the launch after it are steps of that work, decided in its
+    # next round.
+    {fetch, work} = held_fetch!(ctx, driver, room, put)
+    invoke(driver, room, 3, app <> ":1.0.0")
+    proposed!(ctx, room, put, 2)
+    send(fetch, :continue)
 
-        # The page waits: nothing answered it, and nothing ran.
-        refute_received {:driver, :answer, _session, ^id, _status, _body}
-        assert app_runs() == id - 1
-        {:ok, steps} = Tape.steps(ctx, turn)
+    sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
+    assert answered!(1) == {200, result(@fetched)}
+    assert answered!(2) == {403, refused(sentence)}
+    assert answered!(3) == {403, refused(sentence)}
 
-        assert [%{purpose: "page", kind: "launch", dispatch_state: "proposed", approval_id: card}] =
-                 Enum.filter(steps, &(&1.dispatch_state == "proposed"))
+    assert %{status: "completed", agent_mode: "read-only", error: nil, root_execution_id: root} =
+             ended!(ctx, work)
 
-        assert card == approval.id
+    refute_received %ThreadEvent{kind: :turn_paused}
+    [get, keep, launch] = requests(ctx, room)
 
-        # The launch's card, for this one run, saying the page asks and
-        # what of the page it lets out.
-        assert %{
-                 "purpose" => "page",
-                 "proposal" => %{
-                   "tool" => "execution",
-                   "action" => "run",
-                   "lets_flow" => ["vault_disclosed", "outside"]
-                 }
-               } = intent!(ctx, approval)
+    assert steps!(ctx, work) == [
+             page_step(1, work, get, "http.get", "ok"),
+             page_step(2, work, keep, "notes.keep", "denied", sentence),
+             page_step(3, work, launch, "execution.run", "denied", sentence)
+           ]
 
-        ScriptedWorker.script([{:output, %{"run" => id}}])
+    # The thread is told once, right after the first refusal's answer.
+    rows = rows!(ctx, room)
+    [said] = for %{kind: "system"} = row <- rows, do: row
+    [_fetched, first_refused, _second] = for %{kind: "page_result"} = row <- rows, do: row.seq
 
-        assert {:ok, %{decision: "approved"}} =
-                 Approvals.resolve(ctx, approval.id, %{decision: :approved})
+    assert said ==
+             row(room, %{
+               seq: said.seq,
+               author: Prima.Author.system(),
+               kind: "system",
+               content: sentence,
+               execution_id: root,
+               turn_id: work,
+               client_id: "read-only:" <> work,
+               sent_by: "aqua"
+             })
 
-        # The answer is that run's result, and the run appended once.
-        assert answered!(id) == {200, result(%{"run" => id})}
-        assert %{status: "completed"} = ended!(ctx, turn.id)
-        assert app_runs() == id
-        approval.id
-      end
-
-    assert [_, _] = Enum.uniq(approvals)
-
-    steps = for {_turn, steps} <- turns_after(ctx, room, put), step <- steps, do: step
-
-    assert [%{outcome: "ok", approval_id: first}, %{outcome: "ok", approval_id: second}] =
-             Enum.filter(steps, &(&1.purpose == "page"))
-
-    assert [first, second] == approvals
-    assert length(runs_of(ctx, app)) == 2
+    assert said.seq == first_refused + 1
+    assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
+    assert runs_of(ctx, app) == [] and app_runs() == 0
   end
 
-  test "a call that arrives while a card waits opens no card until that one is decided, " <>
-         "then one of its own",
-       %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
-    worker!([app])
-    room = workspace!(ctx)
-    put = put!(ctx, room, @html)
-
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, first} = paused!(ctx)
-    invoke(driver, room, 2, app <> ":1.0.0")
-    waiting!(room, 1)
-
-    # No card and no step for it while the first card waits.
-    assert {:ok, [%{id: only}]} = Tape.pending_approvals(ctx, turn)
-    assert only == first.id
-    assert [{_turn, [_one]}] = turns_after(ctx, room, put)
-
-    ScriptedWorker.script([{:output, %{"run" => 1}}])
-    {:ok, _} = Approvals.resolve(ctx, first.id, %{decision: :approved})
-    assert answered!(1) == {200, result(%{"run" => 1})}
-
-    {_turn, second} = paused!(ctx)
-    assert second.id != first.id
-    refute_received {:driver, :answer, _session, 2, _status, _body}
-    assert app_runs() == 1
-
-    {:ok, _} = Approvals.resolve(ctx, second.id, %{decision: :declined})
-    assert {403, %{"ok" => false}} = answered!(2)
-    assert app_runs() == 1
-
-    steps = for {_turn, steps} <- turns_after(ctx, room, put), step <- steps, do: step
-
-    assert [%{outcome: "ok", approval_id: asked}, %{outcome: "denied", approval_id: later}] =
-             steps
-
-    assert {asked, later} == {first.id, second.id}
-  end
-
-  test "with execution.run at ask every call asks, and with it denied every call is refused",
+  test "a call Aqua is not offered is refused, a launch among them, and nothing of it runs",
        %{ctx: ctx, driver: driver} do
     app = app!(ctx)
     worker!([app])
     room = workspace!(ctx)
     put = put!(ctx, room, @html)
-    policy!(ctx, %{"execution.run" => "ask"})
+    # Granted and on auto, the launch would run but for the tools.
+    unoffer!(ctx, ["crew.list", "execution.run"])
 
-    for id <- [1, 2] do
-      invoke(driver, room, id, app <> ":1.0.0")
-      {turn, approval} = paused!(ctx)
-      refute_received {:driver, :answer, _session, ^id, _status, _body}
-      {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :declined})
-      assert {403, %{"ok" => false}} = answered!(id)
-      ended!(ctx, turn.id)
-    end
+    action(driver, room, 1, "component.list")
+    assert {200, %{"ok" => true}} = answered!(1)
+    settled!(ctx, room)
+    action(driver, room, 2, "crew.list")
+    assert answered!(2) == {403, refused("crew.list is not among the tools Aqua is offered")}
+    settled!(ctx, room)
+    invoke(driver, room, 3, app <> ":1.0.0")
 
-    policy!(ctx, %{"execution.run" => nil})
+    assert answered!(3) ==
+             {403, refused("execution.run is not among the tools Aqua is offered")}
 
-    for id <- [3, 4] do
-      invoke(driver, room, id, app <> ":1.0.0")
+    settled!(ctx, room)
+    [offered, list, launch] = requests(ctx, room)
 
-      assert {403,
-              %{
-                "ok" => false,
-                "error" => %{
-                  "class" => "forbidden",
-                  "message" => "execution.run is not in the agent's policy"
-                }
-              }} = answered!(id)
-    end
+    assert [{%{id: first}, _}, {%{id: second}, _}, {%{id: third}, _}] =
+             turns_after(ctx, room, put)
 
-    steps = for {_turn, steps} <- turns_after(ctx, room, put), step <- steps, do: step
+    assert [steps!(ctx, first), steps!(ctx, second), steps!(ctx, third)] == [
+             [page_step(1, first, offered, "component.list", "ok")],
+             [
+               page_step(
+                 1,
+                 second,
+                 list,
+                 "crew.list",
+                 "denied",
+                 "crew.list is not among the tools Aqua is offered"
+               )
+             ],
+             [
+               page_step(
+                 1,
+                 third,
+                 launch,
+                 "execution.run",
+                 "denied",
+                 "execution.run is not among the tools Aqua is offered"
+               )
+             ]
+           ]
 
-    assert [
-             %{outcome: "denied", approval_id: asked_1},
-             %{outcome: "denied", approval_id: asked_2},
-             %{outcome: "denied", approval_id: nil, error: refused},
-             %{outcome: "denied", approval_id: nil}
-           ] = steps
-
-    assert is_binary(asked_1) and is_binary(asked_2) and asked_1 != asked_2
-    assert refused == "execution.run is not in the agent's policy"
-    assert runs_of(ctx, app) == []
-  end
-
-  test "a component with no grant asks, and its yes is refused with nothing run",
-       %{ctx: ctx, driver: driver} do
-    app = app!(ctx, nil, false)
-    worker!([app])
-    room = workspace!(ctx)
-    _put = put!(ctx, room, @html)
-
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, approval} = paused!(ctx)
-    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
-
-    assert {_status, %{"ok" => false}} = answered!(1)
-    turn = ended!(ctx, turn.id)
-    assert {:ok, [%{kind: "launch", outcome: "error", approval_id: card}]} = Tape.steps(ctx, turn)
-    assert card == approval.id
     assert runs_of(ctx, app) == [] and app_runs() == 0
   end
 
-  test "in a turn a schedule started, a call that would ask opens no card and ends the run failed",
+  test "a component whose grant lets nothing of the page out runs at once each time, once, " <>
+         "with nothing asked",
+       %{ctx: ctx, driver: driver} do
+    app = app!(ctx, @exit)
+    worker!([app])
+    room = workspace!(ctx)
+    put = put!(ctx, room, @html)
+
+    for id <- [1, 2] do
+      ScriptedWorker.script([{:output, %{"run" => id}}])
+      invoke(driver, room, id, app <> ":1.0.0", %{"n" => id})
+      assert answered!(id) == {200, result(%{"run" => id})}
+      settled!(ctx, room)
+      assert app_runs() == id
+    end
+
+    [one, two] = requests(ctx, room)
+    assert [{%{id: first}, _}, {%{id: second}, _}] = turns_after(ctx, room, put)
+
+    assert [steps!(ctx, first), steps!(ctx, second)] == [
+             [page_step(1, first, one, "execution.run", "ok")],
+             [page_step(1, second, two, "execution.run", "ok")]
+           ]
+
+    assert length(runs_of(ctx, app)) == 2
+  end
+
+  test "in a turn a schedule started, a page's call is decided by the mode as any turn's: " <>
+         "on auto it runs, and on read-only it is refused and the turn completes",
        %{ctx: ctx, driver: driver} do
     app = app!(ctx, @exit)
     worker!([app])
     {:ok, scheduled} = Sanctum.Tenancy.continuation(ctx.user_id, ctx.athanor_id, "schedule")
 
-    # A page a scheduled run put: its call's turn runs under the schedule.
+    # A page a scheduled run put: its calls' work runs under the schedule.
     room = workspace!(ctx)
     put = put!(scheduled, room, @html)
     assert put.origin == "schedule"
+
+    ScriptedWorker.script([{:output, %{"run" => 1}}])
     invoke(driver, room, 1, app <> ":1.0.0")
+    assert answered!(1) == {200, result(%{"run" => 1})}
+    settled!(ctx, room)
 
-    assert {403, %{"ok" => false, "error" => %{"class" => "forbidden", "message" => said}}} =
-             answered!(1)
+    mode!(ctx, "read-only")
+    sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
+    invoke(driver, room, 2, app <> ":1.0.0")
+    assert answered!(2) == {403, refused(sentence)}
+    settled!(ctx, room)
 
-    assert [{%{id: turn_id}, _}] = turns_after(ctx, room, put)
-    turn = ended!(ctx, turn_id)
-    assert {turn.status, turn.origin, turn.error} == {"failed", "schedule", said}
-    assert said =~ "This scheduled run needed your approval to run #{app}"
-    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
-    assert {:ok, [%{outcome: "denied", approval_id: nil, error: ^said}]} = Tape.steps(ctx, turn)
-    refute_received %ThreadEvent{kind: :turn_paused}
-    assert runs_of(ctx, app) == []
-  end
+    [ran, stopped] = requests(ctx, room)
+    assert [{%{id: first}, _}, {%{id: second}, _}] = turns_after(ctx, room, put)
 
-  test "a decline answers the page a refusal and runs nothing", %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
-    worker!([app])
-    room = workspace!(ctx)
-    put = put!(ctx, room, @html)
+    # Neither ended failed: the refusal is no question, and the turn went on.
+    assert Enum.map([first, second], fn id ->
+             turn = ended!(ctx, id)
+             {turn.status, turn.origin, turn.agent_mode, turn.error}
+           end) == [
+             {"completed", "schedule", "auto", nil},
+             {"completed", "schedule", "read-only", nil}
+           ]
 
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, approval} = paused!(ctx)
+    assert [steps!(ctx, first), steps!(ctx, second)] == [
+             [page_step(1, first, ran, "execution.run", "ok")],
+             [page_step(1, second, stopped, "execution.run", "denied", sentence)]
+           ]
 
-    assert {:ok, %{decision: "declined"}} =
-             Approvals.resolve(ctx, approval.id, %{decision: :declined, reason: "not now"})
-
-    assert {403, %{"ok" => false, "error" => %{"class" => "forbidden"}}} = answered!(1)
-    assert %{status: "completed"} = ended!(ctx, turn.id)
-
-    assert [{_turn, [%{purpose: "page", outcome: "denied", approval_id: card}]}] =
-             turns_after(ctx, room, put)
-
-    assert card == approval.id
-    assert runs_of(ctx, app) == [] and app_runs() == 0
-  end
-
-  # ---------------------------------------------------------------------------
-  # Aqua's actions
-  # ---------------------------------------------------------------------------
-
-  test "an auto action runs, an ask action cards, and a denied one is refused",
-       %{ctx: ctx, driver: driver} do
-    worker!([])
-    room = workspace!(ctx)
-    put = put!(ctx, room, @html)
-    policy!(ctx, %{"crew.list" => nil})
-
-    action(driver, room, 1, "component.list")
-    assert {200, %{"ok" => true}} = answered!(1)
-
-    action(driver, room, 2, "crew.list")
-
-    assert {403,
-            %{
-              "ok" => false,
-              "error" => %{
-                "class" => "forbidden",
-                "message" => "crew.list is not in the agent's policy"
-              }
-            }} = answered!(2)
-
-    action(driver, room, 3, "notes.keep", %{"name" => "from-page", "content" => "kept"})
-    {turn, approval} = paused!(ctx)
-    refute_received {:driver, :answer, _session, 3, _status, _body}
-    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
-    assert {200, %{"ok" => true}} = answered!(3)
-    ended!(ctx, turn.id)
-    assert {:ok, %{content: "kept"}} = Aqua.Notes.read(ctx, "from-page")
-
-    steps = for {_turn, steps} <- turns_after(ctx, room, put), step <- steps, do: step
-
-    assert [
-             %{action: "list", tool: "component", outcome: "ok", approval_id: nil},
-             %{action: "list", tool: "crew", outcome: "denied", approval_id: nil},
-             %{action: "keep", tool: "notes", outcome: "ok", approval_id: card}
-           ] = steps
-
-    assert card == approval.id
+    assert length(runs_of(ctx, app)) == 1
   end
 
   # ---------------------------------------------------------------------------
   # A request that ends
   # ---------------------------------------------------------------------------
 
-  test "a request that is gone skips its step, and a late yes runs nothing",
+  test "a request that is gone skips its step, which never runs, and the work it was a step " <>
+         "of ends once the rest has run",
        %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
-    worker!([app])
+    worker!([@http])
     room = workspace!(ctx)
-    _put = put!(ctx, room, @html)
+    put = put!(ctx, room, @html)
+    {fetch, work} = held_fetch!(ctx, driver, room, put)
 
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, approval} = paused!(ctx)
-    {:ok, [step]} = Tape.steps(ctx, turn)
+    # The driver gives the keep's request up: the page left the window.
+    :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "callend", "id" => 2}))
+    skipped!(ctx, work, 2)
+    send(fetch, :continue)
 
-    # The driver gives the request up: the page left the window.
-    :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "callend", "id" => 1}))
+    assert answered!(1) == {200, result(@fetched)}
+    assert %{status: "completed"} = ended!(ctx, work)
+    # The runner hears the work's end after the rows say it.
+    settled!(ctx, room)
+    [get, keep] = requests(ctx, room)
 
-    wait_until(
-      fn -> match?({:ok, %{outcome: "skipped"}}, Tape.step(ctx, step.id)) end,
-      10_000,
-      "the gone request's step to be skipped"
-    )
+    assert steps!(ctx, work) == [
+             page_step(1, work, get, "http.get", "ok"),
+             page_step(2, work, keep, "notes.keep", "skipped")
+           ]
 
-    assert {:ok, %{status: status}} = Tape.approval(ctx, approval.id)
-    refute status in ["pending", "approved"]
-
-    ScriptedWorker.script([{:output, %{"late" => true}}])
-    _ = Approvals.resolve(ctx, approval.id, %{decision: :approved})
-    assert {:ok, %{status: ^status}} = Tape.approval(ctx, approval.id)
-    assert {:ok, %{dispatch_state: "closed", outcome: "skipped"}} = Tape.step(ctx, step.id)
-    assert {:ok, [_only]} = Tape.steps(ctx, turn)
-    assert runs_of(ctx, app) == [] and app_runs() == 0
-    refute_received {:driver, :answer, _session, 1, _status, _body}
+    assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
+    refute_received {:driver, :answer, _session, 2, _status, _body}
   end
 
-  test "a call whose browser is killed outright skips its step, and a late yes runs nothing",
+  test "a call whose browser is killed outright skips its step, which never runs",
        %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
-    worker!([app])
+    worker!([@http])
     room = workspace!(ctx)
-    _put = put!(ctx, room, @html)
+    put = put!(ctx, room, @html)
+    {fetch, work} = held_fetch!(ctx, driver, room, put)
 
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, approval} = paused!(ctx)
-    {:ok, [step]} = Tape.steps(ctx, turn)
+    # The fetch already at work runs to its end; the keep never starts.
+    kill_browser!(ctx, :person)
+    skipped!(ctx, work, 2)
+    send(fetch, :continue)
 
-    # The browser's holder dies with no word of its calls.
-    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :person})
-    ref = Process.monitor(holder)
-    Process.exit(holder, :kill)
-    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+    assert %{status: "completed"} = ended!(ctx, work)
+    [get, keep] = requests(ctx, room)
 
-    wait_until(
-      fn -> match?({:ok, %{outcome: "skipped"}}, Tape.step(ctx, step.id)) end,
-      10_000,
-      "the step of the call whose browser died to be skipped"
-    )
+    assert steps!(ctx, work) == [
+             page_step(1, work, get, "http.get", "ok"),
+             page_step(2, work, keep, "notes.keep", "skipped")
+           ]
 
-    assert {:ok, %{status: status}} = Tape.approval(ctx, approval.id)
-    refute status in ["pending", "approved"]
-
-    ScriptedWorker.script([{:output, %{"late" => true}}])
-    _ = Approvals.resolve(ctx, approval.id, %{decision: :approved})
-    assert %{status: "completed"} = ended!(ctx, turn.id)
-    assert {:ok, %{status: ^status}} = Tape.approval(ctx, approval.id)
-    assert {:ok, [%{dispatch_state: "closed", outcome: "skipped"}]} = Tape.steps(ctx, turn)
-    assert runs_of(ctx, app) == [] and app_runs() == 0
+    assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
   end
 
   test "a call whose browser is killed outright before its runner takes it runs nothing, " <>
@@ -888,76 +990,70 @@ defmodule Aqua.PageCallsTest do
     assert runs_of(ctx, app) == [] and app_runs() == 0
   end
 
-  test "a call waiting behind a card when its browser is killed outright never becomes a " <>
+  test "a call waiting behind a launch when its browser is killed outright never becomes a " <>
          "step, and runs nothing",
        %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
+    app = app!(ctx)
     worker!([app])
     room = workspace!(ctx)
-    _put = put!(ctx, room, @html)
+    put = put!(ctx, room, @html)
+    {launched, work} = held_launch!(ctx, driver, room, put, app)
 
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, approval} = paused!(ctx)
-    invoke(driver, room, 2, app <> ":1.0.0")
-    waiting!(room, 1)
-
-    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :person})
-    ref = Process.monitor(holder)
-    Process.exit(holder, :kill)
-    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+    kill_browser!(ctx, :person)
     waiting!(room, 0)
+    send(launched, :continue)
 
-    ScriptedWorker.script([{:output, %{"late" => true}}, {:output, %{"late" => true}}])
-    _ = Approvals.resolve(ctx, approval.id, %{decision: :approved})
-    assert %{status: "completed"} = ended!(ctx, turn.id)
-    assert {:ok, [%{dispatch_state: "closed", outcome: "skipped"}]} = Tape.steps(ctx, turn)
+    # The launch already at work runs to its end; the one that waited
+    # leaves no row and no step.
+    assert %{status: "completed"} = ended!(ctx, work)
+    [launch] = requests(ctx, room)
+    assert steps!(ctx, work) == [page_step(1, work, launch, "execution.run", "ok")]
     assert [%{kind: "page_call"}, %{kind: "page_result"}] = page_rows(ctx, room)
-    assert runs_of(ctx, app) == [] and app_runs() == 0
+    assert app_runs() == 1 and length(runs_of(ctx, app)) == 1
   end
 
   test "in a thread kept apart, a page's call is the second Chrome's, and that browser killed " <>
-         "outright runs nothing",
+         "outright skips its step, which never runs",
        %{ctx: ctx, driver: driver} do
     browser_row!(ctx, :apart)
-    app = app!(ctx, @exit)
-    worker!([app])
+    worker!([@http])
     room = workspace!(ctx, true)
-    _put = put!(ctx, room, @html)
-
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, approval} = paused!(ctx)
-    {:ok, [step]} = Tape.steps(ctx, turn)
+    put = put!(ctx, room, @html)
+    {fetch, work} = held_fetch!(ctx, driver, room, put)
 
     # The person's own Chrome never started: the page is in the second.
     assert [] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :person})
-    [{holder, _}] = Registry.lookup(Opus.Browser.Registry, {ctx.athanor_id, ctx.user_id, :apart})
-    ref = Process.monitor(holder)
-    Process.exit(holder, :kill)
-    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+    kill_browser!(ctx, :apart)
+    skipped!(ctx, work, 2)
+    send(fetch, :continue)
 
-    wait_until(
-      fn -> match?({:ok, %{outcome: "skipped"}}, Tape.step(ctx, step.id)) end,
-      10_000,
-      "the step of the call whose browser died to be skipped"
-    )
+    assert %{status: "completed"} = ended!(ctx, work)
+    [get, keep] = requests(ctx, room)
 
-    ScriptedWorker.script([{:output, %{"late" => true}}])
-    _ = Approvals.resolve(ctx, approval.id, %{decision: :approved})
-    assert %{status: "completed"} = ended!(ctx, turn.id)
-    assert runs_of(ctx, app) == [] and app_runs() == 0
+    assert steps!(ctx, work) == [
+             page_step(1, work, get, "http.get", "ok"),
+             page_step(2, work, keep, "notes.keep", "skipped")
+           ]
+
+    assert {:error, _} = Aqua.Notes.read(ctx, "from-page")
   end
 
   test "a call waiting to become a step when its runner is killed is answered unavailable " <>
          "and leaves no step",
        %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
-    worker!([app])
+    worker!([@http])
     room = workspace!(ctx)
     put = put!(ctx, room, @html)
 
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, _approval} = paused!(ctx)
-    invoke(driver, room, 2, app <> ":1.0.0")
+    # The page's fetch is lost with its waiter: its work stops on the
+    # unknown outcome, and a call after it waits in the runner.
+    ScriptedWorker.script([{:crash, :before_response}])
+    action(driver, room, 1, "http.get", @get)
+
+    assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: work, reason: :uncertain}},
+                   60_000
+
+    action(driver, room, 2, "component.list")
     waiting!(room, 1)
 
     runner = Runner.whereis(room.id)
@@ -969,17 +1065,26 @@ defmodule Aqua.PageCallsTest do
     assert answered!(2) == {503, unavailable}
     assert answered!(1) == {503, unavailable}
 
-    # The call that waited is in no row and no step; the one its card held
-    # is skipped by the runner that recovers the turn.
+    # The runner that recovers the work holds neither: the call that
+    # waited is in no row and no step.
     wait_until(
-      fn -> match?({:ok, [%{outcome: "skipped"}]}, Tape.steps(ctx, turn)) end,
+      fn -> match?(%{paused: true}, Runner.state(room.id, ctx.athanor_id)) end,
       30_000,
-      "the held call's step to be skipped"
+      "the recovered work to wait on its unknown outcome"
     )
 
-    assert [{_turn, [_one]}] = turns_after(ctx, room, put)
-    assert [%{kind: "page_call"}, %{kind: "page_result"}] = page_rows(ctx, room)
-    assert runs_of(ctx, app) == []
+    [get] = requests(ctx, room)
+    assert [{%{id: ^work}, _steps}] = turns_after(ctx, room, put)
+
+    assert steps!(ctx, work) == [
+             %{
+               page_step(1, work, get, "http.get", "uncertain", "killed")
+               | dispatch_state: "uncertain",
+                 answered: nil
+             }
+           ]
+
+    assert [%{kind: "page_call"}] = page_rows(ctx, room)
   end
 
   test "a call over the rate is refused, and leaves no step", %{ctx: ctx, driver: driver} do
@@ -1002,27 +1107,36 @@ defmodule Aqua.PageCallsTest do
   # Found by these tests; each passes once its fix outside Aqua.PageCalls lands
   # ---------------------------------------------------------------------------
 
-  test "the yes to a call that waited behind a card runs it once, on what the turn read by then",
+  test "a call that waited while its work was paused around a launch runs once after it",
        %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
+    app = app!(ctx)
     worker!([app])
     room = workspace!(ctx)
-    _put = put!(ctx, room, @html)
+    put = put!(ctx, room, @html)
+    {launched, work} = held_launch!(ctx, driver, room, put, app)
+    send(launched, :continue)
 
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {_turn, first} = paused!(ctx)
-    invoke(driver, room, 2, app <> ":1.0.0")
-    waiting!(room, 1)
-
-    ScriptedWorker.script([{:output, %{"run" => 1}}])
-    {:ok, _} = Approvals.resolve(ctx, first.id, %{decision: :approved})
     assert answered!(1) == {200, result(%{"run" => 1})}
-
-    {turn, second} = paused!(ctx)
-    ScriptedWorker.script([{:output, %{"run" => 2}}])
-    {:ok, _} = Approvals.resolve(ctx, second.id, %{decision: :approved})
     assert answered!(2) == {200, result(%{"run" => 2})}
-    assert %{status: "completed"} = ended!(ctx, turn.id)
+    settled!(ctx, room)
+    [first, second] = requests(ctx, room)
+
+    # It is a step of the work once that runs again, or, when the work
+    # ended first, of work of its own.
+    case turns_after(ctx, room, put) do
+      [{%{id: ^work}, _}] ->
+        assert steps!(ctx, work) == [
+                 page_step(1, work, first, "execution.run", "ok"),
+                 page_step(2, work, second, "execution.run", "ok")
+               ]
+
+      [{%{id: ^work}, _}, {%{id: own}, _}] ->
+        assert [steps!(ctx, work), steps!(ctx, own)] == [
+                 [page_step(1, work, first, "execution.run", "ok")],
+                 [page_step(1, own, second, "execution.run", "ok")]
+               ]
+    end
+
     assert app_runs() == 2 and length(runs_of(ctx, app)) == 2
   end
 
@@ -1031,39 +1145,20 @@ defmodule Aqua.PageCallsTest do
     app = app!(ctx, nil, false)
     worker!([app])
     room = workspace!(ctx)
-    _put = put!(ctx, room, @html)
+    put = put!(ctx, room, @html)
 
     invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, approval} = paused!(ctx)
-    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
-
     assert {403, %{"ok" => false, "error" => %{"class" => "consent_required"}}} = answered!(1)
 
     assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user_id}},
                    10_000
 
     assert {ref, user_id} == {app <> ":1.0.0", ctx.user_id}
-    ended!(ctx, turn.id)
-    assert runs_of(ctx, app) == []
-  end
-
-  test "a turn whose last call's request is gone ends", %{ctx: ctx, driver: driver} do
-    app = app!(ctx, @exit)
-    worker!([app])
-    room = workspace!(ctx)
-    _put = put!(ctx, room, @html)
-
-    invoke(driver, room, 1, app <> ":1.0.0")
-    {turn, _approval} = paused!(ctx)
-    :ok = Driver.write(driver, Opus.Browser.Frame.message(%{"t" => "callend", "id" => 1}))
-
-    assert %{status: "completed"} = ended!(ctx, turn.id)
-    assert {:ok, [%{outcome: "skipped"}]} = Tape.steps(ctx, turn)
-    # The runner hears the loop's end after the rows say it.
-    wait_until(
-      fn -> match?(%{running: false, paused: false}, Runner.state(room.id, ctx.athanor_id)) end,
-      10_000,
-      "the runner hears the turn end"
-    )
+    [launch] = requests(ctx, room)
+    assert [{%{id: work}, _}] = turns_after(ctx, room, put)
+    assert %{status: "completed"} = ended!(ctx, work)
+    said = "Consent required: #{app} has not been granted — grant it to run it"
+    assert steps!(ctx, work) == [page_step(1, work, launch, "execution.run", "error", said)]
+    assert runs_of(ctx, app) == [] and app_runs() == 0
   end
 end

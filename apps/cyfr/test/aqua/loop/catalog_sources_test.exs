@@ -4,12 +4,12 @@
 defmodule Aqua.Loop.CatalogSourcesTest do
   @moduledoc """
   A catalog call's answer joins its turn as its operation declares it,
-  read under the caller's actor, before the next call is decided; and a
-  registry mutation reaching the registry is approved one card at a time,
-  whatever allow a thread holds for it.
+  read under the caller's actor, before the next call is decided, so a
+  note the next call keeps carries it; and a registry mutation runs under
+  the soul's `auto` and is refused under its `read-only`.
 
-  The loop, the gate, the cards and the standing rule are real; the model
-  is scripted and the registry is an HTTP stub.
+  The loop and the gate are real; the model is scripted and the registry
+  is an HTTP stub.
   """
 
   # The registry's address is global configuration, so the module runs
@@ -67,9 +67,8 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   end
 
   describe "the soul's own catalog reads" do
-    test "carry nothing into the turn, so a thread's allow still covers the next call",
+    test "carry nothing outside into the turn, and the next call runs",
          %{ctx: ctx, thread: thread} do
-      {:ok, _} = allow!(ctx, thread, "notes", "keep")
       turn = accept!(ctx, thread, "@aqua look around and keep a note")
 
       script!([
@@ -87,7 +86,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
       for call <- ["c1", "c2", "c3"],
           do: assert(%{outcome: "ok"} = step(ctx, turn, call), call)
 
-      assert %{outcome: "ok", approval_id: nil} = step(ctx, turn, "c4")
+      assert %{outcome: "ok"} = step(ctx, turn, "c4")
       refute Enum.any?(sources(ctx, turn), &Source.outside?/1)
     end
   end
@@ -95,7 +94,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   describe "a local component's inspection" do
     # The inspection of a local root carries the entries a pulled
     # dependency's own manifest declares.
-    test "keeps a pulled dependency's prose outside before a standing allow is judged",
+    test "keeps a pulled dependency's prose outside before the next call, whose note carries it",
          %{ctx: ctx, thread: thread} do
       remote_reason = "REMOTE_PROSE_FROM_ACME"
 
@@ -145,7 +144,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
                  )
       end
 
-      {:ok, _} = allow!(ctx, thread, "notes", "keep")
       turn = accept!(ctx, thread, "@aqua inspect the local root and keep what it says")
 
       script!([
@@ -156,24 +154,30 @@ defmodule Aqua.Loop.CatalogSourcesTest do
         reply("kept")
       ])
 
-      outcome = run(ctx, turn)
+      assert :completed = run(ctx, turn)
 
       # The inspection answered, and its answer carries the pulled
       # dependency's prose.
       assert %{outcome: "ok", content: content} = step_result(ctx, turn, "c1")
       assert content =~ remote_reason
+      dependency = Source.outside("reagent:acme.loop-dep")
+      assert dependency in sources(ctx, turn)
 
-      assert Source.outside("reagent:acme.loop-dep") in sources(ctx, turn)
-      assert outcome == {:paused, :approval}
-      assert %{approval_id: approval_id} = step(ctx, turn, "c2")
-      assert is_binary(approval_id)
+      # The keep ran, and the note it kept carries the prose's source: the
+      # turn held it before the keep was decided.
+      assert %{outcome: "ok"} = step(ctx, turn, "c2")
+
+      assert {:ok, %{content: ^remote_reason, sources: kept}} =
+               Aqua.Notes.read(ctx, "dependency-info")
+
+      assert dependency in kept
     end
   end
 
   describe "a registry read" do
-    test "is outside material on the turn before the next call is decided, so a thread's allow that names no outside source asks",
+    test "is outside material on the turn before the next call is decided, so the note it keeps carries it",
          %{ctx: ctx, thread: thread, stub: stub} do
-      soul_policy!(ctx, %{"registry.get_namespace" => "auto"})
+      soul!(ctx, %{"tools_add" => ["registry.get_namespace"]})
 
       HTTPStub.expect_once(stub, "GET", "/v1/namespaces/acme", fn conn ->
         conn
@@ -181,7 +185,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
         |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => "acme", "about" => "from the registry"}))
       end)
 
-      {:ok, _} = allow!(ctx, thread, "notes", "keep")
       turn = accept!(ctx, thread, "@aqua look up acme and keep it")
 
       script!([
@@ -192,16 +195,15 @@ defmodule Aqua.Loop.CatalogSourcesTest do
         reply("kept")
       ])
 
-      assert {:paused, :approval} = run(ctx, turn)
+      assert :completed = run(ctx, turn)
       assert %{outcome: "ok"} = step(ctx, turn, "c1")
       assert Source.outside(nil) in sources(ctx, turn)
 
-      # The keep the allow would have run asks, and its card names the
-      # registry's answer as outside material.
-      assert %{approval_id: approval_id} = step(ctx, turn, "c2")
-      assert is_binary(approval_id)
-      assert %{"sources" => shown} = pending_intent(ctx, turn)
-      assert Source.to_json(Source.outside(nil)) in shown
+      # The keep ran, and the note it kept names the registry's answer as
+      # outside material.
+      assert %{outcome: "ok"} = step(ctx, turn, "c2")
+      assert {:ok, %{sources: kept}} = Aqua.Notes.read(ctx, "acme")
+      assert Source.outside(nil) in kept
     end
 
     test "an answer whose execution is another athanor's carries no ledger of it, only an unnamed outside source",
@@ -224,59 +226,40 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   end
 
   describe "a registry mutation" do
-    for {action, args, kind} <- [
-          {"tokens_revoke", %{"slug" => "acme", "token_id" => "tok_1"}, :destructive},
-          {"report", %{"category" => "spam", "details" => "junk", "target_namespace" => "acme"},
-           :external}
+    for {action, args} <- [
+          {"tokens_revoke", %{"slug" => "acme", "token_id" => "tok_1"}},
+          {"report", %{"category" => "spam", "details" => "junk", "target_namespace" => "acme"}}
         ] do
-      test "registry.#{action} asks on a card under a thread allow stored before it took none, and runs once approved",
-           %{ctx: ctx, thread: thread} do
+      test "registry.#{action} runs in auto and is refused in read-only", %{
+        ctx: ctx,
+        thread: thread
+      } do
         action = unquote(action)
         args = unquote(Macro.escape(args))
-        kind = unquote(kind)
-        soul_policy!(ctx, %{"registry.#{action}" => "ask"})
+        sentence = Aqua.Loop.Policy.read_only_sentence("Aqua")
+        soul!(ctx, %{"tools_add" => ["registry.#{action}"]})
 
-        # An allow row the rule refuses, written straight to storage.
-        {:ok, _} =
-          Arca.ToolGrantStorage.put(%{
-            athanor_id: ctx.athanor_id,
-            scope: "thread",
-            effect: "allow",
-            thread_id: thread.id,
-            agent_name: "aqua",
-            tool: "registry",
-            action: action,
-            granted_by: ctx.user_id
-          })
+        script!([
+          calls([{"c1", "registry.#{action}", args}]),
+          reply("done"),
+          calls([{"c2", "registry.#{action}", args}]),
+          reply("refused")
+        ])
 
-        # The rule refuses to write one now, at either scope.
-        for place <- [%{scope: "thread", thread_id: thread.id}, %{scope: "agent"}] do
-          assert {:error, {:scope_not_permitted, ^kind}} =
-                   Sanctum.ToolGrants.put(
-                     ctx,
-                     Map.merge(place, %{
-                       effect: "allow",
-                       agent_name: "aqua",
-                       tool: "registry",
-                       action: action
-                     })
-                   )
-        end
-
-        turn = accept!(ctx, thread, "@aqua do it")
-        script!([calls([{"c1", "registry.#{action}", args}]), reply("done")])
-
-        assert {:paused, :approval} = run(ctx, turn)
-        assert %{dispatch_state: "proposed", approval_id: approval_id} = step(ctx, turn, "c1")
-        assert is_binary(approval_id)
-
-        # Approved for this one call, the call is made: no push token is
-        # held here, so the registry is never reached and the handler
-        # answers the refusal.
-        approve_once!(ctx, turn)
-        assert :completed = resume(ctx, turn)
-        assert %{outcome: "error", content: content} = step_result(ctx, turn, "c1")
+        # In auto the call is made: no push token is held here, so the
+        # registry is never reached and the handler answers the refusal.
+        ran = accept!(ctx, thread, "@aqua do it")
+        assert :completed = run(ctx, ran)
+        assert %{outcome: "error", content: content} = step_result(ctx, ran, "c1")
         assert content =~ "no push token"
+
+        # In read-only it does more than read, and is refused before the
+        # handler is asked.
+        soul!(ctx, %{"mode" => "read-only"})
+        refused = accept!(ctx, thread, "@aqua do it again")
+        assert :completed = run(ctx, refused)
+        assert {:ok, %{agent_mode: "read-only"}} = Tape.turn(ctx, refused.id)
+        assert step_result(ctx, refused, "c2") == %{outcome: "denied", content: sentence}
       end
     end
   end
@@ -292,15 +275,12 @@ defmodule Aqua.Loop.CatalogSourcesTest do
     tree
   end
 
-  # The soul's own definition gains `patch`, and its grant is walked again
-  # for the shape that moved.
-  defp soul_policy!(ctx, patch) do
+  # The soul's own file takes `edit` through the `aqua` tool, as the Aqua
+  # page edits it, and its grant is walked again for the capability that
+  # moved.
+  defp soul!(ctx, edit) do
     {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
-        "tool_policy_patch" => patch
-      })
+      Cyfr.Test.AquaTool.call(ctx, Map.merge(%{"action" => "update", "name" => "aqua"}, edit))
 
     decisions = %{ref: @soul, selections: [%{dep: @model, label: "default"}]}
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
@@ -314,18 +294,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
         commit_digest: preview.commit_digest,
         expected_consent_revision: plan.expected_consent_revision
       })
-  end
-
-  # A thread allow with no bounds, naming no outside source.
-  defp allow!(ctx, thread, tool, action) do
-    Sanctum.ToolGrants.put(ctx, %{
-      scope: "thread",
-      effect: "allow",
-      thread_id: thread.id,
-      agent_name: "aqua",
-      tool: tool,
-      action: action
-    })
   end
 
   # A completed execution of the athanor whose ledger holds `sources`.
@@ -378,11 +346,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   defp run(ctx, turn),
     do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end) |> Task.await(60_000)
 
-  defp resume(ctx, turn) do
-    Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
-    |> Task.await(60_000)
-  end
-
   defp sources(ctx, turn) do
     {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
     Source.decode(sources)
@@ -399,22 +362,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
     %{outcome: outcome} = step = step(ctx, turn, call_id)
     {:ok, result} = Tape.message(ctx, step.result_message_id)
     %{outcome: outcome, content: result.content}
-  end
-
-  defp pending_card(ctx, turn) do
-    {:ok, fresh} = Tape.turn(ctx, turn.id)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, fresh)
-    {:ok, card} = Tape.message(ctx, approval.message_id)
-    %{approval: approval, intent: Tape.payload(card)["intent"]}
-  end
-
-  defp pending_intent(ctx, turn), do: pending_card(ctx, turn).intent
-
-  defp approve_once!(ctx, turn) do
-    %{approval: approval} = pending_card(ctx, turn)
-
-    assert {:ok, %{decision: "approved"}} =
-             Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved})
   end
 
   defp calls(blocks) do

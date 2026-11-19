@@ -56,7 +56,7 @@ defmodule Aqua.Providers.WorkspaceTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
-  alias Aqua.{Approvals, Crew, Runner, Tape}
+  alias Aqua.{Crew, Runner, Tape}
   alias Aqua.Providers.Workspace
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
@@ -615,32 +615,6 @@ defmodule Aqua.Providers.WorkspaceTest do
   end
 
   describe "the state's moves" do
-    test "a card opens: it waits on the person and reports; the last card decided: it is at work again and reports nothing",
-         %{ctx: ctx, daily: daily} do
-      script!([
-        call("k1", "notes", %{"action" => "keep", "name" => "moon", "content" => "x"}),
-        reply("Kept it.")
-      ])
-
-      workspace = open!(ctx, daily)
-      assert {:ok, %{"applied" => 1}} = drain(ctx)
-      [%{turn_id: turn_id}] = rows(ctx, workspace.id) |> Enum.filter(&(&1.kind == "opening"))
-      await_status(ctx, turn_id, "paused")
-
-      assert thread(ctx, workspace.id).workspace_state == "needs_you"
-
-      assert [%{snapshot: %{"outcome" => "needs_you", "approval_id" => approval_id}}] =
-               records(ctx, "workspace_report")
-
-      assert {:ok, %{decision: "declined"}} =
-               Approvals.resolve(ctx, approval_id, %{decision: :declined})
-
-      assert thread(ctx, workspace.id).workspace_state == "open"
-      await_status(ctx, turn_id, "completed")
-      assert length(records(ctx, "workspace_report")) == 1
-      assert thread(ctx, workspace.id).workspace_state == "open"
-    end
-
     test "a turn that ends failed with no report is the server's error, reported; a cancel nobody named moves nothing",
          %{ctx: ctx, daily: daily} do
       workspace = open!(ctx, daily)

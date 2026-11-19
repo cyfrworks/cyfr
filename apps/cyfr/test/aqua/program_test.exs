@@ -8,29 +8,32 @@ defmodule Aqua.ProgramTest do
   scripted backends service as `Opus.BrainTest` does.
 
   A turn on a program brain opens with the host's `program.start` of the
-  brain's row, decided as a model's is and attended: the driver is given
-  its start, the turn's work and the turn's post. What the program says is
-  a post of its agent, its usage is counted once, and the turn completes on
-  the `idle` that answers every post it was given, one written while it
-  works included. Its asks are steps the loop decides and runs, answered
-  with their results; an ask of a tool the turn does not offer is refused,
-  and one of other work writes no step and closes the session. A post and
-  an answer owed together are written one at a time, the answer first. A
-  post written while an ask's card waits is written at once and approves
-  nothing, and an ask made then is recorded and decided when the turn
-  goes on, under what holds then. A start nobody allowed waits on its
-  card, and a schedule's opens none; a session left from the turn before
-  is written nothing while the next waits on its own; a post that brings
-  in what the start's card did not show ends the turn; and new startup
-  options restart the driver, resuming. A holder's end resumes the native
-  session with the posts whose delivery its transcript says: one it holds
-  is continued by one notice, one it does not ends the turn, and an
-  answer the resumed session no longer asks for comes as one notice that
-  names its call, attempted once. A transcript the harness no longer has
-  starts over, the thread its context, and in the middle of the work one
-  prompt carries what its calls answered. Stop closes the session first,
-  during a CYFR tool too. A program turn has no deadline, and the
-  program's own silence ends it, never while a card waits.
+  brain's row, which asks nothing, a schedule's turn's too: the driver is
+  given its start in the configuration the turn's mode sets, the turn's
+  work and the turn's post. What the program is given first joins the
+  turn's sources before its start runs, the program itself among them,
+  and a post that brings in outside material is written at once and joins
+  them as it is written. What the program says is a post of Aqua's, its
+  usage is counted once, and the turn completes on the `idle` that answers
+  every post it was given, one written while the program starts, works or
+  waits on an ask's call included, each after the post that opened the
+  turn. Its asks are steps the loop decides under the member's mode and
+  runs, answered with their results: auto runs an offered one, and
+  read-only refuses one that does more than read in the read-only
+  sentence, which the thread is told once, and runs a read; an ask of a
+  tool the turn does not offer is refused, and one of other work writes no
+  step and closes the session. A post and an answer owed together are
+  written one at a time, the answer first. A session left from the turn
+  before takes the next turn's work, and new startup options restart the
+  driver, resuming. A holder's end resumes the native session with the
+  posts whose delivery its transcript says: one it holds is continued by
+  one notice, one it does not ends the turn, and an answer the resumed
+  session no longer asks for comes as one notice that names its call,
+  attempted once. A transcript the harness no longer has starts over, the
+  thread its context, and in the middle of the work one prompt carries
+  what its calls answered. Stop closes the session first, during a CYFR
+  tool too. A program turn has no deadline, and the program's own silence
+  ends it, never while an ask's call runs.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -62,9 +65,8 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "a turn on a program brain" do
-    test "opens with the host's start, allowed standing, and completes on the idle that answers its post",
+    test "opens with the host's start, which asks nothing, and completes on the idle that answers its post",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "what is in notes.md?")
       loop = run(ctx, turn)
 
@@ -72,10 +74,11 @@ defmodule Aqua.ProgramTest do
       spec = spec!(ctx, turn)
       start_step = start_step(ctx, turn)
 
+      # The holder sets `read_only` from the turn's mode, auto here.
       assert Map.delete(start, "system") == %{
                "t" => "start",
                "gen" => 0,
-               "config" => %{"model" => spec.agent["model"]}
+               "config" => %{"model" => spec.agent["model"], "read_only" => false}
              }
 
       assert without_clock(start["system"]) == without_clock(spec.system)
@@ -100,11 +103,9 @@ defmodule Aqua.ProgramTest do
       say(fake, row, idle(turn, [input.id]))
 
       assert :completed = Task.await(loop, 30_000)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
 
-      # The start was the host's, decided by the standing allow: no card.
-      assert {:ok, %{status: "completed"} = ended} = Tape.turn(ctx, turn.id)
-      assert {:ok, []} = Tape.pending_approvals(ctx, ended)
-
+      # The start was the host's, run with nothing asked.
       assert step_fields(start_step(ctx, turn)) == %{
                kind: "tool",
                purpose: "brain",
@@ -139,7 +140,7 @@ defmodule Aqua.ProgramTest do
       assert step_fields(carried) == input_fields("post", turn.message_id, "ok")
       assert carried_by(ctx, turn.message_id) == input.id
 
-      # What the program said is a post of its agent in the thread.
+      # What the program said is a post of Aqua's in the thread.
       assert said_rows(ctx, thread, turn) == [
                {Arca.Schemas.Message.agent_author(), "aqua", "text",
                 "notes.md holds three lines.", %{"brain_message" => "msg_1"}}
@@ -148,7 +149,6 @@ defmodule Aqua.ProgramTest do
 
     test "takes a post written while the program works at once, and completes only on the idle that answers it too",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -189,7 +189,6 @@ defmodule Aqua.ProgramTest do
   describe "the program's asks" do
     test "an ask of the open turn is a step the loop decides and runs, answered with its result; one of a tool not offered is refused",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "list the programs")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -275,8 +274,6 @@ defmodule Aqua.ProgramTest do
     test "an ask of other work, or of none, writes no step and cannot be answered here, so the " <>
            "session closes and the turn ends saying why",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
-
       # Each round is a driver process of its own, its boot its own.
       for {work, boot} <- [{"trn_other", "boot-one"}, {nil, "boot-two"}] do
         turn = accept!(ctx, thread, row, "first")
@@ -307,7 +304,6 @@ defmodule Aqua.ProgramTest do
     test "a post and a tool's answer owed together are written one at a time, the answer " <>
            "first, each once",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -361,29 +357,19 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "a post written while an ask's card waits is written at once and approves nothing; " <>
-           "approved, the ask runs and its answer follows",
+    test "a post written while an ask's call runs is written at once, and the ask's answer " <>
+           "follows",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
-      turn = accept!(ctx, thread, row, "write it down")
+      turn = accept!(ctx, thread, row, "run it")
       loop = run(ctx, turn)
       started!(fake, row)
       _post = sent()
       [input] = inputs(ctx, turn)
       say(fake, row, accepted(input))
 
-      say(
-        fake,
-        row,
-        ask(turn, "ask-1", "files", %{
-          "action" => "write",
-          "path" => "data/a.md",
-          "content" => "x"
-        })
-      )
-
-      assert {:paused, :approval} = Task.await(loop, 30_000)
-      %{approval: card} = pending_card(ctx, turn)
+      # The program asks for a call that does more than read, which auto
+      # runs at once; its terminal's open is held, so it runs on.
+      opening = held_start!(fake, row, turn, "ask-1")
       key = TurnStorage.brain_ask_key(turn.id, "ask-1")
 
       steer = steer!(ctx, thread, turn, "and this")
@@ -393,16 +379,13 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(steered))
       closed!(ctx, turn, steered.idempotency_key)
 
-      # The card still waits, and the turn with it.
-      assert %{approval: %{id: card_id, status: "pending"}} = pending_card(ctx, turn)
-      assert card_id == card.id
-      assert {:ok, %{status: "paused"}} = Tape.turn(ctx, turn.id)
+      # The call still runs, and the turn with it.
+      assert Map.take(step_by_key(ctx, turn, key), [:dispatch_state, :outcome]) ==
+               %{dispatch_state: "dispatched", outcome: nil}
 
-      assert Map.take(step_by_key(ctx, turn, key), [:dispatch_state, :outcome, :approval_id]) ==
-               %{dispatch_state: "proposed", outcome: nil, approval_id: card.id}
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
 
-      approve!(ctx, card)
-      loop = resume(ctx, turn)
+      send(opening, :go)
       answer = sent()
       written = step_by_key(ctx, turn, key)
       {:ok, result} = Tape.message(ctx, written.result_message_id)
@@ -418,11 +401,11 @@ defmodule Aqua.ProgramTest do
 
       assert Map.take(written, [:tool, :action, :dispatch_state, :outcome, :approval_id]) ==
                %{
-                 tool: "files",
-                 action: "write",
+                 tool: "program",
+                 action: "start",
                  dispatch_state: "closed",
                  outcome: "ok",
-                 approval_id: card.id
+                 approval_id: nil
                }
 
       say(fake, row, accepted(answered))
@@ -438,257 +421,125 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "asks made while a card waits are recorded and dispatched by none, and are decided " <>
-           "when the turn goes on, under the authority and the sources that hold then",
+    test "a read-only member's asks that do more than read are refused in the read-only " <>
+           "sentence, which the thread is told once, and its read runs",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      outside = Prima.Source.outside("news.example")
-      allow!(ctx, thread, row, :thread, %{sources: [outside]})
-      standing!(ctx, thread, "files", "write", %{"path" => "data/b.md"}, :thread)
+      read_only!(ctx)
       turn = accept!(ctx, thread, row, "tidy up")
       loop = run(ctx, turn)
-      started!(fake, row)
+      %{start: start} = started!(fake, row)
+
+      # The holder starts the program read-only.
+      assert start["config"] == %{"model" => spec!(ctx, turn).agent["model"], "read_only" => true}
+
       _post = sent()
       [input] = inputs(ctx, turn)
       say(fake, row, accepted(input))
 
-      say(
-        fake,
-        row,
-        ask(turn, "ask-1", "notes", %{"action" => "keep", "name" => "todo", "content" => "tidy"})
-      )
+      said =
+        "#{@title} is read-only, so it refused a step that does more than read. To let it, " <>
+          "switch #{@title} to auto on the Aqua page."
 
-      assert {:paused, :approval} = Task.await(loop, 30_000)
-      %{approval: card} = pending_card(ctx, turn)
+      # Two offered asks that do more than read, the start auto runs in the
+      # tests above among them: each refused in the sentence, as an error.
+      for {id, name, args} <- [
+            {"ask-1", "program", start_args(row)},
+            {"ask-2", "files", %{"action" => "write", "path" => "data/a.md", "content" => "x"}}
+          ] do
+        say(fake, row, ask(turn, id, name, args))
+        refused = sent()
+        denied = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, id))
+        {:ok, denial} = Tape.message(ctx, denied.result_message_id)
+        told = List.last(inputs(ctx, turn))
 
-      # While the card waits the program asks for a write the standing
-      # allow covers now, and for a list: each recorded, neither run.
-      say(
-        fake,
-        row,
-        ask(turn, "ask-2", "files", %{
-          "action" => "write",
-          "path" => "data/b.md",
-          "content" => "y"
-        })
-      )
-
-      say(fake, row, ask(turn, "ask-3", "program", %{"action" => "list"}))
-      committed!(ctx, thread, 7)
-      write_key = TurnStorage.brain_ask_key(turn.id, "ask-2")
-      list_key = TurnStorage.brain_ask_key(turn.id, "ask-3")
-
-      for key <- [write_key, list_key] do
-        assert Map.take(step_by_key(ctx, turn, key), [:dispatch_state, :outcome, :approval_id]) ==
-                 %{dispatch_state: "proposed", outcome: nil, approval_id: nil}
-      end
-
-      refute_receive {:session, "send", _wire, _fields}, 500
-
-      # Then a never on the list is recorded, and a post brings in outside
-      # material, which joins the turn as it is written.
-      standing!(ctx, thread, "program", "list", %{}, :never)
-
-      steer =
-        steer!(ctx, thread, turn, "and this brief", %{"attachments" => [brief("news.example")]})
-
-      post = sent()
-      [_input, steered] = inputs(ctx, turn)
-      assert post == posted(steered, turn, "and this brief")
-      say(fake, row, accepted(steered))
-      {:ok, paused} = Tape.turn(ctx, turn.id)
-      assert Prima.Source.decode(paused.sources) == [program_source(row), outside]
-
-      for key <- [write_key, list_key] do
-        assert %{dispatch_state: "proposed"} = step_by_key(ctx, turn, key)
-      end
-
-      # Approved, the card's ask runs; the list is refused by the never;
-      # the write asks on a card of its own, which shows the outside
-      # source the allow does not cover.
-      approve!(ctx, card)
-      assert {:paused, :approval} = Task.await(resume(ctx, turn), 30_000)
-
-      kept = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1"))
-      listed = step_by_key(ctx, turn, list_key)
-      writing = step_by_key(ctx, turn, write_key)
-
-      assert Map.take(kept, [:tool, :action, :dispatch_state, :outcome, :approval_id]) ==
-               %{
-                 tool: "notes",
-                 action: "keep",
-                 dispatch_state: "closed",
-                 outcome: "ok",
-                 approval_id: card.id
-               }
-
-      assert Map.take(listed, [:tool, :action, :dispatch_state, :outcome, :approval_id]) ==
-               %{
-                 tool: "program",
-                 action: "list",
-                 dispatch_state: "closed",
-                 outcome: "denied",
-                 approval_id: nil
-               }
-
-      %{approval: second_card, intent: intent} = pending_card(ctx, turn)
-      assert second_card.step_id == writing.id
-
-      assert intent["proposal"] == %{
-               "tool" => "files",
-               "action" => "write",
-               "args" => %{"path" => "data/b.md", "content" => "y"}
-             }
-
-      assert intent["sources"] == [
-               %{"class" => "outside", "name" => "claude-code"},
-               %{"class" => "outside", "name" => "news.example"}
-             ]
-
-      assert Map.take(writing, [:dispatch_state, :outcome, :approval_id]) ==
-               %{dispatch_state: "proposed", outcome: nil, approval_id: second_card.id}
-
-      # The two closed asks are answered while the new card waits, each once.
-      answers =
-        for _ <- 1..2 do
-          answer = sent()
-          say(fake, row, %{"t" => "accepted", "id" => answer["id"]})
-          answer
-        end
-
-      {:ok, kept_result} = Tape.message(ctx, kept.result_message_id)
-      {:ok, denial} = Tape.message(ctx, listed.result_message_id)
-
-      assert answers |> Enum.map(&Map.delete(&1, "id")) |> Enum.sort_by(& &1["ask"]) == [
-               %{
+        assert refused == %{
                  "t" => "answer",
-                 "ask" => "ask-1",
-                 "content" => kept_result.content,
-                 "is_error" => false
-               },
-               %{
-                 "t" => "answer",
-                 "ask" => "ask-3",
+                 "id" => told.id,
+                 "ask" => id,
                  "content" => denial.content,
                  "is_error" => true
                }
-             ]
 
-      approve!(ctx, second_card)
-      loop = resume(ctx, turn)
+        assert {denied.tool, denied.action, denied.dispatch_state, denied.outcome, denied.error} ==
+                 {name, args["action"], "closed", "denied", said}
+
+        say(fake, row, accepted(told))
+      end
+
+      # A read runs.
+      say(fake, row, ask(turn, "ask-3", "program", %{"action" => "list"}))
       answer = sent()
-      written = step_by_key(ctx, turn, write_key)
-      {:ok, write_result} = Tape.message(ctx, written.result_message_id)
+      listed = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-3"))
+      {:ok, result} = Tape.message(ctx, listed.result_message_id)
+      answered = List.last(inputs(ctx, turn))
 
-      assert Map.delete(answer, "id") == %{
+      assert answer == %{
                "t" => "answer",
-               "ask" => "ask-2",
-               "content" => write_result.content,
+               "id" => answered.id,
+               "ask" => "ask-3",
+               "content" => result.content,
                "is_error" => false
              }
 
-      assert %{dispatch_state: "closed", outcome: "ok"} = written
-      say(fake, row, %{"t" => "accepted", "id" => answer["id"]})
-      say(fake, row, idle(turn, [input.id, steered.id]))
+      assert {listed.dispatch_state, listed.outcome} == {"closed", "ok"}
+      say(fake, row, accepted(answered))
+      say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
-      assert carried_by(ctx, steer.id) == steered.id
+
+      # The thread was told once, and the refused start opened nothing.
+      assert system_lines(ctx, thread, turn) == [said]
+      refute_received {:session, "open", %{"mode" => "terminal"}, _fields}
       refute_received {:session, "send", _wire, _fields}
     end
   end
 
   describe "its start's decision" do
-    test "without a standing allow the start waits on its card, and the driver is given nothing until it is approved",
+    test "the program itself is an outside source its turn reads before its start runs, and " <>
+           "the turn keeps it",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "hello")
-      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
-
-      refute_received {:session, "open", _wire, _fields}
-      refute_received {:session, "send", _wire, _fields}
-      %{approval: approval, intent: intent} = pending_card(ctx, turn)
-
-      # The card shows the start of the brain's row, its pinned command.
-      assert intent == %{
-               "action_kind" => "execute",
-               "id" => approval.id,
-               "kind" => "request_approval",
-               "program" => %{
-                 "command" => "cyfr-claude-code npx -y @anthropic-ai/claude-code@2.1.323",
-                 "epoch" => row.epoch,
-                 "folder" => "its own folder",
-                 "hosts" => "every public host",
-                 "name" => "claude-code",
-                 "row" => row.id
-               },
-               "proposal" => %{
-                 "action" => "start",
-                 "args" => %{"epoch" => row.epoch, "program" => row.id},
-                 "tool" => "program"
-               },
-               "purpose" => "brain",
-               "sources" => [%{"class" => "outside", "name" => "claude-code"}],
-               "standing" => nil,
-               "summary" => "",
-               "title" => "program.start",
-               "tool_call_id" => "start"
-             }
-
-      assert {:ok, %{decision: "approved"}} =
-               Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: :once})
-
-      loop = resume(ctx, turn)
-      %{work: work} = started!(fake, row)
-      start_step = start_step(ctx, turn)
-      assert work["id"] == start_step.id
-      assert start_step.approval_id == approval.id
-      post = sent()
-      [input] = inputs(ctx, turn)
-      assert post == posted(input, turn, "hello")
-      say(fake, row, accepted(input))
-      say(fake, row, idle(turn, [input.id]))
-      assert :completed = Task.await(loop, 30_000)
-    end
-
-    test "the program itself is an outside source its turn reads from the start: a standing " <>
-           "allow that does not follow it asks on the card, and the turn keeps it",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      args = %{"program" => row.id, "epoch" => row.epoch}
-      standing!(ctx, thread, "program", "start", args, :thread)
       turn = accept!(ctx, thread, row, "look it up")
-      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
-      refute_received {:session, "open", _wire, _fields}
-      %{approval: card, intent: intent} = pending_card(ctx, turn)
-      assert intent["sources"] == [%{"class" => "outside", "name" => row.name}]
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      {:ok, starting} = Tape.turn(ctx, turn.id)
+      assert Prima.Source.decode(starting.sources) == [program_source(row)]
 
-      approve!(ctx, card)
-      loop = resume(ctx, turn)
-      started!(fake, row)
+      begun!(fake, row)
       _post = sent()
       [input] = inputs(ctx, turn)
       say(fake, row, accepted(input))
-      committed!(ctx, thread, 4)
-      {:ok, working} = Tape.turn(ctx, turn.id)
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
-      assert Prima.Source.decode(working.sources) == [program_source(row)]
+
+      {:ok, ended} = Tape.turn(ctx, turn.id)
+      assert Prima.Source.decode(ended.sources) == [program_source(row)]
     end
 
-    test "a post written while the start's card waits skips nothing and is written nothing " <>
-           "until the start is allowed, then follows the post that opened the turn",
+    test "a post written while the harness starts skips nothing: it is written once the work " <>
+           "is taken, after the post that opened the turn",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "hello")
-      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
-      %{approval: card} = pending_card(ctx, turn)
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start"} = sent()
       steer = steer!(ctx, thread, turn, "and this")
 
-      refute_receive {:session, "open", _wire, _fields}, 1_000
+      # Nothing of the turn's posts is written before the harness stands
+      # and takes the work.
+      refute_receive {:session, "send", _wire, _fields}, 1_000
+      say(fake, row, started([]))
+      work = sent()
+
+      assert work == %{
+               "t" => "work",
+               "id" => start_step(ctx, turn).id,
+               "work" => turn.id,
+               "tools" => json(spec!(ctx, turn).tools)
+             }
+
       assert inputs(ctx, turn) == []
       assert carried_by(ctx, steer.id) == nil
-      assert %{approval: %{id: card_id, status: "pending"}} = pending_card(ctx, turn)
-      assert card_id == card.id
 
-      approve!(ctx, card)
-      loop = resume(ctx, turn)
-      %{work: work} = started!(fake, row)
-      assert work["id"] == start_step(ctx, turn).id
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
       first = sent()
       [opening] = inputs(ctx, turn)
       assert first == posted(opening, turn, "hello")
@@ -701,7 +552,7 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
 
       assert Map.take(start_step(ctx, turn), [:dispatch_state, :outcome, :approval_id]) ==
-               %{dispatch_state: "closed", outcome: "ok", approval_id: card.id}
+               %{dispatch_state: "closed", outcome: "ok", approval_id: nil}
 
       assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
                input_fields("post", turn.message_id, "ok"),
@@ -711,52 +562,11 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == []
     end
 
-    test "a standing never recorded while the program works ends the turn at its next write, which is never written",
+    test "a post that brings in outside material is written at once, and what it brings in " <>
+           "joins the turn as it is written",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
-      started!(fake, row)
-      _post = sent()
-      [input] = inputs(ctx, turn)
-      say(fake, row, accepted(input))
-      committed!(ctx, thread, 4)
-
-      allow!(ctx, thread, row, :never)
-
-      {:ok, %{message: steer}} =
-        Tape.accept(ctx, thread.id, %{
-          message: %{author: ctx.user_id, sent_by: "person", content: "and this"},
-          steer_turn_id: turn.id
-        })
-
-      line = "#{@title} may not go on with this work any more."
-      assert {:failed, ^line} = Task.await(loop, 15_000)
-      assert system_lines(ctx, thread, turn) == [line]
-      assert carried_by(ctx, steer.id) == nil
-
-      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
-               input_fields("post", turn.message_id, "ok")
-             ]
-
-      assert running_sessions(fake, row) == []
-      refute_received {:session, "send", _wire, _fields}
-    end
-
-    test "a post that brings in material its start's card did not show ends the turn at its " <>
-           "write, which is never written",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "work on it")
-      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
-
-      %{
-        approval: card,
-        intent: %{"sources" => [%{"class" => "outside", "name" => "claude-code"}]}
-      } =
-        pending_card(ctx, turn)
-
-      approve!(ctx, card)
-      loop = resume(ctx, turn)
       started!(fake, row)
       _post = sent()
       [input] = inputs(ctx, turn)
@@ -766,39 +576,35 @@ defmodule Aqua.ProgramTest do
       steer =
         steer!(ctx, thread, turn, "and this brief", %{"attachments" => [brief("news.example")]})
 
-      line =
-        "This message brings in material the approval of #{@title} did not cover, so this " <>
-          "work ends here. Send it again to be asked anew."
+      post = sent()
+      [_input, steered] = inputs(ctx, turn)
+      assert post == posted(steered, turn, "and this brief")
+      assert carried_by(ctx, steer.id) == steered.id
+      {:ok, writing} = Tape.turn(ctx, turn.id)
 
-      assert {:failed, ^line} = Task.await(loop, 15_000)
-      assert system_lines(ctx, thread, turn) == [line]
-      assert carried_by(ctx, steer.id) == nil
-
-      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
-               input_fields("post", turn.message_id, "ok")
-             ]
-
-      # What the post brings in joined the turn before its write was
-      # refused, and stays joined: the turn read it.
-      {:ok, ended} = Tape.turn(ctx, turn.id)
-
-      assert Prima.Source.decode(ended.sources) == [
-               Prima.Source.outside("claude-code"),
+      assert Prima.Source.decode(writing.sources) == [
+               program_source(row),
                Prima.Source.outside("news.example")
              ]
 
-      assert_receive {:session, "close", _wire, _fields}, 10_000
-      assert running_sessions(fake, row) == []
+      say(fake, row, accepted(steered))
+      say(fake, row, idle(turn, [input.id, steered.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == []
+
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok"),
+               input_fields("post", steer.id, "ok")
+             ]
+
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "a session left from the turn before is written nothing while the next turn waits on " <>
-           "its own start's card, and once allowed takes the next turn's work, then its posts",
+    test "a session left from the turn before takes the next turn's work, then its posts, one " <>
+           "written before the work is taken among them, and opens nothing again",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "first")
-      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
-      approve!(ctx, pending_card(ctx, turn).approval)
-      loop = resume(ctx, turn)
+      loop = run(ctx, turn)
       %{work: first_work} = started!(fake, row)
       _post = sent()
       [input] = inputs(ctx, turn)
@@ -807,24 +613,9 @@ defmodule Aqua.ProgramTest do
       assert :completed = Task.await(loop, 30_000)
       assert Aqua.Program.holding?(ctx.athanor_id, thread.id, "aqua")
 
-      # The start of the turn before was allowed once, for that turn: the
-      # next waits on a card of its own, and nothing of it is written.
+      # The same session is given the next turn's work first.
       next = accept!(ctx, thread, row, "second")
-      paused = run(ctx, next)
-      refute_receive {:session, "send", _wire, _fields}, 2_000
-      assert {:paused, :approval} = Task.await(paused, 30_000)
-      %{approval: card} = pending_card(ctx, next)
-      steer = steer!(ctx, thread, next, "and this")
-      refute_receive {:session, "send", _wire, _fields}, 1_000
-      refute_received {:session, "close", _wire, _fields}
-      assert [_held] = running_sessions(fake, row)
-      assert inputs(ctx, next) == []
-      assert carried_by(ctx, next.message_id) == nil
-      assert carried_by(ctx, steer.id) == nil
-
-      # Allowed, the same session takes the turn's work, then its posts.
-      approve!(ctx, card)
-      loop = resume(ctx, next)
+      loop = run(ctx, next)
       work = sent()
 
       assert work == %{
@@ -833,6 +624,13 @@ defmodule Aqua.ProgramTest do
                  "work" => next.id,
                  "tools" => json(spec!(ctx, next).tools)
              }
+
+      # A post written before the work is taken is written nothing yet.
+      steer = steer!(ctx, thread, next, "and this")
+      refute_receive {:session, "send", _wire, _fields}, 1_000
+      assert inputs(ctx, next) == []
+      assert carried_by(ctx, next.message_id) == nil
+      assert carried_by(ctx, steer.id) == nil
 
       say(fake, row, %{"t" => "accepted", "id" => work["id"]})
       post = sent()
@@ -851,13 +649,15 @@ defmodule Aqua.ProgramTest do
                input_fields("post", steer.id, "ok")
              ]
 
+      assert [_held] = running_sessions(fake, row)
       refute_received {:session, "open", _wire, _fields}
+      refute_received {:session, "close", _wire, _fields}
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "what the program is given first joins the turn before its start is decided: its " <>
-           "instructions' sources, its post's and the thread's a fresh session reads are on " <>
-           "the card, and once allowed its post is written",
+    test "what the program is given first joins the turn before its start runs: its " <>
+           "instructions' sources, its post's and the thread's a fresh session reads, and its " <>
+           "post carries the thread",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       # Its instructions carry a note kept from outside, the thread an
       # earlier post that brought outside material, and its own post too.
@@ -875,26 +675,22 @@ defmodule Aqua.ProgramTest do
           payload: %{"attachments" => [brief("wire.example")]}
         })
 
-      allow!(ctx, thread, row)
-
       turn =
         accept!(ctx, thread, row, "read this brief", %{"attachments" => [brief("post.example")]})
 
-      assert {:paused, :approval} = Task.await(run(ctx, turn), 30_000)
-      refute_received {:session, "open", _wire, _fields}
-      %{approval: card, intent: intent} = pending_card(ctx, turn)
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      {:ok, starting} = Tape.turn(ctx, turn.id)
 
-      assert intent["sources"] == [
-               %{"class" => "filed", "name" => nil},
-               %{"class" => "outside", "name" => "claude-code"},
-               %{"class" => "outside", "name" => "news.example"},
-               %{"class" => "outside", "name" => "post.example"},
-               %{"class" => "outside", "name" => "wire.example"}
+      assert Prima.Source.decode(starting.sources) == [
+               Prima.Source.new(:filed),
+               program_source(row),
+               Prima.Source.outside("news.example"),
+               Prima.Source.outside("post.example"),
+               Prima.Source.outside("wire.example")
              ]
 
-      approve!(ctx, card)
-      loop = resume(ctx, turn)
-      %{start: start} = started!(fake, row)
+      %{start: start} = begun!(fake, row)
       assert start["system"] =~ "Fares rise on Monday"
       post = sent()
       [input] = inputs(ctx, turn)
@@ -912,16 +708,18 @@ defmodule Aqua.ProgramTest do
 
     test "every startup option the work names reaches the harness's start, none dropped",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "plan only")
       options!(turn, %{"permission_mode" => "plan", "effort" => "high"})
       loop = run(ctx, turn)
       %{start: start} = started!(fake, row)
 
+      # Beside them the mode the holder sets: auto keeps the harness's own
+      # permission mode.
       assert start["config"] == %{
                "model" => spec!(ctx, turn).agent["model"],
                "permission_mode" => "plan",
-               "effort" => "high"
+               "effort" => "high",
+               "read_only" => false
              }
 
       post = sent()
@@ -935,7 +733,6 @@ defmodule Aqua.ProgramTest do
     test "a turn whose startup options differ from the running harness's closes its driver " <>
            "and starts a new one, resuming with them, before anything is written",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
       %{start: first} = started!(fake, row)
@@ -960,7 +757,11 @@ defmodule Aqua.ProgramTest do
       assert Map.delete(resume, "system") ==
                Map.merge(Map.delete(first, "system"), %{
                  "session" => @session,
-                 "config" => %{"model" => spec!(ctx, next).agent["model"], "effort" => "high"}
+                 "config" => %{
+                   "model" => spec!(ctx, next).agent["model"],
+                   "effort" => "high",
+                   "read_only" => false
+                 }
                })
 
       assert without_clock(resume["system"]) == without_clock(first["system"])
@@ -987,7 +788,6 @@ defmodule Aqua.ProgramTest do
 
     test "a startup option the harness does not take is refused before anything is written",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "warm")
       options!(turn, %{"temperature" => "0.2"})
       loop = run(ctx, turn)
@@ -1005,32 +805,35 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "a scheduled turn with no standing allow opens no card and ends failed saying what it needed",
-         %{ctx: ctx, thread: thread, row: row} do
+    test "a scheduled turn starts its program with nothing asked and runs as any turn of its mode",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
       ctx = %{ctx | origin: :schedule}
       turn = accept!(ctx, thread, row, "hello")
-      _ = Task.await(run(ctx, turn), 30_000)
+      loop = run(ctx, turn)
+      %{work: work} = started!(fake, row)
+      assert work["id"] == start_step(ctx, turn).id
+      post = sent()
+      [input] = inputs(ctx, turn)
+      assert post == posted(input, turn, "hello")
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
 
-      needed =
-        "This scheduled run needed your approval to use program.start, and nobody was here " <>
-          "to give it. To allow it next time, ask Aqua for it once on your daily thread and " <>
-          "choose \"for a schedule\", naming this one, when it asks."
-
-      assert {:ok, %{status: "failed", error: ^needed} = ended} = Tape.turn(ctx, turn.id)
-      assert {:ok, []} = Tape.pending_approvals(ctx, ended)
+      assert {:ok, %{status: "completed", origin: "schedule", error: nil}} =
+               Tape.turn(ctx, turn.id)
 
       assert Map.take(start_step(ctx, turn), [:dispatch_state, :outcome, :error, :approval_id]) ==
-               %{dispatch_state: "closed", outcome: "denied", error: needed, approval_id: nil}
+               %{dispatch_state: "closed", outcome: "ok", error: nil, approval_id: nil}
 
-      assert inputs(ctx, turn) == []
-      refute_received {:session, "open", _wire, _fields}
+      assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
+               input_fields("post", turn.message_id, "ok")
+             ]
     end
   end
 
   describe "recovery" do
     test "a holder's end resumes the native session naming the post, and a post its transcript holds is continued by one notice",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       %{start: first, work: work} = started!(fake, row)
@@ -1075,7 +878,6 @@ defmodule Aqua.ProgramTest do
     test "a notice the holder refuses before writing it leaves its post owed: the next start " <>
            "names the post again, and the notice follows once",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       %{work: work} = started!(fake, row)
@@ -1117,7 +919,6 @@ defmodule Aqua.ProgramTest do
 
     test "a post the resumed transcript does not hold ends the turn saying so, and is never written again",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       %{start: first} = started!(fake, row)
@@ -1150,7 +951,6 @@ defmodule Aqua.ProgramTest do
     test "the driver's death with a tool's answer held back by a post resumes each held post " <>
            "with one notice, and the answer as one notice that names its call",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
       %{start: first_start, work: work} = started!(fake, row)
@@ -1223,7 +1023,6 @@ defmodule Aqua.ProgramTest do
     test "an answer whose delivery is uncertain becomes one notice, a second restart sends no " <>
            "second one and ends the turn saying so, and the call never runs again",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
       %{start: first_start, work: work} = started!(fake, row)
@@ -1305,7 +1104,6 @@ defmodule Aqua.ProgramTest do
 
     test "a transcript the harness no longer has starts over, and the next post carries the thread as its context",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
       %{start: first} = started!(fake, row)
@@ -1369,7 +1167,6 @@ defmodule Aqua.ProgramTest do
     test "a transcript lost in the middle of the work starts over with one prompt that carries " <>
            "the thread so far and what its calls answered, and runs none of them again",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "unfinished")
       loop = run(ctx, turn)
       %{start: first} = started!(fake, row)
@@ -1435,7 +1232,6 @@ defmodule Aqua.ProgramTest do
   describe "its end" do
     test "Stop closes the session before anything of the turn stops, and the turn ends cancelled",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       tasks = start_supervised!(Task.Supervisor)
 
@@ -1486,7 +1282,6 @@ defmodule Aqua.ProgramTest do
     test "Stop while a CYFR tool the program asked for runs closes the session before " <>
            "anything of the turn stops, and the tool's step settles by its own record",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "run it")
       tasks = start_supervised!(Task.Supervisor)
 
@@ -1499,8 +1294,8 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(input))
       committed!(ctx, thread, 4)
 
-      # The program asks to run its own row on a terminal, which the
-      # thread's standing allow covers; the terminal's open is held.
+      # The program asks to run its own row on a terminal, which auto
+      # runs at once; the terminal's open is held.
       Scripted.hold(fake, "open", 30_000)
       args = %{"action" => "start", "program" => row.id, "epoch" => row.epoch}
       say(fake, row, ask(turn, "ask-1", "program", args))
@@ -1585,7 +1380,6 @@ defmodule Aqua.ProgramTest do
 
     test "a program turn has no deadline: one whose active time is past its turn's keeps running",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "take your time")
 
       {1, _} =
@@ -1608,7 +1402,6 @@ defmodule Aqua.ProgramTest do
     test "the program's own silence after it took a post ends its work, saying so",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       silence!(2_000)
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -1626,7 +1419,6 @@ defmodule Aqua.ProgramTest do
     test "the silence runs on after an idle that answers only some of the posts the program took",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       silence!(1_000)
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "first")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -1648,31 +1440,19 @@ defmodule Aqua.ProgramTest do
     test "an idle of other work leaves the open work owing output: after a tool's answer is " <>
            "taken with no post owed, the program is still busy and its clock runs",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
-      turn = accept!(ctx, thread, row, "write it down")
+      turn = accept!(ctx, thread, row, "run it")
       loop = run(ctx, turn)
       started!(fake, row)
       _post = sent()
       [input] = inputs(ctx, turn)
       say(fake, row, accepted(input))
 
-      say(
-        fake,
-        row,
-        ask(turn, "ask-1", "files", %{
-          "action" => "write",
-          "path" => "data/b.md",
-          "content" => "x"
-        })
-      )
-
-      assert {:paused, :approval} = Task.await(loop, 30_000)
-      %{approval: card} = pending_card(ctx, turn)
+      # While an ask's call runs, the program's idle answers the post.
+      opening = held_start!(fake, row, turn, "ask-1")
       say(fake, row, idle(turn, [input.id]))
       committed!(ctx, thread, 6)
-      approve!(ctx, card)
-      loop = resume(ctx, turn)
-      assert %{"t" => "answer", "id" => answer} = sent()
+      send(opening, :go)
+      assert %{"t" => "answer", "ask" => "ask-1", "id" => answer} = sent()
       say(fake, row, %{"t" => "accepted", "id" => answer})
       committed!(ctx, thread, 7)
       say(fake, row, idle(%{id: "previous-work"}, []))
@@ -1686,7 +1466,6 @@ defmodule Aqua.ProgramTest do
 
     test "an attendant that ends while its turn waits on it ends the turn, saying so",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -1715,7 +1494,6 @@ defmodule Aqua.ProgramTest do
     test "a session closed on purpose while its turn waits ends the wait and says nothing in " <>
            "the thread",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -1738,7 +1516,6 @@ defmodule Aqua.ProgramTest do
     test "a session forgotten while its turn waits ends as a close does: it opens nothing " <>
            "again and says nothing in the thread",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -1772,30 +1549,38 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == []
     end
 
-    test "the silence does not run out while an ask's card waits",
+    test "the silence does not run out while an ask's call runs, and runs once its answer is " <>
+           "taken",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       silence!(2_000)
-      allow!(ctx, thread, row)
-      turn = accept!(ctx, thread, row, "write it down")
+      turn = accept!(ctx, thread, row, "run it")
       loop = run(ctx, turn)
       started!(fake, row)
       _post = sent()
       [input] = inputs(ctx, turn)
       say(fake, row, accepted(input))
+      opening = held_start!(fake, row, turn, "ask-1")
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1")
 
-      say(
-        fake,
-        row,
-        ask(turn, "ask-1", "files", %{"action" => "write", "path" => "a.md", "content" => "x"})
-      )
-
-      assert {:paused, :approval} = Task.await(loop, 30_000)
-      assert %{approval: %{status: "pending"}} = pending_card(ctx, turn)
-
+      # Three silences pass while the call runs, and the clock stands still.
       refute_receive {:session, "close", _wire, _fields}, 6_000
-      assert {:ok, %{status: "paused"}} = Tape.turn(ctx, turn.id)
+      assert %{dispatch_state: "dispatched"} = step_by_key(ctx, turn, key)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+
+      assert TurnStorage.brain_silence(Sanctum.Context.actor(ctx), thread.id) ==
+               {:ok, %{expired?: false, due_ms: nil}}
+
       assert system_lines(ctx, thread, turn) == []
-      assert [_running] = running_sessions(fake, row)
+
+      # Its answer taken, the program owes output again, and its silence
+      # ends the work.
+      send(opening, :go)
+      assert %{"t" => "answer", "ask" => "ask-1", "id" => answer} = sent()
+      say(fake, row, %{"t" => "accepted", "id" => answer})
+      line = "#{@title} said nothing for 0 minutes, so its work here ended."
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+      assert %{dispatch_state: "closed", outcome: "ok"} = step_by_key(ctx, turn, key)
     end
   end
 
@@ -1803,7 +1588,6 @@ defmodule Aqua.ProgramTest do
     test "one no turn offers is decided denied and answered as an error, one with a null " <>
            "argument is refused before it runs, and the turn completes",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      allow!(ctx, thread, row)
       turn = accept!(ctx, thread, row, "search for it")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -1898,42 +1682,17 @@ defmodule Aqua.ProgramTest do
     turn
   end
 
-  # A standing answer to the soul's `program.start` of `row` in this
-  # thread (or a never), recorded through Sanctum as a card's answer
-  # records one. An allow follows the program itself, an outside source
-  # the start reads (`Aqua.Loop`), and any other the bounds name.
-  defp allow!(ctx, thread, row, scope \\ :thread, bounds \\ %{}) do
-    bounds =
-      if scope == :never,
-        do: bounds,
-        else: Map.update(bounds, :sources, [program_source(row)], &[program_source(row) | &1])
-
-    standing!(
-      ctx,
-      thread,
-      "program",
-      "start",
-      %{"program" => row.id, "epoch" => row.epoch},
-      scope,
-      bounds
-    )
-  end
-
+  # The program itself, an outside source its turn reads (`Aqua.Loop`).
   defp program_source(row), do: Prima.Source.outside(row.name)
 
-  # A standing answer to the soul's `tool.action` in this thread, with
-  # the bounds the person chose.
-  defp standing!(ctx, thread, tool, action, args, scope, bounds \\ %{}) do
-    {:ok, [grant]} =
-      Aqua.Standing.rows(
-        ctx,
-        %{id: "turn_none", thread_id: thread.id, agent: "aqua", root_execution_id: nil},
-        %{"tool" => tool, "action" => action, "args" => args},
-        scope,
-        bounds
-      )
-
-    {:ok, _} = Sanctum.ToolGrants.put(ctx, grant)
+  # The soul switched to read-only, as the Aqua page switches it.
+  defp read_only!(ctx) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "update",
+        "name" => Compendium.AquaPath.soul_name(),
+        "mode" => "read-only"
+      })
   end
 
   # The program's silence, below the roster's floor so a test can wait it
@@ -1959,12 +1718,6 @@ defmodule Aqua.ProgramTest do
     steer
   end
 
-  # The person's yes on a card, for this call alone.
-  defp approve!(ctx, approval) do
-    assert {:ok, %{decision: "approved"}} =
-             Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: :once})
-  end
-
   # The startup options the turn names, as a crew request sets them.
   defp options!(turn, options) do
     {1, _} =
@@ -1984,9 +1737,6 @@ defmodule Aqua.ProgramTest do
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
-  defp resume(ctx, turn),
-    do: Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
-
   # The spec the loop built for the running turn, built again as a resumed
   # loop builds it: its system prompt and tools are what the driver is given.
   defp spec!(ctx, turn) do
@@ -2005,13 +1755,6 @@ defmodule Aqua.ProgramTest do
   defp without_clock(system), do: String.replace(system, ~r/Current date: .*\z/s, "")
 
   defp json(value), do: value |> Jason.encode!() |> Jason.decode!()
-
-  defp pending_card(ctx, turn) do
-    {:ok, fresh} = Tape.turn(ctx, turn.id)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, fresh)
-    {:ok, card} = Tape.message(ctx, approval.message_id)
-    %{approval: approval, intent: Tape.payload(card)["intent"]}
-  end
 
   # ---------------------------------------------------------------------------
   # Rows
@@ -2153,6 +1896,11 @@ defmodule Aqua.ProgramTest do
   # start and the work it was given.
   defp started!(fake, row, boot \\ "boot-one") do
     opened!(fake, row, boot)
+    begun!(fake, row)
+  end
+
+  # The opened driver starts the harness, which takes the turn's work.
+  defp begun!(fake, row) do
     start = sent()
     assert %{"t" => "start"} = start
     say(fake, row, started([]))
@@ -2209,6 +1957,20 @@ defmodule Aqua.ProgramTest do
       "name" => name,
       "arguments" => arguments
     }
+
+  # The program asks, as `ask`, to run its own row on a terminal, a call
+  # that does more than read, answering as soon as it opens; the open is
+  # held until the test sends `:go` to what this answers, so the call runs
+  # on meanwhile.
+  defp held_start!(fake, row, turn, ask) do
+    Scripted.hold(fake, "open", 120_000)
+    say(fake, row, ask(turn, ask, "program", start_args(row)))
+    assert_receive {:held, "open", opening}, 10_000
+    opening
+  end
+
+  defp start_args(row),
+    do: %{"action" => "start", "program" => row.id, "epoch" => row.epoch, "wait_ms" => 0}
 
   defp counts,
     do: %{

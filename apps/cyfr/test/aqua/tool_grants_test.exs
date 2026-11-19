@@ -9,9 +9,6 @@ defmodule Aqua.ToolGrantsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Aqua.Loop.Binding
-  alias Aqua.Loop.Binding.Call
-  alias Aqua.Loop.Policy
   alias Aqua.ToolGrants
 
   setup tags do
@@ -215,76 +212,6 @@ defmodule Aqua.ToolGrantsTest do
       assert Aqua.Kinds.auto_permitted?("notes", "read")
     end
 
-    test "the ceiling admits an authored auto on a launch, and a stored allow never makes one run without its card" do
-      # A launch is decided by its line: an authored auto reaches the guest
-      # as auto, where the component's grant decides it. No answer a person
-      # gives is ever kept for it.
-      assert {:ok, %{kind: :execute, standing: nil, stored_answers: false}} =
-               Sanctum.Catalog.action_declaration("execution.run")
-
-      assert Aqua.Kinds.auto_permitted?("execution", "run")
-
-      assert ToolGrants.resolve(%{"execution.run" => "auto"}, [], {:ok, true}) == %{
-               "execution.run" => "auto"
-             }
-
-      # A stored allow for execution.run, which the store refuses, counts
-      # for nothing however it was written: it leaves an authored auto as
-      # it is, an authored ask asking, and no line no line.
-      allow = %{
-        scope: "agent",
-        effect: "allow",
-        agent_name: "aqua",
-        tool: "execution",
-        action: "run",
-        sources: []
-      }
-
-      launch = %Call{
-        kind: :launch,
-        tool: "execution",
-        action: "run",
-        args: %{"reference" => "reagent:local.app:1.0.0", "input" => %{}},
-        target: "reagent:local.app:1.0.0"
-      }
-
-      asks = ToolGrants.resolve(%{"execution.run" => "ask"}, [allow], {:ok, true})
-      assert asks == %{"execution.run" => "ask"}
-      assert Policy.decide(launch, asks, sources: []) == :ask
-      refute Policy.auto?(launch, asks, sources: [])
-
-      assert ToolGrants.resolve(%{"execution.run" => "auto"}, [allow], {:ok, true}) ==
-               %{"execution.run" => "auto"}
-
-      assert ToolGrants.resolve(%{}, [allow], {:ok, true}) == %{}
-    end
-
-    test "an HTTP post, put or patch the author made automatic asks; a GET stays automatic" do
-      # Each call resolves through the binding the loop uses, and its decision
-      # reads the key the binding names, from the ceiling's own effective map.
-      args = %{"url" => "https://example.test/", "body" => "b"}
-
-      authored = %{
-        "http.get" => "auto",
-        "http.post" => "auto",
-        "http.put" => "auto",
-        "http.patch" => "auto"
-      }
-
-      effective = ToolGrants.effective(authored, [], {:ok, true})
-      guest = ToolGrants.to_guest(effective)
-
-      for name <- ~w(http.post http.put http.patch) do
-        assert {:ok, %Call{tool: tool, action: action} = call} = Binding.resolve(name, args)
-        assert {:ask, :authored} = effective["#{tool}.#{action}"], "#{name} stayed automatic"
-        assert Policy.decide(call, guest, []) == :ask
-      end
-
-      assert {:ok, %Call{} = get} = Binding.resolve("http.get", args)
-      assert {:auto, :authored} = effective["http.get"]
-      assert Policy.decide(get, guest, []) == :auto
-    end
-
     test "allowed_keys/1 is grant-derived and a deny subtracts" do
       rows = [
         %{effect: "allow", scope: "thread", tool: "component", action: "pull"},
@@ -325,36 +252,6 @@ defmodule Aqua.ToolGrantsTest do
     }
 
     defp family(mode), do: Map.new(@family, &{"browser.#{&1}", mode})
-
-    test "decides every action that follows it, on as auto and off as deny, whatever the author wrote; its own three keep their lines" do
-      assert Enum.filter(
-               Aqua.Kinds.actions_of("browser"),
-               &Sanctum.Catalog.follows_setting?("browser", &1)
-             )
-             |> Enum.sort() == Enum.sort(@family)
-
-      assert ToolGrants.resolve(@authored, [], {:ok, true}) ==
-               Map.merge(family("auto"), @setting_lines)
-
-      assert ToolGrants.resolve(@authored, [], {:ok, false}) ==
-               Map.merge(family("deny"), @setting_lines)
-
-      # A store that could not answer reads as off.
-      assert ToolGrants.resolve(@authored, [], {:error, :unavailable}) ==
-               ToolGrants.resolve(@authored, [], {:ok, false})
-
-      # A glob names the family as its exact lines do; the setting's own
-      # turn_on still asks, since it takes no standing answer, and the
-      # person's watch keeps the line it was given, which no agent can use:
-      # no turn's chain is offered it.
-      assert ToolGrants.resolve(%{"browser.*" => "auto"}, [], {:ok, true}) ==
-               family("auto")
-               |> Map.merge(%{@setting_lines | "browser.turn_on" => "ask"})
-               |> Map.put("browser.watch", "auto")
-
-      assert ToolGrants.effective(%{"browser.open" => "ask"}, [], {:ok, false}) ==
-               %{"browser.open" => {:deny, :setting}}
-    end
 
     test "counts no standing answer for the family, and gives the browser to no agent whose author named it nowhere",
          %{ctx: ctx} do
@@ -909,52 +806,6 @@ defmodule Aqua.ToolGrantsTest do
       assert :ok = ToolGrants.revoke(ctx, key)
       assert listed(ctx) == MapSet.new()
       assert covered.() == [false, false, false]
-    end
-
-    test "the browser setting decides the browser's actions over an answer for a schedule, and makes the schedule's other answers no more than they were",
-         %{ctx: ctx, a: a} do
-      for_a = %{
-        scope: "agent",
-        effect: "allow",
-        agent_name: "aqua",
-        lifecycle_kind: "schedule",
-        lifecycle_id: a.id
-      }
-
-      {:ok, %{schedule_id: id}} =
-        Sanctum.ToolGrants.put(ctx, Map.merge(for_a, %{tool: "browser", action: "read"}))
-
-      assert id == a.id
-      {:ok, _} = Sanctum.ToolGrants.put(ctx, Map.merge(for_a, %{tool: "files", action: "write"}))
-      run_a = run!(ctx, a.id)
-      rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
-      authored = %{"browser.read" => "ask", "browser.open" => "ask", "files.write" => "ask"}
-
-      read = %Call{kind: :catalog, tool: "browser", action: "read", args: %{}}
-      place = [ctx: ctx, agent: "aqua", thread_id: "thread_1", execution_id: run_a, sources: []]
-
-      on = ToolGrants.resolve(authored, rows, {:ok, true})
-      assert on == %{"browser.read" => "auto", "browser.open" => "auto", "files.write" => "ask"}
-      assert Policy.decide(read, on, place) == :auto
-
-      assert Policy.decide(
-               %Call{
-                 kind: :catalog,
-                 tool: "files",
-                 action: "write",
-                 args: write_call(run_a).args
-               },
-               on,
-               place
-             ) == :auto
-
-      # Off, the schedule's answer for the read covers nothing; its answer
-      # for files.write still covers the schedule's own runs.
-      off = ToolGrants.resolve(authored, rows, {:ok, false})
-      assert off == %{"browser.read" => "deny", "browser.open" => "deny", "files.write" => "ask"}
-      assert {:deny, _sentence} = Policy.decide(read, off, place)
-      assert Sanctum.ToolGrants.admits?(ctx, write_call(run_a))
-      refute Sanctum.ToolGrants.admits?(ctx, write_call(run!(ctx, nil)))
     end
 
     test "a thread-only action takes an agent-wide allow only when it ends with a schedule; a launch, a destructive and an external action take none",

@@ -296,8 +296,8 @@ defmodule Aqua.PageCalls do
 
   @doc """
   The answer a page's result row holds (`answer/3`), or, for a row a
-  call was closed with where no answer was made (a step skipped, or
-  withdrawn with its card), the refusal its sentence says.
+  call was closed with where no answer was made (a step skipped), the
+  refusal its sentence says.
   """
   @spec answered(map()) :: {pos_integer(), String.t()}
   def answered(%{content: body, payload: %{"status" => status}}) when is_integer(status),
