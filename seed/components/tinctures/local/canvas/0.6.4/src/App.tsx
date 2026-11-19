@@ -13,6 +13,7 @@ import {
   pressSchedule,
   recentRows,
   retryRun,
+  sayer,
   scheduleRows,
   showRun,
   showSteps,
@@ -36,8 +37,6 @@ const ROWS = 8;
 // The narrowest page the desk's two columns fit, below which it stacks
 // them as the hand does.
 const TWO_COLUMNS_PX = 860;
-// How long a tap's answer is said where the person tapped.
-const REFUSED_MS = 4_000;
 
 // Each section's heading, by its widget.
 const TITLES: Record<string, string> = {
@@ -485,15 +484,13 @@ function Section({
   );
 }
 
-// What a tap's answer says, held for a moment and then gone.
+// What a tap's answer says, held for a moment after the last answer and
+// then gone (`sayer`).
 function useSaid(): [string | null, (said: string | null) => void] {
   const [said, setSaid] = useState<string | null>(null);
-  useEffect(() => {
-    if (said === null) return;
-    const timer = setTimeout(() => setSaid(null), REFUSED_MS);
-    return () => clearTimeout(timer);
-  }, [said]);
-  return [said, setSaid];
+  const [{ say, stop }] = useState(() => sayer(setSaid));
+  useEffect(() => stop, [stop]);
+  return [said, say];
 }
 
 function Dot({ status }: { status: Status }) {

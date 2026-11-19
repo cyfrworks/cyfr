@@ -226,6 +226,11 @@ export const NOT_OPENED = "Not opened: tap again";
 // What a tap on the tile of an app the shell no longer lists says.
 export const NOT_INSTALLED = "It is no longer installed";
 
+// What a tap on an app's tile says when the shell's answer never came
+// (the SDK's `uncertain`): the shell may have opened the app before its
+// answer was lost, so it claims nothing about whether it opened.
+export const NO_ANSWER = "No answer yet";
+
 // Opens an app, for the person's tap on its tile. Answers what the tile
 // says, or null: an app the shell opened shows as its window. Every other
 // answer says something, so a tap that opens nothing is never silent.
@@ -234,7 +239,37 @@ export async function openApp(sdk: Sdk, app: InstalledApp): Promise<string | nul
   if (answer.outcome === "opened") return null;
   if (answer.outcome === "cancelled" && answer.reason === "too_soon") return TOO_SOON;
   if (answer.outcome === "refused" && answer.reason === "not_found") return NOT_INSTALLED;
+  if (answer.outcome === "refused" && answer.reason === "uncertain") return NO_ANSWER;
   return NOT_OPENED;
+}
+
+// How long a tap's answer is said where the person tapped.
+export const SAID_MS = 4_000;
+
+// What a tap's answer says where the person tapped, shown through `show`
+// for SAID_MS after the last answer: each answer restarts that moment, the
+// same words again included, so a tap answered as the one before it is
+// said for as long; null clears it at once.
+export function sayer(show: (said: string | null) => void): {
+  say: (said: string | null) => void;
+  stop: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const stop = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
+  const say = (said: string | null) => {
+    stop();
+    show(said);
+    if (said !== null) {
+      timer = setTimeout(() => {
+        timer = null;
+        show(null);
+      }, SAID_MS);
+    }
+  };
+  return { say, stop };
 }
 
 // Opens a run's page, the Dashboard's Executions page at that run, where

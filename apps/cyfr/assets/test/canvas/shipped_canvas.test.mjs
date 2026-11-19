@@ -1364,7 +1364,7 @@ describe("the shipped canvas 0.6.4", () => {
     assert.doesNotMatch(sources().join("\n"), /\["conflict",/)
   })
 
-  test("a tap on an app's tile that opens nothing says so where the person tapped; only an open says nothing", async () => {
+  test("a tap on an app's tile that opens nothing says so where the person tapped, one never answered says only that; only an open says nothing", async () => {
     const {cyfr, calls, answers} = shell()
     const notes = {ref: "tincture:local.notes", name: "Notes", icon: null, open: false}
     const said = (answer) => {
@@ -1381,14 +1381,51 @@ describe("the shipped canvas 0.6.4", () => {
     assert.equal(await said({outcome: "cancelled"}), "Not opened: tap again")
     // No longer listed by the shell.
     assert.equal(await said({outcome: "refused", reason: "not_found"}), "It is no longer installed")
-    // Any other refusal, the SDK's `uncertain` for an open never answered
-    // among them, opens nothing too.
-    assert.equal(await said({outcome: "refused", reason: "uncertain"}), "Not opened: tap again")
+    // An open never answered (the SDK's `uncertain`) is told apart: the
+    // shell may have opened the app before its answer was lost, so the tile
+    // claims nothing about whether it opened, nor asks for a second tap.
+    assert.equal(await said({outcome: "refused", reason: "uncertain"}), "No answer yet")
+    // Any other refusal opens nothing too.
     assert.equal(await said({outcome: "refused", reason: "invalid_argument"}), "Not opened: tap again")
     assert.deepEqual(calls.open, Array(6).fill("tincture:local.notes"))
     assert.match(app(), /onClick=\{\(\) => openApp\(cyfr, app\)\.then\(say\)\}/)
     assert.match(app(), /\{said !== null && <span className="said">\{said\}<\/span>\}/)
     assert.match(readFileSync(new URL("src/model.ts", VERSION_64), "utf8"), /open\(ref: string, on\?: \{ kind: string; id: string \} \| null\): Promise<Opened>;/)
+  })
+
+  test("a tap's answer is said for its moment from the last answer, the same words again included", (t) => {
+    t.mock.timers.enable({apis: ["setTimeout"]})
+    const shown = []
+    const {say} = V64.sayer((said) => shown.push(said))
+    assert.equal(V64.SAID_MS, 4_000)
+
+    // A tap dropped, and the next dropped the same way three seconds on:
+    // the words stay for the whole moment after the second.
+    say("Not opened: tap again")
+    t.mock.timers.tick(3_000)
+    say("Not opened: tap again")
+    t.mock.timers.tick(V64.SAID_MS - 1)
+    assert.deepEqual(shown, ["Not opened: tap again", "Not opened: tap again"])
+    t.mock.timers.tick(1)
+    assert.deepEqual(shown, ["Not opened: tap again", "Not opened: tap again", null])
+
+    // Other words in the moment replace them and start their own; null
+    // clears them at once, and nothing later clears anything again.
+    say("Tap again in a moment")
+    t.mock.timers.tick(1_000)
+    say("No answer yet")
+    t.mock.timers.tick(V64.SAID_MS - 1)
+    assert.equal(shown.at(-1), "No answer yet")
+    say(null)
+    t.mock.timers.tick(V64.SAID_MS * 2)
+    assert.deepEqual(shown.slice(3), ["Tap again in a moment", "No answer yet", null])
+
+    // Every tap's answer on the page is said through it: the tile's, Retry's
+    // and a schedule's press.
+    assert.match(app(), /const \[\{ say, stop \}\] = useState\(\(\) => sayer\(setSaid\)\);/)
+    assert.match(app(), /useEffect\(\(\) => stop, \[stop\]\);/)
+    assert.equal([...app().matchAll(/= useSaid\(\)/g)].length, 3)
+    assert.doesNotMatch(app(), /setTimeout/)
   })
 
   test("the first steps are offered at first, both, in order, whatever the desktop holds", () => {
