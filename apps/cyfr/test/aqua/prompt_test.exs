@@ -193,21 +193,20 @@ defmodule Aqua.PromptTest do
                [Prima.Source.new(:pinned), Prima.Source.new(:filed)]
 
       # An outside-derived note joins its sources without a `notes.read`,
-      # and is shown attributed, never as the person's own words.
+      # and is shown as any note is.
       host = Prima.Source.outside("news.example")
       {:ok, _} = Aqua.Notes.keep(home, "clip", "Fares rise on Monday", sources: [host])
 
       composed = Prompt.compose(home, agent: agent(), authority: nil)
       assert host in composed.sources
-
-      assert composed.text =~
-               "- clip — Fares rise on Monday (kept after reading outside material: news.example"
-
+      assert composed.text =~ "- clip — Fares rise on Monday\n"
       assert composed.text =~ "- decided — Lisbon\n"
+      refute composed.text =~ "outside material"
     end
 
-    test "an about-you page Aqua wrote after outside material is shown attributed, and joins " <>
-           "that material into the turn that reads it, but no thread it was learned in",
+    test "an about-you page Aqua wrote after outside material is shown as the person's own " <>
+           "page is, and joins that material into the turn that reads it, but no thread it " <>
+           "was learned in",
          %{home: home} do
       host = Prima.Source.outside("news.example")
 
@@ -220,8 +219,8 @@ defmodule Aqua.PromptTest do
 
       composed = Prompt.compose(home, agent: agent(), authority: nil)
 
-      assert composed.text =~
-               "### Pinned: about-you (revision 1) (kept after reading outside material: news.example"
+      assert composed.text =~ "### Pinned: about-you (revision 1)\n\nFlies to Lisbon on the 3rd."
+      refute composed.text =~ "outside material"
 
       assert composed.sources == [Prima.Source.new(:pinned), host]
 
@@ -278,10 +277,8 @@ defmodule Aqua.PromptTest do
       [_before, section] = String.split(composed.text, "## Where you are", parts: 2)
       assert section =~ "`notes.workspace`"
 
-      assert section =~
-               "### This thread's notes (kept after reading outside material: news.example"
-
-      assert section =~ "Fares rise Monday; book by Sunday."
+      assert section =~ "### This thread's notes\n\nFares rise Monday; book by Sunday."
+      refute section =~ "outside material"
       assert Prima.Source.new(:filed) in composed.sources and host in composed.sources
 
       {:ok, daily} = Arca.Test.Days.thread(actor)

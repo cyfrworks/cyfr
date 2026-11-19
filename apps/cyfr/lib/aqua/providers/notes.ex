@@ -45,16 +45,11 @@ defmodule Aqua.Providers.Notes do
   guest that reads it later reads them too, and a component that runs no
   turn keeps what it read as a turn does: a note made from a
   disclosed vault value carries `vault_disclosed`, whatever admitted the
-  keep. Of those, the outside sources make it outside material, shown
-  attributed and endorsable: running the write never endorses the
-  content. A page `pin` or `workspace` writes in a chain
+  keep. A page `pin` or `workspace` writes in a chain
   keeps them the same way, is kept by Aqua (`Prima.Author.agent/0`) and
-  names the thread it was written in, and is never endorsed by being
-  written. A thread source is left out: what a note holds outlives the
-  thread it was kept from, so reading a note never makes a turn one that
-  read that thread. `endorse` is the one clearing of a filed note's
-  outside sources: it names the sources the note carries, and it writes
-  only while the note still carries exactly those. The person's own
+  names the thread it was written in. A thread source is left out: what
+  a note holds outlives the thread it was kept from, so reading a note
+  never makes a turn one that read that thread. The person's own
   write of the pinned page, on
   the Aqua page, carries no sources: what they wrote is theirs.
   """
@@ -158,39 +153,6 @@ defmodule Aqua.Providers.Notes do
           kind: :write,
           sources: [],
           planes: [:in_chain],
-          consent: :interactive
-        ),
-        Operation.new(
-          "notes",
-          "endorse",
-          "Endorse notes",
-          [
-            Arg.new("name", :string,
-              required: true,
-              description: "What the note is called (keep, pin, read, forget)"
-            ),
-            Arg.new(
-              "sources",
-              {:array,
-               Arg.new(
-                 nil,
-                 {:record,
-                  [
-                    Arg.new("class", :string,
-                      required: true,
-                      enum: Enum.map(Prima.Source.classes(), &Atom.to_string/1)
-                    ),
-                    Arg.new("name", :string)
-                  ]}
-               )},
-              required: true,
-              description:
-                "endorse: the sources the note carries, as a read answered them — cleared only while the note carries exactly these"
-            )
-          ],
-          kind: :write,
-          sources: [],
-          planes: [:external, :in_chain],
           consent: :interactive
         ),
         Operation.new(
@@ -368,10 +330,6 @@ defmodule Aqua.Providers.Notes do
 
   defp dispatch(ctx, %{"action" => "forget", "name" => name}) when is_binary(name),
     do: Notes.forget(ctx, name)
-
-  defp dispatch(ctx, %{"action" => "endorse", "name" => name, "sources" => sources})
-       when is_binary(name) and is_list(sources),
-       do: Notes.endorse(ctx, name, sources)
 
   defp dispatch(ctx, %{"action" => "list"} = args), do: Notes.list(ctx, page(args))
 

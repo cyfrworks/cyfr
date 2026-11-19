@@ -172,7 +172,6 @@ const (
 	McpServersRestart       = "restart"
 	McpServersTest          = "test"
 	McpServersUpdate        = "update"
-	NotesEndorse            = "endorse"
 	NotesForget             = "forget"
 	NotesKeep               = "keep"
 	NotesList               = "list"
@@ -327,7 +326,7 @@ var Actions = map[string][]string{
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "open", "refresh", "reset_home", "restart", "test", "update"},
-	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
+	"notes":               {"forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"list", "renew", "revoke", "waiting"},
 	"policy_log":          {"correlate", "get", "list"},
@@ -2406,39 +2405,6 @@ func (args *McpServersUpdateArgsConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// NotesEndorseArgs carries arguments for notes.endorse.
-type NotesEndorseArgs struct {
-	// What the note is called (keep, pin, read, forget)
-	Name string `json:"name"`
-	// endorse: the sources the note carries, as a read answered them — cleared only while the note carries exactly these
-	Sources []NotesEndorseArgsSourcesItem `json:"sources"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args NotesEndorseArgs) MarshalJSON() ([]byte, error) {
-	type fields NotesEndorseArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: NotesEndorse, fields: fields(args)})
-}
-
-type NotesEndorseArgsSourcesItem struct {
-	Class string        `json:"class"`
-	Name  Field[string] `json:"name,omitzero"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *NotesEndorseArgsSourcesItem) UnmarshalJSON(data []byte) error {
-	type fields NotesEndorseArgsSourcesItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = NotesEndorseArgsSourcesItem(value)
-	return nil
-}
-
 // NotesForgetArgs carries arguments for notes.forget.
 type NotesForgetArgs struct {
 	// What the note is called (keep, pin, read, forget)
@@ -2899,11 +2865,10 @@ func (args *ProfileCommitArgsDecisionsToolServersItem) UnmarshalJSON(data []byte
 }
 
 type ProfileCommitArgsDecisionsSubsetItem struct {
-	Egress  Field[ProfileCommitArgsDecisionsSubsetItemEgress]      `json:"egress,omitzero"`
-	Storage Field[ProfileCommitArgsDecisionsSubsetItemStorage]     `json:"storage,omitzero"`
-	Tools   Field[[]string]                                        `json:"tools,omitzero"`
-	Limits  Field[ProfileCommitArgsDecisionsSubsetItemLimits]      `json:"limits,omitzero"`
-	Exits   Field[[]ProfileCommitArgsDecisionsSubsetItemExitsItem] `json:"exits,omitzero"`
+	Egress  Field[ProfileCommitArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
+	Storage Field[ProfileCommitArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
+	Tools   Field[[]string]                                    `json:"tools,omitzero"`
+	Limits  Field[ProfileCommitArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -2985,22 +2950,6 @@ func (args *ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(d
 		return err
 	}
 	*args = ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit(value)
-	return nil
-}
-
-type ProfileCommitArgsDecisionsSubsetItemExitsItem struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *ProfileCommitArgsDecisionsSubsetItemExitsItem) UnmarshalJSON(data []byte) error {
-	type fields ProfileCommitArgsDecisionsSubsetItemExitsItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = ProfileCommitArgsDecisionsSubsetItemExitsItem(value)
 	return nil
 }
 
@@ -3278,11 +3227,10 @@ func (args *ProfilePreviewArgsDecisionsToolServersItem) UnmarshalJSON(data []byt
 }
 
 type ProfilePreviewArgsDecisionsSubsetItem struct {
-	Egress  Field[ProfilePreviewArgsDecisionsSubsetItemEgress]      `json:"egress,omitzero"`
-	Storage Field[ProfilePreviewArgsDecisionsSubsetItemStorage]     `json:"storage,omitzero"`
-	Tools   Field[[]string]                                         `json:"tools,omitzero"`
-	Limits  Field[ProfilePreviewArgsDecisionsSubsetItemLimits]      `json:"limits,omitzero"`
-	Exits   Field[[]ProfilePreviewArgsDecisionsSubsetItemExitsItem] `json:"exits,omitzero"`
+	Egress  Field[ProfilePreviewArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
+	Storage Field[ProfilePreviewArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
+	Tools   Field[[]string]                                     `json:"tools,omitzero"`
+	Limits  Field[ProfilePreviewArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3364,22 +3312,6 @@ func (args *ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(
 		return err
 	}
 	*args = ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit(value)
-	return nil
-}
-
-type ProfilePreviewArgsDecisionsSubsetItemExitsItem struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *ProfilePreviewArgsDecisionsSubsetItemExitsItem) UnmarshalJSON(data []byte) error {
-	type fields ProfilePreviewArgsDecisionsSubsetItemExitsItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = ProfilePreviewArgsDecisionsSubsetItemExitsItem(value)
 	return nil
 }
 

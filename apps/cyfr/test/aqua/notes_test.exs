@@ -268,7 +268,7 @@ defmodule Aqua.NotesStoreTest do
   end
 
   describe "outside material" do
-    test "a note kept with sources answers them on every read until a person endorses it", %{
+    test "a note kept with sources answers them on every read", %{
       ctx: ctx
     } do
       member!()
@@ -281,74 +281,10 @@ defmodule Aqua.NotesStoreTest do
       assert {:ok, %{notes: [%{sources: [^host]}]} = found} = Notes.search(ctx, "fares")
       assert Notes.sources_of_answer({:ok, %{matches: found.notes}}) == [host]
 
-      # The endorsement must name exactly what the note carries.
-      assert {:error, {:conflict, _}} =
-               Notes.endorse(
-                 ctx,
-                 "clip",
-                 Prima.Source.to_json_list([Prima.Source.outside("other.example")])
-               )
-
-      assert {:error, {:conflict, _}} = Notes.endorse(ctx, "clip", [])
-      assert {:ok, %{sources: [^host]}} = Notes.read(ctx, "clip")
-
-      assert {:ok, %{endorsed: "clip"}} =
-               Notes.endorse(ctx, "clip", Prima.Source.to_json_list([host]))
-
-      assert {:ok, %{content: "Fares rise on Monday", sources: [], kept_by: kept_by}} =
-               Notes.read(ctx, "clip")
-
-      assert kept_by == ctx.user_id
-
-      assert {:error, {:invalid_argument, _}} =
-               Notes.endorse(ctx, "clip", Prima.Source.to_json_list([host]))
-
-      assert {:error, {:invalid_argument, _}} =
-               Notes.endorse(ctx, "about-you", Prima.Source.to_json_list([host]))
-
-      assert {:error, {:not_found, "note", "gone"}} =
-               Notes.endorse(ctx, "gone", Prima.Source.to_json_list([host]))
-    end
-
-    test "a note carrying only the athanor's own material is no outside material to endorse, and an endorsement keeps what it was made from",
-         %{ctx: ctx} do
-      member!()
       vault = Prima.Source.new(:vault_disclosed)
-      host = Prima.Source.outside("news.example")
-
       assert {:ok, _} = Notes.keep(ctx, "derived", "the account's region", sources: [vault])
       assert {:ok, %{sources: [^vault]}} = read = Notes.read(ctx, "derived")
       assert Notes.sources_of_answer(read) == [vault]
-
-      assert {:error, {:invalid_argument, message}} =
-               Notes.endorse(ctx, "derived", Prima.Source.to_json_list([vault]))
-
-      assert message =~ "no outside sources"
-
-      assert {:ok, _} =
-               Notes.keep(ctx, "mixed", "the region, as the news put it", sources: [vault, host])
-
-      assert {:ok, %{endorsed: "mixed"}} =
-               Notes.endorse(ctx, "mixed", Prima.Source.to_json_list([vault, host]))
-
-      # The outside material is the person's own now; the disclosed value
-      # it was made from is still what it holds.
-      assert {:ok, %{sources: [^vault]}} = Notes.read(ctx, "mixed")
-    end
-
-    test "an endorsement never writes over a note corrected since its read", %{ctx: ctx} do
-      member!()
-      host = Prima.Source.outside("news.example")
-      assert {:ok, _} = Notes.keep(ctx, "clip", "Fares rise", sources: [host])
-
-      Interleave.plant(fn ->
-        {:ok, _} = Notes.keep_over(ctx, "clip", "Fares fall, corrected", 1)
-      end)
-
-      assert {:error, {:conflict, _}} =
-               Notes.endorse(ctx, "clip", Prima.Source.to_json_list([host]))
-
-      assert {:ok, %{content: "Fares fall, corrected", sources: []}} = Notes.read(ctx, "clip")
     end
 
     test "a keep and a pin in a chain that read outside material are marked, whatever allowed " <>
@@ -386,7 +322,7 @@ defmodule Aqua.NotesStoreTest do
                )
 
       # Aqua's own page: kept by Aqua, naming the thread it was written in,
-      # with what the chain read, and never endorsed by being written.
+      # with what the chain read.
       assert {:ok, %{sources: [%Prima.Source{class: :filed}, ^host], thread: ^thread} = page} =
                Notes.pinned(ctx)
 

@@ -56,12 +56,8 @@ defmodule Aqua.Notes do
 
   A note kept from a chain carries every source the chain's turns read
   (`sources`, `Prima.Source`s), and every read answers it with them, so a
-  turn or a guest that reads it reads them (`Aqua.Loop.Policy`). One that
-  carries an outside source is outside material, never the person's own
-  words: the notes index shows it attributed (`Aqua.Prompt`), and only
-  `endorse/3`, a write that names its sources, clears its outside
-  sources, keeping the rest. A provenance that cannot
-  be read is an unnamed outside source.
+  turn or a guest that reads it reads them (`Aqua.Loop.Policy`). A
+  provenance that cannot be read is an unnamed outside source.
 
   This module is the domain. Four callers read or write here:
   `Aqua.Providers.Notes`, the door people and agents come through;
@@ -388,53 +384,6 @@ defmodule Aqua.Notes do
   end
 
   @doc """
-  Make a filed note's outside material the person's own: clear the
-  outside sources its provenance carries, over the revision read just
-  before, naming its sources. `sources_seen` are the
-  sources the call names, as their canonical JSON objects; a note whose sources are not exactly those, a note changed
-  since it was read, a note that carries no outside source and a pinned
-  name are refused, and nothing is written. Its other sources stay, since
-  what it was made from inside the athanor (a disclosed vault value, a
-  filed note) is still what it holds; the body is kept as it stands, the
-  thread and execution it came from with it, and the person who endorsed
-  it is who kept it now.
-  """
-  @spec endorse(Context.t(), String.t(), [map()]) ::
-          {:ok, %{endorsed: String.t(), athanor_id: String.t()}} | {:error, refusal()}
-  def endorse(%Context{} = ctx, name, sources_seen) when is_list(sources_seen) do
-    seen = decode_sources_list(sources_seen)
-
-    with :ok <- check_name(name),
-         :ok <- refuse_pinned(name, "endorse", "pin"),
-         {:ok, %{revision: revision, note: note}} <- current(ctx, name) do
-      cond do
-        is_nil(note) ->
-          {:error, {:not_found, "note", name}}
-
-        not Enum.any?(note.sources, &Prima.Source.outside?/1) ->
-          {:error, {:invalid_argument, "'#{name}' carries no outside sources to clear"}}
-
-        Prima.Source.set(note.sources) != seen ->
-          {:error,
-           {:conflict, "'#{name}' carries other sources than the ones shown — read it again"}}
-
-        true ->
-          provenance = [
-            thread: note.thread,
-            execution: note.execution,
-            sources: Enum.reject(note.sources, &Prima.Source.outside?/1)
-          ]
-
-          with :ok <- publish(ctx, name, encode(ctx, note.content, provenance), revision),
-               do: {:ok, %{endorsed: name, athanor_id: Context.athanor!(ctx)}}
-      end
-    end
-  end
-
-  def endorse(%Context{}, _name, _sources_seen),
-    do: {:error, {:invalid_argument, "endorse names the sources the note carries"}}
-
-  @doc """
   The sources a notes read answered carries, as the `notes` tool answers
   it (`Aqua.Providers.Notes`): the provenance of the note a `read`
   answered, or of each match a `search` answered, each source in its JSON
@@ -471,7 +420,7 @@ defmodule Aqua.Notes do
   @doc """
   One sentence for what a write answered, as the `notes` tool answers it:
   one per outcome this module mints (`keep/4` new or replacing, `pin/4`
-  setting or clearing, `forget/2`, `endorse/3`); `nil` for anything that
+  setting or clearing, `forget/2`); `nil` for anything that
   is not a write's answer, so a caller can post nothing rather than guess.
   """
   @spec describe(term()) :: String.t() | nil
@@ -483,7 +432,6 @@ defmodule Aqua.Notes do
   def describe(%{workspace_notes: _thread}), do: "📝 Wrote this workspace thread's notes"
   def describe(%{cleared_workspace_notes: _thread}), do: "📝 Cleared this workspace thread's notes"
   def describe(%{forgot: name}), do: "📝 Forgot the note: #{name}"
-  def describe(%{endorsed: name}), do: "📝 Made the note your own: #{name}"
   def describe(_result), do: nil
 
   # ---------------------------------------------------------------------------
@@ -823,10 +771,6 @@ defmodule Aqua.Notes do
   # under this member's slot. The slot is asked first, so a member that
   # holds none stages nothing; bytes a refused publication staged have
   # their reservation ended, and the sweep removes them.
-  defp publish(ctx, name, bytes, revision_read) do
-    with {:ok, _revision} <- published(ctx, name, bytes, revision_read, []), do: :ok
-  end
-
   defp published(ctx, name, bytes, revision_read, closures) do
     actor = Sanctum.Context.actor(ctx)
 
