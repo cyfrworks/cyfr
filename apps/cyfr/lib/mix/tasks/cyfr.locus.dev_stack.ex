@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# arca:bypass-ok=B — entire module: every file it touches is the operator's,
+# read or written before any boot, with no Arca configured: the checkout's
+# `.env` and `.env.example`, the declarations the script resolved into its
+# private directory, and the local cyfr.run's certificate authority it
+# copied out.
 defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   @shortdoc "The source development stack's settings, read as a mix boot reads them"
 
@@ -80,13 +85,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
   never a release.
-
-  ## arca:bypass-ok=B — entire module
-
-  Every file it touches is the operator's, read or written before any
-  boot, with no Arca configured: the checkout's `.env` and `.env.example`,
-  the declarations the script resolved into its private directory, and the
-  local cyfr.run's certificate authority it copied out.
   """
 
   use Boundary, classify_to: Cyfr
