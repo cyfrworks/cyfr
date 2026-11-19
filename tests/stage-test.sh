@@ -1034,7 +1034,7 @@ git -C "$rrepo" reset -q
 grep -qx 'selected unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
   grep -qx 'selected unit-pg postgres apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
   grep -qx 'left Cyfr.Wide 3' "$S/logs-uncommitted/receipt" || fail "the receipt's selection: $(grep -E '^(selected|left)' "$S/logs-uncommitted/receipt")"
-grep -qx "stage: receipt: handoff passed, commit $head, tree $start, uncommitted, logs $S/logs-uncommitted" "$S/uncommitted.err" ||
+grep -qx "stage: receipt: handoff passed, commit $head, tree $tree, uncommitted, logs $S/logs-uncommitted" "$S/uncommitted.err" ||
   fail "the receipt's line: $(grep receipt "$S/uncommitted.err")"
 git -C "$rrepo" checkout -q -- .
 
@@ -1095,11 +1095,18 @@ cp "$S/receipt-table" "$rrepo/scripts/stages.tsv"
 git -C "$rrepo" -c user.name=test -c user.email=test@invalid commit -qam 'the receipt table'
 head=$(git -C "$rrepo" rev-parse HEAD) tree=$(git -C "$rrepo" rev-parse 'HEAD^{tree}')
 
-begin 'a receipt that cannot be written fails a stage that would pass and prints no receipt line; a row the queue never started has no line that says its tests ran'
+begin 'a receipt that cannot be written, or written whole, fails a stage that would pass and prints no receipt line; a row the queue never started has no line that says its tests ran'
 mkdir -p "$S/logs-unwritable/receipt"
 rstage unwritable handoff
 [ "$rc" = 1 ] && grep -qF "stage: receipt: could not be written to $S/logs-unwritable/receipt" "$S/unwritable.err" &&
   ! grep -q '^stage: receipt: handoff' "$S/unwritable.err" || fail "an unwritable receipt gave $rc: $(cat "$S/unwritable.err")"
+# A receipt.part that opens and refuses the write, as a full disk does.
+mkdir -p "$S/logs-full"
+ln -s /dev/full "$S/logs-full/receipt.part"
+rstage full handoff
+[ "$rc" = 1 ] && grep -qF "stage: receipt: could not be written to $S/logs-full/receipt" "$S/full.err" &&
+  ! grep -q '^stage: receipt: handoff' "$S/full.err" && [ ! -e "$S/logs-full/receipt" ] && [ ! -L "$S/logs-full/receipt" ] ||
+  fail "a receipt the disk refused gave $rc: $(cat "$S/full.err"; ls -l "$S/logs-full")"
 printf '# edit\n' >>"$rrepo/apps/cyfr/lib/cyfr/a.ex"
 RECEIPT_QUEUE_DEADLINE=1 rstage unqueued handoff
 [ "$rc" = 1 ] || fail "a stage whose test rows never started exited $rc"

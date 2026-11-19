@@ -141,10 +141,11 @@
 # `selected <check> <adapter> <files>` for each test row's planned files,
 # `left <name> <count>` for each name the selection left to the pull
 # request's run, and `row <line>` for each summary line, the stdout's,
-# which say what ran. The printed tree is the start snapshot, which a
-# reviewer holds against `git rev-parse <commit>^{tree}`. A receipt that
-# cannot be written prints no receipt line, says so, and fails a stage
-# that would have passed. Save writes none.
+# which say what ran. The printed tree is the end commit's, and the word
+# beside it says whether the working files were that tree. A receipt that
+# cannot be written whole prints no receipt line, says so, and fails a
+# stage that would have passed. A log directory inside the checkout must
+# be one Git ignores, or its files count as uncommitted. Save writes none.
 #
 # Exits 0 when every row that ran passed and 1 otherwise; 64 on usage, or
 # inside a heavy-check (HEAVY_CHECK_HELD set), since the stage queues its
@@ -190,7 +191,7 @@ work_tree() {
 # directory, then its one line on stderr; 1, saying so, when it cannot be
 # written.
 receipt() {
-  local result=passed commit head_tree=unknown end_tree state i check adapter named listed line
+  local result=passed commit head_tree=unknown end_tree state i check adapter named listed line text
   [ "$1" = 0 ] || result="failed $1"
   # HEAD is read once, at the end, and its tree is that commit's.
   if commit=$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null); then
@@ -203,7 +204,9 @@ receipt() {
   elif [ "$start_tree" != "$end_tree" ]; then state=moved
   elif [ "$start_tree" = "$head_tree" ]; then state=committed
   else state=uncommitted; fi
-  if ! {
+  # The text is built first and written in one write whose status is the
+  # one checked, so a full disk is a failed receipt, never a short one.
+  text=$({
     echo "stage $stage"
     echo "result $result"
     echo "end-commit $commit"
@@ -229,12 +232,13 @@ receipt() {
       echo "row ${lines[$i]-$check: no result}"
     done
     for line in ${tickets[@]+"${tickets[@]}"}; do echo "row $line"; done
-  } >"$logdir/receipt.part" 2>/dev/null || ! mv -fT "$logdir/receipt.part" "$logdir/receipt" 2>/dev/null; then
+  })
+  if ! printf '%s\n' "$text" 2>/dev/null >"$logdir/receipt.part" || ! mv -fT "$logdir/receipt.part" "$logdir/receipt" 2>/dev/null; then
     rm -f "$logdir/receipt.part" 2>/dev/null
     echo "stage: receipt: could not be written to $logdir/receipt, so this $stage has no evidence" >&2
     return 1
   fi
-  echo "stage: receipt: $stage $result, commit $commit, tree ${start_tree:-unknown}, $state, logs $logdir" >&2
+  echo "stage: receipt: $stage $result, commit $commit, tree $head_tree, $state, logs $logdir" >&2
 }
 on_signal() {
   trap '' INT TERM HUP

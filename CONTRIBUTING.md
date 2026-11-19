@@ -276,11 +276,13 @@ same worktree refuses, naming the run that holds it.
   `origin/main`.
 
   A handoff ends with a receipt in its log folder and one line on stderr
-  naming its result, HEAD's commit at the end, and two snapshots: the
-  working files' tree when the stage started, before it read its table,
-  and when it ended. It reads committed when that commit's tree is both,
-  uncommitted when both are one other tree, and moved when they differ;
-  the ready report carries that line. An input Git ignores or is told to
+  naming its result, HEAD's commit at the end, that commit's tree and one
+  word for the two snapshots the receipt file holds: the working files'
+  tree when the stage started, before it read its table, and when it
+  ended. It reads committed when that commit's tree is both, uncommitted
+  when both are one other tree, and moved when they differ; the ready
+  report carries that line. A log folder inside the checkout (`-l`) must
+  be one Git ignores, or its files count as uncommitted. An input Git ignores or is told to
   assume unchanged, a file changed and restored in between, and a
   submodule's contents are outside the snapshots. The receipt is evidence,
   not a lock: nothing refuses a push without one.
