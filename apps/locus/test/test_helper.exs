@@ -85,4 +85,4 @@ end
 # application installs it when it starts, which the suite's VM does not.
 :ok = Prima.ComponentFeatures.install!()
 
-ExUnit.start()
+ExUnit.start(assert_receive_timeout: Prima.Test.Wait.receive_ms())

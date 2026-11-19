@@ -361,6 +361,9 @@ defmodule Aqua.AquaToolEditsTest do
 
     {pid, ref} = spawn_monitor(fn -> call(ctx, %{"action" => "create", "name" => "tracker"}) end)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+    # The dead writer's node-local lock outlives it by a moment, and a
+    # repair that finds it held takes nothing.
+    Arca.Test.LockWait.await_unit_lock_free!(actor, role)
 
     # Published: the row, the journal, and the member reads already.
     assert {:ok, %{state: "committed"}} = Arca.StorageUnits.current(actor, root, key)

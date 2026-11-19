@@ -959,6 +959,11 @@ defmodule Aqua.RunnerTest do
     assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, accepted.id)
 
+    # The loop writes the turn's end before it answers its runner, and a
+    # runner ended while its loop still works ends that loop inside a read
+    # on this test's connection.
+    wait_until(fn -> match?(%{running: false}, Runner.state(thread.id, ctx.athanor_id)) end)
+
     # A turn left running by a boot that died: its root row and attempt
     # stand, nobody renews them.
     for {_id, pid, _, _} <- DynamicSupervisor.which_children(Aqua.RunnerSupervisor),
@@ -2439,7 +2444,14 @@ defmodule Aqua.RunnerTest do
       assert %{seq: 2, tool: "notes", action: "keep", outcome: "ok", card: "approved"} = keep
       assert last == model_step(ctx, id, 3, "text")
       assert [] = page_rows!(ctx, ws.id)
-      assert %{running: false, paused: false, queued: 0} = Runner.state(ws.id, ctx.athanor_id)
+
+      # The loop writes the turn's end before it answers its runner.
+      wait_until(fn ->
+        match?(
+          %{running: false, paused: false, queued: 0},
+          Runner.state(ws.id, ctx.athanor_id)
+        )
+      end)
     end
 
     test "a request that ended while its step is proposed skips the step, withdraws its " <>

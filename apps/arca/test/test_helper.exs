@@ -25,4 +25,4 @@ end
 # and the seeded athanors, as every database app's suite has them.
 Arca.Test.SuiteBoot.boot!(seed: &Arca.Test.Actor.seed_athanors!/0, stand_ins: true)
 
-ExUnit.start()
+ExUnit.start(assert_receive_timeout: Prima.Test.Wait.receive_ms())
