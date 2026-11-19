@@ -14,12 +14,11 @@ defmodule PrismWeb.ThreadPaneLiveTest.UnreadableCrew do
 end
 
 defmodule PrismWeb.ThreadPaneLiveTest do
-  # The pane on its own: what it says when the session is gone, that a
-  # refusal reaches the person as a sentence, that what it pushes names
-  # the pane it is for and a page it points at is a link, and that a kept
-  # model catalogue is read without a run; and in its host, Aqua's panel on
-  # the desktop, where a grant is asked and a crew thread opens. On the
-  # person's own athanor.
+  # The pane on its own: what it says when the session is gone, that what
+  # it pushes names the pane it is for and a page it points at is a link,
+  # and that a kept model catalogue is read without a run; and in its
+  # host, Aqua's panel on the desktop, where a grant is asked and a crew
+  # thread opens. On the person's own athanor.
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -86,83 +85,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     row
   end
 
-  # A card as the loop opens it: a turn with its root, the model step,
-  # the call, and the approval on the tape.
-  defp card!(ctx, thread, proposal, intent_over \\ %{}) do
-    alias Aqua.Tape
-
-    {:ok, %{turn: turn}} =
-      Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua pin it"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
-      })
-
-    {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(
-        %{
-          id: "exec_pane_#{System.unique_integer([:positive])}",
-          reference: "agent:local.aqua",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
-          component_type: "agent",
-          kind: "turn",
-          turn_id: turn.id,
-          origin: :interactive
-        },
-        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
-        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
-        verify: &Sanctum.ExecutionStanding.verify/1
-      )
-
-    {:ok, turn} =
-      Tape.start_turn(ctx, turn, %{
-        root_execution_id: execution.id,
-        attempt: attempt.attempt,
-        profile_id: "prof_x",
-        consent_id: "consent_x",
-        agent_mode: "auto",
-        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
-      })
-
-    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
-
-    {:ok, %{calls: [%{step: step}]}} =
-      Tape.record_response(ctx, turn, model_step, %{
-        text: nil,
-        tool_calls: [
-          %{
-            tool_call_id: "c1",
-            name: "#{proposal["tool"]}.#{proposal["action"]}",
-            tool: proposal["tool"],
-            action: proposal["action"],
-            arguments: proposal["args"],
-            kind: "write"
-          }
-        ]
-      })
-
-    intent =
-      Map.merge(
-        %{
-          "kind" => "request_approval",
-          "title" => "Pin the plan",
-          "action_kind" => "write",
-          "standing" => false,
-          "tool_call_id" => "c1",
-          "proposal" => proposal
-        },
-        intent_over
-      )
-
-    {:ok, %{card: card}} =
-      Tape.open_approval(ctx, turn, step, %{
-        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
-        card: %{content: "Pin the plan", payload: %{"intent" => intent}}
-      })
-
-    card
-  end
-
   # A nested view mounts after its host renders; look again until it has.
   defp child!(parent, id, tries \\ 50) do
     render(parent)
@@ -209,7 +131,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # The pane in its host: Aqua's panel on the desktop, opened at `thread`
-  # as the attention stream opens it. Answers the panel and its pane.
+  # as a canvas's `aqua` setting opens it. Answers the panel and its pane.
   defp panel_pane(conn, thread) do
     {desktop, _html} = mount_desktop(conn)
     panel = child!(desktop, "aqua-panel")
@@ -264,312 +186,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
              )
 
     Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "a refused standing answer reaches the person as a sentence, not the machine's atom",
-       %{conn: conn, athanor: athanor, here: here, thread: thread} do
-    card =
-      card!(here, thread, %{
-        "tool" => "notes",
-        "action" => "endorse",
-        "args" => %{"name" => "plan"}
-      })
-
-    pane = open_pane(conn, athanor, thread)
-
-    # What the card dispatches for "always".
-    send(pane.pid, {:approval_approve, card.approval_id, %{scope: :always}})
-    html = render(pane)
-
-    assert html =~ Aqua.ToolGrants.refusal_message({:scope_not_permitted, :never_standing})
-    refute html =~ "never_standing"
-  end
-
-  test "a card is decided through approval.resolve by its approval, with the bounds chosen",
-       %{conn: conn, athanor: athanor, here: here, thread: thread} do
-    card =
-      card!(
-        here,
-        thread,
-        %{
-          "tool" => "files",
-          "action" => "write",
-          "args" => %{"path" => "data//notes/today.md", "content" => "x"}
-        },
-        %{"standing" => nil}
-      )
-
-    pane = open_pane(conn, athanor, thread)
-    card_dom = ~s([id$="-card-#{card.id}"])
-
-    # The person has no schedule of Aqua's, so no answer for one is offered.
-    assert has_element?(pane, ~s(#{card_dom} [phx-value-lifecycle="execution"]))
-    refute has_element?(pane, ~s(#{card_dom} [phx-value-lifecycle="schedule"]))
-
-    pane |> element(~s(#{card_dom} input[phx-click="approval:toggle_limit"])) |> render_click()
-    pane |> element(~s(#{card_dom} button[phx-value-lifecycle="execution"])) |> render_click()
-    render(pane)
-
-    [input] =
-      Arca.Repo.all(
-        from(l in Arca.Schemas.McpLog,
-          where: l.tool == "approval" and l.action == "resolve",
-          select: l.input
-        )
-      )
-
-    assert input =~ card.approval_id
-    assert input =~ ~s("lifecycle":"execution")
-    assert input =~ ~s("scope":"thread")
-    assert input =~ ~s("patterns":["data/notes/today.md"])
-    assert input =~ ~s("kind":"storage_path")
-  end
-
-  test "a card that also follows the outside sources it names sends them to approval.resolve",
-       %{conn: conn, athanor: athanor, here: here, thread: thread} do
-    shown = [
-      %{"class" => "filed", "name" => nil},
-      %{"class" => "outside", "name" => "news.example"}
-    ]
-
-    card =
-      card!(
-        here,
-        thread,
-        %{"tool" => "files", "action" => "write", "args" => %{"path" => "data/a.md"}},
-        %{"standing" => nil, "sources" => shown}
-      )
-
-    pane = open_pane(conn, athanor, thread)
-    card_dom = ~s([id$="-card-#{card.id}"])
-    assert has_element?(pane, ~s(#{card_dom} [data-test="approval-sources"]), "news.example")
-
-    pane |> element(~s(#{card_dom} input[phx-click="approval:toggle_follows"])) |> render_click()
-    pane |> element(~s(#{card_dom} button[phx-value-hours="1"])) |> render_click()
-    render(pane)
-
-    [input] =
-      Arca.Repo.all(
-        from(l in Arca.Schemas.McpLog,
-          where: l.tool == "approval" and l.action == "resolve",
-          select: l.input
-        )
-      )
-
-    # The named outside source alone: never the filed class beside it.
-    assert %{
-             "sources" => [%{"class" => "outside", "name" => "news.example"}],
-             "scope" => "thread"
-           } =
-             Jason.decode!(input)
-  end
-
-  @write %{
-    "tool" => "files",
-    "action" => "write",
-    "args" => %{"path" => "data/notes/today.md", "content" => "x"}
-  }
-
-  # A card of its own in a thread of its own: deciding a card settles it.
-  defp offer!(conn, athanor, here) do
-    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
-    card = card!(here, thread, @write, %{"standing" => nil})
-    {open_pane(conn, athanor, thread), card}
-  end
-
-  # A schedule of the person's that holds a line for Aqua.
-  defp schedule!(here, name) do
-    {:ok, schedule} =
-      Arca.CronSchedule.create(Sanctum.Context.actor(here), %{
-        user_id: here.user_id,
-        name: name,
-        cron_expression: "0 0 1 1 *",
-        reference: Arca.CronSchedule.aqua_line(),
-        resolved_reference: Arca.CronSchedule.aqua_line(),
-        input: Jason.encode!(%{"line" => "summarise"}),
-        cap: 0,
-        by_person: true
-      })
-
-    schedule
-  end
-
-  # The grant that reached `approval.resolve` for `card`, as it was asked.
-  defp resolved(card) do
-    inputs =
-      Arca.Repo.all(
-        from(l in Arca.Schemas.McpLog,
-          where: l.tool == "approval" and l.action == "resolve",
-          select: l.input
-        )
-      )
-
-    assert [input] =
-             inputs
-             |> Enum.map(&Jason.decode!/1)
-             |> Enum.filter(&(&1["approval"] == card.approval_id))
-
-    input
-  end
-
-  defp click_offer(pane, card, selector) do
-    pane |> element(~s([id$="-card-#{card.id}"] #{selector})) |> render_click()
-    render(pane)
-  end
-
-  describe "each offer of a card" do
-    test "once, for this run and always reach approval.resolve with their scope and lifecycle",
-         %{conn: conn, athanor: athanor, here: here} do
-      for {selector, scope, lifecycle} <- [
-            {~s(button[phx-value-scope="once"]), "once", nil},
-            {~s(button[phx-value-lifecycle="execution"]), "thread", "execution"},
-            {~s|button[phx-value-scope="always"]:not([phx-value-lifecycle])|, "always", nil}
-          ] do
-        {pane, card} = offer!(conn, athanor, here)
-        click_offer(pane, card, selector)
-        input = resolved(card)
-
-        assert input["decision"] == "approve"
-        assert input["scope"] == scope, selector
-        assert input["lifecycle"] == lifecycle, selector
-        refute Map.has_key?(input, "until"), selector
-        refute Map.has_key?(input, "constraint"), selector
-      end
-    end
-
-    test "for this thread until ends 1, 8 or 24 hours from the click",
-         %{conn: conn, athanor: athanor, here: here} do
-      for hours <- [1, 8, 24] do
-        {pane, card} = offer!(conn, athanor, here)
-        before = DateTime.utc_now()
-        click_offer(pane, card, ~s(button[phx-value-hours="#{hours}"]))
-        later = DateTime.utc_now()
-        input = resolved(card)
-
-        assert input["scope"] == "thread"
-        refute Map.has_key?(input, "lifecycle")
-        assert is_binary(input["until"]), "#{hours}h reached approval.resolve with no until"
-        assert {:ok, until, 0} = DateTime.from_iso8601(input["until"])
-
-        assert DateTime.compare(until, DateTime.add(before, hours * 3600 - 1, :second)) != :lt,
-               "#{hours}h: #{input["until"]}"
-
-        assert DateTime.compare(until, DateTime.add(later, hours * 3600 + 1, :second)) != :gt,
-               "#{hours}h: #{input["until"]}"
-      end
-    end
-  end
-
-  describe "an answer for a schedule" do
-    test "a daily thread's card offers it with a schedule to name, and the one picked reaches approval.resolve agent-wide, ending with it",
-         %{conn: conn, athanor: athanor, here: here} do
-      # No schedule of Aqua's: nothing to name, nothing offered.
-      {plain_pane, plain} = offer!(conn, athanor, here)
-
-      refute has_element?(
-               plain_pane,
-               ~s([id$="-card-#{plain.id}"] [data-test="approval-for-schedule"])
-             )
-
-      morning = schedule!(here, "Morning brief")
-      evening = schedule!(here, "Evening brief")
-      {pane, card} = offer!(conn, athanor, here)
-      offer = ~s([id$="-card-#{card.id}"] [data-test="approval-for-schedule"])
-      assert has_element?(pane, offer, "Morning brief")
-      assert has_element?(pane, offer, "Evening brief")
-
-      click_offer(pane, card, ~s(button[phx-value-schedule="#{evening.id}"]))
-      input = resolved(card)
-
-      assert input["scope"] == "always"
-      assert input["lifecycle"] == "schedule"
-      assert input["schedule"] == evening.id
-      refute Map.has_key?(input, "until")
-
-      # A schedule the card does not name chooses nothing.
-      {forged_pane, forged} = offer!(conn, athanor, here)
-
-      forged_pane
-      |> element(~s([id$="-card-#{forged.id}"] button[phx-value-schedule="#{morning.id}"]))
-      |> render_click(%{"schedule" => "sched_not_theirs"})
-
-      refute Arca.Repo.all(
-               from(l in Arca.Schemas.McpLog,
-                 where: l.tool == "approval" and l.action == "resolve",
-                 select: l.input
-               )
-             )
-             |> Enum.any?(&(Jason.decode!(&1)["approval"] == forged.approval_id))
-    end
-  end
-
-  test "a card that arrives after a schedule was made offers it, though the pane opened before the schedule existed",
-       %{conn: conn, athanor: athanor, here: here} do
-    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
-    pane = open_pane(conn, athanor, thread)
-
-    morning = schedule!(here, "Morning after mount")
-    card = card!(here, thread, @write, %{"standing" => nil})
-    offer = ~s([id$="-card-#{card.id}"] [data-test="approval-for-schedule"])
-
-    Prima.Test.Wait.wait_until(
-      fn -> has_element?(pane, offer, "Morning after mount") end,
-      5_000,
-      "the card offers the schedule made after the pane opened"
-    )
-
-    assert has_element?(pane, ~s(#{offer} button[phx-value-schedule="#{morning.id}"]))
-  end
-
-  test "the thread's standing answers are listed, bounded ones too, each to withdraw",
-       %{conn: conn, athanor: athanor, thread: thread} do
-    pane = open_pane(conn, athanor, thread)
-
-    send(pane.pid, %Cyfr.Bus.ThreadEvent{
-      athanor_id: thread.athanor_id,
-      thread_id: thread.id,
-      kind: :grants,
-      data: MapSet.new([{"aqua", "files", "write", nil, nil}])
-    })
-
-    render(pane)
-    assert has_element?(pane, ~s([data-test="standing-answers"]), "standing answers in this chat")
-
-    assert has_element?(
-             pane,
-             ~s([data-test="standing-answers"] button[phx-click="revoke_grant"][phx-value-tool="files"][phx-value-action="write"])
-           )
-  end
-
-  test "an answer for a schedule is listed by the schedule's name, and withdrawing it names that schedule",
-       %{conn: conn, athanor: athanor, thread: thread} do
-    pane = open_pane(conn, athanor, thread)
-    schedule = %{id: "sched_brief", name: "Morning brief"}
-
-    send(pane.pid, %Cyfr.Bus.ThreadEvent{
-      athanor_id: thread.athanor_id,
-      thread_id: thread.id,
-      kind: :grants,
-      data: MapSet.new([{"aqua", "files", "write", nil, schedule}])
-    })
-
-    render(pane)
-    assert has_element?(pane, ~s([data-test="standing-answer"]), "files.write, for Morning brief")
-
-    pane
-    |> element(~s([data-test="standing-answer"] button[phx-value-schedule="sched_brief"]))
-    |> render_click()
-
-    [input] =
-      Arca.Repo.all(
-        from(l in Arca.Schemas.McpLog,
-          where: l.tool == "thread" and l.action == "revoke_grant",
-          select: l.input
-        )
-      )
-
-    assert %{"schedule" => "sched_brief", "tool" => "files", "tool_action" => "write"} =
-             Jason.decode!(input)
   end
 
   test "a schedule's fire is drawn as that schedule's, never as the person's own line, and is not offered to paste",
@@ -906,70 +522,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert {:ok, 0} = Threads.unread(actor, seen)
   end
 
-  test "a program's standing answer is listed by the program's name, and withdrawing it withdraws that program's alone",
-       %{conn: conn, athanor: athanor, here: here, thread: thread} do
-    actor = Sanctum.Context.actor(here)
-
-    rows =
-      for name <- ["gh", "jq"] do
-        {:ok, row} =
-          Arca.McpServerStorage.insert(actor, %{
-            cap: 0,
-            name: name,
-            transport: "program",
-            mark: "driven",
-            url: nil,
-            config_json: Jason.encode!(%{"command" => name, "env" => %{}})
-          })
-
-        {:ok, _} =
-          Sanctum.ToolGrants.put(here, %{
-            scope: "thread",
-            effect: "allow",
-            thread_id: thread.id,
-            agent_name: "aqua",
-            tool: "program",
-            action: "start",
-            constraint: %{kind: "program_row", patterns: [row.id]}
-          })
-
-        row
-      end
-
-    [gh, jq] = rows
-    {:ok, grants} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)
-    pane = open_pane(conn, athanor, thread)
-
-    send(pane.pid, %Cyfr.Bus.ThreadEvent{
-      athanor_id: thread.athanor_id,
-      thread_id: thread.id,
-      kind: :grants,
-      data: grants
-    })
-
-    render(pane)
-    assert has_element?(pane, ~s([data-test="standing-answer"]), "every start of gh")
-    assert has_element?(pane, ~s([data-test="standing-answer"]), "every start of jq")
-
-    pane
-    |> element(~s([data-test="standing-answer"] button[phx-value-program="#{gh.id}"]))
-    |> render_click()
-
-    withdrawn = fn ->
-      match?(
-        {:ok, left} when is_struct(left, MapSet),
-        Aqua.ToolGrants.allowed_by_agent(here, thread.id)
-      ) and
-        MapSet.size(elem(Aqua.ToolGrants.allowed_by_agent(here, thread.id), 1)) == 1
-    end
-
-    # sleep-ok: poll interval of a bounded wait (300 tries) for the grant to be withdrawn
-    assert Enum.any?(1..300, fn _ -> withdrawn.() or (Process.sleep(10) && false) end)
-
-    assert {:ok, left} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)
-    assert left == MapSet.new([{"aqua", "program", "start", %{id: jq.id, name: "jq"}, nil}])
-  end
-
   test "what the pane pushes names the pane it is for, and a page it points at is a link, never pushed",
        %{conn: conn, user: user, athanor: athanor, thread: thread} do
     # The pages these navigate to are dev's, the mode the host names.
@@ -1119,18 +671,17 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     here: here,
     thread: thread
   } do
-    # A state no test here reaches — several approvals pending, a held
-    # send, the panel's links and its read-the-thread box —
-    # is held by the template itself: no text class under 12 px and no
-    # inline style anywhere, and each of those small targets on `min-h-6`.
+    # A state no test here reaches — a held send, the panel's links and
+    # its read-the-thread box — is held by the template itself: no text
+    # class under 12 px and no inline style anywhere, and each of those
+    # small targets on `min-h-6`.
     source =
       PrismWeb.ThreadPaneLive.module_info(:compile)[:source] |> to_string() |> File.read!()
 
     refute source =~ @under_12px
     refute source =~ @inline_style
 
-    for click <-
-          ~w(approve_all_pending decline_all_pending retry_send discard_send dismiss_link dismiss_reads_notice) do
+    for click <- ~w(retry_send discard_send dismiss_link dismiss_reads_notice) do
       assert source =~ ~r/phx-click="#{click}"[^>]*class="[^"]*min-h-6/,
              "the #{click} control is under 24 px"
     end
@@ -1164,16 +715,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     # A turn running for this person with a message queued behind it, its
-    # tools at work, two standing answers and the prompt to send again.
+    # tools at work and the prompt to send again.
     event.(:turn_starting, user.user_id)
     event.(:queued, 2)
     event.(:tool_activity, [%{tool: "files.read", status: :running, preview: "notes.md"}])
-
-    event.(
-      :grants,
-      MapSet.new([{"aqua", "files", "read", nil, nil}, {"aqua", "notes", "write", nil, nil}])
-    )
-
     event.(:restart_prompt, %{text: "two files", user_id: user.user_id})
 
     # A file on its way up.
@@ -1188,7 +733,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     for drawn <- [
           "is asking",
           "2 queued",
-          "+2 this chat",
           "files.read",
           "send it again",
           "draft.txt",
@@ -1199,9 +743,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute html =~ @under_12px
     refute html =~ @inline_style
 
-    standing = ~s([data-test="standing-answers"])
-    assert has_element?(pane, "#{standing}.text-xs")
-    assert has_element?(pane, ~s(#{standing} button.min-h-6.min-w-6[phx-click="revoke_grant"]))
     assert has_element?(pane, ~s(button.min-h-6.min-w-6[phx-click="cancel_upload"]))
     assert has_element?(pane, ~s(button.min-h-6[phx-click="restart_send"]))
     assert has_element?(pane, ~s(button.min-h-6[phx-click="dismiss_restart"]))
@@ -1763,52 +1304,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     Cyfr.Test.Sandbox.end_views()
-  end
-
-  test "a launch's card names the account it binds and takes no standing answer, one for a schedule neither",
-       %{
-         conn: conn,
-         athanor: athanor,
-         here: here,
-         thread: thread
-       } do
-    proposal = %{
-      "tool" => "execution",
-      "action" => "run",
-      "args" => %{
-        "reference" => "reagent:local.mailer:1.0.0",
-        "input" => %{},
-        "connection" => "Work"
-      },
-      "vault_entry" => "vlt_work-1"
-    }
-
-    # A schedule to name, which a launch's card still does not offer.
-    schedule!(here, "Morning brief")
-    card = card!(here, thread, proposal, %{"action_kind" => "execute", "standing" => false})
-    pane = open_pane(conn, athanor, thread)
-    card_dom = ~s([id$="-card-#{card.id}"])
-
-    assert has_element?(pane, ~s(#{card_dom} [data-test="approval-account"]), "Work")
-    refute has_element?(pane, ~s(#{card_dom} [data-test="approval-standing"]))
-    refute has_element?(pane, ~s(#{card_dom} [data-test="approval-for-schedule"]))
-    refute render(pane) =~ "vlt_work-1"
-    assert has_element?(pane, ~s(#{card_dom} button[phx-value-scope="once"]))
-
-    # A launch that names no account says none.
-    {:ok, other} = Arca.Test.Days.thread(Sanctum.Context.actor(here))
-
-    unnamed = %{
-      "tool" => "execution",
-      "action" => "run",
-      "args" => %{"reference" => "reagent:local.mailer:1.0.0", "input" => %{}}
-    }
-
-    plain =
-      card!(here, other, unnamed, %{"action_kind" => "execute", "standing" => false})
-
-    other_pane = open_pane(conn, athanor, other)
-    refute has_element?(other_pane, ~s([id$="-card-#{plain.id}"] [data-test="approval-account"]))
   end
 
   # The pane on the athanor with no thread open: its empty state.
@@ -2376,8 +1871,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # Rows as the crew writes them, through the tape, which tells the
-  # thread's viewers: a person's request to `member`, the member's reply
-  # (answering `answers`, its own request first) and its notice.
+  # thread's viewers: a person's request to `member` and the member's
+  # reply (answering `answers`, its own request first).
   defp request!(here, room, member, task) do
     {:ok, %{message: row}} =
       Aqua.Tape.accept(here, room.id, %{
@@ -2411,35 +1906,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       })
 
     row
-  end
-
-  defp notice!(here, room, request, child, text) do
-    {:ok, %{message: row}} =
-      Aqua.Tape.accept(here, room.id, %{
-        message: %{
-          author: "aqua",
-          sent_by: request.addressee,
-          addressee: "person",
-          reply_to: request.id,
-          outcome: "needs_you",
-          status: "pending",
-          content: text,
-          payload: %{"from_thread" => child.id, "approval_id" => "apr_x"}
-        }
-      })
-
-    row
-  end
-
-  # A notice written decided, as its card's decision writes it: scoped to
-  # the notice's athanor, actor first, as every row write is.
-  defp decide!(here, notice) do
-    {1, _} =
-      from(m in Arca.Schemas.Message, where: m.id == ^notice.id)
-      |> Arca.QueryHelpers.where_tenant(Sanctum.Context.actor(here))
-      |> Arca.Repo.update_all(set: [status: "approved"])
-
-    %{notice | status: "approved"}
   end
 
   describe "the archive" do
@@ -2625,52 +2091,6 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
       refute has_element?(pane, ~s([id$="-m-#{second.id}"] [id$="-reply-#{reply.id}"]))
       refute has_element?(pane, ~s([id$="-m-#{reply.id}"]))
-
-      Cyfr.Test.Sandbox.end_views()
-    end
-
-    test "a notice says the member needs you and opens the member's thread",
-         %{conn: conn, here: here, thread: room} do
-      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
-      request = request!(here, room, "explorer", "Deploy the site")
-      {panel, pane} = panel_pane(conn, room)
-
-      notice = notice!(here, room, request, child, "Approve the deploy")
-      shown = ~s([id$="-m-#{notice.id}"])
-      assert has_element?(pane, shown, "explorer needs you")
-      assert has_element?(pane, shown, "Approve the deploy")
-
-      # The pane asks the panel, which turns it to the member's thread.
-      pane |> element(~s(#{shown} button[phx-click="open_thread"])) |> render_click()
-      on_thread!(pane, child.id)
-      assert has_element?(panel, "#aqua-panel-day-name", "explorer's thread")
-
-      Cyfr.Test.Sandbox.end_views()
-    end
-
-    test "a notice decided with its card is gone, live and on a fresh read",
-         %{conn: conn, athanor: athanor, here: here, thread: room} do
-      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
-      request = request!(here, room, "explorer", "Deploy the site")
-      pane = open_pane(conn, athanor, room)
-
-      notice = notice!(here, room, request, child, "Approve the deploy")
-      shown = ~s([id$="-m-#{notice.id}"])
-      assert has_element?(pane, shown, "explorer needs you")
-
-      # The card's decision writes the notice decided and announces it.
-      decided = decide!(here, notice)
-      Aqua.Tape.announce(here, room.id, :notice, decided)
-      refute has_element?(pane, shown, "explorer needs you")
-
-      # The notice's opening announcement, arriving after its decision's,
-      # is an older snapshot: the decided notice stands.
-      Aqua.Tape.announce(here, room.id, :notice, notice)
-      refute has_element?(pane, shown, "explorer needs you")
-
-      pane = open_pane(conn, athanor, room)
-      refute has_element?(pane, shown, "explorer needs you")
-      refute render(pane) =~ "Approve the deploy"
 
       Cyfr.Test.Sandbox.end_views()
     end

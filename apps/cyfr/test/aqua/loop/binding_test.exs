@@ -96,7 +96,7 @@ defmodule Aqua.Loop.BindingTest do
     assert {:error, "unknown tool: bare"} = Binding.resolve("bare", %{})
   end
 
-  test "an argument the proposal's digest has no form for, at any depth, is refused " <>
+  test "an argument the canonical form has no form for, at any depth, is refused " <>
          "invalid_argument before the call resolves: a null, a decimal, a number past 2^53 - 1" do
     assert {:error,
             {:invalid_argument,
@@ -122,12 +122,12 @@ defmodule Aqua.Loop.BindingTest do
     assert {:ok, %Call{args: %{"ids" => [9_007_199_254_740_991]}}} =
              Binding.resolve("notes.read", %{"ids" => [Prima.JCS.max_safe_integer()]})
 
-    # Refused, the call is recorded with no digest of what was refused.
+    # Refused, the call is recorded as of no kind.
     for value <- [1.5, too_large] do
       args = %{"action" => "read", "path" => "data/a", "options" => %{"value" => value}}
       refused = Binding.resolve("files", args)
       assert {:error, {:invalid_argument, "files: the argument options.value is " <> _}} = refused
-      assert %{proposal_digest: nil, kind: "unknown"} = Aqua.Loop.recorded("files", args, refused)
+      assert %{kind: "unknown"} = Aqua.Loop.recorded("files", refused)
     end
   end
 

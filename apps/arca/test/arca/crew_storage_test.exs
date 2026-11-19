@@ -1,27 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.CrewStorageTest.PausingDelete do
-  @moduledoc false
-  use Arca.Storage.TestDouble
-
-  # The first thread tree this process deletes runs the test's hook
-  # first: what a child does the moment a deletion's bytes start to go.
-  def delete_tree(actor, ["threads", _id] = path) do
-    if hook = Process.delete(:on_blob_delete), do: hook.()
-    Arca.Adapters.Local.delete_tree(actor, path)
-  end
-
-  def delete_tree(actor, path), do: Arca.Adapters.Local.delete_tree(actor, path)
-end
-
 defmodule Arca.CrewStorageTest do
   @moduledoc """
   The crew's rows and records: a request is accepted with the outbox
   record that delivers it; a turn a delivered request opens stores its
   reply address and its sender, and every terminal write of it records
-  one reply naming every request delivered into it, as a card it opens
-  records a notice; a reply answers the requests it names in its own
+  one reply naming every request delivered into it; a reply answers the
+  requests it names in its own
   acceptance, where the consumer's receipt lands too or nothing does.
   A steer is whatever anyone but the turn's agent wrote into it. One
   child thread stands per member per room, and a retired one admits
@@ -282,48 +268,6 @@ defmodule Arca.CrewStorageTest do
       refute Enum.any?(replies(actor), &(&1.source_id == own.id))
     end
 
-    test "a card in a delivered turn records a needs_you reply with the card's text, in its own transaction",
-         %{actor: actor, room: room} do
-      request = request!(actor, room, "planner", "keep it")
-      {:ok, child} = Threads.crew_thread(actor, room.id, "planner")
-      turn = actor |> delivered!(room, child, request) |> then(&start!(actor, &1))
-      step = model_step!(actor, turn, "model:1")
-
-      {:ok, %{calls: [%{step: call}]}} =
-        TurnStorage.record_response(actor, turn.id, step.id, %{
-          fence: turn.fence,
-          text: nil,
-          usage: %{},
-          stop_reason: "tool_call",
-          tool_calls: [
-            %{
-              tool_call_id: "k1",
-              name: "notes",
-              tool: "notes",
-              action: "keep",
-              arguments: %{},
-              kind: "write",
-              idempotency_key: "call:k1",
-              proposal_digest: "sha256:k1"
-            }
-          ]
-        })
-
-      {:ok, _} =
-        TurnStorage.open_approval(actor, call.id, %{
-          proposal_digest: "sha256:k1",
-          card: %{content: "Keep the note plan?"},
-          fence: turn.fence
-        })
-
-      assert [record] = replies(actor)
-
-      assert %{"outcome" => "needs_you", "text" => "Keep the note plan?", "request_ids" => [id]} =
-               record.snapshot
-
-      assert id == request.id
-    end
-
     test "a reply answers the requests it names that wait on its sender, in its acceptance",
          %{actor: actor, room: room} do
       first = request!(actor, room, "planner", "one", "aqua")
@@ -428,7 +372,7 @@ defmodule Arca.CrewStorageTest do
       assert {:ok, %{active_turn_id: nil}} = Threads.get(actor, child.id)
     end
 
-    test "deleting a room cancels its children's open turns and deletes them, writing no reply, and waits for a card",
+    test "deleting a room cancels its children's open turns and deletes them, writing no reply",
          %{actor: actor, room: room} do
       {:ok, planner} = Threads.crew_thread(actor, room.id, "planner")
       {:ok, builder} = Threads.crew_thread(actor, room.id, "builder")
@@ -438,21 +382,6 @@ defmodule Arca.CrewStorageTest do
         actor
         |> delivered!(room, builder, request!(actor, room, "builder", "build"))
         |> then(&start!(actor, &1))
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(t in Arca.Schemas.Turn, where: t.id == ^waiting.id),
-          set: [status: "paused", paused_reason: "approval"]
-        )
-
-      assert {:error, {:child_awaits_card, "planner"}} = Threads.delete(actor, room.id)
-      assert {:ok, _} = Threads.get(actor, planner.id)
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(t in Arca.Schemas.Turn, where: t.id == ^waiting.id),
-          set: [status: "accepted", paused_reason: nil]
-        )
 
       assert {:ok, %{cancelled: cancelled}} =
                Threads.delete(actor, room.id, %{grant: :stored, verify: &Arca.Test.Actor.admits/1})
@@ -472,44 +401,27 @@ defmodule Arca.CrewStorageTest do
   end
 
   describe "deleting a room" do
-    test "decides before any byte goes: a refusal keeps every blob, and a card opened as the bytes go comes too late to refuse",
+    test "decides before any byte goes: a refusal keeps every blob",
          %{actor: actor, room: room} do
       {:ok, planner} = Threads.crew_thread(actor, room.id, "planner")
-      waiting = delivered!(actor, room, planner, request!(actor, room, "planner", "plan"))
+
+      running =
+        actor
+        |> delivered!(room, planner, request!(actor, room, "planner", "plan"))
+        |> then(&start!(actor, &1))
+
       blobs = for thread <- [room, planner], do: Threads.blob_root(thread.id) ++ ["msg", "a.txt"]
       for blob <- blobs, do: :ok = Arca.put(actor, blob, "bytes")
 
-      pause = fn status, reason ->
-        Arca.Repo.update_all(
-          from(t in Arca.Schemas.Turn, where: t.id == ^waiting.id),
-          set: [status: status, paused_reason: reason]
-        )
-      end
-
-      {1, _} = pause.("paused", "approval")
-      assert {:error, {:child_awaits_card, "planner"}} = Threads.delete(actor, room.id)
+      # The child's running turn ends only under its root's grant: a
+      # deletion that carries none is refused in its transaction.
+      assert {:error, :missing_grant} = Threads.delete(actor, room.id)
       for blob <- blobs, do: assert(Arca.exists?(actor, blob))
-      {1, _} = pause.("accepted", nil)
-
-      # The child pauses on a card when the first bytes would go: after the
-      # commit that decided, so the deletion stands whole.
-      Process.put(:on_blob_delete, fn -> pause.("paused", "approval") end)
 
       assert {:ok, %{cancelled: [%{turn_id: turn_id}]}} =
-               Prima.Test.Env.with_app_env(
-                 :arca,
-                 :storage_adapter,
-                 Arca.CrewStorageTest.PausingDelete,
-                 fn ->
-                   Threads.delete(actor, room.id, %{
-                     grant: :stored,
-                     verify: &Arca.Test.Actor.admits/1
-                   })
-                 end
-               )
+               Threads.delete(actor, room.id, %{grant: :stored, verify: &Arca.Test.Actor.admits/1})
 
-      assert turn_id == waiting.id
-      assert Process.get(:on_blob_delete) == nil
+      assert turn_id == running.id
 
       for thread <- [room, planner],
           do: assert({:error, :not_found} = Threads.get(actor, thread.id))

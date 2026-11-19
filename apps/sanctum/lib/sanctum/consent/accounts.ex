@@ -29,7 +29,7 @@ defmodule Sanctum.Consent.Accounts do
   its ingress (`Prima.Authority.Blob.ingress/2`)
   and the named binding there (`Prima.Authority.Blob.vault_for/2`). This
   is the one resolution of a launch's account: what an assistant's policy
-  decides on, what its card binds and what its dispatch checks again.
+  decides on and what its dispatch checks again.
 
   The name is matched as account names compare
   (`Prima.Authority.Blob.same_account_name?/2`), so another case of a

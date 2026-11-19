@@ -1125,8 +1125,8 @@ defmodule Opus.RecordTest do
       # not, so every version of one tincture is the same caller.
       {"tincture:local.page", framed.("1.0.0"), []},
       {"tincture:local.page", framed.("2.0.0"), []},
-      # Nearer starters win: an agent over the person who approved its
-      # launch, a frame over the key behind it and over the person, a
+      # Nearer starters win: an agent over the person whose turn launched
+      # it, a frame over the key behind it and over the person, a
       # webhook over a key. A schedule's row names a claimed occurrence,
       # so its cases are the scheduler's (`Cyfr.AdmissionOriginTest`).
       {"agent:aqua", ctx, [launch: Map.put(launch, :execution_id, Record.generate_id())]},

@@ -55,8 +55,8 @@ defmodule Locus.Runtime.AuthorityExecutionTest do
     {:ok, %{profile_id: profile_id}} =
       Opus.authority_for(ctx, :default, @probe_node)
 
-    # The one place an agent-authored string selects an authority is the
-    # approved `execution.run`/`run_stream` arm, which forwards
+    # The one place an agent-authored string selects an authority is a
+    # launch's `execution.run`/`run_stream` arm (`Aqua.Launch`), which forwards
     # args["profile"] verbatim. The containment is that candidates load
     # for the CALLER's focused athanor — so a profile id minted elsewhere
     # answers not-found instead of rooting a foreign authority.

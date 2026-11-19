@@ -512,7 +512,7 @@ defmodule Aqua.Loop do
   end
 
   # The child a stopped or settled step's run is cancelled by. A launched
-  # app is a root of its own, run because a person approved it: its row
+  # app is a root of its own, run as the turn's person: its row
   # carries the step's id so the step's close can read its ledger, and the
   # turn's end cancels nothing it started.
   defp cancellable(%{kind: "launch"}), do: nil
@@ -1429,7 +1429,7 @@ defmodule Aqua.Loop do
     args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
     id = block["id"] || Prima.UUID7.generate_id("call")
 
-    recorded = recorded(name, args, call)
+    recorded = recorded(name, call)
 
     Map.merge(recorded, %{
       tool_call_id: id,
@@ -1444,10 +1444,8 @@ defmodule Aqua.Loop do
   # What a step records of a call as it was bound, a model's
   # (`call_attrs/4`) or a page's (`Aqua.PageCalls.proposal/3`): one
   # recording, so a page's call is recorded as Aqua's call of its kind is.
-  # A refused call proposes nothing, so it records no proposal digest: its
-  # arguments may hold the value the digest's form refused.
-  @spec recorded(String.t(), map(), {:ok, Call.t()} | {:error, term()}) :: map()
-  def recorded(name, args, call) do
+  @spec recorded(String.t(), {:ok, Call.t()} | {:error, term()}) :: map()
+  def recorded(name, call) do
     {tool, action, kind, recovery, child, step_kind} =
       case call do
         {:ok, %Call{} = call} ->
@@ -1464,10 +1462,6 @@ defmodule Aqua.Loop do
       kind: kind,
       recovery: recovery,
       child_execution_id: child,
-      proposal_digest:
-        if(match?({:ok, _}, call),
-          do: Policy.proposal_digest(%{"tool" => tool, "action" => action, "args" => args})
-        ),
       step_kind: step_kind
     }
   end
@@ -2453,7 +2447,7 @@ defmodule Aqua.Loop do
   defp open_program(%State{program: %{row: row, epoch: epoch}} = state) do
     args = %{"action" => "start", "program" => row, "epoch" => epoch}
     call = Binding.resolve("program", args, tool_call_id: "start")
-    recorded = recorded("program", args, call)
+    recorded = recorded("program", call)
 
     # Replay safe: attending again reattaches to the held session, or
     # opens one, and sets the work and the configuration it runs with; it
@@ -2466,7 +2460,6 @@ defmodule Aqua.Loop do
       tool: "program",
       action: "start",
       recovery: "replay_safe",
-      proposal_digest: recorded.proposal_digest,
       idempotency_key: Tape.brain_start_key(state.turn.id),
       call: %{
         kind: "tool_call",
@@ -2713,8 +2706,8 @@ defmodule Aqua.Loop do
   # dispatched call that is safe to run again is opened afresh;
   # a flush's dispatched call closes with its outcome unknown and its
   # unstarted ones are skipped; a dispatched call whose effect is unknown
-  # stops the turn on it — a person continues, never a replay; an approved
-  # or unstarted step is dispatched once; a steer that arrived while a
+  # stops the turn on it — a person continues, never a replay; an
+  # unstarted step is decided and dispatched once; a steer that arrived while a
   # model's turn was away skips them all (`steered?/1`).
   defp settle(%State{} = state) do
     guest = guest(state)
@@ -2898,9 +2891,8 @@ defmodule Aqua.Loop do
   end
 
   # One silent request before older rows are summarized away, so the model
-  # can keep notes: `notes.keep` alone, under the author's `auto` or a
-  # standing allow that covers it now (its sources among its bounds),
-  # re-read from the member's grants, in a turn no unknown outcome
+  # can keep notes: `notes.keep` alone, when the member's mode runs it and
+  # its offered set holds it, in a turn no unknown outcome
   # restricts, with room left for the flush, the summary and the next chat
   # request, and only when the request fits the catalyst's cap. The kept
   # note carries the turn's sources when they hold an outside one

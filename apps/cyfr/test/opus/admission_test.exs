@@ -463,12 +463,12 @@ defmodule Opus.AdmissionTest do
     %{ref: ref, default: default, work: work}
   end
 
-  describe "an approved launch's entry" do
+  describe "a launch's approved_entry" do
     @root_load {Sanctum.Consent.Loader, :load_root, 3}
     @attempt_open {Opus.Attempt, :open, 1}
 
     # A context as `Aqua.Launch` hands it to the run it dispatches: the
-    # entry its card bound and the name the binding stored it under.
+    # entry its decision bound and the name the binding stored it under.
     defp expecting(ctx, entry_id, name),
       do: Map.put(ctx, :approved_entry, %{entry: entry_id, name: name})
 
@@ -529,7 +529,7 @@ defmodule Opus.AdmissionTest do
       assert rooted.resources.vault.entry_id == work.id
 
       # The name resolves, on the one read that picks it, to another entry
-      # than the one approved.
+      # than the one decided.
       assert {:error, :approved_entry_moved} =
                Admission.authority_and_stamp_for(
                  expecting(ctx, default.id, "Work"),
@@ -538,15 +538,15 @@ defmodule Opus.AdmissionTest do
                  connection: "Work"
                )
 
-      # The entry approved, under a name its binding does not store: `work`
+      # The entry decided, under a name its binding does not store: `work`
       # picks the binding stored as `Work`, which is another stored name.
       assert {:error, :approved_entry_moved} =
                Admission.authority_for(expecting(ctx, work.id, "work"), :default, ref,
                  connection: "work"
                )
 
-      # A name the ingress no longer binds: for an approved launch the same
-      # stale approval, and an account to grant for anyone else.
+      # A name the ingress no longer binds: for a launch the same stale
+      # decision, and an account to grant for anyone else.
       assert {:error, :approved_entry_moved} =
                Admission.authority_for(expecting(ctx, work.id, "Home"), :default, ref,
                  connection: "Home"
@@ -555,7 +555,7 @@ defmodule Opus.AdmissionTest do
       assert {:error, :connection_not_granted} =
                Admission.authority_for(ctx, :default, ref, connection: "Home")
 
-      # No account named: the root holds the default, not the approved one.
+      # No account named: the root holds the default, not the decided one.
       assert {:error, :approved_entry_moved} =
                Admission.authority_for(expecting(ctx, work.id, "Work"), :default, ref)
 

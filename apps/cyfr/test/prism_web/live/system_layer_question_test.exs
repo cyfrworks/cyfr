@@ -240,17 +240,35 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         shows!(view, id)
         assert has_element?(view, "#system-layer-title", "tables wants to delete a table")
 
+        assert has_element?(view, ~s([data-test="question-publisher"]), "local")
+        assert has_element?(view, ~s([data-test="question-caller"]), "you")
+
+        frame =
+          view
+          |> render()
+          |> find(~s([data-test="question-frame"]))
+          |> hd()
+          |> LazyHTML.text()
+          |> String.split()
+          |> Enum.join(" ")
+
+        assert frame =~ ~r/^From local · started by you · waits until \S+/
+
         assert has_element?(
                  view,
-                 ~s([data-test="question-component"]),
-                 "tables, published by local"
+                 ~s([data-test="question-frame"] time.whitespace-nowrap[data-local="clock"])
                )
 
-        assert has_element?(view, ~s([data-test="question-caller"]), "you")
+        assert has_element?(
+                 view,
+                 ~s([data-test="question-words"] figcaption),
+                 "The component says:"
+               )
+
         # In the person's own time zone, as the layer's script writes it.
         assert has_element?(
                  view,
-                 ~s([data-test="question-deadline"] time[data-local][datetime$="Z"])
+                 ~s(time[data-test="question-deadline"][data-local][datetime$="Z"])
                )
 
         assert has_element?(
@@ -281,6 +299,61 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert LazyHTML.tag(heading) == ["h2"]
       assert LazyHTML.attribute(heading, "tabindex") == ["-1"]
       assert LazyHTML.text(heading) =~ "wants to delete a table"
+      end_views()
+    end
+
+    test "asks Allow this? over two named groups, draws every answer alike, the caller's " <>
+           "four on one line wide and two by two narrow, and wraps its line at a word",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+      html = render(view)
+
+      assert has_element?(view, ~s([data-test="question-choices"] > p), "Allow this?")
+
+      # Each group named by its heading, and its buttons in the person's words.
+      label = fn el -> el |> LazyHTML.text() |> String.split() |> Enum.join(" ") end
+
+      for {group, name, labels} <- [
+            {"question-caller-row", "For you", ["Never", "Just once", "For an hour", "Always"]},
+            {"question-any-caller", "For everyone", ["Always"]}
+          ] do
+        [fieldset] = find(html, ~s(fieldset[data-test="#{group}"]))
+        assert fieldset |> find("legend") |> hd() |> label.() == name
+        assert fieldset |> find("button") |> Enum.map(label) == labels
+      end
+
+      # Its passkey said beside the button for everyone, and read with it.
+      [everyone] = find(html, ~s([data-test="question-any-caller"] button))
+      [said] = LazyHTML.attribute(everyone, "aria-describedby")
+      assert has_element?(view, "##{said}", "asks for your passkey")
+
+      # No answer is the filled one: the most lasting is no default.
+      buttons = find(html, ~s([data-test="question-choice"]))
+      classes = Enum.map(buttons, &hd(LazyHTML.attribute(&1, "class")))
+      assert length(classes) == 5
+      refute Enum.any?(classes, &(&1 =~ "bg-blue-600"))
+      row_classes = Enum.take(classes, 4)
+      assert row_classes |> Enum.uniq() |> length() == 1
+      assert hd(row_classes) =~ "min-h-11"
+
+      [row] = find(html, ~s([data-test="question-caller-row"] > div))
+      row = row |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "grid-cols-2" in row
+      assert "sm:flex-nowrap" in row
+
+      [title] = find(html, "#system-layer-title")
+
+      assert "[overflow-wrap:anywhere]" in (title
+                                            |> LazyHTML.attribute("class")
+                                            |> hd()
+                                            |> String.split())
+
+      [line] = find(html, ~s([data-test="question-frame"]))
+      line = line |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "[overflow-wrap:anywhere]" in line
+      refute "break-all" in line
       end_views()
     end
 
@@ -363,7 +436,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         [group] = find(html, ~s([data-test="question-caller-row"]))
         assert LazyHTML.tag(group) == ["fieldset"]
         [legend] = find(html, ~s(fieldset[data-test="question-caller-row"] > legend))
-        assert String.trim(LazyHTML.text(legend)) == "For #{words}:"
+        assert String.trim(LazyHTML.text(legend)) == "For #{words}"
         assert Enum.map(find(group, "button"), &hd(LazyHTML.attribute(&1, "data-choice"))) == row
         assert row_offered(view) == row
         assert offered(view) == row ++ ["allow_always_any_caller"]
@@ -372,6 +445,10 @@ defmodule PrismWeb.SystemLayerQuestionTest do
                  view,
                  ~s([data-test="question-any-caller"] [data-choice="allow_always_any_caller"])
                )
+
+        if caller == "unknown",
+          do:
+            assert(has_element?(view, ~s([data-test="question-caller-row"] button), "Just once"))
 
         Q.end!(setup.ctx, run, :withdrawn)
         wait_until(fn -> open_prompt(view) == nil end, 2_000, "the card gone")
@@ -657,6 +734,22 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
+    test "the block that scrolls and takes focus is named by the caption, The component says",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      shows!(view, Prompt.question_id(ref))
+      html = render(view)
+      [block] = find(html, ~s([data-test="question-block"]))
+      assert LazyHTML.attribute(block, "tabindex") == ["0"]
+      assert LazyHTML.attribute(block, "role") == ["region"]
+      [caption] = LazyHTML.attribute(block, "aria-labelledby")
+      [figcaption] = find(html, "figcaption##{caption}")
+      assert String.trim(LazyHTML.text(figcaption)) == "The component says:"
+
+      end_views()
+    end
+
     test "text that imitates a button stays text inside the block", setup do
       view = screen!(setup)
 
@@ -799,8 +892,9 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         assert has_element?(
                  view,
                  ~s([role="alert"]),
-                 "No installed version asks for this permission in these words, " <>
-                   "so this answer cannot be kept. You can still allow it once, or not allow it."
+                 "No installed version asks for this permission in these words, so this answer " <>
+                   "cannot be kept: you can still allow it just once, or close this card with × " <>
+                   "to not allow it."
                )
 
         refute render(view) =~ "no longer installed"
@@ -811,6 +905,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         # Only the answers given once are offered from then on.
         assert offered(view) == ["allow_once"]
         refute has_element?(view, ~s([data-test="question-any-caller"]))
+        assert has_element?(view, ~s([data-test="question-caller-row"] button), "Just once")
 
         choose(view, "allow_once")
         assert_receive {:answered, ^ref}
@@ -1160,14 +1255,10 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert has_element?(
                view,
                ~s([data-test="question-any-caller"] [data-choice="allow_always_any_caller"]),
-               "Always allow, whoever starts it"
+               "Always"
              )
 
-      assert has_element?(
-               view,
-               ~s([data-test="question-any-caller"]),
-               "Needs a fresh confirmation"
-             )
+      assert has_element?(view, ~s([data-test="question-any-caller"]), "asks for your passkey")
 
       choose(view, "allow_always_any_caller")
       assert_received :answer_dispatched
@@ -1428,6 +1519,13 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       confirmation = waited_ref(asking)
       shows!(other, Prompt.confirmation_id(confirmation), "the confirmation in front")
       assert [%{id: ^id}] = layer_assigns(other).queue
+
+      # Titled by what it allows, not by the operation that carries it.
+      assert has_element?(
+               other,
+               "#system-layer-title",
+               "Always allow tables to delete a table, for everyone"
+             )
 
       prove_here!(other, confirmation, authenticator)
 

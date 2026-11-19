@@ -9,20 +9,16 @@ defmodule Aqua do
   - `Aqua.Runner` — one process per thread; every send is admitted
     and accepted through it, and it owns the turns' lifecycle.
   - `Aqua.Loop` — one turn, run by the process that holds its root: the
-    model rounds, the dispatch, the cards (`Aqua.Loop.Turn`,
-    `Aqua.Loop.Binding`, `Aqua.Loop.Request`, `Aqua.Loop.Planner`,
-    `Aqua.Loop.Policy`).
+    model rounds, the dispatch, and each call decided under its member's
+    mode (`Aqua.Loop.Turn`, `Aqua.Loop.Binding`, `Aqua.Loop.Request`,
+    `Aqua.Loop.Planner`, `Aqua.Loop.Policy`).
   - `Aqua.Crew` — the crew index, the soul's hand-off to a crew member,
     worked in a child thread of the room, and the delivery of requests
     and replies.
   - `Aqua.Tape` — the one persistence port of the runner and the loop.
-  - `Aqua.Approvals` — a card decided once, from its own rows;
-    `Aqua.Standing` — what may stand for later calls; `Aqua.Launch` — an
-    approved launch run as its approver.
+  - `Aqua.Launch` — the one dispatcher of a launch, run as a person.
   - `Aqua.Prompt` — the one composer of the system prompt, from the
     resolved agent and the turn's pinned authority.
-  - `Aqua.ToolGrants` — standing approvals as rows, composed over the
-    agent's declared `tool_policy`.
   - `Aqua.Hands` — the pseudo-tools that run on the bundled catalysts, and
     the console intents (`Aqua.Intents`).
   - `Aqua.AgentConfig` — the soul's and the crew's definitions and their catalysts;
@@ -63,7 +59,7 @@ defmodule Aqua do
     ],
     check: [aliases: true]
 
-  alias Aqua.{ApprovalScope, Attachments, ConsentStatus, Models, Notes}
+  alias Aqua.{Attachments, ConsentStatus, Models, Notes}
   alias Sanctum.Context
 
   @doc "The model listing the console's pickers show. See `Aqua.Models.catalogue/1`."
@@ -104,14 +100,6 @@ defmodule Aqua do
           {:ok, [{String.t(), :stale | {:drifted, [String.t()]}}]}
           | {:error, ConsentStatus.refusal()}
   defdelegate stale_consent_refs(ctx), to: ConsentStatus, as: :stale_refs
-
-  @doc "The approval scope a string or atom names, `:once` otherwise (`Aqua.ApprovalScope.parse/1`)."
-  @spec parse_approval_scope(term()) :: ApprovalScope.t()
-  defdelegate parse_approval_scope(scope), to: ApprovalScope, as: :parse
-
-  @doc "An approval scope's wire string (`Aqua.ApprovalScope.to_string/1`)."
-  @spec approval_scope_string(ApprovalScope.t()) :: String.t()
-  defdelegate approval_scope_string(scope), to: ApprovalScope, as: :to_string
 
   @doc "The storage path of one message attachment's blob (`Aqua.Attachments.blob_path/3`)."
   @spec attachment_blob_path(String.t(), String.t(), Attachments.ref()) ::
@@ -164,18 +152,6 @@ defmodule Aqua do
   @doc "A thread's runner state as viewers see it (`Aqua.Runner.state/2`)."
   @spec thread_state(String.t(), String.t()) :: map() | {:error, term()}
   defdelegate thread_state(thread_id, athanor_id), to: Aqua.Runner, as: :state
-
-  @doc "Whether a card offers an answer of `scope` for its intent. See `Aqua.Standing.offered?/2`."
-  @spec standing_offered?(map(), :thread | :always | :schedule) :: boolean()
-  defdelegate standing_offered?(intent, scope), to: Aqua.Standing, as: :offered?
-
-  @doc """
-  The person's schedules that hold a line for Aqua, live, in the
-  context's athanor, oldest first, each `%{id, name}`: what a card offers
-  an answer "for a schedule" for (`Aqua.Standing`).
-  """
-  @spec answer_schedules(Context.t()) :: {:ok, [%{id: String.t(), name: String.t()}]}
-  defdelegate answer_schedules(ctx), to: Aqua.Standing, as: :schedules
 
   @doc """
   Keep `zone`, the time zone the person's browser reported, as theirs when

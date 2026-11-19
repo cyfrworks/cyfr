@@ -86,9 +86,7 @@ defmodule Aqua.HandsTest do
              Hands.canonical_files("grep", %{"path" => "data/storage", "pattern" => "x"})
   end
 
-  test "request_setup.open is auto-only and builds no child call" do
-    assert Sanctum.VirtualTools.auto_only?("request_setup", "open")
-    refute Sanctum.VirtualTools.auto_only?("files", "read")
+  test "request_setup.open builds no child call" do
     assert {:error, _} = Hands.child_call("request_setup", "open", %{})
   end
 end

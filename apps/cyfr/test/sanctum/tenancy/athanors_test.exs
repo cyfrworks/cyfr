@@ -37,12 +37,12 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       stale = athanor
 
       {:ok, _} = Athanors.put_settings(athanor, %{"written_during" => "yes"})
-      {:ok, _} = Athanors.put_settings(stale, %{"approvals" => %{"expiry_hours" => 2}})
+      {:ok, _} = Athanors.put_settings(stale, %{"aqua" => %{"name" => "Home"}})
 
       assert {:ok, fresh} = Athanors.get(athanor.id)
       settings = Athanors.settings(fresh)
 
-      assert settings["approvals"]["expiry_hours"] == 2
+      assert settings["aqua"]["name"] == "Home"
 
       assert settings["written_during"] == "yes",
              "a concurrent settings write was clobbered by a merge over a stale struct"

@@ -364,17 +364,6 @@ defmodule Aqua.StreamsTest do
         })
 
       {:ok, %{id: plans, title: plans_title}} = Arca.Test.Days.thread(ada.actor)
-      {:ok, %{id: carded, title: carded_title}} = Arca.Test.Days.thread(ada.actor)
-
-      # A pending card row, which nothing opens now, waits on no one.
-      {:ok, _card} =
-        Threads.append(ada.actor, carded, %{
-          author: Prima.Author.system(),
-          sent_by: "aqua",
-          kind: "approval",
-          status: "pending",
-          content: "Run it?"
-        })
 
       work = workspace!(ada.actor, "Book the trip")
       waiting = reported!(ada, "Pick a hotel", "needs_you")
@@ -395,7 +384,7 @@ defmodule Aqua.StreamsTest do
       wired = Enum.map(items, &read_as/1)
 
       ids = Enum.map(wired, & &1["id"])
-      assert ids == [trip.id, done.id, waiting.id, work.id, carded, plans]
+      assert ids == [trip.id, done.id, waiting.id, work.id, plans]
       refute child.id in ids
       refute old.id in ids
       refute bobs in ids
@@ -413,8 +402,6 @@ defmodule Aqua.StreamsTest do
                  "waits_on_you" => true
                }),
                listed_as(ada, work.id, %{"kind" => "workspace", "title" => "Book the trip"}),
-               # The card is not the person's own line, so it is unread to them.
-               listed_as(ada, carded, %{"kind" => "daily", "title" => carded_title, "unread" => 1}),
                listed_as(ada, plans, %{"kind" => "daily", "title" => plans_title})
              ]
 

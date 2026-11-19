@@ -237,7 +237,6 @@ defmodule Prima.RefusalTest do
     {:not_member, :forbidden},
     {:archived, :forbidden},
     {:thread_retired, :forbidden},
-    {{:child_awaits_card, "planner"}, :conflict},
     {:thread_in_use, :conflict},
     {:not_addressable, :forbidden},
     {:not_in_a_turn, :forbidden},
@@ -377,8 +376,6 @@ defmodule Prima.RefusalTest do
     {:catalyst_pinned, :conflict},
     {:not_proposed, :conflict},
     {:not_dispatched, :conflict},
-    {:proposal_digest_required, :conflict},
-    {{:already_resolved, :approved}, :conflict},
     {:consent_moved, :conflict},
     {:agent_changed, :conflict},
     {:no_pin, :conflict},
@@ -388,10 +385,8 @@ defmodule Prima.RefusalTest do
     {:seq_conflict, :internal},
     {:illegal_transition, :internal},
     {{:execution_not_in, "running"}, :internal},
-    {{:grant_failed, :database_error}, :internal},
     {:thread_not_found, :not_found},
     {:turn_not_found, :not_found},
-    {:approval_not_found, :not_found},
     {:catalyst_not_found, :not_found},
     {:step_not_found, :not_found},
     {:empty, :invalid_argument},
@@ -630,16 +625,16 @@ defmodule Prima.RefusalTest do
       assert Refusal.message({:connection_cap, "anything"}) == Refusal.message(:connection_cap)
     end
 
-    test "a launch whose approved entry moved is a conflict that says to ask again, never " <>
-           "an unexpected reason" do
+    test "a launch whose decided entry moved is a conflict that says to propose it again, " <>
+           "never an unexpected reason" do
       log =
         capture_log(fn ->
           assert %Refusal{class: :conflict, reason: :approved_entry_moved, message: message} =
                    Refusal.classify(:approved_entry_moved)
 
           assert message ==
-                   "The account this launch was approved for has changed since it was approved, " <>
-                     "so nothing ran: ask again to approve it as it stands now."
+                   "The account this launch was decided on has changed since, so nothing ran: " <>
+                     "propose it again to run it on the account as it stands now."
         end)
 
       # The module runs async, and capture_log takes every process's log

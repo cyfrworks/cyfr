@@ -144,7 +144,6 @@ defmodule Cyfr.Requests do
       kind: :grant_request,
       id: id,
       label: label,
-      day: nil,
       since: since,
       destination: %{kind: "ref", page: nil, ref: id},
       outcome: nil

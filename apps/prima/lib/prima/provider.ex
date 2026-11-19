@@ -378,12 +378,6 @@ defmodule Prima.Provider do
     (`Sanctum.Context.platform_admin`): the door verbs, and the one
     execution action that releases every athanor's slots. Everyone else is
     refused and does not see the action listed.
-  - `:standing` — whether a person may pre-answer this action for calls
-    nobody has seen yet. Absent means any standing scope a runner offers;
-    `:thread` means a standing allow for one thread and no
-    wider; `false` means never — every call is a click. `Aqua.ToolGrants`
-    reads it at the grant write and the runner reads it off the approval
-    intent, so both gates answer from this one declaration.
   """
   @type action_annotation :: %{
           required(:kind) => action_kind(),
@@ -392,7 +386,6 @@ defmodule Prima.Provider do
           optional(:permission) => atom(),
           optional(:consent) => :interactive | :staging,
           optional(:scope) => :platform,
-          optional(:standing) => :thread | false,
           # A read whose re-dispatch after an uncertain recovery is safe by
           # review: no effect beyond its answer. A recovered turn may
           # re-run only these; `kind: :read` alone says nothing about an

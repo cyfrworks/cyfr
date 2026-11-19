@@ -9,7 +9,7 @@ defmodule PrismWeb.ChatOverlayLive do
   stays while the person moves between the pages drawn over the desktop.
 
   The desktop opens it too, for a canvas's `settings` of `chat` (the
-  attention stream's approvals and the shipped desktops name it so).
+  shipped desktops name it so).
 
   Its control stands at the shelf's right end (`#chat-button`, in the
   shelf's chrome) with the number of the person's shared threads that hold
@@ -329,9 +329,10 @@ defmodule PrismWeb.ChatOverlayLive do
   def handle_info(:open, socket),
     do: {:noreply, socket |> assign(:open, true) |> load() |> mark_read() |> announce()}
 
-  # The desktop opens the chat at a shared thread (an attention item's
-  # `chat` destination), read under the person's own seat: one they do not
-  # sit in opens the chat on its list, saying the thread cannot be opened.
+  # The desktop opens the chat at a shared thread (a canvas's `settings`
+  # of `chat` with a `ref`), read under the person's own seat: one they do
+  # not sit in opens the chat on its list, saying the thread cannot be
+  # opened.
   def handle_info({:open, thread_id}, socket) when is_binary(thread_id),
     do: {:noreply, socket |> assign(:open, true) |> load() |> open_shared(thread_id)}
 

@@ -27,8 +27,8 @@ defmodule Sanctum.Gate.FacadeTest do
   # One action map, in the provider's atom-keyed spelling and the wire's
   # string-keyed one.
   @actions %{
-    "read" => %{kind: :read, recovery: :replay_safe, standing: :thread},
-    "write" => %{kind: :write, recovery: :replay_safe, standing: false}
+    "read" => %{kind: :read, recovery: :replay_safe},
+    "write" => %{kind: :write, recovery: :replay_safe}
   }
 
   test "the root answers exactly its roster" do
@@ -48,8 +48,6 @@ defmodule Sanctum.Gate.FacadeTest do
       assert Sanctum.Annotations.actions_of(source) == @actions
       assert Sanctum.Annotations.kind(source, "read") == :read
       assert Sanctum.Annotations.kind(source, "nope") == nil
-      assert Sanctum.Annotations.standing(source, "read") == :thread
-      assert Sanctum.Annotations.standing(source, "write") == false
       assert Sanctum.Annotations.recovery(source, "read") == :replay_safe
       # A write annotated replay-safe is not.
       assert Sanctum.Annotations.recovery(source, "write") == nil

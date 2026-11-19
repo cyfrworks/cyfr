@@ -430,23 +430,4 @@ defmodule Aqua.Loop.Policy do
   end
 
   defp host_of(_url), do: nil
-
-  @doc """
-  The digest a card is consumed by: the canonical proposal, hashed, the
-  one form a proposal is digested in where it is recorded and where an
-  approval consumes it. A field the proposal leaves absent, as an
-  external call's action, is no field of it, since the canonical form has
-  no null. Its arguments are hashed as they were given: a call with an
-  argument the canonical form refuses is refused before it is proposed
-  (`Binding.resolve/3`).
-  """
-  @spec proposal_digest(map()) :: String.t()
-  def proposal_digest(%{"proposal" => proposal}), do: proposal_digest(proposal)
-
-  def proposal_digest(proposal) when is_map(proposal) do
-    {:ok, digest} =
-      proposal |> Map.reject(fn {_field, value} -> is_nil(value) end) |> Prima.JCS.hash()
-
-    digest
-  end
 end

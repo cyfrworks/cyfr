@@ -36,38 +36,14 @@ defmodule Prima.TurnStateTest do
 
     assert TurnState.open_statuses() == ["accepted", "running", "paused"]
     assert TurnState.terminal_statuses() == ["completed", "failed", "cancelled", "uncertain"]
-    assert TurnState.step_kinds() == ["model", "tool", "ui", "approval", "launch", "input"]
+    assert TurnState.step_kinds() == ["model", "tool", "ui", "launch", "input"]
 
     assert TurnState.outcomes() ==
              ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
 
-    assert TurnState.decisions() == ["approved", "declined", "expired", "error"]
-
-    assert TurnState.approval_statuses() ==
-             ["pending", "approved", "declined", "expired", "error", "invalidated"]
-
-    assert TurnState.invalidated() == "invalidated"
-    refute TurnState.invalidated() in TurnState.decisions()
-    assert TurnState.pause_reasons() == ["approval", "launch"]
+    assert TurnState.pause_reasons() == ["launch"]
     assert TurnState.opening_states() == ["proposed", "dispatched"]
     assert TurnState.recoveries() == ["replay_safe"]
-    assert TurnState.approval_scopes() == ["once", "thread", "always", "never"]
-  end
-
-  test "a decision writes one resolution and never turns a step into a launch" do
-    assert TurnState.resolution_kind("approved", "launch") == "launch"
-
-    for kind <- TurnState.step_kinds() -- ["launch"] do
-      assert TurnState.resolution_kind("approved", kind) == "continue"
-    end
-
-    for kind <- TurnState.step_kinds() do
-      assert TurnState.resolution_kind("declined", kind) == "denied"
-      assert TurnState.resolution_kind("expired", kind) == "expired"
-      assert TurnState.resolution_kind("error", kind) == "denied"
-    end
-
-    assert_raise FunctionClauseError, fn -> TurnState.resolution_kind("maybe", "tool") end
   end
 
   test "a replay-safe recovery is the one Prima.TurnStep replays" do

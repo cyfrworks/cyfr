@@ -343,8 +343,7 @@ defmodule Compendium.Providers.Aqua do
           sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
-          permission: :component_manage,
-          standing: false
+          permission: :component_manage
         ),
         Operation.new(
           "aqua",
@@ -370,8 +369,7 @@ defmodule Compendium.Providers.Aqua do
           sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
-          permission: :component_manage,
-          standing: false
+          permission: :component_manage
         ),
         Operation.new(
           "aqua",

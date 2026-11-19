@@ -19,8 +19,7 @@ defmodule Compendium.Providers.Canvas do
       built first
       when it is React, after allocating its version number, and
       registers it. It never edits a version, opens no stream and
-      activates nothing. It takes no standing answer (`standing: false`),
-      so each write an assistant proposes asks the person on its own card.
+      activates nothing.
     * `activate` reports a glass's trial of a version under its frame's
       validation credential, which it spends; only `ready` activates, and
       only under the canvas's current grant. Prism calls it, from outside
@@ -126,8 +125,7 @@ defmodule Compendium.Providers.Canvas do
           kind: :write,
           sources: [],
           planes: [:external, :in_chain],
-          permission: :execute,
-          standing: false
+          permission: :execute
         ),
         Operation.new(
           "canvas",

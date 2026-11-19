@@ -60,10 +60,9 @@ defmodule Prima.OutboxRecord do
   whose turn the delivery starts), `person_id` and `origin`.
 
   `workspace_report` is a report of a workspace thread's work: Aqua's
-  `done` or `needs_you`, a card's notice (`needs_you` naming its
-  approval), or the server's `error` (`workspace_report/1`): its source
-  is the workspace thread, its revision the move's instant, and its
-  snapshot holds `workspace_id`, `title`, `turn_id` (the turn that
+  `done` or `needs_you`, or the server's `error` (`workspace_report/1`):
+  its source is the workspace thread, its revision the move's instant,
+  and its snapshot holds `workspace_id`, `title`, `turn_id` (the turn that
   reported, or the turn whose end the host reported; none for an
   opening refused before any turn started), `outcome` (one of
   `report_outcomes/0`), `summary`
@@ -71,8 +70,7 @@ defmodule Prima.OutboxRecord do
   set), `attachments` (the files of the workspace thread's posts the
   report carries, each `{"message_id", "stored_name"}`, copied at
   delivery), `sources` (the turn's ledger at the move, canonical JSON
-  objects), `person_id`, `origin`, and for `needs_you` the card's
-  `approval_id`.
+  objects), `person_id` and `origin`.
 
   `brain_forget` is one owed removal of a program's native session from
   its row's kept folder (`brain_forget/1`): a thread's `brain_session`
@@ -95,9 +93,9 @@ defmodule Prima.OutboxRecord do
   # A reply is delivered as a message to the asking thread, so it is cut
   # to the one bound every message passes (`Aqua.Runner.Admission`).
   @max_reply_bytes 32 * 1024
-  @reply_outcomes ~w(done failed cancelled uncertain needs_you)
+  @reply_outcomes ~w(done failed cancelled uncertain)
   # Aqua reports `done` or `needs_you`; `error` is the server's, when Aqua
-  # could not run. A `needs_you` record naming a card is the card's notice.
+  # could not run.
   @report_outcomes ~w(done needs_you error)
   # The files one report carries, as a message carries at most.
   @max_report_files 10
@@ -248,24 +246,21 @@ defmodule Prima.OutboxRecord do
   transaction read: `athanor_id`, the turn's `turn_id` and `ended_at`,
   its reply address (`asking_thread_id`, `request_ids`), `member`,
   `outcome` (one of `reply_outcomes/0`), the final `text`, `person_id`
-  and `origin`; a `needs_you` record also names the card's `approval_id`,
-  which the notice it becomes is resolved with.
+  and `origin`.
   """
   @spec crew_reply(map()) :: t()
-  def crew_reply(
-        %{
-          athanor_id: athanor_id,
-          turn_id: turn_id,
-          ended_at: %DateTime{} = ended_at,
-          asking_thread_id: asking_thread_id,
-          request_ids: [_ | _] = request_ids,
-          member: member,
-          outcome: outcome,
-          text: text,
-          person_id: person_id,
-          origin: origin
-        } = attrs
-      )
+  def crew_reply(%{
+        athanor_id: athanor_id,
+        turn_id: turn_id,
+        ended_at: %DateTime{} = ended_at,
+        asking_thread_id: asking_thread_id,
+        request_ids: [_ | _] = request_ids,
+        member: member,
+        outcome: outcome,
+        text: text,
+        person_id: person_id,
+        origin: origin
+      })
       when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and turn_id != "" and
              is_binary(asking_thread_id) and asking_thread_id != "" and is_binary(member) and
              member != "" and outcome in @reply_outcomes and is_binary(text) and
@@ -279,18 +274,16 @@ defmodule Prima.OutboxRecord do
       source_revision: instant(ended_at),
       athanor_id: athanor_id,
       kind: "crew_reply",
-      snapshot:
-        %{
-          "asking_thread_id" => asking_thread_id,
-          "request_ids" => request_ids,
-          "member" => member,
-          "outcome" => outcome,
-          "text" => text,
-          "truncated" => truncated?,
-          "person_id" => person_id,
-          "origin" => Prima.Origin.to_wire(origin)
-        }
-        |> card(outcome, Map.get(attrs, :approval_id))
+      snapshot: %{
+        "asking_thread_id" => asking_thread_id,
+        "request_ids" => request_ids,
+        "member" => member,
+        "outcome" => outcome,
+        "text" => text,
+        "truncated" => truncated?,
+        "person_id" => person_id,
+        "origin" => Prima.Origin.to_wire(origin)
+      }
     }
   end
 
@@ -334,25 +327,22 @@ defmodule Prima.OutboxRecord do
   report of an opening refused before any turn started), `moved_at`,
   `outcome` (one of `report_outcomes/0`), `summary`, `attachments`
   (`[%{"message_id", "stored_name"}]`, at most `max_report_files/0`),
-  `sources` (`Prima.Source`), `person_id` and `origin`; a card's notice,
-  a `needs_you` record, also names the card's `approval_id`.
+  `sources` (`Prima.Source`), `person_id` and `origin`.
   """
   @spec workspace_report(map()) :: t()
-  def workspace_report(
-        %{
-          athanor_id: athanor_id,
-          workspace_id: workspace_id,
-          title: title,
-          turn_id: turn_id,
-          moved_at: %DateTime{} = moved_at,
-          outcome: outcome,
-          summary: summary,
-          attachments: attachments,
-          sources: sources,
-          person_id: person_id,
-          origin: origin
-        } = attrs
-      )
+  def workspace_report(%{
+        athanor_id: athanor_id,
+        workspace_id: workspace_id,
+        title: title,
+        turn_id: turn_id,
+        moved_at: %DateTime{} = moved_at,
+        outcome: outcome,
+        summary: summary,
+        attachments: attachments,
+        sources: sources,
+        person_id: person_id,
+        origin: origin
+      })
       when is_binary(athanor_id) and athanor_id != "" and is_binary(workspace_id) and
              workspace_id != "" and is_binary(title) and
              ((is_binary(turn_id) and turn_id != "") or (is_nil(turn_id) and outcome == "error")) and
@@ -368,20 +358,18 @@ defmodule Prima.OutboxRecord do
       source_revision: instant(moved_at),
       athanor_id: athanor_id,
       kind: "workspace_report",
-      snapshot:
-        %{
-          "workspace_id" => workspace_id,
-          "title" => title,
-          "turn_id" => turn_id,
-          "outcome" => outcome,
-          "summary" => summary,
-          "truncated" => truncated?,
-          "attachments" => attachments,
-          "sources" => stored_sources(sources),
-          "person_id" => person_id,
-          "origin" => Prima.Origin.to_wire(origin)
-        }
-        |> card(outcome, Map.get(attrs, :approval_id))
+      snapshot: %{
+        "workspace_id" => workspace_id,
+        "title" => title,
+        "turn_id" => turn_id,
+        "outcome" => outcome,
+        "summary" => summary,
+        "truncated" => truncated?,
+        "attachments" => attachments,
+        "sources" => stored_sources(sources),
+        "person_id" => person_id,
+        "origin" => Prima.Origin.to_wire(origin)
+      }
     }
   end
 
@@ -444,11 +432,6 @@ defmodule Prima.OutboxRecord do
        do: true
 
   defp file?(_file), do: false
-
-  defp card(snapshot, "needs_you", approval_id) when is_binary(approval_id) and approval_id != "",
-    do: Map.put(snapshot, "approval_id", approval_id)
-
-  defp card(snapshot, _outcome, _approval_id), do: snapshot
 
   defp names!(names, member) do
     unless Enum.all?(names, &(is_binary(&1) and &1 != "")),

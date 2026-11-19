@@ -26,13 +26,9 @@ defmodule Arca.Providers.Files do
 
   `list`, `read`, `write` and `delete` name their file or folder by
   `path`, relative to the athanor root, and declare it as their resource
-  (`resource:`), so a standing approval may be constrained to paths.
-  `move` names its file or folder by `path` and its new place by `to`,
-  both under `data/`; a rename is a move within one folder. It takes no
-  standing approval
-  (`standing: false`) and declares no resource: an approval constrained
-  to paths could not cover its destination, so each move is approved on
-  its own.
+  (`resource:`). `move` names its file or folder by `path` and its new
+  place by `to`, both under `data/`; a rename is a move within one
+  folder. It declares no resource.
 
   ## Sending a copy
 
@@ -152,8 +148,7 @@ defmodule Arca.Providers.Files do
           ],
           kind: :write,
           planes: [:external],
-          permission: :storage_write,
-          standing: false
+          permission: :storage_write
         ),
         Operation.new(
           "file",

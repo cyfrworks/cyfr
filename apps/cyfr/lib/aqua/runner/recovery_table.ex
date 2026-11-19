@@ -5,11 +5,10 @@ defmodule Aqua.Runner.RecoveryTable do
   @moduledoc """
   What a runner does with each open turn it finds when it starts, from
   the rows alone: an accepted turn waits its turn again; a turn paused on
-  a card waits for the decision while any card is pending and continues
-  once none is; a turn paused on a call whose outcome is unknown waits
-  for its sender's next line, and continues once one is on the tape; a
-  turn paused around a launch that never closed is stopped the same way,
-  its launch step the unknown outcome; a running turn a dead runner left
+  a call whose outcome is unknown waits for its sender's next line, and
+  continues once one is on the tape; a turn paused around a launch that
+  never closed is stopped the same way, its launch step the unknown
+  outcome; a running turn a dead runner left
   holding an unacknowledged unknown outcome is set down paused on it; any
   other running turn is taken over (its predecessor's attempt retired, a
   successor opened) and adopted, or ended uncertain past the recovery cap.
@@ -79,13 +78,6 @@ defmodule Aqua.Runner.RecoveryTable do
   defp classify(ctx, %{status: "paused", paused_reason: "launch"} = turn) do
     case turn.launch_step_id && Tape.step(ctx, turn.launch_step_id) do
       {:ok, %{dispatch_state: "dispatched"} = step} -> settle_launch(ctx, turn, step)
-      _ -> {:continue, turn}
-    end
-  end
-
-  defp classify(ctx, %{status: "paused"} = turn) do
-    case Tape.pending_approvals(ctx, turn) do
-      {:ok, [_ | _]} -> {:wait, turn}
       _ -> {:continue, turn}
     end
   end

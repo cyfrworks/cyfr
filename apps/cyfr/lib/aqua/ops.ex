@@ -25,7 +25,7 @@ defmodule Aqua.Ops do
 
   `opts` are the registry's own (`:lineage` — the host-stamped execution
   and thread identity a tool may trust, guest-supplied spellings
-  dropped); the helper forwards them so the runner can name a card's own
+  dropped); the helper forwards them so the runner can name the turn's own
   execution without the argument map carrying it.
   """
   @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Prima.Authority.t(), keyword()) ::
@@ -66,18 +66,6 @@ defmodule Aqua.Ops do
     case Sanctum.Catalog.get_tool(tool) do
       {:ok, tool_def} -> Sanctum.Annotations.recovery(tool_def, action) == :replay_safe
       _ -> false
-    end
-  end
-
-  @doc """
-  The registry's `standing` annotation for `tool`/`action` — `:thread`,
-  `false`, or nil when the action declares none or the tool is unknown.
-  """
-  @spec action_standing(String.t(), String.t()) :: :thread | false | nil
-  def action_standing(tool, action) do
-    case Sanctum.Catalog.get_tool(tool) do
-      {:ok, tool_def} -> Sanctum.Annotations.standing(tool_def, action)
-      _ -> nil
     end
   end
 

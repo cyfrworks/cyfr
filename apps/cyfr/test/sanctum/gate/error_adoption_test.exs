@@ -91,7 +91,6 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # write — never a refusal on the wire; reached because the decision
     # provider renders decisions.
     "apps/prima/lib/prima/decision.ex" => 13,
-    "apps/cyfr/lib/aqua/approvals.ex" => 4,
     "apps/cyfr/lib/compendium/component.ex" => 3,
     "apps/cyfr/lib/compendium/providers/shared.ex" => 3,
     "apps/cyfr/lib/compendium/registry.ex" => 4,

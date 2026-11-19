@@ -13,8 +13,8 @@ defmodule Aqua.Nudge do
   for the quiet period, in it or in a crew thread under it, gets one line
   of the server's for its own Aqua: nothing has happened here, the work is
   not finished, say where it stands. What has happened is a post, a step
-  starting or ending, a card made or decided and a turn accepted or
-  ended; Aqua's own silence is silence, and a page's own calls, reads,
+  starting or ending and a turn accepted or ended; Aqua's own silence is
+  silence, and a page's own calls, reads,
   read marks, this process's reads, a delivery's receipt and output
   streamed and not recorded are no activity
   (`Arca.TurnStorage.nudge/3`). It goes to the thread alone, never through
@@ -32,7 +32,7 @@ defmodule Aqua.Nudge do
   to the turn it read, and the acceptance refuses a binding the thread's
   lock no longer finds, so authority is never borrowed from work that
   moved. Anything else open there (a page's call's turn, a turn paused
-  on a card or an uncertain call) leaves it to the next tick. An
+  on an uncertain call) leaves it to the next tick. An
   archived thread is neither nudged nor reminded, and no line of this
   process's takes one out of the archive. No second nudge comes while one
   is unanswered: until a model round of its turn has carried it and

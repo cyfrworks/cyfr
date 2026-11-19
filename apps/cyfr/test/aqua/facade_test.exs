@@ -11,8 +11,6 @@ defmodule Aqua.FacadeTest do
   use ExUnit.Case, async: true
 
   @roster [
-    answer_schedules: 1,
-    approval_scope_string: 1,
     at_work: 2,
     attachment_blob_path: 3,
     attachment_limits: 0,
@@ -27,7 +25,6 @@ defmodule Aqua.FacadeTest do
     models: 1,
     models: 2,
     note_pinned?: 1,
-    parse_approval_scope: 1,
     pin_max_bytes: 0,
     pinned_note_page: 1,
     providers: 1,
@@ -36,7 +33,6 @@ defmodule Aqua.FacadeTest do
     room_excerpt: 2,
     roster: 1,
     stale_consent_refs: 1,
-    standing_offered?: 2,
     steps: 2,
     steps: 3,
     stream_abandoned: 2,
@@ -79,16 +75,6 @@ defmodule Aqua.FacadeTest do
 
     assert Aqua.providers(outside) == Aqua.Models.providers(outside)
     assert {:error, :forbidden} = Aqua.providers(outside)
-  end
-
-  test "approval scopes parse and print as Aqua.ApprovalScope does" do
-    for scope <- ["thread", "always", "never", :once, "bogus", nil] do
-      assert Aqua.parse_approval_scope(scope) == Aqua.ApprovalScope.parse(scope)
-    end
-
-    for scope <- [:once, :thread, :always, :never] do
-      assert Aqua.approval_scope_string(scope) == Aqua.ApprovalScope.to_string(scope)
-    end
   end
 
   test "attachment bounds and names are Aqua.Attachments'" do

@@ -5,8 +5,8 @@ defmodule Aqua.Providers.Thread do
   @moduledoc """
   Chat on the wire: the `thread` tool, and the `crew` tool beside it.
 
-  Exposes Aqua thread addressing, queuing, history and approvals to
-  MCP clients through the thread runner.
+  Exposes Aqua thread addressing, queuing and history to MCP clients
+  through the thread runner.
 
   `thread.post` is the one action of `thread` a running turn writes with:
   a post into the thread its turn runs in, under its fence, with text, the
@@ -67,17 +67,17 @@ defmodule Aqua.Providers.Thread do
 
   ## Starting turns
 
-  Start chat turns through the runner so the turn pins a profile and later
-  approvals use that same authority. Direct execution of the agent formula
-  does not establish this thread state.
+  Start chat turns through the runner so the turn pins the profile it
+  runs under. Direct execution of the agent formula does not establish
+  this thread state.
 
   ## Two gates, on different axes
 
     * **Plane.** `Sanctum.Gate.call_external/4` refuses a
       `:guest` context outright, and these actions but `post`, `search`
       and `events` declare `planes: [:external]` so they never appear
-      in-chain. A running agent cannot speak, decide, or post into a
-      thread but its own, and reads only its own athanor's daily and
+      in-chain. A running agent cannot speak or post into a thread but
+      its own, and reads only its own athanor's daily and
       workspace threads — never other people's.
     * **Surface.** Every action declares `consent: :interactive`, which the
       registry's dispatch gate holds to
@@ -104,12 +104,6 @@ defmodule Aqua.Providers.Thread do
     * `activity.changes` is the athanor's crew at work, a job's start and
       end, and takes no subject (`Aqua.Crew.Activity`). It is declared
       here, beside the `crew` tool, as the assistant's one provider.
-
-  ## Approvals are never skipped
-
-  A client with no way to render a card does not get to decide for the
-  person. `send` reports a turn that is waiting, and the card stays
-  pending until somebody answers it through `approve` or `decline`.
   """
 
   @behaviour Prima.Provider
@@ -118,7 +112,7 @@ defmodule Aqua.Providers.Thread do
   # shared thread, so a call moves a slice, never a thread.
   @aloud_max 50
 
-  alias Aqua.{Approvals, Runner, Tape}
+  alias Aqua.{Runner, Tape}
   alias Sanctum.Context
 
   @impl true
@@ -254,12 +248,12 @@ defmodule Aqua.Providers.Thread do
   def definition do
     alias Prima.{Arg, Operation}
     # `:external` on every action but `post`, `search` and `events`: a
-    # running agent must not speak, decide or post but into its own
-    # thread, and `post` reaches only that one, named by the lineage;
-    # `search` and `events` read, for the person and for a turn of theirs,
-    # the athanor's daily and workspace threads. And `:interactive` on
-    # every action but `post`: only a person's own session, or its chain,
-    # may speak, decide, or read as them — never a standing credential.
+    # running agent must not speak or post but into its own thread, and
+    # `post` reaches only that one, named by the lineage; `search` and
+    # `events` read, for the person and for a turn of theirs, the
+    # athanor's daily and workspace threads. And `:interactive` on every
+    # action but `post`: only a person's own session, or its chain, may
+    # speak or read as them — never a standing credential.
     # Advisory: maxLength counts graphemes; the governing bound is
     # the runner's 32 KiB byte check, which every sender passes
     # through (the console included).
@@ -358,8 +352,7 @@ defmodule Aqua.Providers.Thread do
             ),
             Arg.new("message_id", :string,
               required: true,
-              description:
-                "approve/decline: the approval card; attach: the message the files belong to"
+              description: "attach: the message the files belong to"
             ),
             Arg.new(
               "files",
@@ -408,86 +401,6 @@ defmodule Aqua.Providers.Thread do
             Arg.new("thread", :string,
               required: true,
               description: "Thread id (all actions except today and list)"
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "thread",
-          "approve",
-          "Approve thread",
-          [
-            Arg.new("thread", :string,
-              required: true,
-              description: "Thread id (all actions except today and list)"
-            ),
-            Arg.new("message_id", :string,
-              required: true,
-              description:
-                "approve/decline: the approval card; attach: the message the files belong to"
-            ),
-            Arg.new("scope", :string,
-              description:
-                "approve: once | thread | always. decline: once | never. Standing scopes are refused for destructive and external actions.",
-              enum: ["once", "thread", "always"]
-            )
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "thread",
-          "decline",
-          "Decline thread",
-          [
-            Arg.new("thread", :string,
-              required: true,
-              description: "Thread id (all actions except today and list)"
-            ),
-            Arg.new("message_id", :string,
-              required: true,
-              description:
-                "approve/decline: the approval card; attach: the message the files belong to"
-            ),
-            Arg.new("scope", :string,
-              description:
-                "approve: once | thread | always. decline: once | never. Standing scopes are refused for destructive and external actions.",
-              enum: ["once", "never"]
-            ),
-            Arg.new("reason", :string, description: "decline: why")
-          ],
-          kind: :write,
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "thread",
-          "revoke_grant",
-          "Revoke grant thread",
-          [
-            Arg.new("thread", :string,
-              required: true,
-              description: "Thread id (all actions except today and list)"
-            ),
-            Arg.new("agent_name", :string,
-              required: true,
-              description: "revoke_grant: the agent the standing answer was given for"
-            ),
-            Arg.new("tool", :string, required: true, description: "revoke_grant: the tool"),
-            Arg.new("tool_action", :string,
-              required: true,
-              description: "revoke_grant: the action"
-            ),
-            Arg.new("program", :string,
-              description:
-                "revoke_grant: for an answer that is one program's, the program's row id; required for program.start"
-            ),
-            Arg.new("schedule", :string,
-              description:
-                "revoke_grant: for an answer that is one schedule's, the schedule's id; none for any other"
             )
           ],
           kind: :write,
@@ -667,7 +580,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, archive a thread (a daily or workspace thread goes behind the list's Archived filter until new work there, nothing else changing; a crew member's thread is retired, which stops its work there), and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: find today's thread or list threads, send a message, follow the reply, stop a turn, archive a thread (a daily or workspace thread goes behind the list's Archived filter until new work there, nothing else changing; a crew member's thread is retired, which stops its work there), and say one of your own private lines aloud into a shared thread you sit in; a running turn posts into its own thread, with files and links. A send with no thread joins today's daily thread and starts a turn of the athanor's assistant, or with @<name> asks that crew member, who works in a thread of its own under it and replies there; a send in a crew member's thread speaks to that member. A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the shared thread open beside it. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -958,21 +871,6 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp act(
-         "revoke_grant",
-         ctx,
-         id,
-         %{"agent_name" => agent, "tool" => tool, "tool_action" => action} = args
-       )
-       when is_binary(agent) and is_binary(tool) and is_binary(action) do
-    key = %{program: args["program"], schedule: args["schedule"]}
-
-    case Runner.revoke_grant(ctx, id, agent, tool, action, key) do
-      :ok -> {:ok, %{revoked: true, agent: agent, tool: tool, action: action}}
-      {:error, reason} -> {:error, refusal(reason, id)}
-    end
-  end
-
   defp act("restart_for_consent", ctx, id, args) do
     result = %{profile_id: args["profile_id"], revision: args["revision"]}
 
@@ -984,8 +882,7 @@ defmodule Aqua.Providers.Thread do
 
   # A thread is deleted whole — its rows and its blobs, and a room's crew
   # threads with it, their open turns cancelled and the runtime still
-  # holding them stopped after — and never under a running turn, nor while
-  # a crew thread of the room waits on a card.
+  # holding them stopped after — and never under a running turn.
   defp act("delete", ctx, id, _args) do
     cond do
       Runner.turn_running?(ctx, id) ->
@@ -1033,36 +930,6 @@ defmodule Aqua.Providers.Thread do
   defp act("stop", ctx, id, _args) do
     case Runner.stop_turn(ctx, id) do
       :ok -> {:ok, %{stopped: true}}
-      {:error, reason} -> {:error, refusal(reason, id)}
-    end
-  end
-
-  # A card is decided by the message it was shown as; the decision is
-  # `Aqua.Approvals`' — the same door the `approval` tool opens.
-  defp act("approve", ctx, id, %{"message_id" => message_id} = args) when is_binary(message_id) do
-    with {:ok, scope} <- approve_scope(args["scope"]),
-         {:ok, approval} <- card_approval(ctx, id, message_id),
-         {:ok, outcome} <-
-           Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: scope}) do
-      {:ok,
-       Map.merge(outcome, %{decided: outcome.decision, message_id: message_id, scope: scope})}
-    else
-      {:error, reason} -> {:error, refusal(reason, id)}
-    end
-  end
-
-  defp act("decline", ctx, id, %{"message_id" => message_id} = args) when is_binary(message_id) do
-    with {:ok, scope} <- decline_scope(args["scope"]),
-         {:ok, approval} <- card_approval(ctx, id, message_id),
-         {:ok, outcome} <-
-           Approvals.resolve(ctx, approval.id, %{
-             decision: :declined,
-             scope: scope,
-             reason: String.slice(args["reason"] || "", 0, 80)
-           }) do
-      {:ok,
-       Map.merge(outcome, %{decided: outcome.decision, message_id: message_id, scope: scope})}
-    else
       {:error, reason} -> {:error, refusal(reason, id)}
     end
   end
@@ -1136,17 +1003,6 @@ defmodule Aqua.Providers.Thread do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # The card's approval, pinned to this thread: a member cannot
-  # drive one thread's door to settle another thread's card.
-  defp card_approval(ctx, thread_id, message_id) do
-    case Tape.approval_by_message(ctx, message_id) do
-      {:ok, %{thread_id: ^thread_id} = approval} -> {:ok, approval}
-      {:ok, _elsewhere} -> {:error, {:not_found, "approval", message_id}}
-      {:error, :not_found} -> {:error, {:not_found, "approval", message_id}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp put_opt(opts, _key, nil), do: opts
   defp put_opt(opts, _key, ""), do: opts
   defp put_opt(opts, key, value), do: Keyword.put(opts, key, value)
@@ -1181,12 +1037,10 @@ defmodule Aqua.Providers.Thread do
     end)
   end
 
-  # What a client is told after speaking. A pending card is REPORTED, never
-  # decided: a caller that cannot render one has not thereby been given
-  # permission to answer it. The message is already accepted by the time
-  # this runs, so a faulty status read degrades to "not running, nothing
-  # pending" rather than turning the accepted send into an error — both
-  # reads can return error tuples, and either would crash the handler.
+  # What a client is told after speaking: whether a turn runs and how
+  # many wait behind it. The message is already accepted by the time this
+  # runs, so a faulty status read degrades to "not running, nothing
+  # queued" rather than turning the accepted send into an error.
   defp waiting(ctx, id) do
     live =
       case Runner.state(id, ctx.athanor_id) do
@@ -1194,17 +1048,10 @@ defmodule Aqua.Providers.Thread do
         _ -> %{}
       end
 
-    pending =
-      case Arca.ThreadStorage.pending_approvals(Sanctum.Context.actor(ctx), id) do
-        rows when is_list(rows) -> Enum.map(rows, &render/1)
-        _ -> []
-      end
-
     %{
       sent: true,
       running: live[:running] || false,
-      queued: live[:queued] || 0,
-      pending_approvals: pending
+      queued: live[:queued] || 0
     }
   end
 
@@ -1269,11 +1116,6 @@ defmodule Aqua.Providers.Thread do
     do: {:timeout, "Some workers have not stopped yet. Retry Stop."}
 
   defp translate(:workers_unavailable, _id), do: {:unavailable, "Worker coordination"}
-
-  # One sentence per reason, and the runner's — the same words the chat
-  # shows, so a client and a person are told the same thing.
-  defp translate({:scope_not_permitted, _reason} = refusal, _id),
-    do: {:invalid_argument, Aqua.ToolGrants.refusal_message(refusal)}
 
   # An unmapped reason stays as it is — the router logs it and answers
   # generically, which is the visible cue that a new refusal needs a row
@@ -1689,20 +1531,7 @@ defmodule Aqua.Providers.Thread do
   defp cursor([]), do: nil
   defp cursor(rows), do: rows |> List.last() |> Map.get(:seq)
 
-  # An approval row carries its intent — the tool, action and arguments
-  # the card asks about — so a client without a card to render still sees
-  # what it is deciding before it answers `approve`, standing scopes
-  # included. A client that hides this from its person is the client's
-  # failing; withholding it here would make the blind answer the only one.
-  defp render(%{kind: "approval"} = msg) do
-    msg
-    |> render_row()
-    |> Map.put(:intent, Arca.ThreadStorage.payload(msg)["intent"])
-  end
-
-  defp render(msg), do: render_row(msg)
-
-  defp render_row(msg) do
+  defp render(msg) do
     %{
       id: msg.id,
       seq: msg.seq,
@@ -1712,33 +1541,5 @@ defmodule Aqua.Providers.Thread do
       status: msg.status,
       at: msg.inserted_at
     }
-  end
-
-  # The codec is `Aqua.ApprovalScope`; what each verb accepts is the verb's.
-  @approve_scopes Map.new(
-                    [:once, :thread, :always],
-                    &{Aqua.ApprovalScope.to_string(&1), &1}
-                  )
-  @decline_scopes Map.new([:once, :never], &{Aqua.ApprovalScope.to_string(&1), &1})
-
-  defp approve_scope(nil), do: {:ok, :once}
-
-  defp approve_scope(value) do
-    case Map.fetch(@approve_scopes, value) do
-      {:ok, scope} ->
-        {:ok, scope}
-
-      :error ->
-        {:error, {:invalid_argument, "approve scope must be once, thread or always"}}
-    end
-  end
-
-  defp decline_scope(nil), do: {:ok, :once}
-
-  defp decline_scope(value) do
-    case Map.fetch(@decline_scopes, value) do
-      {:ok, scope} -> {:ok, scope}
-      :error -> {:error, {:invalid_argument, "decline scope must be once or never"}}
-    end
   end
 end

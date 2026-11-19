@@ -19,7 +19,7 @@ defmodule Compendium.Providers.AquaConsentTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  test "the annotations say who may write and what a person may pre-answer" do
+  test "the annotations say who may write" do
     actions = Tool.definition().annotations.actions
 
     for action <- @writes do
@@ -28,15 +28,6 @@ defmodule Compendium.Providers.AquaConsentTest do
 
     for action <- @reads do
       refute Map.has_key?(actions[action], :consent), "aqua.#{action} declares a consent class"
-    end
-
-    # The two scroll writes a chain may propose are read into every turn's
-    # prompt index — each one a click, no standing allow at any scope.
-    assert actions["skill_create"].standing == false
-    assert actions["skill_update"].standing == false
-
-    for action <- (@writes -- ~w(skill_create skill_update)) ++ @reads do
-      refute Map.has_key?(actions[action], :standing), "aqua.#{action} declares a standing rule"
     end
   end
 

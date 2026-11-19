@@ -189,7 +189,6 @@ defmodule Prima.Refusal do
     :catalyst_pinned,
     :not_proposed,
     :not_dispatched,
-    :proposal_digest_required,
     :consent_moved,
     :agent_changed,
     :no_pin,
@@ -202,7 +201,6 @@ defmodule Prima.Refusal do
   @turn_internal [:fence_required, :seq_conflict, :illegal_transition]
 
   @turn_not_found [
-    :approval_not_found,
     :catalyst_not_found,
     :step_not_found,
     :thread_not_found,
@@ -728,11 +726,6 @@ defmodule Prima.Refusal do
   defp row({:crew_unready, member, :unavailable}) when is_binary(member),
     do: {:unavailable, "#{member}'s brain cannot be read right now — retry shortly"}
 
-  defp row({:child_awaits_card, member}) when is_binary(member),
-    do:
-      {:conflict,
-       "#{member}'s thread waits on a card — decide it there before deleting this thread"}
-
   # A deletion that turns kept starting or reading while it chose the
   # ones it stops (`Arca.ThreadStorage.delete/3`): the thread is in use,
   # and nothing about the queue or a send caused it.
@@ -1223,28 +1216,22 @@ defmodule Prima.Refusal do
 
   defp row(:conflict), do: {:conflict, "Another change landed first — read again and retry"}
 
-  # An approved launch whose root, as loaded, does not hold the account the
-  # approval bound (its entry, under the name its binding stored): nothing
-  # ran, and approving it again is what to do. The launch itself answers
+  # A launch whose root, as loaded, does not hold the account its decision
+  # bound (its entry, under the name its binding stored): nothing ran, and
+  # proposing it again is what to do. The launch itself answers
   # in a sentence naming the account; this one is for a surface that
   # renders the reason without it.
   defp row(:approved_entry_moved),
     do:
       {:conflict,
-       "The account this launch was approved for has changed since it was approved, so nothing " <>
-         "ran: ask again to approve it as it stands now."}
-
-  defp row(:approved_sources_moved),
-    do:
-      {:conflict,
-       "This turn read more since the launch was approved, so nothing ran: ask again " <>
-         "to approve it with what it has read now."}
+       "The account this launch was decided on has changed since, so nothing ran: propose it " <>
+         "again to run it on the account as it stands now."}
 
   defp row(:approved_grant_moved),
     do:
       {:conflict,
-       "The grant this launch was approved under has changed since it was approved, so nothing " <>
-         "ran: ask again to approve it as it stands now."}
+       "The grant this launch was decided on has changed since, so nothing ran: propose it " <>
+         "again to run it on the grant as it stands now."}
 
   # A run an API key narrowed to named tools may not start
   # (`Sanctum.ApiKey.admit_tool/2`).
@@ -1283,9 +1270,6 @@ defmodule Prima.Refusal do
   defp row(reason) when reason in @turn_conflicts,
     do: {:conflict, "The turn moved on — read the thread again and retry"}
 
-  defp row({:already_resolved, _answer}),
-    do: {:conflict, "This was already decided"}
-
   defp row({:no_claim, _id}), do: {:conflict, "The thread's claim moved on — read it again"}
 
   defp row(reason) when reason in @turn_internal,
@@ -1293,9 +1277,6 @@ defmodule Prima.Refusal do
 
   defp row({:execution_not_in, _from}),
     do: {:internal, "The execution is not in the state the write expected"}
-
-  defp row({:grant_failed, _reason}),
-    do: {:internal, "The turn's grant could not be written"}
 
   defp row(reason) when reason in @turn_not_found, do: {:not_found, "Not found"}
   defp row(:empty), do: {:invalid_argument, "The message is empty"}

@@ -17,8 +17,8 @@ defmodule Aqua.ThreadList do
   `unread` counts the messages unread to the person.
 
   `changed/2` follows the writes that move a listed thread's row as the
-  list shows it: its creation, a message accepted into it, a turn's end, a
-  card opened or decided, its read mark moved (`mark_read/3`); an archive
+  list shows it: its creation, a message accepted into it, a turn's end,
+  its read mark moved (`mark_read/3`); an archive
   is announced by the bridge (`Cyfr.TelemetryBridge`), whoever made it.
   `removed/2` follows a committed delete. Both are
   `Cyfr.Providers.Threads`'. A shared thread's change is announced by the

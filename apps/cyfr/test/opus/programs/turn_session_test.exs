@@ -352,10 +352,18 @@ defmodule Opus.Programs.TurnSessionTest do
       stamped = Map.new(lineage, fn {key, value} -> {Atom.to_string(key), value} end)
       {id, _open, _answer} = start!(ctx, stamped, row)
 
+      {:ok, launch} =
+        TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
+          kind: "launch",
+          idempotency_key: "launch:1",
+          fence: turn.fence
+        })
+
       {:ok, _paused} =
         TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{
           fence: turn.fence,
-          reason: "approval"
+          reason: "launch",
+          launch_step_id: launch.id
         })
 
       gate = fn action, args ->

@@ -203,48 +203,6 @@ defmodule Aqua.TapeTest do
     assert_receive %ThreadEvent{kind: :turn_finished}
   end
 
-  test "a card is announced to the athanor, and its decision too", %{ctx: ctx, thread: thread} do
-    actor = Sanctum.Context.actor(ctx)
-    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
-    turn = started!(ctx, thread, "@aqua write")
-    {:ok, step} = Tape.record_model_intent(ctx, turn, %{})
-
-    {:ok, %{calls: [%{step: call_step}]}} =
-      Tape.record_response(ctx, turn, step, %{
-        text: nil,
-        tool_calls: [
-          %{
-            tool_call_id: "w",
-            name: "files.write",
-            tool: "files",
-            action: "write",
-            arguments: %{},
-            kind: "write"
-          }
-        ]
-      })
-
-    assert {:ok, %{approval: approval, card: card}} =
-             Tape.open_approval(ctx, turn, call_step, %{
-               proposal_digest: "sha256:w",
-               card: %{content: "Write?"}
-             })
-
-    assert_receive %Cyfr.Bus.Notify{kind: :approval_pending, payload: %{approval_id: aid}}
-    assert aid == approval.id
-    assert card.approval_id == approval.id
-
-    assert {:ok, %{step: %{dispatch_state: "proposed"}}} =
-             Tape.resolve_approval(ctx, turn, approval.id, "approved", %{
-               decided_by: ctx.user_id,
-               resolution_kind: "continue"
-             })
-
-    assert_receive %Cyfr.Bus.Notify{kind: :approval_resolved, payload: %{decision: "approved"}}
-    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
-    assert {:ok, %{status: "approved"}} = Tape.approval(ctx, approval.id)
-  end
-
   test "a daily thread deleted takes its crew members' threads, leaves the other days, and frees its date",
        %{ctx: ctx, thread: thread} do
     actor = Sanctum.Context.actor(ctx)

@@ -26,8 +26,7 @@ defmodule PrismWeb.WorkspaceLive do
   as if there were none. The thread's title and state are `Aqua.workspace/2`'s, worded by
   `PrismWeb.DisplayHelpers.work_state/1`, read again when the person's
   list announces the thread (`Cyfr.Bus.ThreadListed`), which a crew
-  member's thread under it announces too, and when a card opens or is
-  decided in the athanor (`Cyfr.Bus.Notify`). Above the steps stands who
+  member's thread under it announces too. Above the steps stands who
   is at work there, one row an agent with its last step and how long ago
   (`Aqua.at_work/2`), read with the steps and again every few seconds,
   since a crew member's steps happen in its own thread. Stop, while the
@@ -56,8 +55,7 @@ defmodule PrismWeb.WorkspaceLive do
     :tool_activity,
     :turn_started,
     :turn_paused,
-    :turn_finished,
-    :approval_resolved
+    :turn_finished
   ]
 
   @tabs ~w(posts work)
@@ -104,13 +102,11 @@ defmodule PrismWeb.WorkspaceLive do
     end
   end
 
-  # The thread's own events, the person's list of threads and the
-  # athanor's notifications.
+  # The thread's own events and the person's list of threads.
   defp follow(ctx, id) do
     actor = Sanctum.Context.actor(ctx)
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, id))
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.threads(actor, ctx.user_id))
-    Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
   end
 
   # The steps and who is at work as they stand; a read that fails keeps
@@ -145,8 +141,6 @@ defmodule PrismWeb.WorkspaceLive do
       {:error, _unread} -> socket
     end
   end
-
-  defp read_work(socket), do: socket
 
   defp gone(socket) do
     socket
@@ -214,12 +208,6 @@ defmodule PrismWeb.WorkspaceLive do
     do: {:noreply, gone(socket)}
 
   def handle_info(%ThreadListed{}, socket), do: {:noreply, socket}
-
-  def handle_info(%Cyfr.Bus.Notify{kind: kind}, socket)
-      when kind in [:approval_pending, :approval_resolved],
-      do: {:noreply, read_work(socket)}
-
-  def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info({:pane, _pane, {:ready, pid, _thread_id}}, socket) when is_pid(pid),
     do: {:noreply, assign(socket, :pane, pid)}
@@ -512,14 +500,12 @@ defmodule PrismWeb.WorkspaceLive do
   # A step's state as a person reads it beside its sentence; a step done
   # says nothing more.
   defp step_words(:running), do: "Running"
-  defp step_words(:waiting), do: "Waits for you"
   defp step_words(:failed), do: "Failed"
   defp step_words(:refused), do: "Refused"
   defp step_words(:skipped), do: "Skipped"
   defp step_words(_done), do: nil
 
   defp step_dot(:running), do: "bg-green-400 animate-pulse"
-  defp step_dot(:waiting), do: "bg-amber-400"
   defp step_dot(:done), do: "bg-green-400"
   defp step_dot(:failed), do: "bg-red-400"
   defp step_dot(_other), do: "bg-gray-500"

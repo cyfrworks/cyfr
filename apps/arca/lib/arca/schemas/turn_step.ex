@@ -45,13 +45,11 @@ defmodule Arca.Schemas.TurnStep do
     field :dispatch_state, :string, default: "proposed"
     field :message_id, :string
     field :execution_id, :string
-    field :approval_id, :string
     field :authority_digest, :string
     field :outcome, :string
     field :started_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
     field :result_message_id, :string
-    field :proposal_digest, :string
     field :request_digest, :string
     field :usage, :string
     field :excluded, :string

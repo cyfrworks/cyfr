@@ -158,13 +158,11 @@ defmodule Arca.Providers.FilesTest do
              permission: :storage_write
            }
 
-    # A move takes no standing approval and names no resource: one
-    # constrained to paths could not cover its destination.
+    # A move names no resource.
     assert actions["move"] == %{
              kind: :write,
              planes: [:external],
              permission: :storage_write,
-             standing: false,
              auth: :required
            }
 

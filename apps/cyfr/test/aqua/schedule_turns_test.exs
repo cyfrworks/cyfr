@@ -236,13 +236,12 @@ defmodule Aqua.ScheduleTurnsTest do
 
   # What each tool step of the turn was and how it ended.
   defp outcomes(ctx, turn),
-    do:
-      Enum.map(steps(ctx, turn), &Map.take(&1, [:tool, :action, :outcome, :error, :approval_id]))
+    do: Enum.map(steps(ctx, turn), &Map.take(&1, [:tool, :action, :outcome, :error]))
 
   # The thread's posts, as a person reads them.
   defp posts(ctx, thread_id) do
     for %{kind: kind} = row <- Threads.messages(actor(ctx), thread_id),
-        kind in ~w(text approval error system),
+        kind in ~w(text error system),
         do: Map.take(row, [:kind, :author, :sent_by, :content, :client_id, :turn_id])
   end
 
@@ -692,8 +691,8 @@ defmodule Aqua.ScheduleTurnsTest do
       assert [read, refused] = steps(ctx, turn)
 
       assert outcomes(ctx, turn) == [
-               %{tool: "threads", action: "list", outcome: "ok", error: nil, approval_id: nil},
-               %{tool: "notes", action: "keep", outcome: "denied", error: said, approval_id: nil}
+               %{tool: "threads", action: "list", outcome: "ok", error: nil},
+               %{tool: "notes", action: "keep", outcome: "denied", error: said}
              ]
 
       # The read's result holds what it read.
@@ -748,8 +747,8 @@ defmodule Aqua.ScheduleTurnsTest do
       assert %{agent_mode: "auto", error: nil, paused_at: nil} = turn
 
       assert outcomes(ctx, turn) == [
-               %{tool: "threads", action: "list", outcome: "ok", error: nil, approval_id: nil},
-               %{tool: "notes", action: "keep", outcome: "ok", error: nil, approval_id: nil}
+               %{tool: "threads", action: "list", outcome: "ok", error: nil},
+               %{tool: "notes", action: "keep", outcome: "ok", error: nil}
              ]
 
       assert {:ok, %{notes: [%{name: "plan"}]}} = Aqua.Notes.list(ctx)
@@ -839,7 +838,6 @@ defmodule Aqua.ScheduleTurnsTest do
                     kind: :failed_schedule,
                     id: id,
                     label: "Planner",
-                    day: nil,
                     since: claimed.scheduled_for,
                     destination: %{kind: "page", page: "schedules", ref: id},
                     outcome: nil
@@ -917,7 +915,7 @@ defmodule Aqua.ScheduleTurnsTest do
 
       turn = await_status(ctx, turn_of(ctx, occurrence).id, "completed")
 
-      assert [%{outcome: "ok", approval_id: nil, child_execution_id: root}] =
+      assert [%{outcome: "ok", child_execution_id: root}] =
                launches(ctx, turn)
 
       assert runs_of(ctx, app) == [root]
@@ -965,10 +963,9 @@ defmodule Aqua.ScheduleTurnsTest do
       turn = await_status(ctx, turn_of(ctx, occurrence).id, "completed")
       assert [launch] = launches(ctx, turn)
 
-      assert Map.take(launch, [:outcome, :error, :approval_id]) == %{
+      assert Map.take(launch, [:outcome, :error]) == %{
                outcome: "error",
-               error: "Consent required: #{app} has not been granted — grant it to run it",
-               approval_id: nil
+               error: "Consent required: #{app} has not been granted — grant it to run it"
              }
 
       assert runs_of(ctx, app) == []

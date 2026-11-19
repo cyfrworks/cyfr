@@ -396,7 +396,7 @@ defmodule Arca.SchemaVocabularyTest do
     test "lands every message outcome and NULL, and refuses any other", ctx do
       thread_id = thread_row!(ctx)
 
-      for outcome <- ~w(done failed cancelled uncertain needs_you) ++ [nil] do
+      for outcome <- ~w(done failed cancelled uncertain) ++ [nil] do
         assert {1, _} = insert!("messages", message(ctx, thread_id, outcome))
       end
 

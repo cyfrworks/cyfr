@@ -9,18 +9,15 @@ defmodule Cyfr.Bus.ThreadEvent do
   `data` is plain data by kind:
 
     * `:message` — a tape row as a plain map, after its write committed;
-    * `:request`, `:reply`, `:notice` — the same for a request to a crew
-      member, a reply answering one, and a notice (a reply whose outcome
-      is `needs_you`), each told apart so a view can file it under what
-      it answers;
+    * `:request`, `:reply` — the same for a request to a crew member and
+      a reply answering one, each told apart so a view can file it under
+      what it answers;
     * `:turn_started` — the turn's id;
     * `:turn_finished` — nil;
     * `:turn_starting` — the id of the person whose turn is starting;
     * `:turn_paused` — `%{turn_id:, reason:}`;
     * `:turn_fence` — `%{turn_id:, fence:}`, the running loop's fence;
-    * `:approval_resolved` — the resolution's ids and decision;
     * `:queued` — how many turns wait;
-    * `:grants` — the thread's standing grants;
     * `:restart_prompt` — `%{text:, user_id:}`;
     * `:consent_required` — `%{ref:, user_id:}`, and for a launch naming
       an account its app's profile does not bind, `account: %{name:,
@@ -42,15 +39,12 @@ defmodule Cyfr.Bus.ThreadEvent do
     :message,
     :request,
     :reply,
-    :notice,
     :turn_finished,
     :turn_starting,
     :turn_started,
     :turn_paused,
     :turn_fence,
-    :approval_resolved,
     :queued,
-    :grants,
     :restart_prompt,
     :consent_required,
     :intents,
@@ -68,15 +62,12 @@ defmodule Cyfr.Bus.ThreadEvent do
           :message
           | :request
           | :reply
-          | :notice
           | :turn_finished
           | :turn_starting
           | :turn_started
           | :turn_paused
           | :turn_fence
-          | :approval_resolved
           | :queued
-          | :grants
           | :restart_prompt
           | :consent_required
           | :intents

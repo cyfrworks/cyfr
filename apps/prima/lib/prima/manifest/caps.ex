@@ -276,8 +276,8 @@ defmodule Prima.Manifest.Caps do
   # Binding or removing a feed binds or ends a standing conduit for a
   # profile's authority, a schedule fires runs on its own under one, and
   # editing the layout rearranges the person's screen: only an agent,
-  # whose tool policy and kind ceiling decide when the person is asked
-  # first, asks for one, by its exact name. A pattern never grants one
+  # whose member's mode decides whether it runs, asks for one, by its
+  # exact name. A pattern never grants one
   # (`Sanctum.Consent.ShapeDerivation.expand_tools/1`).
   defp agent_only_tools(_tools, "agent"), do: :ok
 

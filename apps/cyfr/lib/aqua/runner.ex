@@ -11,9 +11,8 @@ defmodule Aqua.Runner do
   it on the tape with the turn it opens, runs the loop in a worker of
   its own (`Aqua.Loop`, the process that holds the turn's root, which
   dies with the runner — `Aqua.Loop.Worker`), and keeps what a viewer
-  joining now needs — whether a turn runs, the tool activity, the usage,
-  the standing grants. Every row is the tape's; every viewer reads the
-  same topic.
+  joining now needs — whether a turn runs, the tool activity, the usage.
+  Every row is the tape's; every viewer reads the same topic.
 
   ## Admission
 
@@ -101,9 +100,9 @@ defmodule Aqua.Runner do
 
   ## Broadcasts — `Cyfr.Bus.ThreadEvent` on `Cyfr.Bus.thread/2`
 
-  The rows from the tape (`:message`, `:turn_finished`,
-  `:approval_resolved`), and from here `:turn_starting`, `:turn_started`,
-  `:turn_paused`, `:queued`, `:grants` and `:restart_prompt`; the loop
+  The rows from the tape (`:message`, `:turn_finished`), and from here
+  `:turn_starting`, `:turn_started`, `:turn_paused`, `:queued` and
+  `:restart_prompt`; the loop
   announces `:usage`, `:tool_activity`, `:intents`, `:consent_required`,
   the running loop's `:turn_fence`, a chat step's streamed text as
   `:delta` and its withdrawal as `:delta_abandoned` (`Aqua.Loop.Stream`),
@@ -419,26 +418,6 @@ defmodule Aqua.Runner do
     end)
   end
 
-  @doc """
-  Stop auto-approving `{tool, action}` for `agent` in this thread: the
-  answer `key` names, `%{program, schedule}`, each nil for none. For an
-  action whose answer is one program's, that program's answer, and none
-  without it (`Sanctum.ToolGrants.revoke/2`); for an answer that ends with
-  a schedule, that schedule's alone, which stands beside the others.
-  """
-  @spec revoke_grant(
-          Context.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          %{optional(:program) => String.t() | nil, optional(:schedule) => String.t() | nil}
-        ) ::
-          :ok | {:error, term()}
-  def revoke_grant(%Context{} = ctx, thread_id, agent, tool, action, key \\ %{})
-      when is_binary(agent) and is_binary(tool) and is_binary(action) and is_map(key),
-      do: call(ctx, thread_id, {:revoke_grant, ctx, agent, tool, action, key})
-
   @doc "A consent granted mid-turn applies to future roots: the turn is cut and the sender asked to re-send."
   @spec restart_for_consent(Context.t(), String.t(), map()) :: :ok | {:error, term()}
   def restart_for_consent(%Context{} = ctx, thread_id, result) when is_map(result),
@@ -538,7 +517,7 @@ defmodule Aqua.Runner do
           thread: Map.take(thread, [:id, :kind, :parent_id, :agent]),
           # The running loop: its turn, task, sender and agent.
           live: nil,
-          # A turn paused on a card or around a launch, waiting here.
+          # A turn paused around a launch or on an uncertain call, waiting here.
           paused: nil,
           # Turns accepted behind the running one, oldest first.
           queue: [],
@@ -549,7 +528,6 @@ defmodule Aqua.Runner do
           tool_activity: [],
           # The running turn's streamed answers (`Aqua.Loop.Stream`).
           partials: Aqua.Loop.Stream.new(),
-          grants: MapSet.new(),
           agent: thread.agent,
           idle_ref: nil,
           # A page's calls waiting to become steps, oldest first.
@@ -659,30 +637,6 @@ defmodule Aqua.Runner do
 
       {:error, reason, state} ->
         {:stop, :normal, {:error, reason}, retire_runtime(state)}
-    end
-  end
-
-  defp handle_owned_call({:revoke_grant, ctx, agent, tool, action, key}, _from, state) do
-    case Admission.standing(ctx, state.athanor_id) do
-      :ok ->
-        revoked =
-          for scope <- Aqua.ToolGrants.scopes() do
-            Aqua.ToolGrants.revoke(ctx, %{
-              scope: scope,
-              thread_id: state.id,
-              agent_name: agent,
-              tool: tool,
-              action: action,
-              program_row: Map.get(key, :program),
-              schedule_id: Map.get(key, :schedule)
-            })
-          end
-
-        answer = Enum.find(revoked, :ok, &(&1 != :ok))
-        {:reply, answer, refresh_grants(state, ctx)}
-
-      refusal ->
-        {:reply, refusal, state}
     end
   end
 
@@ -1021,9 +975,6 @@ defmodule Aqua.Runner do
       addressee: addressee,
       reply_to: reply && reply.request.id,
       outcome: reply && reply.outcome,
-      # A card's notice waits with its card until the card is decided.
-      approval_id: reply && reply[:approval_id],
-      status: if(reply && reply[:approval_id], do: "pending"),
       content: text,
       id: Keyword.get(opts, :id),
       client_id: Keyword.get(opts, :client_id),
@@ -1263,14 +1214,6 @@ defmodule Aqua.Runner do
     end
   end
 
-  # A card decided: the paused turn continues once none is pending.
-  defp handle_owned_info(
-         %ThreadEvent{kind: :approval_resolved, data: %{turn_id: turn_id}},
-         %{paused: %{turn_id: turn_id}} = state
-       ) do
-    {:noreply, settle_paused(state)}
-  end
-
   defp handle_owned_info(%ThreadEvent{kind: :usage, data: usage}, state),
     do: {:noreply, %{state | usage: usage}}
 
@@ -1313,13 +1256,6 @@ defmodule Aqua.Runner do
   end
 
   defp handle_owned_info(%ThreadEvent{}, state), do: {:noreply, state}
-
-  defp handle_owned_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
-    Aqua.Approvals.expire_due(state.ctx)
-    {:noreply, settle_paused(%{state | paused: %{state.paused | expiry: nil}})}
-  end
-
-  defp handle_owned_info({:expire, _turn_id}, state), do: {:noreply, state}
 
   defp handle_owned_info({:resume, turn_id}, %{paused: %{turn_id: turn_id}} = state),
     do: {:noreply, settle_paused(state)}
@@ -1379,8 +1315,7 @@ defmodule Aqua.Runner do
               job: live.job,
               agent: live.agent,
               origin: live.origin,
-              reason: reason,
-              expiry: nil
+              reason: reason
             }
         }
 
@@ -1420,8 +1355,7 @@ defmodule Aqua.Runner do
           job: live.job,
           agent: live.agent,
           origin: turn.origin,
-          reason: pause_reason(turn),
-          expiry: nil
+          reason: pause_reason(turn)
         }
 
         state = %{state | live: nil, paused: paused}
@@ -1438,10 +1372,9 @@ defmodule Aqua.Runner do
     end
   end
 
-  # A paused turn: with cards still pending the runner waits for the
-  # decision (and the expiry); stopped on a call whose outcome is unknown
-  # it waits for its sender's next line, unless one is already on the
-  # tape past the stop; with neither it continues as its sender.
+  # A paused turn: stopped on a call whose outcome is unknown it waits for
+  # its sender's next line, unless one is already on the tape past the
+  # stop; paused around a launch it continues as its sender.
   defp settle_paused(%{paused: %{turn_id: turn_id} = paused} = state) do
     case Tape.turn(state.ctx, turn_id) do
       {:ok, %{status: "paused", paused_reason: "uncertain"} = turn} ->
@@ -1449,14 +1382,8 @@ defmodule Aqua.Runner do
           do: continue(%{state | paused: nil}, entry_of(paused), :resume),
           else: touch(state)
 
-      {:ok, %{status: "paused"} = turn} ->
-        case Tape.pending_approvals(state.ctx, turn) do
-          {:ok, [_ | _] = pending} ->
-            arm_expiry(state, pending)
-
-          _ ->
-            continue(%{state | paused: nil}, entry_of(paused), :resume)
-        end
+      {:ok, %{status: "paused"}} ->
+        continue(%{state | paused: nil}, entry_of(paused), :resume)
 
       {:ok, %{status: "running"}} ->
         # The loop is still taking the root back around its launch.
@@ -1467,24 +1394,6 @@ defmodule Aqua.Runner do
         # Ended meanwhile (a failed pin, a stop): nothing to continue.
         start_next(%{state | paused: nil})
     end
-  end
-
-  defp arm_expiry(%{paused: paused} = state, pending) do
-    if paused.expiry, do: Process.cancel_timer(paused.expiry)
-
-    soonest =
-      pending
-      |> Enum.map(& &1.expires_at)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.min(DateTime, fn -> nil end)
-
-    ref =
-      if soonest do
-        delay = max(DateTime.diff(soonest, DateTime.utc_now(), :millisecond), 0)
-        Process.send_after(self(), {:expire, paused.turn_id}, delay)
-      end
-
-    touch(%{state | paused: %{paused | expiry: ref}})
   end
 
   # ---------------------------------------------------------------------------
@@ -1678,9 +1587,6 @@ defmodule Aqua.Runner do
   defp retire_turn(state, id) do
     if match?(%{turn_id: ^id}, state.live), do: Process.demonitor(state.live.task.ref, [:flush])
 
-    if match?(%{turn_id: ^id}, state.paused) and state.paused.expiry,
-      do: Process.cancel_timer(state.paused.expiry)
-
     if held = state.held[id], do: Process.demonitor(held.ref, [:flush])
 
     state = %{
@@ -1782,8 +1688,7 @@ defmodule Aqua.Runner do
           job: job_of(turn),
           agent: turn.agent,
           origin: turn.origin,
-          reason: pause_reason(turn),
-          expiry: nil
+          reason: pause_reason(turn)
         }
 
         settle_paused(%{state | paused: paused})
@@ -1876,7 +1781,6 @@ defmodule Aqua.Runner do
 
   defp pause_reason(%{paused_reason: "launch"}), do: :launch
   defp pause_reason(%{paused_reason: "uncertain"}), do: :uncertain
-  defp pause_reason(_turn), do: :approval
 
   # A queued turn recovered from its row runs as its sender's
   # continuation, under the origin its row stores; one that cannot is
@@ -2063,10 +1967,9 @@ defmodule Aqua.Runner do
   end
 
   # A request that ended: no step of it is recorded or dispatched from
-  # now on, and its step still proposed is skipped and its card withdrawn,
-  # so a late yes runs nothing. Withdrawing a card is no decision the tape
-  # announces: a turn paused on it is settled here, and goes on once no
-  # other card is pending.
+  # now on, and its step still proposed is skipped, which the tape
+  # announces to no runner: a paused turn whose step it skipped is
+  # settled here.
   defp withdraw(state, request) do
     with {:ok, %{turn_id: turn_id, skipped: [_ | _]}} <-
            Tape.end_call(state.ctx, state.id, request, "the page's request ended"),
@@ -2093,23 +1996,10 @@ defmodule Aqua.Runner do
       partials: if(state.live, do: state.partials, else: Aqua.Loop.Stream.new()),
       tool_activity: state.tool_activity,
       usage: state.usage,
-      grants: state.grants,
       agent: state.agent && %{"name" => state.agent, "title" => state.agent},
       turn_user: current && current.user_id,
       queued: length(state.queue)
     }
-  end
-
-  defp refresh_grants(state, ctx) do
-    case Aqua.ToolGrants.allowed_by_agent(ctx, state.id) do
-      {:ok, grants} ->
-        state = %{state | grants: grants}
-        broadcast(state, :grants, grants)
-        state
-
-      {:error, _} ->
-        state
-    end
   end
 
   defp broadcast(state, kind, data), do: Tape.announce(state.ctx, state.id, kind, data)

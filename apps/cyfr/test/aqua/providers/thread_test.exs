@@ -46,74 +46,6 @@ defmodule Aqua.Providers.ThreadTest do
   defp discard(ctx, thread, message_id),
     do: call(ctx, %{"action" => "discard", "thread" => thread.id, "message_id" => message_id})
 
-  # A card as the loop opens it: a turn with its root, the model step, the
-  # call, and the approval on the tape; the intent is the card's.
-  defp card!(ctx, thread, intent) do
-    alias Aqua.Tape
-    proposal = intent["proposal"]
-
-    {:ok, %{turn: turn}} =
-      Tape.accept(ctx, thread.id, %{
-        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua do a thing"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
-      })
-
-    {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(
-        %{
-          id: "exec_tool_#{System.unique_integer([:positive])}",
-          reference: "agent:local.aqua",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
-          component_type: "agent",
-          kind: "turn",
-          turn_id: turn.id,
-          origin: :interactive
-        },
-        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
-        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
-        verify: &Sanctum.ExecutionStanding.verify/1
-      )
-
-    {:ok, turn} =
-      Tape.start_turn(ctx, turn, %{
-        root_execution_id: execution.id,
-        attempt: attempt.attempt,
-        profile_id: "prof_x",
-        consent_id: "consent_x",
-        agent_mode: "auto",
-        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
-      })
-
-    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
-
-    {:ok, %{calls: [%{step: step}]}} =
-      Tape.record_response(ctx, turn, model_step, %{
-        text: nil,
-        tool_calls: [
-          %{
-            tool_call_id: "c1",
-            name: "#{proposal["tool"]}.#{proposal["action"]}",
-            tool: proposal["tool"],
-            action: proposal["action"],
-            arguments: proposal["args"] || %{},
-            kind: intent["action_kind"]
-          }
-        ]
-      })
-
-    {:ok, %{card: card}} =
-      Tape.open_approval(ctx, turn, step, %{
-        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
-        card: %{
-          content: intent["title"],
-          payload: %{"intent" => Map.put(intent, "tool_call_id", "c1")}
-        }
-      })
-
-    card
-  end
-
   describe "turns" do
     test "no one suspends or recovers a turn: the tool is unknown, alike to every caller, and offered to no one",
          %{ctx: ctx, thread: thread} do
@@ -278,7 +210,7 @@ defmodule Aqua.Providers.ThreadTest do
            "post is a chain's alone, and the two reads are the person's and a chain's" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 17
+      assert map_size(actions) == 14
 
       for {name, spec} <- Map.drop(actions, ["post", "search", "events"]) do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
@@ -354,117 +286,15 @@ defmodule Aqua.Providers.ThreadTest do
                call(ctx, %{"action" => "events", "thread" => thread.id})
     end
 
-    test "an approval row carries its intent on the wire, so a client decides what it can see",
-         %{ctx: ctx, thread: thread} do
-      intent = %{
-        "kind" => "request_approval",
-        "title" => "Pull component",
-        "action_kind" => "write",
-        "proposal" => %{"tool" => "component", "action" => "pull", "args" => %{"ref" => "x"}}
-      }
-
-      {:ok, apr} =
-        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
-          author: "aqua",
-          sent_by: "aqua",
-          kind: "approval",
-          status: "pending",
-          content: "Pull component",
-          payload: %{"agent" => "aqua", "intent" => intent}
-        })
-
-      assert {:ok, %{messages: rows}} =
-               call(ctx, %{"action" => "events", "thread" => thread.id})
-
-      assert %{intent: ^intent} = Enum.find(rows, &(&1.id == apr.id))
-
-      # A line that is not a card carries no intent key at all.
-      {:ok, line} =
-        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
-          author: ctx.user_id,
-          sent_by: "person",
-          kind: "text",
-          content: "hi"
-        })
-
-      assert {:ok, %{messages: rows}} =
-               call(ctx, %{"action" => "events", "thread" => thread.id})
-
-      refute Map.has_key?(Enum.find(rows, &(&1.id == line.id)), :intent)
-    end
-
     test "refusals are the typed vocabulary, not sentences", %{ctx: ctx, thread: thread} do
       assert {:refused, {:invalid_argument, _}} =
                admission(ctx, "thread", %{"action" => "send", "thread" => thread.id})
-
-      assert {:refused, {:invalid_argument, _}} =
-               admission(ctx, "thread", %{"action" => "approve", "thread" => thread.id})
-
-      assert {:error, {:invalid_argument, _}} =
-               call(ctx, %{
-                 "action" => "approve",
-                 "thread" => thread.id,
-                 "message_id" => "msg_x",
-                 "scope" => "forever"
-               })
 
       assert {:refused, {:unknown_action, "thread.dance"}} =
                admission(ctx, "thread", %{"action" => "dance", "thread" => thread.id})
 
       assert {:refused, {:invalid_argument, _}} =
                admission(ctx, "thread", %{"action" => "events"})
-    end
-
-    test "a refused standing answer is a sentence a person can read, not the runner's atom", %{
-      ctx: ctx
-    } do
-      # Deciding a card is held to the standing of the athanor's person,
-      # like a send: the decider is a person of their own, in their own.
-      {ctx, user} = Sanctum.TestContext.person!(ctx)
-      ctx = %{ctx | athanor_id: Sanctum.Test.People.athanor!(user).id}
-
-      # One turn holds a thread at a time — that is what the thread's claim
-      # means — so each card is raised in a thread of its own.
-      {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
-      {:ok, second} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
-
-      destructive =
-        card!(ctx, thread, %{
-          "kind" => "request_approval",
-          "title" => "Wipe it",
-          "action_kind" => "destructive",
-          "proposal" => %{"tool" => "component", "action" => "delete", "args" => %{}}
-        })
-
-      assert {:error, {:invalid_argument, msg}} =
-               call(ctx, %{
-                 "action" => "approve",
-                 "thread" => thread.id,
-                 "message_id" => destructive.id,
-                 "scope" => "always"
-               })
-
-      assert msg == Aqua.ToolGrants.refusal_message({:scope_not_permitted, "destructive"})
-
-      one_click =
-        card!(ctx, second, %{
-          "kind" => "request_approval",
-          "title" => "Endorse it",
-          "action_kind" => "write",
-          "standing" => false,
-          "proposal" => %{"tool" => "notes", "action" => "endorse", "args" => %{}}
-        })
-
-      assert {:error, {:invalid_argument, msg}} =
-               call(ctx, %{
-                 "action" => "approve",
-                 "thread" => second.id,
-                 "message_id" => one_click.id,
-                 "scope" => "thread"
-               })
-
-      assert msg == Aqua.ToolGrants.refusal_message({:scope_not_permitted, :never_standing})
-      refute msg =~ "never_standing"
     end
 
     test "another athanor's thread is not found", %{ctx: ctx, thread: thread} do
@@ -833,7 +663,7 @@ defmodule Aqua.Providers.ThreadTest do
     end
 
     test "get answers the thread with its live state", %{ctx: ctx, thread: thread} do
-      assert {:ok, %{id: id, running: false, queued: 0, pending_approvals: []}} =
+      assert {:ok, %{id: id, running: false, queued: 0}} =
                call(ctx, %{"action" => "get", "thread" => thread.id})
 
       assert id == thread.id
@@ -1016,34 +846,6 @@ defmodule Aqua.Providers.ThreadTest do
 
       assert {:error, {:not_found, "thread", _}} =
                call(ctx, %{"action" => "delete", "thread" => thread.id})
-    end
-
-    test "revoke_grant withdraws a standing answer for the agent it was given for", %{
-      ctx: ctx,
-      thread: thread
-    } do
-      {:ok, _} =
-        Sanctum.ToolGrants.put(ctx, %{
-          scope: "thread",
-          effect: "allow",
-          thread_id: thread.id,
-          agent_name: "aqua",
-          tool: "notes",
-          action: "keep"
-        })
-
-      assert {:ok, [_]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
-
-      assert {:ok, %{revoked: true}} =
-               call(ctx, %{
-                 "action" => "revoke_grant",
-                 "thread" => thread.id,
-                 "agent_name" => "aqua",
-                 "tool" => "notes",
-                 "tool_action" => "keep"
-               })
-
-      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
     end
   end
 

@@ -12,7 +12,6 @@ import "encoding/json"
 
 // Tools.
 const (
-	Approval           = "approval"
 	Aqua               = "aqua"
 	Athanor            = "athanor"
 	Browser            = "browser"
@@ -58,8 +57,6 @@ const (
 
 // Actions, as tool then action.
 const (
-	ApprovalList            = "list"
-	ApprovalResolve         = "resolve"
 	AquaCreate              = "create"
 	AquaDelete              = "delete"
 	AquaGet                 = "get"
@@ -273,17 +270,14 @@ const (
 	SystemNotify            = "notify"
 	SystemStatus            = "status"
 	ThreadAloud             = "aloud"
-	ThreadApprove           = "approve"
 	ThreadArchive           = "archive"
 	ThreadAttach            = "attach"
-	ThreadDecline           = "decline"
 	ThreadDelete            = "delete"
 	ThreadDiscard           = "discard"
 	ThreadEvents            = "events"
 	ThreadGet               = "get"
 	ThreadList              = "list"
 	ThreadRestartForConsent = "restart_for_consent"
-	ThreadRevokeGrant       = "revoke_grant"
 	ThreadSearch            = "search"
 	ThreadSend              = "send"
 	ThreadStop              = "stop"
@@ -315,7 +309,6 @@ const (
 
 // Actions lists every action the catalog serves, per tool.
 var Actions = map[string][]string{
-	"approval":            {"list", "resolve"},
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
 	"athanor":             {"get", "provision", "settings"},
 	"browser":             {"status", "turn_off", "turn_on", "watch"},
@@ -350,7 +343,7 @@ var Actions = map[string][]string{
 	"share":               {"create", "list", "offered", "revoke", "set_audience", "set_caps", "usage"},
 	"shared_thread":       {"add", "archive", "attach", "create", "get", "leave", "list", "messages", "pair", "people", "post", "remove", "rename", "unarchive", "withdraw"},
 	"system":              {"notify", "status"},
-	"thread":              {"aloud", "approve", "archive", "attach", "decline", "delete", "discard", "events", "get", "list", "restart_for_consent", "revoke_grant", "search", "send", "stop", "today"},
+	"thread":              {"aloud", "archive", "attach", "delete", "discard", "events", "get", "list", "restart_for_consent", "search", "send", "stop", "today"},
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
@@ -361,84 +354,6 @@ var Actions = map[string][]string{
 
 // BindingKinds lists every need kind a consent binds: the credential kinds, and login, which binds a program.
 var BindingKinds = []string{"api_key", "oauth", "bundle", "login"}
-
-// ApprovalListArgs carries arguments for approval.list.
-type ApprovalListArgs struct {
-	// list: the thread whose open cards to show
-	Thread string `json:"thread"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ApprovalListArgs) MarshalJSON() ([]byte, error) {
-	type fields ApprovalListArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ApprovalList, fields: fields(args)})
-}
-
-// ApprovalResolveArgs carries arguments for approval.resolve.
-type ApprovalResolveArgs struct {
-	// resolve: the approval id
-	Approval string `json:"approval"`
-	// resolve: the decision
-	Decision string `json:"decision"`
-	// resolve: approve once | thread | always; decline once | never. Default once.
-	Scope Field[string] `json:"scope,omitzero"`
-	// resolve: why (decline)
-	Reason Field[string] `json:"reason,omitzero"`
-	// resolve: the run a standing approval ends with — its execution, turn or schedule
-	Lifecycle Field[string] `json:"lifecycle,omitzero"`
-	// resolve: with scope always and lifecycle schedule, the id of the person's schedule of Aqua's the approval stands for and ends with
-	Schedule Field[string] `json:"schedule,omitzero"`
-	// resolve: an ISO 8601 UTC time a standing approval ends at, a bound beside its lifecycle
-	Until Field[string] `json:"until,omitzero"`
-	// resolve: the resources a standing approval covers, for an action that declares which argument names one
-	Constraint Field[ApprovalResolveArgsConstraint] `json:"constraint,omitzero"`
-	// resolve: the outside sources, among those the card names, a standing approval also follows
-	Sources Field[[]ApprovalResolveArgsSourcesItem] `json:"sources,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ApprovalResolveArgs) MarshalJSON() ([]byte, error) {
-	type fields ApprovalResolveArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ApprovalResolve, fields: fields(args)})
-}
-
-type ApprovalResolveArgsConstraint struct {
-	Kind     string   `json:"kind"`
-	Patterns []string `json:"patterns"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *ApprovalResolveArgsConstraint) UnmarshalJSON(data []byte) error {
-	type fields ApprovalResolveArgsConstraint
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = ApprovalResolveArgsConstraint(value)
-	return nil
-}
-
-type ApprovalResolveArgsSourcesItem struct {
-	Class string        `json:"class"`
-	Name  Field[string] `json:"name,omitzero"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *ApprovalResolveArgsSourcesItem) UnmarshalJSON(data []byte) error {
-	type fields ApprovalResolveArgsSourcesItem
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = ApprovalResolveArgsSourcesItem(value)
-	return nil
-}
 
 // AquaCreateArgs carries arguments for aqua.create.
 type AquaCreateArgs struct {
@@ -4818,25 +4733,6 @@ func (args ThreadAloudArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ThreadAloud, fields: fields(args)})
 }
 
-// ThreadApproveArgs carries arguments for thread.approve.
-type ThreadApproveArgs struct {
-	// Thread id (all actions except today and list)
-	Thread string `json:"thread"`
-	// approve/decline: the approval card; attach: the message the files belong to
-	MessageId string `json:"message_id"`
-	// approve: once | thread | always. decline: once | never. Standing scopes are refused for destructive and external actions.
-	Scope Field[string] `json:"scope,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ThreadApproveArgs) MarshalJSON() ([]byte, error) {
-	type fields ThreadApproveArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ThreadApprove, fields: fields(args)})
-}
-
 // ThreadArchiveArgs carries arguments for thread.archive.
 type ThreadArchiveArgs struct {
 	// Thread id (all actions except today and list)
@@ -4856,7 +4752,7 @@ func (args ThreadArchiveArgs) MarshalJSON() ([]byte, error) {
 type ThreadAttachArgs struct {
 	// Thread id (all actions except today and list)
 	Thread string `json:"thread"`
-	// approve/decline: the approval card; attach: the message the files belong to
+	// attach: the message the files belong to
 	MessageId string `json:"message_id"`
 	// attach: the files as {filename, media_type, data} with base64 data
 	Files []ThreadAttachArgsFilesItem `json:"files"`
@@ -4886,27 +4782,6 @@ func (args *ThreadAttachArgsFilesItem) UnmarshalJSON(data []byte) error {
 	}
 	*args = ThreadAttachArgsFilesItem(value)
 	return nil
-}
-
-// ThreadDeclineArgs carries arguments for thread.decline.
-type ThreadDeclineArgs struct {
-	// Thread id (all actions except today and list)
-	Thread string `json:"thread"`
-	// approve/decline: the approval card; attach: the message the files belong to
-	MessageId string `json:"message_id"`
-	// approve: once | thread | always. decline: once | never. Standing scopes are refused for destructive and external actions.
-	Scope Field[string] `json:"scope,omitzero"`
-	// decline: why
-	Reason Field[string] `json:"reason,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ThreadDeclineArgs) MarshalJSON() ([]byte, error) {
-	type fields ThreadDeclineArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ThreadDecline, fields: fields(args)})
 }
 
 // ThreadDeleteArgs carries arguments for thread.delete.
@@ -5005,31 +4880,6 @@ func (args ThreadRestartForConsentArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadRestartForConsent, fields: fields(args)})
-}
-
-// ThreadRevokeGrantArgs carries arguments for thread.revoke_grant.
-type ThreadRevokeGrantArgs struct {
-	// Thread id (all actions except today and list)
-	Thread string `json:"thread"`
-	// revoke_grant: the agent the standing answer was given for
-	AgentName string `json:"agent_name"`
-	// revoke_grant: the tool
-	Tool string `json:"tool"`
-	// revoke_grant: the action
-	ToolAction string `json:"tool_action"`
-	// revoke_grant: for an answer that is one program's, the program's row id; required for program.start
-	Program Field[string] `json:"program,omitzero"`
-	// revoke_grant: for an answer that is one schedule's, the schedule's id; none for any other
-	Schedule Field[string] `json:"schedule,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ThreadRevokeGrantArgs) MarshalJSON() ([]byte, error) {
-	type fields ThreadRevokeGrantArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ThreadRevokeGrant, fields: fields(args)})
 }
 
 // ThreadSearchArgs carries arguments for thread.search.

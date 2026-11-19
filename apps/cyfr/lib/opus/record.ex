@@ -150,7 +150,7 @@ defmodule Opus.Record do
     # a child's is its parent's ledger, read where it is admitted. On a
     # record read back, the row's ledger as that read found it.
     sources: [],
-    # The classes an approved launch let flow to every exit of its tree,
+    # The classes a launch let flow to every exit of its tree,
     # written into the root's policy (`Arca.Execution.launch_key/0`).
     launch_classes: [],
     # What the run was admitted under (`admitted/4`): the admission decision
@@ -177,8 +177,8 @@ defmodule Opus.Record do
   A root's source ledger is seeded from what admitted it, never from an
   argument: a launch's stamp (`:launch`, `%{sources, classes}`, which
   `Opus.Admission` takes off the context `Aqua.Launch` builds alone) seeds
-  the turn's sources and writes the classes the person let flow on its
-  card, none for a launch decided with no card; a webhook's
+  the turn's sources and writes the classes it lets flow, none for a
+  launch `Aqua.Launch` decides; a webhook's
   run starts outside; a frame's invocation starts with the classes its
   declared reads may carry (`:frame_sources`, which `Opus.Tincture`
   alone passes); an interactive, programmatic, scheduled or feed run
@@ -562,7 +562,7 @@ defmodule Opus.Record do
   defp reaches_outside?(%{allowed_domains: [_ | _]}), do: true
   defp reaches_outside?(_policy), do: false
 
-  # The root's policy with the classes its approved launch let flow, read
+  # The root's policy with the classes its launch let flow, read
   # for every send of its tree (`Arca.Execution.flow_state/2`).
   defp launch_policy(%__MODULE__{launch_classes: []} = record), do: record.host_policy
 

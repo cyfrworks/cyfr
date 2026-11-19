@@ -15,8 +15,8 @@ defmodule Aqua.Steps do
   a step reads the same while it runs and after.
 
   An operation the table does not name is worded by what kind of call it
-  was: a component's run, a step that shows something, a card's decision,
-  or a call of a tool.
+  was: a component's run, a step that shows something, or a call of a
+  tool.
 
   A step a page in Aqua's browser called (purpose `page`,
   `Aqua.PageCalls`) is worded as the page's: "The page ran an app".
@@ -34,7 +34,7 @@ defmodule Aqua.Steps do
           turn: String.t(),
           at: DateTime.t() | nil,
           sentence: String.t(),
-          status: :running | :done | :failed | :refused | :skipped | :waiting
+          status: :running | :done | :failed | :refused | :skipped
         }
 
   @typedoc "An agent at work in a workspace thread, as a view reads it."
@@ -206,12 +206,9 @@ defmodule Aqua.Steps do
     do: %{agent: agent, sentence: "Thinking", at: turn.accepted_at, status: :running}
 
   defp row(agent, _turn, step) do
-    %{sentence: sentence, at: at, status: status} = step(step)
-    %{agent: agent, sentence: sentence, at: at, status: at_work_status(status)}
+    %{sentence: sentence, at: at} = step(step)
+    %{agent: agent, sentence: sentence, at: at, status: :running}
   end
-
-  defp at_work_status(:waiting), do: :waiting
-  defp at_work_status(_status), do: :running
 
   defp step(row) do
     %{
@@ -225,7 +222,6 @@ defmodule Aqua.Steps do
 
   defp worded(%{kind: "launch"}), do: sentence("execution", "run")
   defp worded(%{kind: "ui"}), do: "Showed something on the screen"
-  defp worded(%{kind: "approval"}), do: "Asked you to decide"
   defp worded(%{tool: tool, action: action}), do: sentence(tool, action)
 
   # Every sentence opens on its verb, which follows the page's name.
@@ -233,9 +229,6 @@ defmodule Aqua.Steps do
     do: "The page " <> String.downcase(<<first::utf8>>) <> rest
 
   defp by(sentence, _purpose), do: sentence
-
-  defp status(%{approval_id: id, dispatch_state: "proposed", outcome: nil}) when is_binary(id),
-    do: :waiting
 
   defp status(%{outcome: nil}), do: :running
   defp status(%{outcome: "ok"}), do: :done

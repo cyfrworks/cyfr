@@ -50,21 +50,6 @@ defmodule Sanctum.Gate.AnnotationsTest do
     assert Annotations.kind(source, "x") == nil
   end
 
-  # The one codec for a standing declaration, whichever surface it arrives
-  # from: the annotation's atom, the wire's string, or nothing.
-  test "a standing declaration decodes to one shape and encodes back to the wire" do
-    assert Annotations.standing(:thread) == :thread
-    assert Annotations.standing("thread") == :thread
-    assert Annotations.standing(false) == false
-    assert Annotations.standing(nil) == nil
-    assert Annotations.standing("anything else") == nil
-
-    assert Annotations.standing_to_wire(:thread) == "thread"
-    assert Annotations.standing_to_wire("thread") == "thread"
-    assert Annotations.standing_to_wire(false) == false
-    assert Annotations.standing_to_wire(nil) == nil
-  end
-
   test "an action the host intercepts says so, and a chain reaches it through the host" do
     tool = %{
       name: "execution",

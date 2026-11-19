@@ -18,11 +18,10 @@ defmodule Prima.Author do
   @system "system"
 
   @doc """
-  The author of a row the assistant wrote: its reply, and the approval
-  card it proposed. It is read as the agent's own speech — what a person
-  may say aloud from their own athanor, what a room excerpt renders under
-  the assistant's name — so nothing a runner says in its own voice
-  carries it.
+  The author of a row the assistant wrote, such as its reply. It is read
+  as the agent's own speech — what a person may say aloud from their own
+  athanor, what a room excerpt renders under the assistant's name — so
+  nothing a runner says in its own voice carries it.
   """
   @spec agent() :: String.t()
   def agent, do: @agent
