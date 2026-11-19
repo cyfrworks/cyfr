@@ -948,20 +948,33 @@ defmodule Locus.Runtime.HostClientTest do
          %{client: client} do
       frame = <<6::32, ?c, "abcde">>
 
-      {port, _server} =
+      # The host answers its status and one frame, and holds the response
+      # open until the call has been answered: nothing but the deadline
+      # ends it.
+      {port, host} =
         raw_host!(fn socket ->
           :gen_tcp.send(socket, frames_head() <> chunked(frame))
-          Process.sleep(2_000)
+          receive do: (:answered -> :ok)
         end)
 
-      assert {:error, "timeout"} =
-               HostClient.attached_fetch(
-                 %{client | host_url: "http://127.0.0.1:#{port}"},
-                 attached(),
-                 options(sink(), within: 500)
-               )
+      # The deadline is counted from before the request, so it is long
+      # enough for the status to arrive inside it on a loaded host, and is
+      # waited out. The frame handed over says the status came first.
+      options = options(sink(), within: 2_000)
 
-      assert [{:frame, <<?c, "abcde">>}] = events()
+      calling =
+        Task.async(fn ->
+          HostClient.attached_fetch(
+            %{client | host_url: "http://127.0.0.1:#{port}"},
+            attached(),
+            options
+          )
+        end)
+
+      assert_receive {:event, {:frame, <<?c, "abcde">>}}, 2_000
+      assert {:error, "timeout"} = Task.await(calling, 10_000)
+      send(host, :answered)
+      assert events() == []
 
       {port, _server} =
         raw_host!(fn socket ->
