@@ -189,16 +189,6 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   defp by_aqua?(%{kept_by: by}), do: by == Prima.Author.agent()
   defp by_aqua?(_note), do: false
 
-  # The outside material the page was written after reading, by name.
-  defp outside_line(%{sources: sources}) when is_list(sources) do
-    case for(%{"class" => "outside"} = source <- sources, do: source["name"] || "a source") do
-      [] -> nil
-      names -> "after reading " <> Enum.join(Enum.uniq(names), ", ")
-    end
-  end
-
-  defp outside_line(_note), do: nil
-
   defp provenance_line(%{kept_by: by, kept_at: at, thread: thread}) do
     [
       "kept by " <> if(is_binary(by), do: principal_label(by), else: "someone"),
@@ -296,7 +286,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
           id="aqua-about-by"
           class="text-[10px] text-gray-500"
         >
-          Written by Aqua{if line = outside_line(@about_note), do: " " <> line}. Edit it to make it yours.
+          Written by Aqua. Edit it to make it yours.
         </p>
         <div
           :if={(not @about_editing? and @about_note) && @about_note[:from_deleted_thread]}
