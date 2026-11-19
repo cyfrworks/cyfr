@@ -37,15 +37,6 @@ defmodule Aqua.Providers.Notes do
   Reads and writes take no scope: every action acts on the athanor in
   focus, the person's own.
 
-  ## What a person may pre-answer
-
-  `keep` may be granted standing for one thread and no wider
-  (`standing: :thread`); `pin` and `workspace` declare no standing of
-  their own, so an authored `auto` runs them with no card; `endorse`
-  never (`standing: false`), since it makes outside material the
-  person's own; `forget` is destructive and already takes no standing
-  allow. The annotation is the one source for every gate that honours it.
-
   ## Provenance and outside material
 
   A note kept in a chain carries in its provenance every source the
@@ -120,8 +111,7 @@ defmodule Aqua.Providers.Notes do
           kind: :write,
           sources: [],
           planes: [:external, :in_chain],
-          consent: :interactive,
-          standing: :thread
+          consent: :interactive
         ),
         Operation.new(
           "notes",
@@ -204,8 +194,7 @@ defmodule Aqua.Providers.Notes do
           kind: :write,
           sources: [],
           planes: [:external, :in_chain],
-          consent: :interactive,
-          standing: false
+          consent: :interactive
         ),
         Operation.new(
           "notes",

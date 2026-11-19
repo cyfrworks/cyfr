@@ -86,7 +86,6 @@ defmodule Opus.Providers.Tincture do
         kind: :execute,
         planes: [:external],
         consent: nil,
-        standing: false,
         recovery: nil,
         permission: nil
       ] ++ auth

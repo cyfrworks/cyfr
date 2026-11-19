@@ -20,11 +20,12 @@ defmodule Sanctum.Catalog do
   port (`Sanctum.Proxy`).
 
   Consent reads the table here: shape derivation asks which `tool.action`
-  pairs it serves (`tool_actions/0`), and the standing rule what one action
-  is (`action_declaration/1`). Before `load!/0` has written the table,
-  every read of it here raises `Sanctum.Catalog.NotLoadedError` rather
-  than answering a narrower roster: a shape derived from no table at all
-  would grant nothing and read as a component that asks for nothing.
+  pairs it serves (`tool_actions/0`), and a request's preview names what
+  one action touches (`action_declaration/1`). Before `load!/0` has written
+  the table, every read of it here raises `Sanctum.Catalog.NotLoadedError`
+  rather than answering a narrower roster: a shape derived from no table
+  at all would grant nothing and read as a component that asks for
+  nothing.
 
   Callers outside the gate are admitted through `Sanctum.Gate`, whose
   dispatching entries `Sanctum.Dispatch` implements over this table, and
@@ -56,16 +57,12 @@ defmodule Sanctum.Catalog do
   end
 
   @typedoc """
-  What one `tool.action` is, as the standing rule reads it: its `kind`,
-  its `standing` declaration (`:thread`, `false`, or nil for either
-  scope) and its `resource`, the argument that names the resource the
-  action touches with that resource's kind (`Prima.Operation`'s
-  `resource:`), or nil when it declares none.
+  What one `tool.action` is: its `kind` and its `resource`, the argument
+  that names the resource the action touches with that resource's kind
+  (`Prima.Operation`'s `resource:`), or nil when it declares none.
   """
   @type action_declaration :: %{
           kind: atom(),
-          standing: term(),
-          stored_answers: boolean(),
           resource: {String.t(), Prima.Operation.resource_kind()} | nil
         }
 
@@ -550,9 +547,9 @@ defmodule Sanctum.Catalog do
   names are the `:external` bucket, in-chain by wiring.
 
   This is the same predicate `Sanctum.Gate.call_in_chain/5` enforces per
-  call, exposed so the surfaces that *offer* actions — the agent capability matrix, the
-  prompt's approval section, proposal validation — offer only what the chain
-  could actually run, instead of handing someone a button that fails.
+  call, exposed so the surface that *offers* actions — the agent capability
+  matrix, through `chain_reachable?/2` — offers only what the chain could
+  actually run, instead of handing someone a button that fails.
   """
   @spec in_chain_reachable?(String.t(), String.t() | nil) :: boolean()
   def in_chain_reachable?(name, action) when is_binary(name) do
@@ -910,8 +907,8 @@ defmodule Sanctum.Catalog do
   and what an assistant's call answers joins its turn, as that
   declaration says (`Prima.Operation.result_sources/3`), and an action
   that declares none is read as outside material: a read of the
-  athanor's own records would mark every run and turn that makes it, and
-  every standing approval would ask again. So each in-chain action says
+  athanor's own records would mark every run and turn that makes it. So
+  each in-chain action says
   what its answers carry — `[]` for the athanor's own, `[:outside]` or an
   answer reader for what reaches outside — and the catalog refuses to
   boot on an omission, as it does on an unannotated action. An action
@@ -1103,37 +1100,6 @@ defmodule Sanctum.Catalog do
   end
 
   @doc """
-  Whether `tool.action` may ever run without a card: its declaration's
-  kind is one `Sanctum.VirtualTools.auto_permitted_kind?/1` admits (a
-  read, write or execute) and the declaration takes a standing allow at
-  agent scope (no `standing` of its own, the rule
-  `Sanctum.ToolGrants.check_standing/2` applies to a standing answer). An
-  authored `auto` is a standing answer the agent's file gives for every
-  call in every thread, so it obeys the same rule: an action asked on
-  every call (`standing: false`, such as `notes.pin`) or allowed only for
-  one thread (`standing: :thread`, such as `notes.keep`) is never `auto`,
-  and neither is one whose resource is a program row, which stands only
-  for one row. A destructive, external or undeclared action is `false`
-  too. The one
-  predicate the assistant's runtime ceiling (`Aqua.Kinds.auto_permitted?/2`)
-  and the `aqua` tool's write door
-  (`Compendium.AquaAgent.validate_tool_policy/2`) read.
-  """
-  @spec auto_permitted?(String.t(), String.t()) :: boolean()
-  def auto_permitted?(tool, action) when is_binary(tool) and is_binary(action) do
-    case declaration(tool, action) do
-      {:ok, %{kind: kind, standing: standing} = declaration} ->
-        Sanctum.VirtualTools.auto_permitted_kind?(kind) and is_nil(standing) and
-          not match?({_argument, :program_row}, Map.get(declaration, :resource))
-
-      {:error, :not_found} ->
-        false
-    end
-  end
-
-  def auto_permitted?(_tool, _action), do: false
-
-  @doc """
   Whether `tool.action` follows the person's own browser setting
   (`Prima.Operation`'s `follows_setting`) rather than an authored policy
   line: the browser tool's actions alone declare it, so with the setting
@@ -1153,10 +1119,10 @@ defmodule Sanctum.Catalog do
   def follows_setting?(_tool, _action), do: false
 
   @doc """
-  One `tool.action` as the standing rule reads it, by its name, classified
-  as `tool_kind/2` classifies it: a virtual hand from its table, an
-  upstream `server:tool` as external (it declares no standing and names no
-  resource), a catalogued action from its operation. An action name holds
+  One `tool.action` by its name, classified as `tool_kind/2` classifies
+  it: a virtual hand from its table, an upstream `server:tool` as
+  external (it names no resource), a catalogued action from its
+  operation. An action name holds
   no dot, so the pair splits at the last one, and a server's tool name
   keeps any dot of its own. `{:error, :not_found}` for a pair nothing
   declares.
@@ -1180,31 +1146,19 @@ defmodule Sanctum.Catalog do
       Sanctum.VirtualTools.tool?(tool) ->
         case Sanctum.VirtualTools.action(tool, action) do
           %{kind: kind} = declared ->
-            {:ok,
-             %{
-               kind: kind,
-               standing: nil,
-               stored_answers: true,
-               resource: Map.get(declared, :resource)
-             }}
+            {:ok, %{kind: kind, resource: Map.get(declared, :resource)}}
 
           nil ->
             {:error, :not_found}
         end
 
       String.contains?(tool, ":") ->
-        {:ok, %{kind: :external, standing: nil, stored_answers: true, resource: nil}}
+        {:ok, %{kind: :external, resource: nil}}
 
       true ->
         with {:ok, {_module, %{operations: operations}}} <- lookup(tool),
              %Operation{} = operation <- Enum.find(operations, &(&1.action == action)) do
-          {:ok,
-           %{
-             kind: operation.kind,
-             standing: operation.standing,
-             stored_answers: operation.stored_answers,
-             resource: operation.resource
-           }}
+          {:ok, %{kind: operation.kind, resource: operation.resource}}
         else
           _ -> {:error, :not_found}
         end

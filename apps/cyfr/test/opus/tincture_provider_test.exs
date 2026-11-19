@@ -62,7 +62,6 @@ defmodule Opus.Providers.TinctureTest do
                  kind: :execute,
                  planes: [:external],
                  consent: nil,
-                 standing: false,
                  recovery: nil,
                  permission: nil,
                  scope: nil,

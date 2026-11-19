@@ -31,16 +31,12 @@ defmodule Opus.Programs.Provider do
 
   ## What a start runs
 
-  The words after the command are the turn's own: a card shows the
-  pinned command and every word whole before a start runs, or a standing
-  answer the person gave for that one row lets the turn choose them
-  (`resource: {"program", :program_row}`, which takes a standing allow
-  only constrained to one row, `Sanctum.ToolGrants`). They are bounded
-  so a card can show them whole: at most 32 words of at most 256
-  characters each. The program gets them as its own arguments, never
-  read by a shell. The terminal is 50 rows by 200 columns. A start names
-  the row's epoch as `list` answered it, so the row a card showed is the
-  row that runs: one changed since is refused (`:row_changed`).
+  The words after the command are the turn's own. They are bounded: at
+  most 32 words of at most 256 characters each. The program gets them as
+  its own arguments, never read by a shell. The terminal is 50 rows by
+  200 columns. A start names the row's epoch as `list` answered it, so
+  the row the turn read is the row that runs: one changed since is
+  refused (`:row_changed`).
 
   ## What the turn reads
 
@@ -50,8 +46,7 @@ defmodule Opus.Programs.Provider do
   64 KiB a call, with the offset to read on from and how many bytes
   were no longer kept. It passed the backends service's masking of the
   row's credentials first. Each answer is an outside source named by the
-  program's row (`answer_sources/2`), so a standing answer covers a
-  later call only when it names that program's output.
+  program's row (`answer_sources/2`).
   """
 
   @behaviour Prima.Provider
@@ -147,8 +142,7 @@ defmodule Opus.Programs.Provider do
           kind: :execute,
           sources: [],
           planes: [:in_chain],
-          consent: :interactive,
-          standing: :thread
+          consent: :interactive
         ),
         Operation.new("program", "read", "Read a program", [session, after_arg],
           kind: :read,

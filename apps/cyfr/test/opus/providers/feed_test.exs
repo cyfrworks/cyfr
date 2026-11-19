@@ -117,7 +117,7 @@ defmodule Opus.Providers.FeedTest do
                {:execute, [:external], :execute}
 
       for {_action, op} <- ops do
-        assert {op.consent, op.standing, op.resource} == {nil, nil, nil}
+        assert {op.consent, op.resource} == {nil, nil}
       end
     end
 
@@ -307,14 +307,8 @@ defmodule Opus.Providers.FeedTest do
                Enum.find(feeds, &(&1.binding_id == answer.binding))
     end
 
-    test "an in-chain bind is external and takes no standing allow" do
+    test "an in-chain bind is external" do
       assert Aqua.Kinds.kind_for("feed", "bind") == :external
-      refute Sanctum.Catalog.auto_permitted?("feed", "bind")
-
-      allow = %{scope: "athanor", effect: "allow", tool: "feed", action: "bind"}
-
-      assert {:error, _not_standing} =
-               Sanctum.ToolGrants.check_standing(allow, DateTime.utc_now())
     end
 
     test "refuses an uninstalled reference, an operation with no declared result, and a binding " <>

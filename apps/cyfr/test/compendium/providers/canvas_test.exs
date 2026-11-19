@@ -6,7 +6,7 @@ defmodule Compendium.Providers.CanvasTest do
   The `canvas` tool: Compendium's, with five operations whose kinds,
   planes and permission are the operation table's — the two reads and the
   write on both planes, activation and restore from outside any chain —
-  and no consent, standing or resource annotation. Each action is
+  and no consent or resource annotation. Each action is
   `Compendium.Canvas`'s, and each refusal is one of `Prima.Refusal`'s
   classes: `invalid_argument` for a shape, size or grammar, `not_found`
   for a canvas, `conflict` for a name another tincture holds or a stale
@@ -89,12 +89,9 @@ defmodule Compendium.Providers.CanvasTest do
                {:write, [:external], nil}
 
       # As the layout's operations, none carries a consent or resource
-      # annotation: the agent's consent names the keys it reaches. Only
-      # write takes no standing answer, so each write an assistant proposes
-      # asks on its own card.
+      # annotation: the agent's consent names the keys it reaches.
       for {action, op} <- ops do
-        standing = if action == "write", do: false, else: nil
-        assert {op.consent, op.standing, op.resource} == {nil, standing, nil}, action
+        assert {op.consent, op.resource} == {nil, nil}, action
       end
     end
 

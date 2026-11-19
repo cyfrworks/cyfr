@@ -4,8 +4,7 @@
 defmodule Sanctum.VirtualTools do
   @moduledoc """
   The one declaration of the assistant's virtual tools — `files`,
-  `storage`, `http` and `request_setup` — and of the kinds an action may
-  have to run without a card.
+  `storage`, `http` and `request_setup`.
 
   A virtual tool is dispatched inside the formula, not through the
   operation table, so its declaration lives here rather than in a
@@ -17,21 +16,16 @@ defmodule Sanctum.VirtualTools do
       action from outside a running formula;
     * **recovery** — `:replay_safe` on a read reviewed as safe to
       re-dispatch after an uncertain recovery;
-    * **auto_only** — `true` on an action that may only ever be `auto`, a
-      UI event no card could run;
     * **resource** — on a `files` action, the argument naming the path it
       touches, relative to the athanor root, as `Prima.Operation`'s
-      `resource:` declares one: what a standing approval's constraint is
-      checked against (`Sanctum.ToolGrants.admits?/2`). `search` names its
-      folder by `base_path`, as the hand builds it; `storage` names a key
-      and `http` a URL, so neither declares one and neither takes a
-      constraint.
+      `resource:` declares one (`Sanctum.Catalog.action_declaration/1`).
+      `search` names its folder by `base_path`, as the hand builds it;
+      `storage` names a key and `http` a URL, so neither declares one.
 
   An `http` action is classed by what it does at its destination: `put`,
   `patch` and `post` write there and are `:external`, and `delete` is
-  `:destructive`, so none of them takes a standing allow
-  (`Sanctum.ToolGrants`); `get`, `head`, `options`, `read`, `links` and
-  `metadata` are `:read` and may take one.
+  `:destructive`; `get`, `head`, `options`, `read`, `links` and
+  `metadata` are `:read`.
 
   Every function is a pure read of the table.
   """
@@ -44,7 +38,6 @@ defmodule Sanctum.VirtualTools do
           required(:kind) => kind(),
           required(:planes) => [atom()],
           optional(:recovery) => :replay_safe,
-          optional(:auto_only) => true,
           optional(:resource) => {String.t(), Prima.Operation.resource_kind()}
         }
 
@@ -133,13 +126,9 @@ defmodule Sanctum.VirtualTools do
       title: "Setup form",
       description: "Open the inline setup form for a component needing credentials.",
       catalyst: nil,
-      actions: %{"open" => %{kind: :write, planes: [:in_chain], auto_only: true}}
+      actions: %{"open" => %{kind: :write, planes: [:in_chain]}}
     }
   }
-
-  # The kinds an action may have to run without a card. Destructive and
-  # external actions always ask, and so does an action of unknown kind.
-  @auto_kinds [:read, :write, :execute]
 
   @doc "The whole table: family name to its declaration."
   @spec table() :: %{String.t() => family()}
@@ -208,13 +197,6 @@ defmodule Sanctum.VirtualTools do
   end
 
   @doc """
-  Whether `tool.action` may only ever be `auto`: a UI event the guest
-  answers in place, never a catalyst call a card could run.
-  """
-  @spec auto_only?(term(), term()) :: boolean()
-  def auto_only?(tool, action), do: match?(%{auto_only: true}, action(tool, action))
-
-  @doc """
   `:replay_safe` for a virtual read reviewed as safe to re-dispatch after
   an uncertain recovery, nil for every other action — a write so marked
   included.
@@ -243,13 +225,6 @@ defmodule Sanctum.VirtualTools do
   def action_pairs do
     Enum.sort(for tool <- tools(), action <- actions_of(tool), do: "#{tool}.#{action}")
   end
-
-  @doc """
-  Whether an action of `kind` may run without a card: a read, write or
-  execute. A destructive, external or unknown (`nil`) kind always asks.
-  """
-  @spec auto_permitted_kind?(term()) :: boolean()
-  def auto_permitted_kind?(kind), do: kind in @auto_kinds
 
   defp family(tool) when is_binary(tool), do: Map.get(@table, tool)
   defp family(_tool), do: nil

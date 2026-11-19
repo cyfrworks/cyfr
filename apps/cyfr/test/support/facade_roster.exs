@@ -36,7 +36,6 @@
     "Sanctum.RunningTasks",
     "Sanctum.Shares",
     "Sanctum.TinctureAccess",
-    "Sanctum.ToolGrants",
     "Sanctum.VirtualTools",
     "Sanctum.Visibility",
     "Sanctum.Webhook"

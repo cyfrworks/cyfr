@@ -67,8 +67,7 @@ defmodule Opus.ProviderRetryTest do
       [tool] = Opus.Provider.tools()
       retry = Enum.find(tool.operations, &(&1.action == "retry"))
 
-      assert {retry.kind, retry.planes, retry.permission, retry.standing} ==
-               {:execute, [:external], :execute, false}
+      assert {retry.kind, retry.planes, retry.permission} == {:execute, [:external], :execute}
 
       assert [%Prima.Arg{name: "execution_id", required: true}] = retry.args
     end

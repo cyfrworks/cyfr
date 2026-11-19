@@ -326,12 +326,7 @@ defmodule Opus.Provider do
             host: :intercepted,
             kind: :execute,
             planes: [:external],
-            permission: :execute,
-            # A run stands on its component's grant, so an author may let
-            # the assistant start one with no card; an answer a person gave
-            # on one run's card lets that run's sources through and never
-            # stands for another.
-            stored_answers: false
+            permission: :execute
           ),
           Operation.new(
             "execution",
@@ -444,8 +439,7 @@ defmodule Opus.Provider do
             ],
             kind: :execute,
             planes: [:external],
-            permission: :execute,
-            standing: false
+            permission: :execute
           ),
           # Slot diagnostics are tenant-operational: global counters
           # with no chain grain to scope them to, so the operation is out

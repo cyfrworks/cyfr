@@ -5,9 +5,8 @@ defmodule Sanctum.Gate.VirtualToolsTest do
   @moduledoc """
   The virtual tools' one declaration: the four families and their
   catalysts, every action's kind, its planes (in-chain only), which reads
-  are replay-safe, which action is auto-only, and the kinds that may run
-  without a card. A change to the table fails here before it changes what
-  the assistant may do.
+  are replay-safe and which path each files action names. A change to the
+  table fails here before it changes what the assistant may do.
   """
   use ExUnit.Case, async: true
 
@@ -100,25 +99,6 @@ defmodule Sanctum.Gate.VirtualToolsTest do
     assert VirtualTools.recovery("http", "get") == nil
     assert VirtualTools.recovery("files", "write") == nil
     assert VirtualTools.recovery("component", "read") == nil
-  end
-
-  test "request_setup.open is the one auto-only action" do
-    auto_only =
-      for tool <- VirtualTools.tools(),
-          action <- VirtualTools.actions_of(tool),
-          VirtualTools.auto_only?(tool, action),
-          do: {tool, action}
-
-    assert auto_only == [{"request_setup", "open"}]
-    refute VirtualTools.auto_only?("request_setup", "close")
-    refute VirtualTools.auto_only?(nil, nil)
-  end
-
-  test "a read, write or execute may run without a card; nothing else may" do
-    for kind <- [:read, :write, :execute], do: assert(VirtualTools.auto_permitted_kind?(kind))
-
-    for kind <- [:destructive, :external, nil, "read"],
-        do: refute(VirtualTools.auto_permitted_kind?(kind))
   end
 
   test "the table carries each family's display fields and its actions" do

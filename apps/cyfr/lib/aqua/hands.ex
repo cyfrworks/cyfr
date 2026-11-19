@@ -18,10 +18,8 @@ defmodule Aqua.Hands do
     * **canonical operation** — what an `execution.run` of one of those
       catalysts, or a `files` call whose path lands in the storage
       boundary, IS (`canonical/2`, `canonical_files/2`): wrappers are
-      aliases of canonical operations, and every policy decision — a
-      card, an approval — is made on the canonical one;
-    * **`auto_only`** — `request_setup.open` is a UI event, not a catalyst;
-      an `ask` on it would be a card nothing can execute.
+      aliases of canonical operations, and every policy decision is made
+      on the canonical one.
 
   The resource boundary is `data/storage/`: a file operation inside it is
   the storage operation of the same effect, whichever tool spelled it.

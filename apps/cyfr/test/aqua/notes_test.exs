@@ -360,19 +360,6 @@ defmodule Aqua.NotesStoreTest do
       {thread, root} =
         chain!(ctx, actor, [Prima.Source.new(:filed), host, Prima.Source.thread("thr_read")])
 
-      # A standing allow naming the source covers the keep; it admits the
-      # action and endorses nothing.
-      {:ok, _} =
-        Sanctum.ToolGrants.put(ctx, %{
-          scope: "thread",
-          effect: "allow",
-          thread_id: thread,
-          agent_name: "aqua",
-          tool: "notes",
-          action: "keep",
-          sources: [host]
-        })
-
       guest = Sanctum.Context.enter_guest(ctx)
       lineage = %{"root_execution_id" => root, "thread_id" => thread}
 

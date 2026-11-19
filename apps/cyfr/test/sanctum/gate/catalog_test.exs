@@ -317,6 +317,52 @@ defmodule Sanctum.Gate.CatalogTest do
     end
   end
 
+  describe "the action's declaration from the operation table" do
+    test "a virtual hand, a catalogued action and an upstream tool, with the resource each names" do
+      assert {:ok, %{kind: :write, resource: {"path", :storage_path}}} =
+               Sanctum.Catalog.action_declaration("files.write")
+
+      assert {:ok, %{kind: :read, resource: {"base_path", :storage_path}}} =
+               Sanctum.Catalog.action_declaration("files.search")
+
+      assert {:ok, %{kind: :destructive, resource: {"path", :storage_path}}} =
+               Sanctum.Catalog.action_declaration("files.delete")
+
+      # The files page's own tool and a component's source name their path
+      # the same way.
+      for name <-
+            ~w(file.list file.read file.write file.delete) ++
+              ~w(source.tree source.read source.grep source.write source.edit source.delete) do
+        assert {:ok, %{resource: {"path", :storage_path}}} =
+                 Sanctum.Catalog.action_declaration(name),
+               "#{name} names no path"
+      end
+
+      assert {:ok, %{kind: :write, resource: {"path", :storage_path}}} =
+               Sanctum.Catalog.action_declaration("source.write")
+
+      assert {:ok, %{kind: :write, resource: nil}} =
+               Sanctum.Catalog.action_declaration("notes.keep")
+
+      assert {:ok, %{kind: :write, resource: nil}} =
+               Sanctum.Catalog.action_declaration("notes.endorse")
+
+      assert {:ok, %{kind: :external, resource: nil}} =
+               Sanctum.Catalog.action_declaration("srv:repos.list.do")
+
+      for name <- ["no_such_tool.go", "files.nothing", "files", "", ".write", "files."] do
+        assert {:error, :not_found} = Sanctum.Catalog.action_declaration(name),
+               "#{inspect(name)} was answered"
+      end
+    end
+
+    test "storage and http name no resource" do
+      for name <- ~w(storage.write storage.read http.get http.post) do
+        assert {:ok, %{resource: nil}} = Sanctum.Catalog.action_declaration(name)
+      end
+    end
+  end
+
   describe "an unloaded table" do
     test "every read of it, and consent's, raises the named refusal" do
       unloaded(fn ->
@@ -329,13 +375,7 @@ defmodule Sanctum.Gate.CatalogTest do
               fn -> Catalog.lookup("system") end,
               &Catalog.tool_actions/0,
               fn -> Catalog.action_declaration("system.status") end,
-              fn -> Sanctum.Consent.ShapeDerivation.expand_tools([]) end,
-              fn ->
-                Sanctum.ToolGrants.check_standing(
-                  %{scope: "thread", effect: "allow", tool: "system", action: "status"},
-                  DateTime.utc_now()
-                )
-              end
+              fn -> Sanctum.Consent.ShapeDerivation.expand_tools([]) end
             ] do
           error = assert_raise Catalog.NotLoadedError, read
           assert error.message =~ "Sanctum.Catalog.load!/0"
