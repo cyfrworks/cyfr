@@ -62,6 +62,6 @@ defmodule Arca.Schemas.Turn do
     # How the turn was started (`Prima.Origin`'s wire spelling), written
     # when it is accepted.
     field :origin, :string
-    field :sources, :string, default: "[]"
+    field :read_threads, :string, default: "[]"
   end
 end

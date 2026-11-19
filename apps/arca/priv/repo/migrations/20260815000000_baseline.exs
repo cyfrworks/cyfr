@@ -1339,10 +1339,11 @@ defmodule Arca.Repo.Migrations.Baseline do
       # How the run started (`Prima.Origin`): named by the admission path
       # for a root, copied from the parent for a child.
       add :origin, :string
-      # The run's source ledger (`Prima.Source`, canonical JSON): seeded in
-      # the admission transaction and only ever grown, before the bytes a
-      # read or a child carries reach the run.
-      add :sources, :text, null: false, default: "[]"
+      # The ids of the threads whose posts the run holds, a sorted JSON
+      # list (`Arca.ThreadStorage.threads_text/1`): seeded in the admission
+      # transaction and only ever grown, before the bytes a read or a child
+      # carries reach the run.
+      add :read_threads, :text, null: false, default: "[]"
       # Who started the root (`Prima.Question.Caller`'s text), set on a
       # root and null on a child, which reads its root's. A root with none
       # reads as `unknown`. Text: a caller names a tincture's reference or
@@ -1486,24 +1487,24 @@ defmodule Arca.Repo.Migrations.Baseline do
     # rises, raised by a mark in its intent's transaction before the store;
     # `settled_generation` is null until a first settlement and moves only
     # to a newer settled generation than both itself and
-    # `deleted_at_generation`. `sources` are the settled generation's
-    # (`Prima.Source`, canonical JSON), named by every writer.
+    # `deleted_at_generation`. `read_threads` are the settled generation's
+    # (`Arca.ThreadStorage.threads_text/1`).
     create table(:object_revisions, primary_key: false) do
       add :athanor_id, :string, primary_key: true, null: false
       add :path, :text, primary_key: true, null: false
       add :generation, :bigint, null: false
       add :settled_generation, :bigint
-      add :sources, :text, null: false
+      add :read_threads, :text, null: false
       add :deleted, :boolean, null: false, default: false
       add :deleted_at_generation, :bigint
       add :settled_at, :utc_datetime_usec
     end
 
     # One row per generation of a path whose object may exist, with the
-    # bytes the mark said its writer will store and the writer's source
-    # ledger as it stood at the mark (`Prima.Source`, canonical JSON), the
-    # provenance of the bytes it covers, so any settlement of it, the
-    # writer's or one made without it, can name its sources: the settled
+    # bytes the mark said its writer will store and the writer's read
+    # threads as they stood at the mark (`Arca.ThreadStorage.threads_text/1`),
+    # the threads whose posts the bytes may hold, so any settlement of it,
+    # the writer's or one made without it, can name them: the settled
     # generation's row gives the path's visible bytes, and the rows
     # together are the home's physical count. Retention deletes the
     # object, then its row.
@@ -1512,7 +1513,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :path, :text, primary_key: true, null: false
       add :generation, :bigint, primary_key: true, null: false
       add :bytes, :bigint, null: false
-      add :sources, :text, null: false
+      add :read_threads, :text, null: false
       add :marked_at, :utc_datetime_usec, null: false
     end
 
@@ -2865,10 +2866,11 @@ defmodule Arca.Repo.Migrations.Baseline do
       # How the turn was started (`Prima.Origin`), written when it is
       # accepted, so a turn recovered after a restart resumes under it.
       add :origin, :string, null: false
-      # Every source the turn has read (JSON, a list of `Prima.Source`),
-      # grown in the transaction that writes each step, so it survives
-      # compaction and restart.
-      add :sources, :text, null: false, default: "[]"
+      # The ids of the threads whose posts the turn has read, a sorted JSON
+      # list (`Arca.ThreadStorage.threads_text/1`), grown in the
+      # transaction that writes each step, so it survives compaction and
+      # restart.
+      add :read_threads, :text, null: false, default: "[]"
     end
 
     checked(sqlite?, :turns, [turn_status])

@@ -84,14 +84,14 @@ defmodule Opus.Close do
   component's catalyst envelope, whose error is its refusal: that run
   completes with the refusal as its output. An output that exceeds the
   node's `max_response_size` or cannot be encoded closes the run failed. Answers the result — `%{status: :completed, output: masked,
-  metadata: map, sources: [Prima.Source.t()]}`, `sources` the run's
-  ledger as the terminal transaction itself read it — or
+  metadata: map, read_threads: [String.t()]}`, `read_threads` the run's
+  read threads as the terminal transaction itself read them — or
   `{:error, message}`. A cancel, lapse or takeover that closed the row
   first leaves that row standing, and the answer is the row's, as
   `lost/1` answers it: a cancelled row answers its error, so no caller
   records a cancelled run as completed.
   A run whose athanor was archived while it ran is never answered as a
-  success: its completion is refused (`Opus.Record.write_completed_ledger/2`),
+  success: its completion is refused (`Opus.Record.write_completed/2`),
   the row closes failed and the answer is `{:error, message}`.
   """
   @spec complete(t(), [String.t()], term()) ::
@@ -103,14 +103,14 @@ defmodule Opus.Close do
     with :ok <- check_application_error(close, secrets, masked_output),
          :ok <- check_response_size(close, secrets, masked_output),
          completed_record = Record.complete(close.record, masked_output),
-         {:written, write_result, ledger} <- completed_write(close, completed_record) do
+         {:written, write_result, threads} <- completed_write(close, completed_record) do
       if write_result == {:error, :not_running},
         do: closed_after(close, completed_record),
-        else: completed(close, completed_record, write_result, ledger)
+        else: completed(close, completed_record, write_result, threads)
     end
   end
 
-  defp completed(close, completed_record, write_result, ledger) do
+  defp completed(close, completed_record, write_result, threads) do
     if write_result == :ok, do: StepSpans.completed(close.step_spans)
 
     # The lifecycle telemetry follows the row: a completion is announced
@@ -123,8 +123,9 @@ defmodule Opus.Close do
       status: :completed,
       output: completed_record.output,
       metadata: metadata(close, completed_record),
-      # The ledger the terminal transaction read, else read as it stands now.
-      sources: ledger || sources(close)
+      # The read threads the terminal transaction read, else read as they
+      # stand now.
+      read_threads: threads || read_threads(close)
     }
 
     result =
@@ -150,14 +151,14 @@ defmodule Opus.Close do
   # closed failed by the record's write: its output is neither answered
   # nor announced as a success.
   defp completed_write(close, completed_record) do
-    case Record.write_completed_ledger(completed_record, close.admission) do
+    case Record.write_completed(completed_record, close.admission) do
       {:error, :not_standing} ->
         message = "Execution refused: its athanor is no longer active"
         Telemetry.execute_exception(Record.fail(close.record, message, :uncertain), message)
         {:error, message}
 
-      {:ok, ledger} ->
-        {:written, :ok, ledger}
+      {:ok, threads} ->
+        {:written, :ok, threads}
 
       write_result ->
         {:written, write_result, nil}
@@ -276,14 +277,13 @@ defmodule Opus.Close do
     end
   end
 
-  # The ledger of the run `close` ends (`Arca.Execution.sources/2`), read
-  # after its terminal write, for the result its caller is handed: the
-  # first carrier of a child's provenance to a turn. One that cannot be
-  # read is an unnamed outside source, never none.
-  defp sources(%__MODULE__{ctx: ctx, record: record}) do
-    case Opus.Ledger.sources(Sanctum.Context.actor(ctx), record.id) do
-      {:ok, sources} -> sources
-      {:error, _unread} -> [Prima.Source.outside(nil)]
+  # The read threads of the run `close` ends (`Arca.Execution.read_threads/2`),
+  # read after its terminal write, for the result its caller is handed;
+  # ones that cannot be read are none.
+  defp read_threads(%__MODULE__{ctx: ctx, record: record}) do
+    case Arca.Execution.read_threads(Sanctum.Context.actor(ctx), record.id) do
+      {:ok, ids} -> ids
+      {:error, _unread} -> []
     end
   end
 
@@ -297,7 +297,7 @@ defmodule Opus.Close do
            status: :completed,
            output: row.output,
            metadata: metadata(close, row),
-           sources: row.sources
+           read_threads: row.read_threads
          }}
 
       {:ok, %Record{status: :cancelled, error: error}} ->

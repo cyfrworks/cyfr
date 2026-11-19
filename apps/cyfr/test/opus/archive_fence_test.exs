@@ -375,7 +375,7 @@ defmodule Opus.ArchiveFenceTest do
       completed = Record.complete(fixture.record, %{"answer" => 42})
 
       assert {:error, :not_standing} =
-               Record.write_completed_ledger(completed, retention_class: "api")
+               Record.write_completed(completed, retention_class: "api")
 
       assert %{status: "failed", output: nil} = row(fixture)
       assert %{state: "failed", outcome: "uncertain"} = attempt_row(fixture)

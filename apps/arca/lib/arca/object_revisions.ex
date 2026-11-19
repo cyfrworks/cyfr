@@ -16,24 +16,24 @@ defmodule Arca.ObjectRevisions do
        `generation` to a number no ancestor or descendant path's
        generation has reached (so no two objects ever need one name as a
        file and as a directory), and inserts the generation's row with the
-       bytes the writer will store and the sources those bytes carry: the
-       writer's, joined for an append with the settled object's.
+       bytes the writer will store and the read threads those bytes carry:
+       the writer's, joined for an append with the settled object's.
     2. **Store.** The bytes go to the generation's key, outside any
        transaction. A stalled or late store lands at its own key and is
        never another generation's bytes.
     3. **Settle.** A second transaction moves the row's
        `settled_generation`, the read pointer, to the generation, with its
-       sources, only while the generation is newer than the pointer and
+       read threads, only while the generation is newer than the pointer and
        than `deleted_at_generation`. A superseded settlement writes
        nothing; one at or below the deletion fence is `dead`.
 
   A guest's write runs its mark and its settlement inside its attempt's
   intent transactions (`Arca.ExecutionAttempts.while_held/6`), which settle
-  with the generation's sources joined with the attempt's ledger. A write
-  with no attempt — a person's Files write, an offer's create, an upload —
-  runs all three steps here (`write/5`), each transaction its own, and its
-  sources are the ones its caller names (an unnamed outside source when
-  it names none: provenance nobody recorded is never the athanor's own).
+  with the generation's read threads joined with the attempt's run's. A
+  write with no attempt — a person's Files write, an offer's create, an
+  upload — runs all three steps here (`write/5`), each transaction its
+  own, and its read threads are the ones its caller names, none by
+  default.
   A write with no attempt settles within twelve hours of its mark or not
   at all, so a store stalled past the shortest retention window can never
   publish a generation retention has begun to collect.
@@ -58,8 +58,8 @@ defmodule Arca.ObjectRevisions do
 
   ## Reads
 
-  One observation: the row, its `settled_generation` and the sources it
-  settled with, then that generation's object. A path with no settled
+  One observation: the row, its `settled_generation` and the read threads
+  it settled with, then that generation's object. A path with no settled
   generation is `{:error, :not_found}`. An object retention collected
   under a reader that read the row before a newer settlement is read
   again from the row.
@@ -165,15 +165,15 @@ defmodule Arca.ObjectRevisions do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The settled object at `path` and the sources it settled with, in one
-  observation: `{:ok, bytes, sources}`, `{:error, :not_found}` where
+  The settled object at `path` and the read threads it settled with, in
+  one observation: `{:ok, bytes, threads}`, `{:error, :not_found}` where
   nothing is settled, or the adapter's or the database's refusal.
   """
   @spec read(Prima.Actor.t(), Arca.Storage.path()) ::
-          {:ok, binary(), [Prima.Source.t()]} | {:error, term()}
+          {:ok, binary(), [String.t()]} | {:error, term()}
   def read(%Prima.Actor{} = actor, path) do
-    with {:ok, bytes, sources, _generation} <- observe(actor, path, @read_attempts),
-         do: {:ok, bytes, sources}
+    with {:ok, bytes, threads, _generation} <- observe(actor, path, @read_attempts),
+         do: {:ok, bytes, threads}
   end
 
   @doc """
@@ -183,14 +183,14 @@ defmodule Arca.ObjectRevisions do
   @spec read_for_update(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, binary(), {:generation, pos_integer()}} | {:error, term()}
   def read_for_update(%Prima.Actor{} = actor, path) do
-    with {:ok, bytes, _sources, generation} <- observe(actor, path, @read_attempts),
+    with {:ok, bytes, _threads, generation} <- observe(actor, path, @read_attempts),
          do: {:ok, bytes, {:generation, generation}}
   end
 
-  @doc "The settled bytes at `path` — `read/2` without its sources, as an adapter's `get/2` answers."
+  @doc "The settled bytes at `path` — `read/2` without its read threads, as an adapter's `get/2` answers."
   @spec get(Prima.Actor.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
   def get(%Prima.Actor{} = actor, path) do
-    with {:ok, bytes, _sources} <- read(actor, path), do: {:ok, bytes}
+    with {:ok, bytes, _threads} <- read(actor, path), do: {:ok, bytes}
   end
 
   defp observe(actor, path, attempts) do
@@ -201,10 +201,10 @@ defmodule Arca.ObjectRevisions do
         {:ok, nil} ->
           {:error, :not_found}
 
-        {:ok, %ObjectRevision{settled_generation: generation, sources: sources}} ->
+        {:ok, %ObjectRevision{settled_generation: generation, read_threads: threads}} ->
           case adapter.get(actor, object_key(generation, path)) do
             {:ok, bytes} ->
-              {:ok, bytes, Prima.Source.decode(sources), generation}
+              {:ok, bytes, Arca.ThreadStorage.threads_of(threads), generation}
 
             # Collected after a newer settlement moved the pointer past it:
             # the row is read again.
@@ -437,8 +437,8 @@ defmodule Arca.ObjectRevisions do
   `:append`, `:create` (`{:error, :exists}` once something is settled
   there) or `{:if_match, {:generation, g}}` (`{:error,
   :precondition_failed}` when the pointer moved, `{:error, :missing}`
-  when nothing is settled). `sources:` names the bytes' sources, an
-  unnamed outside source by default.
+  when nothing is settled). `threads:` names the ids of the threads whose
+  posts the bytes carry, none by default.
 
   `:ok` once the write settled or a newer one superseded it; `{:error,
   :dead}` when a delete fenced it; `{:error, :unknown}` when the store or
@@ -455,11 +455,11 @@ defmodule Arca.ObjectRevisions do
         ) ::
           :ok | {:error, term()}
   def write(%Prima.Actor{} = actor, path, op, content, opts \\ []) when is_binary(content) do
-    sources = Keyword.get_lazy(opts, :sources, fn -> [Prima.Source.outside(nil)] end)
+    threads = Keyword.get(opts, :threads, [])
 
     with {:ok, _athanor_id} <- athanor(actor),
          {:ok, op} <- host_op(op) do
-      host_write(actor, path, op, content, sources, 1)
+      host_write(actor, path, op, content, threads, 1)
     end
   end
 
@@ -469,11 +469,11 @@ defmodule Arca.ObjectRevisions do
   defp host_op({:if_match, _foreign}), do: {:error, :precondition_failed}
   defp host_op(op) when op in [:put, :append, :create], do: {:ok, op}
 
-  defp host_write(actor, path, op, content, sources, attempt) do
+  defp host_write(actor, path, op, content, threads, attempt) do
     marked =
       Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.mark", fn ->
         Arca.Repo.locking_transaction(fn ->
-          case mark!(actor, path, op, %{bytes: byte_size(content), sources: sources}) do
+          case mark!(actor, path, op, %{bytes: byte_size(content), threads: threads}) do
             {:ok, mark} -> mark
             {:refused, reason} -> Arca.Repo.rollback({:refused, reason})
           end
@@ -484,10 +484,10 @@ defmodule Arca.ObjectRevisions do
       {:ok, mark} ->
         case store(actor, mark, content) do
           :ok ->
-            host_settle(actor, mark, path, op, content, sources, attempt)
+            host_settle(actor, mark, path, op, content, threads, attempt)
 
           {:error, :base_moved} ->
-            rederive(actor, path, op, content, sources, attempt)
+            rederive(actor, path, op, content, threads, attempt)
 
           {:error, _} = error ->
             error
@@ -501,7 +501,7 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
-  defp host_settle(actor, mark, path, op, content, sources, attempt) do
+  defp host_settle(actor, mark, path, op, content, threads, attempt) do
     settled =
       Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.settle", fn ->
         Arca.Repo.locking_transaction(fn -> settle!(actor, mark, [], fresh: true) end)
@@ -512,7 +512,7 @@ defmodule Arca.ObjectRevisions do
         :ok
 
       {:ok, :base_moved} ->
-        rederive(actor, path, op, content, sources, attempt)
+        rederive(actor, path, op, content, threads, attempt)
 
       # A create a delete fenced after its mark: nothing landed, and the
       # caller's read of the path says so.
@@ -533,13 +533,13 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
-  defp rederive(actor, path, op, content, sources, attempt)
+  defp rederive(actor, path, op, content, threads, attempt)
        when attempt < @append_attempts do
     backoff(attempt)
-    host_write(actor, path, op, content, sources, attempt + 1)
+    host_write(actor, path, op, content, threads, attempt + 1)
   end
 
-  defp rederive(_actor, _path, _op, _content, _sources, attempt) do
+  defp rederive(_actor, _path, _op, _content, _threads, attempt) do
     Logger.warning("[Arca.ObjectRevisions] an append still losing after #{attempt} attempts")
     {:error, :precondition_failed}
   end
@@ -586,7 +586,7 @@ defmodule Arca.ObjectRevisions do
     with {:ok, _athanor_id} <- athanor(actor) do
       Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.delete", fn ->
         Arca.Repo.locking_transaction(fn ->
-          case mark!(actor, path, :delete, %{bytes: 0, sources: []}) do
+          case mark!(actor, path, :delete, %{bytes: 0, threads: []}) do
             {:ok, mark} -> settle!(actor, mark, [])
             {:refused, reason} -> Arca.Repo.rollback(reason)
           end
@@ -664,10 +664,10 @@ defmodule Arca.ObjectRevisions do
   the destination, never both and never neither.
 
     1. **Read.** The source's settled rows, each one's generation and
-       sources, and its bytes. `admit` is asked of each destination path
-       with its bytes before anything is marked.
+       read threads, and its bytes. `admit` is asked of each destination
+       path with its bytes before anything is marked.
     2. **Mark.** One transaction marks a create of every destination path,
-       carrying the source's sources. A path already settled, or a file
+       carrying the source's read threads. A path already settled, or a file
        and a folder that would share a name, refuses here and marks
        nothing.
     3. **Store.** The bytes go to the marks' keys, outside any
@@ -704,7 +704,7 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
-  # The source's settled objects as `{path, generation, sources, bytes}`,
+  # The source's settled objects as `{path, generation, threads, bytes}`,
   # each generation's bytes read from its own key: a generation collected
   # under this read was superseded, so the source changed.
   defp read_source(actor, athanor_id, src) do
@@ -718,7 +718,8 @@ defmodule Arca.ObjectRevisions do
 
           case adapter().get(actor, object_key(row.settled_generation, path)) do
             {:ok, bytes} ->
-              entry = {path, row.settled_generation, Prima.Source.decode(row.sources), bytes}
+              threads = Arca.ThreadStorage.threads_of(row.read_threads)
+              entry = {path, row.settled_generation, threads, bytes}
               {:cont, {:ok, [entry | acc]}}
 
             {:error, :not_found} ->
@@ -738,11 +739,11 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
-  defp place({path, _generation, sources, bytes}, src, dest),
-    do: {dest ++ Enum.drop(path, length(src)), sources, bytes}
+  defp place({path, _generation, threads, bytes}, src, dest),
+    do: {dest ++ Enum.drop(path, length(src)), threads, bytes}
 
   defp admit_all(placed, admit) do
-    Enum.reduce_while(placed, :ok, fn {path, _sources, bytes}, :ok ->
+    Enum.reduce_while(placed, :ok, fn {path, _threads, bytes}, :ok ->
       case admit.(path, bytes) do
         :ok -> {:cont, :ok}
         refused -> {:halt, refused}
@@ -754,9 +755,9 @@ defmodule Arca.ObjectRevisions do
     Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.move", fn ->
       Arca.Repo.locking_transaction(fn ->
         placed
-        |> Enum.sort_by(fn {path, _sources, _bytes} -> key(path) end)
-        |> Enum.map(fn {path, sources, bytes} ->
-          case mark!(actor, path, :create, %{bytes: byte_size(bytes), sources: sources}) do
+        |> Enum.sort_by(fn {path, _threads, _bytes} -> key(path) end)
+        |> Enum.map(fn {path, threads, bytes} ->
+          case mark!(actor, path, :create, %{bytes: byte_size(bytes), threads: threads}) do
             {:ok, mark} -> mark
             {:refused, reason} -> Arca.Repo.rollback(reason)
           end
@@ -766,7 +767,7 @@ defmodule Arca.ObjectRevisions do
   end
 
   defp store_moves(actor, marks, placed) do
-    bytes = Map.new(placed, fn {path, _sources, bytes} -> {path, bytes} end)
+    bytes = Map.new(placed, fn {path, _threads, bytes} -> {path, bytes} end)
 
     Enum.reduce_while(marks, :ok, fn mark, :ok ->
       case store(actor, mark, Map.fetch!(bytes, mark.segments)) do
@@ -786,7 +787,7 @@ defmodule Arca.ObjectRevisions do
   # move still answers that it moved what it read.
   defp publish_move(actor, athanor_id, {src, dest}, read, marks) do
     expected =
-      Map.new(read, fn {path, generation, _sources, _bytes} -> {key(path), generation} end)
+      Map.new(read, fn {path, generation, _threads, _bytes} -> {key(path), generation} end)
 
     prefix = key(src)
     now = DateTime.utc_now()
@@ -896,8 +897,9 @@ defmodule Arca.ObjectRevisions do
   Mark a generation of `path` for `op` inside the caller's transaction:
   the row locked (made when absent, for a write), its generation raised,
   and, for a write, the generation's row inserted with `bytes` (an
-  append's settled bytes plus the suffix) and `sources` (an append's
-  joined with the settled object's). `{:refused, reason}` writes nothing:
+  append's settled bytes plus the suffix) and `threads`, the writer's
+  read threads (an append's joined with the settled object's).
+  `{:refused, reason}` writes nothing:
   `:not_found` for a delete where nothing is settled, `:exists` for a
   create over a settled object, `:missing` or `:precondition_failed` for
   a replace whose precondition does not hold, `:object_too_large` for an
@@ -907,7 +909,7 @@ defmodule Arca.ObjectRevisions do
   """
   @spec mark!(Prima.Actor.t(), Arca.Storage.path(), op(), %{
           bytes: non_neg_integer(),
-          sources: [Prima.Source.t()]
+          threads: [String.t()]
         }) :: {:ok, mark()} | {:refused, atom()}
   # arca:db-raise-ok inside the caller's transaction
   def mark!(%Prima.Actor{athanor_id: athanor_id}, path, :delete, _what)
@@ -937,7 +939,7 @@ defmodule Arca.ObjectRevisions do
   end
 
   # arca:db-raise-ok inside the caller's transaction
-  def mark!(%Prima.Actor{athanor_id: athanor_id}, path, op, %{bytes: bytes, sources: sources})
+  def mark!(%Prima.Actor{athanor_id: athanor_id}, path, op, %{bytes: bytes, threads: threads})
       when is_binary(athanor_id) and athanor_id != "" do
     key = key(path)
     lock_ancestors!(athanor_id, path)
@@ -947,7 +949,7 @@ defmodule Arca.ObjectRevisions do
 
     with :ok <- precondition(op, row),
          :ok <- shape(athanor_id, path, key),
-         {:ok, stored, joined} <- derived(athanor_id, op, row, visible, bytes, sources) do
+         {:ok, stored, joined} <- derived(op, row, visible, bytes, threads) do
       next = next_generation!(athanor_id, path, row)
       raise_generation!(athanor_id, key, next)
 
@@ -956,7 +958,7 @@ defmodule Arca.ObjectRevisions do
         path: key,
         generation: next,
         bytes: stored,
-        sources: Prima.Source.encode(joined),
+        read_threads: Arca.ThreadStorage.threads_text(joined),
         marked_at: DateTime.utc_now()
       })
 
@@ -1034,26 +1036,24 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
-  # What the generation holds: an append the settled bytes and their
-  # sources, extended by the suffix and the writer's sources.
-  defp derived(athanor_id, :append, row, visible, bytes, sources) do
+  # What the generation holds: an append the settled bytes and their read
+  # threads, extended by the suffix and the writer's read threads.
+  defp derived(:append, row, visible, bytes, threads) do
     base_bytes = visible || 0
 
     if base_bytes + bytes > Prima.Limits.default_max_response_size() do
       {:refused, :object_too_large}
     else
       inherited =
-        if is_integer(row.settled_generation), do: settled_sources!(athanor_id, row), else: []
+        if is_integer(row.settled_generation),
+          do: Arca.ThreadStorage.threads_of(row.read_threads),
+          else: []
 
-      {:ok, base_bytes + bytes, Prima.Source.union(inherited, sources)}
+      {:ok, base_bytes + bytes, inherited ++ threads}
     end
   end
 
-  defp derived(_athanor_id, _op, _row, _visible, bytes, sources),
-    do: {:ok, bytes, Prima.Source.set(sources)}
-
-  defp settled_sources!(_athanor_id, %ObjectRevision{sources: sources}),
-    do: Prima.Source.decode(sources)
+  defp derived(_op, _row, _visible, bytes, threads), do: {:ok, bytes, threads}
 
   defp base(:append, row), do: row.settled_generation
   defp base({:if_match, generation}, _row), do: generation
@@ -1088,14 +1088,14 @@ defmodule Arca.ObjectRevisions do
   Settle `mark` inside the caller's transaction (the table in the
   moduledoc): the row locked, the deletion fence and the operation's
   condition checked, and the pointer moved with the generation's recorded
-  sources joined with `sources` (the settling attempt's ledger; none for
-  a write with no attempt). `fresh: true` refuses `:expired` a mark older
+  read threads joined with `threads` (the settling attempt's run's; none
+  for a write with no attempt). `fresh: true` refuses `:expired` a mark older
   than the settling window of a write with no attempt. A generation whose
   row retention collected settles nothing (`:expired`).
   """
-  @spec settle!(Prima.Actor.t(), mark(), [Prima.Source.t()], keyword()) :: settlement() | :expired
+  @spec settle!(Prima.Actor.t(), mark(), [String.t()], keyword()) :: settlement() | :expired
   # arca:db-raise-ok inside the caller's transaction
-  def settle!(%Prima.Actor{athanor_id: athanor_id}, %Mark{} = mark, sources, opts \\ [])
+  def settle!(%Prima.Actor{athanor_id: athanor_id}, %Mark{} = mark, threads, opts \\ [])
       when is_binary(athanor_id) and athanor_id != "" do
     # Ancestors, own row, then every row under it: the one ascending path
     # order every locker of these rows takes. The range comes last because
@@ -1108,7 +1108,7 @@ defmodule Arca.ObjectRevisions do
 
     case mark.op do
       :delete -> settle_delete!(athanor_id, row, mark)
-      op -> settle_write!(athanor_id, row, mark, op, sources, Keyword.get(opts, :fresh, false))
+      op -> settle_write!(athanor_id, row, mark, op, threads, Keyword.get(opts, :fresh, false))
     end
   end
 
@@ -1132,7 +1132,7 @@ defmodule Arca.ObjectRevisions do
     end
   end
 
-  defp settle_write!(athanor_id, row, mark, op, sources, fresh?) do
+  defp settle_write!(athanor_id, row, mark, op, threads, fresh?) do
     generation = generation!(athanor_id, mark)
 
     cond do
@@ -1147,13 +1147,13 @@ defmodule Arca.ObjectRevisions do
         # path and its ancestors: of a file and a path under it marked
         # together, the second to settle refuses.
         case shape(athanor_id, mark.segments, mark.key) do
-          :ok -> settle_condition(athanor_id, row, mark, op, generation, sources)
+          :ok -> settle_condition(athanor_id, row, mark, op, generation, threads)
           {:refused, reason} -> reason
         end
     end
   end
 
-  defp settle_condition(athanor_id, row, mark, op, generation, sources) do
+  defp settle_condition(athanor_id, row, mark, op, generation, threads) do
     settled = row.settled_generation
 
     case op do
@@ -1162,14 +1162,15 @@ defmodule Arca.ObjectRevisions do
       :create when is_integer(settled) -> :exists
       {:if_match, _} when is_nil(settled) -> :missing
       {:if_match, expected} when settled != expected -> :precondition_failed
-      _settles -> publish!(athanor_id, mark, generation, sources)
+      _settles -> publish!(athanor_id, mark, generation, threads)
     end
   end
 
-  defp publish!(athanor_id, mark, %ObjectGeneration{sources: recorded}, sources) do
+  defp publish!(athanor_id, mark, %ObjectGeneration{read_threads: recorded}, threads) do
     update_row!(athanor_id, mark.key,
       settled_generation: mark.generation,
-      sources: Prima.Source.encode(Prima.Source.union(Prima.Source.decode(recorded), sources)),
+      read_threads:
+        Arca.ThreadStorage.threads_text(Arca.ThreadStorage.threads_of(recorded) ++ threads),
       deleted: false,
       settled_at: DateTime.utc_now()
     )
@@ -1413,7 +1414,7 @@ defmodule Arca.ObjectRevisions do
   defp ensure_row!(athanor_id, key) do
     Arca.Repo.insert_all(
       ObjectRevision,
-      [%{athanor_id: athanor_id, path: key, generation: 0, sources: "[]", deleted: false}],
+      [%{athanor_id: athanor_id, path: key, generation: 0, read_threads: "[]", deleted: false}],
       on_conflict: :nothing,
       conflict_target: [:athanor_id, :path]
     )

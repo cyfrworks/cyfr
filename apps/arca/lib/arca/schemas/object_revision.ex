@@ -8,11 +8,11 @@ defmodule Arca.Schemas.ObjectRevision do
 
   `generation` is the last generation handed out for the path and only
   rises; `settled_generation` is the generation a read resolves to, nil
-  until a first settlement; `sources` are the settled generation's
-  (`Prima.Source`, canonical JSON); `deleted` and `deleted_at_generation`
-  record a delete, which a settlement at or below that generation never
-  undoes; `settled_at` is when the pointer last moved. Owned by the
-  athanor.
+  until a first settlement; `read_threads` are the settled generation's
+  (`Arca.ThreadStorage.threads_text/1`); `deleted` and
+  `deleted_at_generation` record a delete, which a settlement at or below
+  that generation never undoes; `settled_at` is when the pointer last
+  moved. Owned by the athanor.
   """
 
   use Ecto.Schema
@@ -26,7 +26,7 @@ defmodule Arca.Schemas.ObjectRevision do
     field :path, :string, primary_key: true
     field :generation, :integer
     field :settled_generation, :integer
-    field :sources, :string
+    field :read_threads, :string
     field :deleted, :boolean, default: false
     field :deleted_at_generation, :integer
     field :settled_at, :utc_datetime_usec

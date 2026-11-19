@@ -68,16 +68,11 @@ defmodule Opus.Host.Children do
   and the header's attempt as its lineage. A setup refusal is announced on
   the root's event stream. The answer is the tool's result.
 
-  Whatever the call answers — its result or its
-  refusal — reaches the guest, and the root's stream hears of a setup
-  refusal, only once the run's ledger holds what the answer carries
-  (`Opus.Ledger.join/3`): a server's answer is outside, named by the server
-  (its call's row was labelled so before the call left,
-  `Emissary.External.Proxy`); a catalog action's success carries what its
-  `sources:` declaration says (`Prima.Operation.answer_sources/3`: its
-  classes, or the answer's own provenance); a refusal made before any
-  handler ran carries nothing, and any other carries every class the
-  action may answer. A join that cannot be written answers `unavailable`.
+  A catalog action's answer that carries a thread's posts reaches the
+  guest only once the run's read threads hold that thread
+  (`Prima.Operation.read_threads/3`, joined through
+  `Arca.Execution.join_threads/3`), so deleting the thread finds the run.
+  A join that cannot be written answers `unavailable`.
 
   ## release_child
 
@@ -402,27 +397,21 @@ defmodule Opus.Host.Children do
   # tool_call
   # ---------------------------------------------------------------------------
 
-  # What the call's answer carries joins the run's ledger before the
-  # answer, a refusal included, reaches the guest.
+  # The threads the call's answer carries join the run before the answer
+  # reaches the guest. An outside server's tool names no catalog
+  # operation, so its answer joins none.
   defp answered(caller, chain, tool, result) do
-    Opus.Ledger.join(
-      Sanctum.Context.actor(chain.ctx),
-      caller.execution_id,
-      answer_sources(chain, tool, result)
-    )
-  end
+    actor = Sanctum.Context.actor(chain.ctx)
 
-  defp answer_sources(chain, %{name: name} = tool, result) do
-    case String.split(name, ":", parts: 2) do
-      [server, _tool] when server != "" ->
-        [Prima.Source.outside(server)]
+    case Prima.Operation.read_threads(operation_of(tool.name, tool.args), actor, result) do
+      [] ->
+        :ok
 
-      _catalog ->
-        Prima.Operation.result_sources(
-          operation_of(name, tool.args),
-          Sanctum.Context.actor(chain.ctx),
-          result
-        )
+      ids ->
+        case Arca.Execution.join_threads(actor, caller.execution_id, ids) do
+          :ok -> :ok
+          {:error, _not_written} -> {:error, :unavailable}
+        end
     end
   end
 

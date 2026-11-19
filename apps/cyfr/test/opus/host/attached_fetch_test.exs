@@ -905,39 +905,16 @@ defmodule Opus.Host.AttachedFetchTest do
   # Admitted
   # ---------------------------------------------------------------------------
 
-  describe "the ledger" do
-    # A class the run read, joined as a read joins it.
-    defp read_class!(fixture, class) do
-      :ok =
-        Opus.Ledger.join(
-          Prima.Actor.in_athanor(fixture.athanor_id),
-          fixture.execution_id,
-          [Prima.Source.new(class)]
-        )
-    end
-
-    defp ledger(fixture) do
-      {:ok, sources} =
-        Arca.Execution.sources(Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id)
-
-      sources
-    end
-
-    test "a run holding any class is pinned and fetched, and its host joins the ledger: nothing of where its material came from is checked",
+  describe "the read threads" do
+    test "a run that read a thread is pinned and fetched, and the fetch joins nothing: nothing of what it read is checked",
          %{ctx: ctx, port: port} do
       %{fixture: fixture} = scenario!(ctx, port)
-      read_class!(fixture, :filed)
-      read_class!(fixture, :vault_disclosed)
+      actor = Prima.Actor.in_athanor(fixture.athanor_id)
+      :ok = Arca.Execution.join_threads(actor, fixture.execution_id, ["thr_read"])
 
       assert :ok = fetched(fixture, request("http://127.0.0.1:#{port}/hello"))
       assert received_upstream().path == "/hello"
-
-      assert ledger(fixture) == [
-               Prima.Source.new(:filed),
-               Prima.Source.new(:vault_disclosed),
-               Prima.Source.outside("127.0.0.1")
-             ]
-
+      assert Arca.Execution.read_threads(actor, fixture.execution_id) == {:ok, ["thr_read"]}
       assert denials(fixture) == []
     end
   end

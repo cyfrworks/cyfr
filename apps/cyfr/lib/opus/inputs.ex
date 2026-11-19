@@ -49,10 +49,10 @@ defmodule Opus.Inputs do
       whose bytes the old attempt may already have handed on, so it can
       arrive and be acted on twice; the old attempt can never acknowledge
       the replacement's delivery, since its calls are `lost`.
-    * Attachments are the supplier's to resolve: it joins their sources to
-      the invocation's run, and checks their removal and authority, before
-      it returns their bytes. Nothing an input carries is a path or an
-      address for anyone to fetch.
+    * Attachments are the supplier's to resolve: it joins their read
+      threads to the invocation's run, and checks their removal and
+      authority, before it returns their bytes. Nothing an input carries
+      is a path or an address for anyone to fetch.
 
   An input handed over cannot be recalled: once `next` has answered it to
   the runner, its bytes may reach the harness whatever happens after,

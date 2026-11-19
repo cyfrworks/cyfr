@@ -386,7 +386,7 @@ defmodule Opus.Provider do
               )
             ],
             kind: :read,
-            sources: {:answer, {__MODULE__, :answer_sources}},
+            threads: {__MODULE__, :read_threads},
             planes: [:external, :in_chain],
             permission: :execute
           ),
@@ -401,7 +401,7 @@ defmodule Opus.Provider do
               )
             ],
             kind: :read,
-            sources: {:answer, {__MODULE__, :answer_sources}},
+            threads: {__MODULE__, :read_threads},
             planes: [:external, :in_chain],
             permission: :execute
           ),
@@ -416,7 +416,6 @@ defmodule Opus.Provider do
               )
             ],
             kind: :write,
-            sources: [],
             planes: [:external, :in_chain],
             permission: :execute
           ),
@@ -500,28 +499,27 @@ defmodule Opus.Provider do
   # ============================================================================
 
   @doc """
-  What an execution read's answer carries (the `logs` and `list`
-  operations' `sources:` declaration, `Prima.Operation.answer_sources/3`):
-  the ledger of every execution it answers (`Arca.Execution.sources/2`),
-  read under `actor`. A record of a sibling or child carries the
-  provenance its run held when it wrote what the record shows; one whose
-  ledger cannot be read, or whose row is gone, is an unnamed outside
-  source.
+  The threads an execution read's answer carries (the `logs` and `list`
+  operations' `threads:` declaration, `Prima.Operation.read_threads/3`):
+  the union of the read threads of every execution it answers
+  (`Arca.Execution.read_threads/2`), read under `actor`. A record of a
+  sibling or child carries the threads its run read when it wrote what
+  the record shows; one whose read threads cannot be read, or whose row
+  is gone, adds none.
   """
-  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
-  def answer_sources(%Prima.Actor{} = actor, answer) do
+  @spec read_threads(Prima.Actor.t() | nil, term()) :: [String.t()]
+  def read_threads(%Prima.Actor{} = actor, answer) do
     answer
     |> answered_ids()
     |> Enum.flat_map(fn id ->
-      case Arca.Execution.sources(actor, id) do
-        {:ok, sources} -> sources
-        {:error, _unread} -> [Prima.Source.outside(nil)]
+      case Arca.Execution.read_threads(actor, id) do
+        {:ok, ids} -> ids
+        {:error, _unread} -> []
       end
     end)
-    |> Prima.Source.set()
   end
 
-  def answer_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
+  def read_threads(_actor, _answer), do: []
 
   defp answered_ids(%{executions: executions}) when is_list(executions),
     do: for(%{execution_id: id} <- executions, is_binary(id), do: id)
@@ -668,7 +666,7 @@ defmodule Opus.Provider do
   # (`Opus.run_root/5`'s `:consent_id`), so a grant changed since runs
   # nothing. Only such a run is repeated exactly from
   # its row: its seed was empty and it named no account, while a run
-  # started anywhere else may have carried a launch's sources or an
+  # started anywhere else may have carried a launch's read threads or an
   # account the row does not record. The retry starts as the caller's own
   # run, recording the caller's origin. It
   # answers `accepted` with the new run's id once the run is admitted
@@ -771,7 +769,7 @@ defmodule Opus.Provider do
     case run_root_formatted(ctx, reference, input, opts, args) do
       {:ok, result} ->
         # Format response for MCP (convert atoms to strings for JSON)
-        {:ok, format_run_result(ctx, result, reference)}
+        {:ok, format_run_result(result, reference)}
 
       {:error, reason} ->
         {:error, reason}
@@ -977,10 +975,7 @@ defmodule Opus.Provider do
 
   # Format the root run's result for the MCP response
   # Converts atoms to strings for JSON serialization
-  # The completion result carries whether any run of the tree was admitted
-  # with egress, as each admission marked its root (`Opus.Record`): the
-  # one fact a launcher reads to know what the result came from.
-  defp format_run_result(ctx, result, reference) do
+  defp format_run_result(result, reference) do
     meta = result.metadata
 
     %{
@@ -993,10 +988,9 @@ defmodule Opus.Provider do
       user_id: meta.user_id,
       reference: reference,
       policy_applied: meta.policy_applied,
-      reached_outside: Record.reached_outside(ctx, meta.execution_id),
-      # The tree's ledger as its root's terminal write left it: what its
-      # result carries into whoever launched it.
-      sources: Prima.Source.to_json_list(result.sources)
+      # The tree's read threads as its root's terminal write left them:
+      # what its result carries into whoever launched it.
+      read_threads: result.read_threads
     }
   end
 

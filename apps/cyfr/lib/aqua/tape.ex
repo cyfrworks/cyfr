@@ -471,36 +471,35 @@ defmodule Aqua.Tape do
   end
 
   @doc """
-  Join `sources` into the turn's (`TurnStorage.join_sources/4`), under the
-  turn's row lock and its fence: what a model child's persisted ledger
-  brings into its turn before the turn uses the child's answer. A runner
-  whose fence moved is refused `{:error, :superseded}`; nothing to join
-  writes nothing.
+  Join `threads` into the turn's read threads
+  (`TurnStorage.join_threads/4`), under the turn's row lock and its fence:
+  what a child's run read joins its turn before the turn uses the child's
+  answer. A runner whose fence moved is refused `{:error, :superseded}`;
+  nothing to join writes nothing.
   """
-  @spec join_sources(Context.t(), turn(), [Prima.Source.t()]) :: :ok | {:error, term()}
-  def join_sources(%Context{}, _turn, []), do: :ok
+  @spec join_threads(Context.t(), turn(), [String.t()]) :: :ok | {:error, term()}
+  def join_threads(%Context{}, _turn, []), do: :ok
 
-  def join_sources(%Context{} = ctx, turn, sources) when is_list(sources),
+  def join_threads(%Context{} = ctx, turn, threads) when is_list(threads),
     do:
-      TurnStorage.join_sources(Sanctum.Context.actor(ctx), turn.id, sources, %{fence: turn.fence})
+      TurnStorage.join_threads(Sanctum.Context.actor(ctx), turn.id, threads, %{fence: turn.fence})
 
   @doc """
-  Join what the turn read of the athanor's threads into its sources
+  Join what the turn read of the athanor's threads into its read threads
   before its read answers (`TurnStorage.join_read/3`), under the turn's
-  row lock and its fence: `threads` (each whose posts it read), `sources`
-  (what those rows carry, `carried_sources/1`) and `turns`
+  row lock and its fence: `threads` (each whose posts it read or that those
+  posts carry, `carried_threads/1`) and the read threads of `turns`
   (`writing_turns/1`). Answers the threads that still stood, whose posts
-  alone the read may answer, and the sources joined.
+  alone the read may answer, and the read threads joined.
   """
-  @spec join_read(Context.t(), turn(), [String.t()], [Prima.Source.t()], [String.t()]) ::
-          {:ok, %{threads: [String.t()], sources: [Prima.Source.t()]}} | {:error, term()}
-  def join_read(%Context{} = ctx, turn, threads, sources, turns),
+  @spec join_read(Context.t(), turn(), [String.t()], [String.t()]) ::
+          {:ok, %{threads: [String.t()], read_threads: [String.t()]}} | {:error, term()}
+  def join_read(%Context{} = ctx, turn, threads, turns),
     do:
       TurnStorage.join_read(Sanctum.Context.actor(ctx), turn.id, %{
         fence: turn.fence,
         threads: threads,
-        sources: sources,
-        sources_from: turns
+        threads_from: turns
       })
 
   @doc """
@@ -1126,42 +1125,37 @@ defmodule Aqua.Tape do
   def payload(row), do: Threads.payload(row)
 
   @doc """
-  What `rows` carry of the athanor's other threads, as sources: a row
-  naming a workspace thread (a pointer, a report, the server's post of
-  its wait) names it, and an opening the daily
-  thread its refs are posts of, each a `thread` source
-  (`Prima.Source.thread/1`) by which forgetting that thread finds the
-  turn that read it; a report the sources its record kept of the turn
-  that reported, so its outside material joins even once that turn's row
-  is gone; and a copied file the sources of the post it was copied from
-  (`Aqua.Attachments.copied_sources/1`). What every reader of rows joins
-  besides the sources of the turns that wrote them (`writing_turns/1`).
+  The athanor's other threads whose posts `rows` carry: a row naming a
+  workspace thread (a pointer, a report, the server's post of its wait)
+  names it, a report the read threads its record kept of the turn that
+  reported, so they join even once that turn's row is gone, an opening
+  the daily thread its refs are posts of, and a copied file the read
+  threads of the post it was copied from
+  (`Aqua.Attachments.copied_threads/1`). By these, forgetting a thread
+  finds the turn that read it. What every reader of rows joins besides the
+  read threads of the turns that wrote them (`writing_turns/1`).
   """
-  @spec carried_sources([row()]) :: [Prima.Source.t()]
-  def carried_sources(rows) when is_list(rows),
+  @spec carried_threads([row()]) :: [String.t()]
+  def carried_threads(rows) when is_list(rows),
     do: Enum.flat_map(rows, &(carried(&1) ++ files_carried(&1)))
 
-  defp carried(%{workspace_id: id} = row) when is_binary(id),
-    do: [Prima.Source.thread(id) | kept(row)]
+  defp carried(%{workspace_id: id} = row) when is_binary(id), do: [id | kept(row)]
 
   defp carried(%{kind: "opening"} = row) do
     case payload(row) do
-      %{"from" => %{"thread" => id}} when is_binary(id) and id != "" ->
-        [Prima.Source.thread(id)]
-
-      _ ->
-        []
+      %{"from" => %{"thread" => id}} when is_binary(id) and id != "" -> [id]
+      _ -> []
     end
   end
 
   defp carried(_row), do: []
 
   defp files_carried(row),
-    do: Enum.flat_map(Aqua.Attachments.refs_of(row), &Aqua.Attachments.copied_sources/1)
+    do: Enum.flat_map(Aqua.Attachments.refs_of(row), &Aqua.Attachments.copied_threads/1)
 
   defp kept(%{kind: "report"} = row) do
-    case payload(row)["sources"] do
-      sources when is_list(sources) -> Enum.map(sources, &Prima.Source.from_json/1)
+    case payload(row)["read_threads"] do
+      ids when is_list(ids) -> Enum.filter(ids, &(is_binary(&1) and &1 != ""))
       _ -> []
     end
   end

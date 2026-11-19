@@ -56,7 +56,6 @@ defmodule Arca.StaleMemberUnitRemovalTest do
             "Remove a unit",
             [Prima.Arg.new("unit", :string, required: true)],
             kind: :write,
-            sources: [],
             planes: [:external]
           )
         ])

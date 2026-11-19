@@ -5,7 +5,7 @@ defmodule Aqua.ProgramToolTest do
   @moduledoc """
   Aqua's own program tool through the real loop, a model's start a call
   like any other of its mode: in auto it runs at once, and its answer is
-  what the program printed, an outside source named by the program; in
+  what the program printed, which joins no thread to the turn; in
   read-only every start is refused in the read-only sentence, which the
   thread is told once, while the tool's list runs; a start whose words
   are not readable text, too many or too long, or whose row changed
@@ -22,7 +22,6 @@ defmodule Aqua.ProgramToolTest do
   alias Aqua.Tape
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Cyfr.Test.ScriptedWorker
-  alias Prima.Source
 
   @model "catalyst:local.claude"
   @model_id "scripted-small"
@@ -91,13 +90,13 @@ defmodule Aqua.ProgramToolTest do
                        _fields}
 
       # The program's output is the step's result, and what the model read
-      # next; it joined the turn as an outside source named by the program.
+      # next; it carries no thread's posts, so the turn read no thread.
       assert %{outcome: "ok"} = step(ctx, turn, "c1")
 
       assert %{"output" => ~s({"stargazerCount":3}\n), "ended" => "exited", "program" => "gh"} =
                last_tool_result()
 
-      assert Source.outside("gh") in sources(ctx, turn)
+      assert read_threads(ctx, turn) == []
 
       # Its session ended with the turn, at the latest.
       assert {:ok, []} = Opus.Programs.running(ctx)
@@ -289,9 +288,9 @@ defmodule Aqua.ProgramToolTest do
     turn
   end
 
-  defp sources(ctx, turn) do
-    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
-    Source.decode(sources)
+  defp read_threads(ctx, turn) do
+    {:ok, %{read_threads: read}} = Tape.turn(ctx, turn.id)
+    Arca.ThreadStorage.threads_of(read)
   end
 
   defp step(ctx, turn, call_id) do

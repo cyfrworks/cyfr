@@ -71,12 +71,12 @@ defmodule Opus.GuestStorageTest do
   end
 
   # A hold that stands from the intent to its settlement, as an attempt's
-  # does with no source in its ledger: a guest object's write is marked,
+  # does for a run that read no thread: a guest object's write is marked,
   # stored at its generation's key and settled, and a read answers the
   # settled object; any other store call runs and its answer decides.
   defp held(ctx, %{op: :read, path: path}) do
     case Arca.ObjectRevisions.read(Sanctum.Context.actor(ctx), path) do
-      {:ok, bytes, _sources} -> {:ok, {:read, {:ok, bytes}}}
+      {:ok, bytes, _threads} -> {:ok, {:read, {:ok, bytes}}}
       {:error, _} = error -> {:ok, {:read, error}}
     end
   end
@@ -87,7 +87,7 @@ defmodule Opus.GuestStorageTest do
       Arca.Repo.transaction(fn ->
         Arca.ObjectRevisions.mark!(Sanctum.Context.actor(ctx), path, op, %{
           bytes: Map.get(write, :bytes) || 0,
-          sources: []
+          threads: []
         })
       end)
 
@@ -933,7 +933,7 @@ defmodule Opus.GuestStorageTest do
       assert {:ok, "kept"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "kept.txt"])
 
       # A guest object's read is answered through the hold, which joins its
-      # sources into the run's ledger before its bytes are handed over.
+      # read threads into the run before its bytes are handed over.
       assert {:error, :lost} =
                run(ctx, edge(["data/"]), %{"action" => "read", "path" => "data/kept.txt"},
                  hold: lost

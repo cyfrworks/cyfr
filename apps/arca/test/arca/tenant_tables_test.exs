@@ -137,7 +137,7 @@ defmodule Arca.TenantTablesTest do
             path: "data/a.txt",
             generation: 2,
             settled_generation: 2,
-            sources: "[]",
+            read_threads: "[]",
             deleted: false,
             deleted_at_generation: nil,
             settled_at: now
@@ -147,7 +147,7 @@ defmodule Arca.TenantTablesTest do
             path: "data/b.txt",
             generation: 1,
             settled_generation: nil,
-            sources: "[]",
+            read_threads: "[]",
             deleted: false,
             deleted_at_generation: nil,
             settled_at: nil
@@ -161,7 +161,7 @@ defmodule Arca.TenantTablesTest do
             path: "data/a.txt",
             generation: 1,
             bytes: 3,
-            sources: "[]",
+            read_threads: "[]",
             marked_at: now
           },
           %{
@@ -169,7 +169,7 @@ defmodule Arca.TenantTablesTest do
             path: "data/a.txt",
             generation: 2,
             bytes: 5,
-            sources: "[]",
+            read_threads: "[]",
             marked_at: now
           },
           %{
@@ -177,7 +177,7 @@ defmodule Arca.TenantTablesTest do
             path: "data/b.txt",
             generation: 1,
             bytes: 7,
-            sources: "[]",
+            read_threads: "[]",
             marked_at: now
           }
         ])

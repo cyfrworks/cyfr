@@ -84,8 +84,8 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
                RequestLog.closed(alice, {:ok, other}, %{})
     end
 
-    # A clock or a source inside an answer is read by its fields, and the
-    # row is still written.
+    # A clock inside an answer is read by its fields, and the row is still
+    # written.
     clocked = %{id: mine.id, created_at: DateTime.utc_now()}
 
     assert %{status: "success", output: clocked_kept} =
@@ -93,10 +93,10 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
 
     assert clocked_kept =~ mine.id
 
-    sourced = %{id: bobs.id, created_at: DateTime.utc_now(), sources: [Prima.Source.new(:filed)]}
+    foreign_clocked = %{id: bobs.id, created_at: DateTime.utc_now()}
 
     assert %{status: "success", output: ~s({"redacted":"cross_athanor"})} =
-             RequestLog.closed(alice, {:ok, sourced}, %{})
+             RequestLog.closed(alice, {:ok, foreign_clocked}, %{})
 
     # Prose that merely starts like an id is a body, not a locator.
     prose = %{content: "ath_ is how an athanor id starts", athanor_id: mine.id}

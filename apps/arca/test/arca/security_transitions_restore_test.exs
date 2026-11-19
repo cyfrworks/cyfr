@@ -378,7 +378,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       accepted_at: now(),
       origin: "interactive",
       fence: 1,
-      sources: "[]"
+      read_threads: "[]"
     })
 
     id

@@ -41,9 +41,7 @@ defmodule Compendium.Providers.Registry do
   # Every action that sends a change to the registry — a POST that claims,
   # verifies, mints, adds, updates, reports or appeals — reaches
   # outside the home and is `external`; a DELETE there (`tokens_revoke`,
-  # `members_remove`) is `destructive`. The reads stay `read`. Every
-  # action declares `sources: [:outside]`: whatever it answers, an error
-  # body included, the registry wrote.
+  # `members_remove`) is `destructive`. The reads stay `read`.
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
@@ -55,7 +53,6 @@ defmodule Compendium.Providers.Registry do
       [
         Operation.new("registry", "sync", "Sync registry tokens", [answer_arg()],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -72,7 +69,6 @@ defmodule Compendium.Providers.Registry do
             answer_arg()
           ],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -89,7 +85,6 @@ defmodule Compendium.Providers.Registry do
             answer_arg()
           ],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
@@ -105,7 +100,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
-          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -122,7 +116,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -142,7 +135,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :destructive,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
@@ -158,7 +150,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
-          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -181,7 +172,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -206,7 +196,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -226,14 +215,12 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :destructive,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
         ),
         Operation.new("registry", "whoami", "Whoami registry", [],
           kind: :read,
-          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -247,7 +234,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
-          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -290,7 +276,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external, :in_chain]
         ),
@@ -307,7 +292,6 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
-          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -323,13 +307,11 @@ defmodule Compendium.Providers.Registry do
           ],
           auth: :signed_in,
           kind: :read,
-          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new("registry", "legal_version", "Legal version registry", [],
           auth: :signed_in,
           kind: :read,
-          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -354,7 +336,6 @@ defmodule Compendium.Providers.Registry do
             answer_arg()
           ],
           kind: :external,
-          sources: [:outside],
           consent: :interactive,
           planes: [:external, :in_chain]
         )

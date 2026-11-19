@@ -91,9 +91,8 @@ defmodule Sanctum.Catalog do
   boot: every consent shape is digested against the table, and a partial
   table would read as the whole. A build for any environment but test
   compiles no `with_providers/2`. An action the
-  gates cannot classify, an in-chain action that does not say what its
-  answers carry, a handler input the gate cannot honour, and a resource
-  read the gate cannot name refuse the boot the same way.
+  gates cannot classify, a handler input the gate cannot honour, and a
+  resource read the gate cannot name refuse the boot the same way.
   """
   @spec load!() :: :ok
   def load! do
@@ -227,14 +226,6 @@ defmodule Sanctum.Catalog do
     audit!(audit_action_kinds(providers), "tool annotations failed the catalog audit", fn f ->
       "#{f.tool}.#{f.action}: #{f.reason}"
     end)
-
-    audit!(
-      audit_sources(providers),
-      "in-chain actions failed the catalog's sources audit",
-      fn f ->
-        "#{f.tool}.#{f.action}: #{f.reason}"
-      end
-    )
 
     audit!(
       audit_context_kinds(providers),
@@ -900,34 +891,6 @@ defmodule Sanctum.Catalog do
     do: [
       %{provider: module, tool: Map.get(tool, :name), action: nil, reason: :missing_operations}
     ]
-
-  @doc """
-  Audit every provider's in-chain actions for a `sources:` declaration
-  (`Prima.Operation`). What a chain's call answers joins the run's ledger,
-  and what an assistant's call answers joins its turn, as that
-  declaration says (`Prima.Operation.result_sources/3`), and an action
-  that declares none is read as outside material: a read of the
-  athanor's own records would mark every run and turn that makes it. So
-  each in-chain action says
-  what its answers carry — `[]` for the athanor's own, `[:outside]` or an
-  answer reader for what reaches outside — and the catalog refuses to
-  boot on an omission, as it does on an unannotated action. An action
-  served only outside a chain joins no ledger and is not audited.
-
-  Returns `:ok`, or `{:error, [%{provider: module, tool: name, action:
-  verb, reason: :undeclared_sources}]}`.
-  """
-  @spec audit_sources([module()]) :: :ok | {:error, [map()]}
-  def audit_sources(providers \\ available_providers()) do
-    findings =
-      for module <- providers,
-          %{name: name, operations: operations} when is_list(operations) <- module.tools(),
-          %Operation{sources: nil, planes: planes, action: action} <- operations,
-          :in_chain in planes,
-          do: %{provider: module, tool: name, action: action, reason: :undeclared_sources}
-
-    if findings == [], do: :ok, else: {:error, findings}
-  end
 
   @doc """
   Audit every provider's declared handler input

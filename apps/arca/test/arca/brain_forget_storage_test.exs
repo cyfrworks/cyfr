@@ -171,7 +171,7 @@ defmodule Arca.BrainForgetStorageTest do
   end
 
   # A turn of `reader` that read `thread`, as a read of it stamps its
-  # sources.
+  # read threads.
   defp reads!(actor, reader, thread) do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, reader.id, %{
@@ -179,8 +179,10 @@ defmodule Arca.BrainForgetStorageTest do
         turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
-    sources = Jason.encode!([Prima.Source.to_json(Prima.Source.thread(thread.id))])
-    set_turn!(turn, status: "completed", sources: sources)
+    set_turn!(turn,
+      status: "completed",
+      read_threads: Arca.ThreadStorage.threads_text([thread.id])
+    )
   end
 
   defp record(actor, thread, row, session, generation),

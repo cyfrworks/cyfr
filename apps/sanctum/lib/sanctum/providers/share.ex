@@ -121,7 +121,7 @@ defmodule Sanctum.Providers.Share do
           "Your shares, active and revoked, oldest first: each names its entry, its " <>
             "audience and its caps, with today's total use (used_today)",
           [],
-          [sources: []] ++ read
+          read
         ),
         Operation.new(
           "share",
@@ -161,7 +161,7 @@ defmodule Sanctum.Providers.Share do
               description: "Days of use to read, today included"
             )
           ],
-          [sources: [:outside]] ++ read
+          read
         ),
         Operation.new(
           "share",
@@ -171,7 +171,7 @@ defmodule Sanctum.Providers.Share do
             "(used_today) and the most you may make in a day (person_daily, null for no " <>
             "limit); never another person's use",
           [],
-          [sources: [:outside]] ++ read
+          read
         )
       ],
       description:

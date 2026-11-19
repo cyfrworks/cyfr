@@ -179,10 +179,10 @@ defmodule Arca.FilesTest do
   end
 
   describe "a move" do
-    test "lands a file in its new folder and not its old one, with the sources it was written with",
+    test "lands a file in its new folder and not its old one, with the read threads it was " <>
+           "written with",
          %{actor: actor} do
-      vault = Prima.Source.new(:vault_disclosed)
-      :ok = Arca.put(actor, ["data", "inbox", "q3.csv"], "a,b\n", sources: [vault])
+      :ok = Arca.put(actor, ["data", "inbox", "q3.csv"], "a,b\n", threads: ["thr_inbox"])
 
       assert Files.move(actor, "data/inbox/q3.csv", "data/reports/q3.csv") ==
                {:ok, %{moved: "data/inbox/q3.csv", to: "data/reports/q3.csv"}}
@@ -194,7 +194,7 @@ defmodule Arca.FilesTest do
                   size: 4,
                   content: "a,b\n",
                   encoding: "utf8",
-                  sources: Prima.Source.to_json_list([vault])
+                  read_threads: ["thr_inbox"]
                 }}
 
       assert Files.read(actor, "data/inbox/q3.csv") ==

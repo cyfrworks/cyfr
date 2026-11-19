@@ -190,12 +190,11 @@ defmodule Arca.WorkspaceStorageTest do
        %{actor: actor, daily: daily} do
     workspace = open!(actor, daily)
     reader = running!(actor, daily)
-    read = Prima.Source.encode([Prima.Source.thread(workspace.id)])
 
     {1, _} =
       Arca.Repo.update_all(
         from(t in Arca.Schemas.Turn, where: t.id == ^reader.id),
-        set: [sources: read]
+        set: [read_threads: Arca.ThreadStorage.threads_text([workspace.id])]
       )
 
     # Finished, its opening stopped before it started: no work remains in it.
@@ -703,7 +702,7 @@ defmodule Arca.WorkspaceStorageTest do
     assert {:ok, %{workspace_state: "error"}} = refuse.()
     assert {:ok, %{status: "error"}} = Threads.get_message(actor, opening.id)
 
-    assert [%{snapshot: %{"outcome" => "error", "sources" => []} = snapshot}] =
+    assert [%{snapshot: %{"outcome" => "error", "read_threads" => []} = snapshot}] =
              records(actor, "workspace_report")
 
     assert snapshot["turn_id"] == nil

@@ -230,12 +230,11 @@ defmodule Opus.BrowserTest do
 
   defp not_a_draft, do: Aqua.Providers.Thread.not_a_draft()
 
-  # A turn's `open` of `url`, with the sources its result closes with
-  # joined into the turn, as the loop joins them when the step closes.
-  defp opened!(ctx, turn, lineage, url) do
-    {:ok, answer} = call(ctx, lineage, "open", %{"url" => url})
+  # The turn holding `thread_id` among its read threads, as the loop
+  # joins what a step read when the step closes.
+  defp read_thread!(ctx, turn, thread_id) do
     {:ok, turn} = Aqua.Tape.turn(ctx, turn.id)
-    :ok = Aqua.Tape.join_sources(ctx, turn, Provider.answer_sources(nil, answer))
+    :ok = Aqua.Tape.join_threads(ctx, turn, [thread_id])
   end
 
   defp attempt!(turn, attempt) do
@@ -418,19 +417,13 @@ defmodule Opus.BrowserTest do
         {:ok, %{"png" => Base.encode64(png), "width" => 1280, "height" => 900}}
       )
 
-      # The page was asked for at one address and landed at another.
-      answers(
-        context,
-        "open",
-        {:ok, %{"url" => "https://moon.example/landed", "title" => "Moon"}}
-      )
-
       {:ok, png: png}
     end
 
-    test "is the post's own file, carrying the outside source of the page it shows; the draft goes and posts once",
+    test "is the post's own file, carrying the threads its turn read; the draft goes and posts once",
          %{ctx: ctx, turn: turn, lineage: lineage, png: png} do
-      opened!(ctx, turn, lineage, "https://moon.example/")
+      {:ok, read} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      read_thread!(ctx, turn, read.id)
       {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
       thread_id = lineage["thread_id"]
 
@@ -442,10 +435,8 @@ defmodule Opus.BrowserTest do
       assert [%{"filename" => "screenshot.png", "media_type" => "image/png"} = ref] =
                Aqua.Attachments.refs_of(row)
 
-      # The landing page's host, never the asked-for address, and the
-      # screenshot's own outside source.
-      assert Prima.Source.outside("moon.example") in Aqua.Attachments.copied_sources(ref)
-      assert Prima.Source.outside("browser") in Aqua.Attachments.copied_sources(ref)
+      # The threads the turn had read when the screenshot was taken.
+      assert Aqua.Attachments.copied_threads(ref) == [read.id]
 
       # Readable from the post alone.
       data = Base.encode64(png)
@@ -459,13 +450,13 @@ defmodule Opus.BrowserTest do
       assert [_one] = posts(ctx, thread_id)
     end
 
-    test "of an earlier page keeps an outside source with no name of a host",
+    test "of a turn that read no thread carries none",
          %{ctx: ctx, lineage: lineage} do
       {:ok, %{message_id: shot}} = call(ctx, lineage, "screenshot")
       {:ok, %{posted: post_id}} = post(ctx, lineage, %{"screenshot" => shot})
       {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), post_id)
       [ref] = Aqua.Attachments.refs_of(row)
-      assert Aqua.Attachments.copied_sources(ref) == [Prima.Source.outside("browser")]
+      assert Aqua.Attachments.copied_threads(ref) == []
     end
 
     test "is refused, in one sentence, to another turn, thread, person or athanor, and when it is not there",

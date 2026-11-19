@@ -20,11 +20,11 @@ defmodule Aqua.Attachments do
   report on a daily thread — is copied into the destination message's
   own blobs before that message is written (`carried/3`, then `copy/4`),
   and a write that fails discards the copies (`discard/3`). A copied file
-  carries the sources of the post that held it (`Prima.Source`), in its
-  ref's `"sources"`: those of the turn that wrote the post, of the turn
+  carries the read threads of the post that held it, in its ref's
+  `"read_threads"`: those of the turn that wrote the post, of the turn
   whose words it carries, and those the file came with when it was a copy
-  itself. So a turn that reads the copy reads that material's provenance
-  with it, wherever the copy went (`Aqua.Loop`). A turn's
+  itself. So a turn that reads the copy joins those threads, wherever the
+  copy went (`Aqua.Loop`), and deleting one of them finds it. A turn's
   agent stores the files of its own posts the same way, under the thread
   its turn runs in (`Aqua.Providers.Thread`'s `post`); only a person's
   session stores under a message of their choosing (`store/4`).
@@ -101,10 +101,10 @@ defmodule Aqua.Attachments do
   def copy(%Context{} = ctx, thread_id, message_id, files) when is_list(files),
     do: write(ctx, thread_id, message_id, files)
 
-  # A copy keeps the sources of the post it came from; a file a person or
-  # a turn hands has none of its own.
-  defp with_sources(ref, [_ | _] = sources), do: Map.put(ref, "sources", sources)
-  defp with_sources(ref, _none), do: ref
+  # A copy keeps the read threads of the post it came from; a file a
+  # person or a turn hands has none of its own.
+  defp with_threads(ref, [_ | _] = threads), do: Map.put(ref, "read_threads", threads)
+  defp with_threads(ref, _none), do: ref
 
   @doc """
   Remove every file stored under a message that was never written: the
@@ -163,7 +163,7 @@ defmodule Aqua.Attachments do
 
           ref ->
             with {:ok, file} <- bytes_of(actor, thread_id, message_id, ref),
-                 do: {:ok, Map.put(file, "sources", post_sources(ctx, row, ref))}
+                 do: {:ok, Map.put(file, "read_threads", post_threads(ctx, row, ref))}
         end
 
       {:ok, _another_threads} ->
@@ -179,11 +179,11 @@ defmodule Aqua.Attachments do
 
   defp carry(_ctx, _thread_id, _file), do: {:error, :not_a_post}
 
-  # The sources of the post that holds a file, as canonical JSON objects:
-  # the turn that wrote it, the turn whose words it carries (`from_turn`),
-  # and what the file came with when it was itself a copy. A turn that
-  # cannot be read is an unnamed outside source, never none.
-  defp post_sources(ctx, row, ref) do
+  # The read threads of the post that holds a file: the turn that wrote
+  # it, the turn whose words it carries (`from_turn`), and what the file
+  # came with when it was itself a copy. A turn that cannot be read adds
+  # none.
+  defp post_threads(ctx, row, ref) do
     turns =
       [Map.get(row, :turn_id), Arca.ThreadStorage.payload(row)["from_turn"]]
       |> Enum.filter(&(is_binary(&1) and &1 != ""))
@@ -192,12 +192,12 @@ defmodule Aqua.Attachments do
     read =
       Enum.flat_map(turns, fn id ->
         case Aqua.Tape.turn(ctx, id) do
-          {:ok, turn} -> Prima.Source.decode(turn.sources)
-          {:error, _unread} -> [Prima.Source.outside(nil)]
+          {:ok, turn} -> Arca.ThreadStorage.threads_of(turn.read_threads)
+          {:error, _unread} -> []
         end
       end)
 
-    Prima.Source.to_json_list(read ++ copied_sources(ref))
+    Enum.uniq(read ++ copied_threads(ref))
   end
 
   @doc """
@@ -205,14 +205,14 @@ defmodule Aqua.Attachments do
   message id of its own that has not been sent, in the turn's thread, as
   `copy/4` stores, with its facts beside it under the same id (`draft`):
   the turn and the attempt that took it, its thread, person and athanor,
-  the file's ref and `sources`, what the page it shows came from when it
-  was taken. Only `drafted/3`, called by the same attempt of the same
-  turn, publishes it. Answers the draft's id and the file's ref; a write
-  that fails leaves nothing.
+  the file's ref and `read_threads`, the turn's when it was taken. Only
+  `drafted/3`, called by the same attempt of the same turn, publishes
+  it. Answers the draft's id and the file's ref; a write that fails
+  leaves nothing.
   """
-  @spec draft(Context.t(), Aqua.Tape.turn(), file(), [Prima.Source.t()]) ::
+  @spec draft(Context.t(), Aqua.Tape.turn(), file(), [String.t()]) ::
           {:ok, String.t(), ref()} | {:error, term()}
-  def draft(%Context{} = ctx, turn, file, sources) when is_list(sources) do
+  def draft(%Context{} = ctx, turn, file, threads) when is_list(threads) do
     id = Prima.UUID7.generate_id("msg")
 
     with {:ok, [ref]} <- write(ctx, turn.thread_id, id, [file]) do
@@ -224,7 +224,7 @@ defmodule Aqua.Attachments do
           "person" => ctx.user_id,
           "athanor" => ctx.athanor_id,
           "ref" => ref,
-          "sources" => Prima.Source.to_json_list(sources)
+          "read_threads" => threads
         })
 
       case Arca.put_if_none_match(Context.actor(ctx), draft_path(turn.thread_id, id), facts) do
@@ -240,7 +240,7 @@ defmodule Aqua.Attachments do
 
   @doc """
   The file of the draft `id` (`draft/4`) for a copy (`copy/4`), with the
-  sources it was taken with, claimed for one publication: only a draft
+  read threads it was taken with, claimed for one publication: only a draft
   of `turn`'s own attempt, thread, person and athanor that has not been
   sent and that no other publication holds. Any other is
   `{:error, :not_a_draft}`, and so is one whose bytes have gone. The
@@ -260,7 +260,7 @@ defmodule Aqua.Attachments do
            actor |> Arca.put_if_none_match(claim_path(thread_id, id), "") |> drafted_refusal() do
       case bytes_of(actor, thread_id, id, ref) do
         {:ok, file} ->
-          {:ok, Map.put(file, "sources", facts["sources"])}
+          {:ok, Map.put(file, "read_threads", facts["read_threads"])}
 
         {:error, :attachment_missing} ->
           release(ctx, thread_id, id)
@@ -283,8 +283,9 @@ defmodule Aqua.Attachments do
   end
 
   # The draft's ref, when the draft is this attempt's of this turn, in its
-  # thread, of its person and athanor, and was kept with its sources.
-  defp own_draft(ctx, turn, %{"ref" => %{} = ref, "sources" => [_ | _]} = facts) do
+  # thread, of its person and athanor, and was kept with its read threads.
+  defp own_draft(ctx, turn, %{"ref" => %{} = ref, "read_threads" => threads} = facts)
+       when is_list(threads) do
     if facts["turn"] == turn.id and facts["attempt"] == turn.attempt and
          facts["thread"] == turn.thread_id and facts["person"] == ctx.user_id and
          facts["athanor"] == ctx.athanor_id,
@@ -320,12 +321,12 @@ defmodule Aqua.Attachments do
   defp draft_path(thread_id, id), do: Arca.ThreadStorage.blob_root(thread_id) ++ [id, "draft"]
   defp claim_path(thread_id, id), do: Arca.ThreadStorage.blob_root(thread_id) ++ [id, "published"]
 
-  @doc "The sources a copied file came with (`[]` for a file that is no copy)."
-  @spec copied_sources(ref()) :: [Prima.Source.t()]
-  def copied_sources(%{"sources" => sources}) when is_list(sources),
-    do: Enum.map(sources, &Prima.Source.from_json/1)
+  @doc "The read threads a copied file came with (`[]` for a file that is no copy)."
+  @spec copied_threads(ref()) :: [String.t()]
+  def copied_threads(%{"read_threads" => threads}) when is_list(threads),
+    do: Enum.filter(threads, &(is_binary(&1) and &1 != ""))
 
-  def copied_sources(_ref), do: []
+  def copied_threads(_ref), do: []
 
   # A file whose bytes the store says are not there is gone; a read that
   # failed for now (a timeout, a store that cannot be reached) is
@@ -370,7 +371,7 @@ defmodule Aqua.Attachments do
                 "media_type" => file["media_type"] || Prima.MediaType.binary(),
                 "size" => byte_size(bytes)
               }
-              |> with_sources(file["sources"])
+              |> with_threads(file["read_threads"])
 
             {:cont, {:ok, [ref | refs]}}
 

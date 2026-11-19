@@ -121,9 +121,10 @@ defmodule Arca.Schemas.Execution do
     # recorded on the row, not in the authority a runner receives
     # (`Prima.Authority`), which carries no origin.
     field :origin, :string
-    # The run's source ledger (`Prima.Source`, canonical JSON): seeded at
-    # admission and only ever grown.
-    field :sources, :string, default: "[]"
+    # The ids of the threads whose posts the run holds
+    # (`Arca.ThreadStorage.threads_text/1`): seeded at admission and only
+    # ever grown.
+    field :read_threads, :string, default: "[]"
     # Who started the root (`Prima.Question.Caller`'s text); nil on a child.
     field :caller, :string
   end
@@ -158,7 +159,7 @@ defmodule Arca.Schemas.Execution do
     :event_seq,
     :call_id,
     :origin,
-    :sources,
+    :read_threads,
     :caller
   ]
 

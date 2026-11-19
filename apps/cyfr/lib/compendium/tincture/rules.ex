@@ -7,9 +7,9 @@ defmodule Compendium.Tincture.Rules do
   file types a version serves, the frame capabilities a manifest may
   declare and what each opens in the frame's `sandbox` and `allow`
   attributes, the entry page's Content Security Policy and the origins it
-  admits, the source classes a frame's reads may carry, the templates a
-  tincture starts from, the lockfile a build tincture ships, and the
-  grammar of its frame, streams and system actions. A desktop, what the
+  admits, the templates a tincture starts from, the lockfile a build
+  tincture ships, and the grammar of its frame, streams and system
+  actions. A desktop, what the
   code calls a canvas (a declaration with the `tincture.desktop` block,
   `Prima.Manifest.Tincture.canvas?/1`), is held tighter: it is its
   version's own page on the vanilla or the react template, its
@@ -162,11 +162,6 @@ defmodule Compendium.Tincture.Rules do
   # decides on CYFR's preview (`control_runs/1`, `request_operation/1`).
   @persons_controls Caps.agent_only_tools()
 
-  # The stream namespaces whose events carry a thread's or the notes'
-  # material, which may be of any source class: a thread's title, the
-  # people in it and what waits on the person are their own words.
-  @thread_streams ~w(turn thread threads notes attention)
-
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
   # An absolute path whose every segment is plain and none is `.` or `..`.
@@ -179,12 +174,6 @@ defmodule Compendium.Tincture.Rules do
 
   @typedoc "A refusal in `Prima.Manifest`'s block vocabulary: the tag and a sentence."
   @type refusal :: {:invalid_tincture, String.t()}
-
-  @typedoc """
-  One read a frame makes: an invoke of a component, a system action by its
-  operation name, a stream by its name, or a stored file.
-  """
-  @type read :: :invoke | {:action, String.t()} | {:stream, String.t()} | :storage
 
   @typedoc "A template a tincture starts from: its name, its build tool (nil for none) and its entry."
   @type template :: %{name: String.t(), build: String.t() | nil, entry: String.t()}
@@ -548,68 +537,6 @@ defmodule Compendium.Tincture.Rules do
   end
 
   def invokes?(_manifest, _ref), do: false
-
-  @doc """
-  The source classes (`Prima.Source`) a frame's read may carry, known
-  before anything is read or run, in class order:
-
-    * `:invoke`, a component's result: every class, since a run's answer
-      carries whatever its run read;
-    * `{:action, "tool.action"}`, a system action: what the catalogued
-      operation declares its answers may carry
-      (`Prima.Operation.possible_classes/1`, `outside` for an operation that
-      declares nothing), and every class for one the catalog does not hold;
-    * `{:stream, name}`, a stream's events and its refresh: every class for
-      a stream over a turn, a thread, the threads, notes or what needs
-      the person's attention (a name under `turn.`, `thread.`, `threads.`,
-      `notes.` or `attention.`), whose events carry a person's own words,
-      `outside` for any other;
-    * `:storage`, a stored file: `files_by_grant` and `outside`, since a
-      file carries no provenance of its own.
-
-  Nothing is read for the answer: the operation table is the catalog's
-  (`Sanctum.Catalog`), loaded at boot.
-  """
-  @spec read_classes(read()) :: [Prima.Source.class()]
-  def read_classes(:invoke), do: Prima.Source.classes()
-  def read_classes(:storage), do: [:files_by_grant, :outside]
-
-  def read_classes({:action, operation}) when is_binary(operation) do
-    case catalogued(operation) do
-      %Prima.Operation{} = declared -> Prima.Operation.possible_classes(declared)
-      nil -> Prima.Source.classes()
-    end
-  end
-
-  def read_classes({:stream, name}) when is_binary(name) do
-    [namespace | _rest] = String.split(name, ".")
-    if namespace in @thread_streams, do: Prima.Source.classes(), else: [:outside]
-  end
-
-  @doc """
-  The source classes any read the manifest declares may carry
-  (`read_classes/1` over each): an invoke of each of its
-  `dependencies.static`, each of its `actions` and each of its `streams`,
-  in class order. A run a frame invokes starts holding these
-  (`Opus.Tincture`), since what the frame passes it may carry anything the
-  frame has read. A declaration that does not read is every class.
-  """
-  @spec frame_classes(term()) :: [Prima.Source.class()]
-  def frame_classes(manifest) do
-    case validate_declaration(manifest) do
-      {:ok, %Tincture{} = declaration} ->
-        reads =
-          Enum.map(static_dependencies(manifest), fn _dependency -> :invoke end) ++
-            Enum.map(declaration.actions, &{:action, &1}) ++
-            Enum.map(declaration.streams, &{:stream, &1.name})
-
-        classes = Enum.flat_map(reads, &read_classes/1)
-        Enum.filter(Prima.Source.classes(), &(&1 in classes))
-
-      {:error, _unreadable} ->
-        Prima.Source.classes()
-    end
-  end
 
   defp catalogued(operation) do
     with [tool, action] <- String.split(operation, ".", parts: 2),

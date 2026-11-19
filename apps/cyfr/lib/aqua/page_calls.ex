@@ -31,9 +31,8 @@ defmodule Aqua.PageCalls do
   by the same policy and dispatched by the same code (`Aqua.Loop`). The
   host proposes it (`proposal/3`) as a step of purpose `page`, with its
   call in a `page_call` row and its answer in a `page_result` row, which
-  no model's request or compaction carries. It counts the page as outside
-  material, since a page may hold anything it fetched. Its result row is
-  the wire's answer (`answer/3`).
+  no model's request or compaction carries. Its result row is the wire's
+  answer (`answer/3`).
 
   ## Who holds a call
 
@@ -242,12 +241,12 @@ defmodule Aqua.PageCalls do
       action: recorded.action,
       recovery: recorded.recovery,
       child_execution_id: recorded.child_execution_id,
-      idempotency_key: "page_call:#{turn_id}:#{request}",
-      sources: [Prima.Source.outside("browser")]
+      idempotency_key: "page_call:#{turn_id}:#{request}"
     }
 
     # A turn opened on the call, which asks no model, starts with the
-    # sources of the turn that put the page, whose words the page holds.
+    # read threads of the turn that put the page, whose words the page
+    # holds.
     case Keyword.get(opts, :message_id) do
       nil ->
         Map.put(step, :call, %{
@@ -260,7 +259,7 @@ defmodule Aqua.PageCalls do
       message_id ->
         step
         |> Map.put(:message_id, message_id)
-        |> Map.put(:sources_from, List.wrap(payload["put_turn"]))
+        |> Map.put(:threads_from, List.wrap(payload["put_turn"]))
     end
   end
 

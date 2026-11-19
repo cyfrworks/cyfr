@@ -340,20 +340,7 @@ defmodule Opus.TinctureTest do
   end
 
   describe "the run a tincture invokes" do
-    # The run's ledger as its row holds it and as its start recorded it.
-    defp assert_seed(ctx, execution_id, seed) do
-      actor = Sanctum.Context.actor(ctx)
-      seed = Prima.Source.set(seed)
-
-      assert {:ok, ^seed} = Arca.Execution.sources(actor, execution_id)
-      assert {:ok, [started | _rest]} = Arca.ExecutionEvents.since(actor, execution_id, 0)
-      assert started.type == "execution.started"
-
-      assert Arca.ExecutionEvents.data(started)["sources"] ==
-               Prima.Source.to_json_list(seed)
-    end
-
-    test "starts holding every class the tincture's declared reads may carry", %{ctx: ctx} do
+    test "starts holding no read threads, and its start records none", %{ctx: ctx} do
       node = tincture!(ctx, "tinc-seeded")
       _owner = profile!(ctx, node, :owner)
       worker!([%{"answer" => 1}])
@@ -362,23 +349,11 @@ defmodule Opus.TinctureTest do
       assert {:ok, %{status: :completed, execution_id: execution_id}} =
                Opus.Tincture.invoke(ctx, args("tinc-seeded", :protected), :protected)
 
-      # Its static dependency is an invoke, whose result may carry every
-      # class; the outside source names nothing.
-      assert_seed(ctx, execution_id, Enum.map(Prima.Source.classes(), &Prima.Source.new/1))
-    end
-
-    test "starts holding only what the tincture's declared reads may carry", %{ctx: ctx} do
-      # No static dependency, and an action whose answers are outside:
-      # outside alone. The profile's grant still reaches the dependency.
-      node = tincture!(ctx, "tinc-narrow", %{"actions" => ["component.search"]}, [])
-      _owner = profile!(ctx, node, :owner)
-      worker!([%{"answer" => 2}])
-      ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
-
-      assert {:ok, %{status: :completed, execution_id: execution_id}} =
-               Opus.Tincture.invoke(ctx, args("tinc-narrow", :protected), :protected)
-
-      assert_seed(ctx, execution_id, [Prima.Source.outside(nil)])
+      actor = Sanctum.Context.actor(ctx)
+      assert {:ok, []} = Arca.Execution.read_threads(actor, execution_id)
+      assert {:ok, [started | _rest]} = Arca.ExecutionEvents.since(actor, execution_id, 0)
+      assert started.type == "execution.started"
+      assert started |> Arca.ExecutionEvents.data() |> Map.keys() == ["attempt"]
     end
   end
 

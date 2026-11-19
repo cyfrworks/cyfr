@@ -111,7 +111,6 @@ defmodule Arca.Providers.Records do
             ],
             kind: :read,
             recorded: false,
-            sources: [:outside],
             planes: [:external, :in_chain],
             permission: :storage_read
           )

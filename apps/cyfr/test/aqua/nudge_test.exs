@@ -721,8 +721,8 @@ defmodule Aqua.NudgeTest do
     refute Enum.any?(sent(), &(&1 =~ "Gone wait"))
   end
 
-  test "a post a model has read is a source of its turn, and goes with its workspace thread, " <>
-         "whose deletion forgets what the daily thread kept of it",
+  test "a post a model has read makes its workspace thread a read thread of its turn, and goes " <>
+         "with that thread, whose deletion forgets what the daily thread kept of it",
        %{ctx: ctx} do
     script!([reply("It waits on you.")])
     wait = waiting!(ctx, "Read wait")
@@ -732,8 +732,8 @@ defmodule Aqua.NudgeTest do
     [post] = posts(ctx, today.id)
     await_status(ctx, post.turn_id, "completed")
 
-    {:ok, %{sources: sources}} = Tape.turn(ctx, post.turn_id)
-    assert Prima.Source.thread(wait.id) in Prima.Source.decode(sources)
+    {:ok, %{read_threads: read}} = Tape.turn(ctx, post.turn_id)
+    assert Arca.ThreadStorage.threads_of(read) == [wait.id]
     {:ok, %{brain_generation: generation}} = Threads.get(actor(ctx), today.id)
 
     assert {:ok, _} = Tape.delete_thread(ctx, wait.id)

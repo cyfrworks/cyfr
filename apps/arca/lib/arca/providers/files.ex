@@ -14,15 +14,11 @@ defmodule Arca.Providers.Files do
   fill `data/` unattended. The actions are external-plane only: a chain
   reaches files through its own consented hands.
 
-  A read answers files read through the reader's storage grant
-  (`files_by_grant`) joined with the file's own provenance
-  (`Prima.Source`): a file under `data/` is a guest object, and its read
-  answers the sources its settled generation was written with
-  (`Arca.Files.read/2`, `read_sources/2`); a file anywhere else records
-  none, so it is outside material, since provenance that is not recorded
-  is never the athanor's own. A listing names files without reading them,
-  so it answers `files_by_grant` and outside material whatever the files
-  hold.
+  A file under `data/` is a guest object, and its read answers the ids of
+  the threads whose posts its settled generation was written with
+  (`Arca.Files.read/2`, `read_threads/2`), so that deleting one of them
+  finds the run that read it; a file anywhere else, and a listing, carry
+  none.
 
   `list`, `read`, `write` and `delete` name their file or folder by
   `path`, relative to the athanor root, and declare it as their resource
@@ -96,14 +92,13 @@ defmodule Arca.Providers.Files do
           "List a folder; an omitted or empty path lists the root folders",
           [path],
           kind: :read,
-          sources: [:files_by_grant, :outside],
           planes: [:external],
           permission: :storage_read,
           resource: {"path", :storage_path}
         ),
         Operation.new("file", "read", "Read a file as text or base64 bytes", [Arg.required(path)],
           kind: :read,
-          sources: {:answer, {__MODULE__, :read_sources}},
+          threads: {__MODULE__, :read_threads},
           planes: [:external],
           permission: :storage_read,
           resource: {"path", :storage_path}
@@ -183,7 +178,6 @@ defmodule Arca.Providers.Files do
           # Activities under rows they never chose. Their own offer, accept,
           # decline and withdraw stay recorded.
           recorded: false,
-          sources: [:files_by_grant, :outside],
           planes: [:external],
           permission: :storage_read,
           consent: :interactive
@@ -236,23 +230,14 @@ defmodule Arca.Providers.Files do
   def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
 
   @doc """
-  What a read's answer carries (its operation's `sources:` declaration,
-  `Prima.Operation.answer_sources/3`): `files_by_grant`, joined with the
-  sources a guest object's answer names, or with an unnamed outside source
-  for a file that records none.
+  The ids of the threads whose posts a read's answer carries (its
+  operation's `threads:` declaration, `Prima.Operation.read_threads/3`):
+  those a guest object's answer names; none for any other answer.
   """
-  @spec read_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
-  def read_sources(_actor, %{sources: sources}) when is_list(sources),
-    do:
-      Prima.Source.set([
-        Prima.Source.new(:files_by_grant) | Enum.map(sources, &Prima.Source.from_json/1)
-      ])
-
-  def read_sources(actor, %{"sources" => sources}) when is_list(sources),
-    do: read_sources(actor, %{sources: sources})
-
-  def read_sources(_actor, _answer),
-    do: [Prima.Source.new(:files_by_grant), Prima.Source.outside(nil)]
+  @spec read_threads(Prima.Actor.t() | nil, term()) :: [String.t()]
+  def read_threads(_actor, %{read_threads: ids}) when is_list(ids), do: ids
+  def read_threads(_actor, %{"read_threads" => ids}) when is_list(ids), do: ids
+  def read_threads(_actor, _answer), do: []
 
   defp dispatch(actor, %{"action" => "list"} = args),
     do: Files.list(actor, Map.get(args, "path", ""))

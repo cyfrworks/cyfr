@@ -87,13 +87,13 @@ defmodule Opus.Host.EgressTest do
     end
   end
 
-  # A resolver during whose lookup the run reads a source.
+  # A resolver during whose lookup the run reads a thread.
   defmodule GrowingResolver do
     @moduledoc false
 
     def getaddr(_name, :inet) do
       {actor, id} = Process.get({__MODULE__, :execution})
-      :ok = Opus.Ledger.join(actor, id, [Prima.Source.new(:filed)])
+      :ok = Arca.Execution.join_threads(actor, id, ["thr_growing"])
       {:ok, {203, 0, 113, 10}}
     end
 
@@ -160,8 +160,8 @@ defmodule Opus.Host.EgressTest do
     }
   end
 
-  # An edge for the ledger cases: egress to `domains` and storage reads of
-  # `data/`.
+  # An edge for the read-threads cases: egress to `domains` and storage
+  # reads of `data/`.
   defp reading!(domains) do
     AttemptFixtures.attached!(
       ctx: Sanctum.TestContext.local(:api),
@@ -175,16 +175,21 @@ defmodule Opus.Host.EgressTest do
     )
   end
 
-  defp ledger(fixture) do
-    {:ok, sources} =
-      Arca.Execution.sources(Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id)
+  defp read_threads(fixture) do
+    {:ok, threads} =
+      Arca.Execution.read_threads(
+        Prima.Actor.in_athanor(fixture.athanor_id),
+        fixture.execution_id
+      )
 
-    sources
+    threads
   end
 
   # A storage root of the test's own, restored before it is changed.
   defp storage_root! do
-    dir = Path.join(System.tmp_dir!(), "host_egress_ledger_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(System.tmp_dir!(), "host_egress_threads_#{System.unique_integer([:positive])}")
+
     previous = Application.get_env(:arca, :base_path)
 
     on_exit(fn ->
@@ -234,7 +239,7 @@ defmodule Opus.Host.EgressTest do
     {:ok, 1} =
       Arca.Execution.delete_ids([fixture.execution_id], athanor_id: fixture.athanor_id)
 
-    assert {:error, :not_found} = Arca.Execution.sources(actor, fixture.execution_id)
+    assert {:error, :not_found} = Arca.Execution.read_threads(actor, fixture.execution_id)
   end
 
   defp read!(fixture, path) do
@@ -271,27 +276,27 @@ defmodule Opus.Host.EgressTest do
     end
   end
 
-  describe "the ledger" do
-    test "a run that read data/ is pinned a host its grant allows, and nothing of where its material came from is checked" do
+  describe "the read threads" do
+    test "a run that read data/ and a thread is pinned a host its grant allows, and nothing of what it read is checked" do
       storage_root!()
       Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
       fixture = reading!(["api.example.test"])
-      :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "notes.txt"], "restricted")
+
+      :ok =
+        Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "notes.txt"], "restricted",
+          threads: ["thr_notes"]
+        )
 
       read!(fixture, "data/notes.txt")
 
       :ok =
-        Opus.Ledger.join(Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id, [
-          Prima.Source.new(:filed),
-          Prima.Source.new(:vault_disclosed)
-        ])
+        Arca.Execution.join_threads(
+          Prima.Actor.in_athanor(fixture.athanor_id),
+          fixture.execution_id,
+          ["thr_read"]
+        )
 
-      assert ledger(fixture) == [
-               Prima.Source.new(:filed),
-               Prima.Source.new(:files_by_grant),
-               Prima.Source.new(:vault_disclosed),
-               Prima.Source.outside(nil)
-             ]
+      assert read_threads(fixture) == ["thr_notes", "thr_read"]
 
       assert {:ok, %PinnedTarget{host: "api.example.test"}} =
                pin(fixture, "https://api.example.test/send", :fetch)
@@ -299,25 +304,18 @@ defmodule Opus.Host.EgressTest do
       assert denials(fixture) == []
     end
 
-    test "a pinned host joins the ledger before it is answered, and another host under the same pattern is pinned too" do
+    test "a pin joins nothing to the run, and another host under the same pattern is pinned too" do
       Resolver.script("api.x.test", :inet, [{203, 0, 113, 10}])
       Resolver.script("other.x.test", :inet, [{203, 0, 113, 11}])
       fixture = reading!(["*.x.test"])
 
-      assert ledger(fixture) == []
       assert {:ok, %PinnedTarget{}} = pin(fixture, "https://api.x.test/a", :fetch)
-      assert ledger(fixture) == [Prima.Source.outside("api.x.test")]
-
       assert {:ok, %PinnedTarget{}} = pin(fixture, "https://API.x.test/b", :fetch)
       assert {:ok, %PinnedTarget{}} = pin(fixture, "https://other.x.test/", :fetch)
-
-      assert ledger(fixture) == [
-               Prima.Source.outside("api.x.test"),
-               Prima.Source.outside("other.x.test")
-             ]
+      assert read_threads(fixture) == []
     end
 
-    test "a source the run joins while the name resolves stays in its ledger beside the pinned host" do
+    test "a thread the run joins while the name resolves stays among its read threads, and the host is pinned" do
       fixture = reading!(["api.example.test"])
 
       Process.put(
@@ -328,44 +326,42 @@ defmodule Opus.Host.EgressTest do
       assert {:ok, %PinnedTarget{}} =
                pin(fixture, "https://api.example.test/send", :fetch, resolver: GrowingResolver)
 
-      assert ledger(fixture) == [
-               Prima.Source.new(:filed),
-               Prima.Source.outside("api.example.test")
-             ]
-
+      assert read_threads(fixture) == ["thr_growing"]
       assert denials(fixture) == []
     end
 
     @tag :capture_log
-    test "a run that reads what an earlier run wrote carries what that run read, also once the writer is purged" do
+    test "a run that reads what an earlier run wrote holds that run's read threads, also once the writer is purged" do
       storage_root!()
       Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}, {203, 0, 113, 10}])
 
-      # Run 1 has read a filed note, and writes what it made of it.
+      # Run 1 has read a thread, and writes what it made of it.
       writer = writing!(["api.example.test"])
 
       :ok =
-        Opus.Ledger.join(Prima.Actor.in_athanor(writer.athanor_id), writer.execution_id, [
-          Prima.Source.new(:filed)
-        ])
+        Arca.Execution.join_threads(
+          Prima.Actor.in_athanor(writer.athanor_id),
+          writer.execution_id,
+          ["thr_note"]
+        )
 
       assert %{"ok" => %{"written" => true}} =
-               store!(writer, "write", "data/x.txt", "from a filed note")
+               store!(writer, "write", "data/x.txt", "from a thread's post")
 
       # Run 2 reads the object, and holds what run 1 read.
       reader = reading!(["api.example.test"])
       read!(reader, "data/x.txt")
-      assert Prima.Source.new(:filed) in ledger(reader)
+      assert read_threads(reader) == ["thr_note"]
 
-      # The writer's execution is purged; the object keeps its sources.
+      # The writer's execution is purged; the object keeps its read threads.
       purge!(writer)
       late = reading!(["api.example.test"])
       read!(late, "data/x.txt")
-      assert Prima.Source.new(:filed) in ledger(late)
+      assert read_threads(late) == ["thr_note"]
     end
 
     @tag :capture_log
-    test "an uncertain restricted overwrite that landed is never read: a clean append and a later read carry the clean object and its suffix" do
+    test "an uncertain overwrite by a run that read a thread is never read: a clean append and a later read carry the clean object and its suffix" do
       storage_root!()
       previous = Application.get_env(:arca, :storage_adapter)
 
@@ -383,11 +379,9 @@ defmodule Opus.Host.EgressTest do
       clean = writing!(["api.example.test"])
       assert %{"ok" => %{"written" => true}} = store!(clean, "write", "data/y.txt", "clean;")
 
-      # A restricted writer's overwrite lands and is uncertain.
+      # The overwrite of a writer that read a thread lands and is uncertain.
       restricted = writing!(["api.example.test"])
-
-      :ok =
-        Opus.Ledger.join(actor, restricted.execution_id, [Prima.Source.new(:vault_disclosed)])
+      :ok = Arca.Execution.join_threads(actor, restricted.execution_id, ["thr_restricted"])
 
       assert %{"error" => "guest_error", "type" => "storage_uncertain"} =
                store!(restricted, "write", "data/y.txt", "restricted bytes")
@@ -406,20 +400,12 @@ defmodule Opus.Host.EgressTest do
                })
 
       assert Base.decode64!(content) == "clean;suffix"
-      refute Prima.Source.new(:vault_disclosed) in ledger(sender)
+      assert read_threads(sender) == []
       assert {:ok, %PinnedTarget{}} = pin(sender, "https://api.example.test/send", :fetch)
 
       # The restricted bytes are nowhere a reader can name them.
       assert {:ok, [["data", "y.txt"]]} = Arca.list_recursive(actor, ["data"])
       assert {:error, :forbidden} = Arca.list_recursive(actor, ["objects"])
-    end
-
-    test "every spelling of one IPv6 address is one host to the ledger" do
-      fixture = reading!(["*"])
-
-      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:db8::20]:8080/", :fetch)
-      assert ledger(fixture) == [Prima.Source.outside("[2001:db8::20]")]
-      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:0DB8:0:0::0020]:8080/", :fetch)
     end
   end
 
@@ -639,6 +625,13 @@ defmodule Opus.Host.EgressTest do
       fixture = attached!(["*"])
       assert {:ok, %PinnedTarget{}} = pin(fixture, "https://203.0.113.10/", :fetch)
       assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:db8::20]:8080/", :stream)
+    end
+
+    test "is pinned in every spelling of one IPv6 address" do
+      fixture = attached!(["*"])
+
+      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:db8::20]:8080/", :fetch)
+      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:0DB8:0:0::0020]:8080/", :fetch)
     end
   end
 

@@ -17,9 +17,7 @@ defmodule Compendium.Tincture.RulesTest do
   sentence, its page is among its files, and it reads only streams that
   declare a shape, each feed by its name; a stream that declares a shape
   is a canvas's alone. The origins a frame connects to are exactly the
-  ones its policy admits, and the classes each read may carry are known
-  before it is made, one read at a time and over a whole declaration. The
-  facade answers what the module answers.
+  ones its policy admits. The facade answers what the module answers.
   """
 
   use ExUnit.Case, async: true
@@ -1472,7 +1470,7 @@ defmodule Compendium.Tincture.RulesTest do
     end
   end
 
-  describe "the origins a frame connects to and what its reads may carry" do
+  describe "the origins a frame connects to" do
     test "the origins are the declared domains the connect grammar admits, once each, " <>
            "exactly as the policy admits them" do
       declared =
@@ -1493,109 +1491,11 @@ defmodule Compendium.Tincture.RulesTest do
         assert Rules.connect_origins(none) == []
       end
     end
-
-    test "an invoke may carry every class, and a stored file its grant's and the outside" do
-      assert Rules.read_classes(:invoke) == Prima.Source.classes()
-      assert Rules.read_classes(:storage) == [:files_by_grant, :outside]
-    end
-
-    test "an action carries what its catalogued operation declares, every class when the " <>
-           "catalog holds none" do
-      assert Rules.read_classes({:action, "system.status"}) == []
-      assert Rules.read_classes({:action, "component.search"}) == [:outside]
-
-      for operation <- [
-            "system.status",
-            "component.search",
-            "execution.list",
-            "notes.read",
-            "notes.search"
-          ] do
-        [tool, action] = String.split(operation, ".")
-        {:ok, {_provider, %{operations: operations}}} = Sanctum.Catalog.lookup(tool)
-        declared = Enum.find(operations, &(&1.action == action))
-
-        assert Rules.read_classes({:action, operation}) ==
-                 Prima.Operation.possible_classes(declared),
-               operation
-      end
-
-      for unknown <- ["no_such_tool.read", "system.no_such_action", "system"] do
-        assert Rules.read_classes({:action, unknown}) == Prima.Source.classes(), unknown
-      end
-    end
-
-    test "a stream over a turn, a thread or notes may carry every class, and any other " <>
-           "the outside alone" do
-      for name <- ["turn.events", "thread.messages", "notes.changes"] do
-        assert Rules.read_classes({:stream, name}) == Prima.Source.classes(), name
-      end
-
-      for name <- [
-            "mcp_servers.changes",
-            "prompt.changes",
-            "feed.results",
-            "runs.changes",
-            "schedules.changes",
-            "schedule_runs.changes",
-            "threads_seen.changes"
-          ] do
-        assert Rules.read_classes({:stream, name}) == [:outside], name
-      end
-    end
-
-    # From A2's report: a thread's title and what waits on the person are
-    # their own words, so the threads and attention streams carry every
-    # class, and so does a desktop that reads either.
-    test "a desktop declaring attention.changes or threads.changes gets the thread classes" do
-      for name <- ["attention.changes", "threads.changes"] do
-        assert Rules.read_classes({:stream, name}) == Prima.Source.classes(), name
-
-        desktop = %{
-          "type" => "tincture",
-          "tincture" => %{"entry" => "index.html", "desktop" => %{"data" => [name]}}
-        }
-
-        assert Rules.frame_classes(desktop) == Prima.Source.classes(), name
-      end
-
-      # A desktop reading only runs carries the outside alone.
-      runs = %{
-        "tincture" => %{"entry" => "index.html", "desktop" => %{"data" => ["runs.changes"]}}
-      }
-
-      assert Rules.frame_classes(runs) == [:outside]
-    end
-
-    test "a frame's declared reads together carry every class any of them may" do
-      plain = %{
-        "type" => "tincture",
-        "tincture" => %{
-          "actions" => ["system.status"],
-          "streams" => [%{"name" => "mcp_servers.changes"}]
-        }
-      }
-
-      assert Rules.frame_classes(plain) == [:outside]
-
-      assert Rules.frame_classes(put_in(plain, ["tincture", "streams"], [%{"name" => "notes.x"}])) ==
-               Prima.Source.classes()
-
-      # Each static dependency is an invoke, which may carry every class.
-      assert Rules.frame_classes(Map.put(plain, "dependencies", %{"static" => [@runs]})) ==
-               Prima.Source.classes()
-
-      assert Rules.frame_classes(%{"type" => "tincture", "tincture" => %{}}) == []
-
-      # A declaration that does not read is held to every class.
-      assert Rules.frame_classes(manifest(%{"streams" => "nope"})) == Prima.Source.classes()
-    end
   end
 
   test "the facade answers what the rules answer" do
     declared = manifest(%{"connect" => ["api.example.com"], "actions" => ["system.status"]})
     assert Compendium.tincture_connect_origins(declared) == Rules.connect_origins(declared)
-    assert Compendium.tincture_frame_classes(declared) == Rules.frame_classes(declared)
 
     assert Compendium.tincture_served_types() == Rules.served_types()
 

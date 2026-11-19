@@ -58,10 +58,10 @@ defmodule Opus.GuestStorage do
   write's store call takes the generation its intent marked and stores at
   that generation's key; the write becomes visible at its settlement, and
   a read sees only a settled generation. A read is answered through the
-  hold as well, which joins the object's settled sources into the run's
-  ledger before its bytes are handed over, so a run that reads what an
-  earlier run wrote carries what that run read. A write a delete fenced is
-  `storage_conflict` and wrote nothing.
+  hold as well, which joins the read threads of the object's settled
+  generation into the run before its bytes are handed over, so a run that
+  reads what an earlier run wrote holds the threads that run read. A
+  write a delete fenced is `storage_conflict` and wrote nothing.
 
   A read or listing answers at most the node's `max_response_size` bytes.
   The athanor's byte cap is `Arca`'s own write gate.
@@ -552,8 +552,8 @@ defmodule Opus.GuestStorage do
   end
 
   # A guest object is read through the hold, which joins its settled
-  # sources into the run's ledger before the bytes come back; anything else
-  # is read where it is.
+  # generation's read threads into the run before the bytes come back;
+  # anything else is read where it is.
   defp read(scope, physical) do
     if Arca.ObjectRevisions.object_path?(physical) do
       case scope.hold.(%{op: :read, path: physical}) do

@@ -1905,9 +1905,7 @@ defmodule Opus.BrainTest do
       crew = held!(fake, ctx, binding, child, "planner", "7f1e2d3c")
       {_brain, reading} = read = held!(fake, ctx, binding, reader, "aqua", "8f1e2d3c")
 
-      set_turn(reading,
-        sources: Jason.encode!([Prima.Source.to_json(Prima.Source.thread(thread.id))])
-      )
+      set_turn(reading, read_threads: Arca.ThreadStorage.threads_text([thread.id]))
 
       {room, crew, read}
     end

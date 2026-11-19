@@ -55,7 +55,7 @@ defmodule Aqua.Launch do
 
   The launch's stamp rides the one call on the person's context
   (`Sanctum.Context`'s `launch`): the root is admitted under the step's
-  pre-minted id, seeded with the turn's sources as its row holds them
+  pre-minted id, seeded with the turn's read threads as its row holds them
   when the launch is dispatched (`Opus.Admission`), so a thread the turn
   read is a thread the launched run read. Whatever grant the root loads
   decides what it reaches; for a component with no grant the gate
@@ -291,14 +291,14 @@ defmodule Aqua.Launch do
 
   # The person's context also carries the stamp for the run's root
   # (`Sanctum.Context.stamp_launch/2`, called here alone), never from
-  # anything a caller sends: the turn's sources as its row holds them now,
-  # which the root is seeded with, the root's id (the step's pre-minted
+  # anything a caller sends: the turn's read threads as its row holds them
+  # now, which the root is seeded with, the root's id (the step's pre-minted
   # child id, so the loop can read the root's row whatever the launch
   # answers), and the name of the agent whose turn launched it, which the
   # root records as its caller.
   defp launching(caller, step, turn) do
     Sanctum.Context.stamp_launch(caller, %{
-      sources: Prima.Source.decode(turn.sources),
+      read_threads: Arca.ThreadStorage.threads_of(turn.read_threads),
       execution_id: root_id(step),
       agent: turn.agent
     })

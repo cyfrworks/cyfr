@@ -1044,9 +1044,9 @@ defmodule Aqua.Providers.ThreadTest do
       )
     end
 
-    defp turn_sources(ctx, turn) do
-      {:ok, %{sources: sources}} = Aqua.Tape.turn(ctx, turn.id)
-      Prima.Source.decode(sources)
+    defp read_threads(ctx, turn) do
+      {:ok, %{read_threads: read}} = Aqua.Tape.turn(ctx, turn.id)
+      Arca.ThreadStorage.threads_of(read)
     end
 
     test "a search finds posts of the daily and workspace threads, newest first, each a pointer",
@@ -1060,7 +1060,7 @@ defmodule Aqua.Providers.ThreadTest do
                search(ctx, %{"q" => "  ChaRT  "})
 
       # The person's own read at the door joins no turn and names nothing.
-      refute Map.has_key?(answer, :sources)
+      refute Map.has_key?(answer, :read_threads)
 
       assert %{message: id, kind: "workspace", title: "NVDA technical analysis", by: "aqua"} =
                first
@@ -1154,7 +1154,7 @@ defmodule Aqua.Providers.ThreadTest do
                  in_turn(ctx, turn, %{"action" => "events", "thread" => id})
       end
 
-      assert turn_sources(ctx, turn) == []
+      assert read_threads(ctx, turn) == []
     end
 
     test "a turn reads a daily or workspace thread's posts, fifty at most, after a seq",
@@ -1182,15 +1182,17 @@ defmodule Aqua.Providers.ThreadTest do
       assert length(all) == 60
     end
 
-    test "a turn's search and read join every thread they carry and what their posts carry " <>
-           "into the turn, before they answer",
+    test "a turn's search and read join every thread they carry and their posts carry into " <>
+           "the turn, before they answer",
          %{ctx: ctx, thread: daily} do
       work = workspace!(ctx, "Fares")
-      news = Prima.Source.outside("news.example")
+      news = workspace!(ctx, "News")
+      feed = workspace!(ctx, "Feed")
 
-      # A turn of the workspace thread read the news, and wrote a post there.
+      # A turn of the workspace thread read the news thread, and wrote a
+      # post there.
       writer = running!(ctx, work)
-      {:ok, _} = Aqua.Tape.record_model_intent(ctx, writer, %{sources: [news]})
+      {:ok, _} = Aqua.Tape.record_model_intent(ctx, writer, %{threads: [news.id]})
 
       say!(ctx, work, "fares rise on Monday", %{
         author: "aqua",
@@ -1198,41 +1200,33 @@ defmodule Aqua.Providers.ThreadTest do
         turn_id: writer.id
       })
 
-      # The daily thread's report of it keeps what that turn read.
+      # The daily thread's report of it keeps what the reporting turn read.
       say!(ctx, daily, "Fares: fares rise on Monday", %{
         author: "aqua",
         sent_by: "aqua",
         kind: "report",
         workspace_id: work.id,
-        payload: %{"sources" => Prima.Source.to_json_list([Prima.Source.outside("feed.example")])}
+        payload: %{"read_threads" => [feed.id]}
       })
 
       reader = running!(ctx, daily)
 
-      assert {:ok, %{results: [_report, _post], sources: carried}} =
+      assert {:ok, %{results: [_report, _post], read_threads: carried}} =
                in_turn(ctx, reader, %{"action" => "search", "q" => "fares rise"})
 
-      expected = [
-        Prima.Source.outside("feed.example"),
-        news,
-        Prima.Source.thread(daily.id),
-        Prima.Source.thread(work.id)
-      ]
+      expected = Enum.sort([daily.id, feed.id, news.id, work.id])
+      assert carried == expected
+      assert read_threads(ctx, reader) == expected
 
-      assert Prima.Source.set(Enum.map(carried, &Prima.Source.from_json/1)) ==
-               Prima.Source.set(expected)
-
-      assert Prima.Source.set(expected) -- turn_sources(ctx, reader) == []
-
-      # A read of the workspace thread joins it and its writer's sources.
+      # A read of the workspace thread joins it and its writer's read threads.
       other = running!(ctx, workspace!(ctx, "Elsewhere"))
 
-      assert {:ok, %{messages: read, sources: _}} =
+      assert {:ok, %{messages: read, read_threads: joined}} =
                in_turn(ctx, other, %{"action" => "events", "thread" => work.id})
 
       assert "fares rise on Monday" in Enum.map(read, & &1.content)
-
-      assert [news, Prima.Source.thread(work.id)] -- turn_sources(ctx, other) == []
+      assert joined == Enum.sort([news.id, work.id])
+      assert read_threads(ctx, other) == joined
     end
 
     test "a holder a takeover replaced, a forged lineage and a chain with no turn read nothing",
@@ -1264,7 +1258,7 @@ defmodule Aqua.Providers.ThreadTest do
                  "thread" => daily.id
                })
 
-      assert turn_sources(ctx, turn) == []
+      assert read_threads(ctx, turn) == []
     end
   end
 

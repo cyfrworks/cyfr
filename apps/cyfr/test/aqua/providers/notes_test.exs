@@ -269,61 +269,6 @@ defmodule Aqua.Providers.NotesTest do
     end
   end
 
-  test "a note kept in a chain records every source the chain's turns read, outside or not",
-       %{ctx: ctx} do
-    auth = granting([{"notes", "keep"}, {"notes", "read"}])
-    actor = Context.actor(ctx)
-    root = "exec_root_#{System.unique_integer([:positive])}"
-    vault = Prima.Source.new(:vault_disclosed)
-
-    # A turn of the chain read a disclosed vault value, and nothing outside.
-    {:ok, thread} = Arca.Test.Days.thread(actor)
-
-    {:ok, %{turn: turn}} =
-      Arca.TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: actor.user_id, sent_by: "person", content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
-      })
-
-    {1, _} =
-      Arca.Repo.update_all(
-        turn_row(actor.athanor_id, turn.id),
-        set: [root_execution_id: root, sources: Prima.Source.encode([vault])]
-      )
-
-    args = %{"action" => "keep", "name" => "region", "content" => "eu-west"}
-    lineage = [lineage: %{root_execution_id: root, thread_id: thread.id}]
-    assert {:ok, %{kept: "region"}} = in_chain(ctx, args, auth, lineage)
-
-    # Whoever reads it reads the disclosed value's provenance, which a
-    # flow must let leave; it is no outside material, so nothing marks it.
-    assert {:ok, %{sources: sources} = answer} =
-             in_chain(ctx, %{"action" => "read", "name" => "region"}, auth)
-
-    assert sources == Prima.Source.to_json_list([vault])
-    assert vault in Tool.answer_sources(actor, answer)
-  end
-
-  test "a note kept by a component that runs no turn records the calling execution's ledger",
-       %{ctx: ctx} do
-    auth = granting([{"notes", "keep"}, {"notes", "read"}])
-    actor = Context.actor(ctx)
-    vault = Prima.Source.new(:vault_disclosed)
-
-    # The calling execution read a disclosed vault value; no turn runs in
-    # its chain.
-    caller = caller!(ctx)
-    assert :ok = Opus.Ledger.join(actor, caller.parent_execution_id, [vault])
-
-    args = %{"action" => "keep", "name" => "standalone", "content" => "eu-west"}
-    assert {:ok, %{kept: "standalone"}} = in_chain(ctx, args, auth, lineage: caller)
-
-    assert {:ok, %{sources: sources}} =
-             in_chain(ctx, %{"action" => "read", "name" => "standalone"}, auth)
-
-    assert sources == Prima.Source.to_json_list([vault])
-  end
-
   test "a turn's call keeps a note from inside the chain, kept by Aqua, and only an OIDC session's chain may",
        %{ctx: ctx, mine: mine} do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])
@@ -806,8 +751,8 @@ defmodule Aqua.Providers.NotesTest do
   end
 
   describe "a workspace thread's notes" do
-    # A turn of `thread` running on its own root, having read `sources`.
-    defp turn_in!(ctx, thread, sources) do
+    # A turn of `thread` running on its own root, having read `threads`.
+    defp turn_in!(ctx, thread, threads) do
       actor = Context.actor(ctx)
 
       {:ok, %{turn: turn}} =
@@ -820,7 +765,7 @@ defmodule Aqua.Providers.NotesTest do
 
       {1, _} =
         Arca.Repo.update_all(turn_row(actor.athanor_id, turn.id),
-          set: [root_execution_id: root, sources: Prima.Source.encode(sources)]
+          set: [root_execution_id: root, read_threads: Arca.ThreadStorage.threads_text(threads)]
         )
 
       %{turn | root_execution_id: root}
@@ -859,12 +804,12 @@ defmodule Aqua.Providers.NotesTest do
       Aqua.Notes.thread_notes(row)
     end
 
-    test "a turn writes its own workspace thread's notes, named by the lineage, with what it read",
+    test "a turn writes its own workspace thread's notes, named by the lineage, and keeps no " <>
+           "thread it read",
          %{ctx: ctx} do
-      host = Prima.Source.outside("news.example")
       work = workspace!(ctx, "Fares")
       elsewhere = workspace!(ctx, "Elsewhere")
-      turn = turn_in!(ctx, work, [host, Prima.Source.thread(elsewhere.id)])
+      turn = turn_in!(ctx, work, [elsewhere.id])
 
       # An argument naming another thread names nothing.
       assert {:ok, %{workspace_notes: id}} =
@@ -873,10 +818,14 @@ defmodule Aqua.Providers.NotesTest do
       assert id == work.id
       assert notes_of(ctx, elsewhere) == nil
 
-      assert %{content: "Fares rise Monday.", sources: [^host], kept_by: by, thread: thread} =
-               notes_of(ctx, work)
-
-      assert by == Prima.Author.agent() and thread == work.id
+      assert Map.delete(notes_of(ctx, work), :kept_at) == %{
+               name: "workspace",
+               content: "Fares rise Monday.",
+               athanor_id: ctx.athanor_id,
+               kept_by: Prima.Author.agent(),
+               thread: work.id,
+               execution: turn.root_execution_id
+             }
 
       # Whole each time; empty content clears them.
       assert {:ok, _} = write(ctx, turn, %{"content" => "Booked."})

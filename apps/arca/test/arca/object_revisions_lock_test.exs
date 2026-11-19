@@ -113,7 +113,7 @@ defmodule Arca.ObjectRevisionsLockTest do
     {:ok, {:ok, mark}} =
       unboxed(fn ->
         Arca.Repo.locking_transaction(fn ->
-          ObjectRevisions.mark!(actor, path, :put, %{bytes: byte_size(content), sources: []})
+          ObjectRevisions.mark!(actor, path, :put, %{bytes: byte_size(content), threads: []})
         end)
       end)
 
@@ -140,9 +140,9 @@ defmodule Arca.ObjectRevisionsLockTest do
     child = parent ++ ["c"]
 
     unboxed(fn ->
-      :ok = Arca.put(actor, parent, "old parent", sources: [])
+      :ok = Arca.put(actor, parent, "old parent")
       :ok = Arca.delete(actor, parent)
-      :ok = Arca.put(actor, child, "child", sources: [])
+      :ok = Arca.put(actor, child, "child")
     end)
 
     test = self()
@@ -150,7 +150,7 @@ defmodule Arca.ObjectRevisionsLockTest do
     # `delete/2`'s own transaction, held between its mark and settlement.
     deleting =
       job(fn ->
-        {:ok, mark} = ObjectRevisions.mark!(actor, child, :delete, %{bytes: 0, sources: []})
+        {:ok, mark} = ObjectRevisions.mark!(actor, child, :delete, %{bytes: 0, threads: []})
         send(test, {:delete_marked, backend()})
         gate(:settle)
         ObjectRevisions.settle!(actor, mark, [])
@@ -161,7 +161,7 @@ defmodule Arca.ObjectRevisionsLockTest do
     marking =
       job(fn ->
         send(test, {:marking, backend()})
-        ObjectRevisions.mark!(actor, child, :put, %{bytes: 3, sources: []})
+        ObjectRevisions.mark!(actor, child, :put, %{bytes: 3, threads: []})
       end)
 
     assert_receive {:marking, marking_backend}, 5_000
@@ -209,7 +209,7 @@ defmodule Arca.ObjectRevisionsLockTest do
     parent_answer =
       case unboxed(fn ->
              Arca.Repo.locking_transaction(fn ->
-               ObjectRevisions.mark!(actor, parent, :put, %{bytes: 6, sources: []})
+               ObjectRevisions.mark!(actor, parent, :put, %{bytes: 6, threads: []})
              end)
            end) do
         {:ok, {:ok, pm}} ->

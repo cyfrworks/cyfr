@@ -53,7 +53,6 @@ defmodule Compendium.Providers.Canvas do
           "What a canvas may read",
           [],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -67,7 +66,6 @@ defmodule Compendium.Providers.Canvas do
             )
           ],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -123,7 +121,6 @@ defmodule Compendium.Providers.Canvas do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:external, :in_chain],
           permission: :execute
         ),

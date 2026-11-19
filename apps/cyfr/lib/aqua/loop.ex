@@ -33,41 +33,33 @@ defmodule Aqua.Loop do
   runs as any turn of its member's mode. A refused call is no question,
   so the turn goes on without it.
 
-  ## The turn's sources
+  ## The turn's read threads
 
-  Every way a turn reads joins its sources (`Prima.Source`,
-  `turns.sources`) in the transaction that writes the step it belongs to.
-  A model step opens with the prompt's sources (`Aqua.Prompt.compose/2`),
-  the sources of every earlier turn whose rows the request sends,
-  compaction summaries among them, an outside source for a turn a webhook
-  started and one for the model's own web search when the request offers
-  it, and a `thread` source for each other thread whose posts its rows
-  bring in (a workspace thread's pointer or report, the daily thread an
-  opening refers to), with the sources a report kept of the turn that
-  reported, those of the turns that wrote the posts an opening refers
-  to, and those every copied file carries from the post it came from; a
-  call's result closes with the sources it carries
-  (`Aqua.Loop.Policy.sources_of/3`), and a launched component's with an
-  outside source named by its reference unless its completion result says
-  no run of its tree was admitted with egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
-  members' words and joins nothing.
+  Every way a turn reads a thread's posts joins that thread to the turn's
+  read threads (`turns.read_threads`) in the transaction that writes the
+  step it belongs to, so deleting a thread finds every turn that read it.
+  A model step opens with the read threads of every earlier turn whose
+  rows the request sends, compaction summaries among them, and each other
+  thread whose posts its rows bring in (a workspace thread's pointer or
+  report, the daily thread an opening refers to), with the read threads a
+  report kept of the turn that reported, those of the turns that wrote
+  the posts an opening refers to, and those every copied file carries
+  from the post it came from; a call's result closes with the threads it
+  carries (`Aqua.Loop.Policy.threads_of/3`). The room excerpt is the
+  athanor's own members' words and joins nothing.
 
-  A model adds no source of its own, and never drops one: a model, hand
-  or launched child's persisted ledger joins its turn when its step
-  closes, before anything of its answer is used — a model's before its
-  reply, its calls, a kept note or a summary is written, a hand's and a
-  launch's in the transaction that writes the step's result. It arrives
-  by the first carrier that holds it: the completion result's `sources`,
-  the ledger as the child's terminal write left it; else the child's row,
-  read by the id the loop minted for it; else, for a row no longer held
-  or unreadable, an unnamed outside source, since retention may prune a
-  terminal child while its turn runs. Only a refusal made before any
-  attempt existed — the gate's at admission, or a launch's own before its
-  run was asked for — says nothing ran, and joins nothing. A join that
-  cannot be written leaves the answer unused.
+  A model, hand or launched child's read threads join its turn when its
+  step closes, before anything of its answer is used — a model's before
+  its reply, its calls, a kept note or a summary is written, a hand's and
+  a launch's in the transaction that writes the step's result. They
+  arrive by the first carrier that holds them: the completion result's
+  `read_threads`, as the child's terminal write left them; else the
+  child's row, read by the id the loop minted for it. A row no longer held
+  or unreadable adds none. A join that cannot be written leaves the answer
+  unused.
 
-  `Aqua.Launch` seeds a launched root with the turn's sources as its row
-  holds them when the launch is dispatched.
+  `Aqua.Launch` seeds a launched root with the turn's read threads as its
+  row holds them when the launch is dispatched.
   """
 
   require Logger
@@ -512,8 +504,8 @@ defmodule Aqua.Loop do
   end
 
   # The child a stopped or settled step's run is cancelled by. A launched
-  # app is a root of its own, run as the turn's person: its row
-  # carries the step's id so the step's close can read its ledger, and the
+  # app is a root of its own, run as the turn's person: its row carries
+  # the step's id so the step's close can read its read threads, and the
   # turn's end cancels nothing it started.
   defp cancellable(%{kind: "launch"}), do: nil
   defp cancellable(%{child_execution_id: id}), do: id
@@ -1019,9 +1011,9 @@ defmodule Aqua.Loop do
   # counts against the turn's cap, before it opens; the count is the
   # turn's, rebuilt from its rows on a continuation.
   #
-  # The step opens with what the request reads (`opening_sources/1`), and
-  # with the sources of the earlier turns whose rows it sends, joined in
-  # the step's own transaction.
+  # The step opens with the threads its rows carry, and with the read
+  # threads of the earlier turns whose rows it sends, joined in the step's
+  # own transaction.
   defp open_model_step(state, purpose, rows \\ [], cited \\ [])
 
   defp open_model_step(%State{steps: steps}, _purpose, _rows, _cited) when steps >= @max_steps,
@@ -1036,35 +1028,18 @@ defmodule Aqua.Loop do
              tool: state.spec.catalyst,
              action: "chat",
              purpose: purpose,
-             sources: opening_sources(state) ++ thread_sources(rows),
-             sources_from: earlier_turns(state, rows ++ cited)
+             threads: Tape.carried_threads(rows),
+             threads_from: earlier_turns(state, rows ++ cited)
            }),
          {:ok, step} <- Tape.mark_dispatched(guest(state), state.turn, step) do
       {:ok, step, %{state | steps: state.steps + 1}}
     end
   end
 
-  # What a model step reads besides the rows: the system prompt's sources,
-  # a webhook's payload for a turn one started, and the open web when the
-  # request offers the model's own search.
-  defp opening_sources(%State{spec: spec, turn: turn}) do
-    webhook = if turn.origin == "webhook", do: [Prima.Source.outside("webhook")], else: []
-
-    search =
-      if offers_search?(spec), do: [Prima.Source.outside("web_search")], else: []
-
-    spec.sources ++ webhook ++ search
-  end
-
-  # The request offers web search, and the turn records the open web as a
-  # source, on one answer: the policy turns it on, the grant carries it and
-  # the model has the tool.
+  # The request offers web search when the policy turns it on, the grant
+  # carries it and the model has the tool.
   defp offers_search?(spec),
     do: Request.offers_search?(spec.offered, spec.authority, spec.capabilities)
-
-  # What a request reads of the athanor's other threads, by the rows that
-  # bring it in (`Aqua.Tape.carried_sources/1`).
-  defp thread_sources(rows), do: Tape.carried_sources(rows)
 
   # The daily thread's posts the openings among `rows` refer to, read as
   # they stand now and never copied: a post of another thread, or one
@@ -1109,7 +1084,7 @@ defmodule Aqua.Loop do
       {:uncertain, page_step, reason, rest} ->
         stop_uncertain(state, page_step, reason, rest)
 
-      # The turn's fence moved before the model's ledger could join it.
+      # The turn's fence moved before the model's read threads could join it.
       {:error, :superseded} ->
         {:halt, :cancelled, state}
 
@@ -1251,11 +1226,12 @@ defmodule Aqua.Loop do
   # thread while it runs, and is withdrawn when the step lands no text row;
   # a flush or a compaction streams nothing.
   #
-  # Whatever it answers, the child's ledger joins the step's turn before
-  # the answer is handed back (`model_ledger/3`): every use of a model's
-  # output — a chat reply, a flush's notes, a compaction's summary, a
-  # refusal's text — passes through here, and none happens unless the
-  # join was written. A turn whose fence moved answers `:superseded`.
+  # Whatever it answers, the child's read threads join the step's turn
+  # before the answer is handed back (`model_threads/3`): every use of a
+  # model's output — a chat reply, a flush's notes, a compaction's
+  # summary, a refusal's text — passes through here, and none happens
+  # unless the join was written. A turn whose fence moved answers
+  # `:superseded`.
   defp model_call(%State{spec: spec} = state, step, request, retained, pages? \\ false) do
     input = %{"operation" => "chat", "params" => request}
     retained_input = retained && %{"operation" => "chat", "params" => retained}
@@ -1293,10 +1269,10 @@ defmodule Aqua.Loop do
           stopped
 
         answer ->
-          case Tape.join_sources(guest, turn, model_ledger(state, step, answer)) do
+          case Tape.join_threads(guest, turn, model_threads(state, step, answer)) do
             :ok -> model_result(answer)
             {:error, :superseded} -> {:error, :superseded}
-            {:error, _unwritten} -> {:error, :sources_unrecorded}
+            {:error, _unwritten} -> {:error, :read_threads_unrecorded}
           end
       end
 
@@ -1309,39 +1285,38 @@ defmodule Aqua.Loop do
   defp model_result({:ok, {:error, reason}}), do: {:error, reason}
   defp model_result({:exit, reason}), do: {:exit, reason}
 
-  # The ledger a model child's answer brings into its turn: what its
+  # The read threads a model child's answer brings into its turn: what its
   # completion result carries, else its row's, read by the id the step
   # minted for it — a worker that died included, since its child may have
   # read before it did.
-  defp model_ledger(state, step, {:ok, answer}),
-    do: child_ledger(state, step.child_execution_id, answer)
+  defp model_threads(state, step, {:ok, answer}),
+    do: child_threads(state, step.child_execution_id, answer)
 
-  defp model_ledger(state, step, {:exit, _reason}),
-    do: read_ledger(state, step.child_execution_id)
+  defp model_threads(state, step, {:exit, _reason}),
+    do: read_threads(state, step.child_execution_id)
 
-  # A child's ledger by the first carrier that holds it
-  # (`Aqua.Loop.Policy.child_ledger/1`): its completion result's, none
+  # A child's read threads by the first carrier that holds them
+  # (`Aqua.Loop.Policy.child_threads/1`): its completion result's, none
   # for a refusal made before any attempt existed, else its row's.
-  defp child_ledger(state, child_id, answer) do
-    case Policy.child_ledger(answer) do
-      {:carried, sources} -> sources
+  defp child_threads(state, child_id, answer) do
+    case Policy.child_threads(answer) do
+      {:carried, threads} -> threads
       :nothing_ran -> []
-      :unknown -> read_ledger(state, child_id)
+      :unknown -> read_threads(state, child_id)
     end
   end
 
-  # A child's ledger read from its row by the id the loop minted for it.
-  # A row no longer held — retention prunes a terminal child while its
-  # turn still runs — or one that cannot be read is an unnamed outside
-  # source: unknown provenance is never none.
-  defp read_ledger(state, child_id) when is_binary(child_id) do
-    case Opus.sources(ctx(state), child_id) do
-      {:ok, sources} -> sources
-      {:error, _gone_or_unreadable} -> [Prima.Source.outside(nil)]
+  # A child's read threads read from its row by the id the loop minted for
+  # it. A row no longer held — retention prunes a terminal child while its
+  # turn still runs — or one that cannot be read adds none.
+  defp read_threads(state, child_id) when is_binary(child_id) do
+    case Opus.read_threads(ctx(state), child_id) do
+      {:ok, threads} -> threads
+      {:error, _gone_or_unreadable} -> []
     end
   end
 
-  defp read_ledger(_state, _no_id), do: [Prima.Source.outside(nil)]
+  defp read_threads(_state, _no_id), do: []
 
   # A turn's text streams under its own fence, named by its agent when
   # that is not the soul.
@@ -1831,11 +1806,11 @@ defmodule Aqua.Loop do
           # A hand's child read what its row holds whatever its outcome: an
           # unknown one joins it too, as a dead worker's does.
           {:uncertain, reason} ->
-            _ = Tape.join_sources(guest(state), state.turn, unknown_ledger(state, step, call))
+            _ = Tape.join_threads(guest(state), state.turn, unknown_threads(state, step, call))
             {:uncertain, step, describe(reason)}
 
           result ->
-            case close(state, step, call, result, result_sources(state, step, call, result)) do
+            case close(state, step, call, result, result_threads(state, step, call, result)) do
               {:ok, _closed} ->
                 :ok
 
@@ -1914,34 +1889,27 @@ defmodule Aqua.Loop do
     })
   end
 
-  # The sources a dispatched call's result joins to its turn. The host's
-  # start of a program brain answers in CYFR's own words, no program's
-  # output: it joins none, so the session it starts is not refused its
-  # first post (`Opus.Brain`) for having been started.
-  defp result_sources(state, step, call, result) do
-    if host_start?(state, step),
-      do: [],
-      else:
-        Policy.sources_of(call, result, guest(state)) ++ unread_ledger(state, step, call, result)
-  end
+  # The threads a dispatched call's result joins to its turn.
+  defp result_threads(state, step, call, result),
+    do: Policy.threads_of(call, result, guest(state)) ++ unread_threads(state, step, call, result)
 
-  # A hand's child ledger its answer does not carry (`Policy.sources_of/3`
-  # joins a carried one): read from the child's row, or an unnamed outside
-  # source when the row is gone or unreadable. A refusal made before any
+  # A hand's child read threads its answer does not carry
+  # (`Policy.threads_of/3` joins carried ones): read from the child's row,
+  # none when the row is gone or unreadable. A refusal made before any
   # attempt existed reads nothing.
-  defp unread_ledger(state, step, %Call{kind: :hand}, result) do
-    case Policy.child_ledger(result) do
-      :unknown -> read_ledger(state, step.child_execution_id)
+  defp unread_threads(state, step, %Call{kind: :hand}, result) do
+    case Policy.child_threads(result) do
+      :unknown -> read_threads(state, step.child_execution_id)
       _carried_or_nothing_ran -> []
     end
   end
 
-  defp unread_ledger(_state, _step, %Call{}, _result), do: []
+  defp unread_threads(_state, _step, %Call{}, _result), do: []
 
-  defp unknown_ledger(state, step, %Call{kind: :hand}),
-    do: read_ledger(state, step.child_execution_id)
+  defp unknown_threads(state, step, %Call{kind: :hand}),
+    do: read_threads(state, step.child_execution_id)
 
-  defp unknown_ledger(_state, _step, %Call{}), do: []
+  defp unknown_threads(_state, _step, %Call{}), do: []
 
   # One outcome vocabulary at the loop's boundary: an effect that may
   # have happened with no result (`uncertain`), one that happened whose
@@ -1955,8 +1923,8 @@ defmodule Aqua.Loop do
   # The step's result row and outcome: `ok`, `error`, `denied` for a
   # refusal by the policy or the chain, `skipped` for a call not started,
   # or `uncertain` for a call closed with its outcome unknown — with the
-  # sources the result carries, joined in the same transaction.
-  defp close(%State{} = state, step, call, result, sources \\ []) do
+  # threads the result carries, joined in the same transaction.
+  defp close(%State{} = state, step, call, result, threads \\ []) do
     {outcome, text, error?} =
       case result do
         {:unknown, message} ->
@@ -2003,7 +1971,7 @@ defmodule Aqua.Loop do
         }),
       execution_id: step.child_execution_id,
       error: if(error?, do: text, else: nil),
-      sources: sources
+      threads: threads
     })
   end
 
@@ -2060,13 +2028,12 @@ defmodule Aqua.Loop do
 
         why = describe(reason)
         # A dead waiter handed back no completion result, so what its run
-        # read comes from the child's row, or is an unnamed outside source
-        # when the row is gone: a dead waiter never means an empty ledger.
-        ledger = read_ledger(state, fresh.child_execution_id)
+        # read comes from the child's row.
+        threads = read_threads(state, fresh.child_execution_id)
 
         case Prima.TurnStep.unresolved(fresh) do
           :uncertain ->
-            _ = Tape.join_sources(guest, state.turn, ledger)
+            _ = Tape.join_threads(guest, state.turn, threads)
             unknown(state, fresh, why, mode)
 
           :unknown ->
@@ -2076,7 +2043,7 @@ defmodule Aqua.Loop do
                 fresh,
                 unwrap(call),
                 {:unknown, "the outcome is unknown: #{why}"},
-                ledger
+                threads
               )
 
             :ok
@@ -2088,7 +2055,7 @@ defmodule Aqua.Loop do
                 fresh,
                 unwrap(call),
                 {:error, "the call did not finish: #{why}"},
-                ledger
+                threads
               )
 
             :ok
@@ -2256,19 +2223,18 @@ defmodule Aqua.Loop do
   end
 
   # A launch whose outcome is unknown: what its tree read joins the turn,
-  # from its root's row or as an unnamed outside source, and the turn
-  # stops on the step, its root already let go.
+  # from its root's row, and the turn stops on the step, its root already
+  # let go.
   defp launch_unknown(%State{} = state, step, reason) do
-    _ = Tape.join_sources(guest(state), state.turn, read_ledger(state, step.child_execution_id))
+    _ = Tape.join_threads(guest(state), state.turn, read_threads(state, step.child_execution_id))
     stop_uncertain(state, step, describe(reason), [])
   end
 
-  # The launched tree's ledger joins the turn in the transaction that
+  # The launched tree's read threads join the turn in the transaction that
   # writes the step's result: on success as its completion result carries
-  # it (`execution.run`'s `sources`), else read from its root's row; on a
-  # failure read from the root's row by the id its launch was stamped
-  # with, an unnamed outside source when that row is gone. A launch
-  # refused before its run was asked for joins nothing.
+  # them (`execution.run`'s `read_threads`), else read from its root's row;
+  # on a failure read from the root's row by the id its launch was stamped
+  # with. A launch refused before its run was asked for joins nothing.
   defp close_launch(state, step, call, {:ok, id, result}) do
     text = Jason.encode!(result, pretty: true)
 
@@ -2281,8 +2247,7 @@ defmodule Aqua.Loop do
             "is_error" => false
           }),
         execution_id: id,
-        launched: %{reference: call && call.target, reached_outside: reached_outside(result)},
-        sources: launched_ledger(state, step, id, result)
+        threads: launched_threads(state, step, id, result)
       })
 
     state
@@ -2292,13 +2257,13 @@ defmodule Aqua.Loop do
     do: failed_launch(state, step, call, reason, [])
 
   defp close_launch(state, step, call, {:error, reason}),
-    do: failed_launch(state, step, call, reason, read_ledger(state, step.child_execution_id))
+    do: failed_launch(state, step, call, reason, read_threads(state, step.child_execution_id))
 
   # A launch that did not run is closed in its sentence, its reason kept
   # for a page's answer. A page's call of a component that is not granted
   # asks the person for the grant, as a model's asks with request_setup.
-  defp failed_launch(state, step, call, reason, sources) do
-    close(state, step, call, {:error, {:launch, reason}}, sources)
+  defp failed_launch(state, step, call, reason, threads) do
+    close(state, step, call, {:error, {:launch, reason}}, threads)
 
     with "page" <- step.purpose,
          %Call{target: ref} <- call,
@@ -2313,21 +2278,15 @@ defmodule Aqua.Loop do
   defp output(%{result: output}), do: output
   defp output(result), do: result
 
-  defp launched_ledger(state, step, id, %{} = result) do
-    case Map.get(result, :sources) do
-      list when is_list(list) -> list |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
-      _not_carried -> read_ledger(state, id || step.child_execution_id)
+  defp launched_threads(state, step, id, %{} = result) do
+    case Map.get(result, :read_threads) do
+      threads when is_list(threads) -> threads
+      _not_carried -> read_threads(state, id || step.child_execution_id)
     end
   end
 
-  defp launched_ledger(state, step, id, _result),
-    do: read_ledger(state, id || step.child_execution_id)
-
-  # Whether the launched tree reached outside, as its completion result
-  # says (`execution.run`'s `reached_outside`); anything else is unknown,
-  # which the step's close reads as outside.
-  defp reached_outside(%{reached_outside: reached}) when is_boolean(reached), do: reached
-  defp reached_outside(_result), do: :unknown
+  defp launched_threads(state, step, id, _result),
+    do: read_threads(state, id || step.child_execution_id)
 
   defp unwrap({:ok, %Call{} = call}), do: call
   defp unwrap(_), do: nil
@@ -2477,28 +2436,20 @@ defmodule Aqua.Loop do
   defp open_program(%State{} = state), do: {:ok, state}
 
   # What the program is given before its first answer joins the turn's
-  # sources before its start is decided, as a model step's request joins
-  # what it reads, so a thread's deletion finds the turn: the system prompt's sources
-  # (`opening_sources/1`), the turn's posts, and for a thread with no
-  # native session the thread so far a fresh session's first post carries
-  # (`Aqua.Program.context_rows/2`), with the sources of the turns whose
-  # words those rows are. The program itself reads outside material with
-  # tools of its own, so it is an outside source named as a program used
-  # as a tool is (`Opus.Programs.Provider.answer_sources/2`).
-  defp join_startup(%State{program: program} = state) do
+  # read threads before its start is decided, as a model step's request
+  # joins what it reads, so a thread's deletion finds the turn: the threads
+  # the turn's posts carry, and for a thread with no native session those
+  # of the thread so far a fresh session's first post carries
+  # (`Aqua.Program.context_rows/2`), with the read threads of the turns
+  # whose words those rows are.
+  defp join_startup(%State{} = state) do
     guest = guest(state)
 
     with {:ok, posts} <- Tape.brain_posts(guest, state.turn),
          {:ok, context} <- startup_context(state, posts) do
       rows = posts ++ context
-      read = Enum.flat_map(earlier_turns(state, rows), &turn_sources(guest, &1))
-
-      Tape.join_sources(
-        guest,
-        state.turn,
-        [Prima.Source.outside(program.name) | opening_sources(state)] ++
-          thread_sources(rows) ++ read
-      )
+      read = Enum.flat_map(earlier_turns(state, rows), &turn_threads(guest, &1))
+      Tape.join_threads(guest, state.turn, Tape.carried_threads(rows) ++ read)
     end
   end
 
@@ -2518,12 +2469,12 @@ defmodule Aqua.Loop do
 
   defp startup_context(_state, []), do: {:ok, []}
 
-  # A turn's sources as its row stands; one that cannot be read is an
-  # outside source no answer names.
-  defp turn_sources(guest, turn_id) do
+  # A turn's read threads as its row stands; one that cannot be read adds
+  # none.
+  defp turn_threads(guest, turn_id) do
     case Tape.turn(guest, turn_id) do
-      {:ok, %{sources: sources}} -> Prima.Source.decode(sources)
-      {:error, _} -> [Prima.Source.outside(nil)]
+      {:ok, %{read_threads: threads}} -> Arca.ThreadStorage.threads_of(threads)
+      {:error, _} -> []
     end
   end
 
@@ -2585,8 +2536,8 @@ defmodule Aqua.Loop do
   # answered no call is taken, and the page's workers still running are
   # waited for. A page's call whose outcome is unknown stops the turn at
   # once, as the group's first one does (`stop_uncertain/4`): the model's
-  # worker is stopped and its child cancelled first, its ledger joins the
-  # turn and its step closes with no answer used.
+  # worker is stopped and its child cancelled first, its read threads join
+  # the turn and its step closes with no answer used.
   defp model_worker(%State{} = state, step, fun) do
     model_wait(state, step, Aqua.Loop.Worker.async(fun), nil, %{})
   end
@@ -2673,13 +2624,13 @@ defmodule Aqua.Loop do
   defp take_call(_state, _item, running), do: running
 
   # What the model's worker started stops before the turn's stop: the
-  # worker, then its child, whose ledger joins the turn as a dead
-  # worker's does, and its step closes as a model request that died does.
+  # worker, then its child, whose read threads join the turn as a dead
+  # worker's do, and its step closes as a model request that died does.
   # Answers what of the page's work still runs, for `cancel_rest/2`.
   defp stop_model(%State{} = state, step, task, rest) do
     if task, do: Aqua.Loop.Worker.shutdown(task)
     Opus.cancel(ctx(state), step.child_execution_id)
-    _ = Tape.join_sources(guest(state), state.turn, read_ledger(state, step.child_execution_id))
+    _ = Tape.join_threads(guest(state), state.turn, read_threads(state, step.child_execution_id))
 
     _ =
       Tape.close_step(guest(state), state.turn, step, "error", %{
@@ -2805,9 +2756,8 @@ defmodule Aqua.Loop do
 
     with {:ok, steps} <- Tape.steps(guest, state.turn) do
       # A page's call waits for the next page round, after what was
-      # decided has run: decided now, a launch would bind the turn's
-      # sources before an earlier launch's ledger joins them, and find
-      # them stale.
+      # decided has run: decided now, a launch would stamp the turn's read
+      # threads before an earlier launch's join them, and find them stale.
       for %{dispatch_state: "proposed", kind: kind} = step <- steps,
           kind not in ["model", "input"],
           step.purpose != "page" do
@@ -2887,9 +2837,7 @@ defmodule Aqua.Loop do
   # can keep notes: `notes.keep` alone, when the member's mode runs it and
   # its offered set holds it, in a turn no unknown outcome
   # restricts, with room left for the flush, the summary and the next chat
-  # request, and only when the request fits the catalyst's cap. The kept
-  # note carries the turn's sources when they hold an outside one
-  # (`Aqua.Providers.Notes`).
+  # request, and only when the request fits the catalyst's cap.
   defp flush(%State{spec: spec} = state, rows, probe) do
     cap = spec.request_cap
 
@@ -3281,7 +3229,7 @@ defmodule Aqua.Loop do
   defp describe(:occurrence_not_claimed),
     do: "This scheduled run was already taken up by another turn, so this one did not start."
 
-  defp describe(:sources_unrecorded),
+  defp describe(:read_threads_unrecorded),
     do: "What the model read could not be recorded on the turn, so its answer was not used"
 
   defp describe(reason) when is_binary(reason), do: reason

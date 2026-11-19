@@ -402,8 +402,8 @@ defmodule Arca.ExecutionAttemptsTest do
 
   describe "a guest object's write" do
     # A storage root of the test's own and an attempt claimed by `@runner`
-    # at fence 1, whose run has read `sources`.
-    defp writer!(actor, sources \\ []) do
+    # at fence 1, whose run holds the read threads `threads`.
+    defp writer!(actor, threads \\ []) do
       dir = Path.join(System.tmp_dir!(), "attempt_objects_#{System.unique_integer([:positive])}")
       previous = Application.get_env(:arca, :base_path)
 
@@ -422,7 +422,7 @@ defmodule Arca.ExecutionAttemptsTest do
       :ok =
         ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_o", Arca.Test.Actor.stored())
 
-      :ok = Arca.Execution.join_sources(actor, execution.id, sources)
+      :ok = Arca.Execution.join_threads(actor, execution.id, threads)
       %{actor: actor, execution: execution, attempt: attempt.attempt}
     end
 
@@ -472,15 +472,15 @@ defmodule Arca.ExecutionAttemptsTest do
       :ok
     end
 
-    test "marks its generation on the intent, stores at the generation's key, never at the path, and settles with the run's ledger",
+    test "marks its generation on the intent, stores at the generation's key, never at the path, and settles with the run's read threads",
          %{actor: actor} do
-      w = writer!(actor, [Prima.Source.new(:filed)])
+      w = writer!(actor, ["thr_a"])
       path = ["data", "g.txt"]
 
-      # The ledger also grows while the store is in flight: the settlement
-      # carries what the run had read by then.
+      # The read threads also grow while the store is in flight: the
+      # settlement carries what the run had read by then.
       grow = fn _mark ->
-        :ok = Arca.Execution.join_sources(actor, w.execution.id, [Prima.Source.outside("x.test")])
+        :ok = Arca.Execution.join_threads(actor, w.execution.id, ["thr_b"])
       end
 
       assert {:ok, {:confirmed, :ok}} = held(w, put(path, "bytes", grow))
@@ -488,17 +488,15 @@ defmodule Arca.ExecutionAttemptsTest do
       assert [%{state: "confirmed", generation: generation}] = intents(w)
       assert %{settled_generation: ^generation} = revision(actor, "data/g.txt")
 
-      assert %{sources: recorded} =
+      assert %{read_threads: ~s(["thr_a"])} =
                Arca.Repo.get_by(Arca.Schemas.ObjectGeneration,
                  athanor_id: actor.athanor_id,
                  path: "data/g.txt",
                  generation: generation
                )
 
-      assert Prima.Source.decode(recorded) == [Prima.Source.new(:filed)]
-
-      assert {:ok, "bytes", sources} = Arca.ObjectRevisions.read(actor, path)
-      assert sources == [Prima.Source.new(:filed), Prima.Source.outside("x.test")]
+      assert {:ok, "bytes", threads} = Arca.ObjectRevisions.read(actor, path)
+      assert threads == ["thr_a", "thr_b"]
 
       assert {:ok, "bytes"} =
                Arca.Adapters.Local.get(actor, ["objects", "#{generation}" | path])
@@ -521,7 +519,7 @@ defmodule Arca.ExecutionAttemptsTest do
       assert_received {:announced, "data/n.txt", false, true}
       refute_received {:announced, _path, _in_transaction, _settled}
 
-      :ok = Arca.put(actor, ["data", "u.txt"], "before", sources: [])
+      :ok = Arca.put(actor, ["data", "u.txt"], "before")
       assert_received {:announced, "data/u.txt", false, true}
 
       assert {:ok, {:uncertain, :hold_lost}} =
@@ -534,7 +532,7 @@ defmodule Arca.ExecutionAttemptsTest do
          %{actor: actor} do
       w = writer!(actor)
       path = ["data", "h.txt"]
-      :ok = Arca.put(actor, path, "before", sources: [])
+      :ok = Arca.put(actor, path, "before")
 
       assert {:ok, {:uncertain, :hold_lost}} =
                held(w, put(path, "after", fn _mark -> cancel!(w) end))
@@ -549,7 +547,7 @@ defmodule Arca.ExecutionAttemptsTest do
          %{actor: actor} do
       w = writer!(actor)
       path = ["data", "d.txt"]
-      :ok = Arca.put(actor, path, "v1", sources: [])
+      :ok = Arca.put(actor, path, "v1")
 
       assert {:ok, {:failed, {:error, :dead}}} =
                held(w, put(path, "late", fn _mark -> :ok = Arca.delete(actor, path) end))
@@ -565,7 +563,7 @@ defmodule Arca.ExecutionAttemptsTest do
       child = ["data", "shape", "c.txt"]
 
       settle_parent = fn _mark ->
-        :ok = Arca.put(actor, ["data", "shape"], "a file now", sources: [])
+        :ok = Arca.put(actor, ["data", "shape"], "a file now")
       end
 
       assert {:ok, {:failed, {:error, :enotdir}}} = held(w, put(child, "child", settle_parent))
@@ -577,7 +575,7 @@ defmodule Arca.ExecutionAttemptsTest do
     test "a delete stores nothing and tombstones the row at its settlement", %{actor: actor} do
       w = writer!(actor)
       path = ["data", "gone.txt"]
-      :ok = Arca.put(actor, path, "v1", sources: [])
+      :ok = Arca.put(actor, path, "v1")
 
       assert {:ok, {:confirmed, :ok}} =
                held(w, %{op: :delete, path: path, io: fn _mark -> :ok end})
@@ -597,7 +595,7 @@ defmodule Arca.ExecutionAttemptsTest do
          %{actor: actor} do
       w = writer!(actor)
       path = ["data", "a.log"]
-      :ok = Arca.put(actor, path, "base;", sources: [])
+      :ok = Arca.put(actor, path, "base;")
       moved = :counters.new(1, [])
 
       append = %{
@@ -608,7 +606,7 @@ defmodule Arca.ExecutionAttemptsTest do
           # The first store finds another writer has settled over its base.
           if :counters.get(moved, 1) == 0 do
             :counters.add(moved, 1, 1)
-            :ok = Arca.put(actor, path, "moved;", sources: [])
+            :ok = Arca.put(actor, path, "moved;")
           end
 
           Arca.append(actor, path, "suffix", mark: mark)
@@ -625,7 +623,7 @@ defmodule Arca.ExecutionAttemptsTest do
          %{actor: actor} do
       w = writer!(actor)
       path = ["data", "c.log"]
-      :ok = Arca.put(actor, path, "base;", sources: [])
+      :ok = Arca.put(actor, path, "base;")
       moves = :counters.new(1, [])
 
       append = %{
@@ -634,7 +632,7 @@ defmodule Arca.ExecutionAttemptsTest do
         bytes: 6,
         io: fn mark ->
           :counters.add(moves, 1, 1)
-          :ok = Arca.put(actor, path, "moved-#{:counters.get(moves, 1)};", sources: [])
+          :ok = Arca.put(actor, path, "moved-#{:counters.get(moves, 1)};")
           Arca.append(actor, path, "suffix", mark: mark)
         end
       }
@@ -646,17 +644,15 @@ defmodule Arca.ExecutionAttemptsTest do
       refute bytes =~ "suffix"
     end
 
-    test "a read joins the object's settled sources into the run's ledger before answering its bytes",
+    test "a read joins the object's settled read threads into the run's before answering its bytes",
          %{actor: actor} do
       w = writer!(actor)
       path = ["data", "r.txt"]
-      :ok = Arca.put(actor, path, "disclosed", sources: [Prima.Source.new(:vault_disclosed)])
+      :ok = Arca.put(actor, path, "posts", threads: ["thr_a"])
 
-      assert {:ok, []} = Arca.Execution.sources(actor, w.execution.id)
-      assert {:ok, {:read, {:ok, "disclosed"}}} = held(w, %{op: :read, path: path})
-
-      assert {:ok, [%Prima.Source{class: :vault_disclosed}]} =
-               Arca.Execution.sources(actor, w.execution.id)
+      assert {:ok, []} = Arca.Execution.read_threads(actor, w.execution.id)
+      assert {:ok, {:read, {:ok, "posts"}}} = held(w, %{op: :read, path: path})
+      assert {:ok, ["thr_a"]} = Arca.Execution.read_threads(actor, w.execution.id)
 
       assert {:ok, {:read, {:error, :not_found}}} =
                held(w, %{op: :read, path: ["data", "missing.txt"]})
@@ -690,7 +686,7 @@ defmodule Arca.ExecutionAttemptsTest do
       # last one, so only its intent says it may still settle.
       {:ok, {:ok, _later_mark}} =
         Arca.Repo.transaction(fn ->
-          Arca.ObjectRevisions.mark!(actor, path, :put, %{bytes: 1, sources: []})
+          Arca.ObjectRevisions.mark!(actor, path, :put, %{bytes: 1, threads: []})
         end)
 
       later = DateTime.add(DateTime.utc_now(), 86_400, :second)

@@ -1390,19 +1390,18 @@ defmodule Aqua.CrewTest do
     assert pending(ctx, "crew_request") == []
   end
 
-  test "the member's turn carries the sources of the request's files",
+  test "the member's turn carries the read threads of the request's files",
        %{ctx: ctx, room: room} do
     script!([reply("Read.")])
-    outside = Prima.Source.outside("moon.example")
 
-    # The soul's turn that read outside material asks with a file.
+    # The soul's turn that read another thread asks with a file.
     {:ok, %{turn: asker}} =
       TurnStorage.accept_message(actor(ctx), room.id, %{
         message: %{author: ctx.user_id, sent_by: "person", content: "ask the planner"},
         turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
-    :ok = Tape.join_sources(ctx, asker, [outside])
+    :ok = Tape.join_threads(ctx, asker, ["thr_moon"])
 
     # The request's file stored under its row first, as `crew.ask` stores it.
     id = Prima.UUID7.generate_id("msg")
@@ -1422,9 +1421,9 @@ defmodule Aqua.CrewTest do
     await_status(ctx, turn_id, "completed")
 
     [delivered | _] = rows(ctx, child.id)
-    assert [%{"sources" => [_ | _]}] = refs_of(delivered)
-    {:ok, %{sources: sources}} = Tape.turn(ctx, turn_id)
-    assert outside in Prima.Source.decode(sources)
+    assert [%{"read_threads" => ["thr_moon"]}] = refs_of(delivered)
+    {:ok, %{read_threads: read}} = Tape.turn(ctx, turn_id)
+    assert Arca.ThreadStorage.threads_of(read) == ["thr_moon"]
   end
 
   # The scripted brain takes image/png and application/pdf inline.

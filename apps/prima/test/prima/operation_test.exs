@@ -398,40 +398,34 @@ defmodule Prima.OperationTest do
     end
   end
 
-  describe "result_sources" do
-    defp read_with(sources),
+  describe "read_threads" do
+    defp read_with(threads),
       do:
         Operation.new("sample", "list", "List samples", [],
           kind: :read,
           planes: [:in_chain],
-          sources: sources
+          threads: threads
         )
 
-    def outside_answer(_actor, %{from: from}), do: [Prima.Source.outside(from)]
-    def outside_answer(_actor, _answer), do: :unreadable
+    def threads_answer(_actor, %{threads: ids}), do: ids
+    def threads_answer(_actor, _answer), do: :unreadable
 
-    test "a success is what the declaration reads from the answer; nothing declared is outside" do
+    test "a success is what the declaration reads from the answer; nothing declared carries none" do
       actor = %Prima.Actor{athanor_id: "ath_1"}
-      reader = read_with({:answer, {__MODULE__, :outside_answer}})
+      reader = read_with({__MODULE__, :threads_answer})
 
-      assert Operation.result_sources(read_with([]), actor, {:ok, %{}}) == []
+      assert Operation.read_threads(reader, actor, {:ok, %{threads: ["thr_b", "thr_a", "thr_b"]}}) ==
+               ["thr_a", "thr_b"]
 
-      assert Operation.result_sources(read_with([:filed]), actor, {:ok, %{}}) ==
-               [Prima.Source.new(:filed)]
-
-      assert Operation.result_sources(reader, actor, {:ok, %{from: "feed"}}) ==
-               [Prima.Source.outside("feed")]
-
-      assert Operation.result_sources(reader, actor, {:ok, :malformed}) ==
-               [Prima.Source.outside(nil)]
-
-      assert Operation.result_sources(read_with(nil), actor, {:ok, %{}}) ==
-               [Prima.Source.outside(nil)]
-
-      assert Operation.result_sources(nil, actor, {:ok, %{}}) == [Prima.Source.outside(nil)]
+      assert Operation.read_threads(reader, actor, {:ok, %{threads: []}}) == []
+      assert Operation.read_threads(reader, actor, {:ok, %{threads: ["thr_a", ""]}}) == []
+      assert Operation.read_threads(reader, actor, {:ok, %{threads: ["thr_a", :thr_b]}}) == []
+      assert Operation.read_threads(reader, actor, {:ok, :malformed}) == []
+      assert Operation.read_threads(read_with(nil), actor, {:ok, %{threads: ["thr_a"]}}) == []
+      assert Operation.read_threads(nil, actor, {:ok, %{threads: ["thr_a"]}}) == []
     end
 
-    test "an admission refusal carries nothing; any other failure every class the action may answer" do
+    test "a refusal or any other failure carries none, whatever the action declares" do
       actor = %Prima.Actor{athanor_id: "ath_1"}
 
       admission = %Prima.Refusal{
@@ -441,25 +435,22 @@ defmodule Prima.OperationTest do
         stage: :admission
       }
 
-      for op <- [nil, read_with(nil), read_with([:filed])],
-          do: assert(Operation.result_sources(op, actor, {:error, admission}) == [])
+      reader = read_with({__MODULE__, :threads_answer})
 
-      failure = {:error, %{admission | stage: :execution}}
-      reader = read_with({:answer, {__MODULE__, :outside_answer}})
+      for op <- [nil, read_with(nil), reader],
+          result <- [
+            {:error, admission},
+            {:error, %{admission | stage: :execution}},
+            {:error, :not_found},
+            {:error, "body"},
+            :no_result
+          ],
+          do: assert(Operation.read_threads(op, actor, result) == [])
+    end
 
-      assert Operation.result_sources(read_with([]), actor, failure) == []
-
-      assert Operation.result_sources(read_with([:outside, :filed]), actor, failure) ==
-               [Prima.Source.new(:filed), Prima.Source.outside(nil)]
-
-      assert Operation.result_sources(reader, actor, {:error, :not_found}) ==
-               Enum.map(Prima.Source.classes(), &Prima.Source.new/1)
-
-      assert Operation.result_sources(read_with(nil), actor, {:error, "body"}) ==
-               [Prima.Source.outside(nil)]
-
-      assert Operation.result_sources(nil, actor, {:error, "body"}) == [Prima.Source.outside(nil)]
-      assert Operation.result_sources(nil, actor, :no_result) == [Prima.Source.outside(nil)]
+    test "a declaration other than {module, function} is refused at declaration" do
+      for threads <- [[], ["thr_a"], {:answer, {__MODULE__, :threads_answer}}, {__MODULE__, "f"}],
+          do: assert_raise(ArgumentError, fn -> read_with(threads) end)
     end
   end
 

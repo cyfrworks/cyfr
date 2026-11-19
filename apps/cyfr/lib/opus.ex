@@ -536,9 +536,6 @@ defmodule Opus do
     |> put(:activation_stamp, Keyword.get(opts, :activation_stamp))
     |> put(:client_ip, Keyword.get(opts, :client_ip))
     |> put(:execution_id, Keyword.get(opts, :execution_id))
-    # A frame-invoked root's seed (`Opus.Tincture`); a child's row starts
-    # from its parent's ledger whatever this says (`Opus.Record.new/4`).
-    |> put(:frame_sources, Keyword.get(opts, :frame_sources))
     # The tincture a tincture-invoked root names as its caller (`Opus.Tincture`).
     |> put(:caller, Keyword.get(opts, :caller))
     # Only a root carries a profile; an in-chain child walks its parent's
@@ -649,17 +646,22 @@ defmodule Opus do
   def cancel(%Context{} = ctx, execution_id), do: Dispatch.cancel(ctx, execution_id)
 
   @doc """
-  The source ledger of the execution `execution_id` in `ctx`'s athanor
-  (`Opus.Ledger`): `{:ok, sources}`; `{:error, :not_found}` for a row no
-  longer held — retention prunes a terminal run while its caller may
-  still be closing the step that ran it, so absence says nothing about
-  what ran; or `{:error, :unavailable}`. The loop's second carrier of a
-  child's provenance into its turn, read when the child failed.
+  The read threads of the execution `execution_id` in `ctx`'s athanor
+  (`Arca.Execution.read_threads/2`): `{:ok, ids}`; `{:error, :not_found}`
+  for a row no longer held — retention prunes a terminal run while its
+  caller may still be closing the step that ran it, so absence says
+  nothing about what ran; or `{:error, :unavailable}`. The loop reads a
+  failed child's read threads into its turn here.
   """
-  @spec sources(Context.t(), String.t()) ::
-          {:ok, [Prima.Source.t()]} | {:error, :not_found | :unavailable}
-  def sources(%Context{} = ctx, execution_id) when is_binary(execution_id),
-    do: Opus.Ledger.sources(Context.actor(ctx), execution_id)
+  @spec read_threads(Context.t(), String.t()) ::
+          {:ok, [String.t()]} | {:error, :not_found | :unavailable}
+  def read_threads(%Context{} = ctx, execution_id) when is_binary(execution_id) do
+    case Arca.Execution.read_threads(Context.actor(ctx), execution_id) do
+      {:ok, ids} -> {:ok, ids}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unread} -> {:error, :unavailable}
+    end
+  end
 
   @doc "An execution record of the context's athanor by id."
   @spec get(Context.t(), String.t()) :: {:ok, Record.t()} | {:error, term()}

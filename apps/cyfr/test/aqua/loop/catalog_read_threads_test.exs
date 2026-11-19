@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.Loop.CatalogSourcesTest do
+defmodule Aqua.Loop.CatalogReadThreadsTest do
   @moduledoc """
-  A catalog call's answer joins its turn as its operation declares it,
-  read under the caller's actor, before the next call is decided, so a
-  note the next call keeps carries it; and a registry mutation runs under
-  the soul's `auto` and is refused under its `read-only`.
+  A catalog call's answer joins its turn's read threads as its operation
+  declares them, read under the caller's actor, and one that declares
+  none joins nothing; and a registry mutation runs under the soul's
+  `auto` and is refused under its `read-only`.
 
   The loop and the gate are real; the model is scripted and the registry
   is an HTTP stub.
@@ -19,7 +19,6 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   alias Aqua.Tape
   alias Cyfr.Test.HTTPStub
   alias Cyfr.Test.ScriptedWorker
-  alias Prima.Source
   alias Sanctum.Consent.Bootstrap
 
   @soul "agent:local.aqua"
@@ -67,7 +66,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   end
 
   describe "the soul's own catalog reads" do
-    test "carry nothing outside into the turn, and the next call runs",
+    test "carry no thread into the turn, and the next call runs",
          %{ctx: ctx, thread: thread} do
       turn = accept!(ctx, thread, "@aqua look around and keep a note")
 
@@ -87,141 +86,24 @@ defmodule Aqua.Loop.CatalogSourcesTest do
           do: assert(%{outcome: "ok"} = step(ctx, turn, call), call)
 
       assert %{outcome: "ok"} = step(ctx, turn, "c4")
-      refute Enum.any?(sources(ctx, turn), &Source.outside?/1)
+      assert read_threads(ctx, turn) == []
     end
   end
 
-  describe "a local component's inspection" do
-    # The inspection of a local root carries the entries a pulled
-    # dependency's own manifest declares.
-    test "keeps a pulled dependency's prose outside before the next call, whose note carries it",
-         %{ctx: ctx, thread: thread} do
-      remote_reason = "REMOTE_PROSE_FROM_ACME"
-
-      entries = [
-        {"acme", "loop-dep",
-         %{
-           "dependencies" => %{
-             "static" => [
-               %{
-                 "ref" => "reagent:local.optional-leaf:1.0.0",
-                 "optional" => true,
-                 "reason" => remote_reason
-               }
-             ]
-           }
-         }},
-        {"local", "loop-root",
-         %{"dependencies" => %{"static" => [%{"ref" => "reagent:acme.loop-dep:1.0.0"}]}}}
-      ]
-
-      wasm = Cyfr.Test.Guests.wasm(:reagent)
-
-      for {publisher, name, extra} <- entries do
-        manifest =
-          Map.merge(
-            %{
-              "name" => name,
-              "version" => "1.0.0",
-              "type" => "reagent",
-              "publisher" => publisher
-            },
-            extra
-          )
-
-        assert {:ok, _} =
-                 Compendium.Registry.publish_bytes(
-                   ctx,
-                   wasm,
-                   %{
-                     name: name,
-                     version: "1.0.0",
-                     type: "reagent",
-                     publisher: publisher,
-                     manifest: Jason.encode!(manifest)
-                   },
-                   origin: if(publisher == "local", do: :local, else: :remote)
-                 )
-      end
-
-      turn = accept!(ctx, thread, "@aqua inspect the local root and keep what it says")
-
-      script!([
-        calls([
-          {"c1", "component.inspect", %{"reference" => "reagent:local.loop-root:1.0.0"}}
-        ]),
-        calls([{"c2", "notes.keep", %{"name" => "dependency-info", "content" => remote_reason}}]),
-        reply("kept")
-      ])
-
-      assert :completed = run(ctx, turn)
-
-      # The inspection answered, and its answer carries the pulled
-      # dependency's prose.
-      assert %{outcome: "ok", content: content} = step_result(ctx, turn, "c1")
-      assert content =~ remote_reason
-      dependency = Source.outside("reagent:acme.loop-dep")
-      assert dependency in sources(ctx, turn)
-
-      # The keep ran, and the note it kept carries the prose's source: the
-      # turn held it before the keep was decided.
-      assert %{outcome: "ok"} = step(ctx, turn, "c2")
-
-      assert {:ok, %{content: ^remote_reason, sources: kept}} =
-               Aqua.Notes.read(ctx, "dependency-info")
-
-      assert dependency in kept
-    end
-  end
-
-  describe "a registry read" do
-    test "is outside material on the turn before the next call is decided, so the note it keeps carries it",
-         %{ctx: ctx, thread: thread, stub: stub} do
-      soul!(ctx, %{"tools_add" => ["registry.get_namespace"]})
-
-      HTTPStub.expect_once(stub, "GET", "/v1/namespaces/acme", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => "acme", "about" => "from the registry"}))
-      end)
-
-      turn = accept!(ctx, thread, "@aqua look up acme and keep it")
-
-      script!([
-        calls([{"c1", "registry.get_namespace", %{"slug" => "acme"}}]),
-        calls([
-          {"c2", "notes.keep", %{"name" => "acme", "content" => "acme: from the registry"}}
-        ]),
-        reply("kept")
-      ])
-
-      assert :completed = run(ctx, turn)
-      assert %{outcome: "ok"} = step(ctx, turn, "c1")
-      assert Source.outside(nil) in sources(ctx, turn)
-
-      # The keep ran, and the note it kept names the registry's answer as
-      # outside material.
-      assert %{outcome: "ok"} = step(ctx, turn, "c2")
-      assert {:ok, %{sources: kept}} = Aqua.Notes.read(ctx, "acme")
-      assert Source.outside(nil) in kept
-    end
-
-    test "an answer whose execution is another athanor's carries no ledger of it, only an unnamed outside source",
+  describe "an execution read" do
+    test "carries the read threads of its athanor's execution, and none of another athanor's",
          %{ctx: ctx} do
       other = ScriptedWorker.athanor!(Sanctum.TestContext.local(:prism))
-      foreign = execution!(other, [Source.outside("news.example")])
-      own = execution!(ctx, [Source.outside("own.example")])
+      foreign = execution!(other, ["thr_theirs"])
+      own = execution!(ctx, ["thr_own"])
       call = %Aqua.Loop.Binding.Call{kind: :catalog, tool: "execution", action: "logs", args: %{}}
 
-      assert Aqua.Loop.Policy.sources_of(call, {:ok, %{execution_id: own}}, ctx) ==
-               [Source.outside("own.example")]
+      assert Aqua.Loop.Policy.threads_of(call, {:ok, %{execution_id: own}}, ctx) == ["thr_own"]
+      assert Aqua.Loop.Policy.threads_of(call, {:ok, %{execution_id: foreign}}, ctx) == []
 
-      assert Aqua.Loop.Policy.sources_of(call, {:ok, %{execution_id: foreign}}, ctx) ==
-               [Source.outside(nil)]
-
-      # The same answer read as the other athanor is that athanor's ledger.
-      assert Aqua.Loop.Policy.sources_of(call, {:ok, %{execution_id: foreign}}, other) ==
-               [Source.outside("news.example")]
+      # The same answer read as the other athanor carries that athanor's.
+      assert Aqua.Loop.Policy.threads_of(call, {:ok, %{execution_id: foreign}}, other) ==
+               ["thr_theirs"]
     end
   end
 
@@ -296,8 +178,8 @@ defmodule Aqua.Loop.CatalogSourcesTest do
       })
   end
 
-  # A completed execution of the athanor whose ledger holds `sources`.
-  defp execution!(ctx, sources) do
+  # A completed execution of the athanor whose read threads are `threads`.
+  defp execution!(ctx, threads) do
     id = "exec_cs_#{System.unique_integer([:positive])}"
     grant = Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id)
 
@@ -315,7 +197,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
         verify: &Sanctum.ExecutionStanding.verify/1
       )
 
-    :ok = Opus.Ledger.join(Sanctum.Context.actor(ctx), id, sources)
+    :ok = Arca.Execution.join_threads(Sanctum.Context.actor(ctx), id, threads)
 
     {:ok, _} =
       Arca.Execution.record_end(
@@ -346,9 +228,9 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   defp run(ctx, turn),
     do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end) |> Task.await(60_000)
 
-  defp sources(ctx, turn) do
-    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
-    Source.decode(sources)
+  defp read_threads(ctx, turn) do
+    {:ok, %{read_threads: read}} = Tape.turn(ctx, turn.id)
+    Arca.ThreadStorage.threads_of(read)
   end
 
   # The step of one call, by the id its model gave it.

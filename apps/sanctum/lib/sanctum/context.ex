@@ -108,13 +108,14 @@ defmodule Sanctum.Context do
   @type approved_entry :: %{entry: String.t(), name: String.t()}
 
   @typedoc """
-  What a launch bound for the root it dispatches: the turn's sources it
-  seeds (`sources`), the root's pre-minted id (`execution_id`) and the name of the agent whose turn
-  launched it (`agent`), which the root records as its caller
+  What a launch bound for the root it dispatches: the ids of the threads
+  the turn read, which it seeds (`read_threads`), the root's pre-minted id
+  (`execution_id`) and the name of the agent whose turn launched it
+  (`agent`), which the root records as its caller
   (`Prima.Question.Caller`).
   """
   @type launch :: %{
-          sources: [Prima.Source.t()],
+          read_threads: [String.t()],
           execution_id: String.t(),
           agent: String.t()
         }
@@ -665,16 +666,16 @@ defmodule Sanctum.Context do
   def stamp_launch(
         %__MODULE__{} = ctx,
         %{
-          sources: sources,
+          read_threads: threads,
           execution_id: id,
           agent: agent
         } = launch
       )
-      when is_list(sources) and is_binary(id) and is_binary(agent) and agent != "" do
-    unless Enum.all?(sources, &is_struct(&1, Prima.Source)),
-      do: raise(ArgumentError, "a launch stamp names Prima.Source values")
+      when is_list(threads) and is_binary(id) and is_binary(agent) and agent != "" do
+    unless Enum.all?(threads, &is_binary/1),
+      do: raise(ArgumentError, "a launch stamp names thread ids")
 
-    %{ctx | launch: Map.take(launch, [:sources, :execution_id, :agent])}
+    %{ctx | launch: Map.take(launch, [:read_threads, :execution_id, :agent])}
   end
 
   @doc """

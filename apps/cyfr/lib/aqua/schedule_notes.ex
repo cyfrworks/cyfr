@@ -7,18 +7,16 @@ defmodule Aqua.ScheduleNotes do
   schedule's metadata (`Opus.Schedules.Provider`) files every completed
   run's output as a note in the schedule's athanor (`Aqua.Notes`) — named
   by the metadata's `note_name`, else by the schedule's id — with the
-  schedule, the execution and the run's sources as provenance, so a later
-  send of what it says is decided on the classes the run read, capped so
-  one run cannot fill a ledger. Each run replaces the note before it, and
-  a note someone else changed since the run read it is kept as they left
-  it.
+  schedule and the execution as provenance. Each run replaces the note
+  before it, and a note someone else changed since the run read it is
+  kept as they left it.
 
   ## Durable delivery
 
   The run's finish records its outcome in the outbox in the finish's own
   transaction (`Opus.Schedules.Scheduler`, `Prima.OutboxRecord`), with
   everything the note is made of in the record's snapshot: the output as
-  the run stored it with the run's sources, the note's name and the
+  the run stored it, the note's name and the
   choice to keep it as they stood at the finish, the authority the run
   fired under, and the revision of the note the run read
   (`read_by_run/4`). Nothing here reads the run's payload, its execution
@@ -368,8 +366,7 @@ defmodule Aqua.ScheduleNotes do
            over,
            [
              kept_by: "schedule:" <> snapshot["schedule_id"],
-             execution: snapshot["execution_id"],
-             sources: Prima.OutboxRecord.sources(record)
+             execution: snapshot["execution_id"]
            ],
            verify: fn ->
              with :ok <- held(JobClaims.hold(claim)),

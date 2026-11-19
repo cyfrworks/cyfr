@@ -158,7 +158,7 @@ defmodule Arca.UsageTest do
         Arca.Repo.transaction(fn ->
           Arca.ObjectRevisions.mark!(actor, ["data", "a.txt"], :put, %{
             bytes: 9,
-            sources: []
+            threads: []
           })
         end)
 

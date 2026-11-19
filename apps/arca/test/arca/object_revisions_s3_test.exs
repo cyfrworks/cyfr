@@ -81,10 +81,10 @@ defmodule Arca.ObjectRevisionsS3Test do
   # Helpers: one writer's steps, and the state a reader sees
   # ---------------------------------------------------------------------------
 
-  defp mark(actor, path, op, bytes, sources) do
+  defp mark(actor, path, op, bytes, threads) do
     {:ok, {:ok, mark}} =
       Arca.Repo.transaction(fn ->
-        ObjectRevisions.mark!(actor, path, op, %{bytes: bytes, sources: sources})
+        ObjectRevisions.mark!(actor, path, op, %{bytes: bytes, threads: threads})
       end)
 
     mark
@@ -129,9 +129,6 @@ defmodule Arca.ObjectRevisionsS3Test do
     scope
   end
 
-  defp filed, do: Prima.Source.new(:filed)
-  defp disclosed, do: Prima.Source.new(:vault_disclosed)
-
   # ---------------------------------------------------------------------------
   # Interleavings of mark, store and settle
   # ---------------------------------------------------------------------------
@@ -139,8 +136,8 @@ defmodule Arca.ObjectRevisionsS3Test do
   test "a store delayed past a newer settlement lands at its own key and is never read",
        %{actor: actor} do
     path = ["data", "a.txt"]
-    a = mark(actor, path, :put, 3, [filed()])
-    b = mark(actor, path, :put, 3, [Prima.Source.outside("b.example")])
+    a = mark(actor, path, :put, 3, ["thr_a"])
+    b = mark(actor, path, :put, 3, ["thr_b"])
 
     :ok = ObjectRevisions.store(actor, b, "bbb")
     assert settle(actor, b) == :settled
@@ -149,8 +146,7 @@ defmodule Arca.ObjectRevisionsS3Test do
 
     assert {:ok, "bbb"} = Arca.get(actor, path)
 
-    assert {:ok, "bbb", [%Prima.Source{class: :outside, name: "b.example"}]} =
-             ObjectRevisions.read(actor, path)
+    assert {:ok, "bbb", ["thr_b"]} = ObjectRevisions.read(actor, path)
 
     assert {:ok, "aaa"} = stored(actor, a.generation, path)
     assert {:error, :forbidden} = Arca.get(actor, ["objects", "#{a.generation}" | path])
@@ -194,8 +190,8 @@ defmodule Arca.ObjectRevisionsS3Test do
 
   test "of two writers the older settlement writes nothing", %{actor: actor} do
     path = ["data", "c5.txt"]
-    a = mark(actor, path, :put, 1, [filed()])
-    b = mark(actor, path, :put, 1, [Prima.Source.outside("b.example")])
+    a = mark(actor, path, :put, 1, ["thr_a"])
+    b = mark(actor, path, :put, 1, ["thr_b"])
     :ok = ObjectRevisions.store(actor, a, "a")
     :ok = ObjectRevisions.store(actor, b, "b")
 
@@ -204,8 +200,7 @@ defmodule Arca.ObjectRevisionsS3Test do
     assert settle(actor, a) == :superseded
     assert row(actor, path) == after_newer
 
-    assert {:ok, "b", [%Prima.Source{class: :outside, name: "b.example"}]} =
-             ObjectRevisions.read(actor, path)
+    assert {:ok, "b", ["thr_b"]} = ObjectRevisions.read(actor, path)
   end
 
   test "a write paused across a delete is dead, and a recreate settles above the fence",
@@ -230,36 +225,35 @@ defmodule Arca.ObjectRevisionsS3Test do
   end
 
   # ---------------------------------------------------------------------------
-  # Sources
+  # Read threads
   # ---------------------------------------------------------------------------
 
-  test "a clean append over an uncertain restricted overwrite derives from the settled bytes",
+  test "an append over an uncertain overwrite derives from the settled bytes and their read threads",
        %{actor: actor} do
     path = ["data", "c7.txt"]
-    :ok = Arca.put(actor, path, "clean", sources: [filed()])
-    pending = mark(actor, path, :put, 10, [disclosed()])
-    :ok = ObjectRevisions.store(actor, pending, "restricted")
+    :ok = Arca.put(actor, path, "settled", threads: ["thr_a"])
+    pending = mark(actor, path, :put, 10, ["thr_b"])
+    :ok = ObjectRevisions.store(actor, pending, "unsettled")
 
-    :ok = Arca.append(actor, path, "suffix", sources: [])
+    :ok = Arca.append(actor, path, "suffix")
 
-    assert {:ok, "cleansuffix", [_filed] = sources} = ObjectRevisions.read(actor, path)
-    assert sources == [filed()]
-    assert {:ok, "cleansuffix"} = Arca.get(actor, path)
+    assert {:ok, "settledsuffix", ["thr_a"]} = ObjectRevisions.read(actor, path)
+    assert {:ok, "settledsuffix"} = Arca.get(actor, path)
     assert {:error, :forbidden} = Arca.get(actor, ["objects", "#{pending.generation}" | path])
   end
 
-  test "a restricted settled prefix keeps its sources through a clean append and a clean copy",
+  test "an append unions its read threads with the settled object's, and a copy keeps them",
        %{actor: actor} do
     path = ["data", "p", "s.txt"]
-    :ok = Arca.put(actor, path, "secret", sources: [disclosed()])
-    :ok = Arca.append(actor, path, "x", sources: [])
+    :ok = Arca.put(actor, path, "posts", threads: ["thr_b"])
+    :ok = Arca.append(actor, path, "x", threads: ["thr_a", "thr_b"])
 
-    assert {:ok, "secretx", sources} = ObjectRevisions.read(actor, path)
-    assert disclosed() in sources
+    assert {:ok, "postsx", ["thr_a", "thr_b"]} = ObjectRevisions.read(actor, path)
 
-    assert {:ok, [["s.txt"]]} = Arca.copy_tree(actor, ["data", "p"], ["data", "q"], sources: [])
-    assert {:ok, "secretx", copied} = ObjectRevisions.read(actor, ["data", "q", "s.txt"])
-    assert disclosed() in copied
+    assert {:ok, [["s.txt"]]} = Arca.copy_tree(actor, ["data", "p"], ["data", "q"])
+
+    assert {:ok, "postsx", ["thr_a", "thr_b"]} =
+             ObjectRevisions.read(actor, ["data", "q", "s.txt"])
   end
 
   # ---------------------------------------------------------------------------
@@ -495,12 +489,12 @@ defmodule Arca.ObjectRevisionsS3Test do
   test "a name with a combining mark lists, counts and deletes what lies under it, and is no file over it",
        %{actor: actor} do
     dir = ["data", "é"]
-    :ok = Arca.put(actor, dir ++ ["child"], "child", sources: [])
+    :ok = Arca.put(actor, dir ++ ["child"], "child")
 
     assert {:ok, [{"child", :file}]} = Arca.list_typed(actor, dir)
     assert {:ok, [["data", "é", "child"]]} = Arca.list_recursive(actor, dir)
     assert {:ok, %{files: 1, bytes: 5}} = cold_usage(actor, dir)
-    assert {:error, :eisdir} = Arca.put(actor, dir, "parent", sources: [])
+    assert {:error, :eisdir} = Arca.put(actor, dir, "parent")
 
     assert :ok = Arca.delete_tree(actor, dir)
     assert {:error, :not_found} = Arca.get(actor, dir ++ ["child"])
@@ -513,17 +507,17 @@ defmodule Arca.ObjectRevisionsS3Test do
        %{actor: actor} do
     deep = ["data" | Enum.map(1..31, &Integer.to_string/1)]
     assert :ok = Prima.PathSafety.validate_segments!(deep)
-    assert :ok = Arca.put(actor, deep, "deep", sources: [])
+    assert :ok = Arca.put(actor, deep, "deep")
     assert {:ok, "deep"} = Arca.get(actor, deep)
 
     near =
       ["data"] ++ List.duplicate(String.duplicate("a", 200), 4) ++ [String.duplicate("c", 40)]
 
-    for n <- 1..10, do: assert(:ok = Arca.put(actor, near, Integer.to_string(n), sources: []))
+    for n <- 1..10, do: assert(:ok = Arca.put(actor, near, Integer.to_string(n)))
     assert {:ok, "10"} = Arca.get(actor, near)
     assert Enum.max(generations(actor, near)) >= 10
 
-    assert_raise ArgumentError, fn -> Arca.put(actor, deep ++ ["x"], "x", sources: []) end
+    assert_raise ArgumentError, fn -> Arca.put(actor, deep ++ ["x"], "x") end
     assert row(actor, deep ++ ["x"]) == nil
   end
 
@@ -567,20 +561,21 @@ defmodule Arca.ObjectRevisionsS3Test do
     assert {:ok, "fresh"} = stored(actor, fresh.generation, path)
   end
 
-  test "a copy naming no sources joins an unnamed outside source, and sources: [] joins none",
+  test "a copy from data/ keeps the source's read threads, transformed or not, joined with those it names",
        %{actor: actor} do
-    :ok = Arca.put(actor, ["data", "src", "f"], "clean", sources: [])
+    :ok = Arca.put(actor, ["data", "src", "f"], "posts", threads: ["thr_b"])
 
     assert {:ok, [["f"]]} =
              Arca.copy_tree(actor, ["data", "src"], ["data", "dst"],
-               transform: fn _relative, _content -> "outside material" end
+               transform: fn _relative, _content -> "transformed" end
              )
 
-    assert {:ok, "outside material", [%Prima.Source{class: :outside, name: nil}]} =
-             ObjectRevisions.read(actor, ["data", "dst", "f"])
+    assert {:ok, "transformed", ["thr_b"]} = ObjectRevisions.read(actor, ["data", "dst", "f"])
 
-    assert {:ok, [["f"]]} = Arca.copy_tree(actor, ["data", "src"], ["data", "own"], sources: [])
-    assert {:ok, "clean", []} = ObjectRevisions.read(actor, ["data", "own", "f"])
+    assert {:ok, [["f"]]} =
+             Arca.copy_tree(actor, ["data", "src"], ["data", "own"], threads: ["thr_a"])
+
+    assert {:ok, "posts", ["thr_a", "thr_b"]} = ObjectRevisions.read(actor, ["data", "own", "f"])
   end
 
   # ---------------------------------------------------------------------------
@@ -588,8 +583,8 @@ defmodule Arca.ObjectRevisionsS3Test do
   # ---------------------------------------------------------------------------
 
   # An admitted execution whose attempt `runner` claims at fence 1, whose
-  # run has read `sources`.
-  defp writer!(actor, sources \\ []) do
+  # run holds the read threads `threads`.
+  defp writer!(actor, threads \\ []) do
     n = System.unique_integer([:positive])
 
     {:ok, %{execution: execution, attempt: attempt}} =
@@ -608,7 +603,7 @@ defmodule Arca.ObjectRevisionsS3Test do
 
     runner = "runner_#{n}"
     :ok = ExecutionAttempts.claim(actor, attempt.attempt, 1, runner, Arca.Test.Actor.stored())
-    :ok = Arca.Execution.join_sources(actor, execution.id, sources)
+    :ok = Arca.Execution.join_threads(actor, execution.id, threads)
     %{actor: actor, execution: execution, attempt: attempt.attempt, runner: runner}
   end
 
@@ -683,18 +678,18 @@ defmodule Arca.ObjectRevisionsS3Test do
   defp purge!(w) do
     {:ok, []} = Arca.ExecutionPayloads.release(w.actor, [w.execution.id])
     {:ok, 1} = Arca.Execution.delete_ids([w.execution.id], athanor_id: w.actor.athanor_id)
-    assert {:error, :not_found} = Arca.Execution.sources(w.actor, w.execution.id)
+    assert {:error, :not_found} = Arca.Execution.read_threads(w.actor, w.execution.id)
   end
 
-  # The run's ledger as it stands (`Arca.Execution.sources/2`).
-  defp ledger(w), do: Arca.Execution.sources(w.actor, w.execution.id)
+  # The run's read threads as they stand (`Arca.Execution.read_threads/2`).
+  defp read_threads(w), do: Arca.Execution.read_threads(w.actor, w.execution.id)
 
   describe "through admitted attempts" do
-    test "a store held until a newer write settles lands at its own key, and the read serves the newer write with its sources",
+    test "a store held until a newer write settles lands at its own key, and the read serves the newer write with its read threads",
          %{actor: actor} do
       path = ["data", "att-a.txt"]
-      stale = writer!(actor, [filed()])
-      newer = writer!(actor, [Prima.Source.outside("b.test")])
+      stale = writer!(actor, ["thr_a"])
+      newer = writer!(actor, ["thr_b"])
       test = self()
 
       task = Task.async(fn -> held(stale, put(stale, path, "stale", pause_at(test, :marked))) end)
@@ -707,8 +702,7 @@ defmodule Arca.ObjectRevisionsS3Test do
       reader = writer!(actor)
       assert {:ok, {:read, {:ok, "newer"}}} = read(reader, path)
 
-      assert {:ok, "newer", [%Prima.Source{class: :outside, name: "b.test"}]} =
-               ObjectRevisions.read(actor, path)
+      assert {:ok, "newer", ["thr_b"]} = ObjectRevisions.read(actor, path)
 
       [stale_intent] = ExecutionAttempts.write_intents(actor, stale.attempt)
       assert {:ok, "stale"} = stored(actor, stale_intent.generation, path)
@@ -717,7 +711,7 @@ defmodule Arca.ObjectRevisionsS3Test do
     test "metadata before bytes and bytes before metadata: a reader sees the settled object until the hold settles",
          %{actor: actor} do
       path = ["data", "att-b.txt"]
-      :ok = Arca.put(actor, path, "before", sources: [])
+      :ok = Arca.put(actor, path, "before")
       w = writer!(actor)
       test = self()
 
@@ -744,7 +738,7 @@ defmodule Arca.ObjectRevisionsS3Test do
     test "the deletion fence: a write held across another attempt's delete is dead with both holds live, and a recreate settles",
          %{actor: actor} do
       path = ["data", "att-c.txt"]
-      :ok = Arca.put(actor, path, "g1", sources: [])
+      :ok = Arca.put(actor, path, "g1")
       a = writer!(actor)
       b = writer!(actor)
       test = self()
@@ -768,7 +762,7 @@ defmodule Arca.ObjectRevisionsS3Test do
          %{actor: actor} do
       for step <- [:marked, :stored] do
         path = ["data", "att-d-#{step}.txt"]
-        :ok = Arca.put(actor, path, "kept", sources: [])
+        :ok = Arca.put(actor, path, "kept")
         w = writer!(actor)
         end_hold = fn reached -> if reached == step, do: cancel!(w), else: :ok end
 
@@ -800,47 +794,47 @@ defmodule Arca.ObjectRevisionsS3Test do
       end
     end
 
-    test "an uncertain restricted overwrite, a clean append and the writer purged: the clean object and its suffix are read, and their reader carries no source",
+    test "an uncertain overwrite, an append and the writer purged: the settled object and its suffix are read, and their reader holds none of the overwrite's read threads",
          %{actor: actor} do
       path = ["data", "att-f.txt"]
-      clean = writer!(actor)
-      assert {:ok, {:confirmed, :ok}} = held(clean, put(clean, path, "clean;"))
+      settled = writer!(actor)
+      assert {:ok, {:confirmed, :ok}} = held(settled, put(settled, path, "settled;"))
 
-      restricted = writer!(actor, [disclosed()])
+      overwriter = writer!(actor, ["thr_b"])
 
       uncertain = %{
         op: :put,
         path: path,
         bytes: 10,
         io: fn mark ->
-          :ok = Arca.put(actor, path, "restricted", mark: mark)
+          :ok = Arca.put(actor, path, "unsettled", mark: mark)
           {:error, :unknown}
         end
       }
 
-      assert {:ok, {:uncertain, :unknown_outcome}} = held(restricted, uncertain)
-      assert {:ok, {:confirmed, :ok}} = held(clean, append(clean, path, "suffix"))
-      purge!(restricted)
+      assert {:ok, {:uncertain, :unknown_outcome}} = held(overwriter, uncertain)
+      assert {:ok, {:confirmed, :ok}} = held(settled, append(settled, path, "suffix"))
+      purge!(overwriter)
 
       sender = writer!(actor)
-      assert {:ok, {:read, {:ok, "clean;suffix"}}} = read(sender, path)
-      assert ledger(sender) == {:ok, []}
+      assert {:ok, {:read, {:ok, "settled;suffix"}}} = read(sender, path)
+      assert read_threads(sender) == {:ok, []}
     end
 
-    test "a run that reads what an earlier run wrote carries what that run read, also once the writer is purged",
+    test "a run that reads what an earlier run wrote holds that run's read threads, also once the writer is purged",
          %{actor: actor} do
       path = ["data", "att-g.txt"]
-      w = writer!(actor, [filed()])
-      assert {:ok, {:confirmed, :ok}} = held(w, put(w, path, "from a filed note"))
+      w = writer!(actor, ["thr_a"])
+      assert {:ok, {:confirmed, :ok}} = held(w, put(w, path, "from a thread's posts"))
 
       first = writer!(actor)
       assert {:ok, {:read, {:ok, _bytes}}} = read(first, path)
-      assert ledger(first) == {:ok, [filed()]}
+      assert read_threads(first) == {:ok, ["thr_a"]}
 
       purge!(w)
       later = writer!(actor)
       assert {:ok, {:read, {:ok, _bytes}}} = read(later, path)
-      assert ledger(later) == {:ok, [filed()]}
+      assert read_threads(later) == {:ok, ["thr_a"]}
     end
 
     # The stated limit: S3 caps a key at 1,024 bytes with the tenant's
@@ -874,20 +868,20 @@ defmodule Arca.ObjectRevisionsS3Test do
       assert generations(actor, path) == []
     end
 
-    test "a restricted settled prefix keeps its sources through an attempt's clean append and a clean copy",
+    test "an attempt's append unions its run's read threads with the settled object's, and a copy keeps them",
          %{actor: actor} do
       path = ["data", "att-h", "p.txt"]
-      :ok = Arca.put(actor, path, "secret;", sources: [disclosed()])
-      w = writer!(actor)
-      assert {:ok, {:confirmed, :ok}} = held(w, append(w, path, "clean"))
+      :ok = Arca.put(actor, path, "posts;", threads: ["thr_a"])
+      w = writer!(actor, ["thr_b"])
+      assert {:ok, {:confirmed, :ok}} = held(w, append(w, path, "more"))
 
       assert {:ok, [["p.txt"]]} =
-               Arca.copy_tree(actor, ["data", "att-h"], ["data", "att-h-copy"], sources: [])
+               Arca.copy_tree(actor, ["data", "att-h"], ["data", "att-h-copy"])
 
       for read_path <- [path, ["data", "att-h-copy", "p.txt"]] do
         reader = writer!(actor)
-        assert {:ok, {:read, {:ok, "secret;clean"}}} = read(reader, read_path)
-        assert ledger(reader) == {:ok, [disclosed()]}
+        assert {:ok, {:read, {:ok, "posts;more"}}} = read(reader, read_path)
+        assert read_threads(reader) == {:ok, ["thr_a", "thr_b"]}
       end
     end
   end

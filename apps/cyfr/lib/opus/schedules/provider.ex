@@ -159,7 +159,6 @@ defmodule Opus.Schedules.Provider do
               )
             ],
             kind: :read,
-            sources: [],
             planes: [:external, :in_chain],
             permission: :execute
           ),
@@ -174,7 +173,6 @@ defmodule Opus.Schedules.Provider do
               )
             ],
             kind: :read,
-            sources: [],
             planes: [:external, :in_chain],
             permission: :execute
           ),
