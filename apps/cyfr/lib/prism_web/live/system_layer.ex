@@ -1382,6 +1382,22 @@ defmodule PrismWeb.SystemLayer do
 
   defp panel_of(_panels, nil), do: nil
 
+  # The choices the shown question's card draws, by the names its buttons
+  # carry (`Question.offered/1`): none while they are not drawn, under a
+  # covered layer, on a client that cannot confirm, or while a
+  # confirmation of an earlier choice waits in the card. The drawing and
+  # the `question_answer` event both ask here, so no answer is sent that
+  # the card does not show.
+  defp question_offered(assigns) do
+    with %{kind: :question} = prompt <- shown(assigns),
+         true <- may_confirm?(assigns[:context], prompt),
+         nil <- panel_of(assigns.panels, prompt) do
+      Question.offered(prompt)
+    else
+      _not_drawn -> []
+    end
+  end
+
   # The panel of `ref` when its prompt is the open one: a click meant for a
   # prompt already gone never acts on another.
   defp open_panel(socket, ref) do
@@ -1567,14 +1583,12 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # A question's choice the card offers (`Question.offered/1`), sent as its
-  # answer (`Question.answer/1`), while no confirmation of an earlier
-  # choice waits in its card.
+  # A question's choice its card draws (`question_offered/1`), sent as its
+  # answer (`Question.answer/1`).
   def handle_event("question_answer", %{"id" => id, "choice" => choice}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, prompt} <- open(socket, id, [:question]),
-           nil <- panel_of(socket.assigns.panels, prompt),
-           true <- choice in Question.offered(prompt) do
+           true <- choice in question_offered(socket.assigns) do
         prompt = Map.delete(prompt, :said)
 
         {:noreply,
@@ -2812,6 +2826,14 @@ defmodule PrismWeb.SystemLayer do
   defp over_page?(%{kind: :pairing}), do: true
   defp over_page?(_prompt), do: false
 
+  # The prompt drawn: the open one, or none while the layer is covered and
+  # the open one is not drawn over a page (`render/1`).
+  defp shown(%{covered: true, current: current}) do
+    if over_page?(current), do: current
+  end
+
+  defp shown(%{current: current}), do: current
+
   # ---------------------------------------------------------------------------
   # Render
   # ---------------------------------------------------------------------------
@@ -2824,10 +2846,7 @@ defmodule PrismWeb.SystemLayer do
     # render from `covered` and `current` together, so the browser sees the
     # dialog open again once the layer is uncovered, though `current`
     # itself never moved.
-    shown =
-      if assigns.covered and not over_page?(assigns.current),
-        do: nil,
-        else: assigns.current
+    shown = shown(assigns)
 
     # A prompt drawn over a page that waits behind one hidden there (the
     # devices', behind a frame's) is not put in front of it, which may hold
@@ -2835,6 +2854,7 @@ defmodule PrismWeb.SystemLayer do
     # where the hidden one is.
     held_back = assigns.covered and is_nil(shown) and Enum.any?(assigns.queue, &over_page?/1)
     may = shown && may_confirm?(assigns[:context], shown)
+    offered = question_offered(assigns)
 
     panel =
       case panel_of(assigns.panels, shown) do
@@ -2847,6 +2867,7 @@ defmodule PrismWeb.SystemLayer do
         shown: shown,
         held_back: held_back,
         may: may,
+        offered: offered,
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
         proves: panel != nil and can_prove?(assigns[:context]),
@@ -2938,8 +2959,9 @@ defmodule PrismWeb.SystemLayer do
           </p>
 
           <Question.choices
-            :if={@may and @shown.kind == :question and is_nil(@panel)}
+            :if={@offered != []}
             prompt={@shown}
+            offered={@offered}
             myself={@myself}
             button_class={&button_class/1}
           />

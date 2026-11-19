@@ -33,6 +33,28 @@ defmodule PrismWeb.SystemLayerQuestionTest.Host do
   end
 end
 
+defmodule PrismWeb.SystemLayerQuestionTest.GuestHost do
+  @moduledoc false
+  # A page holding a context it was handed, with a layer that does not
+  # listen: a client no session backs, whose prompts the test places.
+  use Phoenix.LiveView
+
+  @impl true
+  def mount(_params, session, socket), do: {:ok, assign(socket, context: session["context"])}
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <.live_component
+      module={PrismWeb.SystemLayer}
+      id="system-layer"
+      context={@context}
+      listen={false}
+    />
+    """
+  end
+end
+
 defmodule PrismWeb.SystemLayerQuestionTest do
   @moduledoc """
   A component's question as the page's layer draws it: on every open
@@ -53,7 +75,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
 
   alias Cyfr.Test.QuestionFixtures, as: Q
   alias PrismWeb.SystemLayer.Prompt
-  alias PrismWeb.SystemLayerQuestionTest.Host
+  alias PrismWeb.SystemLayerQuestionTest.{GuestHost, Host}
   alias Sanctum.Context
   alias Sanctum.TestContext.Authenticator
 
@@ -183,6 +205,21 @@ defmodule PrismWeb.SystemLayerQuestionTest do
   end
 
   defp end_views, do: Cyfr.Test.Sandbox.end_views()
+
+  # The person's athanor under a client that cannot confirm: a guest's
+  # context, as a frame's is.
+  defp guest_context(ctx) do
+    [
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      permissions: [:*],
+      scope: :athanor,
+      auth_method: :tincture,
+      authenticated: true
+    ]
+    |> Context.build()
+    |> Context.enter_guest()
+  end
 
   # The elements `selector` matches in rendered HTML or in one element.
   defp find(html, selector) when is_binary(html), do: find(LazyHTML.from_fragment(html), selector)
@@ -320,7 +357,14 @@ defmodule PrismWeb.SystemLayerQuestionTest do
         {run, ref} = Q.open!(setup.ctx, setup.component, caller: caller)
         shows!(view, Prompt.question_id(ref))
         assert has_element?(view, ~s([data-test="question-caller"]), words)
-        assert has_element?(view, ~s([data-test="question-caller-row"] p), "For #{words}:")
+        # The row is a group named by its heading, holding the row's
+        # buttons and not the answer for anyone below it.
+        html = render(view)
+        [group] = find(html, ~s([data-test="question-caller-row"]))
+        assert LazyHTML.tag(group) == ["fieldset"]
+        [legend] = find(html, ~s(fieldset[data-test="question-caller-row"] > legend))
+        assert String.trim(LazyHTML.text(legend)) == "For #{words}:"
+        assert Enum.map(find(group, "button"), &hd(LazyHTML.attribute(&1, "data-choice"))) == row
         assert row_offered(view) == row
         assert offered(view) == row ++ ["allow_always_any_caller"]
 
@@ -811,6 +855,87 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert Q.standing(setup.ctx) == []
       assert open_prompt(view) == nil
       assert_receive {:host, {:system_layer, ^id, :dismissed}}
+      end_views()
+    end
+
+    # The layer sends only what the card draws: under a covered layer the
+    # card is not drawn, and on a client that cannot confirm its choices
+    # are not, so an event for its id answers nothing in either.
+    test "a choice sent while the card's choices are not drawn sends nothing", setup do
+      test = self()
+      handler = "question-tried-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach_many(
+          handler,
+          [[:cyfr, :sanctum, :decision, :admitted], [:cyfr, :sanctum, :decision, :refused]],
+          fn _event, _measurements, meta, _config ->
+            if meta[:tool] == "question" and meta[:action] == "answer",
+              do: send(test, :answer_tried)
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      send_once = fn view, id ->
+        view
+        |> with_target("#system-layer")
+        |> render_click("question_answer", %{"id" => id, "choice" => "allow_once"})
+      end
+
+      # Covered: the question stays current, drawn again once uncovered.
+      view = screen!(setup)
+      {_run, covered} = Q.open!(setup.ctx, setup.component)
+      covered_id = Prompt.question_id(covered)
+      shows!(view, covered_id)
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer,
+        id: "system-layer",
+        covered: true
+      )
+
+      refute has_element?(view, ~s([data-test="question"]))
+      assert %{current: %{id: ^covered_id} = held} = layer_assigns(view)
+      send_once.(view, covered_id)
+      assert layer_assigns(view).current == held
+
+      # A client that cannot confirm: the card is drawn without choices.
+      guest = guest_context(setup.ctx)
+      refute Sanctum.Pairing.can_confirm?(guest)
+
+      {:ok, guest_view, _html} =
+        live_isolated(setup.conn, GuestHost, session: %{"context" => guest})
+
+      {_run, unconfirmable} =
+        Q.open!(setup.ctx, setup.component, request: %{action: "delete_rows"})
+
+      unconfirmable_id = Prompt.question_id(unconfirmable)
+
+      {:ok, %{questions: [entry]}} =
+        PrismWeb.Ops.call_tool(setup.ctx, "question/pending", %{"ref" => unconfirmable})
+
+      {:ok, prompt} = Prompt.question(entry)
+
+      Phoenix.LiveView.send_update(guest_view.pid, PrismWeb.SystemLayer,
+        id: "system-layer",
+        prompt: prompt
+      )
+
+      shows!(guest_view, unconfirmable_id)
+      refute has_element?(guest_view, ~s([data-test="question-choices"]))
+      shown = layer_assigns(guest_view).current
+      send_once.(guest_view, unconfirmable_id)
+
+      # Nothing was tried for it: no refusal is kept on the card either.
+      assert layer_assigns(guest_view).current == shown
+      refute has_element?(guest_view, ~s([data-test="question-said"]))
+
+      refute_received :answer_tried
+      refute_received :answer_dispatched
+      assert Q.row(setup.ctx, covered).state == "open"
+      assert Q.row(setup.ctx, unconfirmable).state == "open"
+      assert Q.standing(setup.ctx) == []
       end_views()
     end
 

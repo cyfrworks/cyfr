@@ -178,29 +178,29 @@ defmodule PrismWeb.SystemLayer.Question do
   end
 
   attr :prompt, :map, required: true
+  attr :offered, :list, required: true
   attr :myself, :any, required: true
   attr :button_class, :any, required: true
 
   @doc """
-  The choices `offered/1` lists, each sending `question_answer` with its
-  name: the caller's row under its heading, and the answer for any caller
-  below it.
+  The choices `offered` names (`offered/1`, as the layer draws them), each
+  sending `question_answer` with its name: the caller's row, a group named
+  by its heading, and the answer for any caller below it, outside the
+  group.
   """
   def choices(assigns) do
-    offered = offered(assigns.prompt)
-
     assigns =
       assign(assigns,
-        row: Enum.filter(offered, &(&1 != @any_caller)),
-        any_caller: @any_caller in offered
+        row: Enum.filter(assigns.offered, &(&1 != @any_caller)),
+        any_caller: @any_caller in assigns.offered
       )
 
     ~H"""
     <div class="space-y-3" data-test="question-choices">
-      <div class="space-y-2" data-test="question-caller-row">
-        <p class="text-sm text-gray-300 [overflow-wrap:anywhere]">
+      <fieldset class="m-0 min-w-0 space-y-2 border-0 p-0" data-test="question-caller-row">
+        <legend class="mb-2 text-sm text-gray-300 [overflow-wrap:anywhere]">
           For {caller_words(@prompt.subject.caller)}:
-        </p>
+        </legend>
         <div class="flex flex-wrap justify-end gap-2">
           <.option
             :for={name <- @row}
@@ -212,7 +212,7 @@ defmodule PrismWeb.SystemLayer.Question do
             {label(name)}
           </.option>
         </div>
-      </div>
+      </fieldset>
 
       <div
         :if={@any_caller}
