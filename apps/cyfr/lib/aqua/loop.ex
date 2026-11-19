@@ -218,15 +218,21 @@ defmodule Aqua.Loop do
   # file is refused has no registry row (`Compendium.AgentIndex` indexes
   # only what parses), so its root is refused as an unknown component
   # before the file is read: the soul's own refusal is the reason then,
-  # and a file still holding the retired `tool_policy` gets its line.
+  # and a file still holding the retired `tool_policy`, or a `tools`
+  # entry that names no one action, gets its line.
   defp unclaimed(ctx, %{agent: agent}, reason) do
     with true <- Prima.AgentRef.soul?(agent),
-         {:ok, _roster, :tool_policy_retired} <- Aqua.AgentConfig.roster_and_soul(ctx) do
-      :tool_policy_retired
+         {:ok, _roster, refused} <- Aqua.AgentConfig.roster_and_soul(ctx),
+         true <- soul_line?(refused) do
+      refused
     else
       _other -> reason
     end
   end
+
+  defp soul_line?(:tool_policy_retired), do: true
+  defp soul_line?({:tools_invalid_entry, _entry}), do: true
+  defp soul_line?(_refused), do: false
 
   # The root is held but the turn never ran: ended with the actor's own
   # context, since no spec was built to carry it, and the root closed by
@@ -254,13 +260,17 @@ defmodule Aqua.Loop do
 
   # A turn that never ran says why in the thread where the person can act
   # on it: a brain whose provider refused its key, in the provider's
-  # words, and a member whose file still holds the retired `tool_policy`,
-  # in the sentence that says what to change.
+  # words, and a member whose file still holds the retired `tool_policy`
+  # or a `tools` entry that names no one action, in the sentence that
+  # says what to change.
   defp say_unrun(ctx, turn, {:model_refused, _catalyst, %{"type" => @refused_key} = error}),
     do: unrun_line(ctx, turn, refused_key_line(error))
 
   defp say_unrun(ctx, turn, :tool_policy_retired),
     do: unrun_line(ctx, turn, Prima.AgentRef.tool_policy_retired())
+
+  defp say_unrun(ctx, turn, {:tools_invalid_entry, _entry} = reason),
+    do: unrun_line(ctx, turn, describe(reason))
 
   defp say_unrun(ctx, turn, {:read_only_unheld, _title, _brain} = reason),
     do: unrun_line(ctx, turn, describe(reason))
@@ -3275,6 +3285,10 @@ defmodule Aqua.Loop do
   defp describe({:read_only_unheld, title, brain}), do: Aqua.Models.unheld_sentence(title, brain)
 
   defp describe(:tool_policy_retired), do: Prima.AgentRef.tool_policy_retired()
+
+  defp describe({:tools_invalid_entry, entry}),
+    do: Prima.AgentRef.tools_entry_invalid(entry)
+
   defp describe(:no_model), do: "The agent names no model"
 
   # A schedule's turn whose fire another turn already took up: on another

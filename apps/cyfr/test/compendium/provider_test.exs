@@ -1777,18 +1777,21 @@ defmodule Compendium.ProviderTest do
       assert {:error, :not_found} = Arca.get(actor, Compendium.AquaPath.crew_file("reader"))
     end
 
-    test "update rejects a malformed tools entry, whole or patched", %{ctx: ctx} do
+    test "update rejects a malformed tools entry and a wildcard, whole or patched", %{ctx: ctx} do
       {:ok, bytes} = Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
 
-      sentence =
-        ~s{Invalid tool "no-dot-here" — use "tool.action", "tool.*", "native_search" or "server:tool"}
+      # One action an entry: a tool's actions are listed by name, so a
+      # wildcard is refused at the door as the parser refuses it.
+      for entry <- ["no-dot-here", "files.*"], arg <- ["tools", "tools_add", "tools_remove"] do
+        sentence =
+          "Invalid tool #{inspect(entry)} — use \"tool.action\", \"native_search\" or " <>
+            "\"server:tool\", one action an entry: list each action of a tool by name"
 
-      for arg <- ["tools", "tools_add", "tools_remove"] do
         assert {:error, {:invalid_argument, ^sentence}} =
                  Provider.handle("aqua", ctx, %{
                    "action" => "update",
                    "name" => "aqua",
-                   arg => ["no-dot-here"]
+                   arg => [entry]
                  })
       end
 
@@ -1884,14 +1887,14 @@ defmodule Compendium.ProviderTest do
       assert result.tools == ["build.compile", "component.list"]
     end
 
-    test "update accepts a member's mode, and a glob, the bare native_search and an outside server's tool",
+    test "update accepts a member's mode, an action, the bare native_search and an outside server's tool",
          %{ctx: ctx} do
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "aqua",
                  "mode" => "read-only",
-                 "tools" => ["native_search", "github:list_issues", "files.read", "files.*"]
+                 "tools" => ["native_search", "github:list_issues", "files.read", "files.write"]
                })
 
       assert {:ok, _} =
@@ -1901,7 +1904,7 @@ defmodule Compendium.ProviderTest do
                  "mode" => "read-only"
                })
 
-      tools = ["files.*", "files.read", "github:list_issues", "native_search"]
+      tools = ["files.read", "files.write", "github:list_issues", "native_search"]
       {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
       assert Map.take(soul, [:mode, :tools]) == %{mode: "read-only", tools: tools}
 

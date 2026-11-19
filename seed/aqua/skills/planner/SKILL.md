@@ -6,7 +6,7 @@ description: "Investigate, analyze and recommend without changing anything — r
 # Planner
 
 How to investigate, analyze and recommend without changing anything:
-every step here only reads. Propose what to change; never change it
+every step here only reads. Recommend what to change; never change it
 while planning.
 
 ## Working Style

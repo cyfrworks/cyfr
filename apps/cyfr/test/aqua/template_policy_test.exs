@@ -45,16 +45,12 @@ defmodule Prism.AquaTemplatePolicyTest do
     refute Map.has_key?(catalog, "member")
   end
 
-  # `native_search` is a bare exclusivity gate, not a tool; a `tool.*` glob
-  # is offered as the tool's own actions (`Aqua.Offered`); an outside
+  # `native_search` is a bare exclusivity gate, not a tool; an outside
   # server's `server:tool` names no catalogued action.
   defp refused?("native_search"), do: false
 
   defp refused?(key) do
     case String.split(key, ".", parts: 2) do
-      [_tool, "*"] ->
-        false
-
       [tool, action] ->
         if Hands.hand?(tool) do
           # A virtual tool's ACTION has to exist too. Accepting the whole

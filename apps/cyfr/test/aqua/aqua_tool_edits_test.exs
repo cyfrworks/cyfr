@@ -167,7 +167,7 @@ defmodule Aqua.AquaToolEditsTest do
     # string by the tool's schema; a list beside its patch is refused.
     assert {:error,
             {:invalid_argument,
-             ~s{Invalid tool "no-dot-here" — use "tool.action", "tool.*", "native_search" or "server:tool"}}} =
+             ~s{Invalid tool "no-dot-here" — use "tool.action", "native_search" or "server:tool", one action an entry: list each action of a tool by name}}} =
              call(ctx, %{"action" => "update", "name" => @soul, "tools_add" => ["no-dot-here"]})
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =

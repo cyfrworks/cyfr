@@ -177,6 +177,20 @@ defmodule Aqua.Loop.PolicyTest do
       assert sentence =~ "outside the tools this job was narrowed to"
     end
 
+    # Narrowed to a bare tool, the job runs every action of it and nothing else.
+    by_tool = Keyword.put(@opts, :narrowed, ["notes"])
+
+    for args <- [%{"action" => "keep", "name" => "n", "content" => "c"}, %{"action" => "list"}] do
+      assert Policy.decide(resolve!("notes", args), offered, "auto", by_tool) == :run
+    end
+
+    assert Policy.decide(
+             resolve!("files", %{"action" => "read", "path" => "a"}),
+             offered,
+             "auto",
+             by_tool
+           ) == {:deny, "files.read is outside the tools this job was narrowed to"}
+
     assert :run =
              Policy.decide(
                resolve!("github__search", %{"q" => "x"}),
@@ -220,19 +234,37 @@ defmodule Aqua.Loop.PolicyTest do
     assert unnamed == Prima.Source.outside(nil)
   end
 
-  test "the offered set expands a tool's glob, drops an action the tool lacks, and passes the rest" do
+  test "the offered set is each entry as written: an action the tool lacks, or a wildcard, " <>
+         "offers nothing, and the rest pass" do
     offered =
       Aqua.Offered.resolve(
-        ["notes.*", "files.nope", "native_search", "github:search"],
+        ["notes.keep", "notes.*", "files.nope", "native_search", "github:search"],
         {:ok, true}
       )
 
-    assert Map.keys(offered) |> Enum.filter(&String.starts_with?(&1, "notes.")) |> Enum.sort() ==
-             Aqua.Kinds.actions_of("notes") |> Enum.map(&"notes.#{&1}") |> Enum.sort()
+    assert offered == %{
+             "notes.keep" => "offered",
+             "native_search" => "offered",
+             "github:search" => "offered"
+           }
+  end
 
-    refute Map.has_key?(offered, "files.nope")
-    assert offered["native_search"] == "offered"
-    assert offered["github:search"] == "offered"
+  test "the browser's own actions are offered with the person's setting on, and off with it " <>
+         "off or with a setting store that could not answer; the setting's own actions stay " <>
+         "offered" do
+    actions = Aqua.Kinds.actions_of("browser")
+    listed = Enum.map(actions, &"browser.#{&1}")
+    follows? = &Sanctum.Catalog.follows_setting?("browser", &1)
+    assert follows?.("open") and not follows?.("status")
+
+    turned_off =
+      Map.new(actions, &{"browser.#{&1}", if(follows?.(&1), do: "off", else: "offered")})
+
+    assert Aqua.Offered.resolve(listed, {:ok, true}) == Map.new(listed, &{&1, "offered"})
+
+    for setting <- [{:ok, false}, {:error, :unavailable}] do
+      assert Aqua.Offered.resolve(listed, setting) == turned_off, inspect(setting)
+    end
   end
 
   test "reads overlap; everything else runs alone" do

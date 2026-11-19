@@ -421,13 +421,13 @@ defmodule Aqua.Loop.Request do
   # ---------------------------------------------------------------------------
 
   # `tool => [actions]` for every offered key, tools with a colon (an
-  # external server's) and globs excluded.
+  # external server's) excluded.
   defp offered_actions(offered) do
     offered
     |> Enum.filter(fn {_key, state} -> state == "offered" end)
     |> Enum.reduce(%{}, fn {key, _state}, acc ->
       case String.split(key, ".", parts: 2) do
-        [tool, action] when action != "*" and tool != "native_search" ->
+        [tool, action] when tool != "native_search" ->
           Map.update(acc, tool, [action], &Enum.uniq([action | &1]))
 
         _ ->

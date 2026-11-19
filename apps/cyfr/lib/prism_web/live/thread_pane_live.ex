@@ -2032,7 +2032,7 @@ defmodule PrismWeb.ThreadPaneLive do
                 <%!-- Whether the room has agents, or a model, could not be
                      read: nothing is offered but to try again. --%>
                 <span data-test="agents-unavailable">
-                  The agents cannot be read right now — try again.
+                  Aqua and its crew members cannot be read right now — try again.
                 </span>
               <% @model_ready == :model_unavailable -> %>
                 <%!-- Whether the model is installed could not be read: nothing

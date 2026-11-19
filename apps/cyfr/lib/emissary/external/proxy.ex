@@ -217,8 +217,9 @@ defmodule Emissary.External.Proxy do
                 # Pass through upstream MCP-spec hints. Aqua classifies any
                 # `server:tool`-namespaced tool as `:external` via
                 # `Aqua.Kinds.kind_for/2`; no per-action annotation
-                # needed. Users still override per-action in their
-                # tool_policy if they want to auto-allow trusted reads.
+                # needed. A read-only member therefore never runs one;
+                # an auto member runs it when the soul's `tools` list
+                # names it.
                 #
                 # No planes entry: an upstream catalogue is unbounded and
                 # changes without us, so the whole bucket is `:in_chain`

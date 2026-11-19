@@ -512,7 +512,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           {[], sentence}
 
         _unread ->
-          {[], "The agents cannot be read right now — try again."}
+          {[], "Aqua and its crew members cannot be read right now — try again."}
       end
 
     # Each card reads its agent in the roster's string-keyed projection,

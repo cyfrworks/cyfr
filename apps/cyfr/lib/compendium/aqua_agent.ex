@@ -40,8 +40,9 @@ defmodule Compendium.AquaAgent do
   `read-only` or `auto`, which decides what of its offered tools it runs
   (`Aqua.Loop.Policy`; a file without the line is `auto`); and on the
   soul alone `tools`, the tools it is offered, each `tool.action`,
-  `tool.*`, `native_search` or `server:tool`. An absent list offers
-  nothing. A crew member is offered the soul's (`under_soul/2`), narrowed
+  `native_search` or `server:tool`, one action an entry (there is no
+  wildcard: every action of a tool is listed by name). An absent list
+  offers nothing. A crew member is offered the soul's (`under_soul/2`), narrowed
   only by the request that asks it, so a `tools` list in a crew file
   refuses the file. A file that still holds the retired `tool_policy`
   is refused, soul or crew (`:tool_policy_retired`), with the sentence
@@ -426,22 +427,23 @@ defmodule Compendium.AquaAgent do
 
   @typedoc """
   Why a `tools` list is refused: not a list of strings, or an entry that
-  is neither `tool.action`, `tool.*`, `native_search` nor `server:tool`.
+  is neither `tool.action`, `native_search` nor `server:tool` (a `*` in
+  either name is no entry, and neither is a null).
   """
   @type tools_error :: :tools_not_a_list | {:tools_invalid_entry, term()}
 
   @doc """
   A `tools` list against the grammar the runtime reads: a list, every
-  entry `tool.action`, `tool.*`, the bare `native_search` or an outside
-  server's `server:tool`. The one rule the file parser and the `aqua`
-  tool door both apply, so no write lands a list that would not parse
-  back.
+  entry a string naming one action, `tool.action`, the bare
+  `native_search` or an outside server's `server:tool`. The one rule the
+  file parser and the `aqua` tool door both apply, so no write lands a
+  list that would not parse back.
   """
   @spec check_tools(term()) :: :ok | {:error, tools_error()}
   def check_tools(tools) when is_list(tools) do
-    case Enum.find(tools, &(not valid_tool?(&1))) do
-      nil -> :ok
-      entry -> {:error, {:tools_invalid_entry, entry}}
+    case Enum.reject(tools, &valid_tool?/1) do
+      [] -> :ok
+      [entry | _rest] -> {:error, {:tools_invalid_entry, entry}}
     end
   end
 
@@ -476,11 +478,20 @@ defmodule Compendium.AquaAgent do
 
   defp valid_tool?("native_search"), do: true
 
+  # One action an entry: a `*` names none (the list has no wildcard).
   defp valid_tool?(name) when is_binary(name) do
-    case {String.split(name, ":"), String.split(name, ".")} do
-      {[server, tool], _dots} -> server != "" and tool != "" and not String.contains?(server, ".")
-      {[_no_server], [tool, action]} -> tool != "" and action != ""
-      _ -> false
+    case {String.contains?(name, "*"), String.split(name, ":"), String.split(name, ".")} do
+      {true, _colons, _dots} ->
+        false
+
+      {false, [server, tool], _dots} ->
+        server != "" and tool != "" and not String.contains?(server, ".")
+
+      {false, [_no_server], [tool, action]} ->
+        tool != "" and action != ""
+
+      _ ->
+        false
     end
   end
 

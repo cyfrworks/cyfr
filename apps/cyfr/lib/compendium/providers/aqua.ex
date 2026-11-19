@@ -225,7 +225,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("tools", {:array, Arg.new(nil, :string)},
               nullable: true,
               description:
-                "The soul's tools, which every crew member is offered too (a crew member has none of its own): each 'tool.action', 'tool.*', 'native_search' (the provider's own search) or an outside server's 'server:tool'. A tool missing from the list is not callable at all; null offers nothing."
+                "The soul's tools, which every crew member is offered too (a crew member has none of its own): each one action, 'tool.action', 'native_search' (the provider's own search) or an outside server's 'server:tool', with no wildcard: every action of a tool is listed by name. A tool missing from the list is not callable at all; null offers nothing."
             ),
             Arg.new("tools_add", {:array, Arg.new(nil, :string)},
               description:
@@ -407,7 +407,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua'), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, running under the soul's tool policy), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua'), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools and running them in its own mode), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
       title: "Aqua Agent System"
     )
   end
@@ -1093,11 +1093,20 @@ defmodule Compendium.Providers.Aqua do
   # with that error.
   defp soul_read(errors) do
     case List.keyfind(errors, AquaPath.soul_name(), 0) do
-      # A soul still holding the retired key is refused in the sentence
-      # that says what to change, not as a store's fault.
-      {_soul, :tool_policy_retired} -> {:error, {:conflict, Prima.AgentRef.tool_policy_retired()}}
-      {_soul, reason} -> {:error, reason}
-      nil -> :ok
+      # A soul still holding the retired key, or a `tools` entry that
+      # names no one action, is refused in the sentence that says what to
+      # change, not as a store's fault.
+      {_soul, :tool_policy_retired} ->
+        {:error, {:conflict, Prima.AgentRef.tool_policy_retired()}}
+
+      {_soul, {:tools_invalid_entry, entry}} ->
+        {:error, {:conflict, Prima.AgentRef.tools_entry_invalid(entry)}}
+
+      {_soul, reason} ->
+        {:error, reason}
+
+      nil ->
+        :ok
     end
   end
 
@@ -1144,8 +1153,8 @@ defmodule Compendium.Providers.Aqua do
       {:error, {:tools_invalid_entry, entry}} ->
         {:error,
          {:invalid_argument,
-          "Invalid tool #{inspect(entry)} — use \"tool.action\", \"tool.*\", \"native_search\" " <>
-            "or \"server:tool\""}}
+          "Invalid tool #{inspect(entry)} — use \"tool.action\", \"native_search\" or " <>
+            "\"server:tool\", one action an entry: list each action of a tool by name"}}
 
       {:error, :tools_not_a_list} ->
         {:error, {:invalid_argument, "tools must be a list"}}

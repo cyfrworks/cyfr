@@ -8,11 +8,12 @@ defmodule Aqua.Offered do
   exact against the catalog and the person's browser setting. What a
   member runs of it is its mode's to say (`Aqua.Loop.Policy`).
 
-  The set is a map from an exact key to `"offered"` or `"off"`. A
-  catalogued tool's `tool.*` is expanded to the tool's actions; an
-  action the tool does not have is dropped; `native_search`, an outside
-  server's `server:tool` and a tool nobody catalogues pass through as
-  written (the request offers no such tool).
+  The set is a map from an exact key to `"offered"` or `"off"`. Every
+  entry names one action (the list has no wildcard), so the list a
+  person reads is the set: an action a catalogued tool does not have is
+  dropped; `native_search`, an outside server's `server:tool` and a tool
+  nobody catalogues pass through as written (the request offers no such
+  tool).
 
   ## The browser follows the person's setting
 
@@ -53,18 +54,12 @@ defmodule Aqua.Offered do
   @spec offered?(t(), String.t()) :: boolean()
   def offered?(offered, key) when is_map(offered), do: Map.get(offered, key) == "offered"
 
-  # Each entry as exact keys: a catalogued tool's glob as its actions,
-  # an action the tool does not have dropped, anything else as written.
+  # Each entry as its exact key: an action a catalogued tool does not
+  # have dropped, anything else as written.
   defp expand(tools) do
     tools
     |> Enum.flat_map(fn key ->
       case String.split(key, ".", parts: 2) do
-        [tool, "*"] ->
-          case Aqua.Kinds.actions_of(tool) do
-            [] -> [key]
-            actions -> Enum.map(actions, &"#{tool}.#{&1}")
-          end
-
         [tool, action] ->
           if Aqua.Kinds.catalogued?(tool) and action not in Aqua.Kinds.actions_of(tool),
             do: [],

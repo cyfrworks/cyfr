@@ -42,7 +42,7 @@ defmodule Compendium.AquaAgentTest do
           name: "aqua",
           avoid: "",
           mode: "auto",
-          tools: ["files.read", "github:search", "native_search", "web.*"]
+          tools: ["files.read", "github:search", "native_search", "web.fetch"]
         },
         overrides
       )
@@ -129,14 +129,14 @@ defmodule Compendium.AquaAgentTest do
   end
 
   test "serialize writes the soul's tools as a list, one per line, in one form" do
-    binary = AquaAgent.serialize(soul(%{tools: ["web.*", "files.read", "files.read"]}))
+    binary = AquaAgent.serialize(soul(%{tools: ["web.fetch", "files.read", "files.read"]}))
 
     assert binary =~
              "\nmode: auto\noptions:\n" <>
                "  budget: 8\n  effort: \"high\"\n  label: \"true\"\n  thinking: true\n" <>
-               "tools:\n  - files.read\n  - web.*\n---\n"
+               "tools:\n  - files.read\n  - web.fetch\n---\n"
 
-    assert {:ok, %{tools: ["files.read", "web.*"]}} = AquaAgent.parse("aqua", binary)
+    assert {:ok, %{tools: ["files.read", "web.fetch"]}} = AquaAgent.parse("aqua", binary)
 
     # An outside server's tool takes the scalar spelling YAML reads back.
     binary = AquaAgent.serialize(soul(%{tools: ["github:search"]}))
@@ -189,7 +189,9 @@ defmodule Compendium.AquaAgentTest do
       assert {:error, ^reason} = AquaAgent.parse("aqua", "---\n#{yaml}\n---\n\nprompt\n")
     end
 
-    assert :ok = AquaAgent.check_tools(["files.read", "files.*", "native_search", "srv:search"])
+    assert :ok =
+             AquaAgent.check_tools(["files.read", "files.write", "native_search", "srv:search"])
+
     assert {:error, :tools_not_a_list} = AquaAgent.check_tools(%{"files.read" => "auto"})
   end
 
@@ -294,5 +296,26 @@ defmodule Compendium.AquaAgentTest do
     {:ok, moved} = AquaAgent.capability_digest(%{coder | program: "mcp_019a2b3d"})
     refute programmed == digest
     refute programmed == moved
+  end
+
+  test "a null entry in the tools list is refused as grammar" do
+    assert {:error, {:tools_invalid_entry, nil}} =
+             Compendium.AquaAgent.parse("aqua", "---\ntools:\n  - null\n---\nHello\n")
+
+    assert {:error, {:tools_invalid_entry, nil}} =
+             Compendium.AquaAgent.check_tools(["files.read", nil])
+  end
+
+  # One action an entry: the list a person reads is the set a turn is
+  # offered, so a tool's actions are listed by name, never as a wildcard.
+  test "a wildcard in the tools list is refused as grammar, by the parser and the door's check" do
+    for entry <- ["storage.*", "*", "github:*", "*.read"] do
+      assert {:error, {:tools_invalid_entry, ^entry}} =
+               Compendium.AquaAgent.parse("aqua", "---\ntools:\n  - \"#{entry}\"\n---\nHi\n"),
+             entry
+
+      assert {:error, {:tools_invalid_entry, ^entry}} =
+               Compendium.AquaAgent.check_tools(["files.read", entry])
+    end
   end
 end

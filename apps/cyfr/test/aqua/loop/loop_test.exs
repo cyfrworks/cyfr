@@ -909,6 +909,38 @@ defmodule Aqua.LoopTest do
     assert [_answered] = chat_messages()
   end
 
+  # The soul's list names one action an entry: a file that names a tool's
+  # actions as a wildcard is refused whole, and the line names the entry.
+  test "a soul whose tools list holds a wildcard, posted to where it last answered, ends its " <>
+         "turn unrun with the line that names the entry, and dispatches nothing",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("hi")])
+    answered = post!(ctx, thread, "hello")
+    assert %{status: "completed", agent: "aqua"} = answered
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.soul_file())
+    held = String.replace(bytes, "tools:\n", "tools:\n  - storage.*\n", global: false)
+    refute held == bytes
+    :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), held)
+
+    assert {:error, {:tools_invalid_entry, "storage.*"}} =
+             Compendium.AgentIndex.snapshot(ctx, "aqua")
+
+    unrun = post!(ctx, thread, "and now?")
+    line = Prima.AgentRef.tools_entry_invalid("storage.*")
+    assert %{status: "failed", agent: "aqua", error: ^line, root_execution_id: nil} = unrun
+    turn_id = unrun.id
+
+    assert for(%{turn_id: ^turn_id} = line <- lines(ctx, thread.id), do: line) == [
+             line("text", ctx.user_id, "person", "and now?", turn_id),
+             line("system", Prima.Author.system(), "aqua", line, turn_id)
+           ]
+
+    assert step_rows(ctx, unrun) == []
+    assert [_answered] = chat_messages()
+  end
+
   test "a soul whose file names no tools offers nothing: its request carries only the ui event " <>
          "and request_setup",
        %{ctx: ctx, thread: thread} do

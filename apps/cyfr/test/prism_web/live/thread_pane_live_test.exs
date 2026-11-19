@@ -2339,7 +2339,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(
                pane,
                ~s([data-test="agents-unavailable"]),
-               "The agents cannot be read right now — try again."
+               "Aqua and its crew members cannot be read right now — try again."
              )
 
       refute render(pane) =~ "has no model yet"

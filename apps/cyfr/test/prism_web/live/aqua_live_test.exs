@@ -836,7 +836,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(
                view,
                ~s([data-test="agents-unavailable"]),
-               "The agents cannot be read right now — try again."
+               "Aqua and its crew members cannot be read right now — try again."
              )
 
       refute render(view) =~ "No soul here"
@@ -1842,6 +1842,29 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "form[phx-submit=editor_create_member]")
       refute render(view) =~ "No soul here"
       assert has_element?(view, "#aqua-notes")
+    end
+
+    # The soul's list names one action an entry, so what the page shows is
+    # what a turn is offered: a file that names a tool's actions as `tool.*`
+    # is refused, and the section names the entry and says what to write.
+    test "a soul whose tools list holds a wildcard names the entry in place of every card",
+         %{conn: conn, ctx: ctx} do
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.soul_file(),
+          "---\ntitle: Aqua\ntools:\n  - storage.*\n  - files.read\n---\n\nsoul\n"
+        )
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert texts(view, ~s([data-test="agents-unavailable"])) == [
+               Prima.AgentRef.tools_entry_invalid("storage.*")
+             ]
+
+      assert Prima.AgentRef.tools_entry_invalid("storage.*") =~ "`storage.*`"
+      assert Prima.AgentRef.tools_entry_invalid("storage.*") =~ "list each action by name"
+      refute has_element?(view, "[id^=aqua-card-]")
     end
 
     # A brain's options are what its `describe` declares: the card offers

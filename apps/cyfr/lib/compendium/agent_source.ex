@@ -23,8 +23,9 @@ defmodule Compendium.AgentSource do
       never moves a consent; the file's bytes are its **revision**, kept
       by `Arca.AgentRevisions` for a turn to pin.
     * `caps.tools` are the agent's `tools` that name tool actions
-      (`tool.action`, `tool.*`), which consent expands against the live
-      catalog: a key no catalogued action matches expands to nothing
+      (`tool.action`, one action an entry), which consent expands
+      against the live catalog: a key no catalogued action matches
+      expands to nothing
       (`Prima.ToolPattern.expand/2`); and `native_search`, the provider's
       own search, which no catalog action is and the consent carries by
       its name.

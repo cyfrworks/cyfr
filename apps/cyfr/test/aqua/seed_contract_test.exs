@@ -227,9 +227,7 @@ defmodule Aqua.SeedContractTest do
     # scroll builds what it does not find.
     "component.list" => "capability acquisition, taught by the soul",
     "component.search" => "capability acquisition, taught by the soul",
-    "component.pull" => "capability acquisition, taught by the soul",
-    # A note the person asks to have forgotten; no prose teaches it.
-    "notes.forget" => "a note the person asks forgotten"
+    "component.pull" => "capability acquisition, taught by the soul"
   }
 
   test "every offered tool is taught, or rostered as granted untaught" do
@@ -294,6 +292,38 @@ defmodule Aqua.SeedContractTest do
       refute text =~ ~r/\bglass(es)?\b/i, file
       refute text =~ ~r/\bcards?\b/i, file
       refute text =~ "says yes", file
+    end
+  end
+
+  # Nothing asks Aqua's leave: each member's mode decides what of its
+  # offered tools runs. So no prose the Aqua tree ships, the soul's, a crew
+  # member's or a scroll's, promises a yes, a standing yes or an answer to
+  # wait for, or tells a member to propose a call for one. A frame's
+  # request to the person (`cyfr.request`) is the person's own prompt and
+  # is not this.
+  test "no shipped prose promises the person's yes before a call, or proposes a call for one" do
+    files =
+      [Path.join(@seed, "aqua.md")] ++
+        Prima.Test.SourceTree.files!(
+          Path.join([@seed, Compendium.AquaPath.crew_dirname(), "*.md"])
+        ) ++
+        Prima.Test.SourceTree.files!(Path.join([@seed, "skills", "*", "SKILL.md"]))
+
+    assert length(files) > 3
+
+    for file <- files do
+      text = file |> File.read!() |> String.replace(~r/\s+/, " ")
+      name = Path.relative_to(file, @seed)
+
+      for promise <- [
+            ~r/\bpropos(e|es|ed|ing)\b/i,
+            ~r/\bsays? yes\b/i,
+            ~r/\bperson's yes\b/i,
+            ~r/\bevery start of\b/i,
+            ~r/\bthe person is asked each time\b/i
+          ] do
+        refute text =~ promise, "#{name}: #{inspect(promise)}"
+      end
     end
   end
 
@@ -495,7 +525,6 @@ defmodule Aqua.SeedContractTest do
 
   defp mcp_action?(key) do
     case String.split(key, ".", parts: 2) do
-      [_tool, "*"] -> false
       [tool, _action] -> not Hands.hand?(tool)
       _ -> false
     end

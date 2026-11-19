@@ -251,13 +251,13 @@ defmodule Compendium.AgentSourceTest do
     refute moved.release_digest == programmed.release_digest
   end
 
-  test "a glob on the soul naming a crew member is a tool pattern, not an edge into it", %{
+  test "a tool on the soul named as a crew member is a tool pattern, not an edge into it", %{
     ctx: ctx
   } do
-    write_agent!(ctx, "aqua", &%{&1 | tools: ["explorer.*" | &1.tools]})
+    write_agent!(ctx, "aqua", &%{&1 | tools: ["explorer.search" | &1.tools]})
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
 
-    assert "explorer.*" in soul.manifest["caps"]["tools"]
+    assert "explorer.search" in soul.manifest["caps"]["tools"]
     refute Map.has_key?(soul.manifest["agent"], "mode")
 
     refute "agent:local.explorer" in Enum.map(
