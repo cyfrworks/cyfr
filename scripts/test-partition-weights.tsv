@@ -175,6 +175,7 @@
 0.2	apps/cyfr/test/aqua/template_policy_test.exs
 0.1	apps/cyfr/test/aqua/text_test.exs
 0.6	apps/cyfr/test/aqua/tool_seam_test.exs
+31.8	apps/cyfr/test/aqua/turn_read_threads_test.exs
 0.2	apps/cyfr/test/arca/actor_standing_drift_test.exs
 0.0	apps/cyfr/test/arca/audit_handler_test.exs
 1.3	apps/cyfr/test/arca/component_storage_test.exs
