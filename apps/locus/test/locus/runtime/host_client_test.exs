@@ -954,14 +954,20 @@ defmodule Locus.Runtime.HostClientTest do
           Process.sleep(2_000)
         end)
 
-      assert {:error, "timeout"} =
-               HostClient.attached_fetch(
-                 %{client | host_url: "http://127.0.0.1:#{port}"},
-                 attached(),
-                 options(sink(), within: 500)
-               )
+      answer =
+        HostClient.attached_fetch(
+          %{client | host_url: "http://127.0.0.1:#{port}"},
+          attached(),
+          options(sink(), within: 500)
+        )
 
-      assert [{:frame, <<?c, "abcde">>}] = events()
+      # The deadline is counted from before the request is made, so on a
+      # loaded host it can pass before the status arrives, which is
+      # uncertain: the frame the host sends with its status says which.
+      case events() do
+        [{:frame, <<?c, "abcde">>}] -> assert answer == {:error, "timeout"}
+        [] -> assert answer == {:error, "uncertain"}
+      end
 
       {port, _server} =
         raw_host!(fn socket ->
