@@ -155,6 +155,9 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
       assert %{status: 200, body: %{"status" => "ended"}} = Task.await(sending, 10_000)
       refute_received {:invoke, "ping", _fields}
 
+      # What a caller can read of the session holds nothing of that line.
+      # A lapsed owner's session is read no more, so there the answer
+      # above is the only witness.
       if ending == :lapse do
         assert %{status: 409, body: %{"error" => "unknown_owner"}} =
                  session(fake, root, %{
@@ -178,6 +181,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
                    max_wait_ms: 0
                  })
 
+        assert received["lines"] == []
         if ending == :exit, do: assert(received["exit_code"] == 0)
       end
 

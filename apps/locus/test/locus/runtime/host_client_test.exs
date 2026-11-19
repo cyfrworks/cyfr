@@ -964,15 +964,23 @@ defmodule Locus.Runtime.HostClientTest do
 
       calling =
         Task.async(fn ->
-          HostClient.attached_fetch(
-            %{client | host_url: "http://127.0.0.1:#{port}"},
-            attached(),
-            options
-          )
+          answer =
+            HostClient.attached_fetch(
+              %{client | host_url: "http://127.0.0.1:#{port}"},
+              attached(),
+              options
+            )
+
+          {answer, System.system_time(:millisecond)}
         end)
 
       assert_receive {:event, {:frame, <<?c, "abcde">>}}, 2_000
-      assert {:error, "timeout"} = Task.await(calling, 10_000)
+      assert {{:error, "timeout"}, answered} = Task.await(calling, 10_000)
+
+      # The deadline ended the call, and nothing before it. The client
+      # reads the same clock in the same unit for the deadline it was
+      # given, and that clock does not run back, so no margin is allowed.
+      assert answered >= options.deadline
       send(host, :answered)
       assert events() == []
 
