@@ -1118,7 +1118,9 @@ reds="$root/scripts/ci/reds.py"
 # repository's issues and pull requests (each {number, title, state,
 # comments[, pull_request]}), "jobs", each run attempt's jobs by
 # "RUN/ATTEMPT", and "logs", each job's log by id (a job without one is a
-# log that cannot be read). It lists the open issues and an attempt's
+# log that cannot be read, and one holding a terminal escape sequence is
+# refused without --allow-escape-sequences, as gh 2.97.0 and later refuse
+# it). It lists the open issues and an attempt's
 # jobs two to a page, as gh prints pages; opens, comments on and closes
 # issues; and adds each run whose failed jobs it is asked to rerun to
 # "reruns". Every call is a line of $GH_CALLS; under GH_FAIL every call
@@ -1144,6 +1146,8 @@ args = args[1:]
 method = "GET"
 if args[:1] == ["-X"]:
     method, args = args[1], args[2:]
+escapes = "--allow-escape-sequences" in args
+args = [a for a in args if a != "--allow-escape-sequences"]
 paginate = args[:1] == ["--paginate"]
 url, fields = (args[1:] if paginate else args)[0], {}
 rest = (args[1:] if paginate else args)[1:]
@@ -1175,7 +1179,9 @@ elif method == "GET" and paginate and (m := re.fullmatch(re.escape(r) + r"action
     pages(jobs, lambda p: {"total_count": len(jobs), "jobs": p})
 elif method == "GET" and (m := re.fullmatch(re.escape(r) + r"actions/jobs/(\d+)/logs", url)):
     if m[1] not in state["logs"]:
-        sys.exit("gh: HTTP 404: Not Found")
+        sys.exit("gh: Not Found (HTTP 404)")
+    if "\x1b" in state["logs"][m[1]] and not escapes:
+        sys.exit("the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway")
     sys.stdout.write(state["logs"][m[1]])
 elif method == "POST" and (m := re.fullmatch(re.escape(r) + r"actions/runs/(\d+)/rerun-failed-jobs", url)) and not fields:
     state["reruns"].append(int(m[1])); save()
@@ -1195,7 +1201,8 @@ chmod +x "$scratch/reds-bin/gh"
 # reds_state [ISSUE...]: a fresh stand-in state, each ISSUE 'NUMBER
 # open|closed|pr TITLE'. Run 7's attempt 1 failed two jobs and passed one:
 # job 71's log names ExUnit failures, one twice, and a harness FAIL line
-# under the runner's timestamps, with a mention and a link; job 72's log
+# under the runner's timestamps, with a mention and a link, after a step
+# command the runner coloured, as in every job's log; job 72's log
 # names none; job 73 passed. Its attempt 2 failed job 75 again; job 74's
 # log cannot be read. Run 8's attempt 1 failed no job.
 reds_state() {
@@ -1210,6 +1217,7 @@ for spec in sys.argv[2:]:
         issue["pull_request"] = {}
     issues.append(issue)
 log71 = "\n".join([
+    "2026-11-18T09:58:00.1234567Z \x1b[36;1mscripts/test-partitioned.sh -a postgres\x1b[0m",
     "2026-11-18T10:00:00.1234567Z ==> partition 2/4",
     "2026-11-18T10:00:01.0000000Z   1) test a session ends on sign-out (CyfrWeb.SessionTest)",
     "2026-11-18T10:00:01.1000000Z      apps/cyfr/test/cyfr_web/session_test.exs:41",
@@ -1298,14 +1306,28 @@ test_run 7 2 success push main
 if [ "$code" -eq 0 ] && state 'len(issues["Flaky tests"]) == 2 and len(issues["Flaky tests"][0]["comments"]) == 1 and not issues["Flaky tests"][1]["comments"]' &&
   state 'issues["Flaky tests"][0]["comments"][0].startswith("A flake on main: ")' && [ "$(writes)" = 1 ]; then pass "$label"; else fail "$label"; fi
 
-label="reds: a flake's job whose log cannot be read is still named"
+label="reds: a flake's job whose log cannot be read is still named, and the script's output says why"
 reds_state
 python3 -I - "$scratch/reds-state" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1])); del s["logs"]["72"]; json.dump(s, open(sys.argv[1], "w"))
 PY
 test_run 7 2 success pull_request feature
-if [ "$code" -eq 0 ] && state '"    @someone'"'"'s job\n        (its log could not be read)" in issues["Flaky tests"][0]["comments"][0]'; then pass "$label"; else fail "$label"; fi
+if [ "$code" -eq 0 ] && state '"    @someone'"'"'s job\n        (its log could not be read)" in issues["Flaky tests"][0]["comments"][0]' &&
+  grep -qxF 'reds: the log of job 72 could not be read: gh api --allow-escape-sequences repos/{owner}/{repo}/actions/jobs/72/logs: gh: Not Found (HTTP 404)' "$scratch/out"; then pass "$label"; else fail "$label"; fi
+
+# A pull request's author writes its test names and log lines; the record
+# keeps their text and none of their control characters.
+label="reds: a failing-test line carrying control characters reaches the record without them"
+reds_state
+python3 -I - "$scratch/reds-state" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+s["logs"]["72"] = "2026-11-18T10:00:06.0000000Z   3) test \x1b[31mred\x1b[0m\x07 and\x7f\x00 bell\t(Color.Test)\n"
+json.dump(s, open(sys.argv[1], "w"))
+PY
+test_run 7 2 success pull_request feature
+if [ "$code" -eq 0 ] && state '"    @someone'"'"'s job\n        3) test [31mred[0m and bell(Color.Test)" in issues["Flaky tests"][0]["comments"][0] and not any(ord(c) < 32 and c != "\n" or ord(c) == 127 for c in issues["Flaky tests"][0]["comments"][0])'; then pass "$label"; else fail "$label"; fi
 
 label="reds: a passed rerun whose earlier attempt failed no job (a rerun by hand of a green or cancelled run) records nothing"
 reds_state
