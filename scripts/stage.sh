@@ -325,18 +325,21 @@ for p, t in text.items():
         named.setdefault(n, set()).add(p)
 
 # What a source defines: each defmodule and defprotocol, nested by
-# indentation, and for each defimpl its protocol and its for: targets.
-DECLARE = re.compile(r"^([ \t]*)(defmodule|defprotocol|defimpl)[ \t]+([A-Z][\w.]*)(?![\w.])(.*)$", re.M)
+# indentation, and for each defimpl its protocol and its for: targets,
+# read up to the do that opens its body, on whichever line that is.
+DECLARE = re.compile(r"^([ \t]*)(defmodule|defprotocol|defimpl)[ \t]+([A-Z][\w.]*)(?![\w.])", re.M)
 TARGETS = re.compile(r"\bfor:\s*(\[[^\]]*\]|[A-Z][\w.]*)")
 def defined(source):
     found, stack = [], []
     for m in DECLARE.finditer(source):
-        indent, kind, name, rest = len(m.group(1)), m.group(2), m.group(3), m.group(4)
+        indent, kind, name = len(m.group(1)), m.group(2), m.group(3)
         while stack and stack[-1][0] >= indent:
             stack.pop()
         if kind == "defimpl":
             found.append(name)
-            target = TARGETS.search(rest)
+            head = source[m.end(3):]
+            opening = re.search(r"\bdo\b", head)
+            target = TARGETS.search(head[:opening.start()] if opening else head)
             if target:
                 found += re.findall(r"[A-Z][\w.]*", target.group(1))
             continue

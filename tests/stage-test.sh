@@ -447,6 +447,8 @@ for f in \
   'apps/arca/lib/arca/probe_impl.ex|defimpl Prima.Probe, for: Arca.Thing do\n  def probe(_), do: :ok\nend' \
   'apps/cyfr/test/prima/probe_test.exs|  Prima.Probe.probe(1)' \
   'apps/cyfr/test/arca/thing_test.exs|  %Arca.Thing{}' \
+  'apps/arca/lib/arca/probe_other.ex|defimpl Prima.Probe,\n  for: Arca.Other do\n  def probe(_), do: :ok\nend' \
+  'apps/cyfr/test/arca/other_test.exs|  %Arca.Other{}' \
   'apps/cyfr/test/prima/fresh_test.exs|  Prima.Fresh.new()' \
   'config/runtime.exs|import Config' \
   'apps/cyfr/test/cyfr/runtime_config_test.exs|  File.read!("config/runtime.exs")' \
@@ -467,7 +469,7 @@ done
 # each: either fits the 300 s budget alone, both do not, so which is taken
 # shows the order. The rest weigh 1 s, the table's median.
 {
-  printf '1.0\t%s\n' apps/cyfr/test/arca/thing_test.exs apps/cyfr/test/cyfr/runtime_config_test.exs \
+  printf '1.0\t%s\n' apps/cyfr/test/arca/other_test.exs apps/cyfr/test/arca/thing_test.exs apps/cyfr/test/cyfr/runtime_config_test.exs \
     apps/cyfr/test/opus/keeper_vectors_test.exs apps/cyfr/test/prima/fresh_test.exs apps/cyfr/test/prima/probe_test.exs apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/longer_test.exs apps/cyfr/test/sanctum/provider_test.exs \
     apps/cyfr/test/sanctum/tools_test.exs apps/locus/test/locus/keeper_wire_test.exs
   printf '200.0\t%s\n' apps/cyfr/test/narrow/n_test.exs
@@ -486,13 +488,14 @@ printf '# edit\n' >>"$repo/config/runtime.exs"
 printf '{"edit": 1}\n' >"$repo/tests/fixtures/toy_wire.json"
 printf '# edit\n' >>"$repo/apps/prima/lib/prima/probe.ex"
 printf '# edit\n' >>"$repo/apps/arca/lib/arca/probe_impl.ex"
+printf '# edit\n' >>"$repo/apps/arca/lib/arca/probe_other.ex"
 # A file named -- is a changed path like any other, never an option: the
 # new module after it in Git's listing still selects its reader.
 : >"$repo/--"
 printf 'defmodule Prima.Fresh do\nend\n' >"$repo/apps/prima/lib/prima/fresh.ex"
 stage selected -l "$S/logs-selected" handoff
 [ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/selected.err")"
-printf '%s\n' apps/cyfr/test/arca/thing_test.exs apps/cyfr/test/cyfr/runtime_config_test.exs \
+printf '%s\n' apps/cyfr/test/arca/other_test.exs apps/cyfr/test/arca/thing_test.exs apps/cyfr/test/cyfr/runtime_config_test.exs \
   apps/cyfr/test/opus/keeper_vectors_test.exs apps/cyfr/test/prima/fresh_test.exs apps/cyfr/test/prima/probe_test.exs apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/provider_test.exs apps/cyfr/test/sanctum/tools_test.exs \
   apps/locus/test/locus/keeper_wire_test.exs >"$S/want"
 diff "$S/want" "$S/logs-selected/listed.txt" >/dev/null || fail "handoff selected: $(tr '\n' ' ' <"$S/logs-selected/listed.txt")"
