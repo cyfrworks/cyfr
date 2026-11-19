@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# A red Test run is rerun once, and a rerun that passes is recorded as a
+# flake (CONTRIBUTING.md). GitHub starts this workflow, from the default
+# branch's file, each time a run of the Test workflow completes, a rerun's
+# attempt included; scripts/ci/reds.py holds the whole decision and says
+# which runs it acts on. Test called from nightly.yml or release.yml runs
+# inside those workflows' runs, which this does not follow.
+#
+# A workflow_run job holds write permissions whatever the triggering run
+# was, a pull request's from a fork included. So it checks out one file,
+# the script, from the default branch, never the triggering run's code,
+# and reads that run's records and logs through the API alone, passing
+# its facts through the environment.
+name: Rerun once
+run-name: ${{ format('After Test run {0}, attempt {1}, {2}', github.event.workflow_run.id, github.event.workflow_run.run_attempt, github.event.workflow_run.conclusion) }}
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+permissions: {}
+jobs:
+  decide:
+    name: A red Test run is rerun once, and a flake recorded
+    if: github.repository == 'cyfrworks/cyfr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # The script, read from the default branch.
+      contents: read
+      # The run's jobs and logs, and the rerun of its failed jobs.
+      actions: write
+      # The flake record and the red-twice issue.
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: scripts/ci/reds.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Rerun or record the Test run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: python3 -I scripts/ci/reds.py test-run
