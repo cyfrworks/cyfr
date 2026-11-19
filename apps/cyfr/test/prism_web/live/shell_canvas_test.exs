@@ -3711,6 +3711,24 @@ defmodule PrismWeb.ShellCanvasTest do
       assert notice_text(view) == line
     end
 
+    # Where the line stands beside a full app is the canvas proof's to
+    # measure (`crash_fallback`, `app_over_canvas`).
+    test "in the hand, a full app opens shown while the fallback's line stands",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      seeded!(ctx)
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+      settle!(view, fn -> assigns(view).posture == "hand" end)
+      open!(view, "tincture:local.app-dash")
+
+      assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
+      assert %{reason: :gone} = fallback(view)
+      assert has_element?(view, "#system-layer-desktop-notice")
+    end
+
     test "no safe mode is left to ask for: no chip, and the Devices chip stays",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
