@@ -536,15 +536,17 @@ defmodule Emissary.Web.FrameSocketTest do
 
     wait_until(fn -> listeners(source) == 2 end, @answer_ms)
 
-    # The connection holds still while its forwarders queue more than it
-    # may fall behind by; the first fact it then reads finds the backlog.
+    # The connection holds still until every change is in its mailbox, 600
+    # from each subscription's forwarder: resumed at 1,001 with the rest
+    # still on their way, it has 1,000 behind its first fact, which is not
+    # too far, and delivers it.
     :erlang.suspend_process(socket)
 
     try do
       for _ <- 1..600, do: changed(source)
 
       wait_until(
-        fn -> elem(Process.info(socket, :message_queue_len), 1) > 1_000 end,
+        fn -> elem(Process.info(socket, :message_queue_len), 1) >= 1_200 end,
         @answer_ms
       )
     after

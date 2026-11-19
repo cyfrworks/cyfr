@@ -96,4 +96,4 @@ ExUnit.after_suite(fn _ ->
   end
 end)
 
-ExUnit.start()
+ExUnit.start(assert_receive_timeout: Prima.Test.Wait.receive_ms())

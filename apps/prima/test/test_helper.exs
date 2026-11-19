@@ -5,4 +5,4 @@
 # that admit or compile components install it when they start.
 :ok = Prima.ComponentFeatures.install!()
 
-ExUnit.start()
+ExUnit.start(assert_receive_timeout: Prima.Test.Wait.receive_ms())

@@ -224,6 +224,9 @@ defmodule Compendium.ProjectionReconcilerTest do
         end)
 
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+      # The dead writer's node-local lock outlives it by a moment, and a
+      # repair that finds it held takes nothing.
+      Arca.Test.LockWait.await_unit_lock_free!(actor, unit(name))
 
       long_ago =
         DateTime.add(DateTime.utc_now(), -2 * Arca.StorageUnits.draft_ttl_ms(), :millisecond)
