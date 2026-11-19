@@ -1141,11 +1141,13 @@ jobs:
           echo "MinIO did not become healthy" >&2
           docker logs minio || true
           exit 1
-      # Arca owns the tagged adapter, append-parity and publication suites.
-      # Scope the run to that app so unrelated umbrella apps with no matching
-      # tests do not fail --only. The store's defaults name this container.
+      # Arca owns the tagged adapter, append-parity and publication suites;
+      # the cyfr app holds one more, the cross-member successor schedules
+      # over both real backends. Scope the run to those paths so umbrella
+      # apps with no matching tests do not fail --only. The store's defaults
+      # name this container.
       - name: Run the S3 integration suite
-        run: scripts/test-partitioned.sh -n 1 -a sqlite apps/arca/test --warnings-as-errors --only s3_integration
+        run: scripts/test-partitioned.sh -n 1 -a sqlite apps/arca/test apps/cyfr/test/arca/unit_successor_members_backends_test.exs --warnings-as-errors --only s3_integration
       # What the server thought of the requests, when it refused them.
       - name: MinIO logs
         if: failure()
