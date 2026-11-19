@@ -46,10 +46,6 @@ defmodule PrismWeb.SystemLayer.Question do
   # How long "For an hour" lasts.
   @hour_s 3600
 
-  # The caption of the component's words, which also names the block that
-  # scrolls and takes focus for a screen reader: whose words they are.
-  @says "The component says:"
-
   @caller_row ~w(deny_always_this_caller allow_once allow_hour_this_caller allow_always_this_caller)
   @any_caller "allow_always_any_caller"
 
@@ -156,7 +152,7 @@ defmodule PrismWeb.SystemLayer.Question do
   on one line that wraps at a word; then what the component says.
   """
   def card(assigns) do
-    assigns = assign(assigns, subject: assigns.prompt.subject, says: @says)
+    assigns = assign(assigns, :subject, assigns.prompt.subject)
 
     ~H"""
     <section class="space-y-3" data-test="question" data-ref={@subject.ref}>
@@ -179,8 +175,9 @@ defmodule PrismWeb.SystemLayer.Question do
         aria-labelledby={"#{@id}-question-words"}
         data-test="question-words"
       >
+        <%!-- The caption also names the block below for a screen reader. --%>
         <figcaption id={"#{@id}-question-words"} class="mb-2 text-xs text-gray-400">
-          {@says}
+          The component says:
         </figcaption>
         <p class="text-sm text-gray-100 [overflow-wrap:anywhere]" data-test="question-summary">
           {@subject.summary}

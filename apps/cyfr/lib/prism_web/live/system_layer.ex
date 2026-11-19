@@ -252,7 +252,7 @@ defmodule PrismWeb.SystemLayer do
   confirmation leaves: closing the confirmation there answers nothing.
   Drawn as its own prompt, that confirmation, and the one the component's
   page asks for when its form sets the same answer, is titled by what it
-  allows: the component, the action's title and whoever starts it.
+  allows: the component, the action's title and everyone.
 
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
@@ -3589,15 +3589,15 @@ defmodule PrismWeb.SystemLayer do
 
   defp operation_title(_operation), do: "Confirm a change"
 
-  # An allow, always, for whoever starts the component, named by the
+  # An allow, always, for everyone who starts the component, named by the
   # component and the action's declared title its preview carries.
   defp always_any_title(%{"resource" => resource, "details" => %{"action" => action}})
        when is_binary(resource) and is_binary(action) do
     name = resource |> String.split(".", parts: 2) |> List.last()
-    "Always allow #{name} to #{action}, whoever starts it"
+    "Always allow #{name} to #{action}, for everyone"
   end
 
-  defp always_any_title(_preview), do: "Always allow a component's action, whoever starts it"
+  defp always_any_title(_preview), do: "Always allow a component's action, for everyone"
 
   # A program's definition, by what its confirmation does to it.
   defp program_title("mcp_servers.create"), do: "Add a program"

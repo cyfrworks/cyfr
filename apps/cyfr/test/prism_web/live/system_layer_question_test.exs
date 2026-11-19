@@ -1524,7 +1524,7 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       assert has_element?(
                other,
                "#system-layer-title",
-               "Always allow tables to delete a table, whoever starts it"
+               "Always allow tables to delete a table, for everyone"
              )
 
       prove_here!(other, confirmation, authenticator)

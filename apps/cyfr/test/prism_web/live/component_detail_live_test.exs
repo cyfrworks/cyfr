@@ -886,7 +886,7 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       assert has_element?(
                view,
                "#system-layer-title",
-               "Always allow tables to delete a table, whoever starts it"
+               "Always allow tables to delete a table, for everyone"
              )
 
       view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
