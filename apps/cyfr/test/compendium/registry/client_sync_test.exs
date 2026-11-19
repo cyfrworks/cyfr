@@ -135,19 +135,29 @@ defmodule Compendium.Registry.ClientSyncTest do
   @wire Path.expand("../../../../../tests/fixtures/registry_wire.json", __DIR__)
 
   describe "the component API's vectors" do
-    # Reading the section and running its cases are one act: every case
-    # runs here against a stub of its own, each failure is kept under its
-    # case's name, and the test fails with all of them.
+    # Reading the section and running its cases are one act: every entry
+    # runs here against a stub of its own, or is a failure where it cannot
+    # run, each failure kept under its position and name, and the test fails
+    # with all of them.
     test "every case of registry_wire.json's components holds", %{ctx: ctx} do
       cases = Jason.decode!(File.read!(@wire))["components"]
       assert is_list(cases) and cases != [], "registry_wire.json holds no components"
 
-      failures =
-        for %{"name" => name} = vector <- cases,
-            failure = case_failure(vector, ctx),
-            do: "#{name}: #{failure}"
+      results =
+        for {vector, at} <- Enum.with_index(cases, 1) do
+          case vector do
+            %{"name" => name, "call" => _, "request" => _} when is_binary(name) ->
+              failure = case_failure(vector, ctx)
+              {:ran, failure && "case #{at} (#{name}): #{failure}"}
 
+            _ ->
+              {:not_run, "case #{at} has no name, call or request: #{inspect(vector)}"}
+          end
+        end
+
+      failures = for {_, failure} <- results, failure, do: failure
       assert failures == [], Enum.join(failures, "\n\n")
+      assert Enum.count(results, &match?({:ran, _}, &1)) == length(cases)
     end
   end
 
@@ -182,13 +192,15 @@ defmodule Compendium.Registry.ClientSyncTest do
   defp component_case(%{"request" => request, "answer" => answer} = vector, ctx, stub) do
     bearer = request["token_namespace"] && "cyfr_pt_" <> request["token_namespace"]
     parent = self()
+    # This case's own mark: a message an earlier case's stub left is not its.
+    sent_by = make_ref()
 
     HTTPStub.expect_once(stub, request["method"], request["path"], fn conn ->
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
 
       send(
         parent,
-        {:sent,
+        {:sent, sent_by,
          %{
            "query" => Enum.map(query_pairs(conn), &Tuple.to_list/1),
            "bearer" => auth_header(conn),
@@ -208,8 +220,8 @@ defmodule Compendium.Registry.ClientSyncTest do
     }
 
     receive do
-      {:sent, ^want} -> got
-      {:sent, sent} -> flunk("sent #{inspect(sent)}, want #{inspect(want)}")
+      {:sent, ^sent_by, ^want} -> got
+      {:sent, ^sent_by, sent} -> flunk("sent #{inspect(sent)}, want #{inspect(want)}")
     after
       0 -> flunk("sent no #{request["method"]} #{request["path"]}")
     end
