@@ -29,6 +29,8 @@ import { pathToFileURL } from "node:url";
 import { askHome, virtualAuthenticator, waitFor } from "./lib.mjs";
 
 const STEP_MS = 60_000;
+// How long a return page that said "Confirmed" has to close its tab.
+const CLOSE_MS = 5_000;
 
 // A person's passkeys: every credential an authenticator of theirs made,
 // given to each page `attach` names. `list()` reads them back first.
@@ -398,6 +400,13 @@ export async function sessionCookie(page, home) {
   return cookie ? cookie.value : null;
 }
 
+// Chromium's launch options under which its popup blocker decides, as in a
+// person's browser: Playwright turns the blocker off by default, so there
+// a tab the page opens with no user activation left opens all the same. A
+// proof that walks a confirmation launches with them, so `confirmInTab`'s
+// tab opens only from the person's click.
+export const POPUPS_BLOCKED = Object.freeze({ ignoreDefaultArgs: ["--disable-popup-blocking"] });
+
 // A confirmation given with the passkey: `click` makes the page ask (the
 // system layer's "Confirm with a passkey", which opens the sign page in a
 // new tab), the tab's request is signed, and the tab returns to the CYFR's
@@ -405,8 +414,11 @@ export async function sessionCookie(page, home) {
 // its tab, the page that asked going on by itself. Answers what the sign
 // page asked and whether the return page `confirmed` it, or the error it
 // shows, and `by` which sign it was: `closed` (the tab closed itself),
-// `said` ("Confirmed", the tab left open) or `went` (to the page the
-// request named); a tab left open is closed.
+// `said` ("Confirmed", the tab still open `CLOSE_MS` after it said so) or
+// `went` (to the page the request named); a tab left open is closed. The
+// page says "Confirmed" as it asks its tab to close, so "said" is answered
+// only once the tab had that long to close: a proof of a flow that
+// promises the tab closes requires `closed`.
 export async function confirmInTab(page, keys, home, click, { timeoutMs = STEP_MS } = {}) {
   const [tab] = await Promise.all([page.context().waitForEvent("page", { timeout: timeoutMs }), click()]);
   // Whether the tab came back to `home`, seen as it navigates: the return
@@ -418,7 +430,10 @@ export async function confirmInTab(page, keys, home, click, { timeoutMs = STEP_M
   try {
     const asked = await usePasskey(tab, keys, { timeoutMs });
     if (!asked.returned) return { ...asked, confirmed: false };
-    return { what: asked.what, ...(await confirmed(tab, home, () => back, { timeoutMs })) };
+    const outcome = await confirmed(tab, home, () => back, { timeoutMs });
+    if (outcome.by === "said" && (tab.isClosed() || await tab.waitForEvent("close", { timeout: CLOSE_MS }).then(() => true, () => false)))
+      return { what: asked.what, ...outcome, by: "closed" };
+    return { what: asked.what, ...outcome };
   } finally {
     await keys.sync();
     await tab.close().catch(() => {});

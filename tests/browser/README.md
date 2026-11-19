@@ -160,13 +160,17 @@ proof may hold apart (`beginAccount` up to the code shown, nothing sent;
 `continueToCyfr` answers the request a CYFR's "Create your account" sent
 along; `usePasskey` signs the request the sign page holds; `signIn` is a
 CYFR's sign-in, `confirmInTab` a confirmation the system layer opens in a
-new tab and whether the CYFR's return page confirmed it before closing
-the tab, and `landing` where a CYFR's page leaves the browser; `addDevice`
-adds a device at `/account/add` from its key and short code;
+new tab, whether the CYFR's return page confirmed it, and whether the tab
+then closed itself, and `landing` where a CYFR's page leaves the browser;
+`addDevice` adds a device at `/account/add` from its key and short code;
 `recoveryPage` and `devicesPage` change the account with a recovery code
 or a passkey, each step settling once the directory's log changed; and
 `readLog` reads an account's log as any reader does. Every proof that
-makes an account, signs in or confirms uses it.
+makes an account, signs in or confirms uses it. Playwright launches
+Chromium with its popup blocker off, so a tab a page opens with no user
+activation left opens all the same; the approval, share and join proofs
+launch with `POPUPS_BLOCKED`, which turns it back on, so their
+confirmation's tab opens only from the person's click.
 
 `device.mjs` is a test device: a client of a home's device channel a proof
 drives frame by frame, its key made in the proof's process and never sent

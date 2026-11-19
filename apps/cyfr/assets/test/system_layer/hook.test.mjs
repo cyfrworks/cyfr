@@ -308,7 +308,9 @@ describe("two layers on one page", () => {
     assert.deepEqual(submitted, ["system-layer-credential"])
   })
 
-  test("a confirmation's hop opens the account pages in a new tab, for the layer the event names", () => {
+  // Whether the tab opens, from the person's click, is the browser's: the
+  // approval, share and join proofs show it with the popup blocker on.
+  test("a confirmation's hop asks the window to open the account pages in a new tab, without an opener, for the layer the event names", () => {
     const opened = []
     const open = globalThis.open
     globalThis.open = (url, target, features) => opened.push([url, target, features])
@@ -786,7 +788,9 @@ describe("the account pages' hop and return", () => {
     ])
   })
 
-  test("the return closes its tab once its page says the confirmation is done", () => {
+  // Whether the tab then closes is the browser's: the approval, share and
+  // join proofs show it.
+  test("the return asks its window to close once its page says the confirmation is done", () => {
     address("")
     const {listeners} = account("return")
     const original = globalThis.close

@@ -62,7 +62,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { confirmInTab, createAccount, passkeys, sessionCookie, setUp } from "../browser/account.mjs";
+import { confirmInTab, createAccount, passkeys, POPUPS_BLOCKED, sessionCookie, setUp } from "../browser/account.mjs";
 import { ask as askRunSh, homeOf, launchBrowser, readHomes, startProxy } from "../browser/lib.mjs";
 
 const [homesFile, outDir, viewportName] = process.argv.slice(2);
@@ -602,8 +602,10 @@ async function proveOwn(page) {
   return { panel: words(confirmation).slice(0, 300), what: tab.what, confirmed: tab.confirmed, by: tab.by, error: tab.error || null };
 }
 
+// Proven here, its tab closing itself as the system layer's confirmation
+// promises.
 const provenHere = (confirmation) =>
-  confirmation.confirmed && confirmation.what === `Confirm a change at ${base}`;
+  confirmation.confirmed && confirmation.by === "closed" && confirmation.what === `Confirm a change at ${base}`;
 
 // A key made on the Vault page: its name, kind, label and destination and
 // its one field typed in the create form, which the browser keeps and
@@ -688,7 +690,7 @@ async function door(page, settings, value, action) {
 
 async function main() {
   const proxy = await startProxy(readHomes(homesFile));
-  const browser = await launchBrowser("chromium", proxy);
+  const browser = await launchBrowser("chromium", proxy, POPUPS_BLOCKED);
   record.browser = browser.version();
   const adminContext = await browser.newContext({ viewport });
   adminContext.on("page", (page) => page.on("dialog", (dialog) => dialog.accept()));
@@ -845,8 +847,8 @@ async function main() {
         "your provider limits and secrets before a choice, opens with its caps empty and says what they mean, " +
         "says nothing of a share to everyone until everyone is chosen, then that it has no limit and is what each " +
         "new person's Aqua uses, and once Company AI's cap is typed only the Aqua sentence, without the no-limit " +
-        "clause, proven with the passkey; Shared by you reads both; the whole state is the two entries and two shares " +
-        "their forms requested",
+        "clause, proven with the passkey, each confirmation's tab closing itself; Shared by you reads both; the " +
+        "whole state is the two entries and two shares their forms requested",
       { passkey, entries: shownIds, sheets: [sharedAi, sharedMail].map(({ shown, chosen, capped }) => ({ shown, chosen, capped })), shared_by_you: madeShares,
         state: made.compared,
         confirmations: [madeAi.confirmation, madeMail.confirmation, sharedAi.confirmation, sharedMail.confirmation] })) {
