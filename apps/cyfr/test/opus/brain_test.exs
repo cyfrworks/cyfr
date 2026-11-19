@@ -606,6 +606,137 @@ defmodule Opus.BrainTest do
     end
   end
 
+  describe "a mode switched between turns" do
+    for {before_mode, after_mode} <- [{"auto", "read-only"}, {"read-only", "auto"}],
+        caller_config? <- [false, true] do
+      test "a work from #{before_mode} to #{after_mode}, caller config #{caller_config?}, restarts before every delivery",
+           %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
+        set_turn(turn, agent_mode: unquote(before_mode))
+        brain = started!(fake, row, binding)
+
+        other =
+          admitted!(
+            ctx,
+            binding,
+            next_turn!(ctx, thread.id, turn, "aqua"),
+            row,
+            unquote(after_mode)
+          )
+
+        work = %{"t" => "work", "id" => "stp_mode_work", "work" => other.turn_id, "tools" => []}
+
+        opts =
+          if unquote(caller_config?),
+            do: [config: %{"read_only" => unquote(before_mode == "read-only")}],
+            else: []
+
+        assert {:ok, :restarted} = Brain.write(brain, other, work, opts)
+        refute_sent()
+        say(fake, row, hello("boot-two"))
+        assert {"boot-two", [{1, %{"t" => "hello"}}]} = batch(brain)
+        :ok = Brain.read_on(brain, "boot-two", 1)
+
+        resume = %{
+          "t" => "start",
+          "gen" => 0,
+          "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
+          "config" => %{}
+        }
+
+        assert :ok = Brain.write(brain, other, resume)
+        assert sent()["config"] == %{"read_only" => unquote(after_mode == "read-only")}
+        harness_started!(fake, row, brain, "boot-two")
+        assert :ok = Brain.write(brain, other, work, opts)
+        assert sent() == work
+        accepted!(fake, row, brain, work["id"], "boot-two")
+        assert :ok = Brain.write(brain, other, post(other))
+        assert sent() == post(other)
+        accepted!(fake, row, brain, "stp_post", "boot-two")
+
+        say(fake, row, %{
+          "t" => "ask",
+          "gen" => 0,
+          "work" => other.turn_id,
+          "ask" => "ask-mode",
+          "name" => "files",
+          "arguments" => %{}
+        })
+
+        {"boot-two", [{seq, _ask}]} = batch(brain)
+        :ok = Brain.read_on(brain, "boot-two", seq)
+
+        answer = %{
+          "t" => "answer",
+          "id" => "stp_answer",
+          "ask" => "ask-mode",
+          "content" => "ok",
+          "is_error" => false
+        }
+
+        assert :ok = Brain.write(brain, other, answer)
+        assert sent() == answer
+      end
+
+      test "a post or an answer from #{before_mode} to #{after_mode}, caller config #{caller_config?}, never reaches the old mode",
+           %{fake: fake, ctx: ctx, row: row, binding: binding, thread: thread, turn: turn} do
+        set_turn(turn, agent_mode: unquote(before_mode))
+        brain = started!(fake, row, binding)
+
+        old_work = %{
+          "t" => "work",
+          "id" => "stp_old_work",
+          "work" => binding.turn_id,
+          "tools" => []
+        }
+
+        assert :ok = Brain.write(brain, binding, old_work)
+        assert sent() == old_work
+        accepted!(fake, row, brain, old_work["id"])
+
+        other =
+          admitted!(
+            ctx,
+            binding,
+            next_turn!(ctx, thread.id, turn, "aqua"),
+            row,
+            unquote(after_mode)
+          )
+
+        opts =
+          if unquote(caller_config?),
+            do: [config: %{"read_only" => unquote(after_mode == "read-only")}],
+            else: []
+
+        assert {:error, :not_this_mode} = Brain.write(brain, other, post(other), opts)
+        refute_sent()
+
+        say(fake, row, %{
+          "t" => "ask",
+          "gen" => 0,
+          "work" => other.turn_id,
+          "ask" => "ask-mode",
+          "name" => "files",
+          "arguments" => %{}
+        })
+
+        {"boot-one", [{seq, _ask}]} = batch(brain)
+        :ok = Brain.read_on(brain, "boot-one", seq)
+
+        answer = %{
+          "t" => "answer",
+          "id" => "stp_answer",
+          "ask" => "ask-mode",
+          "content" => "ok",
+          "is_error" => false
+        }
+
+        assert {:error, :not_this_mode} = Brain.write(brain, other, answer, opts)
+        refute_sent()
+        assert Process.alive?(elem(brain, 0))
+      end
+    end
+  end
+
   describe "the binding to admitted work" do
     setup %{fake: fake, row: row, binding: binding} do
       {:ok, brain: started!(fake, row, binding)}

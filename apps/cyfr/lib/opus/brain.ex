@@ -61,6 +61,8 @@ defmodule Opus.Brain do
   (below). One that differs from the configuration the running harness
   was started with writes nothing: the driver's process is closed and a new one opened in the same
   holder, `{:ok, :restarted}`, and the attendant starts it again, resuming.
+  A `post` or an `answer` never reaches a harness started in another mode
+  than its turn's stored one: it writes nothing and is refused.
 
   The configuration's `read_only` is the holder's to set, never the
   caller's: in every `start` and every `work` it is the mode the turn's
@@ -259,7 +261,9 @@ defmodule Opus.Brain do
   command's answer is outstanding), `:not_attached`, `:unreadable`,
   `:running` (a `start` while a harness runs), `:not_started`,
   `:not_this_work`, `:not_this_generation` (a `start` naming another
-  generation than the binding's), `{:not_admitted, reason}`; or
+  generation than the binding's), `:not_this_mode` (a `post` or an
+  `answer` whose turn's stored mode is not the running harness's),
+  `{:not_admitted, reason}`; or
   `{:error, :uncertain}`, a write that may have reached the driver, after
   which the session ends.
   """
@@ -1242,15 +1246,27 @@ defmodule Opus.Brain do
          {:ok, turn} <- admitted(binding, t),
          command = held(command, turn),
          {:ok, line} <- encode(command) do
-      if t == "work" and state.config != held_config(opts[:config] || state.config, turn),
-        do: restarted(state),
-        else: send_line(state, command, line)
+      cond do
+        t == "start" or state.config == held_config(work_config(t, opts) || state.config, turn) ->
+          send_line(state, command, line)
+
+        t == "work" ->
+          restarted(state)
+
+        true ->
+          {:reply, {:error, :not_this_mode}, state}
+      end
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
   defp deliver(state, _binding, _command, _opts), do: {:reply, {:error, :unreadable}, state}
+
+  # Only a work runs with a configuration its caller names; every other
+  # delivery is compared under the running harness's own.
+  defp work_config("work", opts), do: opts[:config]
+  defp work_config(_delivery, _opts), do: nil
 
   # A start's configuration as the holder sets it from the turn it is
   # admitted for (moduledoc, "Writing").
