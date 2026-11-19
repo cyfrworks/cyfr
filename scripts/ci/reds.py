@@ -15,16 +15,17 @@ test-run (.github/workflows/rerun.yml, when a run of the Test workflow
 completes): RUN_ID, RUN_ATTEMPT, CONCLUSION, EVENT, HEAD_BRANCH, HEAD_SHA
 and RUN_URL, the run's own record. It acts on a pull request's run and on a
 push run on main, and leaves every other run alone:
-  failure on attempt 1   its failed jobs are rerun, once;
-  success on attempt N>1 when attempt N-1 had failed jobs, a flake: a
-                         comment on FLAKES naming the run, the commit, those
-                         jobs and the failing tests their logs name (ExUnit's
-                         numbered failure lines, the harnesses' FAIL lines);
-  failure on attempt N>1 no further rerun; on main, a comment on RED_TWICE
-                         naming the run and its failed jobs (a second red on
-                         main opens a regression job); on a pull request
-                         nothing: the red stands for its author.
-A cancelled run, or any other conclusion, is left alone.
+  failure on attempt 1  its failed jobs are rerun, once;
+  success on attempt 2  when attempt 1 had failed jobs, a flake: a comment
+                        on FLAKES naming the run, the commit, those jobs and
+                        the failing tests their logs name (ExUnit's numbered
+                        failure lines, the harnesses' FAIL lines);
+  failure on attempt 2  no further rerun; on main, a comment on RED_TWICE
+                        naming the run and its failed jobs (a second red on
+                        main opens a regression job); on a pull request
+                        nothing: the red stands for its author.
+A cancelled run, any other conclusion, and every attempt after the second,
+which only a person starts and reads, are left alone.
 
 nightly (.github/workflows/host-nightly.yml's report): OUTCOME, the outcome
 of the step that checks the host's report, and the report's COMMIT, STATUS,
@@ -103,11 +104,23 @@ def open_issue(title):
 
 
 def report(title, body):
-    """Comment on the open issue of TITLE, or open it with BODY."""
+    """Comment on the open issue of TITLE, or open it with BODY.
+
+    Two runs that both found none open both open one. Issue numbers rise in
+    the order issues are made, so the later of the two, reading the open
+    issues again, finds the earlier one older than its own: it moves its
+    text there as a comment and closes its own, and both reports end in
+    one issue."""
     number = open_issue(title)
     if number is None:
         made = json.loads(gh("-X", "POST", "repos/{owner}/{repo}/issues", "-f", f"title={title}", "-f", f"body={body}"))
-        print(f"reds: opened #{made.get('number')}, {title}")
+        mine, oldest = made.get("number"), open_issue(title)
+        if oldest is None or oldest == mine:
+            print(f"reds: opened #{mine}, {title}")
+            return
+        gh("-X", "POST", f"repos/{{owner}}/{{repo}}/issues/{oldest}/comments", "-f", f"body={body}")
+        gh("-X", "PATCH", f"repos/{{owner}}/{{repo}}/issues/{mine}", "-f", "state=closed", "-f", "state_reason=not_planned")
+        print(f"reds: opened #{mine} beside the older #{oldest}, moved its text there and closed it, {title}")
     else:
         gh("-X", "POST", f"repos/{{owner}}/{{repo}}/issues/{number}/comments", "-f", f"body={body}")
         print(f"reds: commented on #{number}, {title}")
@@ -162,13 +175,15 @@ def test_run():
     said = f"run {run_id}, attempt {attempt}, {conclusion or 'no conclusion'} {where}"
     if not on_main and f["EVENT"] != "pull_request":
         print(f"reds: left alone, a {f['EVENT'] or 'run with no event'} run {run_id} is neither a pull request's nor a push on main")
+    elif attempt > 2:
+        print(f"reds: {said}: left alone, an attempt after the second is a person's to read")
     elif conclusion == "failure" and attempt == 1:
         gh("-X", "POST", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/rerun-failed-jobs")
         print(f"reds: {said}: its failed jobs rerun once")
-    elif conclusion == "success" and attempt > 1:
-        jobs = failed_jobs(run_id, attempt - 1)
+    elif conclusion == "success" and attempt == 2:
+        jobs = failed_jobs(run_id, 1)
         if not jobs:
-            print(f"reds: {said}: attempt {attempt - 1} failed no job, no flake to record")
+            print(f"reds: {said}: attempt 1 failed no job, no flake to record")
             return
         lines = []
         for j in jobs:
@@ -183,12 +198,12 @@ def test_run():
                 if len(tests) > MOST_TESTS:
                     lines.append(f"    and {len(tests) - MOST_TESTS} more")
         report(FLAKES, f"A flake {where}: [run {run_id}]({f['RUN_URL']}) of commit {f['HEAD_SHA']} failed on "
-                       f"attempt {attempt - 1} and passed on attempt {attempt}, nothing changed. "
+                       f"attempt 1 and passed on attempt 2, nothing changed. "
                        f"The jobs that failed, and the failing tests their logs name:\n\n" + block(lines))
     elif conclusion == "failure" and on_main:
-        jobs = failed_jobs(run_id, attempt)
-        report(RED_TWICE, f"[Run {run_id}]({f['RUN_URL']}) of commit {f['HEAD_SHA']} on main failed again on attempt "
-                          f"{attempt}, and is not rerun: open a regression job. Its failed jobs:\n\n"
+        jobs = failed_jobs(run_id, 2)
+        report(RED_TWICE, f"[Run {run_id}]({f['RUN_URL']}) of commit {f['HEAD_SHA']} on main failed again on attempt 2, "
+                          f"and is not rerun: open a regression job. Its failed jobs:\n\n"
                           + block([j.get("name") or f"job {j['id']}" for j in jobs] or ["(none listed)"]))
     elif conclusion == "failure":
         print(f"reds: {said}: not rerun again, the red stands for its author")

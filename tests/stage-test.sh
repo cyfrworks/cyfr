@@ -647,6 +647,10 @@ issues = {"contents": "read", "issues": "write"}
 for name, want in (("report", issues), ("watchdog", {"actions": "read", **issues})):
     if jobs[name].get("permissions") != want:
         errors.append(f"the {name} job's permissions are {jobs[name].get('permissions')}")
+base = {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}", "OUTCOME": "${{ steps.check.outcome }}",
+        "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}
+facts = {"report": {**base, **{k.upper(): f"${{{{ inputs.{k} }}}}" for k in ("commit", "status", "summary", "logs")}},
+         "watchdog": base}
 for name, command in (("report", "nightly"), ("watchdog", "watchdog")):
     steps = jobs[name]["steps"]
     if len(steps) != 3:
@@ -663,8 +667,10 @@ for name, command in (("report", "nightly"), ("watchdog", "watchdog")):
     for step in (checkout, issue):
         if step.get("if") != "${{ !cancelled() }}":
             errors.append(f"{name}'s step {step.get('name') or step.get('uses')} does not run after a failed check")
-    if issue.get("run") != f"python3 -I scripts/ci/reds.py {command}" or issue.get("env", {}).get("OUTCOME") != "${{ steps.check.outcome }}":
-        errors.append(f"{name}'s last step does not hand the check's outcome to reds.py {command}")
+    # Every fact reds.py reads in that step, each bound to its source: one
+    # left out reaches the script as empty.
+    if issue.get("run") != f"python3 -I scripts/ci/reds.py {command}" or issue.get("env") != facts[name]:
+        errors.append(f"{name}'s last step does not hand reds.py {command} the check's outcome and its facts: {issue.get('env')}")
     open(f"{sys.argv[2]}-{name}.sh", "w").write(check["run"])
 if errors:
     open(sys.argv[2] + ".err", "w").write("; ".join(errors))

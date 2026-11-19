@@ -1122,7 +1122,9 @@ reds="$root/scripts/ci/reds.py"
 # jobs two to a page, as gh prints pages; opens, comments on and closes
 # issues; and adds each run whose failed jobs it is asked to rerun to
 # "reruns". Every call is a line of $GH_CALLS; under GH_FAIL every call
-# fails.
+# fails. Calls take turns on the state, and under GH_BARRIER, a file, the
+# first two listings of the open issues each read the issues, then wait
+# for the other before answering, as two runs that list at one moment.
 mkdir -p "$scratch/reds-bin"
 cat > "$scratch/reds-bin/gh" <<'GH'
 #!/usr/bin/env python3
@@ -1132,8 +1134,12 @@ with open(os.environ["GH_CALLS"], "a") as f:
     f.write(" ".join(a.replace("\n", "\\n") for a in args) + "\n")
 if os.environ.get("GH_FAIL") or args[:1] != ["api"]:
     sys.exit("gh: stand-in refused")
+import fcntl, time
 path = os.environ["GH_STATE"]
+lock = open(path + ".lock", "a")
+fcntl.flock(lock, fcntl.LOCK_EX)
 state = json.load(open(path))
+barrier = os.environ.get("GH_BARRIER")
 args = args[1:]
 method = "GET"
 if args[:1] == ["-X"]:
@@ -1154,7 +1160,16 @@ def pages(items, wrap):
         print(json.dumps(wrap(items[i:i + 2])))
 r = "repos/{owner}/{repo}/"
 if method == "GET" and paginate and url == r + "issues?state=open&per_page=100":
-    pages([i for i in state["issues"] if i["state"] == "open"], lambda p: p)
+    listed = [i for i in state["issues"] if i["state"] == "open"]
+    if barrier:
+        with open(barrier, "a") as f:
+            f.write("listed\n")
+        arrived = len(open(barrier).read().split())
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        until = time.time() + 10
+        while arrived <= 2 and len(open(barrier).read().split()) < 2 and time.time() < until:
+            time.sleep(0.05)
+    pages(listed, lambda p: p)
 elif method == "GET" and paginate and (m := re.fullmatch(re.escape(r) + r"actions/runs/(\d+)/attempts/(\d+)/jobs\?per_page=100", url)):
     jobs = state["jobs"].get(f"{m[1]}/{m[2]}", [])
     pages(jobs, lambda p: {"total_count": len(jobs), "jobs": p})
@@ -1170,7 +1185,7 @@ elif method == "POST" and url == r + "issues" and sorted(fields) == ["body", "ti
     print(json.dumps({"number": n}))
 elif method == "POST" and (m := re.fullmatch(re.escape(r) + r"issues/(\d+)/comments", url)) and sorted(fields) == ["body"]:
     issue(int(m[1]))["comments"].append(fields["body"]); save()
-elif method == "PATCH" and (m := re.fullmatch(re.escape(r) + r"issues/(\d+)", url)) and fields == {"state": "closed", "state_reason": "completed"}:
+elif method == "PATCH" and (m := re.fullmatch(re.escape(r) + r"issues/(\d+)", url)) and fields in ({"state": "closed", "state_reason": "completed"}, {"state": "closed", "state_reason": "not_planned"}):
     issue(int(m[1]))["state"] = "closed"; save()
 else:
     sys.exit(f"gh: stand-in does not answer {sys.argv[1:]}")
@@ -1304,10 +1319,36 @@ if [ "$code" -eq 0 ] && state 'not s["reruns"] and [i["comments"] for i in issue
   f"[Run 7](https://example.invalid/runs/7) of commit '"$sha"' on main failed again on attempt 2, and is not rerun: open a regression job. Its failed jobs:\n\n    Browser harness (canvas)"]]' &&
   state 'not issues["Flaky tests"][0]["comments"]'; then pass "$label"; else fail "$label"; fi
 
-label="reds: a third red on main is one more comment on the open red-twice issue"
-reds_state "3 open $red_twice"
-test_run 7 3 failure push main
-if [ "$code" -eq 0 ] && state 'len(s["issues"]) == 1 and len(s["issues"][0]["comments"]) == 1 and not s["reruns"]'; then pass "$label"; else fail "$label"; fi
+for conclusion in failure success; do
+  for spec in "push main" "pull_request feature"; do
+    read -r event branch <<<"$spec"
+    label="reds: a third attempt, $conclusion on $branch, is a person's: nothing is read, rerun or written"
+    reds_state "3 open $red_twice" "4 open $flakes"
+    test_run 7 3 "$conclusion" "$event" "$branch"
+    if [ "$code" -eq 0 ] && [ "$(calls)" = 0 ] && grep -qF 'an attempt after the second is a person' "$scratch/out"; then pass "$label"; else fail "$label"; fi
+  done
+done
+
+# Two flakes recorded at one moment: both find no record open and both
+# open one; the later, listing again, moves its text to the earlier and
+# closes its own.
+label="reds: two flakes recorded at one moment end in one open record holding both"
+reds_state "1 closed $flakes"
+: > "$scratch/reds-barrier"
+racers=()
+for spec in "pull_request feature" "push main"; do
+  read -r event branch <<<"$spec"
+  env -i PATH="$scratch/reds-bin:$PATH" GH_STATE="$scratch/reds-state" GH_CALLS="$scratch/reds-calls" GH_BARRIER="$scratch/reds-barrier" \
+    RUN_ID=7 RUN_ATTEMPT=2 CONCLUSION=success EVENT="$event" HEAD_BRANCH="$branch" HEAD_SHA="$sha" RUN_URL=https://example.invalid/runs/7 \
+    python3 -I "$reds" test-run > "$scratch/out-$branch" 2> "$scratch/err-$branch" &
+  racers+=("$!")
+done
+wait "${racers[0]}"; first=$?
+wait "${racers[1]}"; code=$?
+cat "$scratch/out-feature" "$scratch/out-main" > "$scratch/out"
+cat "$scratch/err-feature" "$scratch/err-main" > "$scratch/err"
+if [ "$first" -eq 0 ] && [ "$code" -eq 0 ] && [ "$(grep -c '^listed$' "$scratch/reds-barrier")" -ge 2 ] &&
+  state '[(i["number"], i["state"]) for i in issues["Flaky tests"]] == [(1, "closed"), (2, "open"), (3, "closed")] and sorted(c.split(":")[0] for c in issues["Flaky tests"][1]["comments"]) == ["A flake for a pull request", "A flake on main"]'; then pass "$label"; else fail "$label"; fi
 
 label="reds: a pull request's rerun red again is left red, with nothing rerun or written"
 reds_state
