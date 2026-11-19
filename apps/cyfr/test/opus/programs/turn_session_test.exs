@@ -580,6 +580,35 @@ defmodule Opus.Programs.TurnSessionTest do
         :sys.resume(partition)
       end
     end
+
+    test "a stop the backend left unanswered keeps its slot while its session's process lives",
+         %{ctx: ctx, row: row, lineage: lineage, fake: fake} do
+      [stopped | _] = for _ <- 1..4, do: elem(start!(ctx, lineage, row), 0)
+
+      running = fn ->
+        length(for {_id, %{running: true}} <- Scripted.sessions(fake, row.id), do: 1)
+      end
+
+      assert running.() == 4
+
+      # Held, the registry reads no exit, so the slot stays the stopped
+      # session's as long as its process would live.
+      partition = Process.whereis(Opus.Programs.Registry.PIDPartition0)
+      :ok = :sys.suspend(partition)
+
+      try do
+        Scripted.refuse_once(fake, "close", "internal")
+        assert {:error, _unanswered} = call(ctx, lineage, "stop", %{"session" => stopped})
+
+        assert {:error, {:invalid_argument, message}} =
+                 call(ctx, lineage, "start", %{"program" => row.id, "epoch" => row.epoch})
+
+        assert message == "This turn already runs 4 programs; stop one first"
+        assert running.() == 4
+      after
+        :sys.resume(partition)
+      end
+    end
   end
 
   describe "what a turn reads" do
