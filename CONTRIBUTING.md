@@ -276,10 +276,14 @@ same worktree refuses, naming the run that holds it.
   `origin/main`.
 
   A handoff ends with a receipt in its log folder and one line on stderr
-  naming its result, HEAD's commit, the tree it tested and whether that is
-  the commit's (committed), not yet committed (uncommitted) or changed
-  while it ran (moved); the ready report carries that line. The receipt is
-  evidence, not a lock: nothing refuses a push without one.
+  naming its result, HEAD's commit at the end, and two snapshots: the
+  working files' tree when the stage started, before it read its table,
+  and when it ended. It reads committed when that commit's tree is both,
+  uncommitted when both are one other tree, and moved when they differ;
+  the ready report carries that line. An input Git ignores or is told to
+  assume unchanged, a file changed and restored in between, and a
+  submodule's contents are outside the snapshots. The receipt is evidence,
+  not a lock: nothing refuses a push without one.
 
   The self-tests that need the whole machine, those a workflow runs and
   no handoff row does, and `go test ./... -race` are the pull request's

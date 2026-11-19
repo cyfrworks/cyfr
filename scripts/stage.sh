@@ -126,20 +126,25 @@
 # run <check> (<n> quarter[s]): <command>` or `would skip <check>:
 # <reason>` per row, and runs nothing.
 #
-# A handoff that made its log directory ends, at every exit, by writing
-# $STAGE_LOGDIR/receipt and printing on stderr `stage: receipt: handoff
-# <result>, commit <commit>, tree <tree>, <state>, logs <logdir>`. The
-# receipt's lines: `stage`, `result` (passed, or failed and the status),
-# `commit` and `commit-tree` (HEAD's, at the end), `start-tree` and
-# `end-tree` (the working files' tree before the changed set is read and
-# at the end, each as a commit of every file Git does not ignore would
-# hold it, computed in a copy of the index), `state` (committed when both
-# are HEAD's tree, uncommitted when they are one other tree, moved when
-# they differ, unknown when Git could not say), `tests <check> <adapter>
-# <files>` for each test row that ran, `left <name> <count>` for each name
-# the selection left to the pull request's run, and `row <line>` for each
-# summary line, the stdout's. The printed tree is the start tree, which a
-# reviewer holds against `git rev-parse <commit>^{tree}`. Save writes none.
+# A handoff makes its log directory and takes its start snapshot before it
+# reads anything of the checkout, its table included, and ends, at every
+# exit after that, by writing $STAGE_LOGDIR/receipt and then printing on
+# stderr `stage: receipt: handoff <result>, commit <commit>, tree <tree>,
+# <state>, logs <logdir>`. The receipt's lines: `stage`, `result` (passed,
+# or failed and the status), `end-commit` (HEAD, read once at the end) and
+# `end-commit-tree` (that commit's tree), `start-tree` and `end-tree` (the
+# working files' tree at the start and at the end, each as a commit of
+# every file Git does not ignore would hold it, computed in a copy of the
+# index in the log directory), `state` (committed when that one commit's
+# tree is both snapshots, uncommitted when the two snapshots are one other
+# tree, moved when they differ, unknown when Git could not say),
+# `selected <check> <adapter> <files>` for each test row's planned files,
+# `left <name> <count>` for each name the selection left to the pull
+# request's run, and `row <line>` for each summary line, the stdout's,
+# which say what ran. The printed tree is the start snapshot, which a
+# reviewer holds against `git rev-parse <commit>^{tree}`. A receipt that
+# cannot be written prints no receipt line, says so, and fails a stage
+# that would have passed. Save writes none.
 #
 # Exits 0 when every row that ran passed and 1 otherwise; 64 on usage, or
 # inside a heavy-check (HEAVY_CHECK_HELD set), since the stage queues its
@@ -164,16 +169,17 @@ finish() {
   trap - EXIT
   trap '' INT TERM HUP
   if [ "$status" = 0 ] && ! $finished; then status=1; fi
-  if $receipting; then receipt "$status"; fi
+  if $receipting && ! receipt "$status" && [ "$status" = 0 ]; then status=1; fi
   printf '_EXIT=%s %s\n' "$$" "$status"
   exit "$status"
 }
 # The tree of the working files as a commit of them all would hold it now:
-# `git add -A` into a copy of the index, so the index, the working files,
-# the stash and every ref stay as they were. Empty when Git cannot say.
+# `git add -A` into a copy of the index in the log directory, so the index,
+# the working files, the stash and every ref stay as they were. Empty when
+# Git cannot say.
 work_tree() {
   local copy tree=
-  copy=$(mktemp "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-stage-index.XXXXXX") || return 0
+  copy=$(mktemp "$logdir/.index.XXXXXX") || return 0
   if cp "$(git rev-parse --path-format=absolute --git-path index)" "$copy" 2>/dev/null; then
     tree=$(GIT_INDEX_FILE=$copy git add -A 2>/dev/null && GIT_INDEX_FILE=$copy git write-tree 2>/dev/null) || tree=
   fi
@@ -181,22 +187,27 @@ work_tree() {
   printf '%s' "$tree"
 }
 # receipt STATUS: the handoff's receipt (the header's), written to its log
-# directory, and its one line on stderr.
+# directory, then its one line on stderr; 1, saying so, when it cannot be
+# written.
 receipt() {
-  local result=passed commit head_tree end_tree state i check adapter named listed line
+  local result=passed commit head_tree=unknown end_tree state i check adapter named listed line
   [ "$1" = 0 ] || result="failed $1"
-  commit=$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || commit=unknown
-  head_tree=$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null) || head_tree=unknown
+  # HEAD is read once, at the end, and its tree is that commit's.
+  if commit=$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null); then
+    head_tree=$(git rev-parse -q --verify "$commit^{tree}" 2>/dev/null) || head_tree=unknown
+  else
+    commit=unknown
+  fi
   end_tree=$(work_tree)
   if [ -z "$start_tree" ] || [ -z "$end_tree" ]; then state=unknown
   elif [ "$start_tree" != "$end_tree" ]; then state=moved
   elif [ "$start_tree" = "$head_tree" ]; then state=committed
   else state=uncommitted; fi
-  {
+  if ! {
     echo "stage $stage"
     echo "result $result"
-    echo "commit $commit"
-    echo "commit-tree $head_tree"
+    echo "end-commit $commit"
+    echo "end-commit-tree $head_tree"
     echo "start-tree ${start_tree:-unknown}"
     echo "end-tree ${end_tree:-unknown}"
     echo "state $state"
@@ -209,7 +220,7 @@ receipt() {
       for named in "${r_paths[@]}"; do
         if [ "$named" = '$STAGE_TESTS' ]; then listed+=" ${row_tests[$i]-}"; else listed+=" $named"; fi
       done
-      echo "tests $check $adapter${listed% }"
+      echo "selected $check $adapter${listed% }"
     done
     for line in ${left_names[@]+"${left_names[@]}"}; do echo "left $line"; done
     [ -z "${deps_line:-}" ] || echo "row $deps_line"
@@ -218,7 +229,11 @@ receipt() {
       echo "row ${lines[$i]-$check: no result}"
     done
     for line in ${tickets[@]+"${tickets[@]}"}; do echo "row $line"; done
-  } >"$logdir/receipt"
+  } >"$logdir/receipt.part" 2>/dev/null || ! mv -fT "$logdir/receipt.part" "$logdir/receipt" 2>/dev/null; then
+    rm -f "$logdir/receipt.part" 2>/dev/null
+    echo "stage: receipt: could not be written to $logdir/receipt, so this $stage has no evidence" >&2
+    return 1
+  fi
   echo "stage: receipt: $stage $result, commit $commit, tree ${start_tree:-unknown}, $state, logs $logdir" >&2
 }
 on_signal() {
@@ -268,6 +283,23 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 root=$(git -C "$here/.." rev-parse --show-toplevel 2>/dev/null) || root=
 [ -n "$root" ] || refuse 69 "$here/.. is not inside a git checkout"
 cd "$root" || refuse 69 "cannot enter $root"
+logdir_made=false
+make_logdir() {
+  if [ -n "$logdir" ]; then
+    mkdir -p "$logdir" && logdir=$(cd "$logdir" && pwd -P) || refuse 64 "cannot use $logdir for the logs"
+  else
+    logdir=$(mktemp -d "/tmp/cyfr-stage.$stage.XXXXXX") || refuse 69 'cannot make a log directory'
+  fi
+  logdir_made=true
+  echo "stage: $stage logs in $logdir" >&2
+}
+# Handoff's start snapshot comes before anything of the checkout is read,
+# the table included, so what its rows run is never newer than it.
+if [ "$stage" = handoff ] && ! $dry; then
+  make_logdir
+  start_tree=$(work_tree)
+  receipting=true
+fi
 table=scripts/stages.tsv
 [ -f "$table" ] && [ -r "$table" ] || refuse 65 "$table: there is no stage table to read"
 
@@ -320,9 +352,6 @@ if [ "$stage" = save ] || [ "$stage" = handoff ]; then
   fi
   [ -n "$base" ] && git rev-parse --verify -q "$base^{commit}" >/dev/null ||
     refuse 69 "the base ${base:-of the handoff stage (origin/main or main)} is not a commit here"
-  # The tree handoff's receipt reads as the one it started on, taken before
-  # the changed set is.
-  if [ "$stage" = handoff ] && ! $dry; then start_tree=$(work_tree); fi
   while IFS= read -r -d '' path; do changed+=("$path"); done < <(
     git diff --name-only --no-renames -z "$base" --
     git ls-files -z --others --exclude-standard
@@ -599,13 +628,7 @@ if $dry; then
   exit 0
 fi
 
-if [ -n "$logdir" ]; then
-  mkdir -p "$logdir" && logdir=$(cd "$logdir" && pwd -P) || refuse 64 "cannot use $logdir for the logs"
-else
-  logdir=$(mktemp -d "/tmp/cyfr-stage.$stage.XXXXXX") || refuse 69 'cannot make a log directory'
-fi
-echo "stage: $stage logs in $logdir" >&2
-[ "$stage" != handoff ] || receipting=true
+$logdir_made || make_logdir
 export STAGE="$stage" STAGE_TESTS="${tests[*]+${tests[*]}}" STAGE_LOGDIR="$logdir"
 
 # A row's summary line: result CHECK STATUS SECONDS.

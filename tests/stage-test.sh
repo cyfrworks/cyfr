@@ -963,6 +963,13 @@ begin "a handoff's receipt names HEAD's commit and tree and reads committed on a
 rrepo="$S/receipt-repo"
 git init -q -b main "$rrepo"
 cp -R "$repo/scripts" "$rrepo/"
+cat >"$rrepo/scripts/heavy-check.sh" <<'EOF'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+case "$*" in *test-partitioned*) [ -z "${RECEIPT_QUEUE_DEADLINE:-}" ] || exit 75 ;; esac
+exec "$@"
+EOF
 printf '%s\n' \
   'handoff|unit|1|60|-|tests|scripts/test-partitioned.sh -n 1 -a sqlite -- $STAGE_TESTS' \
   'handoff|unit-pg|1|60|-|tests|scripts/test-partitioned.sh -n 1 -a postgres -- $STAGE_TESTS' \
@@ -998,7 +1005,7 @@ rstage committed handoff
 untouched >"$S/after"
 diff "$S/before" "$S/after" >/dev/null || fail "the receipt touched the checkout: $(diff "$S/before" "$S/after")"
 head=$(git -C "$rrepo" rev-parse HEAD) tree=$(git -C "$rrepo" rev-parse 'HEAD^{tree}')
-printf '%s\n' 'stage handoff' 'result passed' "commit $head" "commit-tree $tree" "start-tree $tree" "end-tree $tree" \
+printf '%s\n' 'stage handoff' 'result passed' "end-commit $head" "end-commit-tree $tree" "start-tree $tree" "end-tree $tree" \
   'state committed' >"$S/want"
 head -n 7 "$S/logs-committed/receipt" | diff "$S/want" - >/dev/null || fail "the receipt opens: $(head -n 7 "$S/logs-committed/receipt")"
 grep -qx "stage: receipt: handoff passed, commit $head, tree $tree, committed, logs $S/logs-committed" "$S/committed.err" ||
@@ -1024,9 +1031,9 @@ start=$(sed -n 's/^start-tree //p' "$S/logs-uncommitted/receipt")
 git -C "$rrepo" add -A
 [ "$(git -C "$rrepo" write-tree)" = "$start" ] || fail "the start tree is not the working files' tree"
 git -C "$rrepo" reset -q
-grep -qx 'tests unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
-  grep -qx 'tests unit-pg postgres apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
-  grep -qx 'left Cyfr.Wide 3' "$S/logs-uncommitted/receipt" || fail "the receipt's selection: $(grep -E '^(tests|left)' "$S/logs-uncommitted/receipt")"
+grep -qx 'selected unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
+  grep -qx 'selected unit-pg postgres apps/cyfr/test/cyfr/a_test.exs' "$S/logs-uncommitted/receipt" &&
+  grep -qx 'left Cyfr.Wide 3' "$S/logs-uncommitted/receipt" || fail "the receipt's selection: $(grep -E '^(selected|left)' "$S/logs-uncommitted/receipt")"
 grep -qx "stage: receipt: handoff passed, commit $head, tree $start, uncommitted, logs $S/logs-uncommitted" "$S/uncommitted.err" ||
   fail "the receipt's line: $(grep receipt "$S/uncommitted.err")"
 git -C "$rrepo" checkout -q -- .
@@ -1044,6 +1051,62 @@ grep -qx 'result failed 1' "$S/logs-failing/receipt" && grep -qx 'row fail: fail
   grep -qx 'state committed' "$S/logs-failing/receipt" || fail "the failing run's receipt: $(cat "$S/logs-failing/receipt")"
 grep -qx "stage: receipt: handoff failed 1, commit $head, tree $tree, committed, logs $S/logs-failing" "$S/failing.err" ||
   fail "the receipt's line: $(grep receipt "$S/failing.err")"
+
+begin "a commit made after the stage starts, before its first row, reads moved, never committed for the new commit; a receipt's commit and tree are one commit's"
+# A stand-in git commits a new table the moment the stage asks for its
+# base, after the table is read, as another writer could; and, asked for
+# HEAD by the receipt, moves HEAD on before answering again.
+mkdir -p "$S/race-bin"
+real_git=$(command -v git)
+cat >"$S/race-bin/git" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = merge-base ] && [ -n "\${RACE_TABLE:-}" ] && [ ! -e "\$RACE_TABLE.done" ]; then
+  : >"\$RACE_TABLE.done"
+  sed -i s/old-command/new-command/ scripts/stages.tsv
+  "$real_git" add scripts/stages.tsv && "$real_git" -c user.name=test -c user.email=test@invalid commit -qm 'new table' >&2
+fi
+args="\$*"
+if [ -n "\${RACE_HEAD:-}" ] && [ "\$args" != "\${args#rev-parse -q --verify HEAD^}" ] && [ ! -e "\$RACE_HEAD.done" ]; then
+  : >"\$RACE_HEAD.done"
+  "$real_git" "\$@"; s=\$?
+  "$real_git" update-ref HEAD "\$RACE_NEXT"
+  exit \$s
+fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$S/race-bin/git"
+cp "$rrepo/scripts/stages.tsv" "$S/receipt-table"
+printf 'handoff\tread\t1\t60\t-\talways\techo old-command\n' >"$rrepo/scripts/stages.tsv"
+git -C "$rrepo" -c user.name=test -c user.email=test@invalid commit -qam 'old table'
+rc=0; (cd "$rrepo" && PATH="$S/race-bin:$PATH" RACE_TABLE="$S/race-table" scripts/stage.sh -l "$S/logs-race" handoff) >"$S/race.out" 2>"$S/race.err" || rc=$?
+[ "$rc" = 0 ] && grep -qx old-command "$S/logs-race/read.log" || fail "the raced stage exited $rc or ran: $(cat "$S/logs-race/read.log" 2>&1)"
+grep -qx 'state moved' "$S/logs-race/receipt" && [ "$(sed -n 's/^start-tree //p' "$S/logs-race/receipt")" = "$(git -C "$rrepo" rev-parse 'HEAD~1^{tree}')" ] ||
+  fail "a commit after the start reads: $(head -n 7 "$S/logs-race/receipt")"
+# HEAD moved on between the receipt's reads: its commit and tree stay one commit's.
+next=$(git -C "$rrepo" -c user.name=test -c user.email=test@invalid commit-tree "$(git -C "$rrepo" hash-object -t tree /dev/null)" -p HEAD -m next)
+here=$(git -C "$rrepo" rev-parse HEAD)
+rc=0; (cd "$rrepo" && PATH="$S/race-bin:$PATH" RACE_HEAD="$S/race-head" RACE_NEXT="$next" scripts/stage.sh -l "$S/logs-head" handoff) >"$S/head.out" 2>"$S/head.err" || rc=$?
+[ -e "$S/race-head.done" ] || fail 'HEAD was not moved while the receipt read it'
+commit=$(sed -n 's/^end-commit //p' "$S/logs-head/receipt")
+[ "$commit" = "$here" ] && [ "$(sed -n 's/^end-commit-tree //p' "$S/logs-head/receipt")" = "$(git -C "$rrepo" rev-parse "$commit^{tree}")" ] ||
+  fail "the receipt pairs $commit with another commit's tree: $(head -n 7 "$S/logs-head/receipt")"
+git -C "$rrepo" update-ref HEAD "$here"
+cp "$S/receipt-table" "$rrepo/scripts/stages.tsv"
+git -C "$rrepo" -c user.name=test -c user.email=test@invalid commit -qam 'the receipt table'
+head=$(git -C "$rrepo" rev-parse HEAD) tree=$(git -C "$rrepo" rev-parse 'HEAD^{tree}')
+
+begin 'a receipt that cannot be written fails a stage that would pass and prints no receipt line; a row the queue never started has no line that says its tests ran'
+mkdir -p "$S/logs-unwritable/receipt"
+rstage unwritable handoff
+[ "$rc" = 1 ] && grep -qF "stage: receipt: could not be written to $S/logs-unwritable/receipt" "$S/unwritable.err" &&
+  ! grep -q '^stage: receipt: handoff' "$S/unwritable.err" || fail "an unwritable receipt gave $rc: $(cat "$S/unwritable.err")"
+printf '# edit\n' >>"$rrepo/apps/cyfr/lib/cyfr/a.ex"
+RECEIPT_QUEUE_DEADLINE=1 rstage unqueued handoff
+[ "$rc" = 1 ] || fail "a stage whose test rows never started exited $rc"
+grep -qx 'selected unit sqlite apps/cyfr/test/cyfr/a_test.exs' "$S/logs-unqueued/receipt" &&
+  grep -qx 'row unit: not run 75 [0-9]*s' "$S/logs-unqueued/receipt" &&
+  ! grep -qE '^(tests|row unit: ok)' "$S/logs-unqueued/receipt" || fail "the unstarted row's receipt: $(cat "$S/logs-unqueued/receipt")"
+git -C "$rrepo" checkout -q -- .
 
 begin 'the real table reads whole, no save or handoff row takes more than one quarter, and every self-test a handoff row runs is one a pull-request workflow runs'
 status=0; (cd "$ROOT" && scripts/stage.sh -n release) >"$S/real.out" 2>"$S/real.err" || status=$?
