@@ -245,8 +245,11 @@
 # the project goes whole, its volumes, the engine's join network and join
 # containers and the run's stand-in image with it, when the run ends,
 # however it ends (tests/compose-proof/cleanup.sh: a removal that fails
-# three times fails the run, naming the project). Nothing of a deployed
-# stack on the same host is touched.
+# three times fails the run, naming the project). What an earlier run
+# killed before its teardown left, its scratch directory and its update
+# cases' release tags, goes at the start of the next (cleanup.sh
+# `sweep_dead_runs`). Nothing of a deployed stack on the same host is
+# touched.
 #
 # Usage: tests/compose-proof/run.sh --case bind|modes|interrupt|restore-identity|shutdown|restore|restore-person
 #        tests/compose-proof/run.sh --case runtime|update|update-refused|update-fail|update-interrupt --locus-image LOCUS_IMAGE
@@ -254,7 +257,8 @@
 # from the tree (Dockerfile.locus), which the run does not build.
 # COMPOSE_PROOF_IMAGE names the app image (default cyfr:compose-proof);
 # COMPOSE_PROOF_SKIP_BUILD=1 reuses that image as a previous run or build
-# left it; COMPOSE_PROOF_KEEP=1 keeps the scratch directory. Needs docker,
+# left it; COMPOSE_PROOF_KEEP=1 keeps the scratch directory, which a later
+# run's start leaves alone. Needs docker,
 # go (the command line and the stand-in are built here), python3 and
 # curl. test.yml's locus-backends-image job runs every case on the app
 # image it builds, tagged cyfr:compose-proof.
@@ -2789,6 +2793,7 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "the image $IMAGE is not b
 [ -z "$LOCUS_IMAGE" ] || docker image inspect "$LOCUS_IMAGE" >/dev/null 2>&1 ||
   fail "the Locus image $LOCUS_IMAGE is not built"
 
+sweep_dead_runs
 project_new
 
 case "$CASE" in

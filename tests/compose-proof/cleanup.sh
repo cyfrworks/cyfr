@@ -6,6 +6,9 @@
 # run's RUN, WORK, IMAGE, UPSTREAM, STANDIN_IMAGE and RELEASE_IMAGES, and calls `compose`
 # and `docker`, which the caller defines or finds.
 #
+# sweep_dead_runs, which run.sh calls at its start, removes what an earlier
+# run killed before its teardown left of its own.
+#
 # A step that removes what the run made is tried up to three times,
 # COMPOSE_PROOF_CLEANUP_PAUSE seconds apart (default 5). A step that still
 # fails is named on stderr with the project it leaves behind, and the run
@@ -76,6 +79,7 @@ cleanup() {
     cleanup_step "docker image rm $made" docker image rm "$made" || failed=1
   done
   if [ "${COMPOSE_PROOF_KEEP:-}" = 1 ]; then
+    : >"$WORK/kept"
     echo "kept $WORK"
   else
     # The entrypoint gave the data and template directories to the image's
@@ -89,4 +93,44 @@ cleanup() {
     code=1
   fi
   exit "$code"
+}
+
+# What an earlier run of this proof left when it was killed before its
+# teardown: its scratch directory and its update cases' release tags, each
+# named after its RUN, which carries the pid of the run.sh that made it. A
+# run whose pid lives keeps both, and so does a scratch directory holding
+# `kept`, which the teardown writes when COMPOSE_PROOF_KEEP=1 keeps it, or
+# one another user owns. A directory goes once the image's user has given
+# its data back, as the teardown takes its own; a tag goes without force,
+# so one a container still uses stays. The run's containers, networks,
+# volumes and stand-in image are scripts/janitor.sh's (rule 1), named under
+# the run prefix. A removal that fails is named on stderr and the run goes
+# on: an earlier run's leftovers do not fail this one.
+sweep_dead_runs() {
+  local dir name pid
+  local scratch_name='^(cyfr-[0-9a-f]{10}-[0-9]+-)?cyfr-compose-proof-([0-9]+)-[0-9a-f]{8}$'
+  local release_tag='^ghcr\.io/cyfrworks/cyfr(-locus)?:[0-9]+\.[0-9]+\.[0-9]+-(cyfr-[0-9a-f]{10}-[0-9]+-)?cyfr-compose-proof-([0-9]+)-[0-9a-f]{8}\.[12]$'
+  for dir in "${TMPDIR:-/tmp}"/*cyfr-compose-proof-*; do
+    [ -d "$dir" ] && [ -O "$dir" ] && [ "$dir" != "$WORK" ] || continue
+    [[ ${dir##*/} =~ $scratch_name ]] || continue
+    pid=${BASH_REMATCH[2]}
+    ! ps -p "$pid" >/dev/null 2>&1 || continue
+    [ ! -e "$dir/kept" ] || continue
+    if docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-sweep-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --volume "$dir:/work" \
+      --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work >/dev/null 2>&1 && rm -rf "$dir"; then
+      echo "removed $dir, left by the run $pid, which is gone"
+    else
+      echo "::warning::compose proof: could not remove $dir, left by the run $pid" >&2
+    fi
+  done
+  while IFS= read -r name; do
+    [[ $name =~ $release_tag ]] || continue
+    pid=${BASH_REMATCH[3]}
+    ! ps -p "$pid" >/dev/null 2>&1 || continue
+    if docker image rm "$name" >/dev/null 2>&1; then
+      echo "removed the tag $name, left by the run $pid, which is gone"
+    else
+      echo "::warning::compose proof: could not remove the tag $name, left by the run $pid" >&2
+    fi
+  done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
 }

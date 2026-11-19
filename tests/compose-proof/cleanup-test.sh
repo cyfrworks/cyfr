@@ -8,7 +8,11 @@
 # the run's Tailscale stand-in image among them; one that fails and then
 # succeeds within its three attempts does not; the access engine's join
 # containers and its join network go too; a failed run keeps its own
-# status; a clean run removes its scratch directory and exits 0.
+# status; a clean run removes its scratch directory and exits 0. The
+# sweep a run starts with (`sweep_dead_runs`) removes the scratch
+# directories and release tags of runs whose pid is gone, and leaves a
+# live run's, a kept directory and every other name; a removal it cannot
+# make is named and does not fail the run.
 #
 # Usage: bash tests/compose-proof/cleanup-test.sh
 set -uo pipefail
@@ -133,6 +137,87 @@ if [ "$code" -eq 0 ] && [ "$(calls 'docker rm join-one')" = 1 ] && [ "$(calls 'd
   check "the access engine's join containers and its join network go with the project" ok
 else
   check "the access engine's join containers and its join network go with the project" no
+fi
+
+# Runs the start's sweep in $scratch/tmp against a docker stand-in that
+# lists the tags in $scratch/tags, records each `run` and `image rm` in
+# $scratch/calls and, with `$1` set, fails every `run`. Leaves the status
+# in $code, stdout in $scratch/out and stderr in $scratch/err.
+sweep() {
+  : >"$scratch/calls"
+  TMPDIR="$scratch/tmp" CALLS="$scratch/calls" TAGS="$scratch/tags" RUN_FAILS="${1:-}" CLEANUP="$here/cleanup.sh" \
+    WORK="$scratch/tmp/cyfr-compose-proof-$$-4a4b4c4d" bash -c '
+      set -euo pipefail
+      RUN=cyfr-compose-proof-test IMAGE=cyfr:compose-proof
+      docker() {
+        case "$1 $2" in
+          "image ls") cat "$TAGS" ;;
+          "image rm") echo "image rm $3" >>"$CALLS" ;;
+          run\ *)
+            [ -z "$RUN_FAILS" ] || return 1
+            local arg
+            for arg in "$@"; do case "$arg" in *:/work) echo "run ${arg%:/work}" >>"$CALLS" ;; esac; done
+            ;;
+          *) echo "unexpected docker $*" >>"$CALLS"; return 1 ;;
+        esac
+      }
+      . "$CLEANUP"
+      sweep_dead_runs
+    ' >"$scratch/out" 2>"$scratch/err"
+  code=$?
+}
+
+# A pid that has finished, and this test's own, which lives.
+dead=$(bash -c 'echo $$')
+live=$$
+t="$scratch/tmp"
+prefixed="$t/cyfr-0123456789-4242-cyfr-compose-proof-$dead-0a0b0c0d"
+plain="$t/cyfr-compose-proof-$dead-1a1b1c1d"
+running="$t/cyfr-compose-proof-$live-2a2b2c2d"
+kept="$t/cyfr-compose-proof-$dead-3a3b3c3d"
+other="$t/cyfr-compose-proof-notes"
+reset_sweep() {
+  rm -rf "$t"
+  mkdir -p "$prefixed/data" "$plain" "$running" "$kept" "$other" "$t/cyfr-compose-proof-$live-4a4b4c4d"
+  : >"$kept/kept"
+  cat >"$scratch/tags" <<TAGS
+ghcr.io/cyfrworks/cyfr:0.6.1-cyfr-0123456789-4242-cyfr-compose-proof-$dead-0a0b0c0d.1
+ghcr.io/cyfrworks/cyfr-locus:0.6.1-cyfr-compose-proof-$dead-1a1b1c1d.2
+ghcr.io/cyfrworks/cyfr:0.6.1-cyfr-compose-proof-$live-2a2b2c2d.1
+ghcr.io/cyfrworks/cyfr:0.6.0-alpha.15
+cyfr:compose-proof
+TAGS
+}
+
+reset_sweep
+sweep
+expected="image rm ghcr.io/cyfrworks/cyfr-locus:0.6.1-cyfr-compose-proof-$dead-1a1b1c1d.2
+image rm ghcr.io/cyfrworks/cyfr:0.6.1-cyfr-0123456789-4242-cyfr-compose-proof-$dead-0a0b0c0d.1
+run $plain
+run $prefixed"
+if [ "$code" -eq 0 ] && [ "$(sort "$scratch/calls")" = "$(sort <<<"$expected")" ] && [ ! -e "$prefixed" ] && [ ! -e "$plain" ] &&
+  [ -d "$running" ] && [ -e "$kept/kept" ] && [ -d "$other" ] && [ -d "$t/cyfr-compose-proof-$live-4a4b4c4d" ] &&
+  [ "$(grep -c 'which is gone$' "$scratch/out")" = 4 ] && [ ! -s "$scratch/err" ]; then
+  check "the start's sweep removes a gone run's scratch directory and release tags, and leaves a live run's, a kept one and other names" ok
+else
+  check "the start's sweep removes a gone run's scratch directory and release tags, and leaves a live run's, a kept one and other names" no
+fi
+
+reset_sweep
+sweep fails
+if [ "$code" -eq 0 ] && [ -d "$prefixed/data" ] && [ -d "$plain" ] &&
+  grep -q "could not remove $prefixed, left by the run $dead" "$scratch/err"; then
+  check "a scratch directory the sweep cannot take back stays, is named, and does not fail the run" ok
+else
+  check "a scratch directory the sweep cannot take back stays, is named, and does not fail the run" no
+fi
+
+teardown 0 0 0
+COMPOSE_PROOF_KEEP=1 teardown 0 0 0
+if [ "$code" -eq 0 ] && [ -e "$scratch/work/kept" ]; then
+  check "a kept scratch directory carries the mark the sweep leaves it for" ok
+else
+  check "a kept scratch directory carries the mark the sweep leaves it for" no
 fi
 
 echo "$cases cases, $failures failed"
