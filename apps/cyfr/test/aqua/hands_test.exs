@@ -38,7 +38,7 @@ defmodule Aqua.HandsTest do
     end
   end
 
-  test "a canonical operation carries the virtual tool's own args, so a card can run it again" do
+  test "a canonical operation carries the virtual tool's own args" do
     assert {:ok, [%{tool: "files", action: "delete", args: %{"path" => "a.md"}}]} =
              Hands.canonical("catalyst:local.files", %{
                "action" => "delete",
@@ -206,7 +206,7 @@ defmodule Aqua.HandsLaunchAccountsTest do
     # The request the turn sends says the same, the default as what
     # omitting the account takes.
     description =
-      %{"execution.run" => "ask"}
+      %{"execution.run" => "offered"}
       |> Aqua.Loop.Request.tool_definitions(accounts: Hands.launch_accounts(ctx))
       |> Enum.find(&(&1["name"] == "execution"))
       |> get_in(["parameters", "properties", "connection", "description"])
@@ -227,7 +227,7 @@ defmodule Aqua.HandsLaunchAccountsTest do
     assert Hands.launch_accounts(ctx) == nil
 
     description =
-      %{"execution.run" => "ask"}
+      %{"execution.run" => "offered"}
       |> Aqua.Loop.Request.tool_definitions(accounts: Hands.launch_accounts(ctx))
       |> Enum.find(&(&1["name"] == "execution"))
       |> get_in(["parameters", "properties", "connection", "description"])

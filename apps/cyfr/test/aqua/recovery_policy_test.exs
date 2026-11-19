@@ -51,6 +51,7 @@ defmodule Aqua.Runner.RecoveryPolicyTest do
       Tape.start_turn(ctx, turn, %{
         root_execution_id: execution.id,
         attempt: attempt.attempt,
+        agent_mode: "auto",
         recovery_limit: RecoveryPolicy.max_attempts()
       })
 

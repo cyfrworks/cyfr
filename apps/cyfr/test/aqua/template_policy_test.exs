@@ -3,13 +3,12 @@
 
 defmodule Prism.AquaTemplatePolicyTest do
   @moduledoc """
-  The shipped agent allowlist offers only what a chat can actually run.
+  The shipped soul is offered only what a chat can actually run.
 
-  An approved proposal is executed inside the chain (`Aqua.Loop`),
-  so an allowlist key whose action the chain cannot reach is a card that
-  fails on the click — and an `"auto"` key of the same shape is a tool call
-  the agent is told it may make and then cannot. Those actions live on their
-  own pages, where a member does them as themselves.
+  A turn's calls run inside the chain (`Aqua.Loop`), so a `tools` entry
+  whose action the chain cannot reach is a call Aqua is told it may make
+  and then cannot. Those actions live on their own pages, where a member
+  does them as themselves.
   """
   use ExUnit.Case, async: true
 
@@ -17,16 +16,18 @@ defmodule Prism.AquaTemplatePolicyTest do
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
-  test "every tool_policy key in the shipped template is reachable from a chat" do
-    unreachable =
-      policies()
-      |> Enum.flat_map(fn {agent, policy} ->
-        for {key, _mode} <- policy, refused?(key), do: "#{agent}: #{key}"
-      end)
-      |> Enum.sort()
+  test "every tool the shipped soul is offered is reachable from a chat" do
+    # The check refuses an action a virtual tool does not have.
+    assert refused?("storage.frobnicate")
+
+    {:ok, soul} =
+      Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
+
+    assert soul.tools != []
+    unreachable = soul.tools |> Enum.filter(&refused?/1) |> Enum.sort()
 
     assert unreachable == [],
-           "the shipped allowlist offers actions a running chain cannot reach:\n" <>
+           "the shipped soul is offered actions a running chain cannot reach:\n" <>
              Enum.join(unreachable, "\n")
   end
 
@@ -44,29 +45,17 @@ defmodule Prism.AquaTemplatePolicyTest do
     refute Map.has_key?(catalog, "member")
   end
 
-  # The one policy the tree holds: the soul's, which the crew runs under.
-  defp policies do
-    {:ok, soul} =
-      Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
-
-    [{soul.name, soul.tool_policy}]
-  end
-
-  # `native_search` is a bare exclusivity gate, not a tool; a `tool.*` glob
-  # is judged per action at proposal time; a sub-agent name is a delegation
-  # target the formula resolves itself.
+  # `native_search` is a bare exclusivity gate, not a tool; an outside
+  # server's `server:tool` names no catalogued action.
   defp refused?("native_search"), do: false
 
   defp refused?(key) do
     case String.split(key, ".", parts: 2) do
-      [_tool, "*"] ->
-        false
-
       [tool, action] ->
         if Hands.hand?(tool) do
           # A virtual tool's ACTION has to exist too. Accepting the whole
           # namespace on the strength of its name let `storage.frobnicate`
-          # through — granted in the template, dispatched by nothing.
+          # through — offered in the template, dispatched by nothing.
           is_nil(Sanctum.VirtualTools.kind_for(tool, action))
         else
           refused_action?(tool, action)

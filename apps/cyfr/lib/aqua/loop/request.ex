@@ -6,10 +6,9 @@ defmodule Aqua.Loop.Request do
   The `model/chat@1` request a turn sends, built from what the tape
   holds and what the agent may call.
 
-  The tool surface is the agent's effective policy over the tools that
-  exist: a tool is offered when at least one of its actions is `auto` or
-  `ask`, its `action` enum is those actions, and an action that asks says
-  so in the description so the model expects the pause. A hand keeps the
+  The tool surface is the member's offered set (`Aqua.Offered`) over the
+  tools that exist: a tool is offered when at least one of its actions
+  is, and its `action` enum is those actions. A hand keeps the
   schema the guest offered; a catalog tool keeps its own, but for the
   account an `execution.run` names (`connection`), which lists the apps
   whose own profile binds named accounts and their names, never an
@@ -165,8 +164,8 @@ defmodule Aqua.Loop.Request do
   @type tool :: %{String.t() => term()}
 
   @doc """
-  The tools a turn offers, from the agent's effective policy (the guest
-  spelling, `"tool.action" => "auto" | "ask" | "deny"`). `opts`:
+  The tools a turn offers, from the member's offered set
+  (`t:Aqua.Offered.t/0`). `opts`:
   `:external` (the external servers' tools as `%{name, description,
   input_schema}`), `:accounts` (the apps a launch may name an account
   of, `t:Aqua.Hands.launch_accounts/0`, which the `connection`
@@ -175,28 +174,26 @@ defmodule Aqua.Loop.Request do
   list.
   """
   @spec tool_definitions(map(), keyword()) :: [tool()]
-  def tool_definitions(policy, opts \\ []) when is_map(policy) do
-    offered = offered_actions(policy)
-
+  def tool_definitions(offered, opts \\ []) when is_map(offered) do
     hands =
-      for {tool, actions} <- offered, Aqua.Hands.hand?(tool), tool != "request_setup" do
-        hand_tool(tool, actions, policy)
+      for {tool, actions} <- offered_actions(offered),
+          Aqua.Hands.hand?(tool),
+          tool != "request_setup" do
+        hand_tool(tool, actions)
       end
 
     external =
       for tool <- Keyword.get(opts, :external, []) do
         %{
           "name" => Aqua.Loop.Binding.model_name(tool.name),
-          "description" =>
-            (tool.description || "") <>
-              " Needs the person's approval; calling it pauses the turn.",
+          "description" => tool.description || "",
           "parameters" => tool.input_schema || %{"type" => "object"}
         }
       end
 
-    catalog = with_accounts(catalog_tools(policy), Keyword.get(opts, :accounts))
+    catalog = with_accounts(catalog_tools(offered), Keyword.get(opts, :accounts))
 
-    hands ++ catalog ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"], policy)]
+    hands ++ catalog ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"])]
   end
 
   # The account a launch names, described by the apps that bind one: the
@@ -244,15 +241,15 @@ defmodule Aqua.Loop.Request do
   end
 
   @doc """
-  The catalog tools `policy` offers and nothing else: each tool whose
-  actions are `auto` or `ask`, its action enum narrowed to those.
+  The catalog tools `offered` offers and nothing else: each tool with an
+  offered action, its action enum narrowed to those.
   """
   @spec catalog_tools(map()) :: [tool()]
-  def catalog_tools(policy) when is_map(policy) do
-    for {tool, actions} <- offered_actions(policy),
+  def catalog_tools(offered) when is_map(offered) do
+    for {tool, actions} <- offered_actions(offered),
         not Aqua.Hands.hand?(tool),
         not String.contains?(tool, ":"),
-        definition = catalog_tool(tool, actions, policy),
+        definition = catalog_tool(tool, actions),
         definition != nil,
         do: definition
   end
@@ -275,17 +272,19 @@ defmodule Aqua.Loop.Request do
   end
 
   @doc """
-  Whether a turn asks the provider for its own search: the agent's policy
-  turns it on (`native_search: auto`) and the grant the turn runs under
-  carries it on the agent's ingress (`Compendium.AgentSource`). A grant
-  that lacks it never searches, whatever the policy says.
+  Whether a turn asks the provider for its own search: the member is
+  offered `native_search` and the grant the turn runs under carries it
+  on the agent's ingress (`Compendium.AgentSource`). A grant that lacks
+  it never searches, whatever the member is offered.
   """
   @spec native_search?(map(), Prima.Authority.t()) :: boolean()
-  def native_search?(policy, %Prima.Authority{resources: %Prima.Authority.Blob.Edge{tools: tools}})
-      when is_map(policy) and is_list(tools),
-      do: Map.get(policy, "native_search") == "auto" and "native_search" in tools
+  def native_search?(offered, %Prima.Authority{
+        resources: %Prima.Authority.Blob.Edge{tools: tools}
+      })
+      when is_map(offered) and is_list(tools),
+      do: Aqua.Offered.offered?(offered, "native_search") and "native_search" in tools
 
-  def native_search?(_policy, _authority), do: false
+  def native_search?(_offered, _authority), do: false
 
   @doc """
   Whether a turn's request offers the provider's own search: the turn may
@@ -294,9 +293,9 @@ defmodule Aqua.Loop.Request do
   records read.
   """
   @spec offers_search?(map(), Prima.Authority.t(), map() | nil) :: boolean()
-  def offers_search?(policy, authority, capabilities),
+  def offers_search?(offered, authority, capabilities),
     do:
-      native_search?(policy, authority) and
+      native_search?(offered, authority) and
         "web_search" in (Map.get(capabilities || %{}, :provider_tools) || [])
 
   @doc """
@@ -421,14 +420,14 @@ defmodule Aqua.Loop.Request do
   # Tools
   # ---------------------------------------------------------------------------
 
-  # `tool => [actions]` for every key that is auto or ask, tools with a
-  # colon (an external server's) and globs excluded.
-  defp offered_actions(policy) do
-    policy
-    |> Enum.filter(fn {_key, mode} -> mode in ["auto", "ask"] end)
-    |> Enum.reduce(%{}, fn {key, _mode}, acc ->
+  # `tool => [actions]` for every offered key, tools with a colon (an
+  # external server's) excluded.
+  defp offered_actions(offered) do
+    offered
+    |> Enum.filter(fn {_key, state} -> state == "offered" end)
+    |> Enum.reduce(%{}, fn {key, _state}, acc ->
       case String.split(key, ".", parts: 2) do
-        [tool, action] when action != "*" and tool != "native_search" ->
+        [tool, action] when tool != "native_search" ->
           Map.update(acc, tool, [action], &Enum.uniq([action | &1]))
 
         _ ->
@@ -438,12 +437,12 @@ defmodule Aqua.Loop.Request do
     |> Map.new(fn {tool, actions} -> {tool, Enum.sort(actions)} end)
   end
 
-  defp hand_tool(tool, actions, policy) do
+  defp hand_tool(tool, actions) do
     schema = Map.fetch!(@hand_schemas, tool)
 
     %{
       "name" => tool,
-      "description" => schema["description"] <> asks(tool, actions, policy),
+      "description" => schema["description"],
       "parameters" => %{
         "type" => "object",
         "required" => schema["required"],
@@ -453,7 +452,7 @@ defmodule Aqua.Loop.Request do
     }
   end
 
-  defp catalog_tool(tool, actions, policy) do
+  defp catalog_tool(tool, actions) do
     case Sanctum.Catalog.get_tool(tool) do
       {:ok, definition} ->
         schema = definition["inputSchema"] || %{"type" => "object"}
@@ -467,7 +466,7 @@ defmodule Aqua.Loop.Request do
         else
           %{
             "name" => tool,
-            "description" => (definition["description"] || "") <> asks(tool, kept, policy),
+            "description" => definition["description"] || "",
             "parameters" => Sanctum.Catalog.restrict_tool(definition, kept)["inputSchema"]
           }
         end
@@ -476,35 +475,6 @@ defmodule Aqua.Loop.Request do
         nil
     end
   end
-
-  defp asks(tool, actions, policy) do
-    asking = Enum.filter(actions, &(Map.get(policy, "#{tool}.#{&1}") == "ask"))
-
-    granted =
-      Enum.filter(
-        actions,
-        &(Aqua.Launch.launch_action?(tool, &1) and Map.get(policy, "#{tool}.#{&1}") == "auto")
-      )
-
-    asking_sentence(asking) <> granted_sentence(granted)
-  end
-
-  defp asking_sentence([]), do: ""
-
-  defp asking_sentence(asking),
-    do:
-      " Actions #{Enum.join(asking, ", ")} need the person's approval; calling one pauses the turn until they decide."
-
-  # A launch the policy runs `auto` runs on the component's grant, and
-  # still asks when the turn has read what that grant does not let
-  # through (`Aqua.Loop.Policy`).
-  defp granted_sentence([]), do: ""
-
-  defp granted_sentence(granted),
-    do:
-      " A component the person has granted runs at once through #{Enum.join(granted, " and ")};" <>
-        " a run still needs the person's approval, and pauses the turn until they decide, when " <>
-        "this turn has read something that component's grant does not let it send on."
 
   # ---------------------------------------------------------------------------
   # Messages

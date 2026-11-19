@@ -50,8 +50,10 @@ defmodule Arca.McpServerStorage do
   @typedoc "The row a write expects to find under its name: its id and epoch."
   @type expected :: %{id: String.t(), epoch: pos_integer()}
 
-  # The brains' drivers, each a command's first word (`driver/1`).
+  # The brains' drivers, each a command's first word (`driver/1`), by its
+  # name or by the path the box installs it at (`Dockerfile.locus`).
   @drivers ~w(cyfr-claude-code cyfr-codex)
+  @driver_dir "/usr/local/bin"
 
   # A program's settings, which `update/4` writes as named (nil clears one).
   @program_columns [
@@ -85,22 +87,28 @@ defmodule Arca.McpServerStorage do
   @doc """
   The driver a program row's command names as its first word, one of the
   brains' drivers built into the box beside the harness each drives
-  (`Dockerfile.locus`), or nil: a bare harness, another program, a tool
-  server, no command. What a kept row's folder holds of a brain's
-  sessions is laid out by that driver's harness, so the driver and the
-  kept folder are fixed once the row names one (`update/4`).
+  (`Dockerfile.locus`), by its name or by the path the box installs it
+  at (`/usr/local/bin/cyfr-codex` is `cyfr-codex`), or nil: a bare
+  harness, another program, a tool server, no command. The one answer
+  to which driver a row runs: the turn's read-only refusal and the Aqua
+  page's read it (`Aqua.Models`). What a kept row's folder holds of a
+  brain's sessions is laid out by that driver's harness, so the driver
+  and the kept folder are fixed once the row names one (`update/4`).
   """
   @spec driver(map()) :: String.t() | nil
   def driver(%{transport: "program"} = row) do
     with %{"command" => command} when is_binary(command) <- config(row),
-         [first | _args] when first in @drivers <- String.split(command) do
-      first
+         [first | _args] <- String.split(command) do
+      named_driver(first)
     else
       _no_driver -> nil
     end
   end
 
   def driver(_row), do: nil
+
+  defp named_driver(word),
+    do: Enum.find(@drivers, &(word in [&1, Path.join(@driver_dir, &1)]))
 
   @doc """
   List all MCP server configs for the given tenant context.

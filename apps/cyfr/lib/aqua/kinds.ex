@@ -6,11 +6,10 @@ defmodule Aqua.Kinds do
   What an operation is to the assistant: its kind, whether it may ever
   run without a card, the verbs a tool has and the standing it takes —
   read from the catalog's annotations and the virtual-tool
-  catalog, one rule for the Aqua page and the runtime ceiling alike. The
+  catalog, one rule for the Aqua page and the runtime alike, whose
+  read-only mode runs an action only when its kind is a read. The
   classification is the gate's (`Sanctum.Catalog.tool_kind/2`,
-  `Sanctum.Catalog.tool_actions/1`), which the `aqua` tool's door in the
-  component domain (`Compendium.AquaAgent.validate_tool_policy/2`) reads
-  too.
+  `Sanctum.Catalog.tool_actions/1`).
   """
 
   @doc """
@@ -42,7 +41,8 @@ defmodule Aqua.Kinds do
   @doc """
   The action verbs a catalogued tool has — the virtual catalog's for a
   virtual tool, the registry's `action` enum otherwise — and `[]` for a
-  tool neither holds. What a `tool.*` glob stands for.
+  tool neither holds: an entry of the soul's `tools` naming an action
+  outside it is offered nothing (`Aqua.Offered`).
   """
   @spec actions_of(String.t()) :: [String.t()]
   defdelegate actions_of(tool), to: Sanctum.Catalog, as: :tool_actions

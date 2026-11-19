@@ -1280,7 +1280,6 @@ for f in \
   apps/sanctum/test/sanctum/issuance_test.exs \
   apps/sanctum/test/sanctum/validation_credential_test.exs \
   apps/sanctum/test/sanctum/consent/authz_test.exs \
-  apps/cyfr/test/aqua/loop/flush_test.exs \
   apps/cyfr/test/integration/runtime/attached_fetch_test.exs \
   apps/cyfr/test/integration/runtime/model_contract_test.exs \
   apps/cyfr/test/integration/runtime/secret_audit_test.exs \

@@ -46,8 +46,7 @@ streams.
   run a schedule or a feed started, and known to have failed, is run
   again. Its press is accepted once the new run starts; show the new
   run's outcome from `runs.changes`, never as the press's answer.
-- `canvas.write` asks the person first, and its card names the streams
-  the version reads. Write what the person asked for, and declare only
+- Write with `canvas.write` what the person asked for, and declare only
   the streams the page opens.
 - Add a new canvas to the person's layout with `layout.edit`.
 - Leave activation to the browser. It checks a new version before it
@@ -74,7 +73,7 @@ streams.
    feed's, by name, and `feeds` the name of every feed it reads;
    `controls`, `prefs` and `chrome` (the path of its `chrome.css` among
    `files`) are as the Tincture Guide gives them. Leave out every one the
-   page does not use. The person approves the call before it runs. Each write is the next
+   page does not use. Each write is the next
    version, whole; nothing is ever edited in place.
 4. For a new canvas, `layout(action: "get")` and then `layout.edit` with
    the canvas added, from the revision `get` answered. `write` answers a

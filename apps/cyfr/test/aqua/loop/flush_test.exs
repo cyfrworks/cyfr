@@ -4,9 +4,9 @@
 defmodule Aqua.Loop.FlushTest do
   @moduledoc """
   The note flush before a compaction: one silent request offering
-  `notes.keep` alone, made only under a standing `auto` for it, whose
-  calls run without a card and whose unknown outcomes are recorded without
-  a replay and without restricting the turn.
+  `notes.keep` alone, made only where a kept note would run (the member
+  is offered `notes.keep` and is in `auto`), whose unknown outcomes are
+  recorded without a replay and without restricting the turn.
 
   The scripted model lists a small window, so a large message fills it: the
   first round fits nothing older to summarize, and the second compacts.
@@ -14,6 +14,7 @@ defmodule Aqua.Loop.FlushTest do
 
   use ExUnit.Case, async: false
 
+  alias Aqua.Runner.RecoveryTable
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
@@ -70,11 +71,8 @@ defmodule Aqua.Loop.FlushTest do
     thread
   end
 
-  test "under a standing auto, the model keeps a note before the summary, and says nothing", %{
-    ctx: ctx,
-    thread: thread
-  } do
-    allow_keep!(ctx, thread)
+  test "in auto and offered notes.keep, the model keeps a note before the summary, and says nothing",
+       %{ctx: ctx, thread: thread} do
     turn = accept_large!(ctx, thread)
 
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
@@ -126,7 +124,6 @@ defmodule Aqua.Loop.FlushTest do
       ctx: ctx,
       thread: thread
     } do
-      allow_keep!(ctx, thread)
       turn = accept_large!(ctx, thread)
 
       flush =
@@ -171,7 +168,6 @@ defmodule Aqua.Loop.FlushTest do
     ctx: ctx,
     thread: thread
   } do
-    allow_keep!(ctx, thread)
     turn = accept_large!(ctx, thread)
     actor = Sanctum.Context.actor(ctx)
 
@@ -221,8 +217,6 @@ defmodule Aqua.Loop.FlushTest do
         content: String.duplicate("lorem ipsum ", 7_000)
       })
 
-    allow_keep!(ctx, thread)
-
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, sent_by: "person", content: "@aqua what did they say?"},
@@ -258,31 +252,47 @@ defmodule Aqua.Loop.FlushTest do
     refute kept =~ "ROOM-ONLY-LINE"
   end
 
-  test "when keeping a note asks, no flush request is made and the summary still lands", %{
-    ctx: ctx,
-    thread: thread
-  } do
-    turn = accept_large!(ctx, thread)
+  # Each differs from an auto member offered notes.keep, whose flush runs
+  # above, in one thing alone: its mode, or a job narrowed to the round's
+  # own read.
+  for {shape, mode, tools} <- [
+        {"a read-only member", "read-only", nil},
+        {"a job narrowed away from notes.keep", "auto", ["files.list"]}
+      ] do
+    test "#{shape} makes no flush request and keeps no note, and the summary still lands", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "mode" => unquote(mode)
+        })
 
-    script!([round_one(), %{"entries" => []}, reply("the story so far"), reply("done")])
+      turn = accept_large!(ctx, thread, unquote(tools))
+      script!([round_one(), %{"entries" => []}, reply("the story so far"), reply("done")])
 
-    assert :completed = Task.await(run(ctx, turn), 60_000)
-    {:ok, steps} = Tape.steps(ctx, turn)
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert ["chat", "compaction", "chat"] =
-             for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
+      assert ["chat", "compaction", "chat"] =
+               for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
 
-    assert Enum.any?(
-             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-             &(&1.kind == "compaction")
-           )
+      refute Enum.any?(steps, &(&1.purpose == "flush"))
+      assert [_first, _summary, _last] = chat_requests()
+
+      assert Enum.any?(
+               Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               &(&1.kind == "compaction")
+             )
+    end
   end
 
-  test "a flush runs notes.keep alone, never past its size, and never as a card", %{
+  test "a flush runs notes.keep alone, and never past its size", %{
     ctx: ctx,
     thread: thread
   } do
-    allow_keep!(ctx, thread)
     turn = accept_large!(ctx, thread)
     oversized = String.duplicate("x", 64 * 1024 + 1)
 
@@ -305,11 +315,9 @@ defmodule Aqua.Loop.FlushTest do
     assert ["denied", "denied", "ok"] = Enum.map(flush_calls, & &1.outcome)
     assert {:ok, _} = Aqua.Notes.read(ctx, "small")
     assert {:error, _} = Aqua.Notes.read(ctx, "big")
-    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
   end
 
   test "a flush never keeps onto a pinned page", %{ctx: ctx, thread: thread} do
-    allow_keep!(ctx, thread)
     turn = accept_large!(ctx, thread)
 
     script!([
@@ -329,66 +337,10 @@ defmodule Aqua.Loop.FlushTest do
     assert {:error, _} = Aqua.Notes.read(ctx, "about-you")
   end
 
-  test "a grant withdrawn while the flush request runs keeps no note", %{
-    ctx: ctx,
-    thread: thread
-  } do
-    grant = allow_keep!(ctx, thread)
-    turn = accept_large!(ctx, thread)
-
-    script!([
-      round_one(),
-      %{"entries" => []},
-      {:probe, self()},
-      flush_reply([keep("n1", "plan", "the plan")]),
-      reply("the story so far"),
-      reply("done")
-    ])
-
-    task = run(ctx, turn)
-    assert_receive {:scripted_probe, worker, _}, 30_000
-    :ok = Aqua.ToolGrants.revoke(ctx, grant)
-    send(worker, :continue)
-
-    assert :completed = Task.await(task, 60_000)
-    {:ok, steps} = Tape.steps(ctx, turn)
-    assert %{purpose: "flush", outcome: "denied"} = Enum.find(steps, &(&1.action == "keep"))
-    assert {:error, _} = Aqua.Notes.read(ctx, "plan")
-
-    assert Enum.any?(
-             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-             &(&1.kind == "compaction")
-           )
-  end
-
-  test "a grant store that cannot answer makes no flush request", %{ctx: ctx, thread: thread} do
-    allow_keep!(ctx, thread)
-    turn = accept_large!(ctx, thread)
-
-    # The first round's call asks the store as it dispatches and is denied
-    # there too, so no child answers it.
-    script!([{:probe, self()}, round_one(), reply("the story so far"), reply("done")])
-
-    task = run(ctx, turn)
-    assert_receive {:scripted_probe, worker, _}, 30_000
-    drop_grants!()
-    send(worker, :continue)
-
-    assert :completed = Task.await(task, 60_000)
-    {:ok, steps} = Tape.steps(ctx, turn)
-    refute Enum.any?(steps, &(&1.purpose == "flush"))
-
-    assert Enum.any?(
-             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-             &(&1.kind == "compaction")
-           )
-  end
-
   test "a summary that fails after a flush keeps the note and the turn goes on", %{
     ctx: ctx,
     thread: thread
   } do
-    allow_keep!(ctx, thread)
     turn = accept_large!(ctx, thread)
 
     script!([
@@ -416,64 +368,62 @@ defmodule Aqua.Loop.FlushTest do
   describe "a flush interrupted before its outcomes were recorded" do
     test "its written note closes unknown, its unstarted call is skipped, and nothing restricts the turn",
          %{ctx: ctx, thread: thread} do
-      paused = paused_on_card!(ctx, thread)
+      turn = interrupted!(ctx, thread)
 
-      a = model_step!(ctx, paused, "flush")
+      a = model_step!(ctx, turn, "flush")
 
       {:ok, %{calls: [%{step: n1}, %{step: n2}]}} =
-        Tape.record_response(ctx, paused, a, %{
+        Tape.record_response(ctx, turn, a, %{
           text: nil,
-          tool_calls: [call_attrs(paused, a, "n1", "plan"), call_attrs(paused, a, "n2", "later")]
+          tool_calls: [call_attrs(turn, a, "n1", "plan"), call_attrs(turn, a, "n2", "later")]
         })
 
-      {:ok, _} = Tape.mark_dispatched(ctx, paused, n1)
+      {:ok, _} = Tape.mark_dispatched(ctx, turn, n1)
       # The note landed; the process died before its outcome was written.
       {:ok, _} = Aqua.Notes.keep(ctx, "plan", "the plan")
-      b = model_step!(ctx, paused, "flush")
+      b = model_step!(ctx, turn, "flush")
 
-      resolve_card!(ctx, paused)
       script!([reply("done")])
-      assert :completed = resume(ctx, paused)
+      assert :completed = adopt(ctx, turn)
 
-      {:ok, steps} = Tape.steps(ctx, paused)
+      {:ok, steps} = Tape.steps(ctx, turn)
       assert %{dispatch_state: "closed", outcome: "uncertain"} = step(steps, n1.id)
       assert %{dispatch_state: "closed", outcome: "skipped"} = step(steps, n2.id)
       assert %{dispatch_state: "closed", outcome: "error"} = step(steps, b.id)
-      refute Tape.restricted?(ctx, paused)
+      refute Tape.restricted?(ctx, turn)
       assert {:error, _} = Aqua.Notes.read(ctx, "later")
     end
 
     test "an ordinary call whose outcome is unknown beside it still stops and restricts the turn",
          %{ctx: ctx, thread: thread} do
-      paused = paused_on_card!(ctx, thread)
+      turn = interrupted!(ctx, thread)
 
-      flush = model_step!(ctx, paused, "flush")
+      flush = model_step!(ctx, turn, "flush")
 
       {:ok, %{calls: [%{step: note}]}} =
-        Tape.record_response(ctx, paused, flush, %{
+        Tape.record_response(ctx, turn, flush, %{
           text: nil,
-          tool_calls: [call_attrs(paused, flush, "n1", "plan")]
+          tool_calls: [call_attrs(turn, flush, "n1", "plan")]
         })
 
-      {:ok, _} = Tape.mark_dispatched(ctx, paused, note)
+      {:ok, _} = Tape.mark_dispatched(ctx, turn, note)
 
-      chat = model_step!(ctx, paused, "chat")
+      chat = model_step!(ctx, turn, "chat")
 
       {:ok, %{calls: [%{step: write}]}} =
-        Tape.record_response(ctx, paused, chat, %{
+        Tape.record_response(ctx, turn, chat, %{
           text: nil,
-          tool_calls: [call_attrs(paused, chat, "w1", "draft")]
+          tool_calls: [call_attrs(turn, chat, "w1", "draft")]
         })
 
-      {:ok, _} = Tape.mark_dispatched(ctx, paused, write)
+      {:ok, _} = Tape.mark_dispatched(ctx, turn, write)
 
-      resolve_card!(ctx, paused)
-      assert {:paused, :uncertain} = resume(ctx, paused)
+      assert {:paused, :uncertain} = adopt(ctx, turn)
 
-      {:ok, steps} = Tape.steps(ctx, paused)
+      {:ok, steps} = Tape.steps(ctx, turn)
       assert %{dispatch_state: "closed", outcome: "uncertain"} = step(steps, note.id)
       assert %{dispatch_state: "uncertain"} = step(steps, write.id)
-      assert Tape.restricted?(ctx, paused)
+      assert Tape.restricted?(ctx, turn)
     end
   end
 
@@ -503,14 +453,22 @@ defmodule Aqua.Loop.FlushTest do
       })
 
     {:ok, _} = Arca.Files.delete(Sanctum.Context.actor(ctx), "threads/#{thread.id}/#{id}")
-    script!([round_one(), %{"entries" => []}, reply("the story so far"), reply("done")])
+
+    script!([
+      round_one(),
+      %{"entries" => []},
+      flush_reply([]),
+      reply("the story so far"),
+      reply("done")
+    ])
+
     assert :completed = Task.await(run(ctx, turn), 60_000)
     {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert ["chat", "compaction", "chat"] =
+    assert ["chat", "flush", "compaction", "chat"] =
              for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
 
-    [first, summary, _last] = chat_requests()
+    [first, _flush, summary, _last] = chat_requests()
     first_text = Jason.encode!(first["messages"])
     summary_text = Jason.encode!(summary["messages"])
     assert first_text =~ "they can no longer be read: gone.png"
@@ -530,36 +488,20 @@ defmodule Aqua.Loop.FlushTest do
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
 
-  defp resume(ctx, turn) do
-    Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
-    |> Task.await(60_000)
-  end
-
-  defp allow_keep!(ctx, thread) do
-    grant = %{
-      scope: "thread",
-      thread_id: thread.id,
-      agent_name: "aqua",
-      tool: "notes",
-      action: "keep"
-    }
-
-    {:ok, _} = Sanctum.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
-    grant
-  end
-
   # A message past the window's fill: the first round has nothing older to
   # summarize; once a round follows it, the message is older than the
-  # boundary.
-  defp accept_large!(ctx, thread) do
-    accept!(ctx, thread, "@aqua read this\n" <> String.duplicate("lorem ipsum ", 7_000))
+  # boundary. `tools` narrows the turn's job to them.
+  defp accept_large!(ctx, thread, tools \\ nil) do
+    accept!(ctx, thread, "@aqua read this\n" <> String.duplicate("lorem ipsum ", 7_000), tools)
   end
 
-  defp accept!(ctx, thread, text) do
+  defp accept!(ctx, thread, text, tools \\ nil) do
+    turn = %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
+
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, sent_by: "person", content: text},
-        turn: %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
+        turn: if(tools, do: Map.put(turn, :options, %{"tools" => tools}), else: turn)
       })
 
     turn
@@ -599,68 +541,44 @@ defmodule Aqua.Loop.FlushTest do
         do: params
   end
 
-  defp drop_grants! do
-    if Arca.repo_adapter() == Ecto.Adapters.Postgres,
-      do: Arca.Repo.query!("DROP TABLE tool_grants CASCADE"),
-      else: Arca.Repo.query!("DROP TABLE tool_grants")
-  end
-
-  # A turn paused on a card, so rows can be laid on it before it resumes.
-  defp paused_on_card!(ctx, thread) do
+  # A turn whose loop died while it waited on its first model request,
+  # left running with no holder, so rows can be laid on it as a loop
+  # writes them before `adopt/2` continues it.
+  defp interrupted!(ctx, thread) do
     turn = accept!(ctx, thread, "@aqua keep it")
+    start_supervised!({ScriptedWorker, ref: [@model], script: [{:probe, self()}]}, id: :died)
+    loop = spawn(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+    assert_receive {:scripted_probe, _player, _}, 60_000
 
-    start_supervised!(
-      {ScriptedWorker,
-       ref: [@model],
-       script: [
-         response(
-           [{"c0", "notes", %{"action" => "keep", "name" => "asked", "content" => "x"}}],
-           nil,
-           10
-         )
-       ]},
-      id: :card
-    )
+    ref = Process.monitor(loop)
+    Process.exit(loop, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^loop, :killed}, 5_000
+    stop_supervised!(:died)
 
-    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
-    stop_supervised!(:card)
-    {:ok, paused} = Tape.turn(ctx, turn.id)
-    paused
+    assert {:ok, %{status: "running"} = running} = Tape.turn(ctx, turn.id)
+    running
   end
 
-  defp resolve_card!(ctx, paused) do
-    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-    {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
+  # The turn taken over and continued as a runner's recovery does.
+  defp adopt(ctx, turn) do
+    assert {:ok, [{:adopt, _taken}]} = RecoveryTable.plan_turn(ctx, turn.thread_id, turn.id)
+
+    Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt) end)
+    |> Task.await(60_000)
   end
 
-  # A model request is recorded only on a running turn: the steps an
-  # interrupted flush left behind were written while the turn ran, so the
-  # fixture records them on the paused turn as it stood then.
+  # A model request the interrupted turn's loop recorded and dispatched.
   defp model_step!(ctx, turn, purpose) do
     {:ok, step} =
-      as_running(turn, fn ->
-        Tape.record_model_intent(ctx, turn, %{
-          idempotency_key: "model:#{turn.id}:#{System.unique_integer([:positive])}",
-          tool: @model,
-          action: "chat",
-          purpose: purpose
-        })
-      end)
+      Tape.record_model_intent(ctx, turn, %{
+        idempotency_key: "model:#{turn.id}:#{System.unique_integer([:positive])}",
+        tool: @model,
+        action: "chat",
+        purpose: purpose
+      })
 
     {:ok, step} = Tape.mark_dispatched(ctx, turn, step)
     step
-  end
-
-  defp as_running(%{id: turn_id, status: status}, fun) do
-    import Ecto.Query, only: [from: 2]
-    row = from(t in Arca.Schemas.Turn, where: t.id == ^turn_id)
-    {1, _} = Arca.Repo.update_all(row, set: [status: "running"])
-
-    try do
-      fun.()
-    after
-      {1, _} = Arca.Repo.update_all(row, set: [status: status])
-    end
   end
 
   defp call_attrs(turn, model_step, id, name) do

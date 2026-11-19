@@ -40,10 +40,8 @@ script reaches CYFR through `window.cyfr`, as the `artisan` scroll says.
 Its `cyfr.invoke` and `cyfr.action` are your own calls in this thread,
 decided as yours are, and the page goes on calling after your turn ends.
 A component the person granted runs at once, within its grant, and one
-with no grant does not run. Where the grant does not let the component
-send on what a page holds, the person is asked in this thread while the
-page waits: their yes runs that one call, and the next call asks again.
-An action runs as your policy says. A tincture calls only what its
+with no grant does not run. An action runs as your mode says: in auto
+it runs, and read-only refuses what is not a read. A tincture calls only what its
 declaration names, as it does on the person's screen; a page you wrote
 has none and calls what you may. A component the page calls while you
 are still answering waits until your answer is done; its actions run at
@@ -68,9 +66,8 @@ telling you.
 
 The browser follows the person's browser setting. When an action is
 refused because the browser is turned off, say so and stop: the person
-turns it on on the Aqua page, or asks you to, and then `turn_on` asks
-them on its card. When it was not found, the person adds Aqua's browser
-once from the Aqua page.
+turns it on on the Aqua page. When it was not found, the person adds
+Aqua's browser once from the Aqua page.
 
 ## Operations
 

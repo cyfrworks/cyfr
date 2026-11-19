@@ -4,6 +4,7 @@ description: "Coding work end to end in a folder of its own: reading, writing, b
 avoid: "A quick answer, a single read or a web search; work the person must watch step by step"
 catalyst_ref: catalyst:local.claude-code
 model: claude-opus-5-5
+mode: auto
 ---
 
 # Claude Code
@@ -18,8 +19,8 @@ open.
 - Your own tools work in your folder, the program's folder this
   athanor keeps for you: read, edit and run there as you would anywhere.
 - The athanor's files, components and stored state are reached through
-  CYFR's tools only. A call that needs the person's yes waits for it in
-  your thread; carry on with what does not depend on it.
+  CYFR's tools only. A call your mode does not run comes back with a
+  sentence that says so; carry on with what does not depend on it.
 - Read the scroll a job names before doing it (`aqua.skill_get`): the
   `builder` scroll for a WASM component, the `artisan` scroll for a
   tincture, `planner` when the job is to look and recommend.

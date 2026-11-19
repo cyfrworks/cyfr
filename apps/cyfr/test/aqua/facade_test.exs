@@ -18,7 +18,6 @@ defmodule Aqua.FacadeTest do
     attachment_limits: 0,
     attachment_refs: 1,
     attachments_as_kept: 2,
-    auto_permitted?: 2,
     brain_options: 2,
     brain_signs_in?: 1,
     browser_turned_off: 0,
@@ -33,6 +32,7 @@ defmodule Aqua.FacadeTest do
     pinned_note_page: 1,
     providers: 1,
     put_time_zone: 2,
+    read_only_unheld: 3,
     room_excerpt: 2,
     roster: 1,
     stale_consent_refs: 1,
@@ -48,7 +48,6 @@ defmodule Aqua.FacadeTest do
     strip_attachment_name: 1,
     thread_state: 2,
     today: 1,
-    tool_kind: 2,
     virtual_tool_catalog: 0,
     workspace: 2,
     workspaces: 1
@@ -108,14 +107,7 @@ defmodule Aqua.FacadeTest do
     assert Aqua.attachments_as_kept(ctx, row) == []
   end
 
-  test "an action's kind and its auto rule are Aqua.Kinds', the virtual catalog Prima's" do
-    assert Aqua.tool_kind("files", "read") == :read
-    assert Aqua.tool_kind("files", "delete") == :destructive
-    assert Aqua.tool_kind("server:tool", "anything") == :external
-    assert Aqua.auto_permitted?("files", "write")
-    refute Aqua.auto_permitted?("files", "delete")
-    refute Aqua.auto_permitted?("server:tool", "anything")
-
+  test "the virtual catalog is Prima's" do
     assert Aqua.virtual_tool_catalog() == Sanctum.VirtualTools.action_kinds()
     assert Aqua.virtual_tool_catalog() == Aqua.Hands.list_for_panel()
   end

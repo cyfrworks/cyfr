@@ -36,6 +36,9 @@ defmodule Opus.Host.QuestionTest do
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
+    # The catalyst these tests ship is laid in a seed tree of their own:
+    # the run's shared one stays empty, so a later fill finds no bundle.
+    Cyfr.Test.SeedBundle.isolate!()
     Prima.Test.RateLimiter.reset!()
     on_exit(&Prima.Test.RateLimiter.reset!/0)
     {ctx, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))

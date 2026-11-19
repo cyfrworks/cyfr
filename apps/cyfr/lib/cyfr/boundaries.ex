@@ -462,7 +462,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy
         Sanctum.Questions Sanctum.Refusals
         Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
-        Sanctum.TinctureAccess Sanctum.ToolGrants Sanctum.Vault Sanctum.VaultReader
+        Sanctum.TinctureAccess Sanctum.Vault Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -474,10 +474,6 @@ defmodule Cyfr.Boundaries do
           "catalyst's pipe mounts its login need through `Sanctum.Mount.resolve/4` " <>
           "(`Opus.Host.Pipe`), and a reset or retired home forgets the sessions of the " <>
           "agents whose brain runs there (`Sanctum.Mount.agents_mounting/2`). " <>
-          "`Sanctum.ToolGrants` is `Opus.Brain`'s read of the decision that admitted a " <>
-          "held program's start, as it is about to write: whether a standing answer says " <>
-          "never to the agent's `program.start` (`for_thread/2`), and whether a standing " <>
-          "allow still covers that start (`admits?/2`); it writes no grant. " <>
           "`Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, and `build_tincture_context/2` is a tincture " <>
@@ -1872,8 +1868,7 @@ defmodule Cyfr.Boundaries do
       kind: 2,
       recovery: 2,
       standing: 1,
-      standing: 2,
-      standing_to_wire: 1
+      standing: 2
     ],
     "Sanctum.ApiKey" => [admit_tool: 2, looks_like_key?: 1, permissions: 0, presets: 0],
     "Sanctum.Attach" => [resolve: 5],
@@ -2140,7 +2135,6 @@ defmodule Cyfr.Boundaries do
       verify_asset_credential: 2
     ],
     "Sanctum.ToolGrants" => [
-      admits?: 2,
       check_standing: 2,
       for_thread: 2,
       grant_row: 2,
@@ -2172,7 +2166,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.VirtualTools" => [
       action: 2,
       action_kinds: 0,
-      auto_only?: 2,
       catalyst_for: 1,
       catalysts: 0,
       recovery: 2,

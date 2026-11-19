@@ -6,12 +6,12 @@ defmodule Aqua.WorkspaceStopTest do
   The person's stop of a workspace thread, through its runner
   (`Aqua.Runner.stop_turn/2`, the `thread` tool's `stop`): all of the
   thread's work ends at once, Aqua's turn there and each crew member's in
-  its own thread under it, with the card that waited and the opening
-  still waiting for its turn, and the thread reads `stopped` with no
-  report of the stop's; a stop that finds nothing running moves nothing,
-  and the person's next post is new work there. A daily thread's stop
-  ends that thread's own turns alone. The crew's delivery consumer is off
-  in the suite (`:crew_delivery_enabled`), so each case drains by hand.
+  its own thread under it, with the opening still waiting for its turn,
+  and the thread reads `stopped` with no report of the stop's; a stop
+  that finds nothing running moves nothing, and the person's next post
+  is new work there. A daily thread's stop ends that thread's own turns
+  alone. The crew's delivery consumer is off in the suite
+  (`:crew_delivery_enabled`), so each case drains by hand.
   """
 
   use ExUnit.Case, async: false
@@ -19,7 +19,7 @@ defmodule Aqua.WorkspaceStopTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
-  alias Aqua.{Approvals, Crew, Runner, Tape}
+  alias Aqua.{Crew, Runner, Tape}
   alias Aqua.Providers.Workspace
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
@@ -293,32 +293,6 @@ defmodule Aqua.WorkspaceStopTest do
     assert pending(ctx, "crew_reply") == []
     assert_stopped(ctx, workspace)
     assert reports(ctx) == []
-  end
-
-  test "with a card waiting: the card is withdrawn with the work, and a late yes runs nothing",
-       %{ctx: ctx, daily: daily} do
-    script!([call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"})])
-    workspace = open!(ctx, daily)
-    aqua = opening_turn!(ctx, workspace)
-    await_status(ctx, aqua, "paused")
-    {:ok, paused} = Tape.turn(ctx, aqua)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-    assert state(ctx, workspace.id) == "needs_you"
-    # The card's notice, which is no report of the work.
-    assert [%{"outcome" => "needs_you", "approval_id" => card}] = notices = reports(ctx)
-    assert card == approval.id
-
-    assert :ok = Runner.stop_turn(ctx, workspace.id)
-
-    assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, aqua)
-    assert {:ok, %{status: "invalidated"}} = Tape.approval(ctx, approval.id)
-    assert_stopped(ctx, workspace)
-    assert reports(ctx) == notices
-
-    assert {:ok, %{decision: "invalidated", replayed: true}} =
-             Approvals.resolve(ctx, approval.id, %{decision: :approved})
-
-    assert {:error, _} = Aqua.Notes.read(ctx, "plan")
   end
 
   test "with an opening waiting behind Aqua's work: the stop ends both, and the opening's " <>

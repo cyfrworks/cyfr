@@ -120,6 +120,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         attempt: attempt.attempt,
         profile_id: "prof_x",
         consent_id: "consent_x",
+        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
@@ -2338,7 +2339,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(
                pane,
                ~s([data-test="agents-unavailable"]),
-               "The agents cannot be read right now — try again."
+               "Aqua and its crew members cannot be read right now — try again."
              )
 
       refute render(pane) =~ "has no model yet"

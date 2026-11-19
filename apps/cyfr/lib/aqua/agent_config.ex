@@ -6,8 +6,8 @@ defmodule Aqua.AgentConfig do
 
   @moduledoc """
   The soul's and the crew's definitions, and the catalysts they run on,
-  as a turn reads them. A crew member's `"tool_policy"` is the soul's,
-  which it runs under (`Compendium.AquaAgent.under_soul/2`).
+  as a turn reads them. A crew member's `"tools"` are the soul's
+  (`Compendium.AquaAgent.under_soul/2`); its `"mode"` is its own.
 
   `roster/1` reads the athanor's `aqua/` tree in-process through the
   `Compendium` facade — the same files the `aqua` tool serves, without the
@@ -21,9 +21,6 @@ defmodule Aqua.AgentConfig do
 
   alias Sanctum.Context
 
-  # The authored tool_policy is edited on the Aqua page. Chat approvals are
-  # stored separately in Aqua.ToolGrants and composed with it at use time.
-
   # What a storage fault reads as on the tape: the adapter's term is for
   # the log, the person gets the one sentence every storage-backed answer
   # gives.
@@ -33,7 +30,7 @@ defmodule Aqua.AgentConfig do
   The athanor's agents, read once: the soul first, then the crew by name,
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
-  `"avoid"`, `"type"`, `"content"`, `"tool_policy"`, `"catalyst_ref"`,
+  `"avoid"`, `"type"`, `"content"`, `"mode"`, `"tools"`, `"catalyst_ref"`,
   `"program"`, `"model"`, `"options"`).
 
   Fails as it reads: a tree that cannot be listed is
@@ -50,6 +47,18 @@ defmodule Aqua.AgentConfig do
   """
   @spec roster(Context.t()) :: {:ok, [map()]} | {:error, {:unavailable, String.t()}}
   def roster(%Context{} = ctx) do
+    with {:ok, agents, _soul_refused} <- roster_and_soul(ctx), do: {:ok, agents}
+  end
+
+  @doc """
+  `roster/1`, with why the soul's file was refused when it was (nil
+  otherwise): the one read admission needs to send a post that names no
+  one to the soul even then, whose turn says why it cannot answer, rather
+  than to the first crew member (`Aqua.Roster.roster/1`).
+  """
+  @spec roster_and_soul(Context.t()) ::
+          {:ok, [map()], term() | nil} | {:error, {:unavailable, String.t()}}
+  def roster_and_soul(%Context{} = ctx) do
     Sanctum.Provisioning.start_provisioning(ctx)
 
     case Compendium.agents(ctx) do
@@ -61,7 +70,12 @@ defmodule Aqua.AgentConfig do
           )
         end)
 
-        {:ok, agents |> Enum.reject(& &1.disabled) |> Enum.map(&project/1)}
+        soul_refused =
+          Enum.find_value(errors, fn {name, reason} ->
+            if Prima.AgentRef.soul?(name), do: reason
+          end)
+
+        {:ok, agents |> Enum.reject(& &1.disabled) |> Enum.map(&project/1), soul_refused}
 
       {:error, reason} ->
         Logger.error("[Aqua.AgentConfig] the aqua tree could not be listed: #{inspect(reason)}")
@@ -79,7 +93,8 @@ defmodule Aqua.AgentConfig do
       "avoid" => agent.avoid,
       "type" => Compendium.agent_type_of(agent),
       "content" => agent.prompt,
-      "tool_policy" => agent.tool_policy,
+      "mode" => agent.mode,
+      "tools" => agent.tools,
       "catalyst_ref" => agent.catalyst_ref,
       "program" => agent.program,
       "model" => agent.model,

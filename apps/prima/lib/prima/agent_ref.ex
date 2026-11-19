@@ -58,6 +58,39 @@ defmodule Prima.AgentRef do
   def soul_name, do: @soul
 
   @doc """
+  The sentence a person reads where an agent file that still holds the
+  retired `tool_policy` is refused (`Compendium.AquaAgent`): on the Aqua
+  page, as the line a thread is given, and for a post that names no one.
+  It says what to change and that nothing else must.
+  """
+  @spec tool_policy_retired() :: String.t()
+  def tool_policy_retired,
+    do:
+      "Aqua's file still lists its tools under `tool_policy:`, which CYFR no longer reads, " <>
+        "so Aqua can't answer. In Files, open aqua/aqua.md and replace that header with " <>
+        "`tools:`, writing each tool on its own line as `- name`, without its `auto` or " <>
+        "`ask`. Nothing else in the file needs to change."
+
+  @doc """
+  The sentence a person reads where the soul's file is refused for an
+  entry of its `tools` list that names no one action (`Compendium.AquaAgent`:
+  a `tool.*`, a null, anything outside the list's grammar): on the Aqua
+  page, as the line a thread is given, and for a post that names no one.
+  It names the entry and says to list each action by name.
+  """
+  @spec tools_entry_invalid(term()) :: String.t()
+  def tools_entry_invalid(entry),
+    do:
+      "Aqua's file lists #{entry_words(entry)} among its tools, which names no one action, " <>
+        "so Aqua can't answer. In Files, open aqua/aqua.md and list each action by name on " <>
+        "its own line under `tools:`, as `- files.read`: a tool's actions are listed one by " <>
+        "one, never as `files.*`."
+
+  defp entry_words(entry) when is_binary(entry), do: "`#{entry}`"
+  defp entry_words(nil), do: "an empty entry"
+  defp entry_words(entry), do: "`#{inspect(entry)}`"
+
+  @doc """
   The soul's name-level ref.
 
   ## Examples

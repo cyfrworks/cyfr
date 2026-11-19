@@ -144,6 +144,7 @@ defmodule Cyfr.Cluster.Fixtures do
     attrs = %{
       fence: fence,
       turn_seq: turn_seq,
+      agent_mode: "auto",
       recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
     }
 

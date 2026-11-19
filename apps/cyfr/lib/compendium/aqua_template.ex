@@ -49,7 +49,7 @@ defmodule Compendium.AquaTemplate do
 
   @doc """
   The seed's agent `name` as it runs: the shipped file parsed, a crew
-  member under the shipped soul's policy (`Compendium.AquaAgent.under_soul/2`).
+  member under the shipped soul's tools (`Compendium.AquaAgent.under_soul/2`).
   `{:error, :not_found}` when the seed ships no such agent.
   """
   @spec shipped_agent(String.t()) :: {:ok, AquaAgent.t()} | {:error, term()}
@@ -61,7 +61,7 @@ defmodule Compendium.AquaTemplate do
     else
       with {:ok, member} <- seed_member(ctx, name),
            {:ok, soul} <- seed_soul(ctx) do
-        {:ok, AquaAgent.under_soul(member, if(soul.disabled, do: %{}, else: soul.tool_policy))}
+        {:ok, AquaAgent.under_soul(member, if(soul.disabled, do: [], else: soul.tools))}
       end
     end
   end

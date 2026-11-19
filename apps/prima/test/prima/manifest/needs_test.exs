@@ -457,6 +457,27 @@ defmodule Prima.Manifest.NeedsTest do
       assert {:unknown_keys, "api_key", ["home"]} = refused(login(%{"home" => "kept"}))
     end
 
+    # A component with a login need runs a program of its own, which a
+    # read-only member's mode never reaches (`Aqua.Models.holds_read_only?/1`):
+    # the need is found by its kind among the others, in a manifest's
+    # normalized needs and in a setup plan's, which carry the same `kind`.
+    test "login?/1 says whether normalized needs hold a login need, by its kind alone" do
+      key = normalized(need())
+      sign_in = normalized(login())
+
+      assert Needs.login?([sign_in])
+      assert Needs.login?([key, sign_in])
+      assert Needs.login?(Needs.from_manifest(%{"needs" => %{"a" => need(), "b" => login()}}))
+      assert Needs.login?([%{kind: "login", name: "plan_need"}])
+
+      refute Needs.login?([key])
+      refute Needs.login?([normalized(%{"type" => "catalyst:local.files", "reason" => "r"})])
+      refute Needs.login?([])
+      refute Needs.login?(nil)
+      refute Needs.login?(Needs.from_manifest(%{}))
+      refute Needs.login?([%{kind: "api_key", program: "claude"}])
+    end
+
     test "names a program in the destination's grammar" do
       for program <- [nil, "", "Claude", "-claude", "claude code", String.duplicate("a", 33), 7] do
         entry =

@@ -6,16 +6,14 @@ defmodule Aqua.TurnSourcesTest do
   A turn's sources (`turns.sources`), grown through the real loop from
   every way it reads — the prompt's pinned page and notes index, a tool's
   result, a note's own provenance, an earlier turn's rows and a compaction
-  summary — and a standing allow bounded by them: an allow names the
-  outside sources it also follows, none unless a person chose some on the
-  card, so a call made after an outside read it does not name asks, from
-  the rows, after a restart too.
+  summary — and carried by what the turn keeps: a note kept after an
+  outside read is marked with it, one kept before is not.
 
   The model, the HTTP hand and the files hand are scripted; everything
-  else — the loop, the gate, the cards, `approval.resolve` and the pane
-  that sends it — is real. The model's key is bound as a disclosed vault
-  field, so every turn whose model ran holds `vault_disclosed`: the model
-  child's ledger joins its turn when its step closes.
+  else — the loop and the gate — is real. The model's key is bound as a
+  disclosed vault field, so every turn whose model ran holds
+  `vault_disclosed`: the model child's ledger joins its turn when its step
+  closes.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -64,8 +62,8 @@ defmodule Aqua.TurnSourcesTest do
     {:ok, conn: conn, ctx: ctx, own: own, thread: thread, host: Source.outside("news.example")}
   end
 
-  describe "a standing allow after an outside read" do
-    test "a card's allow with no lifecycle asks again once the turn reads outside, after a restart too; one naming the host is spent",
+  describe "how a turn reads" do
+    test "a note kept before an outside read is no outside material; one kept after carries the host",
          %{ctx: ctx, thread: thread, host: host} do
       turn = accept!(ctx, thread, "@aqua keep notes as you read")
 
@@ -74,97 +72,19 @@ defmodule Aqua.TurnSourcesTest do
         calls([get("c2")]),
         %{"body" => "Fares rise on Monday"},
         calls([keep("c3", "second", "fares rise")]),
-        calls([keep("c4", "third", "fares rise")]),
-        calls([keep("c5", "fourth", "fares rise")]),
         reply("done")
       ])
 
-      # The card's answer: for this thread, with no lifecycle and no deadline.
-      assert {:paused, :approval} = run(ctx, turn)
-      approve!(ctx, turn, %{scope: :thread})
-
-      assert {:ok, [%{sources: [], lifecycle_kind: nil, expires_at: nil}]} =
-               Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
-
-      # The allow covered nothing past the outside read: the next keep asks.
-      assert {:paused, :approval} = resume(ctx, turn)
+      assert :completed = run(ctx, turn)
       assert host in sources(ctx, turn)
-      assert %{"sources" => shown} = pending_intent(ctx, turn)
-      assert Source.to_json(host) in shown
-      assert step(ctx, turn, "c2").outcome == "ok"
-      assert step(ctx, turn, "c3").approval_id
+      assert %{outcome: "ok"} = step(ctx, turn, "c3")
 
-      # A restart reads the sources from the row: the next keep asks again.
-      decline!(ctx, turn)
-      assert {:paused, :approval} = resume(ctx, turn)
-      assert step(ctx, turn, "c4").approval_id
-
-      # Approved also when it follows the host: the next keep is spent.
-      approve!(ctx, turn, %{scope: :thread, sources: [host]})
-      assert :completed = resume(ctx, turn)
-
-      fourth = step(ctx, turn, "c5")
-      assert %{outcome: "ok", approval_id: nil} = fourth
-      {:ok, ended} = Tape.turn(ctx, turn.id)
-      assert {:ok, []} = Tape.pending_approvals(ctx, ended)
-      # Kept before the outside read, the first note carries what its turn
-      # had read by then and is no outside material.
       assert {:ok, %{sources: first}} = Aqua.Notes.read(ctx, "first")
       refute Enum.any?(first, &Prima.Source.outside?/1)
-      # Admitted by an allow naming the host, the note is still marked.
-      assert {:ok, %{sources: kept}} = Aqua.Notes.read(ctx, "fourth")
+      assert {:ok, %{sources: kept}} = Aqua.Notes.read(ctx, "second")
       assert host in kept
     end
 
-    test "the card's event through the pane and approval.resolve stores an allow naming the host, spent before and after a restart",
-         %{conn: conn, ctx: ctx, own: own, thread: thread, host: host} do
-      turn = accept!(ctx, thread, "@aqua read and keep")
-
-      script!([
-        calls([get("c1")]),
-        %{"body" => "Fares rise on Monday"},
-        calls([keep("c2", "first", "fares rise")]),
-        calls([keep("c3", "second", "fares rise")]),
-        reply("done"),
-        calls([get("d1")]),
-        %{"body" => "Fares rise again"},
-        calls([keep("d2", "third", "again")]),
-        reply("done again")
-      ])
-
-      assert {:paused, :approval} = run(ctx, turn)
-      %{id: card_id} = pending_card(ctx, turn)
-
-      pane = own_pane(conn, own, thread)
-      card_dom = ~s([id$="-card-#{card_id}"])
-      assert render(pane) =~ "news.example"
-
-      pane
-      |> element(~s(#{card_dom} input[phx-click="approval:toggle_follows"]))
-      |> render_click()
-
-      pane |> element(~s(#{card_dom} button[phx-value-hours="1"])) |> render_click()
-      render(pane)
-
-      assert {:ok, [%{sources: [^host], scope: "thread"}]} =
-               Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
-
-      Cyfr.Test.Sandbox.end_views()
-
-      # The decision resumes the turn: the approved keep runs, and the next
-      # one, after the same host, is spent.
-      Prima.Test.Wait.wait_until(fn -> status(ctx, turn) == "completed" end, 30_000)
-      assert %{outcome: "ok", approval_id: nil} = step(ctx, turn, "c3")
-
-      # A new turn, a new loop: the rows alone carry the allow and the reads.
-      again = accept!(ctx, thread, "@aqua once more")
-      assert :completed = run(ctx, again)
-      assert %{outcome: "ok", approval_id: nil} = step(ctx, again, "d2")
-      assert host in sources(ctx, again)
-    end
-  end
-
-  describe "how a turn reads" do
     test "an earlier turn's outside result in history seeds a new turn before any call",
          %{ctx: ctx, thread: thread, host: host} do
       first = accept!(ctx, thread, "@aqua what is in the news?")
@@ -258,9 +178,12 @@ defmodule Aqua.TurnSourcesTest do
       # The first turn reads outside, then compacts its own older rows.
       first = accept_large!(ctx, thread)
 
+      # The note flush ahead of the compaction keeps nothing, and the window
+      # it reports is still full.
       script!([
         response([get("c1")], nil, @full),
         %{"body" => "Fares rise"},
+        reply("nothing to keep", @full),
         reply("the story so far"),
         reply("Fares rise.")
       ])
@@ -336,18 +259,6 @@ defmodule Aqua.TurnSourcesTest do
 
     test "a note kept by a flush after an outside read carries it, and reading it elsewhere puts it back",
          %{ctx: ctx, thread: thread, host: host} do
-      # The flush runs under an allow that follows the host.
-      {:ok, _} =
-        Sanctum.ToolGrants.put(ctx, %{
-          scope: "thread",
-          effect: "allow",
-          thread_id: thread.id,
-          agent_name: "aqua",
-          tool: "notes",
-          action: "keep",
-          sources: [host]
-        })
-
       turn = accept_large!(ctx, thread)
 
       script!([
@@ -654,11 +565,6 @@ defmodule Aqua.TurnSourcesTest do
   defp run(ctx, turn),
     do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end) |> Task.await(60_000)
 
-  defp resume(ctx, turn) do
-    Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
-    |> Task.await(60_000)
-  end
-
   defp accept!(ctx, thread, text) do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
@@ -702,6 +608,7 @@ defmodule Aqua.TurnSourcesTest do
         attempt: attempt.attempt,
         profile_id: "prof_src",
         consent_id: "consent_src",
+        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
@@ -838,11 +745,6 @@ defmodule Aqua.TurnSourcesTest do
     step
   end
 
-  defp status(ctx, turn) do
-    {:ok, %{status: status}} = Tape.turn(ctx, turn.id)
-    status
-  end
-
   defp sources(ctx, turn) do
     {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
     Source.decode(sources)
@@ -860,37 +762,6 @@ defmodule Aqua.TurnSourcesTest do
   end
 
   defp rows(ctx, thread), do: Threads.messages(Sanctum.Context.actor(ctx), thread.id)
-
-  defp pending_card(ctx, turn) do
-    {:ok, fresh} = Tape.turn(ctx, turn.id)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, fresh)
-    {:ok, card} = Tape.message(ctx, approval.message_id)
-    %{id: card.id, approval: approval, intent: Tape.payload(card)["intent"]}
-  end
-
-  defp pending_intent(ctx, turn), do: pending_card(ctx, turn).intent
-
-  defp approve!(ctx, turn, choice) do
-    %{approval: approval} = pending_card(ctx, turn)
-
-    assert {:ok, %{decision: "approved"}} =
-             Aqua.Approvals.resolve(ctx, approval.id, Map.put(choice, :decision, :approved))
-  end
-
-  defp decline!(ctx, turn) do
-    %{approval: approval} = pending_card(ctx, turn)
-    assert {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
-  end
-
-  # The pane on the person's own athanor, turned to `thread`.
-  defp own_pane(conn, own, thread) do
-    {:ok, pane, _} =
-      live_isolated(conn, PrismWeb.ThreadPaneLive,
-        session: %{"athanor_id" => own.id, "thread_id" => thread.id}
-      )
-
-    pane
-  end
 
   defp get(id), do: {id, "http", %{"action" => "get", "url" => @url}}
 
@@ -913,11 +784,11 @@ defmodule Aqua.TurnSourcesTest do
     }
   end
 
-  defp reply(text),
+  defp reply(text, input_tokens \\ 10),
     do: %{
       "content" => [%{"type" => "text", "text" => text}],
       "stop_reason" => "end_turn",
-      "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
+      "usage" => %{"input_tokens" => input_tokens, "output_tokens" => 5}
     }
 
   defp chat_requests do

@@ -4,9 +4,11 @@
 defmodule Compendium.AquaAgentTest do
   @moduledoc """
   The agent file format: frontmatter round-trips byte-stably, a disabled
-  crew member leaves the crew without leaving the tree, and a crew file
-  holds no policy of its own: a member runs under the soul's. Which file
-  is the soul is the tree's to say, never the frontmatter's.
+  crew member leaves the crew without leaving the tree, every member has
+  a mode of its own, and a crew file holds no tools of its own: a member
+  is offered the soul's. A file still holding the retired `tool_policy`
+  is refused whole. Which file is the soul is the tree's to say, never
+  the frontmatter's.
   """
 
   use ExUnit.Case, async: true
@@ -25,7 +27,8 @@ defmodule Compendium.AquaAgentTest do
         program: nil,
         model: "claude-sonnet-5-5",
         options: %{"effort" => "high", "budget" => 8, "thinking" => true, "label" => "true"},
-        tool_policy: %{},
+        mode: "read-only",
+        tools: [],
         prompt: "You are the scribe.\n\n## Style\n\n- terse"
       },
       overrides
@@ -38,7 +41,8 @@ defmodule Compendium.AquaAgentTest do
         %{
           name: "aqua",
           avoid: "",
-          tool_policy: %{"files.read" => "auto", "web.*" => "auto", "native_search" => "ask"}
+          mode: "auto",
+          tools: ["files.read", "github:search", "native_search", "web.fetch"]
         },
         overrides
       )
@@ -87,7 +91,8 @@ defmodule Compendium.AquaAgentTest do
     assert parsed.title == "min"
     assert parsed.avoid == ""
     assert parsed.options == %{}
-    assert parsed.tool_policy == %{}
+    assert parsed.mode == "auto"
+    assert parsed.tools == []
     assert parsed.prompt == "You are minimal."
   end
 
@@ -123,19 +128,87 @@ defmodule Compendium.AquaAgentTest do
     assert {:error, :frontmatter_unterminated} = AquaAgent.parse("x", "---\ntitle: X\n")
   end
 
-  defp with_policy(yaml), do: "---\ntool_policy:\n#{yaml}---\n\nprompt\n"
+  test "serialize writes the soul's tools as a list, one per line, in one form" do
+    binary = AquaAgent.serialize(soul(%{tools: ["web.fetch", "files.read", "files.read"]}))
 
-  test "a crew file holds no policy: one that names any refuses the file, the soul's parses" do
-    assert {:error, :crew_has_no_tool_policy} =
-             AquaAgent.parse("scribe", with_policy("  files.read: auto\n"))
+    assert binary =~
+             "\nmode: auto\noptions:\n" <>
+               "  budget: 8\n  effort: \"high\"\n  label: \"true\"\n  thinking: true\n" <>
+               "tools:\n  - files.read\n  - web.fetch\n---\n"
 
-    assert {:ok, %{tool_policy: %{"files.read" => "auto"}}} =
-             AquaAgent.parse("aqua", with_policy("  files.read: auto\n"))
+    assert {:ok, %{tools: ["files.read", "web.fetch"]}} = AquaAgent.parse("aqua", binary)
 
-    # Whatever the map holds, a crew member serializes without a policy.
-    binary = AquaAgent.serialize(member(%{tool_policy: %{"files.read" => "auto"}}))
-    refute binary =~ "tool_policy"
-    assert {:ok, %{tool_policy: %{}}} = AquaAgent.parse("scribe", binary)
+    # An outside server's tool takes the scalar spelling YAML reads back.
+    binary = AquaAgent.serialize(soul(%{tools: ["github:search"]}))
+    assert binary =~ "tools:\n  - \"github:search\"\n"
+    assert {:ok, %{tools: ["github:search"]}} = AquaAgent.parse("aqua", binary)
+  end
+
+  test "every member has a mode of its own: read-only or auto, a file without one auto" do
+    for mode <- ["read-only", "auto"], name <- ["aqua", "scribe"] do
+      assert {:ok, %{mode: ^mode}} =
+               AquaAgent.parse(name, "---\nmode: #{mode}\n---\n\nprompt\n")
+    end
+
+    assert {:error, {:mode_invalid, "manual"}} =
+             AquaAgent.parse("scribe", "---\nmode: manual\n---\n\nprompt\n")
+
+    assert {:error, {:mode_invalid, true}} =
+             AquaAgent.parse("aqua", "---\nmode: true\n---\n\nprompt\n")
+
+    assert AquaAgent.modes() == ["read-only", "auto"]
+  end
+
+  test "the soul's tools are explicit: an absent list offers nothing, a crew file names none" do
+    assert {:ok, %{tools: []}} = AquaAgent.parse("aqua", "---\ntitle: Aqua\n---\n\nprompt\n")
+
+    assert {:ok, %{tools: ["files.read", "native_search"]}} =
+             AquaAgent.parse(
+               "aqua",
+               "---\ntools:\n  - native_search\n  - files.read\n---\n\nprompt\n"
+             )
+
+    assert {:error, :crew_has_no_tools} =
+             AquaAgent.parse("scribe", "---\ntools:\n  - files.read\n---\n\nprompt\n")
+
+    # A crew member's file carries no tools, whatever its map holds.
+    binary = AquaAgent.serialize(member(%{tools: ["files.read"]}))
+    refute binary =~ "tools"
+    assert {:ok, %{tools: []}} = AquaAgent.parse("scribe", binary)
+  end
+
+  test "a tools list outside the grammar refuses the file with its typed reason" do
+    for {yaml, reason} <- [
+          {"tools: files.read", :tools_not_a_list},
+          {"tools:\n  files.read: auto", :tools_not_a_list},
+          {"tools:\n  - files", {:tools_invalid_entry, "files"}},
+          {"tools:\n  - a.b.c", {:tools_invalid_entry, "a.b.c"}},
+          {"tools:\n  - 1", {:tools_invalid_entry, 1}},
+          {"tools:\n  - \"srv:a:b\"", {:tools_invalid_entry, "srv:a:b"}}
+        ] do
+      assert {:error, ^reason} = AquaAgent.parse("aqua", "---\n#{yaml}\n---\n\nprompt\n")
+    end
+
+    assert :ok =
+             AquaAgent.check_tools(["files.read", "files.write", "native_search", "srv:search"])
+
+    assert {:error, :tools_not_a_list} = AquaAgent.check_tools(%{"files.read" => "auto"})
+  end
+
+  test "a file still holding tool_policy is refused whole, soul or crew, with one sentence" do
+    for name <- ["aqua", "scribe"] do
+      assert {:error, :tool_policy_retired} =
+               AquaAgent.parse(name, "---\ntool_policy:\n  files.read: auto\n---\n\nprompt\n")
+    end
+
+    assert {:error, :tool_policy_retired} =
+             AquaAgent.parse("aqua", "---\ntool_policy: {}\ntools: []\n---\n\nprompt\n")
+
+    assert Prima.AgentRef.tool_policy_retired() ==
+             "Aqua's file still lists its tools under `tool_policy:`, which CYFR no longer " <>
+               "reads, so Aqua can't answer. In Files, open aqua/aqua.md and replace that " <>
+               "header with `tools:`, writing each tool on its own line as `- name`, without " <>
+               "its `auto` or `ask`. Nothing else in the file needs to change."
   end
 
   test "options are a flat map of strings, integers and booleans" do
@@ -149,50 +222,11 @@ defmodule Compendium.AquaAgentTest do
              AquaAgent.parse("x", "---\noptions:\n  effort: high\n  budget: 4\n---\n\nprompt\n")
   end
 
-  test "a crew member runs under the soul's policy, the soul as it is" do
-    policy = %{"files.read" => "auto", "crew.ask" => "auto"}
+  test "a crew member is offered the soul's tools and keeps its own mode, the soul as it is" do
+    tools = ["crew.ask", "files.read"]
 
-    assert %{tool_policy: ^policy} = AquaAgent.under_soul(member(), policy)
-    assert AquaAgent.under_soul(soul(), %{}) == soul()
-  end
-
-  test "the policy grammar parses: ask/auto over tool.action, tool.* and native_search" do
-    file = with_policy("  files.read: auto\n  web.*: ask\n  native_search: auto\n")
-
-    assert {:ok, %{tool_policy: policy}} = AquaAgent.parse("aqua", file)
-    assert policy == %{"files.read" => "auto", "web.*" => "ask", "native_search" => "auto"}
-
-    # An absent policy is the empty allowlist; an empty one parses too.
-    assert {:ok, %{tool_policy: %{}}} = AquaAgent.parse("aqua", "---\ntitle: X\n---\n\nprompt\n")
-    assert :ok = AquaAgent.validate_tool_policy(%{})
-  end
-
-  test "a policy outside the grammar refuses the file with its typed reason" do
-    # The guest treats only "auto" as automatic and anything else as ask,
-    # so a value outside the vocabulary must never reach it.
-    assert {:error, {:tool_policy_invalid_value, "files.read", "never"}} =
-             AquaAgent.parse("aqua", with_policy("  files.read: never\n"))
-
-    assert {:error, {:tool_policy_invalid_value, "files.read", true}} =
-             AquaAgent.parse("aqua", with_policy("  files.read: true\n"))
-
-    assert {:error, {:tool_policy_invalid_key, "files"}} =
-             AquaAgent.parse("aqua", with_policy("  files: auto\n"))
-
-    assert {:error, {:tool_policy_invalid_key, "a.b.c"}} =
-             AquaAgent.parse("aqua", with_policy("  a.b.c: auto\n"))
-
-    assert {:error, :tool_policy_not_a_map} =
-             AquaAgent.parse("aqua", "---\ntool_policy: auto\n---\n\nprompt\n")
-
-    # The same rule at the tool door.
-    assert {:error, {:tool_policy_invalid_value, "a.b", "allow"}} =
-             AquaAgent.validate_tool_policy(%{"a.b" => "allow"})
-
-    assert {:error, {:tool_policy_invalid_key, 1}} =
-             AquaAgent.validate_tool_policy(%{1 => "auto"})
-
-    assert {:error, :tool_policy_not_a_map} = AquaAgent.validate_tool_policy("auto")
+    assert %{tools: ^tools, mode: "read-only"} = AquaAgent.under_soul(member(), tools)
+    assert AquaAgent.under_soul(soul(), []) == soul()
   end
 
   # The security-relevant subset: what an agent is and may do, never what
@@ -207,7 +241,8 @@ defmodule Compendium.AquaAgentTest do
       catalyst_ref: "catalyst:moonmoon69.claude",
       model: "claude-sonnet-5-5",
       options: %{},
-      tool_policy: %{"files.read" => "auto"},
+      mode: "auto",
+      tools: ["files.read"],
       prompt: "You look around."
     }
 
@@ -215,7 +250,8 @@ defmodule Compendium.AquaAgentTest do
     assert manifest["name"] == "scout"
     assert manifest["type"] == AquaAgent.crew_type()
     assert manifest["catalyst_ref"] == "catalyst:moonmoon69.claude"
-    assert manifest["tool_policy"] == %{"files.read" => "auto"}
+    assert manifest["tools"] == ["files.read"]
+    assert manifest["mode"] == "auto"
     refute Map.has_key?(manifest, "options")
     refute Map.has_key?(manifest, "prompt")
     refute Map.has_key?(manifest, "title")
@@ -233,8 +269,12 @@ defmodule Compendium.AquaAgentTest do
 
     assert digest == same
 
-    {:ok, other} = AquaAgent.capability_digest(%{scout | tool_policy: %{"files.read" => "ask"}})
+    {:ok, other} = AquaAgent.capability_digest(%{scout | tools: ["files.read", "files.write"]})
     refute digest == other
+
+    # The mode is what the member runs of its tools: it moves the capability.
+    {:ok, read_only} = AquaAgent.capability_digest(%{scout | mode: "read-only"})
+    refute digest == read_only
 
     # The brain's options are what it runs with: they move the capability.
     {:ok, tuned} = AquaAgent.capability_digest(%{scout | options: %{"effort" => "high"}})
@@ -258,110 +298,24 @@ defmodule Compendium.AquaAgentTest do
     refute programmed == moved
   end
 
-  # What an authored policy may say, on top of the grammar: the rule the
-  # `aqua` tool door applies to every write.
-  describe "validate_tool_policy/1" do
-    test "a destructive or external action is never auto" do
-      assert {:error, msg} =
-               AquaAgent.validate_tool_policy(%{"files.delete" => "auto"})
+  test "a null entry in the tools list is refused as grammar" do
+    assert {:error, {:tools_invalid_entry, nil}} =
+             Compendium.AquaAgent.parse("aqua", "---\ntools:\n  - null\n---\nHello\n")
 
-      assert msg =~ "always asks"
+    assert {:error, {:tools_invalid_entry, nil}} =
+             Compendium.AquaAgent.check_tools(["files.read", nil])
+  end
 
-      assert {:error, _} =
-               AquaAgent.validate_tool_policy(%{"http.delete" => "auto"})
+  # One action an entry: the list a person reads is the set a turn is
+  # offered, so a tool's actions are listed by name, never as a wildcard.
+  test "a wildcard in the tools list is refused as grammar, by the parser and the door's check" do
+    for entry <- ["storage.*", "*", "github:*", "*.read"] do
+      assert {:error, {:tools_invalid_entry, ^entry}} =
+               Compendium.AquaAgent.parse("aqua", "---\ntools:\n  - \"#{entry}\"\n---\nHi\n"),
+             entry
 
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{"files.delete" => "ask"})
-
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{"files.write" => "auto"})
-    end
-
-    test "an action declared to take no agent-wide standing allow is never auto" do
-      # An endorsement and a scroll's writes are asked at every call, and a
-      # kept note takes a standing allow for one thread only, so an
-      # authored auto, which holds in every thread, would be a standing
-      # answer they never take. The about-you page and a workspace thread's
-      # notes are Aqua's own, and take auto.
-      for key <- ~w(notes.pin notes.workspace),
-          do: assert(:ok = AquaAgent.validate_tool_policy(%{key => "auto"}))
-
-      for key <-
-            ~w(notes.endorse notes.keep aqua.skill_create aqua.skill_update) do
-        assert {:error, msg} =
-                 AquaAgent.validate_tool_policy(%{key => "auto"})
-
-        assert msg == "#{key} always asks — it cannot be set to auto"
-        assert :ok = AquaAgent.validate_tool_policy(%{key => "ask"})
-      end
-
-      assert {:error, msg} =
-               AquaAgent.validate_tool_policy(%{"notes.*" => "auto"})
-
-      assert msg =~ "notes.endorse"
-      refute msg =~ "notes.pin"
-
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{"notes.read" => "auto"})
-    end
-
-    test "a launch takes auto: a run stands on the component's grant" do
-      assert :ok = AquaAgent.validate_tool_policy(%{"execution.run" => "auto"})
-      assert :ok = AquaAgent.validate_tool_policy(%{"execution.run" => "ask"})
-    end
-
-    test "a glob at auto that covers a destructive action is refused with the actions named" do
-      assert {:error, msg} =
-               AquaAgent.validate_tool_policy(%{"files.*" => "auto"})
-
-      assert msg =~ "files.delete"
-      assert :ok = AquaAgent.validate_tool_policy(%{"files.*" => "ask"})
-    end
-
-    test "a glob of a tool no table holds, and the search gate, pass" do
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{"builder.*" => "auto", "native_search" => "auto"})
-    end
-
-    test "a UI event is auto or absent" do
-      assert {:error, msg} =
-               AquaAgent.validate_tool_policy(%{"request_setup.open" => "ask"})
-
-      assert msg =~ "runs on its own"
-
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{
-                 "request_setup.open" => "auto",
-                 "files.read" => "ask"
-               })
-    end
-
-    test "a catalogued tool's kind is its operation-table annotation" do
-      assert {:error, msg} =
-               AquaAgent.validate_tool_policy(%{"component.delete" => "auto"})
-
-      assert msg =~ "always asks"
-
-      assert {:error, msg} =
-               AquaAgent.validate_tool_policy(%{"component.*" => "auto"})
-
-      assert msg =~ "component.delete"
-
-      # An upstream server's tool is external whatever the action; a tool
-      # neither table holds has no kind and is left to the runtime ceiling.
-      assert {:error, _} =
-               AquaAgent.validate_tool_policy(%{"srv:search.run" => "auto"})
-
-      assert :ok =
-               AquaAgent.validate_tool_policy(%{"nosuch.thing" => "auto"})
-    end
-
-    test "the grammar is checked first, with its typed reason" do
-      assert {:error, {:tool_policy_invalid_value, "files.read", "never"}} =
-               AquaAgent.validate_tool_policy(%{"files.read" => "never"})
-
-      assert {:error, :tool_policy_not_a_map} =
-               AquaAgent.validate_tool_policy("auto")
+      assert {:error, {:tools_invalid_entry, ^entry}} =
+               Compendium.AquaAgent.check_tools(["files.read", entry])
     end
   end
 end

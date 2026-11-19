@@ -328,18 +328,28 @@ defmodule PrismWeb.WorkspaceLiveTest do
     assert has_element?(pane, ~s(textarea[placeholder^="Ask Aqua…"]))
     refute render(pane) =~ "Ask aqua…"
 
-    # A card the next turn opens there names it so too, and the thread
-    # waits on the person.
+    # Switched to read-only, the next turn's step that does more than read
+    # is refused in a line that names the soul so too, and the turn goes
+    # on to its end: nothing waits on the person.
+    assert {:ok, %{updated: "aqua"}} =
+             Compendium.Providers.Aqua.handle(me, %{
+               "action" => "update",
+               "name" => "aqua",
+               "mode" => "read-only"
+             })
+
     Cyfr.Test.ScriptedWorker.script([
-      model_call("c1", "files", %{"action" => "delete", "path" => "notes.md"})
+      model_call("c1", "files", %{"action" => "delete", "path" => "notes.md"}),
+      model_reply("Your notes stay.")
     ])
 
     pane |> form("form", %{"message" => "delete my notes"}) |> render_submit()
 
-    wait_until(fn -> has_element?(pane, ~s([id^="workspace-pane-card-"]), "wants to") end, 60_000)
-    assert has_element?(pane, ~s([id^="workspace-pane-card-"]), "Aqua wants to")
-    refute render(pane) =~ "aqua wants to"
-    wait_until(fn -> has_element?(view, ~s(#workspace-state[data-state="needs_you"])) end)
+    refused = Aqua.Loop.Policy.read_only_sentence("Aqua")
+    wait_until(fn -> render(pane) =~ "Your notes stay." end, 60_000)
+    assert render(pane) =~ refused
+    refute render(pane) =~ "aqua is read-only"
+    assert has_element?(view, ~s(#workspace-state[data-state="open"]))
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -480,28 +490,30 @@ defmodule PrismWeb.WorkspaceLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "Stop ends the thread's work: its turn waiting on a card is cancelled, and the thread reads Stopped",
+  test "Stop ends the thread's work: its running turn is cancelled, and the thread reads Stopped",
        %{conn: conn, mine: mine, me: me, daily: daily} do
     {workspace, _chart, _ref} = charted!(me, daily)
     {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
     pane = on_thread!(child!(view, "workspace-pane"), workspace.id)
     refute has_element?(view, "#workspace-stop")
 
-    Cyfr.Test.ScriptedWorker.script([
-      model_call("c1", "files", %{"action" => "delete", "path" => "notes.md"})
-    ])
+    # The turn's model call is with the scripted model, which never answers.
+    Cyfr.Test.ScriptedWorker.script([{:probe, self()}, :hang])
+    pane |> form("form", %{"message" => "look around"}) |> render_submit()
+    assert_receive {:scripted_probe, player, _execution}, 60_000
+    send(player, :continue)
 
-    pane |> form("form", %{"message" => "delete my notes"}) |> render_submit()
+    wait_until(fn -> has_element?(view, ~s(#workspace-state[data-state="open"])) end)
 
+    # Aqua stands at work there, thinking; the soul reads as Aqua. The rows
+    # are read again every few seconds.
     wait_until(
-      fn -> has_element?(view, ~s(#workspace-state[data-state="needs_you"])) end,
-      60_000
+      fn -> has_element?(view, ~s(#workspace-at-work-aqua[data-status="running"])) end,
+      15_000
     )
 
-    # Aqua stands at work there, waiting on the card; the soul reads as Aqua.
-    wait_until(fn -> has_element?(view, ~s(#workspace-at-work-aqua[data-status="waiting"])) end)
     assert has_element?(view, "#workspace-at-work-aqua", "Aqua")
-    assert has_element?(view, "#workspace-at-work-aqua", "Deleted a file")
+    assert has_element?(view, "#workspace-at-work-aqua", "Thinking")
 
     [turn] =
       Arca.Repo.all(

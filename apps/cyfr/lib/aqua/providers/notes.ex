@@ -456,9 +456,9 @@ defmodule Aqua.Providers.Notes do
   # the chain's turns read and the calling execution's own ledger, so a
   # component that runs no turn keeps what it read too. At the door a
   # person says what they choose to.
-  # A page Aqua writes itself, the pinned page or a workspace thread's
-  # notes, is kept by Aqua; a note a card admitted, by the person who
-  # approved it.
+  # What a turn writes — a kept note, the pinned page or a workspace
+  # thread's notes — is kept by Aqua; a note a component's chain keeps,
+  # whose lineage names no thread, by the person it runs for.
   defp provenance(args, %Context{plane: :guest} = ctx) do
     [
       thread: args["thread_id"],
@@ -470,7 +470,11 @@ defmodule Aqua.Providers.Notes do
             caller_sources(ctx, args["parent_execution_id"])
           )
         )
-    ] ++ if(args["action"] in ["pin", "workspace"], do: [kept_by: Prima.Author.agent()], else: [])
+    ] ++
+      if(args["action"] in ["pin", "workspace"] or is_binary(args["thread_id"]),
+        do: [kept_by: Prima.Author.agent()],
+        else: []
+      )
   end
 
   defp provenance(args, _ctx) do

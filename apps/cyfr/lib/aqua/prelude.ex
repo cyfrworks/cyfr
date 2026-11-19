@@ -4,9 +4,7 @@
 defmodule Aqua.Prelude do
   @moduledoc """
   The system-prompt text that teaches an agent the console it may drive:
-  the `ui` tool and the intents it carries. Actions that need a person's
-  approval are offered as tools whose description says so, and the turn
-  pauses when one is called; nothing here lists them.
+  the `ui` tool and the intents it carries.
   """
 
   @system_prelude """
@@ -38,16 +36,12 @@ defmodule Aqua.Prelude do
   - `ui.component.focus` `{"ref": "publisher.name@version"}`
   - `ui.tincture.focus` `{"publisher": "...", "name": "..."}`
   - `ui.mcp_server.focus` `{"name": "..."}`
-
-  A tool whose description says it needs the person's approval may still
-  be called: the turn pauses until they decide, and the result — or the
-  refusal — comes back as the call's result.
   """
 
   @doc """
   The system-prompt prelude for an agent, appended after its authored
   prompt. Stable across turns for prompt caching.
   """
-  @spec system_prelude(map()) :: String.t()
-  def system_prelude(_tool_policy \\ %{}), do: @system_prelude
+  @spec system_prelude() :: String.t()
+  def system_prelude, do: @system_prelude
 end

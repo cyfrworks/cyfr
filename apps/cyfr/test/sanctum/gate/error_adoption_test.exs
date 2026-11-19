@@ -98,9 +98,6 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # The build orchestration behind `Compendium.Builds.Provider`, which
     # the scan reaches by following a tool module into what it calls.
     "apps/cyfr/lib/compendium/builds.ex" => 3,
-    # The authored-policy door's sentences, the person's own, which the
-    # `aqua` tool wraps as `{:invalid_argument, …}`.
-    "apps/cyfr/lib/compendium/aqua_agent.ex" => 2,
     # A tool this provider does not define, and the validation rate a
     # caller reached, with the seconds to wait.
     "apps/cyfr/lib/compendium/builds/provider.ex" => 1,

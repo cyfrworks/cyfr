@@ -35,7 +35,7 @@ defmodule Aqua.CrewTest do
 
   @endpoint CyfrWeb.Endpoint
 
-  alias Aqua.{Approvals, Crew, Runner, Tape}
+  alias Aqua.{Crew, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
   alias Cyfr.Bus.ThreadEvent
@@ -172,9 +172,9 @@ defmodule Aqua.CrewTest do
         do: record
   end
 
-  # A crew member the athanor made, on the scripted model: it runs under
-  # the soul's policy, so it asks before it keeps a note as the soul does,
-  # and a member the athanor made is the person's to consent to.
+  # A crew member the athanor made, on the scripted model: it is offered
+  # the soul's tools, in auto as a file naming no mode is, and a member
+  # the athanor made is the person's to consent to.
   defp member!(ctx, name) do
     :ok =
       Arca.put(
@@ -647,8 +647,8 @@ defmodule Aqua.CrewTest do
     child = child!(ctx, room, "planner")
     await_status(ctx, delivered_turn(ctx, child, request.id), "completed")
 
-    # The job was narrowed to what the request named, under the member's
-    # own policy.
+    # The job was narrowed to what the request named, out of the soul's
+    # tools the member is offered.
     %{input: %{"params" => %{"tools" => tools}}} =
       Enum.find(
         ScriptedWorker.calls(),
@@ -788,109 +788,17 @@ defmodule Aqua.CrewTest do
     assert %{status: "answered"} = row(ctx, soul.id)
   end
 
-  test "a card in a child turn writes a notice on the room; its sender steers the paused turn, and the person's decision continues it",
-       %{ctx: ctx, room: room} do
-    script!([
-      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
-      reply("kept, and the rest")
-    ])
-
-    {:ok, %{message_id: first}} = Runner.send_message(ctx, room.id, "@planner keep the plan")
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    child = child!(ctx, room, "planner")
-    turn_id = delivered_turn(ctx, child, first)
-    await_status(ctx, turn_id, "paused")
-
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    notice = Enum.find(rows(ctx, room.id), &(&1.reply_to == first))
-    assert %{outcome: "needs_you", sent_by: "planner", addressee: "person"} = notice
-    assert %{"from_thread" => from, "approval_id" => approval_id} = Tape.payload(notice)
-    assert from == child.id
-    assert %{status: "pending"} = row(ctx, first)
-
-    # The notice waits with its card, and is no request of its own.
-    assert %{status: "pending", approval_id: ^approval_id} = notice
-    assert Enum.map(Tape.pending_requests(ctx, room.id), & &1.id) == [first]
-
-    {:ok, %{message_id: more}} = Runner.send_message(ctx, room.id, "@planner and the rest")
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    assert delivered_turn(ctx, child, more) == turn_id
-
-    assert {:ok, %{decision: "approved"}} =
-             Approvals.resolve(ctx, approval_id, %{decision: :approved})
-
-    # Decided with its card: the notice waits on the person no more.
-    assert %{status: "approved"} = row(ctx, notice.id)
-
-    await_status(ctx, turn_id, "completed")
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == first and &1.outcome == "done"))
-    assert Tape.payload(reply)["answers"] == [first, more]
-    assert %{status: "answered"} = row(ctx, more)
-  end
-
-  # The room's viewers hear a card's notice settled whichever way its card
-  # goes: decided, its turn cancelled, its thread retired.
-  for {how, settle} <- [
-        cancelled: quote(do: fn ctx, child -> Runner.stop_turn(ctx, child.id) end),
-        retired: quote(do: fn ctx, child -> Tape.retire(ctx, child.id) end)
-      ] do
-    test "a card's notice is announced invalidated on the room when its turn is #{how}",
-         %{ctx: ctx, room: room} do
-      {child, notice} = carded!(ctx, room)
-      room_id = room.id
-      notice_id = notice.id
-
-      unquote(settle).(ctx, child)
-
-      assert_receive %Cyfr.Bus.ThreadEvent{
-                       thread_id: ^room_id,
-                       kind: :notice,
-                       data: %{id: ^notice_id, status: "invalidated"}
-                     },
-                     5_000
-
-      assert %{status: "invalidated"} = row(ctx, notice_id)
-    end
-  end
-
-  # A request to the planner whose child turn waits on a card, and the
-  # notice of that card on the room.
-  defp carded!(ctx, room) do
-    script!([
-      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
-      reply("kept")
-    ])
-
-    {:ok, %{message_id: request}} = Runner.send_message(ctx, room.id, "@planner keep the plan")
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-    child = child!(ctx, room, "planner")
-    await_status(ctx, delivered_turn(ctx, child, request), "paused")
-    assert {:ok, %{"applied" => 1}} = drain(ctx)
-
-    notice =
-      Enum.find(rows(ctx, room.id), &(&1.reply_to == request and &1.outcome == "needs_you"))
-
-    assert %{status: "pending"} = notice
-    {child, notice}
-  end
-
   test "a busy child thread leaves the request pending, and the next tick delivers it",
        %{ctx: ctx, room: room} do
-    # The soul's request holds the member's thread on a card; the
-    # person's requests, another sender's, queue behind it until the queue
-    # is full. Every model call here is a plain answer but the card's.
-
-    script!([
-      call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"})
-      | for(n <- 1..16, do: reply("answer #{n}"))
-    ])
+    # The soul's request holds the member's thread while its model request
+    # waits; the person's requests, another sender's, queue behind it until
+    # the queue is full. Every model call here is a plain answer.
+    script!([{:hold, self()} | for(n <- 1..16, do: reply("answer #{n}"))])
 
     held = soul_request!(ctx, room, "planner", "hold the floor")
     assert {:ok, %{"applied" => 1}} = drain(ctx)
+    assert_receive {:scripted_probe, worker, _}, 60_000
     child = child!(ctx, room, "planner")
-    held_turn = delivered_turn(ctx, child, held.id)
-    await_status(ctx, held_turn, "paused")
 
     asks =
       for n <- 1..9 do
@@ -902,14 +810,12 @@ defmodule Aqua.CrewTest do
 
     {waiting, [last]} = Enum.split(asks, 8)
     assert {:ok, %{"pending" => 1}} = drain(ctx)
-    assert %{paused: true, queued: 8} = Runner.state(child.id, ctx.athanor_id)
+    assert %{running: true, queued: 8} = Runner.state(child.id, ctx.athanor_id)
     assert :none = outcome(ctx, "message", last)
     assert delivered_turn(ctx, child, last) == nil
     for id <- waiting, do: assert({:ok, "applied"} = outcome(ctx, "message", id))
 
-    {:ok, paused} = Tape.turn(ctx, held_turn)
-    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-    assert {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+    send(worker, :continue)
 
     for id <- [held.id | waiting],
         do: await_status(ctx, delivered_turn(ctx, child, id), "completed")
@@ -920,10 +826,10 @@ defmodule Aqua.CrewTest do
   end
 
   # The browser's actions follow the person's browser setting, not the
-  # soul's lines the crew holds too: a turn is handed them as the setting
-  # says when it is built and again whenever its policy is read again,
-  # each call decided by that.
-  test "a turn of the soul and of a crew member is handed the browser's actions as the person's setting says, and its policy read again follows the setting",
+  # soul's list the crew is offered too: a turn is offered them as the
+  # setting says when it is built and again whenever its offered set is
+  # read again, each call decided by that.
+  test "a turn of the soul and of a crew member is offered the browser's actions as the person's setting says, and its offered set read again follows the setting",
        %{ctx: ctx, room: room} do
     script!([reply("for the soul"), reply("for the planner")])
     {:ok, %{turn_id: soul_turn}} = Runner.send_message(ctx, room.id, "hello")
@@ -935,10 +841,10 @@ defmodule Aqua.CrewTest do
     family =
       for action <- ~w(open read click type key page screenshot close), do: "browser." <> action
 
-    on = Map.new(family, &{&1, "auto"})
-    off = Map.new(family, &{&1, "deny"})
-    own = %{"browser.status" => "auto", "browser.turn_on" => "ask", "browser.turn_off" => "auto"}
-    browser = &Map.filter(&1, fn {key, _mode} -> String.starts_with?(key, "browser.") end)
+    on = Map.new(family, &{&1, "offered"})
+    off = Map.new(family, &{&1, "off"})
+    own = %{"browser.status" => "offered", "browser.turn_off" => "offered"}
+    browser = &Map.filter(&1, fn {key, _offered} -> String.starts_with?(key, "browser.") end)
 
     for {turn_id, agent} <- [{soul_turn, "aqua"}, {member_turn, "planner"}] do
       {:ok, pinned} = Tape.turn(ctx, turn_id)
@@ -948,27 +854,27 @@ defmodule Aqua.CrewTest do
 
       assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
       assert {:ok, built_on} = build.()
-      assert browser.(built_on.policy) == Map.merge(on, own), agent
+      assert browser.(built_on.offered) == Map.merge(on, own), agent
 
-      # Turned off while the turn runs: its policy read again, as each call
-      # is decided at its dispatch, denies the browser.
+      # Turned off while the turn runs: its offered set read again, as each
+      # call is decided at its dispatch, turns the browser off.
       assert {:ok, false} = Aqua.BrowserSetting.put(ctx, false)
-      assert {:ok, refreshed} = Aqua.Loop.Turn.current_policy(built_on)
+      refreshed = Aqua.Loop.Turn.current_offered(built_on)
       assert browser.(refreshed) == Map.merge(off, own), agent
-      # Nothing else of the policy moves with the setting.
-      assert Map.drop(refreshed, family) == Map.drop(built_on.policy, family)
+      # Nothing else of the offered set moves with the setting.
+      assert Map.drop(refreshed, family) == Map.drop(built_on.offered, family)
 
       assert {:ok, built_off} = build.()
-      assert browser.(built_off.policy) == Map.merge(off, own), agent
+      assert browser.(built_off.offered) == Map.merge(off, own), agent
 
       # And on again, the refresh follows.
       assert {:ok, true} = Aqua.BrowserSetting.put(ctx, true)
-      assert {:ok, again} = Aqua.Loop.Turn.current_policy(built_off)
+      again = Aqua.Loop.Turn.current_offered(built_off)
       assert browser.(again) == Map.merge(on, own), agent
     end
   end
 
-  test "the soul's browser call is refused without a card while the setting is off, and goes to the browser without one while it is on",
+  test "the soul's browser call is refused in the browser's own words while the setting is off, and goes to the browser while it is on",
        %{ctx: ctx, room: room} do
     open = %{"action" => "open", "url" => "https://example.com/"}
 
@@ -1041,29 +947,33 @@ defmodule Aqua.CrewTest do
       assert %{status: "answered"} = row(ctx, request)
     end
 
+    # Paused on a call whose outcome is unknown, the turn goes on at its
+    # sender's next line, which the delivery is.
     test "gives the paused turn its reply address, and the turn's end answers it",
          %{ctx: ctx, room: room} do
-      script!([
-        call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),
-        reply("kept, and more")
-      ])
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, "catalyst:local.http"],
+         script: [
+           call("g1", "http", %{"action" => "get", "url" => "https://example.test/plan"}),
+           {:crash, :before_response},
+           reply("fetched, and more")
+         ]}
+      )
 
       {:ok, child} = Threads.crew_thread(actor(ctx), room.id, "planner")
-      {:ok, %{turn_id: direct}} = Runner.send_message(ctx, child.id, "keep the plan")
+      {:ok, %{turn_id: direct}} = Runner.send_message(ctx, child.id, "fetch the plan")
       await_status(ctx, direct, "paused")
+      assert {:ok, %{paused_reason: "uncertain"}} = Tape.turn(ctx, direct)
 
       {:ok, %{message_id: request}} = Runner.send_message(ctx, room.id, "@planner and more")
       assert {:ok, %{"applied" => _}} = drain(ctx)
       assert delivered_turn(ctx, child, request) == direct
-
-      {:ok, paused} = Tape.turn(ctx, direct)
-      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
-      assert {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
       await_status(ctx, direct, "completed")
 
       assert {:ok, %{"applied" => _}} = drain(ctx)
       reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request and &1.outcome == "done"))
-      assert %{content: "kept, and more"} = reply
+      assert %{content: "fetched, and more"} = reply
       assert %{status: "answered"} = row(ctx, request)
     end
   end
@@ -1130,7 +1040,7 @@ defmodule Aqua.CrewTest do
     )
   end
 
-  test "a member's turn runs a granted component under the soul's tools with no card, and a job narrowed away from it runs none",
+  test "a member's turn in auto runs a granted component under the soul's tools, and a job narrowed away from it runs none",
        %{ctx: ctx, room: room} do
     app = quiet_app!(ctx)
     run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
@@ -1181,7 +1091,7 @@ defmodule Aqua.CrewTest do
     assert runs_of(ctx, app) == [root]
   end
 
-  test "a narrowed job is refused a call outside its tools before any card, and goes on",
+  test "a narrowed job is refused a call outside its tools though its member is in auto, and goes on",
        %{ctx: ctx, room: room} do
     script!([
       call("k1", "notes", %{"action" => "keep", "name" => "plan", "content" => "x"}),

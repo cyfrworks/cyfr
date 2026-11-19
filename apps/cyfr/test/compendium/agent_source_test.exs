@@ -6,7 +6,7 @@ defmodule Compendium.AgentSourceTest do
   An agent is a consent source: its row projects from its file with the
   capability digest as artifact, tool actions as caps, and the model
   catalyst and hands as dependencies, never another agent; a crew member
-  projects the soul's policy it runs under beside its own brain; the same
+  projects the soul's tools it is offered beside its own brain; the same
   lookups that serve component nodes serve it, its activation walks the
   closure, and only what it may do moves its digests.
   """
@@ -70,8 +70,8 @@ defmodule Compendium.AgentSourceTest do
   end
 
   # The tree's grammar is the roster: a Markdown file whose name the path
-  # grammar refuses is plain storage, and never a crew member under the
-  # soul's policy.
+  # grammar refuses is plain storage, and never a crew member offered the
+  # soul's tools.
   test "a crew file whose name the path grammar refuses is plain storage, never crew", %{
     ctx: ctx
   } do
@@ -107,16 +107,16 @@ defmodule Compendium.AgentSourceTest do
     assert {:ok, ^bytes} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.soul_file())
     assert {:ok, snap.agent} == AquaAgent.parse("aqua", bytes)
 
-    # A crew member's snapshot keeps its own bytes and runs under the
-    # soul's policy, which its capability digest names.
+    # A crew member's snapshot keeps its own bytes and is offered the
+    # soul's tools, which its capability digest names.
     {:ok, member} = Compendium.AgentIndex.snapshot(ctx, "explorer")
 
     {:ok, member_bytes} =
       Arca.AgentRevisions.get(Sanctum.Context.actor(ctx), member.revision_digest)
 
     {:ok, written} = AquaAgent.parse("explorer", member_bytes)
-    assert written.tool_policy == %{}
-    assert member.agent.tool_policy == snap.agent.tool_policy
+    assert written.tools == []
+    assert member.agent.tools == snap.agent.tools and snap.agent.tools != []
     assert {:ok, member.capability_digest} == AquaAgent.capability_digest(member.agent)
   end
 
@@ -149,9 +149,9 @@ defmodule Compendium.AgentSourceTest do
     {:ok, explorer} = AgentSource.latest_row(ctx, "explorer")
     assert explorer.manifest["caps"] == manifest["caps"]
 
-    # The policy's modes are no part of the manifest; the provider's own
-    # search, on, is one of its tools.
-    refute Map.has_key?(manifest["agent"], "policy")
+    # The member's mode is no part of the manifest; the provider's own
+    # search, offered, is one of its tools.
+    refute Map.has_key?(manifest["agent"], "mode")
     assert "native_search" in manifest["caps"]["tools"]
     assert explorer.manifest["agent"]["catalyst"] == "catalyst:local.gemini"
 
@@ -185,20 +185,16 @@ defmodule Compendium.AgentSourceTest do
              })
   end
 
-  test "the prompt moves nothing; the soul's policy and the model move the digests", %{ctx: ctx} do
+  test "the prompt moves nothing; the soul's tools and the model move the digests", %{ctx: ctx} do
     {:ok, before} = AgentSource.latest_row(ctx, "explorer")
 
     write_agent!(ctx, "explorer", &%{&1 | prompt: &1.prompt <> "\n\nSay less."})
     {:ok, reworded} = AgentSource.latest_row(ctx, "explorer")
     assert reworded.digest == before.digest and reworded.release_digest == before.release_digest
 
-    # The member runs under the soul's policy: an edit of it moves the
+    # The member is offered the soul's tools: an edit of them moves the
     # member's capability with the soul's.
-    write_agent!(
-      ctx,
-      "aqua",
-      &%{&1 | tool_policy: Map.put(&1.tool_policy, "storage.write", "ask")}
-    )
+    write_agent!(ctx, "aqua", &%{&1 | tools: ["storage.write" | &1.tools]})
 
     {:ok, widened} = AgentSource.latest_row(ctx, "explorer")
     refute widened.digest == before.digest
@@ -255,14 +251,14 @@ defmodule Compendium.AgentSourceTest do
     refute moved.release_digest == programmed.release_digest
   end
 
-  test "a glob on the soul naming a crew member is a tool pattern, not an edge into it", %{
+  test "a tool on the soul named as a crew member is a tool pattern, not an edge into it", %{
     ctx: ctx
   } do
-    write_agent!(ctx, "aqua", &%{&1 | tool_policy: Map.put(&1.tool_policy, "explorer.*", "auto")})
+    write_agent!(ctx, "aqua", &%{&1 | tools: ["explorer.search" | &1.tools]})
     {:ok, soul} = AgentSource.latest_row(ctx, "aqua")
 
-    assert "explorer.*" in soul.manifest["caps"]["tools"]
-    refute Map.has_key?(soul.manifest["agent"], "policy")
+    assert "explorer.search" in soul.manifest["caps"]["tools"]
+    refute Map.has_key?(soul.manifest["agent"], "mode")
 
     refute "agent:local.explorer" in Enum.map(
              soul.manifest["dependencies"]["static"],
@@ -280,14 +276,10 @@ defmodule Compendium.AgentSourceTest do
     end
   end
 
-  test "an edit of the tenant soul's policy does not change the seed rows", %{ctx: ctx} do
+  test "an edit of the tenant soul's tools does not change the seed rows", %{ctx: ctx} do
     {:ok, before} = AgentSource.latest_row(ctx, "explorer")
 
-    write_agent!(
-      ctx,
-      "aqua",
-      &%{&1 | tool_policy: Map.put(&1.tool_policy, "storage.write", "ask")}
-    )
+    write_agent!(ctx, "aqua", &%{&1 | tools: ["storage.write" | &1.tools]})
 
     {:ok, edited} = AgentSource.latest_row(ctx, "explorer")
     refute edited.release_digest == before.release_digest

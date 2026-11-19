@@ -67,14 +67,8 @@ defmodule Cyfr.Test.ChatFixture do
   }
 
   # Catalog operations the gate admits for the soul: reads that run beside
-  # each other, and one that asks the person first.
-  @tool_policy %{
-    "notes.list" => "auto",
-    "notes.read" => "auto",
-    "notes.search" => "auto",
-    "notes.keep" => "ask",
-    "system.status" => "auto"
-  }
+  # each other, and a write.
+  @tools ~w(notes.keep notes.list notes.read notes.search system.status)
 
   @doc "The fixture's name-level reference."
   @spec ref() :: String.t()
@@ -151,15 +145,16 @@ defmodule Cyfr.Test.ChatFixture do
     File.write!(Path.join(unit, "cyfr-manifest.json"), Jason.encode!(manifest))
     File.mkdir_p!(Path.join(seed, "aqua"))
 
-    policy = Enum.map_join(@tool_policy, "\n", fn {key, mode} -> "  #{key}: #{mode}" end)
+    tools = Enum.map_join(@tools, "\n", &"  - #{&1}")
 
     File.write!(Path.join([seed, "aqua", "aqua.md"]), """
     ---
     title: Aqua
     catalyst_ref: #{@ref}
     model: #{@name}
-    tool_policy:
-    #{policy}
+    mode: auto
+    tools:
+    #{tools}
     ---
 
     You answer the person.

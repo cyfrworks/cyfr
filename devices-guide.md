@@ -65,7 +65,7 @@ A passkey lives at the account service, whose address is its relying party, so o
 
 ## Fresh Confirmation
 
-Using what was granted, making a grant and answering an approval need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person:
+Using what was granted and making a grant need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person:
 
 - entering or rotating a credential, and widening where a credential may go or what a component may read of it (narrowing needs only your session);
 - sharing a key, or widening who it is shared with;

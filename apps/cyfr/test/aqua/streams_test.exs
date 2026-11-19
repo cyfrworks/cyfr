@@ -180,17 +180,25 @@ defmodule Aqua.StreamsTest do
       refute_receive %ThreadListed{}, 200
     end
 
-    test "a card opened and decided moves whether the thread waits on its person", %{ada: ada} do
-      {:ok, room} = Arca.Test.Days.thread(ada.actor)
+    test "a workspace thread waits on its person once its work is reported to need them, and " <>
+           "no longer once stopped",
+         %{ada: ada} do
+      work = workspace!(ada.actor, "Book the trip")
+      id = work.id
+      shown = %{"kind" => "workspace", "title" => "Book the trip"}
       listen(ada)
 
-      room_id = room.id
-      %{approval: approval} = card!(ada.ctx, room)
-      assert_receive %ThreadListed{id: ^room_id, waits_on_you: true} = waiting
-      assert %{"waits_on_you" => true} = read_as(waiting)
+      turn = asked!(ada, work)
+      assert heard(ada, id) == listed_as(ada, id, shown)
 
-      assert {:ok, _} = Aqua.Approvals.resolve(ada.ctx, approval.id, %{decision: :declined})
-      assert_receive %ThreadListed{id: ^room_id, waits_on_you: false}
+      {:ok, %{workspace_state: "needs_you"}} =
+        Tape.report_workspace(ada.ctx, turn, "needs_you", %{summary: "Which account?"})
+
+      assert heard(ada, id) == listed_as(ada, id, Map.put(shown, "waits_on_you", true))
+
+      {:ok, %{cancelled: [_asked]}} = Tape.stop_work(ada.ctx, id)
+      assert {:ok, %{workspace_state: "stopped"}} = Threads.get(ada.actor, id)
+      assert heard(ada, id) == listed_as(ada, id, shown)
     end
 
     test "a crew member's child thread is never on the list", %{ada: ada} do
@@ -344,7 +352,8 @@ defmodule Aqua.StreamsTest do
   end
 
   describe "the threads' refresh" do
-    test "is the athanor's daily and workspace threads and the active shared ones, the latest first",
+    test "is the athanor's daily and workspace threads and the active shared ones, the latest " <>
+           "first, and only a workspace thread whose work needs its person waits on them",
          %{ada: ada, bob: bob} do
       carol = ShareFixtures.person!("Carol")
 
@@ -355,10 +364,11 @@ defmodule Aqua.StreamsTest do
         })
 
       {:ok, %{id: plans, title: plans_title}} = Arca.Test.Days.thread(ada.actor)
-      {:ok, %{id: waiting, title: waiting_title}} = Arca.Test.Days.thread(ada.actor)
+      {:ok, %{id: carded, title: carded_title}} = Arca.Test.Days.thread(ada.actor)
 
+      # A pending card row, which nothing opens now, waits on no one.
       {:ok, _card} =
-        Threads.append(ada.actor, waiting, %{
+        Threads.append(ada.actor, carded, %{
           author: Prima.Author.system(),
           sent_by: "aqua",
           kind: "approval",
@@ -367,6 +377,8 @@ defmodule Aqua.StreamsTest do
         })
 
       work = workspace!(ada.actor, "Book the trip")
+      waiting = reported!(ada, "Pick a hotel", "needs_you")
+      done = reported!(ada, "Find flights", "done")
       {:ok, child} = Threads.crew_thread(ada.actor, plans, "planner")
 
       {:ok, trip} = SharedThreads.create(ada.user.id, "Trip")
@@ -382,25 +394,29 @@ defmodule Aqua.StreamsTest do
       assert {:ok, items} = ThreadList.listed(ada.ctx, ada.user.id)
       wired = Enum.map(items, &read_as/1)
 
-      assert Enum.map(wired, & &1["id"]) == [trip.id, work.id, waiting, plans]
       ids = Enum.map(wired, & &1["id"])
+      assert ids == [trip.id, done.id, waiting.id, work.id, carded, plans]
       refute child.id in ids
       refute old.id in ids
       refute bobs in ids
 
-      [shared, workspace, card, own] = wired
+      [shared | own] = wired
 
       assert %{"kind" => "shared", "title" => "Trip", "waits_on_you" => false} = shared
       assert ["Ada", "Bob", "@" <> _handle] = shared["people"]
 
-      assert %{"kind" => "workspace", "title" => "Book the trip", "unread" => 0} = workspace
-
-      assert %{"kind" => "daily", "title" => ^waiting_title, "waits_on_you" => true} = card
-      # The card is not the person's own line, so it is unread to them.
-      assert card["unread"] == 1
-
-      assert %{"kind" => "daily", "title" => ^plans_title, "people" => ["Ada"], "unread" => 0} =
-               own
+      assert own == [
+               listed_as(ada, done.id, %{"kind" => "workspace", "title" => "Find flights"}),
+               listed_as(ada, waiting.id, %{
+                 "kind" => "workspace",
+                 "title" => "Pick a hotel",
+                 "waits_on_you" => true
+               }),
+               listed_as(ada, work.id, %{"kind" => "workspace", "title" => "Book the trip"}),
+               # The card is not the person's own line, so it is unread to them.
+               listed_as(ada, carded, %{"kind" => "daily", "title" => carded_title, "unread" => 1}),
+               listed_as(ada, plans, %{"kind" => "daily", "title" => plans_title})
+             ]
 
       times = Enum.map(wired, &elem(DateTime.from_iso8601(&1["last_activity"]), 1))
       assert times == Enum.sort(times, {:desc, DateTime})
@@ -689,6 +705,49 @@ defmodule Aqua.StreamsTest do
     |> Arca.Repo.insert!()
   end
 
+  # The soul's turn in a workspace thread, opened by the person's post
+  # there, accepted and never run.
+  defp asked!(person, thread) do
+    {:ok, %{turn: turn}} =
+      Tape.accept(person.ctx, thread.id, %{
+        message: %{author: person.user.id, sent_by: "person", content: @task},
+        turn: %{agent: "aqua", requested_by: person.user.id}
+      })
+
+    turn
+  end
+
+  # A workspace thread whose work its soul's turn reported as `outcome`,
+  # the turn still open as a report leaves it.
+  defp reported!(person, title, outcome) do
+    work = workspace!(person.actor, title)
+    turn = asked!(person, work)
+
+    {:ok, %{workspace_state: ^outcome}} =
+      Tape.report_workspace(person.ctx, turn, outcome, %{summary: title})
+
+    work
+  end
+
+  # A thread of the person's athanor as their list carries it to a canvas:
+  # `fields` over a thread that waits on no one, every post seen, not
+  # archived, its last activity as its row stores it.
+  defp listed_as(person, id, fields) do
+    {:ok, thread} = Threads.get(person.actor, id)
+
+    Map.merge(
+      %{
+        "id" => id,
+        "people" => [person.user.display_name],
+        "last_activity" => DateTime.to_iso8601(thread.last_message_at || thread.inserted_at),
+        "waits_on_you" => false,
+        "unread" => 0,
+        "archived" => false
+      },
+      fields
+    )
+  end
+
   # A person's line into their own thread, opening no turn.
   defp say(person, thread_id, text) do
     Tape.accept(person.ctx, thread_id, %{
@@ -802,55 +861,10 @@ defmodule Aqua.StreamsTest do
         attempt: attempt.attempt,
         profile_id: "prof_x",
         consent_id: "consent_x",
+        agent_mode: "auto",
         recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
     started
-  end
-
-  # A card as the loop opens it: the soul's turn with its root, the model
-  # step, the call, and the approval on the tape.
-  defp card!(ctx, room) do
-    proposal = %{"tool" => "component", "action" => "delete", "args" => %{}}
-
-    {:ok, %{turn: turn}} =
-      Tape.accept(ctx, room.id, %{
-        message: %{author: ctx.user_id, sent_by: "person", content: "@aqua wipe it"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
-      })
-
-    turn = rooted!(ctx, turn)
-    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
-
-    {:ok, %{calls: [%{step: step}]}} =
-      Tape.record_response(ctx, turn, model_step, %{
-        text: nil,
-        tool_calls: [
-          %{
-            tool_call_id: "c1",
-            name: "component.delete",
-            tool: "component",
-            action: "delete",
-            arguments: %{},
-            kind: "destructive"
-          }
-        ]
-      })
-
-    intent = %{
-      "kind" => "request_approval",
-      "title" => "Wipe it",
-      "action_kind" => "destructive",
-      "proposal" => proposal,
-      "tool_call_id" => "c1"
-    }
-
-    {:ok, opened} =
-      Tape.open_approval(ctx, turn, step, %{
-        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
-        card: %{content: intent["title"], payload: %{"intent" => intent}}
-      })
-
-    opened
   end
 end

@@ -2909,6 +2909,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :consent_id, :string
       add :agent_revision_digest, :string
       add :agent_capability_digest, :string
+      # The agent's mode, `read-only` or `auto`, from the snapshot whose
+      # capability digest the turn pins; null while it is only accepted.
+      add :agent_mode, :string
       add :budget_id, :string
       add :model, :string
       # The exact catalyst release the turn runs on, pinned at its first build.

@@ -672,15 +672,15 @@ defmodule Opus.BrowserTest do
                Provider.handle("browser", ctx, %{"action" => "status"})
     end
 
-    test "a turn turns it off at once; turning it on is a call the person is asked about each time",
+    test "a turn turns it off at once; turning it on is the person's alone",
          %{ctx: ctx, lineage: lineage} do
       assert {:ok, %{on: false}} = call(ctx, lineage, "turn_off")
       assert {:ok, false} = Aqua.BrowserSetting.allowed?(ctx)
 
-      # Turning it on is never standing and never `auto`, so the turn's call
-      # asks on a card each time; turning it off may run at once.
-      assert Sanctum.Catalog.auto_permitted?("browser", "turn_on") == false
-      assert Sanctum.Catalog.auto_permitted?("browser", "turn_off") == true
+      # Turning it on reaches no chain, so no turn calls it; turning it off
+      # is a turn's to call.
+      refute Sanctum.Catalog.chain_reachable?("browser", "turn_on")
+      assert Sanctum.Catalog.chain_reachable?("browser", "turn_off")
 
       # A component the turn started turns nothing on or off.
       child = %{lineage | "parent_execution_id" => "exe_child"}

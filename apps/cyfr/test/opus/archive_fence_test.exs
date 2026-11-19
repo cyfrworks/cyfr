@@ -592,6 +592,7 @@ defmodule Opus.ArchiveFenceTest do
         attempt: attempt.attempt,
         profile_id: "prof_fence",
         consent_id: "consent_fence",
+        agent_mode: "auto",
         recovery_limit: 3
       })
 

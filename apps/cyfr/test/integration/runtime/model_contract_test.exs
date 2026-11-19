@@ -33,7 +33,7 @@ defmodule Locus.Runtime.ModelContractTest do
   import Prima.Test.Wait
   import ExUnit.CaptureLog
 
-  alias Aqua.{Approvals, Runner, Tape}
+  alias Aqua.{Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ChatFixture, as: Fixture
@@ -491,7 +491,7 @@ defmodule Locus.Runtime.ModelContractTest do
     end
 
     # A catalog tool's schema is the one the gate derives for the actions the
-    # policy offers, and nothing the policy does not offer is named.
+    # soul is offered, and nothing it is not offered is named.
     for {name, actions} <- [{"notes", ~w(keep list read search)}, {"system", ~w(status)}] do
       {:ok, definition} = Sanctum.Catalog.get_tool(name)
       derived = Sanctum.Catalog.restrict_tool(definition, actions)["inputSchema"]
@@ -503,7 +503,7 @@ defmodule Locus.Runtime.ModelContractTest do
     end
   end
 
-  test "a call that asks pauses the turn on a card, and the approved call runs and returns to the next chat",
+  test "a write the soul is offered runs at once under auto, and its result returns to the next chat",
        %{ctx: ctx} do
     keep = %{"action" => "keep", "name" => "kept", "content" => "from the fixture"}
 
@@ -523,31 +523,18 @@ defmodule Locus.Runtime.ModelContractTest do
       }
     ]
 
-    paused = play(ctx, steps)
-    assert %{status: "paused", paused_reason: "approval"} = paused.turn
+    played = play(ctx, steps)
 
-    assert [%{kind: "model", outcome: "ok"}, %{action: "keep", dispatch_state: "proposed"} = step] =
-             paused.steps
-
-    assert {:error, _} = Aqua.Notes.read(ctx, "kept")
-    assert {:ok, [approval]} = Tape.pending_approvals(ctx, paused.turn)
-    assert approval.id == step.approval_id
-
-    assert {:ok, %{decision: "approved"}} =
-             Approvals.resolve(ctx, approval.id, %{decision: :approved})
-
-    resumed = finish(ctx, paused)
-
-    assert %{status: "completed"} = resumed.turn
+    assert %{status: "completed", agent_mode: "auto"} = played.turn
 
     assert [
-             _,
+             %{kind: "model", outcome: "ok"},
              %{action: "keep", dispatch_state: "closed", outcome: "ok"},
              %{kind: "model", outcome: "ok"} = last
-           ] = resumed.steps
+           ] = played.steps
 
     assert {:ok, %{content: "from the fixture"}} = Aqua.Notes.read(ctx, "kept")
-    assert %{kind: "text", content: "Kept."} = List.last(agent_rows(resumed))
+    assert %{kind: "text", content: "Kept."} = List.last(agent_rows(played))
 
     assert %{"step" => 1, "received" => %{"messages" => messages}} =
              report(ctx, last.child_execution_id)
@@ -1011,9 +998,9 @@ defmodule Locus.Runtime.ModelContractTest do
   # ---------------------------------------------------------------------------
 
   # A person sends the script of `steps` (or the line `text`) on a thread of
-  # its own, or on `thread`, and the turn is followed until it leaves the
-  # runner: finished, or paused on a card. Answers what is then true: the
-  # turn, its steps, the thread's rows, what a viewer saw and the log.
+  # its own, or on `thread`, and the turn is followed until it finishes.
+  # Answers what is then true: the turn, its steps, the thread's rows, what
+  # a viewer saw and the log.
   defp play(ctx, steps_or_text, thread \\ nil)
 
   defp play(ctx, steps, thread) when is_list(steps), do: play(ctx, message(steps), thread)
@@ -1037,8 +1024,7 @@ defmodule Locus.Runtime.ModelContractTest do
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
 
     # The person sends from the console, whose context carries the origin
-    # `interactive`: a turn paused on a card resumes under the origin its
-    # row stores.
+    # `interactive`, which the turn's row stores.
     sender = %{ctx | origin: :interactive}
 
     {turn_id, log} =
@@ -1046,17 +1032,11 @@ defmodule Locus.Runtime.ModelContractTest do
         assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
                  Runner.send_message(sender, thread.id, text)
 
-        await_turn(ctx, turn_id, :pauses)
+        await_turn(turn_id)
         turn_id
       end)
 
     settled(ctx, %{thread: thread, observer: observer, turn_id: turn_id, log: log})
-  end
-
-  # A paused turn whose card was answered is followed to its end.
-  defp finish(ctx, %{turn_id: turn_id} = played) do
-    {:ok, log} = with_every_log(fn -> await_turn(ctx, turn_id, :ends) end)
-    settled(ctx, %{played | log: played.log <> log})
   end
 
   defp settled(ctx, %{thread: thread, observer: observer, turn_id: turn_id} = played) do
@@ -1068,23 +1048,22 @@ defmodule Locus.Runtime.ModelContractTest do
       turn: turn,
       steps: steps,
       rows: Threads.messages(Sanctum.Context.actor(ctx), thread.id),
-      seen: await_seen(observer, turn, steps)
+      seen: await_seen(observer, steps)
     })
   end
 
   # The viewer hears the thread and the streams beside this process, not
   # through it: what it saw is read once it holds the turn's end and the
   # terminal event of every model step that closed.
-  defp await_seen(observer, turn, steps) do
+  defp await_seen(observer, steps) do
     closed =
       for %{kind: "model", dispatch_state: "closed", child_execution_id: id} <- steps, do: id
 
     wait_until(
       fn ->
         seen = Fixture.seen(observer)
-        ended? = turn.status == "paused" or {:turn_finished, nil} in seen.thread
 
-        ended? and
+        {:turn_finished, nil} in seen.thread and
           Enum.all?(closed, fn id ->
             seen.streams
             |> Map.get(id, [])
@@ -1123,24 +1102,14 @@ defmodule Locus.Runtime.ModelContractTest do
     |> Enum.join()
   end
 
-  # A card opens before the pause it causes lands; an answered card is
-  # announced again, which a turn being followed to its end reads past.
-  defp await_turn(ctx, turn_id, mode) do
+  # The turn's end is announced on the thread's topic, past every other
+  # event of the turn.
+  defp await_turn(turn_id) do
     receive do
-      %ThreadEvent{kind: :turn_finished} ->
-        :ok
-
-      %ThreadEvent{kind: :message, data: %{kind: "approval"}} when mode == :pauses ->
-        wait_until(
-          fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end,
-          @turn_ms,
-          "the turn to pause on its card"
-        )
-
-      %ThreadEvent{} ->
-        await_turn(ctx, turn_id, mode)
+      %ThreadEvent{kind: :turn_finished} -> :ok
+      %ThreadEvent{} -> await_turn(turn_id)
     after
-      @turn_ms -> flunk("the turn #{turn_id} neither finished nor paused")
+      @turn_ms -> flunk("the turn #{turn_id} did not finish")
     end
   end
 

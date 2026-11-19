@@ -78,8 +78,8 @@ defmodule PrismWeb.AquaLive.Section do
   The page's one door to the `aqua` operation: the console's seam
   (`PrismWeb.Ops.call_tool/3`), so the context is held to the freshness
   rule and the call passes the gate on the caller's external plane. The
-  answer is the tool's own, atom-keyed; an agent's `tool_policy` is its
-  frontmatter's string-keyed map.
+  answer is the tool's own, atom-keyed; an agent's `tools` is its
+  frontmatter's list of strings.
   """
   @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_aqua(ctx, args), do: PrismWeb.Ops.call_tool(ctx, "aqua", args)

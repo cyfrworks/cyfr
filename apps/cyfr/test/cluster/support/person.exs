@@ -14,8 +14,8 @@ defmodule Cyfr.Cluster.Person do
   the fill has run there: the shipped Aqua tree and catalysts copied in,
   indexed and the soul consented. The model's key is then entered and
   bound through the consent walk (`person!/0`). What such a
-  person does then goes through the runner (`send/3`), the approvals door
-  (`decide/3`), the console's opening of a thread (`open/2`), the consent
+  person does then goes through the runner (`send/3`), the console's
+  opening of a thread (`open/2`), the consent
   walk (`plan/2`, `commit/3`) and the gate (`call/3`), on whichever member
   a case names.
 
@@ -215,22 +215,6 @@ defmodule Cyfr.Cluster.Person do
   @doc "Call the tool `name` as the person, through the gate's external entry."
   @spec call(String.t(), String.t(), map()) :: {:ok, term()} | {:error, term()}
   def call(token, name, args), do: Sanctum.Gate.call_external(name, context!(token), args)
-
-  @doc "The turn's pending approvals, as this member reads them."
-  @spec pending_approvals(String.t(), String.t()) :: [String.t()]
-  def pending_approvals(token, turn_id) do
-    ctx = context!(token)
-
-    with {:ok, turn} <- Aqua.Tape.turn(ctx, turn_id),
-         {:ok, approvals} <- Aqua.Tape.pending_approvals(ctx, turn) do
-      Enum.map(approvals, & &1.id)
-    end
-  end
-
-  @doc "Decide `approval_id` as the person, through the one door for a decision."
-  @spec decide(String.t(), String.t(), :approved | :declined) :: {:ok, map()} | {:error, term()}
-  def decide(token, approval_id, decision),
-    do: Aqua.Approvals.resolve(context!(token), approval_id, %{decision: decision})
 
   @doc "The messages of `thread_id`, as this member reads them: author, kind and content."
   @spec messages(String.t(), String.t()) :: [map()]
