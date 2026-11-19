@@ -359,10 +359,10 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert soul_still.revision == soul_head.revision
   end
 
-  test "a glob naming a crew member left on the soul asks for nothing: no tool, no edge into the member",
+  test "a tool named as a crew member left on the soul asks for nothing: no tool, no edge into the member",
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
-    write_agent!(ctx, "aqua", &%{&1 | tools: ["explorer.*" | &1.tools]})
+    write_agent!(ctx, "aqua", &%{&1 | tools: ["explorer.search" | &1.tools]})
 
     # The soul consents through the walk: it selects the key the member
     # bound on claude — a selection needs a bound lender.

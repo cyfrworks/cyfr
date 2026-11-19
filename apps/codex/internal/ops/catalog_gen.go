@@ -668,7 +668,7 @@ type AquaUpdateArgs struct {
 	OptionsPatch Field[map[string]*any] `json:"options_patch,omitzero"`
 	// What of its offered tools this member runs (create/update; the soul or a crew member): 'read-only' runs only reads, then answers, and every other call is refused; 'auto' runs every tool it is offered, deleting included. A file without it is auto.
 	Mode Field[string] `json:"mode,omitzero"`
-	// The soul's tools, which every crew member is offered too (a crew member has none of its own): each 'tool.action', 'tool.*', 'native_search' (the provider's own search) or an outside server's 'server:tool'. A tool missing from the list is not callable at all; null offers nothing.
+	// The soul's tools, which every crew member is offered too (a crew member has none of its own): each one action, 'tool.action', 'native_search' (the provider's own search) or an outside server's 'server:tool', with no wildcard: every action of a tool is listed by name. A tool missing from the list is not callable at all; null offers nothing.
 	Tools Field[*[]string] `json:"tools,omitzero"`
 	// update only: tools to add to the soul's list as it is when the write lands, so two edits of different tools at once keep both. Not with tools.
 	ToolsAdd Field[[]string] `json:"tools_add,omitzero"`
