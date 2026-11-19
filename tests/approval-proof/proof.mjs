@@ -53,7 +53,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { confirmInTab, createAccount, passkeys, sessionCookie, setUp } from "../browser/account.mjs";
+import { confirmInTab, createAccount, passkeys, POPUPS_BLOCKED, sessionCookie, setUp } from "../browser/account.mjs";
 import {
   ask as askRunSh, homeOf, launchBrowser, MARKER, pageTokens, readHomes, recordText, redact, redactFrames, sleep,
   startProxy, waitFor,
@@ -546,6 +546,10 @@ async function proveHere(page, panel) {
   return { what: tab.what, confirmed: tab.confirmed, by: tab.by, error: tab.error || null };
 }
 
+// A confirmation the return page took and whose tab then closed itself, as
+// the system layer's confirmation promises.
+const closedItself = (proven) => proven.confirmed && proven.by === "closed";
+
 // The grant prompt for the component `ref`, the tincture unless named,
 // opened from its Components row.
 async function openGrant(page, ref = APP) {
@@ -808,7 +812,7 @@ async function diagnose(page, name) {
 
 async function main() {
   const proxy = await startProxy(readHomes(homesFile));
-  const browser = await launchBrowser("chromium", proxy);
+  const browser = await launchBrowser("chromium", proxy, POPUPS_BLOCKED);
   record.browser = browser.version();
   const page = await (await browserContext(browser)).newPage();
   const frames = [];
@@ -1089,6 +1093,7 @@ async function main() {
     };
     if (!row("account_choices",
       listedAll && madeHome.created && connectWork.cleared && connectAnthropic.cleared && madeHome.cleared &&
+        [connectWork, connectAnthropic, madeHome].every((m) => closedItself(m.proven)) &&
         same(openedAs, openedExpected) && perEdge && perEdge.own && perEdge.openai &&
         perEdge.claude && perEdge.grok &&
         same(perEdge.lifetimes, lifetimesExpected({
@@ -1098,7 +1103,7 @@ async function main() {
         !holdsKey(vaultHtml) && !holdsKey(grantHtml) && choicesState.held,
       "two OpenAI entries, one through Connect and one on the Vault page, and one Anthropic entry: the app's own " +
         "calls take OpenAI Work, the OpenAI edge OpenAI Home, the one Anthropic entry chosen with no picker; the " +
-        "whole state is the model",
+        "whole state is the model; each entry's confirmation tab closes itself",
       { opened_as: openedAs, per_edge: perEdge, admitted: admitted2, state: choicesState.compared })) return;
 
     // -----------------------------------------------------------------------
@@ -1492,6 +1497,7 @@ async function main() {
     // Each part's verdict, so a failed row names the part that did not hold.
     const parts = {
       made: madeXai.created && madeXai.cleared && !!ids[XAI.name],
+      tab_closed: closedItself(madeXai.proven),
       made_state: xaiMadeState.held,
       head_before: same(xaiMadeState.heads[GROK], bootstrapHead),
       shown: same(shownOffer, expectedOffer),

@@ -18,7 +18,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  confirmInTab, continueToCyfr, createAccount, landing, passkeys, readLog, usePasskey,
+  confirmInTab, continueToCyfr, createAccount, landing, passkeys, POPUPS_BLOCKED, readLog, usePasskey,
 } from "../browser/account.mjs";
 import { ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, startProxy } from "../browser/lib.mjs";
 
@@ -141,9 +141,9 @@ async function main(browser) {
     { timeout: 30_000 }).then(() => true).catch(() => false);
   record.confirm = { confirmed, key_shown: shown };
   if (!row("confirm",
-    confirmed.what === `Confirm a change at ${H.origin}` && confirmed.confirmed && shown,
+    confirmed.what === `Confirm a change at ${H.origin}` && confirmed.confirmed && confirmed.by === "closed" && shown,
     "an API key the person asks for at H waits on a fresh confirmation; the sign page asks to confirm a change at H, the passkey " +
-      "signs it, and the waiting page makes the key",
+      "signs it, the confirmation's tab closes itself, and the waiting page makes the key",
     record.confirm)) return;
 }
 
@@ -156,7 +156,7 @@ try {
   console.error(`FAIL: ${error.message.split("\n")[0]}`);
   process.exit(1);
 }
-const browser = await launchBrowser("chromium", proxy);
+const browser = await launchBrowser("chromium", proxy, POPUPS_BLOCKED);
 const version = browser.version();
 console.log(`== chromium ${version}`);
 let failure = null;

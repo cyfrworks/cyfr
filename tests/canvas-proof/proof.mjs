@@ -420,10 +420,11 @@ function receiptFacts(receipts) {
 // the shell's document is read while the button is down; nothing is
 // evaluated on the frame, and the page sends its verb from its own click
 // handler. The click waits out the bridge's activation lifespan first
-// (`lapse`). Answers whether the shell held the frame as its active element
+// (`lapse`), unless `soon`: then it comes as at once after the proof's last
+// input. Answers whether the shell held the frame as its active element
 // before the button came up.
-async function personClick(page, frame, x, y) {
-  await lapse();
+async function personClick(page, frame, x, y, { soon = false } = {}) {
+  if (!soon) await lapse();
   await page.mouse.move(x, y);
   await page.mouse.down();
   const focused = await lib.waitFor(
@@ -939,14 +940,25 @@ async function stepFeedChart(page, name) {
 // app_over_canvas: canvas-full opened full from the shipped canvas's
 // launcher tile over the shipped canvas, frozen with it on a switch, shown
 // again on the way back, and closed. The tile is clicked as a person
-// clicks it (personClick), and the page opens from its click handler.
+// clicks it (personClick), the frame taking the shell's focus from the
+// click, and the page opens from its click handler. Tapped again at once
+// after the window's close in the shell, within the activation's lifespan
+// of that press, the open is dropped too soon and the tile says so ("Tap
+// again in a moment", the shipped canvas's TOO_SOON): a tap dropped too
+// soon is not silent. The verdict is what the browser showed: the open
+// received and dropped with the shell holding activation and the frame
+// focused, the tile's words, nothing opened. How long after the close the
+// proof's clock read the tap's start is recorded beside it and decides
+// nothing: the bridge measures the lifespan on the browser's own clock,
+// from the shell's input to the verb's receipt.
 async function stepAppOverCanvas(page, name) {
   const start = await showCanvas(page, "start");
   await until(start.frame, shippedDrawing, (d) => d.tiles.includes("canvas-full"), "the canvas-full launcher");
-  const tile = await centerOf(start.frame.locator('.app', { has: start.frame.locator('.label', { hasText: "canvas-full" }) }).first());
+  const launcher = (frame) => frame.locator('.app', { has: frame.locator('.label', { hasText: "canvas-full" }) }).first();
+  const tile = await centerOf(launcher(start.frame));
   if (!tile) throw new Error("the canvas-full launcher could not be measured");
   const from = (await instrument(page)).receipts.length;
-  await personClick(page, start.id, tile.x, tile.y);
+  const focused = await personClick(page, start.id, tile.x, tile.y);
   const full = await lib.waitFor(async () => {
     const el = await page.$('[data-canvas-place="full"][data-canvas-shown="true"] iframe');
     if (!el) return null;
@@ -971,18 +983,36 @@ async function stepAppOverCanvas(page, name) {
     return f && f.state === "live" && f.shown === true ? f : null;
   }, { timeoutMs: 15_000, what: "canvas-full shown again" });
   await page.locator('button[phx-click="close_active_tincture"]:visible').click();
+  const closedAt = Date.now();
   await lib.waitFor(async () => ((await page.$(`iframe[data-frame-id="${full.id}"]`)) ? null : true), { timeoutMs: 15_000, what: "canvas-full closed" });
   const startBack = await showCanvas(page, "start");
 
+  // The tile tapped again at once: too soon after the close's press. The
+  // milliseconds since the close are the proof's clock, a diagnostic.
+  const soonFrom = (await instrument(page)).receipts.length;
+  const sinceClose = Date.now() - closedAt;
+  const tileAgain = await centerOf(launcher(startBack.frame));
+  if (!tileAgain) throw new Error("the canvas-full launcher could not be measured again");
+  const soonFocused = await personClick(page, startBack.id, tileAgain.x, tileAgain.y, { soon: true });
+  const said = await lib.waitFor(async () => {
+    const text = await launcher(startBack.frame).locator(".said").innerText({ timeout: 100 }).catch(() => "");
+    return text.trim() || null;
+  }, { timeoutMs: 3_000, stepMs: 50, what: "the canvas-full tile's answer" }).catch(() => null);
+  const soon = receiptFacts(await handled(page, soonFrom, startBack.id, "open", 1));
+  const reopened = (await page.$('[data-canvas-place="full"] iframe')) !== null;
+
   note("app_over_canvas", name,
-    opened === 1 && full.state === "live" && startUnder && startUnder.state === "frozen" &&
+    focused && opened === 1 && full.state === "live" && startUnder && startUnder.state === "frozen" &&
       fullFrozen.state === "frozen" && fullFrozen.inert && startFrozen && startFrozen.state === "frozen" &&
-      fullAgain.state === "live" && startBack.id === start.id && startBack.state === "live",
+      fullAgain.state === "live" && startBack.id === start.id && startBack.state === "live" &&
+      soonFocused && soon.received === 1 && soon.dropped === 1 && soon.forwarded === 0 &&
+      soon.active === true && soon.active_element_is_frame === true && said === "Tap again in a moment" && !reopened,
     {
-      opened: { by: "the shipped canvas's launcher tile", open_verbs: opened, full_frame: full.state, canvas_under: startUnder && startUnder.state },
+      opened: { by: "the shipped canvas's launcher tile", frame_focused: focused, open_verbs: opened, full_frame: full.state, canvas_under: startUnder && startUnder.state },
       on_switch: { full_frame: { state: fullFrozen.state, inert: fullFrozen.inert, shown: fullFrozen.shown }, canvas: startFrozen && startFrozen.state },
       switched_back: { full_frame: fullAgain.state },
       closed: { canvas_shown_again: startBack.state, same_frame: startBack.id === start.id },
+      tapped_too_soon: { since_close_ms: sinceClose, frame_focused: soonFocused, open: soon, tile_said: said, opened: reopened },
     });
 }
 

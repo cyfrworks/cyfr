@@ -18,7 +18,7 @@ defmodule Locus.Runtime.RunnerTest do
   import Prima.Test.Wait
 
   alias Prima.{Assignment, RunnerControl}
-  alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
+  alias Locus.Runtime.Test.{Runners, ScriptedHost, ScriptedKeeper}
 
   @echo File.read!(Path.expand("../../support/runtime/test_wasm/echo.wasm", __DIR__))
   @boot "boot_runner_test"
@@ -40,7 +40,6 @@ defmodule Locus.Runtime.RunnerTest do
 
     on_exit(fn ->
       :socket.close(service)
-      :socket.close(runner_end)
       :socket.close(listener)
       File.rm(path)
     end)
@@ -75,17 +74,9 @@ defmodule Locus.Runtime.RunnerTest do
          stop: fn status -> send(test, {:stopped, status}) end}
       )
 
-    # The runner's control port polls `runner_end`'s descriptor, which it
-    # does not own. A port can outlive its owner, writing out what it was
-    # given first, and has stopped polling only once it has left the port
-    # table: a descriptor closed before then is reused by the next test's
-    # sockets, and this port's late release takes the descriptor from them.
-    # Registered last, this runs first, once the runner has stopped and
-    # before the sockets close.
-    [control] =
-      for port <- Port.list(), Port.info(port, :connected) == {:connected, runner}, do: port
-
-    on_exit(fn -> wait_until(fn -> control not in Port.list() end, 5_000) end)
+    # The runner's control port polls `runner_end`'s descriptor, so that
+    # socket outlives this test until the port has gone.
+    Runners.control_gone_at_exit(runner_end, runner)
 
     {:ok, host: host, service: service}
   end
@@ -311,11 +302,13 @@ defmodule Locus.Runtime.RunnerTest do
     # The guest's bytes are held, so its call outlasts the attempt's bound.
     # A guest spinning past it instead would keep its native thread, and
     # the engine worker under it, for the rest of this VM's run: the kill
-    # frees only its BEAM process.
+    # frees only its BEAM process. The bound is counted from the attempt's
+    # making, so on a loaded host it can run out before the guest asks for
+    # its bytes: the attempt fails either way, and its held report keeps it
+    # open past the deadline.
     attempt = echo!(host, timeout_ms: 300)
     hold_artifact!(host, @echo)
     assign(service, attempt)
-    assert_receive {:held, _fetch}, 5_000
 
     assert %{type: :exit, runner: "runner_under_test", open: [held]} = frame(service)
     assert held == attempt.attempt

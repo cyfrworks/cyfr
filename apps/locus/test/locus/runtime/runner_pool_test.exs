@@ -598,11 +598,15 @@ defmodule Locus.Runtime.RunnerPoolTest do
     serve!(pool)
     {:ok, busy, _} = RunnerPool.take(pool, "ath_a", "exec_1")
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)
+    # The keeper tells its loss to the spawns it has recorded.
+    spawn_of(keeper, busy)
 
     ScriptedKeeper.kill!(keeper)
 
-    assert_receive {RunnerPool, ^busy, {:gone, :channel_lost}}
+    # The pool tells the assignee as it takes the runner out of its busy
+    # ones.
     wait_until(fn -> counts(pool).busy == 0 end)
+    assert_received {RunnerPool, ^busy, {:gone, :channel_lost}}
     refute_receive {RunnerPool, _, {:gone, _}}, 100
   end
 end

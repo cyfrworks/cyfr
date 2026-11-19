@@ -93,6 +93,9 @@ defmodule Aqua.StatusTest do
   } do
     watch = start_supervised!(Aqua.Status)
     {:ok, [opened]} = Provider.status(ctx, nil)
+    # The watch hears the athanor's entries once it has handled the
+    # opening, which reaches it as a cast.
+    :sys.get_state(watch)
 
     Arca.StorageReserve.put(:depleted)
 

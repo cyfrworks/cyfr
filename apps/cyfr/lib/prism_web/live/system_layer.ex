@@ -250,6 +250,9 @@ defmodule PrismWeb.SystemLayer do
   that confirmation arrives from the stream, and goes in front of an open
   question card, which waits first in line and comes back when the
   confirmation leaves: closing the confirmation there answers nothing.
+  Drawn as its own prompt, that confirmation, and the one the component's
+  page asks for when its form sets the same answer, is titled by what it
+  allows: the component, the action's title and everyone.
 
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
@@ -2544,7 +2547,8 @@ defmodule PrismWeb.SystemLayer do
     once_only? = match?(%Prima.Refusal{reason: :removed}, reason)
 
     update_prompt(socket, id, fn prompt ->
-      prompt = Map.put(prompt, :said, Ops.error_message(reason))
+      said = if once_only?, do: Question.once_only_words(), else: Ops.error_message(reason)
+      prompt = Map.put(prompt, :said, said)
 
       if once_only?,
         do: Map.put(prompt, :choice, Map.put(Question.choice(prompt), :once_only, true)),
@@ -2890,7 +2894,7 @@ defmodule PrismWeb.SystemLayer do
         role="dialog"
         aria-modal="true"
         aria-labelledby={"#{@id}-title"}
-        aria-describedby={"#{@id}-description"}
+        aria-describedby={@shown && @shown.kind != :question && "#{@id}-description"}
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
@@ -2899,7 +2903,13 @@ defmodule PrismWeb.SystemLayer do
               id={"#{@id}-title"}
               tabindex={if @shown.kind == :question, do: "-1"}
               data-focus-first={@shown.kind == :question}
-              class="text-lg font-semibold focus:outline-none"
+              class={
+                [
+                  "text-lg font-semibold focus:outline-none",
+                  # A component's name is one word as long as the line at most.
+                  @shown.kind == :question && "min-w-0 [overflow-wrap:anywhere]"
+                ]
+              }
             >
               {title(@shown)}
             </h2>
@@ -2912,13 +2922,16 @@ defmodule PrismWeb.SystemLayer do
               phx-target={@myself}
               phx-value-id={@shown.id}
               aria-label="Close, and don't allow it this time"
+              title="Close, and don't allow it this time"
               data-test="question-close"
               class="-m-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-300 hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
             >
               <span aria-hidden="true" class="text-2xl leading-none">×</span>
             </button>
           </div>
-          <p id={"#{@id}-description"} class="text-sm text-gray-300">
+          <%!-- A question's card says what its cross does in the cross's
+            name and title alone. --%>
+          <p :if={@shown.kind != :question} id={"#{@id}-description"} class="text-sm text-gray-300">
             {description(@shown)}
           </p>
 
@@ -2960,6 +2973,7 @@ defmodule PrismWeb.SystemLayer do
 
           <Question.choices
             :if={@offered != []}
+            id={@id}
             prompt={@shown}
             offered={@offered}
             myself={@myself}
@@ -3529,6 +3543,11 @@ defmodule PrismWeb.SystemLayer do
        }),
        do: program_title(operation)
 
+  # The one answer to a component's question that needs a fresh
+  # confirmation, from its card or from the component's page alike.
+  defp title(%{kind: :confirmation, action: :question_always_any, subject: subject}),
+    do: always_any_title(subject[:preview])
+
   defp title(%{kind: :confirmation, subject: %{operation: operation}}),
     do: operation_title(operation)
 
@@ -3570,6 +3589,16 @@ defmodule PrismWeb.SystemLayer do
 
   defp operation_title(_operation), do: "Confirm a change"
 
+  # An allow, always, for everyone who starts the component, named by the
+  # component and the action's declared title its preview carries.
+  defp always_any_title(%{"resource" => resource, "details" => %{"action" => action}})
+       when is_binary(resource) and is_binary(action) do
+    name = resource |> String.split(".", parts: 2) |> List.last()
+    "Always allow #{name} to #{action}, for everyone"
+  end
+
+  defp always_any_title(_preview), do: "Always allow a component's action, for everyone"
+
   # A program's definition, by what its confirmation does to it.
   defp program_title("mcp_servers.create"), do: "Add a program"
   defp program_title("mcp_servers.update"), do: "Change a program"
@@ -3599,11 +3628,6 @@ defmodule PrismWeb.SystemLayer do
     do:
       "Nothing runs until you approve. This is what CYFR would run, as CYFR shows it: " <>
         "the app that asked drew none of it."
-
-  defp description(%{kind: :question}),
-    do:
-      "It asks before it does this, and waits for your answer. Closing this with × " <>
-        "doesn't allow it, this time."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:

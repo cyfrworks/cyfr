@@ -130,6 +130,10 @@
 #   thread USER_ID TEXT
 #       A thread in the person's athanor holding one message, TEXT.
 #
+#   thread_read USER_ID THREAD_ID
+#       The contents of the messages of the person's thread THREAD_ID, in
+#       order, as the storage's own door reads them.
+#
 #   console SESSION_TOKEN TOOL ARGUMENTS_JSON
 #       TOOL called as the console calls it for the session's person
 #       (`PrismWeb.Ops.call_tool/3`, through the gate): a proxied
@@ -958,5 +962,10 @@ fn args ->
         })
 
       answer.(%{thread_id: thread.id, athanor_id: ctx.athanor_id})
+
+    ["thread_read", user_id, thread_id] ->
+      actor = Sanctum.Context.actor(person_ctx.(user_id))
+      messages = Arca.ThreadStorage.messages(actor, thread_id)
+      answer.(%{contents: Enum.map(messages, & &1.content)})
   end
 end

@@ -22,6 +22,20 @@ defmodule Prima.Test.Wait do
 
   import ExUnit.Assertions
 
+  @receive_ms 1_000
+
+  @doc """
+  How long an `assert_receive` that names no bound waits for its message,
+  in every app's suite: each `test/test_helper.exs` starts ExUnit with it.
+
+  The message ends the wait when it comes, so a passing test waits no
+  longer under a wider bound; ExUnit's own 100 ms is shorter than a loaded
+  machine takes to carry a message across two processes. `refute_receive`
+  keeps ExUnit's bound, which every passing use of it waits out.
+  """
+  @spec receive_ms() :: pos_integer()
+  def receive_ms, do: @receive_ms
+
   @poll_ms 10
   @default_timeout_ms 2_000
 

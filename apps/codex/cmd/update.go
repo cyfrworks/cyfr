@@ -77,16 +77,11 @@ The update holds the stack's lock from before its first docker call to its end, 
 
 // The release's manifest and the scaffold files, each a package variable so
 // tests substitute them; production calls the verified release fetch and
-// the checksum-verified scaffold fetch.
+// the checksum-verified scaffold fetch. Only a build tagged releaseproof
+// (release_proof.go) points them elsewhere.
 var (
 	fetchManifest = release.FetchManifest
-	fetchScaffold = func(version string) (scaffoldRelease, error) {
-		r, err := scaffold.Fetch(version)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
+	fetchScaffold = fetchVerifiedScaffold
 	// updateNow names the snapshot directory and stamps snapshot.json.
 	updateNow = time.Now
 	// liveSlotsWindow bounds the offline re-read, measured from the end of
@@ -133,6 +128,16 @@ const (
 	// expands a relative path setting.
 	appWorkdir = "/app"
 )
+
+// fetchVerifiedScaffold is the release's scaffold verified against its
+// signed checksums.txt (scaffold.Fetch).
+func fetchVerifiedScaffold(version string) (scaffoldRelease, error) {
+	r, err := scaffold.Fetch(version)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
 
 // bundledServices are the services of the bundled stack besides cyfr, whose
 // fields ensureComposeFields keeps; caddy and tailscale are the public

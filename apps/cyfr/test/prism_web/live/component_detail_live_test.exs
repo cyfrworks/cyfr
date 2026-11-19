@@ -882,6 +882,13 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       assert html =~ ~s(data-own="true")
       [_, ref] = Regex.run(~r/data-prompt-id="confirmation-([^"]+)"/, html)
 
+      # Titled by what it allows, as the card's own confirmation is.
+      assert has_element?(
+               view,
+               "#system-layer-title",
+               "Always allow tables to delete a table, for everyone"
+             )
+
       view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
       assert_push_event(view, "system_layer:hop", %{layer: "system-layer", url: url})
       [_page, fragment] = String.split(url, "#", parts: 2)

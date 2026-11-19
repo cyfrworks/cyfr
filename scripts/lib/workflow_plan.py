@@ -68,7 +68,9 @@ local substitution: the line that loads the Locus image a download step
 fetched becomes a check that the image the gate built is there.
 
 A construct the plan cannot run as CI does fails it, naming the step:
-an expression beyond the matrix, runner.temp, github.workspace, the status
+an expression beyond the matrix, runner.temp, github.workspace,
+github.event_name (`push`: a job run here stands for main's push run and
+the tag's, which run every step a pull request's run skips), the status
 functions, contains(), ==, !=, !, && and || (and, in a build's
 build-args, a step's output), an unknown action or `with:` input, a
 `shell:` other than bash, continue-on-error other than WORLD_CHECK, a job
@@ -1063,7 +1065,7 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
         raise Refused("the job has no timeout-minutes, which is each step's deadline here")
     deadline = int(job["timeout-minutes"]) * 60
     entry = matrix_entry(job, picks)
-    ctx = {"matrix": entry, "runner.temp": temp, "github.workspace": root}
+    ctx = {"matrix": entry, "runner.temp": temp, "github.workspace": root, "github.event_name": "push"}
     steps = job.get("steps") or []
     names = [s.get("name") for s in steps]
     for n in excepts + ([only] if only else []):
