@@ -137,4 +137,22 @@ defmodule Prima.CodeLinesTest do
       CodeLines.code_lines(~S|x = "unterminated| <> "\n")
     end
   end
+
+  describe "comments" do
+    test "a comment is read from its # to its line's end, and a # inside text is none" do
+      source = ~S'''
+      # one
+      defmodule M do
+        @moduledoc """
+        # not a comment
+        """
+        def a, do: "# nor this" <> ~s(# nor this) # two
+        @doc "# nor this"
+        def b, do: :ok
+      end
+      '''
+
+      assert CodeLines.comments(source) == [{"# one", 1}, {"# two", 6}]
+    end
+  end
 end

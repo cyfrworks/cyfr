@@ -76,7 +76,9 @@
 # Usage: TAILNET_REAL_AUTH_KEY_FILE=… [TAILNET_REAL_SHARED_LOGIN=…] tests/tailnet-real/run.sh
 # Needs docker with a daemon that reaches the internet, go and python3.
 # Everything it makes is named for the run and removed when it ends, its
-# nodes logged out first. Sourced, it defines its predicates and runs
+# nodes logged out first; a run killed before its teardown leaves its
+# containers, network, volumes and stand-in image for its runner to remove,
+# as no sweep knows their names. Sourced, it defines its predicates and runs
 # nothing.
 step() { printf '\n=== %s\n' "$*"; }
 ok() { printf 'ok    %s\n' "$*"; }

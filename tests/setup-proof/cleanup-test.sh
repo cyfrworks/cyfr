@@ -13,7 +13,9 @@
 #
 # Usage: tests/setup-proof/cleanup-test.sh
 # Env: SETUP_PROOF_IMAGE, an image with `sleep` (default cyfr:setup-proof),
-# which is never pulled.
+# which is never pulled: build the default as tests/setup-proof/run.sh
+# does, `docker build -f Dockerfile -t cyfr:setup-proof .`, or name any
+# local image with `sleep`, as CI names cyfr:compose-proof.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -44,7 +46,7 @@ finish() {
 trap finish EXIT
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
-  echo "::error::the image $IMAGE is not here; set SETUP_PROOF_IMAGE to one with sleep" >&2
+  echo "::error::the image $IMAGE is not here: build it as tests/setup-proof/run.sh does, docker build -f Dockerfile -t $IMAGE ., or set SETUP_PROOF_IMAGE to any local image with sleep" >&2
   exit 1
 }
 docker create --pull=never --name "$CONTAINER" --label "$LABEL=$CONTAINER" --network none \

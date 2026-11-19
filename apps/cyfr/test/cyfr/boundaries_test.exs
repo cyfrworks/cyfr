@@ -2635,8 +2635,9 @@ defmodule Cyfr.BoundariesTest do
 
       assert found == [],
              """
-             A direct filesystem call carries no `#{seam.marker}` marker on its
-             line or within the #{seam.window} lines above it:
+             A direct filesystem call carries no comment matching
+             `#{Regex.source(seam.marker)}` on its line or within the
+             #{seam.window} lines above it:
 
              #{Enum.join(found, "\n")}
 
@@ -2712,6 +2713,24 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.filesystem_violations([planted]) == []
     end
 
+    test "a marker names one group letter, which no word character follows" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          def a(p), do: File.read(p) # arca:bypass-ok=AA
+          def b(p), do: File.read(p) # arca:bypass-ok=Apple
+          def c(p), do: File.read(p) # arca:bypass-ok=A
+          def d(p), do: File.read(p) # arca:bypass-ok=A, a reason
+          def e(p), do: File.read(p) # arca:bypass-ok=E — a reason
+        end
+        ''')
+
+      assert planted |> List.wrap() |> Boundaries.filesystem_violations() |> line_numbers() == [
+               2,
+               3
+             ]
+    end
+
     test "a marker five lines above, or below, covers nothing" do
       planted =
         planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
@@ -2732,14 +2751,13 @@ defmodule Cyfr.BoundariesTest do
                [7, 9]
     end
 
-    test "the entire-module marker exempts the file, for a group the seam names" do
+    test "the entire-module marker in a comment exempts the file, for a group the seam names" do
       source = fn group ->
         """
+        # arca:bypass-ok=#{group} — entire module: a scratch sandbox.
         defmodule Locus.Planted do
           @moduledoc \"\"\"
           Builds in a scratch sandbox.
-
-          ## arca:bypass-ok=#{group} — entire module
           \"\"\"
 
           @root "/tmp"
@@ -2756,7 +2774,50 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.filesystem_violations([
                planted_file("apps/locus/lib/locus/planted.ex", source.("F"))
              ])
-             |> line_numbers() == [10]
+             |> line_numbers() == [9]
+    end
+
+    test "a marker's words in a string or a document excuse no call, and mark no module" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          @moduledoc """
+          Reads files.
+
+          ## arca:bypass-ok=D — entire module
+          """
+
+          @doc "arca:bypass-ok=D — a document."
+          def a(p), do: File.read(p)
+
+          def b(p) do
+            Logger.info("arca:bypass-ok=D — a string")
+            File.read(p)
+          end
+
+          def c(p), do: File.read(p) <> "arca:bypass-ok=D"
+
+          @tag ~s(arca:bypass-ok=D)
+          def d(p), do: File.rm(p)
+
+          @note """
+          arca:bypass-ok=D
+          """
+          def e(p), do: File.rm(p)
+
+          # arca:bypass-ok — names no group
+          def f(p), do: File.rm(p)
+        end
+        ''')
+
+      assert planted |> List.wrap() |> Boundaries.filesystem_violations() |> line_numbers() ==
+               [9, 13, 16, 19, 24, 27]
+
+      assert Regex.source(Boundaries.filesystem_seam().entire_module) in Boundaries.stale_filesystem_exemptions(
+               [
+                 planted
+               ]
+             )
     end
 
     test "the adapters and the storage behaviour are the seam, not callers of it" do
@@ -2802,16 +2863,20 @@ defmodule Cyfr.BoundariesTest do
     end
   end
 
-  # Every file the seam reads, with its text for the marker and its code
-  # lines for the calls. Unlike `scan/1`, the catalog's own file is read.
+  # Every file the seam reads, with its comments for the marker and its
+  # code lines for the calls. Unlike `scan/1`, the catalog's own file is
+  # read.
   defp filesystem_tree do
     for path <- SourceTree.files!(Path.join(root(), Boundaries.filesystem_seam().from)),
-        do: {Path.relative_to(path, root()), SourceTree.read(path), SourceTree.code_lines(path)}
+        do:
+          {Path.relative_to(path, root()), CodeLines.comments(SourceTree.read(path)),
+           SourceTree.code_lines(path)}
   end
 
-  # A planted file as the seam reads one: its text, and its code lines
+  # A planted file as the seam reads one: its comments and its code lines,
   # through the one filter.
-  defp planted_file(path, source), do: {path, source, CodeLines.code_lines(source)}
+  defp planted_file(path, source),
+    do: {path, CodeLines.comments(source), CodeLines.code_lines(source)}
 
   defp line_numbers(found) do
     for violation <- found do

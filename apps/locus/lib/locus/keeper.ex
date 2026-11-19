@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# arca:bypass-ok=D — entire module: the only paths touched are the channel's
+# `/proc/self/fd` link and the attach socket in this node's private
+# directory.
 defmodule Locus.Keeper do
   @moduledoc """
   The one client of cyfr-locus (`apps/locus/keeper`): every role of a
@@ -9,11 +12,6 @@ defmodule Locus.Keeper do
   runner of the runtime as a long-lived spawn with a control channel and
   a relay (`spawn/2` with `control: true`), which the runtime's adapter
   (`Locus.Runtime.Keeper.Channel`) asks for.
-
-  ## arca:bypass-ok=D — entire module
-
-  The only paths touched are the channel's `/proc/self/fd` link and the
-  attach socket in this node's private directory.
 
   ## The channel
 

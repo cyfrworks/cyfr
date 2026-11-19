@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# arca:bypass-ok=D — entire module: sources arrive as a map and reach the
+# build only inside its input archive; the one filesystem read is the check
+# that the configured Cargo seed exists.
 defmodule Locus.Builder do
   @moduledoc """
   Builds a component from its sources: Rust to a WASM component with
@@ -8,12 +11,6 @@ defmodule Locus.Builder do
   and Vite. It takes a build request as the build wire reads it
   (`Prima.BuilderProtocol`) and answers output files, or the wire's refusal
   for why there are none.
-
-  ## arca:bypass-ok=D — entire module
-
-  Sources arrive as a map and reach the build only inside its input
-  archive; the one filesystem read is the check that the configured Cargo
-  seed exists.
 
   ## How a build runs
 
