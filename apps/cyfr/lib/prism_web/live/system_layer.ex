@@ -231,7 +231,9 @@ defmodule PrismWeb.SystemLayer do
   `answered`, `expired` or `withdrawn` fact, letting go of any
   confirmation it waited on. The desktop's layer and the panel's draw
   none. A choice sends its answer through `question.answer`; closing the
-  card without choosing is "Don't allow", once. A card reports to the page
+  card without choosing, by the cross in its header or by Escape, is
+  "Don't allow", once, and the cross is the question card's one close
+  control. A card reports to the page
   `:confirmed` once its answer is kept, and `:dismissed` when it is
   closed, so a page that lists permissions reads them again; every other
   answer the layer hears of, given on another of the person's screens, is
@@ -1380,6 +1382,22 @@ defmodule PrismWeb.SystemLayer do
 
   defp panel_of(_panels, nil), do: nil
 
+  # The choices the shown question's card draws, by the names its buttons
+  # carry (`Question.offered/1`): none while they are not drawn, under a
+  # covered layer, on a client that cannot confirm, or while a
+  # confirmation of an earlier choice waits in the card. The drawing and
+  # the `question_answer` event both ask here, so no answer is sent that
+  # the card does not show.
+  defp question_offered(assigns) do
+    with %{kind: :question} = prompt <- shown(assigns),
+         true <- may_confirm?(assigns[:context], prompt),
+         nil <- panel_of(assigns.panels, prompt) do
+      Question.offered(prompt)
+    else
+      _not_drawn -> []
+    end
+  end
+
   # The panel of `ref` when its prompt is the open one: a click meant for a
   # prompt already gone never acts on another.
   defp open_panel(socket, ref) do
@@ -1565,38 +1583,20 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # A question's choice, sent as its answer (`Question.answer/2`), while no
-  # confirmation of an earlier choice waits in its card.
+  # A question's choice its card draws (`question_offered/1`), sent as its
+  # answer (`Question.answer/1`).
   def handle_event("question_answer", %{"id" => id, "choice" => choice}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       with {:ok, prompt} <- open(socket, id, [:question]),
-           nil <- panel_of(socket.assigns.panels, prompt),
-           this_caller = Question.choice(prompt).this_caller and Question.switchable?(prompt),
-           {:ok, answer} <- Question.answer(choice, this_caller) do
+           true <- choice in question_offered(socket.assigns) do
         prompt = Map.delete(prompt, :said)
-        {:noreply, socket |> assign(:current, prompt) |> question_answer(prompt, answer)}
+
+        {:noreply,
+         socket |> assign(:current, prompt) |> question_answer(prompt, Question.answer(choice))}
       else
         _unanswerable -> {:noreply, socket}
       end
     end)
-  end
-
-  # The card's second press, and its switch, kept on the shown prompt.
-  def handle_event("question_more", %{"id" => id}, socket) do
-    case open(socket, id, [:question]) do
-      {:ok, prompt} -> {:noreply, put_question_choice(socket, prompt, more: true)}
-      :none -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("question_switch", %{"id" => id}, socket) do
-    with {:ok, prompt} <- open(socket, id, [:question]),
-         true <- Question.switchable?(prompt) do
-      choice = Question.choice(prompt)
-      {:noreply, put_question_choice(socket, prompt, this_caller: not choice.this_caller)}
-    else
-      _unswitchable -> {:noreply, socket}
-    end
   end
 
   def handle_event("confirm", %{"id" => id}, socket) do
@@ -2565,23 +2565,16 @@ defmodule PrismWeb.SystemLayer do
   # read of what waits if the answer did not land. Its page was told
   # `:dismissed`, so an answer that landed is not told again.
   defp dismiss_question(socket, %{kind: :question, subject: %{ref: ref}} = prompt) do
-    {:ok, answer} = Question.answer("deny_once", false)
-
-    case Ops.call_tool(socket, "question/answer", %{"ref" => ref, "answer" => answer}) do
+    case Ops.call_tool(socket, "question/answer", %{
+           "ref" => ref,
+           "answer" => Question.dismissal()
+         }) do
       {:ok, _answered} -> answered_here(socket, prompt.id)
       _unanswered -> socket
     end
   end
 
   defp dismiss_question(socket, _prompt), do: socket
-
-  defp put_question_choice(socket, prompt, change),
-    do:
-      assign(
-        socket,
-        :current,
-        Map.put(prompt, :choice, Enum.into(change, Question.choice(prompt)))
-      )
 
   # ---------------------------------------------------------------------------
   # Pairing
@@ -2833,6 +2826,14 @@ defmodule PrismWeb.SystemLayer do
   defp over_page?(%{kind: :pairing}), do: true
   defp over_page?(_prompt), do: false
 
+  # The prompt drawn: the open one, or none while the layer is covered and
+  # the open one is not drawn over a page (`render/1`).
+  defp shown(%{covered: true, current: current}) do
+    if over_page?(current), do: current
+  end
+
+  defp shown(%{current: current}), do: current
+
   # ---------------------------------------------------------------------------
   # Render
   # ---------------------------------------------------------------------------
@@ -2845,10 +2846,7 @@ defmodule PrismWeb.SystemLayer do
     # render from `covered` and `current` together, so the browser sees the
     # dialog open again once the layer is uncovered, though `current`
     # itself never moved.
-    shown =
-      if assigns.covered and not over_page?(assigns.current),
-        do: nil,
-        else: assigns.current
+    shown = shown(assigns)
 
     # A prompt drawn over a page that waits behind one hidden there (the
     # devices', behind a frame's) is not put in front of it, which may hold
@@ -2856,6 +2854,7 @@ defmodule PrismWeb.SystemLayer do
     # where the hidden one is.
     held_back = assigns.covered and is_nil(shown) and Enum.any?(assigns.queue, &over_page?/1)
     may = shown && may_confirm?(assigns[:context], shown)
+    offered = question_offered(assigns)
 
     panel =
       case panel_of(assigns.panels, shown) do
@@ -2868,6 +2867,7 @@ defmodule PrismWeb.SystemLayer do
         shown: shown,
         held_back: held_back,
         may: may,
+        offered: offered,
         # A record is proven here only by a client with a person behind it;
         # one with none waits for another client of the person.
         proves: panel != nil and can_prove?(assigns[:context]),
@@ -2894,14 +2894,30 @@ defmodule PrismWeb.SystemLayer do
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
-          <h2
-            id={"#{@id}-title"}
-            tabindex={if @shown.kind == :question, do: "-1"}
-            data-focus-first={@shown.kind == :question}
-            class="text-lg font-semibold focus:outline-none"
-          >
-            {title(@shown)}
-          </h2>
+          <div class="flex items-start justify-between gap-3">
+            <h2
+              id={"#{@id}-title"}
+              tabindex={if @shown.kind == :question, do: "-1"}
+              data-focus-first={@shown.kind == :question}
+              class="text-lg font-semibold focus:outline-none"
+            >
+              {title(@shown)}
+            </h2>
+            <%!-- A question's one close, for a finger as for Escape: the
+              dismissal, "Don't allow", once. --%>
+            <button
+              :if={@shown.kind == :question}
+              type="button"
+              phx-click="dismiss"
+              phx-target={@myself}
+              phx-value-id={@shown.id}
+              aria-label="Close, and don't allow it this time"
+              data-test="question-close"
+              class="-m-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-300 hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+            >
+              <span aria-hidden="true" class="text-2xl leading-none">×</span>
+            </button>
+          </div>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">
             {description(@shown)}
           </p>
@@ -2943,8 +2959,9 @@ defmodule PrismWeb.SystemLayer do
           </p>
 
           <Question.choices
-            :if={@may and @shown.kind == :question and is_nil(@panel)}
+            :if={@offered != []}
             prompt={@shown}
+            offered={@offered}
             myself={@myself}
             button_class={&button_class/1}
           />
@@ -3408,7 +3425,7 @@ defmodule PrismWeb.SystemLayer do
     ~H"""
     <div class="flex flex-wrap justify-end gap-2">
       <button
-        :if={not (@prompt.kind == :question and @may)}
+        :if={@prompt.kind != :question}
         type="button"
         phx-click="dismiss"
         phx-target={@myself}
@@ -3584,7 +3601,9 @@ defmodule PrismWeb.SystemLayer do
         "the app that asked drew none of it."
 
   defp description(%{kind: :question}),
-    do: "It asks before it does this, and waits for your answer. Closing this is Don't allow."
+    do:
+      "It asks before it does this, and waits for your answer. Closing this with × " <>
+        "doesn't allow it, this time."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:

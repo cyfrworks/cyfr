@@ -6016,8 +6016,13 @@ defmodule PrismWeb.SystemLayerTest do
         text = described(view)
         assert String.starts_with?(text, opening), "#{kind}: #{text}"
 
-        # A question's card offers its choices, "Don't allow" among them,
-        # and no other close: it is closed as the browser's Escape closes it.
+        # A question's card alone draws the cross in its header, its one
+        # close; here it is closed as the browser's Escape closes it.
+        assert has_element?(view, ~s([data-test="question-close"])) == (kind == :question),
+               inspect(kind)
+
+        refute kind == :question and has_element?(view, ~s([data-test="prompt-dismiss"]))
+
         if kind == :question,
           do: view |> layer() |> render_click("dismiss", %{"id" => prompt.id}),
           else: view |> element(~s(button[phx-click="dismiss"])) |> render_click()

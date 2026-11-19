@@ -66,8 +66,9 @@ defmodule Arca.UnitSuccessorMembersBackendsTest do
   public successor protocol are that module's. The park
   delegates all operations to real Local or S3, preserving each adapter's
   conditionals and listing. The S3 fixtures own a distinct prefix per test.
-  Both variants run only under :s3_integration so one exclusive host check
-  can exercise the exact three schedules on both real storage backends.
+  Both variants run only under :s3_integration, in test.yml's s3-minio
+  job, which exercises the exact three schedules on both real storage
+  backends.
   This is still a simulation of a second node's independent local lock.
   """
   use ExUnit.Case,
