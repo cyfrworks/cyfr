@@ -83,6 +83,75 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     {:ok, source: source, session: session}
   end
 
+  for damage <- [:node, :ingress], route <- [:action, :invoke] do
+    test "a frame whose grant lost its own #{damage} is refused its #{route} as a damaged head",
+         %{source: source} do
+      damage = unquote(damage)
+      route = unquote(route)
+      name = "lost-#{damage}-#{route}"
+      ref = "tincture:local.#{name}"
+
+      digest =
+        tincture!(
+          source,
+          name,
+          %{"connect" => ["api.beyond.example"], "actions" => ["system.status"]},
+          [%{"ref" => "reagent:local.echo", "reason" => "echo"}]
+        )
+
+      frame = frame!(source, name, digest)
+      assert action(frame.bearer, "system.status").status == 200
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          source,
+          %{
+            id: "prof_" <> String.replace(name, "-", "_"),
+            kind: :owner,
+            source_ref: ref,
+            label: "default",
+            status: :active
+          },
+          %{
+            id: "cons_lost_#{damage}_#{route}",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: :live,
+            commit_digest: "sha256:commit",
+            resolved_policy: lost_policy(damage, ref),
+            activation: %{ref => "sha256:act"}
+          }
+        )
+
+      assert %{class: "corrupt"} = refused(lost_request(route, frame.bearer), route)
+    end
+  end
+
+  # A head's policy that lost the tincture's own node, or kept the node and
+  # lost its ingress.
+  defp lost_policy(:node, _ref), do: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => %{}})
+
+  defp lost_policy(:ingress, ref),
+    do:
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          ref => %{"limits" => Prima.Test.AuthorityFixtures.limits_map(), "edges" => %{}}
+        }
+      })
+
+  defp lost_request(:action, bearer), do: action(bearer, "system.status")
+
+  defp lost_request(:invoke, bearer),
+    do:
+      data(
+        :invoke,
+        TinctureWire.request(:invoke, %{ref: "r:local.echo:1.0.0", operation: "run", args: %{}}),
+        bearer: bearer
+      )
+
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
@@ -779,6 +848,63 @@ defmodule Emissary.Web.TinctureDataControllerTest do
                  "input" => %{"operation" => "run", "params" => %{"x" => 1}}
                } = Jason.decode!(row.input)
       end)
+    end
+
+    # A public page roots at its public profile, whose head here grants
+    # its ingress nothing: nothing of where the page's material goes is
+    # read before the invoke is handed to the gate.
+    test "a public page's invoke runs on its public profile's grant", %{source: source} do
+      name = "beyond-pub"
+      node = "tincture:local.#{name}"
+
+      tincture!(source, name, %{"connect" => ["api.beyond.example"]}, [
+        %{"ref" => "reagent:local.echo", "reason" => "echo"}
+      ])
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          source,
+          %{
+            id: "prof_beyond_pub_public",
+            kind: :public,
+            source_ref: node,
+            label: "public",
+            status: :active
+          },
+          %{
+            id: "cons_beyond_pub_public",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :edge_only,
+            shape_digest: :live,
+            commit_digest: "sha256:commit",
+            resolved_policy: Sanctum.Test.ConsentFixtures.empty_policy(node),
+            activation: %{node => "sha256:act"}
+          }
+        )
+
+      address = address(source)
+
+      body =
+        TinctureWire.request(:invoke, %{
+          ref: "r:local.echo:1.0.0",
+          operation: "run",
+          args: %{"x" => 1},
+          public: public(address, name)
+        })
+
+      data(:invoke, body)
+
+      assert [row] = mcp_rows("tincture")
+      assert row.action == "invoke_public"
+
+      assert %{
+               "athanor" => ^address,
+               "tincture_name" => "beyond-pub",
+               "reference" => "r:local.echo:1.0.0",
+               "input" => %{"operation" => "run", "params" => %{"x" => 1}}
+             } = Jason.decode!(row.input)
     end
   end
 

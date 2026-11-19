@@ -234,6 +234,55 @@ defmodule Emissary.Web.FrameSocketTest do
     {:ok, source: source}
   end
 
+  test "a stream ends as a damaged head when its grant loses its own ingress", %{source: source} do
+    name = "socket-lost-ingress"
+    ref = "tincture:local.#{name}"
+    digest = app!(source, name, [%{"name" => "mcp_servers.changes"}], [@origin])
+    frame = frame!(source, name, digest)
+    socket = Socket.connect(:shared)
+    Socket.subscribe(socket, 1, frame.bearer, "mcp_servers.changes")
+    assert answer(socket, 1) == TinctureWire.subscribed(1)
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        source,
+        %{
+          id: "prof_" <> String.replace(name, "-", "_"),
+          kind: :owner,
+          source_ref: ref,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "cons_socket_lost_ingress",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: :live,
+          commit_digest: "sha256:commit",
+          resolved_policy:
+            Jason.encode!(%{
+              "canonical" => "jcs-1",
+              "nodes" => %{
+                ref => %{"limits" => Prima.Test.AuthorityFixtures.limits_map(), "edges" => %{}}
+              }
+            }),
+          activation: %{ref => "sha256:act"}
+        }
+      )
+
+    :ok =
+      Phoenix.PubSub.broadcast(
+        Cyfr.PubSub,
+        Cyfr.Bus.caller_invalidated_global(),
+        Cyfr.Bus.CallerInvalidated.new(source.session_token_hash)
+      )
+
+    assert Socket.state(socket).subs == %{}
+    assert %{"type" => "ended", "error" => %{"class" => "corrupt"}} = answer(socket, 1)
+  end
+
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
