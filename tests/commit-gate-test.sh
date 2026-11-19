@@ -2463,28 +2463,34 @@ start_gate int STUB_HOLD=sqlite_test_compile -- "$gate" -n 2 -l "$scratch/int.lo
 i=$gate_pid
 until_true 60 test -s "$scratch/int.trace/held.sqlite_test_compile" || fail "the INT case's step never started: $(cat "$scratch/int.err")"
 held=$(cat "$scratch/int.trace/held.sqlite_test_compile")
-alive "$held" || fail 'the held step was not running before the INT'
+alive "$held" || fail "the held step was not running before the INT$(said int)"
 kill -INT "$i"
-gate_status "$i"; [ "$gate_rc" = 130 ] || fail "a gate given INT exited $gate_rc, not 130$(said int)"
-(framed int "$i" 130) || fail "the INT case's gate was not framed$(said int)"
-dead "$held" || fail 'a step outlived a gate given INT'
+gate_status "$i"
+# Whichever check fails says what the gate's wait returned and what the
+# gate wrote.
+got=": the gate's wait returned $gate_rc (130 expected, and 130 on its last line)$(said int)"
+[ "$gate_rc" = 130 ] || fail "a gate given INT did not exit 130$got"
+(framed int "$i" 130) || fail "the INT case's gate was not framed$got"
+dead "$held" || fail "a step outlived a gate given INT$got"
 echo 'ok: INT'
 
 # --- HUP, and a signal the gate does not trap --------------------------------------
 # HUP stops the gate as TERM does, with 129. USR1 is not trapped: Bash runs
 # the EXIT trap with $? at 0 and then dies of it, and the exit line must
-# still not say 0.
+# still not say 0: its wait returns 138 and its last line says 1.
 for spec in hup:HUP:129:129 usr1:USR1:1:138; do
   IFS=: read -r name sig line want <<<"$spec"
   start_gate "$name" STUB_HOLD=sqlite_test_compile -- "$gate" -n 2 -l "$scratch/$name.log"
   p=$gate_pid
   until_true 60 test -s "$scratch/$name.trace/held.sqlite_test_compile" || fail "the $sig case's step never started: $(cat "$scratch/$name.err")"
   held=$(cat "$scratch/$name.trace/held.sqlite_test_compile")
-  alive "$held" || fail "the held step was not running before the $sig"
+  alive "$held" || fail "the held step was not running before the $sig$(said "$name")"
   kill -"$sig" "$p"
-  gate_status "$p"; [ "$gate_rc" = "$want" ] || fail "a gate given $sig exited $gate_rc, not $want$(said "$name")"
-  (framed "$name" "$p" "$line") || fail "the $sig case's gate was not framed$(said "$name")"
-  dead "$held" || fail "a step outlived a gate given $sig"
+  gate_status "$p"
+  got=": the gate's wait returned $gate_rc ($want expected, and $line on its last line)$(said "$name")"
+  [ "$gate_rc" = "$want" ] || fail "a gate given $sig did not exit $want$got"
+  (framed "$name" "$p" "$line") || fail "the $sig case's gate was not framed$got"
+  dead "$held" || fail "a step outlived a gate given $sig$got"
 done
 echo 'ok: HUP, and an untrapped USR1 not reported as success'
 
