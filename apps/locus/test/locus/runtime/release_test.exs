@@ -151,6 +151,7 @@ defmodule Locus.Runtime.ReleaseTest do
     assert_receive {^port, :eof}, 2_000
 
     Port.close(port)
+    Locus.Runtime.Test.Runners.port_gone(port)
     :socket.close(runner_end)
     :socket.close(listener)
     File.rm(path)

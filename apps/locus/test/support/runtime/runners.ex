@@ -10,6 +10,11 @@ defmodule Locus.Runtime.Test.Runners do
   know no runner of the work it started is left, since one still running
   a subtree could make its next host call after the test moved on, and
   that no report of a runner it ended still lands after that.
+
+  And what a test waits on before it closes a socket whose descriptor it
+  gave a port: the port gone from the port table (`port_gone/1`).
+  `control_gone_at_exit/2` keeps such a socket open past the test's end
+  until a runner's control port has gone.
   """
 
   import Prima.Test.Wait
@@ -76,4 +81,62 @@ defmodule Locus.Runtime.Test.Runners do
   @spec reports_in_flight() :: [pid()]
   def reports_in_flight,
     do: Map.keys(:sys.get_state(Locus.Runtime.WorkerService).reports)
+
+  @doc """
+  Keeps `socket` open past the test's end until the control port of the
+  runner process `runner` has left the port table, and closes it then.
+  `socket` is the one whose descriptor the test gave that runner
+  (`Locus.Runtime.Runner`); the test calls this once the runner runs, and
+  does not close the socket itself.
+
+  The port polls a descriptor it does not own. A port can outlive its
+  owner, writing out what it was given first, and has stopped polling only
+  once it has left the port table: a descriptor closed before then is
+  reused by the next test's sockets, and the port's late release takes the
+  descriptor from them.
+
+  A socket closes with the process that owns it, and the test process has
+  exited before any `on_exit` callback runs: ExUnit runs them once the
+  test's supervisor is down, which goes down with the test process it is
+  linked to. So the socket is given to a process of this fixture's, which
+  closes it when the callback has seen the port gone.
+  """
+  @spec control_gone_at_exit(:socket.socket(), pid()) :: :ok
+  def control_gone_at_exit(socket, runner) when is_pid(runner) do
+    [control] =
+      for port <- Port.list(), Port.info(port, :connected) == {:connected, runner}, do: port
+
+    keeper =
+      spawn(fn ->
+        receive do
+          {:close, from} -> send(from, {self(), :socket.close(socket)})
+        end
+      end)
+
+    :ok = :socket.setopt(socket, {:otp, :controlling_process}, keeper)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      try do
+        port_gone(control)
+        # The descriptor was the port's alone until now.
+        {:ok, _descriptor} = :socket.getopt(socket, {:otp, :fd})
+      after
+        send(keeper, {:close, self()})
+
+        receive do
+          {^keeper, _closed} -> :ok
+        end
+      end
+    end)
+  end
+
+  @doc "Until `port` has left the port table, five seconds at most."
+  @spec port_gone(port()) :: :ok
+  def port_gone(port) when is_port(port) do
+    wait_until(
+      fn -> port not in Port.list() end,
+      5_000,
+      "#{inspect(port)} to leave the port table"
+    )
+  end
 end
