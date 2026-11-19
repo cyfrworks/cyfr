@@ -2693,7 +2693,16 @@ defmodule Opus.BrowserTest do
       :ok = Driver.flood(driver)
       :ok = Driver.release(driver, id)
       :ok = Driver.image(driver, cast, 2, whole)
-      eventually(fn -> lost?(ctx) end, "the tail")
+
+      # The terminal lets some go as soon as the answer passes what it
+      # keeps, which may be a read before it has the second image: the
+      # holder is let on only once the tail ends with that image, or it
+      # would meet it after the cast it belongs to had ended.
+      eventually(
+        fn -> tail_ends_with?(ctx, Driver.image_frame(cast, 2, whole)) end,
+        "the tail to end with the second image"
+      )
+
       :sys.resume(holder)
 
       assert {:ok, %{"text" => ^text}} = Task.await(task, 20_000)
@@ -3091,6 +3100,15 @@ defmodule Opus.BrowserTest do
   # taken, and whether it let some of what came meanwhile go.
   defp outstanding?(ctx), do: Enum.any?(subscribers(ctx), &(&1.outstanding != nil))
   defp lost?(ctx), do: Enum.any?(subscribers(ctx), & &1.lost)
+
+  # Whether what the terminal keeps for its holder is a tail, and `frame`
+  # the last of it.
+  defp tail_ends_with?(ctx, frame) do
+    Enum.any?(subscribers(ctx), fn subscriber ->
+      subscriber.lost and subscriber.pending != nil and
+        String.ends_with?(subscriber.pending.bytes, frame)
+    end)
+  end
 
   defp subscribers(ctx) do
     case browser_sessions(ctx) do
