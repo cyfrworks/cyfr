@@ -126,6 +126,27 @@
 # run <check> (<n> quarter[s]): <command>` or `would skip <check>:
 # <reason>` per row, and runs nothing.
 #
+# A handoff makes its log directory and takes its start snapshot before it
+# reads anything of the checkout, its table included, and ends, at every
+# exit after that, by writing $STAGE_LOGDIR/receipt and then printing on
+# stderr `stage: receipt: handoff <result>, commit <commit>, tree <tree>,
+# <state>, logs <logdir>`. The receipt's lines: `stage`, `result` (passed,
+# or failed and the status), `end-commit` (HEAD, read once at the end) and
+# `end-commit-tree` (that commit's tree), `start-tree` and `end-tree` (the
+# working files' tree at the start and at the end, each as a commit of
+# every file Git does not ignore would hold it, computed in a copy of the
+# index in the log directory), `state` (committed when that one commit's
+# tree is both snapshots, uncommitted when the two snapshots are one other
+# tree, moved when they differ, unknown when Git could not say),
+# `selected <check> <adapter> <files>` for each test row's planned files,
+# `left <name> <count>` for each name the selection left to the pull
+# request's run, and `row <line>` for each summary line, the stdout's,
+# which say what ran. The printed tree is the end commit's, and the word
+# beside it says whether the working files were that tree. A receipt that
+# cannot be written whole prints no receipt line, says so, and fails a
+# stage that would have passed. A log directory inside the checkout must
+# be one Git ignores, or its files count as uncommitted. Save writes none.
+#
 # Exits 0 when every row that ran passed and 1 otherwise; 64 on usage, or
 # inside a heavy-check (HEAVY_CHECK_HELD set), since the stage queues its
 # own tickets; 65 for a table that is missing or unreadable, or a line of
@@ -143,14 +164,81 @@ set -uo pipefail
 
 # Each running heavy-check's pid, and the row index (or deps) it runs.
 declare -A running=()
-finished=false launched=false
+finished=false launched=false receipting=false start_tree=
 finish() {
   local status=$?
   trap - EXIT
   trap '' INT TERM HUP
   if [ "$status" = 0 ] && ! $finished; then status=1; fi
+  if $receipting && ! receipt "$status" && [ "$status" = 0 ]; then status=1; fi
   printf '_EXIT=%s %s\n' "$$" "$status"
   exit "$status"
+}
+# The tree of the working files as a commit of them all would hold it now:
+# `git add -A` into a copy of the index in the log directory, so the index,
+# the working files, the stash and every ref stay as they were. Empty when
+# Git cannot say.
+work_tree() {
+  local copy tree=
+  copy=$(mktemp "$logdir/.index.XXXXXX") || return 0
+  if cp "$(git rev-parse --path-format=absolute --git-path index)" "$copy" 2>/dev/null; then
+    tree=$(GIT_INDEX_FILE=$copy git add -A 2>/dev/null && GIT_INDEX_FILE=$copy git write-tree 2>/dev/null) || tree=
+  fi
+  rm -f "$copy"
+  printf '%s' "$tree"
+}
+# receipt STATUS: the handoff's receipt (the header's), written to its log
+# directory, then its one line on stderr; 1, saying so, when it cannot be
+# written.
+receipt() {
+  local result=passed commit head_tree=unknown end_tree state i check adapter named listed line text
+  [ "$1" = 0 ] || result="failed $1"
+  # HEAD is read once, at the end, and its tree is that commit's.
+  if commit=$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null); then
+    head_tree=$(git rev-parse -q --verify "$commit^{tree}" 2>/dev/null) || head_tree=unknown
+  else
+    commit=unknown
+  fi
+  end_tree=$(work_tree)
+  if [ -z "$start_tree" ] || [ -z "$end_tree" ]; then state=unknown
+  elif [ "$start_tree" != "$end_tree" ]; then state=moved
+  elif [ "$start_tree" = "$head_tree" ]; then state=committed
+  else state=uncommitted; fi
+  # The text is built first and written in one write whose status is the
+  # one checked, so a full disk is a failed receipt, never a short one.
+  text=$({
+    echo "stage $stage"
+    echo "result $result"
+    echo "end-commit $commit"
+    echo "end-commit-tree $head_tree"
+    echo "start-tree ${start_tree:-unknown}"
+    echo "end-tree ${end_tree:-unknown}"
+    echo "state $state"
+    for i in ${rows[@]+"${!rows[@]}"}; do
+      [ -z "${reasons[$i]-x}" ] && runner "$i" || continue
+      IFS=$'\t' read -r _ _ check _ <<<"${rows[$i]}"
+      adapter=sqlite
+      [[ " $r_options " =~ \ -a\ ([a-z]+)\  ]] && adapter=${BASH_REMATCH[1]}
+      listed=
+      for named in "${r_paths[@]}"; do
+        if [ "$named" = '$STAGE_TESTS' ]; then listed+=" ${row_tests[$i]-}"; else listed+=" $named"; fi
+      done
+      echo "selected $check $adapter${listed% }"
+    done
+    for line in ${left_names[@]+"${left_names[@]}"}; do echo "left $line"; done
+    [ -z "${deps_line:-}" ] || echo "row $deps_line"
+    for i in ${rows[@]+"${!rows[@]}"}; do
+      IFS=$'\t' read -r _ _ check _ <<<"${rows[$i]}"
+      echo "row ${lines[$i]-$check: no result}"
+    done
+    for line in ${tickets[@]+"${tickets[@]}"}; do echo "row $line"; done
+  })
+  if ! printf '%s\n' "$text" 2>/dev/null >"$logdir/receipt.part" || ! mv -fT "$logdir/receipt.part" "$logdir/receipt" 2>/dev/null; then
+    rm -f "$logdir/receipt.part" 2>/dev/null
+    echo "stage: receipt: could not be written to $logdir/receipt, so this $stage has no evidence" >&2
+    return 1
+  fi
+  echo "stage: receipt: $stage $result, commit $commit, tree $head_tree, $state, logs $logdir" >&2
 }
 on_signal() {
   trap '' INT TERM HUP
@@ -199,6 +287,23 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 root=$(git -C "$here/.." rev-parse --show-toplevel 2>/dev/null) || root=
 [ -n "$root" ] || refuse 69 "$here/.. is not inside a git checkout"
 cd "$root" || refuse 69 "cannot enter $root"
+logdir_made=false
+make_logdir() {
+  if [ -n "$logdir" ]; then
+    mkdir -p "$logdir" && logdir=$(cd "$logdir" && pwd -P) || refuse 64 "cannot use $logdir for the logs"
+  else
+    logdir=$(mktemp -d "/tmp/cyfr-stage.$stage.XXXXXX") || refuse 69 'cannot make a log directory'
+  fi
+  logdir_made=true
+  echo "stage: $stage logs in $logdir" >&2
+}
+# Handoff's start snapshot comes before anything of the checkout is read,
+# the table included, so what its rows run is never newer than it.
+if [ "$stage" = handoff ] && ! $dry; then
+  make_logdir
+  start_tree=$(work_tree)
+  receipting=true
+fi
 table=scripts/stages.tsv
 [ -f "$table" ] && [ -r "$table" ] || refuse 65 "$table: there is no stage table to read"
 
@@ -282,7 +387,7 @@ fi
 # requests that went red on GitHub, selected each failing test, and at it
 # the median handoff of the 40 pull requests before it added about 220 s.
 SELECT_BUDGET=300
-left_out=()
+left_out=() left_names=()
 if [ "$stage" = handoff ] && ! $explicit; then
   # The changed paths and the touched tests reach the selection as
   # NUL-separated streams on fds 3 and 4, and its records come back NUL-
@@ -397,7 +502,10 @@ PY
   while [ "$k" -lt "${#records[@]}" ]; do
     case ${records[k]} in
       test) tests+=("${records[k + 1]}"); k=$((k + 2)) ;;
-      left) left_out+=("==> stage: ${records[k + 1]} (${records[k + 2]} test files) left to the pull request's run"); k=$((k + 3)) ;;
+      left)
+        left_out+=("==> stage: ${records[k + 1]} (${records[k + 2]} test files) left to the pull request's run")
+        left_names+=("${records[k + 1]} ${records[k + 2]}")
+        k=$((k + 3)) ;;
       *) refuse 69 "the test selection answered '${records[k]}'" ;;
     esac
   done
@@ -524,12 +632,7 @@ if $dry; then
   exit 0
 fi
 
-if [ -n "$logdir" ]; then
-  mkdir -p "$logdir" && logdir=$(cd "$logdir" && pwd -P) || refuse 64 "cannot use $logdir for the logs"
-else
-  logdir=$(mktemp -d "/tmp/cyfr-stage.$stage.XXXXXX") || refuse 69 'cannot make a log directory'
-fi
-echo "stage: $stage logs in $logdir" >&2
+$logdir_made || make_logdir
 export STAGE="$stage" STAGE_TESTS="${tests[*]+${tests[*]}}" STAGE_LOGDIR="$logdir"
 
 # A row's summary line: result CHECK STATUS SECONDS.
