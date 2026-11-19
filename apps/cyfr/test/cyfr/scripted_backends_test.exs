@@ -103,60 +103,61 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
       open = Map.put(open_message(), :home_id, @home)
       assert %{status: 200, body: %{"session" => id}} = session(fake, root, open)
 
-      Scripted.hold(fake, "send")
+      # The send is held in the service before it reads or writes the
+      # session, so it is in flight when the session ends, and resumes
+      # only once the end has been answered.
+      Scripted.hold(fake, "send", 60_000)
 
       sending =
         Task.async(fn ->
-          session(fake, root, %{
-            type: :send,
-            owner: owner(),
-            e: 1,
-            session: id,
-            lines: List.duplicate(Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "ping"}), 1_000)
-          })
+          session(
+            fake,
+            root,
+            %{
+              type: :send,
+              owner: owner(),
+              e: 1,
+              session: id,
+              lines: [Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "ping"})]
+            },
+            receive_timeout: 60_000
+          )
         end)
 
-      assert_receive {:held, "send", handler}, 2_000
-      priority = Process.flag(:priority, :high)
-      send(handler, :go)
+      assert_receive {:held, "send", held}, 2_000
 
-      # The first invoke follows the session read. Pause the handler while
-      # the remaining batch is delivered, before a split write can land.
-      assert_receive {:invoke, "ping", _fields}, 2_000
-      assert :erlang.suspend_process(handler)
+      case ending do
+        :exit ->
+          Scripted.end_sessions(fake, @owner.server, 0)
 
-      try do
-        case ending do
-          :exit ->
-            Scripted.end_sessions(fake, @owner.server, 0)
+        :close ->
+          assert %{status: 200, body: %{"status" => "closed"}} =
+                   session(fake, root, %{type: :close, owner: owner(), e: 1, session: id})
 
-          :close ->
-            assert %{status: 200, body: %{"status" => "closed"}} =
-                     session(fake, root, %{type: :close, owner: owner(), e: 1, session: id})
+        :retire ->
+          assert %{status: 200} =
+                   control(fake, root, 2, %{
+                     type: :home,
+                     op: :retire,
+                     athanor: @owner.athanor,
+                     home_id: @home
+                   })
 
-          :retire ->
-            assert %{status: 200} =
-                     control(fake, root, 2, %{
-                       type: :home,
-                       op: :retire,
-                       athanor: @owner.athanor,
-                       home_id: @home
-                     })
+        :lapse ->
+          lapse!(fake)
 
-          :lapse ->
-            lapse!(fake)
-
-            assert %{status: 200, body: %{"owners" => []}} =
-                     control(fake, root, 2, %{type: :status, owners: [owner()]})
-        end
-      after
-        :erlang.resume_process(handler)
-        Process.flag(:priority, priority)
+          assert %{status: 200, body: %{"owners" => []}} =
+                   control(fake, root, 2, %{type: :status, owners: [owner()]})
       end
 
-      assert %{status: 200, body: %{"status" => status}} = Task.await(sending)
-      assert status in ["running", "ended"]
+      # The line finds the session ended: its program takes nothing of it.
+      send(held, :go)
+      assert %{status: 200, body: %{"status" => "ended"}} = Task.await(sending, 10_000)
+      refute_received {:invoke, "ping", _fields}
 
+      # What a caller can read of the session holds nothing of that line.
+      # A lapsed owner's session is read no more, so there the answer
+      # above is the only witness.
       if ending == :lapse do
         assert %{status: 409, body: %{"error" => "unknown_owner"}} =
                  session(fake, root, %{
@@ -180,6 +181,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
                    max_wait_ms: 0
                  })
 
+        assert received["lines"] == []
         if ending == :exit, do: assert(received["exit_code"] == 0)
       end
 
@@ -225,7 +227,7 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
   defp open(fake, root, nonce),
     do: session(fake, root, %{open_message() | key: "key-#{nonce}"})
 
-  defp session(fake, root, message) do
+  defp session(fake, root, message, options \\ []) do
     {:ok, body} = Wire.encode_session(message)
     {:ok, key} = Wire.owner_key(root, @owner)
     nonce = Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
@@ -237,10 +239,9 @@ defmodule Cyfr.Test.ScriptedBackendsTest do
         body
       )
 
-    Req.post!(fake.url <> Wire.route(:session),
-      body: body,
-      headers: [{Wire.auth_header(), header}],
-      retry: false
+    Req.post!(
+      fake.url <> Wire.route(:session),
+      [body: body, headers: [{Wire.auth_header(), header}], retry: false] ++ options
     )
   end
 
