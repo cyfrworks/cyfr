@@ -4,10 +4,10 @@
 defmodule Sanctum.Notify do
   @moduledoc """
   What a person's tray shows: members joining or leaving, invites,
-  allowlist requests, executions finishing, approvals waiting, schedules
-  failing, a passkey registered under the first-method rule or the
-  administrator's authorization, and a passkey the platform administrator
-  recovered — about one athanor, or, for its operators, about the server.
+  allowlist requests, executions finishing, schedules failing, a passkey
+  registered under the first-method rule or the administrator's
+  authorization, and a passkey the platform administrator recovered —
+  about one athanor, or, for its operators, about the server.
 
   This module owns the vocabulary (`t:kind/0`, `kinds/0`) and the
   announcements; it names no topic and never broadcasts. A foundation
@@ -22,8 +22,6 @@ defmodule Sanctum.Notify do
     :allowlist_changed,
     :execution_finished,
     :execution_failed,
-    :approval_pending,
-    :approval_resolved,
     :schedule_failed,
     :passkey_registered,
     :passkey_recovered
@@ -35,8 +33,6 @@ defmodule Sanctum.Notify do
           | :allowlist_changed
           | :execution_finished
           | :execution_failed
-          | :approval_pending
-          | :approval_resolved
           | :schedule_failed
           | :passkey_registered
           | :passkey_recovered

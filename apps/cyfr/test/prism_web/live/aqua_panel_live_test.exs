@@ -11,8 +11,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
   # halt reaches its own turn, a grant is asked in its own layer, Escape
   # and Ctrl+J close it, it keeps its place, its size and its docking
   # across a reload (the pointer and the hand's sheet are the hook's,
-  # tested in assets/test/aqua_panel/), the attention stream opens it at
-  # any thread of the person's, and it tries a failed fill again. Its pane
+  # tested in assets/test/aqua_panel/), a canvas's `aqua` setting opens it
+  # at any thread of the person's, and it tries a failed fill again. Its pane
   # is a window onto the runner: two desktops of the person see one thread,
   # a send is held while the athanor is being prepared, and a file is
   # stored for any device. Driven against the real loop and a scripted
@@ -126,8 +126,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     overlay
   end
 
-  # The panel's pane, turned to thread `id` as the attention stream turns
-  # it: the desktop opens the panel there.
+  # The panel's pane, turned to thread `id` as a canvas's `aqua` setting
+  # turns it: the desktop opens the panel there.
   defp show!(panel, id) do
     send(panel.pid, {:open, id})
     render(panel)
@@ -1652,7 +1652,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the attention stream's destination opens the thread an approval waits in: an earlier day's or a crew member's, and a workspace thread at its layer",
+  test "a canvas's aqua setting opens the thread its ref names: an earlier day's or a crew member's, and a workspace thread at its layer",
        %{conn: conn, mine: mine, me: me} do
     actor = Sanctum.Context.actor(me)
     day = Aqua.today(me)

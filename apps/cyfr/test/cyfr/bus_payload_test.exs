@@ -117,7 +117,7 @@ defmodule Cyfr.BusPayloadTest do
       SharedThreadChanged.new(:posted, "usr_payload", "sth_payload"),
       FileOffer.new(:offered, "ofr_payload", "usr_sender", "q3.csv"),
       FrameCredential.new(:revoked, "usr_payload", "fcr_payload"),
-      Notify.new(@actor, :approval_pending, %{thread_id: "t", approval_id: "a"}),
+      Notify.new(@actor, :schedule_failed, %{schedule_id: "s", execution_id: "e"}),
       Ping.new(1),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
       AquaAsk.new("About the runs widget on my main desktop (canvas): "),

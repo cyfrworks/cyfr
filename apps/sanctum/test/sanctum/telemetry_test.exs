@@ -167,8 +167,6 @@ defmodule Sanctum.TelemetryTest do
                :allowlist_changed,
                :execution_finished,
                :execution_failed,
-               :approval_pending,
-               :approval_resolved,
                :schedule_failed,
                :passkey_registered,
                :passkey_recovered

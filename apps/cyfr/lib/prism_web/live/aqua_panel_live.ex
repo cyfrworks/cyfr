@@ -51,16 +51,16 @@ defmodule PrismWeb.AquaPanelLive do
 
   A workspace thread is not shown in the panel: it opens as its own layer
   over the desktop (`PrismWeb.WorkspaceLive`). Asked for one, from the
-  list, a card's Open in the pane, the desktop or the attention stream,
-  the panel moves the page there through the desktop's `navigate`
+  list, a card's Open in the pane or the desktop, the panel moves the
+  page there through the desktop's `navigate`
   (`assets/js/hooks/shell_page.js`) and closes, the thread's posts being
   the layer's. A crew member's thread under a workspace thread moves the
   page to that layer and is shown here, over it.
 
   The desktop opens it for a canvas's `settings` of `aqua`, on today's
-  thread, or at the thread a `ref` names, where the attention stream's
-  approvals send the person: any thread of their athanor, an earlier
-  day's or a crew member's included, and a workspace thread at its layer.
+  thread, or at the thread a `ref` names: any thread of the person's
+  athanor, an earlier day's or a crew member's included, and a workspace
+  thread at its layer.
 
   A page may ask it about something it shows (`Cyfr.Bus.AquaAsk`, on the
   page's own topic the session names, `aqua_ask`): a closed panel opens on
@@ -517,10 +517,9 @@ defmodule PrismWeb.AquaPanelLive do
 
   def handle_info(:open, socket), do: {:noreply, socket}
 
-  # The desktop opens the panel at a thread (an attention item's `aqua`
-  # destination, the thread an approval waits in): any thread of the
-  # person's athanor, read under their context, or today's when the id
-  # names none of theirs.
+  # The desktop opens the panel at a thread (a canvas's `settings` of
+  # `aqua` with a `ref`): any thread of the person's athanor, read under
+  # their context, or today's when the id names none of theirs.
   def handle_info({:open, thread_id}, %{assigns: %{phase: :ready}} = socket)
       when is_binary(thread_id) do
     {:noreply, socket |> open_on(thread_id) |> remember()}

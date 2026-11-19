@@ -78,7 +78,7 @@ defmodule Cyfr.Providers.AttentionTest do
       assert Prima.Provider.Stream.valid?(stream)
       assert stream.name == @stream
       assert stream.topic == :attention
-      assert stream.projection == ~w(kind id label day since destination outcome revision at)
+      assert stream.projection == ~w(kind id label since destination outcome revision at)
 
       assert {stream.key, stream.removal, stream.reread, stream.stale_after} ==
                {"id", "removed", [], 300}
@@ -104,7 +104,7 @@ defmodule Cyfr.Providers.AttentionTest do
 
       destination = stream.shape["fields"]["destination"]
       assert destination["fields"]["kind"]["values"] == ["page", "ref"]
-      assert destination["fields"]["page"]["values"] == ~w(aqua executions schedules files)
+      assert destination["fields"]["page"]["values"] == ~w(executions schedules files)
 
       assert {Provider, :waiting} = stream.refresh
       assert function_exported?(Provider, :waiting, 2)
@@ -146,77 +146,6 @@ defmodule Cyfr.Providers.AttentionTest do
       assert {:ok, []} = Provider.waiting(ctx, ctx.user_id)
     end
 
-    test "lists a pending approval by its thread's title, a daily thread's day, until it is decided or expires",
-         %{
-           ctx: ctx,
-           actor: actor
-         } do
-      thread = thread!(actor)
-      waiting = approval!(actor, thread)
-      decided = approval!(actor, thread, status: "approved")
-      expired = approval!(actor, thread, expires_at: DateTime.add(DateTime.utc_now(), -60))
-
-      assert [item] = refreshed(ctx)
-      assert item["kind"] == "approval"
-      assert item["id"] == waiting.id
-      # The thread's own name, and the day as a field of its own, which the
-      # surface that draws the item words.
-      assert item["label"] == thread.title
-      assert item["day"] == Date.to_iso8601(thread.day)
-      assert item["destination"] == %{"kind" => "page", "page" => "aqua", "ref" => thread.id}
-      refute item["id"] in [decided.id, expired.id]
-    end
-
-    test "names an approval in a crew member's thread by that thread's title, and carries no day, whatever the title reads like",
-         %{ctx: ctx, actor: actor} do
-      # A crew member may be named like a date: its row is no day's.
-      {:ok, crew} = Arca.ThreadStorage.crew_thread(actor, thread!(actor).id, "2026-11-15")
-      approval!(actor, crew)
-
-      assert [item] = refreshed(ctx)
-      assert %{"label" => "2026-11-15", "day" => nil, "destination" => %{"ref" => ref}} = item
-      assert ref == crew.id
-    end
-
-    test "names an approval in a workspace thread by its title, with no day, and sends the person to that thread",
-         %{ctx: ctx, actor: actor} do
-      {:ok, %{workspace: workspace}} =
-        Arca.TurnStorage.open_workspace(actor, %{
-          daily_id: thread!(actor).id,
-          id: Prima.UUID7.generate_id("thread"),
-          title: "Moon report",
-          opening: %{
-            id: Prima.UUID7.generate_id("msg"),
-            author: ctx.user_id,
-            content: "write the moon report",
-            payload: %{"ask" => "write the moon report"}
-          },
-          pointer: %{
-            author: Prima.Author.agent(),
-            sent_by: "aqua",
-            content: "Moon report",
-            payload: %{"title" => "Moon report"}
-          },
-          files: fn _thread, _message -> {:ok, []} end,
-          person_id: ctx.user_id,
-          origin: :interactive
-        })
-
-      approval!(actor, workspace)
-
-      # Aqua's panel, at that destination, opens the workspace thread's
-      # layer (`PrismWeb.AquaPanelLive`).
-      assert [item] = refreshed(ctx)
-
-      assert %{
-               "label" => "Moon report",
-               "day" => nil,
-               "destination" => %{"kind" => "page", "page" => "aqua", "ref" => ref}
-             } = item
-
-      assert ref == workspace.id
-    end
-
     test "lists an open confirmation by its ref and operation", %{ctx: ctx} do
       ref = confirmation!(ctx)
 
@@ -226,7 +155,6 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "confirmation",
                "id" => ^ref,
                "label" => "vault.create",
-               "day" => nil,
                "destination" => %{"kind" => "ref", "page" => nil, "ref" => ^ref}
              } = item
 
@@ -242,7 +170,6 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "question",
                "id" => ^ref,
                "label" => "tables wants to delete a table",
-               "day" => nil,
                "destination" => %{"kind" => "ref", "page" => nil, "ref" => ^ref}
              } = item
 
@@ -264,7 +191,6 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "grant_request",
                "id" => ^id,
                "label" => "schedule.create",
-               "day" => nil,
                "destination" => %{"kind" => "ref", "page" => nil, "ref" => ^id},
                "outcome" => nil
              } = item
@@ -318,7 +244,6 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "failed_run",
                "id" => "reagent:local.standing:1.0.0",
                "label" => "reagent:local.standing:1.0.0",
-               "day" => nil,
                "since" => DateTime.to_iso8601(DateTime.add(t, 120)),
                "destination" => %{"kind" => "page", "page" => "executions", "ref" => newest.id},
                "outcome" => nil
@@ -366,7 +291,6 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "failed_schedule",
                "id" => failing.id,
                "label" => "nightly report",
-               "day" => nil,
                "since" => DateTime.to_iso8601(DateTime.add(t, 60)),
                "destination" => %{"kind" => "page", "page" => "schedules", "ref" => failing.id},
                "outcome" => nil
@@ -390,13 +314,11 @@ defmodule Cyfr.Providers.AttentionTest do
                "kind" => "file_offer",
                "id" => ^offer,
                "label" => "alpha.csv",
-               "day" => nil,
                "destination" => %{"kind" => "page", "page" => "files", "ref" => ^offer}
              } = item
     end
 
     test "is every kind at once, oldest first", %{ctx: ctx, actor: actor, other_ctx: other_ctx} do
-      approval!(actor, thread!(actor))
       confirmation!(ctx)
       question!(ctx)
       run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", ~U[2026-01-01 00:00:00.000000Z])
@@ -408,7 +330,7 @@ defmodule Cyfr.Providers.AttentionTest do
       items = refreshed(ctx)
 
       assert items |> Enum.map(& &1["kind"]) |> Enum.sort() ==
-               ~w(approval confirmation failed_run failed_schedule file_offer grant_request question)
+               ~w(confirmation failed_run failed_schedule file_offer grant_request question)
 
       times = Enum.map(items, &elem(DateTime.from_iso8601(&1["since"]), 1))
       assert times == Enum.sort(times, DateTime)
@@ -419,24 +341,21 @@ defmodule Cyfr.Providers.AttentionTest do
       other_ctx: other_ctx
     } do
       other = Context.actor(other_ctx)
-      approval!(other, thread!(other))
       confirmation!(other_ctx)
       run!(other, other_ctx.user_id, "reagent:local.x:1.0.0", "failed", DateTime.utc_now())
       offer!(ctx, other_ctx.user_id, ["to-them.csv"])
 
       assert {:ok, []} = Provider.waiting(ctx, ctx.user_id)
       assert {:ok, theirs} = Provider.waiting(other_ctx, other_ctx.user_id)
-      assert length(theirs) == 4
+      assert length(theirs) == 3
       assert {:error, :not_holder} = Provider.waiting(ctx, other_ctx.user_id)
       assert {:error, :no_athanor} = Provider.waiting(%{ctx | athanor_id: nil}, ctx.user_id)
     end
 
-    test "lists an athanor's approvals and offers only to the athanor's own person", %{
+    test "lists an athanor's offers only to the athanor's own person", %{
       ctx: ctx,
-      actor: actor,
       other_ctx: other_ctx
     } do
-      approval!(actor, thread!(actor))
       offer!(other_ctx, ctx.user_id, ["f.csv"])
 
       # The other person's context focused here: not their athanor.
@@ -450,84 +369,6 @@ defmodule Cyfr.Providers.AttentionTest do
   # ---------------------------------------------------------------------------
 
   describe "live" do
-    test "an approval enters when it opens, as the refresh lists it, and leaves when resolved",
-         %{ctx: ctx, actor: actor} do
-      thread = thread!(actor)
-      approval = approval!(actor, thread)
-
-      :ok =
-        Sanctum.Notify.broadcast(actor.athanor_id, :approval_pending, %{
-          thread_id: thread.id,
-          message_id: "msg_1",
-          approval_id: approval.id
-        })
-
-      assert_receive %Attention{kind: :approval} = entered
-      assert [read_as(entered)] == refreshed(ctx)
-
-      resolve!(actor, approval.id)
-
-      :ok =
-        Sanctum.Notify.broadcast(actor.athanor_id, :approval_resolved, %{
-          thread_id: thread.id,
-          message_id: "msg_1",
-          approval_id: approval.id,
-          decision: "approved"
-        })
-
-      assert_receive %Attention{kind: :removed} = left
-      assert removed?(left, approval.id, "resolved")
-      assert refreshed(ctx) == []
-    end
-
-    test "an approval's removal names how its decision ended it", %{actor: actor} do
-      for {decision, outcome} <- [
-            {"declined", "resolved"},
-            {"error", "resolved"},
-            {"expired", "expired"},
-            {"withdrawn", "withdrawn"}
-          ] do
-        :ok =
-          Sanctum.Notify.broadcast(actor.athanor_id, :approval_resolved, %{
-            thread_id: "thr_decided",
-            approval_id: "apr_#{decision}",
-            decision: decision
-          })
-
-        assert_receive %Attention{kind: :removed} = left
-        assert removed?(left, "apr_#{decision}", outcome), decision
-      end
-    end
-
-    test "deleting a thread removes its waiting approval from attention",
-         %{ctx: ctx, actor: actor} do
-      thread = thread!(actor)
-      approval = approval!(actor, thread)
-      assert [%{"kind" => "approval", "id" => id}] = refreshed(ctx)
-      assert id == approval.id
-
-      assert {:ok, _deleted} = Aqua.Tape.delete_thread(ctx, thread.id)
-
-      assert_receive %Attention{kind: :removed, id: ^id} = left
-      assert removed?(left, id, "withdrawn")
-      assert refreshed(ctx) == []
-    end
-
-    test "an approval decided before its announcement is read no more, and enters nothing", %{
-      actor: actor
-    } do
-      thread = thread!(actor)
-      approval = approval!(actor, thread, status: "approved")
-
-      :ok =
-        Sanctum.Notify.broadcast(actor.athanor_id, :approval_pending, %{
-          thread_id: thread.id,
-          approval_id: approval.id
-        })
-
-      refute_receive %Attention{}, 200
-    end
-
     test "a confirmation enters on its opening and leaves on each end, never on its proof", %{
       ctx: ctx,
       actor: actor
@@ -731,12 +572,6 @@ defmodule Cyfr.Providers.AttentionTest do
       # The other person's topic in this athanor, too.
       :ok = Bus.subscribe(actor, Bus.attention(actor, other_ctx.user_id))
 
-      thread = thread!(actor)
-      approval = approval!(actor, thread)
-
-      :ok =
-        Sanctum.Notify.broadcast(actor.athanor_id, :approval_pending, %{approval_id: approval.id})
-
       confirmation!(ctx)
       failed = run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", DateTime.utc_now())
       execute(:exception, actor, ctx.user_id, failed.id, "reagent:local.x:1.0.0")
@@ -762,7 +597,6 @@ defmodule Cyfr.Providers.AttentionTest do
 
     test "no item names a person", %{ctx: ctx, actor: actor, other_ctx: other_ctx} do
       :ok = Cyfr.Requests.open(ctx, Prima.UUID7.request_id(), "feed.bind")
-      approval!(actor, thread!(actor))
       confirmation!(ctx)
       run!(actor, ctx.user_id, "reagent:local.x:1.0.0", "failed", DateTime.utc_now())
       offer!(other_ctx, ctx.user_id, ["f.csv"])
@@ -810,55 +644,10 @@ defmodule Cyfr.Providers.AttentionTest do
       "kind" => "removed",
       "id" => id,
       "label" => nil,
-      "day" => nil,
       "since" => nil,
       "destination" => nil,
       "outcome" => outcome
     }
-  end
-
-  # A daily thread of a date of its own, titled with its date.
-  defp thread!(actor) do
-    {:ok, thread} = Arca.Test.Days.thread(actor)
-    thread
-  end
-
-  defp approval!(actor, thread, opts \\ []) do
-    now = DateTime.utc_now()
-    turn_id = Prima.UUID7.generate_id("turn")
-
-    Arca.Repo.insert!(%Arca.Schemas.Turn{
-      id: turn_id,
-      athanor_id: actor.athanor_id,
-      thread_id: thread.id,
-      status: "running",
-      origin: "interactive",
-      accepted_at: now,
-      fence: 1
-    })
-
-    Arca.Repo.insert!(%Arca.Schemas.Approval{
-      id: Prima.UUID7.generate_id("apr"),
-      athanor_id: actor.athanor_id,
-      turn_id: turn_id,
-      thread_id: thread.id,
-      status: Keyword.get(opts, :status, "pending"),
-      proposal_digest: "digest #{@private}",
-      expires_at: Keyword.get(opts, :expires_at),
-      inserted_at: now
-    })
-  end
-
-  defp resolve!(actor, approval_id) do
-    import Ecto.Query, only: [from: 2]
-
-    {1, _} =
-      Arca.Repo.update_all(
-        from(a in Arca.Schemas.Approval,
-          where: a.athanor_id == ^actor.athanor_id and a.id == ^approval_id
-        ),
-        set: [status: "approved"]
-      )
   end
 
   # An open confirmation of the person's, asked through the gate as a page

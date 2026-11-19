@@ -129,7 +129,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # The pane in its host: Aqua's panel on the desktop, opened at `thread`
-  # as the attention stream opens it. Answers the panel and its pane.
+  # as a canvas's `aqua` setting opens it. Answers the panel and its pane.
   defp panel_pane(conn, thread) do
     {desktop, _html} = mount_desktop(conn)
     panel = child!(desktop, "aqua-panel")
