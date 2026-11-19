@@ -821,7 +821,7 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
-  test("a press of a control or a write dropped for want of input is told it did not run; the shell's answers are posted once", async () => {
+  test("a press of a control, a write or an open dropped for want of input is told it did not run, naming no reason; the shell's answers are posted once", async () => {
     const bridge = connect()
     const {el} = bridge
     const tell = (verb, args) => el.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
@@ -837,11 +837,20 @@ describe("a canvas frame's bridge", () => {
       const press = {control: "pause-digest", value: "sch_1", call: 1}
       await send(bridge, port, {v: 1, verb: "press", frame: CANVAS, args: press})
       await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {widgets: {}}, call: 2}})
-      await eventually(() => bridge.heard.length === 5)
+      // An open with the page holding activation but another element its
+      // active element, as when the frame's click reaches the shell before
+      // the shell knows the frame has focus.
+      activation("active")
+      focus({id: "another element"})
+      await send(bridge, port, {v: 1, verb: "open", frame: CANVAS, args: {ref: "tincture:local.vault", call: 3}})
+      await eventually(() => bridge.heard.length === 6)
+      assert.equal(bridge.hook.dropped, 3)
+      assert.deepEqual(forwarded(bridge.events), [])
       // Each told it did not run under the call it was sent with.
       assert.deepEqual(bridge.heard.slice(3), [
         {v: 1, verb: "pressed", frame: CANVAS, args: {control: "pause-digest", call: 1, outcome: "cancelled"}},
-        {v: 1, verb: "prefs", frame: CANVAS, args: {call: 2, outcome: "cancelled", ...LIVE.canvas.prefs}}
+        {v: 1, verb: "prefs", frame: CANVAS, args: {call: 2, outcome: "cancelled", ...LIVE.canvas.prefs}},
+        {v: 1, verb: "opened", frame: CANVAS, args: {call: 3, outcome: "cancelled"}}
       ])
 
       // The shell's answer, once; a write's answer moves what the bridge
@@ -850,8 +859,8 @@ describe("a canvas frame's bridge", () => {
       const saved = {call: 5, outcome: "saved", document: {widgets: {runs: {on: false}}, desktop: {}}, revision: 9}
       tell("prefs", saved)
       await send(bridge, port, {v: 1, verb: "prefs", frame: CANVAS, args: {document: {}, call: 6}})
-      await eventually(() => bridge.heard.length === 8)
-      assert.deepEqual(bridge.heard.slice(5), [
+      await eventually(() => bridge.heard.length === 9)
+      assert.deepEqual(bridge.heard.slice(6), [
         {v: 1, verb: "pressed", frame: CANVAS, args: pressed},
         {v: 1, verb: "prefs", frame: CANVAS, args: saved},
         {v: 1, verb: "prefs", frame: CANVAS, args: {...saved, call: 6, outcome: "cancelled"}}
