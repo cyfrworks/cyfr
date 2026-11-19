@@ -7,10 +7,7 @@ defmodule Arca.Schemas.Message do
 
   One row per thread entry, in `seq` order. `author` is a user id or one
   of the two reserved authors below (`agent_author/0`, `system_author/0`);
-  `kind` is `text | approval | error | system`. An approval row carries the
-  agent's proposal in `payload` and walks
-  `pending → running → approved | declined | error`, with the decision in
-  `resolution` and the person who made it in `resolved_by`.
+  `kind` is `text | error | system`.
 
   `sent_by` is who said it, `"person"` or an agent name, on every row: a
   turn's own rows carry its agent, so what anyone else wrote into a turn
@@ -19,8 +16,7 @@ defmodule Arca.Schemas.Message do
   reply's id in `resolved_by`, or `expired` when the person stopped its
   room's work before an answer came. A reply names the request it answers in
   `reply_to`, its `outcome` (`outcomes/0`) and, in `addressee`, who the
-  request came from; a notice is a reply row whose outcome is
-  `needs_you`, which answers nothing.
+  request came from.
 
   A workspace thread's rows: an `opening` is the first message of a
   workspace thread and each further ask sent there (its envelope in
@@ -62,12 +58,12 @@ defmodule Arca.Schemas.Message do
   # rows too, which no model's request carries (`Aqua.PageCalls`). A
   # `page_call`'s `resolved_at` is when its request ended unanswered
   # (`Arca.TurnStorage.end_call/4`).
-  @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted
+  @kinds ~w(text error system tool_call tool_result compaction turn_aborted
              opening pointer report page_call page_result nudge)
-  @statuses ~w(pending running approved declined error expired answered)
+  @statuses ~w(pending error expired answered)
 
   @doc """
-  A reply's or notice's `outcome` vocabulary, the `messages_outcome_known`
+  A reply's `outcome` vocabulary, the `messages_outcome_known`
   check's: `Prima.OutboxRecord.reply_outcomes/0`, which a reply's outbox
   record carries.
   """
@@ -100,11 +96,9 @@ defmodule Arca.Schemas.Message do
     field :resolved_by, :string
     field :carried_by, :string
     field :resolved_at, :utc_datetime_usec
-    field :resolution, :string
     field :execution_id, :string
     field :inserted_at, :utc_datetime_usec
     field :turn_id, :string
-    field :approval_id, :string
     field :client_id, :string
     field :sent_by, :string
     field :addressee, :string
@@ -125,11 +119,9 @@ defmodule Arca.Schemas.Message do
     :status,
     :resolved_by,
     :resolved_at,
-    :resolution,
     :execution_id,
     :inserted_at,
     :turn_id,
-    :approval_id,
     :client_id,
     :sent_by,
     :addressee,

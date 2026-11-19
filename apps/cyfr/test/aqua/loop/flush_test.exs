@@ -592,8 +592,6 @@ defmodule Aqua.Loop.FlushTest do
       arguments: args,
       kind: "write",
       idempotency_key: "call:#{turn.id}:#{model_step.id}:#{id}",
-      proposal_digest:
-        Aqua.Loop.Policy.proposal_digest(%{"tool" => "notes", "action" => "keep", "args" => args}),
       step_kind: "tool"
     }
   end

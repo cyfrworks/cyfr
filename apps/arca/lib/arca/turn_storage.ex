@@ -2776,8 +2776,8 @@ defmodule Arca.TurnStorage do
   @doc """
   Record one step of a turn at the next `seq`. `attrs`: `:kind`,
   `:purpose` (default `chat`), `:tool`, `:action`, `:idempotency_key`, `:authority_digest`,
-  `:request_digest`, `:proposal_digest`, `:recovery`, `:excluded` (a
-  list), `:message_id`, `:child_execution_id`, `:dispatch_state`
+  `:request_digest`, `:recovery`, `:excluded` (a list), `:message_id`,
+  `:child_execution_id`, `:dispatch_state`
   (`Prima.TurnState.opening_states/0`, default `proposed`), `:fence`,
   and the sources the step opens with: `:sources` (`Prima.Source`s) and
   `:sources_from` (the ids of the athanor's turns whose words the rows the
@@ -2963,7 +2963,6 @@ defmodule Arca.TurnStorage do
                   tool: Map.get(call, :tool),
                   action: Map.get(call, :action),
                   idempotency_key: Map.get(call, :idempotency_key),
-                  proposal_digest: Map.get(call, :proposal_digest),
                   recovery: Map.get(call, :recovery),
                   message_id: row.id,
                   child_execution_id: Map.get(call, :child_execution_id),
@@ -5206,7 +5205,6 @@ defmodule Arca.TurnStorage do
       message_id: Map.get(attrs, :message_id),
       authority_digest: Map.get(attrs, :authority_digest),
       request_digest: Map.get(attrs, :request_digest),
-      proposal_digest: Map.get(attrs, :proposal_digest),
       recovery: Map.get(attrs, :recovery),
       excluded: encode(Map.get(attrs, :excluded)),
       child_execution_id: Map.get(attrs, :child_execution_id),

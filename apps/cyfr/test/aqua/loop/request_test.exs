@@ -186,7 +186,6 @@ defmodule Aqua.Loop.RequestTest do
         "name" => "files",
         "step_id" => "s1"
       }),
-      row(5, "approval", @agent, "Write?", %{"intent" => %{}}),
       row(6, "error", @system, "boom"),
       row(7, "text", @agent, "Done.", %{"step_id" => "s2"}),
       row(8, "text", "usr_b", "thanks")

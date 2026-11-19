@@ -57,8 +57,7 @@ defmodule Aqua.StepsTest do
             started_at: DateTime.utc_now(),
             tool: nil,
             action: nil,
-            outcome: nil,
-            approval_id: nil
+            outcome: nil
           },
           spec
         )

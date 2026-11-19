@@ -100,7 +100,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           DecisionLog.AuditFailure Doors FrameCredentials McpLog PairedClients
           ProfileStorage ProviderCredentialStorage Questions RegistryTokenStorage
           SessionStorage ShareUsage SharedMessages SharedThreadMembers SharedThreads Shares
-          ToolGrantStorage Users VaultStorage WebhookStorage),
+          Users VaultStorage WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CompanyAuthorizations CompanyLoginAttempts

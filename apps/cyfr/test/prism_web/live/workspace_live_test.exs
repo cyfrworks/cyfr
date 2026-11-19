@@ -114,8 +114,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
             started_at: DateTime.utc_now(),
             tool: nil,
             action: nil,
-            outcome: "ok",
-            approval_id: nil
+            outcome: "ok"
           },
           spec
         )

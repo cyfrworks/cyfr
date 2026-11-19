@@ -2698,8 +2698,7 @@ defmodule Aqua.RunnerTest do
         error: step.error,
         cancel_requested?: step.cancel_requested_at != nil,
         carried: kind_of(ctx, step.message_id),
-        answered: kind_of(ctx, step.result_message_id),
-        approval_id: step.approval_id
+        answered: kind_of(ctx, step.result_message_id)
       }
     end
   end
@@ -2735,8 +2734,7 @@ defmodule Aqua.RunnerTest do
       error: nil,
       cancel_requested?: false,
       carried: nil,
-      answered: answered,
-      approval_id: nil
+      answered: answered
     }
   end
 
@@ -2760,8 +2758,7 @@ defmodule Aqua.RunnerTest do
       error: error,
       cancel_requested?: false,
       carried: "tool_call",
-      answered: "tool_result",
-      approval_id: nil
+      answered: "tool_result"
     }
   end
 
@@ -2815,10 +2812,8 @@ defmodule Aqua.RunnerTest do
         resolved_by: nil,
         carried_by: nil,
         resolved_at: nil,
-        resolution: nil,
         execution_id: nil,
         turn_id: nil,
-        approval_id: nil,
         client_id: nil,
         addressee: nil,
         reply_to: nil,
@@ -2848,8 +2843,7 @@ defmodule Aqua.RunnerTest do
       error: nil,
       cancel_requested?: false,
       carried: "page_call",
-      answered: if(state == "closed", do: "page_result"),
-      approval_id: nil
+      answered: if(state == "closed", do: "page_result")
     }
   end
 

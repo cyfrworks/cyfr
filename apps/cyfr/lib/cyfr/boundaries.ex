@@ -333,7 +333,7 @@ defmodule Cyfr.Boundaries do
   # that may name them: Sanctum, their one reader, and Arca, which holds
   # them.
   @sanctum_only_storage ~w(
-    Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage Arca.ToolGrantStorage
+    Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Athanors Arca.Doors
@@ -1227,7 +1227,7 @@ defmodule Cyfr.Boundaries do
       only: @sanctum_only_storage,
       allow: [],
       reason:
-        "profiles, consents and their proofs, standing tool grants, vault entries, " <>
+        "profiles, consents and their proofs, vault entries, " <>
           "sessions, API keys, tincture frame credentials, paired clients and their " <>
           "device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>

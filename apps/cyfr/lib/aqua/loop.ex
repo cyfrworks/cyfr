@@ -1429,7 +1429,7 @@ defmodule Aqua.Loop do
     args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
     id = block["id"] || Prima.UUID7.generate_id("call")
 
-    recorded = recorded(name, args, call)
+    recorded = recorded(name, call)
 
     Map.merge(recorded, %{
       tool_call_id: id,
@@ -1444,10 +1444,8 @@ defmodule Aqua.Loop do
   # What a step records of a call as it was bound, a model's
   # (`call_attrs/4`) or a page's (`Aqua.PageCalls.proposal/3`): one
   # recording, so a page's call is recorded as Aqua's call of its kind is.
-  # A refused call proposes nothing, so it records no proposal digest: its
-  # arguments may hold the value the digest's form refused.
-  @spec recorded(String.t(), map(), {:ok, Call.t()} | {:error, term()}) :: map()
-  def recorded(name, args, call) do
+  @spec recorded(String.t(), {:ok, Call.t()} | {:error, term()}) :: map()
+  def recorded(name, call) do
     {tool, action, kind, recovery, child, step_kind} =
       case call do
         {:ok, %Call{} = call} ->
@@ -1464,10 +1462,6 @@ defmodule Aqua.Loop do
       kind: kind,
       recovery: recovery,
       child_execution_id: child,
-      proposal_digest:
-        if(match?({:ok, _}, call),
-          do: Policy.proposal_digest(%{"tool" => tool, "action" => action, "args" => args})
-        ),
       step_kind: step_kind
     }
   end
@@ -2453,7 +2447,7 @@ defmodule Aqua.Loop do
   defp open_program(%State{program: %{row: row, epoch: epoch}} = state) do
     args = %{"action" => "start", "program" => row, "epoch" => epoch}
     call = Binding.resolve("program", args, tool_call_id: "start")
-    recorded = recorded("program", args, call)
+    recorded = recorded("program", call)
 
     # Replay safe: attending again reattaches to the held session, or
     # opens one, and sets the work and the configuration it runs with; it
@@ -2466,7 +2460,6 @@ defmodule Aqua.Loop do
       tool: "program",
       action: "start",
       recovery: "replay_safe",
-      proposal_digest: recorded.proposal_digest,
       idempotency_key: Tape.brain_start_key(state.turn.id),
       call: %{
         kind: "tool_call",

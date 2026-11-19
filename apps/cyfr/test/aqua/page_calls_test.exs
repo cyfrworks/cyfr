@@ -533,10 +533,8 @@ defmodule Aqua.PageCallsTest do
         resolved_by: nil,
         carried_by: nil,
         resolved_at: nil,
-        resolution: nil,
         execution_id: nil,
         turn_id: nil,
-        approval_id: nil,
         client_id: nil,
         addressee: nil,
         reply_to: nil,
@@ -582,7 +580,6 @@ defmodule Aqua.PageCallsTest do
                kind: "launch",
                dispatch_state: "closed",
                outcome: "ok",
-               approval_id: nil,
                child_execution_id: root_id,
                result_message_id: result_id
              } = step

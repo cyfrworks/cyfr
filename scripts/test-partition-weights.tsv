@@ -111,7 +111,6 @@
 0.0	apps/arca/test/arca/suite_boot_test.exs
 1.6	apps/arca/test/arca/tenant_argument_order_test.exs
 0.2	apps/arca/test/arca/tenant_tables_test.exs
-1.1	apps/arca/test/arca/tool_grant_storage_test.exs
 0.5	apps/arca/test/arca/turn_fence_race_test.exs
 0.2	apps/arca/test/arca/turn_storage_test.exs
 1.0	apps/arca/test/arca/turn_tape_storage_test.exs

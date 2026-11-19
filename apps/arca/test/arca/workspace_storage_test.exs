@@ -363,7 +363,6 @@ defmodule Arca.WorkspaceStorageTest do
 
     assert [%{snapshot: snapshot}] = records(actor, "workspace_report")
     assert %{"outcome" => "needs_you", "turn_id" => turn_id} = snapshot
-    refute Map.has_key?(snapshot, "approval_id")
     assert turn_id == turn.id
 
     assert {:error, :reported} =

@@ -113,7 +113,6 @@ defmodule Aqua.ProgramTest do
                action: "start",
                dispatch_state: "closed",
                outcome: "ok",
-               approval_id: nil,
                idempotency_key: TurnStorage.brain_start_key(turn.id),
                message_id: start_step.message_id,
                usage: %{
@@ -399,13 +398,12 @@ defmodule Aqua.ProgramTest do
                "is_error" => false
              }
 
-      assert Map.take(written, [:tool, :action, :dispatch_state, :outcome, :approval_id]) ==
+      assert Map.take(written, [:tool, :action, :dispatch_state, :outcome]) ==
                %{
                  tool: "program",
                  action: "start",
                  dispatch_state: "closed",
-                 outcome: "ok",
-                 approval_id: nil
+                 outcome: "ok"
                }
 
       say(fake, row, accepted(answered))
@@ -646,8 +644,8 @@ defmodule Aqua.ProgramTest do
       say(fake, row, idle(turn, [opening.id, steered.id]))
       assert :completed = Task.await(loop, 30_000)
 
-      assert Map.take(start_step(ctx, turn), [:dispatch_state, :outcome, :approval_id]) ==
-               %{dispatch_state: "closed", outcome: "ok", approval_id: nil}
+      assert Map.take(start_step(ctx, turn), [:dispatch_state, :outcome]) ==
+               %{dispatch_state: "closed", outcome: "ok"}
 
       assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
                input_fields("post", turn.message_id, "ok"),
@@ -917,8 +915,8 @@ defmodule Aqua.ProgramTest do
       assert {:ok, %{status: "completed", origin: "schedule", error: nil}} =
                Tape.turn(ctx, turn.id)
 
-      assert Map.take(start_step(ctx, turn), [:dispatch_state, :outcome, :error, :approval_id]) ==
-               %{dispatch_state: "closed", outcome: "ok", error: nil, approval_id: nil}
+      assert Map.take(start_step(ctx, turn), [:dispatch_state, :outcome, :error]) ==
+               %{dispatch_state: "closed", outcome: "ok", error: nil}
 
       assert Enum.map(inputs(ctx, turn), &step_fields/1) == [
                input_fields("post", turn.message_id, "ok")
@@ -1427,7 +1425,6 @@ defmodule Aqua.ProgramTest do
                :dispatch_state,
                :outcome,
                :error,
-               :approval_id,
                :result_message_id,
                :usage
              ]) == %{
@@ -1438,7 +1435,6 @@ defmodule Aqua.ProgramTest do
                dispatch_state: "uncertain",
                outcome: "uncertain",
                error: "stopped",
-               approval_id: nil,
                result_message_id: nil,
                usage: nil
              }
@@ -1726,8 +1722,7 @@ defmodule Aqua.ProgramTest do
                "is_error" => true
              }
 
-      assert {null.dispatch_state, null.outcome, null.proposal_digest} ==
-               {"closed", "denied", nil}
+      assert {null.dispatch_state, null.outcome} == {"closed", "denied"}
 
       say(fake, row, accepted(answered))
       say(fake, row, idle(turn, [input.id]))
@@ -1926,7 +1921,6 @@ defmodule Aqua.ProgramTest do
       :action,
       :dispatch_state,
       :outcome,
-      :approval_id,
       :idempotency_key,
       :message_id,
       :usage
@@ -1944,7 +1938,6 @@ defmodule Aqua.ProgramTest do
       action: action,
       dispatch_state: if(outcome, do: "closed", else: "dispatched"),
       outcome: outcome,
-      approval_id: nil,
       idempotency_key: (key || "0:#{action}:") <> row_id,
       message_id: row_id,
       usage: nil

@@ -92,7 +92,7 @@ defmodule Aqua.ProgramToolTest do
 
       # The program's output is the step's result, and what the model read
       # next; it joined the turn as an outside source named by the program.
-      assert %{outcome: "ok", approval_id: nil} = step(ctx, turn, "c1")
+      assert %{outcome: "ok"} = step(ctx, turn, "c1")
 
       assert %{"output" => ~s({"stargazerCount":3}\n), "ended" => "exited", "program" => "gh"} =
                last_tool_result()
@@ -128,7 +128,7 @@ defmodule Aqua.ProgramToolTest do
       assert %{outcome: "ok"} = step(ctx, turn, "l1")
 
       for id <- ~w(c1 c2) do
-        assert %{outcome: "denied", error: ^said, started_at: nil, approval_id: nil} =
+        assert %{outcome: "denied", error: ^said, started_at: nil} =
                  step(ctx, turn, id)
       end
 
@@ -184,7 +184,7 @@ defmodule Aqua.ProgramToolTest do
       unreadable = "Error: The words to follow the command are not valid"
 
       assert Map.new(~w(c1 c2 c3 c4 c5 c6 c7), fn id ->
-               {id, Map.take(step(ctx, turn, id), [:outcome, :error, :approval_id])}
+               {id, Map.take(step(ctx, turn, id), [:outcome, :error])}
              end) == %{
                "c1" => refused("Error: Field 'terminal_args[0]' must be at most 256"),
                "c2" => refused("Error: Field 'terminal_args' must be at most 32"),
@@ -192,7 +192,7 @@ defmodule Aqua.ProgramToolTest do
                "c5" => refused(unreadable),
                "c3" => refused("Error: The program changed since it was shown; ask again"),
                "c6" => refused("Error: Program or session not found: that"),
-               "c7" => %{outcome: "ok", error: nil, approval_id: nil}
+               "c7" => %{outcome: "ok", error: nil}
              }
 
       assert_received {:session, "open", %{"argv" => ["--version"]}, _fields}
@@ -219,7 +219,7 @@ defmodule Aqua.ProgramToolTest do
       assert {:ok, %{status: "completed", origin: "schedule", agent_mode: "auto", error: nil}} =
                Tape.turn(ctx, turn.id)
 
-      assert %{outcome: "ok", approval_id: nil} = step(ctx, turn, "c1")
+      assert %{outcome: "ok"} = step(ctx, turn, "c1")
       assert_received {:session, "open", %{"argv" => ["--version"]}, _fields}
       assert %{"output" => "gh version 2\n", "program" => "gh"} = last_tool_result()
       assert {:ok, []} = Opus.Programs.running(ctx)
@@ -258,7 +258,7 @@ defmodule Aqua.ProgramToolTest do
   end
 
   # A start refused as it dispatched, in the words the turn read.
-  defp refused(error), do: %{outcome: "error", error: error, approval_id: nil}
+  defp refused(error), do: %{outcome: "error", error: error}
 
   # The soul switched to read-only, as the Aqua page switches it.
   defp read_only!(ctx) do

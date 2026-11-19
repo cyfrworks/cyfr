@@ -1160,7 +1160,7 @@ defmodule Aqua.LoopTest do
   end
 
   # A turn's steps whole, but for what a run mints for each: its ids, its
-  # times, the digests of its request and its proposal, and its usage. A
+  # times, the digest of its request, and its usage. A
   # model step names the catalyst release the turn pinned.
   defp step_rows(ctx, turn) do
     {:ok, %{catalyst_ref: pinned}} = Tape.turn(ctx, turn.id)
@@ -1178,7 +1178,6 @@ defmodule Aqua.LoopTest do
         :dispatch_state,
         :outcome,
         :error,
-        :approval_id,
         :recovery,
         :generation,
         :cancel_requested_at
@@ -1195,7 +1194,6 @@ defmodule Aqua.LoopTest do
       dispatch_state: "closed",
       outcome: outcome,
       error: error,
-      approval_id: nil,
       recovery: nil,
       generation: 0,
       cancel_requested_at: nil
@@ -1216,7 +1214,6 @@ defmodule Aqua.LoopTest do
       dispatch_state: "closed",
       outcome: outcome,
       error: error,
-      approval_id: nil,
       recovery: recovery,
       generation: 0,
       cancel_requested_at: nil
@@ -1274,22 +1271,18 @@ defmodule Aqua.LoopTest do
     {:ok, steps} = Tape.steps(ctx, turn)
     [search, null, decimal] = Enum.filter(steps, &(&1.kind == "tool"))
 
-    digest =
-      Aqua.Loop.Policy.proposal_digest(%{"tool" => "github:search", "args" => %{"q" => "x"}})
-
-    assert {search.tool, search.action, search.dispatch_state, search.outcome, search.error,
-            search.proposal_digest} ==
+    assert {search.tool, search.action, search.dispatch_state, search.outcome, search.error} ==
              {"github:search", nil, "closed", "denied",
-              "github:search is not among the tools Aqua is offered", digest}
+              "github:search is not among the tools Aqua is offered"}
 
-    assert {null.dispatch_state, null.outcome, null.error, null.proposal_digest} ==
+    assert {null.dispatch_state, null.outcome, null.error} ==
              {"closed", "denied",
-              "github__search: the argument q is null; leave it out or give it a value", nil}
+              "github__search: the argument q is null; leave it out or give it a value"}
 
-    assert {decimal.dispatch_state, decimal.outcome, decimal.error, decimal.proposal_digest} ==
+    assert {decimal.dispatch_state, decimal.outcome, decimal.error} ==
              {"closed", "denied",
               "github__search: the argument limit is a decimal number; give a whole number, " <>
-                "or the number as text", nil}
+                "or the number as text"}
   end
 
   test "an outside server's tool the soul is offered runs in auto, through the gate under the " <>
@@ -1314,7 +1307,7 @@ defmodule Aqua.LoopTest do
 
     # Dispatched, not refused by the mode or the offered set: the gate
     # decided it.
-    assert {listed.dispatch_state, listed.approval_id} == {"closed", nil}
+    assert listed.dispatch_state == "closed"
     refute listed.error =~ "among the tools"
     assert {:ok, [_ | _]} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: tool)
   end
@@ -2687,7 +2680,7 @@ defmodule Aqua.LoopTest do
 
     {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert %{child_execution_id: ^root_id, outcome: "ok", approval_id: nil} =
+    assert %{child_execution_id: ^root_id, outcome: "ok"} =
              Enum.find(steps, &(&1.kind == "launch"))
 
     # The app rooted under the launch step's own id, seeded with what the
@@ -2811,7 +2804,6 @@ defmodule Aqua.LoopTest do
       assert %{
                dispatch_state: "closed",
                outcome: "ok",
-               approval_id: nil,
                child_execution_id: ^root_id,
                result_message_id: result
              } = Enum.find(steps, &(&1.kind == "launch"))
@@ -2851,7 +2843,7 @@ defmodule Aqua.LoopTest do
     assert {:ok, %{status: "paused", paused_reason: "uncertain"}} = Tape.turn(ctx, turn.id)
     {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert %{dispatch_state: "uncertain", approval_id: nil} =
+    assert %{dispatch_state: "uncertain"} =
              Enum.find(steps, &(&1.kind == "launch"))
 
     assert Enum.count(steps, &(&1.kind == "model")) == 1
@@ -2909,7 +2901,7 @@ defmodule Aqua.LoopTest do
     assert :completed = Task.await(run(ctx, turn), 60_000)
     {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert %{dispatch_state: "closed", outcome: "denied", approval_id: nil} =
+    assert %{dispatch_state: "closed", outcome: "denied"} =
              launch = Enum.find(steps, &(&1.kind == "launch"))
 
     assert {:ok, %{content: said}} = Tape.message(ctx, launch.result_message_id)
@@ -3262,7 +3254,7 @@ defmodule Aqua.LoopTest do
       send(model, :continue)
       assert :completed = Task.await(task, 60_000)
 
-      assert %{outcome: "ok", generation: 0, approval_id: nil} = step!(ctx, turn, page.id)
+      assert %{outcome: "ok", generation: 0} = step!(ctx, turn, page.id)
       assert {:ok, %{content: "x"}} = Aqua.Notes.read(ctx, "from-page")
       assert [_one] = chats()
     end
@@ -3406,7 +3398,7 @@ defmodule Aqua.LoopTest do
 
       answers =
         for page <- [null, decimal] do
-          %{result_message_id: result, outcome: "denied", proposal_digest: nil} =
+          %{result_message_id: result, outcome: "denied"} =
             step!(ctx, turn, page.id)
 
           {:ok, %{content: body} = row} = Tape.message(ctx, result)

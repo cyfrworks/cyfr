@@ -635,11 +635,11 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the thirty-five stores and the transitions, each a module" do
+    test "the security-row roster is exactly the thirty-three stores and the transitions, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
-                 Arca.ToolGrantStorage Arca.VaultStorage Arca.SessionStorage
+                 Arca.VaultStorage Arca.SessionStorage
                  Arca.ApiKeyStorage Arca.RegistryTokenStorage Arca.ProviderCredentialStorage
                  Arca.WebhookStorage Arca.FrameCredentials Arca.PairedClients Arca.Users
                  Arca.Athanors Arca.Doors

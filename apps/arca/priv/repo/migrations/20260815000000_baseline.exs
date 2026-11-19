@@ -2129,65 +2129,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:oauth_provider_credentials, [:athanor_id, :provider])
-
-    # Athanor-scoped tool decisions, kept apart from authored agent policy:
-    # effective policy is the declared permissions plus allows, minus denies.
-    # An agent-scope grant applies across threads; a thread-scope
-    # grant only to the named one. Each scope has its own unique index,
-    # because agent rows carry no thread id and a nullable composite
-    # key would permit duplicates; effect is not in either key, so flipping
-    # allow/deny updates one row.
-    create table(:tool_grants, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
-      add :scope, :string, null: false
-      add :effect, :string, null: false
-      add :thread_id, :string
-      add :agent_name, :string, null: false
-      add :tool, :string, null: false
-      add :action, :string, null: false
-      add :granted_by, :string
-      add :granted_at, :utc_datetime_usec, null: false
-      # The bounds an allow may carry and a deny never does: the lifecycle
-      # it ends with (`execution`, `turn` or `schedule`, and that row's id),
-      # a deadline, and a resource constraint (JSON: a resource kind and its
-      # patterns).
-      add :lifecycle_kind, :string
-      add :lifecycle_id, :string
-      add :expires_at, :utc_datetime_usec
-      add :constraint, :text
-      # The outside sources an allow also covers (JSON, a list of
-      # `Prima.Source`): a turn that read an outside source the list does
-      # not name asks again. Empty covers none; a deny names none.
-      add :sources, :text, null: false, default: "[]"
-      # The program row an allow's `program_row` constraint names, empty
-      # for every other kind: part of the answer's identity, so each
-      # program's standing answer stands on its own (`Arca.Schemas.ToolGrant`).
-      add :program_row, :string, null: false, default: ""
-      # The schedule an allow ends with, empty for every other answer: part
-      # of the answer's identity as the program row is, so an answer for one
-      # schedule stands beside another's and beside one for no schedule.
-      add :schedule_id, :string, null: false, default: ""
-    end
-
-    # Each partial key is named for its scope, the name Postgres reports a
-    # violation under. SQLite reports a violation by column, so
-    # `Arca.ToolGrantStorage` declares each constraint under both spellings.
-    create unique_index(
-             :tool_grants,
-             [:thread_id, :agent_name, :tool, :action, :program_row, :schedule_id],
-             where: "scope = 'thread'",
-             name: :tool_grants_thread_scope_index
-           )
-
-    create unique_index(
-             :tool_grants,
-             [:athanor_id, :agent_name, :tool, :action, :program_row, :schedule_id],
-             where: "scope = 'agent'",
-             name: :tool_grants_agent_scope_index
-           )
-
-    create index(:tool_grants, [:athanor_id, :agent_name])
   end
 
   # ==========================================================================
@@ -2686,7 +2627,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # `Arca.Schemas.Message.outcomes/0`.
     message_outcome =
-      known("messages_outcome_known", "outcome", ~w(done failed cancelled uncertain needs_you))
+      known("messages_outcome_known", "outcome", ~w(done failed cancelled uncertain))
 
     create table(:threads, primary_key: false) do
       add :id, :string, primary_key: true, null: false
@@ -2793,18 +2734,17 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :seq, :integer, null: false
       # Who wrote it: a user id, an agent, or "system".
       add :author, :string, null: false
-      # text | approval | error | system | tool_call | tool_result |
-      # compaction | turn_aborted | opening | pointer | report | page_call |
-      # page_result | nudge
+      # text | error | system | tool_call | tool_result | compaction |
+      # turn_aborted | opening | pointer | report | page_call | page_result |
+      # nudge
       add :kind, :string, null: false, default: "text"
       add :content, :text, null: false, default: ""
-      # Kind-specific JSON: an approval's intent and proposal, a text
-      # message's attachment refs (bytes under
+      # Kind-specific JSON: a text message's attachment refs (bytes under
       # data/athanors/{athanor_id}/threads/{thread}/{msg}/), an error's
       # source.
       add :payload, :text
-      # Approvals: pending | running | approved | declined | expired | error |
-      # invalidated. A request to a crew member: pending | answered.
+      # A request to a crew member: pending | answered | expired. An
+      # opening: none while it waits, then expired | error.
       add :status, :string
       # A request's `resolved_by` is the id of the reply that answered it,
       # a nudge's the model step whose request carried it.
@@ -2813,20 +2753,17 @@ defmodule Arca.Repo.Migrations.Baseline do
       # `input` step. A plain string, from which nothing cascades.
       add :carried_by, :string
       add :resolved_at, :utc_datetime_usec
-      # Approvals: the decision's reason/result summary/scope, JSON.
-      add :resolution, :text
       add :execution_id, :string
       add :turn_id, :string
-      add :approval_id, :string
       # The sender's retry identity.
       add :client_id, :string
       # Who sent it: `person` or an agent name.
       add :sent_by, :string
       # The crew member a request names.
       add :addressee, :string
-      # The request a reply or notice answers.
+      # The request a reply answers.
       add :reply_to, :string
-      # A reply's or notice's outcome.
+      # A reply's outcome.
       add :outcome, :string, check: if(sqlite?, do: message_outcome)
       # The workspace thread a daily thread's pointer, report or reminder
       # names, with which it is deleted. A plain string, from which nothing
@@ -2854,8 +2791,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   # `turns` own accepted work and its state; `turn_steps` own orchestration
   # state and reference content by message and execution id, never
-  # duplicating it; `approvals` own a decision, which the corresponding
-  # message row references. Columns naming an execution or a turn beyond
+  # duplicating it. Columns naming an execution or a turn beyond
   # the composite parents are plain strings: the tenant seam holds every
   # query to `athanor_id`.
   defp turns do
@@ -2923,7 +2859,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :window_upto_seq, :integer
       add :active_ms, :integer, null: false, default: 0
       add :paused_at, :utc_datetime_usec
-      # approval | launch
+      # launch
       add :paused_reason, :string
       add :launch_step_id, :string
       # How the turn was started (`Prima.Origin`), written when it is
@@ -2956,7 +2892,7 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :seq, :integer, null: false
-      # model | tool | ui | approval | launch | input
+      # model | tool | ui | launch | input
       add :kind, :string, null: false
       # chat | flush | compaction | page | brain — what the step serves, set by the host
       add :purpose, :string, null: false
@@ -2969,9 +2905,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :result_message_id, :string
       add :execution_id, :string
       add :child_execution_id, :string
-      add :approval_id, :string
       add :authority_digest, :string
-      add :proposal_digest, :string
       add :request_digest, :string
       add :usage, :text
       add :excluded, :text
@@ -2990,41 +2924,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:turn_steps, [:id, :athanor_id])
     create index(:turn_steps, [:athanor_id, :turn_id])
     create index(:turn_steps, [:athanor_id, :dispatch_state])
-
-    create table(:approvals, primary_key: false) do
-      add :id, :string, primary_key: true, null: false
-      add :athanor_id, :string, null: false
-
-      add :turn_id,
-          references(:turns,
-            type: :string,
-            on_delete: :delete_all,
-            with: [athanor_id: :athanor_id]
-          ),
-          null: false
-
-      add :thread_id, :string
-      add :step_id, :string
-      add :message_id, :string
-      # pending | approved | declined | expired | error | invalidated
-      # (Prima.TurnState.approval_statuses/0)
-      add :status, :string, null: false
-      add :scope, :string
-      add :proposal_digest, :string, null: false
-      # continue | launch | denied | expired
-      add :resolution_kind, :string
-      add :decided_by, :string
-      add :decided_at, :utc_datetime_usec
-      add :expires_at, :utc_datetime_usec
-      add :resolution, :text
-      add :inserted_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:approvals, [:id, :athanor_id])
-    create index(:approvals, [:athanor_id, :status])
-    create index(:approvals, [:athanor_id, :turn_id])
-    create index(:approvals, [:athanor_id, :thread_id, :status])
-    create index(:approvals, [:athanor_id, :status, :expires_at])
   end
 
   # ==========================================================================

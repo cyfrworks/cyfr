@@ -253,11 +253,7 @@ defmodule Arca.SchemaBaselineTest do
     assert is_nil(columns["recovery_limit"].default)
   end
 
-  test "threads hold the messages, tool grants and approvals" do
-    for table <- ~w(messages tool_grants approvals) do
-      assert "thread_id" in Enum.map(columns(table), & &1.name), "#{table} lacks thread_id"
-    end
-
+  test "threads hold the messages" do
     assert Enum.find(columns("messages"), &(&1.name == "thread_id")).not_null?
     assert "turn_seq" in Enum.map(columns("threads"), & &1.name)
   end

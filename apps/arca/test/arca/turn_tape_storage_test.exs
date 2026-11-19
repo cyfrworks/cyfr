@@ -173,7 +173,6 @@ defmodule Arca.TurnTapeStorageTest do
               kind: "read",
               recovery: "replay_safe",
               idempotency_key: "call:#{turn.id}:1:#{id}",
-              proposal_digest: "sha256:" <> id,
               child_execution_id: "exec_child_" <> id
             }
           end)
