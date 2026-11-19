@@ -15,9 +15,9 @@ defmodule Aqua.Loop.Binding do
   operation of the same effect, an `execution.run` of a wrapped catalyst
   is the hand it aliases, an `execution.run` of an agent is refused (a
   crew member is asked with `crew.ask`, never launched), and any other
-  `execution.run` is a launch the loop hands to `Aqua.Launch` after a
-  card, its arguments as the model wrote them, the account it names
-  (`connection`) among them.
+  `execution.run` is a launch the loop hands to `Aqua.Launch` once the
+  member's mode runs it, its arguments as the model wrote them, the
+  account it names (`connection`) among them.
 
   `dispatch/2` runs a hand, a catalog call or an external call under the
   turn's authority from a worker of the loop's, with the turn root as
@@ -61,11 +61,10 @@ defmodule Aqua.Loop.Binding do
   @doc """
   Resolve one model call. `opts`: `:tool_call_id`. Answers the call with
   its canonical operation, or a refusal the loop records as the call's
-  result. A call with an argument the proposal's digest has no form for
-  (`Aqua.Loop.Policy.proposal_digest/1`, `Prima.JCS`), at any depth, is
-  refused `invalid_argument` before anything runs: a null, since an
-  explicit null and an omitted argument can be two operations, a decimal
-  number, or an integer past 2^53 - 1.
+  result. A call with an argument the canonical form (`Prima.JCS`) has
+  no form for, at any depth, is refused `invalid_argument` before
+  anything runs: a null, since an explicit null and an omitted argument
+  can be two operations, a decimal number, or an integer past 2^53 - 1.
   """
   @spec resolve(String.t(), map(), keyword()) ::
           {:ok, Call.t()} | {:error, String.t() | {:invalid_argument, String.t()}}

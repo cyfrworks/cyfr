@@ -4,8 +4,8 @@
 defmodule Arca.TurnTapeStorageTest do
   @moduledoc """
   The durable turn: acceptance is atomic with the work it opens; a step
-  is proposed before its effect and closed with its result; approvals
-  consume a proposal; pause, resume, finish and takeover move the turn,
+  is proposed before its effect and closed with its result; pause,
+  resume, finish and takeover move the turn,
   its attempt and its root execution together; the projection reads
   behind a consumption boundary that a queued turn never crosses.
   """
@@ -173,13 +173,31 @@ defmodule Arca.TurnTapeStorageTest do
               kind: "read",
               recovery: "replay_safe",
               idempotency_key: "call:#{turn.id}:1:#{id}",
-              proposal_digest: "sha256:" <> id,
               child_execution_id: "exec_child_" <> id
             }
           end)
       })
 
     {step, recorded}
+  end
+
+  # The turn paused around a launch it handed to a person.
+  defp launch_paused!(actor, turn) do
+    {:ok, launch} =
+      TurnStorage.put_step(actor, turn.id, %{
+        kind: "launch",
+        idempotency_key: "launch:1",
+        fence: turn.fence
+      })
+
+    {:ok, paused} =
+      TurnStorage.pause(actor, turn.id, %{
+        fence: turn.fence,
+        reason: "launch",
+        launch_step_id: launch.id
+      })
+
+    paused
   end
 
   describe "acceptance" do
@@ -341,15 +359,15 @@ defmodule Arca.TurnTapeStorageTest do
       assert taken == second.id
     end
 
-    test "an approval pause keeps the claim", %{actor: actor, thread: thread} do
+    test "a launch pause keeps the claim", %{actor: actor, thread: thread} do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
       {started, _root} = start!(actor, turn)
       assert %{active_turn_id: held} = reread(actor, thread)
       assert held == turn.id
 
-      # The pause a card raises: still this member's work, still its thread.
-      {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: started.fence})
-      assert paused.paused_reason == "approval"
+      # The pause a launch raises: still this member's work, still its thread.
+      paused = launch_paused!(actor, started)
+      assert paused.paused_reason == "launch"
       assert %{active_turn_id: ^held} = reread(actor, thread)
 
       {:ok, _resumed} =
@@ -552,7 +570,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert is_nil(next.cancel_requested_at)
     end
 
-    test "skipping closes the unstarted steps with a synthetic result and invalidates their cards",
+    test "skipping closes the unstarted steps with a synthetic result",
          %{
            actor: actor,
            thread: thread
@@ -562,13 +580,6 @@ defmodule Arca.TurnTapeStorageTest do
 
       {_model, %{calls: [%{step: s1}, %{step: s2}]}} =
         respond!(actor, turn, [{"a", "files", "read"}, {"b", "files", "write"}])
-
-      {:ok, %{approval: approval, card: card}} =
-        TurnStorage.open_approval(actor, s2.id, %{
-          proposal_digest: "sha256:b",
-          card: %{content: "Write a.txt?", payload: %{"intent" => %{}}},
-          fence: turn.fence
-        })
 
       {:ok, _} = TurnStorage.dispatch_step(actor, s1.id, %{fence: turn.fence})
 
@@ -591,82 +602,8 @@ defmodule Arca.TurnTapeStorageTest do
       assert %{"tool_call_id" => "b", "name" => "files.write", "skipped" => true} =
                Arca.ThreadStorage.payload(result)
 
-      assert {:ok, %{status: "invalidated"}} = TurnStorage.approval(actor, approval.id)
-
-      assert %{status: "invalidated"} = Arca.Repo.get!(Message, card.id)
-      # The status it took is one the turn vocabulary names.
-      assert "invalidated" in Prima.TurnState.approval_statuses()
       # The dispatched step is untouched.
       assert {:ok, %{dispatch_state: "dispatched"}} = TurnStorage.step(actor, s1.id)
-    end
-  end
-
-  describe "approvals" do
-    test "a decision consumes the card once: approved returns the step to proposed, declined closes it denied",
-         %{actor: actor, thread: thread} do
-      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
-      {turn, _root} = start!(actor, turn)
-
-      {_model, %{calls: [%{step: s1}, %{step: s2}]}} =
-        respond!(actor, turn, [{"a", "files", "write"}, {"b", "files", "delete"}])
-
-      {:ok, %{approval: a1, card: card1}} =
-        TurnStorage.open_approval(actor, s1.id, %{
-          proposal_digest: "sha256:a",
-          card: %{content: "a?"},
-          fence: turn.fence
-        })
-
-      assert card1.approval_id == a1.id and card1.status == "pending"
-
-      assert {:ok, %{step_id: sid}} = TurnStorage.approval_by_message(actor, card1.id)
-
-      assert sid == s1.id
-
-      assert {:ok, [%{id: aid}]} = TurnStorage.pending_approvals(actor, turn.id)
-
-      assert aid == a1.id
-
-      assert {:ok, %{approval: %{status: "approved", decided_by: who}, step: step, card: card}} =
-               TurnStorage.resolve_approval(actor, a1.id, "approved", %{
-                 fence: turn.fence,
-                 decided_by: actor.user_id,
-                 scope: "once",
-                 resolution_kind: "continue",
-                 resolution: %{"scope" => "once"}
-               })
-
-      assert who == actor.user_id and step.dispatch_state == "proposed" and
-               card.status == "approved"
-
-      assert {:error, {:already_resolved, %{status: "approved"}}} =
-               TurnStorage.resolve_approval(actor, a1.id, "declined", %{
-                 decided_by: actor.user_id,
-                 fence: turn.fence
-               })
-
-      {:ok, %{approval: a2}} =
-        TurnStorage.open_approval(actor, s2.id, %{
-          proposal_digest: "sha256:b",
-          card: %{content: "b?"},
-          fence: turn.fence
-        })
-
-      assert {:ok, %{step: denied, approval: %{status: "declined"}}} =
-               TurnStorage.resolve_approval(actor, a2.id, "declined", %{
-                 fence: turn.fence,
-                 decided_by: actor.user_id,
-                 resolution_kind: "denied",
-                 reason: "no",
-                 denied_result: %{content: "did not run: declined", payload: %{"denied" => true}}
-               })
-
-      assert denied.outcome == "denied" and denied.dispatch_state == "closed"
-
-      assert %{kind: "tool_result", content: "did not run: declined"} =
-               Arca.Repo.get!(Message, denied.result_message_id)
-
-      assert {:ok, []} = TurnStorage.pending_approvals(actor, turn.id)
     end
   end
 
@@ -677,13 +614,8 @@ defmodule Arca.TurnTapeStorageTest do
       {turn, root} = start!(actor, turn)
       Process.sleep(15)
 
-      assert {:ok, paused} =
-               TurnStorage.pause(actor, turn.id, %{
-                 reason: "approval",
-                 fence: turn.fence
-               })
-
-      assert paused.status == "paused" and paused.paused_reason == "approval"
+      paused = launch_paused!(actor, turn)
+      assert paused.status == "paused" and paused.paused_reason == "launch"
       assert paused.active_ms >= 15
 
       assert %{state: "paused"} = ExecutionAttempts.get(actor, root.attempt.attempt)

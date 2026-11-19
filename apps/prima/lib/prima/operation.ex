@@ -20,12 +20,10 @@ defmodule Prima.Operation do
   `{"domain", :egress_domain}` or `{"program", :program_row}`, a program
   row's id (`resource_kinds/0`). It is validated at
   declaration: the argument must be one of the action's own string
-  arguments. A standing approval may be constrained to resources of that
-  kind only for an action that declares one; an action that declares none
-  takes no standing constraint, and an action whose resource is a program
-  row takes a standing allow only constrained to one row
-  (`Sanctum.ToolGrants`). Like `resource_schemes`, it is metadata for
-  the gate, absent from the annotation view and from discovery.
+  arguments. A request's preview names the resource it touches by it
+  (`Sanctum.Catalog.action_declaration/1`). Like `resource_schemes`, it
+  is metadata for the gate, absent from the annotation view and from
+  discovery.
 
   `reduces_authority` marks an action that only takes authority away:
   signing out, revoking, withdrawing consent, leaving, removing a member,
@@ -52,23 +50,11 @@ defmodule Prima.Operation do
   annotation view and from discovery.
 
   `follows_setting: true` marks an action that follows the person's own
-  browser setting rather than an authored policy line: with the setting
-  on the assistant runs it without a card, an external one among them,
-  and with it off the action is refused (`Aqua.BrowserSetting`). It is
-  admitted for the browser tool's in-chain actions alone (`validate!/1`):
-  no other external action takes a standing allow. It is metadata for
-  the gate, absent from the annotation view and from discovery.
-
-  `stored_answers: false` marks an action no standing allow a person
-  gives is ever kept for, though its `standing` lets an author make it
-  automatic: whether an author may write `auto` for an action and whether
-  a stored standing allow may exist for it are two facts, and this is
-  the second. `Sanctum.ToolGrants`' one rule refuses such a row when it
-  is written and counts none when it reads one back; a standing deny
-  stands as for every action. It is declared only
-  beside a `standing` of nil, since `false` and `:thread` already say how
-  far an answer reaches. It is metadata for the gate, absent from the
-  annotation view and from discovery.
+  browser setting: with the setting off the action is refused, and with
+  it on the member's mode decides it as any offered call
+  (`Aqua.BrowserSetting`). It is admitted for the browser tool's in-chain
+  actions alone (`validate!/1`). It is metadata for the gate, absent from
+  the annotation view and from discovery.
 
   `recorded: false` marks a read whose admitted call the gate's decision
   audit leaves out (`Sanctum.Catalog.recorded?/2`): discovery, the audit's
@@ -91,7 +77,6 @@ defmodule Prima.Operation do
     :permission,
     :consent,
     :scope,
-    :standing,
     :recovery,
     :host,
     :resource,
@@ -100,7 +85,6 @@ defmodule Prima.Operation do
     resource_schemes: [],
     reduces_authority: false,
     follows_setting: false,
-    stored_answers: true,
     recorded: true
   ]
 
@@ -115,14 +99,12 @@ defmodule Prima.Operation do
           permission: atom() | nil,
           consent: :interactive | :staging | nil,
           scope: :platform | nil,
-          standing: :thread | false | nil,
           recovery: :replay_safe | nil,
           host: :intercepted | nil,
           resource: {String.t(), resource_kind()} | nil,
           resource_schemes: [String.t()],
           reduces_authority: boolean(),
           follows_setting: boolean(),
-          stored_answers: boolean(),
           recorded: boolean(),
           sources: sources() | nil
         }
@@ -154,7 +136,6 @@ defmodule Prima.Operation do
     :permission,
     :consent,
     :scope,
-    :standing,
     :recovery,
     :host
   ]
@@ -169,7 +150,6 @@ defmodule Prima.Operation do
           :resource_schemes,
           :reduces_authority,
           :follows_setting,
-          :stored_answers,
           :recorded,
           :sources | @annotation_fields
         ]
@@ -197,10 +177,9 @@ defmodule Prima.Operation do
              Enum.all?(op.planes, &(&1 in @valid_planes)) and
              op.auth in [:anonymous, :signed_in, :required] and
              op.consent in [nil, :interactive, :staging] and
-             op.scope in [nil, :platform] and op.standing in [nil, false, :thread] and
-             op.recovery in [nil, :replay_safe] and
+             op.scope in [nil, :platform] and op.recovery in [nil, :replay_safe] and
              is_boolean(op.reduces_authority) and is_boolean(op.follows_setting) and
-             is_boolean(op.stored_answers) and is_boolean(op.recorded) and
+             is_boolean(op.recorded) and
              (is_nil(op.permission) or is_atom(op.permission)),
            do: raise(ArgumentError, "invalid operation annotation")
 
@@ -212,9 +191,6 @@ defmodule Prima.Operation do
 
     if not op.recorded and op.kind != :read,
       do: raise(ArgumentError, "only a read may go unrecorded")
-
-    if not op.stored_answers and not is_nil(op.standing),
-      do: raise(ArgumentError, "a standing declaration already says how far an answer reaches")
 
     if op.follows_setting and (op.tool != "browser" or op.planes != [:in_chain]),
       do: raise(ArgumentError, "only the browser tool's in-chain actions follow the setting")

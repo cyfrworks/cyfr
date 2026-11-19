@@ -64,7 +64,7 @@ defmodule Compendium.Providers.Source do
 
     # Every action names its file or folder by the one argument, in the
     # grammar `scoped/2` reads, and declares it as its resource, so a
-    # standing approval may be constrained to paths.
+    # request's preview names the path it touches.
     path =
       Arg.new("path", :string,
         required: true,

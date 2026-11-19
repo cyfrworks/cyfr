@@ -111,7 +111,6 @@
 0.0	apps/arca/test/arca/suite_boot_test.exs
 1.6	apps/arca/test/arca/tenant_argument_order_test.exs
 0.2	apps/arca/test/arca/tenant_tables_test.exs
-1.1	apps/arca/test/arca/tool_grant_storage_test.exs
 0.5	apps/arca/test/arca/turn_fence_race_test.exs
 0.2	apps/arca/test/arca/turn_storage_test.exs
 1.0	apps/arca/test/arca/turn_tape_storage_test.exs
@@ -127,8 +126,6 @@
 0.2	apps/arca/test/arca/writers_test.exs
 1.0	apps/cyfr/test/aqua/agent_config_test.exs
 0.8	apps/cyfr/test/aqua/aloud_test.exs
-0.0	apps/cyfr/test/aqua/approval_scope_test.exs
-56.4	apps/cyfr/test/aqua/approvals_test.exs
 4.2	apps/cyfr/test/aqua/aqua_tool_edits_test.exs
 0.2	apps/cyfr/test/aqua/attachment_write_race_test.exs
 0.5	apps/cyfr/test/aqua/attachments_test.exs
@@ -156,7 +153,6 @@
 0.6	apps/cyfr/test/aqua/models_test.exs
 1.2	apps/cyfr/test/aqua/notes_test.exs
 3.9	apps/cyfr/test/aqua/prompt_test.exs
-0.4	apps/cyfr/test/aqua/providers/approval_test.exs
 1.9	apps/cyfr/test/aqua/providers/notes_test.exs
 26.8	apps/cyfr/test/aqua/providers/status_test.exs
 2.5	apps/cyfr/test/aqua/providers/thread_test.exs
@@ -170,7 +166,6 @@
 0.1	apps/cyfr/test/aqua/schedule_notes_sandbox_test.exs
 2.9	apps/cyfr/test/aqua/schedule_notes_test.exs
 1.2	apps/cyfr/test/aqua/seed_contract_test.exs
-0.1	apps/cyfr/test/aqua/standing_test.exs
 5.1	apps/cyfr/test/aqua/status_test.exs
 3.8	apps/cyfr/test/aqua/streams_test.exs
 0.1	apps/cyfr/test/aqua/supervisor_test.exs
@@ -178,7 +173,6 @@
 0.5	apps/cyfr/test/aqua/tape_test.exs
 0.2	apps/cyfr/test/aqua/template_policy_test.exs
 0.1	apps/cyfr/test/aqua/text_test.exs
-0.8	apps/cyfr/test/aqua/tool_grants_test.exs
 0.6	apps/cyfr/test/aqua/tool_seam_test.exs
 64.7	apps/cyfr/test/aqua/turn_ledger_test.exs
 31.8	apps/cyfr/test/aqua/turn_sources_test.exs
@@ -282,7 +276,6 @@
 0.5	apps/cyfr/test/compendium/registry/identity_test.exs
 2.1	apps/cyfr/test/compendium/registry/transport_test.exs
 0.0	apps/cyfr/test/compendium/registry_cache_invalidation_test.exs
-0.1	apps/cyfr/test/compendium/registry_port_test.exs
 1.1	apps/cyfr/test/compendium/registry_remove_cascade_test.exs
 9.9	apps/cyfr/test/compendium/registry_test.exs
 0.2	apps/cyfr/test/compendium/release_digest_test.exs
@@ -452,7 +445,6 @@
 0.2	apps/cyfr/test/emissary/telemetry_test.exs
 0.2	apps/cyfr/test/emissary/web/controllers/account_controller_test.exs
 3.2	apps/cyfr/test/emissary/web/controllers/canvas_controller_test.exs
-0.5	apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs
 1.4	apps/cyfr/test/emissary/web/controllers/directory_controller_test.exs
 0.2	apps/cyfr/test/emissary/web/controllers/directory_privacy_test.exs
 1.5	apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs
@@ -583,7 +575,6 @@
 0.0	apps/cyfr/test/prism/labels_test.exs
 32.7	apps/cyfr/test/prism/tincture_registry_test.exs
 0.1	apps/cyfr/test/prism_web/athanors_test.exs
-0.3	apps/cyfr/test/prism_web/components/aqua_approval_card_test.exs
 0.7	apps/cyfr/test/prism_web/controllers/company_login_controller_test.exs
 0.6	apps/cyfr/test/prism_web/controllers/device_unlock_controller_test.exs
 0.5	apps/cyfr/test/prism_web/controllers/download_outsider_test.exs
@@ -998,7 +989,6 @@
 0.7	apps/sanctum/test/sanctum/tenancy_test.exs
 0.0	apps/sanctum/test/sanctum/tenant_policy_test.exs
 7.1	apps/sanctum/test/sanctum/tincture_auth_test.exs
-1.5	apps/sanctum/test/sanctum/tool_grants_test.exs
 0.1	apps/sanctum/test/sanctum/tool_server_digest_test.exs
 0.3	apps/sanctum/test/sanctum/unauthorized_vocabulary_test.exs
 0.0	apps/sanctum/test/sanctum/user_agent_test.exs

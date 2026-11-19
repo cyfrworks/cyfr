@@ -102,16 +102,16 @@ defmodule Sanctum.Context do
         }
 
   @typedoc """
-  The account an approved launch's card showed: the vault entry it bound
+  The account a launch's decision resolved: the vault entry it bound
   (`entry`) and the name its binding stored that entry under (`name`).
   """
   @type approved_entry :: %{entry: String.t(), name: String.t()}
 
   @typedoc """
-  What an approved launch's card bound for the root it dispatches: the
-  turn's sources it seeds (`sources`), the classes the person let flow to
-  every exit of the launched tree (`classes`), the consent revision the
-  card showed the launched grant at (`consent_id`), the root's
+  What a launch bound for the root it dispatches: the turn's sources it
+  seeds (`sources`), the classes let flow to every exit of the launched
+  tree (`classes`), the consent revision the launched grant must load at
+  (`consent_id`, nil for none), the root's
   pre-minted id (`execution_id`) and the name of the agent whose turn
   launched it (`agent`), which the root records as its caller
   (`Prima.Question.Caller`).
@@ -225,22 +225,22 @@ defmodule Sanctum.Context do
     # never inspected (the derived `Inspect` leaves it out), so a crash
     # report carrying the context does not carry it.
     :confirmation_id,
-    # The account an approved launch's card showed (`t:approved_entry/0`:
+    # The account a launch's decision resolved (`t:approved_entry/0`:
     # the entry it bound and the name its binding stored), or nil. Only
-    # `Aqua.Launch.dispatch/2` sets it, on the approver's context for the
+    # `Aqua.Launch.run/3` sets it, on the turn's person's context for the
     # one `execution.run` it dispatches; nothing a caller sends can name
     # one, and `build/1` never sets it. The run's root admission
     # (`Opus.Admission`) refuses unless the root's binding names this
     # entry under this name, and clears it from the context the run
     # carries on, so it rides that one call and is never compared again.
     :approved_entry,
-    # What an approved launch's card bound for its root (`t:launch/0`), or
+    # What a launch bound for its root (`t:launch/0`), or
     # nil. Set through `stamp_launch/2` alone, which `Aqua.Launch` alone
-    # calls, on the approver's context for the one `execution.run` it
+    # calls, on the turn's person's context for the one `execution.run` it
     # dispatches; nothing a caller sends can name one and `build/1` never
     # sets it. The
     # root's admission (`Opus.Admission`) seeds the root from it, refuses a
-    # root whose loaded consent revision is not the one the card showed,
+    # root whose loaded consent revision is not the one it names,
     # and clears it from the context the run carries on.
     :launch,
     # How the run this context starts began (`Prima.Origin`): set by the
@@ -261,7 +261,7 @@ defmodule Sanctum.Context do
     # Which authorization plane this context is on. :external is every real
     # ingress; :guest is stamped one-way by enter_guest/1 when a context
     # enters a WASM closure (an execution's attempt for its guest's calls, the thread
-    # runner before an approved in-chain call), and require_permission/2 fails closed on it — a
+    # runner before a decided in-chain call), and require_permission/2 fails closed on it — a
     # context that has entered a guest closure can never authorize an
     # external-plane call.
     plane: :external
@@ -658,12 +658,12 @@ defmodule Sanctum.Context do
   def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
 
   @doc """
-  `ctx` carrying an approved launch's stamp (`t:launch/0`): the one writer
+  `ctx` carrying a launch's stamp (`t:launch/0`): the one writer
   of the field, whose root admission seeds the launched root from it
   (`Opus.Admission`). It mints a host-trusted seed, the classes a tree
-  may send anywhere and the agent the root names as its caller, which a
-  standing answer's match keys on, so it is called from `Aqua.Launch`
-  alone, a roster holds (`Sanctum.LaunchStampBoundaryTest`). A stamp of
+  may send anywhere and the agent the root names as its caller, so it is
+  called from `Aqua.Launch` alone, a roster holds
+  (`Sanctum.LaunchStampBoundaryTest`). A stamp of
   another shape raises.
   """
   @spec stamp_launch(t(), launch()) :: t()

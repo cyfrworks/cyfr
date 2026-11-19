@@ -10,8 +10,8 @@ defmodule PrismWeb.AquaLive do
   (`Compendium.AquaTemplate` seeds them), edited by its
   person through the `aqua` tool — beside the page the soul reads first
   (`about-you`, pinned through the `notes` tool), the notes kept here, and the scrolls it can
-  read on demand. Every write from this page goes through the tool a
-  card in chat goes through, so one gate answers for both.
+  read on demand. Every write from this page goes through the tool Aqua
+  calls in a thread, so one gate answers for both.
 
   The page shows the tree of the athanor in focus and nothing else: a
   person's own athanor page edits their own tree. The soul reads only the
@@ -467,7 +467,7 @@ defmodule PrismWeb.AquaLive do
       end
 
     "This athanor consented to an older #{short_ref(ref)}: #{count} not in its consent " <>
-      "(#{shown}#{rest}), so a card for one is denied on Approve until you consent again."
+      "(#{shown}#{rest}), so a call to one is refused until you consent again."
   end
 
   defp consent_warning(ref, :stale) do

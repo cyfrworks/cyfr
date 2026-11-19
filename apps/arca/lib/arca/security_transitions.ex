@@ -145,7 +145,6 @@ defmodule Arca.SecurityTransitions do
 
   alias Arca.Schemas.{
     ApiKey,
-    Approval,
     Athanor,
     ConsentVaultRef,
     DeviceCertificate,
@@ -166,7 +165,6 @@ defmodule Arca.SecurityTransitions do
     SharedThread,
     SharedThreadMember,
     StorageWriteIntent,
-    ToolGrant,
     Turn,
     TurnStep,
     User,
@@ -716,12 +714,11 @@ defmodule Arca.SecurityTransitions do
   to `needs_consent`, every active vault entry to `needs_reauth` and every
   active share to `revoked` (`Arca.StatusTransitions.restored/1`),
   answering the shares in `revoked_share_ids`; deletes every standing
-  allow (`tool_grants` rows of effect `allow`, and `question_answers` rows
-  of effect `allow`, answered in `dropped_question_answer_ids`; denies
-  stay);
+  allow (`question_answers` rows of effect `allow`, answered in
+  `dropped_question_answer_ids`; denies stay);
   drops every unconsumed once binding by consuming it under the restore
-  (`consumed_by_root` `restore:<restore id>`); expires every pending
-  approval; and settles every open run terminal under
+  (`consumed_by_root` `restore:<restore id>`); and settles every open run
+  terminal under
   `Prima.ExecutionState` and `Prima.TurnState`: an execution `failed`,
   its attempt `lapsed` with outcome `uncertain` and the attempt's pending
   write intents `uncertain`, a turn `uncertain` with its open steps, and
@@ -855,9 +852,6 @@ defmodule Arca.SecurityTransitions do
         updated_at: now
       )
 
-    {_count, grant_ids} =
-      Arca.Repo.delete_all(from(g in ToolGrant, where: g.effect == "allow", select: g.id))
-
     {_count, question_answer_ids} =
       Arca.Repo.delete_all(from(a in QuestionAnswer, where: a.effect == "allow", select: a.id))
 
@@ -867,13 +861,6 @@ defmodule Arca.SecurityTransitions do
           where: r.lifetime_kind == "once" and is_nil(r.consumed_by_root)
         ),
         set: [consumed_by_root: "restore:" <> restore_id]
-      )
-
-    approval_ids =
-      updated(from(a in Approval, where: a.status == "pending", select: a.id),
-        status: "expired",
-        resolution_kind: "expired",
-        decided_at: now
       )
 
     vault_ids =
@@ -906,10 +893,8 @@ defmodule Arca.SecurityTransitions do
       revoked_admission_invitation_ids: admission_invitation_ids,
       deleted_confirmation_refs: confirmation_refs,
       needs_consent_profile_ids: profile_ids,
-      dropped_grant_ids: Enum.sort(grant_ids || []),
       dropped_question_answer_ids: Enum.sort(question_answer_ids || []),
       dropped_once_bindings: bindings,
-      expired_approval_ids: approval_ids,
       needs_reauth_vault_entry_ids: vault_ids,
       revoked_share_ids: share_ids
     })
@@ -1014,11 +999,9 @@ defmodule Arca.SecurityTransitions do
       from(i in Invitation, where: is_nil(i.redeemed_at) and is_nil(i.revoked_at)),
       PendingConfirmation,
       from(p in Profile, where: p.status == ^profile_from),
-      from(g in ToolGrant, where: g.effect == "allow"),
       from(a in QuestionAnswer, where: a.effect == "allow"),
       from(q in Question, where: q.state == "open"),
       from(r in ConsentVaultRef, where: r.lifetime_kind == "once" and is_nil(r.consumed_by_root)),
-      from(a in Approval, where: a.status == "pending"),
       from(v in VaultEntry, where: v.status == ^entry_from),
       from(s in Share, where: s.status == ^share_from),
       from(e in Execution, where: e.status in ^Prima.ExecutionState.open_statuses()),

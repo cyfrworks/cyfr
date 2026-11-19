@@ -533,10 +533,8 @@ defmodule Aqua.PageCallsTest do
         resolved_by: nil,
         carried_by: nil,
         resolved_at: nil,
-        resolution: nil,
         execution_id: nil,
         turn_id: nil,
-        approval_id: nil,
         client_id: nil,
         addressee: nil,
         reply_to: nil,
@@ -551,8 +549,8 @@ defmodule Aqua.PageCallsTest do
   # On auto
   # ---------------------------------------------------------------------------
 
-  test "a granted component with no exit, or whose grant lets the page out, runs once with " <>
-         "no card in two workspace threads, as a model's launch runs",
+  test "a granted component with no exit, or whose grant lets the page out, runs once in " <>
+         "two workspace threads, as a model's launch runs",
        %{ctx: ctx, driver: driver} do
     quiet = app!(ctx)
     flowing = app!(ctx, @flowing)
@@ -568,14 +566,13 @@ defmodule Aqua.PageCallsTest do
       assert answered!(id) == {200, result(%{"answered" => id})}
 
       # A turn of its own, asking no model, as the put's person under its
-      # origin: one launch, closed with no card and the run's result.
+      # origin: one launch, closed with the run's result.
       assert [{%{id: turn_id}, _steps}] = turns_after(ctx, room, put)
       turn = ended!(ctx, turn_id)
 
       assert {turn.status, turn.requested_by, turn.origin, turn.agent} ==
                {"completed", ctx.user_id, "interactive", "aqua"}
 
-      assert {:ok, []} = Tape.pending_approvals(ctx, turn)
       {:ok, [step]} = Tape.steps(ctx, turn)
 
       assert %{
@@ -583,7 +580,6 @@ defmodule Aqua.PageCallsTest do
                kind: "launch",
                dispatch_state: "closed",
                outcome: "ok",
-               approval_id: nil,
                child_execution_id: root_id,
                result_message_id: result_id
              } = step

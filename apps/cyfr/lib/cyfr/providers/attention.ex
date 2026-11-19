@@ -17,7 +17,6 @@ defmodule Cyfr.Providers.Attention do
 
   | kind | the record | `id` | `label` | `since` | enters, leaves |
   |---|---|---|---|---|---|
-  | `approval` | a pending approval in the athanor's threads | the approval | its thread's title, as the thread holds it | opened | opened; resolved or expired |
   | `grant_request` | a frame's request of the person, waiting in the shell that presents it (`Cyfr.Requests`) | the request | the operation it asks for, or the component a grant names | asked | asked; decided, expired, or withdrawn with its frame |
   | `confirmation` | the person's open confirmation of a sensitive change | its ref | its operation | opened | opened; consumed, cancelled, voided or expired |
   | `question` | a component's open question to the person before an action (`Sanctum.Questions`) | its ref | the component's name and the action's title: "<name> wants to <title>" | opened | opened; answered, expired, or withdrawn with its run |
@@ -25,42 +24,32 @@ defmodule Cyfr.Providers.Attention do
   | `failed_schedule` | a schedule of the person whose latest ended occurrence failed or is uncertain | the schedule | its name | that occurrence's due time | failed; its next completed run or its deletion |
   | `file_offer` | an offer to the person, offered and unexpired | the offer | its first file's name | made | offered; accepted, declined, withdrawn or expired |
 
-  Every item carries `day`: for an approval that waits in a daily thread,
-  that thread's date (ISO 8601), which the surface that draws the item
-  words; nil for every other item, a crew thread's approval among them,
-  whatever its title reads like. A surface words a day from this field
-  alone, never from a label.
-
   A failed run is one item per reference, its `id` the exact reference the
   run's record keeps, so the next end of a run of that reference names
   the item it settles without a read. `removed` names the item that
   stopped waiting by its `id` and how it left by its `outcome`, every
   other field nil: `expired` for an end whose time ran out, `withdrawn`
-  for a voided confirmation, a question its run's end withdrew, a withdrawn offer, a deleted schedule or a
-  deleted thread's approval, and `resolved` for every other end. A
-  waiting item's `outcome` is nil. An approval that a
-  cancel, a pause or an archive of its turn invalidates is announced to
-  no one (`Arca.TurnStorage`), so it leaves at the next refresh, which
-  the delivery contract (`Compendium.Canvas.catalog/1`) makes within five
-  minutes: an item is keyed by its `id`.
+  for a voided confirmation, a question its run's end withdrew, a
+  withdrawn offer or a deleted schedule, and `resolved` for every other
+  end. A waiting item's `outcome` is nil. An item whose record left
+  untold leaves at the next refresh, which the delivery contract
+  (`Compendium.Canvas.catalog/1`) makes within five minutes: an item is
+  keyed by its `id`.
 
-  An athanor is one person's, so its threads' approvals wait for its
-  owner, and an offer waits for its recipient in their own athanor; a
-  run, a schedule, a confirmation, a question and a request wait for the
-  person their record names. Nothing an operator decides for the server is an item.
+  An offer waits for its recipient in their own athanor; a run, a
+  schedule, a confirmation, a question and a request wait for the person
+  their record names. Nothing an operator decides for the server is an
+  item.
 
   The destination is where the person acts on the item, in one trusted
   spelling: `{kind: "page", page, ref}` for where Prism shows it, each a
-  page a canvas opens with `settings` (`aqua`, Aqua's panel on the desktop,
-  opened at the thread the approval waits in, which for a workspace
-  thread, or a crew member's thread under one, opens that workspace
-  thread's layer, `PrismWeb.AquaPanelLive`; the Dashboard's
-  `executions`, `schedules` and `files`), and the record there (a thread,
-  a run, a schedule or an offer), or `{kind: "ref", page: nil,
-  ref}` for a confirmation and a question, which the system layer
-  presents wherever the person is, and for a request, which the system layer presents above
-  the frame that asked. No field carries a message, a credential, a
-  diagnostic sentence or a person's identifier.
+  Dashboard page a canvas opens with `settings` (`executions`,
+  `schedules` and `files`), and the record there (a run, a schedule or
+  an offer), or `{kind: "ref", page: nil, ref}` for a confirmation and a
+  question, which the system layer presents wherever the person is, and
+  for a request, which the system layer presents above the frame that
+  asked. No field carries a message, a credential, a diagnostic sentence
+  or a person's identifier.
   """
 
   @behaviour Prima.Provider
@@ -72,13 +61,13 @@ defmodule Cyfr.Providers.Attention do
   @deadline_bound 86_400
 
   # Five minutes: how long a picture stands before it is read again, the
-  # bound on an approval that left untold (the moduledoc's).
+  # bound on an item that left untold (the moduledoc's).
   @stale_after 300
 
   # The failed runs a refresh lists, newest first.
   @failed_runs 20
 
-  @pages ~w(aqua executions schedules files)
+  @pages ~w(executions schedules files)
 
   @typedoc "One waiting item: the stream's payload fields with its kind."
   @type item :: %{
@@ -87,7 +76,6 @@ defmodule Cyfr.Providers.Attention do
           kind: Cyfr.Bus.Attention.kind(),
           id: String.t(),
           label: String.t() | nil,
-          day: String.t() | nil,
           since: DateTime.t() | nil,
           destination: map() | nil,
           outcome: nil
@@ -110,7 +98,7 @@ defmodule Cyfr.Providers.Attention do
         name: "attention.changes",
         topic: :attention,
         projection:
-          ["kind", "id", "label", "day", "since", "destination", "outcome"] ++
+          ["kind", "id", "label", "since", "destination", "outcome"] ++
             Prima.Provider.Stream.delivery_fields(),
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
@@ -127,9 +115,9 @@ defmodule Cyfr.Providers.Attention do
   @doc """
   The refresh of `attention.changes`: everything waiting for the holder in
   the context's athanor, oldest first, as the moduledoc's table derives
-  it. The approvals and the offers are listed only in the holder's own
-  athanor, where they are told live. A store that cannot answer ends the
-  refresh with its reason.
+  it. The offers are listed only in the holder's own athanor, where they
+  are told live. A store that cannot answer ends the refresh with its
+  reason.
   """
   @spec waiting(Context.t(), String.t()) :: {:ok, [item()]} | {:error, term()}
   def waiting(%Context{athanor_id: athanor_id, user_id: holder} = ctx, holder)
@@ -140,14 +128,13 @@ defmodule Cyfr.Providers.Attention do
 
     with {:ok, confirmations} <- Sanctum.Consent.waiting_confirmations(ctx),
          {:ok, questions} <- Sanctum.Questions.waiting(ctx),
-         {:ok, approvals} <- if(own?, do: approvals(actor, now, []), else: {:ok, []}),
          {:ok, offers} <- if(own?, do: offers(actor, now, []), else: {:ok, []}),
          {:ok, runs} <- runs(actor, holder, limit: @failed_runs),
          {:ok, schedules} <- schedules(actor, holder, []) do
       items =
         Enum.map(confirmations, &confirmation/1) ++
           Enum.map(questions, &question/1) ++
-          Cyfr.Requests.waiting(athanor_id, holder) ++ approvals ++ offers ++ runs ++ schedules
+          Cyfr.Requests.waiting(athanor_id, holder) ++ offers ++ runs ++ schedules
 
       {:ok,
        items
@@ -167,18 +154,6 @@ defmodule Cyfr.Providers.Attention do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The person an athanor's own items wait for: its owner, or `:none` for an
-  athanor that does not read.
-  """
-  @spec person(String.t()) :: {:ok, String.t()} | :none
-  def person(athanor_id) when is_binary(athanor_id) do
-    case Sanctum.Tenancy.Athanors.get(athanor_id) do
-      {:ok, %{owner_user_id: owner}} when is_binary(owner) and owner != "" -> {:ok, owner}
-      _none -> :none
-    end
-  end
-
-  @doc """
   The person's own athanor, where an item that reaches them from another
   athanor (an offer) is told, or `:none` for a person who holds none here.
   """
@@ -189,11 +164,6 @@ defmodule Cyfr.Providers.Attention do
       _none -> :none
     end
   end
-
-  @doc "The approval `approval_id` of the actor's athanor, while it waits."
-  @spec approval(Prima.Actor.t(), String.t()) :: {:ok, [item()]} | {:error, term()}
-  def approval(%Prima.Actor{} = actor, approval_id) when is_binary(approval_id),
-    do: approvals(actor, DateTime.utc_now(), approval_id: approval_id)
 
   @doc "The offer `offer_id` to the actor's person, while it waits for them."
   @spec file_offer(Prima.Actor.t(), String.t()) :: {:ok, [item()]} | {:error, term()}
@@ -224,7 +194,6 @@ defmodule Cyfr.Providers.Attention do
       kind: :confirmation,
       id: ref,
       label: operation,
-      day: nil,
       since: opened_at,
       destination: %{kind: "ref", page: nil, ref: ref},
       outcome: nil
@@ -241,7 +210,6 @@ defmodule Cyfr.Providers.Attention do
       kind: :question,
       id: ref,
       label: label,
-      day: nil,
       since: opened_at,
       destination: %{kind: "ref", page: nil, ref: ref},
       outcome: nil
@@ -249,17 +217,6 @@ defmodule Cyfr.Providers.Attention do
   end
 
   # ---------------------------------------------------------------------------
-
-  defp approvals(actor, now, opts) do
-    with {:ok, rows} <- Arca.TurnStorage.waiting_approvals(actor, now, opts) do
-      {:ok,
-       for row <- rows do
-         :approval
-         |> item(row.id, row.title, row.inserted_at, page("aqua", row.thread_id))
-         |> Map.put(:day, row.day && Date.to_iso8601(row.day))
-       end}
-    end
-  end
 
   defp offers(actor, now, opts) do
     with {:ok, rows} <- Arca.FileOffers.awaiting(actor, now, opts) do
@@ -305,7 +262,6 @@ defmodule Cyfr.Providers.Attention do
       kind: kind,
       id: id,
       label: label,
-      day: nil,
       since: since,
       destination: destination,
       outcome: nil
@@ -323,7 +279,6 @@ defmodule Cyfr.Providers.Attention do
         },
         "id" => %{"type" => "string"},
         "label" => %{"type" => "string", "nullable" => true},
-        "day" => %{"type" => "string", "max" => 10, "nullable" => true},
         "since" => %{"type" => "time", "nullable" => true},
         "destination" => %{
           "type" => "object",
@@ -341,7 +296,7 @@ defmodule Cyfr.Providers.Attention do
           "nullable" => true
         }
       },
-      "required" => ["kind", "id", "label", "day", "since", "destination", "outcome"]
+      "required" => ["kind", "id", "label", "since", "destination", "outcome"]
     })
   end
 

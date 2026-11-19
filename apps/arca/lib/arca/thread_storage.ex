@@ -8,16 +8,14 @@ defmodule Arca.ThreadStorage do
   `PrismWeb.ThreadPaneLive` shows it).
 
   A thread belongs to the athanor of the context that opened it, and so
-  to its person, who reads it, sends the next message and decides a
-  pending approval. Reads scope through
-  `Arca.QueryHelpers.where_tenant/2` (a context without an athanor raises,
-  fail closed) and every write stamps the context's athanor.
+  to its person, who reads it and sends the next message. Reads scope
+  through `Arca.QueryHelpers.where_tenant/2` (a context without an
+  athanor raises, fail closed) and every write stamps the context's
+  athanor.
 
   Message rows are appended in `seq` order by `append/3`; the unique index
   on `(thread_id, seq)` is what makes two writers appending at once
-  safe — the loser retries with the next number. Approval rows move through
-  `resolve_approval/4`, a compare-and-set on `status`, so two members
-  clicking the same card cannot both run it.
+  safe — the loser retries with the next number.
 
   ## The claim
 
@@ -71,7 +69,7 @@ defmodule Arca.ThreadStorage do
   # The rows a person reads as posts: what a turn writes for itself
   # (`tool_call`, `tool_result`, `compaction`, `turn_aborted`, `page_call`,
   # `page_result`) is none.
-  @post_kinds ~w(text approval error system opening pointer report)
+  @post_kinds ~w(text error system opening pointer report)
 
   # ---------------------------------------------------------------------------
   # Threads
@@ -656,7 +654,7 @@ defmodule Arca.ThreadStorage do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.pending_requests", fn ->
       query =
         from(m in Message,
-          # A card's notice waits too, but answers a request and is none.
+          # A reply answers a request and is none.
           where: not is_nil(m.addressee) and m.status == "pending" and m.kind == "text",
           where: is_nil(m.reply_to),
           order_by: [asc: m.inserted_at, asc: m.seq]
@@ -764,8 +762,8 @@ defmodule Arca.ThreadStorage do
   so a turn whose claim a successor already took releases nothing of its
   successor's.
 
-  An approval pause keeps the claim — the turn is still this member's
-  work, waiting on a person. Every terminal transition releases it.
+  A pause keeps the claim — the turn is still this member's work,
+  waiting on a person. Every terminal transition releases it.
   """
   @spec release(Prima.Actor.t(), String.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_held | :database_error}
@@ -924,9 +922,7 @@ defmodule Arca.ThreadStorage do
   are cancelled in the same transaction, recording no reply since the
   room they would answer is going (`Arca.TurnStorage.cancel_open!/4`,
   under the root's grant `attrs` carry), and answered for the caller's
-  runtime to stop: a turn of the thread paused on a card is one. While a child's turn waits on a card the
-  deletion is refused `{:error, {:child_awaits_card, member}}`, so the
-  person decides there first.
+  runtime to stop.
 
   What other threads kept of it goes in the same transaction: the
   pointers and reports that name it, on every daily thread, and in each
@@ -958,7 +954,6 @@ defmodule Arca.ThreadStorage do
           | {:error,
              :no_athanor
              | :not_found
-             | {:child_awaits_card, String.t()}
              | :thread_in_use
              | :database_error}
   def delete(actor, id, attrs \\ %{})
@@ -1026,8 +1021,7 @@ defmodule Arca.ThreadStorage do
          children = child_ids(actor, thread),
          ids = [thread.id | children],
          readers = readers(athanor_id, ids),
-         :ok <- still_chosen!(removed_turns(athanor_id, ids, readers), chosen),
-         [] <- Arca.TurnStorage.awaiting_card!(actor, children) do
+         :ok <- still_chosen!(removed_turns(athanor_id, ids, readers), chosen) do
       # Before anything clears or deletes them: the sessions of the
       # threads that go and of those that read one, read from the rows
       # that hold them.
@@ -1043,7 +1037,6 @@ defmodule Arca.ThreadStorage do
       # Explicit message deletion also covers SQLite connections without
       # foreign_keys=ON.
       Repo.delete_all(from(m in Message, where: m.thread_id in ^ids))
-      delete_thread_satellites(ids)
 
       {_, _} =
         from(c in Thread, where: c.id in ^ids)
@@ -1054,7 +1047,6 @@ defmodule Arca.ThreadStorage do
     else
       # No such thread: the athanor's row and none of its threads held.
       [] -> Repo.rollback(:not_found)
-      [member | _] -> Repo.rollback({:child_awaits_card, member})
     end
   end
 
@@ -1288,24 +1280,6 @@ defmodule Arca.ThreadStorage do
             inspect(reason)
         )
     end
-  end
-
-  # What rides with a thread besides its messages: what its person
-  # already answered about tool calls in it.
-  # Agent-scope grants are untouched — they belong to the agent, not the
-  # thread.
-  #
-  # arca:unscoped-ok scoped transitively — every id comes from a read the
-  # caller already tenant-proved (do_delete's `get`), and each row names
-  # exactly one thread.
-  defp delete_thread_satellites(ids) do
-    Repo.delete_all(
-      from(g in Arca.Schemas.ToolGrant,
-        where: g.scope == ^Arca.Schemas.ToolGrant.thread_scope() and g.thread_id in ^ids
-      )
-    )
-
-    :ok
   end
 
   @doc """
@@ -1588,26 +1562,6 @@ defmodule Arca.ThreadStorage do
     end
   end
 
-  @doc "The approval rows of a thread still waiting on a decision."
-  @spec pending_approvals(Prima.Actor.t(), String.t()) ::
-          [map()] | {:error, :no_athanor | :database_error}
-  def pending_approvals(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
-    Arca.Repo.Errors.with_db_rescue("ThreadStorage.pending_approvals", fn ->
-      from(m in Message,
-        where:
-          m.thread_id == ^thread_id and m.kind == "approval" and
-            m.status == "pending",
-        order_by: [asc: m.seq]
-      )
-      |> QueryHelpers.where_tenant(actor)
-      |> Repo.all()
-    end)
-    |> Arca.Data.project()
-  end
-
-  def pending_approvals(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
-
   @doc """
   Append one message to a thread.
 
@@ -1792,7 +1746,6 @@ defmodule Arca.ThreadStorage do
       status: attrs[:status],
       execution_id: attrs[:execution_id],
       turn_id: attrs[:turn_id],
-      approval_id: attrs[:approval_id],
       client_id: attrs[:client_id],
       workspace_id: attrs[:workspace_id],
       inserted_at: now
@@ -1821,76 +1774,10 @@ defmodule Arca.ThreadStorage do
 
   def update_message(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
-  @doc """
-  Move an approval row from one of `from` to `to` — compare-and-set on
-  `status`, so a second decision on the same card sees
-  `{:error, :already_resolved}` instead of running it twice. `attrs` may
-  carry `:resolution` (a map, stored as JSON); `resolved_by` is the
-  context's user and `resolved_at` is now unless the row is only being
-  marked `"running"`.
-  """
-  @spec resolve_approval(
-          Prima.Actor.t(),
-          String.t(),
-          [String.t()] | String.t(),
-          String.t(),
-          map()
-        ) ::
-          {:ok, map()}
-          | {:error, :no_athanor | :not_found | :already_resolved | :database_error}
-  def resolve_approval(actor, id, from, to, attrs \\ %{})
-
-  def resolve_approval(%Prima.Actor{athanor_id: athanor_id} = actor, id, from, to, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and
-             to in ~w(running approved declined error) do
-    Arca.Repo.Errors.with_db_rescue("ThreadStorage.resolve_approval", fn ->
-      do_resolve_approval(actor, id, from, to, attrs)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def resolve_approval(%Prima.Actor{}, _id, _from, _to, _attrs), do: {:error, :no_athanor}
-
-  defp do_resolve_approval(actor, id, from, to, attrs) do
-    from = List.wrap(from)
-    now = DateTime.utc_now()
-
-    updates =
-      [status: to, resolved_by: actor.user_id || @system_author]
-      |> Keyword.merge(if(to == "running", do: [], else: [resolved_at: now]))
-      |> Keyword.merge(
-        case attrs[:resolution] do
-          nil -> []
-          resolution -> [resolution: encode_json(resolution)]
-        end
-      )
-
-    {count, _} =
-      from(m in Message, where: m.id == ^id and m.kind == "approval" and m.status in ^from)
-      |> QueryHelpers.where_tenant(actor)
-      |> Repo.update_all(set: updates)
-
-    case count do
-      1 ->
-        message_row(actor, id)
-
-      0 ->
-        case message_row(actor, id) do
-          {:ok, _} -> {:error, :already_resolved}
-          {:error, :not_found} -> {:error, :not_found}
-        end
-    end
-  end
-
   @doc "A message's `payload` decoded (`%{}` when none)."
   @spec payload(map()) :: map()
   def payload(%{payload: nil}), do: %{}
   def payload(%{payload: json}), do: decode_map(json, "payload")
-
-  @doc "A message's `resolution` decoded (`%{}` when none)."
-  @spec resolution(map()) :: map()
-  def resolution(%{resolution: nil}), do: %{}
-  def resolution(%{resolution: json}), do: decode_map(json, "resolution")
 
   # ---------------------------------------------------------------------------
   # Archive

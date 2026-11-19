@@ -39,12 +39,12 @@ defmodule Compendium.RegisterMintsNothingTest do
   end
 
   describe "the register action's reach" do
-    test "is refused in-chain, so an approved Aqua proposal cannot run it" do
+    test "is refused in-chain, so no Aqua turn can run it" do
       refute Sanctum.Catalog.chain_reachable?("component", "register"),
              """
              `component.register` is reachable in-chain again.
 
-             An approved Aqua proposal executes inside the chain, so this
+             An Aqua turn's call executes inside the chain, so this
              re-opens the path where a catalyst stages bytes under
              `components/local/` and the agent is talked into indexing
              them. `consent: :staging` does NOT cover this: it refuses

@@ -898,7 +898,6 @@ defmodule Aqua.CrewTest do
     assert %{
              dispatch_state: "closed",
              outcome: "denied",
-             approval_id: nil,
              result_message_id: denied
            } =
              step.(off)
@@ -912,16 +911,11 @@ defmodule Aqua.CrewTest do
     await_status(ctx, on, "completed")
 
     # Run by the browser, which proved the turn and found no browser added.
-    assert %{dispatch_state: "closed", outcome: "error", approval_id: nil, result_message_id: rid} =
+    assert %{dispatch_state: "closed", outcome: "error", result_message_id: rid} =
              step.(on)
 
     assert %{content: content} = row(ctx, rid)
     assert content =~ "The browser was not found."
-
-    for turn_id <- [off, on] do
-      {:ok, turn} = Tape.turn(ctx, turn_id)
-      assert {:ok, []} = Tape.pending_approvals(ctx, turn)
-    end
   end
 
   describe "a delivery that steers a turn a direct post opened" do
@@ -1075,19 +1069,16 @@ defmodule Aqua.CrewTest do
     {:ok, turn} = Tape.turn(ctx, first)
     {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert %{outcome: "ok", approval_id: nil, child_execution_id: ^root} =
+    assert %{outcome: "ok", child_execution_id: ^root} =
              Enum.find(steps, &(&1.kind == "launch"))
-
-    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
 
     {:ok, turn} = Tape.turn(ctx, second)
     {:ok, steps} = Tape.steps(ctx, turn)
 
-    assert %{outcome: "denied", approval_id: nil, error: said} =
+    assert %{outcome: "denied", error: said} =
              Enum.find(steps, &(&1.kind == "launch"))
 
     assert said == "execution.run is outside the tools this job was narrowed to"
-    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
     assert runs_of(ctx, app) == [root]
   end
 
@@ -1105,8 +1096,7 @@ defmodule Aqua.CrewTest do
 
     {:ok, turn} = Tape.turn(ctx, turn_id)
     {:ok, steps} = Tape.steps(ctx, turn)
-    assert %{outcome: "denied", approval_id: nil} = Enum.find(steps, &(&1.action == "keep"))
-    assert {:ok, []} = Tape.pending_approvals(ctx, turn)
+    assert %{outcome: "denied"} = Enum.find(steps, &(&1.action == "keep"))
   end
 
   test "retiring cancels every open turn in its own transaction, the running one included, and leaves none open",

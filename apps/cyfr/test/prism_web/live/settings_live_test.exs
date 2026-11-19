@@ -233,44 +233,17 @@ defmodule PrismWeb.SettingsLiveTest do
     for html <- [
           view |> element("#mode-words") |> render(),
           view |> element("#request-stats") |> render(),
-          view |> element("#approvals") |> render(),
+          view |> element(~s([data-test="api-keys-link"])) |> render(),
           view |> element("#host-decisions") |> render()
         ],
         do: PrismWeb.Vocabulary.refute_vocabulary(html)
   end
 
-  test "an approval's wait is saved as whole hours, and the page links to API Keys", %{conn: conn} do
+  test "the page links to API Keys", %{conn: conn} do
     person = test_user()
     {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
 
-    assert has_element?(view, ~s(#approval-hours[placeholder="default"]))
-    refute has_element?(view, ~s(#approval-hours[value]))
     assert has_element?(view, ~s([data-test="api-keys-link"] a[href$="/api-keys"]))
-
-    view |> form("#approvals-form", %{"hours" => "0"}) |> render_submit()
-    assert render(view) =~ "the wait is a whole number of hours"
-
-    view |> form("#approvals-form", %{"hours" => "6"}) |> render_submit()
-    assert has_element?(view, ~s(#approval-hours[value="6"]))
-
-    # Saved in the athanor's settings, where Aqua reads it: the page read
-    # again shows it.
-    {again, _html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
-    assert has_element?(again, ~s(#approval-hours[value="6"]))
-
-    # Cleared, the stored wait is gone and Aqua's own default holds again.
-    again |> form("#approvals-form", %{"hours" => ""}) |> render_submit()
-    assert render(again) =~ "Approvals wait Aqua&#39;s default time again."
-    refute has_element?(again, ~s(#approval-hours[value]))
-    assert has_element?(again, "#approvals", "Left empty, Aqua's own default")
-
-    athanor = seated_athanor()
-    {:ok, row} = Sanctum.Tenancy.Athanors.get(athanor.id)
-
-    refute Map.has_key?(
-             Sanctum.Tenancy.Athanors.settings(row)["approvals"] || %{},
-             "expiry_hours"
-           )
   end
 
   test "the request card names the page where a failed request with no execution is read", %{

@@ -21,8 +21,6 @@ defmodule Cyfr.Bus.Notify do
     :allowlist_changed,
     :execution_finished,
     :execution_failed,
-    :approval_pending,
-    :approval_resolved,
     :schedule_failed,
     :passkey_registered,
     :passkey_recovered
@@ -34,11 +32,7 @@ defmodule Cyfr.Bus.Notify do
     :execution_id,
     :reference,
     :schedule_id,
-    :reason,
-    :thread_id,
-    :message_id,
-    :approval_id,
-    :decision
+    :reason
   ]
 
   @enforce_keys [:athanor_id, :kind]
@@ -50,8 +44,6 @@ defmodule Cyfr.Bus.Notify do
           | :allowlist_changed
           | :execution_finished
           | :execution_failed
-          | :approval_pending
-          | :approval_resolved
           | :schedule_failed
           | :passkey_registered
           | :passkey_recovered

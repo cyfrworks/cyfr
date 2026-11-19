@@ -29,7 +29,6 @@ defmodule Cyfr.Cluster.Person do
 
   @compile {:no_warn_undefined,
             [
-              Aqua.Approvals,
               Aqua.Runner,
               Aqua.Tape,
               Arca,

@@ -215,7 +215,6 @@ defmodule Arca do
       StorageReserve,
       TenantTables,
       ThreadStorage,
-      ToolGrantStorage,
       TurnStorage,
       Usage,
       Users,

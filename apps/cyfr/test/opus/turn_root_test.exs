@@ -96,6 +96,18 @@ defmodule Opus.TurnRootTest do
     {pid, result}
   end
 
+  # A launch step of the running turn, which a pause around a launch names.
+  defp launch!(ctx, started) do
+    {:ok, step} =
+      TurnStorage.put_step(Sanctum.Context.actor(ctx), started.id, %{
+        kind: "launch",
+        idempotency_key: "launch:#{System.unique_integer([:positive])}",
+        fence: started.fence
+      })
+
+    step.id
+  end
+
   defp claim!(ctx, turn, opts \\ []) do
     {:ok, claim} =
       TurnRoot.claim(
@@ -276,7 +288,8 @@ defmodule Opus.TurnRootTest do
         claim: claim,
         turn_id: turn.id,
         fence: started.fence,
-        reason: "approval"
+        reason: "launch",
+        launch_step_id: launch!(ctx, started)
       )
 
     assert [] = registered(claim.execution_id)
@@ -310,7 +323,8 @@ defmodule Opus.TurnRootTest do
                claim: claim,
                turn_id: turn.id,
                fence: started.fence,
-               reason: "approval"
+               reason: "launch",
+               launch_step_id: launch!(ctx, started)
              )
 
     assert paused.status == "paused"
@@ -376,7 +390,8 @@ defmodule Opus.TurnRootTest do
                  claim: claim,
                  turn_id: turn.id,
                  fence: started.fence + 1,
-                 reason: "approval"
+                 reason: "launch",
+                 launch_step_id: launch!(ctx, started)
                )
 
       {:ok, before: before, claim: claim, started: started}
@@ -405,7 +420,8 @@ defmodule Opus.TurnRootTest do
                  claim: claim,
                  turn_id: turn.id,
                  fence: started.fence,
-                 reason: "approval"
+                 reason: "launch",
+                 launch_step_id: launch!(ctx, started)
                )
 
       refute Process.alive?(claim.keeper)
@@ -506,7 +522,8 @@ defmodule Opus.TurnRootTest do
         claim: claim,
         turn_id: turn.id,
         fence: started.fence,
-        reason: "approval"
+        reason: "launch",
+        launch_step_id: launch!(ctx, started)
       )
 
     test_pid = self()
@@ -555,7 +572,8 @@ defmodule Opus.TurnRootTest do
           claim: holding,
           turn_id: turn.id,
           fence: started.fence,
-          reason: "approval"
+          reason: "launch",
+          launch_step_id: launch!(ctx, started)
         )
 
       paused

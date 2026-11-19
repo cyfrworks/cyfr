@@ -211,7 +211,7 @@ defmodule Aqua.PageCalls do
   """
   @spec row(map()) :: map()
   def row(%{request: request, name: name, arguments: arguments, user_id: user_id} = call) do
-    recorded = Aqua.Loop.recorded(name, arguments, bind(request, name, arguments))
+    recorded = Aqua.Loop.recorded(name, bind(request, name, arguments))
 
     %{
       "tool_call_id" => request,
@@ -233,7 +233,7 @@ defmodule Aqua.PageCalls do
   @spec proposal(map(), map(), keyword()) :: map()
   def proposal(%{id: turn_id}, %{"tool_call_id" => request, "name" => name} = payload, opts \\ []) do
     arguments = payload["arguments"] || %{}
-    recorded = Aqua.Loop.recorded(name, arguments, bind(request, name, arguments))
+    recorded = Aqua.Loop.recorded(name, bind(request, name, arguments))
 
     step = %{
       kind: recorded.step_kind,
@@ -242,7 +242,6 @@ defmodule Aqua.PageCalls do
       action: recorded.action,
       recovery: recorded.recovery,
       child_execution_id: recorded.child_execution_id,
-      proposal_digest: recorded.proposal_digest,
       idempotency_key: "page_call:#{turn_id}:#{request}",
       sources: [Prima.Source.outside("browser")]
     }

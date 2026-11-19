@@ -96,7 +96,6 @@ defmodule Sanctum do
       Tenancy.Users,
       TinctureAccess,
       TinctureAuth,
-      ToolGrants,
       ToolServerDigest,
       Unauthorized,
       UnauthorizedError,

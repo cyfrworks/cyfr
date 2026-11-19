@@ -15,8 +15,8 @@ defmodule Aqua.Providers.Browser do
   `screenshot` and `close`. They run in a
   turn's chain and nowhere else (`planes: [:in_chain]`), only for a
   person's own sign-in (`consent: :interactive`), and each follows the
-  person's browser setting (`follows_setting`), not a policy line: with
-  it on, every one runs without a card; with it off, every one is
+  person's browser setting (`follows_setting`): with it on, every one
+  runs as the member's mode decides; with it off, every one is
   refused here before any Chrome starts, and Aqua says the browser is
   turned off. `read` and `screenshot` are reads, `close` a write, and the
   rest reach the outside.

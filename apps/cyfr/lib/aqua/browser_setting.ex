@@ -4,9 +4,9 @@
 defmodule Aqua.BrowserSetting do
   @moduledoc """
   The person's browser setting: whether Aqua may use its browser
-  (`Opus.Browser`). There is no yes per thread and no card for the
-  browser's own actions: with it on, every action of the browser tool
-  runs without one; with it off, every one is refused and Aqua says so.
+  (`Opus.Browser`). There is no yes per thread for the browser's own
+  actions: with it on, every action of the browser tool runs as the
+  member's mode decides; with it off, every one is refused and Aqua says so.
   Turning it off holds at once: from then on CYFR starts no browser and
   sends it nothing, no action and no page, and a browser that a start
   already under way brings up is sent nothing and closed as soon as that
@@ -16,10 +16,9 @@ defmodule Aqua.BrowserSetting do
   It is one value of the person's preferences, `aqua_browser`, read and
   written here and nowhere else. An absent value reads as the default,
   which is on; a value that is not a boolean reads as off. The person
-  turns it on and off with the switch on the Aqua page, or Aqua does
-  when asked on the daily thread: turning it on asks with a card in the
-  thread, which takes no standing answer, and turning it off holds at
-  once (`Aqua.Providers.Browser`). A write merges into the preferences as
+  turns it on and off with the switch on the Aqua page; turning it on is
+  theirs alone, and Aqua turns it off when asked, which holds at once
+  (`Aqua.Providers.Browser`). A write merges into the preferences as
   the store holds them, so it keeps every other preference written
   meanwhile (`Sanctum.Tenancy.Users.put_prefs/2`).
   """

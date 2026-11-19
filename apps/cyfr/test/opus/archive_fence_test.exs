@@ -557,7 +557,7 @@ defmodule Opus.ArchiveFenceTest do
     {execution.id, attempt.attempt}
   end
 
-  # A turn paused for an approval: its root attempt and root row paused,
+  # A turn paused around a launch: its root attempt and root row paused,
   # its reservation still held.
   defp paused_turn!(ctx, grant) do
     {:ok, thread} = Arca.Test.Days.thread(actor(ctx))
@@ -596,7 +596,20 @@ defmodule Opus.ArchiveFenceTest do
         recovery_limit: 3
       })
 
-    {:ok, paused} = Arca.TurnStorage.pause(actor(ctx), turn.id, %{fence: started.fence})
+    {:ok, launch} =
+      Arca.TurnStorage.put_step(actor(ctx), turn.id, %{
+        kind: "launch",
+        idempotency_key: "launch:1",
+        fence: started.fence
+      })
+
+    {:ok, paused} =
+      Arca.TurnStorage.pause(actor(ctx), turn.id, %{
+        fence: started.fence,
+        reason: "launch",
+        launch_step_id: launch.id
+      })
+
     assert paused.status == "paused"
     paused
   end

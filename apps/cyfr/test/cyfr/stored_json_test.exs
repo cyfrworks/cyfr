@@ -29,7 +29,7 @@ defmodule Cyfr.StoredJsonTest do
     refute log =~ "sk-live"
   end
 
-  test "Arca.ThreadStorage reads a gate's payload and resolution as a map" do
+  test "Arca.ThreadStorage reads a gate's payload as a map" do
     alias Arca.ThreadStorage
 
     assert ThreadStorage.payload(%{payload: nil}) == %{}
@@ -39,9 +39,6 @@ defmodule Cyfr.StoredJsonTest do
 
     log = capture_log(fn -> assert ThreadStorage.payload(%{payload: @corrupt}) == %{} end)
     assert_logged(log, "Arca.ThreadStorage", "payload")
-
-    log = capture_log(fn -> assert ThreadStorage.resolution(%{resolution: @corrupt}) == %{} end)
-    assert_logged(log, "Arca.ThreadStorage", "resolution")
   end
 
   test "Arca.Providers.Records reads a corrupt audit column as corruption", %{ctx: ctx} do

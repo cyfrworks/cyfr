@@ -3,11 +3,11 @@
 
 defmodule PrismWeb.ThreadPaneLive do
   @moduledoc """
-  One thread of the person's own Aqua on screen: the tape, the composer,
-  the approval cards and the uploads — a window onto `Aqua.Runner` for
-  one thread, under one focused context. Its host is Aqua's panel
-  (`PrismWeb.AquaPanelLive`), which mounts one pane (`id:
-  "aqua-panel-pane"`) focused on the person's own athanor.
+  One thread of the person's own Aqua on screen: the tape, the composer
+  and the uploads — a window onto `Aqua.Runner` for one thread, under one
+  focused context. Its host is Aqua's panel (`PrismWeb.AquaPanelLive`),
+  which mounts one pane (`id: "aqua-panel-pane"`) focused on the person's
+  own athanor.
 
   The pane is a nested LiveView with its own mailbox, authenticated
   session context and owner-checked athanor focus. Runner calls, row
@@ -48,14 +48,11 @@ defmodule PrismWeb.ThreadPaneLive do
   Every line is named by who sent it (`sent_by`): a person as the console
   names them, the soul as Aqua, a crew member by its name. A schedule's
   fire is written in the server's voice and drawn as that schedule's,
-  under its name, never as the person's line. A card in a daily thread
-  offers its answer for one of the person's schedules of Aqua's
-  (`Aqua.answer_schedules/1`), read as the card is drawn. A request to a
-  crew member says who asked whom and whether it is answered, with the
-  replies to it beneath it; a reply whose request is not on screen stands
-  on its own, and a notice says the member needs the person. A room lists
-  its crew members' threads; a member's thread names its member, leads
-  back to its room and, while it stands, can be archived
+  under its name, never as the person's line. A request to a crew member
+  says who asked whom and whether it is answered, with the replies to it
+  beneath it; a reply whose request is not on screen stands on its own.
+  A room lists its crew members' threads; a member's thread names its
+  member, leads back to its room and, while it stands, can be archived
   (`thread.archive`). The pane opens neither: it asks its host to open
   the thread, `{:open_thread, id}`.
 
@@ -77,11 +74,8 @@ defmodule PrismWeb.ThreadPaneLive do
   never the outcome the report was written with), and Open, which asks
   the host to open that thread, `{:open_thread, id}`. The state is read
   again when the person's list announces the thread (`Cyfr.Bus.ThreadListed`,
-  on their `Cyfr.Bus.threads/2` topic) and when a card opens or is
-  decided anywhere in the athanor (`Cyfr.Bus.Notify`), since a card in a
-  crew member's thread under it moves it too; a thread the list says
-  left takes its cards with it. A thread that cannot be found any more
-  has no Open.
+  on their `Cyfr.Bus.threads/2` topic); a thread the list says left takes
+  its cards with it. A thread that cannot be found any more has no Open.
 
   What the thread made is told to the host as it is read, for a host that
   shows it beside the thread's posts (`PrismWeb.WorkspaceLive`): Aqua's
@@ -103,8 +97,8 @@ defmodule PrismWeb.ThreadPaneLive do
   name or thread label of its own, and its model override, soul or crew
   member and token counts sit in a menu (`<dom>-menu`, which the panel's
   header opens). Its status line appears only while it has something to
-  say (still being prepared, no assistant, messages queued, standing
-  answers, a turn being asked).
+  say (still being prepared, no assistant, messages queued, a turn being
+  asked).
   """
 
   use PrismWeb, :live_view
@@ -126,7 +120,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The thread events that carry a row the pane draws, each with its files
   # as they stand when it arrives (`files_kept/2`).
-  @row_events [:message, :request, :reply, :notice]
+  @row_events [:message, :request, :reply]
 
   # How many of a thread's newest rows the pane reads when it opens one.
   @window 500
@@ -236,7 +230,6 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:models_loaded, false)
       |> stream_configure(:messages, dom_id: &(dom <> "-m-" <> &1.id))
       |> stream(:messages, [])
-      |> assign(:decided_notices, MapSet.new())
       |> allow_upload(:attachments,
         accept: :any,
         max_entries: Aqua.attachment_limits().max_files,
@@ -253,8 +246,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The athanor's own topic. `Sanctum.Provisioning` broadcasts
   # `:athanor_changed` when a fill completes, which is what clears the
-  # preparing state without a reload; a card opened or decided there moves
-  # the workspace thread it waits under. And the person's list of threads,
+  # preparing state without a reload. And the person's list of threads,
   # which says when a workspace thread a card names moved or left.
   defp subscribe_athanor(%Sanctum.Context{athanor_id: id} = ctx)
        when is_binary(id) and id != "" do
@@ -298,11 +290,9 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:assistant, nil)
       |> assign(:input, "")
       |> stream(:messages, [], reset: true)
-      |> assign(:decided_notices, MapSet.new())
       |> assign(:requests, %{})
       |> assign(:children, [])
       |> assign(:parent, nil)
-      |> assign(:pending_approvals, [])
       |> assign(:seen, thread && thread.read_seq)
       |> assign(:any_messages, false)
       |> assign(:cards, %{})
@@ -336,9 +326,7 @@ defmodule PrismWeb.ThreadPaneLive do
         socket
         |> hold_cards(rows)
         |> stream(:messages, shown, reset: true)
-        |> assign(:decided_notices, decided_notices(rows))
         |> assign(:requests, requests)
-        |> assign(:pending_approvals, pending_in(rows))
         |> assign(:any_messages, rows != [])
         |> apply_live(live)
         |> relatives(thread)
@@ -461,8 +449,8 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp relatives(socket, _room), do: read_children(socket)
 
-  # Read again on each crew row the room hears: a reply or notice names a
-  # thread the room may not have listed yet.
+  # Read again on each crew row the room hears: a request or a reply names
+  # a thread the room may not have listed yet.
   defp read_children(%{assigns: %{thread: %{kind: kind, id: id}}} = socket)
        when kind in @rooms do
     case Threads.children(Sanctum.Context.actor(socket.assigns.context), id) do
@@ -472,21 +460,6 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp read_children(socket), do: socket
-
-  # The schedules a card offers an answer for, read as the card is drawn,
-  # so a schedule made after the pane opened is among them: in a daily
-  # thread, where a schedule of Aqua's fires, and only for a card whose
-  # action takes one. Nothing keeps them, so there is nothing to refresh.
-  defp card_schedules(ctx, %{kind: "daily"}, intent) do
-    if Aqua.standing_offered?(intent, :schedule) do
-      {:ok, schedules} = Aqua.answer_schedules(ctx)
-      schedules
-    else
-      []
-    end
-  end
-
-  defp card_schedules(_ctx, _thread, _intent), do: []
 
   # The person has seen the rows the pane shows: the thread's read mark
   # moves to `seq`, forward only, and a row at or behind the mark it holds
@@ -528,7 +501,6 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
-    |> assign(:grants, MapSet.new())
     |> assign(:announcement, "")
     # Whether the running turn wrote a reply: its end is announced as one
     # only then.
@@ -551,7 +523,6 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:partials, live.partials)
     |> assign(:tool_activity, live.tool_activity)
     |> assign(:token_usage, live.usage)
-    |> assign(:grants, live.grants)
     |> assign(:assistant, live.agent || socket.assigns.assistant)
   end
 
@@ -654,53 +625,6 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, assign(socket, :model_override, if(model == "", do: nil, else: model))}
   end
 
-  # A program's answer is withdrawn by its row, and an answer for a
-  # schedule by that schedule: the entry names them, and the revoke names
-  # them as the answer's key.
-  def handle_event(
-        "revoke_grant",
-        %{"agent" => agent, "tool" => tool, "action" => action} = params,
-        socket
-      ) do
-    case socket.assigns.thread do
-      nil ->
-        {:noreply, socket}
-
-      thread ->
-        args =
-          %{
-            "thread" => thread.id,
-            "agent_name" => agent,
-            "tool" => tool,
-            "tool_action" => action
-          }
-          |> Prima.MapUtil.put_present("program", params["program"])
-          |> Prima.MapUtil.put_present("schedule", params["schedule"])
-
-        {:noreply, run(socket, &PrismWeb.Ops.call_tool(&1, "thread/revoke_grant", args))}
-    end
-  end
-
-  # Approving every pending card decides each one on its own, once: one
-  # exact decision per action, never a standing answer for the batch.
-  def handle_event("approve_all_pending", _params, socket) do
-    socket =
-      Enum.reduce(socket.assigns.pending_approvals, socket, fn msg, acc ->
-        decide(acc, {:approval_approve, msg.approval_id, %{scope: :once}})
-      end)
-
-    {:noreply, socket}
-  end
-
-  def handle_event("decline_all_pending", _params, socket) do
-    socket =
-      Enum.reduce(socket.assigns.pending_approvals, socket, fn msg, acc ->
-        decide(acc, {:approval_decline, msg.approval_id, "", :once})
-      end)
-
-    {:noreply, socket}
-  end
-
   # A crew thread, or its room: the host opens it, as it opens any thread.
   def handle_event("open_thread", %{"id" => id}, socket) do
     tell_host(socket, {:open_thread, id})
@@ -773,7 +697,7 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # ============================================================================
-  # The pane's mailbox: runner broadcasts, card decisions, the grant's outcome
+  # The pane's mailbox: runner broadcasts, the grant's outcome
   # ============================================================================
 
   @impl true
@@ -810,23 +734,6 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   def handle_info(%ThreadListed{}, socket), do: {:noreply, socket}
-
-  # A card opened or decided in the athanor may have moved a workspace
-  # thread a card names, a crew member's card under it among them: each
-  # is read again.
-  def handle_info(%Cyfr.Bus.Notify{kind: kind}, socket)
-      when kind in [:approval_pending, :approval_resolved],
-      do: {:noreply, reread_works(socket, Map.keys(socket.assigns.works))}
-
-  # Approval cards dispatch the decision to their LiveView — this one; a
-  # refusal reaches the person who clicked.
-  def handle_info({:approval_approve, _id, _scope} = decision, socket) do
-    {:noreply, decide(socket, decision)}
-  end
-
-  def handle_info({:approval_decline, _id, _reason, _scope} = decision, socket) do
-    {:noreply, decide(socket, decision)}
-  end
 
   # The grant this pane asked for, as the host's layer reported it.
   # Granted, the running turn is cut for the new consent and the sender
@@ -938,88 +845,6 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp models_loaded(socket, {:error, _}), do: {:noreply, assign(socket, :models_loaded, true)}
 
-  # A card is decided through `approval.resolve`, by its approval's id,
-  # with the bounds the person chose for a standing answer, the outside
-  # sources it also follows among them. A refusal
-  # reaches the person who clicked — log-only made the button appear to
-  # do nothing.
-  defp decide(socket, {:approval_approve, id, %{scope: scope} = choice}) when is_binary(id) do
-    case socket.assigns.thread do
-      %{id: _thread_id} ->
-        args =
-          %{
-            "approval" => id,
-            "decision" => "approve",
-            "scope" => Aqua.approval_scope_string(scope)
-          }
-          |> Prima.MapUtil.put_present(
-            "lifecycle",
-            choice[:lifecycle] && to_string(choice[:lifecycle])
-          )
-          |> Prima.MapUtil.put_present("schedule", choice[:schedule])
-          |> Prima.MapUtil.put_present(
-            "until",
-            choice[:until] && DateTime.to_iso8601(choice[:until])
-          )
-          |> Prima.MapUtil.put_present("constraint", constraint_wire(choice[:constraint]))
-          |> Prima.MapUtil.put_present("sources", sources_wire(choice[:sources]))
-
-        case PrismWeb.Ops.call_tool(socket, "approval/resolve", args) do
-          {:ok, _} ->
-            socket
-
-          {:error, :already_resolved} ->
-            socket
-
-          {:error, reason} ->
-            Logger.warning("[ThreadPane] approve failed: #{inspect(reason)}")
-            put_flash(socket, :error, "Approve failed: #{error_message(reason)}")
-        end
-
-      _ ->
-        socket
-    end
-  end
-
-  defp decide(socket, {:approval_decline, id, reason, scope}) when is_binary(id) do
-    case socket.assigns.thread do
-      %{id: _thread_id} ->
-        case PrismWeb.Ops.call_tool(socket, "approval/resolve", %{
-               "approval" => id,
-               "decision" => "decline",
-               "reason" => reason,
-               "scope" => Aqua.approval_scope_string(scope)
-             }) do
-          {:ok, _} ->
-            socket
-
-          {:error, :already_resolved} ->
-            socket
-
-          {:error, why} ->
-            Logger.warning("[ThreadPane] decline failed: #{inspect(why)}")
-            put_flash(socket, :error, "Decline failed: #{error_message(why)}")
-        end
-
-      _ ->
-        socket
-    end
-  end
-
-  # A card with no approval behind it, or a choice the card never offers,
-  # decides nothing.
-  defp decide(socket, _decision), do: socket
-
-  defp constraint_wire(%{kind: kind, patterns: patterns}) when is_list(patterns),
-    do: %{"kind" => to_string(kind), "patterns" => patterns}
-
-  defp constraint_wire(_none), do: nil
-
-  # The outside sources a standing answer also follows, as their canonical
-  # objects; none chosen sends none.
-  defp sources_wire([_ | _] = sources), do: Prima.Source.to_json_list(sources)
-  defp sources_wire(_none), do: nil
-
   # ---------------------------------------------------------------------------
   # Runner events
   # ---------------------------------------------------------------------------
@@ -1059,27 +884,6 @@ defmodule PrismWeb.ThreadPaneLive do
     read_children(socket)
   end
 
-  # A notice moves from pending to decided and never back: an announcement
-  # of it pending that arrives after its decision's is an older snapshot,
-  # and the decided row the pane holds stands.
-  defp handle_thread_event(socket, :notice, row) do
-    decided = socket.assigns.decided_notices
-
-    cond do
-      row.status == "pending" and MapSet.member?(decided, row.id) ->
-        socket
-
-      row.status != "pending" ->
-        socket
-        |> assign(:decided_notices, MapSet.put(decided, row.id))
-        |> upsert_message(row)
-        |> read_children()
-
-      true ->
-        socket |> upsert_message(row) |> read_children()
-    end
-  end
-
   # A turn may start for a message queued earlier — the sender's draft of
   # a newer message stays where it is (`send_message/3` clears on send).
   defp handle_thread_event(socket, :turn_starting, user_id) do
@@ -1106,8 +910,8 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:live_turn_id, turn_id)
   end
 
-  # The turn stopped on a card, a launch, or a call whose outcome is
-  # unknown; the sender it waits on stays named.
+  # The turn stopped on a launch or on a call whose outcome is unknown;
+  # the sender it waits on stays named.
   defp handle_thread_event(socket, :turn_paused, %{reason: reason}) do
     socket =
       if reason == :uncertain,
@@ -1168,7 +972,6 @@ defmodule PrismWeb.ThreadPaneLive do
     do: assign(socket, :tool_activity, list)
 
   defp handle_thread_event(socket, :usage, usage), do: assign(socket, :token_usage, usage)
-  defp handle_thread_event(socket, :grants, grants), do: assign(socket, :grants, grants)
 
   # Client intents and the grant prompt are the sender's alone: another
   # member's browser must not navigate or be asked because this one asked.
@@ -1200,7 +1003,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, _kind, _data), do: socket
 
   # The row an event landed on the tape, by its sequence.
-  defp landed(kind, %{seq: seq}) when kind in [:message, :request, :reply, :notice], do: seq
+  defp landed(kind, %{seq: seq}) when kind in @row_events, do: seq
   defp landed(_kind, _data), do: nil
 
   # A text row an agent wrote while a turn runs is the turn's reply.
@@ -1208,19 +1011,11 @@ defmodule PrismWeb.ThreadPaneLive do
   defp replied?(_row, _socket), do: false
 
   # The stream owns membership and ordering (stream_insert replaces an
-  # existing dom id in place); only the two derived facts the templates
-  # and the approve-all handlers read are kept as assigns.
+  # existing dom id in place); only whether the thread holds a row, which
+  # the empty state reads, is kept as an assign.
   defp upsert_message(socket, row) do
-    pending = Enum.reject(socket.assigns.pending_approvals, &(&1.id == row.id))
-
-    pending =
-      if row.kind == "approval" and row.status == "pending",
-        do: pending ++ [row],
-        else: pending
-
     socket
     |> stream_insert(:messages, row)
-    |> assign(:pending_approvals, pending)
     |> assign(:any_messages, true)
   end
 
@@ -1531,10 +1326,6 @@ defmodule PrismWeb.ThreadPaneLive do
       {:error, :attachments_unreadable}
   end
 
-  defp pending_in(messages) do
-    Enum.filter(messages, &(&1.kind == "approval" and &1.status == "pending"))
-  end
-
   # The grant for `ref`, read under the pane's context and asked in the
   # system layer of the view that renders the pane: opened on `account`,
   # the account a launch named, on the app's own calls, when the turn
@@ -1821,13 +1612,6 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             {@queued} queued
           </span>
-          <span
-            :if={MapSet.size(@grants) > 0}
-            class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-300"
-            title="Standing answers in this chat"
-          >
-            +{MapSet.size(@grants)} this chat
-          </span>
         </div>
         <div class="flex items-center gap-1">
           <span
@@ -2048,57 +1832,6 @@ defmodule PrismWeb.ThreadPaneLive do
           <% end %>
         </div>
 
-        <div
-          :if={MapSet.size(@grants) > 0}
-          class="flex flex-wrap items-center gap-1.5 text-xs text-gray-500"
-          data-test="standing-answers"
-        >
-          <span>standing answers in this chat:</span>
-          <span
-            :for={{agent, tool, action, program, schedule} <- Enum.sort(@grants)}
-            class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
-            title={"answered for #{agent}"}
-            data-test="standing-answer"
-          >
-            <span class="text-gray-500">{agent}:</span>{answered(tool, action, program, schedule)}
-            <button
-              type="button"
-              phx-click="revoke_grant"
-              phx-value-agent={agent}
-              phx-value-tool={tool}
-              phx-value-action={action}
-              phx-value-program={program && program.id}
-              phx-value-schedule={schedule && schedule.id}
-              class="inline-flex min-h-6 min-w-6 items-center justify-center text-gray-500 hover:text-gray-200"
-              title="withdraw this standing answer"
-            >
-              ×
-            </button>
-          </span>
-        </div>
-
-        <% pending = @pending_approvals %>
-        <div
-          :if={length(pending) > 1}
-          class="sticky top-0 z-10 flex items-center gap-2 rounded bg-amber-900/30 border border-amber-800/50 px-2.5 py-1 text-xs text-amber-200"
-        >
-          <span>{length(pending)} pending approvals</span>
-          <button
-            type="button"
-            phx-click="approve_all_pending"
-            class="ml-auto min-h-6 rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
-          >
-            Approve all
-          </button>
-          <button
-            type="button"
-            phx-click="decline_all_pending"
-            class="min-h-6 rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
-          >
-            Decline all
-          </button>
-        </div>
-
         <%!-- A log to assistive tech, but not a live region: the announcer
               above speaks the coherent updates, not every streamed delta. --%>
         <div
@@ -2134,42 +1867,6 @@ defmodule PrismWeb.ThreadPaneLive do
                     dom={@dom}
                     reply={msg}
                     athanor_route={@athanor_route}
-                  />
-                <% crew(msg) == :decided_notice -> %>
-                <% crew(msg) == :notice -> %>
-                  <div class="flex flex-col items-start">
-                    <span class="text-xs text-gray-500 mb-0.5 px-1">{msg.sent_by} needs you</span>
-                    <div class="max-w-[85%] space-y-1 rounded-lg border border-amber-800/50 bg-amber-900/30 px-3 py-1.5 text-sm text-amber-200 break-words">
-                      <p class="whitespace-pre-wrap">{String.trim(msg.content || "")}</p>
-                      <button
-                        :if={from = Threads.payload(msg)["from_thread"]}
-                        type="button"
-                        phx-click="open_thread"
-                        phx-value-id={from}
-                        class="min-h-6 text-xs text-amber-100 underline hover:text-white"
-                      >
-                        Open {msg.sent_by}'s thread
-                      </button>
-                    </div>
-                  </div>
-                <% msg.kind == "approval" -> %>
-                  <% intent = Threads.payload(msg)["intent"] || %{} %>
-                  <% resolution = Threads.resolution(msg) %>
-                  <.live_component
-                    module={PrismWeb.AquaApprovalCard}
-                    id={@dom <> "-card-" <> msg.id}
-                    message_id={msg.id}
-                    approval_id={msg.approval_id}
-                    schedules={card_schedules(@context, @thread, intent)}
-                    bounds={Map.take(resolution, ~w(lifecycle schedule until constraint sources))}
-                    payload={intent}
-                    status={msg.status}
-                    decided_at={msg.resolved_at}
-                    reason={resolution["reason"]}
-                    result_summary={resolution["summary"]}
-                    scope={scope_atom(resolution["scope"])}
-                    resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
-                    agent_label={@assistant && assistant_label(@assistant)}
                   />
                 <% Map.has_key?(@cards, msg.id) -> %>
                   <.work_card
@@ -2450,18 +2147,10 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
-  # A standing answer as the chat lists it: its call, and the program or
-  # the schedule it is one of.
-  defp answered(tool, action, program, schedule) do
-    "#{tool}.#{action}" <>
-      if(program, do: ", every start of #{program.name}", else: "") <>
-      if(schedule, do: ", for #{schedule.name}", else: "")
-  end
-
   # The status line is drawn only while it says something.
   defp status?(assigns) do
     assigns.preparing? or assigns.roster == [] or assigns.queued > 0 or
-      MapSet.size(assigns.grants) > 0 or (assigns.running and assigns.turn_user != nil)
+      (assigns.running and assigns.turn_user != nil)
   end
 
   attr :id, :string, required: true
@@ -2727,21 +2416,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp role_align_row(_role), do: "justify-start"
 
   # What a row is on the tape, as `Aqua.Tape` announces it: a request to a
-  # crew member, a reply to one, a notice that a member needs the person,
-  # or none of these.
-  # The notices a load reads already decided, which no announcement reopens.
-  defp decided_notices(rows) do
-    for %{outcome: "needs_you", status: status, id: id} <- rows,
-        status != "pending",
-        into: MapSet.new(),
-        do: id
-  end
-
-  # A notice shows while its card waits; one decided with its card is gone.
-  defp crew(%{reply_to: id, outcome: "needs_you", status: "pending"}) when is_binary(id),
-    do: :notice
-
-  defp crew(%{reply_to: id, outcome: "needs_you"}) when is_binary(id), do: :decided_notice
+  # crew member, a reply to one, or neither.
   defp crew(%{reply_to: id}) when is_binary(id), do: :reply
 
   defp crew(%{addressee: addressee, status: status})
@@ -2837,8 +2512,6 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp label_for(_members, _user_id, _ctx), do: nil
-
-  defp scope_atom(scope), do: Aqua.parse_approval_scope(scope)
 
   defp role_align("user"), do: "items-end"
   defp role_align(_), do: "items-start"

@@ -582,12 +582,12 @@ defmodule Aqua.Program do
   defp input?(_outstanding, _id), do: false
 
   # An ask of the open turn as the step the host proposes for it, decided
-  # by the code that decides a model's call (`Aqua.Loop.recorded/3`), and
+  # by the code that decides a model's call (`Aqua.Loop.recorded/2`), and
   # recorded once by the native ask's id. Its call row is a `tool_call`,
   # as a model's is.
   defp ask(work, %{"ask" => ask, "name" => name, "arguments" => arguments}) do
     call = Aqua.Loop.Binding.resolve(name, arguments, tool_call_id: ask)
-    recorded = Aqua.Loop.recorded(name, arguments, call)
+    recorded = Aqua.Loop.recorded(name, call)
 
     %{
       kind: recorded.step_kind,
@@ -595,7 +595,6 @@ defmodule Aqua.Program do
       action: recorded.action,
       recovery: recorded.recovery,
       child_execution_id: recorded.child_execution_id,
-      proposal_digest: recorded.proposal_digest,
       idempotency_key: Tape.brain_ask_key(work.turn.id, ask),
       call: %{
         kind: "tool_call",

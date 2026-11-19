@@ -59,7 +59,7 @@ defmodule Prima.OutboxRecordTest do
              ~w(schedule_outcome crew_request crew_reply workspace_open workspace_report brain_forget)
 
     assert OutboxRecord.source_kinds() == ~w(schedule_occurrence message turn thread)
-    assert OutboxRecord.reply_outcomes() == ~w(done failed cancelled uncertain needs_you)
+    assert OutboxRecord.reply_outcomes() == ~w(done failed cancelled uncertain)
     assert OutboxRecord.report_outcomes() == ~w(done needs_you error)
     assert OutboxRecord.max_report_files() == 10
     assert OutboxRecord.max_output_bytes() == 64 * 1024
@@ -119,30 +119,24 @@ defmodule Prima.OutboxRecordTest do
                source_id: "thr_work",
                source_revision: "2026-11-05T12:00:00.000001Z",
                kind: "workspace_report",
-               snapshot:
-                 %{
-                   "workspace_id" => "thr_work",
-                   "title" => "Moon report",
-                   "turn_id" => "turn_1",
-                   "outcome" => ^outcome,
-                   "summary" => "written",
-                   "truncated" => false,
-                   "attachments" => [
-                     %{"message_id" => "msg_post", "stored_name" => "0-chart.png"}
-                   ],
-                   "person_id" => "usr_1",
-                   "origin" => "interactive"
-                 } = snapshot
+               snapshot: %{
+                 "workspace_id" => "thr_work",
+                 "title" => "Moon report",
+                 "turn_id" => "turn_1",
+                 "outcome" => ^outcome,
+                 "summary" => "written",
+                 "truncated" => false,
+                 "attachments" => [
+                   %{"message_id" => "msg_post", "stored_name" => "0-chart.png"}
+                 ],
+                 "person_id" => "usr_1",
+                 "origin" => "interactive"
+               }
              } = record = OutboxRecord.workspace_report(report(%{outcome: outcome}))
 
       assert OutboxRecord.report_sources(record) ==
                [Source.outside("moon.example"), Source.thread("thr_daily")]
-
-      refute Map.has_key?(snapshot, "approval_id")
     end
-
-    assert %{snapshot: %{"approval_id" => "apr_1"}} =
-             OutboxRecord.workspace_report(report(%{outcome: "needs_you", approval_id: "apr_1"}))
 
     assert %{snapshot: %{"truncated" => true, "summary" => cut}} =
              OutboxRecord.workspace_report(report(%{summary: String.duplicate("é", 20_000)}))
@@ -234,20 +228,6 @@ defmodule Prima.OutboxRecordTest do
              } = OutboxRecord.crew_reply(reply(%{outcome: outcome}))
 
       assert map_size(snapshot) == 8
-    end
-  end
-
-  test "a needs_you reply names its card's approval, and no other reply does" do
-    assert %{snapshot: %{"approval_id" => "apr_1"} = snapshot} =
-             OutboxRecord.crew_reply(reply(%{outcome: "needs_you", approval_id: "apr_1"}))
-
-    assert map_size(snapshot) == 9
-
-    for outcome <- OutboxRecord.reply_outcomes() -- ["needs_you"] do
-      %{snapshot: snapshot} =
-        OutboxRecord.crew_reply(reply(%{outcome: outcome, approval_id: "apr_1"}))
-
-      refute Map.has_key?(snapshot, "approval_id"), outcome
     end
   end
 

@@ -625,10 +625,8 @@ defmodule Aqua.Providers.WorkspaceTest do
       {:ok, _} = Tape.finish(ctx, work!(ctx, workspace), "failed", %{error: "the build broke"})
       assert thread(ctx, workspace.id).workspace_state == "error"
 
-      assert [%{snapshot: %{"outcome" => "error", "summary" => "the build broke"} = snapshot}] =
+      assert [%{snapshot: %{"outcome" => "error", "summary" => "the build broke"}}] =
                records(ctx, "workspace_report")
-
-      refute Map.has_key?(snapshot, "approval_id")
     end
 
     test "Aqua reports its work needs the person: once its turn ends the thread needs them, " <>
@@ -653,7 +651,6 @@ defmodule Aqua.Providers.WorkspaceTest do
                records(ctx, "workspace_report")
 
       assert snapshot["summary"] == "Which account should the report go to?"
-      refute Map.has_key?(snapshot, "approval_id")
 
       # Only new work clears it: the person's post.
       post!(ctx, workspace, "the work account")

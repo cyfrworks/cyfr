@@ -796,26 +796,13 @@ defmodule Aqua.Providers.NotesTest do
     Compendium.AgentSource.manifest(soul)
   end
 
-  test "the annotations say what a person may pre-answer" do
+  test "the annotations say forget is destructive and the workspace notes are a chain's" do
     actions = Tool.definition().annotations.actions
 
-    # A filed note follows the thread it was kept from, never the agent;
-    # an endorsement is one click at a time; forget is destructive and
-    # already takes no standing allow. The about-you page and a workspace
-    # thread's notes are Aqua's to keep current: no standing rule of
-    # their own, so an authored `auto` runs them with no card, and the
-    # workspace notes are a chain's alone.
-    assert actions["keep"].standing == :thread
-    assert actions["endorse"].standing == false
+    # Forget is destructive; a workspace thread's notes are Aqua's to keep
+    # current, and a chain's alone.
     assert actions["forget"].kind == :destructive
     assert %{kind: :write, planes: [:in_chain], consent: :interactive} = actions["workspace"]
-
-    for name <- ~w(pin workspace forget list read search) do
-      refute Map.has_key?(actions[name], :standing), "#{name} declares a standing rule"
-    end
-
-    for action <- ~w(pin workspace), do: assert(Aqua.Kinds.auto_permitted?("notes", action))
-    for action <- ~w(keep endorse forget), do: refute(Aqua.Kinds.auto_permitted?("notes", action))
   end
 
   describe "a workspace thread's notes" do

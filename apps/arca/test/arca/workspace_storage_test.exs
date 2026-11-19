@@ -5,8 +5,8 @@ defmodule Arca.WorkspaceStorageTest do
   @moduledoc """
   A workspace thread's rows: opened in one transaction with its opening,
   its pointer and its record, or none of them; its state moved by the
-  write that moves it, a card in it or in a crew member's thread under it
-  among them; and a row that names it landing only while it stands.
+  write that moves it; and a row that names it landing only while it
+  stands.
   """
 
   use ExUnit.Case, async: false
@@ -100,45 +100,6 @@ defmodule Arca.WorkspaceStorageTest do
     started
   end
 
-  # A card in `turn`, as the loop opens one.
-  defp card!(actor, turn, key) do
-    {:ok, model} =
-      TurnStorage.put_step(actor, turn.id, %{
-        kind: "model",
-        idempotency_key: "model:#{key}",
-        fence: turn.fence
-      })
-
-    {:ok, %{calls: [%{step: call}]}} =
-      TurnStorage.record_response(actor, turn.id, model.id, %{
-        fence: turn.fence,
-        text: nil,
-        usage: %{},
-        stop_reason: "tool_call",
-        tool_calls: [
-          %{
-            tool_call_id: key,
-            name: "notes",
-            tool: "notes",
-            action: "keep",
-            arguments: %{},
-            kind: "write",
-            idempotency_key: "call:#{key}",
-            proposal_digest: "sha256:#{key}"
-          }
-        ]
-      })
-
-    {:ok, %{approval: approval}} =
-      TurnStorage.open_approval(actor, call.id, %{
-        proposal_digest: "sha256:#{key}",
-        card: %{content: "Keep the note?"},
-        fence: turn.fence
-      })
-
-    approval
-  end
-
   # The turn an opening's delivery opens on it, accepted and never run.
   defp opening_turn!(actor, workspace, opening) do
     {:ok, %{turn: turn}} =
@@ -158,15 +119,6 @@ defmodule Arca.WorkspaceStorageTest do
         error: "stopped",
         grant: :stored,
         verify: &Arca.Test.Actor.admits/1
-      })
-  end
-
-  defp decline!(actor, turn, approval) do
-    {:ok, _} =
-      TurnStorage.resolve_approval(actor, approval.id, "declined", %{
-        fence: turn.fence,
-        resolution_kind: Prima.TurnState.resolution_kind("declined", "tool"),
-        denied_result: %{content: "declined", payload: %{}}
       })
   end
 
@@ -198,43 +150,6 @@ defmodule Arca.WorkspaceStorageTest do
     other = Prima.Actor.in_athanor("ath_other_#{System.unique_integer([:positive])}")
 
     assert {:error, :not_found} = TurnStorage.open_workspace(other, opening(other, daily, %{}))
-  end
-
-  test "a card in a workspace thread, or in a crew member's thread under it, waits on the person and reports once; the last one decided puts it back to work",
-       %{actor: actor, daily: daily} do
-    workspace = open!(actor, daily)
-    own = running!(actor, workspace)
-    first = card!(actor, own, "k1")
-
-    assert state(actor, workspace.id) == "needs_you"
-
-    assert [%{snapshot: %{"outcome" => "needs_you", "approval_id" => approval_id}}] =
-             records(actor, "workspace_report")
-
-    assert approval_id == first.id
-
-    {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
-    member = running!(actor, child)
-    second = card!(actor, member, "k2")
-    assert length(records(actor, "workspace_report")) == 1
-
-    decline!(actor, own, first)
-    assert state(actor, workspace.id) == "needs_you"
-
-    decline!(actor, member, second)
-    assert state(actor, workspace.id) == "open"
-    assert length(records(actor, "workspace_report")) == 1
-
-    # At work again, a crew member's card waits on the person once more.
-    {:ok, member} = TurnStorage.get(actor, member.id)
-    _third = card!(actor, member, "k3")
-    assert state(actor, workspace.id) == "needs_you"
-    assert [_, %{snapshot: %{"turn_id" => turn_id}}] = records(actor, "workspace_report")
-    assert turn_id == member.id
-
-    # A card its turn's cancel invalidates settles it too.
-    {:ok, _} = TurnStorage.skip_steps(actor, member.id, "stopped", %{fence: member.fence})
-    assert state(actor, workspace.id) == "open"
   end
 
   test "a deletion leaves nothing of a report, whichever comes first: one that landed goes with it, and one after it lands nothing",
@@ -367,37 +282,6 @@ defmodule Arca.WorkspaceStorageTest do
     assert state(actor, workspace.id) == "done"
   end
 
-  test "a report while a crew member's card waits lands and leaves the thread waiting; once the last card is settled and nothing else remains, it is what the report said",
-       %{actor: actor, daily: daily} do
-    workspace = open!(actor, daily)
-    [opening] = Threads.messages(actor, workspace.id)
-    own = opening_turn!(actor, workspace, opening)
-    {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
-    member = running!(actor, child)
-    card = card!(actor, member, "k1")
-    assert state(actor, workspace.id) == "needs_you"
-
-    assert {:ok, %{workspace_state: "needs_you"}} =
-             TurnStorage.report_workspace(actor, own.id, "done", %{
-               fence: own.fence,
-               summary: "Done."
-             })
-
-    assert state(actor, workspace.id) == "needs_you"
-
-    assert ["needs_you", "done"] =
-             for(record <- records(actor, "workspace_report"), do: record.snapshot["outcome"])
-
-    # Decided, the card leaves the member's turn still running: at work.
-    decline!(actor, member, card)
-    assert state(actor, workspace.id) == "open"
-
-    # The member's turn ends and nothing else remains: what the report said.
-    finish!(actor, member)
-    assert state(actor, workspace.id) == "done"
-    assert length(records(actor, "workspace_report")) == 2
-  end
-
   test "a row naming a workspace thread lands only while it stands", %{actor: actor, daily: daily} do
     workspace = open!(actor, daily)
 
@@ -479,7 +363,6 @@ defmodule Arca.WorkspaceStorageTest do
 
     assert [%{snapshot: snapshot}] = records(actor, "workspace_report")
     assert %{"outcome" => "needs_you", "turn_id" => turn_id} = snapshot
-    refute Map.has_key?(snapshot, "approval_id")
     assert turn_id == turn.id
 
     assert {:error, :reported} =
@@ -547,52 +430,6 @@ defmodule Arca.WorkspaceStorageTest do
     assert report_outcomes(actor) == ["error", "done"]
   end
 
-  test "a card's notice is no report of the turn's work, and Aqua's needs_you outlasts a card",
-       %{actor: actor, daily: daily} do
-    {workspace, turn} = at_work!(actor, daily)
-    card = card!(actor, turn, "k1")
-    assert state(actor, workspace.id) == "needs_you"
-
-    # The notice leaves the turn its own report.
-    assert {:ok, %{workspace_state: "needs_you"}} =
-             TurnStorage.report_workspace(actor, turn.id, "needs_you", %{
-               fence: turn.fence,
-               summary: "Tell me the date."
-             })
-
-    assert [%{"approval_id" => _}, authored] =
-             for(r <- records(actor, "workspace_report"), do: r.snapshot)
-
-    refute Map.has_key?(authored, "approval_id")
-
-    # Deciding the card clears its own wait only.
-    decline!(actor, turn, card)
-    {:ok, _} = ended!(actor, turn, "completed")
-    assert state(actor, workspace.id) == "needs_you"
-  end
-
-  test "the person's answer clears Aqua's needs_you and leaves a card that still waits waiting",
-       %{actor: actor, daily: daily} do
-    {workspace, turn} = at_work!(actor, daily)
-    {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
-    member = running!(actor, child)
-    card = card!(actor, member, "k1")
-    {:ok, _} = TurnStorage.report_workspace(actor, turn.id, "needs_you", %{fence: turn.fence})
-    {:ok, _} = ended!(actor, turn, "completed")
-    assert state(actor, workspace.id) == "needs_you"
-
-    answer = running!(actor, workspace)
-    assert outcome(actor, workspace.id) == nil
-    assert state(actor, workspace.id) == "needs_you"
-
-    decline!(actor, member, card)
-    assert state(actor, workspace.id) == "open"
-
-    finish!(actor, member)
-    {:ok, _} = ended!(actor, answer, "completed")
-    assert state(actor, workspace.id) == "open"
-  end
-
   test "Aqua's needs_you before the person's post is cleared by it; after it, it is the last word",
        %{actor: actor, daily: daily} do
     # The report first, then the person's post: new work clears it.
@@ -653,21 +490,16 @@ defmodule Arca.WorkspaceStorageTest do
       assert records(actor, "workspace_report") == []
     end
 
-    test "with Aqua and a crew member running, a card waiting: all ends, the card with it",
+    test "with Aqua and a crew member running: all ends",
          %{actor: actor, daily: daily} do
       {workspace, turn} = at_work!(actor, daily)
       {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
       member = running!(actor, child)
-      card = card!(actor, member, "k1")
-      assert state(actor, workspace.id) == "needs_you"
-      [notice] = records(actor, "workspace_report")
 
       assert {:ok, %{cancelled: cancelled}} = stop!(actor, workspace)
       assert Enum.sort(Enum.map(cancelled, & &1.turn_id)) == Enum.sort([turn.id, member.id])
       assert state(actor, workspace.id) == "stopped"
-      assert {:ok, %{status: status}} = TurnStorage.approval(actor, card.id)
-      assert status != "pending"
-      assert records(actor, "workspace_report") == [notice]
+      assert records(actor, "workspace_report") == []
     end
 
     test "with an opening queued: it starts nothing after, and the thread reads stopped",
@@ -1088,17 +920,6 @@ defmodule Arca.WorkspaceStorageTest do
       assert {:ok, %{status: "error"}} = Threads.get_message(actor, older.id)
       assert state(actor, second.id) == "error"
       assert report_outcomes(actor) == ["error", "error"]
-    end
-
-    test "a card's notice alone leaves the refusal its error", %{actor: actor, daily: daily} do
-      {workspace, turn} = at_work!(actor, daily)
-      waiting = asked_again!(actor, daily, workspace)
-      _card = card!(actor, turn, "k1")
-      assert outcome(actor, workspace.id) == nil
-
-      {:ok, _} = refuse(actor, workspace, waiting)
-      assert outcome(actor, workspace.id) == "error"
-      assert report_outcomes(actor) == ["needs_you", "error"]
     end
 
     test "a stop or an error written with no report since the opening is the thread's later word",

@@ -24,7 +24,7 @@ defmodule Aqua.Providers.Workspace do
       what did not in its summary) or `needs_you` (the work waits on
       something only the person can give), with the files of the
       thread's posts it carries, which the thread becomes once nothing
-      else it accepted remains to run and no card waits, and the
+      else it accepted remains to run, and the
       `workspace_report` record lands the report on the daily thread
       current when it is delivered. The host makes the other moves, and
       alone says a thread is `stopped` or in `error`
@@ -482,10 +482,9 @@ defmodule Aqua.Providers.Workspace do
   work ended (`done`, `stopped`, `error`) with posts the person has not
   seen; one they have seen leaves the list by itself and is found from
   the daily thread, and one archived is found in their list's Archived
-  filter, a card waiting in it still counted where the person's waiting
-  items are.
-  `waits_on_you` is whether it needs the person: a card waits there or
-  in a crew member's thread under it, or Aqua reported it needs them.
+  filter.
+  `waits_on_you` is whether it needs the person: Aqua reported it needs
+  them.
   """
   @spec records(Context.t()) :: {:ok, [entry()]} | {:error, term()}
   def records(%Context{} = ctx) do
@@ -533,8 +532,7 @@ defmodule Aqua.Providers.Workspace do
     end
   end
 
-  # It needs the person while a card waits there or in a crew member's
-  # thread under it, or once Aqua reported so, which its state says
+  # It needs the person once Aqua reported so, which its state says
   # (`needs_you`).
   defp record_of(actor, thread) do
     with {:ok, unread} <- Arca.ThreadStorage.unread(actor, thread) do

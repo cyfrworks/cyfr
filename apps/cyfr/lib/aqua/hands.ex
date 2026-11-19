@@ -18,10 +18,8 @@ defmodule Aqua.Hands do
     * **canonical operation** — what an `execution.run` of one of those
       catalysts, or a `files` call whose path lands in the storage
       boundary, IS (`canonical/2`, `canonical_files/2`): wrappers are
-      aliases of canonical operations, and every policy decision — a
-      card, an approval — is made on the canonical one;
-    * **`auto_only`** — `request_setup.open` is a UI event, not a catalyst;
-      an `ask` on it would be a card nothing can execute.
+      aliases of canonical operations, and every policy decision is made
+      on the canonical one.
 
   The resource boundary is `data/storage/`: a file operation inside it is
   the storage operation of the same effect, whichever tool spelled it.
@@ -133,7 +131,7 @@ defmodule Aqua.Hands do
 
   @doc """
   The catalyst and the input one virtual `tool.action` becomes — what the
-  guest's dispatch table builds, so a card approved on the host runs the
+  guest's dispatch table builds, so a call the host decides runs the
   very same request. `request_setup` builds nothing: it is a UI event.
   """
   @spec child_call(String.t(), String.t(), map()) ::
@@ -270,8 +268,8 @@ defmodule Aqua.Hands do
   (`files.tree` and `files.list`) — `{:error, :not_virtual}` for a
   reference that is not one of the wrapped catalysts, and
   `{:error, :unknown_operation}` for an input no virtual action builds.
-  Each candidate carries the virtual tool's own `args`, so a card can be
-  stored for it and `child_call/3` can run it again.
+  Each candidate carries the virtual tool's own `args`, so the call is
+  decided on the virtual action and `child_call/3` runs it.
   """
   @spec canonical(String.t(), map()) ::
           {:ok, [canonical()]} | {:error, :not_virtual | :unknown_operation}
@@ -303,8 +301,8 @@ defmodule Aqua.Hands do
       component_source_path?(path) ->
         # A component's source is not the files catalyst's to write: its
         # grant is `data/`. The host-side `source` tool owns this, with its
-        # own policy keys, so `files.write: auto` for `data/` cannot
-        # auto-approve a rewrite of component code.
+        # own offered keys, so a member offered `files.write` for `data/`
+        # is not offered a rewrite of component code.
         {:ok, %{tool: "source", action: action, args: args}}
 
       not storage_path?(path) ->

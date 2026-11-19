@@ -51,7 +51,7 @@ defmodule Sanctum.TenancyContinuationTest do
     user: user,
     athanor: athanor
   } do
-    # A programmatic turn a person continues — a launch they approved, a
+    # A programmatic turn a person continues — a launch its turn decided, a
     # turn recovered after a restart — stays programmatic.
     for origin <- Prima.Origin.values() do
       assert {:ok, %{origin: ^origin}} =

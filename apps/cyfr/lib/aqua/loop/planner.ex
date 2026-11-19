@@ -147,9 +147,9 @@ defmodule Aqua.Loop.Planner do
   end
 
   # Grouping keeps a result beside the call it answers, but only while they
-  # are adjacent: an approval card or an aborted mark writes a row between
-  # them, and the boundary could then land on that row and summarize away a
-  # call whose result it keeps. Providers reject a `tool_result` with no
+  # are adjacent: an aborted mark writes a row between them, and the
+  # boundary could then land on that row and summarize away a call whose
+  # result it keeps. Providers reject a `tool_result` with no
   # `tool_call`, and nothing repairs that direction.
   #
   # So the boundary is pulled back to include any call whose answer is kept.
@@ -310,8 +310,7 @@ defmodule Aqua.Loop.Planner do
 
   @doc """
   Whether a row is pinned in the projection: a request to a crew member
-  still waiting on its reply. A card's notice waits too, but answers a
-  request and is none.
+  still waiting on its reply.
   """
   @spec pinned?(Aqua.Tape.row()) :: boolean()
   def pinned?(row),

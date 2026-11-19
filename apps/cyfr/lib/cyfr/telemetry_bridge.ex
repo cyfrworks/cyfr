@@ -299,7 +299,6 @@ defmodule Cyfr.TelemetryBridge do
       tenant(meta, &Bus.notify/1, fn actor ->
         Notify.new(actor, meta[:kind], notify_payload(meta))
       end)
-      | approval_attention(meta)
     ]
   end
 
@@ -676,34 +675,6 @@ defmodule Cyfr.TelemetryBridge do
     do:
       attention(fn -> {:ok, [{athanor_id, user_id, :removed, %{id: id, outcome: :resolved}}]} end)
 
-  # An approval waits for the athanor's person: opened, it is read as it
-  # stands; resolved, it is removed with how its decision ended it.
-  defp approval_attention(%{
-         athanor_id: athanor_id,
-         kind: kind,
-         payload: %{approval_id: id} = payload
-       })
-       when kind in [:approval_pending, :approval_resolved] and is_binary(athanor_id) and
-              athanor_id != "" and is_binary(id) do
-    [
-      attention(fn ->
-        with {:ok, person} <- Cyfr.Providers.Attention.person(athanor_id) do
-          case kind do
-            :approval_pending ->
-              Cyfr.Providers.Attention.approval(Prima.Actor.in_athanor(athanor_id), id)
-              |> waiting(athanor_id, person)
-
-            :approval_resolved ->
-              outcome = left_as(Map.get(payload, :decision))
-              {:ok, [{athanor_id, person, :removed, %{id: id, outcome: outcome}}]}
-          end
-        end
-      end)
-    ]
-  end
-
-  defp approval_attention(_meta), do: []
-
   # An offer waits for its recipient in their own athanor, wherever its
   # sender is, among what waits for them and among their files: one
   # message, so a denial that ends thousands of offers reads each
@@ -804,11 +775,11 @@ defmodule Cyfr.TelemetryBridge do
 
   # How an item left its person's attention (`Cyfr.Bus.Attention.outcomes/0`),
   # by its record's end: a confirmation's stage, an offer's transition or
-  # an approval's decision. An end whose time ran out is `expired`, one
-  # that took the record away (a voided confirmation, a withdrawn offer, a
-  # deleted thread's approval) `withdrawn`, and every other `resolved`.
-  defp left_as(ended) when ended in [:expired, "expired"], do: :expired
-  defp left_as(ended) when ended in [:voided, :withdrawn, "withdrawn"], do: :withdrawn
+  # a question's end. An end whose time ran out is `expired`, one that
+  # took the record away (a voided confirmation, a withdrawn offer, a
+  # question its run withdrew) `withdrawn`, and every other `resolved`.
+  defp left_as(:expired), do: :expired
+  defp left_as(ended) when ended in [:voided, :withdrawn], do: :withdrawn
   defp left_as(_settled), do: :resolved
 
   # Read when delivered, so a read that fails costs this message alone.

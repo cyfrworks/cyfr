@@ -46,7 +46,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
     AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent
-    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive GrantsComponent
+    CommandPaletteLiveComponent SystemLayer CanvasLive GrantsComponent
   )
 
   # The tasks started from the console, by file, and each answer they send

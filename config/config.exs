@@ -37,8 +37,6 @@ config :sanctum,
     # Workspace threads: opened from a daily thread for one piece of work,
     # reporting back to it.
     Aqua.Providers.Workspace,
-    # A card decided from the wire: the same door the console's buttons use.
-    Aqua.Providers.Approval,
     # What was kept out of a thread — a separate object from the tape,
     # which is what lets a thread be erased honestly.
     Aqua.Providers.Notes,

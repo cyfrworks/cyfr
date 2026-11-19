@@ -57,7 +57,7 @@ defmodule Aqua.Loop.PlannerTest do
     # Gemini numbers its calls in each response: both calls are `call_1`.
     rows = [
       paired(1, "tool_call", String.duplicate("x", 40_000), "s1", "call_1"),
-      row(2, "approval", "may I?"),
+      row(2, "turn_aborted", "stopped"),
       paired(3, "tool_result", "ok", "s1_call", "call_1"),
       paired(4, "tool_call", "again", "s2", "call_1"),
       paired(5, "tool_result", "ok again", "s2_call", "call_1"),
@@ -67,14 +67,14 @@ defmodule Aqua.Loop.PlannerTest do
     assert %{first_kept_seq: 1} = Planner.boundary(rows, 2_000)
   end
 
-  test "a card between a call and its answer does not let the boundary part them" do
+  test "an aborted mark between a call and its answer does not let the boundary part them" do
     big = String.duplicate("x", 40_000)
 
-    # What a call needing approval writes: the card lands between the call
-    # and the result, and carries no step id of its own.
+    # What a turn the server restarted under writes: the mark lands between
+    # the call and the result, and carries no step id of its own.
     rows = [
       paired(1, "tool_call", big, "s1", "call_1"),
-      row(2, "approval", "may I?"),
+      row(2, "turn_aborted", "stopped"),
       paired(3, "tool_result", "ok", "s1_call", "call_1"),
       row(4, "text", "done", "s2")
     ]

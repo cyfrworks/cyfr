@@ -168,7 +168,7 @@ defmodule Arca.OutboxTest do
           asking_thread_id: "thr_room",
           request_ids: ["msg_1"],
           member: "reviewer",
-          outcome: "needs_you",
+          outcome: "done",
           text: "which branch?",
           person_id: "usr_1",
           origin: :interactive
@@ -346,7 +346,7 @@ defmodule Arca.OutboxTest do
           asking_thread_id: "thr_room",
           request_ids: ["msg_1"],
           member: "reviewer",
-          outcome: "needs_you",
+          outcome: "done",
           text: "which branch?",
           person_id: "usr_1",
           origin: :interactive

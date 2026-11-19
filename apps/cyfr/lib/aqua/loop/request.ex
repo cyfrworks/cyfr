@@ -36,8 +36,8 @@ defmodule Aqua.Loop.Request do
   the files it carries; a pointer as one line naming its workspace thread
   and title; a report as one block naming its workspace thread, outcome
   and summary. A post the reading agent made with `thread.post` is its
-  call's to show. Cards, notes in the server's voice and errors are not
-  the model's to read.
+  call's to show. Notes in the server's voice and errors are not the
+  model's to read.
   """
 
   alias Aqua.Tape
@@ -552,7 +552,6 @@ defmodule Aqua.Loop.Request do
     me = Keyword.get(opts, :me)
 
     cond do
-      decided_notice?(row) -> acc
       # The reader's own post is its call's to show (`thread.post`).
       posted?(row) and own?(row, me) -> acc
       is_binary(Map.get(row, :reply_to)) -> said(reply_text(row), row, acc)
@@ -619,7 +618,7 @@ defmodule Aqua.Loop.Request do
     [%{role: "user", blocks: [%{"type" => "text", "text" => text}], step: nil} | acc]
   end
 
-  # Cards, notes in the server's voice and errors are not the model's.
+  # Notes in the server's voice and errors are not the model's.
   defp shape(%{}, acc, _opts), do: acc
 
   # A later post's files on the message its row was shaped as, before any
@@ -731,10 +730,7 @@ defmodule Aqua.Loop.Request do
   end
 
   # The outcome as the reading model is told it: Aqua's `done` or
-  # `needs_you`, the server's `error`, or a card's notice.
-  defp reported(%{"outcome" => "needs_you", "approval_id" => _card}),
-    do: "a card waits on the person"
-
+  # `needs_you`, or the server's `error`.
   defp reported(%{"outcome" => "needs_you"}), do: "needs the person"
   defp reported(%{"outcome" => "error"}), do: "error, Aqua could not run it"
   defp reported(_payload), do: "done"
@@ -747,15 +743,6 @@ defmodule Aqua.Loop.Request do
     asker = if row.sent_by == "person", do: display(row.author, opts), else: row.sent_by
 
     "[#{asker} asked #{row.addressee} (request #{row.id}, #{row.status})]\n#{row.content}"
-  end
-
-  # A notice is read while its card waits; a decided card waits for no one.
-  defp decided_notice?(row),
-    do: Map.get(row, :outcome) == "needs_you" and Map.get(row, :status) != "pending"
-
-  defp reply_text(%{outcome: "needs_you"} = row) do
-    "[#{row.sent_by} needs the person on request #{row.reply_to}: a card waits for them " <>
-      "in #{row.sent_by}'s thread]\n#{row.content}"
   end
 
   defp reply_text(row),

@@ -210,11 +210,10 @@ defmodule Arca.ThreadStorageTest do
 
       assert unread(ctx, thread) == 0
 
-      # The agent's reply, its card and its error.
+      # The agent's reply and its error.
       post!(ctx, thread, %{content: "Here is the plan."})
-      post!(ctx, thread, %{kind: "approval", status: "pending", content: "Send it?"})
       post!(ctx, thread, %{kind: "error", content: "It failed."})
-      assert unread(ctx, thread) == 3
+      assert unread(ctx, thread) == 2
 
       # A schedule's line is sent for its person in the server's voice: the
       # person did not write it, so it counts.
@@ -226,11 +225,11 @@ defmodule Arca.ThreadStorageTest do
           content: "Morning summary"
         })
 
-      assert unread(ctx, thread) == 4
+      assert unread(ctx, thread) == 3
 
       # A crew member's reply is not the person's either.
       post!(ctx, thread, %{author: "planner", sent_by: "planner", content: "Done."})
-      assert unread(ctx, thread) == 5
+      assert unread(ctx, thread) == 4
 
       {:ok, _} = Threads.mark_read(ctx, thread.id, line.seq)
       assert unread(ctx, thread) == 1
@@ -328,59 +327,6 @@ defmodule Arca.ThreadStorageTest do
       })
 
     assert Threads.payload(msg) == %{"intent" => %{"title" => "t"}}
-  end
-
-  test "an approval is decided once — the second click sees already_resolved", %{
-    ctx: ctx,
-    bob: bob
-  } do
-    {:ok, thread} = Days.thread(ctx)
-
-    {:ok, apr} =
-      Threads.append(ctx, thread.id, %{
-        author: "aqua",
-        sent_by: "aqua",
-        kind: "approval",
-        content: "Send it",
-        status: "pending"
-      })
-
-    assert [%{id: id}] = Threads.pending_approvals(ctx, thread.id)
-    assert id == apr.id
-
-    assert {:ok, running} =
-             Threads.resolve_approval(ctx, apr.id, "pending", "running")
-
-    assert running.status == "running"
-    assert running.resolved_by == ctx.user_id
-    assert running.resolved_at == nil
-
-    assert {:error, :already_resolved} =
-             Threads.resolve_approval(bob, apr.id, "pending", "declined")
-
-    assert {:ok, done} =
-             Threads.resolve_approval(
-               ctx,
-               apr.id,
-               "running",
-               "approved",
-               %{
-                 resolution: %{"summary" => "ok"}
-               }
-             )
-
-    assert done.status == "approved"
-    assert done.resolved_at
-    assert Threads.resolution(done) == %{"summary" => "ok"}
-    assert Threads.pending_approvals(ctx, thread.id) == []
-
-    assert {:error, :not_found} =
-             Threads.resolve_approval(
-               ctx,
-               "msg_nope",
-               "pending",
-               "running"
-             )
   end
 
   test "blob_root/1 spells a real tenant root" do

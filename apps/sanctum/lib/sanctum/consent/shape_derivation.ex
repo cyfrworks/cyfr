@@ -94,8 +94,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @exact_only Caps.agent_only_tools()
 
   # The provider's own search: no catalog action, so no pattern reaches
-  # it, and an agent's consent carries it by its name when its policy
-  # turns it on (`Compendium.AgentSource`). Only an agent asks for it.
+  # it, and an agent's consent carries it by its name when its `tools`
+  # name it (`Compendium.AgentSource`). Only an agent asks for it.
   @provider_search "native_search"
 
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
@@ -198,9 +198,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   The `ShapeDigest.compute/1` input derived from live state. An agent
   source's shape also carries its model target (`catalyst#model`): the
   model an agent runs on is what it may do, so changing it re-asks. Its
-  tool policy's modes are not in it: whether a tool asks first grants
-  nothing the consent does not (`ARCHITECTURE.md` §5.4), so marking one
-  `auto` or `ask` re-asks nothing.
+  mode is not in it: what of its tools a member runs grants nothing the
+  consent does not (`ARCHITECTURE.md` §5.4), so switching a member's mode
+  re-asks nothing.
 
   A login need (`Prima.Manifest.Needs.mount_only?/1`) enters the shape
   with the program it mounts into and the row it suggests, so a change to
@@ -436,8 +436,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   names, never by a pattern (`*`, `feed.*`, `layout.*` or any other),
   whatever the component's type. A component other than an agent may not
   name one (`Prima.Manifest.Caps`), so no other component's grant holds
-  one; an agent that names one exactly keeps it, and its tool policy and
-  the assistant's kind ceiling decide when the person is asked first.
+  one; an agent that names one exactly keeps it, and the member's mode
+  decides whether it runs.
   """
   @spec expand_tools([String.t()]) :: [String.t()]
   def expand_tools(patterns) when is_list(patterns) do

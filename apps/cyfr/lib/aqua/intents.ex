@@ -23,9 +23,8 @@ defmodule Aqua.Intents do
   @allowed_overlay_states ~w(half full)
 
   # One optional colon: an external MCP server's tool is proposed as
-  # `server:tool`, the shape `kind_for/2`'s `:external` branch and the
-  # approval card speak. Anchored `\A…\z`, not `^…$`: `$` matches before a
-  # trailing newline.
+  # `server:tool`, the shape `kind_for/2`'s `:external` branch speaks.
+  # Anchored `\A…\z`, not `^…$`: `$` matches before a trailing newline.
   @id_re ~r/\A[\w.\-]+(:[\w.\-]+)?\z/
 
   # A generous ceiling for a pasted code block, and a bound on what a model

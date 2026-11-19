@@ -206,8 +206,8 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Merge `patch` into the athanor's settings document, one level deep: a map
-  under a key merges into the map already there (so an `"approvals"` patch
-  naming one value leaves the others alone), a `nil` deletes the key,
+  under a key merges into the map already there (so a patch naming one
+  value under a key leaves the others alone), a `nil` deletes the key,
   anything else replaces. Retention settings are not here: they are the
   storage layer's own rows (`Arca.RetentionSettings`).
   Every member's open views hear of the change on the athanor's notify

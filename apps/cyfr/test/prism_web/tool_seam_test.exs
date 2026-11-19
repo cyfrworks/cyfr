@@ -287,17 +287,15 @@ defmodule PrismWeb.ToolSeamTest do
   # The chat's verbs go through the tool surface: the same `thread` and
   # `shared_thread` actions a headless client calls, from the views that
   # hold them: Aqua's pane and panel for the person's own threads, the chat
-  # overlay and the shared thread it opens for the threads they share. A
-  # card is decided through `approval.resolve`, the one door that carries
-  # a standing answer's bounds, as the wire's `approval` tool does. None of
-  # them writes a thread through its store or its authority's facade: the
-  # tool is the only way in. The read mark the overlay moves is the
-  # person's own presentation state (`Sanctum.SharedThreads.mark_read/2`)
-  # and no write of the thread's.
+  # overlay and the shared thread it opens for the threads they share.
+  # None of them writes a thread through its store or its authority's
+  # facade: the tool is the only way in. The read mark the overlay moves
+  # is the person's own presentation state
+  # (`Sanctum.SharedThreads.mark_read/2`) and no write of the thread's.
   @chat_verbs %{
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
-      ~w(thread/today thread/attach thread/send thread/discard thread/stop approval/resolve
-         thread/revoke_grant thread/restart_for_consent),
+      ~w(thread/today thread/attach thread/send thread/discard thread/stop
+         thread/restart_for_consent),
     "apps/cyfr/lib/prism_web/live/aqua_panel_live.ex" => ~w(thread/today),
     "apps/cyfr/lib/prism_web/live/chat_overlay_live.ex" =>
       ~w(shared_thread/create shared_thread/add shared_thread/pair),

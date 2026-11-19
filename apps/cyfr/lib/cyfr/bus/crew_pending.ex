@@ -5,8 +5,8 @@ defmodule Cyfr.Bus.CrewPending do
   @moduledoc """
   A crew record committed in an athanor, on the global
   `Cyfr.Bus.crew_deliveries/0`: a request to a crew member, a member's
-  reply, or a card it opened, published only after the transaction that
-  recorded it (`Aqua.Tape`).
+  reply, or a workspace thread's opening or report, published only after
+  the transaction that recorded it (`Aqua.Tape`).
 
   It names the athanor alone and only wakes the delivery consumer
   (`Aqua.Crew`), which works the outbox records under its job claim, so

@@ -3,12 +3,12 @@
 
 defmodule Sanctum.LaunchStampBoundaryTest do
   @moduledoc """
-  An approved launch's stamp (`Sanctum.Context`'s `launch`) seeds a root,
-  names the classes its tree may send anywhere and names the agent the
-  root records as its caller, which a standing answer's match keys on, so
-  it is written by one function, `Sanctum.Context.stamp_launch/2`, called
-  from `Aqua.Launch` alone. Mechanically, over the code of every app's `lib`,
-  read as Elixir's own syntax tree: the setter is called in one place,
+  A launch's stamp (`Sanctum.Context`'s `launch`) seeds a root, names the
+  classes its tree may send anywhere and names the agent the root records
+  as its caller, so it is written by one function,
+  `Sanctum.Context.stamp_launch/2`, called from `Aqua.Launch` alone.
+  Mechanically, over the code of every app's `lib`, read as Elixir's own
+  syntax tree: the setter is called in one place,
   and nothing but the setter's own module gives the field a value — no
   map or struct literal or update names a `launch` key with anything but
   `nil` (admission's clear) outside a function head's pattern, and no

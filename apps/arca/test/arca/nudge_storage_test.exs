@@ -14,7 +14,7 @@ defmodule Arca.NudgeStorageTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{Approval, Message, Thread, Turn, TurnStep}
+  alias Arca.Schemas.{Message, Thread, Turn, TurnStep}
   alias Arca.ThreadStorage, as: Threads
   alias Arca.TurnStorage
 
@@ -148,47 +148,22 @@ defmodule Arca.NudgeStorageTest do
       })
   end
 
-  # A card in `turn`, as the loop opens one.
-  defp card!(actor, turn, key) do
-    model = model_step!(actor, turn, key)
-
-    {:ok, %{calls: [%{step: call}]}} =
-      TurnStorage.record_response(actor, turn.id, model.id, %{
+  # Aqua's report that its work in the workspace thread waits on the
+  # person: the thread reads `needs_you` once nothing else remains to run.
+  defp needs_you!(actor, turn) do
+    {:ok, _} =
+      TurnStorage.report_workspace(actor, turn.id, "needs_you", %{
         fence: turn.fence,
-        text: nil,
-        usage: %{},
-        stop_reason: "tool_call",
-        tool_calls: [
-          %{
-            tool_call_id: key,
-            name: "notes",
-            tool: "notes",
-            action: "keep",
-            arguments: %{},
-            kind: "write",
-            idempotency_key: "call:#{key}",
-            proposal_digest: "sha256:#{key}"
-          }
-        ]
+        summary: "Which date?"
       })
-
-    {:ok, %{approval: approval}} =
-      TurnStorage.open_approval(actor, call.id, %{
-        proposal_digest: "sha256:#{key}",
-        card: %{content: "Keep the note?"},
-        fence: turn.fence
-      })
-
-    approval
   end
 
-  defp decline!(actor, turn, approval) do
+  # The person's post in a workspace thread: new work there, which ends a
+  # wait on them.
+  defp answer!(actor, workspace) do
     {:ok, _} =
-      TurnStorage.resolve_approval(actor, approval.id, "declined", %{
-        fence: turn.fence,
-        decided_by: actor.user_id,
-        resolution_kind: Prima.TurnState.resolution_kind("declined", "tool"),
-        denied_result: %{content: "declined", payload: %{}}
+      TurnStorage.accept_message(actor, workspace.id, %{
+        message: %{author: actor.user_id, sent_by: "person", content: "The first."}
       })
   end
 
@@ -203,8 +178,7 @@ defmodule Arca.NudgeStorageTest do
     for {schema, fields} <- [
           {Message, [:inserted_at]},
           {Turn, [:accepted_at, :ended_at]},
-          {TurnStep, [:started_at, :ended_at]},
-          {Approval, [:inserted_at, :decided_at]}
+          {TurnStep, [:started_at, :ended_at]}
         ],
         field <- fields do
       from(r in schema,
@@ -483,17 +457,15 @@ defmodule Arca.NudgeStorageTest do
       assert {:ok, _} = nudge(actor, workspace, held)
     end
 
-    test "a step starting and a card decided are activity; a card waiting is the person's, not the thread's quiet",
+    test "a step starting is activity; a wait is the person's, not the thread's quiet",
          %{actor: actor, daily: daily, held: held} do
       workspace = at_rest!(actor, daily)
       turn = running!(actor, workspace)
-      card = card!(actor, turn, "k1")
+      needs_you!(actor, turn)
       :ok = aged!(actor)
       assert {:error, {:workspace_state, "needs_you"}} = nudge(actor, workspace, held)
 
-      decline!(actor, turn, card)
-      assert {:error, :not_quiet} = nudge(actor, workspace, held)
-
+      answer!(actor, workspace)
       :ok = aged!(actor)
       step = model_step!(actor, turn, "k2")
       {:ok, _} = TurnStorage.dispatch_step(actor, step.id, %{fence: turn.fence})
@@ -649,7 +621,15 @@ defmodule Arca.NudgeStorageTest do
 
       held_back = at_rest!(actor, daily)
       other = running!(actor, held_back)
-      {:ok, _} = TurnStorage.pause(actor, other.id, %{reason: "approval", fence: other.fence})
+      call = model_step!(actor, other, "c1")
+      {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: other.fence})
+
+      {:ok, _} =
+        TurnStorage.pause_uncertain(actor, other.id, %{
+          fence: other.fence,
+          step_id: call.id,
+          generation: 0
+        })
 
       :ok = aged!(actor)
       assert {:ok, %{joined: true, message: row}} = nudge(actor, launching, held)
@@ -745,30 +725,23 @@ defmodule Arca.NudgeStorageTest do
   # ---- the wait ------------------------------------------------------------
 
   describe "the wait a reminder names" do
-    test "a move into needs you or error starts a wait; one out keeps it; an act of the person that leaves it waiting starts a new one, later than the last whatever the clock",
+    test "a move into needs you or error starts a wait; one out keeps it; the next starts a new one, later than the last whatever the clock",
          %{actor: actor, daily: daily} do
       workspace = at_rest!(actor, daily)
       assert thread(actor, workspace.id).waits_since == nil
 
       turn = running!(actor, workspace)
-      first = card!(actor, turn, "k1")
+      needs_you!(actor, turn)
       %{workspace_state: "needs_you", waits_since: began} = thread(actor, workspace.id)
       assert %DateTime{} = began
 
-      # A second card is no move and no act.
-      {:ok, child} = Threads.crew_thread(actor, workspace.id, "planner")
-      member = running!(actor, child)
-      second = card!(actor, member, "k2")
-      assert thread(actor, workspace.id).waits_since == began
+      # Its turn's end is no move.
+      cancel!(actor, turn)
+      assert %{workspace_state: "needs_you", waits_since: ^began} = thread(actor, workspace.id)
 
-      # Deciding one of the two is an act: a new wait.
-      decline!(actor, turn, first)
-      %{workspace_state: "needs_you", waits_since: again} = thread(actor, workspace.id)
-      assert DateTime.compare(again, began) == :gt
-
-      # The last one decided puts it back to work, and the wait stays.
-      decline!(actor, member, second)
-      assert %{workspace_state: "open", waits_since: ^again} = thread(actor, workspace.id)
+      # The person's post puts it back to work, and the wait stays.
+      answer!(actor, workspace)
+      assert %{workspace_state: "open", waits_since: ^began} = thread(actor, workspace.id)
 
       # A clock behind the last wait still starts a later one.
       ahead = DateTime.add(DateTime.utc_now(), 3600, :second)
@@ -776,7 +749,7 @@ defmodule Arca.NudgeStorageTest do
       from(c in Thread, where: c.id == ^workspace.id)
       |> Arca.Repo.update_all(set: [waits_since: ahead])
 
-      _third = card!(actor, turn, "k3")
+      needs_you!(actor, running!(actor, workspace))
       assert thread(actor, workspace.id).waits_since == DateTime.add(ahead, 1, :microsecond)
     end
   end
@@ -786,21 +759,20 @@ defmodule Arca.NudgeStorageTest do
   describe "the server's post of a wait" do
     defp waiting!(actor, daily) do
       workspace = at_rest!(actor, daily)
-      turn = running!(actor, workspace)
-      card = card!(actor, turn, "k#{System.unique_integer([:positive])}")
-      {thread(actor, workspace.id), turn, card}
+      needs_you!(actor, running!(actor, workspace))
+      thread(actor, workspace.id)
     end
 
     # A wait begun past the quiet period: its stamp moved back, as the
     # period passes without a wait.
     defp waited!(actor, daily) do
-      {waiting, turn, card} = waiting!(actor, daily)
+      waiting = waiting!(actor, daily)
       past = DateTime.add(waiting.waits_since, -(@quiet + 60), :second)
 
       from(c in Thread, where: c.id == ^waiting.id)
       |> Arca.Repo.update_all(set: [waits_since: past])
 
-      {thread(actor, waiting.id), turn, card}
+      thread(actor, waiting.id)
     end
 
     # The post as the tick sends it (`Aqua.Nudge`): an ordinary post of the
@@ -845,7 +817,7 @@ defmodule Arca.NudgeStorageTest do
 
     test "lands as an ordinary post of the server's, opening a turn of Aqua's under the schedule origin; it counts as unread, keeps its wait, moves none, and is its own receipt on its day",
          %{actor: actor, daily: daily, held: held} do
-      {wait, _, _} = waited!(actor, daily)
+      wait = waited!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)
       {:ok, unread} = Threads.unread(actor, thread(actor, today.id))
 
@@ -882,27 +854,27 @@ defmodule Arca.NudgeStorageTest do
          %{actor: actor, daily: daily, held: held} do
       {:ok, today} = Arca.Test.Days.thread(actor)
 
-      {decided, turn, card} = waited!(actor, daily)
-      decline!(actor, turn, card)
+      decided = waited!(actor, daily)
+      answer!(actor, decided)
       assert {:error, :wait_moved} = post(actor, today, decided, held)
 
-      {young, _, _} = waiting!(actor, daily)
+      young = waiting!(actor, daily)
       assert {:error, :not_quiet} = post(actor, today, young, held)
 
-      {moved, _, _} = waited!(actor, daily)
+      moved = waited!(actor, daily)
       earlier = DateTime.add(moved.waits_since, -1, :second)
       assert {:error, :wait_moved} = post(actor, today, moved, held, %{waits_since: earlier})
 
-      {archived, _, _} = waited!(actor, daily)
+      archived = waited!(actor, daily)
       archive!(archived.id)
       assert {:error, :thread_archived} = post(actor, today, archived, held)
       assert thread(actor, archived.id).archived_at
 
-      {gone, _, _} = waited!(actor, daily)
+      gone = waited!(actor, daily)
       assert {:ok, _} = Threads.delete(actor, gone.id, Map.put(@grant, :error, "deleted"))
       assert {:error, :workspace_gone} = post(actor, today, gone, held)
 
-      {kept, _, _} = waited!(actor, daily)
+      kept = waited!(actor, daily)
       {:ok, archived_day} = Arca.Test.Days.thread(actor)
       archive!(archived_day.id)
       assert {:error, :thread_archived} = post(actor, archived_day, kept, held)
@@ -915,10 +887,10 @@ defmodule Arca.NudgeStorageTest do
     test "a wait decided, archived or taken out of the archive after its post leaves the post as it was, read as any post, and admits no second that day",
          %{actor: actor, daily: daily, held: held} do
       {:ok, today} = Arca.Test.Days.thread(actor)
-      {wait, turn, card} = waited!(actor, daily)
+      wait = waited!(actor, daily)
       {:ok, %{message: row, turn: posting}} = post(actor, today, wait, held)
 
-      decline!(actor, turn, card)
+      answer!(actor, wait)
       archive!(wait.id)
       assert posts(actor, today) == [row.id]
       started = start!(actor, posting)
@@ -928,7 +900,7 @@ defmodule Arca.NudgeStorageTest do
 
       # Archived and taken out again with its stamp unchanged: the same
       # wait, whose post this day already holds.
-      {again, _, _} = waited!(actor, daily)
+      again = waited!(actor, daily)
       {:ok, %{message: first}} = post(actor, today, again, held)
       archive!(again.id)
 
@@ -940,31 +912,8 @@ defmodule Arca.NudgeStorageTest do
       assert posts(actor, today) == [row.id, first.id]
     end
 
-    test "a waiting thread archived, then taken out by new work in a crew member's thread under it, keeps its wait, so the day's post stands for it and no second lands",
-         %{actor: actor, daily: daily, held: held} do
-      {:ok, today} = Arca.Test.Days.thread(actor)
-      {wait, _, _} = waited!(actor, daily)
-      {:ok, %{message: first}} = post(actor, today, wait, held)
-      {:ok, child} = Threads.crew_thread(actor, wait.id, "planner")
-      assert {:ok, _} = Threads.archive(actor, wait.id)
-      assert {:error, :thread_archived} = post(actor, today, wait, held)
-
-      assert {:ok, %{turn: %{}}} =
-               TurnStorage.accept_message(actor, child.id, %{
-                 message: %{author: actor.user_id, sent_by: "person", content: "one more thing"},
-                 turn: %{agent: "planner", requested_by: actor.user_id, origin: :interactive}
-               })
-
-      assert %{archived_at: nil, workspace_state: "needs_you", waits_since: since} =
-               thread(actor, wait.id)
-
-      assert since == wait.waits_since
-      assert {:error, :duplicate_client_id} = post(actor, today, wait, held)
-      assert posts(actor, today) == [first.id]
-    end
-
     test "a claim lost lands no post", %{actor: actor, daily: daily, held: held} do
-      {wait, _, _} = waited!(actor, daily)
+      wait = waited!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)
 
       # Its lease ran out: still this holder's row, and nobody's to act on.
@@ -985,9 +934,9 @@ defmodule Arca.NudgeStorageTest do
 
     test "a post steers a turn of its own sender and origin: one before the turn's finish holds it open to be answered, one after is refused for ordinary admission",
          %{actor: actor, daily: daily, held: held} do
-      {one, _, _} = waited!(actor, daily)
-      {two, _, _} = waited!(actor, daily)
-      {three, _, _} = waited!(actor, daily)
+      one = waited!(actor, daily)
+      two = waited!(actor, daily)
+      three = waited!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)
 
       {:ok, %{turn: accepted}} = post(actor, today, one, held)
@@ -1023,7 +972,7 @@ defmodule Arca.NudgeStorageTest do
       daily: daily,
       held: held
     } do
-      {wait, _, _} = waited!(actor, daily)
+      wait = waited!(actor, daily)
       {:ok, today} = Arca.Test.Days.thread(actor)
       {:ok, %{message: row}} = post(actor, today, wait, held)
 

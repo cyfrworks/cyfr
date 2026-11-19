@@ -6,10 +6,10 @@ defmodule Cyfr.ApprovedEntryWritersTest do
   Pins who names `Sanctum.Context`'s `approved_entry`, and who gives it a
   value.
 
-  The field is the account an approved launch's card showed, and the
-  run's root admission refuses unless its binding holds it. Only
-  `Aqua.Launch.dispatch/2` may set it, for the one call it dispatches; a
-  second setter could name an expectation no person approved. This is a
+  The field is the account a launch's decision resolved, and the run's
+  root admission refuses unless its binding holds it. Only
+  `Aqua.Launch.run/3` may set it, for the one call it dispatches; a
+  second setter could name an expectation no decision made. This is a
   tripwire for that rule, not a proof over all Elixir: every `.ex` file
   under `apps/*/lib` is read with `Code.string_to_quoted/2`, and the walk
   judges the nodes it can see.
@@ -66,7 +66,7 @@ defmodule Cyfr.ApprovedEntryWritersTest do
 
   # Every occurrence, by file and exact count.
   @rostered %{
-    # `dispatch/2`'s expectation on the approver's context: the one setter.
+    # `expecting/3`'s expectation on the turn's person's context: the one setter.
     "apps/cyfr/lib/aqua/launch.ex" => 1,
     # `admit/4`'s clear to `nil` on the context the run carries on, and
     # `approved_root/2`'s two function heads, which read it.
@@ -276,7 +276,7 @@ defmodule Cyfr.ApprovedEntryWritersTest do
 
            #{Enum.join(unrostered, "\n")}
 
-           Only `Aqua.Launch` sets the account an approval bound, and only
+           Only `Aqua.Launch` sets the account a launch's decision bound, and only
            the root's admission reads and clears it. A new writer of it is a
            change to that rule, made in the field's documentation in
            `Sanctum.Context` and here with its reason, never added to pass
@@ -303,13 +303,13 @@ defmodule Cyfr.ApprovedEntryWritersTest do
            """
            Exactly one occurrence may give `approved_entry` a value, outside
            a pattern, the field's declaration and the clear in an update:
-           `Aqua.Launch.dispatch/2`'s, on the approver's context for the one
+           `Aqua.Launch.run/3`'s, on the turn's person's context for the one
            call it dispatches. Found:
 
            #{Enum.map_join(writes, "\n", fn {rel, line} -> "  #{rel}:#{line}" end)}
 
-           Any other is an expectation no person approved: the root's
-           admission would compare against it as if a card had shown it.
+           Any other is an expectation no decision made: the root's
+           admission would compare against it as if a launch had resolved it.
            """
   end
 end
