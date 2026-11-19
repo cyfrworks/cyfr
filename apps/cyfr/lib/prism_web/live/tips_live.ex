@@ -56,8 +56,8 @@ defmodule PrismWeb.TipsLive do
         </p>
         <p>
           To have Aqua change it, open your Aqua from the shelf (Ctrl+J) and say what you want to
-          see. Aqua writes a new version and shows it on a card that names what it reads; nothing
-          changes until you approve it.
+          see. Aqua writes a new version, and your desktop checks that it starts before it shows
+          it.
         </p>
       </.tip>
 

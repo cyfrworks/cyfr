@@ -28,7 +28,8 @@ defmodule Opus.Programs.Words do
   @doc """
   Whether `word` is text a person can read whole: valid UTF-8 holding no
   control character (C0, DEL or C1). Every word a program is started
-  with is one, so the card a start asks on shows each as it will run.
+  with is one, so wherever a start is shown, each word reads as it will
+  run.
   """
   @spec readable?(term()) :: boolean()
   def readable?(word) when is_binary(word),

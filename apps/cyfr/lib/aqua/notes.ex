@@ -26,8 +26,8 @@ defmodule Aqua.Notes do
   rather than truncated). Everything else is **filed**: listed by name,
   read on demand. Pinning an empty page clears it; that is unpin.
 
-  Aqua writes the pinned page itself, with no card where its policy says
-  so, as it writes a workspace thread's notes (`workspace/4`): a page
+  Aqua writes the pinned page itself, where its mode runs the write, as
+  it writes a workspace thread's notes (`workspace/4`): a page
   written so is kept by Aqua, names the thread it was written in and
   keeps the sources that turn read. When that thread is deleted the page
   stays as it is, and a read says it was learned in a deleted thread
@@ -59,8 +59,8 @@ defmodule Aqua.Notes do
   turn or a guest that reads it reads them (`Aqua.Loop.Policy`). One that
   carries an outside source is outside material, never the person's own
   words: the notes index shows it attributed (`Aqua.Prompt`), and only
-  `endorse/3`, a person's write after a card that names its sources,
-  clears its outside sources, keeping the rest. A provenance that cannot
+  `endorse/3`, a write that names its sources, clears its outside
+  sources, keeping the rest. A provenance that cannot
   be read is an unnamed outside source.
 
   This module is the domain. Four callers read or write here:
@@ -390,8 +390,8 @@ defmodule Aqua.Notes do
   @doc """
   Make a filed note's outside material the person's own: clear the
   outside sources its provenance carries, over the revision read just
-  before, after a card that named its sources. `sources_seen` are the
-  sources the card showed, as their canonical JSON objects; a note whose sources are not exactly those, a note changed
+  before, naming its sources. `sources_seen` are the
+  sources the call names, as their canonical JSON objects; a note whose sources are not exactly those, a note changed
   since it was read, a note that carries no outside source and a pinned
   name are refused, and nothing is written. Its other sources stay, since
   what it was made from inside the athanor (a disclosed vault value, a
@@ -432,7 +432,7 @@ defmodule Aqua.Notes do
   end
 
   def endorse(%Context{}, _name, _sources_seen),
-    do: {:error, {:invalid_argument, "endorse names the sources the card showed"}}
+    do: {:error, {:invalid_argument, "endorse names the sources the note carries"}}
 
   @doc """
   The sources a notes read answered carries, as the `notes` tool answers

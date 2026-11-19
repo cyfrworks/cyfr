@@ -438,7 +438,7 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Tenancy`. " <>
           "`Sanctum.Gate` is the gate the component domain's own calls pass. " <>
           "`Sanctum.Catalog` is the stream declarations a tincture's and a canvas's " <>
-          "checks read and the kinds and actions an agent's tool policy reads, and " <>
+          "checks read and the kinds and actions an agent's tools and mode read, and " <>
           "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
           "declares the virtual tools an agent's source and the assistant's agent read. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>

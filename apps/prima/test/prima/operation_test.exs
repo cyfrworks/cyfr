@@ -326,7 +326,7 @@ defmodule Prima.OperationTest do
   end
 
   describe "resource" do
-    test "defaults to none: an action that declares none takes no standing constraint" do
+    test "defaults to none: an action that declares none names no resource" do
       assert write_file([]).resource == nil
       assert Operation.resource_kinds() == [:storage_path, :egress_domain, :program_row]
     end

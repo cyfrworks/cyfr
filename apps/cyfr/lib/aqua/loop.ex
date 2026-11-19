@@ -512,7 +512,7 @@ defmodule Aqua.Loop do
   end
 
   # The child a stopped or settled step's run is cancelled by. A launched
-  # app is a root of its own, run because a person approved it: its row
+  # app is a root of its own, run as the turn's person: its row
   # carries the step's id so the step's close can read its ledger, and the
   # turn's end cancels nothing it started.
   defp cancellable(%{kind: "launch"}), do: nil
@@ -2706,8 +2706,8 @@ defmodule Aqua.Loop do
   # dispatched call that is safe to run again is opened afresh;
   # a flush's dispatched call closes with its outcome unknown and its
   # unstarted ones are skipped; a dispatched call whose effect is unknown
-  # stops the turn on it — a person continues, never a replay; an approved
-  # or unstarted step is dispatched once; a steer that arrived while a
+  # stops the turn on it — a person continues, never a replay; an
+  # unstarted step is decided and dispatched once; a steer that arrived while a
   # model's turn was away skips them all (`steered?/1`).
   defp settle(%State{} = state) do
     guest = guest(state)
@@ -2891,9 +2891,8 @@ defmodule Aqua.Loop do
   end
 
   # One silent request before older rows are summarized away, so the model
-  # can keep notes: `notes.keep` alone, under the author's `auto` or a
-  # standing allow that covers it now (its sources among its bounds),
-  # re-read from the member's grants, in a turn no unknown outcome
+  # can keep notes: `notes.keep` alone, when the member's mode runs it and
+  # its offered set holds it, in a turn no unknown outcome
   # restricts, with room left for the flush, the summary and the next chat
   # request, and only when the request fits the catalyst's cap. The kept
   # note carries the turn's sources when they hold an outside one

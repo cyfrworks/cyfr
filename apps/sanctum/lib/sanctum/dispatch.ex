@@ -343,7 +343,7 @@ defmodule Sanctum.Dispatch do
     # The attempt of the calling execution, so a provider answering the
     # caller its own payload knows which attempt's it is.
     |> Prima.MapUtil.put_present("attempt", Map.get(lineage, :attempt))
-    # The thread an approved card came from — host-stamped like the
+    # The thread the calling turn runs in — host-stamped like the
     # execution ids, so a tool that records provenance reads it from here
     # and never from what the model wrote.
     |> Prima.MapUtil.put_present("thread_id", Map.get(lineage, :thread_id))

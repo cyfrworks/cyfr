@@ -1320,7 +1320,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :activation_graph, :text
       # The root of the run's tree: a root's own id, a child's root's.
       add :root_execution_id, :string, null: false
-      # The profile pinned for a root execution, so approvals reuse its authority.
+      # The profile pinned for a root execution, so a retry reuses its authority.
       add :profile_id, :string
       # The consent revision the root's authority was loaded at.
       add :consent_id, :string
@@ -2647,7 +2647,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :workspace_state, :string, check: if(sqlite?, do: workspace_state)
       # How its work last ended since it last took new work (Aqua's report,
       # the person's stop, the server's error): what it becomes once
-      # nothing it accepted remains to run and no card waits.
+      # nothing it accepted remains to run.
       add :workspace_outcome, :string, check: if(sqlite?, do: workspace_outcome)
       # When it last came to wait on its person (needs you or error), or the
       # person last acted on it while it still waited, by the database's

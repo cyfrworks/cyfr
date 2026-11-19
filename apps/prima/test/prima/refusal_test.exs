@@ -625,16 +625,16 @@ defmodule Prima.RefusalTest do
       assert Refusal.message({:connection_cap, "anything"}) == Refusal.message(:connection_cap)
     end
 
-    test "a launch whose approved entry moved is a conflict that says to ask again, never " <>
-           "an unexpected reason" do
+    test "a launch whose decided entry moved is a conflict that says to propose it again, " <>
+           "never an unexpected reason" do
       log =
         capture_log(fn ->
           assert %Refusal{class: :conflict, reason: :approved_entry_moved, message: message} =
                    Refusal.classify(:approved_entry_moved)
 
           assert message ==
-                   "The account this launch was approved for has changed since it was approved, " <>
-                     "so nothing ran: ask again to approve it as it stands now."
+                   "The account this launch was decided on has changed since, so nothing ran: " <>
+                     "propose it again to run it on the account as it stands now."
         end)
 
       # The module runs async, and capture_log takes every process's log

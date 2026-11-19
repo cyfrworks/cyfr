@@ -674,7 +674,7 @@ defmodule Arca.Execution do
 
   def row_ledger(_row), do: [Prima.Source.outside(nil)]
 
-  # The key of the classes an approved launch let flow, in its root's
+  # The key of the classes a launch let flow, in its root's
   # `host_policy`.
   @launch_key "launch_flows"
 
@@ -733,7 +733,7 @@ defmodule Arca.Execution do
 
   defp launch_classes(nil), do: []
 
-  @doc "The key an approved launch's classes are written under in its root's `host_policy`."
+  @doc "The key a launch's classes are written under in its root's `host_policy`."
   @spec launch_key() :: String.t()
   def launch_key, do: @launch_key
 

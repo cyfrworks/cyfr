@@ -50,12 +50,11 @@ defmodule Prima.Operation do
   annotation view and from discovery.
 
   `follows_setting: true` marks an action that follows the person's own
-  browser setting rather than an authored policy line: with the setting
-  on the assistant runs it without a card, an external one among them,
-  and with it off the action is refused (`Aqua.BrowserSetting`). It is
-  admitted for the browser tool's in-chain actions alone (`validate!/1`).
-  It is metadata for the gate, absent from the annotation view and from
-  discovery.
+  browser setting: with the setting off the action is refused, and with
+  it on the member's mode decides it as any offered call
+  (`Aqua.BrowserSetting`). It is admitted for the browser tool's in-chain
+  actions alone (`validate!/1`). It is metadata for the gate, absent from
+  the annotation view and from discovery.
 
   `recorded: false` marks a read whose admitted call the gate's decision
   audit leaves out (`Sanctum.Catalog.recorded?/2`): discovery, the audit's

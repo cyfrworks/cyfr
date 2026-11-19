@@ -96,9 +96,10 @@ defmodule Sanctum.Visibility do
   # Consent is decided on how the caller authenticated, never by permission
   # atom, so `:*` does not short-circuit it. The typed refusals are kept for
   # rendering through `Sanctum.Consent.Authz.message/1`. In-chain interactive
-  # calls keep the surface check; the approved proposal supplies consent for
-  # the guest plane. Staging actions require the full surface and plane
-  # checks and are unavailable in-chain.
+  # calls keep the surface check; the chain's own gate stands in for the
+  # plane (`Sanctum.Consent.Authz.authorize_interactive_in_chain/1`).
+  # Staging actions require the full surface and plane checks and are
+  # unavailable in-chain.
   defp check_consent(ctx, annotation, in_chain?) do
     case Map.get(annotation, :consent) do
       nil ->

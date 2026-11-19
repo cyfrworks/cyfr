@@ -18,8 +18,8 @@ defmodule Opus.Programs.Provider do
 
   Every action is `consent: :interactive`, which in a chain the gate
   admits only for a person's own sign-in (an `:oidc` chain: a person's
-  turn, its continuation after a card, a schedule's turn of that
-  person), never a key's. The handler hands the session owner the
+  turn, its continuation, a schedule's turn of that person), never a
+  key's. The handler hands the session owner the
   context with the lineage the gate stamped on the call
   (`Opus.Programs.turn/2`): the gate drops whatever a guest sends under
   `thread_id`, `root_execution_id` and `parent_execution_id` and writes
@@ -180,7 +180,7 @@ defmodule Opus.Programs.Provider do
         )
       ],
       description:
-        "Run one of this athanor's programs on a terminal of its own and read what it prints. list names them; start runs one with the words to follow its command, which the person sees whole and approves; send types on it; read and wait answer what it printed past an offset; stop ends it. A run ends with this turn.",
+        "Run one of this athanor's programs on a terminal of its own and read what it prints. list names them; start runs one with the words to follow its command; send types on it; read and wait answer what it printed past an offset; stop ends it. A run ends with this turn.",
       title: "Programs"
     )
   end

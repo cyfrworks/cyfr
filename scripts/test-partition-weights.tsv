@@ -276,7 +276,6 @@
 0.5	apps/cyfr/test/compendium/registry/identity_test.exs
 2.1	apps/cyfr/test/compendium/registry/transport_test.exs
 0.0	apps/cyfr/test/compendium/registry_cache_invalidation_test.exs
-0.1	apps/cyfr/test/compendium/registry_port_test.exs
 1.1	apps/cyfr/test/compendium/registry_remove_cascade_test.exs
 9.9	apps/cyfr/test/compendium/registry_test.exs
 0.2	apps/cyfr/test/compendium/release_digest_test.exs
@@ -446,7 +445,6 @@
 0.2	apps/cyfr/test/emissary/telemetry_test.exs
 0.2	apps/cyfr/test/emissary/web/controllers/account_controller_test.exs
 3.2	apps/cyfr/test/emissary/web/controllers/canvas_controller_test.exs
-0.5	apps/cyfr/test/emissary/web/controllers/device_session_controller_test.exs
 1.4	apps/cyfr/test/emissary/web/controllers/directory_controller_test.exs
 0.2	apps/cyfr/test/emissary/web/controllers/directory_privacy_test.exs
 1.5	apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs

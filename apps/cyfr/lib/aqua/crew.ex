@@ -8,7 +8,7 @@ defmodule Aqua.Crew do
   reply row. A crew member is a file under `aqua/crew/` (every agent of
   the roster but the soul): who does a job, on a brain of its own, with
   what it is good at and what to avoid; how a job is done is a skill any
-  of them reads. Every member runs under the soul's tool policy, which a
+  of them reads. Every member runs under the soul's tools, which a
   request may narrow for its one job.
 
   ## The index

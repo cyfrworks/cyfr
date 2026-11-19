@@ -549,8 +549,8 @@ defmodule Aqua.PageCallsTest do
   # On auto
   # ---------------------------------------------------------------------------
 
-  test "a granted component with no exit, or whose grant lets the page out, runs once with " <>
-         "no card in two workspace threads, as a model's launch runs",
+  test "a granted component with no exit, or whose grant lets the page out, runs once in " <>
+         "two workspace threads, as a model's launch runs",
        %{ctx: ctx, driver: driver} do
     quiet = app!(ctx)
     flowing = app!(ctx, @flowing)
@@ -566,7 +566,7 @@ defmodule Aqua.PageCallsTest do
       assert answered!(id) == {200, result(%{"answered" => id})}
 
       # A turn of its own, asking no model, as the put's person under its
-      # origin: one launch, closed with no card and the run's result.
+      # origin: one launch, closed with the run's result.
       assert [{%{id: turn_id}, _steps}] = turns_after(ctx, room, put)
       turn = ended!(ctx, turn_id)
 

@@ -1101,10 +1101,10 @@ defmodule Sanctum.Catalog do
 
   @doc """
   Whether `tool.action` follows the person's own browser setting
-  (`Prima.Operation`'s `follows_setting`) rather than an authored policy
-  line: the browser tool's actions alone declare it, so with the setting
-  on they run without a card, external ones among them, and with it off
-  they are refused. No other action, external or not, is decided this way.
+  (`Prima.Operation`'s `follows_setting`): the browser tool's actions
+  alone declare it, so with the setting off they are refused, and with it
+  on the member's mode decides them as any offered call. No other action,
+  external or not, follows the setting.
   """
   @spec follows_setting?(String.t(), String.t()) :: boolean()
   def follows_setting?(tool, action) when is_binary(tool) and is_binary(action) do

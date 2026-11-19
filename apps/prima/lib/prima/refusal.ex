@@ -1216,22 +1216,22 @@ defmodule Prima.Refusal do
 
   defp row(:conflict), do: {:conflict, "Another change landed first — read again and retry"}
 
-  # An approved launch whose root, as loaded, does not hold the account the
-  # approval bound (its entry, under the name its binding stored): nothing
-  # ran, and approving it again is what to do. The launch itself answers
+  # A launch whose root, as loaded, does not hold the account its decision
+  # bound (its entry, under the name its binding stored): nothing ran, and
+  # proposing it again is what to do. The launch itself answers
   # in a sentence naming the account; this one is for a surface that
   # renders the reason without it.
   defp row(:approved_entry_moved),
     do:
       {:conflict,
-       "The account this launch was approved for has changed since it was approved, so nothing " <>
-         "ran: ask again to approve it as it stands now."}
+       "The account this launch was decided on has changed since, so nothing ran: propose it " <>
+         "again to run it on the account as it stands now."}
 
   defp row(:approved_grant_moved),
     do:
       {:conflict,
-       "The grant this launch was approved under has changed since it was approved, so nothing " <>
-         "ran: ask again to approve it as it stands now."}
+       "The grant this launch was decided on has changed since, so nothing ran: propose it " <>
+         "again to run it on the grant as it stands now."}
 
   # A run an API key narrowed to named tools may not start
   # (`Sanctum.ApiKey.admit_tool/2`).

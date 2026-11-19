@@ -70,8 +70,8 @@ defmodule Opus.Programs do
 
   A turn's session (`by: :aqua`): that turn alone types on it, reads
   what it printed (`read/3`, `wait/4`) and closes it; its words are the
-  turn's own, which the card its person approved showed whole or a
-  standing answer for that one row lets it choose. A turn holds a few at
+  turn's own, run as its member's mode decides (`Aqua.Loop.Policy`). A
+  turn holds a few at
   once; they end with the turn, and one whose program exited answers its
   last output until then.
 
@@ -398,50 +398,6 @@ defmodule Opus.Programs do
     end
   end
 
-  @doc """
-  What a start of the program row `row_id` of the caller's athanor with
-  `words` after its command shows on its card, read from the row now: its
-  id, name, pinned command and epoch, the folder it runs in and the hosts
-  it may reach. Refused `:unreadable_words` for words that are not each
-  readable text (`Opus.Programs.Words.readable?/1`), `:row_changed` for a
-  row no longer at `epoch` (the one the call names), `:not_found` for a
-  row that is gone or is no program, `:unavailable` when the store cannot
-  answer.
-  """
-  @spec card(Sanctum.Context.t(), String.t(), term(), term()) :: {:ok, map()} | {:error, term()}
-  def card(%Sanctum.Context{} = ctx, row_id, epoch, words) when is_binary(row_id) do
-    if is_list(words) and Enum.all?(words, &Opus.Programs.Words.readable?/1),
-      do: card_row(ctx, row_id, epoch),
-      else: {:error, :unreadable_words}
-  end
-
-  defp card_row(ctx, row_id, epoch) do
-    case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), row_id) do
-      {:ok, %{transport: "program", epoch: ^epoch} = row} ->
-        {:ok,
-         %{
-           "row" => row.id,
-           "name" => row.name,
-           "command" => Arca.McpServerStorage.config(row)["command"],
-           "epoch" => epoch,
-           "folder" => if(row.home == "kept", do: "its own folder", else: "a scratch folder"),
-           "hosts" => row.hosts || "every public host"
-         }}
-
-      {:ok, %{transport: "program"}} ->
-        {:error, :row_changed}
-
-      {:ok, _not_a_program} ->
-        {:error, :not_found}
-
-      {:error, :not_found} ->
-        {:error, :not_found}
-
-      {:error, _unanswered} ->
-        {:error, :unavailable}
-    end
-  end
-
   @doc "The most sessions one turn holds at once."
   @spec turn_sessions() :: pos_integer()
   def turn_sessions, do: @turn_sessions
@@ -500,10 +456,9 @@ defmodule Opus.Programs do
   #{Prima.LocusBackends.max_argv()} words, each readable text
   (`Opus.Programs.Words.readable?/1`) of at most 4096 bytes, as an `Opus.Programs.Words` (a plain list is
   wrapped here), which the session holds wrapped: a person's words are
-  what that person typed; a turn's are its own, which the card its
-  person approved showed whole, or which a standing answer for this row
-  lets it choose. Neither is ever resolved from a vault. With `epoch`, the row must
-  still be at that epoch (the one a card showed), else `:row_changed`.
+  what that person typed; a turn's are its own, run as its member's mode
+  decides. Neither is ever resolved from a vault. With `epoch`, the row must
+  still be at that epoch (the one the call names), else `:row_changed`.
   A turn holds at most #{@turn_sessions} sessions at once, ended ones it has not
   stopped among them: the next is refused `:too_many_sessions`. Answers
   the session's id once the service runs it, by `deadline` (Unix
@@ -876,7 +831,7 @@ defmodule Opus.Programs do
   # component's it started (the lineage's parent is its root); its person
   # stands; and the store holds a running turn of the lineage's thread, in
   # the context's athanor, whose root is the lineage's root and which that
-  # person asked for. A turn that is paused (on a card), ending or not yet
+  # person asked for. A turn that is paused, ending or not yet
   # running again is a stranger to its own sessions: they stay and go on
   # printing, and it uses them once it runs. The lineage is the gate's
   # (`Sanctum.Dispatch` drops what a guest sends under its names and stamps

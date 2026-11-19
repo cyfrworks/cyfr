@@ -14,11 +14,10 @@ defmodule Aqua.Providers.Notes do
   gate and does not see the tool in `tools/list`.
 
   The actions are reachable in-chain too, which is how an agent keeps a
-  note at all: it proposes, a person clicks, and the approved call runs
-  inside the chain under the turn's authority. Two writes need no click
-  where the soul's policy says `auto`, as the seed's does: `pin`, the
-  about-you page, and `workspace`, the notes of the workspace thread the
-  turn runs in, which the lineage names and no argument does. A turn's
+  note at all: run as its member's mode decides, inside the chain under
+  the turn's authority. Of the writes, `pin` is the about-you page and
+  `workspace` the notes of the workspace thread the turn runs in, which
+  the lineage names and no argument does. A turn's
   `pin` names the revision of the page it read, and one the person changed
   since is refused, so a turn never writes over what it did not read.
   Whether a write comes from a turn is read from the lineage the gate
@@ -47,16 +46,16 @@ defmodule Aqua.Providers.Notes do
   turn keeps what it read as a turn does: a note made from a
   disclosed vault value carries `vault_disclosed`, whatever admitted the
   keep. Of those, the outside sources make it outside material, shown
-  attributed and endorsable: an approval admits the action and never
-  endorses the content. A page `pin` or `workspace` writes in a chain
+  attributed and endorsable: running the write never endorses the
+  content. A page `pin` or `workspace` writes in a chain
   keeps them the same way, is kept by Aqua (`Prima.Author.agent/0`) and
   names the thread it was written in, and is never endorsed by being
   written. A thread source is left out: what a note holds outlives the
   thread it was kept from, so reading a note never makes a turn one that
   read that thread. `endorse` is the one clearing of a filed note's
-  outside sources: it names the sources the note carries, so the card a
-  person approves shows them, and it writes only while the note still
-  carries exactly those. The person's own write of the pinned page, on
+  outside sources: it names the sources the note carries, and it writes
+  only while the note still carries exactly those. The person's own
+  write of the pinned page, on
   the Aqua page, carries no sources: what they wrote is theirs.
   """
 
@@ -74,11 +73,9 @@ defmodule Aqua.Providers.Notes do
   @doc false
   def definition do
     alias Prima.{Arg, Operation}
-    # In-chain as well as at the door: of the writes, `keep`, `endorse`
-    # and `forget` are `ask` in the soul's policy, so from a chain each
-    # one is a card a person clicked, and `pin` and `workspace` are
-    # `auto`, Aqua's own pages; the reads are `auto`, bounded to the
-    # athanor by the domain. `workspace` is a chain's alone: the turn
+    # In-chain as well as at the door: from a chain each action runs as
+    # the member's mode decides, and the reads are bounded to the athanor
+    # by the domain. `workspace` is a chain's alone: the turn
     # names its thread. Interactive on every action — the credential
     # gate is the same on both planes. A write answers only the name it wrote
     # (`Aqua.Notes.describe/1`), so it carries no source; a read

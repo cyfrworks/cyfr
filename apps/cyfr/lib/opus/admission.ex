@@ -79,8 +79,8 @@ defmodule Opus.Admission do
   `{:id, _}` or `{:label, _}` to pin, `:default` for the single active
   owner profile — which fails on ambiguity rather than choosing.
 
-  An approval runs under this authority, so a human decision unblocks a
-  call and never supplies authority. A turn starts here: `Aqua.Loop`
+  A turn's calls run under this authority, so the mode that decides a
+  call never supplies authority. A turn starts here: `Aqua.Loop`
   resolves and pins the profile, composes the system prompt from what the
   authority grants, and only then dispatches under `{:id, pinned}`.
 
@@ -97,8 +97,8 @@ defmodule Opus.Admission do
     (`Prima.Authority.root/3`). Absent or nil, the ingress's default.
 
   A context carrying `approved_entry` (`Sanctum.Context`, set by
-  `Aqua.Launch` alone, for a launch approved on its card or decided with
-  none) roots only where the loaded root's binding names
+  `Aqua.Launch` alone, for a launch naming an account) roots only where
+  the loaded root's binding names
   that entry under the name its binding stored. Another entry, another
   stored name, a vault that binds none, or a name the ingress no longer
   binds is `{:error, :approved_entry_moved}` before anything runs, in
@@ -1036,11 +1036,10 @@ defmodule Opus.Admission do
 
   defp at_revision(refused, _consent_id), do: refused
 
-  # A launch roots only at the consent revision its card showed or its
-  # decision read (the context's `launch`, which `Aqua.Launch` alone sets):
-  # the classes a card let flow, and a decision's cover, were judged against
-  # that grant's exits, so a changed grant is a stale launch, refused before
-  # anything starts.
+  # A launch roots only at the consent revision the context's `launch`
+  # names, when it names one (`Aqua.Launch` alone sets it): the classes it
+  # lets flow were judged against that grant's exits, so a changed grant
+  # is a stale launch, refused before anything starts.
   defp launched({:ok, authority, _stamp} = loaded, %Context{launch: %{consent_id: consent_id}})
        when is_binary(consent_id) do
     if authority.consent_id == consent_id, do: loaded, else: {:error, :approved_grant_moved}
@@ -1048,7 +1047,7 @@ defmodule Opus.Admission do
 
   defp launched(loaded, _ctx), do: loaded
 
-  # A launch roots only on the account its card showed or its decision
+  # A launch roots only on the account its decision
   # resolved (the context's `approved_entry`, which `Aqua.Launch` alone
   # sets), judged on the loader's own answer: the same read of the head
   # that picked the root's named binding, with none between. The root's

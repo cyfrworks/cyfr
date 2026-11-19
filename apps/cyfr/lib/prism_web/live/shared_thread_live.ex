@@ -8,10 +8,10 @@ defmodule PrismWeb.SharedThreadLive do
   names and files, a composer that posts words and files, and a header
   with the thread's people and invitations.
 
-  Nothing runs in a shared thread: there is no agent to pick, no
-  approval to decide, no grant and no follow — being in the thread is
-  the follow. Every control goes through the gate's `shared_thread` tool
-  (`PrismWeb.Ops.call_tool/3`), the read included, under the person's
+  Nothing runs in a shared thread: there is no agent to pick, no grant
+  and no follow — being in the thread is the follow. Every control goes
+  through the gate's `shared_thread` tool (`PrismWeb.Ops.call_tool/3`),
+  the read included, under the person's
   own seat: any of a thread's people renames it, adds someone by name,
   removes someone, withdraws an invitation, makes an invitation link to
   this CYFR naming the thread (`invitation.create`), offering an optional

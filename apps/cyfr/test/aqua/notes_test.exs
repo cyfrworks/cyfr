@@ -281,7 +281,7 @@ defmodule Aqua.NotesStoreTest do
       assert {:ok, %{notes: [%{sources: [^host]}]} = found} = Notes.search(ctx, "fares")
       assert Notes.sources_of_answer({:ok, %{matches: found.notes}}) == [host]
 
-      # The card must name exactly what the note carries.
+      # The endorsement must name exactly what the note carries.
       assert {:error, {:conflict, _}} =
                Notes.endorse(
                  ctx,

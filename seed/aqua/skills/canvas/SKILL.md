@@ -146,9 +146,11 @@ working, which is kept, and which validation last failed.
   fixed act the desktop offers on a tap: the person sees it in the
   canvas's grant before it ever runs. Never put a secret in a request.
 - `cyfr.settings(page, ref)` opens one of CYFR's pages; an
-  `attention.changes` item's `destination` opens with
-  `cyfr.settings(destination.page, destination.ref)`, Aqua's panel and
-  the chat at the thread it names.
+  `attention.changes` item whose `destination` names a page (a run, a
+  schedule or a file offer) opens with
+  `cyfr.settings(destination.page, destination.ref)`. One that names no
+  page (a confirmation, a question or a request) CYFR already shows the
+  person in its own prompt.
 - `cyfr.ready()` tells the browser the page has drawn. Call it once,
   after the streams are open or refused: a version that has not called
   it ten seconds after it opens, or that hits an error it does not catch

@@ -469,7 +469,7 @@ defmodule Arca.TurnInputsStorageTest do
     left = progress(daily)["clock"]["left_ms"]
     assert left in (@silence - 25_000)..(@silence - 20_000)
 
-    # Forty minutes on an ask's card, then its result closed but not yet
+    # The ask dispatched and run, then its result closed but not yet
     # answered: still paused, with what was left of the interval.
     {:ok, asked} = TurnStorage.dispatch_step(actor, asked.id, %{fence: turn.fence})
 

@@ -26,7 +26,7 @@ defmodule Opus.Host.Egress do
        (`Prima.Flow`) do not let reach the URL's host, or, for an
        attached request, its host or the need whose credential it
        carries — an outside source named by that exact host is its own,
-       and the classes an approved launch let flow count — else `flow`;
+       and the classes a launch let flow count — else `flow`;
        a ledger that cannot be read is `unavailable`. A grant that
        declares no flow keeps sending until its run reads a source. The
        ledger is read and decided once more after the address is checked

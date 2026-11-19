@@ -278,8 +278,8 @@ defmodule Opus.Provider do
           # External-plane only, and `host: :intercepted`: a running
           # component's execution request never reaches the catalog — the
           # formula host intercepts it and runs it as a CHILD of the
-          # chain's authority (`Opus.run_child/5`), and an approved
-          # card's is run the same way by the assistant. The annotation
+          # chain's authority (`Opus.run_child/5`), and a launch the
+          # assistant decides is run by `Aqua.Launch`. The annotation
           # says so, and every surface that offers actions to a chain
           # reads it from here.
           Operation.new(
@@ -887,15 +887,15 @@ defmodule Opus.Provider do
   # classes it setup required, in its own sentence (`Prima.Refusal`).
   defp format_root_result({:error, :connection_not_granted} = refused), do: refused
 
-  # A root whose loaded binding is not the account a launch's card showed
-  # or its decision resolved (its entry under its stored name, or a name
+  # A root whose loaded binding is not the account a launch's decision
+  # resolved (its entry under its stored name, or a name
   # no longer bound) stays typed: the launch answers it in its own
   # sentence, naming the account, and the gate classes it a conflict
   # (`Prima.Refusal`).
   defp format_root_result({:error, :approved_entry_moved} = refused), do: refused
 
-  # A root whose loaded consent revision is not the one a launch's card
-  # or decision bound stays typed, so the launch answers it as stale with
+  # A root whose loaded consent revision is not the one a launch bound
+  # stays typed, so the launch answers it as stale with
   # nothing run.
   defp format_root_result({:error, :approved_grant_moved} = refused), do: refused
 
