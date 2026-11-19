@@ -54,15 +54,6 @@ defmodule Prima.SourceTest do
     end
   end
 
-  test "uncovered names the outside sources a cover does not name, never an unnamed one" do
-    read = [Source.new(:filed), Source.outside("a.example"), Source.outside(nil)]
-
-    assert Source.uncovered(read, [Source.outside("a.example")]) == [Source.outside(nil)]
-
-    assert Source.uncovered(read, []) == [Source.outside(nil), Source.outside("a.example")]
-    assert Source.uncovered([Source.new(:pinned)], []) == []
-  end
-
   test "a thread source names the thread read, holds no class and sorts after every class" do
     read = [
       Source.thread("thr_b"),
@@ -88,10 +79,6 @@ defmodule Prima.SourceTest do
     # is no thread and reads as outside, as any unknown class does.
     assert Source.decode(Source.encode(read)) == Source.set(read)
     assert Source.from_json(%{"class" => "thread", "name" => nil}) == Source.outside(nil)
-
-    # It never stands in for an outside source, and nothing covers it.
-    assert Source.uncovered(read, []) == [Source.outside("x")]
-    assert Prima.Flow.uncovered([Source.thread("thr_a")], {:domain, "a.example"}) == []
   end
 
   test "union and classes_of keep the fixed order" do

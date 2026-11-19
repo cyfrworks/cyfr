@@ -53,32 +53,18 @@ defmodule Aqua.Launch do
   there, `:approved_entry_moved`, before anything starts, and reads as
   the same stale launch.
 
-  The proposal also binds what the launch carries (`bind/1`): the turn's
-  sources, and no grant revision and no class let flow. Before anything
-  runs the turn's sources are read again, and any the turn read since
-  refuse the launch as stale. Then what the proposal bound rides the one
-  call on the person's context (`Sanctum.Context`'s `launch`): the root
-  is admitted seeded with those sources under the step's pre-minted id
-  (`Opus.Admission`), and whatever grant it loads decides its sends
-  alone; for a component with no grant the gate answers
-  `consent_required`. The run's root never takes a seed, a class or an id
+  The launch's stamp rides the one call on the person's context
+  (`Sanctum.Context`'s `launch`): the root is admitted under the step's
+  pre-minted id, seeded with the turn's sources as its row holds them
+  when the launch is dispatched (`Opus.Admission`), so a thread the turn
+  read is a thread the launched run read. Whatever grant the root loads
+  decides what it reaches; for a component with no grant the gate
+  answers `consent_required`. The run's root never takes a seed or an id
   from anything a caller sends.
   """
 
   alias Aqua.Tape
   alias Sanctum.Context
-
-  @typedoc """
-  What a launch's proposal binds of the run: the turn's sources the
-  launched root is seeded with, the consent revision of the grant the app
-  roots at, and the classes let flow to every exit of that grant's tree;
-  a decided launch binds no revision and no class.
-  """
-  @type binding :: %{
-          sources: [Prima.Source.t()],
-          consent_id: String.t() | nil,
-          classes: [Prima.Source.class()]
-        }
 
   @typedoc """
   An account a proposal binds: the entry its name resolved to and the
@@ -90,16 +76,14 @@ defmodule Aqua.Launch do
   What the decision that let a launch run read of it (the assistant's
   policy's `{:run, decided}`), which the run is held to as it
   dispatches: the call it decided, its action and its arguments as the
-  model wrote them; the account that call names as it resolved then (nil
-  for a launch naming none); and the binding the run stands on: the
-  turn's sources, no grant revision and no class let flow. It lives in
-  the loop from the decision to the dispatch and is stored nowhere: a
-  turn continued from its rows decides its steps again.
+  model wrote them; and the account that call names as it resolved then
+  (nil for a launch naming none). It lives in the loop from the decision
+  to the dispatch and is stored nowhere: a turn continued from its rows
+  decides its steps again.
   """
   @type decided :: %{
           call: %{action: String.t(), args: map()},
-          account: account() | nil,
-          binding: %{sources: [Prima.Source.t()], consent_id: nil, classes: []}
+          account: account() | nil
         }
 
   @launch_actions ~w(run run_stream)
@@ -114,7 +98,7 @@ defmodule Aqua.Launch do
 
   @doc """
   Run a launch: what `decided` read is what runs, as the turn's person,
-  with no class let flow and on whatever grant the root loads. A step
+  on whatever grant the root loads. A step
   with no decision runs nothing (`{:refused, :not_approved}`). Answers
   the execution the application started (`execution_id` is nil when the
   answer names none) with the tool's whole result.
@@ -133,11 +117,7 @@ defmodule Aqua.Launch do
           | {:error, term()}
   def run(ctx, step, decided \\ nil)
 
-  def run(
-        %Context{} = ctx,
-        step,
-        %{call: _, account: _, binding: %{consent_id: nil, classes: []}} = decided
-      ) do
+  def run(%Context{} = ctx, step, %{call: _, account: _} = decided) do
     case decided_launch(ctx, step, decided) do
       {:ok, launcher, args} -> launch(launcher, args)
       {:error, reason} -> {:refused, reason}
@@ -152,15 +132,12 @@ defmodule Aqua.Launch do
   resolved to: its `connection` spelled as the binding stores the name,
   when the call names that account in any case
   (`Prima.Authority.Blob.same_account_name?/2`), and the entry beside the
-  call (`vault_entry`). It also carries what the launch binds of the run
-  (`bind/1`; none bound when nil): the turn's sources, the launched
-  grant's consent revision and the classes let flow.
+  call (`vault_entry`).
   """
-  @spec proposal(String.t(), map(), account() | nil, binding() | nil) :: map()
-  def proposal(action, args, account, binding) when is_binary(action) and is_map(args) do
+  @spec proposal(String.t(), map(), account() | nil) :: map()
+  def proposal(action, args, account) when is_binary(action) and is_map(args) do
     %{"tool" => "execution", "action" => action, "args" => account_args(args, account)}
     |> put_account(account)
-    |> Map.merge(bind(binding))
   end
 
   defp account_args(args, %{name: stored}) do
@@ -182,85 +159,26 @@ defmodule Aqua.Launch do
 
   defp put_account(proposal, nil), do: proposal
 
-  @doc """
-  The proposal fields a launch binds `binding` under: the sources as
-  canonical JSON (`sources`), the classes it lets flow (`lets_flow`) and
-  the grant's consent revision (`consent_id`). The canonical form carries
-  no null, so a source's absent name and a revision no grant gave are
-  left out. Nil binds no source, no class and no revision.
-  """
-  @spec bind(binding() | nil) :: map()
-  def bind(nil), do: bind(%{sources: [], consent_id: nil, classes: []})
-
-  def bind(%{sources: sources, consent_id: consent_id, classes: classes}) do
-    %{
-      "sources" =>
-        for(
-          json <- Prima.Source.to_json_list(sources),
-          do: Map.reject(json, &is_nil(elem(&1, 1)))
-        ),
-      "lets_flow" =>
-        for(class <- Prima.Source.classes(), class in classes, do: Atom.to_string(class))
-    }
-    |> Prima.MapUtil.put_present("consent_id", consent_id)
-  end
-
-  @doc """
-  What a launch's `proposal` bound (`bind/1`). A proposal that bound none
-  of it reads as having bound no source, no revision and no class.
-  """
-  @spec bound(map()) :: binding()
-  def bound(proposal) when is_map(proposal) do
-    sources =
-      case proposal["sources"] do
-        list when is_list(list) ->
-          list |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
-
-        _none ->
-          []
-      end
-
-    classes =
-      case proposal["lets_flow"] do
-        list when is_list(list) ->
-          Enum.filter(Prima.Source.classes(), &(Atom.to_string(&1) in list))
-
-        _none ->
-          []
-      end
-
-    consent_id =
-      case proposal["consent_id"] do
-        id when is_binary(id) -> id
-        _none -> nil
-      end
-
-    %{sources: sources, consent_id: consent_id, classes: classes}
-  end
-
   # What a launch is held to: the proposal made from the step's own row
   # and what the decision read, run as the turn's person. The row is the
   # last word on what runs: a decision made on another call runs nothing.
-  defp decided_launch(ctx, step, %{call: handed, account: account, binding: binding}) do
+  defp decided_launch(ctx, step, %{call: handed, account: account}) do
     with {:ok, %{action: action, args: args} = recorded} <- recorded_call(ctx, step),
          :ok <- decided_on(recorded, handed),
          {:ok, person, turn} <- person(ctx, step) do
-      held(person, turn, proposal(action, args, account, binding), step)
+      held(person, turn, proposal(action, args, account), step)
     end
   end
 
-  # Its arguments, the turn's sources and the account, each held to what
-  # the proposal bound, then the person's context for the one call.
+  # Its arguments and the account, each held to the proposal, then the
+  # person's context for the one call.
   defp held(caller, turn, proposal, step) do
-    shown = bound(proposal)
-
     with {:ok, args} <- launch_args(proposal),
-         {:ok, sources} <- sources_hold(turn, shown),
          :ok <- account_holds(caller, proposal, args) do
       launcher =
         caller
         |> expecting(proposal, args)
-        |> launching(sources, shown, step, turn)
+        |> launching(step, turn)
 
       {:ok, launcher, args}
     end
@@ -353,17 +271,6 @@ defmodule Aqua.Launch do
     end
   end
 
-  # The turn's sources are the ones the proposal bound: the run is seeded
-  # with them, so a source the turn read after the decision is not what
-  # was decided. Answers the turn's sources as they stand.
-  defp sources_hold(turn, %{sources: shown}) do
-    current = Prima.Source.decode(turn.sources)
-
-    if Prima.Source.set(current) == Prima.Source.set(shown),
-      do: {:ok, current},
-      else: {:error, moved()}
-  end
-
   # The entry the proposal bound, or nil for a launch naming none.
   defp bound_entry(proposal), do: proposal["vault_entry"]
 
@@ -382,23 +289,16 @@ defmodule Aqua.Launch do
     end
   end
 
-  # The person's context also carries what the proposal bound for the
-  # run's root (`Sanctum.Context.stamp_launch/2`, called here alone), never
-  # from anything a caller sends: the turn's sources the root is seeded
-  # with (`sources_hold/2` has held them to the proposal's), the classes it
-  # lets flow — only ever among those sources' own, and none for a
-  # proposal that bound no grant to judge them against — the consent
-  # revision the root must load at, the root's id: the step's pre-minted
+  # The person's context also carries the stamp for the run's root
+  # (`Sanctum.Context.stamp_launch/2`, called here alone), never from
+  # anything a caller sends: the turn's sources as its row holds them now,
+  # which the root is seeded with, the root's id (the step's pre-minted
   # child id, so the loop can read the root's row whatever the launch
-  # answers, and the name of the agent whose turn launched it, which the
+  # answers), and the name of the agent whose turn launched it, which the
   # root records as its caller.
-  defp launching(caller, sources, %{classes: classes, consent_id: consent_id}, step, turn) do
-    held = if is_binary(consent_id), do: Prima.Source.classes_of(sources), else: []
-
+  defp launching(caller, step, turn) do
     Sanctum.Context.stamp_launch(caller, %{
-      sources: sources,
-      classes: Enum.filter(classes, &(&1 in held)),
-      consent_id: consent_id,
+      sources: Prima.Source.decode(turn.sources),
       execution_id: root_id(step),
       agent: turn.agent
     })
@@ -433,13 +333,6 @@ defmodule Aqua.Launch do
 
   defp account(name) when is_binary(name), do: "The account #{inspect(name)}"
   defp account(_none), do: "The default account"
-
-  # A source the turn read since the decision.
-  defp moved,
-    do:
-      {:conflict,
-       "This turn read more since the run was decided, so nothing ran: propose it again to " <>
-         "decide it on what the turn has read now."}
 
   # A launch runs as the turn's person, the one who asked for it
   # (`requested_by`), under the origin the turn's row stores.

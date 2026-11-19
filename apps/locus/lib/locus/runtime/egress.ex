@@ -35,8 +35,8 @@ defmodule Locus.Runtime.Egress do
   `expires_at`, and asks CYFR once more itself, for the request's URL with
   the purpose (and a redirect hop's `from`) the runner asked with, before
   it connects to the address of that answer (`Locus.Runtime.Relay`). So
-  CYFR decides each send against what the run has read by the time it
-  leaves, a flow included, never against a pin taken before a read.
+  CYFR decides each send against the authority as it stands when it
+  leaves, never against a pin taken earlier.
 
   `refusal/2` is how every refused pin reaches the guest, whichever end
   asked for it: a relay that ends a fetch because its own ask got no pin
@@ -98,7 +98,6 @@ defmodule Locus.Runtime.Egress do
           | :dns_error
           | :private_ip_blocked
           | :redirect_credentials
-          | :flow_blocked
 
   @typedoc """
   Why a request got no pin: a refusal CYFR answered
@@ -247,12 +246,6 @@ defmodule Locus.Runtime.Egress do
 
   def refusal(:redirect_credentials, host),
     do: {:refused, :redirect_credentials, redirect_refused(host)}
-
-  def refusal(:flow, host),
-    do:
-      {:refused, :flow_blocked,
-       "HTTP egress to #{host} refused: this run read material its grant declares no flow of " <>
-         "to that host"}
 
   def refusal(:malformed, _host), do: {:refused, :invalid_request, "Invalid URL"}
 

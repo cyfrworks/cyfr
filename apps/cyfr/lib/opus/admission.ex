@@ -1019,7 +1019,6 @@ defmodule Opus.Admission do
          {:ok, authority, stamp} <-
            ctx
            |> approved_root(load_authority(ctx, profile, component, opts))
-           |> launched(ctx)
            |> at_revision(opts[:consent_id]) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
@@ -1035,17 +1034,6 @@ defmodule Opus.Admission do
   end
 
   defp at_revision(refused, _consent_id), do: refused
-
-  # A launch roots only at the consent revision the context's `launch`
-  # names, when it names one (`Aqua.Launch` alone sets it): the classes it
-  # lets flow were judged against that grant's exits, so a changed grant
-  # is a stale launch, refused before anything starts.
-  defp launched({:ok, authority, _stamp} = loaded, %Context{launch: %{consent_id: consent_id}})
-       when is_binary(consent_id) do
-    if authority.consent_id == consent_id, do: loaded, else: {:error, :approved_grant_moved}
-  end
-
-  defp launched(loaded, _ctx), do: loaded
 
   # A launch roots only on the account its decision
   # resolved (the context's `approved_entry`, which `Aqua.Launch` alone

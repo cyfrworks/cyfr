@@ -5,15 +5,13 @@ defmodule Opus.Host.ToolFlowTest do
   @moduledoc """
   A guest's tool calls and the run's source ledger (`Opus.Ledger`).
 
-  A tool server is an exit: a run whose ledger holds a class its edge
-  declares no flow of to `server:<name>` is refused before the call's
-  arguments leave, and the refusal is recorded. Whatever a tool server
-  answers is outside material named by the server, and the call's row and
-  every ancestor hold it from the call's admission, before the call
-  leaves: the server's answer and its error, the error's text included,
-  reach the guest only after the ledger holds it, and a sibling that reads
-  the call's record through `execution.logs` joins it too, so its next
-  send is decided on it.
+  A tool server's call is decided by the grant alone, whatever the run
+  has read. Whatever a tool server answers is outside material named by
+  the server, and the call's row and every ancestor hold it from the
+  call's admission, before the call leaves: the server's answer and its
+  error, the error's text included, reach the guest only after the ledger
+  holds it, and a sibling that reads the call's record through
+  `execution.logs` joins it too.
   """
 
   use ExUnit.Case, async: false
@@ -77,27 +75,13 @@ defmodule Opus.Host.ToolFlowTest do
     end
   end
 
-  defmodule Resolver do
-    @moduledoc false
-    def getaddr(_name, :inet), do: {:ok, {203, 0, 113, 10}}
-    def getaddr(_name, _family), do: {:error, :nxdomain}
-  end
-
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "tool_flow_#{System.unique_integer([:positive])}")
     previous = Application.get_env(:arca, :base_path)
-    previous_resolver = Application.fetch_env(:cyfr, :egress_resolver)
     ctx = Sanctum.TestContext.local(:api)
-
-    on_exit(fn ->
-      case previous_resolver do
-        {:ok, resolver} -> Application.put_env(:cyfr, :egress_resolver, resolver)
-        :error -> Application.delete_env(:cyfr, :egress_resolver)
-      end
-    end)
 
     on_exit(fn ->
       Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
@@ -148,9 +132,8 @@ defmodule Opus.Host.ToolFlowTest do
   end
 
   # The edge a run calls the server and reads executions under: the
-  # server's tool, `execution.logs`, data/ storage and egress to one host,
-  # with exactly `flows`.
-  defp edge(server, flows) do
+  # server's tool, `execution.logs`, data/ storage and egress to one host.
+  defp edge(server) do
     {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
     {:ok, record} = Sanctum.ToolServerDigest.recorded(server)
 
@@ -172,14 +155,13 @@ defmodule Opus.Host.ToolFlowTest do
         "private_ips" => []
       }
     }
-    |> then(fn edge -> if flows == [], do: edge, else: Map.put(edge, "flows", flows) end)
   end
 
-  defp authority(server, flows) do
+  defp authority(server) do
     nodes = %{
       @formula => %{
         "limits" => Graph.limits_map(),
-        "edges" => %{"@ingress" => edge(server, flows), @target => edge(server, flows)}
+        "edges" => %{"@ingress" => edge(server), @target => edge(server)}
       },
       @target => %{"limits" => Graph.limits_map(), "edges" => %{}}
     }
@@ -252,24 +234,6 @@ defmodule Opus.Host.ToolFlowTest do
     sources
   end
 
-  defp pin(fixture, url) do
-    {:ok, args} = Prima.PinnedTarget.request_args(url, :fetch, nil)
-    {:ok, request} = Prima.PinnedTarget.read_request(args)
-    # This one pin resolves through the fixed resolver; every other pin
-    # of the test resolves as the suite's do.
-    previous = Application.fetch_env(:cyfr, :egress_resolver)
-    Application.put_env(:cyfr, :egress_resolver, Resolver)
-
-    try do
-      Opus.Host.Egress.pin(AttemptFixtures.caller(fixture), request)
-    after
-      case previous do
-        {:ok, resolver} -> Application.put_env(:cyfr, :egress_resolver, resolver)
-        :error -> Application.delete_env(:cyfr, :egress_resolver)
-      end
-    end
-  end
-
   defp denials(fixture) do
     {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor(fixture.athanor_id), limit: 100)
     Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
@@ -278,7 +242,7 @@ defmodule Opus.Host.ToolFlowTest do
   test "a server's error reaches the guest only after outside(server) is on the run and its ancestors",
        %{ctx: ctx, server: server} do
     stub!(ctx, server, {:error, "upstream says sentinel-41c7"})
-    fixture = formula!(ctx, authority(server, []))
+    fixture = formula!(ctx, authority(server))
 
     assert %{"error" => "guest_error", "message" => message} =
              tool(fixture, @tool, %{"q" => "x"})
@@ -295,10 +259,10 @@ defmodule Opus.Host.ToolFlowTest do
     assert Source.outside(@server) in ledger(fixture)
   end
 
-  test "a run that read a class its edge lets flow nowhere is refused the server before anything leaves, and the refusal is recorded",
+  test "a run that read a restricted file calls the server, and nothing of where its material came from is checked",
        %{ctx: ctx, server: server} do
     stub!(ctx, server, {:ok, %{"content" => []}})
-    fixture = formula!(ctx, authority(server, []))
+    fixture = formula!(ctx, authority(server))
     :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted")
 
     assert %{"ok" => _} =
@@ -307,40 +271,16 @@ defmodule Opus.Host.ToolFlowTest do
                "path" => "data/secret.txt"
              })
 
-    assert %{"error" => "guest_error", "type" => "flow_blocked", "message" => message} =
-             tool(fixture, @tool, %{"q" => "restricted"})
-
-    assert message =~ "server:#{@server}"
-    refute_received {:called, _, _, _}
-    assert [%{decision: "denied", decision_reason: "tool: " <> _}] = denials(fixture)
-  end
-
-  test "with flows of what it read to the server, the same call is made",
-       %{ctx: ctx, server: server} do
-    stub!(ctx, server, {:ok, %{"content" => []}})
-
-    flows = [
-      %{"from" => "files_by_grant", "to" => "server:#{@server}"},
-      %{"from" => "outside", "to" => "server:#{@server}"}
-    ]
-
-    fixture = formula!(ctx, authority(server, flows))
-    :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted")
-
-    assert %{"ok" => _} =
-             AttemptFixtures.call(fixture, "storage", %{
-               "action" => "read",
-               "path" => "data/secret.txt"
-             })
-
+    assert Source.new(:files_by_grant) in ledger(fixture)
     assert %{"ok" => _} = tool(fixture, @tool, %{"q" => "restricted"})
-    assert_received {:called, "echo", _args, _ledgers}
+    assert_received {:called, "echo", %{"q" => "restricted"}, _ledgers}
+    assert denials(fixture) == []
   end
 
-  test "a sibling that reads a server call's record joins its provenance, and its next send is decided on it",
+  test "a sibling that reads a server call's record joins its provenance",
        %{ctx: ctx, server: server} do
     stub!(ctx, server, {:error, "upstream says sentinel-9d2e"})
-    fixture = formula!(ctx, authority(server, []))
+    fixture = formula!(ctx, authority(server))
 
     # The reader is admitted before the call, so it inherits nothing of it.
     reader = admit_child!(fixture)
@@ -380,13 +320,11 @@ defmodule Opus.Host.ToolFlowTest do
            )
 
     # A guest reads no execution record (the guest plane is refused the
-    # read), and the refusal still joins every class the read may answer:
-    # the reader's next send is decided on it.
+    # read), and the refusal still joins every class the read may answer.
     assert %{"error" => "guest_error"} =
              tool(reader, "execution", %{"action" => "logs", "execution_id" => call_row.id})
 
     assert Source.outside(nil) in ledger(reader)
-    assert {:error, :flow} = pin(reader, "https://api.example.test/send")
   end
 
   test "a note's own provenance reaches the guest that reads it: a note kept with vault-disclosed material is never merely filed",
@@ -396,7 +334,7 @@ defmodule Opus.Host.ToolFlowTest do
         sources: [Source.new(:vault_disclosed)]
       )
 
-    fixture = formula!(ctx, authority(server, []))
+    fixture = formula!(ctx, authority(server))
 
     assert %{"ok" => _} = tool(fixture, "notes", %{"action" => "read", "name" => "key-material"})
 
@@ -406,7 +344,7 @@ defmodule Opus.Host.ToolFlowTest do
 
   test "a catalog read of the athanor's own records carries nothing; one that reaches outside is outside, whatever it answers",
        %{ctx: ctx, server: server} do
-    fixture = formula!(ctx, authority(server, []))
+    fixture = formula!(ctx, authority(server))
     assert %{"ok" => _} = tool(fixture, "component", %{"action" => "categories"})
     assert ledger(fixture) == []
 
@@ -420,9 +358,9 @@ defmodule Opus.Host.ToolFlowTest do
     assert ledger(fixture) == [Source.outside(nil)]
   end
 
-  test "a child's restricted read is its parent's before the read returns, outlives the child, and decides the parent's next send",
+  test "a child's restricted read is its parent's before the read returns, and outlives the child",
        %{ctx: ctx, server: server} do
-    fixture = formula!(ctx, authority(server, []))
+    fixture = formula!(ctx, authority(server))
     child = admit_child!(fixture)
     :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted")
 
@@ -444,6 +382,5 @@ defmodule Opus.Host.ToolFlowTest do
              })
 
     assert Source.new(:files_by_grant) in ledger(fixture)
-    assert {:error, :flow} = pin(fixture, "https://api.example.test/send")
   end
 end

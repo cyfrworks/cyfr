@@ -99,8 +99,7 @@ defmodule Opus.Record do
           kind: String.t() | nil,
           turn_id: String.t() | nil,
           schedule_id: String.t() | nil,
-          sources: [Prima.Source.t()],
-          launch_classes: [Prima.Source.class()]
+          sources: [Prima.Source.t()]
         }
 
   # One execution row, as its admission builds it and a read returns it.
@@ -150,9 +149,6 @@ defmodule Opus.Record do
     # a child's is its parent's ledger, read where it is admitted. On a
     # record read back, the row's ledger as that read found it.
     sources: [],
-    # The classes a launch let flow to every exit of its tree,
-    # written into the root's policy (`Arca.Execution.launch_key/0`).
-    launch_classes: [],
     # What the run was admitted under (`admitted/4`): the admission decision
     # (`call_id`, `Arca.DecisionLog`), what started it (`origin`,
     # `Prima.Origin`) and who (`caller`, `Prima.Question.Caller`), the last
@@ -175,10 +171,9 @@ defmodule Opus.Record do
     itself, so every row in a chain carries the same value.
 
   A root's source ledger is seeded from what admitted it, never from an
-  argument: a launch's stamp (`:launch`, `%{sources, classes}`, which
+  argument: a launch's stamp (`:launch`, `%{sources}`, which
   `Opus.Admission` takes off the context `Aqua.Launch` builds alone) seeds
-  the turn's sources and writes the classes it lets flow, none for a
-  launch `Aqua.Launch` decides; a webhook's
+  the turn's sources; a webhook's
   run starts outside; a frame's invocation starts with the classes its
   declared reads may carry (`:frame_sources`, which `Opus.Tincture`
   alone passes); an interactive, programmatic, scheduled or feed run
@@ -236,8 +231,7 @@ defmodule Opus.Record do
       kind: Keyword.get(opts, :kind, "component"),
       turn_id: Keyword.get(opts, :turn_id),
       schedule_id: Keyword.get(opts, :schedule_id),
-      sources: if(is_nil(parent_execution_id), do: root_seed(ctx, opts), else: []),
-      launch_classes: if(is_nil(parent_execution_id), do: launch_classes(opts), else: [])
+      sources: if(is_nil(parent_execution_id), do: root_seed(ctx, opts), else: [])
     }
   end
 
@@ -323,16 +317,6 @@ defmodule Opus.Record do
           is_list(Keyword.get(opts, :frame_sources)) -> Keyword.fetch!(opts, :frame_sources)
           true -> []
         end
-    end
-  end
-
-  defp launch_classes(opts) do
-    case Keyword.get(opts, :launch) do
-      %{classes: classes} when is_list(classes) ->
-        Enum.filter(Prima.Source.classes(), &(&1 in classes))
-
-      _no_launch ->
-        []
     end
   end
 
@@ -562,16 +546,6 @@ defmodule Opus.Record do
   defp reaches_outside?(%{allowed_domains: [_ | _]}), do: true
   defp reaches_outside?(_policy), do: false
 
-  # The root's policy with the classes its launch let flow, read
-  # for every send of its tree (`Arca.Execution.flow_state/2`).
-  defp launch_policy(%__MODULE__{launch_classes: []} = record), do: record.host_policy
-
-  defp launch_policy(%__MODULE__{host_policy: policy, launch_classes: classes}) do
-    (policy || %{})
-    |> Map.new(fn {key, value} -> {to_string(key), value} end)
-    |> Map.put(Arca.Execution.launch_key(), Enum.map(classes, &Atom.to_string/1))
-  end
-
   defp admit(%__MODULE__{} = record, origin, grant, opts, payloads) do
     case Arca.Execution.admit(
            %{
@@ -587,7 +561,7 @@ defmodule Opus.Record do
              started_at: record.started_at,
              status: "running",
              input: encode_json(input_envelope(record)),
-             host_policy: encode_json(launch_policy(record)),
+             host_policy: encode_json(record.host_policy),
              parent_execution_id: record.parent_execution_id,
              child_key: record.child_key,
              root_execution_id: record.root_execution_id,

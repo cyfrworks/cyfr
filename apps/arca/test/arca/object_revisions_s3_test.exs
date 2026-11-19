@@ -686,20 +686,8 @@ defmodule Arca.ObjectRevisionsS3Test do
     assert {:error, :not_found} = Arca.Execution.sources(w.actor, w.execution.id)
   end
 
-  # The decision every send of the run is held to (`Opus.Ledger.check/4`):
-  # whether its ledger as it stands may reach the host under `flows`.
-  defp sends?(w, flows) do
-    {:ok, %{sources: ledger, launch_classes: launch}} =
-      Arca.Execution.flow_state(w.actor, w.execution.id)
-
-    Prima.Flow.uncovered(ledger, {:domain, "api.example.test"},
-      flows: flows,
-      launch_classes: launch
-    ) == []
-  end
-
-  defp every_class,
-    do: for(class <- Prima.Source.classes(), do: %{from: class, to: "api.example.test"})
+  # The run's ledger as it stands (`Arca.Execution.sources/2`).
+  defp ledger(w), do: Arca.Execution.sources(w.actor, w.execution.id)
 
   describe "through admitted attempts" do
     test "a store held until a newer write settles lands at its own key, and the read serves the newer write with its sources",
@@ -812,7 +800,7 @@ defmodule Arca.ObjectRevisionsS3Test do
       end
     end
 
-    test "an uncertain restricted overwrite, a clean append and the writer purged: the clean object and its suffix are read and may be sent anywhere",
+    test "an uncertain restricted overwrite, a clean append and the writer purged: the clean object and its suffix are read, and their reader carries no source",
          %{actor: actor} do
       path = ["data", "att-f.txt"]
       clean = writer!(actor)
@@ -836,28 +824,23 @@ defmodule Arca.ObjectRevisionsS3Test do
 
       sender = writer!(actor)
       assert {:ok, {:read, {:ok, "clean;suffix"}}} = read(sender, path)
-      {:ok, ledger} = Arca.Execution.sources(actor, sender.execution.id)
-      refute disclosed() in ledger
-      assert sends?(sender, every_class())
+      assert ledger(sender) == {:ok, []}
     end
 
-    test "a run that reads what an earlier run wrote carries what that run read, refused where no flow lets it out, also once the writer is purged",
+    test "a run that reads what an earlier run wrote carries what that run read, also once the writer is purged",
          %{actor: actor} do
       path = ["data", "att-g.txt"]
-      flows = [%{from: :files_by_grant, to: "api.example.test"}]
       w = writer!(actor, [filed()])
       assert {:ok, {:confirmed, :ok}} = held(w, put(w, path, "from a filed note"))
 
       first = writer!(actor)
       assert {:ok, {:read, {:ok, _bytes}}} = read(first, path)
-      refute sends?(first, flows)
+      assert ledger(first) == {:ok, [filed()]}
 
       purge!(w)
       later = writer!(actor)
       assert {:ok, {:read, {:ok, _bytes}}} = read(later, path)
-      assert filed() in elem(Arca.Execution.sources(actor, later.execution.id), 1)
-      refute sends?(later, flows)
-      assert sends?(later, [%{from: :filed, to: "api.example.test"} | flows])
+      assert ledger(later) == {:ok, [filed()]}
     end
 
     # The stated limit: S3 caps a key at 1,024 bytes with the tenant's
@@ -904,7 +887,7 @@ defmodule Arca.ObjectRevisionsS3Test do
       for read_path <- [path, ["data", "att-h-copy", "p.txt"]] do
         reader = writer!(actor)
         assert {:ok, {:read, {:ok, "secret;clean"}}} = read(reader, read_path)
-        refute sends?(reader, [%{from: :files_by_grant, to: "api.example.test"}])
+        assert ledger(reader) == {:ok, [disclosed()]}
       end
     end
   end

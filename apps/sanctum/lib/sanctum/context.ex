@@ -109,17 +109,12 @@ defmodule Sanctum.Context do
 
   @typedoc """
   What a launch bound for the root it dispatches: the turn's sources it
-  seeds (`sources`), the classes let flow to every exit of the launched
-  tree (`classes`), the consent revision the launched grant must load at
-  (`consent_id`, nil for none), the root's
-  pre-minted id (`execution_id`) and the name of the agent whose turn
+  seeds (`sources`), the root's pre-minted id (`execution_id`) and the name of the agent whose turn
   launched it (`agent`), which the root records as its caller
   (`Prima.Question.Caller`).
   """
   @type launch :: %{
           sources: [Prima.Source.t()],
-          classes: [Prima.Source.class()],
-          consent_id: String.t() | nil,
           execution_id: String.t(),
           agent: String.t()
         }
@@ -660,8 +655,8 @@ defmodule Sanctum.Context do
   @doc """
   `ctx` carrying a launch's stamp (`t:launch/0`): the one writer
   of the field, whose root admission seeds the launched root from it
-  (`Opus.Admission`). It mints a host-trusted seed, the classes a tree
-  may send anywhere and the agent the root names as its caller, so it is
+  (`Opus.Admission`). It mints a host-trusted seed and the agent the
+  root names as its caller, so it is
   called from `Aqua.Launch` alone, a roster holds
   (`Sanctum.LaunchStampBoundaryTest`). A stamp of
   another shape raises.
@@ -671,19 +666,15 @@ defmodule Sanctum.Context do
         %__MODULE__{} = ctx,
         %{
           sources: sources,
-          classes: classes,
-          consent_id: consent_id,
           execution_id: id,
           agent: agent
         } = launch
       )
-      when is_list(sources) and is_list(classes) and (is_binary(consent_id) or is_nil(consent_id)) and
-             is_binary(id) and is_binary(agent) and agent != "" do
-    unless Enum.all?(sources, &is_struct(&1, Prima.Source)) and
-             Enum.all?(classes, &(&1 in Prima.Source.classes())),
-           do: raise(ArgumentError, "a launch stamp names Prima.Source values and classes")
+      when is_list(sources) and is_binary(id) and is_binary(agent) and agent != "" do
+    unless Enum.all?(sources, &is_struct(&1, Prima.Source)),
+      do: raise(ArgumentError, "a launch stamp names Prima.Source values")
 
-    %{ctx | launch: Map.take(launch, [:sources, :classes, :consent_id, :execution_id, :agent])}
+    %{ctx | launch: Map.take(launch, [:sources, :execution_id, :agent])}
   end
 
   @doc """

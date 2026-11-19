@@ -592,14 +592,6 @@ defmodule Prima.Refusal do
 
   defp row(:action_missing), do: {:invalid_argument, "Missing required argument: action"}
 
-  # A send whose run read a class its grant declares no flow of to the
-  # exit (`Prima.Flow`): the classes and the exit, by its host, a need and
-  # its host, or a server name.
-  defp row({:flow_not_declared, [_ | _] = classes, exit}) when is_binary(exit) do
-    if Enum.all?(classes, &(&1 in Prima.Source.classes())),
-      do: {:forbidden, Prima.Flow.sentence(classes, exit)}
-  end
-
   defp row({:unknown_action, name_action}) when is_binary(name_action),
     do: {:invalid_argument, "Unknown action: #{name_action}"}
 
@@ -1226,12 +1218,6 @@ defmodule Prima.Refusal do
       {:conflict,
        "The account this launch was decided on has changed since, so nothing ran: propose it " <>
          "again to run it on the account as it stands now."}
-
-  defp row(:approved_grant_moved),
-    do:
-      {:conflict,
-       "The grant this launch was decided on has changed since, so nothing ran: propose it " <>
-         "again to run it on the grant as it stands now."}
 
   # A run an API key narrowed to named tools may not start
   # (`Sanctum.ApiKey.admit_tool/2`).

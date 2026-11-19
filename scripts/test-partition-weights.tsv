@@ -493,7 +493,6 @@
 0.8	apps/cyfr/test/integration/runtime/oauth_handler_test.exs
 3.7	apps/cyfr/test/integration/runtime/orphan_children_test.exs
 1.2	apps/cyfr/test/integration/runtime/pipe_test.exs
-0.2	apps/cyfr/test/integration/runtime/relay_flow_test.exs
 0.4	apps/cyfr/test/integration/runtime/resource_limits_test.exs
 1.8	apps/cyfr/test/integration/runtime/retained_input_test.exs
 0.9	apps/cyfr/test/integration/runtime/runner_reuse_test.exs
@@ -840,7 +839,6 @@
 0.0	apps/prima/test/prima/execution_grant_test.exs
 0.0	apps/prima/test/prima/execution_state_test.exs
 0.7	apps/prima/test/prima/feed_test.exs
-0.0	apps/prima/test/prima/flow_test.exs
 0.1	apps/prima/test/prima/guest_error_test.exs
 0.0	apps/prima/test/prima/handle_answer_test.exs
 0.1	apps/prima/test/prima/host_api_test.exs

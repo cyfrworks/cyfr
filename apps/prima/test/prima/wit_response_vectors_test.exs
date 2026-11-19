@@ -25,12 +25,12 @@ defmodule Prima.WitResponseVectorsTest do
   # Every atom the vectors name, a term's or an encode_error type's: a
   # vector naming another fails until this roster names it too.
   @atoms Map.new(
-           ~w(busy cancelled consent_required control_plane_lost enospc error failed filed
-              flow_not_declared guest_error invalid_objects lost message_too_long no_agent
-              no_grant not_found not_member ok oops outside revoked setup_required shape_moved
+           ~w(busy cancelled consent_required control_plane_lost enospc error failed
+              guest_error invalid_objects lost message_too_long no_agent
+              no_grant not_found not_member ok oops revoked setup_required shape_moved
               some_internal_state
               stale_revision timeout type unavailable
-              dispatch_error domain_blocked flow_blocked http_error request_failed
+              dispatch_error domain_blocked http_error request_failed
               resource_limit storage_error storage_unavailable unknown)a,
            &{Atom.to_string(&1), &1}
          )
@@ -92,7 +92,7 @@ defmodule Prima.WitResponseVectorsTest do
   end
 
   test "encode_error answers every case's envelope, for a type given as a string or an atom" do
-    for vector <- cases!("encode_error", 10, ~w(why type message answer)) do
+    for vector <- cases!("encode_error", 9, ~w(why type message answer)) do
       %{"why" => why, "type" => type, "message" => message, "answer" => answer} = vector
 
       for type <- [type, atom!(type)] do
@@ -104,7 +104,7 @@ defmodule Prima.WitResponseVectorsTest do
   test "every encode_error answer is the envelope and nothing else" do
     %{"member" => member, "fields" => fields} = @vectors["envelope"]
 
-    for vector <- cases!("encode_error", 10, ~w(why type message answer)) do
+    for vector <- cases!("encode_error", 9, ~w(why type message answer)) do
       %{"why" => why, "answer" => answer} = vector
       %{^member => error} = envelope = expected(answer)
       assert Map.keys(envelope) == [member], why
@@ -151,7 +151,7 @@ defmodule Prima.WitResponseVectorsTest do
   end
 
   test "render answers every case's sentence, and nothing for a term it does not know" do
-    cases = cases!("render", 24, ~w(why reason sentence), ~w(class))
+    cases = cases!("render", 23, ~w(why reason sentence), ~w(class))
     assert Enum.any?(cases, &is_nil(&1["sentence"]))
 
     for vector <- cases do
@@ -162,7 +162,7 @@ defmodule Prima.WitResponseVectorsTest do
 
   test "the sample holds one refusal of each class but confirmation_required, of that class" do
     sampled =
-      for vector <- cases!("render", 24, ~w(why reason sentence), ~w(class)),
+      for vector <- cases!("render", 23, ~w(why reason sentence), ~w(class)),
           Map.has_key?(vector, "class"),
           do: {vector["class"], vector}
 

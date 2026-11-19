@@ -505,8 +505,7 @@ defmodule Aqua.ScheduleNotesTest do
       assert {:ok, %{note: note}} = note(ctx, "nightly")
       assert note.sources == [vault]
 
-      # A run that reads the note may send it only where a flow lets the
-      # vault's class leave.
+      # A run that reads the note holds the vault's class.
       reader = Prima.UUID7.execution_id()
 
       {:ok, _reader} =
@@ -527,10 +526,8 @@ defmodule Aqua.ScheduleNotesTest do
       assert :ok =
                Opus.Ledger.join(actor, reader, Aqua.Providers.Notes.answer_sources(actor, answer))
 
-      filed_only = %Prima.Authority.Blob.Edge{flows: [%{from: :filed, to: "export.example"}]}
-
-      assert {:refused, _uncovered} =
-               Opus.Ledger.check(actor, reader, filed_only, {:domain, "export.example"})
+      assert Arca.Execution.sources(actor, reader) ==
+               {:ok, [Prima.Source.new(:filed), vault]}
     end
 
     test "a note_name no note may carry is refused, and the id is not used instead",

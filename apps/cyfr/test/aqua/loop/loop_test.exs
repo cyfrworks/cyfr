@@ -2664,17 +2664,16 @@ defmodule Aqua.LoopTest do
     Prima.Source.decode(sources)
   end
 
-  test "a launch decided in auto binds the turn's sources, no grant revision and no class: the " <>
-         "app roots on them under its step's own id, and its tree's ledger joins the turn by its " <>
-         "completion result",
+  test "a launch decided in auto roots its app under its step's own id, seeded with the turn's " <>
+         "sources, and its tree's ledger joins the turn by its completion result",
        %{ctx: ctx, thread: thread} do
     %{turn: turn, at_launch: shown, root_id: root_id, result: result} =
       launch_through_loop!(ctx, thread, %{"answered" => true}, &app_read!(ctx, &1))
 
     assert result == :completed
 
-    # The decision bound the turn's sources as they stood, the pinned page
-    # among them, and nothing the app read.
+    # The turn's sources as they stood at the launch, the pinned page among
+    # them, and nothing the app read.
     assert Prima.Source.new(:pinned) in shown
     refute @app_read in shown
 
@@ -2683,10 +2682,8 @@ defmodule Aqua.LoopTest do
     assert %{child_execution_id: ^root_id, outcome: "ok"} =
              Enum.find(steps, &(&1.kind == "launch"))
 
-    # The app rooted under the launch step's own id, seeded with what the
-    # decision bound, letting no class flow.
+    # The app rooted under the launch step's own id, seeded with them.
     actor = Sanctum.Context.actor(ctx)
-    assert {:ok, %{launch_classes: []}} = Arca.Execution.flow_state(actor, root_id)
     {:ok, [started | _]} = Arca.ExecutionEvents.since(actor, root_id, 0)
     assert Arca.ExecutionEvents.data(started)["sources"] == Prima.Source.to_json_list(shown)
 

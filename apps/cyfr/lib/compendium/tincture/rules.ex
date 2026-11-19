@@ -360,10 +360,8 @@ defmodule Compendium.Tincture.Rules do
   The origins a frame's page may connect to beyond its endpoint: the
   manifest's `tincture.connect` domains that hold to the connect grammar
   (`Prima.Manifest.valid_connect_domain?/1`), spelled as declared, each
-  once, in declared order. `csp/2` admits exactly these, over `https`, and
-  each is an exit of the frame (`Prima.Flow`): what the frame reads may
-  reach it only as the frame's grant lets it flow there. A manifest that
-  declares none, a canvas always, has none.
+  once, in declared order. `csp/2` admits exactly these, over `https`. A
+  manifest that declares none, a canvas always, has none.
   """
   @spec connect_origins(term()) :: [String.t()]
   def connect_origins(%{"tincture" => %{"connect" => connect}}) do

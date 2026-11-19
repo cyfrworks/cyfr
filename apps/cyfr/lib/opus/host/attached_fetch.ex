@@ -336,13 +336,6 @@ defmodule Opus.Host.AttachedFetch do
       {:error, :resolution} ->
         {:recorded, "dns_error", Prima.Network.dns_failure(host)}
 
-      # The run read a class its grant declares no flow of to this host or
-      # to the need: refused before the credential is resolved or any byte
-      # leaves.
-      {:error, :flow} ->
-        {:recorded, "flow_blocked",
-         "Request to #{host} refused: this run read material its grant declares no flow of to it"}
-
       {:error, reason} when reason in [:lost, :unavailable] ->
         {:error, reason}
 

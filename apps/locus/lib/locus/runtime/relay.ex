@@ -63,8 +63,8 @@ defmodule Locus.Runtime.Relay do
   it signs for the attempt as it signs `take_rate`, for the request's own
   URL, with the purpose the runner asked the pin with and, for a
   redirect's hop, the same `from` (both read from the runner's call when
-  its answer was learned). So CYFR decides the send against what the run
-  has read by the time it leaves, flows included. An answer that is
+  its answer was learned). So CYFR decides the send as it leaves. An
+  answer that is
   refused, lost or names another scheme, host or port than the request's
   (`Locus.Runtime.Egress.names?/2`) ends the fetch with the code
   `Locus.Runtime.Egress.relay_code/1` names, and nothing connects. The

@@ -20,8 +20,8 @@ defmodule Prima.Source do
   workspace thread's opening refers to), so that forgetting that thread
   finds the turns that read it (`thread/1`). Those posts' own material
   joins by the sources of the turns that wrote them, so a thread source
-  never stands in for an outside one, and no flow, launch or standing
-  answer reads it: `classes/0` and `classes_of/1` leave it out.
+  never stands in for an outside one: `classes/0` and `classes_of/1`
+  leave it out.
 
   The canonical JSON of a source is `{"class", "name"}`, `name` null but
   for an outside or a thread source, and a set is a sorted,
@@ -166,20 +166,6 @@ defmodule Prima.Source do
       |> Enum.map(& &1.class)
       |> Enum.uniq()
       |> Enum.sort_by(&Map.fetch!(@order, &1))
-
-  @doc """
-  The outside sources of `sources` that `covered` does not name. An
-  outside source with no name is never covered: nothing can name it.
-  """
-  @spec uncovered([t()], [t()]) :: [t()]
-  def uncovered(sources, covered) when is_list(sources) and is_list(covered) do
-    named = for %__MODULE__{class: :outside, name: name} when is_binary(name) <- covered, do: name
-
-    sources
-    |> Enum.filter(&outside?/1)
-    |> Enum.reject(&(is_binary(&1.name) and &1.name in named))
-    |> set()
-  end
 
   defp to_spelling(class) when is_atom(class) and not is_nil(class), do: Atom.to_string(class)
   defp to_spelling(class), do: class

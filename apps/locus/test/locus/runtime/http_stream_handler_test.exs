@@ -620,7 +620,7 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
       end
     end
 
-    test "asks CYFR again before it sends: a host refused for want of a flow since the stream opened is refused, and nothing is sent" do
+    test "asks CYFR again before it sends: a host refused since the stream opened is refused, and nothing is sent" do
       server =
         start_supervised!(
           {Bandit, plug: {Reached, self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
@@ -639,12 +639,11 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
         |> ScriptedKeeper.relayed!()
         |> Map.fetch!(:client)
 
-      # The pin the stream opens with; by its send, the run has read what
-      # its grant declares no flow of to the host.
+      # The pin the stream opens with; by its send, CYFR refuses the host.
       ScriptedHost.script(host, "egress_pin", [
         fn args, _caller -> ScriptedHost.pin(%{"localhost" => "127.0.0.1"}, args, 30_000) end,
-        {:error, :flow},
-        {:error, :flow}
+        {:error, :denied},
+        {:error, :denied}
       ])
 
       {imports, exec_ref} =
@@ -665,7 +664,7 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
 
       assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
 
-      assert %{"error" => %{"type" => "flow_blocked", "message" => message}} =
+      assert %{"error" => %{"type" => "private_ip_blocked", "message" => message}} =
                poll_for_error(read_fn, handle, 100)
 
       assert message =~ "localhost"

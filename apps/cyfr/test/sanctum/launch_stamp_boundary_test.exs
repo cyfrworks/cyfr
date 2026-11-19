@@ -3,9 +3,9 @@
 
 defmodule Sanctum.LaunchStampBoundaryTest do
   @moduledoc """
-  A launch's stamp (`Sanctum.Context`'s `launch`) seeds a root, names the
-  classes its tree may send anywhere and names the agent the root records
-  as its caller, so it is written by one function,
+  A launch's stamp (`Sanctum.Context`'s `launch`) seeds a root and names
+  the agent the root records as its caller, so it is written by one
+  function,
   `Sanctum.Context.stamp_launch/2`, called from `Aqua.Launch` alone.
   Mechanically, over the code of every app's `lib`, read as Elixir's own
   syntax tree: the setter is called in one place,
@@ -150,7 +150,7 @@ defmodule Sanctum.LaunchStampBoundaryTest do
     def k(ctx, stamp), do: Kernel.struct!(ctx, launch: stamp) # caught
     def l(ctx, stamp), do: {:ok, [%{ctx | launch: stamp}]} # caught
     def cleared(ctx), do: %{ctx | approved_entry: nil, launch: nil}
-    def head(%Sanctum.Context{launch: %{consent_id: id}}), do: id
+    def head(%Sanctum.Context{launch: %{execution_id: id}}), do: id
     def guarded(%{launch: stamp} = ctx) when is_map(stamp), do: ctx
     def kind(call), do: Map.put(call, :kind, :launch)
     def opts(launch), do: Map.put(%{kind: :launch}, :origin, launch) |> card(launch: launch)
@@ -168,18 +168,12 @@ defmodule Sanctum.LaunchStampBoundaryTest do
   test "the setter refuses a stamp of another shape" do
     ctx = Sanctum.TestContext.local()
 
-    stamp = %{
-      sources: [Prima.Source.new(:filed)],
-      classes: [:filed],
-      consent_id: nil,
-      execution_id: "exec_x",
-      agent: "aqua"
-    }
+    stamp = %{sources: [Prima.Source.new(:filed)], execution_id: "exec_x", agent: "aqua"}
 
     assert %{launch: ^stamp} = Sanctum.Context.stamp_launch(ctx, stamp)
 
     assert_raise ArgumentError, fn ->
-      Sanctum.Context.stamp_launch(ctx, %{stamp | classes: [:unsettled]})
+      Sanctum.Context.stamp_launch(ctx, %{stamp | sources: [%{"class" => "filed"}]})
     end
 
     # Through `apply/3`: a stamp missing its root's id, or the agent its

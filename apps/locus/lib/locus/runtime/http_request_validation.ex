@@ -24,8 +24,7 @@ defmodule Locus.Runtime.HttpRequestValidation do
   Every check before the pin is the engine's own, made from the
   assignment's edge and limits (`Locus.Runtime.EdgeGuard`). The pin is CYFR's: the
   address the URL may be reached at under the attempt's authority,
-  including its private-address policy and the flows its grant declares
-  for what the run has read (`Locus.Runtime.Egress.pin/3`), asked for
+  including its private-address policy (`Locus.Runtime.Egress.pin/3`), asked for
   every request. The engine resolves no name, and the runner connects
   nowhere: each handler sends the validated request through the runner's
   relay naming the pin, and the relay's service end (`Locus.Runtime.Relay`)

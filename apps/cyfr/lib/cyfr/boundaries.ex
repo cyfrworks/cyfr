@@ -536,7 +536,7 @@ defmodule Cyfr.Boundaries do
       depth: 3,
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog
-        Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
+        Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts
         Sanctum.DeviceUnlock Sanctum.Directory Sanctum.Directory.Handles Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
@@ -565,11 +565,8 @@ defmodule Cyfr.Boundaries do
           "the caller and the session, the tincture credentials and access policy, the " <>
           "vault's OAuth grant and a webhook's row. `Sanctum.Consent` is the tincture " <>
           "data routes' read of the grant revision a frame credential names " <>
-          "(`Sanctum.Consent.profiles/2`, `head_consent/2`), read as the shell reads it " <>
-          "when it mints, and `Sanctum.Consent.Loader` their read of that head's grant as " <>
-          "the loader reads a stored head (`admitted_blob/3`, with its one reading of a " <>
-          "damaged head), for the flows the tincture's ingress declares to the origins " <>
-          "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
+          "(`Sanctum.Consent.tincture_grant/2`), read as the shell reads it when it " <>
+          "mints. The directory's routes are `Sanctum.Directory`'s " <>
           "decisions, the handle registry's beside it `Sanctum.Directory.Handles`'s, the " <>
           "account pages' served only by the directory's writer, a device's hello and " <>
           "its admission `Sanctum.DeviceUnlock`'s, and the device channel checks each " <>
@@ -1951,12 +1948,9 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Consent.Accounts" => [list: 1, resolve: 4],
     "Sanctum.Consent.Components" => [install!: 1],
     # Admission reads the loader's own-head damage through its one
-    # definition, the family and the refusal each member answers. The
-    # tincture data routes read a frame's grant, for the flows its
-    # tincture's ingress declares, as the loader reads a stored head.
+    # definition, the family and the refusal each member answers.
     "Sanctum.CompanyLogin" => [complete: 2, held: 1, start: 1],
     "Sanctum.Consent.Loader" => [
-      admitted_blob: 3,
       damage?: 1,
       damage_refusal: 3,
       load_root: 3,
