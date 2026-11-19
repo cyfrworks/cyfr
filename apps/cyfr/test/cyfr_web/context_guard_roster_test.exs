@@ -65,6 +65,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
        ]},
     "live/components_live.ex" => {4, [{"live/components_live.ex", :deliver}]},
     "live/builds_live.ex" => {1, [{"live/builds_live.ex", :deliver}]},
+    # A run started from the component's page, which may wait on a card
+    # the page's own layer draws.
+    "live/component_detail_live.ex" => {1, [{"live/component_detail_live.ex", :run}]},
     # An abuse report, answered to the dialog itself.
     "live/components/report_component.ex" =>
       {1, [{"live/components/report_component.ex", :report}]},

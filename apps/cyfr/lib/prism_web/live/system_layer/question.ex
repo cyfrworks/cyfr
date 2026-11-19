@@ -11,18 +11,21 @@ defmodule PrismWeb.SystemLayer.Question do
   (`caller_words/1`), until when it waits, and the choices. The
   component's block sits inside the frame: its summary and its operation,
   marked as its own words, as plain escaped text with its line breaks
-  kept, in a region of a fixed height that scrolls on its own and breaks
-  any line, so no length of text moves the frame or the choices, and text
+  kept. The one-line summary stays in view; the operation is in a region
+  of a fixed height that scrolls on its own and breaks any line, so no
+  length of text moves the frame, the summary or the choices, and text
   that reads like a button stays text inside the block. Masking is said.
 
   The choices are a phone's (`answer/2`): Don't allow; Allow once; Allow
   for an hour; Always allow; and, under a second press ("More choices"),
   Never allow and the switch "only when this caller starts it", offered
   only when the caller is known. An answer that lasts covers every caller
-  unless the switch is on. Closing the card without choosing is "Don't
-  allow", once. The choice the card shows (`choice/1`: the second press
-  and the switch) is kept on the shown prompt by the layer, so it ends
-  with the prompt.
+  unless the switch is on. Once an answer that lasts is refused because
+  no installed version asks for the permission in these words, the card
+  offers only Don't allow and Allow once (`once_only`). Closing the card
+  without choosing is "Don't allow", once. The choice the card shows
+  (`choice/1`: the second press, the switch and `once_only`) is kept on
+  the shown prompt by the layer, so it ends with the prompt.
   """
 
   use Phoenix.Component
@@ -38,9 +41,13 @@ defmodule PrismWeb.SystemLayer.Question do
   @spec choices() :: [String.t()]
   def choices, do: @choices
 
-  @doc "The card's choice as it starts: the second press not made, the switch off."
-  @spec choice(map()) :: %{more: boolean(), this_caller: boolean()}
-  def choice(prompt), do: Map.get(prompt, :choice, %{more: false, this_caller: false})
+  @doc """
+  The card's choice as it starts: the second press not made, the switch
+  off, and every choice offered.
+  """
+  @spec choice(map()) :: %{more: boolean(), this_caller: boolean(), once_only: boolean()}
+  def choice(prompt),
+    do: Map.get(prompt, :choice, %{more: false, this_caller: false, once_only: false})
 
   @doc """
   The `question.answer` JSON a choice names (`Prima.Question.Answer`),
@@ -108,10 +115,6 @@ defmodule PrismWeb.SystemLayer.Question do
   @spec switchable?(map()) :: boolean()
   def switchable?(%{subject: %{caller: caller}}), do: caller != Caller.encode(:unknown)
 
-  @doc "When a permission lasts until, as the component's page says it."
-  @spec until(DateTime.t()) :: String.t()
-  def until(%DateTime{} = deadline), do: Calendar.strftime(deadline, "%Y-%m-%d %H:%M UTC")
-
   attr :id, :string, required: true
   attr :prompt, :map, required: true
 
@@ -146,16 +149,16 @@ defmodule PrismWeb.SystemLayer.Question do
         <figcaption id={"#{@id}-question-words"} class="mb-2 text-xs text-gray-400">
           In the component's own words. CYFR does not check them.
         </figcaption>
+        <p class="text-sm text-gray-100 [overflow-wrap:anywhere]" data-test="question-summary">
+          {@subject.summary}
+        </p>
         <div
-          class="max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
+          class="mt-2 max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
           tabindex="0"
           data-test="question-block"
         >
-          <p class="text-sm text-gray-100" data-test="question-summary">
-            {@subject.summary}
-          </p>
           <pre
-            class="mt-2 whitespace-pre-wrap font-mono text-xs text-gray-200"
+            class="whitespace-pre-wrap font-mono text-xs text-gray-200"
             data-test="question-operation"
           >{@subject.operation}</pre>
         </div>
@@ -174,6 +177,7 @@ defmodule PrismWeb.SystemLayer.Question do
   @doc """
   The choices, each sending `question_answer` with its name; the second
   press shows Never allow and, for a caller the card knows, the switch.
+  Under `once_only`, Don't allow and Allow once alone.
   """
   def choices(assigns) do
     assigns =
@@ -191,15 +195,27 @@ defmodule PrismWeb.SystemLayer.Question do
         <.option prompt={@prompt} myself={@myself} name="allow_once" class={@button_class.(false)}>
           Allow once
         </.option>
-        <.option prompt={@prompt} myself={@myself} name="allow_hour" class={@button_class.(false)}>
+        <.option
+          :if={not @choice.once_only}
+          prompt={@prompt}
+          myself={@myself}
+          name="allow_hour"
+          class={@button_class.(false)}
+        >
           Allow for an hour
         </.option>
-        <.option prompt={@prompt} myself={@myself} name="allow_always" class={@button_class.(true)}>
+        <.option
+          :if={not @choice.once_only}
+          prompt={@prompt}
+          myself={@myself}
+          name="allow_always"
+          class={@button_class.(true)}
+        >
           Always allow
         </.option>
       </div>
 
-      <div class="flex flex-wrap items-center justify-end gap-2">
+      <div :if={not @choice.once_only} class="flex flex-wrap items-center justify-end gap-2">
         <button
           :if={not @choice.more}
           type="button"

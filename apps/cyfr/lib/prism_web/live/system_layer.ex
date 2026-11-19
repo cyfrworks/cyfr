@@ -248,7 +248,10 @@ defmodule PrismWeb.SystemLayer do
 
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
-  and returns focus on close; Escape dismisses every prompt.
+  and returns focus on close; Escape dismisses every prompt. Focus enters
+  at the prompt's first control, except on a question's card, where it
+  enters at the heading (`data-focus-first`), so that Enter answers
+  nothing and no choice or scrolling block is ringed as the card opens.
   While a modal prompt is open on any layer of the page, every frame is
   hidden and inert, so no frame holds the pointer or the screen over it.
   Every event the layer pushes names it (`layer`, its id), because a page
@@ -2487,21 +2490,33 @@ defmodule PrismWeb.SystemLayer do
         remove_prompt(socket, prompt.id)
 
       {:done, {:error, reason}, socket} ->
-        cond do
-          no_longer_waiting?(reason) -> remove_prompt(socket, prompt.id)
-          shown?(socket, prompt) -> assign(socket, :error, Ops.error_message(reason))
-          true -> socket
-        end
+        if no_longer_waiting?(reason),
+          do: remove_prompt(socket, prompt.id),
+          else: question_refused(socket, prompt.id, reason)
     end
+  end
+
+  # A refusal is said on its own card, kept by the card's id wherever it
+  # stands, shown or waiting behind another's confirmation, as an ended
+  # confirmation's words are (`confirmation_ended/3`). An answer that
+  # lasts refused because no installed version asks for the permission in
+  # these words would be refused again: from then on the card offers only
+  # the answers given once.
+  defp question_refused(socket, id, reason) do
+    once_only? = match?(%Prima.Refusal{reason: :removed}, reason)
+
+    update_prompt(socket, id, fn prompt ->
+      prompt = Map.put(prompt, :said, Ops.error_message(reason))
+
+      if once_only?,
+        do: Map.put(prompt, :choice, Map.put(Question.choice(prompt), :once_only, true)),
+        else: prompt
+    end)
   end
 
   defp ended_words(:cancelled), do: "The confirmation was cancelled."
   defp ended_words(:voided), do: "The confirmation was withdrawn."
   defp ended_words(:expired), do: "The confirmation expired."
-
-  # A refusal is said on the card only while it is the one shown.
-  defp shown?(%{assigns: %{current: %{id: id}}}, %{id: id}), do: true
-  defp shown?(_socket, _prompt), do: false
 
   defp no_longer_waiting?(%Prima.Refusal{reason: :not_pending}), do: true
   defp no_longer_waiting?({:not_found, "question", _ref}), do: true
@@ -2837,7 +2852,12 @@ defmodule PrismWeb.SystemLayer do
         class="m-auto w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 text-gray-100 shadow-xl backdrop:bg-black/70"
       >
         <div :if={@shown} class="space-y-4" data-kind={@shown.kind}>
-          <h2 id={"#{@id}-title"} class="text-lg font-semibold">
+          <h2
+            id={"#{@id}-title"}
+            tabindex={if @shown.kind == :question, do: "-1"}
+            data-focus-first={@shown.kind == :question}
+            class="text-lg font-semibold focus:outline-none"
+          >
             {title(@shown)}
           </h2>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">

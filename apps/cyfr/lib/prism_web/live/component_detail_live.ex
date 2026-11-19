@@ -51,6 +51,8 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:input, "")
      |> assign(:run, nil)
      |> assign(:run_error, nil)
+     |> assign(:running, false)
+     |> assign(:run_for, nil)
      |> assign(:permissions, nil)
      |> assign(:permission_error, nil)
      |> assign(:loading, true)}
@@ -58,8 +60,12 @@ defmodule PrismWeb.ComponentDetailLive do
 
   # `component.inspect` answers string keys
   # (`Compendium.Component.inspect_component/2`), its README among them.
+  # The page follows a patch to another component: its reference, and a
+  # run form free of the run the last one started (`left/2`).
   @impl true
   def handle_params(%{"ref" => ref}, _uri, socket) do
+    socket = left(socket, ref)
+
     component =
       case call_tool(socket, "component/inspect", %{
              "reference" => ref,
@@ -82,6 +88,25 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:loading, false)
      |> load_permissions()}
   end
+
+  # A run is shown only on the page of the component it was started for
+  # (`run_for`): a patch to another component lets go of the run here, and
+  # its result is on Executions alone, even if the page comes back to that
+  # component while it still goes. The run itself goes on to its end.
+  defp left(%{assigns: %{ref: ref}} = socket, ref), do: socket
+
+  defp left(socket, ref),
+    do:
+      assign(socket,
+        ref: ref,
+        page_title: "Component: #{ref}",
+        input: "",
+        run: nil,
+        run_error: nil,
+        running: false,
+        run_for: nil,
+        permission_error: nil
+      )
 
   # A catalyst's declared actions and the person's answers that stand for
   # them; nothing for any other component, or one that declares none and
@@ -126,24 +151,21 @@ defmodule PrismWeb.ComponentDetailLive do
   # it; an empty form runs with none. Input that is not an object is told
   # here and runs nothing. A run that completes shows its result on the
   # page; the run is also on Executions.
+  #
+  # The run is made off the page's event and run to its end (`run/2`): a
+  # run may wait on its person, and the card it waits on is drawn by this
+  # page's own system layer, which a page blocked in its event could not
+  # draw. A press while a run is going starts nothing.
   @impl true
+  def handle_event("execute", _params, %{assigns: %{running: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("execute", %{"input" => input}, socket) do
     socket = assign(socket, :input, input)
 
     case run_input(input) do
       {:ok, run_input} ->
-        args = Map.merge(%{"reference" => socket.assigns.ref}, run_input)
-
-        case call_tool(socket, "execution/run", args) do
-          {:ok, %{execution_id: _id} = run} ->
-            {:noreply, socket |> assign(:run, run) |> assign(:run_error, nil)}
-
-          {:error, reason} ->
-            {:noreply,
-             socket
-             |> assign(:run, nil)
-             |> assign(:run_error, "The run failed: #{error_message(reason)}")}
-        end
+        {:noreply, run(socket, Map.merge(%{"reference" => socket.assigns.ref}, run_input))}
 
       {:error, sentence} ->
         {:noreply, socket |> assign(:run, nil) |> assign(:run_error, sentence)}
@@ -231,6 +253,50 @@ defmodule PrismWeb.ComponentDetailLive do
     do: {:noreply, load_permissions(socket)}
 
   def system_layer_report(_id, _outcome, _socket), do: :pass
+
+  # A run's answer reaches the page only while the page still holds that
+  # run: a page moved to another component since (`left/2`) drops it.
+  @impl true
+  def handle_async(:run, {:ok, {tag, run_for, result}}, %{assigns: %{run_for: run_for}} = socket),
+    do:
+      CyfrWeb.ContextGuard.deliver(
+        assign(socket, running: false, run_for: nil),
+        tag,
+        &{:noreply, ran(&1, result)}
+      )
+
+  def handle_async(:run, {:ok, _let_go}, socket), do: {:noreply, socket}
+
+  # Only the node's shutdown stops a run (`run_to_end/1`).
+  def handle_async(:run, {:exit, _reason}, socket), do: {:noreply, socket}
+
+  # The run, off the event and run to its end: the task is the run's
+  # waiter (`Opus.Dispatch`), and it ignores the page's exit, so a run
+  # goes on to its end when its page closes or is left, and its result is
+  # on Executions.
+  defp run(socket, args) do
+    ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
+    run_for = make_ref()
+
+    socket
+    |> assign(running: true, run_for: run_for, run: nil, run_error: nil)
+    |> start_async(
+      :run,
+      fn -> {tag, run_for, run_to_end(fn -> call_tool(ctx, "execution/run", args) end)} end,
+      supervisor: Prism.TaskSupervisor
+    )
+  end
+
+  defp ran(socket, {:ok, %{execution_id: _id} = run}),
+    do: socket |> assign(:run, run) |> assign(:run_error, nil)
+
+  defp ran(socket, {:error, reason}),
+    do:
+      socket
+      |> assign(:run, nil)
+      |> assign(:run_error, "The run failed: #{error_message(reason)}")
 
   @impl true
   def handle_info(%Cyfr.Bus.Components{}, socket) do
@@ -359,8 +425,13 @@ defmodule PrismWeb.ComponentDetailLive do
               placeholder="Input as JSON (optional), such as {&quot;url&quot;: &quot;https://example.com&quot;}"
               class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 font-mono text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
             >{@input}</textarea>
-            <.button type="submit">Run</.button>
+            <.button type="submit" disabled={@running}>
+              {if @running, do: "Running…", else: "Run"}
+            </.button>
           </form>
+          <p :if={@running} id="run-going" role="status" class="mt-3 text-sm text-gray-300">
+            The run is going. A question it asks you appears in front of this page.
+          </p>
           <p :if={@run_error} id="run-error" class="mt-3 text-sm text-red-300">{@run_error}</p>
           <div :if={@run} id="run-result" class="mt-4 space-y-2">
             <p class="text-sm text-gray-300">
@@ -437,7 +508,7 @@ defmodule PrismWeb.ComponentDetailLive do
       )
 
     ~H"""
-    <section id="permissions" class="space-y-4" data-test="permissions">
+    <section id="permissions" phx-hook="LocalTimes" class="space-y-4" data-test="permissions">
       <div>
         <h3 class="text-sm font-medium text-gray-400">Permissions</h3>
         <p class="mt-1 text-sm text-gray-400">
@@ -518,7 +589,7 @@ defmodule PrismWeb.ComponentDetailLive do
         <span :if={@named} class="font-mono text-xs text-gray-400" data-test="permission-action">
           {answer.action}:
         </span>
-        <span>{answer_words(answer)}</span>
+        <span><.answer_words answer={answer} /></span>
         <span
           :if={reworded?(answer, @declared)}
           class="text-xs text-amber-300"
@@ -541,30 +612,35 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   # A standing answer as the person reads it: "Never allowed" only for a
-  # denial that lasts always, as the card's "Never allow" is.
-  defp answer_words(%{effect: "allow", caller: caller, until: until}),
-    do: "Allowed #{when_words(caller)}, #{lasts_words(until)}"
+  # denial that lasts always, as the card's "Never allow" is; a time it
+  # lasts until is shown in the person's own time zone (`time[data-local]`,
+  # which the section's hook rewrites), and reads in UTC until it is.
+  attr :answer, :map, required: true
 
-  defp answer_words(%{effect: "deny", caller: caller, until: nil}),
-    do: "Never allowed #{when_words(caller)}"
+  defp answer_words(%{answer: %{effect: "deny", until: nil}} = assigns) do
+    ~H"Never allowed {when_words(@answer.caller)}"
+  end
 
-  defp answer_words(%{effect: "deny", caller: caller, until: until}),
-    do: "Denied #{when_words(caller)}, #{lasts_words(until)}"
+  defp answer_words(assigns) do
+    until = assigns.answer.until
+
+    assigns =
+      assign(assigns,
+        verb: if(assigns.answer.effect == "allow", do: "Allowed", else: "Denied"),
+        until: until && DateTime.to_iso8601(until),
+        utc: until && Calendar.strftime(until, "%Y-%m-%d %H:%M UTC")
+      )
+
+    ~H"""
+    {@verb} {when_words(@answer.caller)}, {if @until, do: "until", else: "always"}
+    <time :if={@until} datetime={@until} data-local data-test="permission-until">{@utc}</time>
+    """
+  end
 
   # Who an answer is for, as a clause: "when you start it", "when the
   # assistant Aqua starts it".
   defp when_words("person"), do: "when you start it"
   defp when_words(caller), do: "when #{Question.caller_words(caller)} starts it"
-
-  defp lasts_words(nil), do: "always"
-  defp lasts_words(%DateTime{} = until), do: "until #{Question.until(until)}"
-
-  defp lasts_words(until) when is_binary(until) do
-    case DateTime.from_iso8601(until) do
-      {:ok, at, _offset} -> lasts_words(at)
-      _unread -> "until #{until}"
-    end
-  end
 
   # An allow given under a title the action no longer has: it covers
   # nothing, and the component asks again. A deny stays whatever the title.

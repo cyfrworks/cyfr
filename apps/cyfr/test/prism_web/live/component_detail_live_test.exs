@@ -8,8 +8,13 @@ defmodule PrismWeb.ComponentDetailLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Prima.Test.Wait, only: [wait_until: 3]
+
   # How long a test waits for the registry's answer to reach the page.
   @answered_ms 5_000
+
+  # How long a test waits for a run started from the page to end.
+  @run_ms 30_000
 
   # The browser gives up on a pushed event it waits on for 30 seconds and
   # reloads (the shipped script's push timeout); a test stands that wait
@@ -438,8 +443,28 @@ defmodule PrismWeb.ComponentDetailLiveTest do
 
       view |> form("#run-form", %{"input" => ~s({"a": 1})}) |> render_submit()
 
+      wait_until(fn -> has_element?(view, "#run-result") end, @run_ms, "the run's result")
       assert has_element?(view, "#run-result", "Completed")
       assert has_element?(view, "#run-result pre", ~s("ran": true))
+      refute has_element?(view, "#run-error")
+    end
+
+    test "a run that fails says so, and the form takes the next run", %{conn: conn} do
+      {view, _html} = mount_athanor(conn, "/components/reagent:local.run-probe:0.1.0")
+
+      view |> form("#run-form", %{"input" => ~s({"trap": true})}) |> render_submit()
+      wait_until(fn -> not has_element?(view, "#run-going") end, @run_ms, "the run's end")
+      assert has_element?(view, "#run-result", "Failed") or has_element?(view, "#run-error")
+      refute has_element?(view, "#run-result pre", ~s("ran": true))
+
+      view |> form("#run-form", %{"input" => ~s({"a": 1})}) |> render_submit()
+
+      wait_until(
+        fn -> has_element?(view, "#run-result", "Completed") end,
+        @run_ms,
+        "the next run"
+      )
+
       refute has_element?(view, "#run-error")
     end
 
@@ -480,6 +505,259 @@ defmodule PrismWeb.ComponentDetailLiveTest do
 
       assert has_element?(view, "#grants li", "Your grant")
       assert has_element?(view, "#grants li button", "Revoke")
+    end
+  end
+
+  describe "a run that asks its person" do
+    alias Cyfr.Test.QuestionFixtures, as: Q
+
+    @probe Path.expand(
+             "../../../../locus/test/support/runtime/test_wasm/question_probe/question_probe.wasm",
+             __DIR__
+           )
+
+    @page "/components/catalyst:local.question-probe:1.0.0"
+
+    # The question probe (`test_wasm/question_probe`), which asks before
+    # each statement it is handed and reports what it was told, run by
+    # the runtime from the page as a person starts it.
+    setup %{ctx: ctx} do
+      Q.isolate!()
+      Sanctum.Test.Newcomers.directory!()
+
+      {:ok, _} =
+        Arca.Test.UnitFixtures.ship_bytes!(ctx, File.read!(@probe), %{
+          name: "question-probe",
+          version: "1.0.0",
+          type: "catalyst",
+          manifest: %{"asks" => Q.asks()}
+        })
+
+      # A second component of the same athanor, to move the page to.
+      {:ok, _} =
+        Arca.Test.UnitFixtures.ship_bytes!(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "run-probe",
+          version: "0.1.0",
+          type: "reagent",
+          description: "answers every input but a trap"
+        })
+
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+      :ok
+    end
+
+    @other "/components/reagent:local.run-probe:0.1.0"
+
+    defp patch!(view, path), do: render_patch(view, PrismWeb.ConnCase.athanor_path(path, nil))
+
+    # The form free: no run going, the button pressable, the box empty.
+    defp free?(view) do
+      not has_element?(view, "#run-going") and
+        not has_element?(view, ~s(#run-form button[disabled])) and
+        not has_element?(view, "#run-result") and
+        view
+        |> element("#run-form textarea")
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.trim() == ""
+    end
+
+    # The page has taken its run task's answer: LiveView forgets the task
+    # once its answer is handled, whatever the page does with it.
+    defp taken!(view) do
+      wait_until(
+        fn -> is_nil(:sys.get_state(view.pid).socket.private[:live_async][:run]) end,
+        @answered_ms,
+        "the run's answer taken by the page"
+      )
+    end
+
+    defp completed!(ctx) do
+      wait_until(
+        fn -> match?([%{status: "completed"}], probe_runs(ctx)) end,
+        @run_ms,
+        "the run's end"
+      )
+    end
+
+    defp statements(list),
+      do: Jason.encode!(%{"operation" => "run", "params" => %{"statements" => list}})
+
+    # The run form's submit, as the browser pushes it: waited on no
+    # longer than the browser waits (`@push_timeout_ms`).
+    defp start(view, list) do
+      form = form(view, "#run-form", %{"input" => statements(list)})
+      task = Task.async(fn -> render_submit(form) end)
+
+      case Task.yield(task, @push_timeout_ms) do
+        {:ok, html} -> html
+        nil -> :unanswered
+      end
+    end
+
+    defp card!(view),
+      do:
+        wait_until(
+          fn -> has_element?(view, ~s([data-test="question"])) end,
+          @answered_ms,
+          "the card on the page that started the run"
+        )
+
+    defp answers_shown(view) do
+      wait_until(fn -> has_element?(view, "#run-result") end, @run_ms, "the run's result")
+
+      view
+      |> element("#run-result pre")
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> Jason.decode!()
+      |> get_in(["data", "results"])
+      |> Enum.map(& &1["answer"])
+    end
+
+    defp choose(view, choice),
+      do:
+        view
+        |> element(~s([data-test="question-choice"][data-choice="#{choice}"]))
+        |> render_click()
+
+    defp questions_of(id) do
+      import Ecto.Query
+      from(q in Arca.Schemas.Question, where: q.execution_id == ^id)
+    end
+
+    # The probe's runs, read from the store: every one the test started.
+    defp probe_runs(ctx) do
+      import Ecto.Query
+
+      Arca.Repo.all(
+        from(e in Arca.Schemas.Execution,
+          where: e.athanor_id == ^ctx.athanor_id and like(e.reference, "%question-probe%")
+        )
+      )
+    end
+
+    for {choice, answer} <- [allow_once: "allowed", deny_once: "denied"] do
+      test "the page stays live while its run waits on the card, draws the card itself, and " <>
+             "shows the run's result once it is #{answer}",
+           %{conn: conn} do
+        {view, _html} = mount_athanor(conn, @page)
+
+        assert is_binary(start(view, ["DROP TABLE users"])), "the page answered the press"
+        assert has_element?(view, "#run-going")
+        assert has_element?(view, ~s(#run-form button[disabled]), "Running")
+
+        card!(view)
+        refute has_element?(view, "#run-result")
+
+        choose(view, unquote(to_string(choice)))
+        assert answers_shown(view) == [unquote(answer)]
+        refute has_element?(view, "#run-going")
+        refute has_element?(view, ~s([data-test="question"]))
+
+        # What the person typed is still in the form.
+        assert view |> element("#run-form textarea") |> render() =~ "DROP TABLE users"
+      end
+    end
+
+    test "a run that asks nothing shows its result with no card", %{conn: conn} do
+      {view, _html} = mount_athanor(conn, @page)
+
+      assert is_binary(start(view, ["TRUNCATE users"]))
+      assert answers_shown(view) == ["declined"]
+      refute has_element?(view, ~s([data-test="question"]))
+    end
+
+    test "a second press while a run is going starts nothing", %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, @page)
+
+      assert is_binary(start(view, ["DROP TABLE users"]))
+      card!(view)
+      assert is_binary(start(view, ["DROP TABLE logs"]))
+
+      assert [_one] = probe_runs(ctx)
+
+      assert [_one_card] =
+               view
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.query(~s([data-test="question"]))
+               |> Enum.to_list()
+
+      choose(view, "allow_once")
+      assert answers_shown(view) == ["allowed"]
+      assert [_one] = probe_runs(ctx)
+    end
+
+    test "a run whose page moved to another component shows its result on neither page, " <>
+           "and the other's form runs on its own",
+         %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, @page)
+      assert is_binary(start(view, ["DROP TABLE users"]))
+      card!(view)
+
+      patch!(view, @other)
+      assert has_element?(view, "h2", "reagent:local.run-probe:0.1.0")
+      assert free?(view)
+
+      # The first run, answered on its card, ends on Executions alone.
+      choose(view, "allow_once")
+      completed!(ctx)
+      taken!(view)
+      [%{id: id}] = probe_runs(ctx)
+      assert [%{state: "allowed"}] = Arca.Repo.all(questions_of(id))
+      assert free?(view)
+
+      # The other component's own run shows on its page.
+      view |> form("#run-form", %{"input" => ~s({"a": 1})}) |> render_submit()
+      wait_until(fn -> has_element?(view, "#run-result", "Completed") end, @run_ms, "its run")
+      assert has_element?(view, "#run-result pre", ~s("ran": true))
+    end
+
+    test "a page that comes back to a component while its run still goes shows its result " <>
+           "on Executions alone",
+         %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, @page)
+      assert is_binary(start(view, ["DROP TABLE users"]))
+      card!(view)
+
+      patch!(view, @other)
+      patch!(view, @page)
+      assert free?(view)
+
+      choose(view, "allow_once")
+      completed!(ctx)
+      taken!(view)
+      refute has_element?(view, "#run-result")
+      assert free?(view)
+    end
+
+    test "a page closed while its run waits leaves the run to its end, answered on another screen",
+         %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, @page)
+      assert is_binary(start(view, ["DROP TABLE users"]))
+      card!(view)
+
+      # The browser's connection gone: the page stops as a closed socket
+      # stops it.
+      {_ref, _topic, proxy} = view.proxy
+      Process.unlink(proxy)
+      page = Process.monitor(view.pid)
+      GenServer.stop(view.pid, {:shutdown, :closed})
+      assert_receive {:DOWN, ^page, :process, _pid, {:shutdown, :closed}}, @answered_ms
+
+      {other, _html} = mount_athanor(conn, @page)
+      card!(other)
+      choose(other, "allow_once")
+
+      completed!(ctx)
+      [%{id: id}] = probe_runs(ctx)
+      assert [%{state: "allowed"}] = Arca.Repo.all(questions_of(id))
+
+      # Its result is on Executions, not on a page that did not start it.
+      refute has_element?(other, "#run-result")
     end
   end
 
@@ -770,6 +1048,27 @@ defmodule PrismWeb.ComponentDetailLiveTest do
 
       set!(view, "delete_rows", %{"effect" => "deny", "caller" => "any", "lasts" => "always"})
       assert render(view) =~ "Never allowed when anyone starts it"
+    end
+
+    test "a time an answer lasts until is marked to show in the person's own time zone", %{
+      conn: conn,
+      person: person
+    } do
+      {view, _html} = mount_athanor(conn, @page)
+      assert has_element?(view, ~s(#permissions[phx-hook="LocalTimes"]))
+
+      set!(view, "delete_table", %{"effect" => "allow", "caller" => "any", "lasts" => "hour"})
+      [%{until: until}] = Q.standing(person)
+
+      assert [time] =
+               view
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.query(~s([data-action="delete_table"] time[data-local]))
+               |> Enum.to_list()
+
+      assert LazyHTML.attribute(time, "datetime") == [DateTime.to_iso8601(until)]
+      assert render(view) =~ "Allowed when anyone starts it,"
     end
 
     test "each answer for an action no longer declared names its action", %{

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
-import SystemLayer, {clearAllMarked, clearForms, clearMarked, hop, localTimes, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
+import SystemLayer, {LocalTimes, clearAllMarked, clearForms, clearMarked, hop, localTimes, markForm, openTab, resubmit, takeFragment} from "../../js/system_layer/index.js"
 
 // A document with a frame in fullscreen and pointer lock. Every call the
 // hook makes on it, and on the dialog, is recorded in `calls`, in order.
@@ -66,7 +66,10 @@ function fakeDialog(doc, calls, controls) {
       dialog.open = false
     },
     // The prompt's controls; it holds no time to show in local time.
-    querySelectorAll: (selector) => (selector === "time[data-local]" ? [] : controls)
+    querySelectorAll: (selector) => (selector === "time[data-local]" ? [] : controls),
+    // The element the prompt marks for its first focus, if any.
+    marked: null,
+    querySelector: (selector) => (selector === "[data-focus-first]" ? dialog.marked : null)
   })
   return dialog
 }
@@ -164,6 +167,16 @@ describe("showing a prompt", () => {
 describe("focus", () => {
   test("focus moves to the prompt's first control, skipping hidden inputs", async () => {
     await shown()
+    assert.equal(doc.activeElement.name, "secret")
+  })
+
+  test("a prompt that marks where its focus starts, as a question's card marks its heading, takes it there", async () => {
+    dialog.marked = control(doc, "heading", {tabIndex: -1})
+    await shown()
+    assert.equal(doc.activeElement.name, "heading")
+
+    // Tab from the heading enters the prompt's controls at the first.
+    hook.onKeydown({key: "Tab", shiftKey: false, preventDefault: () => {}})
     assert.equal(doc.activeElement.name, "secret")
   })
 
@@ -888,5 +901,18 @@ describe("times", () => {
     assert.deepEqual(asked, ["time[data-local]"])
     assert.equal(marked.textContent, new Date(at).toLocaleString("en-GB"))
     assert.equal(unreadable.textContent, "soon")
+  })
+
+  test("a page's own times are shown in the browser's own zone when it mounts and on every update", () => {
+    const at = "2026-11-14T09:00:00Z"
+    const time = {attrs: {datetime: at}, textContent: at, getAttribute(name) { return this.attrs[name] }}
+    const page = Object.assign(Object.create(LocalTimes), {el: {querySelectorAll: () => [time]}})
+
+    page.mounted()
+    assert.equal(time.textContent, new Date(at).toLocaleString())
+
+    time.textContent = at
+    page.updated()
+    assert.equal(time.textContent, new Date(at).toLocaleString())
   })
 })
