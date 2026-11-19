@@ -140,11 +140,15 @@ const unescape = (s) =>
 
 // The page at `width` pixels, served over `protocol`, with the person's
 // stored `prefs`; `refuse` refuses a stream's first open by its name. Every
-// open answers at once; timers wait until the test runs them.
+// stream's open answers at once; an app's open waits until the test answers
+// it (`openings`); timers wait until the test runs them (`runTimers`) or
+// moves the page's clock past them (`elapse`).
 function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version = NEXT} = {}) {
   const listeners = {}
   const timers = []
+  let clock = 0
   const opens = []
+  const openings = []
   const presses = []
   const pages = []
   const shell = {}
@@ -174,7 +178,7 @@ function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version =
     settings: (...args) => pages.push(args),
     prefs: () => new Promise(() => {}),
     ask() {},
-    open() {},
+    open: (ref) => new Promise((answer) => openings.push({ref, answer})),
     grant() {},
     ready() {}
   }
@@ -194,7 +198,7 @@ function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version =
     addEventListener() {},
     matchMedia: () => ({matches: true}),
     requestAnimationFrame: (fn) => setImmediate(fn),
-    setTimeout: (fn) => timers.push(fn),
+    setTimeout: (fn, ms = 0) => timers.push({fn, at: clock + ms}),
     clearTimeout: (id) => (timers[id - 1] = null),
     setInterval: () => 0,
     clearInterval() {},
@@ -232,9 +236,18 @@ function desk({width = 1024, protocol = "h2", prefs = {}, refuse = {}, version =
     const b = button(match)
     listeners.click({target: {closest: () => ({dataset: b.dataset, getAttribute: (k) => b.attrs[k] ?? null})}})
   }
-  const runTimers = () => timers.splice(0).forEach((fn) => fn && fn())
+  const runTimers = () => timers.splice(0).forEach((t) => t && t.fn())
+  const elapse = (ms) => {
+    clock += ms
+    timers.forEach((t, i) => {
+      if (t && t.at <= clock) {
+        timers[i] = null
+        t.fn()
+      }
+    })
+  }
   const tell = (event, value) => shell[event](value)
-  return {opens, presses, pages, send, change, picture, seen, buttons, button, tap, runTimers, last, tell}
+  return {opens, openings, presses, pages, send, change, picture, seen, buttons, button, tap, runTimers, elapse, last, tell}
 }
 
 const flush = async () => {
@@ -610,15 +623,55 @@ describe("the line desktop 0.2.0", () => {
   })
 })
 
-// 0.3.3: a feed's widget with no reading names its feed and how to bind one,
+// 0.3.4: a feed's widget with no reading names its feed and how to bind one,
 // the threads are Aqua's daily and workspace threads and shared ones, and
 // the threads widget's Archived button lists the archived ones instead.
-const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.3/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.4/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the line desktop 0.3.3", () => {
+describe("the line desktop 0.3.4", () => {
+  test("a tap on an app's button that opens nothing says why under it, the shipped canvas's words, for four seconds from the last answer; an open says nothing", async () => {
+    const p = desk({version: V3})
+    await flush()
+    p.tell("installed", [{ref: "tincture:local.maps", name: "Maps", icon: null, open: false}])
+    await flush()
+    const WORDS = /Tap again in a moment|It is no longer installed|No answer yet|Not opened: tap again|Opening/
+    const under = () => (p.seen().match(new RegExp(`Maps (${WORDS.source})`)) || [])[1] ?? null
+    const answer = async (a) => {
+      const before = under()
+      p.tap((b) => b.dataset.key === "app-tincture:local.maps")
+      await flush()
+      // The tap claims nothing before the shell answers.
+      assert.equal(under(), before)
+      p.openings.at(-1).answer(a)
+      await flush()
+      return under()
+    }
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
+    assert.equal(await answer({outcome: "opened"}), null)
+    assert.doesNotMatch(p.seen(), WORDS)
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
+    // An open never answered may have opened: it says only that no answer came.
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
+    assert.doesNotMatch(p.seen(), /Not opened/)
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Not opened: tap again")
+    assert.deepEqual(p.openings.map((o) => o.ref), Array(6).fill("tincture:local.maps"))
+
+    // The same answer again three seconds on restarts the four seconds.
+    p.elapse(3000)
+    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    p.elapse(3999)
+    await flush()
+    assert.equal(under(), "Not opened: tap again")
+    p.elapse(1)
+    await flush()
+    assert.equal(under(), null)
+    assert.doesNotMatch(p.seen(), WORDS)
+  })
+
   test("a feed widget with no reading names its feed and says to ask Aqua for one, until a reading comes", async () => {
     const p = desk({version: V3})
     await flush()

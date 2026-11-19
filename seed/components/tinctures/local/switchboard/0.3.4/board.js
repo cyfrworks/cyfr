@@ -424,12 +424,35 @@
   // Opens one of CYFR's pages, at the line's thread, run, schedule or offer
   // where it has one.
   const show = (page, at) => (at ? sdk.settings(page, at) : sdk.settings(page));
+  // What a tap to open an app says where the person tapped, from the
+  // shell's answer to the open, or null when it opened: the shipped
+  // canvas's words. An open never answered (`uncertain`) may have opened,
+  // so it says only that no answer came. Each answer is said for
+  // OPEN_SAID_MS from that answer, the same words again included.
+  const OPEN_SAID_MS = 4000;
+  function openSaid(answer) {
+    if (answer && answer.outcome === 'opened') return null;
+    if (answer && answer.outcome === 'cancelled' && answer.reason === 'too_soon') return 'Tap again in a moment';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'not_found') return 'It is no longer installed';
+    if (answer && answer.outcome === 'refused' && answer.reason === 'uncertain') return 'No answer yet';
+    return 'Not opened: tap again';
+  }
+  // An app opened by a cord patched to its jack: the readout names the app
+  // once it opened, and otherwise says why.
+  function openApp(line) {
+    const name = line.name;
+    sdk.open(line.ref).then((answer) => {
+      const words = openSaid(answer);
+      if (words === null) tell(`${name} → app`);
+      else tell(`${name} · ${words}`, OPEN_SAID_MS);
+    });
+  }
   function act(line, dest) {
     const name = line.name;
     if (dest === 'aqua' && line.aqua === 'open') { show('aqua', line.at); tell(`${name} → Aqua`); return; }
     if (dest === 'aqua') { sdk.ask(line.widget); tell(`${name} → Aqua · nothing sent`); return; }
     if (dest === 'chat') { show('chat', line.at); tell(`${name} → chat`); return; }
-    if (dest === 'app') { sdk.open(line.ref); tell(`${name} → app`); return; }
+    if (dest === 'app') { openApp(line); return; }
     if (dest === 'settings' && line.page) { show(line.page, line.at); tell(`${name} → settings`); }
   }
 

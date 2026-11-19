@@ -1392,6 +1392,32 @@ function scheduleAct(s) {
   a.disabled = pending.has(s.schedule_id);
   return a;
 }
+// What a tap to open an app says where the person tapped, from the
+// shell's answer to the open, or null when it opened: the shipped
+// canvas's words. An open never answered (`uncertain`) may have opened,
+// so it says only that no answer came. Each answer is said for
+// OPEN_SAID_MS from that answer, the same words again included.
+const OPEN_SAID_MS = 4000;
+function openSaid(answer) {
+  if (answer && answer.outcome === 'opened') return null;
+  if (answer && answer.outcome === 'cancelled' && answer.reason === 'too_soon') return 'Tap again in a moment';
+  if (answer && answer.outcome === 'refused' && answer.reason === 'not_found') return 'It is no longer installed';
+  if (answer && answer.outcome === 'refused' && answer.reason === 'uncertain') return 'No answer yet';
+  return 'Not opened: tap again';
+}
+// An app opened from its sign's board, which says why when nothing opened,
+// while that sign is still the one shown.
+let openTimer = null;
+async function openApp(ref) {
+  if (!sdk) return;
+  const at = selected;
+  const words = openSaid(await sdk.open(ref));
+  if (words === null || selected !== at) return;
+  said = words; saidOk = false;
+  clearTimeout(openTimer);
+  openTimer = setTimeout(() => { if (said === words) { said = ''; renderBoard(); } }, OPEN_SAID_MS);
+  renderBoard();
+}
 async function pressSchedule(s) {
   const c = scheduleControl(s);
   if (!c || !sdk) return;
@@ -1557,7 +1583,7 @@ function signFor(e) {
       const app = e.app, c = e.comp;
       return {
         title: app.name, facts: [['', app.open ? 'open' : 'on the hill'], ['version', c ? text(c.version) : ''], ...(update(c) ? [['', 'update available']] : [])],
-        acts: [act(`Open ${app.name}`, () => sdk && sdk.open(app.ref), 'go'), ...(update(c) ? [page('Open updates', 'components')] : []), ask('apps')],
+        acts: [act(`Open ${app.name}`, () => openApp(app.ref), 'go'), ...(update(c) ? [page('Open updates', 'components')] : []), ask('apps')],
       };
     }
   }

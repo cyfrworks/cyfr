@@ -3,7 +3,7 @@
 window.RoadList = (function () {
   const R = Road, S = Road.state;
   const root = document.getElementById('lists');
-  let shown = false, queued = false, said = '';
+  let shown = false, queued = false, said = '', openTimer = null;
 
   function at(m) {
     if (m == null) return '';
@@ -22,6 +22,15 @@ window.RoadList = (function () {
     for (const [text, bad, ...buttons] of items) { const li = el('li', text, bad ? 'bad' : null); for (const b of buttons) li.append(' ', b); ul.appendChild(li); }
     s.appendChild(ul);
     return s;
+  }
+  // What the list says of a tap to open an app, for Road.OPEN_SAID_MS from that answer.
+  async function open(ref) {
+    const words = await R.open(ref);
+    if (!words) return;
+    said = words;
+    clearTimeout(openTimer);
+    openTimer = setTimeout(() => { if (said === words) { said = ''; render(); } }, R.OPEN_SAID_MS);
+    render();
   }
   function retry(id) {
     return button('Retry run', async () => { said = await R.retry(id); render(); });
@@ -49,7 +58,7 @@ window.RoadList = (function () {
         ...(R.retryable(r.id) ? [retry(r.id)] : [])]), 'No runs lately.'),
       section('Threads', 'threads', R.threads().map((t) => [t.title + (t.waits ? ', waits on you' : '') + (t.unread ? ', ' + t.unread + ' unread' : '') + ', ' + at(t.last), t.waits]), 'No threads.'),
       section('Crew at work', 'activity', v(S.activity).map((j) => [j.member + (j.title ? ': ' + j.title : '') + ' since ' + at(j.since) + (j.status ? ' (' + j.status + ')' : ''), false]), 'Nobody is at work.'),
-      section('Apps', 'components', S.installed.map((a) => [a.name + (a.open ? ' (open)' : '') + ((R.component(a.ref) || {}).update ? ', update ready' : ''), false, button('Open', () => R.open(a.ref))]), 'No apps installed.'),
+      section('Apps', 'components', S.installed.map((a) => [a.name + (a.open ? ' (open)' : '') + ((R.component(a.ref) || {}).update ? ', update ready' : ''), false, button('Open', () => open(a.ref))]), 'No apps installed.'),
       section('Vault', 'vault', v(S.vault).map((e) => [e.name + ': ' + (e.fine ? 'fine' : 'needs re-authorisation'), !e.fine]), 'No vault entries.'),
       section('Files', 'files', v(S.files).map((f) => [f.name + (f.kind === 'offer' ? ', offered by ' + (f.from || 'someone') : ', changed ' + at(f.changed)), false]), 'No recent files and no offers.'),
       section('CYFR', 'system', sys ? [[{ ok: 'All is well', degraded: 'Something is not working as it should', low_storage: 'Storage is running low' }[sys.health] || 'Health not known', sys.health !== 'ok'],
