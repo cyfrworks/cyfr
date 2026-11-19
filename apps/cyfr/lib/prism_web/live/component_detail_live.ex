@@ -52,6 +52,7 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:run, nil)
      |> assign(:run_error, nil)
      |> assign(:running, false)
+     |> assign(:run_for, nil)
      |> assign(:permissions, nil)
      |> assign(:permission_error, nil)
      |> assign(:loading, true)}
@@ -59,8 +60,12 @@ defmodule PrismWeb.ComponentDetailLive do
 
   # `component.inspect` answers string keys
   # (`Compendium.Component.inspect_component/2`), its README among them.
+  # The page follows a patch to another component: its reference, and a
+  # run form free of the run the last one started (`left/2`).
   @impl true
   def handle_params(%{"ref" => ref}, _uri, socket) do
+    socket = left(socket, ref)
+
     component =
       case call_tool(socket, "component/inspect", %{
              "reference" => ref,
@@ -83,6 +88,25 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:loading, false)
      |> load_permissions()}
   end
+
+  # A run is shown only on the page of the component it was started for
+  # (`run_for`): a patch to another component lets go of the run here, and
+  # its result is on Executions alone, even if the page comes back to that
+  # component while it still goes. The run itself goes on to its end.
+  defp left(%{assigns: %{ref: ref}} = socket, ref), do: socket
+
+  defp left(socket, ref),
+    do:
+      assign(socket,
+        ref: ref,
+        page_title: "Component: #{ref}",
+        input: "",
+        run: nil,
+        run_error: nil,
+        running: false,
+        run_for: nil,
+        permission_error: nil
+      )
 
   # A catalyst's declared actions and the person's answers that stand for
   # them; nothing for any other component, or one that declares none and
@@ -230,14 +254,18 @@ defmodule PrismWeb.ComponentDetailLive do
 
   def system_layer_report(_id, _outcome, _socket), do: :pass
 
+  # A run's answer reaches the page only while the page still holds that
+  # run: a page moved to another component since (`left/2`) drops it.
   @impl true
-  def handle_async(:run, {:ok, {tag, result}}, socket),
+  def handle_async(:run, {:ok, {tag, run_for, result}}, %{assigns: %{run_for: run_for}} = socket),
     do:
       CyfrWeb.ContextGuard.deliver(
-        assign(socket, :running, false),
+        assign(socket, running: false, run_for: nil),
         tag,
         &{:noreply, ran(&1, result)}
       )
+
+  def handle_async(:run, {:ok, _let_go}, socket), do: {:noreply, socket}
 
   # Only the node's shutdown stops a run (`run_to_end/1`).
   def handle_async(:run, {:exit, _reason}, socket), do: {:noreply, socket}
@@ -250,13 +278,13 @@ defmodule PrismWeb.ComponentDetailLive do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
 
+    run_for = make_ref()
+
     socket
-    |> assign(:running, true)
-    |> assign(:run, nil)
-    |> assign(:run_error, nil)
+    |> assign(running: true, run_for: run_for, run: nil, run_error: nil)
     |> start_async(
       :run,
-      fn -> {tag, run_to_end(fn -> call_tool(ctx, "execution/run", args) end)} end,
+      fn -> {tag, run_for, run_to_end(fn -> call_tool(ctx, "execution/run", args) end)} end,
       supervisor: Prism.TaskSupervisor
     )
   end

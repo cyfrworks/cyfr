@@ -929,6 +929,71 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
+    test "an answer refused while another's confirmation stands in front keeps its words and " <>
+           "the answers given once on its card",
+         setup do
+      authenticator = Sanctum.TestContext.passkey!(setup.user.user_id)
+      asking = screen!(setup)
+      proving = screen!(setup)
+      {_run, first} = Q.open!(setup.ctx, setup.component)
+      first_card = Prompt.question_id(first)
+      shows!(asking, first_card)
+      choose(asking, "allow_always")
+      original = waited_ref(asking)
+      shows!(proving, Prompt.confirmation_id(original), "the first confirmation")
+
+      {_run, second} =
+        Q.open!(setup.ctx, setup.component, request: %{action: "delete_rows"})
+
+      assert {:error, {:confirmation_required, %{id: second_id}}} =
+               PrismWeb.Ops.call_tool(view_context(proving), "question/answer", %{
+                 "ref" => second,
+                 "answer" => %{"effect" => "allow", "lasts" => "always", "covers" => "any_caller"}
+               })
+
+      in_front = Prompt.confirmation_id(Prima.Confirmation.ref(second_id))
+      shows!(asking, in_front, "in front")
+
+      # The release that declares the action leaves while the first card
+      # waits behind: its answer, repeated once proved, is refused there.
+      :ok =
+        Arca.ComponentStorage.delete_component(
+          Context.actor(setup.ctx),
+          "tables",
+          "1.0.0",
+          "local",
+          "catalyst"
+        )
+
+      prove_here!(proving, original, authenticator)
+
+      wait_until(
+        fn ->
+          Enum.any?(layer_assigns(asking).queue, &(&1.id == first_card and &1[:said] != nil))
+        end,
+        2_000,
+        "the refusal kept on the waiting card"
+      )
+
+      asking
+      |> with_target("#system-layer")
+      |> render_click("dismiss", %{"id" => in_front})
+
+      shows!(asking, first_card, "the first card again")
+
+      assert has_element?(
+               asking,
+               ~s([data-test="question-said"]),
+               "No installed version asks for this permission in these words"
+             )
+
+      assert offered(asking) == ["deny_once", "allow_once"]
+      refute has_element?(asking, ~s([data-test="question-more"]))
+      assert Q.row(setup.ctx, first).state == "open"
+      assert Q.standing(setup.ctx) == []
+      end_views()
+    end
+
     for {fact, words} <- [
           voided: "The confirmation was withdrawn.",
           cancelled: "The confirmation was cancelled.",

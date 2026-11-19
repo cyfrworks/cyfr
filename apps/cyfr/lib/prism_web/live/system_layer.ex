@@ -2490,34 +2490,33 @@ defmodule PrismWeb.SystemLayer do
         remove_prompt(socket, prompt.id)
 
       {:done, {:error, reason}, socket} ->
-        cond do
-          no_longer_waiting?(reason) ->
-            remove_prompt(socket, prompt.id)
-
-          shown?(socket, prompt) ->
-            socket |> assign(:error, Ops.error_message(reason)) |> once_only(reason)
-
-          true ->
-            socket
-        end
+        if no_longer_waiting?(reason),
+          do: remove_prompt(socket, prompt.id),
+          else: question_refused(socket, prompt.id, reason)
     end
   end
 
-  # An answer that lasts refused because no installed version asks for the
-  # permission in these words would be refused again: the card offers only
+  # A refusal is said on its own card, kept by the card's id wherever it
+  # stands, shown or waiting behind another's confirmation, as an ended
+  # confirmation's words are (`confirmation_ended/3`). An answer that
+  # lasts refused because no installed version asks for the permission in
+  # these words would be refused again: from then on the card offers only
   # the answers given once.
-  defp once_only(socket, %Prima.Refusal{reason: :removed}),
-    do: put_question_choice(socket, socket.assigns.current, once_only: true)
+  defp question_refused(socket, id, reason) do
+    once_only? = match?(%Prima.Refusal{reason: :removed}, reason)
 
-  defp once_only(socket, _reason), do: socket
+    update_prompt(socket, id, fn prompt ->
+      prompt = Map.put(prompt, :said, Ops.error_message(reason))
+
+      if once_only?,
+        do: Map.put(prompt, :choice, Map.put(Question.choice(prompt), :once_only, true)),
+        else: prompt
+    end)
+  end
 
   defp ended_words(:cancelled), do: "The confirmation was cancelled."
   defp ended_words(:voided), do: "The confirmation was withdrawn."
   defp ended_words(:expired), do: "The confirmation expired."
-
-  # A refusal is said on the card only while it is the one shown.
-  defp shown?(%{assigns: %{current: %{id: id}}}, %{id: id}), do: true
-  defp shown?(_socket, _prompt), do: false
 
   defp no_longer_waiting?(%Prima.Refusal{reason: :not_pending}), do: true
   defp no_longer_waiting?({:not_found, "question", _ref}), do: true

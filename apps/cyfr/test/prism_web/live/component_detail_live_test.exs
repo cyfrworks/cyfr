@@ -533,8 +533,52 @@ defmodule PrismWeb.ComponentDetailLiveTest do
           manifest: %{"asks" => Q.asks()}
         })
 
+      # A second component of the same athanor, to move the page to.
+      {:ok, _} =
+        Arca.Test.UnitFixtures.ship_bytes!(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+          name: "run-probe",
+          version: "0.1.0",
+          type: "reagent",
+          description: "answers every input but a trap"
+        })
+
       {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
       :ok
+    end
+
+    @other "/components/reagent:local.run-probe:0.1.0"
+
+    defp patch!(view, path), do: render_patch(view, PrismWeb.ConnCase.athanor_path(path, nil))
+
+    # The form free: no run going, the button pressable, the box empty.
+    defp free?(view) do
+      not has_element?(view, "#run-going") and
+        not has_element?(view, ~s(#run-form button[disabled])) and
+        not has_element?(view, "#run-result") and
+        view
+        |> element("#run-form textarea")
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.text()
+        |> String.trim() == ""
+    end
+
+    # The page has taken its run task's answer: LiveView forgets the task
+    # once its answer is handled, whatever the page does with it.
+    defp taken!(view) do
+      wait_until(
+        fn -> is_nil(:sys.get_state(view.pid).socket.private[:live_async][:run]) end,
+        @answered_ms,
+        "the run's answer taken by the page"
+      )
+    end
+
+    defp completed!(ctx) do
+      wait_until(
+        fn -> match?([%{status: "completed"}], probe_runs(ctx)) end,
+        @run_ms,
+        "the run's end"
+      )
     end
 
     defp statements(list),
@@ -647,6 +691,49 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       assert [_one] = probe_runs(ctx)
     end
 
+    test "a run whose page moved to another component shows its result on neither page, " <>
+           "and the other's form runs on its own",
+         %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, @page)
+      assert is_binary(start(view, ["DROP TABLE users"]))
+      card!(view)
+
+      patch!(view, @other)
+      assert has_element?(view, "h2", "reagent:local.run-probe:0.1.0")
+      assert free?(view)
+
+      # The first run, answered on its card, ends on Executions alone.
+      choose(view, "allow_once")
+      completed!(ctx)
+      taken!(view)
+      [%{id: id}] = probe_runs(ctx)
+      assert [%{state: "allowed"}] = Arca.Repo.all(questions_of(id))
+      assert free?(view)
+
+      # The other component's own run shows on its page.
+      view |> form("#run-form", %{"input" => ~s({"a": 1})}) |> render_submit()
+      wait_until(fn -> has_element?(view, "#run-result", "Completed") end, @run_ms, "its run")
+      assert has_element?(view, "#run-result pre", ~s("ran": true))
+    end
+
+    test "a page that comes back to a component while its run still goes shows its result " <>
+           "on Executions alone",
+         %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, @page)
+      assert is_binary(start(view, ["DROP TABLE users"]))
+      card!(view)
+
+      patch!(view, @other)
+      patch!(view, @page)
+      assert free?(view)
+
+      choose(view, "allow_once")
+      completed!(ctx)
+      taken!(view)
+      refute has_element?(view, "#run-result")
+      assert free?(view)
+    end
+
     test "a page closed while its run waits leaves the run to its end, answered on another screen",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, @page)
@@ -665,12 +752,7 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       card!(other)
       choose(other, "allow_once")
 
-      wait_until(
-        fn -> match?([%{status: "completed"}], probe_runs(ctx)) end,
-        @run_ms,
-        "the run's end"
-      )
-
+      completed!(ctx)
       [%{id: id}] = probe_runs(ctx)
       assert [%{state: "allowed"}] = Arca.Repo.all(questions_of(id))
 
