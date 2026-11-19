@@ -2713,6 +2713,24 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.filesystem_violations([planted]) == []
     end
 
+    test "a marker names one group letter, which no word character follows" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          def a(p), do: File.read(p) # arca:bypass-ok=AA
+          def b(p), do: File.read(p) # arca:bypass-ok=Apple
+          def c(p), do: File.read(p) # arca:bypass-ok=A
+          def d(p), do: File.read(p) # arca:bypass-ok=A, a reason
+          def e(p), do: File.read(p) # arca:bypass-ok=E — a reason
+        end
+        ''')
+
+      assert planted |> List.wrap() |> Boundaries.filesystem_violations() |> line_numbers() == [
+               2,
+               3
+             ]
+    end
+
     test "a marker five lines above, or below, covers nothing" do
       planted =
         planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''

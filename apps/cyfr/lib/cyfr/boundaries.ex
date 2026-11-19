@@ -3198,7 +3198,7 @@ defmodule Cyfr.Boundaries do
     from: "apps/*/lib/**/*.ex",
     exempt: ["*/arca/adapters/*", "apps/arca/lib/arca/storage.ex"],
     entire_module: ~r/arca:bypass-ok=[A-E] — entire module/,
-    marker: ~r/arca:bypass-ok=[A-E]/,
+    marker: ~r/arca:bypass-ok=[A-E](?!\w)/,
     window: 4,
     call:
       ~r/(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard|(^|[^A-Za-z0-9_]):(file|filelib|erl_tar|prim_file)\./,
