@@ -28,7 +28,7 @@ defmodule Opus.Record do
 
       # On success: write completion
       record = Record.complete(record, output)
-      {:ok, _ledger} = Record.write_completed_ledger(record, retention_class: class)
+      {:ok, _read_threads} = Record.write_completed(record, retention_class: class)
 
       # On failure: write failure
       record = Record.fail(record, error)
@@ -99,7 +99,7 @@ defmodule Opus.Record do
           kind: String.t() | nil,
           turn_id: String.t() | nil,
           schedule_id: String.t() | nil,
-          sources: [Prima.Source.t()]
+          read_threads: [String.t()]
         }
 
   # One execution row, as its admission builds it and a read returns it.
@@ -145,10 +145,10 @@ defmodule Opus.Record do
     # The schedule or feed this root runs for (`Opus.Schedules`), when
     # the scheduler fired it; nil otherwise.
     :schedule_id,
-    # A root's seed (`Prima.Source`), from what admitted it (`root_seed/2`);
-    # a child's is its parent's ledger, read where it is admitted. On a
-    # record read back, the row's ledger as that read found it.
-    sources: [],
+    # A root's seed, from what admitted it (`root_seed/1`); a child's is
+    # its parent's read threads, read where it is admitted. On a record
+    # read back, the row's read threads as that read found them.
+    read_threads: [],
     # What the run was admitted under (`admitted/4`): the admission decision
     # (`call_id`, `Arca.DecisionLog`), what started it (`origin`,
     # `Prima.Origin`) and who (`caller`, `Prima.Question.Caller`), the last
@@ -170,14 +170,11 @@ defmodule Opus.Record do
   - `:root_execution_id` - The chain's root execution ID. A root stamps
     itself, so every row in a chain carries the same value.
 
-  A root's source ledger is seeded from what admitted it, never from an
-  argument: a launch's stamp (`:launch`, `%{sources}`, which
+  A root's read threads are seeded from what admitted it, never from an
+  argument: a launch's stamp (`:launch`, `%{read_threads}`, which
   `Opus.Admission` takes off the context `Aqua.Launch` builds alone) seeds
-  the turn's sources; a webhook's
-  run starts outside; a frame's invocation starts with the classes its
-  declared reads may carry (`:frame_sources`, which `Opus.Tincture`
-  alone passes); an interactive, programmatic, scheduled or feed run
-  starts empty until it reads. A child's is its parent's.
+  the turn's read threads; any other root starts with none until it
+  reads. A child's are its parent's.
 
   A root's caller (`Prima.Question.Caller`) is derived here, once, from
   what admitted it, and never from an argument a caller of the gate
@@ -231,7 +228,7 @@ defmodule Opus.Record do
       kind: Keyword.get(opts, :kind, "component"),
       turn_id: Keyword.get(opts, :turn_id),
       schedule_id: Keyword.get(opts, :schedule_id),
-      sources: if(is_nil(parent_execution_id), do: root_seed(ctx, opts), else: [])
+      read_threads: if(is_nil(parent_execution_id), do: root_seed(opts), else: [])
     }
   end
 
@@ -306,17 +303,10 @@ defmodule Opus.Record do
   defp named(kind, id) when is_binary(id) and id != "", do: {kind, id}
   defp named(_kind, _none), do: nil
 
-  defp root_seed(%Context{} = ctx, opts) do
+  defp root_seed(opts) do
     case Keyword.get(opts, :launch) do
-      %{sources: sources} when is_list(sources) ->
-        Prima.Source.set(sources)
-
-      _no_launch ->
-        cond do
-          ctx.origin == :webhook -> [Prima.Source.outside("webhook")]
-          is_list(Keyword.get(opts, :frame_sources)) -> Keyword.fetch!(opts, :frame_sources)
-          true -> []
-        end
+      %{read_threads: ids} when is_list(ids) -> ids
+      _no_launch -> []
     end
   end
 
@@ -526,26 +516,6 @@ defmodule Opus.Record do
 
   def inherited_grant(_athanor_id, _parent_execution_id), do: {:error, :not_standing}
 
-  @doc """
-  Whether any run of the tree rooted at `execution_id` was admitted with
-  egress, as each admission marked the root (`Arca.Execution.reached_outside/2`):
-  what a launcher reads from the run's completion result. `nil` when the
-  root cannot be read, which a reader takes as outside.
-  """
-  @spec reached_outside(Context.t(), String.t()) :: boolean() | nil
-  def reached_outside(%Context{} = ctx, execution_id) when is_binary(execution_id) do
-    case Arca.Execution.reached_outside(Sanctum.Context.actor(ctx), execution_id) do
-      {:ok, reached} -> reached
-      {:error, _unreadable} -> nil
-    end
-  end
-
-  def reached_outside(%Context{}, _execution_id), do: nil
-
-  # A run's own admitted egress: the domains its edge allows.
-  defp reaches_outside?(%{allowed_domains: [_ | _]}), do: true
-  defp reaches_outside?(_policy), do: false
-
   defp admit(%__MODULE__{} = record, origin, grant, opts, payloads) do
     case Arca.Execution.admit(
            %{
@@ -574,7 +544,7 @@ defmodule Opus.Record do
              turn_id: record.turn_id,
              schedule_id: record.schedule_id,
              origin: origin,
-             sources: record.sources,
+             read_threads: record.read_threads,
              caller:
                record.admitted.caller && Prima.Question.Caller.encode(record.admitted.caller)
            },
@@ -585,10 +555,7 @@ defmodule Opus.Record do
                reservation: Keyword.get(opts, :reservation),
                payloads: payloads,
                grant: grant,
-               verify: &Sanctum.ExecutionStanding.verify/1,
-               # A run admitted with egress marks its tree's root in this
-               # transaction, where retention cannot reach it first.
-               reaches_outside: reaches_outside?(record.host_policy)
+               verify: &Sanctum.ExecutionStanding.verify/1
              ],
              Keyword.take(opts, [
                :charge,
@@ -661,13 +628,13 @@ defmodule Opus.Record do
   end
 
   @doc """
-  Close the row as completed, answering `{:ok, ledger}`: the run's source
-  ledger as the terminal transaction itself read it
-  (`Arca.Execution.row_ledger/1`), the first carrier of its provenance to
-  whoever it answers — never a read after the write, which retention may
-  race. The row keeps an envelope of the output (`persisted_output/1`);
-  the output itself is staged as the result payload and committed by the
-  same transaction that closes the attempt. A result that cannot be kept
+  Close the row as completed, answering `{:ok, read_threads}`: the run's
+  read threads as the terminal transaction itself read them
+  (`Arca.Execution.row_threads/1`), which whoever it answers carries on —
+  never a read after the write, which retention may race. The row keeps
+  an envelope of the output (`persisted_output/1`); the output itself is
+  staged as the result payload and committed by the same transaction
+  that closes the attempt. A result that cannot be kept
   closes the attempt `result_lost` and the row failed — durably, so
   nothing retries an effect that already happened — and answers
   `{:error, {:result_lost, reason}}`.
@@ -681,10 +648,10 @@ defmodule Opus.Record do
   closes `uncertain` and the row failed, since what the run did may
   already have happened, and the answer is `{:error, :not_standing}`.
   """
-  @spec write_completed_ledger(t(), keyword()) :: {:ok, [Prima.Source.t()]} | {:error, term()}
-  def write_completed_ledger(record, opts)
+  @spec write_completed(t(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
+  def write_completed(record, opts)
 
-  def write_completed_ledger(%__MODULE__{status: :completed} = record, opts) do
+  def write_completed(%__MODULE__{status: :completed} = record, opts) do
     ctx = record_to_ctx(record)
     grant = written_grant(opts)
 
@@ -714,7 +681,7 @@ defmodule Opus.Record do
                 "duration_ms" => record.duration_ms
               })
 
-            {:ok, Arca.Execution.row_ledger(execution)}
+            {:ok, Arca.Execution.row_threads(execution)}
 
           {:error, :not_standing} ->
             if staged, do: Arca.ExecutionPayloads.discard(staged)
@@ -734,7 +701,7 @@ defmodule Opus.Record do
     end
   end
 
-  def write_completed_ledger(%__MODULE__{status: status}, _opts) do
+  def write_completed(%__MODULE__{status: status}, _opts) do
     {:error, "Cannot write completed record for status: #{status}"}
   end
 
@@ -922,7 +889,7 @@ defmodule Opus.Record do
   for a failed component root a schedule or a feed fired (its
   `schedule_id`), whose attempt closed `error`, the run's own failure;
   otherwise the refusal the retry answers. A run started anywhere else may
-  have carried a launch's sources or an account its row does not record,
+  have carried a launch's read threads or an account its row does not record,
   so only such a run is repeated exactly from its row; and an `uncertain`
   or `result_lost` outcome may have completed what it did, which no
   contract proves safe to run again (ARCHITECTURE.md §6.5). Reads the
@@ -1215,7 +1182,7 @@ defmodule Opus.Record do
       kind: result[:kind],
       turn_id: result[:turn_id],
       schedule_id: result[:schedule_id],
-      sources: Arca.Execution.row_ledger(result)
+      read_threads: Arca.Execution.row_threads(result)
     }
   end
 

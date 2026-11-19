@@ -767,7 +767,7 @@ Events use standard SSE format with `event:` set to the event type. An execution
 ```
 id: 1
 event: execution.started
-data: {"attempt":"att_...","sources":[]}
+data: {"attempt":"att_..."}
 
 id: 1.1
 event: emit

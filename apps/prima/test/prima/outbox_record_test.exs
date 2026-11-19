@@ -14,7 +14,6 @@ defmodule Prima.OutboxRecordTest do
   use ExUnit.Case, async: true
 
   alias Prima.OutboxRecord
-  alias Prima.Source
 
   @at ~U[2026-11-05 12:00:00.000001Z]
 
@@ -104,7 +103,7 @@ defmodule Prima.OutboxRecordTest do
         outcome: "done",
         summary: "written",
         attachments: [%{"message_id" => "msg_post", "stored_name" => "0-chart.png"}],
-        sources: [Source.outside("moon.example"), Source.thread("thr_daily")],
+        read_threads: ["thr_daily", "thr_board", "thr_daily"],
         person_id: "usr_1",
         origin: :interactive
       },
@@ -112,7 +111,7 @@ defmodule Prima.OutboxRecordTest do
     )
   end
 
-  test "a report is a record of its workspace thread at the move, with the turn's sources" do
+  test "a report is a record of its workspace thread at the move, with the turn's read threads" do
     for outcome <- OutboxRecord.report_outcomes() do
       assert %OutboxRecord{
                source_kind: "thread",
@@ -129,13 +128,13 @@ defmodule Prima.OutboxRecordTest do
                  "attachments" => [
                    %{"message_id" => "msg_post", "stored_name" => "0-chart.png"}
                  ],
+                 "read_threads" => ["thr_board", "thr_daily"],
                  "person_id" => "usr_1",
                  "origin" => "interactive"
                }
              } = record = OutboxRecord.workspace_report(report(%{outcome: outcome}))
 
-      assert OutboxRecord.report_sources(record) ==
-               [Source.outside("moon.example"), Source.thread("thr_daily")]
+      assert OutboxRecord.report_threads(record) == ["thr_board", "thr_daily"]
     end
 
     assert %{snapshot: %{"truncated" => true, "summary" => cut}} =

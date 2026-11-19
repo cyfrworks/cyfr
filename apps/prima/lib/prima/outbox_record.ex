@@ -19,11 +19,6 @@ defmodule Prima.OutboxRecord do
       the close that answered it, JSON-encoded when it is not a string
       and cut to `max_output_bytes/0` on a character boundary with
       `truncated` set; nil when the schedule did not ask to keep it;
-    * `sources` — the run's source ledger (`Prima.Source`) as the
-      finish's own transaction read it, canonical JSON objects beside the
-      output they describe, so a kept note carries the classes the run
-      read without a later read of an execution row retention may have
-      removed; nil when the schedule did not ask to keep the output;
     * `keep_outcome` and `note_name` — the schedule's choice at the
       finish, the pair its stored metadata states (`keep_pair/1`);
     * `schedule_revision` — the schedule's revision, the same instant as
@@ -69,8 +64,8 @@ defmodule Prima.OutboxRecord do
   (cut to `max_reply_bytes/0` on a character boundary with `truncated`
   set), `attachments` (the files of the workspace thread's posts the
   report carries, each `{"message_id", "stored_name"}`, copied at
-  delivery), `sources` (the turn's ledger at the move, canonical JSON
-  objects), `person_id` and `origin`.
+  delivery), `read_threads` (the ids of the threads whose posts the turn
+  read, at the move), `person_id` and `origin`.
 
   `brain_forget` is one owed removal of a program's native session from
   its row's kept folder (`brain_forget/1`): a thread's `brain_session`
@@ -153,9 +148,8 @@ defmodule Prima.OutboxRecord do
   read in its transaction: `occurrence` (`id`, `athanor_id`,
   `scheduled_for`, `execution_id`, `note_revision_read`), `schedule`
   (`id`, `profile_id`, `updated_at`), `consent_revision`, the parsed
-  `keep` pair `{keep_outcome, note_name}`, the run's raw `output` and
-  its ledger `sources`, both kept only when the schedule asked to keep
-  the output.
+  `keep` pair `{keep_outcome, note_name}` and the run's raw `output`,
+  kept only when the schedule asked to keep it.
   """
   @spec schedule_outcome(map()) :: t()
   def schedule_outcome(%{
@@ -163,11 +157,10 @@ defmodule Prima.OutboxRecord do
         schedule: %{id: schedule_id, profile_id: profile_id, updated_at: %DateTime{} = updated},
         consent_revision: consent_revision,
         keep: {keep?, note_name},
-        output: output,
-        sources: sources
+        output: output
       })
       when is_binary(occurrence_id) and is_binary(athanor_id) and athanor_id != "" and
-             is_binary(schedule_id) and is_boolean(keep?) and is_list(sources) and
+             is_binary(schedule_id) and is_boolean(keep?) and
              (is_integer(consent_revision) or is_nil(consent_revision)) do
     revision = instant(updated)
     {output, truncated?} = if keep?, do: output(output), else: {nil, false}
@@ -181,7 +174,6 @@ defmodule Prima.OutboxRecord do
       snapshot: %{
         "output" => output,
         "truncated" => truncated?,
-        "sources" => if(keep?, do: stored_sources(sources)),
         "keep_outcome" => keep?,
         "note_name" => if(keep?, do: note_name(note_name)),
         "schedule_revision" => revision,
@@ -327,7 +319,7 @@ defmodule Prima.OutboxRecord do
   report of an opening refused before any turn started), `moved_at`,
   `outcome` (one of `report_outcomes/0`), `summary`, `attachments`
   (`[%{"message_id", "stored_name"}]`, at most `max_report_files/0`),
-  `sources` (`Prima.Source`), `person_id` and `origin`.
+  `read_threads` (thread ids), `person_id` and `origin`.
   """
   @spec workspace_report(map()) :: t()
   def workspace_report(%{
@@ -339,7 +331,7 @@ defmodule Prima.OutboxRecord do
         outcome: outcome,
         summary: summary,
         attachments: attachments,
-        sources: sources,
+        read_threads: read_threads,
         person_id: person_id,
         origin: origin
       })
@@ -347,7 +339,7 @@ defmodule Prima.OutboxRecord do
              workspace_id != "" and is_binary(title) and
              ((is_binary(turn_id) and turn_id != "") or (is_nil(turn_id) and outcome == "error")) and
              outcome in @report_outcomes and is_binary(summary) and is_list(attachments) and
-             length(attachments) <= @max_report_files and is_list(sources) and
+             length(attachments) <= @max_report_files and is_list(read_threads) and
              is_binary(person_id) and person_id != "" and origin in @origins do
     files!(attachments)
     {summary, truncated?} = cap(summary, @max_reply_bytes)
@@ -366,7 +358,7 @@ defmodule Prima.OutboxRecord do
         "summary" => summary,
         "truncated" => truncated?,
         "attachments" => attachments,
-        "sources" => stored_sources(sources),
+        "read_threads" => thread_ids!(read_threads),
         "person_id" => person_id,
         "origin" => Prima.Origin.to_wire(origin)
       }
@@ -407,16 +399,15 @@ defmodule Prima.OutboxRecord do
   end
 
   @doc """
-  The sources a `workspace_report` snapshot records for the turn that
-  reported (`Prima.Source`); a snapshot that records none it can read is
-  one unnamed outside source, as `sources/1` reads a schedule's.
+  The ids of the threads a `workspace_report` snapshot records the
+  reporting turn read, sorted; none for a snapshot that records none.
   """
-  @spec report_sources(t()) :: [Prima.Source.t()]
-  def report_sources(%__MODULE__{kind: "workspace_report", snapshot: %{"sources" => sources}})
-      when is_list(sources),
-      do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
+  @spec report_threads(t()) :: [String.t()]
+  def report_threads(%__MODULE__{kind: "workspace_report", snapshot: %{"read_threads" => ids}})
+      when is_list(ids),
+      do: ids |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq() |> Enum.sort()
 
-  def report_sources(%__MODULE__{}), do: [Prima.Source.outside(nil)]
+  def report_threads(%__MODULE__{}), do: []
 
   # A file a report carries names a post of the workspace thread and the
   # blob stored under it, and nothing else.
@@ -488,18 +479,6 @@ defmodule Prima.OutboxRecord do
 
   def note_revision_read(%__MODULE__{}), do: :absent
 
-  @doc """
-  The sources a `schedule_outcome` snapshot records for its kept output
-  (`Prima.Source`). A snapshot that records none it can read is one
-  unnamed outside source, never none: provenance that cannot be read is
-  not the athanor's own.
-  """
-  @spec sources(t()) :: [Prima.Source.t()]
-  def sources(%__MODULE__{snapshot: %{"sources" => sources}}) when is_list(sources),
-    do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
-
-  def sources(%__MODULE__{}), do: [Prima.Source.outside(nil)]
-
   @doc "The snapshot as the canonical JSON text it is stored as."
   @spec encode_snapshot(t()) :: {:ok, String.t()} | {:error, :unencodable}
   def encode_snapshot(%__MODULE__{snapshot: snapshot}) when is_map(snapshot) do
@@ -548,12 +527,11 @@ defmodule Prima.OutboxRecord do
   defp revision_read(read) when is_integer(read) and read >= 0, do: read
   defp revision_read(nil), do: "absent"
 
-  # A source's canonical object without the name it does not carry: JCS
-  # has no null, and `Prima.Source.from_json/1` reads an absent name as
-  # none.
-  defp stored_sources(sources) do
-    for json <- Prima.Source.to_json_list(sources),
-        do: Map.reject(json, fn {_key, value} -> is_nil(value) end)
+  defp thread_ids!(ids) do
+    unless Enum.all?(ids, &(is_binary(&1) and &1 != "")),
+      do: raise(ArgumentError, "a report's read threads are thread ids")
+
+    ids |> Enum.uniq() |> Enum.sort()
   end
 
   defp note_name(name) when is_binary(name) and name != "", do: name

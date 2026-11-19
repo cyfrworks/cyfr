@@ -13,7 +13,7 @@ defmodule Aqua.Providers.Thread do
   files it hands (stored under the post's own row first), links, which
   are shown and never fetched, and a screenshot the same attempt of the
   turn took (`Aqua.Attachments.drafted/3`), copied into the post with
-  the sources of the page it shows. The lineage the gate stamps names the
+  the read threads it was taken with. The lineage the gate stamps names the
   thread and the turn; no argument does.
 
   ## Recall
@@ -28,12 +28,12 @@ defmodule Aqua.Providers.Thread do
   after a `seq`, in a turn fifty posts at most. A crew member's thread is
   neither searched nor read, and another athanor's is not found. A turn
   reads only while the person's Aqua holds it, the holder that made the
-  call: before a read answers, what it carries joins the turn's sources
-  under the turn's fence (`Aqua.Tape.join_read/5`): each thread whose
-  posts it answers or that those posts carry (a pointer's or a report's
-  workspace thread, an opening's daily thread), what the posts carry (a
-  report's kept sources, a copied file's), and the sources of the turns
-  that wrote them. So deleting a thread a turn read finds that turn, and
+  call: before a read answers, what it carries joins the turn's read
+  threads under the turn's fence (`Aqua.Tape.join_read/4`): each thread
+  whose posts it answers or that those posts carry (a pointer's or a
+  report's workspace thread, an opening's daily thread, a report's kept
+  read threads, a copied file's), and the read threads of the turns that
+  wrote them. So deleting a thread a turn read finds that turn, and
   blanks the read's result (`Arca.ThreadStorage.delete/3`); a thread
   deleted before the join is not answered.
 
@@ -266,7 +266,6 @@ defmodule Aqua.Providers.Thread do
         ),
         Operation.new("thread", "list", "List thread", [],
           kind: :read,
-          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
           planes: [:external],
           consent: :interactive
         ),
@@ -281,7 +280,6 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :read,
-          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
           planes: [:external],
           consent: :interactive
         ),
@@ -448,7 +446,7 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :read,
-          sources: {:answer, {__MODULE__, :read_sources}},
+          threads: {__MODULE__, :read_threads},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -475,7 +473,7 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :read,
-          sources: {:answer, {__MODULE__, :read_sources}},
+          threads: {__MODULE__, :read_threads},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -561,7 +559,6 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:in_chain]
         ),
         Operation.new(
@@ -591,7 +588,7 @@ defmodule Aqua.Providers.Thread do
     # In a chain only: the soul's turn hands a job to a crew member, and a
     # person's own ask is an `@name` in `thread.send`. The answer is the
     # request's id and the roster the athanor's own files hold, so
-    # neither carries outside material.
+    # neither carries a thread's posts.
     Operation.tool(
       [
         Operation.new(
@@ -623,12 +620,10 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:in_chain]
         ),
         Operation.new("crew", "list", "List crew", [],
           kind: :read,
-          sources: [],
           planes: [:in_chain],
           recovery: :replay_safe
         )
@@ -642,14 +637,11 @@ defmodule Aqua.Providers.Thread do
   @doc false
   def threads_definition do
     alias Prima.{Arg, Operation}
-    # In a chain only, and read only. What other people said there is
-    # theirs, not the athanor's own records, so it carries an outside
-    # source into the turn that reads it.
+    # In a chain only, and read only.
     Operation.tool(
       [
         Operation.new("threads", "list", "List threads", [],
           kind: :read,
-          sources: [:outside],
           planes: [:in_chain],
           recovery: :replay_safe
         ),
@@ -664,7 +656,6 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :read,
-          sources: [:outside],
           planes: [:in_chain],
           recovery: :replay_safe
         )
@@ -1250,23 +1241,20 @@ defmodule Aqua.Providers.Thread do
   # ---------------------------------------------------------------------------
 
   @doc """
-  What a read's answer carries (`search` and `events`, their `sources:`
-  declaration, `Prima.Operation.answer_sources/3`): the sources the read
-  joined into its turn before it answered (`Aqua.Tape.join_read/5`), each
-  thread it carries posts of among them, which the answer names. An answer
-  that names none, the person's own read at the door, is an unnamed
-  outside source, never the athanor's own.
+  The threads whose posts a read's answer carries (`search` and `events`,
+  their `threads:` declaration, `Prima.Operation.read_threads/3`): those
+  the read joined into its turn before it answered
+  (`Aqua.Tape.join_read/4`), which the answer names. An answer that names
+  none, the person's own read at the door, carries none.
   """
-  @spec read_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
-  def read_sources(_actor, %{sources: sources}) when is_list(sources),
-    do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
-
-  def read_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
+  @spec read_threads(Prima.Actor.t() | nil, term()) :: [String.t()]
+  def read_threads(_actor, %{read_threads: threads}) when is_list(threads), do: threads
+  def read_threads(_actor, _answer), do: []
 
   # Past posts of the athanor's daily and workspace threads, newest first,
   # each as a pointer to open with `events`. From a turn, the posts it
-  # answers join the turn's sources first, under its fence, and only the
-  # posts of threads that still stand then are answered.
+  # answers join the turn's read threads first, under its fence, and only
+  # the posts of threads that still stand then are answered.
   defp search(ctx, args) do
     with {:ok, needle} <- query(args["q"]),
          {:ok, reader} <- recall_reader(ctx, args),
@@ -1279,16 +1267,16 @@ defmodule Aqua.Providers.Thread do
              "before",
              args["before"]
            ),
-         {:ok, posts, sources} <- joined(ctx, reader, found.posts, & &1.message) do
+         {:ok, posts, threads} <- joined(ctx, reader, found.posts, & &1.message) do
       results = Enum.map(posts, &pointer(&1, needle))
-      {:ok, with_sources(%{results: results, count: length(results), next: found.next}, sources)}
+      {:ok, with_threads(%{results: results, count: length(results), next: found.next}, threads)}
     end
   end
 
   # A turn's read of one daily or workspace thread of its athanor: its
-  # posts after `after_seq`, at most fifty, joined into the turn's sources
-  # before they are answered. A crew member's thread, or one of another
-  # athanor, is not found.
+  # posts after `after_seq`, at most fifty, joined into the turn's read
+  # threads before they are answered. A crew member's thread, or one of
+  # another athanor, is not found.
   defp read_thread(ctx, %{"thread" => id} = args) when is_binary(id) and id != "" do
     actor = Sanctum.Context.actor(ctx)
 
@@ -1296,9 +1284,9 @@ defmodule Aqua.Providers.Thread do
          {:ok, %{kind: kind}} when kind in ["daily", "workspace"] <-
            Arca.ThreadStorage.get(actor, id),
          rows when is_list(rows) <- Arca.ThreadStorage.messages(actor, id, read_opts(args)),
-         {:ok, rows, sources} <- joined(ctx, reader, rows, & &1) do
+         {:ok, rows, threads} <- joined(ctx, reader, rows, & &1) do
       rows = Enum.map(rows, &render/1)
-      {:ok, with_sources(%{thread: id, messages: rows, cursor: cursor(rows)}, sources)}
+      {:ok, with_threads(%{thread: id, messages: rows, cursor: cursor(rows)}, threads)}
     else
       {:ok, %{}} -> {:error, {:not_found, "thread", id}}
       {:error, :not_found} -> {:error, {:not_found, "thread", id}}
@@ -1353,44 +1341,35 @@ defmodule Aqua.Providers.Thread do
   defp recall_reader(%Context{plane: :guest}, _args), do: {:error, :not_in_a_turn}
   defp recall_reader(%Context{}, _args), do: {:ok, :person}
 
-  # The rows a read answers, and the sources it carries. The person's read
+  # The rows a read answers, and the threads it joined. The person's read
   # joins nothing. A turn's joins, under its fence, every thread whose
-  # posts the rows are or carry, what the rows carry, and the turns that
-  # wrote them (`Aqua.Tape.join_read/5`); a row of a thread or carrying one
+  # posts the rows are or carry and the read threads of the turns that
+  # wrote them (`Aqua.Tape.join_read/4`); a row of a thread or carrying one
   # that no longer stands is not answered.
   defp joined(_ctx, :person, items, _row), do: {:ok, items, nil}
 
   defp joined(ctx, {:turn, turn}, items, row) do
     rows = Enum.map(items, row)
-    carried = Tape.carried_sources(rows)
-    threads = Enum.uniq(Enum.map(rows, & &1.thread_id) ++ Prima.Source.threads(carried))
+    threads = Enum.uniq(Enum.map(rows, & &1.thread_id) ++ Tape.carried_threads(rows))
 
-    case Tape.join_read(
-           ctx,
-           turn,
-           threads,
-           Prima.Source.material(carried),
-           Tape.writing_turns(rows)
-         ) do
-      {:ok, %{threads: standing, sources: sources}} ->
+    case Tape.join_read(ctx, turn, threads, Tape.writing_turns(rows)) do
+      {:ok, %{threads: standing, read_threads: joined}} ->
         kept =
           Enum.filter(items, fn item ->
             row = row.(item)
-            needs = [row.thread_id | Prima.Source.threads(Tape.carried_sources([row]))]
+            needs = [row.thread_id | Tape.carried_threads([row])]
             Enum.all?(needs, &(&1 in standing))
           end)
 
-        {:ok, kept, sources}
+        {:ok, kept, joined}
 
       {:error, reason} ->
         {:error, refusal(reason, nil)}
     end
   end
 
-  defp with_sources(answer, nil), do: answer
-
-  defp with_sources(answer, sources),
-    do: Map.put(answer, :sources, Prima.Source.to_json_list(sources))
+  defp with_threads(answer, nil), do: answer
+  defp with_threads(answer, threads), do: Map.put(answer, :read_threads, threads)
 
   defp storage({:ok, _} = ok, _arg, _value), do: ok
 

@@ -27,12 +27,11 @@ defmodule Aqua.Notes do
   read on demand. Pinning an empty page clears it; that is unpin.
 
   Aqua writes the pinned page itself, where its mode runs the write, as
-  it writes a workspace thread's notes (`workspace/4`): a page
-  written so is kept by Aqua, names the thread it was written in and
-  keeps the sources that turn read. When that thread is deleted the page
-  stays as it is, and a read says it was learned in a deleted thread
-  (`read/3`'s `from_deleted_thread`), for the person to remove it or make
-  it their own; nothing here rewrites it.
+  it writes a workspace thread's notes (`workspace/4`): a page written so
+  is kept by Aqua and names the thread it was written in. When that thread
+  is deleted the page stays as it is, and a read says it was learned in a
+  deleted thread (`read/3`'s `from_deleted_thread`), for the person to
+  remove it or make it their own; nothing here rewrites it.
 
   ## A workspace thread's notes
 
@@ -53,11 +52,6 @@ defmodule Aqua.Notes do
   A note carries who kept it, when, and — when known — the thread and
   execution it came from, as frontmatter above the body. The reader is the
   one the agent files share, `Compendium.parse_agent_frontmatter/1`.
-
-  A note kept from a chain carries every source the chain's turns read
-  (`sources`, `Prima.Source`s), and every read answers it with them, so a
-  turn or a guest that reads it reads them (`Aqua.Loop.Policy`). A
-  provenance that cannot be read is an unnamed outside source.
 
   This module is the domain. Four callers read or write here:
   `Aqua.Providers.Notes`, the door people and agents come through;
@@ -88,8 +82,7 @@ defmodule Aqua.Notes do
   @type provenance :: [
           kept_by: String.t(),
           thread: String.t(),
-          execution: String.t(),
-          sources: [Prima.Source.t()]
+          execution: String.t()
         ]
   @type note :: %{
           name: String.t(),
@@ -98,8 +91,7 @@ defmodule Aqua.Notes do
           kept_by: String.t() | nil,
           kept_at: String.t() | nil,
           thread: String.t() | nil,
-          execution: String.t() | nil,
-          sources: [Prima.Source.t()]
+          execution: String.t() | nil
         }
   @typedoc """
   What a call can refuse with — `Prima.Refusal`'s vocabulary, so
@@ -384,40 +376,6 @@ defmodule Aqua.Notes do
   end
 
   @doc """
-  The sources a notes read answered carries, as the `notes` tool answers
-  it (`Aqua.Providers.Notes`): the provenance of the note a `read`
-  answered, or of each match a `search` answered, each source in its JSON
-  form. An answer that is not a read's carries none.
-  """
-  @spec sources_of_answer(term()) :: [Prima.Source.t()]
-  def sources_of_answer({:ok, %{sources: sources}}) when is_list(sources),
-    do: decode_sources_list(sources)
-
-  def sources_of_answer({:ok, %{matches: matches}}) when is_list(matches),
-    do: matches |> Enum.flat_map(& &1.sources) |> decode_sources_list()
-
-  def sources_of_answer(_answer), do: []
-
-  @doc """
-  The sources the turns of the chain under `root_execution_id` have read,
-  in the context's athanor (`Arca.TurnStorage.chain_sources/2`): what a
-  note kept from that chain may carry. A chain no turn runs is `[]`; a
-  read that fails is one unnamed outside source.
-  """
-  @spec chain_sources(Context.t(), String.t() | nil) :: [Prima.Source.t()]
-  def chain_sources(%Context{} = ctx, root_execution_id) when is_binary(root_execution_id) do
-    case Arca.TurnStorage.chain_sources(Context.actor(ctx), root_execution_id) do
-      {:ok, sources} -> sources
-      {:error, _unreadable} -> [Prima.Source.outside(nil)]
-    end
-  end
-
-  def chain_sources(%Context{}, _none), do: []
-
-  defp decode_sources_list(sources),
-    do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
-
-  @doc """
   One sentence for what a write answered, as the `notes` tool answers it:
   one per outcome this module mints (`keep/4` new or replacing, `pin/4`
   setting or clearing, `forget/2`); `nil` for anything that
@@ -455,16 +413,15 @@ defmodule Aqua.Notes do
 
   @doc """
   The filed notes of the focused athanor as name and first line, sorted by
-  name — what a turn is shown so it can read one on demand — each with
-  the sources its provenance carries. No timestamps and no sizes, so the
-  same pile renders the same bytes. Bounded to #{@index_limit} entries,
+  name — what a turn is shown so it can read one on demand. No timestamps
+  and no sizes, so the same pile renders the same bytes. Bounded to #{@index_limit} entries,
   with a count of what lies beyond: a pile an agent can grow must not
   grow every prompt with it.
   """
   @spec index(Context.t()) ::
           {:ok,
            %{
-             entries: [%{name: String.t(), line: String.t(), sources: [Prima.Source.t()]}],
+             entries: [%{name: String.t(), line: String.t()}],
              more: non_neg_integer()
            }}
           | {:error, refusal()}
@@ -478,8 +435,8 @@ defmodule Aqua.Notes do
       entries =
         for name <- shown do
           case fetch(ctx, name) do
-            {:ok, note} -> %{name: name, line: first_line(note.content), sources: note.sources}
-            _ -> %{name: name, line: "", sources: []}
+            {:ok, note} -> %{name: name, line: first_line(note.content)}
+            _ -> %{name: name, line: ""}
           end
         end
 
@@ -637,12 +594,11 @@ defmodule Aqua.Notes do
 
   @doc """
   Notes whose name or body contains `query` (case-insensitive), each with
-  the first matching line as a snippet and the sources its provenance
-  carries — a page of them (`t:page/1`), the same `:limit`/`:after` as
+  the first matching line as a snippet — a page of them (`t:page/1`), the same `:limit`/`:after` as
   `list/2`. Only the notes a page can show are read.
   """
   @spec search(Context.t(), String.t(), keyword()) ::
-          {:ok, page(%{name: String.t(), snippet: String.t(), sources: [Prima.Source.t()]})}
+          {:ok, page(%{name: String.t(), snippet: String.t()})}
           | {:error, refusal()}
   def search(ctx, query, opts \\ [])
 
@@ -883,10 +839,10 @@ defmodule Aqua.Notes do
 
   defp match(ctx, name, needle) do
     case fetch(ctx, name) do
-      {:ok, %{content: body, sources: sources}} ->
+      {:ok, %{content: body}} ->
         case snippet(name, body, needle) do
           {:ok, snippet} ->
-            [%{name: name, snippet: snippet, sources: sources}]
+            [%{name: name, snippet: snippet}]
 
           :none ->
             []
@@ -923,8 +879,7 @@ defmodule Aqua.Notes do
         {"kept_by", Keyword.get(provenance, :kept_by) || ctx.user_id || "system"},
         {"kept_at", DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()},
         {"thread", Keyword.get(provenance, :thread)},
-        {"execution", Keyword.get(provenance, :execution)},
-        {"sources", encoded_sources(Keyword.get(provenance, :sources, []))}
+        {"execution", Keyword.get(provenance, :execution)}
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
@@ -951,22 +906,7 @@ defmodule Aqua.Notes do
       kept_by: meta["kept_by"],
       kept_at: meta["kept_at"],
       thread: meta["thread"],
-      execution: meta["execution"],
-      sources: decoded_sources(meta)
+      execution: meta["execution"]
     }
-  end
-
-  # The sources a note carries, as canonical JSON text; none is no line.
-  defp encoded_sources([]), do: nil
-  defp encoded_sources(sources) when is_list(sources), do: Prima.Source.encode(sources)
-
-  # A note with no `sources` line carries none; a line that is not the
-  # canonical text reads as an unnamed outside source.
-  defp decoded_sources(meta) do
-    case Map.fetch(meta, "sources") do
-      :error -> []
-      {:ok, text} when is_binary(text) -> Prima.Source.decode(text)
-      {:ok, _unreadable} -> [Prima.Source.outside(nil)]
-    end
   end
 end

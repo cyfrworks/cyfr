@@ -125,7 +125,6 @@ defmodule Aqua.Providers.Workspace do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive
         ),
@@ -152,12 +151,10 @@ defmodule Aqua.Providers.Workspace do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:in_chain]
         ),
         Operation.new("workspace", "list", "List workspace threads", [],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe

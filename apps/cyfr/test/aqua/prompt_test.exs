@@ -178,64 +178,25 @@ defmodule Aqua.PromptTest do
       refute notes =~ ~r/\d{4}-\d{2}-\d{2}T/
     end
 
-    test "composition answers what it read: the pinned page, the index and each note's sources",
+    test "an about-you page Aqua wrote in a thread is shown as the person's own page is",
          %{home: home} do
-      assert %{sources: []} = Prompt.compose(home, agent: agent(), authority: nil)
-
-      {:ok, _} = Aqua.Notes.pin(home, "about-you", "We are planning a trip.")
-
-      assert %{sources: [%Prima.Source{class: :pinned}]} =
-               Prompt.compose(home, agent: agent(), authority: nil)
-
-      {:ok, _} = Aqua.Notes.keep(home, "decided", "Lisbon")
-
-      assert Prompt.compose(home, agent: agent(), authority: nil).sources ==
-               [Prima.Source.new(:pinned), Prima.Source.new(:filed)]
-
-      # An outside-derived note joins its sources without a `notes.read`,
-      # and is shown as any note is.
-      host = Prima.Source.outside("news.example")
-      {:ok, _} = Aqua.Notes.keep(home, "clip", "Fares rise on Monday", sources: [host])
-
-      composed = Prompt.compose(home, agent: agent(), authority: nil)
-      assert host in composed.sources
-      assert composed.text =~ "- clip — Fares rise on Monday\n"
-      assert composed.text =~ "- decided — Lisbon\n"
-      refute composed.text =~ "outside material"
-    end
-
-    test "an about-you page Aqua wrote after outside material is shown as the person's own " <>
-           "page is, and joins that material into the turn that reads it, but no thread it " <>
-           "was learned in",
-         %{home: home} do
-      host = Prima.Source.outside("news.example")
-
       {:ok, _} =
         Aqua.Notes.pin(home, "about-you", "Flies to Lisbon on the 3rd.",
           kept_by: Prima.Author.agent(),
-          thread: "thr_learned",
-          sources: [host]
+          thread: "thr_learned"
         )
 
       composed = Prompt.compose(home, agent: agent(), authority: nil)
-
       assert composed.text =~ "### Pinned: about-you (revision 1)\n\nFlies to Lisbon on the 3rd."
-      refute composed.text =~ "outside material"
 
-      assert composed.sources == [Prima.Source.new(:pinned), host]
-
-      # The person's own write of it carries nothing but the page.
       {:ok, _} = Aqua.Notes.pin(home, "about-you", "Flies to Lisbon on the 3rd.")
       composed = Prompt.compose(home, agent: agent(), authority: nil)
       assert composed.text =~ "### Pinned: about-you (revision 2)\n\nFlies to Lisbon on the 3rd."
-      assert composed.sources == [Prima.Source.new(:pinned)]
     end
 
-    test "a workspace thread's prompt carries its notes, with what they were written from; a " <>
-           "daily thread's carries none",
+    test "a workspace thread's prompt carries its notes; a daily thread's carries none",
          %{home: home} do
       actor = Sanctum.Context.actor(home)
-      host = Prima.Source.outside("news.example")
 
       work =
         %Arca.Schemas.Thread{}
@@ -266,8 +227,7 @@ defmodule Aqua.PromptTest do
       assert {:ok, _} =
                Aqua.Notes.workspace(home, turn, "Fares rise Monday; book by Sunday.",
                  kept_by: Prima.Author.agent(),
-                 thread: work.id,
-                 sources: [host]
+                 thread: work.id
                )
 
       {:ok, thread} = Arca.ThreadStorage.get(actor, work.id)
@@ -278,8 +238,6 @@ defmodule Aqua.PromptTest do
       assert section =~ "`notes.workspace`"
 
       assert section =~ "### This thread's notes\n\nFares rise Monday; book by Sunday."
-      refute section =~ "outside material"
-      assert Prima.Source.new(:filed) in composed.sources and host in composed.sources
 
       {:ok, daily} = Arca.Test.Days.thread(actor)
 
@@ -287,7 +245,6 @@ defmodule Aqua.PromptTest do
         Prompt.compose(home, agent: agent(), authority: nil, where: Prompt.where(home, daily))
 
       refute composed.text =~ "This thread's notes"
-      refute host in composed.sources
     end
 
     test "a person's own athanor carries about-you", %{home: home} do

@@ -39,6 +39,14 @@ defmodule Arca.ThreadStorage do
   it out again (`unarchive!/2`). A crew member's thread is never
   archived: it is retired (`retire/3`), which stops its work. No thread
   is deleted by age; a deletion is the person's (`delete/3`).
+
+  ## Read threads
+
+  A turn, an execution and a guest object record the ids of the threads
+  whose posts they came to hold, as the JSON text of the sorted list
+  (`threads_text/1`, read back by `threads_of/1`), so that a deletion
+  finds every turn that read a thread by the exact JSON string of its id
+  in that text (`delete/3`).
   """
 
   import Ecto.Query
@@ -926,9 +934,9 @@ defmodule Arca.ThreadStorage do
 
   What other threads kept of it goes in the same transaction: the
   pointers and reports that name it, on every daily thread, and in each
-  thread a turn of which read it (a `thread` source on the turn,
-  `Prima.Source.thread/1`) the compactions written since the first such
-  turn was accepted and the brain's session, whose generation is raised;
+  thread a turn of which read it (its id among the turn's read threads)
+  the compactions written since the first such turn was accepted and the
+  brain's session, whose generation is raised;
   an open turn that read it is cancelled as a stop cancels it, its reply
   recorded, and answered with the others. The turns it stops or
   removes are chosen and held first, then the athanor's row and the
@@ -1053,8 +1061,8 @@ defmodule Arca.ThreadStorage do
   # What other threads kept of the threads `ids` a deletion removes,
   # undone in the deleting transaction: the pointers and reports that
   # name one, on every daily thread; and in every thread a turn of which
-  # read one (a `thread` source on the turn, `Prima.Source.thread/1`),
-  # the compactions written since its first such turn was accepted, which
+  # read one (its id among the turn's read threads), the compactions
+  # written since its first such turn was accepted, which
   # may summarize what was read, and the brain's session, which may hold
   # it, its generation raised so no turn keeps the old one; and there the
   # results of the reads that carried one's posts (`blank_reads!/3`). A
@@ -1193,6 +1201,32 @@ defmodule Arca.ThreadStorage do
   def forgotten_read,
     do: "What this read answered came from a thread that has since been deleted."
 
+  @doc """
+  The stored text of a list of read threads: the JSON list of the ids,
+  sorted and without duplicates, `"[]"` for none.
+  """
+  @spec threads_text([String.t()]) :: String.t()
+  def threads_text(ids) when is_list(ids),
+    do: ids |> Enum.uniq() |> Enum.sort() |> Jason.encode!()
+
+  @doc """
+  The thread ids a stored read-threads text holds, sorted and without
+  duplicates: a JSON list's non-empty strings; nil, or text that is not
+  a JSON list, holds none.
+  """
+  @spec threads_of(String.t() | nil) :: [String.t()]
+  def threads_of(nil), do: []
+
+  def threads_of(text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, ids} when is_list(ids) ->
+        ids |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq() |> Enum.sort()
+
+      _unreadable ->
+        []
+    end
+  end
+
   # The answers that carried posts of the threads `ids`, in the threads
   # `reader_ids`: a step's result row whose payload records, among the
   # threads its answer carried, one of them, as the step's close recorded
@@ -1228,16 +1262,16 @@ defmodule Arca.ThreadStorage do
     :ok
   end
 
-  # Each thread outside `ids` with a turn whose sources name one of them:
-  # when its first such turn was accepted, and those of them still open. A
-  # source set is canonical JSON (`Prima.Source.encode/1`), so a thread
-  # source reads as one exact object in the text.
+  # Each thread outside `ids` with a turn whose read threads name one of
+  # them: when its first such turn was accepted, and those of them still
+  # open. The read threads are the JSON text `threads_text/1` writes, so
+  # an id reads as its exact JSON string in it.
   # arca:db-raise-ok inside the caller's transaction
   defp readers(athanor_id, [_ | _] = ids) do
     named =
       Enum.reduce(ids, dynamic(false), fn id, acc ->
-        pattern = "%" <> like_escape(thread_source(id)) <> "%"
-        dynamic([t], ^acc or fragment("? LIKE ? ESCAPE '!'", t.sources, ^pattern))
+        pattern = "%" <> like_escape(Jason.encode!(id)) <> "%"
+        dynamic([t], ^acc or fragment("? LIKE ? ESCAPE '!'", t.read_threads, ^pattern))
       end)
 
     from(t in Arca.Schemas.Turn,
@@ -1253,9 +1287,6 @@ defmodule Arca.ThreadStorage do
       {thread_id, since, open}
     end)
   end
-
-  defp thread_source(id),
-    do: id |> Prima.Source.thread() |> Prima.Source.to_json() |> Jason.encode!()
 
   defp like_escape(text), do: String.replace(text, ["!", "%", "_"], &("!" <> &1))
 

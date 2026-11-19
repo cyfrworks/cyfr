@@ -81,7 +81,6 @@ defmodule Sanctum.Providers.Webhook do
         ),
         Operation.new("webhook", "list", "List webhook", [],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain],
           permission: :storage_read
         ),
@@ -96,7 +95,6 @@ defmodule Sanctum.Providers.Webhook do
             )
           ],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain],
           permission: :storage_read
         ),

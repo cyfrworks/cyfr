@@ -105,7 +105,7 @@ defmodule Aqua.Program do
   Of `rows` (a turn's projection), those a fresh session's context may
   carry before the post at `seq`: the thread's posts before it, of which
   the first post's context keeps the newest that fit. The loop joins
-  their sources before the turn's start is decided.
+  their read threads before the turn's start is decided.
   """
   @spec context_rows([map()], integer()) :: [map()]
   def context_rows(rows, seq) when is_list(rows), do: Enum.filter(rows, &context_row?(&1, seq))
@@ -930,15 +930,16 @@ defmodule Aqua.Program do
   end
 
   # What the rows a delivery carries bring in joins the turn first: the
-  # threads and files they carry and the turns whose words they are.
+  # threads they and their files carry and the read threads of the turns
+  # whose words they are.
   defp carry(work, deliver, row_id, rows \\ []) do
     Tape.carry(work.guest, work.turn, %{
       deliver: deliver,
       row_id: row_id,
       generation: work.generation,
       silence_ms: Opus.Brain.silence_ms(),
-      sources: Tape.carried_sources(rows),
-      sources_from: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == work.turn.id))
+      threads: Tape.carried_threads(rows),
+      threads_from: rows |> Tape.writing_turns() |> Enum.reject(&(&1 == work.turn.id))
     })
   end
 

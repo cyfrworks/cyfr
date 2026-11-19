@@ -58,7 +58,6 @@ defmodule Compendium.Builds.Provider do
               )
             ],
             kind: :execute,
-            sources: [],
             planes: [:external, :in_chain],
             permission: :execute
           ),
@@ -74,12 +73,10 @@ defmodule Compendium.Builds.Provider do
               )
             ],
             kind: :read,
-            sources: [],
             planes: [:external, :in_chain]
           ),
           Operation.new("build", "toolchains", "Toolchains build", [],
             kind: :read,
-            sources: [],
             planes: [:external, :in_chain]
           ),
           Operation.new(
@@ -94,7 +91,6 @@ defmodule Compendium.Builds.Provider do
               )
             ],
             kind: :read,
-            sources: [],
             planes: [:external, :in_chain],
             permission: :execute
           )

@@ -12,8 +12,8 @@ defmodule Aqua.Loop.Turn do
   named (`options["tools"]`), the resolved model catalyst with its capabilities
   and the request size its consent caps it at (`request_cap`), the brain
   options — the agent file's own, over which a crew request's
-  (`options["brain_options"]`) set theirs — the system prompt and the
-  sources it read, the tool surface (with the accounts its launches may name,
+  (`options["brain_options"]`) set theirs — the system prompt, the tool
+  surface (with the accounts its launches may name,
   read once here for every request the spec makes,
   `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
   the deadline the authority allows, never under one answer of its brain
@@ -67,8 +67,7 @@ defmodule Aqua.Loop.Turn do
     :narrowed,
     :excerpt,
     :attachments,
-    soul?: true,
-    sources: []
+    soul?: true
   ]
 
   @doc """
@@ -133,7 +132,6 @@ defmodule Aqua.Loop.Turn do
         capabilities: capabilities,
         request_cap: request_cap(authority, catalyst),
         system: prompt.text,
-        sources: prompt.sources,
         tools:
           Request.tool_definitions(offered,
             external: external_tools(offered),

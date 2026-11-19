@@ -165,10 +165,10 @@ defmodule Emissary.External.InChainProbeTest do
     :ok =
       case reply do
         {:ok, answer} ->
-          {:ok, _ledger} =
+          {:ok, _read_threads} =
             root
             |> Opus.Record.complete(answer)
-            |> Opus.Record.write_completed_ledger(grant: grant, retention_class: "api")
+            |> Opus.Record.write_completed(grant: grant, retention_class: "api")
 
           :ok
 

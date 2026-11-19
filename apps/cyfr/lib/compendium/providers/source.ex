@@ -32,10 +32,7 @@ defmodule Compendium.Providers.Source do
 
   The tool is in-chain only; a person edits through Files. Its actions are
   their own policy keys, so a grant for `files.write` on `data/` never
-  covers component code. A read's answer is the athanor's own file, read
-  through the caller's storage grant (`sources: [:files_by_grant]`); a
-  write, an edit and a delete answer only the path they changed
-  (`sources: []`).
+  covers component code.
   """
 
   @behaviour Prima.Provider
@@ -81,7 +78,6 @@ defmodule Compendium.Providers.Source do
             path
           ],
           kind: :read,
-          sources: [:files_by_grant],
           planes: [:in_chain],
           permission: :storage_read,
           recovery: :replay_safe,
@@ -95,7 +91,6 @@ defmodule Compendium.Providers.Source do
             path
           ],
           kind: :read,
-          sources: [:files_by_grant],
           planes: [:in_chain],
           permission: :storage_read,
           recovery: :replay_safe,
@@ -116,7 +111,6 @@ defmodule Compendium.Providers.Source do
             )
           ],
           kind: :read,
-          sources: [:files_by_grant],
           planes: [:in_chain],
           permission: :storage_read,
           recovery: :replay_safe,
@@ -135,7 +129,6 @@ defmodule Compendium.Providers.Source do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:in_chain],
           permission: :storage_write,
           resource: {"path", :storage_path}
@@ -169,7 +162,6 @@ defmodule Compendium.Providers.Source do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:in_chain],
           permission: :storage_write,
           resource: {"path", :storage_path}
@@ -182,7 +174,6 @@ defmodule Compendium.Providers.Source do
             path
           ],
           kind: :destructive,
-          sources: [],
           planes: [:in_chain],
           permission: :storage_write,
           resource: {"path", :storage_path}

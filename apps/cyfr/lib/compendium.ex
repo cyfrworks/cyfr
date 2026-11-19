@@ -165,13 +165,6 @@ defmodule Compendium do
   defdelegate tincture_connect_origins(manifest), to: Rules, as: :connect_origins
 
   @doc """
-  The source classes any read a tincture's manifest declares may carry
-  (`Compendium.Tincture.Rules.frame_classes/1`).
-  """
-  @spec tincture_frame_classes(term()) :: [Prima.Source.class()]
-  defdelegate tincture_frame_classes(manifest), to: Rules, as: :frame_classes
-
-  @doc """
   Whether every stream a declaration opens is one a provider declares, with
   a subject it takes (`Compendium.Tincture.Rules.check_streams/2`). A
   stream with a shape is a desktop's alone: a declaration without the

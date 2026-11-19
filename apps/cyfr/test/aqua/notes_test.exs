@@ -267,35 +267,12 @@ defmodule Aqua.NotesStoreTest do
     end
   end
 
-  describe "outside material" do
-    test "a note kept with sources answers them on every read", %{
-      ctx: ctx
-    } do
-      member!()
-      host = Prima.Source.outside("news.example")
-      assert {:ok, _} = Notes.keep(ctx, "clip", "Fares rise on Monday", sources: [host])
-
-      assert {:ok, %{sources: [^host]}} = read = Notes.read(ctx, "clip")
-      assert Notes.sources_of_answer(read) == [host]
-      assert {:ok, %{entries: [%{name: "clip", sources: [^host]}]}} = Notes.index(ctx)
-      assert {:ok, %{notes: [%{sources: [^host]}]} = found} = Notes.search(ctx, "fares")
-      assert Notes.sources_of_answer({:ok, %{matches: found.notes}}) == [host]
-
-      vault = Prima.Source.new(:vault_disclosed)
-      assert {:ok, _} = Notes.keep(ctx, "derived", "the account's region", sources: [vault])
-      assert {:ok, %{sources: [^vault]}} = read = Notes.read(ctx, "derived")
-      assert Notes.sources_of_answer(read) == [vault]
-    end
-
-    test "a keep and a pin in a chain that read outside material are marked, whatever allowed " <>
-           "them, and keep no thread the chain read",
+  describe "what a chain keeps" do
+    test "a keep and a pin in a chain name the thread and the execution they were written in, " <>
+           "and keep no thread the chain read",
          %{ctx: ctx, actor: actor} do
       member!()
-      host = Prima.Source.outside("news.example")
-
-      {thread, root} =
-        chain!(ctx, actor, [Prima.Source.new(:filed), host, Prima.Source.thread("thr_read")])
-
+      {thread, root} = chain!(ctx, actor, ["thr_read"])
       guest = Sanctum.Context.enter_guest(ctx)
       lineage = %{"root_execution_id" => root, "thread_id" => thread}
 
@@ -306,8 +283,18 @@ defmodule Aqua.NotesStoreTest do
                  Map.merge(lineage, %{"action" => "keep", "name" => "clip", "content" => "x"})
                )
 
-      assert {:ok, %{sources: [%Prima.Source{class: :filed}, ^host], thread: ^thread}} =
-               Notes.read(ctx, "clip")
+      assert {:ok, note} = Notes.read(ctx, "clip")
+
+      assert Map.delete(note, :kept_at) == %{
+               name: "clip",
+               content: "x",
+               athanor_id: ctx.athanor_id,
+               kept_by: Prima.Author.agent(),
+               thread: thread,
+               execution: root,
+               revision: 1,
+               from_deleted_thread: false
+             }
 
       assert {:ok, %{pinned: "about-you"}} =
                Aqua.Providers.Notes.handle(
@@ -321,16 +308,20 @@ defmodule Aqua.NotesStoreTest do
                  })
                )
 
-      # Aqua's own page: kept by Aqua, naming the thread it was written in,
-      # with what the chain read.
-      assert {:ok, %{sources: [%Prima.Source{class: :filed}, ^host], thread: ^thread} = page} =
-               Notes.pinned(ctx)
+      # Aqua's own page: kept by Aqua, naming the thread it was written in.
+      assert {:ok, page} = Notes.pinned(ctx)
 
-      assert page.kept_by == Prima.Author.agent()
+      assert Map.delete(page, :kept_at) == %{
+               name: "about-you",
+               content: "y",
+               athanor_id: ctx.athanor_id,
+               kept_by: Prima.Author.agent(),
+               thread: thread,
+               execution: root,
+               revision: 1
+             }
 
-      # The same keep at the door carries none; one from a chain that read
-      # only the athanor's own material carries what it read, and is no
-      # outside material.
+      # The same keep at the door names neither.
       assert {:ok, _} =
                Aqua.Providers.Notes.handle("notes", ctx, %{
                  "action" => "keep",
@@ -338,21 +329,7 @@ defmodule Aqua.NotesStoreTest do
                  "content" => "z"
                })
 
-      assert {:ok, %{sources: []}} = Notes.read(ctx, "door")
-      {_thread, own} = chain!(ctx, actor, [Prima.Source.new(:filed)])
-
-      assert {:ok, _} =
-               Aqua.Providers.Notes.handle("notes", guest, %{
-                 "action" => "keep",
-                 "name" => "own",
-                 "content" => "w",
-                 "root_execution_id" => own
-               })
-
-      assert {:ok, %{sources: [%Prima.Source{class: :filed}] = own_sources}} =
-               Notes.read(ctx, "own")
-
-      refute Enum.any?(own_sources, &Prima.Source.outside?/1)
+      assert {:ok, %{thread: nil, execution: nil}} = Notes.read(ctx, "door")
     end
   end
 
@@ -361,9 +338,8 @@ defmodule Aqua.NotesStoreTest do
            "over the revision read",
          %{ctx: ctx, actor: actor} do
       member!()
-      host = Prima.Source.outside("news.example")
       {:ok, work} = Arca.Test.Days.thread(actor)
-      by_aqua = [kept_by: Prima.Author.agent(), thread: work.id, sources: [host]]
+      by_aqua = [kept_by: Prima.Author.agent(), thread: work.id]
       assert {:ok, _} = Notes.pin(ctx, "about-you", "Likes ramen.", by_aqua)
 
       assert {:ok, %{revision: revision, from_deleted_thread: false}} =
@@ -400,11 +376,10 @@ defmodule Aqua.NotesStoreTest do
       assert {:error, {:conflict, _}} = Notes.pin(elsewhere, "about-you", "", [], revision: newer)
       assert {:ok, %{revision: ^newer}} = Notes.read(ctx, "about-you")
 
-      # The person's own write is theirs: no mark, no sources.
+      # The person's own write is theirs: no mark.
       assert {:ok, _} = Notes.pin(ctx, "about-you", "Likes ramen.", [], revision: newer)
 
-      assert {:ok, %{from_deleted_thread: false, sources: [], kept_by: by}} =
-               Notes.read(ctx, "about-you")
+      assert {:ok, %{from_deleted_thread: false, kept_by: by}} = Notes.read(ctx, "about-you")
 
       assert by == ctx.user_id
 
@@ -433,9 +408,9 @@ defmodule Aqua.NotesStoreTest do
   # ---- helpers ---------------------------------------------------------------
 
   # A turn of a thread of this athanor running on its own root execution,
-  # having read `sources`: written straight to its row, as the loop's step
+  # having read `threads`: written straight to its row, as the loop's step
   # writes leave it.
-  defp chain!(ctx, actor, sources) do
+  defp chain!(ctx, actor, threads) do
     actor = Map.put(actor, :user_id, ctx.user_id)
     {:ok, thread} = Arca.Test.Days.thread(actor)
 
@@ -449,7 +424,7 @@ defmodule Aqua.NotesStoreTest do
 
     {1, _} =
       Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [root_execution_id: root, sources: Prima.Source.encode(sources)]
+        set: [root_execution_id: root, read_threads: Arca.ThreadStorage.threads_text(threads)]
       )
 
     {thread.id, root}

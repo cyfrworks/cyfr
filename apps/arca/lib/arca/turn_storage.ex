@@ -27,18 +27,18 @@ defmodule Arca.TurnStorage do
   the transaction and the whole transaction is retried, since a retry
   inside an aborted Postgres transaction cannot land.
 
-  ## The turn's sources
+  ## The turn's read threads
 
-  `turns.sources` is every source the turn has read (`Prima.Source`), a
-  set that only grows. It grows in the transaction that writes the step
-  a read belongs to, after the turn row is taken: `put_step/3` joins the
-  sources the step opens with (`:sources`) and the sources of the turns
-  whose words the rows it sends carry (`:sources_from`): the thread's
-  earlier turns, and a crew member's turn whose reply, or the soul's turn
-  whose request, a row brings across threads. `close_step/4` joins
-  the sources of its result (`:sources`), and of a component it launched
-  (`:launched`): outside, named by its reference, unless the launch's
-  completion result says no run of its tree was admitted with egress.
+  `turns.read_threads` are the ids of the threads whose posts the turn
+  has read (`Arca.ThreadStorage.threads_text/1`), a list that only grows,
+  by which a thread's deletion finds the turn. It grows in the
+  transaction that writes the step a read belongs to, after the turn row
+  is taken: `put_step/3` joins the threads the step opens with
+  (`:threads`) and the read threads of the turns whose words the rows it
+  sends carry (`:threads_from`): the thread's earlier turns, and a crew
+  member's turn whose reply, or the soul's turn whose request, a row
+  brings across threads. `close_step/4` joins the threads its result
+  carries (`:threads`).
 
   ## The thread claim
 
@@ -997,15 +997,16 @@ defmodule Arca.TurnStorage do
 
   # The workspace_report that tells the daily thread, recorded under the
   # identity of the reporting turn's person and origin, with the turn's
-  # sources; one with no turn (an opening refused before any started) is
-  # the server's, under the identity the opening was asked with, and
-  # carries no sources.
+  # read threads; one with no turn (an opening refused before any started)
+  # is the server's, under the identity the opening was asked with, and
+  # carries none.
   # arca:db-raise-ok inside the caller's transaction
   defp reported!(athanor_id, %Thread{} = thread, turn, outcome, report) do
-    {turn_id, person_id, wire, sources} =
+    {turn_id, person_id, wire, read_threads} =
       case turn do
         %Turn{} ->
-          {turn.id, turn.requested_by, turn.origin, Prima.Source.decode(turn.sources)}
+          {turn.id, turn.requested_by, turn.origin,
+           Arca.ThreadStorage.threads_of(turn.read_threads)}
 
         nil ->
           {nil, Map.fetch!(report, :person_id), Map.fetch!(report, :origin), []}
@@ -1022,7 +1023,7 @@ defmodule Arca.TurnStorage do
           outcome: outcome,
           summary: Map.get(report, :summary) || "",
           attachments: Map.get(report, :attachments, []),
-          sources: sources,
+          read_threads: read_threads,
           person_id: person_id,
           origin: origin
         })
@@ -2779,9 +2780,10 @@ defmodule Arca.TurnStorage do
   `:request_digest`, `:recovery`, `:excluded` (a list), `:message_id`,
   `:child_execution_id`, `:dispatch_state`
   (`Prima.TurnState.opening_states/0`, default `proposed`), `:fence`,
-  and the sources the step opens with: `:sources` (`Prima.Source`s) and
-  `:sources_from` (the ids of the athanor's turns whose words the rows the
-  step sends carry, each turn's sources joined as it stands), and `:call`:
+  and the read threads the step opens with: `:threads` (thread ids) and
+  `:threads_from` (the ids of the athanor's turns whose words the rows
+  the step sends carry, each turn's read threads joined as it stands; a
+  turn not found adds nothing), and `:call`:
   the row the step carries its call in (`:kind`, `:content`, `:payload`,
   `:client_id`), written in the same transaction as a row of the turn's
   thread with the turn's agent as its sender, and named by the step's
@@ -2803,7 +2805,7 @@ defmodule Arca.TurnStorage do
 
         if ended_call?(athanor_id, attrs), do: Arca.Repo.rollback(:call_ended)
 
-        turn = join_sources!(athanor_id, turn, opened_sources!(athanor_id, turn, attrs))
+        turn = join_threads!(athanor_id, turn, opened_threads!(athanor_id, attrs))
         step = insert_step!(athanor_id, turn, carried!(actor, athanor_id, turn, attrs))
         :ok = consumed!(athanor_id, turn, step)
         step
@@ -3027,15 +3029,13 @@ defmodule Arca.TurnStorage do
   row, which names the call it answers, its `tool_call_id` and `name`,
   as the call's row does where the payload gives none; omitted for a
   step that produced none), `:execution_id`, `:error`,
-  `:fence`, `:sources`, the `Prima.Source`s the result carries, joined
-  into the turn's in the same transaction, the threads among them
-  recorded on the result row as its payload's `threads`, and `:session`, the brain's
-  session a model step's refusal named, with `:generation`, kept on the
-  thread as `record_response/4` keeps a response's. `:launched` (`%{reference, reached_outside}`, the
-  latter from the launch's completion result) names a component the step
-  launched: outside, under its reference, unless `reached_outside` is
-  `false`. A step closes from `dispatched`, or from
-  `proposed` for `denied` and `skipped`.
+  `:fence`, `:threads`, the ids of the threads whose posts the result
+  carries, joined into the turn's read threads in the same transaction
+  and recorded on the result row as its payload's `threads`, and
+  `:session`, the brain's session a model step's refusal named, with
+  `:generation`, kept on the thread as `record_response/4` keeps a
+  response's. A step closes from `dispatched`, or from `proposed` for
+  `denied` and `skipped`.
   """
   @spec close_step(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, %{step: map(), result: map() | nil}} | {:error, term()}
@@ -3412,65 +3412,55 @@ defmodule Arca.TurnStorage do
   def next_generation(%Prima.Actor{}, _step_id, _attrs), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
-  # Sources
+  # Read threads
   # ---------------------------------------------------------------------------
 
   @doc """
-  The sources the turn whose root execution is `root_execution_id` has
-  read. `{:ok, []}` when no turn of the caller's athanor runs on that
-  execution.
+  The read threads of the turns whose root execution is
+  `root_execution_id`, sorted and without duplicates. `{:ok, []}` when no
+  turn of the caller's athanor runs on that execution.
   """
-  @spec chain_sources(Prima.Actor.t(), String.t()) ::
-          {:ok, [Prima.Source.t()]} | {:error, term()}
-  def chain_sources(%Prima.Actor{athanor_id: athanor_id}, root_execution_id)
+  @spec chain_threads(Prima.Actor.t(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def chain_threads(%Prima.Actor{athanor_id: athanor_id} = actor, root_execution_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(root_execution_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.chain_sources", fn ->
-      sources =
-        from(t in Turn,
-          where: t.athanor_id == ^athanor_id and t.root_execution_id == ^root_execution_id,
-          select: t.sources
-        )
-        |> Arca.Repo.all()
-        |> Enum.flat_map(&Prima.Source.decode/1)
-        |> Prima.Source.set()
-
-      {:ok, sources}
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.chain_threads", fn ->
+      {:ok, chain_threads!(actor, root_execution_id)}
     end)
   end
 
-  def chain_sources(%Prima.Actor{}, _root_execution_id), do: {:error, :no_athanor}
+  def chain_threads(%Prima.Actor{}, _root_execution_id), do: {:error, :no_athanor}
 
   @doc """
-  `chain_sources/2` inside the caller's transaction, raising as the
+  `chain_threads/2` inside the caller's transaction, raising as the
   transaction's own reads do.
   """
-  @spec chain_sources!(Prima.Actor.t(), String.t()) :: [Prima.Source.t()]
+  @spec chain_threads!(Prima.Actor.t(), String.t()) :: [String.t()]
   # arca:db-raise-ok inside the caller's transaction
-  def chain_sources!(%Prima.Actor{athanor_id: athanor_id}, root_execution_id)
+  def chain_threads!(%Prima.Actor{athanor_id: athanor_id}, root_execution_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(root_execution_id) do
     from(t in Turn,
       where: t.athanor_id == ^athanor_id and t.root_execution_id == ^root_execution_id,
-      select: t.sources
+      select: t.read_threads
     )
     |> Arca.Repo.all()
-    |> Enum.flat_map(&Prima.Source.decode/1)
-    |> Prima.Source.set()
+    |> Enum.flat_map(&Arca.ThreadStorage.threads_of/1)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
-  def chain_sources!(%Prima.Actor{}, _root_execution_id),
-    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.chain_sources!/2")
+  def chain_threads!(%Prima.Actor{}, _root_execution_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.chain_threads!/2")
 
   @doc """
-  The sources of the turn the step `step_id` belongs to, as they stand
-  inside the caller's transaction: `{:ok, sources}` when that turn runs on
-  `root_execution_id`, `:none` for a step of no turn on it. What a child a
-  loop step admits under a turn root starts from: the step's own turn,
-  with every source its step opened with already joined.
+  The read threads of the turn the step `step_id` belongs to, as they
+  stand inside the caller's transaction: `{:ok, threads}` when that turn
+  runs on `root_execution_id`, `:none` for a step of no turn on it. What a
+  child a loop step admits under a turn root starts from: the step's own
+  turn, with every thread its step opened with already joined.
   """
-  @spec step_sources!(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, [Prima.Source.t()]} | :none
+  @spec step_threads!(Prima.Actor.t(), String.t(), String.t()) :: {:ok, [String.t()]} | :none
   # arca:db-raise-ok inside the caller's transaction
-  def step_sources!(%Prima.Actor{athanor_id: athanor_id}, step_id, root_execution_id)
+  def step_threads!(%Prima.Actor{athanor_id: athanor_id}, step_id, root_execution_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(step_id) and
              is_binary(root_execution_id) do
     from(s in TurnStep,
@@ -3478,34 +3468,34 @@ defmodule Arca.TurnStorage do
       on: t.id == s.turn_id and t.athanor_id == s.athanor_id,
       where: s.athanor_id == ^athanor_id and s.id == ^step_id,
       where: t.root_execution_id == ^root_execution_id,
-      select: t.sources
+      select: t.read_threads
     )
     |> Arca.Repo.one()
     |> case do
       nil -> :none
-      stored -> {:ok, Prima.Source.decode(stored)}
+      stored -> {:ok, Arca.ThreadStorage.threads_of(stored)}
     end
   end
 
-  def step_sources!(%Prima.Actor{}, _step_id, _root_execution_id),
-    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.step_sources!/3")
+  def step_threads!(%Prima.Actor{}, _step_id, _root_execution_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.step_threads!/3")
 
   @doc """
-  Join `sources` into the turn `turn_id`'s, under the turn's row lock and
-  only while the caller still holds the turn at `attrs[:fence]`
-  (`{:error, :superseded}` otherwise): what a model or hand child's
-  persisted ledger brings into its turn before the turn uses its answer.
-  The set only grows.
+  Join the thread ids `threads` into the turn `turn_id`'s read threads,
+  under the turn's row lock and only while the caller still holds the
+  turn at `attrs[:fence]` (`{:error, :superseded}` otherwise): what a
+  model or hand child's read threads bring into its turn before the turn
+  uses its answer. The list only grows.
   """
-  @spec join_sources(Prima.Actor.t(), String.t(), [Prima.Source.t()], map()) ::
+  @spec join_threads(Prima.Actor.t(), String.t(), [String.t()], map()) ::
           :ok | {:error, term()}
-  def join_sources(%Prima.Actor{athanor_id: athanor_id}, turn_id, sources, attrs)
+  def join_threads(%Prima.Actor{athanor_id: athanor_id}, turn_id, threads, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and
-             is_list(sources) and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.join_sources", fn ->
+             is_list(threads) and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.join_threads", fn ->
       Arca.Repo.locking_transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
-        _turn = join_sources!(athanor_id, turn, sources!(sources))
+        _turn = join_threads!(athanor_id, turn, threads!(threads))
         :ok
       end)
       |> case do
@@ -3515,29 +3505,27 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  def join_sources(%Prima.Actor{}, _turn_id, _sources, _attrs), do: {:error, :no_athanor}
+  def join_threads(%Prima.Actor{}, _turn_id, _threads, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Join what a turn read of the athanor's threads into its sources, before
-  its read answers (`thread.search`, `thread.events`): under the turn's
-  row lock and only while the caller still holds the turn at
+  Join what a turn read of the athanor's threads into its read threads,
+  before its read answers (`thread.search`, `thread.events`): under the
+  turn's row lock and only while the caller still holds the turn at
   `attrs[:fence]` and the turn is open, the thread rows `attrs[:threads]`
   names are taken in the one order (`Arca.ThreadStorage.lock_threads!/2`),
-  and each that stands joins as a `thread` source
-  (`Prima.Source.thread/1`), with `attrs[:sources]` and the sources of the
-  turns `attrs[:sources_from]` names, as a step's opening joins them; a
-  turn named there that is not found is an unnamed outside source, so a
-  post whose writer cannot be read never reads as the athanor's own.
+  and each that stands joins, with the read threads of the turns
+  `attrs[:threads_from]` names, as a step's opening joins them; a turn
+  named there that is not found adds nothing.
 
   Answers the ids of the threads that stood, whose posts the read may
-  answer, with the sources joined. A thread deleted before this takes its
-  row is not among them; one deleted after finds this turn by its source,
-  as a deletion finds every turn that read it. `{:error, :superseded}`
-  for a caller whose fence moved, `{:error, :not_open}` for a turn that
-  ended.
+  answer (`threads`), and every id the read joined (`read_threads`). A
+  thread deleted before this takes its row is not among them; one deleted
+  after finds this turn by its read threads, as a deletion finds every
+  turn that read it. `{:error, :superseded}` for a caller whose fence
+  moved, `{:error, :not_open}` for a turn that ended.
   """
   @spec join_read(Prima.Actor.t(), String.t(), map()) ::
-          {:ok, %{threads: [String.t()], sources: [Prima.Source.t()]}} | {:error, term()}
+          {:ok, %{threads: [String.t()], read_threads: [String.t()]}} | {:error, term()}
   def join_read(%Prima.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.join_read", fn ->
@@ -3551,38 +3539,14 @@ defmodule Arca.TurnStorage do
           for thread <- Arca.ThreadStorage.lock_threads!(actor, Map.get(attrs, :threads, [])),
               do: thread.id
 
-        sources =
-          Prima.Source.set(
-            Enum.map(standing, &Prima.Source.thread/1) ++
-              sources!(Map.get(attrs, :sources, [])) ++
-              read_turns!(athanor_id, Map.get(attrs, :sources_from, []))
-          )
-
-        _turn = join_sources!(athanor_id, turn, sources)
-        %{threads: standing, sources: sources}
+        joined = standing ++ turns_threads!(athanor_id, Map.get(attrs, :threads_from, []))
+        _turn = join_threads!(athanor_id, turn, joined)
+        %{threads: standing, read_threads: joined |> Enum.uniq() |> Enum.sort()}
       end)
     end)
   end
 
   def join_read(%Prima.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
-
-  # The sources of the turns `ids` names, and an unnamed outside source for
-  # each the athanor holds no row of.
-  # arca:db-raise-ok inside the caller's transaction
-  defp read_turns!(_athanor_id, []), do: []
-
-  defp read_turns!(athanor_id, ids) when is_list(ids) do
-    ids = Enum.uniq(ids)
-
-    found =
-      from(t in Turn, where: t.athanor_id == ^athanor_id and t.id in ^ids, select: t.sources)
-      |> Arca.Repo.all()
-
-    missing = if length(found) < length(ids), do: [Prima.Source.outside(nil)], else: []
-    Enum.flat_map(found, &Prima.Source.decode/1) ++ missing
-  end
-
-  defp read_turns!(_athanor_id, _other), do: Arca.Repo.rollback(:invalid_sources)
 
   @doc """
   Whether the caller still holds the turn `turn_id`, open, at `fence`,
@@ -3816,13 +3780,13 @@ defmodule Arca.TurnStorage do
       the turn that closed (`:not_closed`); for `"notice"`, the recovery
       prompt, a post the turn carried or such a result row (running only).
 
-  What the delivery brings in joins the turn's sources before anything
-  is written, as a model step joins what its request carries: `:sources`
-  (`Prima.Source`s, the threads and files it carries) and the sources of
-  the turns in `:sources_from`, whose words it carries; a delivery taken
-  back leaves them joined. A post or a notice joins the posts owed an
-  answer, and the silence clock pauses on the delivery not yet taken
-  (`brain_progress`). A notice leaves the recovery obligation it answers
+  What the delivery brings in joins the turn's read threads before
+  anything is written, as a model step joins what its request carries:
+  `:threads` (the ids of the threads whose posts it carries) and the read
+  threads of the turns in `:threads_from`, whose words it carries; a
+  delivery taken back leaves them joined. A post or a notice joins the
+  posts owed an answer, and the silence clock pauses on the delivery not
+  yet taken (`brain_progress`). A notice leaves the recovery obligation it answers
   (`reconcile_brain/3`) where it stands until the driver answers for its
   write (`commit_brain/3`) or a reconcile settles it; until then its step
   alone keeps another notice of its row from being offered
@@ -3853,7 +3817,7 @@ defmodule Arca.TurnStorage do
            do: Arca.Repo.rollback(:carried)
 
         row = delivered!(athanor_id, turn, deliver, row_id)
-        turn = join_sources!(athanor_id, turn, opened_sources!(athanor_id, turn, attrs))
+        turn = join_threads!(athanor_id, turn, opened_threads!(athanor_id, attrs))
 
         step =
           insert_step!(athanor_id, turn, %{
@@ -5004,6 +4968,7 @@ defmodule Arca.TurnStorage do
       if outcome in ["denied", "skipped"], do: ["dispatched", "proposed"], else: ["dispatched"]
 
     now = DateTime.utc_now()
+    threads = threads!(Map.get(attrs, :threads, []))
 
     result =
       case Map.get(attrs, :result) do
@@ -5018,7 +4983,7 @@ defmodule Arca.TurnStorage do
             sent_by: turn.agent,
             kind: result_kind(step),
             content: Map.get(result, :content, ""),
-            payload: result_payload(athanor_id, result, step, Map.get(attrs, :sources, [])),
+            payload: result_payload(athanor_id, result, step, threads),
             turn_id: turn.id,
             execution_id: Map.get(attrs, :execution_id)
           })
@@ -5045,7 +5010,7 @@ defmodule Arca.TurnStorage do
     if Map.get(attrs, :session),
       do: keep_session!(athanor_id, thread!(athanor_id, turn.thread_id), attrs)
 
-    _turn = join_sources!(athanor_id, turn, closed_sources!(athanor_id, attrs))
+    _turn = join_threads!(athanor_id, turn, threads)
 
     event!(athanor_id, turn, "step.closed", step.id, %{
       "outcome" => outcome,
@@ -5062,21 +5027,21 @@ defmodule Arca.TurnStorage do
   defp result_kind(%TurnStep{}), do: "tool_result"
 
   # A result row's payload: the call's own, the step it closes, and the
-  # threads its answer carried, by the thread sources the step joins
-  # (`Prima.Source.thread/1`), which a deletion of one of them finds the
-  # row by to blank it (`Arca.ThreadStorage.delete/3`). The wire's id and
-  # name of the call it answers come from the call's row where the caller
-  # gives none, as a step skipped before it ran has no call in hand: a
-  # result that names no call is one no brain can pair with its call.
+  # threads its answer carried, as the step joins them, which a deletion
+  # of one of them finds the row by to blank it
+  # (`Arca.ThreadStorage.delete/3`). The wire's id and name of the call it
+  # answers come from the call's row where the caller gives none, as a
+  # step skipped before it ran has no call in hand: a result that names no
+  # call is one no brain can pair with its call.
   # arca:db-raise-ok inside the caller's transaction
-  defp result_payload(athanor_id, result, step, sources) do
+  defp result_payload(athanor_id, result, step, threads) do
     payload =
       athanor_id
       |> call_identity(step)
       |> Map.merge(Map.get(result, :payload) || %{}, fn _key, row, given -> given || row end)
       |> Map.put("step_id", step.id)
 
-    case sources |> sources!() |> Prima.Source.threads() do
+    case threads |> Enum.uniq() |> Enum.sort() do
       [] -> payload
       threads -> Map.put(payload, "threads", threads)
     end
@@ -5095,84 +5060,56 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # The turn's sources joined by `sources`, under the row lock `own!/3`
-  # took: the set is read and written again inside that lock, so it only
-  # grows and no concurrent writer's additions are lost.
+  # The turn's read threads joined by `threads`, under the row lock
+  # `own!/3` took: the list is read and written again inside that lock, so
+  # it only grows and no concurrent writer's additions are lost.
   # arca:db-raise-ok inside the caller's transaction
-  defp join_sources!(athanor_id, %Turn{} = turn, sources) do
-    joined = Prima.Source.encode(Prima.Source.union(Prima.Source.decode(turn.sources), sources))
+  defp join_threads!(athanor_id, %Turn{} = turn, threads) do
+    joined =
+      Arca.ThreadStorage.threads_text(Arca.ThreadStorage.threads_of(turn.read_threads) ++ threads)
 
-    if joined == turn.sources do
+    if joined == turn.read_threads do
       turn
     else
       {1, _} =
         from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn.id)
-        |> Arca.Repo.update_all(set: [sources: joined])
+        |> Arca.Repo.update_all(set: [read_threads: joined])
 
-      %{turn | sources: joined}
+      %{turn | read_threads: joined}
     end
   end
 
-  # What a step opens with: the sources it names and those of the turns
-  # whose words its rows carry, as each turn stands — of any thread of the
-  # athanor, since a reply or a request carries a turn's words across
-  # threads; a join only ever adds. A turn of another athanor joins
-  # nothing.
+  # What a step opens with: the threads it names and the read threads of
+  # the turns whose words its rows carry.
   # arca:db-raise-ok inside the caller's transaction
-  defp opened_sources!(athanor_id, %Turn{} = turn, attrs) do
-    sources!(Map.get(attrs, :sources, [])) ++
-      case Map.get(attrs, :sources_from, []) do
-        [] ->
-          []
-
-        ids when is_list(ids) ->
-          from(t in Turn,
-            where: t.athanor_id == ^athanor_id,
-            where: t.id in ^ids and t.id != ^turn.id,
-            select: t.sources
-          )
-          |> Arca.Repo.all()
-          |> Enum.flat_map(&Prima.Source.decode/1)
-
-        _other ->
-          Arca.Repo.rollback(:invalid_sources)
-      end
+  defp opened_threads!(athanor_id, attrs) do
+    threads!(Map.get(attrs, :threads, [])) ++
+      turns_threads!(athanor_id, Map.get(attrs, :threads_from, []))
   end
 
-  # What a closing step's result carries.
+  # The read threads of the turns `ids` names, as each stands — of any
+  # thread of the athanor, since a reply or a request carries a turn's
+  # words across threads. A turn the athanor holds no row of adds nothing.
   # arca:db-raise-ok inside the caller's transaction
-  defp closed_sources!(athanor_id, attrs) do
-    sources!(Map.get(attrs, :sources, [])) ++
-      launched_sources!(athanor_id, Map.get(attrs, :launched))
+  defp turns_threads!(_athanor_id, []), do: []
+
+  defp turns_threads!(athanor_id, ids) when is_list(ids) do
+    from(t in Turn, where: t.athanor_id == ^athanor_id and t.id in ^ids, select: t.read_threads)
+    |> Arca.Repo.all()
+    |> Enum.flat_map(&Arca.ThreadStorage.threads_of/1)
   end
 
-  # A launched component is outside, named by its reference, unless the
-  # completion result its launcher was handed says no run of its tree was
-  # admitted with egress. That fact lives on the tree's root row, marked in
-  # each run's admission transaction (`Arca.Execution.admit/2`) and carried
-  # into the result, because a child's own row may be pruned by retention
-  # before the launch closes; nothing here reads an execution row. A launch
-  # with no result, or one whose result does not say, is outside.
-  defp launched_sources!(_athanor_id, nil), do: []
-
-  defp launched_sources!(_athanor_id, %{reference: _reference, reached_outside: false}),
-    do: []
-
-  defp launched_sources!(_athanor_id, %{reference: reference}),
-    do: [Prima.Source.outside(reference)]
+  defp turns_threads!(_athanor_id, _other), do: Arca.Repo.rollback(:invalid_read_threads)
 
   # arca:db-raise-ok inside the caller's transaction
-  defp launched_sources!(_athanor_id, _launched), do: Arca.Repo.rollback(:invalid_sources)
-
-  # arca:db-raise-ok inside the caller's transaction
-  defp sources!(sources) when is_list(sources) do
-    if Enum.all?(sources, &is_struct(&1, Prima.Source)),
-      do: sources,
-      else: Arca.Repo.rollback(:invalid_sources)
+  defp threads!(threads) when is_list(threads) do
+    if Enum.all?(threads, &is_binary/1),
+      do: threads,
+      else: Arca.Repo.rollback(:invalid_read_threads)
   end
 
   # arca:db-raise-ok inside the caller's transaction
-  defp sources!(_sources), do: Arca.Repo.rollback(:invalid_sources)
+  defp threads!(_threads), do: Arca.Repo.rollback(:invalid_read_threads)
 
   # arca:db-raise-ok inside the caller's transaction
   defp insert_step!(athanor_id, %Turn{} = turn, attrs) do

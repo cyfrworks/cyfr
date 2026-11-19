@@ -381,7 +381,7 @@ defmodule Aqua.Providers.ThreadsTest do
     [%{operations: operations}] = Enum.filter(Tool.tools(), &(&1.name == "threads"))
 
     for op <- operations do
-      assert %Prima.Operation{kind: :read, planes: [:in_chain], sources: [:outside]} = op
+      assert %Prima.Operation{kind: :read, planes: [:in_chain], threads: nil} = op
     end
 
     for action <- ~w(list read) do

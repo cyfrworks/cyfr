@@ -2139,10 +2139,12 @@ defmodule Aqua.RunnerTest do
          script: [reply("put"), {:hold, self()}, %{"status" => 200, "body" => "x"}]}
       )
 
-      # The page was put by the person's turn over the API.
+      # The page was put by the person's turn over the API, which had read
+      # another thread.
       put = put!(api_line(ctx), ws)
       assert %{origin: "programmatic", requested_by: person, agent: "aqua"} = put
       assert person == ctx.user_id
+      :ok = Tape.join_threads(ctx, put, ["thr_read"])
       # It asks no model, so its brain is not described for it: with the
       # description the putting turn cached forgotten, none is asked.
       Arca.Cache.delete_match({:model_caps, ctx.athanor_id, :_, :_, :_})
@@ -2181,16 +2183,14 @@ defmodule Aqua.RunnerTest do
       assert {:ok, %{status: "completed", error: nil} = ended} = Tape.turn(ctx, id)
       assert [page_step(1, id, call, "ok")] == steps!(ctx, id)
 
-      # It started with the sources of the turn that put the page, and the
-      # page's own.
-      {:ok, put} = Tape.turn(ctx, call.put_turn_id)
-      held = Jason.decode!(ended.sources)
-      assert [_ | _] = Jason.decode!(put.sources)
-      assert Jason.decode!(put.sources) -- held == []
-      assert %{"class" => "outside", "name" => "browser"} in held
+      # It started with the read threads of the turn that put the page, and
+      # its result names them: the fetch's child was seeded with them.
+      assert Arca.ThreadStorage.threads_of(ended.read_threads) == ["thr_read"]
       [carried, answered] = page_rows!(ctx, ws.id)
       assert carried == called(id, call)
-      assert answered == answered(ctx, id, call, 200, answered.content)
+
+      expected = answered(ctx, id, call, 200, answered.content)
+      assert answered == put_in(expected, [:payload, "threads"], ["thr_read"])
 
       # The page is answered the fetch's data, as the endpoint answers it.
       assert Jason.decode!(answered.content) ==

@@ -467,8 +467,8 @@ defmodule Opus.RecordTest do
         }
       }
 
-      {:ok, _ledger} =
-        Record.write_completed_ledger(Record.complete(child, reply), retention_class: "chat_step")
+      {:ok, _read_threads} =
+        Record.write_completed(Record.complete(child, reply), retention_class: "chat_step")
 
       {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Schemas.Execution, child.id).output)
 
@@ -506,8 +506,8 @@ defmodule Opus.RecordTest do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
       :ok = Record.write_started(ctx, record)
 
-      {:ok, _ledger} =
-        Record.write_completed_ledger(
+      {:ok, _read_threads} =
+        Record.write_completed(
           Record.complete(record, %{"usage" => %{"input_tokens" => 9}}),
           retention_class: "api"
         )
@@ -525,8 +525,8 @@ defmodule Opus.RecordTest do
         "error" => %{"type" => "rate_limited", "message" => "slow down"}
       }
 
-      {:ok, _ledger} =
-        Record.write_completed_ledger(Record.complete(record, refused), retention_class: "api")
+      {:ok, _read_threads} =
+        Record.write_completed(Record.complete(record, refused), retention_class: "api")
 
       assert {:ok, %{"envelope" => "v1", "usage" => nil}} =
                Jason.decode(Arca.Repo.get(Arca.Schemas.Execution, record.id).output)
@@ -537,8 +537,8 @@ defmodule Opus.RecordTest do
       assert Record.default_retention_class(ctx) == "api"
       :ok = Record.write_started(ctx, record)
 
-      {:ok, _ledger} =
-        Record.write_completed_ledger(Record.complete(record, %{"sum" => 2}),
+      {:ok, _read_threads} =
+        Record.write_completed(Record.complete(record, %{"sum" => 2}),
           retention_class: "api"
         )
 
@@ -561,7 +561,7 @@ defmodule Opus.RecordTest do
       on_exit(fn -> Application.delete_env(:arca, :execution_payload_store) end)
 
       assert {:error, {:result_lost, :disk_full}} =
-               Record.write_completed_ledger(Record.complete(record, %{"sum" => 2}),
+               Record.write_completed(Record.complete(record, %{"sum" => 2}),
                  retention_class: "api"
                )
 
@@ -684,13 +684,13 @@ defmodule Opus.RecordTest do
     end
   end
 
-  describe "write_completed_ledger/2" do
+  describe "write_completed/2" do
     test "updates record with completion data", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = Record.write_started(ctx, record)
 
       completed = Record.complete(record, %{"result" => 42})
-      {:ok, _ledger} = Record.write_completed_ledger(completed, retention_class: "api")
+      {:ok, _read_threads} = Record.write_completed(completed, retention_class: "api")
 
       db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.status == "completed"
@@ -701,9 +701,22 @@ defmodule Opus.RecordTest do
       assert output["envelope"] == "v1"
     end
 
+    test "answers the run's read threads as its terminal write read them", %{ctx: ctx} do
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Record.write_started(ctx, record)
+
+      :ok =
+        Arca.Execution.join_threads(Sanctum.Context.actor(ctx), record.id, ["thr_b", "thr_a"])
+
+      completed = Record.complete(record, %{"result" => 42})
+
+      assert Record.write_completed(completed, retention_class: "api") ==
+               {:ok, ["thr_a", "thr_b"]}
+    end
+
     test "rejects non-completed records", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      result = Record.write_completed_ledger(record, retention_class: "api")
+      result = Record.write_completed(record, retention_class: "api")
 
       assert {:error, _} = result
     end
@@ -784,7 +797,7 @@ defmodule Opus.RecordTest do
       :ok = Record.write_started(ctx, record)
 
       completed = Record.complete(record, %{"result" => 42})
-      {:ok, _ledger} = Record.write_completed_ledger(completed, retention_class: "api")
+      {:ok, _read_threads} = Record.write_completed(completed, retention_class: "api")
 
       {:ok, loaded} = Record.get(ctx, record.id)
 
@@ -897,7 +910,7 @@ defmodule Opus.RecordTest do
       completed_record = Record.new(ctx, "reagent:local.completed:0.1.0", %{})
       :ok = Record.write_started(ctx, completed_record)
       completed = Record.complete(completed_record, %{})
-      {:ok, _ledger} = Record.write_completed_ledger(completed, retention_class: "api")
+      {:ok, _read_threads} = Record.write_completed(completed, retention_class: "api")
 
       # Filter by running
       {:ok, running_list} = Record.list(ctx, status: :running)
@@ -921,8 +934,8 @@ defmodule Opus.RecordTest do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
       :ok = Record.write_started(ctx, record)
 
-      {:ok, _ledger} =
-        Record.write_completed_ledger(Record.complete(record, %{"sum" => 2}),
+      {:ok, _read_threads} =
+        Record.write_completed(Record.complete(record, %{"sum" => 2}),
           retention_class: "api"
         )
 
@@ -952,7 +965,7 @@ defmodule Opus.RecordTest do
       on_exit(fn -> Application.delete_env(:arca, :execution_payload_store) end)
 
       {:error, {:result_lost, _}} =
-        Record.write_completed_ledger(Record.complete(lost, %{"sum" => 2}),
+        Record.write_completed(Record.complete(lost, %{"sum" => 2}),
           retention_class: "api"
         )
 
@@ -1000,7 +1013,7 @@ defmodule Opus.RecordTest do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = Record.write_started(ctx, record)
       completed = Record.complete(record, %{})
-      {:ok, _ledger} = Record.write_completed_ledger(completed, retention_class: "api")
+      {:ok, _read_threads} = Record.write_completed(completed, retention_class: "api")
 
       result = Record.cancel(ctx, record.id)
 
@@ -1090,7 +1103,7 @@ defmodule Opus.RecordTest do
     key = %{ctx | auth_method: :api_key, api_key_id: "key_rec"}
     device = %{ctx | auth_method: :device, client_id: "cli_rec"}
     system = %{ctx | auth_method: :system}
-    launch = %{sources: [], classes: [], consent_id: nil, agent: "aqua"}
+    launch = %{read_threads: [], consent_id: nil, agent: "aqua"}
     page = %{publisher: "local", name: "page"}
 
     # A frame's context, as its credential's verification builds it.

@@ -61,21 +61,22 @@ defmodule Arca.ExecutionAttempts do
   A write under `data/` is a guest object's (`Arca.ObjectRevisions`): step
   1 also marks its generation, recording on the intent the generation it
   marked and on the generation's row the bytes it will hold and the
-  attempt's ledger as it stands, the provenance of what the guest read
-  before it wrote; step 2 stores at the generation's key, never at the
-  path; and step 3 settles the path's row onto the generation, with the
-  generation's sources joined with the ledger as it stands then, only
-  while the intent is still `pending`. A write whose settlement does not
-  publish never becomes visible: an `uncertain` intent's generation stays
-  pending and is never read, a superseded one is confirmed (a newer write
-  replaced it), and one a delete fenced is `failed` as `dead`. An append
-  whose base moved under it re-derives from the new base under a fresh
-  generation, re-marked under the same hold and recorded on the same
-  intent, within `Arca.ObjectRevisions.append_attempts/0`; past the bound
-  the intent is `failed` as `precondition_failed` with nothing landed. A
-  guest's read of a guest object (`op: :read`) is answered only once its
-  settled sources are in the attempt's run's ledger
-  (`Arca.Execution.join_sources/3`).
+  attempt's run's read threads as they stand, the threads whose posts the
+  guest read before it wrote; step 2 stores at the generation's key, never
+  at the path; and step 3 settles the path's row onto the generation,
+  with the generation's read threads joined with the run's as they stand
+  then, only while the intent is still `pending`. A write whose
+  settlement does not publish never becomes visible: an `uncertain`
+  intent's generation stays pending and is never read, a superseded one
+  is confirmed (a newer write replaced it), and one a delete fenced is
+  `failed` as `dead`. An append whose base moved under it re-derives from
+  the new base under a fresh generation, re-marked under the same hold
+  and recorded on the same intent, within
+  `Arca.ObjectRevisions.append_attempts/0`; past the bound the intent is
+  `failed` as `precondition_failed` with nothing landed. A guest's read
+  of a guest object (`op: :read`) is answered only once its settled
+  generation's read threads are in the attempt's run's
+  (`Arca.Execution.join_threads/3`).
 
     1. **Intent.** One short transaction takes the attempt row's lock by
        writing it, requires the hold — the attempt owns its execution, is
@@ -464,8 +465,8 @@ defmodule Arca.ExecutionAttempts do
   @typedoc """
   What became of a write whose intent was recorded (the moduledoc's
   tables), or what a read answered: `{:read, {:ok, bytes}}` once the
-  object's sources joined the run's ledger, `{:read, {:error, reason}}`
-  as `Arca.ObjectRevisions.read/2` refused.
+  object's read threads joined the run's, `{:read, {:error, reason}}` as
+  `Arca.ObjectRevisions.read/2` refused.
   """
   @type written ::
           {:confirmed, :ok}
@@ -490,9 +491,9 @@ defmodule Arca.ExecutionAttempts do
 
   A `read` of a guest object records no intent and takes no lock: the
   runner must hold the attempt (`held?/4`), the object is read in one
-  observation and its sources join the attempt's run's ledger before its
-  bytes are answered; a ledger that cannot be joined is
-  `{:error, :database_error}` and answers no bytes.
+  observation and its read threads join the attempt's run's before its
+  bytes are answered; threads that cannot be joined are
+  `{:error, :database_error}` and answer no bytes.
   """
   @spec while_held(
           Prima.Actor.t(),
@@ -516,8 +517,8 @@ defmodule Arca.ExecutionAttempts do
     with true <- held?(actor, attempt, fence, runner) || {:error, :lost},
          {:ok, execution_id} <- execution_of(athanor_id, attempt) do
       case Arca.ObjectRevisions.read(actor, path) do
-        {:ok, bytes, sources} ->
-          case Arca.Execution.join_sources(actor, execution_id, sources) do
+        {:ok, bytes, threads} ->
+          case Arca.Execution.join_threads(actor, execution_id, threads) do
             :ok -> {:ok, {:read, {:ok, bytes}}}
             {:error, _unjoined} -> {:error, :database_error}
           end
@@ -590,7 +591,7 @@ defmodule Arca.ExecutionAttempts do
     end
   end
 
-  # The attempt's execution, the ledger its object writes record.
+  # The attempt's execution, whose read threads its object writes record.
   defp execution_of(athanor_id, attempt) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.execution_of", fn ->
       case Arca.Repo.one(
@@ -1352,14 +1353,14 @@ defmodule Arca.ExecutionAttempts do
     end)
   end
 
-  # A guest object's mark, taken with the ledger as it stands: what the
-  # guest read before it wrote. `:none` for any other path.
+  # A guest object's mark, taken with the run's read threads as they
+  # stand: what the guest read before it wrote. `:none` for any other path.
   # arca:db-raise-ok inside the caller's transaction
   defp mark!(athanor_id, execution_id, %{op: op, path: path, io: io} = write) do
     if is_function(io, 1) do
       Arca.ObjectRevisions.mark!(Prima.Actor.in_athanor(athanor_id), path, op, %{
         bytes: Map.get(write, :bytes) || 0,
-        sources: ledger!(athanor_id, execution_id)
+        threads: run_threads!(athanor_id, execution_id)
       })
     else
       :none
@@ -1369,20 +1370,17 @@ defmodule Arca.ExecutionAttempts do
   defp marked_generation({:ok, mark}), do: mark.generation
   defp marked_generation(_unmarked), do: nil
 
-  # The run's ledger as its row holds it now (`Arca.Execution.row_ledger/1`:
-  # an absent or unreadable one is an unnamed outside source). Read, not
-  # locked: the execution row is locked before an attempt row, never after.
+  # The run's read threads as its row holds them now
+  # (`Arca.Execution.row_threads/1`; no row holds none). Read, not locked:
+  # the execution row is locked before an attempt row, never after.
   # arca:db-raise-ok inside the caller's transaction
-  defp ledger!(athanor_id, execution_id) do
+  defp run_threads!(athanor_id, execution_id) do
     from(e in Arca.Schemas.Execution,
       where: e.athanor_id == ^athanor_id and e.id == ^execution_id,
-      select: %{sources: e.sources}
+      select: %{read_threads: e.read_threads}
     )
     |> Arca.Repo.one()
-    |> case do
-      nil -> [Prima.Source.outside(nil)]
-      row -> Arca.Execution.row_ledger(row)
-    end
+    |> Arca.Execution.row_threads()
   end
 
   # An append's re-derivation: a fresh mark, under the same grant and hold,
@@ -1510,7 +1508,7 @@ defmodule Arca.ExecutionAttempts do
             Arca.ObjectRevisions.settle!(
               holder.actor,
               mark,
-              ledger!(holder.athanor_id, holder.execution_id)
+              run_threads!(holder.athanor_id, holder.execution_id)
             ),
           else: :base_moved
       else

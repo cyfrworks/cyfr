@@ -125,7 +125,7 @@ defmodule Arca.Files do
   One file's bytes: as `utf8` text when they are, else `base64`. A file
   past `max_inline_read/0` is refused in words — the download route
   serves it whole. A file under `data/` is a guest object, and its answer
-  carries `sources`, the canonical JSON of the sources its settled
+  carries `read_threads`, the ids of the threads whose posts its settled
   generation was written with (`Arca.ObjectRevisions`), read in the same
   observation as its bytes; a file anywhere else records none.
   """
@@ -136,16 +136,16 @@ defmodule Arca.Files do
              required(:size) => non_neg_integer(),
              required(:content) => String.t(),
              required(:encoding) => String.t(),
-             optional(:sources) => [%{String.t() => String.t() | nil}]
+             optional(:read_threads) => [String.t()]
            }}
           | {:error, term()}
   def read(%Prima.Actor{} = actor, path) when is_binary(path) do
     with :ok <- tenant(actor),
          {:ok, segments, physical, _tier} <- resolve_file(path),
-         {:ok, bytes, sources} <- read_object(actor, physical, path) do
+         {:ok, bytes, threads} <- read_object(actor, physical, path) do
       bytes
       |> answer(segments)
-      |> with_sources(sources)
+      |> with_threads(threads)
     end
   end
 
@@ -171,16 +171,16 @@ defmodule Arca.Files do
     end
   end
 
-  defp with_sources({:ok, answer}, sources) when is_list(sources),
-    do: {:ok, Map.put(answer, :sources, Prima.Source.to_json_list(sources))}
+  defp with_threads({:ok, answer}, threads) when is_list(threads),
+    do: {:ok, Map.put(answer, :read_threads, threads)}
 
-  defp with_sources(answer, _none), do: answer
+  defp with_threads(answer, _none), do: answer
 
-  # A guest object's bytes and sources in one observation; any other file
-  # has bytes alone.
+  # A guest object's bytes and read threads in one observation; any other
+  # file has bytes alone.
   defp read_object(actor, ["data" | _] = physical, path) do
     case Arca.ObjectRevisions.read(actor, physical) do
-      {:ok, bytes, sources} -> {:ok, bytes, sources}
+      {:ok, bytes, threads} -> {:ok, bytes, threads}
       {:error, :not_found} -> {:error, {:not_found, "File", path}}
       {:error, reason} -> storage_error("read", path, reason)
     end
@@ -273,8 +273,8 @@ defmodule Arca.Files do
   Move a file, or a folder with everything in it, to `to`, a path no file
   or folder holds yet, both under `data/`; a rename is a move within one
   folder. Every file landing at `to` must be one `write/4` would accept,
-  by the one check a write meets. A file keeps the sources its settled
-  generation carries.
+  by the one check a write meets. A file keeps the read threads its
+  settled generation carries.
 
   The move is one publication (`Arca.move/4`): a reader sees the files at
   `path` or at `to`, never both and never neither. A source that changed

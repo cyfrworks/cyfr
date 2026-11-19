@@ -102,7 +102,6 @@ defmodule Compendium.Providers.Aqua do
             )
           ],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -117,7 +116,6 @@ defmodule Compendium.Providers.Aqua do
             )
           ],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -292,12 +290,10 @@ defmodule Compendium.Providers.Aqua do
         ),
         Operation.new("aqua", "status", "Status aqua", [],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new("aqua", "skill_list", "Skill list aqua", [],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain],
           recovery: :replay_safe
         ),
@@ -313,7 +309,6 @@ defmodule Compendium.Providers.Aqua do
             )
           ],
           kind: :read,
-          sources: [],
           planes: [:external, :in_chain],
           recovery: :replay_safe
         ),
@@ -340,7 +335,6 @@ defmodule Compendium.Providers.Aqua do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
           permission: :component_manage
@@ -366,7 +360,6 @@ defmodule Compendium.Providers.Aqua do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
           permission: :component_manage

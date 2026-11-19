@@ -1604,14 +1604,9 @@ defmodule Opus.Schedules.Scheduler do
   # the finish's own transaction (`Arca.ScheduleOccurrences.finish/6`'s
   # `also:`): the output as the run answered it, the schedule's choice to
   # keep it parsed from its metadata as the finish read it, the authority
-  # the run fired under, the note revision the occurrence recorded at the
-  # run's read, and the run's source ledger (`Opus.Ledger.sources/2`)
-  # read in this same transaction, so the note keeps the classes the
-  # output carries however long its delivery waits: a run whose row
-  # holds no ledger records one unnamed outside source, and a ledger that
-  # cannot be read refuses the finish. The note is never read here. The
-  # record's delivery is `Aqua.ScheduleNotes`'s; the completion broadcast
-  # after it only wakes it.
+  # the run fired under and the note revision the occurrence recorded at
+  # the run's read. The note is never read here. The record's delivery is
+  # `Aqua.ScheduleNotes`'s; the completion broadcast after it only wakes it.
   #
   # `schedule` is the row as this member read it before the run. A read's
   # revision is the revision of the note the schedule named when the run
@@ -1626,7 +1621,7 @@ defmodule Opus.Schedules.Scheduler do
           {:ok, 1} | {:error, :stale | :not_owner | :no_athanor | :database_error | term()}
   def complete(schedule, occurrence, execution_id, output) do
     end_occurrence(occurrence, claimant(), execution_id, "completed", nil,
-      also: &record_outcome(&1, schedule, execution_id, output)
+      also: &record_outcome(&1, schedule, output)
     )
   end
 
@@ -1727,34 +1722,23 @@ defmodule Opus.Schedules.Scheduler do
     emit_schedule_failed(schedule, context_of(schedule), reason, occurrence, execution_id)
   end
 
-  defp record_outcome(%{occurrence: occurrence} = finished, read_before, execution_id, output) do
+  defp record_outcome(%{occurrence: occurrence} = finished, read_before, output) do
     actor = Prima.Actor.in_athanor(occurrence.athanor_id)
 
-    with {:ok, sources} <- run_sources(actor, execution_id) do
-      record =
-        Prima.OutboxRecord.schedule_outcome(%{
-          occurrence: bound_read(occurrence, read_before, finished.schedule),
-          schedule: finished.schedule,
-          consent_revision: finished.consent_revision,
-          keep: keep_outcome(finished.schedule.metadata),
-          output: output,
-          sources: sources
-        })
+    record =
+      Prima.OutboxRecord.schedule_outcome(%{
+        occurrence: bound_read(occurrence, read_before, finished.schedule),
+        schedule: finished.schedule,
+        consent_revision: finished.consent_revision,
+        keep: keep_outcome(finished.schedule.metadata),
+        output: output
+      })
 
-      # A record already there is this finish's own: the occurrence moves
-      # once, so a second finish never reaches here.
-      case Arca.Outbox.put!(actor, record) do
-        :ok -> :ok
-        {:error, :exists} -> :ok
-      end
-    end
-  end
-
-  defp run_sources(actor, execution_id) do
-    case Opus.Ledger.sources(actor, execution_id) do
-      {:ok, sources} -> {:ok, sources}
-      {:error, :not_found} -> {:ok, [Prima.Source.outside(nil)]}
-      {:error, :unavailable} = unread -> unread
+    # A record already there is this finish's own: the occurrence moves
+    # once, so a second finish never reaches here.
+    case Arca.Outbox.put!(actor, record) do
+      :ok -> :ok
+      {:error, :exists} -> :ok
     end
   end
 

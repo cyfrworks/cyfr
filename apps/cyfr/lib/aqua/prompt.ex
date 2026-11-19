@@ -29,16 +29,10 @@ defmodule Aqua.Prompt do
   open requests, whose ages move. A room excerpt is never part of it: the request carries it as a
   transient block (`Aqua.Loop.Request`).
 
-  ## What the prompt read
+  ## The pinned page's revision
 
-  The prompt is read material too: the pinned page, the filed notes'
-  index and a workspace thread's notes are injected without a tool call.
-  `compose/2` answers the sources it read beside the text
-  (`Prima.Source`): `pinned` when it injected the pinned page, `filed`
-  when the index shows a note or it injected a workspace thread's notes,
-  and the provenance of each of those, so outside-derived material joins
-  the turn's sources without a `notes.read`. The loop records them on the
-  turn as it opens each model step. The pinned page shows the revision it
+  The pinned page, the filed notes' index and a workspace thread's notes
+  are injected without a tool call. The pinned page shows the revision it
   stands at, which a turn's `notes.pin` names to write it again, so a
   turn never writes over a page the person changed after the turn read
   it.
@@ -61,11 +55,11 @@ defmodule Aqua.Prompt do
           %{kind: :daily}
           | %{kind: :workspace, title: String.t(), ask: String.t(), notes: map() | nil}
 
-  @typedoc "A composed prompt: its text and the sources it read."
-  @type composed :: %{text: String.t(), sources: [Prima.Source.t()]}
+  @typedoc "A composed prompt."
+  @type composed :: %{text: String.t()}
 
   @doc """
-  Compose the system prompt for a turn, with the sources it read.
+  Compose the system prompt for a turn.
 
   `:agent` is required and carries its authored prompt under `"prompt"`;
   everything else narrows what the prompt claims.
@@ -76,7 +70,6 @@ defmodule Aqua.Prompt do
   def compose(%Context{} = ctx, opts) do
     %{"prompt" => prompt} = Keyword.fetch!(opts, :agent)
     authority = Keyword.get(opts, :authority)
-    {notes, sources} = notes(ctx)
     where = Keyword.get(opts, :where)
 
     text =
@@ -86,14 +79,14 @@ defmodule Aqua.Prompt do
         file_paths(authority),
         Aqua.Prelude.system_prelude(),
         scrolls(ctx),
-        notes,
+        notes(ctx),
         crew(Keyword.get(opts, :crew, [])),
         where(where),
         requests(Keyword.get(opts, :requests, [])),
         clock()
       ])
 
-    %{text: text, sources: Prima.Source.set(sources ++ where_sources(where))}
+    %{text: text}
   end
 
   # ---------------------------------------------------------------------------
@@ -173,13 +166,6 @@ defmodule Aqua.Prompt do
 
   defp thread_notes(%{content: content}),
     do: ["\n\n### This thread's notes\n\n", content]
-
-  # What the section read: a workspace thread's notes are a note, with the
-  # provenance they were written with.
-  defp where_sources(%{kind: :workspace, notes: %{sources: sources}}),
-    do: [Prima.Source.new(:filed) | Prima.Source.material(sources)]
-
-  defp where_sources(_where), do: []
 
   defp quoted(text),
     do: text |> String.trim() |> String.split("\n") |> Enum.map_join("\n", &("> " <> &1))
@@ -347,53 +333,37 @@ defmodule Aqua.Prompt do
     interactive? = ctx.auth_method == :oidc
     read_rule = if interactive?, do: @read_rule, else: ""
 
-    {pinned, pinned_sources} =
+    pinned =
       case Aqua.Notes.pinned(ctx) do
         {:ok, %{name: name, content: content} = page} ->
-          {[
-             "\n\n### Pinned: ",
-             name,
-             " (revision #{page.revision})",
-             "\n\n",
-             content
-           ], [Prima.Source.new(:pinned) | Prima.Source.material(page.sources)]}
+          ["\n\n### Pinned: ", name, " (revision #{page.revision})", "\n\n", content]
 
         :none ->
-          {[], []}
+          []
       end
 
-    {index, index_sources} =
+    index =
       case Aqua.Notes.index(ctx) do
         {:ok, %{entries: [], more: 0}} ->
-          {"\n\nNo notes filed yet.", []}
+          "\n\nNo notes filed yet."
 
         {:ok, %{entries: entries, more: more}} ->
-          {[
-             "\n\nFiled notes:\n",
-             Enum.map(entries, &index_line/1),
-             if(more > 0,
-               do: ["- … and #{more} more — find one with `notes.search`\n"],
-               else: []
-             )
-           ], filed_sources(entries)}
+          [
+            "\n\nFiled notes:\n",
+            Enum.map(entries, &index_line/1),
+            if(more > 0,
+              do: ["- … and #{more} more — find one with `notes.search`\n"],
+              else: []
+            )
+          ]
 
         {:error, _} ->
-          {[], []}
+          []
       end
 
-    {["\n\n---\n\n## Notes\n\n", @notes_rule, read_rule, pinned, index],
-     pinned_sources ++ index_sources}
+    ["\n\n---\n\n## Notes\n\n", @notes_rule, read_rule, pinned, index]
   end
 
   defp index_line(%{name: name, line: line}),
     do: ["- ", name, if(line == "", do: [], else: [" — ", line]), "\n"]
-
-  # `filed` for a shown note, joined by each shown note's own material.
-  defp filed_sources([]), do: []
-
-  defp filed_sources(entries),
-    do: [
-      Prima.Source.new(:filed)
-      | Enum.flat_map(entries, &Prima.Source.material(Map.get(&1, :sources, [])))
-    ]
 end

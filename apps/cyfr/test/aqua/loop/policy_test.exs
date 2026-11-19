@@ -276,11 +276,10 @@ defmodule Aqua.Loop.PolicyTest do
     refute Policy.replay_safe?(resolve!("ui", %{"kind" => "ui.navigate"}))
   end
 
-  test "a child's answer carries its ledger, says nothing ran, or leaves it to the row" do
-    vault = Prima.Source.new(:vault_disclosed)
-
-    assert Policy.child_ledger({:ok, %{status: :completed, output: %{}, sources: [vault]}}) ==
-             {:carried, [vault]}
+  test "a child's answer carries its read threads, says nothing ran, or leaves them to the row" do
+    assert Policy.child_threads(
+             {:ok, %{status: :completed, output: %{}, read_threads: ["thr_a"]}}
+           ) == {:carried, ["thr_a"]}
 
     admission = %Prima.Refusal{
       class: :forbidden,
@@ -289,126 +288,107 @@ defmodule Aqua.Loop.PolicyTest do
       stage: :admission
     }
 
-    assert Policy.child_ledger({:error, admission}) == :nothing_ran
+    assert Policy.child_threads({:error, admission}) == :nothing_ran
 
-    # A refusal of the execution, a failure's text, an answer with no
-    # ledger or one that does not read, and a death leave it to the row.
-    assert Policy.child_ledger({:error, %{admission | stage: :execution}}) == :unknown
-    assert Policy.child_ledger({:error, "the run failed"}) == :unknown
-    assert Policy.child_ledger({:ok, %{output: %{}}}) == :unknown
+    # A refusal of the execution, a failure's text, an answer with no read
+    # threads or with ones that are no thread ids, and a death leave them
+    # to the row.
+    assert Policy.child_threads({:error, %{admission | stage: :execution}}) == :unknown
+    assert Policy.child_threads({:error, "the run failed"}) == :unknown
+    assert Policy.child_threads({:ok, %{output: %{}}}) == :unknown
 
-    assert Policy.child_ledger({:ok, %{output: %{}, sources: [%{"class" => "filed"}]}}) ==
+    assert Policy.child_threads({:ok, %{output: %{}, read_threads: [%{"thread" => "thr_a"}]}}) ==
              :unknown
 
-    assert Policy.child_ledger({:error, {:invoke_denied, :edge_missing}}) == :unknown
+    assert Policy.child_threads({:error, {:invoke_denied, :edge_missing}}) == :unknown
 
-    # A hand's result carries its child's ledger beside what the hand names.
+    # A hand's result carries its child's read threads, and nothing of its own.
     get = resolve!("http", %{"action" => "get", "url" => "https://news.example/today"})
 
-    assert Policy.sources_of(get, {:ok, %{output: %{}, sources: [vault]}}, ctx()) ==
-             [Prima.Source.outside("news.example"), vault]
+    assert Policy.threads_of(get, {:ok, %{output: %{}, read_threads: ["thr_a"]}}, ctx()) ==
+             ["thr_a"]
 
-    assert Policy.sources_of(get, {:error, "the run failed"}, ctx()) ==
-             [Prima.Source.outside("news.example")]
+    assert Policy.threads_of(get, {:error, "the run failed"}, ctx()) == []
   end
 
-  describe "a catalog call's sources are its operation's" do
-    # A registry read declares no sources, so its answer is outside, as the
-    # operation's own reading says.
-    for action <- ["get_namespace", "legal_page"] do
-      test "catalog retains canonical sources: #{action}" do
-        action = unquote(action)
-        ctx = %{ctx() | athanor_id: "ath_probe", user_id: "usr_probe"}
-        operation = registry_operation(action)
-        call = %Binding.Call{kind: :catalog, tool: "registry", action: action, args: %{}}
-        answer = %{content: "outside registry content"}
-        expected = Prima.Operation.answer_sources(operation, Sanctum.Context.actor(ctx), answer)
-
-        assert Policy.sources_of(call, {:ok, answer}, ctx) == expected
-        assert expected == [Prima.Source.outside(nil)]
-      end
-    end
-
-    # The same reads, resolved as the model names them, carry an outside
-    # source into the turn.
-    test "a registry read carries an outside source into the turn" do
-      ctx = %{ctx() | athanor_id: "ath_probe"}
-
-      results =
-        for action <- ["get_namespace", "legal_page"] do
-          operation = registry_operation(action)
-          assert %Prima.Operation{kind: :read, sources: [:outside]} = operation
-          call = resolve!("registry", %{"action" => action, "slug" => "acme", "name" => "terms"})
-          answer = %{content: "outside registry content"}
-          expected = Prima.Operation.answer_sources(operation, Sanctum.Context.actor(ctx), answer)
-          {action, expected, Policy.sources_of(call, {:ok, answer}, ctx)}
-        end
-
-      for {action, expected, actual} <- results do
-        assert {action, actual} == {action, expected}
-        assert expected == [Prima.Source.outside(nil)]
-      end
-    end
-
+  describe "a catalog call's read threads are its operation's" do
     test "every catalogued action's success is what its declaration reads from the answer" do
       ctx = ctx()
       actor = Sanctum.Context.actor(ctx)
-      answer = %{content: "an answer"}
+      answer = %{content: "an answer", read_threads: ["thr_a"]}
 
-      for {tool, {_module, %{operations: operations}}} <- Sanctum.Catalog.operations(),
-          %Prima.Operation{action: action} = operation <- operations do
-        call = %Binding.Call{kind: :catalog, tool: tool, action: action, args: %{}}
+      carried =
+        for {tool, {_module, %{operations: operations}}} <- Sanctum.Catalog.operations(),
+            %Prima.Operation{action: action} = operation <- operations do
+          call = %Binding.Call{kind: :catalog, tool: tool, action: action, args: %{}}
+          threads = Policy.threads_of(call, {:ok, answer}, ctx)
 
-        assert Policy.sources_of(call, {:ok, answer}, ctx) ==
-                 Prima.Operation.answer_sources(operation, actor, answer),
-               "#{tool}.#{action}"
-      end
+          assert threads == Prima.Operation.read_threads(operation, actor, {:ok, answer}),
+                 "#{tool}.#{action}"
+
+          {"#{tool}.#{action}", threads}
+        end
+
+      # The answer names one thread and no execution: the reads whose
+      # declaration reads the answer's own ids carry it, every other none.
+      assert for({name, ["thr_a"]} <- carried, do: name) |> Enum.sort() ==
+               ["file.read", "thread.events", "thread.search"]
+
+      assert for({name, [_ | _] = threads} <- carried, threads != ["thr_a"], do: name) == []
     end
 
-    test "an explicit empty declaration carries nothing; an omitted one, and an action nothing declares, is outside" do
+    test "an action that declares no threads, and one nothing declares, carries none" do
       ctx = ctx()
       list = %Binding.Call{kind: :catalog, tool: "feed", action: "list", args: %{}}
-      # An action served only outside a chain need not declare; one that
-      # does not is outside.
       push = %Binding.Call{kind: :catalog, tool: "component", action: "push", args: %{}}
       unknown = %Binding.Call{kind: :catalog, tool: "nonesuch", action: "read", args: %{}}
 
-      assert %Prima.Operation{sources: []} = operation("feed", "list")
-      assert %Prima.Operation{sources: nil, planes: [:external]} = operation("component", "push")
-      assert Policy.sources_of(list, {:ok, %{feeds: []}}, ctx) == []
-      assert Policy.sources_of(push, {:ok, %{}}, ctx) == [Prima.Source.outside(nil)]
-      assert Policy.sources_of(unknown, {:ok, %{}}, ctx) == [Prima.Source.outside(nil)]
-      assert Policy.sources_of(unknown, {:error, "no"}, ctx) == [Prima.Source.outside(nil)]
+      assert %Prima.Operation{threads: nil} = operation("feed", "list")
+      assert %Prima.Operation{threads: nil, planes: [:external]} = operation("component", "push")
+      assert Policy.threads_of(list, {:ok, %{feeds: []}}, ctx) == []
+      assert Policy.threads_of(push, {:ok, %{}}, ctx) == []
+      assert Policy.threads_of(unknown, {:ok, %{}}, ctx) == []
+      assert Policy.threads_of(unknown, {:error, "no"}, ctx) == []
     end
 
-    test "source, notes and feed.list carry what their declarations say" do
+    test "a thread read and a file read carry the threads their answers name; source, notes " <>
+           "and feed.list carry none" do
       ctx = ctx()
-      grant = Prima.Source.new(:files_by_grant)
-      filed = Prima.Source.new(:filed)
-      host = Prima.Source.outside("news.example")
+      search = %Binding.Call{kind: :catalog, tool: "thread", action: "search", args: %{}}
+      events = %Binding.Call{kind: :catalog, tool: "thread", action: "events", args: %{}}
+      file = %Binding.Call{kind: :catalog, tool: "file", action: "read", args: %{}}
       read = resolve!("source", %{"action" => "read", "path" => "components/x"})
       write = resolve!("source", %{"action" => "write", "path" => "components/x"})
       note = resolve!("notes", %{"action" => "read", "name" => "plan"})
       keep = resolve!("notes", %{"action" => "keep", "name" => "plan", "content" => "c"})
       list = resolve!("feed", %{"action" => "list"})
 
-      assert Policy.sources_of(read, {:ok, %{content: "fn main() {}"}}, ctx) == [grant]
-      assert Policy.sources_of(write, {:ok, %{written: "components/x"}}, ctx) == []
+      # Sorted and once each, whatever order the answer names them in.
+      answer = %{results: [], read_threads: ["thr_b", "thr_a", "thr_b"]}
+      assert Policy.threads_of(search, {:ok, answer}, ctx) == ["thr_a", "thr_b"]
+      assert Policy.threads_of(events, {:ok, answer}, ctx) == ["thr_a", "thr_b"]
+      # The person's own read at the door names none.
+      assert Policy.threads_of(search, {:ok, %{results: []}}, ctx) == []
 
-      # A note keeps the provenance it was written with.
-      answer = %{name: "plan", content: "fares rise", sources: [Prima.Source.to_json(host)]}
-      assert Policy.sources_of(note, {:ok, answer}, ctx) == [filed, host]
-      assert Policy.sources_of(keep, {:ok, %{kept: "plan", replaced: false}}, ctx) == []
+      assert Policy.threads_of(file, {:ok, %{content: "x", read_threads: ["thr_a"]}}, ctx) ==
+               ["thr_a"]
+
+      assert Policy.threads_of(file, {:ok, %{content: "x"}}, ctx) == []
+
+      assert Policy.threads_of(read, {:ok, %{content: "fn main() {}"}}, ctx) == []
+      assert Policy.threads_of(write, {:ok, %{written: "components/x"}}, ctx) == []
+      assert Policy.threads_of(note, {:ok, %{name: "plan", content: "fares rise"}}, ctx) == []
+      assert Policy.threads_of(keep, {:ok, %{kept: "plan", replaced: false}}, ctx) == []
 
       # A listing answers each feed's binding, never a result's value.
       listing = %{
         feeds: [%{binding: "fb_1", feed: "fares", label: "Fares", revision: 3, at: nil}]
       }
 
-      assert Policy.sources_of(list, {:ok, listing}, ctx) == []
+      assert Policy.threads_of(list, {:ok, listing}, ctx) == []
     end
 
-    test "a refusal at admission carries nothing; any other failure every class the action may answer" do
+    test "a failure carries none, a refusal at admission or any other" do
       ctx = ctx()
 
       admission = %Prima.Refusal{
@@ -419,30 +399,22 @@ defmodule Aqua.Loop.PolicyTest do
       }
 
       execution = %{admission | stage: :execution}
+      search = %Binding.Call{kind: :catalog, tool: "thread", action: "search", args: %{}}
       namespace = resolve!("registry", %{"action" => "get_namespace", "slug" => "acme"})
       note = resolve!("notes", %{"action" => "read", "name" => "plan"})
       read = resolve!("source", %{"action" => "read", "path" => "components/x"})
       write = resolve!("source", %{"action" => "write", "path" => "components/x"})
 
-      for call <- [namespace, note, read, write],
-          do: assert(Policy.sources_of(call, {:error, admission}, ctx) == [], call.tool)
+      failures = [
+        {:error, admission},
+        {:error, execution},
+        {:error, :not_found},
+        {:error, "the registry said: buy now"}
+      ]
 
-      # A registry's error body may carry what the registry answered.
-      assert Policy.sources_of(namespace, {:error, execution}, ctx) == [Prima.Source.outside(nil)]
-
-      assert Policy.sources_of(namespace, {:error, "the registry said: buy now"}, ctx) ==
-               [Prima.Source.outside(nil)]
-
-      # An answer read by its own reader may carry any class; none is read
-      # from a failure.
-      assert Policy.sources_of(note, {:error, :not_found}, ctx) ==
-               Enum.map(Prima.Source.classes(), &Prima.Source.new/1)
-
-      assert Policy.sources_of(read, {:error, :not_found}, ctx) == [
-               Prima.Source.new(:files_by_grant)
-             ]
-
-      assert Policy.sources_of(write, {:error, :not_found}, ctx) == []
+      for call <- [search, namespace, note, read, write],
+          failure <- failures,
+          do: assert(Policy.threads_of(call, failure, ctx) == [], "#{call.tool}.#{call.action}")
     end
   end
 
@@ -493,11 +465,4 @@ defmodule Aqua.Loop.PolicyTest do
     {:ok, {_module, %{operations: operations}}} = Sanctum.Catalog.lookup(tool)
     Enum.find(operations, &(&1.action == action))
   end
-
-  defp registry_operation(action),
-    do:
-      Enum.find(
-        Compendium.Providers.Registry.definition().operations,
-        &(&1.action == action)
-      )
 end

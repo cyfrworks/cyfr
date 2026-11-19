@@ -8,9 +8,9 @@ defmodule Opus.FacadeTest do
   entries answer as `Opus.LeaseWatch` does; `list_by_request/3` and
   `count_by_request/2` are the request log's correlation reads, the
   executions a request id ran, which `PrismWeb.ActivitiesLive` calls
-  under its context beside `Sanctum.PolicyLog`'s own reads. `sources/2`
-  is the ledger read Aqua's loop makes for a child whose step closes
-  without a completion result to carry it.
+  under its context beside `Sanctum.PolicyLog`'s own reads.
+  `read_threads/2` is the read Aqua's loop makes of a child whose step
+  closes without a completion result to carry its read threads.
   """
 
   use ExUnit.Case, async: true
@@ -32,6 +32,7 @@ defmodule Opus.FacadeTest do
     get: 2,
     list_by_request: 3,
     pause_turn_root: 3,
+    read_threads: 2,
     release_turn_root: 3,
     resume_lease_watch: 1,
     resume_turn_root: 3,
@@ -39,7 +40,6 @@ defmodule Opus.FacadeTest do
     run_root: 5,
     run_root_edge: 5,
     service: 0,
-    sources: 2,
     start_lease_watch: 2,
     start_lease_watch: 3,
     start_root: 5,

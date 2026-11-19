@@ -32,10 +32,10 @@ defmodule Arca.ObjectRevisionsTest do
   generation: a write marks a generation, stores its bytes at
   `objects/<generation>/<path>` and settles the path's row onto it, and
   every read, listing, download, count and copy through the `Arca` facade
-  answers only a settled generation's bytes and the sources it settled
-  with. A store delayed past a newer settlement or a delete lands at its
+  answers only a settled generation's bytes and the read threads it
+  settled with. A store delayed past a newer settlement or a delete lands at its
   own key and is never read; a delete fences every generation marked
-  before it; an append and a copy carry the settled sources forward; the
+  before it; an append and a copy carry the settled read threads forward; the
   conditional writes answer on the settled generation; `objects/` is
   refused to every facade caller; and retention collects every retired
   generation while it keeps the pointer and a write still in flight.
@@ -76,10 +76,10 @@ defmodule Arca.ObjectRevisionsTest do
   # Helpers: one writer's steps, and the state a reader sees
   # ---------------------------------------------------------------------------
 
-  defp mark(actor, path, op, bytes, sources) do
+  defp mark(actor, path, op, bytes, threads) do
     {:ok, {:ok, mark}} =
       Arca.Repo.transaction(fn ->
-        ObjectRevisions.mark!(actor, path, op, %{bytes: bytes, sources: sources})
+        ObjectRevisions.mark!(actor, path, op, %{bytes: bytes, threads: threads})
       end)
 
     mark
@@ -115,9 +115,6 @@ defmodule Arca.ObjectRevisionsTest do
     Arca.usage(actor, path)
   end
 
-  defp filed, do: Prima.Source.new(:filed)
-  defp disclosed, do: Prima.Source.new(:vault_disclosed)
-
   # ---------------------------------------------------------------------------
   # Interleavings of mark, store and settle
   # ---------------------------------------------------------------------------
@@ -126,8 +123,8 @@ defmodule Arca.ObjectRevisionsTest do
        %{actor: actor} do
     path = ["data", "a.txt"]
 
-    a = mark(actor, path, :put, 3, [filed()])
-    b = mark(actor, path, :put, 3, [Prima.Source.outside("b.example")])
+    a = mark(actor, path, :put, 3, ["thr_a"])
+    b = mark(actor, path, :put, 3, ["thr_b"])
     assert b.generation > a.generation
 
     :ok = ObjectRevisions.store(actor, b, "bbb")
@@ -139,8 +136,7 @@ defmodule Arca.ObjectRevisionsTest do
 
     assert {:ok, "bbb"} = Arca.get(actor, path)
 
-    assert {:ok, "bbb", [%Prima.Source{class: :outside, name: "b.example"}]} =
-             ObjectRevisions.read(actor, path)
+    assert {:ok, "bbb", ["thr_b"]} = ObjectRevisions.read(actor, path)
 
     # A's bytes sit at A's own key, which the facade refuses.
     assert {:ok, "aaa"} = stored(actor, a.generation, path)
@@ -218,8 +214,8 @@ defmodule Arca.ObjectRevisionsTest do
 
   test "of two writers the older settlement writes nothing", %{actor: actor} do
     path = ["data", "c5.txt"]
-    a = mark(actor, path, :put, 1, [filed()])
-    b = mark(actor, path, :put, 1, [Prima.Source.outside("b.example")])
+    a = mark(actor, path, :put, 1, ["thr_a"])
+    b = mark(actor, path, :put, 1, ["thr_b"])
     :ok = ObjectRevisions.store(actor, a, "a")
     :ok = ObjectRevisions.store(actor, b, "b")
 
@@ -230,8 +226,7 @@ defmodule Arca.ObjectRevisionsTest do
     assert settle(actor, a) == :superseded
     assert row(actor, path) == after_newer
 
-    assert {:ok, "b", [%Prima.Source{class: :outside, name: "b.example"}]} =
-             ObjectRevisions.read(actor, path)
+    assert {:ok, "b", ["thr_b"]} = ObjectRevisions.read(actor, path)
   end
 
   test "a write paused across a delete is dead, and a recreate settles above the fence",
@@ -260,53 +255,50 @@ defmodule Arca.ObjectRevisionsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Sources
+  # Read threads
   # ---------------------------------------------------------------------------
 
-  test "a clean append over an uncertain restricted overwrite derives from the settled bytes",
+  test "an append over an uncertain overwrite derives from the settled bytes and their read threads",
        %{actor: actor} do
     path = ["data", "c7.txt"]
-    :ok = Arca.put(actor, path, "clean", sources: [filed()])
+    :ok = Arca.put(actor, path, "settled", threads: ["thr_a"])
 
-    # A restricted overwrite whose store landed and that never settled.
-    pending = mark(actor, path, :put, 10, [disclosed()])
-    :ok = ObjectRevisions.store(actor, pending, "restricted")
+    # An overwrite whose store landed and that never settled.
+    pending = mark(actor, path, :put, 10, ["thr_b"])
+    :ok = ObjectRevisions.store(actor, pending, "unsettled")
 
-    :ok = Arca.append(actor, path, "suffix", sources: [])
+    :ok = Arca.append(actor, path, "suffix")
 
-    assert {:ok, "cleansuffix", sources} = ObjectRevisions.read(actor, path)
-    assert sources == [filed()]
-    refute disclosed() in sources
-    assert {:ok, "cleansuffix"} = Arca.get(actor, path)
+    assert {:ok, "settledsuffix", ["thr_a"]} = ObjectRevisions.read(actor, path)
+    assert {:ok, "settledsuffix"} = Arca.get(actor, path)
 
     # The pending generation's bytes are not reachable through the facade.
     assert {:error, :forbidden} = Arca.get(actor, ["objects", "#{pending.generation}" | path])
-    assert {:ok, "restricted"} = stored(actor, pending.generation, path)
+    assert {:ok, "unsettled"} = stored(actor, pending.generation, path)
   end
 
-  test "a restricted settled prefix keeps its sources through a clean append and a clean copy",
+  test "an append unions its read threads with the settled object's, and a copy keeps them",
        %{actor: actor} do
     path = ["data", "p", "s.txt"]
-    :ok = Arca.put(actor, path, "secret", sources: [disclosed()])
-    :ok = Arca.append(actor, path, "x", sources: [])
+    :ok = Arca.put(actor, path, "posts", threads: ["thr_b"])
+    :ok = Arca.append(actor, path, "x", threads: ["thr_a"])
 
-    assert {:ok, "secretx", sources} = ObjectRevisions.read(actor, path)
-    assert disclosed() in sources
+    assert {:ok, "postsx", ["thr_a", "thr_b"]} = ObjectRevisions.read(actor, path)
 
-    assert {:ok, [["s.txt"]]} = Arca.copy_tree(actor, ["data", "p"], ["data", "q"], sources: [])
-    assert {:ok, "secretx", copied} = ObjectRevisions.read(actor, ["data", "q", "s.txt"])
-    assert disclosed() in copied
+    assert {:ok, [["s.txt"]]} = Arca.copy_tree(actor, ["data", "p"], ["data", "q"])
+
+    assert {:ok, "postsx", ["thr_a", "thr_b"]} =
+             ObjectRevisions.read(actor, ["data", "q", "s.txt"])
   end
 
-  test "a write naming no sources records an unnamed outside source, and sources: [] none",
+  test "a write records the read threads it names, sorted once each, and none when it names none",
        %{actor: actor} do
     :ok = Arca.put(actor, ["data", "unnamed.txt"], "u")
+    assert {:ok, "u", []} = ObjectRevisions.read(actor, ["data", "unnamed.txt"])
 
-    assert {:ok, "u", [%Prima.Source{class: :outside, name: nil}]} =
-             ObjectRevisions.read(actor, ["data", "unnamed.txt"])
-
-    :ok = Arca.put(actor, ["data", "none.txt"], "n", sources: [])
-    assert {:ok, "n", []} = ObjectRevisions.read(actor, ["data", "none.txt"])
+    :ok = Arca.put(actor, ["data", "named.txt"], "n", threads: ["thr_b", "thr_a", "thr_b"])
+    assert {:ok, "n", ["thr_a", "thr_b"]} = ObjectRevisions.read(actor, ["data", "named.txt"])
+    assert row(actor, ["data", "named.txt"]).read_threads == ~s(["thr_a","thr_b"])
   end
 
   # ---------------------------------------------------------------------------
@@ -621,12 +613,12 @@ defmodule Arca.ObjectRevisionsTest do
   test "a name with a combining mark lists, counts and deletes what lies under it, and is no file over it",
        %{actor: actor} do
     dir = ["data", "é"]
-    :ok = Arca.put(actor, dir ++ ["child"], "child", sources: [])
+    :ok = Arca.put(actor, dir ++ ["child"], "child")
 
     assert {:ok, [{"child", :file}]} = Arca.list_typed(actor, dir)
     assert {:ok, [["data", "é", "child"]]} = Arca.list_recursive(actor, dir)
     assert {:ok, %{files: 1, bytes: 5}} = cold_usage(actor, dir)
-    assert {:error, :eisdir} = Arca.put(actor, dir, "parent", sources: [])
+    assert {:error, :eisdir} = Arca.put(actor, dir, "parent")
 
     assert :ok = Arca.delete_tree(actor, dir)
     assert {:error, :not_found} = Arca.get(actor, dir ++ ["child"])
@@ -636,26 +628,26 @@ defmodule Arca.ObjectRevisionsTest do
        %{actor: actor} do
     deep = ["data" | Enum.map(1..31, &Integer.to_string/1)]
     assert :ok = Prima.PathSafety.validate_segments!(deep)
-    assert :ok = Arca.put(actor, deep, "deep", sources: [])
+    assert :ok = Arca.put(actor, deep, "deep")
     assert {:ok, "deep"} = Arca.get(actor, deep)
 
     long =
       ["data"] ++ List.duplicate(String.duplicate("a", 240), 4) ++ [String.duplicate("b", 55)]
 
     assert byte_size(Enum.join(long, "/")) == 1024
-    assert :ok = Arca.put(actor, long, "long", sources: [])
+    assert :ok = Arca.put(actor, long, "long")
     assert {:ok, "long"} = Arca.get(actor, long)
 
     # Its generation gaining a digit lengthens its key, never its path.
     near =
       ["data"] ++ List.duplicate(String.duplicate("a", 240), 4) ++ [String.duplicate("c", 45)]
 
-    for n <- 1..10, do: assert(:ok = Arca.put(actor, near, Integer.to_string(n), sources: []))
+    for n <- 1..10, do: assert(:ok = Arca.put(actor, near, Integer.to_string(n)))
     assert {:ok, "10"} = Arca.get(actor, near)
     assert Enum.max(generations(actor, near)) >= 10
 
     # Past the logical limits nothing is marked.
-    assert_raise ArgumentError, fn -> Arca.put(actor, deep ++ ["x"], "x", sources: []) end
+    assert_raise ArgumentError, fn -> Arca.put(actor, deep ++ ["x"], "x") end
     assert row(actor, deep ++ ["x"]) == nil
   end
 
@@ -699,16 +691,15 @@ defmodule Arca.ObjectRevisionsTest do
     assert {:ok, "fresh"} = stored(actor, fresh.generation, path)
   end
 
-  test "a move publishes the destination and retires the source at once, keeping their sources",
+  test "a move publishes the destination and retires the source at once, keeping their read threads",
        %{actor: actor} do
     admit = fn _path, _bytes -> :ok end
-    :ok = Arca.put(actor, ["data", "m", "a.txt"], "alpha", sources: [disclosed()])
-    :ok = Arca.put(actor, ["data", "m", "b.txt"], "beta", sources: [])
+    :ok = Arca.put(actor, ["data", "m", "a.txt"], "alpha", threads: ["thr_a"])
+    :ok = Arca.put(actor, ["data", "m", "b.txt"], "beta")
 
     assert ObjectRevisions.move(actor, ["data", "m"], ["data", "n"], admit) == :ok
 
-    assert ObjectRevisions.read(actor, ["data", "n", "a.txt"]) ==
-             {:ok, "alpha", [disclosed()]}
+    assert ObjectRevisions.read(actor, ["data", "n", "a.txt"]) == {:ok, "alpha", ["thr_a"]}
 
     assert ObjectRevisions.read(actor, ["data", "n", "b.txt"]) == {:ok, "beta", []}
 
@@ -736,8 +727,7 @@ defmodule Arca.ObjectRevisionsTest do
     assert ObjectRevisions.move(actor, ["data", "n"], ["data", "p"], changing) ==
              {:error, :changed}
 
-    assert ObjectRevisions.read(actor, ["data", "n", "a.txt"]) ==
-             {:ok, "changed", [Prima.Source.outside(nil)]}
+    assert ObjectRevisions.read(actor, ["data", "n", "a.txt"]) == {:ok, "changed", []}
 
     assert ObjectRevisions.exists?(actor, ["data", "n", "b.txt"])
     refute ObjectRevisions.exists?(actor, ["data", "p", "a.txt"])
@@ -754,20 +744,21 @@ defmodule Arca.ObjectRevisionsTest do
              {:error, :not_movable}
   end
 
-  test "a copy naming no sources joins an unnamed outside source, and sources: [] joins none",
+  test "a copy from data/ keeps the source's read threads, transformed or not, joined with those it names",
        %{actor: actor} do
-    :ok = Arca.put(actor, ["data", "src", "f"], "clean", sources: [])
+    :ok = Arca.put(actor, ["data", "src", "f"], "posts", threads: ["thr_b"])
 
     assert {:ok, [["f"]]} =
              Arca.copy_tree(actor, ["data", "src"], ["data", "dst"],
-               transform: fn _relative, _content -> "outside material" end
+               transform: fn _relative, _content -> "transformed" end
              )
 
-    assert {:ok, "outside material", [%Prima.Source{class: :outside, name: nil}]} =
-             ObjectRevisions.read(actor, ["data", "dst", "f"])
+    assert {:ok, "transformed", ["thr_b"]} = ObjectRevisions.read(actor, ["data", "dst", "f"])
 
-    assert {:ok, [["f"]]} = Arca.copy_tree(actor, ["data", "src"], ["data", "own"], sources: [])
-    assert {:ok, "clean", []} = ObjectRevisions.read(actor, ["data", "own", "f"])
+    assert {:ok, [["f"]]} =
+             Arca.copy_tree(actor, ["data", "src"], ["data", "own"], threads: ["thr_a"])
+
+    assert {:ok, "posts", ["thr_a", "thr_b"]} = ObjectRevisions.read(actor, ["data", "own", "f"])
   end
 
   # ---------------------------------------------------------------------------
@@ -783,17 +774,17 @@ defmodule Arca.ObjectRevisionsTest do
 
     test "a settled write, a delete and a folder's delete each name their path once, after the commit",
          %{actor: actor} do
-      :ok = Arca.put(actor, ["data", "a.txt"], "one", sources: [])
+      :ok = Arca.put(actor, ["data", "a.txt"], "one")
       assert_received {:announced, "data/a.txt", false, true}
 
-      :ok = Arca.append(actor, ["data", "a.txt"], " two", sources: [])
+      :ok = Arca.append(actor, ["data", "a.txt"], " two")
       assert_received {:announced, "data/a.txt", false, true}
 
       :ok = Arca.delete(actor, ["data", "a.txt"])
       assert_received {:announced, "data/a.txt", false, false}
 
-      :ok = Arca.put(actor, ["data", "dir", "b.txt"], "b", sources: [])
-      :ok = Arca.put(actor, ["data", "dir", "c.txt"], "c", sources: [])
+      :ok = Arca.put(actor, ["data", "dir", "b.txt"], "b")
+      :ok = Arca.put(actor, ["data", "dir", "c.txt"], "c")
       assert_received {:announced, "data/dir/b.txt", false, true}
       assert_received {:announced, "data/dir/c.txt", false, true}
 
@@ -803,7 +794,7 @@ defmodule Arca.ObjectRevisionsTest do
     end
 
     test "a refused write and a write outside data/ announce nothing", %{actor: actor} do
-      :ok = Arca.put(actor, ["data", "once.txt"], "first", sources: [])
+      :ok = Arca.put(actor, ["data", "once.txt"], "first")
       assert_received {:announced, "data/once.txt", false, true}
 
       assert {:error, :exists} = Arca.put_if_none_match(actor, ["data", "once.txt"], "again")
@@ -816,7 +807,7 @@ defmodule Arca.ObjectRevisionsTest do
 
   test "the recent files are the newest settled ones, each with its last change", %{actor: actor} do
     for name <- ~w(old mid new gone) do
-      :ok = Arca.put(actor, ["data", "r", name], name, sources: [])
+      :ok = Arca.put(actor, ["data", "r", name], name)
     end
 
     :ok = Arca.delete(actor, ["data", "r", "gone"])

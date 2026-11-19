@@ -501,7 +501,6 @@ defmodule Opus.Admission do
       ]
       |> maybe_put(:execution_id, opts[:execution_id])
       |> maybe_put(:launch, opts[:launch])
-      |> maybe_put(:frame_sources, opts[:frame_sources])
       |> maybe_put(:caller, opts[:caller])
 
     ctx

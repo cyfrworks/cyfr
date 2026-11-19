@@ -36,13 +36,10 @@ defmodule Aqua.Loop.Policy do
   sends, and a component with none is answered `consent_required` by the
   gate.
 
-  `sources_of/3` names the sources a call's result carries into its
-  turn: a catalog action's as its operation declares them
-  (`Prima.Operation.result_sources/3`, an undeclared one outside),
-  `files_by_grant` for a files or storage read, and an outside source
-  named by its origin for an external server's tool and the HTTP hand;
-  and a hand's child its own ledger, as its completion result carries it
-  (`child_ledger/1`).
+  `threads_of/3` names the threads whose posts a call's result carries
+  into its turn: a catalog action's as its operation declares them
+  (`Prima.Operation.read_threads/3`), and a hand's child's read threads,
+  as its completion result carries them (`child_threads/1`).
   """
 
   alias Aqua.Loop.Binding.Call
@@ -295,73 +292,55 @@ defmodule Aqua.Loop.Policy do
   def launch_account(%Call{}, _ctx), do: {:ok, nil}
 
   @doc """
-  What a model or hand child's answer says of its ledger: `{:carried,
-  sources}` for a completion result carrying the ledger its terminal
-  write left (`Opus.Close.complete/3`); `:nothing_ran` for a refusal the
-  gate made at admission, before any attempt existed
+  What a model or hand child's answer says of its read threads:
+  `{:carried, threads}` for a completion result carrying those its
+  terminal write left (`Opus.Close.complete/3`); `:nothing_ran` for a
+  refusal the gate made at admission, before any attempt existed
   (`%Prima.Refusal{stage: :admission}`); `:unknown` for anything else —
-  a failure, a death, an answer of another shape — whose ledger only the
-  child's row can tell. Row absence never says nothing ran: retention
-  may prune a terminal child before its step closes.
+  a failure, a death, an answer of another shape — whose read threads
+  only the child's row can tell. Row absence never says nothing ran:
+  retention may prune a terminal child before its step closes.
   """
-  @spec child_ledger(term()) :: {:carried, [Prima.Source.t()]} | :nothing_ran | :unknown
-  def child_ledger({:ok, %{sources: sources}}) when is_list(sources) do
-    if Enum.all?(sources, &is_struct(&1, Prima.Source)),
-      do: {:carried, sources},
+  @spec child_threads(term()) :: {:carried, [String.t()]} | :nothing_ran | :unknown
+  def child_threads({:ok, %{read_threads: threads}}) when is_list(threads) do
+    if Enum.all?(threads, &(is_binary(&1) and &1 != "")),
+      do: {:carried, threads},
       else: :unknown
   end
 
-  def child_ledger({:error, %Prima.Refusal{stage: :admission}}), do: :nothing_ran
-  def child_ledger(_answer), do: :unknown
+  def child_threads({:error, %Prima.Refusal{stage: :admission}}), do: :nothing_ran
+  def child_threads(_answer), do: :unknown
 
   @doc """
-  The sources `call`'s `result` carries into its turn, read under `ctx`,
-  the context the call was dispatched under. A catalog action's are its
-  operation's `sources:` declaration's, read from the caller's actor and
-  the answer (`Prima.Operation.result_sources/3`): a success carries the
-  declared classes or the answer's own provenance, an action that
-  declares none is outside, a refusal the gate made at admission carries
-  nothing, and any other failure every class the action may answer. An
-  external server's tool is outside, named by its server; the HTTP hand
-  is outside, named by the host its URL names; a files or storage read is
-  `files_by_grant`. A hand also carries its child's ledger, as its
-  completion result carries it (`child_ledger/1`; a hand's failure names
-  none, and the loop reads its child's row). Any other call carries none
-  here: a launched component's are judged from its tree's admitted
-  egress and its result's ledger where its step closes
-  (`Arca.TurnStorage.close_step/4`'s `:launched` and `:sources`).
+  The threads whose posts `call`'s `result` carries into its turn, read
+  under `ctx`, the context the call was dispatched under. A catalog
+  action's are its operation's `threads:` declaration's, read from the
+  caller's actor and the answer (`Prima.Operation.read_threads/3`). A
+  hand carries its child's read threads, as its completion result
+  carries them (`child_threads/1`; a hand's failure names none, and the
+  loop reads its child's row). Any other call carries none here: a
+  launched component's join where its step closes.
   """
-  @spec sources_of(Call.t(), term(), Sanctum.Context.t()) :: [Prima.Source.t()]
-  def sources_of(%Call{kind: :external, target: target}, _result, _ctx),
-    do: [Prima.Source.outside(server_of(target))]
-
-  def sources_of(%Call{kind: :hand} = call, result, _ctx) do
-    carried =
-      case child_ledger(result) do
-        {:carried, sources} -> sources
-        _not_carried -> []
-      end
-
-    hand_sources(call) ++ carried
+  @spec threads_of(Call.t(), term(), Sanctum.Context.t()) :: [String.t()]
+  def threads_of(%Call{kind: :hand}, result, _ctx) do
+    case child_threads(result) do
+      {:carried, threads} -> threads
+      _not_carried -> []
+    end
   end
 
-  def sources_of(
+  def threads_of(
         %Call{kind: :catalog, tool: tool, action: action},
         result,
         %Sanctum.Context{} = ctx
       ),
       do:
-        Prima.Operation.result_sources(
-          operation(tool, action),
-          Sanctum.Context.actor(ctx),
-          result
-        )
+        Prima.Operation.read_threads(operation(tool, action), Sanctum.Context.actor(ctx), result)
 
-  def sources_of(%Call{}, _result, _ctx), do: []
+  def threads_of(%Call{}, _result, _ctx), do: []
 
   # The catalogued operation a catalog call names, nil when none declares
-  # it (`Prima.Operation.result_sources/3` reads that as outside), read
-  # from the operation table as a chain's tool call reads it
+  # it, read from the operation table as a chain's tool call reads it
   # (`Opus.Host.Children`).
   defp operation(tool, action) when is_binary(action) do
     case Map.get(Sanctum.Catalog.operations(), tool) do
@@ -374,33 +353,4 @@ defmodule Aqua.Loop.Policy do
   end
 
   defp operation(_tool, _action), do: nil
-
-  # What a hand's call names it read, whatever its child answered.
-  defp hand_sources(%Call{tool: "http", args: args}),
-    do: [Prima.Source.outside(host_of(args["url"]))]
-
-  defp hand_sources(%Call{tool: tool, action: action}) when tool in ["files", "storage"] do
-    if Aqua.Kinds.kind_for(tool, action) == :read,
-      do: [Prima.Source.new(:files_by_grant)],
-      else: []
-  end
-
-  defp hand_sources(%Call{}), do: []
-
-  # `server:tool` is named by its server.
-  defp server_of(target) when is_binary(target),
-    do: target |> String.split(":", parts: 2) |> hd()
-
-  defp server_of(_target), do: nil
-
-  # A URL is named by its host, lowercased; one that names none is an
-  # unnamed outside source.
-  defp host_of(url) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{host: host} when is_binary(host) and host != "" -> String.downcase(host)
-      _ -> nil
-    end
-  end
-
-  defp host_of(_url), do: nil
 end

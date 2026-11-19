@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.Host.ToolFlowTest do
+defmodule Opus.Host.ToolReadThreadsTest do
   @moduledoc """
-  A guest's tool calls and the run's source ledger (`Opus.Ledger`).
+  A guest's tool calls and the run's read threads.
 
   A tool server's call is decided by the grant alone, whatever the run
-  has read. Whatever a tool server answers is outside material named by
-  the server, and the call's row and every ancestor hold it from the
-  call's admission, before the call leaves: the server's answer and its
-  error, the error's text included, reach the guest only after the ledger
-  holds it, and a sibling that reads the call's record through
-  `execution.logs` joins it too.
+  has read, and its answer joins no thread. A catalog action whose answer
+  carries a thread's posts names those threads (`Prima.Operation`'s
+  `threads`), and the run and every ancestor hold them before the answer
+  reaches the guest; an answer whose threads cannot be joined is refused.
+  A call's record, read through `execution.logs`, carries the call's
+  read threads. A child's read is its parent's before the read returns,
+  and outlives the child.
   """
 
   use ExUnit.Case, async: false
@@ -21,7 +22,6 @@ defmodule Opus.Host.ToolFlowTest do
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
   alias Prima.Authority
   alias Prima.Authority.Blob
-  alias Prima.Source
   alias Prima.Test.AuthorityFixtures, as: Graph
 
   @formula "formula:local.tool-flow-formula"
@@ -29,10 +29,56 @@ defmodule Opus.Host.ToolFlowTest do
   @server "leak"
   @tool "leak:echo"
 
+  # A catalog read whose answer carries the posts of the threads it names
+  # (`"threads"`). A read that names a run under `"gone"` purges that
+  # run's row first, so its threads cannot be joined.
+  defmodule ThreadProbe do
+    @moduledoc false
+    @behaviour Prima.Provider
+
+    alias Prima.{Arg, Operation}
+
+    @impl true
+    def service, do: "thread-probe"
+
+    @impl true
+    def tools do
+      [
+        Operation.tool([
+          Operation.new(
+            "thread_probe",
+            "read",
+            "Read posts of threads",
+            [
+              Arg.new("threads", {:array, Arg.new(nil, :string)}, required: true),
+              Arg.new("gone", :string)
+            ],
+            kind: :read,
+            planes: [:in_chain],
+            threads: {__MODULE__, :read_threads}
+          )
+        ])
+      ]
+    end
+
+    @impl true
+    def handle("thread_probe", ctx, %{"action" => "read", "threads" => threads} = args) do
+      with id when is_binary(id) <- args["gone"] do
+        actor = Sanctum.Context.actor(ctx)
+        {:ok, _released} = Arca.ExecutionPayloads.release(actor, [id])
+        {:ok, 1} = Arca.Execution.delete_ids([id], athanor_id: ctx.athanor_id)
+      end
+
+      {:ok, %{"threads" => threads}}
+    end
+
+    def read_threads(_actor, %{"threads" => threads}), do: threads
+    def read_threads(_actor, _answer), do: []
+  end
+
   # The server process the row's calls reach, registered where the
   # supervisor finds one: under the row's configuration digest. Each call
-  # tells the test what the calling tree's ledgers held while the call was
-  # in flight, then answers as the test scripted.
+  # tells the test it was made, then answers as the test scripted.
   defmodule ServerStub do
     use GenServer
 
@@ -52,26 +98,8 @@ defmodule Opus.Host.ToolFlowTest do
 
     @impl true
     def handle_call({:call_tool, tool, args}, _from, state) do
-      send(state.test, {:called, tool, args, ledgers(state.athanor_id)})
+      send(state.test, {:called, tool, args})
       {:reply, state.answer, state}
-    end
-
-    # The running call's row and its parent, read while the call is in
-    # flight.
-    defp ledgers(athanor_id) do
-      actor = Prima.Actor.in_athanor(athanor_id)
-
-      [row] =
-        Arca.Repo.all(
-          Ecto.Query.from(e in Arca.Schemas.Execution,
-            where: e.kind == "tool_call" and e.status == "running"
-          )
-        )
-
-      %{
-        "call" => Arca.Execution.sources(actor, row.id),
-        "parent_execution_id" => Arca.Execution.sources(actor, row.parent_execution_id)
-      }
     end
   end
 
@@ -79,7 +107,9 @@ defmodule Opus.Host.ToolFlowTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
-    test_path = Path.join(System.tmp_dir!(), "tool_flow_#{System.unique_integer([:positive])}")
+    test_path =
+      Path.join(System.tmp_dir!(), "tool_read_threads_#{System.unique_integer([:positive])}")
+
     previous = Application.get_env(:arca, :base_path)
     ctx = Sanctum.TestContext.local(:api)
 
@@ -132,13 +162,14 @@ defmodule Opus.Host.ToolFlowTest do
   end
 
   # The edge a run calls the server and reads executions under: the
-  # server's tool, `execution.logs`, data/ storage and egress to one host.
+  # server's tool, `execution.logs`, the thread probe, data/ storage and
+  # egress to one host.
   defp edge(server) do
     {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
     {:ok, record} = Sanctum.ToolServerDigest.recorded(server)
 
     %{
-      "tools" => ["execution.logs", "notes.read", "component.categories", "component.search"],
+      "tools" => ["execution.logs", "thread_probe.read"],
       "tool_servers" => [
         %{
           "server_digest" => digest,
@@ -227,11 +258,23 @@ defmodule Opus.Host.ToolFlowTest do
     })
   end
 
-  defp ledger(fixture) do
-    {:ok, sources} =
-      Arca.Execution.sources(Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id)
+  defp read_threads(fixture) do
+    {:ok, threads} =
+      Arca.Execution.read_threads(
+        Prima.Actor.in_athanor(fixture.athanor_id),
+        fixture.execution_id
+      )
 
-    sources
+    threads
+  end
+
+  defp join!(fixture, threads) do
+    :ok =
+      Arca.Execution.join_threads(
+        Prima.Actor.in_athanor(fixture.athanor_id),
+        fixture.execution_id,
+        threads
+      )
   end
 
   defp denials(fixture) do
@@ -239,31 +282,15 @@ defmodule Opus.Host.ToolFlowTest do
     Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
   end
 
-  test "a server's error reaches the guest only after outside(server) is on the run and its ancestors",
-       %{ctx: ctx, server: server} do
-    stub!(ctx, server, {:error, "upstream says sentinel-41c7"})
-    fixture = formula!(ctx, authority(server))
-
-    assert %{"error" => "guest_error", "message" => message} =
-             tool(fixture, @tool, %{"q" => "x"})
-
-    assert message =~ "sentinel-41c7"
-
-    # While the call was in flight, before any answer existed, the caller
-    # already held the server's provenance.
-    assert_received {:called, "echo", _args, ledgers}
-    assert {:ok, call} = ledgers["call"]
-    assert Source.outside(@server) in call
-    assert {:ok, during} = ledgers["parent_execution_id"]
-    assert Source.outside(@server) in during
-    assert Source.outside(@server) in ledger(fixture)
-  end
-
-  test "a run that read a restricted file calls the server, and nothing of where its material came from is checked",
+  test "a run that read a thread calls the server, nothing of what it read is checked, and the server's answer joins nothing",
        %{ctx: ctx, server: server} do
     stub!(ctx, server, {:ok, %{"content" => []}})
     fixture = formula!(ctx, authority(server))
-    :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted")
+
+    :ok =
+      Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted",
+        threads: ["thr_secret"]
+      )
 
     assert %{"ok" => _} =
              AttemptFixtures.call(fixture, "storage", %{
@@ -271,25 +298,29 @@ defmodule Opus.Host.ToolFlowTest do
                "path" => "data/secret.txt"
              })
 
-    assert Source.new(:files_by_grant) in ledger(fixture)
+    assert read_threads(fixture) == ["thr_secret"]
     assert %{"ok" => _} = tool(fixture, @tool, %{"q" => "restricted"})
-    assert_received {:called, "echo", %{"q" => "restricted"}, _ledgers}
+    assert_received {:called, "echo", %{"q" => "restricted"}}
     assert denials(fixture) == []
+    assert read_threads(fixture) == ["thr_secret"]
   end
 
-  test "a sibling that reads a server call's record joins its provenance",
+  test "a server call's record carries the call's read threads to the one that reads it",
        %{ctx: ctx, server: server} do
     stub!(ctx, server, {:error, "upstream says sentinel-9d2e"})
     fixture = formula!(ctx, authority(server))
 
-    # The reader is admitted before the call, so it inherits nothing of it.
+    # The reader is admitted before the caller reads a thread, so it
+    # inherits nothing of it.
     reader = admit_child!(fixture)
     caller = admit_child!(fixture)
+    join!(caller, ["thr_caller"])
 
-    assert %{"error" => "guest_error"} = tool(caller, @tool, %{"q" => "x"})
-    assert_received {:called, "echo", _args, _ledgers}
-    assert Source.outside(@server) in ledger(caller)
-    assert ledger(reader) == []
+    assert %{"error" => "guest_error", "message" => message} = tool(caller, @tool, %{"q" => "x"})
+    assert message =~ "sentinel-9d2e"
+    assert_received {:called, "echo", _args}
+    assert read_threads(caller) == ["thr_caller"]
+    assert read_threads(reader) == []
 
     [call_row] =
       Arca.Repo.all(
@@ -299,7 +330,7 @@ defmodule Opus.Host.ToolFlowTest do
       )
 
     # What the record carries, read as the in-chain plane reads it: the
-    # call's own ledger, the server's provenance among it.
+    # call's own read threads, its caller's from its admission.
     {:ok, logs} = Sanctum.Catalog.lookup("execution")
     {_module, %{operations: operations}} = logs
     op = Enum.find(operations, &(&1.action == "logs"))
@@ -313,58 +344,66 @@ defmodule Opus.Host.ToolFlowTest do
 
     assert answer.error =~ "sentinel-9d2e"
 
-    assert Source.outside(@server) in Prima.Operation.answer_sources(
-             op,
-             Sanctum.Context.actor(ctx),
-             answer
-           )
+    assert Prima.Operation.read_threads(op, Sanctum.Context.actor(ctx), {:ok, answer}) ==
+             ["thr_caller"]
 
     # A guest reads no execution record (the guest plane is refused the
-    # read), and the refusal still joins every class the read may answer.
+    # read), and the refusal joins nothing.
     assert %{"error" => "guest_error"} =
              tool(reader, "execution", %{"action" => "logs", "execution_id" => call_row.id})
 
-    assert Source.outside(nil) in ledger(reader)
+    assert read_threads(reader) == []
   end
 
-  test "a note's own provenance reaches the guest that reads it: a note kept with vault-disclosed material is never merely filed",
+  test "a catalog read's answer reaches the guest once the run and its ancestors hold the threads it names",
        %{ctx: ctx, server: server} do
-    {:ok, _} =
-      Aqua.Notes.keep(ctx, "key-material", "the key is k",
-        sources: [Source.new(:vault_disclosed)]
-      )
+    Sanctum.Catalog.with_providers([ThreadProbe], fn ->
+      fixture = formula!(ctx, authority(server))
+      child = admit_child!(fixture)
 
-    fixture = formula!(ctx, authority(server))
+      assert %{"ok" => %{"threads" => ["thr_b", "thr_a"]}} =
+               tool(child, "thread_probe", %{"action" => "read", "threads" => ["thr_b", "thr_a"]})
 
-    assert %{"ok" => _} = tool(fixture, "notes", %{"action" => "read", "name" => "key-material"})
+      assert read_threads(child) == ["thr_a", "thr_b"]
+      assert read_threads(fixture) == ["thr_a", "thr_b"]
 
-    assert Source.new(:filed) in ledger(fixture)
-    assert Source.new(:vault_disclosed) in ledger(fixture)
+      # An answer that names no thread joins none.
+      assert %{"ok" => %{"threads" => []}} =
+               tool(fixture, "thread_probe", %{"action" => "read", "threads" => []})
+
+      assert read_threads(fixture) == ["thr_a", "thr_b"]
+    end)
   end
 
-  test "a catalog read of the athanor's own records carries nothing; one that reaches outside is outside, whatever it answers",
+  @tag :capture_log
+  test "a catalog read's answer whose threads cannot be joined is refused as unavailable",
        %{ctx: ctx, server: server} do
-    fixture = formula!(ctx, authority(server))
-    assert %{"ok" => _} = tool(fixture, "component", %{"action" => "categories"})
-    assert ledger(fixture) == []
+    Sanctum.Catalog.with_providers([ThreadProbe], fn ->
+      fixture = formula!(ctx, authority(server))
+      child = admit_child!(fixture)
 
-    _answered =
-      tool(fixture, "component", %{
-        "action" => "search",
-        "query" => "weather",
-        "source" => "local"
-      })
+      assert %{"error" => "unavailable"} =
+               tool(child, "thread_probe", %{
+                 "action" => "read",
+                 "threads" => ["thr_gone"],
+                 "gone" => child.execution_id
+               })
 
-    assert ledger(fixture) == [Source.outside(nil)]
+      assert read_threads(fixture) == []
+    end)
   end
 
-  test "a child's restricted read is its parent's before the read returns, and outlives the child",
+  test "a child's read is its parent's before the read returns, and outlives the child",
        %{ctx: ctx, server: server} do
     fixture = formula!(ctx, authority(server))
     child = admit_child!(fixture)
-    :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted")
 
-    assert ledger(fixture) == []
+    :ok =
+      Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted",
+        threads: ["thr_secret"]
+      )
+
+    assert read_threads(fixture) == []
 
     assert %{"ok" => %{"content" => _}} =
              AttemptFixtures.call(child, "storage", %{
@@ -373,14 +412,14 @@ defmodule Opus.Host.ToolFlowTest do
              })
 
     # The parent holds it now, before the child has handed it anything.
-    assert Source.new(:files_by_grant) in ledger(fixture)
+    assert read_threads(fixture) == ["thr_secret"]
 
-    # The child ends; what its read put in the parent's ledger stays.
+    # The child ends; what its read put in the parent's read threads stays.
     assert %{"ok" => _} =
              AttemptFixtures.call(child, "fail", %{
                "outcome" => AttemptFixtures.outcome(child, "failed", %{"error" => "gone"})
              })
 
-    assert Source.new(:files_by_grant) in ledger(fixture)
+    assert read_threads(fixture) == ["thr_secret"]
   end
 end

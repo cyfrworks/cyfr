@@ -50,12 +50,10 @@ defmodule Opus.Host.ChildrenTest do
         Operation.tool([
           Operation.new("act_then_raise", "effect", "Act, then raise", [],
             kind: :write,
-            sources: [],
             planes: [:in_chain]
           ),
           Operation.new("act_then_raise", "peek", "Read, then raise", [],
             kind: :read,
-            sources: [],
             planes: [:in_chain],
             recovery: :replay_safe
           )

@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.ExecutionLedgerTest do
+defmodule Arca.ExecutionReadThreadsTest do
   @moduledoc """
-  A run's source ledger on `executions.sources`: seeded in the admission
-  transaction (a root's as its admission names it, a child's from its
-  parent's as it stands, any sources its admission adds joined into its
+  A run's read threads on `executions.read_threads`: seeded in the
+  admission transaction (a root's as its admission names them, a child's
+  from its parent's as they stand, any its admission adds joined into its
   ancestors first), joined up the admission chain root first and below a
-  turn root no further, read with provenance that cannot be read as
-  outside, and recorded in the started event for audit.
+  turn root no further, and read as none where the stored text does not
+  read.
   """
 
   use ExUnit.Case, async: false
@@ -17,7 +17,6 @@ defmodule Arca.ExecutionLedgerTest do
 
   alias Arca.Execution
   alias Arca.Schemas.Execution, as: Row
-  alias Prima.Source
 
   @athanor Arca.Test.Actor.athanor_id()
 
@@ -33,8 +32,8 @@ defmodule Arca.ExecutionLedgerTest do
       Execution.admit(
         Map.merge(
           %{
-            id: "exec_ledger_#{System.unique_integer([:positive])}",
-            reference: "catalyst:local.ledger:1.0.0",
+            id: "exec_threads_#{System.unique_integer([:positive])}",
+            reference: "catalyst:local.threads:1.0.0",
             user_id: "user_test",
             athanor_id: @athanor,
             component_type: "catalyst",
@@ -49,35 +48,36 @@ defmodule Arca.ExecutionLedgerTest do
     row
   end
 
-  defp sources!(id) do
-    {:ok, sources} = Execution.sources(actor(), id)
-    sources
+  defp read_threads!(id) do
+    {:ok, threads} = Execution.read_threads(actor(), id)
+    threads
   end
 
-  defp started_sources(id) do
+  defp started_data(id) do
     Ecto.Query.from(e in Arca.Schemas.ExecutionEvent,
       where: e.execution_id == ^id and e.type == "execution.started",
       select: e.data
     )
     |> Arca.Repo.one()
     |> Jason.decode!()
-    |> Map.fetch!("sources")
   end
 
-  test "a root is seeded as its admission names it, and the started event records the seed" do
-    root = admit!(%{sources: [Source.outside("webhook")]})
+  test "a root is seeded as its admission names it, stored sorted once each, and the started event records only the attempt" do
+    root = admit!(%{read_threads: ["thr_b", "thr_a", "thr_b"]})
 
-    assert sources!(root.id) == [Source.outside("webhook")]
-    assert started_sources(root.id) == [%{"class" => "outside", "name" => "webhook"}]
+    assert read_threads!(root.id) == ["thr_a", "thr_b"]
+    assert Arca.Repo.get!(Row, root.id).read_threads == ~s(["thr_a","thr_b"])
+    assert started_data(root.id) == %{"attempt" => root.current_attempt}
 
     bare = admit!(%{})
-    assert sources!(bare.id) == []
+    assert read_threads!(bare.id) == []
+    assert Arca.Repo.get!(Row, bare.id).read_threads == "[]"
   end
 
-  test "a child starts from its parent's ledger as it stands, and what its admission adds reaches its ancestors first" do
-    root = admit!(%{sources: [Source.new(:pinned)]})
+  test "a child starts from its parent's read threads as they stand, and what its admission adds reaches its ancestors first" do
+    root = admit!(%{read_threads: ["thr_a"]})
     child = admit!(%{parent_execution_id: root.id, root_execution_id: root.id})
-    assert sources!(child.id) == [Source.new(:pinned)]
+    assert read_threads!(child.id) == ["thr_a"]
 
     proxy =
       admit!(%{
@@ -85,24 +85,24 @@ defmodule Arca.ExecutionLedgerTest do
         root_execution_id: root.id,
         kind: "tool_call",
         component_type: "tool_server",
-        sources: [Source.outside("search")]
+        read_threads: ["thr_b"]
       })
 
-    assert sources!(proxy.id) == [Source.new(:pinned), Source.outside("search")]
-    assert sources!(child.id) == [Source.new(:pinned), Source.outside("search")]
-    assert sources!(root.id) == [Source.new(:pinned), Source.outside("search")]
+    assert read_threads!(proxy.id) == ["thr_a", "thr_b"]
+    assert read_threads!(child.id) == ["thr_a", "thr_b"]
+    assert read_threads!(root.id) == ["thr_a", "thr_b"]
   end
 
   test "a child's admission ignores no parent growth: a later child sees what its parent read since" do
     root = admit!(%{})
     first = admit!(%{parent_execution_id: root.id, root_execution_id: root.id})
-    assert sources!(first.id) == []
+    assert read_threads!(first.id) == []
 
-    assert :ok = Execution.join_sources(actor(), root.id, [Source.new(:filed)])
+    assert :ok = Execution.join_threads(actor(), root.id, ["thr_a"])
     second = admit!(%{parent_execution_id: root.id, root_execution_id: root.id})
 
-    assert sources!(second.id) == [Source.new(:filed)]
-    assert sources!(first.id) == []
+    assert read_threads!(second.id) == ["thr_a"]
+    assert read_threads!(first.id) == []
   end
 
   test "a join reaches the run and every ancestor, never a sibling, and only grows" do
@@ -111,64 +111,63 @@ defmodule Arca.ExecutionLedgerTest do
     child = admit!(%{parent_execution_id: parent.id, root_execution_id: root.id})
     sibling = admit!(%{parent_execution_id: root.id, root_execution_id: root.id})
 
-    assert :ok = Execution.join_sources(actor(), child.id, [Source.new(:vault_disclosed)])
-    assert :ok = Execution.join_sources(actor(), child.id, [Source.outside("a.test")])
-    assert :ok = Execution.join_sources(actor(), parent.id, [])
+    assert :ok = Execution.join_threads(actor(), child.id, ["thr_b"])
+    assert :ok = Execution.join_threads(actor(), child.id, ["thr_a"])
+    assert :ok = Execution.join_threads(actor(), parent.id, [])
 
-    expected = [Source.new(:vault_disclosed), Source.outside("a.test")]
+    for id <- [child.id, parent.id, root.id], do: assert(read_threads!(id) == ["thr_a", "thr_b"])
+    assert read_threads!(sibling.id) == []
 
-    for id <- [child.id, parent.id, root.id], do: assert(sources!(id) == expected)
-    assert sources!(sibling.id) == []
-
-    assert Execution.join_sources(actor(), "exec_none", [Source.new(:filed)]) ==
-             {:error, :not_found}
+    assert Execution.join_threads(actor(), "exec_none", ["thr_a"]) == {:error, :not_found}
   end
 
-  test "a join stops below a turn root, whose ledger is its turns'" do
+  test "a join stops below a turn root, whose read threads are its turns'" do
     turn_root = admit!(%{kind: "turn", component_type: "agent"})
     hand = admit!(%{parent_execution_id: turn_root.id, root_execution_id: turn_root.id})
 
-    assert :ok = Execution.join_sources(actor(), hand.id, [Source.new(:vault_disclosed)])
+    assert :ok = Execution.join_threads(actor(), hand.id, ["thr_a"])
 
-    assert sources!(hand.id) == [Source.new(:vault_disclosed)]
-    assert Arca.Repo.get!(Row, turn_root.id).sources == "[]"
-    # No turn runs on it yet: its turns' sources are none.
-    assert sources!(turn_root.id) == []
+    assert read_threads!(hand.id) == ["thr_a"]
+    assert Arca.Repo.get!(Row, turn_root.id).read_threads == "[]"
+    # No turn runs on it yet: its turns' read threads are none.
+    assert read_threads!(turn_root.id) == []
   end
 
-  test "a stored ledger that does not read is one unnamed outside source, never none" do
+  test "a stored text that does not read holds no read threads, and a child inherits none from it" do
     root = admit!(%{})
 
     {1, _} =
       Arca.Repo.update_all(Ecto.Query.from(e in Row, where: e.id == ^root.id),
-        set: [sources: "not json"]
+        set: [read_threads: "not json"]
       )
 
-    assert sources!(root.id) == [Source.outside(nil)]
+    assert read_threads!(root.id) == []
 
     child = admit!(%{parent_execution_id: root.id, root_execution_id: root.id})
-    assert sources!(child.id) == [Source.outside(nil)]
+    assert read_threads!(child.id) == []
   end
 
-  test "sources admitted that are not Prima.Source values refuse the admission, writing nothing" do
-    id = "exec_ledger_bad_#{System.unique_integer([:positive])}"
+  test "read threads admitted that are not a list of thread ids refuse the admission, writing nothing" do
+    for named <- [[%{"id" => "thr_a"}], ["thr_a", :thr_b], "thr_a"] do
+      id = "exec_threads_bad_#{System.unique_integer([:positive])}"
 
-    assert {:error, :invalid_sources} =
-             Execution.admit(
-               %{
-                 id: id,
-                 root_execution_id: id,
-                 reference: "catalyst:local.ledger:1.0.0",
-                 user_id: "user_test",
-                 athanor_id: @athanor,
-                 component_type: "catalyst",
-                 origin: :programmatic,
-                 sources: [%{"class" => "filed"}]
-               },
-               Arca.Test.Actor.standing(@athanor)
-             )
+      assert {:error, :invalid_read_threads} =
+               Execution.admit(
+                 %{
+                   id: id,
+                   root_execution_id: id,
+                   reference: "catalyst:local.threads:1.0.0",
+                   user_id: "user_test",
+                   athanor_id: @athanor,
+                   component_type: "catalyst",
+                   origin: :programmatic,
+                   read_threads: named
+                 },
+                 Arca.Test.Actor.standing(@athanor)
+               )
 
-    assert is_nil(Arca.Repo.get(Row, id))
+      assert is_nil(Arca.Repo.get(Row, id))
+    end
   end
 
   # Outside the sandbox: the case below needs transactions of its own that
@@ -184,8 +183,8 @@ defmodule Arca.ExecutionLedgerTest do
   @tag timeout: 60_000
   test "a join made while a terminal write waits on its attempt waits for that write, " <>
          "and the completion carries the row the write left" do
-    id = "exec_ledger_terminal_#{System.unique_integer([:positive])}"
-    joined = Source.outside("joined-during-close.example")
+    id = "exec_threads_terminal_#{System.unique_integer([:positive])}"
+    joined = "thr_joined_during_close"
     parent = self()
 
     on_exit(fn ->
@@ -240,7 +239,7 @@ defmodule Arca.ExecutionLedgerTest do
       Task.async(fn ->
         unboxed(fn ->
           send(parent, {:joining, backend!()})
-          Execution.join_sources(actor(), id, [joined])
+          Execution.join_threads(actor(), id, [joined])
         end)
       end)
 
@@ -254,9 +253,9 @@ defmodule Arca.ExecutionLedgerTest do
     assert {:ok, terminal} = Task.await(ending)
     assert :ok = Task.await(joining)
 
-    # The completion carries the ledger the run ended with; the join,
-    # made after, is the row's alone.
-    assert Execution.row_ledger(terminal) == []
-    assert sources!(id) == [joined]
+    # The completion carries the read threads the run ended with; the
+    # join, made after, is the row's alone.
+    assert Execution.row_threads(terminal) == []
+    assert read_threads!(id) == [joined]
   end
 end

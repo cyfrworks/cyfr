@@ -546,7 +546,7 @@ defmodule Opus.Attempt do
     answers them, in the attempt's context, under its edge and limits, for
     its component. A storage write records its intent, runs the store call
     outside any transaction and settles the intent against the same hold
-    (`Arca.ExecutionAttempts.while_held/5`): one the attempt does not hold
+    (`Arca.ExecutionAttempts.while_held/6`): one the attempt does not hold
     its row for is `:lost`, touches nothing and stops the attempt, and one
     whose hold ended while the store call was in flight, or whose store
     could not say what it did, is `storage_uncertain` to the guest —
@@ -1158,22 +1158,16 @@ defmodule Opus.Attempt do
   defp unseal(state, caller) do
     case fetch_secrets(state) do
       {:ok, secrets} ->
-        case join(state, disclosure_sources(state.authority, secrets)) do
-          :ok ->
-            StepSpans.guest_started(state.close.step_spans)
-            audit_dispensed(state, caller.runner, secrets)
+        StepSpans.guest_started(state.close.step_spans)
+        audit_dispensed(state, caller.runner, secrets)
 
-            {:reply, {:ok, secrets},
-             %{
-               state
-               | claimed_by: caller.runner,
-                 secrets: secrets,
-                 run_deadline: run_deadline(state)
-             }}
-
-          {:error, :unavailable} ->
-            {:reply, {:error, :unavailable}, state}
-        end
+        {:reply, {:ok, secrets},
+         %{
+           state
+           | claimed_by: caller.runner,
+             secrets: secrets,
+             run_deadline: run_deadline(state)
+         }}
 
       {:setup_required, reason} ->
         typed = {:setup_required, setup_payload(state, reason)}
@@ -1186,24 +1180,6 @@ defmodule Opus.Attempt do
         end)
     end
   end
-
-  # A vault entry's fields handed to the guest are vault-disclosed material
-  # its run's ledger holds before the runner is answered with them; a
-  # publisher's provided values are public, and an edge that discloses
-  # nothing adds nothing.
-  defp disclosure_sources(_authority, secrets) when map_size(secrets) == 0, do: []
-
-  defp disclosure_sources(%Authority{resources: %Edge{vault: %{provided: _values}}}, _secrets),
-    do: []
-
-  defp disclosure_sources(_authority, _secrets), do: [Prima.Source.new(:vault_disclosed)]
-
-  # The run's ledger joined ahead of the bytes it describes
-  # (`Opus.Ledger.join/3`); a join that cannot be written withholds them.
-  defp join(_state, []), do: :ok
-
-  defp join(state, sources),
-    do: Opus.Ledger.join(Context.actor(state.ctx), state.execution_id, sources)
 
   defp fetch_secrets(%__MODULE__{authority: authority, close: close} = state) do
     case authority do
@@ -1546,43 +1522,17 @@ defmodule Opus.Attempt do
     {:reply, :ok, %{state | attached: attached}}
   end
 
+  # A guest object's read under `data/` is answered through the hold,
+  # which joins its settled generation's read threads into the run before
+  # the bytes come back (`Arca.ExecutionAttempts.while_held/6`).
   defp run(op, state) when elem(op, 0) in [:storage, :fetch_artifact, :record_denial] do
     case Host.Storage.run(op, host_storage(state)) do
       {:error, :lost} -> {:stop, :normal, {:error, :lost}, release_holds(state)}
-      {:ok, _answer} = reply -> {:reply, read_joined(state, op, reply), state}
       reply -> {:reply, reply, state}
     end
   end
 
   defp run(_op, state), do: {:reply, {:error, :lost}, state}
-
-  # What a storage read answers — a file's bytes, a listing's names, a
-  # path's existence — reaches the guest only once the run's ledger holds
-  # its provenance. A file is read through the edge's storage grant. A
-  # guest object's read under `data/` was answered through the hold, which
-  # joined the sources its settled generation was written with before the
-  # bytes came back (`Arca.ExecutionAttempts.while_held/6`); a listing's
-  # names and a path's existence there read no object, so what wrote them
-  # is not recorded, and provenance that is not recorded is outside. The
-  # component's own artifact and the bare scope listing carry nothing.
-  defp read_joined(state, {:storage, action, %{"path" => path}}, reply)
-       when action in [:read, :list, :exists] do
-    case join(state, storage_sources(action, path)) do
-      :ok -> reply
-      {:error, :unavailable} -> {:error, :unavailable}
-    end
-  end
-
-  defp read_joined(_state, _op, reply), do: reply
-
-  defp storage_sources(_action, ""), do: []
-
-  defp storage_sources(_action, "components/" <> _rest), do: [Prima.Source.new(:files_by_grant)]
-  defp storage_sources(_action, "components"), do: [Prima.Source.new(:files_by_grant)]
-  defp storage_sources(:read, "data/" <> _object), do: [Prima.Source.new(:files_by_grant)]
-
-  defp storage_sources(_action, _path),
-    do: [Prima.Source.new(:files_by_grant), Prima.Source.outside(nil)]
 
   defp names_outcome?(state, %Outcome{} = outcome) do
     outcome.execution_id == state.execution_id and outcome.attempt == state.attempt and
@@ -1832,12 +1782,7 @@ defmodule Opus.Attempt do
     case resolve_token(state, provider) do
       {:ok, token} ->
         token_request(state, provider, start_time, %{status: :ok})
-
-        # A dispensed token is vault material the guest now holds.
-        case join(state, [Prima.Source.new(:vault_disclosed)]) do
-          :ok -> {{:ok, token}, %{state | tokens: [token | state.tokens]}}
-          {:error, :unavailable} -> {{:error, :unavailable}, state}
-        end
+        {{:ok, token}, %{state | tokens: [token | state.tokens]}}
 
       {:error, reason} ->
         message = refusal_message(reason)

@@ -25,33 +25,27 @@ defmodule Aqua.Providers.Notes do
   names the turn's thread, writes only while the turn the lineage names
   holds its fence, asked again where the write commits; a turn that ended,
   was superseded or is not found writes nothing. Only the person's own
-  call at the door writes with no turn, and a `keep` from a component's
-  chain, which names no thread, keeps with that execution's ledger. The
-  consent class keeps its surface half there — only an `:oidc` session's
-  chain gets through — so the same formula started by a key or a schedule
-  is refused exactly as at the door.
+  call at the door, and a `keep` from a component's chain, which names no
+  thread, write with no turn. The consent class keeps its surface half
+  there — only an `:oidc` session's chain gets through — so the same
+  formula started by a key or a schedule is refused exactly as at the
+  door.
 
   ## Where a note lands
 
   Reads and writes take no scope: every action acts on the athanor in
   focus, the person's own.
 
-  ## Provenance and outside material
+  ## Provenance
 
-  A note kept in a chain carries in its provenance every source the
-  chain's turns read (`Aqua.Notes.chain_sources/2`) and the calling
-  execution's own ledger (`Opus.sources/2`), both read from the
-  host-stamped lineage, never from what the model wrote, so a turn or a
-  guest that reads it later reads them too, and a component that runs no
-  turn keeps what it read as a turn does: a note made from a
-  disclosed vault value carries `vault_disclosed`, whatever admitted the
-  keep. A page `pin` or `workspace` writes in a chain
-  keeps them the same way, is kept by Aqua (`Prima.Author.agent/0`) and
-  names the thread it was written in. A thread source is left out: what
-  a note holds outlives the thread it was kept from, so reading a note
-  never makes a turn one that read that thread. The person's own
-  write of the pinned page, on
-  the Aqua page, carries no sources: what they wrote is theirs.
+  A note kept in a chain names the execution and the thread it was kept
+  from, read from the host-stamped lineage, never from what the model
+  wrote. What a turn writes in a chain (a kept note, a page `pin` or
+  `workspace`) is kept by Aqua (`Prima.Author.agent/0`) and names the
+  thread it was written in. What a note holds outlives the thread it was
+  kept from, so reading a note never makes a turn one that read that
+  thread. The person's own write of the pinned page, on the Aqua page, is
+  theirs.
   """
 
   @behaviour Prima.Provider
@@ -72,9 +66,7 @@ defmodule Aqua.Providers.Notes do
     # the member's mode decides, and the reads are bounded to the athanor
     # by the domain. `workspace` is a chain's alone: the turn
     # names its thread. Interactive on every action — the credential
-    # gate is the same on both planes. A write answers only the name it wrote
-    # (`Aqua.Notes.describe/1`), so it carries no source; a read
-    # carries the notes' own provenance (`answer_sources/2`).
+    # gate is the same on both planes.
     Operation.tool(
       [
         Operation.new(
@@ -101,7 +93,6 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive
         ),
@@ -134,7 +125,6 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive
         ),
@@ -151,7 +141,6 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :write,
-          sources: [],
           planes: [:in_chain],
           consent: :interactive
         ),
@@ -170,7 +159,6 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :read,
-          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -186,7 +174,6 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :read,
-          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -202,7 +189,6 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :destructive,
-          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive
         ),
@@ -225,7 +211,6 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :read,
-          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -236,17 +221,6 @@ defmodule Aqua.Providers.Notes do
       title: "Notes"
     )
   end
-
-  @doc """
-  What a notes read's answer carries (its operations' `sources:`
-  declaration, `Prima.Operation.answer_sources/3`): the filed note it read,
-  with each note's own provenance as it was written — an outside source
-  keeps its name, and a note carrying vault-disclosed material keeps that
-  class (`Aqua.Notes.sources_of_answer/1`).
-  """
-  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
-  def answer_sources(_actor, answer),
-    do: Prima.Source.set([Prima.Source.new(:filed) | Aqua.Notes.sources_of_answer({:ok, answer})])
 
   # What a turn's pin is told when the page is not the one it read, and
   # when it names no revision at all.
@@ -281,11 +255,10 @@ defmodule Aqua.Providers.Notes do
        when is_binary(name) and is_binary(content),
        do: Notes.keep(ctx, name, content, provenance(args, ctx))
 
-  # The pinned page, whole: in a chain Aqua's, with the sources the
-  # chain read, written only over the revision the turn read, so a page
-  # the person changed since is never written over by a turn that did not
-  # read it; at the door the person's, with none. A `revision` writes only
-  # over the page as it was read.
+  # The pinned page, whole: in a chain Aqua's, written only over the
+  # revision the turn read, so a page the person changed since is never
+  # written over by a turn that did not read it; at the door the person's.
+  # A `revision` writes only over the page as it was read.
   defp dispatch(
          %Context{plane: :guest} = ctx,
          %{"action" => "pin", "name" => name, "content" => content} = args
@@ -333,20 +306,14 @@ defmodule Aqua.Providers.Notes do
 
   defp dispatch(ctx, %{"action" => "list"} = args), do: Notes.list(ctx, page(args))
 
-  defp dispatch(ctx, %{"action" => "read", "name" => name} = args) when is_binary(name) do
-    with {:ok, note} <- Notes.read(ctx, name, root_execution_id: args["root_execution_id"]),
-         do: {:ok, wire_sources(note)}
-  end
+  defp dispatch(ctx, %{"action" => "read", "name" => name} = args) when is_binary(name),
+    do: Notes.read(ctx, name, root_execution_id: args["root_execution_id"])
 
   defp dispatch(ctx, %{"action" => "search", "query" => query} = args) when is_binary(query) do
     with {:ok, %{notes: matches} = page} <- Notes.search(ctx, query, page(args)) do
-      {:ok, page |> Map.delete(:notes) |> Map.put(:matches, Enum.map(matches, &wire_sources/1))}
+      {:ok, page |> Map.delete(:notes) |> Map.put(:matches, matches)}
     end
   end
-
-  # A note's sources on the wire are their canonical JSON objects.
-  defp wire_sources(%{sources: sources} = note),
-    do: %{note | sources: Prima.Source.to_json_list(sources)}
 
   defp page(args), do: [limit: args["limit"], after: args["after"]]
 
@@ -375,7 +342,7 @@ defmodule Aqua.Providers.Notes do
 
   # A keep's: a turn's chain, which the gate stamps with the turn's thread
   # (`Aqua.Loop.Binding`), as a pin's; a component's chain, whose lineage
-  # names no thread, keeps as before, with its execution's ledger.
+  # names no thread, keeps with no turn's hold.
   defp keep_hold(ctx, %{"thread_id" => thread_id} = args) when is_binary(thread_id),
     do: turn_hold(ctx, args)
 
@@ -396,24 +363,15 @@ defmodule Aqua.Providers.Notes do
   # execution and the thread onto the call as host-only keys
   # (the gate's lineage), and those are the only
   # provenance read there — a value the model put under `thread` or
-  # `execution` is ignored, never recorded. The note carries every source
-  # the chain's turns read and the calling execution's own ledger, so a
-  # component that runs no turn keeps what it read too. At the door a
-  # person says what they choose to.
+  # `execution` is ignored, never recorded. At the door a person says what
+  # they choose to.
   # What a turn writes — a kept note, the pinned page or a workspace
   # thread's notes — is kept by Aqua; a note a component's chain keeps,
   # whose lineage names no thread, by the person it runs for.
-  defp provenance(args, %Context{plane: :guest} = ctx) do
+  defp provenance(args, %Context{plane: :guest}) do
     [
       thread: args["thread_id"],
-      execution: args["root_execution_id"] || args["parent_execution_id"],
-      sources:
-        Prima.Source.material(
-          Prima.Source.union(
-            Notes.chain_sources(ctx, args["root_execution_id"]),
-            caller_sources(ctx, args["parent_execution_id"])
-          )
-        )
+      execution: args["root_execution_id"] || args["parent_execution_id"]
     ] ++
       if(args["action"] in ["pin", "workspace"] or is_binary(args["thread_id"]),
         do: [kept_by: Prima.Author.agent()],
@@ -424,18 +382,4 @@ defmodule Aqua.Providers.Notes do
   defp provenance(args, _ctx) do
     [thread: args["thread"], execution: args["execution"]]
   end
-
-  # The ledger of the execution that called (`Opus.sources/2`), the
-  # lineage's `parent_execution_id`, which the gate admits a call in a
-  # chain only with, read as the call keeps the note. That execution is
-  # running, so a row it no longer finds, or a ledger that cannot be
-  # read, is one unnamed outside source, never none.
-  defp caller_sources(ctx, execution_id) when is_binary(execution_id) do
-    case Opus.sources(ctx, execution_id) do
-      {:ok, sources} -> sources
-      {:error, _unread} -> [Prima.Source.outside(nil)]
-    end
-  end
-
-  defp caller_sources(_ctx, _none), do: []
 end

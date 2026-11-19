@@ -168,12 +168,12 @@ defmodule Sanctum.LaunchStampBoundaryTest do
   test "the setter refuses a stamp of another shape" do
     ctx = Sanctum.TestContext.local()
 
-    stamp = %{sources: [Prima.Source.new(:filed)], execution_id: "exec_x", agent: "aqua"}
+    stamp = %{read_threads: ["thr_x"], execution_id: "exec_x", agent: "aqua"}
 
     assert %{launch: ^stamp} = Sanctum.Context.stamp_launch(ctx, stamp)
 
     assert_raise ArgumentError, fn ->
-      Sanctum.Context.stamp_launch(ctx, %{stamp | sources: [%{"class" => "filed"}]})
+      Sanctum.Context.stamp_launch(ctx, %{stamp | read_threads: [:thr_x]})
     end
 
     # Through `apply/3`: a stamp missing its root's id, or the agent its

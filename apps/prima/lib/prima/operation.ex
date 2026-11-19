@@ -33,21 +33,14 @@ defmodule Prima.Operation do
   metadata for the gate too, absent from the annotation view and from
   discovery.
 
-  `sources` declares where a successful answer's material comes from
-  (`Prima.Source`), so a run whose guest calls the action holds it in its
-  ledger before the answer reaches the guest: a list of classes the
-  answer always carries, or `{:answer, {module, function}}` for an answer
-  whose provenance is its own, which `function` reads from the actor and
-  the answer (a note keeps the sources it was written with; an
-  execution's record carries its ledger). An action that declares none
-  is read as `outside`: provenance that is not declared is never the
-  athanor's own. `possible_classes/1` is what any answer may carry,
-  known before the call: the declared classes, every class for an
-  answer-read declaration, `outside` for none. `result_sources/3` is
-  what a call carries into its caller's ledger whatever it answered, the
-  one rule every caller that joins a catalog call's provenance reads.
-  Like `resource`, it is metadata for the gate, absent from the
-  annotation view and from discovery.
+  `threads` is `{module, function}` for an action whose answer may carry
+  a thread's posts: `function` reads, from the actor and the answer, the
+  ids of the threads whose posts it carries, so that deleting one of
+  them finds the run that read it. An action that declares none carries
+  no thread's posts. `read_threads/3` is the one rule every caller that
+  joins a catalog call's read threads reads. Like `resource`, it is
+  metadata for the gate, absent from the annotation view and from
+  discovery.
 
   `follows_setting: true` marks an action that follows the person's own
   browser setting: with the setting off the action is refused, and with
@@ -80,7 +73,7 @@ defmodule Prima.Operation do
     :recovery,
     :host,
     :resource,
-    :sources,
+    :threads,
     auth: :required,
     resource_schemes: [],
     reduces_authority: false,
@@ -106,14 +99,8 @@ defmodule Prima.Operation do
           reduces_authority: boolean(),
           follows_setting: boolean(),
           recorded: boolean(),
-          sources: sources() | nil
+          threads: {module(), atom()} | nil
         }
-
-  @typedoc """
-  Where an answer's material comes from: the classes it always carries,
-  or a function of the actor and the answer that reads its own.
-  """
-  @type sources :: [Prima.Source.class()] | {:answer, {module(), atom()}}
 
   @typedoc "The kinds of resource an action's argument may name."
   @type resource_kind :: :storage_path | :egress_domain | :program_row
@@ -151,7 +138,7 @@ defmodule Prima.Operation do
           :reduces_authority,
           :follows_setting,
           :recorded,
-          :sources | @annotation_fields
+          :threads | @annotation_fields
         ]
 
     if unknown != [], do: raise(ArgumentError, "unknown operation annotations")
@@ -209,83 +196,38 @@ defmodule Prima.Operation do
 
     validate_resource_schemes!(op)
     validate_resource!(op)
-    validate_sources!(op)
+    validate_threads!(op)
   end
 
   @doc """
-  The sources a successful answer of `op` carries into its caller's
-  ledger: the declared classes, the answer's own provenance as its
-  declared function reads it from `actor` and `answer`, or an unnamed
-  outside source for an action that declares none.
+  The ids of the threads whose posts a call of `op` carries into its
+  caller, sorted and without duplicates: for a success of an action that
+  declares `threads`, what its function reads from `actor` and the
+  answer, when that is a list of thread ids; for anything else, none.
   """
-  @spec answer_sources(t(), Prima.Actor.t(), term()) :: [Prima.Source.t()]
-  def answer_sources(%__MODULE__{sources: nil}, _actor, _answer), do: [Prima.Source.outside(nil)]
-
-  def answer_sources(%__MODULE__{sources: classes}, _actor, _answer) when is_list(classes),
-    do: classes |> Enum.map(&Prima.Source.new/1) |> Prima.Source.set()
-
-  def answer_sources(%__MODULE__{sources: {:answer, {module, function}}}, actor, answer) do
+  @spec read_threads(t() | nil, Prima.Actor.t() | nil, term()) :: [String.t()]
+  def read_threads(%__MODULE__{threads: {module, function}}, actor, {:ok, answer}) do
     case apply(module, function, [actor, answer]) do
-      sources when is_list(sources) ->
-        if Enum.all?(sources, &is_struct(&1, Prima.Source)),
-          do: Prima.Source.set(sources),
-          else: [Prima.Source.outside(nil)]
+      ids when is_list(ids) ->
+        if Enum.all?(ids, &(is_binary(&1) and &1 != "")),
+          do: ids |> Enum.uniq() |> Enum.sort(),
+          else: []
 
       _unreadable ->
-        [Prima.Source.outside(nil)]
+        []
     end
   end
 
-  @doc """
-  The sources a call of `op` carries into its caller's ledger, whatever
-  it answered: a success's are `answer_sources/3`'s; a refusal the gate
-  made at admission, before any handler ran
-  (`%Prima.Refusal{stage: :admission}`), carries nothing; any other
-  result carries every class an answer of `op` may carry
-  (`possible_classes/1`), each unnamed, since a failure's body may hold
-  what the handler read and no answer reader is asked to read it. A call
-  no operation declares (`nil`) is outside, whatever it answered but an
-  admission refusal.
-  """
-  @spec result_sources(t() | nil, Prima.Actor.t(), term()) :: [Prima.Source.t()]
-  def result_sources(nil, _actor, {:ok, _answer}), do: [Prima.Source.outside(nil)]
+  def read_threads(_op, _actor, _result), do: []
 
-  def result_sources(%__MODULE__{} = op, actor, {:ok, answer}),
-    do: answer_sources(op, actor, answer)
+  defp validate_threads!(%__MODULE__{threads: nil}), do: :ok
 
-  def result_sources(_op, _actor, {:error, %Prima.Refusal{stage: :admission}}), do: []
-  def result_sources(nil, _actor, _failed), do: [Prima.Source.outside(nil)]
-
-  def result_sources(%__MODULE__{} = op, _actor, _failed),
-    do: op |> possible_classes() |> Enum.map(&Prima.Source.new/1) |> Prima.Source.set()
-
-  @doc """
-  Every class an answer of `op` may carry, known before the call: its
-  declared classes, every class for an answer-read declaration, and
-  `outside` for an action that declares none.
-  """
-  @spec possible_classes(t()) :: [Prima.Source.class()]
-  def possible_classes(%__MODULE__{sources: nil}), do: [:outside]
-  def possible_classes(%__MODULE__{sources: {:answer, _reader}}), do: Prima.Source.classes()
-
-  def possible_classes(%__MODULE__{sources: classes}) when is_list(classes),
-    do: Prima.Source.classes() |> Enum.filter(&(&1 in classes))
-
-  defp validate_sources!(%__MODULE__{sources: nil}), do: :ok
-
-  defp validate_sources!(%__MODULE__{sources: classes}) when is_list(classes) do
-    unless Enum.all?(classes, &(&1 in Prima.Source.classes())),
-      do: raise(ArgumentError, "sources must name Prima.Source classes")
-
-    :ok
-  end
-
-  defp validate_sources!(%__MODULE__{sources: {:answer, {module, function}}})
+  defp validate_threads!(%__MODULE__{threads: {module, function}})
        when is_atom(module) and is_atom(function),
        do: :ok
 
-  defp validate_sources!(%__MODULE__{}),
-    do: raise(ArgumentError, "sources must be a list of classes or {:answer, {module, function}}")
+  defp validate_threads!(%__MODULE__{}),
+    do: raise(ArgumentError, "threads must be {module, function}")
 
   defp validate_resource!(%__MODULE__{resource: nil}), do: :ok
 

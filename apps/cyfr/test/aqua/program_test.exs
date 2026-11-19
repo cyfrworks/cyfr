@@ -11,9 +11,9 @@ defmodule Aqua.ProgramTest do
   brain's row, which asks nothing, a schedule's turn's too: the driver is
   given its start in the configuration the turn's mode sets, the turn's
   work and the turn's post. What the program is given first joins the
-  turn's sources before its start runs, the program itself among them,
-  and a post that brings in outside material is written at once and joins
-  them as it is written. What the program says is a post of Aqua's, its
+  turn's read threads before its start runs, and a post that carries
+  another thread's posts is written at once and joins those threads as it
+  is written. What the program says is a post of Aqua's, its
   usage is counted once, and the turn completes on the `idle` that answers
   every post it was given, one written while the program starts, works or
   waits on an ask's call included, each after the post that opened the
@@ -587,26 +587,6 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "its start's decision" do
-    test "the program itself is an outside source its turn reads before its start runs, and " <>
-           "the turn keeps it",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      turn = accept!(ctx, thread, row, "look it up")
-      loop = run(ctx, turn)
-      opened!(fake, row, "boot-one")
-      {:ok, starting} = Tape.turn(ctx, turn.id)
-      assert Prima.Source.decode(starting.sources) == [program_source(row)]
-
-      begun!(fake, row)
-      _post = sent()
-      [input] = inputs(ctx, turn)
-      say(fake, row, accepted(input))
-      say(fake, row, idle(turn, [input.id]))
-      assert :completed = Task.await(loop, 30_000)
-
-      {:ok, ended} = Tape.turn(ctx, turn.id)
-      assert Prima.Source.decode(ended.sources) == [program_source(row)]
-    end
-
     test "a post written while the harness starts skips nothing: it is written once the work " <>
            "is taken, after the post that opened the turn",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -655,8 +635,8 @@ defmodule Aqua.ProgramTest do
       assert system_lines(ctx, thread, turn) == []
     end
 
-    test "a post that brings in outside material is written at once, and what it brings in " <>
-           "joins the turn as it is written",
+    test "a post that carries another thread's posts is written at once, and the threads it " <>
+           "carries join the turn as it is written",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
@@ -667,7 +647,7 @@ defmodule Aqua.ProgramTest do
       committed!(ctx, thread, 4)
 
       steer =
-        steer!(ctx, thread, turn, "and this brief", %{"attachments" => [brief("news.example")]})
+        steer!(ctx, thread, turn, "and this brief", %{"attachments" => [brief("thr_news")]})
 
       post = sent()
       [_input, steered] = inputs(ctx, turn)
@@ -675,10 +655,7 @@ defmodule Aqua.ProgramTest do
       assert carried_by(ctx, steer.id) == steered.id
       {:ok, writing} = Tape.turn(ctx, turn.id)
 
-      assert Prima.Source.decode(writing.sources) == [
-               program_source(row),
-               Prima.Source.outside("news.example")
-             ]
+      assert Arca.ThreadStorage.threads_of(writing.read_threads) == ["thr_news"]
 
       say(fake, row, accepted(steered))
       say(fake, row, idle(turn, [input.id, steered.id]))
@@ -748,16 +725,12 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "what the program is given first joins the turn before its start runs: its " <>
-           "instructions' sources, its post's and the thread's a fresh session reads, and its " <>
-           "post carries the thread",
+    test "what the program is given first joins the turn before its start runs: the threads " <>
+           "its post and the thread a fresh session reads carry, and its post carries the thread",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      # Its instructions carry a note kept from outside, the thread an
-      # earlier post that brought outside material, and its own post too.
-      {:ok, _} =
-        Aqua.Notes.keep(ctx, "clip", "Fares rise on Monday",
-          sources: [Prima.Source.outside("news.example")]
-        )
+      # Its instructions carry a note, the thread an earlier post with a
+      # file copied from another thread, and its own post another.
+      {:ok, _} = Aqua.Notes.keep(ctx, "clip", "Fares rise on Monday")
 
       {:ok, _earlier} =
         Tape.append(ctx, thread.id, %{
@@ -765,23 +738,17 @@ defmodule Aqua.ProgramTest do
           sent_by: "person",
           kind: "text",
           content: "from the wire",
-          payload: %{"attachments" => [brief("wire.example")]}
+          payload: %{"attachments" => [brief("thr_wire")]}
         })
 
       turn =
-        accept!(ctx, thread, row, "read this brief", %{"attachments" => [brief("post.example")]})
+        accept!(ctx, thread, row, "read this brief", %{"attachments" => [brief("thr_post")]})
 
       loop = run(ctx, turn)
       opened!(fake, row, "boot-one")
       {:ok, starting} = Tape.turn(ctx, turn.id)
 
-      assert Prima.Source.decode(starting.sources) == [
-               Prima.Source.new(:filed),
-               program_source(row),
-               Prima.Source.outside("news.example"),
-               Prima.Source.outside("post.example"),
-               Prima.Source.outside("wire.example")
-             ]
+      assert Arca.ThreadStorage.threads_of(starting.read_threads) == ["thr_post", "thr_wire"]
 
       %{start: start} = begun!(fake, row)
       assert start["system"] =~ "Fares rise on Monday"
@@ -1774,9 +1741,6 @@ defmodule Aqua.ProgramTest do
     turn
   end
 
-  # The program itself, an outside source its turn reads (`Aqua.Loop`).
-  defp program_source(row), do: Prima.Source.outside(row.name)
-
   # An app of the person's own with no exit, granted with nothing to bind.
   defp quiet_app!(ctx) do
     name = "program-app-#{System.unique_integer([:positive])}"
@@ -1847,13 +1811,13 @@ defmodule Aqua.ProgramTest do
       )
   end
 
-  # A file copied from material that came from `host`.
-  defp brief(host),
+  # A file copied from a post of the thread `thread`.
+  defp brief(thread),
     do: %{
-      "id" => "att_#{host}",
+      "id" => "att_#{thread}",
       "filename" => "brief.txt",
       "media_type" => "text/plain",
-      "sources" => [%{"class" => "outside", "name" => host}]
+      "read_threads" => [thread]
     }
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)

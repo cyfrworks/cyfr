@@ -1,26 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.TurnLedgerTest do
+defmodule Aqua.ChildReadThreadsTest do
   @moduledoc """
-  A turn and the ledgers of the children it runs (`Opus.Ledger`), through
-  the real loop with a scripted model and scripted hands.
+  A turn and the read threads of the children it runs, through the real
+  loop with a scripted model and scripted hands.
 
   A child of the turn's root is seeded with its own step's turn as it
-  stands when the child is admitted — a source the turn read after its
-  root was admitted included — and the capability
-  probe, which runs under no step, with every turn on the root.
+  stands when the child is admitted — a thread the turn read after its
+  root was admitted included — and the capability probe, which runs under
+  no step, with every turn on the root.
 
-  A model adds no source of its own and never drops one: what a model or
-  hand child read joins its turn when its step closes, before its answer
-  is used, by the first carrier that holds it — its completion result,
-  else its row, else, for a row retention pruned meanwhile, an unnamed
-  outside source. Chat, a failed step, a compaction and a note flush all
-  carry it.
+  What a model or hand child read joins its turn when its step closes,
+  before its answer is used, by the first carrier that holds it — its
+  completion result, else its row; a row retention pruned meanwhile adds
+  none. Chat, a failed step, a compaction and a note flush all carry it.
 
   A scripted child stops at `{:probe, self()}`, so the test can grow its
-  ledger in its own attempt (`Opus.Ledger.join/3`, as a disclosed field
-  would) before it answers.
+  read threads in its own attempt (`Arca.Execution.join_threads/3`, as a
+  read of another thread's posts would) before it answers.
   """
 
   use ExUnit.Case, async: false
@@ -31,7 +29,6 @@ defmodule Aqua.TurnLedgerTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
-  alias Prima.Source
   alias Sanctum.Consent.Bootstrap
 
   @soul "agent:local.aqua"
@@ -41,6 +38,8 @@ defmodule Aqua.TurnLedgerTest do
   @url "https://news.example/today"
   @window 40_000
   @full 21_000
+  # The thread whose posts a probed child reads in its own attempt.
+  @read "thr_read_by_child"
 
   setup do
     Arca.Cache.init()
@@ -76,12 +75,15 @@ defmodule Aqua.TurnLedgerTest do
   # ---------------------------------------------------------------------------
 
   describe "a child of the turn's root is seeded with its step's turn as it stands" do
-    test "a source the turn read after its root was admitted reaches the next model and hand children",
+    test "a thread the turn read after its root was admitted reaches the next model and hand " <>
+           "children",
          %{ctx: ctx, thread: thread, actor: actor} do
-      {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
+      work = workspace!(ctx, "Fares")
+      report!(ctx, thread, work)
 
       script!([
         calls([get("g1")]),
+        {:probe, self()},
         %{"body" => "Fares rise"},
         calls([read("f1")]),
         %{"lines" => ["a line"]},
@@ -89,27 +91,28 @@ defmodule Aqua.TurnLedgerTest do
       ])
 
       turn = accept!(ctx, thread, "@aqua read the news, then the file")
-      assert :completed = run!(ctx, turn)
+      {result, probed} = probed_run(ctx, turn, &reads!(ctx, &1))
+      assert result == :completed
+      assert %{child_execution_id: ^probed} = step!(ctx, turn, "g1")
 
       [first, second, _third] = model_steps(ctx, turn)
-      host = Source.outside("news.example")
 
-      # The first model step opened with the pinned page, after the root's
-      # admission: its child holds it.
-      assert Source.new(:pinned) in ledger!(actor, first)
-      # The news the HTTP hand read joined the turn when its step closed:
-      # the next model child and the next hand child hold it.
-      assert host in ledger!(actor, second)
-      assert host in ledger!(actor, step!(ctx, turn, "f1"))
-      refute host in ledger!(actor, first)
+      # The first model step opened with the workspace thread its rows
+      # carry, after the root's admission: its child holds it.
+      assert read_threads!(actor, first) == [work.id]
+      # The thread the HTTP hand's child read joined the turn when its
+      # step closed: the next model child and the next hand child hold it.
+      assert read_threads!(actor, second) == Enum.sort([@read, work.id])
+      assert read_threads!(actor, step!(ctx, turn, "f1")) == Enum.sort([@read, work.id])
     end
 
     test "the capability probe, under no step, is seeded with every turn on the root",
          %{ctx: ctx, thread: thread, actor: actor} do
       # The second read's child dies before it answers: the turn stops on
-      # the unknown outcome, having read the news.
+      # the unknown outcome, having read the thread the first one read.
       script!([
         calls([get("g1")]),
+        {:probe, self()},
         %{"body" => "Fares rise"},
         calls([get("g2")]),
         {:crash, :before_response},
@@ -117,9 +120,9 @@ defmodule Aqua.TurnLedgerTest do
       ])
 
       turn = accept!(ctx, thread, "@aqua read twice")
-      assert {:paused, :uncertain} = run!(ctx, turn)
-      at_pause = sources(ctx, turn)
-      assert Source.outside("news.example") in at_pause
+      assert {{:paused, :uncertain}, _probed} = probed_run(ctx, turn, &reads!(ctx, &1))
+      at_pause = read_threads(ctx, turn)
+      assert at_pause == [@read]
 
       # The model's description is asked again when the turn resumes, as a
       # child of the root under no step.
@@ -133,7 +136,7 @@ defmodule Aqua.TurnLedgerTest do
 
       assert {:ok, %{parent_execution_id: root}} = row(actor, probe)
       assert root == turn_row(ctx, turn).root_execution_id
-      assert {:ok, ^at_pause} = Arca.Execution.sources(actor, probe)
+      assert {:ok, ^at_pause} = Arca.Execution.read_threads(actor, probe)
     end
   end
 
@@ -141,15 +144,15 @@ defmodule Aqua.TurnLedgerTest do
   # The model boundary
   # ---------------------------------------------------------------------------
 
-  describe "a model child's ledger joins its turn when its step closes" do
+  describe "a model child's read threads join its turn when its step closes" do
     test "a chat step's, by its completion result", %{ctx: ctx, thread: thread} do
       script!([{:probe, self()}, reply("hello")])
       turn = accept!(ctx, thread, "@aqua hello")
-      {result, probed} = probed_run(ctx, turn, &disclose!(ctx, &1))
+      {result, probed} = probed_run(ctx, turn, &reads!(ctx, &1))
 
       assert result == :completed
       assert [%{child_execution_id: ^probed}] = model_steps(ctx, turn)
-      assert Source.new(:vault_disclosed) in sources(ctx, turn)
+      assert read_threads(ctx, turn) == [@read]
     end
 
     test "a failed step's, from its row, and a refused one's, by its result",
@@ -162,14 +165,14 @@ defmodule Aqua.TurnLedgerTest do
       ])
 
       failed = accept!(ctx, thread, "@aqua hello")
-      {result, _probed} = probed_run(ctx, failed, &disclose!(ctx, &1))
+      {result, _probed} = probed_run(ctx, failed, &reads!(ctx, &1))
       assert {:failed, "the model failed on what it read"} = result
-      assert Source.new(:vault_disclosed) in sources(ctx, failed)
+      assert read_threads(ctx, failed) == [@read]
 
       refused = accept!(ctx, thread, "@aqua hello again")
-      {result, _probed} = probed_run(ctx, refused, &disclose!(ctx, &1))
+      {result, _probed} = probed_run(ctx, refused, &reads!(ctx, &1))
       assert {:failed, "refused on what it read"} = result
-      assert Source.new(:vault_disclosed) in sources(ctx, refused)
+      assert read_threads(ctx, refused) == [@read]
     end
 
     test "a compaction's, before its summary is committed", %{ctx: ctx, thread: thread} do
@@ -188,12 +191,12 @@ defmodule Aqua.TurnLedgerTest do
       )
 
       turn = accept_large!(ctx, thread)
-      {result, probed} = probed_run(ctx, turn, &disclose!(ctx, &1))
+      {result, probed} = probed_run(ctx, turn, &reads!(ctx, &1))
 
       assert result == :completed
       assert %{child_execution_id: ^probed} = purpose!(ctx, turn, "compaction")
       assert [_compaction] = for(%{kind: "compaction"} = row <- rows(ctx, thread), do: row)
-      assert Source.new(:vault_disclosed) in sources(ctx, turn)
+      assert read_threads(ctx, turn) == [@read]
     end
 
     test "a note flush's, before the notes it keeps", %{ctx: ctx, thread: thread} do
@@ -210,16 +213,16 @@ defmodule Aqua.TurnLedgerTest do
       )
 
       turn = accept_large!(ctx, thread)
-      {result, probed} = probed_run(ctx, turn, &disclose!(ctx, &1))
+      {result, probed} = probed_run(ctx, turn, &reads!(ctx, &1))
 
       assert result == :completed
       assert %{child_execution_id: ^probed} = purpose!(ctx, turn, "flush")
       assert %{outcome: "ok"} = step!(ctx, turn, "n1")
-      assert Source.new(:vault_disclosed) in sources(ctx, turn)
+      assert read_threads(ctx, turn) == [@read]
     end
   end
 
-  describe "a hand's child's ledger joins its turn when its step closes" do
+  describe "a hand's child's read threads join its turn when its step closes" do
     test "by its completion result, and from its row when it fails",
          %{ctx: ctx, thread: thread} do
       script!([
@@ -234,16 +237,16 @@ defmodule Aqua.TurnLedgerTest do
       ])
 
       read = accept!(ctx, thread, "@aqua read the news")
-      {result, probed} = probed_run(ctx, read, &disclose!(ctx, &1))
+      {result, probed} = probed_run(ctx, read, &reads!(ctx, &1))
       assert result == :completed
       assert %{child_execution_id: ^probed, outcome: "ok"} = step!(ctx, read, "g1")
-      assert Source.new(:vault_disclosed) in sources(ctx, read)
+      assert read_threads(ctx, read) == [@read]
 
       failed = accept!(ctx, thread, "@aqua read it again")
-      {result, probed} = probed_run(ctx, failed, &disclose!(ctx, &1))
+      {result, probed} = probed_run(ctx, failed, &reads!(ctx, &1))
       assert result == :completed
       assert %{child_execution_id: ^probed, outcome: "error"} = step!(ctx, failed, "g2")
-      assert Source.new(:vault_disclosed) in sources(ctx, failed)
+      assert read_threads(ctx, failed) == [@read]
     end
   end
 
@@ -252,16 +255,16 @@ defmodule Aqua.TurnLedgerTest do
   # ---------------------------------------------------------------------------
 
   describe "a terminal child pruned while its turn still runs" do
-    test "a failed model child whose row is gone before the loop reads it joins an unnamed " <>
-           "outside source before its failure's text is written",
+    test "a failed model child whose row is gone before the loop reads it adds no read thread, " <>
+           "and its failure's text is written",
          %{ctx: ctx, thread: thread, actor: actor} do
-      sentinel = "the model failed on vault value LEDGER-SENTINEL-7f3"
+      sentinel = "the model failed on READ-SENTINEL-7f3"
       script!([{:probe, self()}, {:error, sentinel}])
       turn = accept!(ctx, thread, "@aqua hello")
 
       {result, probed} =
         probed_run(ctx, turn, fn child ->
-          disclose!(ctx, child)
+          reads!(ctx, child)
           hold_waiter!(child)
         end)
 
@@ -273,8 +276,6 @@ defmodule Aqua.TurnLedgerTest do
         release_waiter!(probed)
       end
 
-      # The failure's text reaches the thread only once the turn holds the
-      # unnamed outside source the gone row stands for.
       assert_receive %ThreadEvent{
                        kind: :message,
                        data: %{
@@ -285,22 +286,19 @@ defmodule Aqua.TurnLedgerTest do
                      30_000
 
       assert said == sentinel
-      assert Source.outside(nil) in sources(ctx, turn)
-
       assert {:failed, ^sentinel} = await!(result)
-      assert Source.outside(nil) in sources(ctx, turn)
-      refute Source.new(:vault_disclosed) in sources(ctx, turn)
+      assert read_threads(ctx, turn) == []
     end
 
-    test "a completed model child carries its ledger in its result, so a row pruned before the " <>
-           "step closes is never read",
+    test "a completed model child carries its read threads in its result, so a row pruned " <>
+           "before the step closes is never read",
          %{ctx: ctx, thread: thread, actor: actor} do
       script!([{:probe, self()}, reply("hello")])
       turn = accept!(ctx, thread, "@aqua hello")
 
       {result, probed} =
         probed_run(ctx, turn, fn child ->
-          disclose!(ctx, child)
+          reads!(ctx, child)
           hold_waiter!(child)
         end)
 
@@ -310,23 +308,21 @@ defmodule Aqua.TurnLedgerTest do
         release_waiter!(probed)
       end
 
+      # No row was read for it: a read would have found none, and joined
+      # nothing.
       assert :completed = await!(result)
-      turn_sources = sources(ctx, turn)
-      assert Source.new(:vault_disclosed) in turn_sources
-      # No row was read for it: a read would have found none and joined
-      # an unnamed outside source.
-      refute Source.outside(nil) in turn_sources
+      assert read_threads(ctx, turn) == [@read]
     end
   end
 
   describe "a child whose waiter is gone, or whose row is gone at its terminal write" do
-    test "a dead hand waiter's step joins the completed child's persisted ledger",
+    test "a dead hand waiter's step joins the completed child's persisted read threads",
          %{ctx: ctx, thread: thread, actor: actor} do
       script!([
-        calls([read("dead-ledger")]),
+        calls([read("dead-waiter")]),
         {:probe, self()},
         {:crash, :after_persist},
-        %{"lines" => ["LEDGER-DERIVED-SENTINEL"]},
+        %{"lines" => ["READ-DERIVED-SENTINEL"]},
         reply("done")
       ])
 
@@ -334,23 +330,22 @@ defmodule Aqua.TurnLedgerTest do
 
       {result, child} =
         probed_run(ctx, turn, fn id ->
-          :ok = Opus.Ledger.join(actor, id, [Source.outside("crash-only.example")])
+          :ok = Arca.Execution.join_threads(actor, id, ["thr_crash_only"])
         end)
 
       assert result == :completed
-      assert {:ok, child_sources} = Arca.Execution.sources(actor, child)
-      assert Source.outside("crash-only.example") in child_sources
-      assert Source.outside("crash-only.example") in sources(ctx, turn)
+      assert Arca.Execution.read_threads(actor, child) == {:ok, ["thr_crash_only"]}
+      assert read_threads(ctx, turn) == ["thr_crash_only"]
     end
 
-    test "the completion result carries the ledger the terminal write itself returned, so " <>
-           "retention at the terminal telemetry takes nothing back",
+    test "the completion result carries the read threads the terminal write itself returned, " <>
+           "so retention at the terminal telemetry takes nothing back",
          %{ctx: ctx, thread: thread, actor: actor} do
-      script!([{:probe, self()}, reply("LEDGER-DERIVED-SENTINEL")])
+      script!([{:probe, self()}, reply("READ-DERIVED-SENTINEL")])
       turn = accept!(ctx, thread, "@aqua hello")
       task = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
       assert_receive {:scripted_probe, runner, child}, 30_000
-      :ok = Opus.Ledger.join(actor, child, [Source.outside("terminal-only.example")])
+      :ok = Arca.Execution.join_threads(actor, child, ["thr_terminal_only"])
       owner = self()
       handler = {__MODULE__, :terminal_probe, make_ref()}
       on_exit(fn -> :telemetry.detach(handler) end)
@@ -387,7 +382,7 @@ defmodule Aqua.TurnLedgerTest do
       assert row(actor, child) == :none
       send(completer, :terminal_continue)
       assert Task.await(task, 60_000) == :completed
-      assert Source.outside("terminal-only.example") in sources(ctx, turn)
+      assert read_threads(ctx, turn) == ["thr_terminal_only"]
     end
   end
 
@@ -416,9 +411,6 @@ defmodule Aqua.TurnLedgerTest do
   defp accept_large!(ctx, thread),
     do: accept!(ctx, thread, "@aqua read this\n" <> String.duplicate("lorem ipsum ", 7_000))
 
-  defp run!(ctx, turn),
-    do: Task.await(Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end), 60_000)
-
   defp resume!(ctx, turn),
     do:
       Task.await(
@@ -441,9 +433,36 @@ defmodule Aqua.TurnLedgerTest do
 
   defp await!(%Task{} = task), do: Task.await(task, 60_000)
 
-  # The child reads a disclosed vault value in its own attempt.
-  defp disclose!(ctx, child),
-    do: :ok = Opus.Ledger.join(Sanctum.Context.actor(ctx), child, [Source.new(:vault_disclosed)])
+  # The child reads the posts of the thread `@read` in its own attempt.
+  defp reads!(ctx, child),
+    do: :ok = Arca.Execution.join_threads(Sanctum.Context.actor(ctx), child, [@read])
+
+  # A workspace thread of the test's athanor.
+  defp workspace!(ctx, title) do
+    %Arca.Schemas.Thread{}
+    |> Arca.Schemas.Thread.changeset(%{
+      id: Prima.UUID7.generate_id("thread"),
+      athanor_id: ctx.athanor_id,
+      kind: "workspace",
+      workspace_state: "open",
+      title: title,
+      created_by: ctx.user_id
+    })
+    |> Arca.Repo.insert!()
+  end
+
+  # A report of `work` landed on `thread`, whose turns' requests carry it.
+  defp report!(ctx, thread, work) do
+    {:ok, _row} =
+      Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        kind: "report",
+        workspace_id: work.id,
+        content: "Fares: done.",
+        payload: %{"workspace" => work.id, "title" => work.title, "outcome" => "done"}
+      })
+  end
 
   # The process waiting on the child — the loop's worker, registered under
   # the child's id — stops before the child answers, so the child's
@@ -497,9 +516,9 @@ defmodule Aqua.TurnLedgerTest do
     end
   end
 
-  defp ledger!(actor, %{child_execution_id: id}) when is_binary(id) do
-    {:ok, ledger} = Arca.Execution.sources(actor, id)
-    ledger
+  defp read_threads!(actor, %{child_execution_id: id}) when is_binary(id) do
+    {:ok, read} = Arca.Execution.read_threads(actor, id)
+    read
   end
 
   defp turn_row(ctx, turn) do
@@ -507,7 +526,7 @@ defmodule Aqua.TurnLedgerTest do
     row
   end
 
-  defp sources(ctx, turn), do: Source.decode(turn_row(ctx, turn).sources)
+  defp read_threads(ctx, turn), do: Threads.threads_of(turn_row(ctx, turn).read_threads)
 
   defp model_steps(ctx, turn) do
     {:ok, steps} = Tape.steps(ctx, turn)

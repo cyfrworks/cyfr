@@ -146,7 +146,7 @@ defmodule Arca.Test.WritersTest do
           root_execution_id: id,
           kind: "component",
           event_seq: 0,
-          sources: "[]"
+          read_threads: "[]"
         })
       )
 

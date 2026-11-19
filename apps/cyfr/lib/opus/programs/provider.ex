@@ -45,8 +45,7 @@ defmodule Opus.Programs.Provider do
   control characters other than newlines and tabs taken out, at most
   64 KiB a call, with the offset to read on from and how many bytes
   were no longer kept. It passed the backends service's masking of the
-  row's credentials first. Each answer is an outside source named by the
-  program's row (`answer_sources/2`).
+  row's credentials first.
   """
 
   @behaviour Prima.Provider
@@ -88,7 +87,6 @@ defmodule Opus.Programs.Provider do
       [
         Operation.new("program", "list", "List programs", [],
           kind: :read,
-          sources: [],
           planes: [:in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -122,7 +120,6 @@ defmodule Opus.Programs.Provider do
           ],
           kind: :execute,
           resource: {"program", :program_row},
-          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:in_chain],
           consent: :interactive
         ),
@@ -140,13 +137,11 @@ defmodule Opus.Programs.Provider do
             Arg.new("enter", :boolean, description: "send: press Enter after the text")
           ],
           kind: :execute,
-          sources: [],
           planes: [:in_chain],
           consent: :interactive
         ),
         Operation.new("program", "read", "Read a program", [session, after_arg],
           kind: :read,
-          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -166,14 +161,12 @@ defmodule Opus.Programs.Provider do
             )
           ],
           kind: :read,
-          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:in_chain],
           consent: :interactive,
           recovery: :replay_safe
         ),
         Operation.new("program", "stop", "Stop a program", [session],
           kind: :write,
-          sources: [],
           planes: [:in_chain],
           consent: :interactive,
           reduces_authority: true
@@ -184,16 +177,6 @@ defmodule Opus.Programs.Provider do
       title: "Programs"
     )
   end
-
-  @doc """
-  What a start's, read's or wait's answer carries: an outside source
-  named by the program it came from.
-  """
-  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
-  def answer_sources(_actor, %{program: name}) when is_binary(name),
-    do: [Prima.Source.outside(name)]
-
-  def answer_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
 
   @impl true
   def handle("program", %Context{} = ctx, %{"action" => action} = args),

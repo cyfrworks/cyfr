@@ -28,36 +28,34 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   alias Prima.TinctureWire
   alias Sanctum.TinctureAuth
 
-  # A provider of one read whose answers are filed material, as its
-  # operation declares (`Prima.Operation`'s `sources`). Each read tells
-  # the process registered as `:tincture_filed_probe`, so a case sees
-  # whether the read was made at all.
-  defmodule FiledProbe do
+  # A provider of one read. Each read tells the process registered as
+  # `:tincture_read_probe`, so a case sees whether the read was made at
+  # all.
+  defmodule ReadProbe do
     @moduledoc false
     @behaviour Prima.Provider
 
     alias Prima.Operation
 
     @impl true
-    def service, do: "filed-probe"
+    def service, do: "read-probe"
 
     @impl true
     def tools do
       [
         Operation.tool([
-          Operation.new("filed_probe", "filed", "Read filed material", [],
+          Operation.new("read_probe", "read", "Read the probe", [],
             kind: :read,
-            planes: [:external],
-            sources: [:filed]
+            planes: [:external]
           )
         ])
       ]
     end
 
     @impl true
-    def handle("filed_probe", _ctx, %{"action" => "filed"}) do
-      if observer = Process.whereis(:tincture_filed_probe), do: send(observer, :filed_probe_read)
-      {:ok, %{"filed" => true}}
+    def handle("read_probe", _ctx, %{"action" => "read"}) do
+      if observer = Process.whereis(:tincture_read_probe), do: send(observer, :read_probe_read)
+      {:ok, %{"read" => true}}
     end
   end
 
@@ -804,28 +802,27 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
   describe "a frame that connects beyond its endpoint" do
     # Under the grant the person gives by default, whose ingress edge holds
-    # nothing. The action is the probe's, whose answer is filed material,
-    # where `system.status` declares none.
+    # nothing. The action is the probe's.
     test "reads an action and invokes a component under the grant it opened with",
          %{source: source} do
-      Sanctum.Catalog.with_providers([FiledProbe], fn ->
-        Process.register(self(), :tincture_filed_probe)
+      Sanctum.Catalog.with_providers([ReadProbe], fn ->
+        Process.register(self(), :tincture_read_probe)
         name = "beyond-dash"
 
         digest =
           tincture!(
             source,
             name,
-            %{"connect" => ["api.beyond.example"], "actions" => ["filed_probe.filed"]},
+            %{"connect" => ["api.beyond.example"], "actions" => ["read_probe.read"]},
             [%{"ref" => "reagent:local.echo", "reason" => "echo"}]
           )
 
         frame = frame!(source, name, digest)
-        conn = action(frame.bearer, "filed_probe.filed")
+        conn = action(frame.bearer, "read_probe.read")
 
         assert conn.status == 200
         assert {:ok, _answer} = answer(conn, :action)
-        assert_receive :filed_probe_read, @answer_ms
+        assert_receive :read_probe_read, @answer_ms
 
         body =
           TinctureWire.request(:invoke, %{

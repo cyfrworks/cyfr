@@ -698,11 +698,6 @@ defmodule Opus.Programs.TurnSessionTest do
 
       assert Provider.text(<<"ok ", 0xFF, " done">>) == "ok � done"
     end
-
-    test "an answer is an outside source named by its program" do
-      assert [%Prima.Source{class: :outside, name: "gh"}] =
-               Provider.answer_sources(nil, %{program: "gh", output: "x"})
-    end
   end
 
   describe "its end" do

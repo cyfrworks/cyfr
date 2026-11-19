@@ -8,13 +8,13 @@ defmodule Aqua.LaunchTest do
   as the turn's person, under the origin the turn's row stores — a
   programmatic turn's launch stays programmatic, and no turn is written
   without an origin — under the account its decision resolved, seeded
-  with the turn's sources as its row holds them when the launch is
+  with the turn's read threads as its row holds them when the launch is
   dispatched, on whatever grant its app roots at when it runs. An app
   with no grant is answered by the gate that it is not granted, and a
   grant that cannot be read refuses as the damage it is. Nothing is
-  checked of where the turn's material came from: no class is let flow,
-  egress refuses no send for what the run read, and a source the turn
-  read since the decision is one more source the root is seeded with.
+  checked of where the turn's material came from: egress refuses no send
+  for what the run read, and a thread the turn read since the decision
+  is one more read thread the root is seeded with.
 
   A launch runs nothing when the account its name resolved to moved
   before it runs: refused by the dispatcher before the gate is asked, or
@@ -188,8 +188,8 @@ defmodule Aqua.LaunchTest do
     decided
   end
 
-  defp read!(ctx, turn, sources),
-    do: {:ok, _} = Tape.record_model_intent(ctx, turn, %{sources: sources})
+  defp read!(ctx, turn, threads),
+    do: {:ok, _} = Tape.record_model_intent(ctx, turn, %{threads: threads})
 
   defp launched(ctx) do
     Arca.Repo.all(
@@ -812,10 +812,8 @@ defmodule Aqua.LaunchTest do
   end
 
   # ---------------------------------------------------------------------------
-  # What the launch carries: the turn's sources, on the grant as it stands
+  # What the launch carries: the turn's read threads, on the grant as it stands
   # ---------------------------------------------------------------------------
-
-  @news Prima.Source.outside("news.example")
 
   # An app of the person's own granted with a default entry alone: its one
   # exit is `api.example.com`.
@@ -850,7 +848,7 @@ defmodule Aqua.LaunchTest do
   end
 
   test "a decided launch runs on the grant its app roots at when it runs: one granted since " <>
-         "the decision runs on that grant, seeded with the turn's sources",
+         "the decision runs on that grant, seeded with the turn's read threads",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
@@ -858,8 +856,7 @@ defmodule Aqua.LaunchTest do
     app = publish_app!(ctx)
     args = %{"reference" => app <> ":1.0.0", "input" => %{}}
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
-    pinned = Prima.Source.new(:pinned)
-    read!(ctx, turn, [pinned])
+    read!(ctx, turn, ["thr_read"])
 
     # Decided while the app has no grant: the decision reads none.
     root_id = Prima.UUID7.execution_id()
@@ -872,26 +869,23 @@ defmodule Aqua.LaunchTest do
     dispatched = Launch.run(ctx, step, decided)
 
     # The grant made since is the one the root loads, and the root is
-    # seeded with the turn's sources; its ledger also holds what its run
-    # was handed of the disclosed entry.
+    # seeded with the turn's read threads.
     assert launched_of(ctx, app) == [root_id], "launch answered #{inspect(dispatched)}"
     actor = Sanctum.Context.actor(ctx)
     assert %{consent_id: consent_id} = Arca.Execution.get_tenant(actor, root_id)
     assert consent_id == consent_of(ctx, app)
-    assert {:ok, seeded} = Arca.Execution.sources(actor, root_id)
-    assert pinned in seeded
+    assert Arca.Execution.read_threads(actor, root_id) == {:ok, ["thr_read"]}
   end
 
   test "a decided launch runs once as the turn's person, under its stored origin, with its " <>
-         "recorded call's arguments, under the step's id, seeded with the turn's sources",
+         "recorded call's arguments, under the step's id, seeded with the turn's read threads",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     %{app: app, args: args} = quiet_app!(ctx)
     turn = started!(%{ctx | origin: :programmatic}, thread, pins)
-    pinned = Prima.Source.new(:pinned)
-    read!(ctx, turn, [pinned, @news])
+    read!(ctx, turn, ["thr_read", "thr_other"])
     root_id = Prima.UUID7.execution_id()
 
     # The recorded call names a lineage of its own: it is dropped.
@@ -911,13 +905,13 @@ defmodule Aqua.LaunchTest do
 
     assert user_id == turn.requested_by
     actor = Sanctum.Context.actor(ctx)
-    assert Arca.Execution.sources(actor, root_id) == {:ok, [pinned, @news]}
+    assert Arca.Execution.read_threads(actor, root_id) == {:ok, ["thr_other", "thr_read"]}
 
+    # Its start names its attempt alone, and nothing of what it read.
     assert {:ok, [%{type: "execution.started"} = started | _]} =
              Arca.ExecutionEvents.since(actor, root_id, 0)
 
-    assert Arca.ExecutionEvents.data(started)["sources"] ==
-             Prima.Source.to_json_list([pinned, @news])
+    assert Map.keys(Arca.ExecutionEvents.data(started)) == ["attempt"]
 
     # Its caller is the member whose turn launched it, which the stamp
     # alone carries, not the person it runs as.
@@ -925,31 +919,29 @@ defmodule Aqua.LaunchTest do
     assert caller == "agent:" <> turn.agent
   end
 
-  test "a decided launch whose turn read a source since its decision runs, seeded with every " <>
-         "source the turn holds when it is dispatched",
+  test "a decided launch whose turn read a thread since its decision runs, seeded with every " <>
+         "read thread the turn holds when it is dispatched",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     %{app: app, args: args} = quiet_app!(ctx)
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
-    pinned = Prima.Source.new(:pinned)
-    read!(ctx, turn, [pinned])
+    read!(ctx, turn, ["thr_read"])
     root_id = Prima.UUID7.execution_id()
     step = launch_step!(ctx, turn, args, root_id)
     decided = decided!(ctx, turn, args)
     assert {:run, decided} == run_on(args)
 
-    # Another thread's posts and outside material, read since the
-    # decision: the launch runs all the same, its root seeded with them
-    # beside what the turn read before it.
-    other = Prima.Source.thread("thr_other")
-    read!(ctx, turn, [other, @news])
+    # Another thread's posts, read since the decision: the launch runs
+    # all the same, its root seeded with that thread beside what the turn
+    # read before it.
+    read!(ctx, turn, ["thr_other"])
     assert {:ok, %{execution_id: ^root_id}} = Launch.run(ctx, step, decided)
     assert launched_of(ctx, app) == [root_id]
 
-    assert Arca.Execution.sources(Sanctum.Context.actor(ctx), root_id) ==
-             {:ok, [pinned, @news, other]}
+    assert Arca.Execution.read_threads(Sanctum.Context.actor(ctx), root_id) ==
+             {:ok, ["thr_other", "thr_read"]}
   end
 
   test "a decided launch whose turn's person was denied since its decision runs nothing and " <>
@@ -987,12 +979,10 @@ defmodule Aqua.LaunchTest do
     ]
 
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
-    pinned = Prima.Source.new(:pinned)
 
-    # Nothing read, outside material read, the pinned page read beside it:
-    # each launch is decided the same, on its call and nothing of what the
-    # turn read.
-    for read <- [[], [@news], [pinned]] do
+    # Nothing read, then another thread's posts read: each launch is
+    # decided the same, on its call and nothing of what the turn read.
+    for read <- [[], ["thr_other"]] do
       if read != [], do: read!(ctx, turn, read)
       for args <- apps, do: assert(decide(ctx, turn, args) == run_on(args))
     end
@@ -1006,79 +996,55 @@ defmodule Aqua.LaunchTest do
     end
   end
 
-  # A turn that read the prompt as it is composed now, as the loop's
-  # first model step records what the prompt read: one of a thread of its
-  # own, since one turn holds a thread at a time.
+  # A turn whose prompt is composed now, as the loop's first model step
+  # opens with it: one of a thread of its own, since one turn holds a
+  # thread at a time. The step opens with what the turn's rows carry,
+  # here none. Answers the turn and the prompt's text.
   defp prompted!(ctx, pins) do
     {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
-    composed = Aqua.Prompt.compose(ctx, agent: %{"prompt" => ""})
-    read!(ctx, turn, composed.sources)
-    turn
+    %{text: text} = Aqua.Prompt.compose(ctx, agent: %{"prompt" => ""})
+    read!(ctx, turn, [])
+    {turn, text}
   end
 
-  test "an about-you page Aqua wrote after reading outside material carries it into every " <>
-         "later turn's launch; the person's own write or Remove on the Aqua page ends it",
+  test "an about-you page in a later turn's prompt seeds its launch with no thread, the " <>
+         "person's own or one Aqua wrote in a thread",
        %{ctx: ctx, thread: thread, pins: pins} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
     on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     %{args: args} = quiet_app!(ctx)
-    pinned = Prima.Source.new(:pinned)
     actor = Sanctum.Context.actor(ctx)
 
-    # A launch dispatched in a later turn: the sources its root is seeded
-    # with.
-    launches = fn ->
-      turn = prompted!(ctx, pins)
+    # A launch dispatched in a later turn whose prompt shows `page`: the
+    # read threads its root is seeded with.
+    launches = fn page ->
+      {turn, text} = prompted!(ctx, pins)
+      assert text =~ page
       root_id = Prima.UUID7.execution_id()
       step = launch_step!(ctx, turn, args, root_id)
       assert {:ok, %{execution_id: ^root_id}} = Launch.run(ctx, step, decided!(ctx, turn, args))
-      Arca.Execution.sources(actor, root_id)
+      Arca.Execution.read_threads(actor, root_id)
     end
 
-    # The person's own page: the launch carries the page alone.
+    # The person's own page.
     {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd.")
-    assert launches.() == {:ok, [pinned]}
+    assert launches.("Flies to Lisbon on the 3rd.") == {:ok, []}
 
-    # Aqua rewrites it after reading the news: every turn that reads the
-    # page from then on carries the news into its launch.
-    {:ok, _} =
-      Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd; fares rise Monday.",
-        kept_by: Prima.Author.agent(),
-        thread: thread.id,
-        sources: [@news]
-      )
-
-    for _turn <- 1..2, do: assert(launches.() == {:ok, [pinned, @news]})
-
-    # The person saves the page as their own on the Aqua page: the next
-    # turn's launch carries the page alone again.
-    {:ok, %{revision: revision}} = Aqua.Notes.read(ctx, "about-you")
-
-    {:ok, _} =
-      Aqua.Notes.pin(ctx, "about-you", "Flies to Lisbon on the 3rd; fares rise Monday.", [],
-        revision: revision
-      )
-
-    assert launches.() == {:ok, [pinned]}
-
-    # Or removes Aqua's page, over the revision the Aqua page read.
+    # Aqua's page, written in a thread: what a note holds outlives that
+    # thread, so a turn that reads the page never read the thread.
     {:ok, _} =
       Aqua.Notes.pin(ctx, "about-you", "Fares rise Monday.",
         kept_by: Prima.Author.agent(),
-        thread: thread.id,
-        sources: [@news]
+        thread: thread.id
       )
 
-    assert launches.() == {:ok, [pinned, @news]}
-    {:ok, %{revision: revision}} = Aqua.Notes.read(ctx, "about-you")
-    {:ok, %{cleared: "about-you"}} = Aqua.Notes.pin(ctx, "about-you", "", [], revision: revision)
-    assert launches.() == {:ok, []}
+    assert launches.("Fares rise Monday.") == {:ok, []}
   end
 
   test "a decided launch's sends reach the host its grant allows whatever the turn read: " <>
-         "another thread's posts or outside material from another host",
+         "another thread's posts",
        %{ctx: ctx, thread: thread, pins: pins} do
     port = upstream_port!(ctx)
     default = attached_entry!(ctx, port, "default", @default_secret)
@@ -1093,13 +1059,7 @@ defmodule Aqua.LaunchTest do
     end
 
     # The turn read another thread's posts: the send goes out.
-    read!(ctx, turn, [Prima.Source.thread("thr_other")])
-    assert {:ok, _} = launch.()
-    assert %{path: "/hello"} = upstream!()
-
-    # Then outside material from another host: the send goes out all the
-    # same.
-    read!(ctx, turn, [@news])
+    read!(ctx, turn, ["thr_other"])
     assert {:ok, _} = launch.()
     assert %{path: "/hello"} = upstream!()
   end

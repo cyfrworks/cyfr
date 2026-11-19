@@ -771,8 +771,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     png = <<137, 80, 78, 71, 13, 10, 26, 10, "the moon">>
     file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => png}
 
-    {:ok, shot, _ref} =
-      Aqua.Attachments.draft(here, turn, file, [Prima.Source.outside("moon.example")])
+    {:ok, shot, _ref} = Aqua.Attachments.draft(here, turn, file, [])
 
     {:ok, %{posted: post_id}} =
       Aqua.Providers.Thread.handle("thread", Sanctum.Context.enter_guest(here), %{

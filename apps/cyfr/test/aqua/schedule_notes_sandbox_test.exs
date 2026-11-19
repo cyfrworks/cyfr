@@ -43,8 +43,7 @@ defmodule Aqua.ScheduleNotesSandboxTest do
         schedule: %{id: "sched_notes_sandbox", profile_id: "prof_notes_sandbox", updated_at: now},
         consent_revision: nil,
         keep: {false, nil},
-        output: "not for keeping",
-        sources: []
+        output: "not for keeping"
       })
 
     :ok = Arca.Outbox.put!(actor, record)

@@ -152,25 +152,21 @@ defmodule Arca.Execution do
     claimant's slow admission starts nothing. A row that names a
     `schedule_id` runs an occurrence, and is refused the same way
     without one.
-  - `:reaches_outside` — the run was admitted with egress (its caller's
-    reading of its own edge): its tree's root, itself for a root, is
-    marked in the same transaction (`reached_outside/2`).
 
   A row that names no parent is a root, and its tree's root is itself
   unless it names one; a child names its tree's root
   (`root_execution_id`), and a child that names none is refused
   `{:error, {:invalid, %{root_execution_id: _}}}` with nothing written.
 
-  The row's source ledger (`sources/2`) is seeded in the same
-  transaction. A root's is the `:sources` attr its admission path names
-  (`Prima.Source`s), absent read as none: the path above this module
-  states every root's seed. A child's is its parent's ledger as it stands
-  in the transaction — for a child of a turn root, the sources of the turn
-  its `:step` belongs to, or of every turn on that root when it names no
-  step — joined by any `:sources` its admission names, which are joined
-  into its ancestors' ledgers in the same transaction (`join_sources/3`),
-  as a tool-server call's server is before the call leaves. The seed is
-  also the `execution.started` event's `sources`, for audit.
+  The row's read threads (`read_threads/2`) are seeded in the same
+  transaction. A root's are the `:read_threads` attr its admission path
+  names (thread ids), absent read as none. A child's are its parent's as
+  they stand in the transaction — for a child of a turn root, those of
+  the turn its `:step` belongs to, or of every turn on that root when it
+  names no step — joined by any `:read_threads` its admission names,
+  which are joined into its ancestors' in the same transaction
+  (`join_threads/3`). An attr that is not a list of strings rolls the
+  admission back `{:error, :invalid_read_threads}`.
   - `:grant` and `:verify` (required, `Arca.ExecutionStanding`) — the
     `Prima.ExecutionGrant` the attempt is stamped with and the caller's
     check over it, asked first in the transaction, before any row is
@@ -236,15 +232,6 @@ defmodule Arca.Execution do
       # The athanor's standing first, before any execution or attempt row
       # is written or locked; a child's grant is its parent's stamp.
       Arca.ExecutionStanding.verify!(grant, verify)
-
-      # A run admitted with egress marks its tree's root below. The root's
-      # execution row is locked here, before any attempt row is — the
-      # parent's, which `hold_for_child!` takes, among them — in the
-      # execution-then-attempt order every execution write keeps
-      # (`Arca.ExecutionAttempts.takeover!/3`), so the admission and a
-      # takeover of the root never wait on each other in opposite order. A
-      # root admitted with egress holds its own row from its insert.
-      root = if Keyword.get(opts, :reaches_outside, false), do: lock_root!(athanor_id, attrs)
 
       inherits!(athanor_id, Map.get(attrs, :parent_execution_id), grant)
       attrs = origin!(athanor_id, attrs)
@@ -326,13 +313,6 @@ defmodule Arca.Execution do
           Arca.Repo.rollback(:parent_ended)
       end
 
-      case root do
-        nil -> :ok
-        :own -> reaches_outside!(athanor_id, execution.id, execution.host_policy)
-        {root_id, policy} -> reaches_outside!(athanor_id, root_id, policy)
-        :gone -> :ok
-      end
-
       commit_payloads!(Keyword.get(opts, :payloads, []), attempt_id)
 
       case {execution.schedule_id, Keyword.get(opts, :occurrence_id)} do
@@ -363,10 +343,7 @@ defmodule Arca.Execution do
           Prima.Actor.in_athanor(athanor_id),
           execution.id,
           "execution.started",
-          data: %{
-            "attempt" => attempt_id,
-            "sources" => execution.sources |> ledger_text() |> Prima.Source.to_json_list()
-          }
+          data: %{"attempt" => attempt_id}
         )
 
       %{
@@ -608,71 +585,35 @@ defmodule Arca.Execution do
     |> Arca.Data.project()
   end
 
-  # The key of the mark `admit/2` sets on a tree's root.
-  @reached_key "tree_reaches_outside"
-
   @doc """
-  Whether a run of the tree rooted at `id` was admitted with egress, as
-  `admit/2`'s `:reaches_outside` marked the root: `{:ok, true | false}`,
-  read from the root's own row, which retention keeps while it runs, so
-  a child pruned before the root ends cannot take the fact with it.
-  `{:error, :not_found}` for no root in the caller's athanor, and
-  `{:error, :unreadable}` for a root whose `host_policy` is not a JSON
-  object: a policy that cannot be read says nothing, never "no egress".
-
-  The mark lives in the root's `host_policy` JSON, beside the policy its
-  own admission recorded.
+  The ids of the threads whose posts the run `id` holds, seeded at
+  admission and only ever grown (`join_threads/3`). A turn root's are its
+  turns' (`Arca.TurnStorage.chain_threads/2`): the root execution of a
+  host loop records none of its own. `{:error, :not_found}` for no such
+  row in the caller's athanor.
   """
-  @spec reached_outside(Prima.Actor.t(), String.t()) ::
-          {:ok, boolean()} | {:error, :not_found | term()}
-  def reached_outside(%Prima.Actor{} = actor, id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Execution.reached_outside", fn ->
+  @spec read_threads(Prima.Actor.t(), String.t()) ::
+          {:ok, [String.t()]} | {:error, :not_found | :database_error}
+  def read_threads(%Prima.Actor{} = actor, id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Execution.read_threads", fn ->
       case row_of(actor, id) do
         nil -> {:error, :not_found}
-        %Row{host_policy: policy} -> reached(policy)
-      end
-    end)
-  end
-
-  defp reached(policy) do
-    case decoded_policy(policy) do
-      {:ok, map} -> {:ok, Map.get(map, @reached_key) == true}
-      :error -> {:error, :unreadable}
-    end
-  end
-
-  @doc """
-  A run's source ledger (`Prima.Source`): every class it read, seeded at
-  admission and only ever grown (`join_sources/3`). A turn root's ledger
-  is its turns' (`Arca.TurnStorage.chain_sources/2`): the root execution
-  of a host loop records none of its own. A stored ledger that is absent
-  or does not read is one unnamed outside source, never none: provenance
-  that cannot be read is not the athanor's own. `{:error, :not_found}`
-  for no such row in the caller's athanor.
-  """
-  @spec sources(Prima.Actor.t(), String.t()) ::
-          {:ok, [Prima.Source.t()]} | {:error, :not_found | :database_error}
-  def sources(%Prima.Actor{} = actor, id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Execution.sources", fn ->
-      case row_of(actor, id) do
-        nil -> {:error, :not_found}
-        %Row{} = row -> {:ok, ledger!(row)}
+        %Row{} = row -> {:ok, threads!(row)}
       end
     end)
   end
 
   @doc """
-  The ledger a row read in hand holds (a run's, not a turn root's): its
-  stored set, an absent or unreadable one an unnamed outside source. What
-  a caller holding the row a terminal write returned reads, so the
-  ledger its answer carries is the one that write committed, never a
-  read after it.
+  The read threads a row read in hand holds (a run's, not a turn root's);
+  anything but a row holds none. What a caller holding the row a terminal
+  write returned reads, so the threads its answer carries are the ones
+  that write committed, never a read after it.
   """
-  @spec row_ledger(map()) :: [Prima.Source.t()]
-  def row_ledger(%{sources: stored}) when is_binary(stored) or is_nil(stored),
-    do: ledger_text(stored)
+  @spec row_threads(map()) :: [String.t()]
+  def row_threads(%{read_threads: stored}) when is_binary(stored) or is_nil(stored),
+    do: Arca.ThreadStorage.threads_of(stored)
 
-  def row_ledger(_row), do: [Prima.Source.outside(nil)]
+  def row_threads(_row), do: []
 
   @doc """
   The consent revision the root `id` was admitted at (its authority's,
@@ -691,29 +632,30 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Join `sources` into the ledger of the run `id` and of every ancestor up
-  its admission chain (`parent_execution_id`), stopping below a turn root,
-  whose ledger is its turns', in one transaction: the rows are locked
-  root first, read again under the lock and written only where the set
-  grows, so concurrent joins in one tree neither deadlock nor lose an
-  addition. Called before the bytes the sources describe reach the run,
-  so every byte a child hands up is preceded by its ancestors holding its
-  provenance. `{:error, :not_found}` for no such row.
+  Join the thread ids `threads` into the read threads of the run `id` and
+  of every ancestor up its admission chain (`parent_execution_id`),
+  stopping below a turn root, whose read threads are its turns', in one
+  transaction: the rows are locked root first, read again under the lock
+  and written only where the list grows, so concurrent joins in one tree
+  neither deadlock nor lose an addition. Called before the bytes that
+  carry those threads' posts reach the run, so every byte a child hands
+  up is preceded by its ancestors holding its read threads.
+  `{:error, :not_found}` for no such row.
   """
-  @spec join_sources(Prima.Actor.t(), String.t(), [Prima.Source.t()]) ::
+  @spec join_threads(Prima.Actor.t(), String.t(), [String.t()]) ::
           :ok | {:error, :not_found | :database_error}
-  def join_sources(%Prima.Actor{athanor_id: athanor_id} = actor, id, sources)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_list(sources) do
-    Arca.Repo.Errors.with_db_rescue("Execution.join_sources", fn ->
+  def join_threads(%Prima.Actor{athanor_id: athanor_id} = actor, id, threads)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_list(threads) do
+    Arca.Repo.Errors.with_db_rescue("Execution.join_threads", fn ->
       case row_of(actor, id) do
         nil ->
           {:error, :not_found}
 
         %Row{} ->
-          if sources == [] do
+          if threads == [] do
             :ok
           else
-            Arca.Repo.locking_transaction(fn -> join_chain!(athanor_id, id, sources) end)
+            Arca.Repo.locking_transaction(fn -> join_chain!(athanor_id, id, threads) end)
             |> case do
               {:ok, :ok} -> :ok
               {:error, reason} -> {:error, reason}
@@ -723,28 +665,29 @@ defmodule Arca.Execution do
     end)
   end
 
-  def join_sources(%Prima.Actor{}, _id, _sources), do: {:error, :not_found}
+  def join_threads(%Prima.Actor{}, _id, _threads), do: {:error, :not_found}
 
   # The run and its ancestors up to the first turn root (excluded), locked
   # root first and each joined under its own lock.
   # arca:db-raise-ok inside the caller's transaction
-  defp join_chain!(athanor_id, id, sources) do
+  defp join_chain!(athanor_id, id, threads) do
     athanor_id
     |> chain!(id, [], 0)
     |> Enum.each(fn chain_id ->
       from(e in Row,
         where: e.athanor_id == ^athanor_id and e.id == ^chain_id,
-        select: e.sources
+        select: e.read_threads
       )
       |> Arca.QueryHelpers.for_update()
       |> Arca.Repo.all()
       |> case do
         [stored] ->
-          joined = Prima.Source.encode(Prima.Source.union(ledger_text(stored), sources))
+          joined =
+            Arca.ThreadStorage.threads_text(Arca.ThreadStorage.threads_of(stored) ++ threads)
 
           if joined != stored do
             from(e in Row, where: e.athanor_id == ^athanor_id and e.id == ^chain_id)
-            |> Arca.Repo.update_all(set: [sources: joined])
+            |> Arca.Repo.update_all(set: [read_threads: joined])
           end
 
         [] ->
@@ -775,52 +718,49 @@ defmodule Arca.Execution do
     end
   end
 
-  # A row's ledger: a turn root's is its turns'; any other's is its stored
-  # set, an absent or unreadable one an unnamed outside source.
+  # A row's read threads: a turn root's are its turns'; any other's are
+  # its stored list.
   # arca:db-raise-ok inside the caller's rescue or transaction
-  defp ledger!(%Row{kind: "turn", id: id, athanor_id: athanor_id}),
-    do: Arca.TurnStorage.chain_sources!(Prima.Actor.in_athanor(athanor_id), id)
+  defp threads!(%Row{kind: "turn", id: id, athanor_id: athanor_id}),
+    do: Arca.TurnStorage.chain_threads!(Prima.Actor.in_athanor(athanor_id), id)
 
-  defp ledger!(%Row{sources: stored}), do: ledger_text(stored)
-
-  defp ledger_text(nil), do: [Prima.Source.outside(nil)]
-  defp ledger_text(stored) when is_binary(stored), do: Prima.Source.decode(stored)
+  defp threads!(%Row{read_threads: stored}), do: Arca.ThreadStorage.threads_of(stored)
 
   # The seed `admit/2` writes (see its doc): a root's as named; a child's
-  # its parent's ledger joined by what its admission names, which joins
-  # its ancestors first, their execution rows locked before any attempt
-  # row is.
+  # its parent's read threads joined by what its admission names, which
+  # joins its ancestors first, their execution rows locked before any
+  # attempt row is.
   # arca:db-raise-ok inside the caller's transaction
   defp seed!(athanor_id, attrs, step) do
-    named = named_sources!(Map.get(attrs, :sources))
+    named = named_threads!(Map.get(attrs, :read_threads))
 
     case Map.get(attrs, :parent_execution_id) do
       nil ->
-        Map.put(attrs, :sources, Prima.Source.encode(named))
+        Map.put(attrs, :read_threads, Arca.ThreadStorage.threads_text(named))
 
       parent_id ->
-        inherited = parent_ledger!(athanor_id, parent_id, step)
+        inherited = parent_threads!(athanor_id, parent_id, step)
         if named != [], do: join_chain!(athanor_id, parent_id, named)
-        Map.put(attrs, :sources, Prima.Source.encode(Prima.Source.union(inherited, named)))
+        Map.put(attrs, :read_threads, Arca.ThreadStorage.threads_text(inherited ++ named))
     end
   end
 
   # arca:db-raise-ok inside the caller's transaction
-  defp named_sources!(nil), do: []
+  defp named_threads!(nil), do: []
 
-  defp named_sources!(sources) when is_list(sources) do
-    if Enum.all?(sources, &is_struct(&1, Prima.Source)),
-      do: Prima.Source.set(sources),
-      else: Arca.Repo.rollback(:invalid_sources)
+  defp named_threads!(ids) when is_list(ids) do
+    if Enum.all?(ids, &is_binary/1),
+      do: ids,
+      else: Arca.Repo.rollback(:invalid_read_threads)
   end
 
-  defp named_sources!(_sources), do: Arca.Repo.rollback(:invalid_sources)
+  defp named_threads!(_ids), do: Arca.Repo.rollback(:invalid_read_threads)
 
-  # The parent's ledger as it stands: a turn root's is the turn the
-  # child's step belongs to — a step of another root's turn admits
+  # The parent's read threads as they stand: a turn root's are the turn
+  # the child's step belongs to — a step of another root's turn admits
   # nothing — or, with no step, every turn on that root.
   # arca:db-raise-ok inside the caller's transaction
-  defp parent_ledger!(athanor_id, parent_id, step) do
+  defp parent_threads!(athanor_id, parent_id, step) do
     case Arca.Repo.one(from(e in Row, where: e.athanor_id == ^athanor_id and e.id == ^parent_id)) do
       nil ->
         Arca.Repo.rollback(:parent_ended)
@@ -828,21 +768,21 @@ defmodule Arca.Execution do
       %Row{kind: "turn"} ->
         case step do
           %{id: step_id} when is_binary(step_id) ->
-            case Arca.TurnStorage.step_sources!(
+            case Arca.TurnStorage.step_threads!(
                    Prima.Actor.in_athanor(athanor_id),
                    step_id,
                    parent_id
                  ) do
-              {:ok, sources} -> sources
+              {:ok, threads} -> threads
               :none -> Arca.Repo.rollback(:step_superseded)
             end
 
           _no_step ->
-            Arca.TurnStorage.chain_sources!(Prima.Actor.in_athanor(athanor_id), parent_id)
+            Arca.TurnStorage.chain_threads!(Prima.Actor.in_athanor(athanor_id), parent_id)
         end
 
       %Row{} = parent ->
-        ledger!(parent)
+        threads!(parent)
     end
   end
 
@@ -854,65 +794,6 @@ defmodule Arca.Execution do
       do: attrs,
       else: Map.put(attrs, :root_execution_id, Map.get(attrs, :id))
   end
-
-  # The tree's root, locked before any attempt row (see `admit/2`): `:own`
-  # for a root, whose insert holds its row, else `{root_id, host_policy}`
-  # read under the lock, or `:gone` for a root no row holds.
-  # arca:db-raise-ok inside the caller's transaction
-  defp lock_root!(athanor_id, attrs) do
-    case Map.get(attrs, :root_execution_id) do
-      root_id when is_binary(root_id) and root_id != "" ->
-        if root_id == Map.get(attrs, :id) do
-          :own
-        else
-          from(e in Row,
-            where: e.athanor_id == ^athanor_id and e.id == ^root_id,
-            select: e.host_policy
-          )
-          |> Arca.QueryHelpers.for_update()
-          |> Arca.Repo.all()
-          |> case do
-            [policy] -> {root_id, policy}
-            [] -> :gone
-          end
-        end
-
-      _root ->
-        :own
-    end
-  end
-
-  # Mark the tree's root as reached outside, under the lock `lock_root!/2`
-  # took (or the root's own insert): a mark that only turns true, written
-  # over the policy read under that lock. A policy that does not read as a
-  # JSON object keeps nothing but the mark.
-  # arca:db-raise-ok inside the caller's transaction
-  defp reaches_outside!(athanor_id, root_id, policy) do
-    base =
-      case decoded_policy(policy) do
-        {:ok, map} -> map
-        :error -> %{}
-      end
-
-    marked = base |> Map.put(@reached_key, true) |> Jason.encode!()
-
-    if marked != policy do
-      from(e in Row, where: e.athanor_id == ^athanor_id and e.id == ^root_id)
-      |> Arca.Repo.update_all(set: [host_policy: marked])
-    end
-
-    :ok
-  end
-
-  # A host policy is a JSON object or it is unreadable.
-  defp decoded_policy(policy) when is_binary(policy) do
-    case Jason.decode(policy) do
-      {:ok, %{} = map} -> {:ok, map}
-      _not_an_object -> :error
-    end
-  end
-
-  defp decoded_policy(_none), do: :error
 
   # The row itself, for the writers here that act on it inside their own
   # rescue or transaction.
@@ -1305,8 +1186,8 @@ defmodule Arca.Execution do
   a completed run whose result was not kept) is appended — its number is
   the answered execution's `event_seq` — in one transaction, which locks
   the row before the attempt. The answered execution is the row as that
-  write left it, read back inside the transaction: its `sources` are the
-  ledger the run ended with (`row_ledger/1`). `attempt`
+  write left it, read back inside the transaction: its `read_threads` are
+  those the run ended with (`row_threads/1`). `attempt`
   names the attempt ending it and is required for a row that has one
   (`{:error, :attempt_not_owner}` when nil); only a row with no attempt —
   a test fixture's, never an admission's — ends with nil.
@@ -1383,9 +1264,9 @@ defmodule Arca.Execution do
 
       # The execution row is locked before its attempt is, the order every
       # execution write keeps (`fail_open/5`, `Arca.TurnStorage`'s
-      # transitions, `Arca.ExecutionAttempts.takeover!/3`), so no source
+      # transitions, `Arca.ExecutionAttempts.takeover!/3`), so no thread
       # joins the run between this read and the terminal write
-      # (`join_sources/3` locks the row too).
+      # (`join_threads/3` locks the row too).
       execution =
         from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
         |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
@@ -1449,8 +1330,8 @@ defmodule Arca.Execution do
         )
 
       # The row as the terminal write left it, read back under the lock:
-      # its ledger is the completion result's (`row_ledger/1`), never what
-      # the changeset was built from.
+      # its read threads are the completion result's (`row_threads/1`),
+      # never what the changeset was built from.
       ended =
         from(e in Row, where: e.id == ^id)
         |> Arca.QueryHelpers.where_tenant_unless_platform(actor)

@@ -199,13 +199,18 @@ defmodule Aqua.Providers.WorkspaceTest do
     turn
   end
 
-  # What a turn has read, as its row records it.
-  defp read!(turn, sources) do
+  # The threads a turn has read, as its row records them.
+  defp read!(turn, threads) do
     {1, _} =
       Arca.Repo.update_all(
         from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [sources: Prima.Source.encode(sources)]
+        set: [read_threads: Arca.ThreadStorage.threads_text(threads)]
       )
+  end
+
+  defp read_threads(ctx, turn_id) do
+    {:ok, %{read_threads: read}} = Tape.turn(ctx, turn_id)
+    Arca.ThreadStorage.threads_of(read)
   end
 
   defp stop!(ctx, turn) do
@@ -788,29 +793,22 @@ defmodule Aqua.Providers.WorkspaceTest do
       assert sent(read) =~ ~s(Report from the workspace thread \\"Moon report\\")
       assert sent(read) =~ "The moon report is written."
 
-      # The daily turn read the workspace thread.
-      {:ok, %{sources: sources}} = Tape.turn(ctx, daily_turn)
-      assert workspace.id in Prima.Source.threads(Prima.Source.decode(sources))
+      # The daily turn read the workspace thread, and the daily thread the
+      # workspace thread's turn read through its opening.
+      assert read_threads(ctx, daily_turn) == Enum.sort([daily.id, workspace.id])
 
       assert %{} = Crew.drain_all()
       assert [_once] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
     end
 
-    test "outside material a workspace thread's turn read reaches the daily turn that reads its report: a thread in between launders no source",
+    test "the threads a workspace thread's turn read reach the daily turn that reads its report",
          %{ctx: ctx, daily: daily} do
       script!([reply("Working."), reply("The moon is full tonight.")])
       workspace = open!(ctx, daily)
       turn = turn!(ctx, workspace.id)
 
-      # What the reporting turn read: a page of a host outside the athanor.
-      outside = Prima.Source.outside("moon.example")
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-          set: [sources: Prima.Source.encode([outside])]
-        )
-
+      # What the reporting turn read: another thread's posts.
+      read!(turn, ["thr_moon"])
       {:ok, turn} = Tape.turn(ctx, turn.id)
       {:ok, _} = Tape.report_workspace(ctx, turn, "done", %{summary: "Full moon tonight."})
       stop!(ctx, turn)
@@ -820,15 +818,9 @@ defmodule Aqua.Providers.WorkspaceTest do
       [%{turn_id: daily_turn}] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
       await_status(ctx, daily_turn, "completed")
 
-      {:ok, %{sources: sources}} = Tape.turn(ctx, daily_turn)
-      read = Prima.Source.decode(sources)
-
-      # The outside material rides with the report; the thread source only
-      # names the workspace thread it came from, and holds no class.
-      assert outside in read
-      assert workspace.id in Prima.Source.threads(read)
-      assert :outside in Prima.Source.classes_of(read)
-      refute :thread in Prima.Source.classes_of(read)
+      # What the reporting turn read rides with the report, beside the
+      # workspace thread it came from.
+      assert read_threads(ctx, daily_turn) == Enum.sort(["thr_moon", workspace.id])
     end
 
     test "a report delivered after midnight lands on the new day's daily thread",
@@ -1082,16 +1074,16 @@ defmodule Aqua.Providers.WorkspaceTest do
   end
 
   describe "a copied file's provenance" do
-    # A file copied into an opening or a report carries the sources of
-    # the post that held it.
-    test "an opening's file carries the sources of the daily post it was copied from, refs or none",
+    # A file copied into an opening or a report carries the read threads
+    # of the post that held it.
+    test "an opening's file carries the read threads of the daily post it was copied from, " <>
+           "refs or none",
          %{ctx: ctx, daily: daily} do
       script!([reply("Working on it."), reply("More.")])
-      outside = Prima.Source.outside("moon.example")
 
-      # A daily turn that read a page outside the athanor posts a file.
+      # A daily turn that read another thread's posts posts a file.
       reader = turn!(ctx, daily.id, "draw the moon")
-      read!(reader, [outside])
+      read!(reader, ["thr_moon"])
       {:ok, reader} = Tape.turn(ctx, reader.id)
       post_id = Prima.UUID7.generate_id("msg")
       png = %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG-moon"}
@@ -1113,26 +1105,27 @@ defmodule Aqua.Providers.WorkspaceTest do
         })
 
       [opening] = rows(ctx, workspace.id)
-      assert [%{"sources" => [_ | _]}] = Aqua.Attachments.refs_of(opening)
+      assert [%{"read_threads" => ["thr_moon"]}] = Aqua.Attachments.refs_of(opening)
 
       assert {:ok, %{"applied" => 1}} = drain(ctx)
       %{turn_id: turn_id} = Enum.find(rows(ctx, workspace.id), &(&1.id == opening.id))
       await_status(ctx, turn_id, "completed")
 
-      {:ok, %{sources: sources}} = Tape.turn(ctx, turn_id)
-      assert outside in Prima.Source.decode(sources)
+      # The workspace thread's turn read the file's thread, and the daily
+      # thread its opening refers to.
+      assert read_threads(ctx, turn_id) == Enum.sort(["thr_moon", daily.id])
     end
 
-    test "a report's file carries the sources of the post that held it, not only the reporting turn's",
+    test "a report's file carries the read threads of the post that held it, not only the " <>
+           "reporting turn's",
          %{ctx: ctx, daily: daily} do
       script!([reply("Here is the chart."), reply("More.")])
-      outside = Prima.Source.outside("moon.example")
       workspace = open!(ctx, daily)
 
-      # One turn of the workspace thread read outside material and posted
-      # a chart; another, which read none, reports it.
+      # One turn of the workspace thread read another thread's posts and
+      # posted a chart; another, which read none, reports it.
       poster = turn!(ctx, workspace.id, "chart it")
-      read!(poster, [outside])
+      read!(poster, ["thr_moon"])
       {:ok, poster} = Tape.turn(ctx, poster.id)
       chart = Prima.UUID7.generate_id("msg")
       png = %{"filename" => "chart.png", "media_type" => "image/png", "bytes" => "PNG-chart"}
@@ -1155,17 +1148,15 @@ defmodule Aqua.Providers.WorkspaceTest do
         })
 
       stop!(ctx, reporter)
-      {:ok, %{sources: reporter_sources}} = Tape.turn(ctx, reporter.id)
-      refute outside in Prima.Source.decode(reporter_sources)
+      assert read_threads(ctx, reporter.id) == []
 
       assert %{} = Crew.drain_all()
       {:ok, today} = Aqua.Day.current(ctx)
       [report] = Enum.filter(rows(ctx, today.id), &(&1.kind == "report"))
-      assert [%{"sources" => [_ | _]}] = Aqua.Attachments.refs_of(report)
+      assert [%{"read_threads" => ["thr_moon"]}] = Aqua.Attachments.refs_of(report)
       await_status(ctx, report.turn_id, "completed")
 
-      {:ok, %{sources: sources}} = Tape.turn(ctx, report.turn_id)
-      assert outside in Prima.Source.decode(sources)
+      assert read_threads(ctx, report.turn_id) == Enum.sort(["thr_moon", workspace.id])
     end
   end
 
@@ -1191,16 +1182,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       earlier = compaction!(ctx, daily, "before it read")
       reader = turn!(ctx, daily.id, "what did it say?")
 
-      read =
-        Prima.Source.encode([
-          Prima.Source.thread(workspace.id),
-          Prima.Source.outside("example.com")
-        ])
-
-      {1, _} =
-        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^reader.id),
-          set: [sources: read]
-        )
+      read!(reader, [workspace.id])
 
       later = compaction!(ctx, daily, "the report said done")
 

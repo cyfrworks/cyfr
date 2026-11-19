@@ -354,33 +354,32 @@ defmodule Aqua.AttachmentsTest do
       actor = Sanctum.Context.actor(ctx)
       turn = %{id: "turn_shot", attempt: 1, thread_id: thread.id}
       file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => "PNG"}
-      sources = [Prima.Source.outside("moon.example")]
+      read = ["thr_read"]
 
       # Its facts deleted: the draft is no draft.
-      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, sources)
+      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, read)
       {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/draft")
       assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
 
       # Its picture deleted: nothing to post either.
-      {:ok, id, ref} = Attachments.draft(ctx, turn, file, sources)
+      {:ok, id, ref} = Attachments.draft(ctx, turn, file, read)
       {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/#{ref["stored_name"]}")
       assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
 
       # The claim marker deleted while a publication holds it: the case the
       # slice accepts, the same turn may claim the same screenshot again.
-      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, sources)
+      {:ok, id, _ref} = Attachments.draft(ctx, turn, file, read)
       assert {:ok, %{"bytes" => "PNG"}} = Attachments.drafted(ctx, turn, id)
       assert {:error, :not_a_draft} = Attachments.drafted(ctx, turn, id)
       {:ok, _} = Arca.Files.delete(actor, "threads/#{thread.id}/#{id}/published")
       assert {:ok, %{"bytes" => "PNG"}} = Attachments.drafted(ctx, turn, id)
     end
 
-    test "deleting a copy's bytes leaves the sources its ref recorded", %{
+    test "deleting a copy's bytes leaves the read threads its ref recorded", %{
       ctx: ctx,
       other: other
     } do
       actor = Sanctum.Context.actor(ctx)
-      outside = Prima.Source.outside("moon.example")
       target = Prima.UUID7.generate_id("msg")
 
       {:ok, [copied]} =
@@ -389,7 +388,7 @@ defmodule Aqua.AttachmentsTest do
             "filename" => "a.txt",
             "media_type" => "text/plain",
             "bytes" => "A",
-            "sources" => Prima.Source.to_json_list([outside])
+            "read_threads" => ["thr_read"]
           }
         ])
 
@@ -408,7 +407,7 @@ defmodule Aqua.AttachmentsTest do
       {:ok, row} = Arca.ThreadStorage.get_message(actor, target)
 
       assert [%{"removed" => true} = gone] = Attachments.as_kept(ctx, row)
-      assert outside in Attachments.copied_sources(gone)
+      assert Attachments.copied_threads(gone) == ["thr_read"]
     end
 
     test "a copy is held to the storage cap before its first byte", %{ctx: ctx, other: other} do

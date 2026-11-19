@@ -66,9 +66,9 @@ defmodule Arca do
   sees only settled generations. `objects/` itself is refused to every
   caller (`{:error, :forbidden}`, `false` from `exists?/2`): its pending
   and retired bytes are nobody's to read. A write under `data/` names the
-  sources of its bytes with `sources:` (`Prima.Source`s; an unnamed outside
-  source when it names none), and a guest's write, whose attempt settles
-  it, carries its mark as `mark:` (`Arca.ExecutionAttempts.while_held/6`).
+  ids of the threads whose posts its bytes carry with `threads:` (none by
+  default), and a guest's write, whose attempt settles it, carries its
+  mark as `mark:` (`Arca.ExecutionAttempts.while_held/6`).
 
   ## Errors
 
@@ -748,12 +748,10 @@ defmodule Arca do
   file's bytes between the read and the write — how `Compendium.Fork`
   re-stamps the manifest without holding the whole tree in memory.
   `cap:` is threaded through to each `put/4` (default `:checked`, like
-  any other write). A file copied from under `data/` keeps the sources its
-  settled generation carries, joined with `sources:` in the destination's
-  generation; a file copied from anywhere else carries `sources:` alone.
-  Either way a copy that names no `sources:` is a host write that names
-  none: an unnamed outside source joins, since a `transform:` may have
-  written anything; `sources: []` names none.
+  any other write). A file copied from under `data/` keeps the read
+  threads its settled generation carries, joined with `threads:` in the
+  destination's generation; a file copied from anywhere else carries
+  `threads:` alone, none by default.
   """
   @spec copy_tree(Prima.Actor.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
@@ -792,16 +790,16 @@ defmodule Arca do
   end
 
   # A copied file's bytes and the options its write carries: the source's
-  # settled sources joined with the caller's, where the source is a guest
-  # object.
+  # settled read threads joined with the caller's, where the source is a
+  # guest object.
   defp copied(actor, path, opts) do
-    put_opts = Keyword.take(opts, [:cap, :sources])
+    put_opts = Keyword.take(opts, [:cap, :threads])
 
     if Arca.ObjectRevisions.object_path?(path) do
-      with {:ok, content, sources} <-
+      with {:ok, content, threads} <-
              guarded(actor, path, &Arca.ObjectRevisions.read(actor, &1)) do
-        writer = Keyword.get_lazy(opts, :sources, fn -> [Prima.Source.outside(nil)] end)
-        {:ok, content, Keyword.put(put_opts, :sources, Prima.Source.union(sources, writer))}
+        writer = Keyword.get(opts, :threads, [])
+        {:ok, content, Keyword.put(put_opts, :threads, threads ++ writer)}
       end
     else
       with {:ok, content} <- get(actor, path), do: {:ok, content, put_opts}
@@ -1005,7 +1003,7 @@ defmodule Arca do
   end
 
   defp object_write(actor, path, op, content, nil, opts),
-    do: Arca.ObjectRevisions.write(actor, path, op, content, Keyword.take(opts, [:sources]))
+    do: Arca.ObjectRevisions.write(actor, path, op, content, Keyword.take(opts, [:threads]))
 
   # The visible delta (ruling 32): an append its suffix, a replacement its
   # bytes less the settled bytes it replaces, a new path its bytes. A size

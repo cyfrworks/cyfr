@@ -1412,18 +1412,16 @@ defmodule Arca.ExecutionTakeoverTest do
   end
 end
 
-defmodule Arca.ExecutionEgressMarkTest do
+defmodule Arca.ExecutionSeedLockOrderTest do
   @moduledoc """
-  The mark a run admitted with egress leaves on its tree's root
-  (`Arca.Execution.admit/2`'s `:reaches_outside`), read back by
-  `Arca.Execution.reached_outside/2`: a root whose policy does not read as
-  a JSON object says nothing, never "no egress"; and the admission takes
-  the root's execution row before any attempt row, the order a takeover
-  takes them in, so the two never deadlock.
+  A child whose admission names read threads joins them into its
+  ancestors' execution rows before it takes any attempt row, the order a
+  takeover takes them in, so the two never deadlock
+  (`Arca.Execution.admit/2`).
 
-  The lock case runs on PostgreSQL alone, on connections of its own
-  outside the sandbox, in an athanor of its own whose rows it deletes
-  when it ends: SQLite's one write lock serializes the two transactions.
+  The case runs on PostgreSQL alone, on connections of its own outside
+  the sandbox, in an athanor of its own whose rows it deletes when it
+  ends: SQLite's one write lock serializes the two transactions.
   """
 
   use ExUnit.Case, async: false
@@ -1436,39 +1434,14 @@ defmodule Arca.ExecutionEgressMarkTest do
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
-  @athanor Arca.Test.Actor.athanor_id()
-
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 
-  test "a marked root whose policy is not a JSON object answers unreadable, never false" do
-    Arca.Test.Actor.athanor!()
-    actor = Arca.Test.Actor.local()
-    root = "exec_mark_#{System.unique_integer([:positive])}"
-    {:ok, _} = admit(@athanor, root, %{}, Arca.Test.Actor.grant(@athanor), true)
-    assert {:ok, true} = Execution.reached_outside(actor, root)
-
-    quiet = "exec_quiet_#{System.unique_integer([:positive])}"
-    {:ok, _} = admit(@athanor, quiet, %{}, Arca.Test.Actor.grant(@athanor), false)
-    assert {:ok, false} = Execution.reached_outside(actor, quiet)
-
-    for policy <- ["not-json", "", "[]", "null", "true", nil] do
-      for id <- [root, quiet] do
-        {1, _} =
-          Arca.Repo.update_all(from(e in Row, where: e.id == ^id), set: [host_policy: policy])
-
-        assert {:error, :unreadable} = Execution.reached_outside(actor, id), inspect(policy)
-      end
-    end
-
-    assert {:error, :not_found} = Execution.reached_outside(actor, "exec_none")
-  end
-
   @tag :postgres
-  test "an egress child's admission waits on its root's row a takeover holds, and neither deadlocks" do
-    athanor = "ath_exec_mark_#{System.unique_integer([:positive])}"
+  test "a child naming read threads waits on its root's row a takeover holds, and neither deadlocks" do
+    athanor = "ath_exec_seed_#{System.unique_integer([:positive])}"
     unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
 
     on_exit(fn ->
@@ -1489,7 +1462,7 @@ defmodule Arca.ExecutionEgressMarkTest do
     root = "exec_root_#{System.unique_integer([:positive])}"
 
     {:ok, %{attempt: %{attempt: attempt}}} =
-      unboxed(fn -> admit(athanor, root, %{}, grant, false) end)
+      unboxed(fn -> admit(athanor, root, %{}, grant) end)
 
     test = self()
 
@@ -1529,9 +1502,8 @@ defmodule Arca.ExecutionEgressMarkTest do
           admit(
             athanor,
             child,
-            %{parent_execution_id: root, root_execution_id: root},
-            grant,
-            true
+            %{parent_execution_id: root, root_execution_id: root, read_threads: ["thr_a"]},
+            grant
           )
         end)
       end)
@@ -1543,31 +1515,28 @@ defmodule Arca.ExecutionEgressMarkTest do
     assert {:ok, :taken} = Task.await(takeover, 30_000)
     assert {:ok, %{execution: %{id: ^child}}} = Task.await(admission, 30_000)
 
-    assert {:ok, true} =
+    assert {:ok, ["thr_a"]} =
              unboxed(fn ->
-               Execution.reached_outside(Arca.Test.Actor.local(athanor_id: athanor), root)
+               Execution.read_threads(Arca.Test.Actor.local(athanor_id: athanor), root)
              end)
   end
 
-  defp admit(athanor, id, lineage, grant, reaches_outside?) do
+  defp admit(athanor, id, lineage, grant) do
     Execution.admit(
       Map.merge(
         %{
           id: id,
-          reference: "catalyst:local.mark:1.0.0",
+          reference: "catalyst:local.seed:1.0.0",
           user_id: "user_test",
           athanor_id: athanor,
           component_type: "catalyst",
-          origin: :programmatic,
-          host_policy:
-            Jason.encode!(%{allowed_domains: if(reaches_outside?, do: ["x.example"], else: [])})
+          origin: :programmatic
         },
         lineage
       )
       |> then(&Map.put_new(&1, :root_execution_id, &1[:parent_execution_id])),
       grant: grant,
-      verify: &Arca.Test.Actor.verify/1,
-      reaches_outside: reaches_outside?
+      verify: &Arca.Test.Actor.verify/1
     )
   end
 

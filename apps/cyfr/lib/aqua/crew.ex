@@ -927,8 +927,8 @@ defmodule Aqua.Crew do
   defp moved(%{"title" => title}), do: "The workspace thread \"#{title}\" is done."
 
   # What a report row names beside its text: the workspace thread and its
-  # title, the outcome, the turn it came from, whose sources a turn
-  # reading it joins (`from_turn`), the sources the record kept, and
+  # title, the outcome, the turn it came from, whose read threads a turn
+  # reading it joins (`from_turn`), the read threads the record kept, and
   # whether its summary was cut.
   defp report_payload(snapshot) do
     %{
@@ -936,7 +936,7 @@ defmodule Aqua.Crew do
       "title" => snapshot["title"],
       "outcome" => snapshot["outcome"],
       "from_turn" => snapshot["turn_id"],
-      "sources" => snapshot["sources"] || [],
+      "read_threads" => snapshot["read_threads"] || [],
       "truncated" => snapshot["truncated"] == true
     }
   end
@@ -1060,8 +1060,8 @@ defmodule Aqua.Crew do
   defp request_row(_ctx, _request_id), do: {:error, :not_addressable}
 
   # The delivered row names the request it carries, which the child
-  # turn's reply answers, and the soul's turn it came from, whose sources
-  # the member's turn reads with it; it references the request's
+  # turn's reply answers, and the soul's turn it came from, whose read
+  # threads the member's turn reads with it; it references the request's
   # attachments, which stay stored under the request's own row.
   defp delivered_payload(request) do
     from_turn =
@@ -1081,8 +1081,8 @@ defmodule Aqua.Crew do
   end
 
   # What a reply row names beside its text: the child turn it came from,
-  # whose sources a turn reading it joins, and the child thread to open;
-  # the requests it answers; and whether its text was cut.
+  # whose read threads a turn reading it joins, and the child thread to
+  # open; the requests it answers; and whether its text was cut.
   defp reply_payload(ctx, %Prima.OutboxRecord{source_id: turn_id, snapshot: snapshot}, answers) do
     base = %{
       "from_turn" => turn_id,

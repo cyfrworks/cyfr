@@ -49,7 +49,7 @@ defmodule Opus.AttemptRecoveryTest do
 
     # The dead runner's result arrives late and is refused by the fence.
     assert {:error, :not_running} =
-             Record.write_completed_ledger(Record.complete(record, %{"late" => true}),
+             Record.write_completed(Record.complete(record, %{"late" => true}),
                retention_class: "api"
              )
 
@@ -152,8 +152,8 @@ defmodule Opus.AttemptRecoveryTest do
     record = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
     :ok = Record.write_started(ctx, record)
 
-    assert {:ok, _ledger} =
-             Record.write_completed_ledger(Record.complete(record, %{"ok" => true}),
+    assert {:ok, _read_threads} =
+             Record.write_completed(Record.complete(record, %{"ok" => true}),
                retention_class: "api"
              )
 

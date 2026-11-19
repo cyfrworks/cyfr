@@ -185,7 +185,7 @@ defmodule Sanctum.RequestLog do
     foreign?(decoded, home) or foreign?(Map.delete(block, "text"), home)
   end
 
-  # A struct is read by its fields (a clock, a source); it enumerates nothing.
+  # A struct is read by its fields (a clock, say); it enumerates nothing.
   defp foreign?(%_{} = struct, home), do: foreign?(Map.from_struct(struct), home)
 
   defp foreign?(%{} = map, home) do

@@ -1593,10 +1593,10 @@ defmodule Aqua.LoopTest do
   # model as the first post's does, made by the same encoder under the same
   # media types, on its own post where that post stands, and with every
   # round after; a post that is only a file is handed its files. A copied
-  # file's sources join the turn before the request that carries it is sent.
+  # file's read threads join the turn before the request that carries it is
+  # sent.
   test "a later post's files reach the model as the first post's do, in every round after",
        %{ctx: ctx, thread: thread} do
-    outside = Prima.Source.outside("moon.example")
     moon = %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "MOON"}
     sun = %{"filename" => "sun.png", "media_type" => "image/png", "bytes" => "SUN"}
     notes = %{"filename" => "notes.txt", "media_type" => "text/plain", "bytes" => "two stars"}
@@ -1638,16 +1638,16 @@ defmodule Aqua.LoopTest do
     {later_id, later_refs} = stored!(ctx, thread, [sun])
     steer!(ctx, thread, turn, later_id, "make it look like this", later_refs)
     {only_id, [notes_ref, art_ref]} = stored!(ctx, thread, [notes, art])
-    sourced = Map.put(notes_ref, "sources", Prima.Source.to_json_list([outside]))
-    steer!(ctx, thread, turn, only_id, "", [sourced, art_ref])
+    copied = Map.put(notes_ref, "read_threads", ["thr_moon"])
+    steer!(ctx, thread, turn, only_id, "", [copied, art_ref])
 
-    refute outside in turn_sources(ctx, turn)
+    assert read_threads(ctx, turn) == []
     send(worker, :continue)
 
-    # The next request is about to be answered: the copy's sources are the
-    # turn's.
+    # The next request is about to be answered: the copy's read threads are
+    # the turn's.
     assert_receive {:scripted_probe, worker, _}, 30_000
-    assert outside in turn_sources(ctx, turn)
+    assert read_threads(ctx, turn) == ["thr_moon"]
     send(worker, :continue)
     assert :completed = Task.await(task, 60_000)
 
@@ -2243,8 +2243,8 @@ defmodule Aqua.LoopTest do
     refute Enum.any?(thread_events(drain()), &match?({:consent_required, _}, &1))
   end
 
-  test "a turn offers the provider's search, and records the open web, only when its grant " <>
-         "carries it",
+  test "a turn offers the provider's search only when its grant carries it, and its search " <>
+         "reads no thread",
        %{ctx: ctx, thread: thread} do
     start_supervised!(
       {ScriptedWorker,
@@ -2255,7 +2255,7 @@ defmodule Aqua.LoopTest do
     searched = accept!(ctx, thread, "@aqua look it up")
     assert :completed = Task.await(run(ctx, searched), 30_000)
     assert chat_provider_tools() == [["web_search"]]
-    assert web_source?(ctx, searched)
+    assert read_threads(ctx, searched) == []
 
     # The person narrows the soul's grant to every tool but the search; the
     # soul's file, its mode and its tools, is left as it was.
@@ -2270,21 +2270,12 @@ defmodule Aqua.LoopTest do
     kept = accept!(ctx, fresh, "@aqua again")
     assert :completed = Task.await(run(ctx, kept), 30_000)
     assert chat_provider_tools() == [["web_search"], []]
-    refute web_source?(ctx, kept)
+    assert read_threads(ctx, kept) == []
   end
 
   defp chat_provider_tools do
     for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
         do: params["provider_tools"]
-  end
-
-  defp web_source?(ctx, turn) do
-    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
-
-    Prima.Source.outside("web_search") in Enum.map(
-      Jason.decode!(sources),
-      &Prima.Source.from_json/1
-    )
   end
 
   defp consent_head!(ctx, ref) do
@@ -2613,18 +2604,20 @@ defmodule Aqua.LoopTest do
     refute log =~ "Prima.Refusal"
 
     # Refused before its run was asked for, the launch brought nothing into
-    # the turn: no unnamed outside source stands for a row that never was.
-    refute Prima.Source.outside(nil) in turn_sources(ctx, turn)
+    # the turn.
+    assert read_threads(ctx, turn) == []
   end
 
-  # A launch of `launchable_app!/1`'s app through the loop, after a turn
-  # that read the pinned page: decided in auto and run at once, its run
-  # stopping at `{:probe, self()}` for `on_probe` to act on its root, by id.
-  # Answers the app, the turn, the turn's sources as the app ran, the
-  # root's id and the loop's result.
+  # The thread the launching turn read before its launch.
+  @turn_read "thr_turn_read"
+
+  # A launch of `launchable_app!/1`'s app through the loop, by a turn that
+  # read another thread (`@turn_read`): decided in auto and run at once, its
+  # run stopping at `{:probe, self()}` for `on_probe` to act on its root,
+  # by id. Answers the app, the turn, the turn's read threads as the app
+  # ran, the root's id and the loop's result.
   defp launch_through_loop!(ctx, thread, app_answer, on_probe) do
     %{ref: app} = launchable_app!(ctx)
-    {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "We are planning a trip.")
 
     start_supervised!(
       {ScriptedWorker,
@@ -2638,9 +2631,10 @@ defmodule Aqua.LoopTest do
     )
 
     turn = accept!(ctx, thread, "@aqua launch it")
+    :ok = Tape.join_threads(ctx, turn, [@turn_read])
     task = run(ctx, turn)
     assert_receive {:scripted_probe, runner, root_id}, 30_000
-    at_launch = turn_sources(ctx, turn)
+    at_launch = read_threads(ctx, turn)
     on_probe.(root_id)
     send(runner, :continue)
 
@@ -2653,47 +2647,46 @@ defmodule Aqua.LoopTest do
     }
   end
 
-  # What the launched app reads: a source no other step of the turn holds
-  # (the model's own key is a disclosed vault field, so the turn holds
-  # `vault_disclosed` already), so the turn holding it is the app's doing.
-  @app_read Prima.Source.outside("app-read.example")
+  # What the launched app reads: a thread no other step of the turn
+  # holds, so the turn holding it is the app's doing.
+  @app_read "thr_app_read"
 
   defp app_read!(ctx, execution_id),
-    do: :ok = Opus.Ledger.join(Sanctum.Context.actor(ctx), execution_id, [@app_read])
+    do: :ok = Arca.Execution.join_threads(Sanctum.Context.actor(ctx), execution_id, [@app_read])
 
-  defp turn_sources(ctx, turn) do
-    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
-    Prima.Source.decode(sources)
+  defp read_threads(ctx, turn) do
+    {:ok, %{read_threads: read}} = Tape.turn(ctx, turn.id)
+    Arca.ThreadStorage.threads_of(read)
   end
 
   test "a launch decided in auto roots its app under its step's own id, seeded with the turn's " <>
-         "sources, and its tree's ledger joins the turn by its completion result",
+         "read threads, and its tree's read threads join the turn by its completion result",
        %{ctx: ctx, thread: thread} do
     %{turn: turn, at_launch: shown, root_id: root_id, result: result} =
       launch_through_loop!(ctx, thread, %{"answered" => true}, &app_read!(ctx, &1))
 
     assert result == :completed
 
-    # The turn's sources as they stood at the launch, the pinned page among
-    # them, and nothing the app read.
-    assert Prima.Source.new(:pinned) in shown
-    refute @app_read in shown
+    # The turn's read threads as they stood at the launch, and nothing the
+    # app read.
+    assert shown == [@turn_read]
 
     {:ok, steps} = Tape.steps(ctx, turn)
 
     assert %{child_execution_id: ^root_id, outcome: "ok"} =
              Enum.find(steps, &(&1.kind == "launch"))
 
-    # The app rooted under the launch step's own id, seeded with them.
+    # The app rooted under the launch step's own id, seeded with them
+    # beside what it read.
     actor = Sanctum.Context.actor(ctx)
-    {:ok, [started | _]} = Arca.ExecutionEvents.since(actor, root_id, 0)
-    assert Arca.ExecutionEvents.data(started)["sources"] == Prima.Source.to_json_list(shown)
+    assert Arca.Execution.read_threads(actor, root_id) == {:ok, Enum.sort([@app_read | shown])}
 
     # What the app read reached the turn by its completion result.
-    assert @app_read in turn_sources(ctx, turn)
+    assert read_threads(ctx, turn) == Enum.sort([@app_read, @turn_read])
   end
 
-  test "a launched app that fails brings its tree's ledger into the turn from its root's row",
+  test "a launched app that fails brings its tree's read threads into the turn from its root's " <>
+         "row",
        %{ctx: ctx, thread: thread} do
     %{turn: turn, root_id: root_id, result: result} =
       launch_through_loop!(ctx, thread, {:error, "the app failed"}, &app_read!(ctx, &1))
@@ -2704,7 +2697,7 @@ defmodule Aqua.LoopTest do
     assert %{child_execution_id: ^root_id, outcome: "error"} =
              Enum.find(steps, &(&1.kind == "launch"))
 
-    assert @app_read in turn_sources(ctx, turn)
+    assert read_threads(ctx, turn) == Enum.sort([@app_read, @turn_read])
   end
 
   # What an MCP client reads of `thread` (`thread.events`, through the
@@ -2908,9 +2901,9 @@ defmodule Aqua.LoopTest do
     refute Enum.any?(ScriptedWorker.calls(), &(&1.input == %{}))
   end
 
-  # What a hand's child read before its runner was lost: a source no other
+  # What a hand's child read before its runner was lost: a thread no other
   # step of the turn holds.
-  @lost_read Prima.Source.outside("lost-read.example")
+  @lost_read "thr_lost_read"
 
   test "a hand whose runner is lost answers its outcome unknown: the turn stops on it, and what the child read joins the turn",
        %{ctx: ctx, thread: thread} do
@@ -2925,7 +2918,7 @@ defmodule Aqua.LoopTest do
 
     task = run(ctx, turn)
     assert_receive {:scripted_probe, runner, child}, 30_000
-    :ok = Opus.Ledger.join(Sanctum.Context.actor(ctx), child, [@lost_read])
+    :ok = Arca.Execution.join_threads(Sanctum.Context.actor(ctx), child, [@lost_read])
 
     # The runner ends while it holds the run: its worker service reports
     # the exit, the attempt lapses, and the waiting worker is answered.
@@ -2941,7 +2934,7 @@ defmodule Aqua.LoopTest do
     # No model round follows the lost call: the model never hears an
     # ordinary error it could answer by calling again.
     assert Enum.count(steps, &(&1.kind == "model")) == 1
-    assert @lost_read in turn_sources(ctx, turn)
+    assert read_threads(ctx, turn) == [@lost_read]
   end
 
   test "a worker that dies with its call's in-process handler still running stops the handler before the step settles",

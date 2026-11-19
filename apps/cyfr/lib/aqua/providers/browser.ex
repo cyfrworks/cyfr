@@ -24,7 +24,7 @@ defmodule Aqua.Providers.Browser do
   Each acts on the window of the thread its turn runs in, which
   `Opus.Browser` names from the lineage the gate stamped and from no
   argument, for a caller the session owner proves to be that running
-  turn. What a page holds is outside material, named by its host.
+  turn.
 
   `page` shows a page in the window, from exactly one of: `html`, a page
   of one file Aqua wrote; `files`, a page of several files Aqua hands,
@@ -47,10 +47,10 @@ defmodule Aqua.Providers.Browser do
 
   `screenshot` keeps the image as a draft of the turn's attempt, under a
   message id of its own that has not been sent, in the turn's thread,
-  with the sources of what it shows beside it
-  (`Aqua.Attachments.draft/4`), and answers that id: that attempt's
-  `thread.post` publishes it (its `screenshot`); one never posted stays
-  unsent, its bytes kept until its thread is deleted.
+  with the turn's read threads beside it (`Aqua.Attachments.draft/4`),
+  and answers that id: that attempt's `thread.post` publishes it (its
+  `screenshot`); one never posted stays unsent, its bytes kept until its
+  thread is deleted.
   The turn is proved again before the image is stored, so a turn
   superseded meanwhile writes nothing.
 
@@ -129,8 +129,7 @@ defmodule Aqua.Providers.Browser do
       kind: :external,
       planes: [:in_chain],
       consent: :interactive,
-      follows_setting: true,
-      sources: {:answer, {__MODULE__, :answer_sources}}
+      follows_setting: true
     ]
 
     setting = [planes: [:external, :in_chain], consent: :interactive]
@@ -176,7 +175,7 @@ defmodule Aqua.Providers.Browser do
               description: "type: the text to type into the element"
             )
           ],
-          Keyword.put(family, :sources, [])
+          family
         ),
         Operation.new(
           "browser",
@@ -189,7 +188,7 @@ defmodule Aqua.Providers.Browser do
               description: "key: the key to press"
             )
           ],
-          Keyword.put(family, :sources, [])
+          family
         ),
         Operation.new(
           "browser",
@@ -255,7 +254,7 @@ defmodule Aqua.Providers.Browser do
           "close",
           "Close the window",
           [],
-          Keyword.merge(family, kind: :write, sources: [])
+          Keyword.merge(family, kind: :write)
         ),
         Operation.new(
           "browser",
@@ -282,15 +281,14 @@ defmodule Aqua.Providers.Browser do
           ],
           kind: :read,
           planes: [:external],
-          consent: :interactive,
-          sources: []
+          consent: :interactive
         ),
         Operation.new(
           "browser",
           "status",
           "Browser setting",
           [],
-          [kind: :read, sources: [], recovery: :replay_safe] ++ setting
+          [kind: :read, recovery: :replay_safe] ++ setting
         ),
         Operation.new(
           "browser",
@@ -298,7 +296,6 @@ defmodule Aqua.Providers.Browser do
           "Let Aqua use the browser",
           [],
           kind: :write,
-          sources: [],
           planes: [:external],
           consent: :interactive
         ),
@@ -307,7 +304,7 @@ defmodule Aqua.Providers.Browser do
           "turn_off",
           "Stop Aqua using the browser",
           [],
-          [kind: :write, sources: [], reduces_authority: true] ++ setting
+          [kind: :write, reduces_authority: true] ++ setting
         )
       ],
       description:
@@ -324,16 +321,6 @@ defmodule Aqua.Providers.Browser do
   """
   @spec turned_off() :: String.t()
   def turned_off, do: "The browser is turned off."
-
-  @doc """
-  What an answer carries: outside material, named by the page's host,
-  or by the browser for an answer that names no page.
-  """
-  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
-  def answer_sources(_actor, %{url: url}) when is_binary(url),
-    do: [Prima.Source.outside(URI.parse(url).host || "browser")]
-
-  def answer_sources(_actor, _answer), do: [Prima.Source.outside("browser")]
 
   @impl true
   def handle("browser", %Context{} = ctx, %{"action" => action} = args),
@@ -439,9 +426,8 @@ defmodule Aqua.Providers.Browser do
 
   # The image is kept only while the turn still runs, as a draft of that
   # attempt (`Aqua.Attachments.draft/4`): one superseded since the driver
-  # answered writes nothing. The draft keeps what the page it shows came
-  # from: the turn's sources so far, which name the host of every page
-  # it opened or read, and the screenshot's own, an outside source.
+  # answered writes nothing. The draft keeps the turn's read threads so
+  # far, which the post that publishes it carries.
   defp answered(
          "screenshot",
          ctx,
@@ -454,9 +440,9 @@ defmodule Aqua.Providers.Browser do
          {:ok, _turn} <- Opus.Browser.turn(caller) |> refused(),
          {:ok, turn} <- held(ctx, args) do
       file = %{"filename" => "screenshot.png", "media_type" => "image/png", "bytes" => bytes}
-      sources = Prima.Source.decode(turn.sources) ++ answer_sources(nil, answer)
+      threads = Arca.ThreadStorage.threads_of(turn.read_threads)
 
-      case Aqua.Attachments.draft(ctx, turn, file, sources) do
+      case Aqua.Attachments.draft(ctx, turn, file, threads) do
         {:ok, message_id, ref} ->
           {:ok,
            %{

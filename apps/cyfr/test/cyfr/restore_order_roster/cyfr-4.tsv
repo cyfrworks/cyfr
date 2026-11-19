@@ -9,7 +9,7 @@ apps/cyfr/test/aqua/canvas_write_test.exs	1	pending
 apps/cyfr/test/aqua/consent_status_test.exs	1	pending
 apps/cyfr/test/aqua/hands_test.exs	1	pending
 apps/cyfr/test/aqua/launch_test.exs	1	pending
-apps/cyfr/test/aqua/loop/catalog_sources_test.exs	1	pending
+apps/cyfr/test/aqua/loop/catalog_read_threads_test.exs	1	pending
 apps/cyfr/test/aqua/loop/flush_test.exs	1	pending
 apps/cyfr/test/aqua/loop/stream_order_test.exs	1	pending
 apps/cyfr/test/aqua/models_test.exs	1	pending
@@ -20,11 +20,11 @@ apps/cyfr/test/aqua/providers/thread_test.exs	1	pending
 apps/cyfr/test/aqua/runner_recovery_test.exs	1	pending
 apps/cyfr/test/aqua/schedule_notes_sandbox_test.exs	1	pending
 apps/cyfr/test/aqua/schedule_notes_test.exs	6	pending
-apps/cyfr/test/aqua/turn_sources_test.exs	1	pending
+apps/cyfr/test/aqua/turn_read_threads_test.exs	1	pending
 apps/cyfr/test/opus/admission_test.exs	2	pending
 apps/cyfr/test/opus/agent_authority_test.exs	1	pending
 apps/cyfr/test/opus/archive_fence_test.exs	4	pending
-apps/cyfr/test/opus/attempt_ledger_test.exs	1	pending
+apps/cyfr/test/opus/attempt_read_threads_test.exs	1	pending
 apps/cyfr/test/opus/attempt_slot_wait_test.exs	2	pending
 apps/cyfr/test/opus/barrier_refusal_test.exs	1	pending
 apps/cyfr/test/opus/feeds_test.exs	4	pending
@@ -32,7 +32,7 @@ apps/cyfr/test/opus/guest_storage_test.exs	3	pending
 apps/cyfr/test/opus/host/attached_fetch_test.exs	2	pending
 apps/cyfr/test/opus/host/children_test.exs	1	pending
 apps/cyfr/test/opus/host/storage_test.exs	3	pending
-apps/cyfr/test/opus/host/tool_flow_test.exs	1	pending
+apps/cyfr/test/opus/host/tool_read_threads_test.exs	1	pending
 apps/cyfr/test/opus/host_egress_test.exs	6	pending
 apps/cyfr/test/opus/host_test.exs	1	pending
 apps/cyfr/test/opus/keys_test.exs	3	pending

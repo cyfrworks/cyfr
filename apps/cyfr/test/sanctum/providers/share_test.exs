@@ -132,11 +132,6 @@ defmodule Sanctum.Providers.ShareTest do
       assert for(a <- @reads ++ @writes, Sanctum.Catalog.reduces_authority?("share.#{a}"), do: a) ==
                ["revoke"]
 
-      # A read of the owner's own rows carries nothing; another person's
-      # names, providers and destinations are outside the athanor.
-      assert {operation("list").sources, operation("usage").sources, operation("offered").sources} ==
-               {[], [:outside], [:outside]}
-
       assert Enum.sort(Enum.map(operation("create").args, & &1.name)) ==
                Enum.sort(~w(entry_id audience thread_id person_daily total_daily))
 

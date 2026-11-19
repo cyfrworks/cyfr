@@ -47,8 +47,7 @@ defmodule Arca.OutboxTest do
       },
       consent_revision: 3,
       keep: {true, "nightly"},
-      output: %{"rows" => 42},
-      sources: [Prima.Source.new(:vault_disclosed), Prima.Source.outside("api.example")]
+      output: %{"rows" => 42}
     })
   end
 
@@ -82,13 +81,6 @@ defmodule Arca.OutboxTest do
 
       assert read.snapshot["note_revision_read"] == "absent"
       assert read.snapshot["output"] == ~s({"rows":42})
-
-      assert Prima.OutboxRecord.sources(read) ==
-               Prima.Source.set([
-                 Prima.Source.new(:vault_disclosed),
-                 Prima.Source.outside("api.example")
-               ])
-
       assert read.source_revision == "2026-10-16T12:00:01.000001Z"
       assert Prima.OutboxRecord.note_revision_read(read) == :absent
     end

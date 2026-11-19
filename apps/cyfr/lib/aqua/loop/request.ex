@@ -288,9 +288,8 @@ defmodule Aqua.Loop.Request do
 
   @doc """
   Whether a turn's request offers the provider's own search: the turn may
-  search (`native_search?/2`) and the model has the tool. The one answer
-  both the request (`build/1`'s `provider_tools`) and the sources the turn
-  records read.
+  search (`native_search?/2`) and the model has the tool. What the
+  request's `provider_tools` follow (`build/1`).
   """
   @spec offers_search?(map(), Prima.Authority.t(), map() | nil) :: boolean()
   def offers_search?(offered, authority, capabilities),
