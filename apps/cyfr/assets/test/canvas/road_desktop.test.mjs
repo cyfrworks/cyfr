@@ -765,23 +765,25 @@ describe("the road desktop 0.3.4", () => {
       if (said !== null) assert.equal(p.aloud(), said)
       return said
     }
-    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
-    t.mock.timers.tick(4000)
+    // The words name the app they are about, as the ticker is shared.
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Maps · Tap again in a moment")
+    // Opened inside the four seconds: the earlier tap's words go at once.
     assert.equal(await answer({outcome: "opened"}), null)
-    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "Maps · It is no longer installed")
+    assert.equal(await answer({outcome: "opened"}), null)
     // An open never answered may have opened: it says only that no answer came.
-    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "Maps · No answer yet")
     assert.doesNotMatch(p.aloud(), /Not opened/)
-    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
-    assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Not opened: tap again")
-    assert.deepEqual(p.openings.map((o) => o.ref), Array(6).fill(MAPS.ref))
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
+    assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Maps · Not opened: tap again")
+    assert.deepEqual(p.openings.map((o) => o.ref), Array(7).fill(MAPS.ref))
 
     // The same answer again three seconds on restarts the four seconds.
     t.mock.timers.tick(3000)
-    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
     // `answer` heard the page aloud 30 ms after the answer.
     t.mock.timers.tick(3999 - 30)
-    assert.equal(p.ticker(), "Not opened: tap again")
+    assert.equal(p.ticker(), "Maps · Not opened: tap again")
     t.mock.timers.tick(1)
     assert.equal(p.ticker(), null)
   })
@@ -804,14 +806,16 @@ describe("the road desktop 0.3.4", () => {
       await settle()
       return line()
     }
-    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
-    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
-    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
-    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Maps · Tap again in a moment")
+    assert.equal(await answer({outcome: "refused", reason: "not_found"}), "Maps · It is no longer installed")
+    // Opened inside the four seconds after a refusal: its words go at once.
+    assert.equal(await answer({outcome: "opened"}), "")
+    assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "Maps · No answer yet")
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
     t.mock.timers.tick(3000)
-    assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
+    assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
     t.mock.timers.tick(3999)
-    assert.equal(line(), "Not opened: tap again")
+    assert.equal(line(), "Maps · Not opened: tap again")
     t.mock.timers.tick(1)
     assert.equal(line(), "")
     // An open says nothing.

@@ -653,12 +653,14 @@ describe("the line desktop 0.3.4", () => {
     assert.equal(await answer({outcome: "opened"}), null)
     assert.doesNotMatch(p.seen(), WORDS)
     assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
+    // Opened inside the four seconds after a refusal: its words go at once.
+    assert.equal(await answer({outcome: "opened"}), null)
     // An open never answered may have opened: it says only that no answer came.
     assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
     assert.doesNotMatch(p.seen(), /Not opened/)
     assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
     assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Not opened: tap again")
-    assert.deepEqual(p.openings.map((o) => o.ref), Array(6).fill("tincture:local.maps"))
+    assert.deepEqual(p.openings.map((o) => o.ref), Array(7).fill("tincture:local.maps"))
 
     // The same answer again three seconds on restarts the four seconds.
     p.elapse(3000)

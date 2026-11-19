@@ -84,8 +84,8 @@ class Element {
   addEventListener(type, handler) {
     ;(this.listeners[type] ||= []).push(handler)
   }
-  dispatch(type) {
-    for (const handler of this.listeners[type] || []) handler({target: this, key: "", preventDefault() {}, stopPropagation() {}})
+  dispatch(type, init = {}) {
+    for (const handler of this.listeners[type] || []) handler({target: this, key: "", preventDefault() {}, stopPropagation() {}, ...init})
   }
   elements() {
     return this.children.filter((c) => typeof c !== "string").flatMap((c) => [c, ...c.elements()])
@@ -635,6 +635,58 @@ describe("the street desktop 0.2.0", () => {
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
 describe("the street desktop 0.3.4", () => {
+  // An answer belongs to the board that asked: never another board, even
+  // the same app's opened again, and never the scrub view.
+  test("an open's answer shows only on the board that asked it, while it is the board shown and not scrubbed", async (t) => {
+    // The page's timers on the test's clock, which does not move here: every
+    // answer is inside its four seconds.
+    t.mock.timers.enable({apis: ["setTimeout", "Date"], now: Date.now()})
+    const MAPS = {ref: "tincture:local.maps", name: "Maps", icon: null, open: false}
+    const p = await street({version: "0.3.4", installed: [MAPS], clock: true})
+    const said = () => p.board().querySelector(".said")?.textContent ?? null
+    const tram = () => p.hits().find((h) => (h.getAttribute("aria-label") || "").startsWith("Now,"))
+
+    // Asked, then the board closed and the same app's board opened again.
+    tap(p, "App Maps")
+    await press(p, "Open Maps")
+    tap(p, "App Maps")
+    tap(p, "App Maps")
+    assert.ok(button(p, "Open Maps"))
+    p.openings.at(-1).answer({outcome: "refused", reason: "uncertain"})
+    await p.settle()
+    assert.equal(said(), null)
+    // Its own tap's answer still shows.
+    await press(p, "Open Maps")
+    p.openings.at(-1).answer({outcome: "cancelled"})
+    await p.settle()
+    assert.equal(said(), "Not opened: tap again")
+
+    // Words shown, then the day scrubbed: not on the scrub view, nor back on
+    // the board after it.
+    tram().dispatch("keydown", {key: "ArrowLeft"})
+    await p.settle()
+    assert.match(p.board().textContent, /^At /)
+    assert.equal(said(), null)
+    tram().dispatch("keydown", {key: "Escape"})
+    await p.settle()
+    assert.ok(button(p, "Open Maps"))
+    assert.equal(said(), null)
+
+    // Asked, then the day scrubbed before the answer: not on the scrub view,
+    // nor on the board after it.
+    await press(p, "Open Maps")
+    tram().dispatch("keydown", {key: "ArrowLeft"})
+    await p.settle()
+    p.openings.at(-1).answer({outcome: "refused", reason: "not_found"})
+    await p.settle()
+    assert.doesNotMatch(p.board().textContent, /It is no longer installed/)
+    tram().dispatch("keydown", {key: "Escape"})
+    await p.settle()
+    assert.ok(button(p, "Open Maps"))
+    assert.equal(said(), null)
+    assert.equal(p.openings.length, 3)
+  })
+
   test("a tap on Open on an app's board that opens nothing says why on the board, the shipped canvas's words, for four seconds from the last answer; an open says nothing", async (t) => {
     t.mock.timers.enable({apis: ["setTimeout", "Date"], now: Date.now()})
     const MAPS = {ref: "tincture:local.maps", name: "Maps", icon: null, open: false}
@@ -651,16 +703,16 @@ describe("the street desktop 0.3.4", () => {
       return said()
     }
     assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Tap again in a moment")
-    t.mock.timers.tick(4000)
-    await p.settle()
+    // Opened inside the four seconds: the earlier tap's words go at once.
     assert.equal(await answer({outcome: "opened"}), null)
     assert.equal(await answer({outcome: "refused", reason: "not_found"}), "It is no longer installed")
+    assert.equal(await answer({outcome: "opened"}), null)
     // An open never answered may have opened: it says only that no answer came.
     assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "No answer yet")
     assert.doesNotMatch(p.board().textContent, /Not opened/)
     assert.equal(await answer({outcome: "cancelled"}), "Not opened: tap again")
     assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Not opened: tap again")
-    assert.deepEqual(p.openings.map((o) => o.ref), Array(6).fill(MAPS.ref))
+    assert.deepEqual(p.openings.map((o) => o.ref), Array(7).fill(MAPS.ref))
 
     // The same answer again three seconds on restarts the four seconds.
     t.mock.timers.tick(3000)

@@ -837,11 +837,13 @@ describe("the switchboard 0.3.4", () => {
     assert.equal(await answer({outcome: "cancelled", reason: "too_soon"}), "Maps · Tap again in a moment")
     assert.equal(await answer({outcome: "opened"}), "Maps → app")
     assert.equal(await answer({outcome: "refused", reason: "not_found"}), "Maps · It is no longer installed")
+    // Opened inside the four seconds after a refusal: its words go at once.
+    assert.equal(await answer({outcome: "opened"}), "Maps → app")
     // An open never answered may have opened: it says only that no answer came.
     assert.equal(await answer({outcome: "refused", reason: "uncertain"}), "Maps · No answer yet")
     assert.equal(await answer({outcome: "cancelled"}), "Maps · Not opened: tap again")
     assert.equal(await answer({outcome: "refused", reason: "invalid_argument"}), "Maps · Not opened: tap again")
-    assert.deepEqual(b.openings.map((o) => o.ref), Array(6).fill("tincture:local.maps"))
+    assert.deepEqual(b.openings.map((o) => o.ref), Array(7).fill("tincture:local.maps"))
 
     // The same answer again three seconds on restarts the four seconds.
     t.mock.timers.tick(3000)

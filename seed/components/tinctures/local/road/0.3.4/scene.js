@@ -266,7 +266,14 @@ window.RoadScene = function () {
 
   // The ticker says `text` for `ms` of the clock from this call, each call starting it again.
   const TICKER_MS = 3200;
-  function say(text, ms = TICKER_MS) { ticker = { text, until: performance.now() + ms }; announce(text); }
+  // `about`: the app a tap to open it said this of, whose opening clears it.
+  function say(text, ms = TICKER_MS, about = null) { ticker = { text, until: performance.now() + ms, about }; announce(text); }
+  // What a tap to open app `a` says on the ticker, named for the app; its
+  // opening clears what an earlier tap to open it said.
+  function openTold(a, words) {
+    if (words) { say(a.name + ' · ' + words, R.OPEN_SAID_MS, a.ref); wake(); }
+    else if (ticker && ticker.about === a.ref) ticker = null;
+  }
   function askAqua(widget, from) {
     if (from) fx.push({ kind: 'drop', x: from.x, y: from.y, tx: W - 10, ty: 4, t: 0 });
     R.ask(widget);
@@ -389,7 +396,7 @@ window.RoadScene = function () {
         choices: [{ label: 'Open activities', primary: true, run: () => settings('activities', 'activities') }, ask('activity')] };
     }
     if (kind === 'market') return { title: 'Apps', portrait: 'market', lines: S.installed.length ? [] : ['No apps are installed yet.'],
-      rows: S.installed.map((a) => { const c = R.component(a.ref); return { text: a.name, sub: (a.open ? 'open' : 'tap to open') + (c && c.update ? ', update ready' : ''), dot: c && c.update ? P.wood : null, run: () => R.open(a.ref).then((words) => { if (words) { say(words, R.OPEN_SAID_MS); wake(); } }) }; }),
+      rows: S.installed.map((a) => { const c = R.component(a.ref); return { text: a.name, sub: (a.open ? 'open' : 'tap to open') + (c && c.update ? ', update ready' : ''), dot: c && c.update ? P.wood : null, run: () => R.open(a.ref).then((words) => openTold(a, words)) }; }),
       choices: [{ label: 'Components', run: () => settings('components', 'components') }, ask('components')] };
     if (kind === 'silo') {
       const s = sys();

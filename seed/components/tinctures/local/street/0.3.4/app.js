@@ -1368,7 +1368,7 @@ let saidOk = false;            // whether that was the outcome asked for
 const pending = new Set();     // schedules with a press on its way
 const retrying = new Set();    // runs with a Retry on its way
 function select(id) {
-  said = '';
+  said = ''; newBoard();
   if (id.startsWith('server-')) id = 'ferry';   // a buoy is the ferry's: its server is the feed's to choose
   selected = selected === id && id !== 'tram' ? null : id;
   if (id === 'tram') { ding(); selected = null; if (scrub) endScrub(); }
@@ -1405,17 +1405,30 @@ function openSaid(answer) {
   if (answer && answer.outcome === 'refused' && answer.reason === 'uncertain') return 'No answer yet';
   return 'Not opened: tap again';
 }
-// An app opened from its sign's board, which says why when nothing opened,
-// while that sign is still the one shown.
+// The board shown: a new one each time a sign's board opens or closes and
+// each time scrubbing replaces it, so an answer reaches only the board that
+// asked, and never the scrub view.
+let shownBoard = {};
+// What a tap to open an app said on the board that asked, {words, board, at}:
+// `at` the sign it was asked from, which the board shown must still show.
+let openShown = null;
 let openTimer = null;
+function newBoard() { shownBoard = {}; openShown = null; clearTimeout(openTimer); }
+// An app opened from its sign's board, which says why when nothing opened
+// while it is still the board shown; an opened answer clears its words.
 async function openApp(ref) {
   if (!sdk) return;
-  const at = selected;
+  const asked = shownBoard;
   const words = openSaid(await sdk.open(ref));
-  if (words === null || selected !== at) return;
-  said = words; saidOk = false;
+  if (asked !== shownBoard) return;
   clearTimeout(openTimer);
-  openTimer = setTimeout(() => { if (said === words) { said = ''; renderBoard(); } }, OPEN_SAID_MS);
+  if (words === null) {
+    openShown = null;
+  } else {
+    const shown = { words, board: asked, at: selected };
+    openShown = shown; said = ''; saidOk = false;
+    openTimer = setTimeout(() => { if (openShown === shown) { openShown = null; renderBoard(); } }, OPEN_SAID_MS);
+  }
   renderBoard();
 }
 async function pressSchedule(s) {
@@ -1618,13 +1631,14 @@ function renderBoard() {
   if (!L) return;
   const e = selected && (selected === 'earlier' || selected === 'later' ? { id: selected, kind: 'days' } : ents.find((x) => x.id === selected));
   const sign = scrub ? scrubSign() : e ? signFor(e) : defaultSign();
+  const opened = !scrub && openShown && openShown.board === shownBoard && openShown.at === selected ? openShown.words : '';
   if (!scrub && e && e.part && notes[e.part]) sign.facts.push(['', notes[e.part].words]);
   const facts = sign.facts.filter((f) => f[1] !== '' && f[1] != null).map(([k, v]) => `${k ? `<span class="k">${esc(k)}</span> ` : ''}${esc(v)}`).join(' · ');
   const picks = sign.picks ? `<div class="tickets">${sign.picks.map((p) => `<button class="ticket" data-pick="${esc(p.id)}">${esc(p.label)}</button>`).join('')}</div>` : '';
   const list = L.posture === 'phone' && !e && !scrub ? phoneList() : '';
   const acts = sign.acts.map((a, i) => `<button class="btn ${a.cls}" data-act="${i}" ${a.disabled ? 'disabled' : ''}${a.pressed != null ? ` aria-pressed="${a.pressed}"` : ''}>${esc(a.label)}</button>`).join('');
   const back = e ? '<button class="btn" data-back>Close</button>' : '';
-  const html = `<div class="say"><h2>${esc(sign.title)}</h2>${facts ? `<p class="facts">${facts}</p>` : ''}${said ? `<p class="said${saidOk ? ' ok' : ''}">${esc(said)}</p>` : ''}${picks}${list}</div><div class="acts">${acts}${back}</div>`;
+  const html = `<div class="say"><h2>${esc(sign.title)}</h2>${facts ? `<p class="facts">${facts}</p>` : ''}${opened ? `<p class="said">${esc(opened)}</p>` : said ? `<p class="said${saidOk ? ' ok' : ''}">${esc(said)}</p>` : ''}${picks}${list}</div><div class="acts">${acts}${back}</div>`;
   boardActs = sign.acts;
   // The same board is not written again: a tap landing while a stream's event redraws would be lost.
   if (html === boardHtml) return;
@@ -1664,7 +1678,7 @@ stage.addEventListener('pointerdown', (ev) => {
 stage.addEventListener('pointermove', (ev) => {
   if (!down || ev.pointerId !== down.id || !L) return;
   if (!scrub && Math.abs(ev.clientX - down.x) < 8) return;
-  if (!scrub) { stage.setPointerCapture(ev.pointerId); stage.classList.add('scrubbing'); }
+  if (!scrub) { stage.setPointerCapture(ev.pointerId); stage.classList.add('scrubbing'); newBoard(); }
   const ax = Math.max(L.vx0 + L.depotW + 2, Math.min(L.vx1 - L.termW - 2, ev.clientX / L.scale));
   scrub = { x: ax, t: invX(ax) };
   renderBoard();
@@ -1676,6 +1690,7 @@ function endScrub() { scrub = null; stage.classList.remove('scrubbing'); ding();
 function tramKeys(ev) {
   if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
     ev.preventDefault();
+    if (!scrub) newBoard();
     const t0 = scrub ? scrub.t : now();
     const t = Math.max(L.dayStart, Math.min(L.dayEnd, t0 + (ev.key === 'ArrowLeft' ? -15 : 15)));
     scrub = { t, x: X(t) };
