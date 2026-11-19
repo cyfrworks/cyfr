@@ -249,6 +249,8 @@ defmodule Locus.Runtime.QuestionTest do
         Enum.take(calls, n)
 
       _fewer when tries > 0 ->
+        # sleep-ok: poll interval of recorded!'s bounded wait (300 tries) for the wire to record
+        # the calls
         Process.sleep(100)
         recorded!(callback, id, n, tries - 1)
 

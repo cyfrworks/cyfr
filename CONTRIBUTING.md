@@ -197,6 +197,16 @@ same worktree refuses, naming the run that holds it.
   (`rustc_version` in `apps/cyfr/test/support/test_wasm/build-fixture.sh`)
   with the same two targets; a handoff check missing its toolchain reads
   `not run 69`.
+- A test waits on an event or a bounded condition (`assert_receive`,
+  `Prima.Test.Wait.wait_until/3`), not on a clock. A `Process.sleep` or
+  `:timer.sleep` under `apps/*/test` carries its reason on its line or in
+  the comment directly above it, as `# sleep-ok: <reason>`: the deadline,
+  lifespan, window or backoff it waits out, the tick two timestamps need,
+  the poll interval of which bounded wait, what must not happen in the
+  pause, or what a stand-in is kept busy for. `mix credo --strict` refuses
+  one without a reason (`tests/credo/sleep_reason.ex`, tested by
+  `tests/credo/sleep-reason-test.exs`). `Process.sleep(:infinity)`, which
+  keeps a stand-in alive and waits for nothing, is exempt.
 - Checks run in stages. `scripts/stages.tsv` names what each stage runs,
   and `scripts/stage.sh STAGE` runs it, queuing its checks through
   `scripts/heavy-check.sh` for the quarters the table names. In `save`

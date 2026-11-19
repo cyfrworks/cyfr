@@ -44,6 +44,7 @@ defmodule Locus.Runtime.ComponentCacheTest do
       assert Cache.match({:cache_test, elem(key, 1), :_}) == []
 
       :ok = Cache.put(key, :value, 0)
+      # sleep-ok: the 0 ms lifespan under test runs out before the get
       Process.sleep(1)
       assert Cache.get(key) == :miss
       assert Cache.match({:cache_test, elem(key, 1), :_}) == []

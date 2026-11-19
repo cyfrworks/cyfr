@@ -143,6 +143,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
         flunk("the keeper never refused #{count} spawns")
 
       true ->
+        # sleep-ok: poll interval of poll_refused's deadline-bounded wait for the keeper's
+        # refusals
         Process.sleep(10)
         poll_refused(keeper, count, now, deadline)
     end
@@ -157,6 +159,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     keeper: keeper
   } do
     pool = start_pool!(keeper, pool_size: 3)
+    # sleep-ok: 50 ms in which a pool that does not serve yet must spawn nothing
     Process.sleep(50)
     assert spawns(keeper) == []
     assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}

@@ -103,6 +103,7 @@ defmodule Opus.ProgramsTest do
         flunk("the controller did not settle")
 
       true ->
+        # sleep-ok: poll interval of await_idle's bounded wait (3 s) for the controller to settle
         Process.sleep(10)
         await_idle(controller, deadline)
     end
@@ -114,6 +115,7 @@ defmodule Opus.ProgramsTest do
         if System.monotonic_time(:millisecond) > deadline,
           do: flunk("timed out waiting for #{what}")
 
+        # sleep-ok: poll interval of eventually's bounded wait (3 s)
         Process.sleep(10)
         eventually(check, what, deadline)
 
@@ -819,6 +821,8 @@ defmodule Opus.ProgramsTest do
     Process.exit(reader, :kill)
 
     # Past the HTTP server's own wait for a request whose client is gone.
+    # sleep-ok: the HTTP server's own wait for a request whose client is gone passes, as the
+    # comment above says
     Process.sleep(6_000)
   end
 
@@ -1365,6 +1369,7 @@ defmodule Opus.ProgramsTest do
 
       # Answered, nothing is outstanding: no reader polls the session, so it
       # sees no activity of this server's.
+      # sleep-ok: no event for the last outstanding read having ended yet; 100 ms before the flush
       Process.sleep(100)
       flush_sessions()
       refute_receive {:session, "recv", _message, _fields}, 400
@@ -1372,6 +1377,7 @@ defmodule Opus.ProgramsTest do
       # The service ends it for idleness; the next call finds it ended, opens
       # it again and initializes the backend afresh before calling.
       Scripted.set(fake, :idle_ms, 200)
+      # sleep-ok: the fake's 200 ms idle_ms passes, so the service ends the session for idleness
       Process.sleep(300)
 
       assert {:ok, %{"content" => [%{"text" => "found"}]}} =
@@ -2597,9 +2603,13 @@ defmodule Opus.ProgramsTest do
         Task.async(fn -> Programs.pipe_open(row, "pipe-k", [], "att_1", deadline) end)
 
       assert_receive {:held, "sync", sync}, 2_000
+      # sleep-ok: the 1.5 s acquisition, which with the open's 1.7 s overruns the 3 s deadline
+      # under test
       Process.sleep(1_500)
       send(sync, :go)
       assert_receive {:held, "open", open}, 2_000
+      # sleep-ok: the 1.7 s open, which with the 1.5 s acquisition overruns the 3 s deadline under
+      # test
       Process.sleep(1_700)
       send(open, :go)
 
@@ -2772,6 +2782,8 @@ defmodule Opus.ProgramsTest do
       # only after it.
       :sys.suspend(box)
       send(answer, :go)
+      # sleep-ok: the box is held 300 ms past the pipe-open deadline under test, so the answer is
+      # handled late
       Process.sleep(max(deadline - System.system_time(:millisecond), 0) + 300)
       :sys.resume(box)
 
@@ -2928,6 +2940,7 @@ defmodule Opus.ProgramsTest do
       log =
         capture_log(fn ->
           catch_exit(GenServer.call(controller, :no_such_call))
+          # sleep-ok: no event for the crash report's log yet; 200 ms after the failed call
           Process.sleep(200)
         end)
 
@@ -2954,6 +2967,7 @@ defmodule Opus.ProgramsTest do
       log =
         capture_log(fn ->
           catch_exit(GenServer.call(pid, :no_such_call))
+          # sleep-ok: no event for the crash report's log yet; 200 ms after the failed call
           Process.sleep(200)
         end)
 

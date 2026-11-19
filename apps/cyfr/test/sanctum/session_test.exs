@@ -172,6 +172,8 @@ defmodule Sanctum.SessionTest do
       {:ok, original_expires, _} = DateTime.from_iso8601(session.expires_at)
 
       # Wait a tiny bit to ensure different timestamp
+      # sleep-ok: the clock ticks so the refreshed expiry differs from the original, as the
+      # comment above says
       :timer.sleep(10)
 
       {:ok, refreshed} = Session.refresh(session.token)

@@ -25,6 +25,8 @@ defmodule Cyfr.Test.SandboxTest.WorkingView do
           ref = Process.monitor(view)
 
           receive do
+            # sleep-ok: the stand-in's work_ms of work after the view has gone, which the
+            # sandbox's end must outwait
             {:DOWN, ^ref, :process, ^view, _reason} -> Process.sleep(work_ms)
           end
         end)
@@ -38,6 +40,7 @@ defmodule Cyfr.Test.SandboxTest.WorkingView do
   @impl true
   def handle_info({:busy, ms}, socket) do
     send(socket.assigns.test, {:busy, self()})
+    # sleep-ok: the view kept busy for the ms it is told, as the moduledoc above says
     Process.sleep(ms)
     {:noreply, socket}
   end
@@ -967,6 +970,8 @@ defmodule Cyfr.Test.SandboxTest do
   # for the test's end.
   defp chain(test, up, links) do
     if links > 0 do
+      # sleep-ok: each link of the chain starts a millisecond after the one before, as the comment
+      # above says
       Process.sleep(1)
 
       spawn(fn ->

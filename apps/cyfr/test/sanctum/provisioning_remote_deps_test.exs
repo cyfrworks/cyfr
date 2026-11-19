@@ -97,6 +97,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     defp hold(stall, repo, waited) do
       if stalled?(stall, repo) do
+        # sleep-ok: the registry stub's stall: it polls every 25 ms, for at most two minutes,
+        # while the repo stays stalled
         Process.sleep(@stall_poll_ms)
         hold(stall, repo, waited + @stall_poll_ms)
       else

@@ -204,6 +204,7 @@ defmodule Sanctum.DeviceUnlockTest do
       assert {:ok, _ctx} = Sanctum.Caller.establish(token)
       assert session_row(answer.session_id).expires_at == before
 
+      # sleep-ok: the clock ticks, so the slid expiry is later than the one read before
       Process.sleep(5)
       assert {:ok, [_slid]} = DeviceUnlock.slide(ctx, [answer.session_id])
       slid = session_row(answer.session_id).expires_at

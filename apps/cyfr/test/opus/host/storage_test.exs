@@ -343,6 +343,8 @@ defmodule Opus.Host.StorageTest do
 
           canceller =
             Task.async(fn ->
+              # sleep-ok: the cancel's random 0-3 ms stagger against the write, the race under
+              # test
               Process.sleep(Enum.random(0..3))
               {:ok, %{cancelled: true}} = Opus.cancel(fixture.ctx, fixture.execution_id)
               {Arca.exists?(Sanctum.Context.actor(fixture.ctx), path), intents(fixture)}

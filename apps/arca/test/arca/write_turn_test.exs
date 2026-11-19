@@ -306,6 +306,8 @@ defmodule Arca.WriteTurnTest do
         flunk("the arbiter never reached the state asked for: #{inspect(status)}")
 
       true ->
+        # sleep-ok: poll interval of await_status's bounded wait (400 tries) for the arbiter's
+        # state
         Process.sleep(5)
         await_status(server, fun, tries - 1)
     end
@@ -326,6 +328,8 @@ defmodule Arca.WriteTurnTest do
         flunk("the held arbiter has #{inspect(queued)} queued, not #{inspect(kinds)}")
 
       true ->
+        # sleep-ok: poll interval of await_queued's bounded wait (400 tries) on the held arbiter's
+        # mailbox
         Process.sleep(5)
         await_queued(server, kinds, tries - 1)
     end
@@ -912,6 +916,7 @@ defmodule Arca.WriteTurnLockTest do
         flunk("the condition never held: #{inspect(status())}")
 
       true ->
+        # sleep-ok: poll interval of await_until's bounded wait (await/2, 2 s)
         Process.sleep(5)
         await_until(fun, deadline)
     end

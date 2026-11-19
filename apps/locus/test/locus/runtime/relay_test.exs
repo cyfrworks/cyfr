@@ -890,6 +890,8 @@ defmodule Locus.Runtime.RelayTest do
                )
 
       # Nothing is granted: the service sends one window and waits.
+      # sleep-ok: 500 ms in which the service, granted nothing, must send no more than its one
+      # window
       Process.sleep(500)
 
       assert Locus.Runtime.Relay.bind(attempt.relay, %{
@@ -1260,6 +1262,8 @@ defmodule Locus.Runtime.RelayTest do
         _ = :gen_tcp.recv(sock, 0, 1_000)
         :ok = :gen_tcp.send(sock, "HTTP/1.1 200 OK\r\ncontent-length: #{size}\r\n\r\n")
         send_body(sock, size, chunk, test)
+        # sleep-ok: the upstream keeps the socket open after the body, so the relay, not a close,
+        # ends the stream
         Process.sleep(5_000)
       end)
 

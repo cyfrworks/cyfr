@@ -74,6 +74,8 @@ defmodule Sanctum.Gate.DecisionsTest do
     if Arca.DecisionLog.writers() == 0 do
       :ok
     else
+      # sleep-ok: poll interval of await_idle_writers's bounded wait (tries) for the writers to go
+      # idle
       Process.sleep(5)
       await_idle_writers(tries - 1)
     end

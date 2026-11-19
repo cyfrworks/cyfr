@@ -53,6 +53,7 @@ defmodule Prima.UUID7Test do
   describe "time-ordering" do
     test "UUIDs are time-ordered (later UUIDs sort after earlier ones)" do
       uuid1 = UUID7.generate()
+      # sleep-ok: the clock ticks a millisecond, so the second UUID's time field is later
       :timer.sleep(1)
       uuid2 = UUID7.generate()
 

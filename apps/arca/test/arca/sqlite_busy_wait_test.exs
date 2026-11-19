@@ -202,6 +202,8 @@ defmodule Arca.SqliteBusyWaitTest do
 
     # Back inside the driver for its next attempt: its pause is at most
     # 25 ms, and the attempt that follows holds the mutex for a quantum.
+    # sleep-ok: the driver's busy pause (at most 25 ms) ends and its next attempt is under way, as
+    # the comment above says
     Process.sleep(30)
     send(holder.pid, :release)
 

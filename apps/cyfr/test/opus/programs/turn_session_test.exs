@@ -204,6 +204,7 @@ defmodule Opus.Programs.TurnSessionTest do
         if System.monotonic_time(:millisecond) > deadline,
           do: flunk("timed out waiting for #{what}")
 
+        # sleep-ok: poll interval of eventually's bounded wait (3 s)
         Process.sleep(10)
         eventually(check, what, deadline)
 
@@ -736,6 +737,7 @@ defmodule Opus.Programs.TurnSessionTest do
 
       set_status(turn, "completed")
       :ok = Programs.end_turn(ctx.athanor_id, turn.id)
+      # sleep-ok: 100 ms after the turn ended in which Aqua's browser session must not end
       Process.sleep(100)
       assert {:ok, [%{session: ^id, by: :browser}]} = Programs.running(ctx)
     end

@@ -669,6 +669,7 @@ defmodule Sanctum.QuestionsTest do
                Questions.answer(person.ctx, ref, once("allow"))
 
       {_run, late} = open!(person, deadline: DateTime.add(DateTime.utc_now(), 1, :second))
+      # sleep-ok: the question's one-second deadline passes, by 100 ms
       Process.sleep(1100)
 
       assert {:error, %Prima.Refusal{class: :conflict}} =
@@ -801,6 +802,7 @@ defmodule Sanctum.QuestionsTest do
     test "a waiting ask sees an answer given meanwhile", person do
       {run, ref} = open!(person)
       waiter = Task.async(fn -> Questions.wait(person.ctx, run.attempt_id, 1, 5_000) end)
+      # sleep-ok: no event for the waiter having entered its wait yet; 100 ms before the answer
       Process.sleep(100)
       {:ok, _} = Questions.answer(person.ctx, ref, once("allow"))
       assert {:answer, :allowed} = Task.await(waiter)
@@ -2088,6 +2090,8 @@ defmodule Sanctum.QuestionsTest do
       proven!(person.ctx, id)
 
       deadline = row(person.ctx, ref).deadline
+      # sleep-ok: the question's deadline under test passes between the proof and the repeat, by
+      # 200 ms
       Process.sleep(max(DateTime.diff(deadline, DateTime.utc_now(), :millisecond), 0) + 200)
 
       assert {:error, %Prima.Refusal{reason: :not_pending}} =

@@ -60,6 +60,7 @@ defmodule Prima.Test.Wait do
         flunk("waited #{timeout}ms for #{label || "a condition"}, which never held")
 
       true ->
+        # sleep-ok: poll interval of wait_until/3, the bounded wait the suites share
         Process.sleep(@poll_ms)
         poll(fun, deadline, timeout, label)
     end

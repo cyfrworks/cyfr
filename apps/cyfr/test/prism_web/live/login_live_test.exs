@@ -266,6 +266,8 @@ defmodule PrismWeb.LoginLiveTest do
 
       # The same answer again starts no second check.
       assert is_binary(handed(view, answer))
+      # sleep-ok: twice the browser's push wait, in which the page must not leave "Checking what
+      # you signed."
       Process.sleep(2 * @push_timeout_ms)
       assert render(view) =~ "Checking what you signed."
     after
@@ -542,6 +544,8 @@ defmodule PrismWeb.LoginLiveTest do
 
         # Held past the browser's wait, and past it twice, the page still
         # waits for the registry.
+        # sleep-ok: twice the browser's push wait, in which the page must not leave "Checking what
+        # you signed."
         Process.sleep(2 * @push_timeout_ms)
         assert render(view) =~ "Checking what you signed."
       after

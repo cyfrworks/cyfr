@@ -89,6 +89,7 @@ defmodule Arca.ExecutionAttemptsTest do
     actor: actor
   } do
     {_execution, attempt} = admit!(actor)
+    # sleep-ok: a running interval of at least 20 ms for the pause to account (ran >= 20)
     Process.sleep(20)
 
     {:ok, ran} =

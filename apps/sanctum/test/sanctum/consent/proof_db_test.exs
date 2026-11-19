@@ -80,6 +80,7 @@ defmodule Sanctum.Consent.ProofDBTest do
 
     test "an expired proof is rejected and burned" do
       token = mint!(bindings(), ttl_ms: 1)
+      # sleep-ok: the proof's 1 ms lifespan runs out before the consume
       Process.sleep(10)
 
       assert {:error, :expired} = Sanctum.Consent.Proof.DB.consume(token, bindings())
@@ -88,6 +89,7 @@ defmodule Sanctum.Consent.ProofDBTest do
 
     test "minting purges expired rows opportunistically" do
       _stale = mint!(bindings(), ttl_ms: 1)
+      # sleep-ok: the stale proof's 1 ms lifespan runs out before the next mint purges it
       Process.sleep(10)
       _fresh = mint!()
 

@@ -199,6 +199,7 @@ defmodule Opus.Host.QuestionTest do
         flunk("#{inspect(pid)} never waited in #{inspect(module)}.#{fun}")
 
       true ->
+        # sleep-ok: poll interval of parked!'s bounded wait (200 tries) on the process's stack
         Process.sleep(50)
         parked!(pid, module, fun, tries - 1)
     end

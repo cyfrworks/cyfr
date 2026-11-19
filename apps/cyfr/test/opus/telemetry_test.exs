@@ -111,6 +111,7 @@ defmodule Opus.TelemetryTest do
 
     test "includes duration from record", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      # sleep-ok: 10 ms of run, so the stop event's duration is at least 10 ms
       :timer.sleep(10)
       completed = Record.complete(record, %{})
 
@@ -161,6 +162,7 @@ defmodule Opus.TelemetryTest do
 
     test "includes duration from record", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      # sleep-ok: 10 ms of run, so the exception event's duration is at least 10 ms
       :timer.sleep(10)
       failed = Record.fail(record, "timeout")
 
@@ -295,6 +297,7 @@ defmodule Opus.TelemetryTest do
       Telemetry.execute_start(record)
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _start_measurements, _}
 
+      # sleep-ok: the clock ticks between start and stop, so the stop's duration is above zero
       :timer.sleep(5)
       completed = Record.complete(record, %{})
       Telemetry.execute_stop(completed)
@@ -310,6 +313,8 @@ defmodule Opus.TelemetryTest do
       Telemetry.execute_start(record)
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _, _}
 
+      # sleep-ok: the clock ticks between start and failure, so the exception's duration is above
+      # zero
       :timer.sleep(5)
       failed = Record.fail(record, "error")
       Telemetry.execute_exception(failed, "error")

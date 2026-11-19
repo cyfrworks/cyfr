@@ -1134,8 +1134,9 @@ workflows, table = sys.argv[1:3]
 rows = [line.rstrip("\n").split("\t") for line in open(table) if line.strip() and not line.startswith("#")]
 handoff = [row[6] for row in rows if row[0] == "handoff"]
 # A self-test is a script under tests/ that a command runs, named *-test.sh,
-# *_test.py or *-test.exs; or a Python script under tests/ run with no
-# argument, or with --self-check alone. A Python script given anything else
+# *_test.py or *-test.exs (a command after `env` and its assignments
+# counts, and `mix run` runs a script as elixir does); or a Python script
+# under tests/ run with no argument, or with --self-check alone. A Python script given anything else
 # (an image suite, given its image) is not one. A command counts only where
 # the shell would run it, in a handoff row as in a workflow's step: comments
 # and heredoc bodies are not read, and a script named among another
@@ -1227,10 +1228,12 @@ def commands(text):
 def self_tests(words):
     """The self-test a simple command runs, as the guard names it, or none."""
     w = list(words)
-    while w and (w[0] in RESERVED or re.match(r"[A-Za-z_]\w*=", w[0])):
+    while w and (w[0] in RESERVED or w[0] == "env" or re.match(r"[A-Za-z_]\w*=", w[0])):
         w.pop(0)
     if not w:
         return []
+    if w[:2] == ["mix", "run"]:
+        w = ["elixir"] + w[2:]
     if w[0] in ("bash", "sh", "elixir", "python", "python3"):
         rest = w[1:]
         k = 0
@@ -1282,6 +1285,8 @@ probe_table 'bash tests/stage-probe-test.sh'
 probe_table 'python3 -I tests/stage-probe.py --self-check && python3 -I tests/stage-probe_test.py'
 [ "$(guard "$S/stages-probe.tsv")" = "$(printf '%s\n' 'tests/stage-probe.py --self-check' tests/stage-probe_test.py)" ] ||
   fail "a row running Python self-tests no workflow runs was not caught: $(guard "$S/stages-probe.tsv")"
+probe_table 'env CYFR_DATABASE=sqlite MIX_ENV=dev mix run --no-start tests/stage-probe-test.exs'
+[ "$(guard "$S/stages-probe.tsv")" = tests/stage-probe-test.exs ] || fail "a row running a script under mix run no workflow runs was not caught: $(guard "$S/stages-probe.tsv")"
 probe_table 'python3 -I tests/stage-probe.py cyfr-locus:review'
 [ -z "$(guard "$S/stages-probe.tsv")" ] || fail "an image suite given its image was counted as a self-test: $(guard "$S/stages-probe.tsv")"
 # The roster tests are application tests, which the guard does not read:

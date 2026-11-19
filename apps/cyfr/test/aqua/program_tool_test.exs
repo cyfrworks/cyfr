@@ -251,6 +251,8 @@ defmodule Aqua.ProgramToolTest do
       Scripted.write(fake, row.id, text)
 
       if exit = opts[:exit] do
+        # sleep-ok: no event for the tool having read the printed text yet; 200 ms between the
+        # write and the exit
         Process.sleep(200)
         Scripted.end_sessions(fake, row.id, exit)
       end

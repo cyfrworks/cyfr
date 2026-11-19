@@ -87,6 +87,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the first task holds one of the two slots for a second, so the third spawn
+            # is refused
             Process.sleep(1000)
             :a
           end
@@ -96,6 +98,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the second task holds the other slot for a second, so the third spawn is
+            # refused
             Process.sleep(1000)
             :b
           end
@@ -202,6 +206,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the task runs on past the await's timeout under test
             Process.sleep(10_000)
             :done
           end
@@ -253,6 +258,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the slow task runs on past the batch await's timeout under test
             Process.sleep(10_000)
             :slow
           end
@@ -318,6 +324,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the slow task takes 500 ms, so the other completes first
             Process.sleep(500)
             :slow
           end
@@ -343,6 +350,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the first task runs on past await_any's 100 ms timeout
             Process.sleep(10_000)
             :a
           end
@@ -352,6 +360,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the second task runs on past await_any's 100 ms timeout too
             Process.sleep(10_000)
             :b
           end
@@ -369,6 +378,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the watched task completes at 600 ms, about 500 ms after the unwatched one
+            # lands mid-await
             Process.sleep(600)
             :watched
           end
@@ -382,6 +393,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the unwatched completion lands 100 ms in, mid-await, as the comment above
+            # says
             Process.sleep(100)
             :unwatched
           end
@@ -430,6 +443,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the task keeps running, so poll answers pending
             Process.sleep(5000)
             :done
           end
@@ -469,6 +483,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the task keeps running until the cancel under test ends it
             Process.sleep(10_000)
             :done
           end
@@ -504,6 +519,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the task the test cancels, kept running until then
             Process.sleep(10_000)
             :a
           end
@@ -538,6 +554,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           tracker,
           fn ->
             send(test_pid, {:task_pid, self()})
+            # sleep-ok: the task runs on past await_all's timeout, so the tracker must kill it
+            # after
             Process.sleep(60_000)
             :slow
           end
@@ -574,6 +592,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the mix's timed-out member, running on past await_all's timeout
             Process.sleep(10_000)
             :slow
           end
@@ -607,6 +626,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the first of three tasks kept running to fill max_tasks
             Process.sleep(5000)
             :a
           end
@@ -616,6 +636,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the second of three tasks kept running to fill max_tasks
             Process.sleep(5000)
             :b
           end
@@ -625,6 +646,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the third task kept running, filling max_tasks for the batch's next spawn
             Process.sleep(5000)
             :c
           end
@@ -645,6 +667,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the first task runs 200 ms, beside the second, then frees its slot, as the
+            # comment above says
             Process.sleep(200)
             :first
           end
@@ -654,6 +678,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
         AsyncTracker.spawn_task(
           tracker,
           fn ->
+            # sleep-ok: the second task keeps its slot while the first completes and frees the
+            # other
             Process.sleep(5000)
             :slow
           end
@@ -689,6 +715,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             # This task runs "forever"
             send(test_pid, :task_started)
+            # sleep-ok: the orphan runs "forever", until stopping the tracker kills it
             Process.sleep(60_000)
             :never_reached
           end

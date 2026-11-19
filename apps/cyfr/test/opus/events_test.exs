@@ -430,8 +430,9 @@ defmodule Opus.EventsTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
 
     assert Enum.any?(1..200, fn _ ->
-             Registry.lookup(Opus.Events.Registry, exec_id) == [] or
-               (Process.sleep(10) && false)
+             # sleep-ok: poll interval of a bounded wait (200 tries) for the registry to drop
+             # the stopped buffer
+             Registry.lookup(Opus.Events.Registry, exec_id) == [] or (Process.sleep(10) && false)
            end),
            "the idle-stopped buffer's registry entry never cleared"
   end

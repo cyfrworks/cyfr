@@ -42,6 +42,7 @@ defmodule Arca.CacheTest do
 
     test "returns :miss for expired key" do
       :ok = Cache.put({:test, "key1"}, "value", 1)
+      # sleep-ok: the entry's 1 ms lifespan runs out before the get
       Process.sleep(5)
       assert :miss = Cache.get({:test, "key1"})
     end
@@ -76,6 +77,7 @@ defmodule Arca.CacheTest do
     test "excludes expired entries" do
       :ok = Cache.put({:session, "user_3", "fresh"}, "yes", 60_000)
       :ok = Cache.put({:session, "user_3", "stale"}, "no", 1)
+      # sleep-ok: the stale entry's 1 ms lifespan runs out before the match
       Process.sleep(5)
 
       results = Cache.match({:session, "user_3", :_})

@@ -1404,6 +1404,8 @@ defmodule Arca.Providers.FilesRaceTest do
         flunk("the acceptance wrote #{length(keys)} custody copies of #{length(@files)}")
 
       true ->
+        # sleep-ok: poll interval of await_custody!'s bounded wait (250 tries) for every custody
+        # copy
         Process.sleep(20)
         await_custody!(recipient, offer_id, tries - 1)
     end

@@ -460,6 +460,7 @@ defmodule Compendium.CosignTest do
         false
 
       true ->
+        # sleep-ok: poll interval of eventually's bounded wait (50 tries)
         Process.sleep(20)
         eventually(check, attempts - 1)
     end

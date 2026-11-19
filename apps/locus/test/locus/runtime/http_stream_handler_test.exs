@@ -348,6 +348,7 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
 
       assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
 
+      # sleep-ok: the stream's 0 s timeout under test passes before the read
       Process.sleep(15)
       decoded = read_fn.(handle) |> Jason.decode!()
 
@@ -380,6 +381,8 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
               body
 
           :ok = :gen_tcp.send(sock, response)
+          # sleep-ok: the server keeps the socket open 500 ms after the body, so the cap, not a
+          # close, ends the stream
           Process.sleep(500)
           :gen_tcp.close(sock)
         end)
@@ -458,6 +461,8 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
                 "connection: close\r\n\r\n" <> body
             )
 
+          # sleep-ok: the server keeps the socket open 200 ms after the 429, so the read sees the
+          # status before a close
           Process.sleep(200)
           :gen_tcp.close(sock)
         end)
@@ -512,6 +517,8 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
               "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
             )
 
+          # sleep-ok: the server keeps the chunked stream open and silent for 5 s, the open stream
+          # under test
           Process.sleep(5_000)
         end)
 
@@ -571,6 +578,8 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
                 "connection: close\r\n\r\n" <> body
             )
 
+          # sleep-ok: the server keeps the socket open 2 s after the body, while the reads grant
+          # credit
           Process.sleep(2_000)
           :gen_tcp.close(sock)
         end)
@@ -826,6 +835,8 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
         flunk("stream completed without surfacing the oversize error")
 
       true ->
+        # sleep-ok: poll interval of poll_for_error's bounded wait (attempts) for the oversize
+        # error
         Process.sleep(20)
         poll_for_error(read_fn, handle, attempts - 1)
     end

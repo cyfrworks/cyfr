@@ -169,6 +169,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     case find_live_child(parent, id) do
       nil when tries > 0 ->
+        # sleep-ok: poll interval of child!'s bounded wait (50 tries) for the nested view to mount
         Process.sleep(20)
         child!(parent, id, tries - 1)
 
@@ -198,6 +199,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         pane
 
       _ when tries > 0 ->
+        # sleep-ok: poll interval of on_thread!'s bounded wait (50 tries) for the pane to turn
         Process.sleep(20)
         on_thread!(pane, id, tries - 1)
 
@@ -961,6 +963,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         MapSet.size(elem(Aqua.ToolGrants.allowed_by_agent(here, thread.id), 1)) == 1
     end
 
+    # sleep-ok: poll interval of a bounded wait (300 tries) for the grant to be withdrawn
     assert Enum.any?(1..300, fn _ -> withdrawn.() or (Process.sleep(10) && false) end)
 
     assert {:ok, left} = Aqua.ToolGrants.allowed_by_agent(here, thread.id)

@@ -231,6 +231,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
                 5_000 -> :ok
               end
 
+              # sleep-ok: the leader's refresh takes 200 ms after :go, as a provider's round trip
+              # would, while the follower waits on it
               Process.sleep(200)
               reseal_valid(ctx, entry, "tok-refreshed")
               {:ok, "tok-refreshed"}

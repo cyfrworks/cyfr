@@ -2346,6 +2346,8 @@ defmodule Arca.FileOffersLockOrderTest do
         :ok
 
       true ->
+        # sleep-ok: poll interval of await_lock_or_done's bounded wait (500 tries) for the backend
+        # to wait on a lock or finish
         Process.sleep(20)
         await_lock_or_done(pid, task, tries - 1)
     end
