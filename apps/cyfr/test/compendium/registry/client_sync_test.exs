@@ -133,51 +133,86 @@ defmodule Compendium.Registry.ClientSyncTest do
   # ============================================================================
 
   @wire Path.expand("../../../../../tests/fixtures/registry_wire.json", __DIR__)
-  @external_resource @wire
-  @components Jason.decode!(File.read!(@wire))["components"]
 
   describe "the component API's vectors" do
-    setup :point_at_stub
+    # Reading the section and running its cases are one act: every case
+    # runs here against a stub of its own, each failure is kept under its
+    # case's name, and the test fails with all of them.
+    test "every case of registry_wire.json's components holds", %{ctx: ctx} do
+      cases = Jason.decode!(File.read!(@wire))["components"]
+      assert is_list(cases) and cases != [], "registry_wire.json holds no components"
 
-    # A case's test is generated from the section, so a case the section
-    # gains or renames is a test here; this holds the file as it reads now
-    # to the tests this module was compiled with.
-    test "every case of the section is a test here" do
-      tests = for {name, 1} <- __MODULE__.__info__(:functions), do: Atom.to_string(name)
+      failures =
+        for %{"name" => name} = vector <- cases,
+            failure = case_failure(vector, ctx),
+            do: "#{name}: #{failure}"
 
-      for %{"name" => name} <- Jason.decode!(File.read!(@wire))["components"] do
-        assert "test the component API's vectors #{name}" in tests,
-               "no test for the case #{inspect(name)}"
-      end
+      assert failures == [], Enum.join(failures, "\n\n")
     end
+  end
 
-    for vector <- @components do
-      @vector vector
-      test vector["name"], %{ctx: ctx, stub: stub} do
-        assert component_case(@vector, ctx, stub) == @vector["result"]
-      end
-    end
+  # Why a case does not hold, or nil when it does.
+  defp case_failure(vector, ctx) do
+    stub = HTTPStub.open()
+
+    got =
+      Prima.Test.Env.with_app_env(:cyfr, :registry_url, "127.0.0.1:#{stub.port}", fn ->
+        component_case(vector, ctx, stub)
+      end)
+
+    unless got == vector["result"],
+      do: "returned #{inspect(got)}, want #{inspect(vector["result"])}"
+  rescue
+    error -> Exception.message(error)
   end
 
   # A case with no call is only the registry's: CYFR never sends its
   # request, and reads its answer as any call's.
-  defp component_case(%{"call" => nil, "answer" => answer, "result" => result}, _ctx, _stub) do
+  defp component_case(
+         %{"call" => nil, "request" => %{}, "answer" => answer, "result" => result},
+         _ctx,
+         _stub
+       ) do
     error = Errors.from_api_response(answer["status"], Jason.encode!(answer["body"]), "discover")
     outcome({:error, error}, result)
   end
 
+  # The stub tells the test what reached it and answers the case's answer;
+  # the call's request is then held to the case's.
   defp component_case(%{"request" => request, "answer" => answer} = vector, ctx, stub) do
     bearer = request["token_namespace"] && "cyfr_pt_" <> request["token_namespace"]
+    parent = self()
 
     HTTPStub.expect_once(stub, request["method"], request["path"], fn conn ->
-      assert Enum.map(query_pairs(conn), &Tuple.to_list/1) == request["query"]
-      assert auth_header(conn) == (bearer && "Bearer " <> bearer)
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
-      assert if(raw == "", do: nil, else: Jason.decode!(raw)) == request["body"]
+
+      send(
+        parent,
+        {:sent,
+         %{
+           "query" => Enum.map(query_pairs(conn), &Tuple.to_list/1),
+           "bearer" => auth_header(conn),
+           "body" => if(raw == "", do: nil, else: Jason.decode!(raw))
+         }}
+      )
+
       json_resp(conn, answer["status"], answer["body"])
     end)
 
-    vector["call"] |> call(vector["args"], ctx, bearer) |> outcome(vector["result"])
+    got = vector["call"] |> call(vector["args"], ctx, bearer) |> outcome(vector["result"])
+
+    want = %{
+      "query" => request["query"],
+      "bearer" => bearer && "Bearer " <> bearer,
+      "body" => request["body"]
+    }
+
+    receive do
+      {:sent, ^want} -> got
+      {:sent, sent} -> flunk("sent #{inspect(sent)}, want #{inspect(want)}")
+    after
+      0 -> flunk("sent no #{request["method"]} #{request["path"]}")
+    end
   end
 
   defp call(name, [params], ctx, nil) when name in ~w(discover search) do
@@ -303,6 +338,24 @@ defmodule Compendium.Registry.ClientSyncTest do
       for params <- [%{namespace: "a"}, %{namespace: "b"}] do
         assert {:error, %Errors{reason: :parse_error}} = Client.discover(ctx, params)
       end
+    end
+
+    # The component tool's discover hands its namespace and type to the
+    # listing; one it drops leaves the whole registry's newest components
+    # in the answer.
+    test "discover asks cyfr.run by namespace, with its type", %{ctx: ctx, stub: stub} do
+      HTTPStub.expect_once(stub, "GET", "/v1/components", fn conn ->
+        assert query_pairs(conn) == [{"namespace", "cyfr"}, {"type", "reagent"}]
+        json_resp(conn, 200, %{"components" => [], "total" => 0})
+      end)
+
+      assert {:ok,
+              %{registry: Compendium.RegistryHost.canonical_host(), components: [], total: 0}} ==
+               Provider.handle("component", ctx, %{
+                 "action" => "discover",
+                 "namespace" => "cyfr",
+                 "type" => "reagent"
+               })
     end
   end
 

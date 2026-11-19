@@ -260,7 +260,7 @@
       "status": 404
     }
   ],
-  "comment": "The vectors pinning Prima.RegistryRequest (cyfr-registry-request/v2) and Prima.HandleAnswer (cyfr-handle/v1), read by CYFR and by the registry at cyfr.run. Every side derives each Ed25519 public key from its seed and each P-256 point from its private scalar; walks the identity entries (cyfr-identity/v2, as identity.json pins them) to each head, reproducing its identifier, directory, head, seq, keys and recovery set; re-signs every request whose signer is an Ed25519 key and reproduces its sig byte for byte, and its bytes as the JCS form of the request (a passkey's assertion is randomised and is verified, never re-signed); verifies each verify case's bytes (the named request's JCS bytes, padded with trailing spaces to pad_with_spaces_to when present) as the registry named (its host and the directory it is configured with, which every identity it accepts names) at now_ms (Unix milliseconds) under the named head, reaching the result or the refusal; does the same with each refusal's input (request, sent as its JSON, or raw, sent as those exact bytes; a request whose signer is null was altered after signing or is not signed at all); holds each handle and publisher spelling under slugs to the grammar of a handle.claim or publisher.claim body; and parses each answer's bytes for the handle and registry asked, reaching its result, which encodes back to those bytes, or its refusal. Refusals are checked in the order: size, JSON, exact keys and their types; protocol; registry; operation and body; expiry; the head's identifier; the head's directory; signature. The signature step refuses bad_signature for a signer the head does not list (a kid, or recovery:<kid> for a recovery key), a sig of the other algorithm's shape (Ed25519: unpadded base64url of 64 bytes over the JCS bytes without sig; a passkey: {authenticator_data, client_data, signature} whose challenge is SHA-256 of those bytes, at the directory's origin and host, user presence and verification set), or a signature that does not verify. A request expires at expires_at and may expire at most 360000 ms after the clock. JCS has no null, and a null anywhere is refused. Under codes, every refusal of the protocol and of the handle answer: CYFR's name, the code the registry writes in its error envelope {\"errors\":[{\"code\",\"message\"}]} and the HTTP status; every refusal named under verify, refusals, envelopes and answers is one of them. Each envelope's bytes read back to the refusal named, or are refused as malformed_answer; an answer's bytes that are an envelope read back to its refusal. An envelope's first error carries a string message, and a null anywhere in an envelope is refused. A request is at most 16384 bytes as sent; one whose escaped content passes that bound is refused by its signer as by the registry. Under components, the component API between CYFR's registry client and cyfr.run's /v1/components and /v1/abuse-reports routes, a case each: call names the client's function and args its arguments after the context and before the bearer (null for a case only the registry is sent); request is what goes on the wire (method, path, the query pairs in order, the namespace whose push token it carries or null for none, and the JSON body or null); answer is the status and JSON body the registry writes for it, each listing entry and component the row its store holds; result is what the call returns, a listing's entries reduced to the fields CYFR keeps with publisher beside namespace_slug, or {error, message}: the refusal's reason, and the registry's own sentence where CYFR carries it. These refusals are the registry's REST codes, not codes'.",
+  "comment": "The vectors pinning Prima.RegistryRequest (cyfr-registry-request/v2) and Prima.HandleAnswer (cyfr-handle/v1), read by CYFR and by the registry at cyfr.run. Every side derives each Ed25519 public key from its seed and each P-256 point from its private scalar; walks the identity entries (cyfr-identity/v2, as identity.json pins them) to each head, reproducing its identifier, directory, head, seq, keys and recovery set; re-signs every request whose signer is an Ed25519 key and reproduces its sig byte for byte, and its bytes as the JCS form of the request (a passkey's assertion is randomised and is verified, never re-signed); verifies each verify case's bytes (the named request's JCS bytes, padded with trailing spaces to pad_with_spaces_to when present) as the registry named (its host and the directory it is configured with, which every identity it accepts names) at now_ms (Unix milliseconds) under the named head, reaching the result or the refusal; does the same with each refusal's input (request, sent as its JSON, or raw, sent as those exact bytes; a request whose signer is null was altered after signing or is not signed at all); holds each handle and publisher spelling under slugs to the grammar of a handle.claim or publisher.claim body; and parses each answer's bytes for the handle and registry asked, reaching its result, which encodes back to those bytes, or its refusal. Refusals are checked in the order: size, JSON, exact keys and their types; protocol; registry; operation and body; expiry; the head's identifier; the head's directory; signature. The signature step refuses bad_signature for a signer the head does not list (a kid, or recovery:<kid> for a recovery key), a sig of the other algorithm's shape (Ed25519: unpadded base64url of 64 bytes over the JCS bytes without sig; a passkey: {authenticator_data, client_data, signature} whose challenge is SHA-256 of those bytes, at the directory's origin and host, user presence and verification set), or a signature that does not verify. A request expires at expires_at and may expire at most 360000 ms after the clock. JCS has no null, and a null anywhere is refused. Under codes, every refusal of the protocol and of the handle answer: CYFR's name, the code the registry writes in its error envelope {\"errors\":[{\"code\",\"message\"}]} and the HTTP status; every refusal named under verify, refusals, envelopes and answers is one of them. Each envelope's bytes read back to the refusal named, or are refused as malformed_answer; an answer's bytes that are an envelope read back to its refusal. An envelope's first error carries a string message, and a null anywhere in an envelope is refused. A request is at most 16384 bytes as sent; one whose escaped content passes that bound is refused by its signer as by the registry. Under components, the component API between CYFR's registry client and cyfr.run's /v1/components and /v1/abuse-reports routes, a case each: call names the client's function and args its arguments after the context and before the bearer (null for a case only the registry is sent); request is what goes on the wire (method, path, the query pairs in order, the namespace whose push token it carries or null for none, and the JSON body or null); answer is the status and JSON body the registry writes for it, each listing entry and component the row its store holds; result is what the call returns, a listing's entries reduced to the fields CYFR keeps with publisher beside namespace_slug, or {error, message}: the refusal's reason, and the registry's own sentence where CYFR carries it. These refusals are the registry's REST codes, not codes'. A case proves that the registry's router and handlers write its status and body from its rows and ask the store with the request's values, and each listing row carries every filter its request names; which rows a database selects is left to the registry's store tests.",
   "components": [
     {
       "answer": {
@@ -280,7 +280,8 @@
               "size": 2048,
               "status": "active",
               "tags": [
-                "greeting"
+                "greeting",
+                "city"
               ],
               "verification": "community",
               "version": "0.2.0"
@@ -300,7 +301,8 @@
               "status": "deprecated",
               "status_reason": "use 0.2.0: speaks en, de, nl, pt",
               "tags": [
-                "greeting"
+                "greeting",
+                "city"
               ],
               "verification": "community",
               "version": "0.1.0"
@@ -349,7 +351,8 @@
             "size": 2048,
             "status": "active",
             "tags": [
-              "greeting"
+              "greeting",
+              "city"
             ],
             "version": "0.2.0"
           },
@@ -367,12 +370,50 @@
             "status": "deprecated",
             "status_reason": "use 0.2.0: speaks en, de, nl, pt",
             "tags": [
-              "greeting"
+              "greeting",
+              "city"
             ],
             "version": "0.1.0"
           }
         ],
         "total": 2
+      }
+    },
+    {
+      "answer": {
+        "body": {
+          "components": [],
+          "total": 0
+        },
+        "status": 200
+      },
+      "args": [
+        {
+          "namespace": "uj-wren",
+          "type": "reagent"
+        }
+      ],
+      "call": "discover",
+      "name": "a listing that matches nothing",
+      "request": {
+        "body": null,
+        "method": "GET",
+        "path": "/v1/components",
+        "query": [
+          [
+            "namespace",
+            "uj-wren"
+          ],
+          [
+            "type",
+            "reagent"
+          ]
+        ],
+        "token_namespace": null
+      },
+      "result": {
+        "components": [],
+        "total": 0
       }
     },
     {
@@ -393,7 +434,8 @@
               "size": 2048,
               "status": "active",
               "tags": [
-                "greeting"
+                "greeting",
+                "city"
               ],
               "verification": "community",
               "version": "0.2.0"
@@ -474,7 +516,8 @@
             "size": 2048,
             "status": "active",
             "tags": [
-              "greeting"
+              "greeting",
+              "city"
             ],
             "version": "0.2.0"
           }
@@ -531,7 +574,8 @@
           "size": 2048,
           "status": "active",
           "tags": [
-            "greeting"
+            "greeting",
+            "city"
           ],
           "updated_at": "2026-11-13T12:24:53Z",
           "verification": "community",
@@ -570,7 +614,8 @@
         "size": 2048,
         "status": "active",
         "tags": [
-          "greeting"
+          "greeting",
+          "city"
         ],
         "updated_at": "2026-11-13T12:24:53Z",
         "verification": "community",
@@ -595,7 +640,8 @@
           "size": 2048,
           "status": "active",
           "tags": [
-            "greeting"
+            "greeting",
+            "city"
           ],
           "updated_at": "2026-11-13T12:24:53Z",
           "verification": "community",
@@ -633,7 +679,8 @@
         "size": 2048,
         "status": "active",
         "tags": [
-          "greeting"
+          "greeting",
+          "city"
         ],
         "updated_at": "2026-11-13T12:24:53Z",
         "verification": "community",
@@ -690,7 +737,8 @@
           "status": "deprecated",
           "status_reason": "use 0.2.0: speaks en, de, nl, pt",
           "tags": [
-            "greeting"
+            "greeting",
+            "city"
           ],
           "updated_at": "2026-11-13T12:24:53Z",
           "verification": "community",
@@ -733,7 +781,8 @@
         "status": "deprecated",
         "status_reason": "use 0.2.0: speaks en, de, nl, pt",
         "tags": [
-          "greeting"
+          "greeting",
+          "city"
         ],
         "updated_at": "2026-11-13T12:24:53Z",
         "verification": "community",
