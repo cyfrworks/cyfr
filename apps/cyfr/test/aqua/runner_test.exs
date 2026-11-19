@@ -1472,6 +1472,64 @@ defmodule Aqua.RunnerTest do
 
     for loss <- [:lost, :expired] do
       @tag :ownership_loss
+      test "a paused turn's resume leaves the tape unchanged when ownership is #{loss}",
+           %{ctx: ctx, thread: thread} do
+        start_supervised!(
+          {ScriptedWorker,
+           ref: [@model, "catalyst:local.http"],
+           script: [fetch("c1"), {:crash, :before_response}, reply("carrying on")]}
+        )
+
+        {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua fetch")
+
+        assert_receive %ThreadEvent{
+                         kind: :turn_paused,
+                         data: %{turn_id: ^first, reason: :uncertain}
+                       },
+                       60_000
+
+        runner = Runner.whereis(thread.id)
+
+        :sys.replace_state(runner, fn state ->
+          actor = Prima.Actor.in_athanor(ctx.athanor_id)
+          :ok = Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+          state
+        end)
+
+        # The sender's next line is on the tape and its runner was never
+        # told: only the resume would carry the stopped turn on.
+        {:ok, _} =
+          Tape.accept(ctx, thread.id, %{
+            message: %{author: ctx.user_id, sent_by: "person", content: "@aqua go on"},
+            steer_turn_id: first
+          })
+
+        assert Tape.steer_pending?(ctx, %{id: first})
+        before = tape_snapshot(ctx, thread.id, [first])
+        calls = ScriptedWorker.calls()
+        runner_ref = Process.monitor(runner)
+        lose_ownership(unquote(loss))
+        send(runner, {:resume, first})
+        await_retired(runner, runner_ref)
+        assert tape_snapshot(ctx, thread.id, [first]) == before
+        assert ScriptedWorker.calls() == calls
+
+        Arca.ControlPlane.record(:unclaimed)
+        assert {:ok, _successor} = Runner.ensure(thread.id, ctx.athanor_id)
+
+        wait_until(
+          fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, first)) end,
+          60_000
+        )
+
+        {:ok, turn} = Tape.turn(ctx, first)
+        {:ok, steps} = Tape.steps(ctx, turn)
+        assert [%{dispatch_state: "uncertain"}] = Enum.filter(steps, &(&1.action == "get"))
+      end
+    end
+
+    for loss <- [:lost, :expired] do
+      @tag :ownership_loss
       test "a live loop and its call stop without settling an unknown effect when ownership is #{loss}",
            %{ctx: ctx, thread: thread} do
         start_supervised!(
@@ -2060,6 +2118,12 @@ defmodule Aqua.RunnerTest do
                [page_step(3, id, call, "ok"), model_step(ctx, id, 4, "text")],
                [model_step(ctx, id, 3, "text"), page_step(4, id, call, "ok")]
              ]
+
+      # The call waited out the pause: its step started only once the launch had closed.
+      raw = raw_steps!(ctx, id)
+      [launched_step] = for %{kind: "launch"} = step <- raw, do: step
+      [page] = for %{purpose: "page"} = step <- raw, do: step
+      assert DateTime.compare(page.started_at, launched_step.ended_at) != :lt
 
       [carried, answered] = page_rows!(ctx, ws.id)
       assert carried == called(id, call)

@@ -421,6 +421,101 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "asks made while the turn is paused around a launch are recorded and dispatched by " <>
+           "none, and are decided by the mode when the turn goes on",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      app = quiet_app!(ctx)
+
+      start_supervised!(
+        {Cyfr.Test.ScriptedWorker,
+         ref: [app], script: [{:hold, self()}, {:output, %{"ran" => true}}]}
+      )
+
+      turn = accept!(ctx, thread, row, "run the app, then tidy up")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      # The program launches the app, whose run is held: the turn is
+      # paused around it.
+      launch = %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}
+      say(fake, row, ask(turn, "ask-1", "execution", launch))
+      assert_receive {:scripted_probe, launched, _child}, 60_000
+      assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, turn.id)
+
+      # While it is paused the program asks for a write and a read: each
+      # recorded, neither run.
+      keep = %{"action" => "keep", "name" => "todo", "content" => "tidy"}
+      say(fake, row, ask(turn, "ask-2", "notes", keep))
+      say(fake, row, ask(turn, "ask-3", "program", %{"action" => "list"}))
+      committed!(ctx, thread, 7)
+      keys = for ask <- ~w(ask-1 ask-2 ask-3), do: TurnStorage.brain_ask_key(turn.id, ask)
+
+      for key <- tl(keys) do
+        assert Map.take(step_by_key(ctx, turn, key), [:dispatch_state, :outcome, :started_at]) ==
+                 %{dispatch_state: "proposed", outcome: nil, started_at: nil}
+      end
+
+      assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, turn.id)
+
+      # The launch ends and the turn goes on: auto runs both, each started
+      # once the launch had closed, and each ask is answered once, in order.
+      send(launched, :continue)
+      answers = for _ask <- keys, do: accept_next!(fake, row)
+      [ran, kept, listed] = steps = Enum.map(keys, &step_by_key(ctx, turn, &1))
+      [_input | answered] = inputs(ctx, turn)
+
+      owed =
+        for {{step, ask}, input} <- Enum.zip(Enum.zip(steps, ~w(ask-1 ask-2 ask-3)), answered) do
+          {:ok, result} = Tape.message(ctx, step.result_message_id)
+
+          %{
+            "t" => "answer",
+            "id" => input.id,
+            "ask" => ask,
+            "content" => result.content,
+            "is_error" => false
+          }
+        end
+
+      assert answers == owed
+
+      assert Enum.map(steps, &Map.take(&1, [:kind, :tool, :action, :dispatch_state, :outcome])) ==
+               [
+                 %{
+                   kind: "launch",
+                   tool: "execution",
+                   action: "run",
+                   dispatch_state: "closed",
+                   outcome: "ok"
+                 },
+                 %{
+                   kind: "tool",
+                   tool: "notes",
+                   action: "keep",
+                   dispatch_state: "closed",
+                   outcome: "ok"
+                 },
+                 %{
+                   kind: "tool",
+                   tool: "program",
+                   action: "list",
+                   dispatch_state: "closed",
+                   outcome: "ok"
+                 }
+               ]
+
+      for step <- [kept, listed],
+          do: assert(DateTime.compare(step.started_at, ran.ended_at) != :lt)
+
+      assert {:ok, %{content: "tidy"}} = Aqua.Notes.read(ctx, "todo")
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received {:session, "send", _wire, _fields}
+    end
+
     test "a read-only member's asks that do more than read are refused in the read-only " <>
            "sentence, which the thread is told once, and its read runs",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -1684,6 +1779,35 @@ defmodule Aqua.ProgramTest do
 
   # The program itself, an outside source its turn reads (`Aqua.Loop`).
   defp program_source(row), do: Prima.Source.outside(row.name)
+
+  # An app of the person's own with no exit, granted with nothing to bind.
+  defp quiet_app!(ctx) do
+    name = "program-app-#{System.unique_integer([:positive])}"
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})
+      })
+
+    ref = "reagent:local." <> name
+    decisions = %{ref: ref, bindings: []}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    ref
+  end
 
   # The soul switched to read-only, as the Aqua page switches it.
   defp read_only!(ctx) do

@@ -988,6 +988,24 @@ defmodule Aqua.LaunchTest do
     assert decide(ctx, turn, args) == run_on(args, [other])
   end
 
+  test "a decided launch whose turn's person was denied since its decision runs nothing and " <>
+         "asks the gate nothing",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    %{app: app, args: args} = quiet_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    step = launch_step!(ctx, turn, args)
+    decided = decided!(ctx, turn, args)
+    {:ok, person} = Sanctum.Tenancy.Users.get(turn.requested_by)
+    {:ok, _} = Sanctum.Tenancy.Users.deny(person)
+    attempts = attempts_of(ctx)
+    decisions = gate_runs(ctx)
+
+    assert Launch.run(ctx, step, decided) == {:refused, {:approver_unavailable, :denied}}
+    assert launched_of(ctx, app) == []
+    assert attempts_of(ctx) == attempts
+    assert gate_runs(ctx) == decisions
+  end
+
   # ---------------------------------------------------------------------------
   # The decision, and what flows at egress
   # ---------------------------------------------------------------------------
@@ -1137,6 +1155,23 @@ defmodule Aqua.LaunchTest do
 
     assert decide(ctx, turn, %{args | "connection" => "Home"}) ==
              {:setup_required, versioned, {nil, "Home"}}
+  end
+
+  test "under auto a launch naming an account of an app with no grant is setup required, and " <>
+         "one naming a profile that cannot be told is refused, never a setup",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    %{app: app, args: args} = granted_app!(ctx)
+    ungranted = publish_app!(ctx) <> ":1.0.0"
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    named = Map.put(args, "connection", "Work")
+
+    assert decide(ctx, turn, %{named | "reference" => ungranted}) ==
+             {:setup_required, ungranted, {nil, "Work"}}
+
+    assert decide(ctx, turn, Map.put(named, "profile", "elsewhere")) ==
+             {:refuse,
+              "the account \"Work\" of #{app}:1.0.0 could not be read: " <>
+                Aqua.Ops.render_refusal({:not_found, "elsewhere"})}
   end
 
   test "under auto a launch of an app with no grant runs on none: the gate answers that the " <>

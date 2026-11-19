@@ -689,12 +689,16 @@ defmodule Aqua.ScheduleTurnsTest do
 
       # The keep is refused before it dispatches, the sentence its result.
       # Auto runs the same call (below): the mode alone refused it.
-      assert [_read, refused] = steps(ctx, turn)
+      assert [read, refused] = steps(ctx, turn)
 
       assert outcomes(ctx, turn) == [
                %{tool: "threads", action: "list", outcome: "ok", error: nil, approval_id: nil},
                %{tool: "notes", action: "keep", outcome: "denied", error: said, approval_id: nil}
              ]
+
+      # The read's result holds what it read.
+      assert {:ok, %{content: listed}} = Tape.message(ctx, read.result_message_id)
+      assert listed =~ "count"
 
       assert refused.started_at == nil
       assert {:ok, %{content: content}} = Tape.message(ctx, refused.result_message_id)
