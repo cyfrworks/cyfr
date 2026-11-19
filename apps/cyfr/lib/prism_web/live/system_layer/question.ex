@@ -6,35 +6,44 @@ defmodule PrismWeb.SystemLayer.Question do
   A component's question as its card draws it, which only the system
   layer does: a frame of CYFR's own around the component's words.
 
-  The frame is fixed in place: the component's publisher and name, "wants
-  to" and the action's title its manifest declares, who started the run
-  (`caller_words/1`), until when it waits, and the choices. The
-  component's block sits inside the frame: its summary and its operation,
-  marked as its own words, as plain escaped text with its line breaks
-  kept. The one-line summary stays in view; the operation is in a region
-  of a fixed height that scrolls on its own and breaks any line, so no
-  length of text moves the frame, the summary or the choices, and text
-  that reads like a button stays text inside the block. Masking is said.
+  The frame is fixed in place: the component's name and "wants to" with
+  the action's title its manifest declares (the layer's heading), then one
+  line of its publisher, who started the run (`caller_words/1`) and until
+  when it waits, in the person's own time, with the date only when it is
+  not today. The component's block sits inside the frame, captioned "The
+  component says:": its summary and its operation, as plain escaped text
+  with its line breaks kept. The one-line summary stays in view; the
+  operation is in a region of a fixed height that scrolls on its own,
+  named by the caption, and breaks any line, so no length of text moves
+  the frame, the summary or the choices, and text that reads like a
+  button stays text inside the block. Masking is said.
 
   The choices (`offered/1`, each named for the answer it sends,
-  `answer/1`): a row for the caller that started the run, headed with who
-  that is, of Never allow, Allow once, Allow for an hour and Always allow,
-  the three that last covering that caller alone; and below it Always
-  allow whoever starts it, which covers every caller and needs a fresh
-  confirmation, drawn inside the card. A caller CYFR does not know cannot
-  be named in an answer that lasts, so its row offers Allow once alone.
-  Once an answer that lasts is refused because no installed version asks
-  for the permission in these words, the card offers only Allow once
-  (`once_only`, kept on the shown prompt by the layer, so it ends with
-  the prompt). Closing the card without choosing is "Don't allow", once
-  (`dismissal/0`).
+  `answer/1`), under "Allow this?": a group named for the caller that
+  started the run ("For you"), of Never, Just once, For an hour and
+  Always, the three that last covering that caller alone; and a group
+  "For everyone" of one button, Always, which covers every caller and
+  asks for the person's passkey, a fresh confirmation drawn inside the
+  card. A caller CYFR does not know cannot be named in an answer that
+  lasts, so its group offers Just once alone. Once an answer that lasts
+  is refused because no installed version asks for the permission in
+  these words, the card offers only Just once (`once_only`, kept on the
+  shown prompt by the layer, so it ends with the prompt) and says so
+  (`once_only_words/0`). Closing the card without choosing, by its cross
+  or Escape, is "Don't allow", once (`dismissal/0`).
+
+  No button is drawn filled, so no answer, the one that lasts longest
+  least of all, looks like the card's default. The caller's four stand on
+  one line on a screen as wide as a small tablet's, and two by two, each
+  a finger's height, on a narrower one, where a group of one button is as
+  wide as the group.
   """
 
   use Phoenix.Component
 
   alias Prima.Question.Caller
 
-  # How long "Allow for an hour" lasts.
+  # How long "For an hour" lasts.
   @hour_s 3600
 
   @caller_row ~w(deny_always_this_caller allow_once allow_hour_this_caller allow_always_this_caller)
@@ -89,6 +98,18 @@ defmodule PrismWeb.SystemLayer.Question do
   def dismissal, do: %{"effect" => "deny", "lasts" => "once"}
 
   @doc """
+  The card's sentence once an answer that lasts is refused because no
+  installed version asks for the permission in these words: what the card
+  then offers, by what is on it.
+  """
+  @spec once_only_words() :: String.t()
+  def once_only_words,
+    do:
+      "No installed version asks for this permission in these words, so this answer " <>
+        "cannot be kept: you can still allow it just once, or close this card with × to " <>
+        "not allow it."
+
+  @doc """
   Who started a run, from its caller's text (`Prima.Question.Caller`), as
   a person reads it: "you", the assistant's name, the app's publisher and
   name, or for a device, a key, a schedule and a webhook the kind and the
@@ -125,36 +146,38 @@ defmodule PrismWeb.SystemLayer.Question do
   attr :id, :string, required: true
   attr :prompt, :map, required: true
 
-  @doc "The frame's rows and the component's block inside it."
+  @doc """
+  The frame's line and the component's block under it: who published it,
+  who started the run and until when it waits, in the person's own time,
+  on one line that wraps at a word; then what the component says.
+  """
   def card(assigns) do
     assigns = assign(assigns, :subject, assigns.prompt.subject)
 
     ~H"""
     <section class="space-y-3" data-test="question" data-ref={@subject.ref}>
-      <dl class="grid grid-cols-3 gap-1 text-sm" data-test="question-frame">
-        <dt class="text-gray-400">Component</dt>
-        <dd class="col-span-2 break-all" data-test="question-component">
-          {@subject.name}, published by {@subject.publisher}
-        </dd>
-        <dt class="text-gray-400">Started by</dt>
-        <dd class="col-span-2 break-all" data-test="question-caller">
-          {caller_words(@subject.caller)}
-        </dd>
-        <dt class="text-gray-400">Waits until</dt>
-        <dd class="col-span-2" data-test="question-deadline">
-          <time datetime={DateTime.to_iso8601(@subject.deadline)} data-local>
-            {DateTime.to_iso8601(@subject.deadline)}
-          </time>
-        </dd>
-      </dl>
+      <p class="text-sm text-gray-300 [overflow-wrap:anywhere]" data-test="question-frame">
+        From <span data-test="question-publisher">{@subject.publisher}</span>
+        · started by <span data-test="question-caller">{caller_words(@subject.caller)}</span>
+        · waits until
+        <time
+          datetime={DateTime.to_iso8601(@subject.deadline)}
+          data-local="clock"
+          data-test="question-deadline"
+          class="whitespace-nowrap"
+        >
+          {DateTime.to_iso8601(@subject.deadline)}
+        </time>
+      </p>
 
       <figure
         class="rounded-md border border-dashed border-gray-600 bg-gray-950 p-3"
         aria-labelledby={"#{@id}-question-words"}
         data-test="question-words"
       >
+        <%!-- The caption also names the block below for a screen reader. --%>
         <figcaption id={"#{@id}-question-words"} class="mb-2 text-xs text-gray-400">
-          In the component's own words. CYFR does not check them.
+          The component says:
         </figcaption>
         <p class="text-sm text-gray-100 [overflow-wrap:anywhere]" data-test="question-summary">
           {@subject.summary}
@@ -162,6 +185,8 @@ defmodule PrismWeb.SystemLayer.Question do
         <div
           class="mt-2 max-h-56 overflow-auto [overflow-wrap:anywhere] [contain:paint]"
           tabindex="0"
+          role="region"
+          aria-labelledby={"#{@id}-question-words"}
           data-test="question-block"
         >
           <pre
@@ -177,6 +202,7 @@ defmodule PrismWeb.SystemLayer.Question do
     """
   end
 
+  attr :id, :string, required: true
   attr :prompt, :map, required: true
   attr :offered, :list, required: true
   attr :myself, :any, required: true
@@ -184,9 +210,10 @@ defmodule PrismWeb.SystemLayer.Question do
 
   @doc """
   The choices `offered` names (`offered/1`, as the layer draws them), each
-  sending `question_answer` with its name: the caller's row, a group named
-  by its heading, and the answer for any caller below it, outside the
-  group.
+  sending `question_answer` with its name, under the question "Allow
+  this?": the group for the caller that started the run, named for that
+  caller, and the group for everyone, each a group named by its heading,
+  so the two "Always" are told apart by their group.
   """
   def choices(assigns) do
     assigns =
@@ -197,51 +224,58 @@ defmodule PrismWeb.SystemLayer.Question do
 
     ~H"""
     <div class="space-y-3" data-test="question-choices">
-      <fieldset class="m-0 min-w-0 space-y-2 border-0 p-0" data-test="question-caller-row">
+      <p class="text-sm font-medium text-gray-100" data-test="question-ask">Allow this?</p>
+
+      <fieldset class="min-w-0 border-0 p-0" data-test="question-caller-row">
         <legend class="mb-2 text-sm text-gray-300 [overflow-wrap:anywhere]">
-          For {caller_words(@prompt.subject.caller)}:
+          For {caller_words(@prompt.subject.caller)}
         </legend>
-        <div class="flex flex-wrap justify-end gap-2">
+        <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-nowrap">
           <.option
             :for={name <- @row}
             prompt={@prompt}
             myself={@myself}
             name={name}
-            class={@button_class.(name == "allow_always_this_caller")}
+            class={[@button_class.(false), "min-h-11 only:col-span-2"]}
           >
             {label(name)}
           </.option>
         </div>
       </fieldset>
 
-      <div
-        :if={@any_caller}
-        class="flex justify-end border-t border-gray-700 pt-3"
-        data-test="question-any-caller"
-      >
-        <.option
-          prompt={@prompt}
-          myself={@myself}
-          name="allow_always_any_caller"
-          class={@button_class.(false)}
-        >
-          Always allow, whoever starts it
-          <span class="block text-xs font-normal text-gray-400">Needs a fresh confirmation</span>
-        </.option>
+      <div :if={@any_caller} class="border-t border-gray-700 pt-3">
+        <fieldset class="min-w-0 border-0 p-0" data-test="question-any-caller">
+          <legend class="mb-2 text-sm text-gray-300">For everyone</legend>
+          <div class="flex flex-wrap items-center gap-3">
+            <.option
+              prompt={@prompt}
+              myself={@myself}
+              name="allow_always_any_caller"
+              class={[@button_class.(false), "min-h-11"]}
+              describedby={"#{@id}-question-passkey"}
+            >
+              Always
+            </.option>
+            <span id={"#{@id}-question-passkey"} class="text-xs text-gray-400">
+              asks for your passkey
+            </span>
+          </div>
+        </fieldset>
       </div>
     </div>
     """
   end
 
-  defp label("deny_always_this_caller"), do: "Never allow"
-  defp label("allow_once"), do: "Allow once"
-  defp label("allow_hour_this_caller"), do: "Allow for an hour"
-  defp label("allow_always_this_caller"), do: "Always allow"
+  defp label("deny_always_this_caller"), do: "Never"
+  defp label("allow_once"), do: "Just once"
+  defp label("allow_hour_this_caller"), do: "For an hour"
+  defp label("allow_always_this_caller"), do: "Always"
 
   attr :prompt, :map, required: true
   attr :myself, :any, required: true
   attr :name, :string, required: true
   attr :class, :any, required: true
+  attr :describedby, :string, default: nil
   slot :inner_block, required: true
 
   defp option(assigns) do
@@ -254,6 +288,7 @@ defmodule PrismWeb.SystemLayer.Question do
       phx-value-choice={@name}
       data-test="question-choice"
       data-choice={@name}
+      aria-describedby={@describedby}
       class={@class}
     >
       {render_slot(@inner_block)}

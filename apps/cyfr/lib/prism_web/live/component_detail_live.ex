@@ -617,7 +617,7 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   # A standing answer as the person reads it: "Never allowed" only for a
-  # denial that lasts always, as the card's "Never allow" is; a time it
+  # denial that lasts always, as the card's "Never" is; a time it
   # lasts until is shown in the person's own time zone (`time[data-local]`,
   # which the section's hook rewrites), and reads in UTC until it is.
   attr :answer, :map, required: true

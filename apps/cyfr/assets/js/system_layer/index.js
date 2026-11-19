@@ -424,13 +424,23 @@ export function firstFocus(dialog, stops) {
 /**
  * Show each `time[data-local]` under `root` in the browser's own time zone
  * and locale: the server writes the instant as it answers it, in UTC, and
- * writes it again on every update, which this rewrites again.
+ * writes it again on every update, which this rewrites again. A time
+ * marked `data-local="clock"` (a question's deadline) shows the hour and
+ * minute alone, with the date only when it is not today.
  */
-export function localTimes(root, locale = undefined) {
+export function localTimes(root, locale = undefined, now = new Date()) {
   for (const time of root.querySelectorAll("time[data-local]")) {
     const at = new Date(time.getAttribute("datetime"))
-    if (!Number.isNaN(at.getTime())) time.textContent = at.toLocaleString(locale)
+    if (Number.isNaN(at.getTime())) continue
+    time.textContent = time.getAttribute("data-local") === "clock" ? clock(at, now, locale) : at.toLocaleString(locale)
   }
+}
+
+function clock(at, now, locale) {
+  const hours = {hour: "numeric", minute: "2-digit"}
+  return at.toDateString() === now.toDateString()
+    ? at.toLocaleTimeString(locale, hours)
+    : at.toLocaleString(locale, {month: "short", day: "numeric", ...hours})
 }
 
 /**

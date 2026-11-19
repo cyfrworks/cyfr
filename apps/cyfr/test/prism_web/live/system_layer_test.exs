@@ -5980,7 +5980,8 @@ defmodule PrismWeb.SystemLayerTest do
            "Sign a device out of this CYFR"},
         request: {request_prompt("k-request"), "Nothing runs until you approve."},
         confirmation: {confirmation, "A client of yours asked for a change"},
-        question: {question, "It asks before it does this"}
+        # A question's card says what its cross does in the cross alone.
+        question: {question, nil}
       }
     end
 
@@ -6013,8 +6014,19 @@ defmodule PrismWeb.SystemLayerTest do
       for {kind, {prompt, opening}} <- prompts do
         prompt(view, prompt)
         assert open_prompt(view) == prompt.id, inspect(kind)
-        text = described(view)
-        assert String.starts_with?(text, opening), "#{kind}: #{text}"
+
+        if opening do
+          text = described(view)
+          assert String.starts_with?(text, opening), "#{kind}: #{text}"
+        else
+          refute has_element?(view, "#system-layer-description"), inspect(kind)
+          refute render(view) =~ "aria-describedby=\"system-layer-description\"", inspect(kind)
+
+          assert has_element?(
+                   view,
+                   ~s([data-test="question-close"][aria-label="Close, and don't allow it this time"][title="Close, and don't allow it this time"])
+                 )
+        end
 
         # A question's card alone draws the cross in its header, its one
         # close; here it is closed as the browser's Escape closes it.
