@@ -662,17 +662,23 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     test "completed tasks free up slots for new spawns" do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 2)
 
-      # Both tasks must block long enough to actually be active simultaneously
+      # The first task runs until the test lets it go, after the refusal,
+      # so both are running when the third spawn is asked.
+      test = self()
+
       {:ok, id1} =
         AsyncTracker.spawn_task(
           tracker,
           fn ->
-            # sleep-ok: no gate yet holding the first task until the third spawn is refused;
-            # 200 ms of both slots occupied, then it frees its own
-            Process.sleep(200)
-            :first
+            send(test, {:first, self()})
+
+            receive do
+              :go -> :first
+            end
           end
         )
+
+      assert_receive {:first, first}
 
       {:ok, _id2} =
         AsyncTracker.spawn_task(
@@ -690,6 +696,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
                AsyncTracker.spawn_task(tracker, fn -> :c end)
 
       # Await id1 to free a slot (also removes from tasks map)
+      send(first, :go)
       {:ok, :first} = AsyncTracker.await_task(tracker, id1, 5000)
 
       # Now we should be able to spawn again

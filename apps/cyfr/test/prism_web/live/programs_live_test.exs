@@ -986,8 +986,6 @@ defmodule PrismWeb.ProgramsLiveTest do
       ExUnit.CaptureLog.capture_log([level: :error], fn ->
         catch_exit(GenServer.call(view.pid, :crash_the_page, 5_000))
         assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 5_000
-        # sleep-ok: no event for the termination report's log yet; 200 ms after :DOWN
-        Process.sleep(200)
       end)
 
     assert log =~ "terminating"

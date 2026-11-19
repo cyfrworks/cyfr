@@ -321,9 +321,6 @@ defmodule Opus.RecordTest do
 
     test "sets completed_at timestamp", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      # sleep-ok: the clock ticks between start and completion; the assertion allows equal
-      # instants, so it may need none
-      :timer.sleep(1)
       completed = Record.complete(record, %{})
 
       assert %DateTime{} = completed.completed_at
@@ -357,9 +354,6 @@ defmodule Opus.RecordTest do
 
     test "sets completed_at timestamp", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      # sleep-ok: the clock ticks between start and failure; the test asserts only that
-      # completed_at is set, so it may need none
-      :timer.sleep(1)
       failed = Record.fail(record, "error")
 
       assert %DateTime{} = failed.completed_at
