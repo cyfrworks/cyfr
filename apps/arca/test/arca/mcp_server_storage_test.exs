@@ -698,6 +698,33 @@ defmodule Arca.McpServerStorageTest do
       assert McpServerStorage.config(row) == config
     end
   end
+
+  describe "driver/1" do
+    # The one answer to which driver a program row runs: by the driver's
+    # name or by the path the box installs it at, and nothing else.
+    test "a command's first word names a driver by its name or its installed path" do
+      row = fn command ->
+        %{transport: "program", config_json: Jason.encode!(%{"command" => command})}
+      end
+
+      for {command, driver} <- [
+            {"cyfr-codex npx -y @openai/codex@0.167.0", "cyfr-codex"},
+            {"/usr/local/bin/cyfr-codex npx -y @openai/codex@0.167.0", "cyfr-codex"},
+            {"cyfr-claude-code npx -y @anthropic-ai/claude-code", "cyfr-claude-code"},
+            {"/usr/local/bin/cyfr-claude-code npx -y @anthropic-ai/claude-code",
+             "cyfr-claude-code"},
+            {"npx -y @openai/codex@0.167.0", nil},
+            {"/opt/cyfr-codex npx -y @openai/codex@0.167.0", nil},
+            {"./cyfr-codex npx", nil},
+            {"/usr/local/bin/cyfr-codexx npx", nil},
+            {"", nil}
+          ] do
+        assert McpServerStorage.driver(row.(command)) == driver, command
+      end
+
+      assert McpServerStorage.driver(%{transport: "http", config_json: nil}) == nil
+    end
+  end
 end
 
 defmodule Arca.McpServerStorageRaceTest do

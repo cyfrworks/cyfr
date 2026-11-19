@@ -170,6 +170,18 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       started!(ctx, room, again, "auto", row)
     end
 
+    test "read-only on a row naming cyfr-codex by its installed path is refused before a session opens",
+         %{ctx: ctx, room: room, fake: fake} do
+      row =
+        program_row!(ctx, "codex-path", "/usr/local/bin/cyfr-codex npx -y @openai/codex@0.167.0")
+
+      turn = accept_on!(ctx, room, row, "what is in notes.md?")
+      task = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+      answer = Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
+      assert Scripted.sessions(fake, row.id) == %{}
+      assert answer == {:ok, {:failed, {:read_only_unheld, "Aqua", "codex-path"}}}
+    end
+
     test "read-only on a cyfr-claude-code row passes the check, and the holder starts it " <>
            "read-only",
          %{ctx: ctx, room: room, fake: fake} do
