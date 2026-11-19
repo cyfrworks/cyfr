@@ -239,23 +239,18 @@ defmodule Aqua.ProgramToolTest do
          "wait_ms" => wait_ms
        }}
 
-  # The program prints `text` once its session opens, and exits with
-  # `exit` when given, as the backends service would run it.
-  defp prints(fake, row, text, opts) do
+  # The program prints `text` once its session opens and exits with
+  # `exit` in the same step, as a command that prints and ends: whatever
+  # read is answered the text is answered the exit with it, so the turn's
+  # wait never settles on the text with the program still running.
+  defp prints(fake, row, text, exit: exit) do
     Task.start(fn ->
       Prima.Test.Wait.wait_until(
         fn -> Enum.any?(Scripted.sessions(fake, row.id), fn {_id, s} -> s.running end) end,
         30_000
       )
 
-      Scripted.write(fake, row.id, text)
-
-      if exit = opts[:exit] do
-        # sleep-ok: no event for the tool having read the printed text yet; 200 ms between the
-        # write and the exit
-        Process.sleep(200)
-        Scripted.end_sessions(fake, row.id, exit)
-      end
+      Scripted.write_and_exit(fake, row.id, text, exit)
     end)
   end
 

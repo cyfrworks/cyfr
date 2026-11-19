@@ -795,8 +795,16 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert Base.decode64!(data) == "one\r\n"
     Scripted.write(fake, row.id, "two")
-    # sleep-ok: no event for the page holding the second output yet; 200 ms after the write
-    Process.sleep(200)
+
+    # The guesses are made only once the session keeps "two" for the page,
+    # which a wrong token would then release. No caller can see what a
+    # session keeps for a page that has not taken the last, so this reads
+    # the session's own state.
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(terminal_pid(session)).subscribers[view.pid].pending != nil end,
+      5_000,
+      "the session to keep the second output"
+    )
 
     for guess <- ["1", "2", delivery <> "x"],
         do: render_hook(view, "terminal_written", %{"session" => session, "delivery" => guess})
