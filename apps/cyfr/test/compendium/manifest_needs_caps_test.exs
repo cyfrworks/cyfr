@@ -283,6 +283,32 @@ defmodule Compendium.ManifestNeedsCapsTest do
                })
     end
 
+    test "publish_bytes refuses a manifest whose caps hold flows, in words naming the key",
+         %{ctx: ctx, wasm: wasm} do
+      manifest =
+        Jason.encode!(%{
+          "name" => "caps-flows",
+          "version" => "1.0.0",
+          "type" => "reagent",
+          "caps" => %{"flows" => %{"outside" => ["api.example.com"]}}
+        })
+
+      assert {:error, reason} =
+               Compendium.Registry.publish_bytes(ctx, wasm, %{
+                 name: "caps-flows",
+                 version: "1.0.0",
+                 type: "reagent",
+                 manifest: manifest
+               })
+
+      assert reason == {:invalid_caps, {:unknown_keys, :caps, ["flows"]}}
+
+      assert %Prima.Refusal{
+               class: :invalid_argument,
+               message: "The manifest is refused: caps has no key flows."
+             } = Sanctum.Refusals.classify(reason)
+    end
+
     test "publish_bytes refuses a manifest with an unknown top-level key", %{ctx: ctx, wasm: wasm} do
       manifest =
         Jason.encode!(%{

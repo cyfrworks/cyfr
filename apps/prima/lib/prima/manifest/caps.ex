@@ -84,6 +84,23 @@ defmodule Prima.Manifest.Caps do
   def agent_only_tools, do: @agent_only_tools
 
   @doc """
+  A `validate/2` refusal in a person's words: the storage path or the key
+  it refused, named with the block it sits in, and otherwise that the caps
+  are not valid. Never its term.
+  """
+  @spec words(error()) :: String.t()
+  def words({:invalid_caps, {:invalid_storage_path, path}}) when is_binary(path),
+    do: "caps.storage.paths names #{path}, which is no guest scope"
+
+  def words({:invalid_caps, {:unknown_keys, block, [_ | _] = keys}}) when is_atom(block),
+    do: "#{block_name(block)} has no key #{Enum.join(keys, ", ")}"
+
+  def words({:invalid_caps, _detail}), do: "its caps are not valid"
+
+  defp block_name(:caps), do: "caps"
+  defp block_name(block), do: "caps.#{block}"
+
+  @doc """
   Validate a decoded manifest's `caps` block. Absent is valid.
   `storage_path_ok?` decides whether a declared storage path names a
   guest scope.

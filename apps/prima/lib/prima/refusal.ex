@@ -437,6 +437,11 @@ defmodule Prima.Refusal do
   defp row({:invalid_argument, message}) when is_binary(message),
     do: {:invalid_argument, message}
 
+  # A manifest whose caps block its grammar refuses, as a pull or a
+  # publish meets it, in the grammar's own words.
+  defp row({:invalid_caps, _detail} = failure),
+    do: {:invalid_argument, "The manifest is refused: #{Prima.Manifest.Caps.words(failure)}."}
+
   # A login need's mount (`Sanctum.Mount`): the program row its binding
   # names is not set up as a program with a kept home.
   defp row({:program_unavailable, name}) when is_binary(name),
