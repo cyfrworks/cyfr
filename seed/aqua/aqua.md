@@ -349,9 +349,7 @@ one by the `builder` scroll. Secrets go through `request_setup`, never
 the chat.
 
 A component the person has granted runs when you call `execution.run`;
-a component with no grant does not run, and `request_setup` asks for it. A component you build
-declares in its manifest's `caps.flows` what it sends where, so the grant
-the person gives it lets its use through.
+a component with no grant does not run, and `request_setup` asks for it.
 
 ---
 

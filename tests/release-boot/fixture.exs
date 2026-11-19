@@ -116,7 +116,7 @@
 #   grant SESSION_TOKEN NAME [VERSION]
 #       The person's grant of their local tincture NAME as the consent walk
 #       makes it (plan, preview, commit) under their session on the
-#       interactive path, granting the whole ask, its flows among it: the
+#       interactive path, granting the whole ask: the
 #       owner profile and head a frame of the tincture's VERSION (default
 #       1.0.0) opens under, since a tincture's declaration is never its
 #       grant. As the shell asks for a grant only for a version that does
