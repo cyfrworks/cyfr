@@ -302,13 +302,13 @@ same worktree refuses, naming the run that holds it.
   The Compose proof's update cases (`tests/compose-proof/run.sh --case
   update`, `update-refused`, `update-fail` and `update-interrupt`: `cyfr
   update` between two releases made from the tree) run on main's push
-  run, a release's and the nightly, never on a pull request's run, since
-  they change rarely and cost the backends job minutes on every run. A
-  change to `cyfr update`, `cyfr restore` or the shipped compose file runs
-  them here first, on all four quarters for the shipped file's fixed
-  subnets: `scripts/heavy-check.sh tests/compose-proof/run.sh --case
-  update --locus-image IMAGE`, the image the backends job tags
-  `cyfr-locus:backends` (`scripts/image.sh locus` builds one).
+  run, a release's and the nightly, never on a pull request's run; main's
+  push run is their check. To run one here, on all four quarters for the
+  shipped compose file's fixed subnets, with an app image and a Locus
+  image of the tree (`scripts/image.sh app`, `scripts/image.sh locus`):
+  `scripts/heavy-check.sh env COMPOSE_PROOF_IMAGE=cyfr:in-H
+  COMPOSE_PROOF_SKIP_BUILD=1 tests/compose-proof/run.sh --case update
+  --locus-image cyfr-locus:in-H`.
 - A release tag is cut on a tree its run on GitHub proved green, and
   that run is the release's proof: `scripts/release.sh`, which runs only
   on origin's main head (a detached checkout of it will do), reads HEAD's

@@ -167,16 +167,26 @@
 #          candidate, both made from the tree and its Locus image as
 #          release.yml makes a release, left unsigned (update_releases):
 #          the old release the app image under the next patch's
-#          pre-release proof.1, the new one an image built from it under
-#          proof.2. The project is the old release's scaffold, as its
+#          pre-release <run>.1, the new one an image built from it under
+#          <run>.2, <run> the run's own name (RUN, from
+#          scripts/lib/run-names.sh's prefix), so no two runs on one
+#          daemon share a tag; a run refuses a tag the daemon holds
+#          already and removes only the tags and images it made. The tags
+#          are under the shipped repositories, which no janitor rule
+#          matches (scripts/janitor.sh's rule 1 reads a name from its
+#          start), so a killed run's are left to the next run's refusal
+#          to name. The project is the old release's scaffold, as its
 #          `cyfr init` lays it down, so its compose file names the old
 #          images by digest and the overlay sets no app image; the update
 #          is the tree's command line built with the releaseproof tag at
 #          the new release, which reads both releases from the run's
 #          folder alone, run with `--continue-as`, as the program step
-#          hands over to it. Pulls of the releases' images are answered
-#          from the image store, which needs the containerd store to name
-#          a local image by digest. The person's data is a message the
+#          hands over to it. Its pulls of the two candidate images by
+#          digest are answered from the image store, which needs the
+#          containerd store to name a local image by digest; Caddy's and
+#          Tailscale's reach their registries, and each case that passes
+#          the schema check holds that all four were pulled before the
+#          stop. The person's data is a message the
 #          release fixture writes in their thread, read back through the
 #          running release's own storage.
 #          update: the update ends 0, its snapshot complete, and the new
@@ -186,21 +196,26 @@
 #          than the one the home's database was built from (the one
 #          difference INS-3 needs, made without a published release); the
 #          update refuses before the stop, with the sentence that says so,
-#          the home's cyfr is the container it was, the compose file, .env
-#          and backups/ are as they were, and the old release serves the
-#          person's message.
+#          and makes no stop, the home's cyfr is the container it was,
+#          .env, every file of the old scaffold and backups/ are as they
+#          were, and the old release serves the person's message.
 #          update-fail: the new release's image refuses its own boot (a
 #          keyring setting that is not its JSON, Cyfr.Application); the update
 #          ends non-zero with the stack left stopped, the boot's
-#          `[Cyfr] FATAL:` line and a complete snapshot, and `cyfr
-#          restore` of that snapshot, as root (cli_run_root), brings the
-#          old release back serving the person's message.
+#          `[Cyfr] FATAL:` line and the one `cyfr restore SNAPSHOT` it
+#          prints, its snapshot complete, and that command, run as root
+#          (cli_run_root), brings the old release back serving the
+#          person's message.
 #          update-interrupt: SIGINT while the update reads the roster
-#          offline after its stop restarts the old release, the project
-#          as it was; the command line killed there leaves the stack
-#          stopped, and the next `cyfr up` starts the old release; SIGINT
-#          while the new release starts is reported, and the update runs
-#          to its end, the new release serving.
+#          offline, the last step of its stop, restarts the old release,
+#          the project as it was; the command line killed there leaves the
+#          stack stopped, and the next `cyfr up` starts the old release;
+#          SIGINT while the new release starts is reported, and the update
+#          runs to its end, the new release serving. No signal lands in the
+#          snapshot: on SQLite it is the command line's own file copies,
+#          with no call the proof can pause, so the check after it is no
+#          case's; no Go test holds it either (TestUpdateOnASignal's last
+#          point is the offline read).
 #          What these cases cannot show: the program step that downloads
 #          and replaces the command line, the signature check of a real
 #          release's manifest and scaffold (a candidate has none), and a
@@ -1626,9 +1641,12 @@ FAULTS="$WORK/faults"
 # exists every such call fails without running; $FAULTS/fail-up makes
 # the first such `up` fail once it has run, every stop after it failing;
 # $FAULTS/pause-slots stops the first call that reads the live slots
-# offline (cyfr update's re-read after its stop); and while
-# $FAULTS/pull-local exists a `pull` of an image the store holds already,
-# by the reference it names, answers without reaching a registry.
+# offline (cyfr update's re-read after its stop). While
+# $FAULTS/release-pulls exists, every call is recorded in $FAULTS/calls,
+# one line of its arguments each, and a `docker pull REF` whose REF is a
+# line of that file, one of the update cases' two candidate images by
+# digest (on no registry), answers from the image store; every other pull
+# reaches its registry.
 shim_install() {
   mkdir -p "$WORK/shim" "$FAULTS"
   cat >"$WORK/shim/docker" <<SH
@@ -1648,11 +1666,13 @@ if [ "\${1:-}" = compose ] && printf '%s\n' "\$@" | grep -qx up; then
     exit 1
   fi
 fi
-# The update cases' pulls of an image the store holds by that digest are
-# answered from the store: their releases are on no registry.
-if [ -e "$FAULTS/pull-local" ] && printf '%s\n' "\$@" | grep -qx pull && "$REAL_DOCKER" image inspect "\${@: -1}" >/dev/null 2>&1; then
-  echo "docker (the proof's): \${@: -1} is in the image store by that digest"
-  exit 0
+if [ -e "$FAULTS/release-pulls" ]; then
+  printf '%s\n' "\$*" >>"$FAULTS/calls"
+  if [ "\$#" -eq 2 ] && [ "\$1" = pull ] && grep -qxF -- "\$2" "$FAULTS/release-pulls"; then
+    "$REAL_DOCKER" image inspect "\$2" >/dev/null || exit 1
+    echo "docker (the proof's): \$2 is in the image store by that digest"
+    exit 0
+  fi
 fi
 if printf '%s\n' "\$@" | grep -q CYFR_LIVE_SLOTS; then
   pause slots
@@ -2278,8 +2298,15 @@ store_digest() {
   printf '%s\n' "$digest"
 }
 
+# A release tag the run is to make, refused when the daemon holds it
+# already: the run takes no name it did not make.
+release_name_free() {
+  ! docker image inspect "$1" >/dev/null 2>&1 || fail "the image store holds $1 already, which this run did not make"
+}
+
 # `$2` tagged as `$1`, the tag removed when the run ends.
 release_tag() {
+  release_name_free "$1"
   docker tag "$2" "$1" || fail "docker tag $2 $1 failed"
   RELEASE_IMAGES+=("$1")
 }
@@ -2287,6 +2314,7 @@ release_tag() {
 # The image `$1` built from the Dockerfile lines on stdin, removed when the
 # run ends.
 release_build() {
+  release_name_free "$1"
   docker build --quiet --tag "$1" - >"$WORK/build.log" 2>&1 || fail "the image $1 did not build: $(tail -n 20 "$WORK/build.log")"
   RELEASE_IMAGES+=("$1")
 }
@@ -2316,8 +2344,8 @@ update_releases() {
 import re, sys
 m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?", sys.argv[1])
 assert m, sys.argv[1]
-base = "%s.%s.%d" % (m.group(1), m.group(2), int(m.group(3)) + 1)
-print(base + "-proof.1", base + "-proof.2")' "$TREE_VERSION")" || fail "apps/prima/mix.exs declares no release version: '$TREE_VERSION'"
+base = "%s.%s.%d-%s" % (m.group(1), m.group(2), int(m.group(3)) + 1, sys.argv[2])
+print(base + ".1", base + ".2")' "$TREE_VERSION" "$RUN")" || fail "apps/prima/mix.exs declares no release version: '$TREE_VERSION'"
   read -r OLD_VERSION NEW_VERSION <<<"$versions"
   step "the releases the update moves between, made from the candidate $TREE_VERSION: $OLD_VERSION and $NEW_VERSION"
   release_tag "ghcr.io/cyfrworks/cyfr:$OLD_VERSION" "$IMAGE"
@@ -2427,35 +2455,90 @@ data_served() {
 update_old_home() {
   step "the old release $OLD_VERSION, up, with the person's data"
   shim_install
-  : >"$FAULTS/pull-local"
+  printf '%s\n' "ghcr.io/cyfrworks/cyfr@$NEW_DIGEST" "ghcr.io/cyfrworks/cyfr-locus@$LOCUS_DIGEST" >"$FAULTS/release-pulls"
   cli_ok up-old up
   await_healthy
   person_data
   data_served "$OLD_VERSION" "$OLD_DIGEST"
   CYFR="$NEW_CYFR"
+  calls_reset
   ok "the command line is release $NEW_VERSION's now"
 }
 
-# The project's files and directories that an update writes, hashed.
+# What the project holds that an update writes, hashed: .env, every file
+# of the old release's scaffold (the compose file and each managed file
+# among them) as the project holds it now, and the backups folder's
+# entries.
 project_state() {
-  (cd "$WORK" && find . -maxdepth 1 -type f \( -name .env -o -name docker-compose.yml \) -exec sha256sum {} + | sort
+  (cd "$WORK" && {
+    printf '%s\n' .env
+    tar -tzf "$RELEASES/$TREE_VERSION/cyfr-scaffold.tar.gz" | sed 's|^\./||' | grep -v '/$'
+  } | sort -u | while IFS= read -r f; do
+    if [ -f "$f" ]; then sha256sum "$f"; else echo "missing $f"; fi
+  done
    [ ! -e backups ] || echo "backups: $(ls -A backups)")
 }
 
-# The one snapshot the update named, complete, in SNAPSHOT: the directory
-# its `cyfr restore` line names, as the log `$1` printed it.
-update_snapshot() {
-  SNAPSHOT="$(sed -n 's/^  cyfr restore \(.*\)$/\1/p' "$WORK/$1.log" | tail -n 1)"
-  [ -n "$SNAPSHOT" ] || SNAPSHOT="$(find "$WORK/backups" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+# The snapshot SNAPSHOT is complete.
+snapshot_complete() {
   [ -f "$SNAPSHOT/snapshot.json" ] || fail "the update left no snapshot with its snapshot.json: '$SNAPSHOT'"
   [ "$(jget "$(cat "$SNAPSHOT/snapshot.json")" complete)" = true ] || fail "the snapshot $SNAPSHOT does not say complete: $(cat "$SNAPSHOT/snapshot.json")"
 }
+
+# The project's one snapshot, in SNAPSHOT.
+only_snapshot() {
+  local found
+  found="$(find "$WORK/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)"
+  [ "$(printf '%s\n' "$found" | grep -c .)" = 1 ] || fail "the project holds not one snapshot but: '$found'"
+  SNAPSHOT="$found"
+  snapshot_complete
+}
+
+# The restore command the log `$1` printed, the one a person runs: its
+# snapshot in SNAPSHOT and the command's words in RESTORE_ARGS.
+printed_restore() {
+  local line
+  line="$(sed -n 's/^  cyfr \(restore .*\)$/\1/p' "$WORK/$1.log")"
+  [ "$(printf '%s\n' "$line" | grep -c .)" = 1 ] || fail "the failed update printed not one cyfr restore command: $(tail -n 20 "$WORK/$1.log")"
+  read -r -a RESTORE_ARGS <<<"$line"
+  [ "${#RESTORE_ARGS[@]}" = 2 ] || fail "the printed restore is not 'cyfr restore SNAPSHOT': cyfr $line"
+  SNAPSHOT="${RESTORE_ARGS[1]}"
+  snapshot_complete
+}
+
+# The pulls cyfr update must make were made, through docker pull, before
+# its first stop: both release images by the new manifest's digests, and
+# Caddy and Tailscale by the digests the compose file pins, as written
+# (apps/codex/cmd/update_test.go lists the same four).
+pulled_before_stop() {
+  python3 -I - "$FAULTS/calls" "ghcr.io/cyfrworks/cyfr@$NEW_DIGEST" "ghcr.io/cyfrworks/cyfr-locus@$LOCUS_DIGEST" \
+    "$(pinned_ref caddy)" "$(pinned_ref tailscale/tailscale)" <<'PY' || fail "cyfr update did not pull what its release names before its stop: $(cat "$FAULTS/calls")"
+import sys
+calls = open(sys.argv[1]).read().splitlines()
+stops = [i for i, c in enumerate(calls) if "stop" in c.split()]
+assert stops, "no stop"
+for ref in sys.argv[2:]:
+    at = [i for i, c in enumerate(calls) if c == "pull " + ref]
+    assert at and at[0] < stops[0], ref
+PY
+  ok "the four images were pulled before the stop"
+}
+
+# `$1` (caddy or tailscale/tailscale) as the old release's compose file
+# names it for a pull: its repository and pinned digest.
+pinned_ref() {
+  printf '%s@%s\n' "$1" "$(pinned_digest "$1" "$WORK/docker-compose.yml")"
+}
+
+# The calls recorded so far are forgotten, for the next update's.
+calls_reset() { : >"$FAULTS/calls"; }
 
 update_success_case() {
   update_old_home
   step "update: cyfr update to $NEW_VERSION, confirmed"
   cli_ok update update --continue-as "$NEW_VERSION" --yes
-  update_snapshot update
+  pulled_before_stop
+  only_snapshot
   ok "snapshot $SNAPSHOT: $(python3 -I -c 'import json, sys; print(",".join(json.load(open(sys.argv[1]))["parts"]))' "$SNAPSHOT/snapshot.json")"
   data_served "$NEW_VERSION" "$NEW_DIGEST"
 }
@@ -2474,7 +2557,8 @@ update_refused_case() {
     grep -qF -- "$said" "$WORK/refused.log" || fail "the refusal does not say \"$said\": $(tail -n 20 "$WORK/refused.log")"
   done
   ok "exit $status: $(grep -m1 -F "was built from schema" "$WORK/refused.log")"
-  [ "$(project_state)" = "$before" ] || fail "the refused update changed the project: $(project_state)"
+  ! grep -qw stop "$FAULTS/calls" || fail "the refused update made a stop: $(grep -w stop "$FAULTS/calls")"
+  [ "$(project_state)" = "$before" ] || fail "the refused update changed the project: $(diff <(printf '%s\n' "$before") <(project_state))"
   [ "$(compose ps -q cyfr)" = "$container" ] && [ "$(docker inspect --format '{{.State.StartedAt}}' "$container")" = "$started" ] ||
     fail "the refused update stopped or replaced cyfr"
   ok "the home was not stopped: cyfr is the container started at $started"
@@ -2492,11 +2576,12 @@ update_fail_case() {
     "A service refused to boot, and its log says why:" '[Cyfr] FATAL: CYFR_CRYPTO_KEYRING must be JSON'; do
     grep -qF -- "$said" "$WORK/fail.log" || fail "the failed update does not say \"$said\": $(tail -n 20 "$WORK/fail.log")"
   done
-  update_snapshot fail
+  pulled_before_stop
+  printed_restore fail
   [ -z "$(running)" ] || fail "the failed update left running: $(running)"
-  ok "exit $status: left stopped, the FATAL line shown, the snapshot $SNAPSHOT complete"
-  step "update-fail: cyfr restore of the snapshot, as root, as the failure says"
-  cli_run_root restore-fail restore "$SNAPSHOT" || fail "cyfr restore exited non-zero: $(tail -n 20 "$WORK/restore-fail.log")"
+  ok "exit $status: left stopped, the FATAL line shown, cyfr ${RESTORE_ARGS[*]} printed, its snapshot complete"
+  step "update-fail: cyfr ${RESTORE_ARGS[*]}, as the failure prints it, as root"
+  cli_run_root restore-fail "${RESTORE_ARGS[@]}" || fail "cyfr ${RESTORE_ARGS[*]} exited non-zero: $(tail -n 20 "$WORK/restore-fail.log")"
   data_served "$OLD_VERSION" "$OLD_DIGEST"
 }
 
@@ -2512,6 +2597,7 @@ update_interrupt_case() {
   cli="$(cli_pid int-stopped)"
   pid="$(await_paused)"
   [ -z "$(running)" ] || fail "the stack still runs while the update reads the roster offline: $(running)"
+  pulled_before_stop
   kill -INT "$cli"
   kill -CONT "$pid"
   status=0
