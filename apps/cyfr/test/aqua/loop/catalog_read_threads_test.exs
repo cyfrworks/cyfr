@@ -90,6 +90,79 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
     end
   end
 
+  describe "a local component's inspection" do
+    # The inspection of a local root carries the entries a pulled
+    # dependency's own manifest declares.
+    test "answers a pulled dependency's own entries, and the keep after it runs",
+         %{ctx: ctx, thread: thread} do
+      remote_reason = "REMOTE_PROSE_FROM_ACME"
+
+      entries = [
+        {"acme", "loop-dep",
+         %{
+           "dependencies" => %{
+             "static" => [
+               %{
+                 "ref" => "reagent:local.optional-leaf:1.0.0",
+                 "optional" => true,
+                 "reason" => remote_reason
+               }
+             ]
+           }
+         }},
+        {"local", "loop-root",
+         %{"dependencies" => %{"static" => [%{"ref" => "reagent:acme.loop-dep:1.0.0"}]}}}
+      ]
+
+      wasm = Cyfr.Test.Guests.wasm(:reagent)
+
+      for {publisher, name, extra} <- entries do
+        manifest =
+          Map.merge(
+            %{
+              "name" => name,
+              "version" => "1.0.0",
+              "type" => "reagent",
+              "publisher" => publisher
+            },
+            extra
+          )
+
+        assert {:ok, _} =
+                 Compendium.Registry.publish_bytes(
+                   ctx,
+                   wasm,
+                   %{
+                     name: name,
+                     version: "1.0.0",
+                     type: "reagent",
+                     publisher: publisher,
+                     manifest: Jason.encode!(manifest)
+                   },
+                   origin: if(publisher == "local", do: :local, else: :remote)
+                 )
+      end
+
+      turn = accept!(ctx, thread, "@aqua inspect the local root and keep what it says")
+
+      script!([
+        calls([
+          {"c1", "component.inspect", %{"reference" => "reagent:local.loop-root:1.0.0"}}
+        ]),
+        calls([{"c2", "notes.keep", %{"name" => "dependency-info", "content" => remote_reason}}]),
+        reply("kept")
+      ])
+
+      assert :completed = run(ctx, turn)
+
+      assert %{outcome: "ok", content: content} = step_result(ctx, turn, "c1")
+      assert content =~ remote_reason
+      assert %{outcome: "ok"} = step(ctx, turn, "c2")
+      assert {:ok, %{content: ^remote_reason}} = Aqua.Notes.read(ctx, "dependency-info")
+      assert read_threads(ctx, turn) == []
+    end
+  end
+
   describe "an execution read" do
     test "carries the read threads of its athanor's execution, and none of another athanor's",
          %{ctx: ctx} do

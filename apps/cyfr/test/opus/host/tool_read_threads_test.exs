@@ -316,7 +316,8 @@ defmodule Opus.Host.ToolReadThreadsTest do
     caller = admit_child!(fixture)
     join!(caller, ["thr_caller"])
 
-    assert %{"error" => "guest_error"} = tool(caller, @tool, %{"q" => "x"})
+    assert %{"error" => "guest_error", "message" => message} = tool(caller, @tool, %{"q" => "x"})
+    assert message =~ "sentinel-9d2e"
     assert_received {:called, "echo", _args}
     assert read_threads(caller) == ["thr_caller"]
     assert read_threads(reader) == []

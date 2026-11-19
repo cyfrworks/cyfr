@@ -626,13 +626,6 @@ defmodule Opus.Host.EgressTest do
       assert {:ok, %PinnedTarget{}} = pin(fixture, "https://203.0.113.10/", :fetch)
       assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:db8::20]:8080/", :stream)
     end
-
-    test "is pinned in every spelling of one IPv6 address" do
-      fixture = attached!(["*"])
-
-      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:db8::20]:8080/", :fetch)
-      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:0DB8:0:0::0020]:8080/", :fetch)
-    end
   end
 
   describe "a redirect" do

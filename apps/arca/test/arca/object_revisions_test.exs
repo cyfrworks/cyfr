@@ -281,7 +281,7 @@ defmodule Arca.ObjectRevisionsTest do
        %{actor: actor} do
     path = ["data", "p", "s.txt"]
     :ok = Arca.put(actor, path, "posts", threads: ["thr_b"])
-    :ok = Arca.append(actor, path, "x", threads: ["thr_a", "thr_b"])
+    :ok = Arca.append(actor, path, "x", threads: ["thr_a"])
 
     assert {:ok, "postsx", ["thr_a", "thr_b"]} = ObjectRevisions.read(actor, path)
 

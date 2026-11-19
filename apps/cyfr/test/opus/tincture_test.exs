@@ -355,6 +355,18 @@ defmodule Opus.TinctureTest do
       assert started.type == "execution.started"
       assert started |> Arca.ExecutionEvents.data() |> Map.keys() == ["attempt"]
     end
+
+    test "runs on its profile's grant with no static dependency declared", %{ctx: ctx} do
+      node = tincture!(ctx, "tinc-narrow", %{"actions" => ["component.search"]}, [])
+      _owner = profile!(ctx, node, :owner)
+      worker!([%{"answer" => 2}])
+      ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
+
+      assert {:ok, %{status: :completed, execution_id: execution_id}} =
+               Opus.Tincture.invoke(ctx, args("tinc-narrow", :protected), :protected)
+
+      assert {:ok, []} = Arca.Execution.read_threads(Sanctum.Context.actor(ctx), execution_id)
+    end
   end
 
   describe "the tincture and its profile are read on every call" do

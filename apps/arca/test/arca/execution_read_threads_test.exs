@@ -112,7 +112,7 @@ defmodule Arca.ExecutionReadThreadsTest do
     sibling = admit!(%{parent_execution_id: root.id, root_execution_id: root.id})
 
     assert :ok = Execution.join_threads(actor(), child.id, ["thr_b"])
-    assert :ok = Execution.join_threads(actor(), child.id, ["thr_a", "thr_b"])
+    assert :ok = Execution.join_threads(actor(), child.id, ["thr_a"])
     assert :ok = Execution.join_threads(actor(), parent.id, [])
 
     for id <- [child.id, parent.id, root.id], do: assert(read_threads!(id) == ["thr_a", "thr_b"])

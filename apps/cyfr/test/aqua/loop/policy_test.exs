@@ -315,16 +315,26 @@ defmodule Aqua.Loop.PolicyTest do
     test "every catalogued action's success is what its declaration reads from the answer" do
       ctx = ctx()
       actor = Sanctum.Context.actor(ctx)
-      answer = %{content: "an answer"}
+      answer = %{content: "an answer", read_threads: ["thr_a"]}
 
-      for {tool, {_module, %{operations: operations}}} <- Sanctum.Catalog.operations(),
-          %Prima.Operation{action: action} = operation <- operations do
-        call = %Binding.Call{kind: :catalog, tool: tool, action: action, args: %{}}
+      carried =
+        for {tool, {_module, %{operations: operations}}} <- Sanctum.Catalog.operations(),
+            %Prima.Operation{action: action} = operation <- operations do
+          call = %Binding.Call{kind: :catalog, tool: tool, action: action, args: %{}}
+          threads = Policy.threads_of(call, {:ok, answer}, ctx)
 
-        assert Policy.threads_of(call, {:ok, answer}, ctx) ==
-                 Prima.Operation.read_threads(operation, actor, {:ok, answer}),
-               "#{tool}.#{action}"
-      end
+          assert threads == Prima.Operation.read_threads(operation, actor, {:ok, answer}),
+                 "#{tool}.#{action}"
+
+          {"#{tool}.#{action}", threads}
+        end
+
+      # The answer names one thread and no execution: the reads whose
+      # declaration reads the answer's own ids carry it, every other none.
+      assert for({name, ["thr_a"]} <- carried, do: name) |> Enum.sort() ==
+               ["file.read", "thread.events", "thread.search"]
+
+      assert for({name, [_ | _] = threads} <- carried, threads != ["thr_a"], do: name) == []
     end
 
     test "an action that declares no threads, and one nothing declares, carries none" do
@@ -393,9 +403,17 @@ defmodule Aqua.Loop.PolicyTest do
       namespace = resolve!("registry", %{"action" => "get_namespace", "slug" => "acme"})
       note = resolve!("notes", %{"action" => "read", "name" => "plan"})
       read = resolve!("source", %{"action" => "read", "path" => "components/x"})
+      write = resolve!("source", %{"action" => "write", "path" => "components/x"})
 
-      for call <- [search, namespace, note, read],
-          failure <- [{:error, admission}, {:error, execution}, {:error, :not_found}],
+      failures = [
+        {:error, admission},
+        {:error, execution},
+        {:error, :not_found},
+        {:error, "the registry said: buy now"}
+      ]
+
+      for call <- [search, namespace, note, read, write],
+          failure <- failures,
           do: assert(Policy.threads_of(call, failure, ctx) == [], "#{call.tool}.#{call.action}")
     end
   end

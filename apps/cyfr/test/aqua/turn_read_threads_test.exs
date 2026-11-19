@@ -5,7 +5,8 @@ defmodule Aqua.TurnReadThreadsTest do
   @moduledoc """
   A turn's read threads (`turns.read_threads`): the ids of the threads
   whose posts it came to hold, grown through the real loop by every way
-  those posts reach it — a read or a search of a thread, a report a
+  those posts reach it — a read or a search of a thread, an earlier turn
+  of its own thread whose rows it sends, a report a
   workspace thread delivered, another turn's reply, a file a launched app
   wrote, the answer of a launched app that read it and a listing of the
   turn's own runs, whose errors may quote them — and what deleting one of
@@ -34,6 +35,7 @@ defmodule Aqua.TurnReadThreadsTest do
   @files "catalyst:local.files"
   @model_id "scripted-small"
   @window 40_000
+  @full 21_000
 
   setup %{conn: conn} do
     Arca.Cache.init()
@@ -146,6 +148,55 @@ defmodule Aqua.TurnReadThreadsTest do
 
       # Neither the excerpt nor the files list carried a thread's posts.
       assert read_threads(ctx, turn) == []
+    end
+
+    test "an earlier turn's read in the thread's history joins a new turn before any call",
+         %{ctx: ctx, thread: thread} do
+      gone = fares!(ctx)
+      first = accept!(ctx, thread, "@aqua what do the fares say?")
+
+      script!([
+        calls([{"e1", "thread", %{"action" => "events", "thread" => gone.id}}]),
+        reply("They rise on Monday.")
+      ])
+
+      assert :completed = run(ctx, first)
+      assert read_threads(ctx, first) == [gone.id]
+      stop_script!()
+
+      # The second turn calls nothing: what it read is what its rows carried.
+      second = accept!(ctx, thread, "@aqua and now?")
+      script!([reply("still the fares")])
+      assert :completed = run(ctx, second)
+      assert read_threads(ctx, second) == [gone.id]
+      assert [] = for(%{kind: kind} = s <- steps(ctx, second), kind != "model", do: s)
+    end
+
+    test "a compaction summary carries its turn's read threads into the next turn",
+         %{ctx: ctx, thread: thread} do
+      gone = fares!(ctx)
+      # The first turn reads the thread, then compacts its own older rows.
+      first = accept_large!(ctx, thread)
+
+      # The note flush ahead of the compaction keeps nothing, and the window
+      # it reports is still full.
+      script!([
+        filling(calls([{"e1", "thread", %{"action" => "events", "thread" => gone.id}}])),
+        filling(reply("nothing to keep")),
+        reply("the story so far"),
+        reply("They rise on Monday.")
+      ])
+
+      assert :completed = run(ctx, first)
+      assert %{turn_id: by} = ctx |> rows(thread) |> Enum.find(&(&1.kind == "compaction"))
+      assert by == first.id
+      assert read_threads(ctx, first) == [gone.id]
+      stop_script!()
+
+      second = accept!(ctx, thread, "@aqua and now?")
+      script!([reply("still the fares")])
+      assert :completed = run(ctx, second)
+      assert read_threads(ctx, second) == [gone.id]
     end
   end
 
@@ -666,6 +717,15 @@ defmodule Aqua.TurnReadThreadsTest do
       "turn #{turn_id} to be #{status}"
     )
   end
+
+  # A message past the window's fill: the first round has nothing older to
+  # summarize; once a round follows it, the message is older than the
+  # boundary.
+  defp accept_large!(ctx, thread),
+    do: accept!(ctx, thread, "@aqua read this\n" <> String.duplicate("lorem ipsum ", 7_000))
+
+  # A model answer reporting the window as full.
+  defp filling(answer), do: put_in(answer, ["usage", "input_tokens"], @full)
 
   # A running turn on a root of its own, as the loop holds one.
   defp running!(ctx, thread) do
