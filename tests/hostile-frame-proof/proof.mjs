@@ -687,6 +687,41 @@ async function prompts(browser, browserName, base, segment, cookie, outDir) {
   return record;
 }
 
+// The control of the undeclared sends above: a frame that connects to one
+// origin lists the person's files and sends what it read there, and the
+// send arrives. The harness's proxy sees every tunnel a browser asks for to
+// the origin and every request in it, and the recording endpoint every send
+// that arrived.
+const DECLARED = { name: "declared_origin_send", column: "allowed", tincture: "declared-origin-probe",
+  holds: (r, sent, arrived) => r.read && r.read.ok === true && r.sent === true && sent > 0 && arrived > 0,
+  what: "a frame that connects to one origin reads what it declares, and its send to that origin arrives" };
+
+const declaredReady = () => {
+  const r = document.getElementById("results");
+  return !!r && r.dataset.ready === "yes" && !!window.__declared;
+};
+
+async function declaredOrigin(browser, browserName, base, proxy, receiver, segment, cookie) {
+  const context = await signedIn(browser, base, cookie);
+  try {
+    proxy.seen = [];
+    receiver.log = [];
+    const page = await context.newPage();
+    await openShell(page, base, segment, DECLARED.tincture);
+    const { frame } = await launch(page, DECLARED.tincture);
+    await frame.waitForFunction(declaredReady, null, { timeout: 60_000 });
+    const result = await frame.evaluate(() => window.__declared.run());
+    await sleep(SETTLE_MS);
+    const sent = proxy.seen.filter((entry) => entry.host === ATTACKER).length;
+    const arrived = recorded(receiver, "/declared-sent").length;
+    const held = result.settled !== false && DECLARED.holds(result, sent, arrived);
+    check(held, browserName, "declared", DECLARED.name, DECLARED.what, { frame: result, to_origin: sent, arrived });
+    return { column: DECLARED.column, outcome: held ? "held" : "FAILED", frame: result, sent, arrived };
+  } finally {
+    await context.close();
+  }
+}
+
 const NOT_DRIVEN = [
   ["suspended_on_another_member",
     "an action after the frame was suspended on another member: a browser cell runs one member on SQLite, so it is proven in the cluster suite (apps/cyfr/test/cluster/frame_suspension_test.exs), the suspension made on one member and refused at the credential's next use on the other"],
@@ -713,6 +748,7 @@ async function main() {
       record[name].private = await phase(browser, name, "private", "containment-probe", base, proxy, receiver, segment, cookie, publicNeighbour);
       record[name].public = await phase(browser, name, "public", "containment-probe-public", base, proxy, receiver, segment, cookie, publicNeighbour);
       record[name].prompts = await prompts(browser, name, base, segment, cookie, outDir);
+      record[name].declared = await declaredOrigin(browser, name, base, proxy, receiver, segment, cookie);
     } finally {
       await browser.close();
     }
@@ -745,6 +781,7 @@ async function main() {
       const limit = attempt.detail && attempt.detail.limitation;
       return `${attempt.outcome || "not run"}${limit ? ` (the frame held the pointer over the prompt: ${limit.held_pointer_over_prompt ? "yes" : "no"})` : ""}`;
     }).join(" | ")} |`,
+    `| ${DECLARED.name} | ${DECLARED.column} | ${BROWSERS.map((b) => (record[b].declared || {}).outcome || "not run").join(" | ")} |`,
     `| session_blind_page | disclosure | ${blind ? "held" : "FAILED"} (asked of the server, with the cookie and without) |`,
     `| frame_request_refused | refused | ${framed ? "held" : "FAILED"} (asked of the server, as a frame and not) |`,
     ...NOT_DRIVEN.map(([name, why]) => `| ${name} | not driven | ${why} |`),
