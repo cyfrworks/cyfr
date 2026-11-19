@@ -516,6 +516,9 @@ defmodule PrismWeb.SystemLayerQuestionTest do
              "aqua is trying to use tables to delete a table", known},
             {"tincture:local.board", "the app local.board", "board", "board",
              "board is trying to use tables to delete a table", known},
+            # A publisher may hold dots; the app's own name never does.
+            {"tincture:stripe.com.q-asker", "the app stripe.com.q-asker", "q-asker", "q-asker",
+             "q-asker is trying to use tables to delete a table", known},
             {"device:pcl_0123456789abcdef", "a paired device (…abcdef)",
              "A paired device (…abcdef)", "a paired device (…abcdef)",
              "A paired device (…abcdef) is trying to use tables to delete a table", known},
@@ -904,7 +907,9 @@ defmodule PrismWeb.SystemLayerQuestionTest do
     for {summary, ends} <- [
           {"drop the table users", "drop the table users."},
           {"drop the table users.", "drop the table users."},
-          {"drop the table users?", "drop the table users?"}
+          {"drop the table users?", "drop the table users?"},
+          {"drop the table users. ", "drop the table users."},
+          {"drop the table users ", "drop the table users."}
         ] do
       test "the sentence ends with one full stop: #{inspect(summary)}", setup do
         view = screen!(setup)

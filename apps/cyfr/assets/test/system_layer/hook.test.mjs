@@ -65,11 +65,17 @@ function fakeDialog(doc, calls, controls) {
       calls.push("close")
       dialog.open = false
     },
-    // The prompt's controls; it holds no time to show in local time or count down.
-    querySelectorAll: (selector) => (selector.startsWith("time[") ? [] : controls),
+    // The prompt's controls; no time to show in local time, and a question's
+    // countdown only when a test draws one.
+    countdown: null,
+    querySelectorAll: (selector) =>
+      selector === "time[data-countdown]"
+        ? (dialog.countdown ? [dialog.countdown] : [])
+        : selector.startsWith("time[") ? [] : controls,
     // The element the prompt marks for its first focus, if any.
     marked: null,
-    querySelector: (selector) => (selector === "[data-focus-first]" ? dialog.marked : null)
+    querySelector: (selector) =>
+      selector === "[data-focus-first]" ? dialog.marked : selector === "time[data-countdown]" ? dialog.countdown : null
   })
   return dialog
 }
@@ -914,6 +920,53 @@ describe("a page's typed form, marked with its prompt", () => {
     assert.equal(marks.size, 0)
 
     SystemLayer.reconnected.call({marks: undefined})
+  })
+})
+
+describe("a question's countdown", () => {
+  test("ticks only while a countdown is drawn, one ticker at a time, and moves its text each second", () => {
+    const deadline = "2026-11-19T10:00:00Z"
+    const timers = new Map()
+    let next = 1
+    let clock = Date.parse(deadline) - 125000
+    const real = {setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval, now: Date.now}
+    globalThis.setInterval = (callback, ms) => (timers.set(next, {callback, ms}), next++)
+    globalThis.clearInterval = (id) => timers.delete(id)
+    Date.now = () => clock
+    const countdownOn = () => ({attrs: {datetime: deadline, "data-countdown": ""}, textContent: "", getAttribute(name) { return this.attrs[name] }})
+
+    try {
+      mount({open: "false", promptId: ""})
+      assert.equal(timers.size, 0, "no ticker before a question is drawn")
+
+      dialog.countdown = countdownOn()
+      hook.updated()
+      assert.equal(timers.size, 1, "a ticker while a countdown is drawn")
+      assert.equal(dialog.countdown.textContent, "2:05 left")
+      hook.updated()
+      assert.equal(timers.size, 1, "never two at once")
+
+      const [{callback, ms}] = timers.values()
+      assert.equal(ms, 1000)
+      clock += 1000
+      callback()
+      assert.equal(dialog.countdown.textContent, "2:04 left", "the ticker moves the text")
+
+      dialog.countdown = null
+      hook.updated()
+      assert.equal(timers.size, 0, "no ticker after the card goes")
+
+      dialog.countdown = countdownOn()
+      hook.updated()
+      assert.equal(timers.size, 1)
+      hook.destroyed()
+      hook = null
+      assert.equal(timers.size, 0, "no ticker once the layer is destroyed")
+    } finally {
+      globalThis.setInterval = real.setInterval
+      globalThis.clearInterval = real.clearInterval
+      Date.now = real.now
+    }
   })
 })
 

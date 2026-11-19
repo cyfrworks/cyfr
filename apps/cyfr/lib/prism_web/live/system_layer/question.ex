@@ -140,7 +140,8 @@ defmodule PrismWeb.SystemLayer.Question do
   escaped text: nothing in a component's words is read as markup.
   """
   def headline(assigns) do
-    summary = assigns.subject.summary
+    # The summary as drawn: no trailing white space before CYFR's stop.
+    summary = String.trim_trailing(assigns.subject.summary)
     {caller, verb} = subject(name(assigns.subject.caller))
 
     assigns =
@@ -189,16 +190,26 @@ defmodule PrismWeb.SystemLayer.Question do
     case Caller.decode(text) do
       {:ok, :person} -> :you
       {:ok, {:agent, name}} -> {:named, name}
-      {:ok, {:tincture, ref}} -> {:named, ref |> String.split(".", parts: 2) |> List.last()}
+      {:ok, {:tincture, ref}} -> {:named, app_name(ref)}
       _other -> {:words, caller_words(text)}
+    end
+  end
+
+  # An app's own name, from its reference (`<publisher>.<name>`) as the
+  # reference's owner reads it: a publisher may hold dots, a name none.
+  defp app_name(ref) do
+    case Prima.ComponentRef.parse("tincture:" <> ref) do
+      {:ok, %Prima.ComponentRef{name: name}} -> name
+      {:error, _unread} -> ref
     end
   end
 
   defp capital(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
 
   # The card ends the sentence with a full stop unless the component's last
-  # words end it already: after the summary, or after the title when there
-  # is no summary.
+  # words end it already, past any white space (the summary is drawn with
+  # none at its end): after the summary, or after the title when there is
+  # no summary.
   defp ends_unstopped?(summary), do: not String.ends_with?(summary, [".", "!", "?"])
 
   @doc """

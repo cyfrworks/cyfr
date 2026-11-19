@@ -215,11 +215,8 @@ export default {
     globalThis.document.addEventListener("pointerlockchange", this.onEscalated)
 
     localTimes(this.dialog)
-    countdowns(this.dialog)
-    // A question's time left moves each second here, in the browser: the
-    // server sent its deadline once. The ticker never holds a process open.
-    this.ticker = setInterval(() => countdowns(this.dialog), 1000)
-    if (this.ticker && typeof this.ticker.unref === "function") this.ticker.unref()
+    this.ticker = null
+    this.countdown()
     this.sync()
   },
 
@@ -227,7 +224,7 @@ export default {
     if (this.el.dataset.account) return
     this.dialog = this.el.querySelector("dialog")
     localTimes(this.dialog)
-    countdowns(this.dialog)
+    this.countdown()
     this.sync()
   },
 
@@ -237,7 +234,7 @@ export default {
     // A layer that goes covers nothing and does nothing more: its state
     // machine ends, and a fullscreen exit still settling finds it gone.
     this.gone = true
-    clearInterval(this.ticker)
+    this.stopCountdown()
     this.layer = {...initial, attempt: this.layer ? this.layer.attempt + 1 : 0}
     this.cover(false)
     this.dialog.removeEventListener("cancel", this.onCancel)
@@ -245,6 +242,23 @@ export default {
     this.dialog.removeEventListener("keydown", this.onKeydown)
     globalThis.document.removeEventListener("fullscreenchange", this.onEscalated)
     globalThis.document.removeEventListener("pointerlockchange", this.onEscalated)
+  },
+
+  // A question's time left moves each second, in the browser, from the
+  // deadline the server sent once: one ticker while a card with a countdown
+  // is drawn, none otherwise. It never holds a process open.
+  countdown() {
+    const drawn = typeof this.dialog?.querySelector === "function" && this.dialog.querySelector("time[data-countdown]")
+    if (!drawn) return this.stopCountdown()
+    countdowns(this.dialog)
+    if (this.ticker) return
+    this.ticker = setInterval(() => countdowns(this.dialog), 1000)
+    if (typeof this.ticker?.unref === "function") this.ticker.unref()
+  },
+
+  stopCountdown() {
+    if (this.ticker) clearInterval(this.ticker)
+    this.ticker = null
   },
 
   // An element of the account pages' hop and return: the browser sent there
