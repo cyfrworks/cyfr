@@ -23,8 +23,8 @@ defmodule PrismWeb.SchedulesLive do
 
   A schedule may instead hold a line for Aqua: each time it runs, Aqua is
   sent the line in the person's daily thread, under the schedule's name,
-  and does only what it may without asking (`Aqua.ScheduleTurns`). Only
-  the person, signed in, makes one; this page is where they do.
+  and does what its mode lets it (`Aqua.ScheduleTurns`). Only the person,
+  signed in, makes one; this page is where they do.
 
   Below the schedules, the athanor's feeds (`feed.list`): each feed's name,
   binding id, component, operation, interval, the time of its last
@@ -654,7 +654,7 @@ defmodule PrismWeb.SchedulesLive do
                   class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 >{@form[:line].value}</textarea>
                 <p class="mt-1 text-xs text-gray-500">
-                  Each time it runs, Aqua is sent this line in your daily thread, under the schedule's name. It does only what it may do without asking you, and stops at the first thing that needs your approval.
+                  Each time it runs, Aqua is sent this line in your daily thread, under the schedule's name. It does what its mode lets it: in auto, every tool it is offered; in read-only, only reads. Nothing is asked of you.
                 </p>
               </div>
               <div :if={@form[:target].value != "aqua"}>

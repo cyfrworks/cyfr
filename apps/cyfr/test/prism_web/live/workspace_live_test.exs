@@ -8,8 +8,8 @@ defmodule PrismWeb.WorkspaceLiveTest do
   # pane, whose sends go to that thread alone; two tabs in the hand. Only
   # the person's own workspace thread opens; anything else reads as not
   # here and shows nothing of it. The state follows the thread: a move
-  # its list announces, a crew member's work ending under it, a card in a
-  # crew member's thread under it, its deletion; Stop ends its work.
+  # its list announces, a crew member's work ending under it, its
+  # deletion; Stop ends its work.
   # A crew member's thread under it opens in the same pane, which leads
   # back. Driven against the real loop and a scripted model; the crew's
   # delivery consumer is off in the suite, so an opening starts no turn.
@@ -386,7 +386,7 @@ defmodule PrismWeb.WorkspaceLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the state follows the thread: a move its list announces, a card under it, and its deletion",
+  test "the state follows the thread: a move its list announces, and its deletion",
        %{conn: conn, mine: mine, me: me, daily: daily} do
     {workspace, _chart, _ref} = charted!(me, daily)
     {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
@@ -398,15 +398,6 @@ defmodule PrismWeb.WorkspaceLiveTest do
 
     wait_until(fn ->
       has_element?(view, ~s(#workspace-state[data-state="needs_you"]), "Needs you")
-    end)
-
-    # A card decided in a crew member's thread under it announces no move
-    # of the workspace thread's own; the athanor's notice is enough.
-    move!(workspace, "open")
-    Sanctum.Notify.broadcast(me.athanor_id, :approval_resolved, %{thread_id: "thr_crew"})
-
-    wait_until(fn ->
-      has_element?(view, ~s(#workspace-state[data-state="open"]), "Working")
     end)
 
     # Deleted while open: nothing of it is left, its posts included.

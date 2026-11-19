@@ -5,8 +5,8 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   @moduledoc """
   The page the soul reads first — `about-you`, pinned through the `notes`
   tool — and the notes
-  kept here out of the threads. Both are written through the tool a
-  card in chat goes through, so one gate answers for both; a write here
+  kept here out of the threads. Both are written through the tool Aqua
+  calls in a thread, so one gate answers for both; a write here
   changes nothing another section shows, so the section reloads itself.
 
   Aqua keeps the page current itself, so the section says when Aqua wrote
@@ -49,7 +49,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   def handle_event("dismiss_flash", _params, socket), do: {:noreply, clear_flash(socket)}
 
   # The pinned page, written through the `notes` tool: the person at the
-  # keyboard and a card in chat go through one gate. The cap is bytes,
+  # keyboard and Aqua in a thread go through one gate. The cap is bytes,
   # since the page is read into every turn; the counter here reads the
   # same number the tool refuses over.
   def handle_event("about_edit", _params, socket) do

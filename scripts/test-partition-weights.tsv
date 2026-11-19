@@ -583,7 +583,6 @@
 0.0	apps/cyfr/test/prism/labels_test.exs
 32.7	apps/cyfr/test/prism/tincture_registry_test.exs
 0.1	apps/cyfr/test/prism_web/athanors_test.exs
-0.3	apps/cyfr/test/prism_web/components/aqua_approval_card_test.exs
 0.7	apps/cyfr/test/prism_web/controllers/company_login_controller_test.exs
 0.6	apps/cyfr/test/prism_web/controllers/device_unlock_controller_test.exs
 0.5	apps/cyfr/test/prism_web/controllers/download_outsider_test.exs

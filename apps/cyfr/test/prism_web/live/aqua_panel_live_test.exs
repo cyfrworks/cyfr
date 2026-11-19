@@ -604,12 +604,6 @@ defmodule PrismWeb.AquaPanelLiveTest do
     :ok = Aqua.mark_read(me, unread.id, last.seq)
     wait_until(fn -> not has_element?(panel, "#aqua-panel-work-#{unread.id}") end)
 
-    # A card in a crew member's thread under one moves it with no
-    # announcement of its own: the athanor's notice reads the list again.
-    state!(going, "needs_you")
-    Sanctum.Notify.broadcast(me.athanor_id, :approval_pending, %{thread_id: "thr_crew"})
-    wait_until(fn -> has_element?(panel, row_state(going), "Needs you") end)
-
     # One opens at its layer: the page moves there and the panel gives way.
     panel |> element("#aqua-panel-work-#{waiting.id} button") |> render_click()
     assert_push_event(panel, "navigate", %{to: to})
@@ -1680,7 +1674,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # A workspace thread opens at its layer, and the panel gives way; a crew
     # member's thread under one moves the page to that layer and is shown
-    # here, over it, where its card is decided.
+    # here, over it.
     workspace = workspace!(me, "Moon report")
     {:ok, under} = Threads.crew_thread(actor, workspace.id, "builder")
 

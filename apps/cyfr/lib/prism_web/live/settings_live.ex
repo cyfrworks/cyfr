@@ -24,9 +24,8 @@ defmodule PrismWeb.SettingsLive do
       stands on included, which then leaves the page. A sign-out is a
       session's, never a key's: removing a key is the account pages', and
       the card links there.
-    * **Aqua's approvals** — how many hours an approval card waits for
-      the person's answer before it expires (`athanor.settings`, the
-      athanor's `approvals.expiry_hours`), and a link to API Keys.
+    * **API Keys** — a link to API Keys, where the person's own programs
+      and scripts get a key to call CYFR as them.
     * **Decisions about the host** — for the platform administrator, the
       gate's decisions no athanor holds (`decision.list_global`), each
       opened whole (`decision.get_global`), and closing an account at the
@@ -107,7 +106,6 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:new_link, nil)
       |> assign(:new_link_local, false)
       |> assign(:platform_settings, [])
-      |> assign(:approval_hours, nil)
       |> assign(:host_decisions, [])
       |> assign(:host_decision, nil)
       |> assign(:settings_revision, nil)
@@ -275,26 +273,6 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # A whole number of hours is stored; an empty field removes the stored
-  # wait (a `nil` in the patch deletes the key), so Aqua's own default
-  # holds again.
-  def handle_event("approvals_save", %{"hours" => hours}, socket) do
-    case String.trim(hours) do
-      "" ->
-        approvals_save(socket, nil, "Approvals wait Aqua's default time again.")
-
-      typed ->
-        case Integer.parse(typed) do
-          {n, ""} when n > 0 ->
-            approvals_save(socket, n, "Approvals now wait #{n} hours.")
-
-          _not_hours ->
-            {:noreply,
-             put_flash(socket, :error, "Not saved: the wait is a whole number of hours.")}
-        end
-    end
-  end
-
   def handle_event("host_decision", %{"id" => call_id}, socket) do
     case call_tool(socket, "decision/get_global", %{"call_id" => call_id}) do
       {:ok, %{decision: decision}} -> {:noreply, assign(socket, :host_decision, decision)}
@@ -357,18 +335,6 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  defp approvals_save(socket, hours, saved) do
-    args = %{"settings" => %{"approvals" => %{"expiry_hours" => hours}}}
-
-    case call_tool(socket, "athanor/settings", args) do
-      {:ok, _athanor} ->
-        {:noreply, socket |> load_approvals() |> put_flash(:info, saved)}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Not saved: #{error_message(reason)}")}
-    end
-  end
-
   # Closing an account needs the administrator's fresh confirmation: asked
   # for through the system layer, and repeated from `system_layer_repeat/4`
   # once confirmed.
@@ -412,7 +378,6 @@ defmodule PrismWeb.SettingsLive do
      |> load_door()
      |> load_invitations()
      |> load_settings()
-     |> load_approvals()
      |> load_host_decisions()
      |> load_prefs()
      |> load_identifier()
@@ -647,21 +612,6 @@ defmodule PrismWeb.SettingsLive do
   end
 
   defp load_settings(socket), do: assign(socket, :platform_settings, [])
-
-  # How long an approval card waits in the athanor this page stands in,
-  # when the person set it; unset, Aqua's own default holds.
-  defp load_approvals(socket) do
-    hours =
-      case call_tool(socket, "athanor/get", %{}) do
-        {:ok, %{settings: %{"approvals" => %{"expiry_hours" => hours}}}} when is_integer(hours) ->
-          hours
-
-        _unset ->
-          nil
-      end
-
-    assign(socket, :approval_hours, hours)
-  end
 
   # The host's own decisions, the newest first: the administrator's.
   defp load_host_decisions(%{assigns: %{context: %{platform_admin: true}}} = socket) do
@@ -1221,37 +1171,16 @@ defmodule PrismWeb.SettingsLive do
           </.table>
         </.card>
 
-        <%!-- How long Aqua's approval cards wait, and where API keys are made --%>
+        <%!-- Where API keys are made --%>
         <.card>
-          <section id="approvals">
-            <h3 class="text-sm font-medium text-gray-400 mb-1">Aqua's approvals</h3>
-            <p class="text-xs text-gray-500 mb-4">
-              When Aqua asks before it acts, its card waits this many hours for your answer,
-              then expires, and Aqua asks again the next time. Left empty, Aqua's own default
-              holds.
-            </p>
-            <form id="approvals-form" phx-submit="approvals_save" class="flex gap-2 items-end">
-              <label class="text-xs text-gray-500">
-                Hours
-                <.input
-                  name="hours"
-                  value={@approval_hours}
-                  type="number"
-                  id="approval-hours"
-                  placeholder="default"
-                />
-              </label>
-              <.button type="submit" variant="ghost">Save</.button>
-            </form>
-            <p class="text-xs text-gray-500 mt-4" data-test="api-keys-link">
-              Your own programs and scripts call CYFR as you with an API key: <.link
-                navigate={PrismWeb.Focus.path(assigns[:athanor_route], "/api-keys")}
-                class="underline"
-              >
-                API Keys
-              </.link>.
-            </p>
-          </section>
+          <p class="text-xs text-gray-500" data-test="api-keys-link">
+            Your own programs and scripts call CYFR as you with an API key: <.link
+              navigate={PrismWeb.Focus.path(assigns[:athanor_route], "/api-keys")}
+              class="underline"
+            >
+              API Keys
+            </.link>.
+          </p>
         </.card>
 
         <%!-- The host's own decisions, and closing an account (platform admins) --%>

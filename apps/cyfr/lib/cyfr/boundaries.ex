@@ -672,11 +672,10 @@ defmodule Cyfr.Boundaries do
           "it passes no rate-limit plug, which makes the console the only per-address " <>
           "bound on the anonymous sign-in requests it mints. " <>
           "`Sanctum.Gate` is the gate the console's and the web tier's calls pass. " <>
-          "`Sanctum.Catalog` is the approval card's read of an action's declaration, " <>
-          "the stream ingress's read of a stream's (`CyfrWeb.SSE`) and the Aqua page's " <>
-          "read of the table's tools and of what a chain reaches; `Sanctum.Annotations` " <>
-          "is that page's read of a tool's declared actions and the approval card's " <>
-          "decoding of a standing. `Sanctum.Refusals` classifies and renders a refusal " <>
+          "`Sanctum.Catalog` is the stream ingress's read of a stream's declaration " <>
+          "(`CyfrWeb.SSE`) and the Aqua page's read of the table's tools and of what a " <>
+          "chain reaches; `Sanctum.Annotations` is that page's read of a tool's declared " <>
+          "actions. `Sanctum.Refusals` classifies and renders a refusal " <>
           "for the console's pages and the web tier's answers. " <>
           "`Sanctum.Decisions`, `Sanctum.RequestLog` and `Sanctum.PolicyLog` are the " <>
           "activity page's reads of the decision record, the request log and the policy " <>
@@ -902,7 +901,7 @@ defmodule Cyfr.Boundaries do
       into: "Aqua",
       allow: ~w(Aqua),
       reason:
-        "the console reads threads, approvals, attachments, notes, the virtual-tool " <>
+        "the console reads threads, attachments, notes, the virtual-tool " <>
           "catalogue and the reply stream through the assistant's root facade, and " <>
           "follows a thread on `Cyfr.Bus`. " <>
           "Boundary's exports are global, and `Aqua` exports `Supervisor` and `Text` beside " <>
@@ -1610,14 +1609,13 @@ defmodule Cyfr.Boundaries do
         :get_message,
         :latest_messages,
         :payload,
-        :post?,
-        :resolution
+        :post?
       ],
       reason:
         "the pane opens a thread, its latest messages and a room's crew threads under the " <>
-          "pane's actor, and decodes a message's stored payload and resolution, and whether " <>
-          "a row is a post, with the store's own projections, which read no row; the " <>
-          "assistant owns every thread write."
+          "pane's actor, and decodes a message's stored payload, and whether a row is a " <>
+          "post, with the store's own projections, which read no row; the assistant owns " <>
+          "every thread write."
     },
     # --- the MCP surface's web adapters ---
     %{

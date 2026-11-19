@@ -47,8 +47,7 @@ defmodule PrismWeb.AquaPanelLive do
   whose work ended that they have read leaves by itself. The list is read
   when the panel opens and again, while it is open, when the person's list
   announces a workspace thread (a crew member's thread under one announces
-  it too) and when a card opens or is decided in the athanor
-  (`Cyfr.Bus.Notify`).
+  it too).
 
   A workspace thread is not shown in the panel: it opens as its own layer
   over the desktop (`PrismWeb.WorkspaceLive`). Asked for one, from the
@@ -56,8 +55,7 @@ defmodule PrismWeb.AquaPanelLive do
   the panel moves the page there through the desktop's `navigate`
   (`assets/js/hooks/shell_page.js`) and closes, the thread's posts being
   the layer's. A crew member's thread under a workspace thread moves the
-  page to that layer and is shown here, over it, where its card is
-  decided.
+  page to that layer and is shown here, over it.
 
   The desktop opens it for a canvas's `settings` of `aqua`, on today's
   thread, or at the thread a `ref` names, where the attention stream's
@@ -561,13 +559,6 @@ defmodule PrismWeb.AquaPanelLive do
         %{assigns: %{phase: :ready}} = socket
       ),
       do: {:noreply, reload_athanor(socket)}
-
-  # A card opened or decided: a workspace thread, by a card of its own or
-  # one in a crew member's thread under it, may wait on the person or no
-  # longer.
-  def handle_info(%Cyfr.Bus.Notify{kind: kind}, %{assigns: %{phase: :ready}} = socket)
-      when kind in [:approval_pending, :approval_resolved],
-      do: {:noreply, read_works_if_open(socket)}
 
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
