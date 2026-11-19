@@ -116,8 +116,10 @@ defmodule Locus.Backends.BackendTest do
 
     # A waiting recv answers as soon as a line comes.
     task = Task.async(fn -> Backend.recv(session, 2, 10_000) end)
-    # sleep-ok: no event for the recv having entered its wait yet; 100 ms before the line
-    Process.sleep(100)
+
+    # The line is sent only once the recv waits in the session. No caller
+    # can see a recv that waits, so this reads the session's own state.
+    wait_until(fn -> :sys.get_state(session).waiters != [] end, 5_000, "the recv to wait")
     :running = Backend.send_lines(session, ["three"])
     assert texts(Task.await(task)) == ["three"]
   end

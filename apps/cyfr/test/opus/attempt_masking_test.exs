@@ -234,8 +234,6 @@ defmodule Opus.AttemptMaskingTest do
                  Opus.Attempt.call(fixture.execution_id, caller, {:push_deltas, @field})
 
         assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
-        # sleep-ok: no event for the crash report's log yet; 100 ms after :DOWN
-        Process.sleep(100)
       end)
 
     assert log =~ "Opus.Attempt"

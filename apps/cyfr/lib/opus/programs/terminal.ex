@@ -317,17 +317,19 @@ defmodule Opus.Programs.Terminal do
   # carried out here, so the caller leaving changes nothing, and answers
   # what the box answered. Nothing attaches to a session being closed.
   def handle_call({:close, _principal}, _from, %{ended: ended} = state) when ended != nil,
-    do: {:stop, :normal, {:ok, :already_gone}, state}
+    do: {:stop, :normal, {:ok, :already_gone}, unlisted(state)}
 
   def handle_call({:close, principal}, _from, state) do
     if listed?(state, principal) do
       state = stop_reader(state)
       if state.opening, do: GenServer.reply(state.opening, {:error, :closed})
 
-      answer =
+      # Only a close the backend confirmed frees the slot: one it left
+      # unanswered may still run there, and counts until this process ends.
+      {answer, state} =
         case close_session(state) do
-          :ok -> {:ok, :closed}
-          {:error, _unanswered} -> {:error, :unanswered}
+          :ok -> {{:ok, :closed}, unlisted(state)}
+          {:error, _unanswered} -> {{:error, :unanswered}, state}
         end
 
       state = ended(state, :closed)
@@ -338,6 +340,16 @@ defmodule Opus.Programs.Terminal do
   end
 
   def handle_call(_request, _from, state), do: {:reply, {:error, :not_found}, state}
+
+  # A close that answered for a program that runs no more has freed its
+  # slot: the session leaves the registry before the answer, since this
+  # process ends only after it, so a start made on that answer counts its
+  # turn's sessions without this one (`Opus.Programs.start/3`). What is
+  # left is this process letting its owner go.
+  defp unlisted(state) do
+    Registry.unregister(Opus.Programs.Registry, {:terminal, state.id})
+    state
+  end
 
   # The start's caller stopped waiting: the session it asked for is
   # nobody's, and ends; whatever the box gave it, the box closes.

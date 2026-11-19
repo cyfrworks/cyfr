@@ -269,6 +269,24 @@ defmodule Cyfr.Test.ScriptedBackends do
     end)
   end
 
+  @doc """
+  Write `line` into every running session of `server` and end each with
+  `exit_code` in one step, as a program that prints and exits: no `recv`
+  is answered the line without the exit.
+  """
+  def write_and_exit(%{agent: agent}, server, line, exit_code) do
+    Agent.update(agent, fn st ->
+      sessions =
+        Map.new(st.sessions, fn {id, s} ->
+          if elem(s.owner, 1) == server and s.running,
+            do: {id, %{emit(s, line) | running: false, exit_code: exit_code}},
+            else: {id, s}
+        end)
+
+      %{st | sessions: sessions}
+    end)
+  end
+
   defmodule Teardown do
     @moduledoc false
     use GenServer
