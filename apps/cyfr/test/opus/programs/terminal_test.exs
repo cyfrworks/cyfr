@@ -881,13 +881,21 @@ defmodule Opus.Programs.TerminalTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :error], fn ->
-          send(pid, {:EXIT, self(), :boom})
-          assert_receive {:DOWN, ^ref, :process, _pid, :boom}, 5_000
-          # sleep-ok: no event for the termination report's log yet; 200 ms after :DOWN
-          Process.sleep(200)
+          # A cast no clause takes: the failed callback's frame carries the
+          # state, which is where a crash report can print it.
+          GenServer.cast(pid, :no_such_cast)
+
+          assert_receive {:DOWN, ^ref, :process, _pid,
+                          {:function_clause,
+                           [
+                             {Opus.Programs.Terminal, :handle_cast, [:no_such_cast, _state],
+                              _where}
+                             | _stack
+                           ]}},
+                         5_000
         end)
 
-      assert log =~ "terminating"
+      assert log =~ "Opus.Programs.Terminal.handle_cast/2"
       refute log =~ @words_secret
     end
 
@@ -995,18 +1003,26 @@ defmodule Opus.Programs.TerminalTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :error], fn ->
-          send(pid, {:EXIT, self(), :boom})
-          assert_receive {:DOWN, ^ref, :process, _pid, :boom}, 5_000
-          # sleep-ok: no event for the termination report's log yet; 200 ms after :DOWN
-          Process.sleep(200)
+          # A cast no clause takes: the failed callback's frame carries the
+          # state, which is where a crash report can print it.
+          GenServer.cast(pid, :no_such_cast)
+
+          assert_receive {:DOWN, ^ref, :process, _pid,
+                          {:function_clause,
+                           [
+                             {Opus.Programs.Terminal, :handle_cast, [:no_such_cast, _state],
+                              _where}
+                             | _stack
+                           ]}},
+                         5_000
         end)
 
-      assert log =~ "terminating"
+      assert log =~ "Opus.Programs.Terminal.handle_cast/2"
       refute log =~ secret
 
       output = Opus.Programs.Output.new(secret)
 
-      {_kind, _reason, stack} =
+      {_kind, reason, stack} =
         try do
           # A state missing what the callback reads, so it raises holding
           # the output; called through `apply/3`, as a process would.
@@ -1015,6 +1031,7 @@ defmodule Opus.Programs.TerminalTest do
           kind, reason -> {kind, reason, __STACKTRACE__}
         end
 
+      refute inspect(reason, limit: :infinity, printable_limit: :infinity) =~ secret
       refute inspect(stack, limit: :infinity, printable_limit: :infinity) =~ secret
     end
   end

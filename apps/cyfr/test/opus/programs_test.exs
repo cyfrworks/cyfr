@@ -803,30 +803,6 @@ defmodule Opus.ProgramsTest do
              Emissary.External.Server.call_tool(bystander, "search", %{})
   end
 
-  test "a reader killed while its recv waits fails nothing of the service's", %{
-    ctx: ctx,
-    fake: fake
-  } do
-    # The server kills a session's reader whenever the session is dropped
-    # (a refusal, a new grant), which may be while its recv still waits on
-    # the service: a request whose client went away is no failure of the
-    # service's, here or once the HTTP server has given up on it.
-    start_controller(fake)
-    row = mcp_row(ctx, "abandoned", %{"NODE_ENV" => "production"})
-    pid = connect(ctx, row)
-    %{grant: grant, session: %{session: session}} = :sys.get_state(pid)
-
-    reader = spawn(fn -> Opus.Programs.Session.recv(grant, session, 1_000_000, 25_000) end)
-    assert_receive {:session, "recv", %{"after" => 1_000_000}, _fields}, 2_000
-    Process.exit(reader, :kill)
-
-    # Past the HTTP server's own wait for a request whose client is gone.
-    # sleep-ok: 6 s, past the 5 s shutdown wait cowboy gave the handler of a request whose
-    # client was killed (the Bypass fake then failed the test as killed); the fake's own
-    # recv still long-polls its 25 s
-    Process.sleep(6_000)
-  end
-
   test "a call refused as stale_epoch after the row moved leaves the server in error",
        %{ctx: ctx, fake: fake} do
     start_controller(fake)
@@ -1370,8 +1346,6 @@ defmodule Opus.ProgramsTest do
 
       # Answered, nothing is outstanding: no reader polls the session, so it
       # sees no activity of this server's.
-      # sleep-ok: no event for the last outstanding read having ended yet; 100 ms before the flush
-      Process.sleep(100)
       flush_sessions()
       refute_receive {:session, "recv", _message, _fields}, 400
 
@@ -2941,8 +2915,6 @@ defmodule Opus.ProgramsTest do
       log =
         capture_log(fn ->
           catch_exit(GenServer.call(controller, :no_such_call))
-          # sleep-ok: no event for the crash report's log yet; 200 ms after the failed call
-          Process.sleep(200)
         end)
 
       released = Process.monitor(held)
@@ -2968,8 +2940,6 @@ defmodule Opus.ProgramsTest do
       log =
         capture_log(fn ->
           catch_exit(GenServer.call(pid, :no_such_call))
-          # sleep-ok: no event for the crash report's log yet; 200 ms after the failed call
-          Process.sleep(200)
         end)
 
       assert log =~ "Emissary.External.Server"

@@ -227,6 +227,19 @@ defmodule Sanctum.QuestionsTest do
   defp answer(json), do: elem(Answer.decode(json), 1)
   defp once(effect), do: answer(%{"effect" => effect, "lasts" => "once"})
 
+  # Whether `pid` is inside `Questions.wait/4`, asleep between two reads
+  # of its question.
+  defp between_reads?(pid) do
+    case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, stack} ->
+        frames = for {module, function, _arity, _location} <- stack, do: {module, function}
+        {Process, :sleep} in frames and {Sanctum.Questions, :poll} in frames
+
+      nil ->
+        false
+    end
+  end
+
   defp hour_from_now,
     do: DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
 
@@ -802,8 +815,16 @@ defmodule Sanctum.QuestionsTest do
     test "a waiting ask sees an answer given meanwhile", person do
       {run, ref} = open!(person)
       waiter = Task.async(fn -> Questions.wait(person.ctx, run.attempt_id, 1, 5_000) end)
-      # sleep-ok: no event for the waiter having entered its wait yet; 100 ms before the answer
-      Process.sleep(100)
+
+      # The answer is given only once the waiter has read the question
+      # open and sleeps until its next read. A wait announces nothing and
+      # no caller can see one, so this reads the waiter's own stack.
+      Prima.Test.Wait.wait_until(
+        fn -> between_reads?(waiter.pid) end,
+        5_000,
+        "the waiter's first read"
+      )
+
       {:ok, _} = Questions.answer(person.ctx, ref, once("allow"))
       assert {:answer, :allowed} = Task.await(waiter)
       assert :pending != Questions.wait(person.ctx, run.attempt_id, 1, 0)
