@@ -91,25 +91,25 @@ defmodule Locus.Runtime.QuestionProbeTest do
              %{
                "ask_no" => 1,
                "action" => "delete_table",
-               "summary" => "Drop the table users",
+               "summary" => "drop the table users",
                "operation" => "DROP TABLE users"
              },
              %{
                "ask_no" => 2,
                "action" => "delete_rows",
-               "summary" => "Delete the row 7 from the table logs",
+               "summary" => "delete the row 7 from the table logs",
                "operation" => "DELETE FROM logs WHERE id = 7"
              },
              %{
                "ask_no" => 3,
                "action" => "delete_table",
-               "summary" => "Drop the table orders",
+               "summary" => "drop the table orders",
                "operation" => "DROP TABLE orders"
              },
              %{
                "ask_no" => 4,
                "action" => "delete_table",
-               "summary" => "Drop the table audit",
+               "summary" => "drop the table audit",
                "operation" => "DROP TABLE audit"
              }
            ]

@@ -79,11 +79,11 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.6.3 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.6.4 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.6.3"
+    assert canvas.version == "0.6.4"
 
     # The seed ships it beside the versions before it, which stay as they
     # shipped.
@@ -226,7 +226,7 @@ defmodule Cyfr.Test.SeedBundleTest do
   # Each shipped desktop: the versions it shipped before, oldest first,
   # and its newest.
   @desktops [
-    {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.3"},
+    {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.4"},
     {"line", ~w(0.1.0 0.2.0), "0.3.3"},
     {"night", ~w(0.1.0 0.2.0), "0.3.3"},
     {"road", ~w(0.1.0 0.2.0), "0.3.3"},

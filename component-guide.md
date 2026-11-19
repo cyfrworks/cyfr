@@ -544,7 +544,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `agent` | object | Agents | The agent's catalyst and model; its tools, and the provider's own search as `native_search`, are in `caps.tools`. Only valid on `type` `"agent"` |
 | `provides` | object | Optional | Public configuration for a need of a dependency: keyed by a `dependencies.static` reference, then the dependency's need name, each a `destination` and string `values` (at most 4 KiB). The consent shows that need as satisfied by the publisher |
 | `results` | object | Optional | The shape of what each operation answers, keyed by operation name (at most 64, each 1 to 64 characters), in the shape grammar: `string`, `number`, `integer`, `boolean`, `time`, `enum`, `list`, `object` and `json`, any of them `nullable`. `results[operation]` describes the `data` of the operation's `{"status", "data"}` envelope, and a feed accepts only a 2xx envelope whose data matches. An error envelope, a non-2xx status or an output that is not an envelope is refused, for catalysts and formulas alike, so a formula feeding a canvas returns the same envelope. A feed's binding copies the shape when it is bound; it decides nothing a consent covers and is not part of the release digest |
-| `asks` | object[] | Optional | The actions the catalyst asks its person about before doing them, each exactly a `name` (lowercase letters, digits and underscores, starting with a letter, at most 64 characters, once in the list) and a `title` completing "<component> wants to …" (Unicode letters, digits, spaces and hyphens, not blank, at most 80 characters); at most 16. Only valid on `type` `"catalyst"`, even when empty. The consent shows them as what the developer says the component asks before doing: nothing checks that it does |
+| `asks` | object[] | Optional | The actions the catalyst asks its person about before doing them, each exactly a `name` (lowercase letters, digits and underscores, starting with a letter, at most 64 characters, once in the list) and a `title` that finishes the card's "… is trying to use <component> to …" and the page's "<component> wants to …" (Unicode letters, digits, spaces and hyphens, not blank, at most 80 characters); at most 16. Only valid on `type` `"catalyst"`, even when empty. The consent shows them as what the developer says the component asks before doing: nothing checks that it does |
 
 ### Fields by Type
 
@@ -1020,7 +1020,11 @@ A catalyst that never imports the interface is unchanged by it.
 
 ### `cyfr:question/ask` — asking before an action
 
-A catalyst can ask its person before it does something it cannot undo, such as dropping a table, and wait for the answer. CYFR draws the question as a card above whatever the person has open: CYFR's own frame (your component's name, the words "wants to" and your action's title, your publisher, who started the run, until when it waits) around your summary and your operation, under "The component says:". Asked "Allow this?", the person answers for whoever started the run, *Never*, *Just once*, *For an hour* or *Always*, or for everyone, *Always*, which asks for their passkey. Closing the card refuses once. An answer that lasts stands as a permission for that action, listed on your component's page, where the person can also answer before any card has appeared.
+A catalyst can ask its person before it does something it cannot undo, such as dropping a table, and wait for the answer. CYFR draws the question as a card above whatever the person has open. Its heading is one sentence of CYFR's around two names and your words:
+
+> *aqua* is trying to use **supabase** to delete a table and it will drop the table users in the project acme.
+
+CYFR writes who started the run by its short name in italics ("You are", "*aqua* is", "*my-board* is"), "trying to use", your component's name in bold, "to", "and it will" and the full stop; your action's title and this run's summary fill the rest, drawn apart from CYFR's words in a colour of their own, as plain text: CYFR reads no markup in them. Under the sentence, beside a countdown of how long the card still waits, *Details* opens to your operation in a block of its own, then who started it and your component by their full names with their publishers, and the time the card waits until. Asked "Allow this?", the person answers for whoever started the run, *Never*, *Just once*, *For an hour* or *Always*, or for everyone, *Always*, which asks for their passkey. Closing the card refuses once. An answer that lasts stands as a permission for that action, listed on your component's page, where the person can also answer before any card has appeared.
 
 **You write the prompt.** Which actions your component has, what each is called, when it asks and what its summary and operation say are yours to define: CYFR adds only the frame. Everything below is about writing those words well.
 
@@ -1035,7 +1039,9 @@ interface ask {
     record request {
         /// A name this component's manifest declares under `asks`.
         action: string,
-        /// One line, at most 200 characters: "Drop the table users in the project acme".
+        /// One line, at most 200 characters, that finishes the person's
+        /// card after "and it will", lower-case and with no full stop of
+        /// its own: "drop the table users in the project acme".
         /// A control or format character refuses the request.
         summary: string,
         /// The exact operation, shown whole. Line breaks and
@@ -1073,9 +1079,9 @@ interface ask {
 ]
 ```
 
-`name` is the action's stable name; `title` completes "<your component> wants to …" and is published with the version: it cannot change under it. The consent sheet and your component's page list these as what you, the developer, say the component asks before doing.
+`name` is the action's stable name; `title` finishes "… is trying to use <your component> to …" on the card and "<your component> wants to …" on your component's page, so it is a lower-case phrase that starts with a verb ("delete a table"). It is published with the version: it cannot change under it. The consent sheet and your component's page list these as what you, the developer, say the component asks before doing.
 
-**How to write the words.** The `summary` names the thing and where it is, in one line of at most 200 characters: "Drop the table users in the project acme". The `operation` is the exact statement or request, whole; it keeps its line breaks and tabs. Both are written at run time, and neither ever carries a secret: CYFR masks only the credentials it dispensed to the run (the card says when it did), not anything else you put there. A control or format character (a direction override, a zero-width character) in either refuses the request, `none(invalid)`.
+**How to write the words.** The `summary` finishes the card's sentence after "and it will": a lower-case phrase that starts with a verb and names the thing and where it is, with no full stop of its own (the card adds one), in one line of at most 200 characters: "drop the table users in the project acme". CYFR shows it as you wrote it and rewrites nothing, so read the whole sentence aloud: "You are trying to use supabase to delete a table and it will drop the table users in the project acme." The `operation` is the exact statement or request, whole; it keeps its line breaks and tabs. Both are written at run time, and neither ever carries a secret: CYFR masks only the credentials it dispensed to the run (the card says when it did), not anything else you put there. A control or format character (a direction override, a zero-width character) in either refuses the request, `none(invalid)`.
 
 **How to tell which action an operation is.** From what your component alone can read: the SQL statement, the method and endpoint, a parameter of its input. When it cannot tell, ask under the harsher action.
 
@@ -1167,12 +1173,12 @@ fn run_one(statement: &str) -> &'static str {
     let request = match parsed {
         Statement::DropTable { table } => Request {
             action: "delete_table".to_string(),
-            summary: format!("Drop the table {table}"),
+            summary: format!("drop the table {table}"),
             operation: statement.to_string(),
         },
         Statement::DeleteRow { table, id } => Request {
             action: "delete_rows".to_string(),
-            summary: format!("Delete the row {id} from the table {table}"),
+            summary: format!("delete the row {id} from the table {table}"),
             operation: statement.to_string(),
         },
     };
