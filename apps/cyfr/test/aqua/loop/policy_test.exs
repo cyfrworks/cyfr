@@ -69,7 +69,7 @@ defmodule Aqua.Loop.PolicyTest do
     Aqua.Offered.resolve(keys, {:ok, true})
   end
 
-  @opts [title: "Aqua", sources: []]
+  @opts [title: "Aqua"]
 
   test "each row of the table in both modes: read-only runs reads alone, auto runs every one" do
     offered = offered(@rows)
@@ -89,11 +89,7 @@ defmodule Aqua.Loop.PolicyTest do
 
           assert auto ==
                    {:run,
-                    %{
-                      call: %{action: call.action, args: call.args},
-                      account: nil,
-                      binding: %{sources: [], consent_id: nil, classes: []}
-                    }},
+                    %{call: %{action: call.action, args: call.args}, account: nil}},
                  label
 
         :other ->
@@ -218,20 +214,15 @@ defmodule Aqua.Loop.PolicyTest do
         do: assert({:refuse, _} = Policy.decide(bad, offered, mode, @opts))
   end
 
-  test "a launch binds the turn's sources as its row holds them, or an unnamed outside source" do
-    launch =
-      resolve!("execution", %{
-        "action" => "run",
-        "reference" => "reagent:local.app:1.0.0",
-        "input" => %{}
-      })
-
+  test "a launch's decision is its call and its account, and binds nothing of what the turn read" do
+    args = %{"action" => "run", "reference" => "reagent:local.app:1.0.0", "input" => %{}}
+    launch = resolve!("execution", args)
     offered = Aqua.Offered.resolve(["execution.run"], {:ok, true})
 
-    assert {:run, %{binding: %{sources: [unnamed], consent_id: nil, classes: []}}} =
-             Policy.decide(launch, offered, "auto", title: "Aqua")
+    assert launch.action == "run"
 
-    assert unnamed == Prima.Source.outside(nil)
+    assert Policy.decide(launch, offered, "auto", title: "Aqua") ==
+             {:run, %{call: %{action: "run", args: launch.args}, account: nil}}
   end
 
   test "the offered set is each entry as written: an action the tool lacks, or a wildcard, " <>

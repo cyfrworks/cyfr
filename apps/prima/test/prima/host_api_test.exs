@@ -361,7 +361,7 @@ defmodule Prima.HostAPITest do
 
       assert Enum.sort(Map.keys(cases)) ==
                Enum.sort(
-                 ~w(fetch stream redirect denied metadata resolution redirect_credentials flow)
+                 ~w(fetch stream redirect denied metadata resolution redirect_credentials)
                )
 
       for {name, call} <- cases do
