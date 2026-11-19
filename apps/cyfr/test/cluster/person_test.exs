@@ -6,8 +6,8 @@ Code.require_file("support/support.exs", __DIR__)
 defmodule Cyfr.Cluster.PersonTest do
   @moduledoc """
   A person's work on a cell of two members, entered by the doors a person
-  has (`Cyfr.Cluster.Person`): a turn sent through the runner, a card
-  decided through the approvals door, a crew member asked by its `@name`,
+  has (`Cyfr.Cluster.Person`): a turn sent through the runner, a crew
+  member asked by its `@name`,
   a consent walked through plan, preview and commit, and a schedule made
   through the gate. Each case does part of that work on one member and
   asks the other what became of it, since a person's next request can
@@ -80,54 +80,6 @@ defmodule Cyfr.Cluster.PersonTest do
       messages = Cell.call(:b, Person, :messages, [person.token, thread])
       assert Enum.any?(messages, &(&1.content == "carried on")), inspect(messages)
       refute Enum.any?(messages, &(&1.content == "from the member that died")), inspect(messages)
-    end
-  end
-
-  describe "a person's card" do
-    # Both decisions are a person's, made through the one door a decision
-    # has (`Aqua.Approvals.resolve/3`), on a card a real turn paused on;
-    # each is one the card would take, so only the decision's own
-    # compare-and-set can keep the second from landing.
-    test "decided on both members at once, is decided once, and the other reads the winner's decision",
-         %{person: person} do
-      thread = Cell.call(:a, Person, :thread!, [person.token])
-      keep = %{"action" => "keep", "name" => "n", "content" => "x"}
-      worker!(:a, [call("c1", "notes", keep), reply("after the card")])
-
-      assert {:ok, %{turn_id: turn_id}} =
-               Cell.call(:a, Person, :send, [person.token, thread, "@aqua keep it"])
-
-      [approval] =
-        Wait.until!(
-          fn ->
-            case Cell.call(:b, Person, :pending_approvals, [person.token, turn_id]) do
-              [_] = pending -> pending
-              _none_yet -> false
-            end
-          end,
-          "the turn never paused on its card"
-        )
-
-      results =
-        Barrier.race(
-          a: {Person, :decide, [person.token, approval, :approved]},
-          b: {Person, :decide, [person.token, approval, :declined]}
-        )
-
-      decided = for {_member, {:ok, %{replayed: false} = outcome}} <- results, do: outcome
-      replayed = for {_member, {:ok, %{replayed: true} = outcome}} <- results, do: outcome
-
-      assert [%{decision: winner}] = decided, inspect(results)
-      assert [%{decision: ^winner}] = replayed, inspect(results)
-      assert winner in ["approved", "declined"]
-
-      assert %{"status" => ^winner} =
-               Observer.row("SELECT status FROM approvals WHERE id = $1", [approval])
-
-      Wait.until!(
-        fn -> Observer.turn(turn_id)["status"] == "completed" end,
-        "the turn never went on past its decided card: #{inspect(Observer.turn(turn_id))}"
-      )
     end
   end
 

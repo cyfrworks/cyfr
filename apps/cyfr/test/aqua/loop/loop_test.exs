@@ -2363,21 +2363,27 @@ defmodule Aqua.LoopTest do
     view
   end
 
-  # A grant through the consent walk, as a person makes it.
-  defp walk!(ctx, decisions) do
+  # A grant through the consent walk, as a person makes it: a walk whose
+  # head moved between its plan and its commit is refused `:stale_plan`
+  # and planned again, as the conflict asks, a bounded number of times.
+  defp walk!(ctx, decisions, tries \\ 20) do
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
-    {:ok, %{profile_id: profile_id}} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
+    case Sanctum.Consent.Commit.commit(ctx, %{
+           decisions: decisions,
+           plan_token: plan.plan_token,
+           proof: preview.proof,
+           commit_digest: preview.commit_digest,
+           expected_consent_revision: plan.expected_consent_revision
+         }) do
+      {:ok, %{profile_id: profile_id}} ->
+        profile_id
 
-    profile_id
+      {:error, {:consent_conflict, %{cause: :stale_plan}}} when tries > 1 ->
+        Process.sleep(50)
+        walk!(ctx, decisions, tries - 1)
+    end
   end
 
   defp pins(turn),
