@@ -775,9 +775,10 @@ defmodule PrismWeb.ProgramsLiveTest do
   end
 
   # The browser behind the page names the delivery it drew by the token it
-  # was handed with it; the page forwards only the token it pushed last.
-  test "the page forwards only the token of the delivery it pushed last",
-       %{conn: conn, athanor: athanor} do
+  # was handed with it: only the token of the delivery pushed last hands
+  # the page what came since.
+  test "an acknowledgment with a wrong token releases no output to the page",
+       %{conn: conn, athanor: athanor, user: user} do
     fake = controller!()
     row = driven_row!(athanor)
     {view, _html} = mount_athanor(conn, "/programs", athanor)
@@ -795,8 +796,19 @@ defmodule PrismWeb.ProgramsLiveTest do
 
     assert Base.decode64!(data) == "one\r\n"
     Scripted.write(fake, row.id, "two")
-    # sleep-ok: no event for the page holding the second output yet; 200 ms after the write
-    Process.sleep(200)
+
+    # The guesses are made only once the session has read "two", which it
+    # then keeps for the page and a wrong token would release.
+    Prima.Test.Wait.wait_until(
+      fn ->
+        match?(
+          {:ok, %{output: %{bytes: "two\r\n"}}},
+          Opus.Programs.read(person(user, athanor), session, byte_size("one\r\n"))
+        )
+      end,
+      5_000,
+      "the session to have read the second output"
+    )
 
     for guess <- ["1", "2", delivery <> "x"],
         do: render_hook(view, "terminal_written", %{"session" => session, "delivery" => guess})
