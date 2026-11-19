@@ -670,33 +670,36 @@ while IFS='|' read -r changed want; do
   pr
   if skipped "$want"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
-src/app.ex README.md apps/arca/lib/arca.ex apps/cyfr/assets/js/app.js|host=false partitions=false
+src/app.ex README.md apps/arca/lib/arca.ex apps/cyfr/assets/js/app.js|host=false partitions=false gate=false
+apps/codex/go.mod seed/components/x/1.0.0/a.txt apps/arca/test/stored_test.exs|host=false partitions=false gate=false
 scripts/lib/contain.sh|
 -scripts/lib/contain.sh|
 .github/workflows/test.yml|
 scripts/ci/self-test-scope.sh|
-tests/contain-test.sh|partitions=false
--tests/contain-test.sh|partitions=false
-tests/load-check/run.sh|partitions=false
-scripts/stages.tsv|partitions=false
+tests/contain-test.sh|partitions=false gate=false
+-tests/contain-test.sh|partitions=false gate=false
+tests/load-check/run.sh|partitions=false gate=false
+scripts/stages.tsv|partitions=false gate=false
+scripts/heavy-check.sh|partitions=false gate=false
 .github/workflows/release.yml|partitions=false
+.github/workflows/codex-ci.yml|partitions=false
 scripts/commit-gate.sh|partitions=false
-config/test.exs|host=false
-config/database_choice.exs|host=false
-scripts/test-partition-weights.tsv|host=false
-.github/actions/setup-elixir/action.yml|host=false
+config/test.exs|host=false gate=false
+config/database_choice.exs|host=false gate=false
+scripts/test-partition-weights.tsv|host=false gate=false
+.github/actions/setup-elixir/action.yml|host=false gate=false
 tests/commit-gate-test.sh|host=false partitions=false
 CASES
 
 label="self-test-scope: what the base changed since the branch left it is not the pull request's"
-scope_repo README.md -- scripts/lib/contain.sh .github/workflows/test.yml
+scope_repo README.md -- scripts/lib/contain.sh .github/workflows/test.yml scripts/commit-gate.sh
 pr
-if skipped 'host=false partitions=false'; then pass "$label"; else fail "$label"; fi
+if skipped 'host=false partitions=false gate=false'; then pass "$label"; else fail "$label"; fi
 
 label="self-test-scope: each job skipped is named not needed"
 scope_repo README.md
 pr
-if [ "$(grep -c '^harness-tests-[a-z]*: not needed, ' "$scratch/out")" = 2 ] && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
+if [ "$(grep -c '^harness-tests-[a-z]*: not needed, ' "$scratch/out")" = 3 ] && [ ! -s "$scratch/err" ]; then pass "$label"; else fail "$label"; fi
 
 for event in push schedule workflow_dispatch; do
   label="self-test-scope: a $event runs every job"
@@ -797,7 +800,7 @@ def evaluate(expression, job, cancelled, result, output):
         }.get(t, t if t.startswith("'") else None) or sys.exit(f"{job}: its if: names {t}, which this check does not read"))
     return eval("".join(out), {"__builtins__": {}})
 
-for job in ("harness-tests-host", "harness-tests-partitions"):
+for job in ("harness-tests-host", "harness-tests-partitions", "harness-tests-gate"):
     expression = condition(job)
     if expression is None:
         print(f"{job}: no if:")

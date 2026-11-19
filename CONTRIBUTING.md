@@ -301,9 +301,14 @@ same worktree refuses, naming the run that holds it.
   no handoff row does, and `go test ./... -race` are the pull request's
   run's alone: a defect in one shows there. A pull request's run starts
   the host and partitions harness self-test jobs only when it changes a
-  path their scripts read (`scripts/ci/self-test-scope.sh` holds each
-  job's paths), and shows a job it leaves out as skipped, not needed; a
-  push to main, a release and the nightly run both. To have one's answer before
+  path their scripts read, and the commit gate's only when it changes
+  the gate, its self-test, `scripts/lib` or a workflow
+  (`scripts/ci/self-test-scope.sh` holds each job's paths); it shows a
+  job it leaves out as skipped, not needed, and a push to main, a
+  release and the nightly run all three. The gate's paths are narrower
+  than what its self-test reads, so a change elsewhere that breaks it
+  shows on main's push run after the merge, where a red job is rerun
+  once and a second red opens an issue. To have one's answer before
   the pull request, run it here by name on all four quarters, as its
   workflow step runs it:
   `scripts/heavy-check.sh bash tests/commit-gate-test.sh`, or

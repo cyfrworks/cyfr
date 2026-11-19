@@ -4,27 +4,36 @@
 #
 # Decide which harness self-test jobs this run needs: scripts/ci/self-test-scope.sh
 #
-# test.yml's harness-tests-host and harness-tests-partitions jobs test the
-# CI and host scripts against stand-ins, so a pull request that changes no
-# file their scripts read cannot turn them red. For each job whose paths
-# below a pull request leaves as its base has them, this writes JOB=false
-# (host, partitions) to GITHUB_OUTPUT, and test.yml skips that job, once
-# this has succeeded. Its outputs are written last, in one write, after
-# everything else that can fail. It writes nothing, and every job runs,
-# everywhere else: a push to main, a release or the nightly
-# (test.yml called from release.yml or nightly.yml carries the caller's
-# event), a run with no event, and a diff that cannot be read.
+# test.yml's harness-tests-host, harness-tests-partitions and
+# harness-tests-gate jobs test the CI and host scripts against stand-ins.
+# For each job whose paths below a pull request leaves as its base has
+# them, this writes JOB=false (host, partitions, gate) to GITHUB_OUTPUT,
+# and test.yml skips that job, once this has succeeded. Its outputs are
+# written last, in one write, after everything else that can fail. It
+# writes nothing, and every job runs, everywhere else: a push to main, a
+# release or the nightly (test.yml called from release.yml or nightly.yml
+# carries the caller's event), a run with no event, and a diff that
+# cannot be read.
 #
 # It compares the merge commit a pull request's run checks out with that
 # commit's first parent, the base, so the job's checkout takes
 # fetch-depth: 2. That commit's second parent must be the pull request's
 # head (PR_HEAD_SHA): a checkout of anything else runs every job.
 #
-# Each job's paths are what the scripts it runs read, source, copy or
-# execute, followed into the scripts those run, and the job's own
-# definition (test.yml, the setup-elixir action) and this script. A path
-# left out skips a job that could have failed, so a script that starts
-# reading another file adds it here.
+# The host and partitions jobs' paths are what the scripts they run read,
+# source, copy or execute, followed into the scripts those run, and the
+# job's own definition (test.yml, the setup-elixir action) and this
+# script, so a pull request that changes none of them cannot turn them
+# red. A path left out skips a job that could have failed, so a script
+# that starts reading another file adds it here.
+#
+# The gate job's paths are narrower than what its self-test reads, on
+# purpose: that is every workflow and every script and test, and a set
+# that wide ran it on nearly every pull request. They are the gate, its
+# self-test, the library they share, the workflows the gate replays and
+# this script. A change elsewhere that breaks the gate's self-test shows
+# on main's push run after the merge, where a red job is rerun once and a
+# second red opens an issue.
 #
 # Exit 0 with or without the output, 64 when given any argument.
 set -euo pipefail
@@ -64,6 +73,14 @@ partitions=(
   config/test.exs config/database_choice.exs
 )
 
+# The commit gate and its self-test, the library they share, and the
+# workflows the gate replays.
+gate=(
+  scripts/commit-gate.sh tests/commit-gate-test.sh
+  scripts/lib
+  .github/workflows
+)
+
 [ "${GITHUB_EVENT_NAME:-}" = pull_request ] || exit 0
 [ -n "${PR_HEAD_SHA:-}" ] || exit 0
 second=$(git rev-parse -q --verify 'HEAD^2^{commit}') || exit 0
@@ -71,13 +88,13 @@ second=$(git rev-parse -q --verify 'HEAD^2^{commit}') || exit 0
 git rev-parse -q --verify 'HEAD^1^{commit}' >/dev/null || exit 0
 
 outputs=
-for job in host partitions; do
+for job in host partitions gate; do
   declare -n paths=$job
   # 0 is no change; 1 a change and anything else a diff that cannot be
   # read, and both run the job.
   if git diff --quiet HEAD^1 HEAD -- "${always[@]}" "${paths[@]}"; then
     outputs+="$job=false"$'\n'
-    echo "harness-tests-$job: not needed, this pull request changes none of the paths its scripts read"
+    echo "harness-tests-$job: not needed, this pull request changes none of its paths"
   fi
   unset -n paths
 done
