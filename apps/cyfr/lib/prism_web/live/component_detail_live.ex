@@ -246,8 +246,10 @@ defmodule PrismWeb.ComponentDetailLive do
   def system_layer_repeat({:question_set, _action}, _tool, args, socket),
     do: set_permission(socket, args)
 
-  # A question's card answered or closed on this page may have left a
-  # permission: the list is read again.
+  # A question's card answered on any of the person's screens, or closed
+  # on this page, may have left a permission: the list is read again. A
+  # standing answer set or removed on another screen announces nothing,
+  # so the list shows it on the page's next read.
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_report("question-" <> _ref, _outcome, socket),
     do: {:noreply, load_permissions(socket)}
@@ -298,6 +300,9 @@ defmodule PrismWeb.ComponentDetailLive do
       |> assign(:run, nil)
       |> assign(:run_error, "The run failed: #{error_message(reason)}")
 
+  # The registry changed: the component is read again, and with it its
+  # permissions, since a removal takes the person's answers for it and a
+  # new version may declare other actions.
   @impl true
   def handle_info(%Cyfr.Bus.Components{}, socket) do
     ref = socket.assigns.ref
@@ -308,7 +313,7 @@ defmodule PrismWeb.ComponentDetailLive do
         _ -> socket.assigns.component
       end
 
-    {:noreply, assign(socket, :component, component)}
+    {:noreply, socket |> assign(:component, component) |> load_permissions()}
   end
 
   def handle_info({:report_component, :submitted}, socket) do

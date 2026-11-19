@@ -806,6 +806,41 @@ defmodule PrismWeb.SystemLayerQuestionTest do
       end_views()
     end
 
+    # A page that lists permissions reads them again on `:confirmed`: an
+    # answer given away from this screen (here no screen at all) reports
+    # it as one given on it would, and an expiry or a withdrawal reports
+    # nothing, since no permission can come of it.
+    test "answered elsewhere it reports confirmed; expired or withdrawn it reports nothing",
+         setup do
+      view = screen!(setup)
+      {_run, ref} = Q.open!(setup.ctx, setup.component)
+      id = Prompt.question_id(ref)
+      shows!(view, id)
+
+      {:ok, answer} = PrismWeb.SystemLayer.Question.answer("allow_once", false)
+
+      assert {:ok, _answered} =
+               PrismWeb.Ops.call_tool(setup.ctx, "question/answer", %{
+                 "ref" => ref,
+                 "answer" => answer
+               })
+
+      wait_until(fn -> open_prompt(view) == nil end, 2_000, "answered elsewhere")
+      assert_receive {:host, {:system_layer, ^id, :confirmed}}
+      refute_receive {:host, {:system_layer, ^id, _again}}, 200
+
+      for stage <- [:expired, :withdrawn] do
+        {run, ref} = Q.open!(setup.ctx, setup.component)
+        id = Prompt.question_id(ref)
+        shows!(view, id)
+        Q.end!(setup.ctx, run, stage)
+        wait_until(fn -> open_prompt(view) == nil end, 2_000, "#{stage}")
+        refute_receive {:host, {:system_layer, ^id, _outcome}}, 200
+      end
+
+      end_views()
+    end
+
     test "a question no longer waiting takes its card away when it is answered", setup do
       view = screen!(setup)
       {run, ref} = Q.open!(setup.ctx, setup.component)

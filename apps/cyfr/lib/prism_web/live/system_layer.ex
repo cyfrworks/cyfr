@@ -232,9 +232,10 @@ defmodule PrismWeb.SystemLayer do
   confirmation it waited on. The desktop's layer and the panel's draw
   none. A choice sends its answer through `question.answer`; closing the
   card without choosing is "Don't allow", once. A card reports to the page
-  `:confirmed` once its answer is kept, and `:dismissed` when it is
-  closed, so a page that lists permissions reads them again; a card taken
-  away by its question's own end reports nothing.
+  `:confirmed` once its answer is kept, on whichever of the person's
+  screens it was given, and `:dismissed` when it is closed, so a page that
+  lists permissions reads them again; a card taken away by its question's
+  expiry or withdrawal reports nothing.
 
   "Always allow" for any caller needs a fresh confirmation. It is the
   layer's own change: its confirmation is drawn inside the card, which
@@ -1006,7 +1007,7 @@ defmodule PrismWeb.SystemLayer do
 
   defp on_fact(socket, %{"kind" => :question, "ref" => ref, "fact" => ended})
        when is_binary(ref) and ended in [:answered, :expired, :withdrawn],
-       do: end_question(socket, Prompt.question_id(ref))
+       do: end_question(socket, Prompt.question_id(ref), ended)
 
   defp on_fact(socket, _fact), do: socket
 
@@ -1028,11 +1029,17 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # A question that stopped waiting: its card goes, open or waiting, and
-  # a confirmation it waited on is cancelled.
-  defp end_question(socket, prompt_id) do
-    if known?(socket, prompt_id),
-      do: socket |> drop_prompt_asks(prompt_id, cancel: true) |> remove_prompt(prompt_id),
-      else: socket
+  # a confirmation it waited on is cancelled. Answered on another screen,
+  # the card reports `:confirmed` as it would have here, since the answer
+  # may have left a permission; a card answered here is gone before its
+  # fact arrives, so it reports once.
+  defp end_question(socket, prompt_id, ended) do
+    if known?(socket, prompt_id) do
+      if ended == :answered, do: report(prompt_id, :confirmed)
+      socket |> drop_prompt_asks(prompt_id, cancel: true) |> remove_prompt(prompt_id)
+    else
+      socket
+    end
   end
 
   # Another client's request, or this one's before it said so: shown with

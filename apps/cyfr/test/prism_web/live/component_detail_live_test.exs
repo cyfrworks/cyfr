@@ -1035,6 +1035,131 @@ defmodule PrismWeb.ComponentDetailLiveTest do
       )
     end
 
+    # A second screen of the same person: another session of theirs, on a
+    # page whose layer draws the card too.
+    defp other_screen!(user) do
+      other = log_in_user(Phoenix.ConnTest.build_conn(), user, claim: false)
+      {view, _html} = mount_athanor(other, "/executions")
+      view
+    end
+
+    defp card!(view, ref),
+      do:
+        Prima.Test.Wait.wait_until(
+          fn -> has_element?(view, ~s([data-test="question"][data-ref="#{ref}"])) end,
+          2_000,
+          "the card"
+        )
+
+    defp card_gone!(view, ref),
+      do:
+        Prima.Test.Wait.wait_until(
+          fn -> not has_element?(view, ~s([data-test="question"][data-ref="#{ref}"])) end,
+          2_000,
+          "the card gone"
+        )
+
+    test "a permission given on another screen is listed without a reload", %{
+      conn: conn,
+      user: user,
+      person: person,
+      component: component
+    } do
+      {view, _html} = mount_athanor(conn, @page)
+      other = other_screen!(user)
+      {_run, ref} = Q.open!(person, component)
+      card!(view, ref)
+      card!(other, ref)
+
+      other |> element(~s([data-choice="allow_hour"])) |> render_click()
+      assert [_answer] = Q.standing(person)
+
+      Prima.Test.Wait.wait_until(
+        fn -> answers(view, "delete_table") == [{"allow", "any"}] end,
+        2_000,
+        "the list read again"
+      )
+    end
+
+    test "an answer given once on another screen leaves the list as it was", %{
+      conn: conn,
+      user: user,
+      person: person,
+      component: component
+    } do
+      {view, _html} = mount_athanor(conn, @page)
+      set!(view, "delete_rows", %{"effect" => "deny", "caller" => "any", "lasts" => "always"})
+      other = other_screen!(user)
+      {_run, ref} = Q.open!(person, component)
+      card!(view, ref)
+
+      other |> element(~s([data-choice="allow_once"])) |> render_click()
+      card_gone!(view, ref)
+
+      assert answers(view, "delete_table") == []
+      assert answers(view, "delete_rows") == [{"deny", "any"}]
+      assert [%{action: "delete_rows"}] = Q.standing(person)
+    end
+
+    test "an answer for another component's question leaves this page's list as it was", %{
+      conn: conn,
+      user: user,
+      person: person
+    } do
+      other_component = Q.catalyst!(person, "rows")
+      {view, _html} = mount_athanor(conn, @page)
+      other = other_screen!(user)
+      {_run, ref} = Q.open!(person, other_component)
+      card!(view, ref)
+
+      other |> element(~s([data-choice="allow_hour"])) |> render_click()
+      card_gone!(view, ref)
+
+      assert [_answer] = Q.standing(person, "rows")
+      assert answers(view, "delete_table") == []
+      assert Q.standing(person) == []
+    end
+
+    test "a removal on another screen takes its answers off the list", %{
+      conn: conn,
+      ctx: ctx,
+      person: person
+    } do
+      # Published, not shipped with the server, so it can be deleted.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: "removable",
+          version: "1.0.0",
+          type: "catalyst",
+          publisher: "local",
+          manifest:
+            Jason.encode!(%{
+              "name" => "removable",
+              "type" => "catalyst",
+              "version" => "1.0.0",
+              "publisher" => "local",
+              "asks" => Q.asks()
+            })
+        })
+
+      {view, _html} = mount_athanor(conn, "/components/catalyst:local.removable:1.0.0")
+      set!(view, "delete_table", %{"effect" => "allow", "caller" => "any", "lasts" => "hour"})
+      assert answers(view, "delete_table") == [{"allow", "any"}]
+
+      assert {:ok, _deleted} =
+               PrismWeb.Ops.call_tool(person, "component/delete", %{
+                 "reference" => "catalyst:local.removable:1.0.0"
+               })
+
+      assert Q.standing(person, "removable") == []
+
+      Prima.Test.Wait.wait_until(
+        fn -> answers(view, "delete_table") == [] end,
+        2_000,
+        "the list read again"
+      )
+    end
+
     test "a denial for an hour reads as one, and Never allowed is a denial that lasts", %{
       conn: conn
     } do
