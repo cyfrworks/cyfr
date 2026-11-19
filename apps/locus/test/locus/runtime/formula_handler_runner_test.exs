@@ -51,7 +51,6 @@ defmodule Locus.Runtime.FormulaHandlerRunnerTest do
 
     on_exit(fn ->
       :socket.close(service)
-      :socket.close(runner_end)
       :socket.close(listener)
       File.rm(path)
     end)
@@ -83,9 +82,9 @@ defmodule Locus.Runtime.FormulaHandlerRunnerTest do
          stop: fn status -> send(test, {:stopped, status}) end}
       )
 
-    # The runner's control port polls `runner_end`'s descriptor, which the
-    # sockets' close above would otherwise hand to the next test under it.
-    Runners.control_gone_at_exit(runner)
+    # The runner's control port polls `runner_end`'s descriptor, so that
+    # socket outlives this test until the port has gone.
+    Runners.control_gone_at_exit(runner_end, runner)
 
     # The runner's root, held at its artifact fetch: a runner starts a
     # child only while it runs a subtree.
