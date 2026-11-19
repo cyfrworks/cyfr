@@ -876,15 +876,37 @@ def check_homebrew(wf, release):
     return None
 
 
+# What can hand the release's go build a build tag or a variable of the
+# command line's package: GOFLAGS, a go environment file (GOENV, `go env
+# -w`), -tags, the release proof's own tag (apps/codex/cmd/release_proof.go,
+# which reads every release from a local folder, unsigned) and -X of
+# github.com/cyfr/codex/cmd. None of these may appear where the release
+# build reads its settings.
+RELEASE_BUILD_TOKENS = ("GOFLAGS", "GOENV", "go env -w", "-tags", "releaseproof", "codex/cmd.")
+
+
+def build_token(value, where):
+    text = json.dumps(value)
+    hit = next((t for t in RELEASE_BUILD_TOKENS if t in text), None)
+    return f"{where} names {hit!r}, which could hand the release build a tag or a variable of the command line's package" if hit else None
+
+
 def check_goreleaser(config):
     # A release build passes no build tag and sets no variable of the
-    # command line's package: the releaseproof tag (apps/codex/cmd/
-    # release_proof.go) reads every release from a local folder, unsigned.
+    # command line's package, through any setting GoReleaser hands go:
+    # each build's tags, flags, ldflags, env and per-target overrides,
+    # and the top-level env and before hooks.
     for build in config.get("builds") or []:
-        if build.get("tags") or any("-tags" in str(f) for f in build.get("flags") or []):
-            return f".goreleaser.yml builds {build.get('binary')!r} with build tags ({build.get('tags')!r}, {build.get('flags')!r})"
-        if any("codex/cmd." in str(f) for f in build.get("ldflags") or []):
-            return f".goreleaser.yml's ldflags set a variable of the command line's package: {build.get('ldflags')!r}"
+        if build.get("tags"):
+            return f".goreleaser.yml builds {build.get('binary')!r} with build tags {build.get('tags')!r}"
+        for key in ("flags", "ldflags", "env", "overrides"):
+            reason = build_token(build.get(key) or [], f".goreleaser.yml's build {build.get('binary')!r} {key}")
+            if reason:
+                return reason
+    for key in ("env", "before"):
+        reason = build_token(config.get(key) or [], f".goreleaser.yml's top-level {key}")
+        if reason:
+            return reason
     # The changelog step is what reads --release-notes (GoReleaser's
     # changelog pipe): disabled, it publishes an empty body.
     if "disable" in (config.get("changelog") or {}):
@@ -2131,6 +2153,24 @@ def manifest_mode_failures(pinned, version):
     return failures, len(cases)
 
 
+# The release workflow hands GoReleaser's go no tag or variable of the
+# command line's package either (RELEASE_BUILD_TOKENS): not in the
+# workflow's env, nor the release job's, nor any of its steps' env, with or
+# scripts (an earlier step can write GITHUB_ENV or a go environment file).
+def check_release_build_env(wf, release):
+    job = wf["jobs"][release]
+    places = [("release.yml's env", wf.get("env") or {}), (f"release.yml's {release} job env", job.get("env") or {})]
+    for i, step in enumerate(job.get("steps") or []):
+        where = f"release.yml's {release} step {step.get('name') or i}"
+        places += [(f"{where} env", step.get("env") or {}), (f"{where} with", step.get("with") or {}),
+                   (f"{where} run", step.get("run") or "")]
+    for where, value in places:
+        reason = build_token(value, where)
+        if reason:
+            return reason
+    return None
+
+
 def check_shape(wf):
     reason = check_failures_pass_nothing(wf)
     if reason:
@@ -2147,6 +2187,7 @@ def check_shape(wf):
     release = next(k for k, job in wf["jobs"].items() if steps_using(job, "goreleaser/goreleaser-action"))
     return (
         check_trigger(wf)
+        or check_release_build_env(wf, release)
         or check_tag(wf, build, release)
         or check_merged_digest(wf, merge)
         or check_release_manifest(wf, merge, release)
@@ -2784,6 +2825,14 @@ GORELEASER_MUTANTS = [
     ("the release proof's tag as a flag", lambda c: c["builds"][0].update(flags=["-tags=releaseproof"])),
     ("the release proof's folder in the ldflags",
      lambda c: c["builds"][0]["ldflags"].append("-X github.com/cyfr/codex/cmd.proofReleases=/tmp/releases")),
+    ("the release proof's tag through the build's GOFLAGS",
+     lambda c: c["builds"][0].setdefault("env", []).append("GOFLAGS=-tags=releaseproof")),
+    ("the release proof's tag through the top-level GOFLAGS",
+     lambda c: c.update(env=(c.get("env") or []) + ["GOFLAGS=-tags=releaseproof"])),
+    ("the release proof's tag in a per-target override",
+     lambda c: c["builds"][0].update(overrides=[{"goos": "linux", "goarch": "amd64", "tags": ["releaseproof"]}])),
+    ("the release proof's tag written by a before hook",
+     lambda c: c.update(before={"hooks": ["go env -w GOFLAGS=-tags=releaseproof"]})),
 ]
 
 
@@ -2885,6 +2934,14 @@ MUTANTS = [
     ("the schema fingerprint read and not written", schema_not_written),
     ("no RELEASE_MANIFEST_DIR on GoReleaser", no_manifest_dir_env),
     ("a RELEASE_MANIFEST_DIR that is not the manifest's", manifest_dir_elsewhere),
+    ("the release proof's tag in the GoReleaser step's env",
+     lambda wf: step_using(wf, "release", "goreleaser/goreleaser-action").setdefault("env", {}).update(GOFLAGS="-tags=releaseproof")),
+    ("the release proof's tag in the release job's env",
+     lambda wf: wf["jobs"]["release"].setdefault("env", {}).update(GOFLAGS="-tags=releaseproof")),
+    ("the release proof's tag in the workflow's env",
+     lambda wf: wf.setdefault("env", {}).update(GOFLAGS="-tags=releaseproof")),
+    ("the release proof's tag written to GITHUB_ENV by an earlier step",
+     lambda wf: wf["jobs"]["release"]["steps"].insert(0, {"name": "planted", "run": 'echo "GOFLAGS=-tags=releaseproof" >> "$GITHUB_ENV"'})),
 ]
 
 # Mutants of test.yml's static job, each refused by check_static.
