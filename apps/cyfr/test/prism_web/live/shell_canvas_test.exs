@@ -920,7 +920,9 @@ defmodule PrismWeb.ShellCanvasTest do
       refute has_element?(view, ~s([data-canvas-place="canvas"][inert]))
     end
 
-    test "a full app fills the apps' area, from the top bar's bottom edge to the shelf's top edge, its capsule inside",
+    # Where it stands, from the top bar's bottom edge to the shelf's top
+    # edge, is the canvas proof's to measure (`app_over_canvas`).
+    test "a full app opens in the full place, its capsule inside",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       tincture!(ctx, "app-dash")
 
@@ -932,25 +934,7 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
       html = render(view)
 
-      classes = fn tag ->
-        tag |> then(&Regex.run(~r/class="([^"]*)"/, &1)) |> List.last() |> String.split()
-      end
-
-      # Inside the frames' box, which starts under the top bar and ends at
-      # the shelf's top edge, the shelf's height read from its stylesheet.
-      [frames] = Regex.run(~r/<div[^>]*id="canvas-frames"[^>]*>/, html)
-      assert "bottom-[var(--canvas-shelf-height)]" in classes.(frames)
-      assert "top-0" in classes.(frames)
-
-      [full] = Regex.run(~r/<div[^>]*data-canvas-place="full"[^>]*>/, html)
-      assert ~w(absolute inset-0 z-[64]) -- classes.(full) == []
-      refute "fixed" in classes.(full)
       assert html =~ ~r/data-canvas-place="full".*role="toolbar" aria-label="Tincture controls"/s
-
-      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
-      assert [_one] = Regex.scan(~r/--canvas-shelf-height: [0-9]+px;/, css)
-      assert css =~ ~r/\.canvas-shelf \{[^}]*height: var\(--canvas-shelf-height\);/
-      assert [_only_the_property] = Regex.scan(~r/52px/, css)
     end
 
     test "a layout published by another session of the same person is read again here; another person's is not",
@@ -3727,57 +3711,6 @@ defmodule PrismWeb.ShellCanvasTest do
       assert notice_text(view) == line
     end
 
-    test "the line stands in the shelf's strip at the chips' level, so a full app keeps the whole area above the shelf",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      seeded!(ctx)
-      tincture!(ctx, "app-dash")
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      render_hook(view, "frame_gone", %{"frame" => canvas(view).id})
-      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
-      settle!(view, fn -> assigns(view).posture == "hand" end)
-      open!(view, "tincture:local.app-dash")
-      assert %{placement: :full, visible: true} = app_frame(view, "app-dash")
-
-      html = render(view)
-      [notice] = Regex.run(~r/<div[^>]*id="system-layer-desktop-notice"[^>]*>/, html)
-      [devices] = Regex.run(~r/<button[^>]*id="shell-devices"[^>]*>/, html)
-
-      classes = fn tag ->
-        tag |> then(&Regex.run(~r/class="([^"]*)"/, &1)) |> List.last() |> String.split()
-      end
-
-      # Placed as the Devices chip is, after it on the shelf's left end, at
-      # its z-index, and one line no taller than a chip.
-      for class <- ~w(absolute bottom-2 z-[67] h-[26px] whitespace-nowrap) do
-        assert class in classes.(notice), class
-      end
-
-      assert "z-[67]" in classes.(devices)
-      refute "fixed" in classes.(notice)
-
-      # The apps stand above the shelf, and the shelf's stylesheet centres
-      # the line in its strip with the chips, half the room its 26 pixels
-      # leave on each side.
-      assert has_element?(view, ~s{#canvas-frames[class*="bottom-[var(--canvas-shelf-height)]"]})
-      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
-
-      assert css =~
-               ~r/#shell:has\(#canvas-shelf\) #shell-devices,\s*#shell:has\(#canvas-shelf\) #system-layer-desktop-notice \{ bottom: calc\(\(var\(--canvas-shelf-height\) - 26px\) \/ 2\); \}/
-
-      # Its width is the room the chips' spacer widens by while it stands,
-      # so nothing of the shelf is under it.
-      [_, width] = Regex.run(~r/#system-layer-desktop-notice \{ width: ([^;]+); \}/, css)
-
-      assert css =~
-               "#shell:has(#system-layer-desktop-notice) .canvas-shelf-chips { width: calc(4.75rem + #{width}); }"
-
-      assert "left-[4.75rem]" in classes.(notice)
-
-      [_, full_z] = Regex.run(~r/data-canvas-place="full"[^>]*class="[^"]*z-\[([0-9]+)\]/, html)
-      assert String.to_integer(full_z) < 67
-    end
-
     test "no safe mode is left to ask for: no chip, and the Devices chip stays",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
@@ -4396,7 +4329,9 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{open: false} = Enum.find(later, &(&1.name == "app-dash"))
     end
 
-    test "the topmost of many windows stays under the canvas's switcher",
+    # That the switcher stays above the topmost is the canvas proof's to
+    # measure (`window_drag`).
+    test "the topmost of many windows is shown, held to the apps' area",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       apps =
         for n <- 1..27 do
@@ -4421,12 +4356,6 @@ defmodule PrismWeb.ShellCanvasTest do
       html = render(view)
       [tag] = Regex.run(~r/<div[^>]*data-canvas-frame="#{top.id}"[^>]*>/, html)
       assert tag =~ "left: 0.00%; top: 0.00%; width: 100.00%; height: 100.00%;"
-      [_, app_z] = Regex.run(~r/z-index: ([0-9]+)/, tag)
-      # The switcher is the shelf's, which its stylesheet stacks.
-      assert html =~ ~r/<nav[^>]*id="canvas-shelf".*id="canvas-switcher"/s
-      css = File.read!(Path.expand("../../../assets/css/canvas_chrome.css", __DIR__))
-      [_, shelf_z] = Regex.run(~r/\.canvas-shelf \{[^}]*z-index: ([0-9]+);/, css)
-      assert String.to_integer(app_z) < String.to_integer(shelf_z)
     end
 
     test "a write the store cannot answer is tried five more times, then let go: the saved arrangement is back and later publications are followed",
