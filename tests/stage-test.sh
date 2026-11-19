@@ -435,6 +435,84 @@ lanes once-dry -n handoff
 grep -qxF 'would skip tests: every touched test runs in rosters' "$S/once-dry.out" || fail "the dry run said: $(cat "$S/once-dry.out")"
 reset_tree
 
+begin "handoff selects the tests in any app's tree that name a changed module, nested or grouped, and those that hold a changed fixture's or configuration file's name; save keeps its own"
+reset_tree
+for f in \
+  'apps/sanctum/lib/sanctum/provider.ex|defmodule Sanctum.Provider do\n  defmodule Tools do\n  end\nend' \
+  'apps/cyfr/test/sanctum/provider_test.exs|  alias Sanctum.Provider' \
+  'apps/cyfr/test/sanctum/grouped_test.exs|  alias Sanctum.{\n    Context,\n    Provider\n  }' \
+  'apps/cyfr/test/sanctum/tools_test.exs|  Sanctum.Provider.Tools.list()' \
+  'apps/cyfr/test/sanctum/longer_test.exs|  Sanctum.ProviderSet.new() and Sanctum.Provider.Other.list()' \
+  'config/runtime.exs|import Config' \
+  'apps/cyfr/test/cyfr/runtime_config_test.exs|  File.read!("config/runtime.exs")' \
+  'tests/fixtures/keeper_protocol.json|{}' \
+  'apps/cyfr/test/opus/keeper_vectors_test.exs|  Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)' \
+  'apps/locus/test/locus/keeper_wire_test.exs|  vectors.("keeper_protocol.json")' \
+  'apps/cyfr/test/test_helper.exs|ExUnit.start()' \
+  'apps/cyfr/lib/cyfr/narrow.ex|defmodule Cyfr.Narrow do\nend' \
+  'apps/cyfr/lib/cyfr/wide.ex|defmodule Cyfr.Wide do\nend' \
+  'apps/cyfr/test/narrow/n_test.exs|  Cyfr.Narrow.go()' \
+  'apps/cyfr/test/wide/w1_test.exs|  Cyfr.Wide.go()' \
+  'apps/cyfr/test/wide/w2_test.exs|  Cyfr.Wide.go()' \
+  'apps/cyfr/test/wide/w3_test.exs|  Cyfr.Wide.go()'; do
+  mkdir -p "$(dirname "$repo/${f%%|*}")"
+  printf '%b\n' "${f#*|}" >"$repo/${f%%|*}"
+done
+# The narrow and wide consumers weigh 120 s each, so the wide name's
+# three are over the budget; the rest weigh 1 s, the table's median.
+{
+  printf '1.0\t%s\n' apps/cyfr/test/cyfr/runtime_config_test.exs apps/cyfr/test/opus/keeper_vectors_test.exs \
+    apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/longer_test.exs apps/cyfr/test/sanctum/provider_test.exs \
+    apps/cyfr/test/sanctum/tools_test.exs apps/locus/test/locus/keeper_wire_test.exs
+  printf '120.0\t%s\n' apps/cyfr/test/narrow/n_test.exs apps/cyfr/test/wide/w1_test.exs apps/cyfr/test/wide/w2_test.exs \
+    apps/cyfr/test/wide/w3_test.exs
+} | LC_ALL=C sort -t "$(printf '\t')" -k2 >"$repo/scripts/test-partition-weights.tsv"
+git -C "$repo" add -A
+git -C "$repo" -c user.name=test -c user.email=test@invalid commit -q -m consumers
+select_rows=(
+  'handoff|unit|1|60|-|tests|scripts/test-partitioned.sh -n 1 -a sqlite -- $STAGE_TESTS'
+  'handoff|listed|1|60|-|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/listed.txt"'
+  'save|listed|1|60|-|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/listed.txt"'
+)
+table "${select_rows[@]}"
+printf '# edit\n' >>"$repo/apps/sanctum/lib/sanctum/provider.ex"
+printf '# edit\n' >>"$repo/config/runtime.exs"
+printf '{"edit": 1}\n' >"$repo/tests/fixtures/keeper_protocol.json"
+stage selected -l "$S/logs-selected" handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/selected.err")"
+printf '%s\n' apps/cyfr/test/cyfr/runtime_config_test.exs apps/cyfr/test/opus/keeper_vectors_test.exs \
+  apps/cyfr/test/sanctum/grouped_test.exs apps/cyfr/test/sanctum/provider_test.exs apps/cyfr/test/sanctum/tools_test.exs \
+  apps/locus/test/locus/keeper_wire_test.exs >"$S/want"
+diff "$S/want" "$S/logs-selected/listed.txt" >/dev/null || fail "handoff selected: $(tr '\n' ' ' <"$S/logs-selected/listed.txt")"
+[ ! -s "$S/logs-selected/unit.log" ] || fail "a selection within the budget left a name out: $(cat "$S/logs-selected/unit.log")"
+stage selected-save -l "$S/logs-selected-save" save
+[ "$rc" = 0 ] || fail "save exited $rc: $(cat "$S/selected-save.err")"
+grep -qx 'listed: skipped (no touched test) [0-9]*s' "$S/selected-save.out" || fail "save selected tests: $(cat "$S/selected-save.out")"
+
+begin "handoff's budget takes the names with the fewest test files first and names each it leaves out, with its count, on stderr and in the test rows' logs; a test_helper.exs stands for its app's suite"
+reset_tree
+table "${select_rows[@]}"
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/wide.ex"
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/narrow.ex"
+stage budget -l "$S/logs-budget" handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/budget.err")"
+[ "$(cat "$S/logs-budget/listed.txt")" = apps/cyfr/test/narrow/n_test.exs ] || fail "handoff selected: $(tr '\n' ' ' <"$S/logs-budget/listed.txt")"
+[ "$(cat "$S/logs-budget/unit.log")" = "==> stage: Cyfr.Wide (3 test files) left to the pull request's run" ] ||
+  fail "the test row's log says: $(cat "$S/logs-budget/unit.log")"
+grep -qxF "==> stage: Cyfr.Wide (3 test files) left to the pull request's run" "$S/budget.err" ||
+  fail "the stage's stderr says: $(cat "$S/budget.err")"
+reset_tree
+table "${select_rows[@]}"
+printf '# edit\n' >>"$repo/apps/cyfr/test/test_helper.exs"
+stage helper -l "$S/logs-helper" handoff
+[ "$rc" = 0 ] || fail "exited $rc: $(cat "$S/helper.err")"
+grep -qx 'unit: skipped (no touched test) [0-9]*s' "$S/helper.out" || fail "a changed test_helper.exs selected tests: $(cat "$S/helper.out")"
+suite=$(git -C "$repo" ls-files 'apps/cyfr/test/*_test.exs' | grep -vc '^apps/cyfr/test/cluster/')
+grep -qxF "==> stage: apps/cyfr/test/test_helper.exs ($suite test files) left to the pull request's run" "$S/helper.err" ||
+  fail "the stage did not name the suite it left out: $(cat "$S/helper.err")"
+reset_tree
+table "${toy_rows[@]}"
+
 begin "a folder's rows report while its ticket runs, each row is stopped at its own hold and the next still runs, and a ticket that never starts leaves each of its rows not run"
 table 'handoff|early|1|60|dev|always|true' \
   'handoff|late|1|60|dev|always|for _ in $(seq 300); do [ -e "$STAGE_LOGDIR/go" ] && exit 0; sleep 0.1; done; exit 1'
@@ -1042,6 +1120,53 @@ planted 'python3 -I tests/stage-probe.py cyfr-locus:review'
 planted 'python3 -I tests/stage-probe.py --self-check # no image'
 [ -z "$(guard "$S/stages-probe.tsv" "$S/workflows")" ] ||
   fail "a self-check with a comment after it was not counted: $(guard "$S/stages-probe.tsv" "$S/workflows")"
+
+begin "the Go rows' paths are their workflows' pull_request paths, and each new handoff row of the real table runs for its own sources alone"
+python3 -I - "$ROOT/scripts/stages.tsv" "$ROOT/.github/workflows" >"$S/go-paths.err" 2>&1 <<'PY' || fail "$(cat "$S/go-paths.err")"
+import sys, yaml
+table, workflows = sys.argv[1:3]
+rows = {f[1]: f[5] for f in (l.rstrip("\n").split("\t") for l in open(table)) if len(f) == 7 and f[0] == "handoff"}
+for check, workflow in (("go-codex", "codex-ci.yml"), ("go-keeper", "keeper-ci.yml")):
+    spec = yaml.safe_load(open(f"{workflows}/{workflow}"))
+    paths = (spec.get("on") or spec.get(True))["pull_request"]["paths"]
+    if rows.get(check, "").split(",") != paths:
+        sys.exit(f"{check} runs for {rows.get(check)}, not {workflow}'s pull_request paths {','.join(paths)}")
+PY
+real="$S/real-repo"
+git init -q -b main "$real"
+mkdir -p "$real/scripts"
+cp "$ROOT/scripts/stage.sh" "$ROOT/scripts/stages.tsv" "$real/scripts/"
+git -C "$real" add -A
+git -C "$real" -c user.name=test -c user.email=test@invalid commit -q -m 'the real table'
+new_rows='go-codex go-keeper catalysts test-wasm locus-alone'
+for spec in \
+  'apps/codex/cmd/x.go|go-codex' \
+  'seed/aqua/aqua.md|go-codex' \
+  'apps/locus/keeper/main.go|go-keeper locus-alone' \
+  'tests/fixtures/brain_wire.json|go-codex go-keeper' \
+  'tests/fixtures/host_api.json|go-codex locus-alone' \
+  'seed/components/catalysts/local/claude/1.4.3/src/src/chat.rs|catalysts' \
+  'apps/cyfr/test/support/test_wasm/chat_fixture/chat_fixture.wasm|test-wasm' \
+  'apps/prima/lib/prima/cargo_toml.ex|test-wasm' \
+  'wit/catalyst/world.wit|test-wasm locus-alone' \
+  'config/locus_runtime.exs|locus-alone' \
+  'scripts/locus-island.sh|locus-alone' \
+  'scripts/test-catalysts.sh|catalysts' \
+  'mix.lock|' \
+  'apps/prima/lib/prima/model.ex|' \
+  'apps/cyfr/lib/cyfr/x.ex|'; do
+  path=${spec%%|*} want=${spec#*|}
+  git -C "$real" clean -qfdx
+  mkdir -p "$(dirname "$real/$path")"
+  echo change >"$real/$path"
+  status=0; (cd "$real" && STAGE_BASE=HEAD scripts/stage.sh -n handoff) >"$S/real-rows.out" 2>"$S/real-rows.err" || status=$?
+  [ "$status" = 0 ] || fail "a change to $path was refused: $(cat "$S/real-rows.err")"
+  got=
+  for check in $new_rows; do
+    if grep -q "^would run $check " "$S/real-rows.out"; then got+="$check "; fi
+  done
+  [ "$got" = "${want:+$want }" ] || fail "a change to $path runs '${got% }', not '$want'"
+done
 
 begin "the real table's nightly runs the janitor, install and handle on one quarter, then both reference canvas viewports on four, one after another"
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/nightly-real.out" 2>"$S/nightly-real.err" || status=$?

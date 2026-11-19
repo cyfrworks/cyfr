@@ -29,14 +29,15 @@ handoff	tests-postgres	1	2700	test_pg	tests	scripts/test-partitioned.sh -n 1 -a 
 # pull request's run that read the whole tree, so a change elsewhere turns
 # them red: the roster tests (the restore order, the cross-language drift,
 # the umbrella's boundaries, the test-seam source check, Sanctum's gate
-# rosters, the seed catalysts' source roster, the router's route map and
-# the console's context-guard roster of callbacks and tasks),
+# rosters, the seed catalysts' source roster, the router's route map,
+# the console's context-guard roster of callbacks and tasks and the export
+# declarations of Arca, Sanctum and each domain),
 # CI's configuration check and its vocabulary job's script. Handoff still
 # leaves to the pull
 # request's run each app compiled and tested alone (the island jobs), the
 # proofs under tests/ and the suites' files no row names and no change
 # touched.
-handoff	rosters	1	2700	test	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs apps/cyfr/test/cyfr/boundaries_test.exs apps/cyfr/test/cyfr/test_seams_test.exs apps/cyfr/test/sanctum/gate apps/cyfr/test/integration/runtime/seed_model_catalysts_test.exs apps/cyfr/test/cyfr_web/router_test.exs apps/cyfr/test/cyfr_web/context_guard_roster_test.exs
+handoff	rosters	1	2700	test	always	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/cyfr/test/cyfr/restore_order_test.exs apps/cyfr/test/cyfr/cross_language_drift_test.exs apps/cyfr/test/cyfr/boundaries_test.exs apps/cyfr/test/cyfr/test_seams_test.exs apps/cyfr/test/sanctum/gate apps/cyfr/test/integration/runtime/seed_model_catalysts_test.exs apps/cyfr/test/cyfr_web/router_test.exs apps/cyfr/test/cyfr_web/context_guard_roster_test.exs apps/cyfr/test/cyfr/boundary_declarations_test.exs
 handoff	config-seam	1	600	-	apps/**/*.ex,apps/**/*.exs,scripts/ci/config-seam.sh	scripts/ci/config-seam.sh
 handoff	vocabulary	1	600	-	always	scripts/ci/vocabulary.sh
 handoff	arca-sqlite	1	2700	test	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test
@@ -63,6 +64,22 @@ handoff	containerd-store-test	1	600	-	scripts/ci/containerd-image-store.sh,tests
 handoff	release-graph	1	600	-	.github/workflows/release.yml,scripts/release.sh,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
 handoff	security-scan-test	1	600	-	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh
 handoff	go-checks	1	1200	-	apps/codex/**	cd apps/codex && test -z "$(gofmt -l .)" && go vet ./... && go build ./...
+# The Go rows run each module's tests without -race (the pull request's
+# Codex CI and Keeper CI add it) when a path its workflow's pull_request
+# paths name changes; tests/stage-test.sh holds the two lists equal.
+handoff	go-codex	1	900	-	apps/codex/**,.env.example,docker-compose.yml,docker-entrypoint.sh,tests/fixtures/**,seed/aqua/**,scripts/scaffold-tarball.sh,README.md,.github/workflows/test.yml,.github/workflows/codex-ci.yml	cd apps/codex && go test -count=1 ./...
+handoff	go-keeper	1	600	-	apps/locus/keeper/**,tests/fixtures/keeper_protocol.json,tests/fixtures/browser_frames.json,tests/fixtures/brain_wire.json,tests/fixtures/residue-canary.go,.github/workflows/keeper-ci.yml	cd apps/locus/keeper && go test -count=1 ./...
+# The Rust rows take rustup's bin directory on PATH, as scripts/commit-gate.sh
+# does, and read not run 69 on a host without the toolchain CONTRIBUTING.md
+# names. The test WASM fixtures' Rust recipes compile the umbrella under
+# MIX_ENV=test (build-fixture.sh), so that row runs in the test folder.
+handoff	catalysts	1	900	-	seed/components/catalysts/*/*/*/src/**,scripts/test-catalysts.sh,rust-toolchain.toml	PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" scripts/test-catalysts.sh "$STAGE_LOGDIR/catalysts-target"
+handoff	test-wasm	1	900	test	apps/locus/test/support/runtime/test_wasm/**,apps/cyfr/test/support/test_wasm/**,apps/cyfr/test/integration/runtime/support/test_wasm/**,tests/locus-runtime-image/hog.wat,tests/locus-runtime-image/hog.wasm,tests/locus-runtime-image/build.sh,apps/**/*.wasm,tests/**/*.wasm,wit/**,apps/prima/lib/prima/cargo_toml.ex,scripts/check-test-wasm.sh,scripts/wasm-tools.sh	scripts/wasm-tools.sh install _tools && env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" CYFR_DATABASE=sqlite RUSTUP_TOOLCHAIN="$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)" scripts/check-test-wasm.sh
+# Locus compiled and tested from its declared apps alone, when what it alone
+# answers for changes: its app, the WIT tree, its runtime configuration and
+# the vector files its tests read. A change only under apps/prima or to
+# mix.lock is left to the pull request's island job.
+handoff	locus-alone	1	900	-	apps/locus/**,wit/**,config/locus_runtime.exs,tests/fixtures/guest_error.json,tests/fixtures/host_api.json,tests/fixtures/keeper_protocol.json,tests/fixtures/locus_backends.json,tests/fixtures/locus_builds.json,tests/fixtures/runner_control.json,tests/fixtures/runner_relay.json,tests/fixtures/worker_api.json,tests/fixtures/worker_auth.json,scripts/locus-island.sh	scripts/locus-island.sh "$STAGE_LOGDIR/locus-island"
 
 pull-request	gate	4	2700	-	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
 

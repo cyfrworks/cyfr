@@ -65,7 +65,8 @@
 #             test/support compiles with warnings as errors, from a copy
 #             that holds only what CI gives them (each read from its
 #             test.yml job), once the SQLite suite's partitions have
-#             exited; locus with --close
+#             exited; locus with --close, through the script its job
+#             runs (scripts/locus-island.sh)
 #   go        codex-ci.yml's test job (go vet, gofmt, go test under -race,
 #             the Docker Compose and access-engine Docker tests with their
 #             ran-and-passed assertions, go build) and keeper-ci.yml's
@@ -535,7 +536,9 @@ island_phase() {
 # same name, `cd` into the application, `mix compile --warnings-as-errors`
 # and `mix test`) or setup that changes nothing the island holds (`set`,
 # `island=`, `mkdir -p`); any other line fails it, so the gate's island
-# cannot drift from CI's.
+# cannot drift from CI's. A job whose step is the one line
+# `scripts/$1-island.sh DIR` reads `$1 --script scripts/$1-island.sh`
+# instead: the gate runs that script, as CI does.
 island_spec() {
   python3 -I - .github/workflows/test.yml "$1" <<'PY'
 import re, shlex, sys, yaml
@@ -544,6 +547,13 @@ path, app = sys.argv[1], sys.argv[2]
 job = (yaml.safe_load(open(path))["jobs"]).get(app + "-independence")
 if job is None:
     sys.exit(f"test.yml has no {app}-independence job")
+script = f"scripts/{app}-island.sh"
+runs = [shlex.split(s["run"]) for s in job.get("steps", []) if "run" in s and script in s["run"]]
+if runs:
+    if len(runs) != 1 or len(runs[0]) != 2 or runs[0][0] != script:
+        sys.exit(f"test.yml's {app}-independence job runs {script} other than as the one line `{script} DIR`")
+    print(f"{app} --script {script}")
+    sys.exit(0)
 steps = [s for s in job.get("steps", []) if f'cd "$island/apps/{app}"' in s.get("run", "")]
 if len(steps) != 1:
     sys.exit(f"test.yml's {app}-independence job has {len(steps)} steps that enter the island, not one")
@@ -573,7 +583,8 @@ PY
 
 # An island is an application compiled and tested from a copy holding only
 # what CI gives it (island_spec reads the list from test.yml): deps and
-# the pinned tools are linked in, the rest copied.
+# the pinned tools are linked in, the rest copied. An island whose job
+# runs its own script is that script's to copy, in the copy the gate makes.
 # Its build directory is the copy's own and one Mix process at a time
 # uses it, so Mix's build lock excludes no one there, and it is off: Mix
 # through 1.20.4 can wait forever on a lock it holds itself, the second
@@ -593,6 +604,15 @@ island() {
   fi
   ISLAND_COPY=$(mktemp -d "$LOGDIR/island_${name}.XXXX") || return 1
   read -r -a paths <<<"$spec"
+  if [ "${paths[1]-}" = --script ]; then
+    # The island's own script copies it, compiles and tests in it, and
+    # removes it, under the test phase's deadline.
+    island_phase "$name" test bash "${paths[2]}" "$ISLAND_COPY"
+    status=$?
+    echo "$name=$status" >> "$LOGDIR/islands.summary"
+    rm -rf "$ISLAND_COPY"
+    return "$status"
+  fi
   for a in "${paths[@]:1}"; do
     case "$a" in
       deps|_tools) ln -s "$ROOT/$a" "$ISLAND_COPY/$a" ;;

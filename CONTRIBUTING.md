@@ -192,6 +192,11 @@ same worktree refuses, naming the run that holds it.
   outside the checkout, where `rust-toolchain.toml` does not choose the
   toolchain. `scripts/commit-gate.sh` looks for it in
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
+  Checking the test WASM fixtures (`scripts/check-test-wasm.sh`, a handoff
+  check too) also needs the Rust release their recipes pin
+  (`rustc_version` in `apps/cyfr/test/support/test_wasm/build-fixture.sh`)
+  with the same two targets; a handoff check missing its toolchain reads
+  `not run 69`.
 - Checks run in stages. `scripts/stages.tsv` names what each stage runs,
   and `scripts/stage.sh STAGE` runs it, queuing its checks through
   `scripts/heavy-check.sh` for the quarters the table names. In `save`
@@ -212,14 +217,18 @@ same worktree refuses, naming the run that holds it.
     generated files' checks, the touched tests on both adapters (all of
     `apps/arca/test` when Arca changed), the roster tests that read the
     whole source tree (the boundaries, the test seams, Sanctum's gate
-    rosters, the restore order, the cross-language drift and the router's
-    route map) and CI's vocabulary scan (`scripts/ci/vocabulary.sh`) on
-    every change, the configuration check when an `apps` source changed,
-    `mix dialyzer` when a `lib` file changed, and the light self-test of
-    every harness script you touched. Each app compiled and tested alone
-    (CI's island jobs), the proofs under `tests/` and the suites' untouched
-    files are the pull request's run's, and the install proof the
-    nightly's;
+    rosters, the restore order, the cross-language drift, the router's
+    route map and the export declarations) and CI's vocabulary scan
+    (`scripts/ci/vocabulary.sh`) on every change, the configuration check
+    when an `apps` source changed, `mix dialyzer` when a `lib` file
+    changed, `go test` of the CLI and of the keeper when a path their
+    workflows watch changed, the model catalysts' `cargo test`, the test
+    WASM fixtures' check and Locus compiled and tested alone
+    (`scripts/locus-island.sh`) when their sources changed, and the light
+    self-test of every harness script you touched. The other apps compiled
+    and tested alone (CI's island jobs), the proofs under `tests/` and the
+    tests no change reaches are the pull request's run's, and the install
+    proof the nightly's;
   - `pull-request`: the pull request's run on GitHub is the check, and it
     runs every check in parallel. `scripts/stage.sh pull-request` runs
     `scripts/commit-gate.sh`, CI's checks on this host, for working
@@ -241,8 +250,15 @@ same worktree refuses, naming the run that holds it.
 
   The touched tests are the changed test files and, for each changed or
   deleted `apps/<app>/lib/<path>.ex`, `apps/<app>/test/<path>_test.exs`
-  where it exists; name others after `--`. `scripts/stage.sh -n STAGE`
-  lists what it would run. A branch stacked on another sets `STAGE_BASE`
+  where it exists. Handoff adds the test files, in any app, that name a
+  module a changed `lib` or `test/support` file defines, or hold the file
+  name of another changed file (a fixture, a configuration file); a
+  changed `test_helper.exs` stands for its app's suite. The names with the
+  fewest such files come first, within a budget of added seconds the
+  script's `SELECT_BUDGET` states, and each name left out is named, on the
+  stage's stderr and at the top of the test checks' logs, as left to the
+  pull request's run. Name
+  others after `--`. `scripts/stage.sh -n STAGE` lists what it would run. A branch stacked on another sets `STAGE_BASE`
   to that branch, so the handoff stage runs its own changes alone rather
   than everything since `origin/main`.
 

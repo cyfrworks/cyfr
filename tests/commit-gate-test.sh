@@ -1164,9 +1164,12 @@ start_leg() {
 # Each island's list is read from its test.yml job: the application, the
 # lock, its apps, deps and the WIT tree at least. A planted copy reaches
 # the list; a line the gate does not mirror, a copy to another directory
-# and a missing job each fail it with the reason.
+# and a missing job each fail it with the reason. Locus's job runs its own
+# script, which the gate runs too.
 island_list() { (cd "$1" && . "$gate" && island_spec "$2"); }
-for isl in prima arca sanctum locus; do
+[ "$(island_list "$root" locus)" = 'locus --script scripts/locus-island.sh' ] ||
+  fail "the locus island is not test.yml's script: $(island_list "$root" locus 2>&1)"
+for isl in prima arca sanctum; do
   spec=$(island_list "$root" "$isl") || fail "the $isl island's list could not be read from test.yml"
   [ "${spec%% *}" = "$isl" ] || fail "the $isl island's list names another application: $spec"
   for p in mix.lock "apps/$isl" deps wit; do

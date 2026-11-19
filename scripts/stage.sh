@@ -68,6 +68,18 @@
 # apps/<app>/lib/<path>.ex, deleted or not, where that test exists; never a
 # deleted path, nothing under apps/cyfr/test/cluster (its suite needs
 # -a postgres --only cluster and an object store); sorted, each once.
+# Handoff's take, besides, the test files that name what the change
+# defines or reads: for each changed apps/*/lib/**.ex and
+# apps/*/test/support/**.ex or .exs, deleted or not, each module it defines,
+# which a test file names by its whole dotted name or as Parent.{..., Rest};
+# for a changed apps/<app>/test/test_helper.exs, every test file of the app;
+# and for any other changed path but a test, the test files that hold its
+# basename. Each name's test files join, the names with the fewest first,
+# while the seconds they add (scripts/test-partition-weights.tsv, a file it
+# lacks weighing its median) stay within SELECT_BUDGET below; each name
+# left out is named with its count of test files, as left to the pull
+# request's run, on stderr and at the top of the log of every row that
+# runs $STAGE_TESTS. Save's stay the changed tests and their lib mirrors.
 # PATHS after `--` replace them. A touched path with whitespace is refused.
 #
 # A row whose command is scripts/test-partitioned.sh, its options, then
@@ -115,8 +127,9 @@
 # own tickets; 65 for a table that is missing or unreadable, or a line of
 # it that is not a row, naming it, or a
 # touched path with whitespace, before any row runs; 69 outside a Git
-# checkout, without the stage's base, or when Git cannot list the changed
-# paths a row's globs match; 130, 143 and 129 on INT, TERM and HUP, once
+# checkout, without the stage's base, when Git cannot list the changed
+# paths a row's globs match, or when handoff's tests cannot be selected
+# (python3 runs the selection); 130, 143 and 129 on INT, TERM and HUP, once
 # every running row has stopped, and no row starts after the signal: each
 # row that had not ended reads `failed <status>`, printed with the rest
 # before the frame.
@@ -257,6 +270,108 @@ else
     if [ -n "$test_path" ]; then tests+=("$test_path"); fi
   done
 fi
+# Handoff's touched tests take, besides, the tests that name what the
+# change defines or reads (the header's rule), within SELECT_BUDGET.
+# The budget trades the consumers handoff runs against the time every
+# slice's handoff holds two quarters for: 300 s was the smallest of 100,
+# 200, 300 and 600 that, replayed over the 2026-11-16 to 11-18 pull
+# requests that went red on GitHub, selected each failing test, and at it
+# the median handoff of the 40 pull requests before it added about 220 s.
+SELECT_BUDGET=300
+left_out=()
+if [ "$stage" = handoff ] && ! $explicit; then
+  selection=$(python3 -I - "$base" "$SELECT_BUDGET" scripts/test-partition-weights.tsv \
+    ${changed[@]+"${changed[@]}"} -- ${tests[@]+"${tests[@]}"} <<'PY'
+import os, re, subprocess, sys
+
+base, budget, table = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+cut = sys.argv.index("--", 4)
+changed, touched = sys.argv[4:cut], set(sys.argv[cut + 1:])
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True, check=True).stdout.decode("utf-8", "replace")
+
+def cluster(path): return path.startswith("apps/cyfr/test/cluster/")
+def is_test(path): return re.fullmatch(r"apps/[^/]+/test/.*_test\.exs", path) is not None
+def is_source(path):
+    return not is_test(path) and re.fullmatch(r"apps/[^/]+/(lib/.*\.ex|test/support/.*\.exs?)", path) is not None
+
+suite = sorted(p for p in git("ls-files", "-co", "--exclude-standard", "-z", "--", ":(glob)apps/*/test/**/*_test.exs").split("\0")
+               if p and not cluster(p) and os.path.isfile(p))
+text = {p: open(p, encoding="utf-8", errors="replace").read() for p in suite}
+
+# A module is named by its whole dotted name, never as the prefix of a
+# longer one, or as Parent.{..., Rest, ...}.
+NAME = re.compile(r"(?<![\w.:@])[A-Z]\w*(?:\.[A-Z]\w*)*")
+MULTI = re.compile(r"(?<![\w.])([A-Z]\w*(?:\.[A-Z]\w*)*)\.\{([^}]*)\}")
+named = {}
+for p, t in text.items():
+    names = set(NAME.findall(t))
+    for parent, inner in MULTI.findall(t):
+        names |= {parent + "." + q.strip() for q in inner.split(",") if re.fullmatch(r"[A-Z]\w*(?:\.[A-Z]\w*)*", q.strip())}
+    for n in names:
+        named.setdefault(n, set()).add(p)
+
+def modules(source):
+    found, stack = [], []
+    for m in re.finditer(r"^([ \t]*)defmodule[ \t]+([A-Z][\w.]*)(?![\w.])", source, re.M):
+        indent, name = len(m.group(1)), m.group(2)
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        full = stack[-1][1] + "." + name if stack and indent > 0 else name
+        stack.append((indent, full))
+        found.append(full)
+    return found
+
+consumers = []
+for path in changed:
+    if is_test(path) or cluster(path):
+        continue
+    if is_source(path):
+        source = open(path, encoding="utf-8", errors="replace").read() if os.path.isfile(path) else git("show", f"{base}:{path}")
+        consumers += [(m, named.get(m, set())) for m in modules(source)]
+        continue
+    helper = re.fullmatch(r"apps/([^/]+)/test/test_helper\.exs", path)
+    if helper:
+        consumers.append((path, {p for p in suite if p.startswith(f"apps/{helper.group(1)}/test/")}))
+        continue
+    base_name = path.rsplit("/", 1)[-1]
+    consumers.append((path, {p for p, t in text.items() if base_name in t}))
+
+weights = {}
+if os.path.isfile(table):
+    for line in open(table):
+        if line.strip() and not line.startswith("#"):
+            seconds, p = line.rstrip("\n").split("\t")
+            weights[p] = float(seconds)
+ordered = sorted(weights.values())
+n = len(ordered)
+median = 1.0 if n == 0 else ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
+
+# Fewest consumers first, so a narrow name is never crowded out by a wide one.
+selected, spent = set(touched), 0.0
+for name, files in sorted(consumers, key=lambda c: (len(c[1]), c[0])):
+    new = files - selected
+    if not new:
+        continue
+    cost = sum(weights.get(p, median) for p in new)
+    if spent + cost > budget:
+        print(f"left\t{name}\t{len(files)}")
+        continue
+    spent += cost
+    selected |= new
+for p in sorted(selected - touched):
+    print(f"test\t{p}")
+PY
+  ) || refuse 69 "cannot select the tests the change can break"
+  while IFS=$'\t' read -r kind a b; do
+    case $kind in
+      test) tests+=("$a") ;;
+      left) left_out+=("==> stage: $a ($b test files) left to the pull request's run") ;;
+    esac
+  done <<<"$selection"
+  if [ "${#left_out[@]}" -gt 0 ]; then printf '%s\n' "${left_out[@]}" >&2; fi
+fi
 for path in ${tests[@]+"${tests[@]}"}; do
   case $path in *[[:space:]]*) refuse 65 "a touched test path holds whitespace: '$path'" ;; esac
 done
@@ -318,6 +433,9 @@ runner() { # INDEX: sets r_options and r_paths for a test row, else returns 1
 row_tests=() notes=()
 for i in ${rows[@]+"${!rows[@]}"}; do
   row_tests[$i]=${tests[*]+${tests[*]}} notes[$i]=
+  if [ "${#left_out[@]}" -gt 0 ] && runner "$i" && [[ " ${r_paths[*]} " == *' $STAGE_TESTS '* ]]; then
+    notes[$i]=$(printf '%s\n' "${left_out[@]}")$'\n'
+  fi
   [ "${lanes[$i]}" != - ] && [ "${lanes[$i]}" != stage ] && [ -z "${reasons[$i]}" ] &&
     runner "$i" && [ "${r_paths[*]}" = '$STAGE_TESTS' ] || continue
   options=$r_options kept=() elsewhere=()
@@ -392,11 +510,12 @@ result() {
   esac
 }
 # launch ENTRY QUARTERS HOLD LOG COMMAND...: COMMAND queued for the host in
-# the background, its heavy-check's pid recorded with ENTRY.
+# the background, its heavy-check's pid recorded with ENTRY, its output
+# added to LOG, which the caller starts.
 launch() {
   local entry=$1 quarters=$2 hold=$3 log=$4
   shift 4
-  scripts/heavy-check.sh -q "$quarters" -t "$hold" -- "$@" >"$log" 2>&1 &
+  scripts/heavy-check.sh -q "$quarters" -t "$hold" -- "$@" >>"$log" 2>&1 &
   running[$!]=$entry
 }
 began=() lines=()
@@ -406,6 +525,7 @@ start_row() { # INDEX: the row on a ticket of its own
   local check quarters hold command
   IFS=$'\t' read -r _ _ check quarters hold _ _ command <<<"${rows[$1]}"
   began[$1]=$SECONDS
+  printf '%s' "${notes[$1]}" >"$logdir/$check.log"
   launch "$1" "$quarters" "$hold" "$logdir/$check.log" bash -c "$command"
 }
 # start_lane FOLDER: the stage lane's next row on a ticket of its own, or
@@ -428,6 +548,7 @@ start_lane() {
   done
   : >"$logdir/$folder.results"
   chain_began[$folder]=$EPOCHSECONDS chain_last[$folder]=$EPOCHSECONDS chain_read[$folder]=0
+  : >"$logdir/$folder.queue.log"
   launch "chain $folder" "$most" "$total" "$logdir/$folder.queue.log" \
     bash scripts/lib/stage-chain.sh "$$" "$logdir/$folder.results" "${args[@]}"
   chains=$((chains + 1))
@@ -500,6 +621,7 @@ done
 failures=0 launched=true
 if [ -n "$deps_command" ]; then
   deps_waits=true deps_began=$SECONDS
+  : >"$logdir/deps.log"
   launch deps 1 1800 "$logdir/deps.log" bash -c "$deps_command"
 else
   for folder in ${folders[@]+"${folders[@]}"}; do start_lane "$folder"; done

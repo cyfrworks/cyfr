@@ -220,18 +220,7 @@ jobs:
       # Each model catalyst's `model/chat@1` mapping runs on the host
       # target; the shipped binaries are not rebuilt here.
       - name: Test the model catalysts
-        run: |
-          shopt -s nullglob
-          chats=(seed/components/catalysts/local/*/*/src/src/chat.rs)
-          # A glob that matches nothing would test nothing; refuse it.
-          if [ "${#chats[@]}" -eq 0 ]; then
-            echo "::error::no model catalyst source matched — the step would test nothing"
-            exit 1
-          fi
-          for chat in "${chats[@]}"; do
-            src="$(dirname "$(dirname "$chat")")"
-            (cd "$src" && cargo test --quiet --target-dir "$RUNNER_TEMP/catalyst-guest-target")
-          done
+        run: scripts/test-catalysts.sh "$RUNNER_TEMP/catalyst-guest-target"
       # Every shipped binary is the build of its source: the stamp the build
       # script writes binds the binary's digest to the source tree's, so a
       # guest edit without a rebuild fails here, toolchain or not.
@@ -1104,28 +1093,10 @@ jobs:
       # at `_tools/wasm-tools`, which the island copies.
       - name: Install the pinned wasm-tools
         run: scripts/wasm-tools.sh install _tools
-      # Locus releases without the control plane: a checkout holding only
-      # the lock, the contracts, Locus, the fetched deps, the WIT tree
-      # (`Prima.WIT` embeds it; `Locus.Runtime.Engine` reads the same
-      # tree), the vector files its wires', its runtime's and its keeper
-      # tests read (tests/fixtures) and the locus release's runtime
-      # configuration (config/locus_runtime.exs, which its config test
-      # evaluates) compiles every role with warnings as errors and runs its
-      # suite, against a scripted host and no database. Its vector tests
-      # fail rather than skip without the vector file.
+      # Locus compiled and tested from a copy holding only what it declares
+      # (the script's header lists it).
       - name: Compile and test Locus from its declared apps alone
-        run: |
-          set -euo pipefail
-          island="$RUNNER_TEMP/locus-island"
-          mkdir -p "$island/apps" "$island/config" "$island/tests"
-          cp mix.lock "$island/"
-          cp -R apps/prima apps/locus "$island/apps/"
-          cp -R deps wit _tools "$island/"
-          cp -R tests/fixtures "$island/tests/"
-          cp config/locus_runtime.exs "$island/config/"
-          cd "$island/apps/locus"
-          mix compile --warnings-as-errors
-          mix test
+        run: scripts/locus-island.sh "$RUNNER_TEMP/locus-island"
 
   s3-minio:
     name: S3 adapter vs MinIO
