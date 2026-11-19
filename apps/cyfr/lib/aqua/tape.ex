@@ -1042,6 +1042,15 @@ defmodule Aqua.Tape do
   @spec turn(Context.t(), String.t()) :: {:ok, turn()} | {:error, term()}
   def turn(%Context{} = ctx, turn_id), do: TurnStorage.get(Sanctum.Context.actor(ctx), turn_id)
 
+  @doc "A turn's read threads as its row stands; a turn that cannot be read holds none."
+  @spec turn_threads(Context.t(), String.t()) :: [String.t()]
+  def turn_threads(%Context{} = ctx, turn_id) do
+    case turn(ctx, turn_id) do
+      {:ok, %{read_threads: stored}} -> Arca.ThreadStorage.threads_of(stored)
+      {:error, _unread} -> []
+    end
+  end
+
   @doc "A turn's steps in order."
   @spec steps(Context.t(), turn()) :: {:ok, [step()]} | {:error, term()}
   def steps(%Context{} = ctx, turn), do: TurnStorage.steps(Sanctum.Context.actor(ctx), turn.id)

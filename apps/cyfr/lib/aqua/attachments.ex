@@ -189,14 +189,7 @@ defmodule Aqua.Attachments do
       |> Enum.filter(&(is_binary(&1) and &1 != ""))
       |> Enum.uniq()
 
-    read =
-      Enum.flat_map(turns, fn id ->
-        case Aqua.Tape.turn(ctx, id) do
-          {:ok, turn} -> Arca.ThreadStorage.threads_of(turn.read_threads)
-          {:error, _unread} -> []
-        end
-      end)
-
+    read = Enum.flat_map(turns, &Aqua.Tape.turn_threads(ctx, &1))
     Enum.uniq(read ++ copied_threads(ref))
   end
 

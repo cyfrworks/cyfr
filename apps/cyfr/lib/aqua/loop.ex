@@ -2448,7 +2448,7 @@ defmodule Aqua.Loop do
     with {:ok, posts} <- Tape.brain_posts(guest, state.turn),
          {:ok, context} <- startup_context(state, posts) do
       rows = posts ++ context
-      read = Enum.flat_map(earlier_turns(state, rows), &turn_threads(guest, &1))
+      read = Enum.flat_map(earlier_turns(state, rows), &Tape.turn_threads(guest, &1))
       Tape.join_threads(guest, state.turn, Tape.carried_threads(rows) ++ read)
     end
   end
@@ -2468,15 +2468,6 @@ defmodule Aqua.Loop do
   end
 
   defp startup_context(_state, []), do: {:ok, []}
-
-  # A turn's read threads as its row stands; one that cannot be read adds
-  # none.
-  defp turn_threads(guest, turn_id) do
-    case Tape.turn(guest, turn_id) do
-      {:ok, %{read_threads: threads}} -> Arca.ThreadStorage.threads_of(threads)
-      {:error, _} -> []
-    end
-  end
 
   defp opened_on_call?(%State{} = state), do: not asks_model?(guest(state), state.turn)
 
