@@ -1833,7 +1833,14 @@ defmodule Aqua.ProgramTest do
       # its post and has told no usage yet.
       pane = pane!(conn, ctx, thread)
       started!(fake, row)
-      _post = sent()
+      assert %{"t" => "post", "id" => id} = sent()
+      say(fake, row, %{"t" => "accepted", "id" => id})
+      committed!(ctx, thread, 4)
+
+      # The held call proves startup is settled and keeps the loop waiting
+      # outside the database even when Stop closes the attendant.
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
       stop = ~s(button[phx-click="stop"])
 
       Prima.Test.Wait.wait_until(
@@ -1857,6 +1864,7 @@ defmodule Aqua.ProgramTest do
         "the pane's menu to say the tokens are unknown"
       )
 
+      send(opening, :go)
       Cyfr.Test.Sandbox.end_views()
     end
 
