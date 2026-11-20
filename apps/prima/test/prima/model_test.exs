@@ -7,11 +7,10 @@ defmodule Prima.ModelTest do
   manifest speaks it or not, the catalyst envelope decodes to its data or
   its typed refusal, whatever wrapping a run result gives it, and the
   members a caller sets per brain hold to the shared vectors
-  (`tests/fixtures/model_chat.json`, which a model catalyst's own tests
-  read too): every valid describe's options read as the vector says,
-  every invalid one is refused naming its member, and so are chat
-  requests and responses and the further messages of a running chat
-  (`check_input/1`), whose bounds the file pins; the file carries exactly
+  (`tests/fixtures/model_chat.json`): every valid describe's options read
+  as the vector says, every invalid one is refused naming its member, and
+  so are chat requests and responses and the further messages of a running
+  chat (`check_input/1`), whose bounds the file pins; the file carries exactly
   the categories this test reads, none empty.
   """
 

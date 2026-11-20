@@ -49,6 +49,37 @@ defmodule Arca.Test.UnitFixtures do
   end
 
   @doc """
+  Lay and register a model catalyst under the context's athanor whose one
+  need is a sign-in of its own (`login`) to the program row `program`, as
+  a harness catalyst declares one; its artifact is the test catalyst
+  guest. Returns the unit's path segments.
+  """
+  def login_catalyst!(ctx, name, program) do
+    unit =
+      tenant_component!(ctx, "catalyst", "local", name, "0.1.0",
+        manifest: %{
+          "name" => name,
+          "type" => "catalyst",
+          "version" => "0.1.0",
+          "publisher" => "local",
+          "contracts" => [Prima.Model.chat_contract()],
+          "needs" => %{
+            program => %{
+              "type" => "login",
+              "program" => program,
+              "reason" => "to run the program on your own plan",
+              "required" => true
+            }
+          }
+        },
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
+      )
+
+    {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+    unit
+  end
+
+  @doc """
   Lay one unit at `unit` (its path segments) from `files` — `{relative,
   bytes}` pairs, the path a string with `/` between its segments, the
   unit's completion object among them — as one commit through the

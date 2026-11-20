@@ -27,36 +27,13 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute "http" in names
   end
 
-  # A model catalyst is an API catalyst, which CYFR attaches a key for, or
-  # a harness adapter, which runs a program on the person's own sign-in.
-  defp adapter?(unit),
-    do:
-      Enum.any?(
-        Prima.Manifest.Needs.from_manifest(unit.manifest) || [],
-        &Prima.Manifest.Needs.mount_only?/1
-      )
-
   test "each API model catalyst's newest version has CYFR attach its key, to its egress hosts" do
-    for unit <- SeedBundle.model_chat_units(), not adapter?(unit) do
+    for unit <- SeedBundle.model_chat_units() do
       assert [need] = Prima.Manifest.Needs.from_manifest(unit.manifest), unit.rel
       assert %{name: "api_key", kind: "api_key", disclose: false} = need
       assert %{in: "header", template: template} = need.attach
       assert template =~ "{value}"
       assert need.hosts == Enum.sort(unit.manifest["caps"]["egress"]["domains"]), unit.rel
-    end
-  end
-
-  test "each harness adapter's newest version runs one program on a login need and reaches no host" do
-    adapters = Enum.filter(SeedBundle.model_chat_units(), &adapter?/1)
-    assert [_ | _] = adapters
-
-    for unit <- adapters do
-      assert [%{kind: "login", program: program}] =
-               Prima.Manifest.Needs.from_manifest(unit.manifest),
-             unit.rel
-
-      assert is_binary(program), unit.rel
-      refute get_in(unit.manifest, ["caps", "egress"]), unit.rel
     end
   end
 

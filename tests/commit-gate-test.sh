@@ -533,13 +533,15 @@ CI_RUNS = {
     ("dialyzer.yml", "dialyzer", "Dialyzer"): ["dialyzer"],
     ("test.yml", "static", "Install the pinned wasm-tools"): ["wasm_tools"],
     ("test.yml", "static", "Compile with warnings as errors"): ["compile_sqlite_test"],
-    ("test.yml", "static", "Boundary plants"): ["boundary_plants"],
+    ("test.yml", "boundary-plants", "Compile with warnings as errors"): ["compile_sqlite_test"],
+    ("test.yml", "boundary-plants", "Boundary plants"): ["boundary_plants"],
     ("test.yml", "static", "Static analysis"): ["credo"],
     ("test.yml", "static", "The sleep-reason check refuses a sleep with no reason"): ["credo_check"],
     ("test.yml", "static", "Check formatting"): ["format"],
     ("test.yml", "static", "The CLI catalog is the operation table's"): ["opsgen"],
     ("test.yml", "static", "The configuration guide is the roster's"): ["confguide"],
-    ("test.yml", "static", "The dev stack's compose override"): ["devstack"],
+    ("test.yml", "dev-stack", "Compile with warnings as errors"): ["compile_sqlite_test"],
+    ("test.yml", "dev-stack", "The dev stack's compose override"): ["devstack"],
     ("test.yml", "static", "The built SDK is its source's"): ["sdk_bundle"],
     ("test.yml", "static", "The built account pages are their source's"): ["account_bundle"],
     ("test.yml", "static", "Every test WASM fixture is its source's build"): ["test_wasm"],
@@ -557,6 +559,7 @@ CI_RUNS = {
     ("test.yml", "test", "Compile the dev target with warnings as errors"): ["compile_sqlite_dev", "compile_pg_dev"],
     ("test.yml", "test", "Run tests"): ["sqlite_suite", "pg_tests", "pg_suite"],
     ("test.yml", "cluster", "Compile with warnings as errors"): ["compile_pg_test"],
+    ("test.yml", "cluster", "The cell's files"): ["cluster"],
     ("test.yml", "cluster", "Run the two-node suite"): ["cluster"],
     ("test.yml", "prima-independence", "Install the pinned wasm-tools"): ["wasm_tools"],
     ("test.yml", "prima-independence", "Compile and test Prima alone"): ["islands:prima"],
@@ -1702,7 +1705,7 @@ has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
   fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml app-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
-  'backends_image: test.yml locus-backends-image: 12 steps' 'app_both: test.yml app-image-locus-suites group=both: 11 steps' \
+  'backends_image: test.yml locus-backends-image: 11 steps' 'app_both: test.yml app-image-locus-suites group=both: 11 steps' \
   'app_a: test.yml app-image-suites group=a: 9 steps' 'app_b: test.yml app-image-suites group=b: 5 steps' \
   'app_c: test.yml app-image-suites group=c: 5 steps' 'compose_checks: test.yml compose-proof-checks: 3 steps' \
   'browser_a: test.yml browser-tincture shard=a: 6 steps' \
@@ -1735,7 +1738,6 @@ python3 tests/locus-backends-image/kept_home.py NS/cyfr-locus:backends|prefix=PR
 python3 tests/locus-backends-image/browser.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_claude_code.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_openai_codex.py NS/cyfr-locus:backends|prefix=PREFIX
-python3 tests/locus-backends-image/openai_codex.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/egress.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/e2e.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push
 python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push

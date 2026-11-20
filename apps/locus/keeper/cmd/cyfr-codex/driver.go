@@ -8,7 +8,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
@@ -420,8 +419,9 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		return d.h.Write(threadStart(s.request, s.system, s.tools, d.config))
 	case "thread":
 		if m.Error != nil {
-			// A thread the folder holds no rollout of is gone: nothing ran.
-			if s.resume && strings.HasPrefix(m.Error.Message, noRolloutWords) {
+			// A thread the folder holds no rollout of, or an empty one, is
+			// gone: nothing ran.
+			if s.resume && resumeGone(m.Error.Message) {
 				d.starting = nil
 				d.Close()
 				return d.c.Emit(brainwire.NewEvent("gone"))
