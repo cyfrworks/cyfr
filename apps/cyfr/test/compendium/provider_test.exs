@@ -14,6 +14,7 @@ defmodule Compendium.ProviderTest do
   # The athanor's own Aqua definitions live under its tenant storage —
   # agent files that shadow the throwaway seed's per-file, so these
   # tests read exactly this fixture whatever the shipped template says.
+  # Only the soul has a prompt; a crew member's file is its frontmatter.
   # Written through the facade so each shadowing write records its origin
   # — the fixture IS an edit of the shipped template, not the athanor's
   # own work.
@@ -61,7 +62,7 @@ defmodule Compendium.ProviderTest do
         description: "Research and web search",
         avoid: "Changing files"
       },
-      "# Explorer Agent\n\nYou are the Explorer."
+      nil
     )
 
     write.(
@@ -70,7 +71,7 @@ defmodule Compendium.ProviderTest do
         title: "Claude Code",
         description: "Coding work in a workspace of its own"
       },
-      "# Claude Code Agent\n\nYou are Claude Code."
+      nil
     )
   end
 
@@ -1691,12 +1692,11 @@ defmodule Compendium.ProviderTest do
 
       {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
       assert soul.tools == ["build.compile", "component.list"]
-      prompt = "# Explorer Agent\n\nYou are the Explorer."
 
+      # A crew member has no prompt: nothing to show and no digest to edit.
       assert result == %{
                name: "explorer",
                format: "markdown",
-               content: prompt,
                type: "crew",
                title: "Explorer",
                description: "Research and web search",
@@ -1708,8 +1708,7 @@ defmodule Compendium.ProviderTest do
                install: nil,
                model: nil,
                options: %{},
-               disabled: false,
-               content_digest: Prima.Digest.sha256_hex(prompt)
+               disabled: false
              }
     end
 
@@ -1946,13 +1945,123 @@ defmodule Compendium.ProviderTest do
                Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
     end
 
-    test "get claude-code returns a crew member prompt", %{ctx: ctx} do
+    test "get claude-code returns a crew member, which has no prompt", %{ctx: ctx} do
       {:ok, result} =
         Provider.handle("aqua", ctx, %{"action" => "get", "name" => "claude-code"})
 
       assert result.name == "claude-code"
       assert result.type == "crew"
-      assert result.content =~ "Claude Code Agent"
+      refute Map.has_key?(result, :content)
+      refute Map.has_key?(result, :content_digest)
+    end
+
+    test "the door refuses a prompt for a crew member, on create and update, and edits the soul's",
+         %{ctx: ctx} do
+      sentence =
+        "A crew member has no prompt: the job it is handed says what to do, and how a kind " <>
+          "of job is done is a scroll — write one with skill_create"
+
+      {:ok, bytes} =
+        Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("explorer"))
+
+      for args <- [%{"content" => "You are the explorer."}, %{"expected_digest" => "abc"}] do
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Provider.handle(
+                   "aqua",
+                   ctx,
+                   Map.merge(%{"action" => "update", "name" => "explorer"}, args)
+                 )
+      end
+
+      assert {:error, {:invalid_argument, ^sentence}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "create",
+                 "name" => "scribe",
+                 "content" => "You are the scribe."
+               })
+
+      assert {:ok, ^bytes} =
+               Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("explorer"))
+
+      assert {:error, _} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "scribe"})
+
+      # A member made without one is its frontmatter alone.
+      assert {:ok, %{created: "scribe"}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "create",
+                 "name" => "scribe",
+                 "description" => "Writes"
+               })
+
+      assert {:ok, "---\ntitle: scribe\ndescription: Writes\nmode: auto\n---\n"} =
+               Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.crew_file("scribe"))
+
+      # The soul's prompt is still the soul's to edit, against its digest.
+      {:ok, soul} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+
+      assert {:ok, _} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "content" => "You are Aqua, edited.",
+                 "expected_digest" => soul.content_digest
+               })
+
+      assert {:ok, %{content: "You are Aqua, edited."}} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+    end
+
+    # Nothing runs a prompt CYFR no longer shows: a crew file that still
+    # holds one is refused where it is read or edited, and listed with the
+    # sentence that says where its words go; the soul's is its own.
+    test "a crew file still holding a prompt is refused with its sentence, read, edited or listed",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      file = "---\ntitle: Explorer\ndescription: Research\n---\n\nYou are the explorer.\n"
+      :ok = Arca.put(actor, Compendium.AquaPath.agent_file("explorer"), file)
+      sentence = Compendium.AquaAgent.prompt_refused("explorer")
+
+      assert {:error, {:conflict, ^sentence}} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
+
+      assert {:error, {:conflict, ^sentence}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "explorer",
+                 "title" => "Explorer"
+               })
+
+      assert {:ok, ^file} = Arca.get(actor, Compendium.AquaPath.agent_file("explorer"))
+
+      {:ok, listed} =
+        Provider.handle("aqua", ctx, %{
+          "action" => "list",
+          "detail" => true,
+          "include_disabled" => true
+        })
+
+      assert listed.refused == [%{name: "explorer", reason: sentence}]
+      refute Enum.any?(listed.guides, &(&1.name == "explorer"))
+      assert [%{name: "aqua", content: "# A.Q.U.A.\n\nYou are A.Q.U.A."} | _] = listed.guides
+      assert %{name: "claude-code"} = claude = Enum.find(listed.guides, &(&1.type == "crew"))
+      refute Map.has_key?(claude, :content)
+
+      # The soul's body is its prompt, never refused.
+      assert {:ok, %{content: "# A.Q.U.A.\n\nYou are A.Q.U.A."}} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
+
+      # Its instructions taken out, the member is read again.
+      :ok =
+        Arca.put(
+          actor,
+          Compendium.AquaPath.agent_file("explorer"),
+          "---\ntitle: Explorer\ndescription: Research\n---\n"
+        )
+
+      assert {:ok, %{name: "explorer"}} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "explorer"})
+
+      assert {:ok, %{refused: []}} = Provider.handle("aqua", ctx, %{"action" => "list"})
     end
 
     test "get with unknown name returns error", %{ctx: ctx} do
@@ -2072,7 +2181,7 @@ defmodule Compendium.ProviderTest do
         Arca.put(
           Sanctum.Context.actor(ctx),
           ["aqua", "crew", "keeper.md"],
-          "---\ntitle: Keeper\n---\n\nkeeper\n"
+          "---\ntitle: Keeper\n---\n"
         )
 
       {:ok, %{created: "pdf"}} =
@@ -2392,7 +2501,6 @@ defmodule Compendium.ProviderTest do
                Provider.handle("aqua", ctx, %{
                  "action" => "create",
                  "name" => "my_agent",
-                 "content" => "You are mine.",
                  "avoid" => "Anything risky",
                  "options" => %{"effort" => "high"}
                })

@@ -187,10 +187,14 @@ defmodule Compendium.AgentSourceTest do
 
   test "the prompt moves nothing; the soul's tools and the model move the digests", %{ctx: ctx} do
     {:ok, before} = AgentSource.latest_row(ctx, "explorer")
+    {:ok, soul_unworded} = AgentSource.latest_row(ctx, "aqua")
 
-    write_agent!(ctx, "explorer", &%{&1 | prompt: &1.prompt <> "\n\nSay less."})
+    # Only the soul has a prompt, and its words move no digest.
+    write_agent!(ctx, "aqua", &%{&1 | prompt: &1.prompt <> "\n\nSay less."})
     {:ok, reworded} = AgentSource.latest_row(ctx, "explorer")
     assert reworded.digest == before.digest and reworded.release_digest == before.release_digest
+    {:ok, soul_reworded} = AgentSource.latest_row(ctx, "aqua")
+    assert soul_reworded.digest == soul_unworded.digest
 
     # The member is offered the soul's tools: an edit of them moves the
     # member's capability with the soul's.

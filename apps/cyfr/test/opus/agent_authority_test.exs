@@ -185,7 +185,7 @@ defmodule Opus.AgentAuthorityTest do
         Arca.put(
           Sanctum.Context.actor(ctx),
           Compendium.AquaPath.crew_file(name),
-          "---\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n\n#{name}\n"
+          "---\ncatalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n"
         )
     end
 

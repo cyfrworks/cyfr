@@ -40,8 +40,7 @@ defmodule Aqua.ProgramNameTest do
         "name" => "coder",
         "title" => "Coder",
         "program" => "claude",
-        "model" => "opus",
-        "content" => "# Coder"
+        "model" => "opus"
       })
 
     # A program brain is no dependency of the member's consent, which
