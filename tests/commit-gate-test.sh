@@ -929,27 +929,38 @@ echo "ok: the close runs every browser shard of test.yml once, and no two shards
 
 # --- the app image's groups the close runs -------------------------------------------
 # app_groups GATE WORKFLOW: the close runs each group of test.yml's
-# app-image-suites matrix once, and no other; each case a step of the job
-# names (contains(matrix.cases, ...)) is in exactly one group's cases, and
-# each case a group lists is a step's.
+# app-image-suites and app-image-locus-suites matrices once, and no other;
+# each group's job needs the producer of each image its `images` name and
+# no other; each case a step of the jobs names (contains(matrix.cases,
+# ...)) is in exactly one group's cases, and each case a group lists is a
+# step's.
 app_groups() {
   python3 -I - "$1" "$2" <<'PY'
 import re, sys, yaml
 gate, wf = sys.argv[1:]
-job = yaml.safe_load(open(wf))["jobs"]["app-image-suites"]
-rows = [e["group"] for e in job["strategy"]["matrix"]["include"]]
-errors = [f"test.yml app-image-suites lists group {g} twice" for g in sorted({g for g in rows if rows.count(g) > 1})]
-runs = re.findall(r"^[ \t]*run_job harness \S+ test\.yml app-image-suites group=(\S+)", open(gate).read(), re.M)
-for g in sorted(set(rows) | set(runs)):
-    if g not in rows:
-        errors.append(f"the close runs test.yml app-image-suites group {g}, which its matrix does not list")
-    elif runs.count(g) != 1:
-        errors.append(f"the close runs test.yml app-image-suites group {g} {runs.count(g)} times, not once")
-steps = {k for st in job["steps"] for k in re.findall(r"contains\(matrix\.cases, '([a-z0-9-]+)'\)", str(st.get("if", "")))}
-listed = {}
-for e in job["strategy"]["matrix"]["include"]:
-    for c in e.get("cases", []):
-        listed.setdefault(c, []).append(e["group"])
+jobs = yaml.safe_load(open(wf))["jobs"]
+names = ("app-image-suites", "app-image-locus-suites")
+producers = {"app": "app-image", "locus": "locus-image"}
+rows, errors, steps, listed = [], [], set(), {}
+for name in names:
+    job = jobs[name]
+    needs = job.get("needs", [])
+    needs = sorted([needs] if isinstance(needs, str) else needs)
+    steps |= {k for st in job["steps"] for k in re.findall(r"contains\(matrix\.cases, '([a-z0-9-]+)'\)", str(st.get("if", "")))}
+    for e in job["strategy"]["matrix"]["include"]:
+        rows.append((name, e["group"]))
+        want = sorted(producers[i] for i in e.get("images", []))
+        if needs != want:
+            errors.append(f"group {e['group']} runs the images {', '.join(e.get('images', []))}, and its job {name} needs {', '.join(needs) or 'nothing'}")
+        for c in e.get("cases", []):
+            listed.setdefault(c, []).append(e["group"])
+errors += [f"test.yml lists group {g} twice" for g in sorted({g for _, g in rows if [r[1] for r in rows].count(g) > 1})]
+runs = re.findall(r"^[ \t]*run_job harness \S+ test\.yml (app-image-suites|app-image-locus-suites) group=(\S+)", open(gate).read(), re.M)
+for key in sorted(set(rows) | set(runs)):
+    if key not in rows:
+        errors.append(f"the close runs test.yml {key[0]} group {key[1]}, which its matrix does not list")
+    elif runs.count(key) != 1:
+        errors.append(f"the close runs test.yml {key[0]} group {key[1]} {runs.count(key)} times, not once")
 for c in sorted(steps):
     if len(listed.get(c, [])) != 1:
         errors.append(f"the case {c} is in {len(listed.get(c, []))} groups, not one: {', '.join(listed.get(c, [])) or 'none'}")
@@ -962,8 +973,8 @@ PY
 }
 app_groups "$gate" "$root/.github/workflows/test.yml" || fail "the close's app image groups are not test.yml's"
 # Planted: a group d repeating group c's bind case, which the close does
-# not run, and group a without its restore case, each fail it with the
-# reason.
+# not run, group a without its restore case, and the both group's job
+# without the Locus image's producer, each fail it with the reason.
 mkdir -p "$scratch/groups"
 python3 -I - "$root/.github/workflows/test.yml" "$scratch/groups" <<'PY'
 import sys
@@ -975,6 +986,9 @@ open(out + "/extra.yml", "w").write(s.replace(row, row + "          - group: d\n
 row = "            cases: [interrupt, restore, restore-person, setup, scan]\n"
 assert s.count(row) == 1
 open(out + "/missing.yml", "w").write(s.replace(row, "            cases: [interrupt, restore-person, setup, scan]\n"))
+needs = "    needs: [locus-image, app-image]\n    strategy:\n      fail-fast: false\n      matrix:\n        include:\n          - group: both\n"
+assert s.count(needs) == 1
+open(out + "/producer.yml", "w").write(s.replace(needs, needs.replace("[locus-image, app-image]", "app-image")))
 PY
 ! app_groups "$gate" "$scratch/groups/extra.yml" 2>"$scratch/groups/extra.err" || fail 'a planted group d passed the close'"'"'s group check'
 for reason in 'the close runs test.yml app-image-suites group d 0 times, not once' 'the case bind is in 2 groups, not one: c, d'; do
@@ -983,7 +997,10 @@ done
 ! app_groups "$gate" "$scratch/groups/missing.yml" 2>"$scratch/groups/missing.err" || fail 'a case in no group passed the close'"'"'s group check'
 grep -qF 'the case restore is in 0 groups, not one: none' "$scratch/groups/missing.err" ||
   fail "a case in no group failed without its reason: $(cat "$scratch/groups/missing.err")"
-echo "ok: the close runs every group of the app image's suites once, and each case runs in one group"
+! app_groups "$gate" "$scratch/groups/producer.yml" 2>"$scratch/groups/producer.err" || fail 'a both job without the Locus producer passed the close'"'"'s group check'
+grep -qF 'group both runs the images locus, app, and its job app-image-locus-suites needs app-image' "$scratch/groups/producer.err" ||
+  fail "a both job without the Locus producer failed without its reason: $(cat "$scratch/groups/producer.err")"
+echo "ok: the close runs every group of the app image's suites once, each on the producers of its images alone, and each case runs in one group"
 
 # --- the image tags the close runs under the gate's names ------------------------
 # image_table GATE ROOT TABLE: every job the gate runs under
@@ -1685,7 +1702,7 @@ has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
   fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml app-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
-  'backends_image: test.yml locus-backends-image: 12 steps' 'app_both: test.yml app-image-suites group=both: 11 steps' \
+  'backends_image: test.yml locus-backends-image: 12 steps' 'app_both: test.yml app-image-locus-suites group=both: 11 steps' \
   'app_a: test.yml app-image-suites group=a: 9 steps' 'app_b: test.yml app-image-suites group=b: 5 steps' \
   'app_c: test.yml app-image-suites group=c: 5 steps' 'compose_checks: test.yml compose-proof-checks: 3 steps' \
   'browser_a: test.yml browser-tincture shard=a: 6 steps' \

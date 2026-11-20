@@ -1172,10 +1172,9 @@ jobs:
         run: docker logs minio
 
   # Dockerfile.locus built once per run, for every job that runs the image:
-  # builder-image, locus-runtime-image, locus-backends-image, the
-  # app-image-suites job's group that runs both images and the
-  # browser-tincture job's tincture proof each load this build under their
-  # own tag.
+  # builder-image, locus-runtime-image, locus-backends-image,
+  # app-image-locus-suites and the browser-tincture job's tincture proof
+  # each load this build under their own tag.
   locus-image:
     name: The Locus image, built once for this run
     runs-on: ubuntu-latest
@@ -1217,7 +1216,8 @@ jobs:
           overwrite: true
 
   # Dockerfile built once per run, beside the Locus image, for every job
-  # that runs it: the app-image-suites job's groups each load this build.
+  # that runs it: the app-image-suites and app-image-locus-suites jobs'
+  # groups each load this build.
   app-image:
     name: The app image, built once for this run
     runs-on: ubuntu-latest
@@ -1619,6 +1619,8 @@ jobs:
   # The suites that run the app image this run built (the app-image job),
   # in groups, each a runner of its own: a step runs in the group whose
   # `cases` name it, and loads the Locus image where its `images` name it.
+  # The group that also runs the Locus image is the app-image-locus-suites
+  # job below, on these steps; these groups need the app image alone.
   # Each Compose proof case makes its own project, command line and
   # stand-in, so a group holds whole cases: a mode switch, an interrupted
   # operation and its recovery stay inside the case that makes them.
@@ -1628,15 +1630,11 @@ jobs:
     # The longest group runs about four minutes of cases. A hang is cut
     # here.
     timeout-minutes: 60
-    needs: [locus-image, app-image]
+    needs: app-image
     strategy:
       fail-fast: false
       matrix:
         include:
-          - group: both
-            title: end to end, a program's pipe, and the Compose proof's runtime and update cases, with the Locus image
-            images: [locus, app]
-            cases: [e2e, pipe, runtime, update, update-refused, update-fail, update-interrupt]
           - group: a
             title: the Compose proof's interrupt, restore and restore-person cases, the setup proof and the image's scan
             images: [app]
@@ -1649,7 +1647,7 @@ jobs:
             title: the Compose proof's bind and restore-identity cases
             images: [app]
             cases: [bind, restore-identity]
-    steps:
+    steps: &app-image-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The Compose proof drives the stack through the `cyfr` command line
       # it builds from apps/codex, and builds the Tailscale stand-in, a Go
@@ -1868,6 +1866,23 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
+
+  # The app-image-suites job's group that runs the Locus image too, on its
+  # steps, once both images are built.
+  app-image-locus-suites:
+    name: App image (${{ matrix.title }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [locus-image, app-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: both
+            title: end to end, a program's pipe, and the Compose proof's runtime and update cases, with the Locus image
+            images: [locus, app]
+            cases: [e2e, pipe, runtime, update, update-refused, update-fail, update-interrupt]
+    steps: *app-image-steps
 
   # The Compose proof's own checks, which need no image of the run's.
   compose-proof-checks:

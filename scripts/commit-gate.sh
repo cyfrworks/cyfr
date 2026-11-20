@@ -94,7 +94,8 @@
 #             app-image job does), every image tag those jobs
 #             name under the gate's own namespace, test.yml's
 #             builder-image, locus-runtime-image, locus-backends-image,
-#             app-image-suites (each group) and compose-proof-checks
+#             app-image-locus-suites, app-image-suites (each group) and
+#             compose-proof-checks
 #             jobs (every suite, every case of the Compose proof, the setup
 #             proof and each image's trivy scan), the browser jobs' eight
 #             shards on this host's pull of the Playwright image, and
@@ -1151,7 +1152,7 @@ leg_harness() {
   run_job harness backends_image test.yml locus-backends-image --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   harness_sweep || status=1
-  run_job harness app_both test.yml app-image-suites group=both --image-namespace "$ns" || status=1
+  run_job harness app_both test.yml app-image-locus-suites group=both --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   harness_sweep || status=1
   run_job harness app_a test.yml app-image-suites group=a --image-namespace "$ns" || status=1
