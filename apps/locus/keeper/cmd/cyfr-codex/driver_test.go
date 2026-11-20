@@ -423,6 +423,15 @@ func TestAFailedTurnIsTypedInTheDriversWords(t *testing.T) {
 	}
 }
 
+// An account's error names both things Codex can run with, since a refused
+// key in its environment types the same as a sign-in that is gone, and is
+// worded as the Claude Code driver words it.
+func TestAnAccountsErrorNamesTheSignInAndAKey(t *testing.T) {
+	if errorSentence("authentication") != "OpenAI Codex has no sign-in or key that its provider accepts; check its sign-in on the program's terminal, or a key in its settings." {
+		t.Fatalf("an account's error is said in the driver's words: %q", errorSentence("authentication"))
+	}
+}
+
 func TestALateTurnNamesNoWork(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})

@@ -347,11 +347,13 @@ func errorKind(raw json.RawMessage) string {
 
 // errorSentence is the driver's own words for an error of Codex's: its
 // words, which name its account, its endpoint or a sign-in, never leave the
-// box.
+// box. An account's error, and a post while no account is signed in, is
+// said for either thing Codex can run with, its sign-in or a key in its
+// environment; the Claude Code driver says it alike.
 func errorSentence(kind string) string {
 	switch kind {
 	case "authentication":
-		return "OpenAI Codex is not signed in to an account that can run this; sign in on the program's terminal."
+		return "OpenAI Codex has no sign-in or key that its provider accepts; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
 		return "OpenAI Codex reported a usage or rate limit; ask again later."
 	case "overloaded":
