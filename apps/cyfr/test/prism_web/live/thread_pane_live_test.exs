@@ -105,6 +105,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # The pane on `thread`, mounted on its own; `session` adds to what its
   # host names.
+  # What an empty thread shows in place of posts, whichever words its
+  # model's state gives it.
+  @empty_state ~s([phx-hook="ScrollBottom"] > div.justify-center)
+
   defp open_pane(conn, athanor, thread, session \\ %{}) do
     {:ok, pane, _} =
       live_isolated(conn, PrismWeb.ThreadPaneLive,
@@ -502,6 +506,51 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       refute has_element?(pane, ~s([id$="-m-#{row.id}"]))
       refute render(pane) =~ row.content
     end
+  end
+
+  test "a thread opened again draws its latest posts, however many of a turn's own rows follow them",
+       %{conn: conn, athanor: athanor, here: here, thread: thread} do
+    actor = Sanctum.Context.actor(here)
+
+    {:ok, said} =
+      Threads.append(actor, thread.id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        content: "a post"
+      })
+
+    for n <- 1..500 do
+      {:ok, _} =
+        Threads.append(actor, thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_call",
+          content: "call #{n}"
+        })
+    end
+
+    pane = open_pane(conn, athanor, thread)
+    assert has_element?(pane, ~s([id$="-m-#{said.id}"] [data-raw-content="a post"]))
+    refute has_element?(pane, @empty_state)
+  end
+
+  test "a thread holding only a turn's own rows opens as an empty thread",
+       %{conn: conn, athanor: athanor, here: here} do
+    actor = Sanctum.Context.actor(here)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
+    assert has_element?(open_pane(conn, athanor, thread), @empty_state)
+
+    for kind <- ~w(tool_call tool_result compaction) do
+      {:ok, _} =
+        Threads.append(actor, thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: kind,
+          content: "#{kind} words"
+        })
+    end
+
+    assert has_element?(open_pane(conn, athanor, thread), @empty_state)
   end
 
   test "a nudge, the server's line to the thread's Aqua, is drawn as the server's as it lands",
