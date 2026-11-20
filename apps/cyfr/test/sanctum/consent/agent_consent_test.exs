@@ -117,14 +117,12 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert Enum.find_index(minted, &(&1 == "catalyst:local.gemini")) <
              Enum.find_index(minted, &(&1 == "agent:local.explorer"))
 
-    # Codex's catalyst is not installed: its member has no consent, and the
-    # soul's is whole without it. Claude Code's brain is a program, which
-    # is no dependency of its consent: it is minted with the rest.
-    codex = "agent:local.openai-codex"
-    refute codex in minted
-    assert {^codex, {:activation_unresolvable, _}} = List.keyfind(skipped, codex, 0)
-    assert "agent:local.claude-code" in minted
-    refute List.keymember?(skipped, "agent:local.claude-code", 0)
+    # Claude Code's and Codex's brains are programs, which are no
+    # dependency of a consent: each is minted with the rest.
+    for harness <- ~w(agent:local.claude-code agent:local.openai-codex) do
+      assert harness in minted
+      refute List.keymember?(skipped, harness, 0)
+    end
 
     refute Enum.any?(skipped, &match?({_, :not_vouched}, &1))
 

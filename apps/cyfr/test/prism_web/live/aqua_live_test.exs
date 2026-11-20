@@ -1871,7 +1871,8 @@ defmodule PrismWeb.AquaLiveTest do
 
     # A brain CYFR cannot keep read-only closes the read-only choice and
     # says why beneath it: a catalyst whose manifest declares a login need,
-    # or a program row whose driver cannot start its harness read-only. A
+    # or a program row whose driver cannot start its harness read-only, the
+    # shipped OpenAI Codex member's own row among them. A
     # file set to read-only by hand on such a brain shows it chosen, with
     # the same sentence, since its turns are refused. A brain on a key, or
     # a row CYFR keeps read-only, leaves the choice open.
@@ -1896,7 +1897,7 @@ defmodule PrismWeb.AquaLiveTest do
         }
       })
 
-      codex = program_row!(ctx, "codex", "cyfr-codex")
+      codex = program_row!(ctx, "openai-codex", "cyfr-codex npx -y @openai/codex@0.169.0")
       claude = program_row!(ctx, "claude", "cyfr-claude-code")
 
       members = [
@@ -1936,7 +1937,8 @@ defmodule PrismWeb.AquaLiveTest do
       for {name, title, brain, shown} <- [
             {"planner", "Planner", "planned", ["auto"]},
             {"by-hand", "By Hand", "planned", ["read-only"]},
-            {"coder", "Coder", "codex", ["auto"]}
+            {"coder", "Coder", "openai-codex", ["auto"]},
+            {"openai-codex", "OpenAI Codex", "openai-codex", ["auto"]}
           ] do
         assert has_element?(view, mode_choice(name, "read-only") <> "[disabled]")
         refute has_element?(view, mode_choice(name, "auto") <> "[disabled]")

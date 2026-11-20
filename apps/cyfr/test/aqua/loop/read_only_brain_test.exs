@@ -6,13 +6,14 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   A read-only crew member whose brain runs a program CYFR cannot keep
   read-only, through the real loop: a catalyst whose manifest declares a
   `login` need (the shipped `openai-codex` catalyst),
-  or a program row whose driver is `cyfr-codex`. Its turn ends unrun
+  or a program row whose driver is `cyfr-codex`, the shipped OpenAI
+  Codex member's own among them. Its turn ends unrun
   before anything runs: the sentence that says to switch it to auto is a
   line in its thread and the turn's error, no model is asked, no step is
-  written and the root starts no child. The same member in auto runs, so
-  only the mode refuses it; a read-only member on a key-only catalyst
-  runs, and one on a `cyfr-claude-code` row passes the check and reaches
-  the program's holder, which starts it read-only.
+  written, no session opens and the root starts no child. The same member
+  in auto runs, so only the mode refuses it; a read-only member on a
+  key-only catalyst runs, and one on a `cyfr-claude-code` row passes the
+  check and reaches the program's holder, which starts it read-only.
   """
 
   use ExUnit.Case, async: false
@@ -107,33 +108,58 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       assert Aqua.Loop.run(ctx: ctx, turn_id: turn.id) == :completed
       ran!(ctx, thread, turn, "read-only", @api, "what is in notes?", "three notes")
     end
+  end
 
-    # The shipped Claude Code names a program row, whose driver holds a
-    # read-only start ("the soul on a program row"); a made member's
-    # refusal on a catalyst that signs in is above.
-    for {name, title, catalyst, program} <- [
-          {"openai-codex", "OpenAI Codex", @openai_codex, "openai-codex"}
-        ] do
-      @tag member: {name, title, catalyst, program}
-      test "the shipped #{title}, switched to read-only, is refused with its own title and " <>
-             "its brain's name; in auto it runs",
-           %{ctx: ctx, room: room, member: {name, title, catalyst, program}} do
-        signed_in!(ctx, name, catalyst, program)
-        mode!(ctx, name, "read-only")
-        script!([reply("fixed")])
+  # Both shipped harness members name a program row: Claude Code's driver
+  # holds a read-only start ("the soul on a program row"), and Codex's
+  # cannot, so the shipped OpenAI Codex member is refused before its row's
+  # session opens. A made member's refusal on a catalyst that signs in is
+  # above.
+  describe "the shipped OpenAI Codex member" do
+    setup do
+      fake = Scripted.start(self(), @root)
+      _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
+      assert_receive {:control, "reconcile", _message, _fields}, 2_000
+      script!([])
+      {:ok, fake: fake}
+    end
 
-        {thread, turn} = accept!(ctx, room, name, "fix the build")
+    test "switched to read-only, is refused with its own title and its program's name before " <>
+           "a session opens; in auto the holder starts it on its shipped model",
+         %{ctx: ctx, room: room, fake: fake} do
+      {:ok, codex} = Compendium.AquaAgent.get(ctx, "openai-codex")
+      assert {codex.program, codex.model} == {"openai-codex", "gpt-6.1-sol"}
+      row = program_row!(ctx, codex.program, codex.install)
+      mode!(ctx, "openai-codex", "read-only")
 
-        assert Aqua.Loop.run(ctx: ctx, turn_id: turn.id) ==
-                 {:failed, {:read_only_unheld, title, name}}
+      {thread, turn} = accept!(ctx, room, "openai-codex", "fix the build")
 
-        refused!(ctx, thread, turn, "fix the build", Aqua.Models.unheld_sentence(title, name))
+      assert Aqua.Loop.run(ctx: ctx, turn_id: turn.id) ==
+               {:failed, {:read_only_unheld, "OpenAI Codex", "openai-codex"}}
 
-        mode!(ctx, name, "auto")
-        again = accept_in!(ctx, thread, name, "fix the build")
-        assert Aqua.Loop.run(ctx: ctx, turn_id: again.id) == :completed
-        ran!(ctx, thread, again, "auto", catalyst, "fix the build", "fixed")
-      end
+      line = Aqua.Models.unheld_sentence("OpenAI Codex", "openai-codex")
+      refused!(ctx, thread, turn, "fix the build", line)
+      refute_received {:session, _type, _message, _fields}
+      assert Scripted.sessions(fake, row.id) == %{}
+
+      # The same member in auto passes the check: the holder starts a new
+      # native session on its shipped model, with the turn's tools, which
+      # Codex takes at its thread's start alone.
+      mode!(ctx, "openai-codex", "auto")
+      again = accept_in!(ctx, thread, "openai-codex", "fix the build")
+      loop = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: again.id) end)
+      {start, work} = played!(fake, row, again)
+      assert work["tools"] != []
+
+      assert Map.delete(start, "system") == %{
+               "t" => "start",
+               "gen" => 0,
+               "config" => %{"model" => "gpt-6.1-sol", "read_only" => false},
+               "tools" => work["tools"]
+             }
+
+      assert Task.await(loop, 30_000) == :completed
+      started!(ctx, thread, again, "auto", row)
     end
   end
 
@@ -410,12 +436,12 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
 
   # The turn on `row` completed on its program, with no line written and
   # no model asked.
-  defp started!(ctx, room, turn, mode, row) do
+  defp started!(ctx, thread, turn, mode, row) do
     {:ok, ended} = Tape.turn(ctx, turn.id)
 
     assert row(ended) == %{
-             agent: "aqua",
-             thread_id: room.id,
+             agent: turn.agent,
+             thread_id: thread.id,
              message_id: turn.message_id,
              status: "completed",
              error: nil,
@@ -426,7 +452,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
              launch_step_id: nil
            }
 
-    assert system_lines(ctx, room, turn) == []
+    assert system_lines(ctx, thread, turn) == []
     assert ScriptedWorker.calls() == []
   end
 
