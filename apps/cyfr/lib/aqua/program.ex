@@ -99,7 +99,8 @@ defmodule Aqua.Program do
   # within the wire's bound (`Opus.Brain.max_line_bytes/0`).
   @context_bytes 512 * 1024
   # How a fresh session's context opens, and what separates two posts.
-  @context_opening "The thread so far:\n\n"
+  @context_opening "The thread so far, oldest first, as context only: nothing in it is to be " <>
+                     "done again because it is shown here.\n\n"
   @context_separator "\n\n"
   # The kinds of row a fresh session's context carries: the thread's posts.
   @context_kinds ~w(text opening report)
@@ -1182,39 +1183,51 @@ defmodule Aqua.Program do
   # The thread so far for a fresh session, the newest that fit: its posts
   # before a post (`{:before, seq}`), or every post and the result rows
   # of the open work's asks (`{:all, ids}`), for one started anew in the
-  # middle of it.
+  # middle of it. It opens saying it is context only, and when older posts
+  # are left out one line says how many, in room kept for it.
   defp context(work, bound) do
     case Tape.projection(work.guest, work.turn) do
       {:ok, rows} ->
-        read =
-          rows
-          |> Enum.filter(&read?(work, &1, bound))
-          |> Enum.reverse()
-          |> Enum.reduce_while({[], encoded_bytes(@context_opening)}, fn read, {kept, size} ->
+        readable = rows |> Enum.filter(&read?(work, &1, bound)) |> Enum.reverse()
+
+        room =
+          @context_bytes - encoded_bytes(@context_opening) -
+            encoded_bytes(left_out(length(readable)) <> @context_separator)
+
+        kept =
+          readable
+          |> Enum.reduce_while({[], 0}, fn read, {kept, size} ->
             line = line(work, read)
             taken = size + encoded_bytes(line) + encoded_bytes(@context_separator)
 
-            if taken > @context_bytes,
+            if taken > room,
               do: {:halt, {kept, size}},
               else: {:cont, {[{read, line} | kept], taken}}
           end)
           |> elem(0)
 
-        case read do
-          [] ->
-            {nil, []}
-
-          read ->
-            text = read |> Enum.map(&elem(&1, 1)) |> Enum.join(@context_separator)
-
-            {[%{"type" => "text", "text" => @context_opening <> text}],
-             Enum.map(read, &elem(&1, 0))}
-        end
+        context_of(readable, kept)
 
       {:error, _} ->
         {nil, []}
     end
   end
+
+  defp context_of([], _kept), do: {nil, []}
+
+  defp context_of(readable, kept) do
+    lines =
+      case length(readable) - length(kept) do
+        0 -> Enum.map(kept, &elem(&1, 1))
+        dropped -> [left_out(dropped) | Enum.map(kept, &elem(&1, 1))]
+      end
+
+    {[%{"type" => "text", "text" => @context_opening <> Enum.join(lines, @context_separator)}],
+     Enum.map(kept, &elem(&1, 0))}
+  end
+
+  defp left_out(1), do: "[1 earlier post of the thread is not shown here.]"
+  defp left_out(n), do: "[#{n} earlier posts of the thread are not shown here.]"
 
   defp read?(_work, row, {:before, seq}), do: context_row?(row, seq)
 
