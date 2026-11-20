@@ -516,7 +516,7 @@ func TestAPostWhileSignedOutIsRefusedUntilASignIn(t *testing.T) {
 	}
 }
 
-func TestDeliveriesBeforeAStartAndAnUntakeablePostAreRefused(t *testing.T) {
+func TestDeliveriesBeforeAStartAreRefused(t *testing.T) {
 	s := startDriver(t)
 	s.expect("hello")
 	for _, command := range []map[string]any{
@@ -529,10 +529,28 @@ func TestDeliveriesBeforeAStartAndAnUntakeablePostAreRefused(t *testing.T) {
 			t.Fatalf("a delivery before a start is refused: %v", e)
 		}
 	}
+}
+
+// A block Codex does not take, a PDF's, is one line of text in its place,
+// and the post is written with the rest.
+func TestABlockCodexDoesNotTakeIsNamedAndThePostWritten(t *testing.T) {
+	s := startDriver(t)
+	s.expect("hello")
 	started(s, map[string]any{})
-	s.send(map[string]any{"t": "post", "id": "p1", "work": "trn_1", "content": []any{map[string]any{"type": "document", "media_type": "application/pdf", "data": "JVBERi0="}}})
-	if e := s.expect("refused"); !strings.Contains(e["reason"].(string), "document") {
-		t.Fatalf("a document, which Codex does not take, is not written: %v", e)
+	work(s, "w1", "trn_1")
+	s.send(map[string]any{"t": "post", "id": "p1", "work": "trn_1", "content": []any{
+		map[string]any{"type": "document", "media_type": "application/pdf", "data": "JVBERi0="},
+		map[string]any{"type": "text", "text": "echo what you were given"},
+	}})
+	if e := s.expect("accepted"); e["id"] != "p1" {
+		t.Fatalf("the post is written: %v", e)
+	}
+	want, _ := json.Marshal([]any{
+		map[string]any{"type": "text", "text": "A file of type application/pdf was attached; OpenAI Codex takes text and images, so it is not handed over.", "text_elements": []any{}},
+		map[string]any{"type": "text", "text": "echo what you were given", "text_elements": []any{}},
+	})
+	if said := saidOf(s.until("idle")); said != string(want) {
+		t.Fatalf("Codex is given a line in the document's place, then the post's text: %q", said)
 	}
 }
 

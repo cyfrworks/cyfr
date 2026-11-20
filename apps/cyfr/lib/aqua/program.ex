@@ -31,11 +31,24 @@ defmodule Aqua.Program do
   ends saying why. What the program says with no
   work open stays out of the thread.
 
+  Its text of the open work is announced to the thread's viewers as it is
+  written, never stored (`Aqua.Loop.Stream`), once its batch committed:
+  each native message streams as a step of its own, settled by its `said`
+  row and withdrawn when no row will land, at its native turn's end or
+  the session's. Its own tools of the open work, by the name it gives,
+  are told to the turn's loop as they start and end, which shows them in
+  the one list of what runs (`Aqua.Loop`); nothing of them is stored. The
+  native turn's `idle` and the session's end are told the same way, and
+  the loop settles what still shows running then, while a call runs too.
+
   It writes a command when a row says one is owed, one at a time: a closed
   ask's result as its `answer`, then each post of the open turn that
   waits, each first recorded as an `input` step (`carry/3`) whose id the
   command carries, so a delivery is attempted once whatever restarts
-  follow.
+  follow. A post carries its files after its text as the API path words
+  them (`Aqua.Loop.Turn.file_block/2`), an image or a PDF as itself where
+  the wire carries its type; a file never refuses a post, and one past
+  the line's bound is named as too large to hand over.
   `accepted` says the write was taken and nothing more: a post's
   obligation ends when an `idle` names it.
 
@@ -223,7 +236,9 @@ defmodule Aqua.Program do
        recovering?: false,
        pending: [],
        timer: nil,
-       subscribed?: false
+       subscribed?: false,
+       streams: %{},
+       ordinal: 0
      }}
   end
 
@@ -272,7 +287,11 @@ defmodule Aqua.Program do
     do: {:noreply, batch(state, boot, lines)}
 
   def handle_info({Opus.Brain, ref, {:ended, reason}}, %{brain: {_pid, ref}} = state),
-    do: ended(%{state | brain: nil, boot: nil, outstanding: nil}, reason)
+    do:
+      %{state | brain: nil, boot: nil, outstanding: nil}
+      |> withdraw()
+      |> session_ended()
+      |> ended(reason)
 
   def handle_info({Opus.Brain, _stale, _message}, state), do: {:noreply, state}
 
@@ -438,11 +457,23 @@ defmodule Aqua.Program do
   defp write_failed(%{work: work} = state, _refused),
     do: fail(shut(state), "#{work.title} could not be given this work.")
 
-  defp shut(%{brain: nil} = state), do: state
+  defp shut(%{brain: nil} = state), do: withdraw(state)
 
   defp shut(%{brain: brain} = state) do
     Opus.Brain.close(brain)
+
     %{state | brain: nil, boot: nil, phase: :closed, outstanding: nil}
+    |> withdraw()
+    |> session_ended()
+  end
+
+  # The session ended: none of the open work's own tools runs any more,
+  # which the loop settles in its list (`Aqua.Loop`).
+  defp session_ended(%{work: work} = state) do
+    case open_turn(work) do
+      %{id: id} -> tell(state, {__MODULE__, id, {:native, :session_ended}})
+      nil -> state
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -474,7 +505,12 @@ defmodule Aqua.Program do
 
         if effects.foreign?,
           do: state |> foreign() |> arm(),
-          else: state |> act(effects, committed) |> arm()
+          else:
+            state
+            |> stream(of_work(lines, "text", open_turn), effects.commit.said)
+            |> own(of_work(lines, "own", open_turn))
+            |> act(effects, committed)
+            |> arm()
 
       {:error, reason} when reason in [:superseded, :generation_moved, :row_changed, :not_open] ->
         # The session is no longer this work's: its writes end here. A
@@ -487,6 +523,13 @@ defmodule Aqua.Program do
         shut(state)
     end
   end
+
+  # The batch's events of type `t` that are the open work's, each with
+  # its line's number.
+  defp of_work(lines, t, %{id: work_id}),
+    do: for({seq, %{"t" => ^t, "work" => ^work_id} = event} <- lines, do: {seq, event})
+
+  defp of_work(_lines, _t, nil), do: []
 
   # The turn the session works for while it is open, as the loop last said.
   defp open_turn(%{turn: %{status: status} = turn}) when status in ["running", "paused"], do: turn
@@ -570,7 +613,7 @@ defmodule Aqua.Program do
     do: %{acc | errors: acc.errors ++ [event]}
 
   # Text streamed, the harness's own tools, late prose and asks of other
-  # work: nothing is written of them.
+  # work: nothing is written of them (`stream/3`).
   defp effect(_event, acc, _work, _work_id, _outstanding), do: acc
 
   defp put_commit(acc, key, value),
@@ -610,6 +653,76 @@ defmodule Aqua.Program do
           })
       }
     }
+  end
+
+  # The open work's text, announced as it is written (`Aqua.Loop.Stream`),
+  # each native message a step of its own, under the turn's fence as it
+  # stands now: a message this batch said lands its row now, which settles
+  # it, so none of its text is announced, and one said later is settled by
+  # its row then.
+  defp stream(state, texts, said) do
+    said = MapSet.new(said, & &1.message)
+    state = %{state | streams: Map.drop(state.streams, MapSet.to_list(said))}
+
+    Enum.reduce(texts, state, fn {seq, %{"message" => message, "delta" => delta}}, state ->
+      if delta == "" or MapSet.member?(said, message) do
+        state
+      else
+        state = streaming(state, message)
+        Aqua.Loop.Stream.announce(state.work.guest, streamed(state, message), {0, seq}, delta)
+        state
+      end
+    end)
+  end
+
+  # A message first streamed takes the next ordinal, so a later message
+  # outranks it while both are kept.
+  defp streaming(%{streams: streams} = state, message) when is_map_key(streams, message),
+    do: state
+
+  defp streaming(state, message),
+    do: %{
+      state
+      | streams: Map.put(state.streams, message, state.ordinal),
+        ordinal: state.ordinal + 1
+    }
+
+  defp streamed(%{work: work} = state, message),
+    do: %{
+      thread_id: state.thread_id,
+      turn_id: work.turn.id,
+      fence: work.turn.fence,
+      source: work.turn.id,
+      step_id: message,
+      ordinal: Map.fetch!(state.streams, message),
+      role: if(Prima.AgentRef.soul?(work.agent), do: nil, else: work.agent)
+    }
+
+  # What streamed for messages no row will land is withdrawn: the open
+  # work's native turn ended, or the session did.
+  defp withdraw(%{streams: streams} = state) when map_size(streams) == 0, do: state
+
+  defp withdraw(%{work: work, streams: streams} = state) do
+    Enum.each(Map.keys(streams), &Aqua.Loop.Stream.abandon(work.guest, streamed(state, &1)))
+    %{state | streams: %{}}
+  end
+
+  # The open work's own tools of the program, told to the loop as they
+  # start and end: the loop keeps the one list of what runs, and nothing
+  # of them is stored.
+  defp own(state, owns) do
+    Enum.reduce(owns, state, fn {_seq, %{"name" => name, "phase" => phase}}, state ->
+      tell(state, {__MODULE__, state.work.turn.id, {:native, {:own, own_name(name), phase}}})
+    end)
+  end
+
+  # The program's word for its tool is shown as text: a name as long as
+  # the wire holds a tool's name to and with no control or format
+  # character, or else a fixed word.
+  defp own_name(name) do
+    if Opus.Brain.tool_name?(name) and not String.match?(name, ~r/\p{C}/u),
+      do: name,
+      else: "tool"
   end
 
   # What this process does once a batch is committed.
@@ -679,10 +792,15 @@ defmodule Aqua.Program do
       else: state
   end
 
-  # The native turn ended: the loop finds whether its turn is done.
+  # The native turn ended: none of its own tools runs any more, which the
+  # loop settles wherever it waits (`{:native, :idle}`), and the loop finds
+  # whether its turn is done.
   defp on_idle(%{work: work} = state, %{idle: %{} = idle}) do
     case {open_turn(work), idle["work"]} do
       {%{id: id}, id} ->
+        state = withdraw(state)
+        state = tell(state, {__MODULE__, id, {:native, :idle}})
+
         if idle["stop"] == "end_turn",
           do: tell(state, {__MODULE__, id, :idle}),
           else: fail(state, "#{work.title} stopped before it finished (#{idle["stop"]}).")
@@ -852,6 +970,7 @@ defmodule Aqua.Program do
           "context" => context
         }
         |> reject_nil()
+        |> with_files(work, row)
 
       case write(state, command) do
         :ok ->
@@ -864,6 +983,63 @@ defmodule Aqua.Program do
       {:error, _reason} -> state
     end
   end
+
+  # The post's files after its text, in its order, each as the API path
+  # makes its block for the media types the wire carries
+  # (`Aqua.Loop.Turn.file_block/2`), which has no member for the file's
+  # name. A file never refuses the post: one whose block would take the
+  # line past the wire's bound is named as too large instead, and the post
+  # goes with the rest; one whose bytes are gone is left out. A line's
+  # bytes are its command's JSON, so a block adds its own and a comma.
+  # Each file ends as its block or its notice, so a block is taken only
+  # while the files after it still fit beside it, each by the smaller of
+  # the two: a notice never stands in for a smaller block, and the post's
+  # line passes the bound only when its text and those smaller ones alone
+  # do.
+  defp with_files(command, work, row) do
+    files =
+      Aqua.Attachments.load(work.guest, row.thread_id, Aqua.Attachments.attachments_of([row]))
+
+    types = Opus.Brain.media_types()
+    max = Opus.Brain.max_line_bytes()
+    notices = Enum.map(files, &too_large/1)
+
+    reserved =
+      files
+      |> Enum.zip(notices)
+      |> Enum.map(fn {file, notice} ->
+        block = file |> Aqua.Loop.Turn.file_block(types) |> Map.delete("filename")
+        min(entry_bytes(block), entry_bytes(notice))
+      end)
+      |> Enum.sum()
+
+    {blocks, _room} =
+      files
+      |> Enum.zip(notices)
+      |> Enum.map_reduce({byte_size(Jason.encode!(command)), reserved}, &fit(&1, &2, types, max))
+
+    Map.update!(command, "content", &(&1 ++ blocks))
+  end
+
+  # One file's block, or its notice, beside `bytes` taken so far and the
+  # room `reserved` for the files after it.
+  defp fit({file, notice}, {bytes, reserved}, types, max) do
+    block = file |> Aqua.Loop.Turn.file_block(types) |> Map.delete("filename")
+    reserved = reserved - min(entry_bytes(block), entry_bytes(notice))
+
+    if bytes + entry_bytes(block) + reserved <= max,
+      do: {block, {bytes + entry_bytes(block), reserved}},
+      else: {notice, {bytes + entry_bytes(notice), reserved}}
+  end
+
+  defp entry_bytes(block), do: byte_size(Jason.encode!(block)) + 1
+
+  defp too_large(%{"filename" => name, "media_type" => media}),
+    do: %{
+      "type" => "text",
+      "text" =>
+        "The file #{name} (#{media}) is attached, and it is too large to hand to this program."
+    }
 
   # One recovery prompt, attempted once: for a post the transcript holds,
   # to go on with it or say where it stands; for a result its ask can no
@@ -953,15 +1129,6 @@ defmodule Aqua.Program do
     case refused do
       :busy ->
         state
-
-      # The person's yes on the start's card covered what the turn had read
-      # then: a delivery that brings in more needs the work admitted anew.
-      {:not_admitted, :source_not_covered} ->
-        fail(
-          shut(state),
-          "This message brings in material the approval of #{work.title} did not cover, so " <>
-            "this work ends here. Send it again to be asked anew."
-        )
 
       {:not_admitted, _reason} ->
         fail(shut(state), "#{work.title} may not go on with this work any more.")

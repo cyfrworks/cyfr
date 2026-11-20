@@ -185,6 +185,684 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "a post's files" do
+    test "reach the program after the post's text, in order: an image and a PDF as " <>
+           "themselves, a text file as text, any other named as attached and not readable",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "moon.png", "media_type" => "image/png", "bytes" => "PNG"},
+          %{"filename" => "brief.pdf", "media_type" => "application/pdf", "bytes" => "%PDF-1"},
+          %{"filename" => "notes.txt", "media_type" => "text/plain", "bytes" => "three lines"},
+          %{"filename" => "tool.bin", "media_type" => "application/octet-stream", "bytes" => "\0"}
+        ])
+
+      turn = accept!(ctx, thread, row, "look at these", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(input, turn, "look at these", [
+                 %{
+                   "type" => "image",
+                   "media_type" => "image/png",
+                   "data" => Base.encode64("PNG")
+                 },
+                 %{
+                   "type" => "document",
+                   "media_type" => "application/pdf",
+                   "data" => Base.encode64("%PDF-1")
+                 },
+                 %{"type" => "text", "text" => "The attached file notes.txt:\n\nthree lines"},
+                 %{
+                   "type" => "text",
+                   "text" =>
+                     "The file tool.bin (application/octet-stream) is attached, and this brain " <>
+                       "cannot read it."
+                 }
+               ])
+
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a file whose block would take the line past the wire's bound is named as too large, " <>
+           "and the post goes with the rest; one whose bytes are gone is left out",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      # Its base64 alone is past the line's 1 MiB.
+      big = :binary.copy("P", 800_000)
+
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "big.png", "media_type" => "image/png", "bytes" => big},
+          %{"filename" => "gone.png", "media_type" => "image/png", "bytes" => "GONE"},
+          %{"filename" => "small.png", "media_type" => "image/png", "bytes" => "PNG"}
+        ])
+
+      [_big, gone, _small] = refs
+
+      {:ok, _} =
+        Arca.Files.delete(
+          Sanctum.Context.actor(ctx),
+          "threads/#{thread.id}/#{id}/#{gone["stored_name"]}"
+        )
+
+      turn = accept!(ctx, thread, row, "three images", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(input, turn, "three images", [
+                 %{
+                   "type" => "text",
+                   "text" =>
+                     "The file big.png (image/png) is attached, and it is too large to hand to " <>
+                       "this program."
+                 },
+                 %{"type" => "image", "media_type" => "image/png", "data" => Base.encode64("PNG")}
+               ])
+
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "small text files still fit beside escaped fresh context when their notices would not",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      files =
+        for name <- ["a.txt", "b.txt"],
+            do: %{"filename" => name, "media_type" => "text/plain", "bytes" => "x"}
+
+      blocks =
+        for file <- files,
+            do: %{"type" => "text", "text" => "The attached file #{file["filename"]}:\n\nx"}
+
+      context = fn history ->
+        [%{"type" => "text", "text" => "The thread so far:\n\nAqua: " <> history}]
+      end
+
+      prototype =
+        posted(
+          %{id: Prima.UUID7.generate_id("stp")},
+          %{id: Prima.UUID7.generate_id("trn")},
+          "tiny files",
+          blocks
+        )
+        |> Map.put("context", context.(""))
+
+      room = Opus.Brain.max_line_bytes() - byte_size(Jason.encode!(prototype)) - 10
+      history = String.duplicate("\"", div(room, 2))
+      assert byte_size("Aqua: " <> history) < 512 * 1024
+
+      assert byte_size(Jason.encode!(Map.put(prototype, "context", context.(history)))) <=
+               Opus.Brain.max_line_bytes()
+
+      assert {:ok, _} =
+               Tape.append(ctx, thread.id, %{
+                 author: Arca.Schemas.Message.agent_author(),
+                 sent_by: "aqua",
+                 kind: "text",
+                 content: history
+               })
+
+      {id, refs} = stored!(ctx, thread, files)
+      turn = accept!(ctx, thread, row, "tiny files", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+      expected = Map.put(posted(input, turn, "tiny files", blocks), "context", context.(history))
+      assert byte_size(Jason.encode!(expected)) <= Opus.Brain.max_line_bytes()
+      assert post == expected
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "an image that nearly fills the line alone is handed over as itself",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      bytes = :binary.copy("P", 786_000)
+
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "image-0.png", "media_type" => "image/png", "bytes" => bytes}
+        ])
+
+      turn = accept!(ctx, thread, row, "ten images", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(input, turn, "ten images", [
+                 %{"type" => "image", "media_type" => "image/png", "data" => Base.encode64(bytes)}
+               ])
+
+      assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "the notices of the files after an image keep their room: one that would leave " <>
+           "them none is named too, and the post goes",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      files =
+        for {size, n} <- Enum.with_index([786_000 | List.duplicate(800_000, 9)]) do
+          %{
+            "filename" => "image-#{n}.png",
+            "media_type" => "image/png",
+            "bytes" => :binary.copy("P", size)
+          }
+        end
+
+      {id, refs} = stored!(ctx, thread, files)
+      turn = accept!(ctx, thread, row, "ten images", %{"attachments" => refs}, id)
+      loop = run(ctx, turn)
+      started!(fake, row)
+      post = sent()
+      [input] = inputs(ctx, turn)
+
+      assert post ==
+               posted(
+                 input,
+                 turn,
+                 "ten images",
+                 for(
+                   n <- 0..9,
+                   do: %{
+                     "type" => "text",
+                     "text" =>
+                       "The file image-#{n}.png (image/png) is attached, and it is too large " <>
+                         "to hand to this program."
+                   }
+                 )
+               )
+
+      assert byte_size(Jason.encode!(post)) <= Opus.Brain.max_line_bytes()
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a post written while the program works carries its files as the first post does",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _first = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      committed!(ctx, thread, 4)
+
+      {id, refs} =
+        stored!(ctx, thread, [
+          %{"filename" => "moon.webp", "media_type" => "image/webp", "bytes" => "WEBP"}
+        ])
+
+      steer!(ctx, thread, turn, "and this one", %{"attachments" => refs}, id)
+
+      post = sent()
+      [_first, second] = inputs(ctx, turn)
+
+      assert post ==
+               posted(second, turn, "and this one", [
+                 %{
+                   "type" => "image",
+                   "media_type" => "image/webp",
+                   "data" => Base.encode64("WEBP")
+                 }
+               ])
+
+      say(fake, row, accepted(second))
+      say(fake, row, idle(turn, [first.id, second.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+  end
+
+  describe "what the program writes as it works" do
+    test "its text of the open work streams to the thread's viewers as it is written, under " <>
+           "the turn's fence: its said row settles it, and a message no row lands is withdrawn " <>
+           "at the native turn's end",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "what is in notes.md?")
+      loop = run(ctx, turn)
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :turn_fence, data: announced}, 10_000
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+
+      # The fence a viewer keeps the streamed text under is announced.
+      assert announced == %{turn_id: turn.id, fence: fence}
+
+      say(fake, row, accepted(input))
+      say(fake, row, text(turn, "msg_1", "notes.md "))
+      say(fake, row, text(turn, "msg_1", "holds three lines."))
+      first = delta!()
+      second = delta!()
+
+      assert [first, second] == [
+               streamed(turn, fence, "msg_1", 0, {0, 5}, "notes.md "),
+               streamed(turn, fence, "msg_1", 0, {0, 6}, "holds three lines.")
+             ]
+
+      viewer = Aqua.Loop.Stream.new() |> Aqua.Loop.Stream.advance(fence)
+      viewer = viewer |> Aqua.Loop.Stream.add(first) |> Aqua.Loop.Stream.add(second)
+
+      assert Aqua.Loop.Stream.texts(viewer) == [
+               %{step_id: "msg_1", role: nil, text: "notes.md holds three lines."}
+             ]
+
+      say(fake, row, said(turn, "msg_1", "notes.md holds three lines."))
+
+      assert_receive %Cyfr.Bus.ThreadEvent{
+                       kind: :message,
+                       data: %{kind: "text", sent_by: "aqua"} = landed
+                     },
+                     10_000
+
+      assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.landed(viewer, landed)) == []
+
+      say(fake, row, text(turn, "msg_2", "and then"))
+      assert delta!() == streamed(turn, fence, "msg_2", 1, {0, 8}, "and then")
+      say(fake, row, idle(turn, [input.id]))
+
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned, data: abandoned}, 10_000
+      assert abandoned == marker(turn, fence, "msg_2", 1)
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
+
+    test "text that lands no row is withdrawn when Stop closes the session",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      tasks = start_supervised!(Task.Supervisor)
+
+      loop =
+        Task.Supervisor.async_nolink(tasks, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, text(turn, "msg_1", "Starting"))
+      {:ok, open} = Tape.turn(ctx, turn.id)
+      assert delta!() == streamed(turn, open.fence, "msg_1", 0, {0, 5}, "Starting")
+
+      stop = fn ->
+        monitor = Process.monitor(loop.pid)
+
+        receive do
+          {:DOWN, ^monitor, :process, _pid, _reason} -> :ok
+        after
+          10_000 -> :ok
+        end
+      end
+
+      assert {:ok, aborted} = Aqua.Loop.abort(ctx, open, "stopped", stop)
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned, data: abandoned}, 10_000
+      assert abandoned == marker(turn, open.fence, "msg_1", 0)
+      {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
+
+    test "text that lands no row is withdrawn when the turn fails",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, text(turn, "msg_1", "Starting"))
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 5}, "Starting")
+
+      say(fake, row, %{
+        "t" => "error",
+        "gen" => 0,
+        "work" => turn.id,
+        "type" => "provider_error",
+        "message" => "The provider failed."
+      })
+
+      line = "#{@title} could not answer: The provider failed."
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned, data: abandoned}, 10_000
+      assert abandoned == marker(turn, fence, "msg_1", 0)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+    end
+
+    test "text and own tools of other work, or of none, are not shown",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+      say(fake, row, text(turn, "msg_other", "for other work", "trn_other"))
+      say(fake, row, text(turn, "msg_none", "for no work", :none))
+      say(fake, row, own(turn, "Other", "start", "trn_other"))
+      say(fake, row, own(turn, "None", "start", :none))
+      say(fake, row, text(turn, "msg_1", "mine"))
+      say(fake, row, own(turn, "Read", "start"))
+      {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
+
+      # One process announces each in order, so the first announced after
+      # the start's is the open work's.
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 9}, "mine")
+      assert activity!() == [start_entry(:done), own_entry("Read", :running)]
+      say(fake, row, said(turn, "msg_1", "mine"))
+      say(fake, row, idle(turn, [input.id]))
+      assert activity!() == [start_entry(:done), own_entry("Read", :done)]
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "the program's own tools show in the turn's one list beside CYFR's, running then " <>
+           "done, by name, and nothing of them is kept",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "list the programs")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      _answer = accept_next!(fake, row)
+      listed = entry("program", Aqua.Steps.sentence("program", "list", "brain"))
+
+      assert [activity!(), activity!()] == [
+               [start_entry(:done), listed.(:running)],
+               [start_entry(:done), listed.(:done)]
+             ]
+
+      say(fake, row, own(turn, "Bash", "start"))
+      say(fake, row, own(turn, "Bash", "end"))
+
+      assert [activity!(), activity!()] == [
+               [start_entry(:done), listed.(:done), own_entry("Bash", :running)],
+               [start_entry(:done), listed.(:done), own_entry("Bash", :done)]
+             ]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+
+      # No step is kept of the program's own tool.
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert Enum.map(steps, &{&1.kind, &1.tool, &1.action}) == [
+               {"tool", "program", "start"},
+               {"input", "program", "post"},
+               {"tool", "program", "list"},
+               {"input", "program", "answer"}
+             ]
+    end
+
+    test "an own tool is shown while a CYFR call the program asked for still runs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # The program's start of a terminal, a call that runs alone, is held.
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), start_entry(:running)]
+      say(fake, row, own(turn, "Bash", "start"))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+
+      send(opening, :go)
+      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :running)]
+      _answer = accept_next!(fake, row)
+      say(fake, row, own(turn, "Bash", "end"))
+      assert activity!() == [start_entry(:done), start_entry(:done), own_entry("Bash", :done)]
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "an own tool is shown while CYFR reads the program asked for still run",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "run and watch")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # A terminal of another row, which no line of the driver's reaches.
+      cli = terminal_row!(ctx)
+      say(fake, row, ask(turn, "ask-start", "program", start_args(cli)))
+      started = accept_next!(fake, row)
+      session = Jason.decode!(started["content"])["session"]
+
+      assert [activity!(), activity!()] == [
+               [start_entry(:done), start_entry(:running)],
+               [start_entry(:done), start_entry(:done)]
+             ]
+
+      [{terminal, _}] = running_sessions(fake, cli)
+
+      # A read that waits for the terminal's output runs among the reads.
+      wait = %{"action" => "wait", "session" => session, "after" => 0, "ms" => 30_000}
+      say(fake, row, ask(turn, "ask-wait", "program", wait))
+      waited = entry("program", Aqua.Steps.sentence("program", "wait", "brain"))
+      before = [start_entry(:done), start_entry(:done)]
+      assert activity!() == before ++ [waited.(:running)]
+      say(fake, row, own(turn, "Read", "start"))
+      assert activity!() == before ++ [waited.(:running), own_entry("Read", :running)]
+
+      Scripted.write_raw(fake, terminal, "ready\r\n")
+      assert activity!() == before ++ [waited.(:done), own_entry("Read", :running)]
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "an own tool is shown while a launch the program asked for runs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      app = quiet_app!(ctx)
+
+      start_supervised!(
+        {Cyfr.Test.ScriptedWorker,
+         ref: [app], script: [{:hold, self()}, {:output, %{"ran" => true}}]}
+      )
+
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "run the app")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      # The app's run is held, and the turn is paused around it.
+      launch = %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}
+      say(fake, row, ask(turn, "ask-1", "execution", launch))
+      assert_receive {:scripted_probe, launched, _child}, 60_000
+      say(fake, row, own(turn, "Bash", "start"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :running)]
+
+      send(launched, :continue)
+      _answer = accept_next!(fake, row)
+      say(fake, row, own(turn, "Bash", "end"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :done)]
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "native idle settles its own tool while a CYFR call is still waiting",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), start_entry(:running)]
+      say(fake, row, own(turn, "Bash", "start"))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:running), own_entry("Bash", :running)]
+
+      say(fake, row, idle(turn, [input.id]))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:running), own_entry("Bash", :done)]
+
+      assert Process.alive?(opening)
+
+      send(opening, :go)
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "an own tool still shown running is done at the native turn's end",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+      say(fake, row, own(turn, "Bash", "start"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :running)]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :done)]
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "an own tool still shown running is done at the session's end, and the turn goes on",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      %{start: first, work: work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+      say(fake, row, own(turn, "Bash", "start"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :running)]
+
+      Scripted.end_sessions(fake, row.id)
+      assert activity!() == [start_entry(:done), own_entry("Bash", :done)]
+
+      # The session resumes, and the turn completes as it would have.
+      opened!(fake, row, "boot-two")
+      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      say(fake, row, started([input.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      _notice = sent()
+      [_post, noticed] = inputs(ctx, turn)
+      say(fake, row, accepted(noticed))
+      say(fake, row, idle(turn, [noticed.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "an own tool named as a CYFR call is kept apart from it in the list",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), start_entry(:running)]
+      say(fake, row, own(turn, "program", "start"))
+      mine = own_entry("program", :running)
+      assert activity!() == [start_entry(:done), start_entry(:running), mine]
+
+      # The call's end marks the call done, not the program's tool of its name.
+      send(opening, :go)
+      assert activity!() == [start_entry(:done), start_entry(:done), mine]
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:done), own_entry("program", :done)]
+
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "an own tool's name past the wire's bound or not printable shows a fixed word",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+      longest = String.duplicate("a", 128)
+
+      for name <- [longest, longest <> "a", "Read\u202E", "Grep\e[31m"],
+          do: say(fake, row, own(turn, name, "start"))
+
+      assert [activity!(), activity!(), activity!(), activity!()] == [
+               [start_entry(:done), own_entry(longest, :running)],
+               [start_entry(:done), own_entry(longest, :running), own_entry("tool", :running)],
+               [start_entry(:done), own_entry(longest, :running)] ++
+                 List.duplicate(own_entry("tool", :running), 2),
+               [start_entry(:done), own_entry(longest, :running)] ++
+                 List.duplicate(own_entry("tool", :running), 3)
+             ]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+  end
+
   describe "the program's asks" do
     test "an ask of the open turn is a step the loop decides and runs, answered with its result; one of a tool not offered is refused",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -1722,12 +2400,30 @@ defmodule Aqua.ProgramTest do
     row
   end
 
+  # A program row with no driver, run only on a terminal.
+  defp terminal_row!(ctx) do
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "notes-cli",
+        transport: "program",
+        mark: "driven",
+        url: nil,
+        home: "kept",
+        memory_bytes: 1_073_741_824,
+        config_json: Jason.encode!(%{"command" => "npx -y notes-cli@1.0.0", "env" => %{}})
+      })
+
+    row
+  end
+
   # A turn of the soul on `row`'s brain: the person's post, and the
   # program row pinned before the loop builds it (`Aqua.Loop.Turn`).
-  defp accept!(ctx, thread, row, text, payload \\ nil) do
+  defp accept!(ctx, thread, row, text, payload \\ nil, id \\ nil) do
     message =
       %{author: ctx.user_id, sent_by: "person", content: text}
       |> then(&if(payload, do: Map.put(&1, :payload, payload), else: &1))
+      |> then(&if(id, do: Map.put(&1, :id, id), else: &1))
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
@@ -1791,11 +2487,13 @@ defmodule Aqua.ProgramTest do
   end
 
   # A post the person writes into the open turn `turn`, with `payload`
-  # (its attachments) when one is given.
-  defp steer!(ctx, thread, turn, text, payload \\ nil) do
+  # (its attachments) when one is given, under `id` when its files were
+  # stored under it (`stored!/3`).
+  defp steer!(ctx, thread, turn, text, payload \\ nil, id \\ nil) do
     message =
       %{author: ctx.user_id, sent_by: "person", content: text}
       |> then(&if(payload, do: Map.put(&1, :payload, payload), else: &1))
+      |> then(&if(id, do: Map.put(&1, :id, id), else: &1))
 
     {:ok, %{message: steer}} =
       Tape.accept(ctx, thread.id, %{message: message, steer_turn_id: turn.id})
@@ -1809,6 +2507,13 @@ defmodule Aqua.ProgramTest do
       Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
         set: [options: Jason.encode!(%{"brain_options" => options})]
       )
+  end
+
+  # Files stored under a post not yet written: its id and their refs.
+  defp stored!(ctx, thread, files) do
+    id = Prima.UUID7.generate_id("msg")
+    {:ok, refs} = Aqua.Attachments.store(ctx, thread.id, id, files)
+    {id, refs}
   end
 
   # A file copied from a post of the thread `thread`.
@@ -1999,12 +2704,12 @@ defmodule Aqua.ProgramTest do
   defp running_sessions(fake, row),
     do: fake |> Scripted.sessions(row.id) |> Enum.filter(fn {_id, s} -> s.running end)
 
-  defp posted(input, turn, text),
+  defp posted(input, turn, text, files \\ []),
     do: %{
       "t" => "post",
       "id" => input.id,
       "work" => turn.id,
-      "content" => [%{"type" => "text", "text" => text}]
+      "content" => [%{"type" => "text", "text" => text} | files]
     }
 
   defp accepted(input), do: %{"t" => "accepted", "id" => input.id}
@@ -2030,6 +2735,55 @@ defmodule Aqua.ProgramTest do
 
   defp said(turn, message, text),
     do: %{"t" => "said", "gen" => 0, "work" => turn.id, "message" => message, "text" => text}
+
+  # A text event of `turn`'s work, of `work` when one is named, or of
+  # none (`:none`).
+  defp text(turn, message, delta, work \\ nil) do
+    %{"t" => "text", "gen" => 0, "message" => message, "delta" => delta}
+    |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
+  end
+
+  # An own event of `turn`'s work, of `work` when one is named, or of none
+  # (`:none`).
+  defp own(turn, name, phase, work \\ nil) do
+    %{"t" => "own", "gen" => 0, "name" => name, "phase" => phase}
+    |> then(&if(work == :none, do: &1, else: Map.put(&1, "work", work || turn.id)))
+  end
+
+  # The next list of what runs the turn announced.
+  defp activity! do
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :tool_activity, data: activity}, 10_000
+    activity
+  end
+
+  defp entry(tool, sentence),
+    do: fn status -> %{tool: tool, sentence: sentence, status: status, preview: nil} end
+
+  # The host's start of the program, an entry of the turn's list.
+  defp start_entry(status),
+    do: entry("program", Aqua.Steps.sentence("program", "start", "brain")).(status)
+
+  # The program's own tool, worded as a tool no step names.
+  defp own_entry(name, status), do: entry(name, "Used a tool").(status)
+
+  # The thread's events reach the test as they reach a viewer.
+  defp watch!(ctx, thread) do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+  end
+
+  defp delta! do
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta, data: delta}, 10_000
+    delta
+  end
+
+  # A delta of the program's native message `message` in `turn`, as a
+  # viewer keeps it (`Aqua.Loop.Stream`): the soul's role is nil.
+  defp streamed(turn, fence, message, ordinal, seq, text),
+    do: Map.merge(marker(turn, fence, message, ordinal), %{role: nil, seq: seq, text: text})
+
+  defp marker(turn, fence, message, ordinal),
+    do: %{turn_id: turn.id, fence: fence, source: turn.id, step_id: message, ordinal: ordinal}
 
   defp ask(turn, ask, name, arguments, work \\ nil),
     do: %{
