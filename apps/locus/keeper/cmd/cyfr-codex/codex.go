@@ -159,21 +159,27 @@ func turnSteer(id, thread, turn string, input []any, uuid string) []byte {
 	return request(id, "turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": input, "clientUserMessageId": uuid})
 }
 
-// inputItems are a post's blocks as Codex's input items, or why one cannot
-// be: Codex takes text and images.
-func inputItems(blocks []brainwire.Block) ([]any, error) {
+// inputItems are a post's blocks as Codex's input items. Codex takes text
+// and images: a block of any other kind, a PDF's among them, becomes one
+// line of text in its place that says a file of its type was attached, so
+// the post is written with the rest.
+func inputItems(blocks []brainwire.Block) []any {
 	out := make([]any, 0, len(blocks))
 	for _, b := range blocks {
 		switch {
 		case b.Type == "text":
-			out = append(out, map[string]any{"type": "text", "text": b.Text, "text_elements": []any{}})
+			out = append(out, textItem(b.Text))
 		case b.Type == "image" && mediaTypes[b.MediaType]:
 			out = append(out, map[string]any{"type": "image", "url": "data:" + b.MediaType + ";base64," + b.Data})
 		default:
-			return nil, fmt.Errorf("a %s block", b.Type)
+			out = append(out, textItem(fmt.Sprintf("A file of type %s was attached; OpenAI Codex takes text and images, so it is not handed over.", b.MediaType)))
 		}
 	}
-	return out, nil
+	return out
+}
+
+func textItem(text string) map[string]any {
+	return map[string]any{"type": "text", "text": text, "text_elements": []any{}}
 }
 
 // answerLine answers Codex's request `id` with `result`.

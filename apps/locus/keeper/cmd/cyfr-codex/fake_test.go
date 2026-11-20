@@ -252,6 +252,10 @@ func fakeCodex() int {
 			reply(turn, "one count missing")
 		case strings.Contains(words, "big"):
 			reply(turn, strings.Repeat("x", 2<<20))
+		case strings.Contains(words, "echo"):
+			// The whole input the turn was given, as Codex read it.
+			given, _ := json.Marshal(config["input"])
+			reply(turn, string(given))
 		default:
 			reply(turn, "ok")
 		}
@@ -362,7 +366,7 @@ func fakeCodex() int {
 					return 3
 				}
 				ok(map[string]any{"turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
-				config := map[string]any{"effort": m.Params["effort"]}
+				config := map[string]any{"effort": m.Params["effort"], "input": input}
 				uuid := str("clientUserMessageId")
 				go func() {
 					notify("turn/started", map[string]any{"threadId": thread.id, "turn": map[string]any{"id": turn, "items": []any{}, "status": "inProgress"}})
