@@ -114,11 +114,12 @@ defmodule Aqua.Providers.StatusTest do
                "health" => if(gate == "ok", do: "ok", else: "degraded"),
                "storage_used" => bytes,
                "storage_cap" => nil,
-               # The shipped soul's brain has no key bound, nor has any
-               # shipped crew member's.
+               # The brain of the crew member Aqua runs on has no key
+               # bound, nor has any other crew member's: the shipped three,
+               # and that member, a worker too (`Cyfr.Test.SeedBundle.seat!/2`).
                "model_connected" => false,
                "crew_ready" => 0,
-               "crew_total" => 3,
+               "crew_total" => 4,
                "version" => Prima.Version.current(),
                # The suite's release channel never reads.
                "update_available" => nil
@@ -143,18 +144,22 @@ defmodule Aqua.Providers.StatusTest do
          %{ctx: ctx} do
       ConsentFixtures.bind_key!(ctx, @soul_brain, %{"ANTHROPIC_API_KEY" => "sk-test"})
 
-      assert [%{"model_connected" => true, "crew_ready" => 0, "crew_total" => 3}] =
+      # Aqua's brain is the brain of the crew member it runs on, which is
+      # a ready worker too.
+      assert [%{"model_connected" => true, "crew_ready" => 1, "crew_total" => 4}] =
                refreshed(ctx)
 
       # The explorer's brain.
       ConsentFixtures.bind_key!(ctx, "catalyst:local.gemini", %{"GEMINI_API_KEY" => "g-test"})
 
-      assert [%{"model_connected" => true, "crew_ready" => 1, "crew_total" => 3}] =
+      assert [%{"model_connected" => true, "crew_ready" => 2, "crew_total" => 4}] =
                refreshed(ctx)
 
       # The same counts the crew index names.
       {:ok, roster} = Aqua.AgentConfig.roster(ctx)
-      assert {:ok, [%{"name" => "explorer"}]} = Aqua.Crew.index(ctx, roster)
+
+      assert {:ok, [%{"name" => "claude"}, %{"name" => "explorer"}]} =
+               Aqua.Crew.index(ctx, roster)
     end
 
     test "leaves the brains unread when they cannot be read, and answers the rest", %{ctx: ctx} do

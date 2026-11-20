@@ -74,7 +74,7 @@ defmodule Aqua.ProgramTest do
 
   describe "a crew member on a program brain" do
     # CYFR's words for every member, then what a program's brain is told
-    # besides: its own tools work in its own folder (`Aqua.Prompt.briefing/2`).
+    # besides: its own tools work in its own folder (`Aqua.Prompt.crew_briefing/2`).
     @briefing "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>
                 "as a task in your thread; your reply goes back to whoever asked, so end with " <>
                 "what you did, what you verified and anything left open.\n\n" <>
@@ -120,6 +120,98 @@ defmodule Aqua.ProgramTest do
       say(fake, row, said(turn, "msg_1", "Tidied."))
       say(fake, row, idle(turn, [input.id]))
       assert :completed = Task.await(loop, 30_000)
+    end
+  end
+
+  describe "Aqua on a crew member whose brain is a program" do
+    # Aqua's prompt is in two parts: its file's, then CYFR's part for the
+    # brain of the member it runs on, told of its folder; the job is the
+    # post it is handed.
+    test "starts with Aqua's own prompt, then CYFR's part with its folder, the job apart",
+         %{ctx: ctx, thread: thread, fake: fake} do
+      seat!(ctx, "claude-code")
+      row = brain_row!(ctx, "claude")
+      turn = accept!(ctx, thread, row, "what is in notes.md?")
+      loop = run(ctx, turn)
+      %{start: start} = started!(fake, row)
+
+      [opening, _context] =
+        String.split(start["system"], "\n\n---\n\n## Runtime Context\n\n", parts: 2)
+
+      {:ok, %{prompt: prompt}} = Compendium.AquaTemplate.shipped_agent("aqua")
+
+      assert opening ==
+               String.trim_trailing(prompt) <> "\n\n---\n\n" <> Aqua.Prompt.briefing(true, false)
+
+      refute opening =~ "## Crew member"
+      assert start["config"] == %{"model" => "opus", "read_only" => false}
+      refute start["system"] =~ "what is in notes.md?"
+
+      post = sent()
+      [input] = inputs(ctx, turn)
+      assert post == posted(input, turn, "what is in notes.md?")
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "Nothing yet."))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    # The member Aqua runs on is a worker too, in a thread of its own: on
+    # one row, one folder and one sign-in, the two hold a session each,
+    # and forgetting Aqua's thread forgets its session alone.
+    test "Aqua and the member it runs on hold a session each on one row; forgetting Aqua's " <>
+           "thread leaves the member's and the sign-in",
+         %{ctx: ctx, thread: thread, fake: fake} do
+      seat!(ctx, "claude-code")
+      row = brain_row!(ctx, "claude")
+      actor = Sanctum.Context.actor(ctx)
+
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      _started = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "reply one"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert {:ok, %{session: @session}} = Tape.brain(ctx, thread.id)
+
+      # The member's own job, in its thread under another room, on the same row.
+      {:ok, room} = Arca.Test.Days.thread(actor)
+      {:ok, child} = Arca.ThreadStorage.crew_thread(actor, room.id, "claude-code")
+      job = accept!(ctx, child, row, "tidy", nil, nil, "claude-code")
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^job.id),
+          set: [status: "completed"]
+        )
+
+      worker = "6f1e2d3c-0000-4968-8776-00000000000a"
+
+      {:ok, %{seen: false}} =
+        TurnStorage.commit_brain(actor, child.id, %{
+          agent: "claude-code",
+          generation: 0,
+          boot: "boot-member",
+          hello: true,
+          seq: 1,
+          row_id: row.id,
+          epoch: row.epoch,
+          silence_ms: 1_800_000,
+          session: worker
+        })
+
+      {:ok, kept} = Arca.ThreadStorage.get(actor, child.id)
+
+      assert {:ok, _} = Tape.delete_thread(ctx, thread.id)
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+
+      assert owed(ctx) == [forget_record(ctx, thread, row, @session, 0)]
+      assert Arca.ThreadStorage.get(actor, child.id) == {:ok, kept}
+      assert {:ok, %{session: ^worker}} = Tape.brain(ctx, child.id)
+      assert {:ok, _row} = Arca.McpServerStorage.get_by_id(actor, row.id)
+      refute_received {:control, "home", _wire, _fields}
     end
   end
 
@@ -2789,6 +2881,30 @@ defmodule Aqua.ProgramTest do
   # ---------------------------------------------------------------------------
   # The brain's row, the turn and its decision
 
+  # Aqua seated on `member`, as the Aqua page seats it, and its consent
+  # given again for the shape that moved, as the person gives it.
+  defp seat!(ctx, member) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => member})
+
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    ref = Prima.AgentRef.soul_ref()
+    decisions = %{ref: ref, selections: []}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    :ok
+  end
+
   defp brain_row!(ctx, name \\ "claude-code") do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -2876,12 +2992,13 @@ defmodule Aqua.ProgramTest do
     ref
   end
 
-  # The soul switched to read-only, as the Aqua page switches it.
+  # Aqua switched to read-only, as the Aqua page switches it: the crew
+  # member Aqua runs on, whose mode Aqua runs in.
   defp read_only!(ctx) do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
-        "name" => Compendium.AquaPath.soul_name(),
+        "name" => Cyfr.Test.SeedBundle.seat_member(),
         "mode" => "read-only"
       })
   end

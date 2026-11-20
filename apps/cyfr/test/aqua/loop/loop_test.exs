@@ -871,7 +871,10 @@ defmodule Aqua.LoopTest do
     # The file as it stood before `tools:`, still holding `tool_policy:`.
     actor = Sanctum.Context.actor(ctx)
     {:ok, bytes} = Arca.get(actor, Compendium.AquaPath.soul_file())
-    held = String.replace(bytes, "mode: auto\n", "mode: auto\ntool_policy:\n  notes.keep: auto\n")
+
+    held =
+      String.replace(bytes, "title: Aqua\n", "title: Aqua\ntool_policy:\n  notes.keep: auto\n")
+
     refute held == bytes
     :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), held)
     assert {:error, :tool_policy_retired} = Compendium.AgentIndex.snapshot(ctx, "aqua")
@@ -1034,7 +1037,7 @@ defmodule Aqua.LoopTest do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
-        "name" => "aqua",
+        "name" => Cyfr.Test.SeedBundle.seat_member(),
         "mode" => "read-only"
       })
 
@@ -1089,9 +1092,13 @@ defmodule Aqua.LoopTest do
 
   # The member `name` switched to `mode` through the `aqua` tool, as the
   # Aqua page switches it, and its grant walked again for its file's move.
+  # Aqua runs in the mode of the crew member it runs on, whose switch
+  # Aqua's is (`Cyfr.Test.SeedBundle.seat!/2`).
   defp mode!(ctx, name, mode) do
+    file = if Prima.AgentRef.soul?(name), do: Cyfr.Test.SeedBundle.seat_member(), else: name
+
     {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => name, "mode" => mode})
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => file, "mode" => mode})
 
     consent!(ctx, name)
   end

@@ -31,6 +31,10 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
   @openai_codex "catalyst:local.openai-codex"
   @root :crypto.strong_rand_bytes(32)
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
+  # The title of the crew member the seed's Aqua runs on, whose mode Aqua
+  # runs in and whose name its read-only sentence gives
+  # (`Cyfr.Test.SeedBundle.seat!/2`).
+  @seat "claude"
 
   setup do
     Arca.Cache.init()
@@ -170,7 +174,8 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       assert_receive {:control, "reconcile", _message, _fields}, 2_000
       # The soul's own catalyst is scripted too, so a model asked shows.
       script!([])
-      mode!(ctx, "aqua", "read-only")
+      # Aqua runs in the mode of the crew member it runs on.
+      mode!(ctx, Cyfr.Test.SeedBundle.seat_member(), "read-only")
       {:ok, fake: fake}
     end
 
@@ -181,15 +186,15 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       turn = accept_on!(ctx, room, row, "what is in notes.md?")
 
       assert Aqua.Loop.run(ctx: ctx, turn_id: turn.id) ==
-               {:failed, {:read_only_unheld, "Aqua", "codex"}}
+               {:failed, {:read_only_unheld, @seat, "codex"}}
 
-      line = Aqua.Models.unheld_sentence("Aqua", "codex")
+      line = Aqua.Models.unheld_sentence(@seat, "codex")
       refused!(ctx, room, turn, "what is in notes.md?", line, program: row.id)
       refute_received {:session, _type, _message, _fields}
       assert Scripted.sessions(fake, row.id) == %{}
 
       # The same soul in auto passes the check: the holder starts it.
-      mode!(ctx, "aqua", "auto")
+      mode!(ctx, Cyfr.Test.SeedBundle.seat_member(), "auto")
       again = accept_on!(ctx, room, row, "what is in notes.md?")
       loop = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: again.id) end)
       {played, work} = played!(fake, row, again)
@@ -207,7 +212,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       task = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
       answer = Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
       assert Scripted.sessions(fake, row.id) == %{}
-      assert answer == {:ok, {:failed, {:read_only_unheld, "Aqua", "codex-path"}}}
+      assert answer == {:ok, {:failed, {:read_only_unheld, @seat, "codex-path"}}}
     end
 
     test "read-only on a cyfr-claude-code row passes the check, and the holder starts it " <>

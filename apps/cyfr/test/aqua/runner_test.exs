@@ -209,12 +209,13 @@ defmodule Aqua.RunnerTest do
   defp script_http!(items),
     do: start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: items})
 
-  # The soul switched between its modes, as the Aqua page switches it.
+  # The soul switched between its modes, as the Aqua page switches it: the
+  # mode of the crew member it runs on.
   defp mode!(ctx, mode) do
-    assert {:ok, %{updated: "aqua"}} =
+    assert {:ok, %{updated: "claude"}} =
              Compendium.Providers.Aqua.handle(ctx, %{
                "action" => "update",
-               "name" => "aqua",
+               "name" => Cyfr.Test.SeedBundle.seat_member(),
                "mode" => mode
              })
   end
@@ -388,8 +389,8 @@ defmodule Aqua.RunnerTest do
           Compendium.AquaPath.soul_file(),
           String.replace(
             shipped,
-            "\nmode: auto\n",
-            "\nmode: auto\ntool_policy:\n  notes.keep: auto\n"
+            "\ntools:\n",
+            "\ntool_policy:\n  notes.keep: auto\ntools:\n"
           )
         )
 

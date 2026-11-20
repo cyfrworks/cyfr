@@ -122,7 +122,7 @@ defmodule Aqua.CanvasWriteTest do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
-        "name" => "aqua",
+        "name" => Cyfr.Test.SeedBundle.seat_member(),
         "mode" => "read-only"
       })
 

@@ -667,6 +667,32 @@ defmodule Prima.Refusal do
       {:conflict,
        "This schedule changed since it was read; read it again and make the change there"}
 
+  # Aqua runs on the crew member its file names (`Compendium.AquaAgent`),
+  # which supplies its brain: a turn of Aqua whose member does not stand is
+  # refused with the sentence its card on the Aqua page says too.
+  defp row({:aqua_runs_on, :none, _member}),
+    do:
+      {:setup_required,
+       "Aqua runs on no crew member yet — choose one on Aqua's card on the Aqua page"}
+
+  defp row({:aqua_runs_on, :missing, member}) when is_binary(member),
+    do:
+      {:setup_required,
+       "Aqua runs on #{member}, which is no longer in the crew — choose another crew member " <>
+         "on Aqua's card on the Aqua page"}
+
+  defp row({:aqua_runs_on, :disabled, member}) when is_binary(member),
+    do:
+      {:setup_required,
+       "Aqua runs on #{member}, which is disabled — enable it on its card, or choose another " <>
+         "crew member on Aqua's card on the Aqua page"}
+
+  defp row({:aqua_runs_on, :refused, member}) when is_binary(member),
+    do:
+      {:setup_required,
+       "Aqua runs on #{member}, whose file is refused — the Aqua page says what to change " <>
+         "in it, or choose another crew member on Aqua's card there"}
+
   # A crew member whose brain cannot take a job yet (`Aqua.Crew.ready/2`):
   # the sentence says what the person does about it.
   defp row({:crew_unready, member, :no_brain}) when is_binary(member),

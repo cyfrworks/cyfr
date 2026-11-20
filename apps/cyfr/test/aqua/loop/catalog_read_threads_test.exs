@@ -209,8 +209,15 @@ defmodule Aqua.Loop.CatalogReadThreadsTest do
         assert content =~ "no push token"
 
         # In read-only it does more than read, and is refused before the
-        # handler is asked.
-        soul!(ctx, %{"mode" => "read-only"})
+        # handler is asked. Aqua runs in the mode of the crew member it runs
+        # on (`Cyfr.Test.SeedBundle.seat!/2`).
+        {:ok, _} =
+          Cyfr.Test.AquaTool.call(ctx, %{
+            "action" => "update",
+            "name" => Cyfr.Test.SeedBundle.seat_member(),
+            "mode" => "read-only"
+          })
+
         refused = accept!(ctx, thread, "@aqua do it again")
         assert :completed = run(ctx, refused)
         assert {:ok, %{agent_mode: "read-only"}} = Tape.turn(ctx, refused.id)
