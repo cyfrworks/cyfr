@@ -95,7 +95,7 @@
 #             name under the gate's own namespace, test.yml's
 #             builder-image, locus-runtime-image and locus-backends-image
 #             jobs (every suite, every case of the Compose proof, the setup
-#             proof and each image's trivy scan), the browser jobs' four
+#             proof and each image's trivy scan), the browser jobs' eight
 #             shards on this host's pull of the Playwright image, and
 #             security.yml's repo-scan job (trivy's secret and
 #             misconfiguration scans of the tree git tracks or would add)
@@ -1115,7 +1115,7 @@ leg_boot() {
 # tool directory of the gate's ahead on PATH, both images built from the
 # tree, then test.yml's image jobs (each suite, every case of the Compose
 # proof and the setup proof in the backends job, and each image's scan),
-# the browser jobs' four shards and security.yml's repository scans, each
+# the browser jobs' eight shards and security.yml's repository scans, each
 # job as CI runs it, every image tag the jobs name under the gate's
 # namespace (--image-namespace). A job whose image did not build fails at
 # its first step that needs it. The image suites name every compose
@@ -1150,9 +1150,21 @@ leg_harness() {
   [ -z "$REFUSED" ] || return 1
   run_job harness browser_b test.yml browser shard=b --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
+  # A shard of one viewport builds its release on its runner; here it
+  # reuses the one the shard before it built from this tree, and fails
+  # when there is none: approval's after c, as when c ran it, and the
+  # canvas proof's after d.
   run_job harness browser_c test.yml browser shard=c --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
+  run_job harness browser_e test.yml browser shard=e --env RELEASE_BOOT_SKIP_BUILD=1 --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_f test.yml browser shard=f --env RELEASE_BOOT_SKIP_BUILD=1 --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
   run_job harness browser_d test.yml browser shard=d --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_g test.yml browser shard=g --env RELEASE_BOOT_SKIP_BUILD=1 --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_h test.yml browser shard=h --env RELEASE_BOOT_SKIP_BUILD=1 --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness repo_scan security.yml repo-scan || status=1
   rm -rf "$tools"

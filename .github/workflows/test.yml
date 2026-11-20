@@ -1828,14 +1828,18 @@ jobs:
   # behind the harness's HTTPS front, driven by the official Playwright
   # image, pinned by digest in tests/browser/harness.sh, so no browser binary
   # is fetched here; Playwright's library comes from
-  # tests/browser/package-lock.json, JavaScript only. The proofs run in four
+  # tests/browser/package-lock.json, JavaScript only. The proofs run in eight
   # shards, each a runner of its own: a step runs in the shard whose
   # `proofs` name it, in the order below. A shard's first release-backed
   # proof (its `build`) builds the release, and every later proof, and a
   # proof's second viewport, reuses it (RELEASE_BOOT_SKIP_BUILD); the grant,
   # share, approval and file-offer proofs only reuse one, so each
-  # shard opens with a proof that builds, and the markdown proof starts no
-  # release. Three
+  # shard opens with a proof that builds or with the release's own build
+  # (`build: release`), and the markdown proof starts no release. The
+  # canvas and approval proofs run one viewport a shard (its `viewport`):
+  # the canvas proof's budget needs the runner to itself
+  # (tests/canvas-proof/README.md), and either at both viewports in turn
+  # would be the run's longest job. Three
   # browsers run where the engine decides the answer (the frame facts, the
   # containment proof, the multi-home smoke and the canvas proof) and
   # Chromium alone elsewhere; a proof that uses a passkey drives Chromium's
@@ -1843,8 +1847,8 @@ jobs:
   browser:
     name: Browser harness (${{ matrix.title }})
     runs-on: ubuntu-latest
-    # The longest shard, the approval and file-offer proofs at both
-    # viewports, takes about a quarter of this. A hang is cut here.
+    # The longest shard, the canvas proof at one viewport, takes about a
+    # sixth of this. A hang is cut here.
     timeout-minutes: 60
     # Shard a, whose tincture proof needs the Locus image, is the
     # browser-tincture job below, on these steps; these shards start at once.
@@ -1857,13 +1861,33 @@ jobs:
             proofs: [identity, join]
             build: identity
           - shard: c
-            title: pairing, approval and file-offer proofs
-            proofs: [pairing, approval, file-offer]
+            title: pairing and file-offer proofs
+            proofs: [pairing, file-offer]
             build: pairing
           - shard: d
-            title: multi-home smoke, grant, share and canvas proofs, HSTS
-            proofs: [multi-home-smoke, grant, share, canvas, hsts]
+            title: multi-home smoke, grant and share proofs, HSTS
+            proofs: [multi-home-smoke, grant, share, hsts]
             build: multi-home-smoke
+          - shard: e
+            title: approval proof, desktop
+            proofs: [approval]
+            build: release
+            viewport: desktop
+          - shard: f
+            title: approval proof, 720x720
+            proofs: [approval]
+            build: release
+            viewport: 720x720
+          - shard: g
+            title: canvas proof, desktop
+            proofs: [canvas]
+            build: release
+            viewport: desktop
+          - shard: h
+            title: canvas proof, 720x720
+            proofs: [canvas]
+            build: release
+            viewport: 720x720
     steps: &browser-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cache deps and the prod build
@@ -1880,6 +1904,11 @@ jobs:
         run: |
           scripts/ci/retry.sh mix deps.get
           scripts/fetch-prebuilt-binaries.sh
+      # The SQLite release the shard's proofs reuse, for a shard that opens
+      # with a proof that only reuses one.
+      - name: Build the SQLite release
+        if: matrix.build == 'release'
+        run: tests/release-boot/build.sh sqlite
       # What each browser allows a sandboxed frame, recorded; it fails only
       # when it could not observe an attempt.
       - name: The frame-facts experiment
@@ -1976,16 +2005,13 @@ jobs:
             VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/share/$viewport" tests/share-proof/run.sh
             export RELEASE_BOOT_SKIP_BUILD=1
           done
-      - name: The approval proof (Chromium, desktop and 720x720)
+      - name: The approval proof (Chromium, at the shard's viewport)
         if: contains(matrix.proofs, 'approval')
         env:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'approval' && '1' || '' }}
-        run: |
-          set -euo pipefail
-          for viewport in desktop 720x720; do
-            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/approval/$viewport" tests/approval-proof/run.sh
-            export RELEASE_BOOT_SKIP_BUILD=1
-          done
+          VAULT_PROOF_VIEWPORT: ${{ matrix.viewport }}
+          PROOF_OUT: ${{ runner.temp }}/proofs/approval/${{ matrix.viewport }}
+        run: tests/approval-proof/run.sh
       - name: The file-offer proof (Chromium, desktop and 720x720)
         if: contains(matrix.proofs, 'file-offer')
         env:
@@ -1998,17 +2024,14 @@ jobs:
           done
       # The runner is the GitHub-hosted host class, held to its own canvas
       # budget (tests/canvas-proof/README.md).
-      - name: The canvas proof (desktop and 720x720)
+      - name: The canvas proof (at the shard's viewport)
         if: contains(matrix.proofs, 'canvas')
         env:
           RELEASE_BOOT_SKIP_BUILD: ${{ matrix.build != 'canvas' && '1' || '' }}
           CANVAS_PROOF_HOST_CLASS: github-hosted
-        run: |
-          set -euo pipefail
-          for viewport in desktop 720x720; do
-            CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/canvas/$viewport" tests/canvas-proof/run.sh
-            export RELEASE_BOOT_SKIP_BUILD=1
-          done
+          CANVAS_PROOF_VIEWPORT: ${{ matrix.viewport }}
+          PROOF_OUT: ${{ runner.temp }}/proofs/canvas/${{ matrix.viewport }}
+        run: tests/canvas-proof/run.sh
       # The shard's records, under proofs/<proof>, or
       # proofs/<proof>/<viewport> for a proof run at each viewport, kept so a
       # failed run's can be read, and a canvas record checked again with
