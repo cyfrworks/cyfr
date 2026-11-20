@@ -24,12 +24,7 @@
 # job's own definition (test.yml, the setup-elixir action) and this
 # script, so a pull request that changes none of them cannot turn them
 # red. A path left out skips a job that could have failed, so a script
-# that starts reading another file adds it here. One read is wider than
-# its job's paths on purpose: tests/run-names-test.sh sweeps every tracked
-# script under tests/ and scripts/ for a directory named without the run
-# prefix, and a set that wide would run the host job on nearly every pull
-# request, so a change elsewhere that the sweep refuses shows on main's
-# push run, where a red job is rerun once and a second red opens an issue.
+# that starts reading another file adds it here.
 #
 # Exit 0 with or without the output, 64 when given any argument.
 set -euo pipefail
@@ -42,8 +37,7 @@ always=(.github/workflows/test.yml scripts/ci/self-test-scope.sh)
 # The containment library, the host queue, the run names, the stage table,
 # the shared images, the janitor and the load check. Their fixtures are
 # scratch repositories holding copies of these; the stage table's guard
-# reads every workflow, and the run names' test the scripts that name what
-# they make after their run.
+# reads every workflow.
 host=(
   .github/workflows
   scripts/lib
@@ -56,9 +50,6 @@ host=(
   tests/install-screen-proof/prepare.sh tests/install-screen-proof/base-image.sh
   tests/install-screen-proof/lib.sh
   tests/browser/harness.sh
-  tests/compose-proof/run.sh tests/compose-proof/tailscale-standin/proof.sh
-  tests/setup-proof/run.sh tests/setup-proof/cleanup-test.sh
-  tests/identity-proof/front.sh tests/proxy-hsts/run.sh tests/release-boot/boot.sh tests/imagesuite.py
 )
 
 # The partition runner against a stand-in Mix and a toy umbrella, with its

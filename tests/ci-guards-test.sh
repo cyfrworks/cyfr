@@ -10,9 +10,12 @@
 # stand-in gh, the last with the workflow that runs it),
 # scripts/ci/release-binary-check.sh (against real builds of the command
 # line, so it needs go and the module's dependencies), for
-# scripts/release.sh's use of the seed guard, and for test.yml's jobs
-# divided between runners: the two-node suite's cells and the partition
-# runner test's groups (it reads test.yml through PyYAML).
+# scripts/release.sh's use of the seed guard, for test.yml's jobs divided
+# between runners: the two-node suite's cells, the partition runner test's
+# groups, the Elixir shards, the browser shards' viewports and the app
+# image's groups (it reads test.yml through PyYAML), for every workflow's
+# trivy pin, and for the run prefix the proof scripts name what they make
+# under.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -1201,6 +1204,58 @@ while IFS='|' read -r kind old new want; do
 done <<'CASES'
 a step with no version|      - name: Secret scan (enforced)\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n          version: v0.75.0\n|      - name: Secret scan (enforced)\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n|security.yml repo-scan: 'Secret scan (enforced)' pins no version, not one vX.Y.Z
 a second release|          version: v0.75.0\n          scan-type: fs\n          scanners: misconfig\n|          version: v0.76.0\n          scan-type: fs\n          scanners: misconfig\n|the trivy-action steps pin v0.75.0, v0.76.0, not one release
+CASES
+
+# --- the proofs' run prefix ---
+
+# run_prefixes ROOT: every script that names what it makes after its run
+# reads PROOF_RUN_PREFIX in the expressions that name it, and no tracked
+# script under ROOT's tests/ or scripts/ makes a directory under TMPDIR
+# named cyfr-... without the prefix before it. Each error is a line. Read
+# as text, it passes a new `docker run` or `docker create` with no --name
+# under the prefix, whose container then outlives a killed run.
+PREFIX_FILES='tests/compose-proof/run.sh tests/compose-proof/tailscale-standin/proof.sh tests/setup-proof/run.sh tests/setup-proof/cleanup-test.sh tests/identity-proof/front.sh tests/proxy-hsts/run.sh tests/release-boot/boot.sh tests/browser/harness.sh tests/imagesuite.py'
+run_prefixes() {
+  local spec f want unprefixed
+  for spec in 'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-' \
+    'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
+    'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-' \
+    'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-' \
+    'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-' \
+    'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
+    'tests/identity-proof/front.sh:name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-' \
+    'tests/proxy-hsts/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-' \
+    'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-ns"}' \
+    'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"}' \
+    'tests/browser/harness.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-' \
+    'tests/imagesuite.py:PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")' \
+    'tests/imagesuite.py:tempfile.mkdtemp(prefix=PROJECT_PREFIX + prefix)'; do
+    f=${spec%%:*} want=${spec#*:}
+    grep -qF -- "$want" "$1/$f" || echo "$f names what it makes without the run prefix: no $want"
+  done
+  unprefixed=$(cd "$1" && git grep -n 'mktemp[^"]*"${TMPDIR:-/tmp}/cyfr-' -- tests scripts) || :
+  [ -z "$unprefixed" ] || echo "a directory a script makes under TMPDIR is named without the run prefix: $unprefixed"
+}
+label="proofs: the scripts that name what they make after their run read PROOF_RUN_PREFIX for it"
+run_prefixes "$root" > "$scratch/out" 2> "$scratch/err"
+code=$?
+if [ "$code" -eq 0 ] && quiet; then pass "$label"; else fail "$label"; fi
+# Planted, in a repository holding the scripts' copies: the HSTS proof's
+# run named under no prefix, and a script making an unprefixed directory.
+new_repo
+for f in $PREFIX_FILES; do mkdir -p "$(dirname "$f")" && cp "$root/$f" "$f"; done
+sed -i 's/RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-/RUN="cyfr-proxy-hsts-/' tests/proxy-hsts/run.sh
+printf 'd=$(mktemp -d "${TMPDIR:-/tmp}/%s")\n' cyfr-planted.XXXXXX > tests/planted.sh
+commit planted
+cd "$root" || exit 1
+while IFS='|' read -r kind want; do
+  label="proofs: the run prefix check refuses $kind ($want)"
+  run_prefixes "$repo" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+  if [ "$code" -eq 0 ] && grep -qF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
+done <<'CASES'
+a run named under no prefix|tests/proxy-hsts/run.sh names what it makes without the run prefix: no RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-
+an unprefixed directory under TMPDIR|a directory a script makes under TMPDIR is named without the run prefix: tests/planted.sh:1:
 CASES
 
 # --- retry ---

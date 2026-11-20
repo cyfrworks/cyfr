@@ -167,37 +167,6 @@ for name in "cyfr-proof-4242-boot-psql" "cyfr-${seed:0:9}-4242-x" "cyfr-${seed}x
   if [[ $name =~ $RUN_NAMES_PATTERN ]]; then fail "the pattern matches $name"; fi
 done
 
-begin 'the scripts that name what they make after their run read the prefix for it'
-# Read as text, the expressions that name each script's run, image or
-# directory: a new `docker run` or `docker create` with no --name under
-# PROOF_RUN_PREFIX passes this, and its container outlives a killed run.
-for spec in 'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-' \
-  'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
-  'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-' \
-  'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-' \
-  'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-' \
-  'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:' \
-  'tests/identity-proof/front.sh:name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-' \
-  'tests/proxy-hsts/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-' \
-  'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-ns"}' \
-  'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"}' \
-  'tests/browser/harness.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-' \
-  'tests/imagesuite.py:PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")' \
-  'tests/imagesuite.py:tempfile.mkdtemp(prefix=PROJECT_PREFIX + prefix)'; do
-  f=${spec%%:*} want=${spec#*:}
-  grep -qF -- "$want" "$root/$f" || fail "$f names what it makes without the run prefix: no $want"
-done
-# Every tracked script under tests/ and scripts/: a directory made under
-# TMPDIR and named cyfr-... carries the prefix before it.
-unprefixed=$(cd "$root" && git grep -n 'mktemp[^"]*"${TMPDIR:-/tmp}/cyfr-' -- tests scripts || :)
-[ -z "$unprefixed" ] || fail "a directory a script makes under TMPDIR is named without the run prefix: $unprefixed"
-# Planted: the sweep finds such a directory in a script of its own.
-mkdir -p "$S/swept/tests"
-printf 'd=$(mktemp -d "${TMPDIR:-/tmp}/%s")\n' cyfr-planted.XXXXXX >"$S/swept/tests/planted.sh"
-git -C "$S/swept" init -q && git -C "$S/swept" add tests
-[ -n "$(cd "$S/swept" && git grep -n 'mktemp[^"]*"${TMPDIR:-/tmp}/cyfr-' -- tests scripts || :)" ] ||
-  fail 'the sweep did not find a directory named without the run prefix'
-
 begin 'a free port lies in 20000-29999 and binds'
 [ "$RUN_NAMES_PORT_FIRST" = 20000 ] && [ "$RUN_NAMES_PORT_LAST" = 29999 ] ||
   fail "the range is $RUN_NAMES_PORT_FIRST-$RUN_NAMES_PORT_LAST"
