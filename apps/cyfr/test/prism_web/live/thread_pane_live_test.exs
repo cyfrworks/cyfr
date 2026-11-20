@@ -2550,9 +2550,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       listed = Threads.list(actor)
 
       question =
-        "Delete this thread? Its posts and everything done in it go, with explorer's and " <>
-          "reviewer's threads under it, and any record a program keeps of them. A program's " <>
-          "sign-in and every other thread stay. This cannot be undone."
+        "Delete this thread? Its posts, files and turns go, with explorer's and reviewer's " <>
+          "threads under it, and any record a program keeps of them. The records of what ran " <>
+          "stay on the Executions page and in the logs, as do a program's sign-in and every " <>
+          "other thread. This cannot be undone."
 
       assert has_element?(pane, ~s(#{@delete}[data-confirm="#{question}"]), "Delete")
       # Asked and not said yes to, nothing was sent: every thread stands.
@@ -2584,9 +2585,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       pane = open_pane(conn, athanor, explorer)
 
       alone =
-        "Delete this thread? Its posts and everything done in it go, and any record a " <>
-          "program keeps of it. A program's sign-in and every other thread stay. " <>
-          "This cannot be undone."
+        "Delete this thread? Its posts, files and turns go, and any record a program keeps " <>
+          "of it. The records of what ran stay on the Executions page and in the logs, as do " <>
+          "a program's sign-in and every other thread. This cannot be undone."
 
       assert has_element?(pane, ~s(#{@delete}[data-confirm="#{alone}"]))
 
@@ -2598,9 +2599,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       })
 
       running =
-        "Delete this thread? The work running in it stops. Its posts and everything done in " <>
-          "it go, and any record a program keeps of it. A program's sign-in and every other " <>
-          "thread stay. This cannot be undone."
+        "Delete this thread? The work running in it stops. Its posts, files and turns go, " <>
+          "and any record a program keeps of it. The records of what ran stay on the " <>
+          "Executions page and in the logs, as do a program's sign-in and every other thread. " <>
+          "This cannot be undone."
 
       assert has_element?(pane, ~s(#{@delete}[data-confirm="#{running}"]))
 

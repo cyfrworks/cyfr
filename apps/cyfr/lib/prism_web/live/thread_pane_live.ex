@@ -1740,7 +1740,7 @@ defmodule PrismWeb.ThreadPaneLive do
             type="button"
             phx-click="delete"
             data-confirm={delete_question(@children, @running)}
-            title="Its posts and everything done in it are removed"
+            title="Its posts, files and turns are removed"
             class="rounded px-1.5 py-0.5 text-text-secondary hover:bg-surface-base hover:text-text-primary"
           >
             Delete
@@ -2530,9 +2530,10 @@ defmodule PrismWeb.ThreadPaneLive do
         many -> {", with #{and_list(many)} threads under it", "them"}
       end
 
-    "Delete this thread?#{stops} Its posts and everything done in it go#{under}, " <>
-      "and any record a program keeps of #{of}. " <>
-      "A program's sign-in and every other thread stay. This cannot be undone."
+    "Delete this thread?#{stops} Its posts, files and turns go#{under}, " <>
+      "and any record a program keeps of #{of}. The records of what ran stay on the " <>
+      "Executions page and in the logs, as do a program's sign-in and every other thread. " <>
+      "This cannot be undone."
   end
 
   defp and_list(names) do
