@@ -952,10 +952,10 @@ jobs:
     #
     # The suite's files are divided between two cells, each a runner with
     # its own database, object store and pair of members, its cases run
-    # one at a time: cell a runs the files CLUSTER_CELL_A lists, cell b
-    # every other file of the suite, so a new file runs in b.
-    # tests/ci-guards-test.sh holds the matrix to these two cells and the
-    # selection to that split.
+    # one at a time: cell a runs the files scripts/ci/cluster-cell.sh
+    # lists, cell b every other file of the suite, so a new file runs in
+    # b. tests/ci-guards-test.sh holds the matrix to these two cells and
+    # these steps to that script's selection.
     strategy:
       fail-fast: false
       matrix:
@@ -983,42 +983,20 @@ jobs:
       CYFR_DATABASE_URL: postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test
       CYFR_CLUSTER_DATABASE_URL: postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test
       CYFR_SECRET_KEY_BASE: JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk
-      # Cell a's files, chosen from one run's module times so the two cells
-      # end together: 277 s of the suite's 562 s of cases.
-      CLUSTER_CELL_A: >-
-        apps/cyfr/test/cluster/execution_test.exs
-        apps/cyfr/test/cluster/provisioning_test.exs
-        apps/cyfr/test/cluster/revocation_test.exs
-        apps/cyfr/test/cluster/context_freshness_test.exs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cache deps and build
         uses: ./.github/actions/setup-elixir
         with:
           cache-key-prefix: mix-cluster
-      # Each file of the suite once, in one cell: a listed file the suite
-      # does not have, a file listed twice, a name with a blank and a cell
-      # with no file fail.
+      # The cell's files (scripts/ci/cluster-cell.sh, which holds cell a's).
       - name: The cell's files
         id: cell
         env:
           CELL: ${{ matrix.cell }}
         run: |
-          set -euo pipefail
-          all=$(find apps/cyfr/test/cluster -name '*_test.exs' | LC_ALL=C sort)
-          if grep -q '[[:blank:]]' <<<"$all"; then echo "::error::a file of the suite has a blank in its name"; exit 1; fi
-          listed=$(printf '%s\n' $CLUSTER_CELL_A | LC_ALL=C sort)
-          twice=$(printf '%s\n' "$listed" | uniq -d)
-          [ -z "$twice" ] || { echo "::error::CLUSTER_CELL_A lists a file twice: $twice"; exit 1; }
-          absent=$(LC_ALL=C comm -13 <(printf '%s\n' "$all") <(printf '%s\n' "$listed"))
-          [ -z "$absent" ] || { echo "::error::CLUSTER_CELL_A lists files the suite does not have: $absent"; exit 1; }
-          case "$CELL" in
-            a) files=$listed ;;
-            b) files=$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$listed")) ;;
-            *) echo "::error::there is no cell $CELL"; exit 1 ;;
-          esac
-          [ -n "$files" ] || { echo "::error::cell $CELL has no file to run"; exit 1; }
-          echo "files=$(printf '%s ' $files)" >> "$GITHUB_OUTPUT"
+          files=$(scripts/ci/cluster-cell.sh "$CELL")
+          echo "files=$files" >> "$GITHUB_OUTPUT"
       # CYFR_CLUSTER=on refuses local storage: two members would each hold
       # half of every athanor. The same image and credentials the s3-minio
       # job uses, pinned by digest; the PostgreSQL service images in this
@@ -2452,8 +2430,8 @@ jobs:
         run: |
           set -euo pipefail
           if ! python3 -I -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y python3-yaml
+            scripts/ci/retry.sh sudo apt-get update
+            scripts/ci/retry.sh sudo apt-get install -y python3-yaml
           fi
           bash tests/ci-guards-test.sh
       # Require new version directories for seed changes; existing bundle

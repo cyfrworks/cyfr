@@ -63,7 +63,7 @@ handoff	setup-proof-test	1	600	-	tests/setup-proof/**	bash tests/setup-proof/cle
 handoff	tailnet-guard-tests	1	600	-	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
 handoff	dev-stack-test	1	600	dev	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,apps/cyfr/lib/mix/tasks/cyfr.locus.dev_stack.ex,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
 handoff	prebuilt-binaries-test	1	600	-	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
-handoff	ci-guards-test	1	600	-	scripts/ci/**,scripts/release.sh,tests/ci-guards-test.sh,.github/workflows/rerun.yml,.github/workflows/test.yml,tests/test-partitioned-test.sh,apps/codex/cmd/release_proof.go	bash tests/ci-guards-test.sh
+handoff	ci-guards-test	1	600	-	scripts/ci/**,scripts/release.sh,tests/ci-guards-test.sh,.github/workflows/rerun.yml,.github/workflows/test.yml,tests/test-partitioned-test.sh,apps/cyfr/test/cluster/**,apps/codex/cmd/release_proof.go	bash tests/ci-guards-test.sh
 handoff	containerd-store-test	1	600	-	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh
 handoff	release-graph	1	600	-	.github/workflows/release.yml,apps/codex/.goreleaser.yml,scripts/release.sh,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
 handoff	security-scan-test	1	600	-	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh

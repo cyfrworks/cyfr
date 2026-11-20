@@ -14,12 +14,13 @@
 set -euo pipefail
 TEST_GROUPS='report rest'
 group=
-case "$#:${1:-}" in
-  0:) ;;
-  1:--groups) echo "$TEST_GROUPS"; exit 0 ;;
-  1:*) case " $TEST_GROUPS " in *" $1 "*) group=$1 ;; *) echo "no group $1 (groups: $TEST_GROUPS)" >&2; exit 64 ;; esac ;;
-  *) echo "usage: $0 [GROUP | --groups]" >&2; exit 64 ;;
-esac
+if [ "$#" = 1 ] && [ "$1" = --groups ]; then echo "$TEST_GROUPS"; exit 0; fi
+if [ "$#" = 1 ]; then
+  for g in $TEST_GROUPS; do [ "$1" != "$g" ] || group=$g; done
+  [ -n "$group" ] || { echo "no group '$1' (groups: $TEST_GROUPS)" >&2; exit 64; }
+elif [ "$#" != 0 ]; then
+  echo "usage: $0 [GROUP | --groups]" >&2; exit 64
+fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 runner="$root/scripts/test-partitioned.sh"
 scratch=$(mktemp -d /tmp/cyfr-runner-test.XXXXXX)
@@ -333,8 +334,16 @@ await_file() {
   for ((i=0; i<600; i++)); do [ -e "$1" ] && return 0; sleep 0.1; done
   fail "$1 never appeared"
 }
+# The groups' cases, each group an arm of the one case statement in
+# cases_of, which the dispatch at the end calls for one group or for each
+# in turn: a case is in an arm, and nothing can stand between two arms.
+# report holds the argument refusals through --cover, rest every case
+# after them. The arms keep the file's top level indentation, since the
+# heredocs below are written whole.
+cases_of() {
+case "$1" in
 # --- report: the argument refusals through --cover ----------------------
-if [ "$group" != rest ]; then
+report)
 refuses -n
 refuses -a
 refuses -n 0
@@ -794,9 +803,9 @@ rm -rf "$scratch/work/apps/three" "$TRACE"/cyfr-t.*-p*
 [ "$(status_of "${clean[@]}" bash "$runner" -n 1 --cover -- --cover)" = 64 ] || fail 'Mix --cover beside the runner'"'"'s was not refused'
 [ "$(status_of "${clean[@]}" bash "$runner" -n 1 --cover -- --export-coverage mine)" = 64 ] || fail 'Mix --export-coverage beside the runner'"'"'s was not refused'
 echo 'cover: one Total line, a failing test still fails, exports removed, another run'"'"'s left alone'
-fi
-[ "$group" != report ] || { echo 'partition runner tests passed: report'; exit 0; }
-# --- rest: every case below --------------------------------------------
+;;
+# --- rest: every case after --cover -------------------------------------
+rest)
 # --- containment, the terminal lines and admission -------------------------
 
 # lines_of OUT ARGS...: the runner in the background, so its pid is known.
@@ -1376,4 +1385,10 @@ grep -qxF "==> the failures record stays :all, the whole suite's rerun still owe
   fail 'a run with --profile-require did not say why the record stays :all'
 toy_run "$scratch/toy-all-profile-after" -n 1 -- --warnings-as-errors --failed
 [ "$toy_status" = 1 ] && [ "$(toy_record)" = b ] || fail "the rerun after --profile-require left $(toy_raw_record) with $toy_status"
-echo 'partition runner tests passed'
+;;
+*) fail "the group $1 has no cases" ;;
+esac
+}
+
+for g in ${group:-$TEST_GROUPS}; do cases_of "$g"; done
+echo "partition runner tests passed${group:+: $group}"
