@@ -629,10 +629,11 @@ defmodule Arca.ThreadStorage do
   to the row (`turns.program`), whose first start may not have committed
   a session yet. A program brain's configured name is never read: a row
   deleted no longer answers it, and a replacement of the same name, whose
-  threads store its own id, is never reached. Each thread is read again
-  under its lock, so one whose session moved to another row meanwhile is
-  left as it is. A session a program's transcript may back is owed its
-  removal first, in the same transaction
+  threads store its own id, is never reached. Each thread, and the open
+  turns pinned to the row, are read again under the threads' locks, so a
+  thread whose session moved to another row, or whose pinned turn ended,
+  meanwhile is left as it is. A session a program's transcript may back
+  is owed its removal first, in the same transaction
   (`Prima.OutboxRecord.brain_forget/1`). Answers those sessions, for the
   caller to close their holders after the commit.
   """
@@ -650,11 +651,17 @@ defmodule Arca.ThreadStorage do
           |> QueryHelpers.where_tenant(actor)
           |> Repo.all()
 
+        candidates =
+          Enum.uniq(candidates ++ stored_with(actor, row_id) ++ pinned_to(actor, row_id))
+
+        locked = lock_threads!(actor, candidates)
+        # Read again under the locks: a pinned turn that ended while this
+        # waited for them, its thread's session kept on another row since,
+        # is no longer the row's.
         pinned = pinned_to(actor, row_id)
-        candidates = Enum.uniq(candidates ++ stored_with(actor, row_id) ++ pinned)
 
         threads =
-          for %Thread{} = thread <- lock_threads!(actor, candidates),
+          for %Thread{} = thread <- locked,
               thread.agent in agents or thread.id in pinned or stored_row(thread) == row_id,
               do: thread
 
