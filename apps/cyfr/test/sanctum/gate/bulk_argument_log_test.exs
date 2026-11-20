@@ -84,8 +84,9 @@ defmodule Sanctum.Gate.BulkArgumentLogTest do
             path <- bulk_paths(arg, arg.name),
             do: "#{operation.tool}.#{operation.action} #{path}"
 
+      # aqua.create takes no content: only the soul has a prompt, and it is
+      # edited with update, never created.
       assert Enum.sort(Enum.uniq(positions)) == [
-               "aqua.create content",
                "aqua.skill_create content",
                "aqua.skill_update content",
                "aqua.update content",

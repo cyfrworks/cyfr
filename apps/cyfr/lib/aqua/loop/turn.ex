@@ -12,7 +12,9 @@ defmodule Aqua.Loop.Turn do
   named (`options["tools"]`), the resolved model catalyst with its capabilities
   and the request size its consent caps it at (`request_cap`), the brain
   options — the agent file's own, over which a crew request's
-  (`options["brain_options"]`) set theirs — the system prompt, the tool
+  (`options["brain_options"]`) set theirs — the system prompt (a crew
+  member's opening with CYFR's briefing for its kind of brain,
+  `Aqua.Prompt.briefing/2`), the tool
   surface (with the accounts its launches may name,
   read once here for every request the spec makes,
   `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
@@ -106,6 +108,8 @@ defmodule Aqua.Loop.Turn do
       prompt =
         Aqua.Prompt.compose(ctx,
           agent: agent,
+          program?: program != nil,
+          search?: Request.offers_search?(offered, authority, capabilities),
           authority: authority,
           crew: crew(ctx, roster, offered, soul?),
           requests: requests(ctx, thread),

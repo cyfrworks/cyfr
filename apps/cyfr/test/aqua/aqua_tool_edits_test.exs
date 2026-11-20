@@ -340,28 +340,31 @@ defmodule Aqua.AquaToolEditsTest do
     assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "claude")
   end
 
+  # Only the soul has a prompt to save.
   test "a prompt save names the version it edited and is refused over a newer one", %{ctx: ctx} do
-    {:ok, %{"content_digest" => digest}} = call(ctx, %{"action" => "get", "name" => "scout"})
-    assert digest == Prima.Digest.sha256_hex("")
+    {:ok, %{"content_digest" => digest, "content" => prompt}} =
+      call(ctx, %{"action" => "get", "name" => "aqua"})
+
+    assert digest == Prima.Digest.sha256_hex(prompt)
 
     assert {:ok, _} =
              call(ctx, %{
                "action" => "update",
-               "name" => "scout",
-               "content" => "# Scout\n\nLook first.",
+               "name" => "aqua",
+               "content" => "# Aqua\n\nLook first.",
                "expected_digest" => digest
              })
 
     assert {:error, {:conflict, message}} =
              call(ctx, %{
                "action" => "update",
-               "name" => "scout",
-               "content" => "# Scout\n\nA stale draft.",
+               "name" => "aqua",
+               "content" => "# Aqua\n\nA stale draft.",
                "expected_digest" => digest
              })
 
     assert message =~ "changed since"
-    {:ok, %{"content" => content}} = call(ctx, %{"action" => "get", "name" => "scout"})
+    {:ok, %{"content" => content}} = call(ctx, %{"action" => "get", "name" => "aqua"})
     assert content =~ "Look first."
   end
 

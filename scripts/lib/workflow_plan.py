@@ -25,7 +25,7 @@ as CI names it. Without --image-namespace a step that gives an image any
 name fails it. Whatever the namespace, a step's docker commands are read
 as docker reads them (its global options, then every option form of a
 verb that gives a name), and one the plan cannot read that far, one that
-loads images other than the line the plan replaces, and one that starts
+loads images other than the lines the plan replaces, and one that starts
 a container under a name CI gives (`docker run`, `docker create`) fail
 it. An upload step keeps its files under DIR/NAME (--artifacts).
 
@@ -64,8 +64,9 @@ RUNNER_TEMP. A `run` step's script is its `run:` text after a preamble
 that leaves the caller's Mix and database selection out, exports the
 workflow's, the job's and the step's env (then --env), sets GITHUB_* and
 RUNNER_TEMP as a runner does, and enters its working directory. Its one
-local substitution: the line that loads the Locus image a download step
-fetched becomes a check that the image the gate built is there.
+local substitution: a line that loads the Locus image or the app image a
+download step fetched becomes a check that the image the gate built is
+there (LOADS).
 
 A construct the plan cannot run as CI does fails it, naming the step:
 an expression beyond the matrix, runner.temp, github.workspace,
@@ -98,7 +99,7 @@ IMAGE_TAGS = {
     "cyfr-locus:runtime": None,
     "cyfr-locus:backends": None,
     "cyfr-locus:tincture-proof": None,
-    "cyfr:push": None,
+    "cyfr:push": "CYFR_IMAGE",
     "cyfr:compose-proof": "COMPOSE_PROOF_IMAGE",
 }
 # A tag of the table's repositories, wherever a step names one: not part
@@ -114,10 +115,15 @@ SETUP_ACTIONS = {
     "actions/checkout", "actions/setup-go", "actions/setup-node", "./.github/actions/setup-elixir",
     "actions/cache", "actions/download-artifact", "docker/setup-buildx-action",
 }
-# The job fetched the image the gate built from the tree; the line that
-# loads the fetched copy is the one line the plan replaces.
-LOAD_LINE = 'zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load'
-LOAD_CHECK = 'docker image inspect --format "the gate built cyfr-locus:ci as {{.Id}}" cyfr-locus:ci'
+# A job fetched an image the gate built from the tree; a line that loads
+# the fetched copy is a line the plan replaces, with a check that the
+# gate's image is there.
+LOADS = {
+    'zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load':
+        'docker image inspect --format "the gate built cyfr-locus:ci as {{.Id}}" cyfr-locus:ci',
+    'zstd -dc "$RUNNER_TEMP/app-image/cyfr.tar.zst" | docker load':
+        'docker image inspect --format "the gate built cyfr:push as {{.Id}}" cyfr:push',
+}
 TRIVY_INPUTS = {"version", "scan-type", "scan-ref", "image-ref", "scanners", "format", "exit-code",
                 "severity", "ignore-unfixed", "trivyignores"}
 BUILD_INPUTS = {"context", "file", "build-args", "load", "tags", "cache-from", "cache-to"}
@@ -807,12 +813,12 @@ def given_names(script):
     `docker tag`'s target, what a `docker save` writes, a `docker commit`'s
     or `docker import`'s name, however the command spells its options. An
     image a script only runs, pulls or inspects is a reference, and its
-    name is not the plan's to give. The one `docker load` the plan replaces
-    is left out; a docker command it cannot read fails it: docker named
+    name is not the plan's to give. The `docker load` lines the plan replaces
+    are left out; a docker command it cannot read fails it: docker named
     where it is no command (an argument of xargs, env, sudo or command, a
     string a shell or eval runs), a load, a run, a verb or option it does
     not read, or a word that may split into options."""
-    script = "\n".join("" if line.strip() == LOAD_LINE else line for line in script.split("\n"))
+    script = "\n".join("" if line.strip() in LOADS else line for line in script.split("\n"))
     names, cases = [], []
     for words, ended in shell_commands(script):
         first = words[0].text if words and words[0].plain else None
@@ -1123,7 +1129,7 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
                 if re.search(r"\bGITHUB_(ENV|PATH)\b", text):
                     raise Refused("it writes GITHUB_ENV or GITHUB_PATH, which the plan does not carry")
                 lines = text.split("\n")
-                body = [rename(LOAD_CHECK) if l.strip() == LOAD_LINE else l for l in lines]
+                body = [rename(LOADS[l.strip()]) if l.strip() in LOADS else l for l in lines]
             shell = step.get("shell", defaults.get("shell"))
             if shell not in (None, "bash"):
                 raise Refused(f"it runs under the shell {shell!r}")

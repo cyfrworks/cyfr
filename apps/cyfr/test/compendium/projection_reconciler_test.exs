@@ -173,7 +173,7 @@ defmodule Compendium.ProjectionReconcilerTest do
       # The soul and a crew member are file units: each lands by its commit.
       for {unit, body} <- [
             {["aqua", "aqua.md"], "---\ntitle: Soul\n---\n\nsoul\n"},
-            {["aqua", "crew", "scout.md"], "---\ntitle: Scout\n---\n\nscout\n"}
+            {["aqua", "crew", "scout.md"], "---\ntitle: Scout\n---\n"}
           ] do
         {:ok, _} = Arca.Overlay.commit_unit(actor, unit, {:files, [{[], body}]}, cap: :exempt)
       end

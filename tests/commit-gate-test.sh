@@ -287,16 +287,19 @@ esac
 exit 0
 FAKE
 # python3 runs as itself but for an image suite (an argument naming one of
-# the images), which records `directory|arguments` in harness.calls; the
-# builder's first suite then leaves a container under the suites' project
-# prefix, as a suite stopped midway would.
+# the images), which records `directory|arguments` in harness.calls, and
+# for the two suites that also run the app image the CYFR_IMAGE they were
+# given; the builder's first suite then leaves a container under the
+# suites' project prefix, as a suite stopped midway would.
 REAL_PYTHON3=$(command -v python3) || fail 'no python3 on PATH'
 cat > "$scratch/bin/python3" <<'FAKE'
 #!/usr/bin/env bash
 for a in "$@"; do
   case "$a" in
     cyfr-locus:*|cyfr:*|cyfr-gate-*/cyfr*:*)
-      printf 'python3 %s|prefix=%s\n' "$*" "${PROOF_RUN_PREFIX:-}" >> "$TRACE/harness.calls"
+      app=
+      case "$*" in *tests/locus-backends-image/e2e.py*|*tests/locus-backends-image/pipe.py*) app=" app=${CYFR_IMAGE-unset}" ;; esac
+      printf 'python3 %s|prefix=%s%s\n' "$*" "${PROOF_RUN_PREFIX:-}" "$app" >> "$TRACE/harness.calls"
       case "$*" in *builder-smoke.py*) [ -z "${PROOF_RUN_PREFIX:-}" ] || echo "c0ffee ${PROOF_RUN_PREFIX}leftover-1" >> "$TRACE/docker.containers" ;; esac
       exit 0 ;;
   esac
@@ -343,13 +346,19 @@ chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scr
 # The release boot and the close's proofs, which each start releases and
 # browsers, stand in through BASH_ENV, which bash sources before a script
 # runs: each records `script arguments` and what its environment chooses
-# in harness.calls, writes a record where the proof writes one, and exits.
+# (the viewport too, when one is set) in harness.calls, writes a record
+# where the proof writes one, and exits.
 # Each notes the PROOF_RUN_PREFIX it was given in proof.prefixes. A script
 # whose path holds STUB_HARNESS_STALL first makes, under that prefix, what
 # the Compose proof names after its run (a project's container, network
 # and volume, the stand-in's image and the run's directory), then records
 # its pid in $TRACE/stalled.harness and waits, so a stop that skips its own
-# cleanup leaves them.
+# cleanup leaves them. The release the browser proofs share stands in as
+# $TRACE/release, as release.sh keeps it: a proof that builds one (its
+# RELEASE_BOOT_SKIP_BUILD empty) clears it first and leaves one once its
+# build has passed, which it does not for a script whose path and
+# arguments hold STUB_HARNESS_FAIL; tests/release-boot/build.sh told to
+# reuse one fails without it.
 cat > "$scratch/stub.bash_env" <<'FAKE'
 # The prebuilt binary fetch and its test download from GitHub and compile
 # with the real Mix, so they stand in too: the fetch records in
@@ -380,10 +389,11 @@ case "$0" in
     exit 0 ;;
 esac
 case "$0" in
-  *tests/release-boot/boot.sh|*tests/*-proof/run.sh|*tests/*-proof/*-test.sh|*tests/compose-proof/tailscale-standin/proof.sh|*tests/browser/run.sh|*tests/multi-home-smoke/run.sh|*tests/proxy-hsts/run.sh)
-    printf '%s %s|skip=%s browsers=%s join=%s db=%s case_image=%s\n' "${0#"$GATE_ROOT"/}" "$*" \
+  *tests/release-boot/boot.sh|*tests/release-boot/build.sh|*tests/*-proof/run.sh|*tests/*-proof/*-test.sh|*tests/compose-proof/tailscale-standin/proof.sh|*tests/browser/run.sh|*tests/multi-home-smoke/run.sh|*tests/proxy-hsts/run.sh)
+    printf '%s %s|skip=%s browsers=%s join=%s db=%s case_image=%s%s\n' "${0#"$GATE_ROOT"/}" "$*" \
       "${RELEASE_BOOT_SKIP_BUILD-unset}" "${TINCTURE_PROOF_BROWSERS:-}" "${JOIN_PROOF_BROWSERS:-}" \
-      "${CYFR_DATABASE_URL##*/}" "${SETUP_PROOF_IMAGE:-}${COMPOSE_PROOF_SKIP_BUILD:+compose ${COMPOSE_PROOF_IMAGE:-}}" >> "$TRACE/harness.calls"
+      "${CYFR_DATABASE_URL##*/}" "${SETUP_PROOF_IMAGE:-}${COMPOSE_PROOF_SKIP_BUILD:+compose ${COMPOSE_PROOF_IMAGE:-}}" \
+      "${VAULT_PROOF_VIEWPORT:+ viewport=$VAULT_PROOF_VIEWPORT}${CANVAS_PROOF_VIEWPORT:+ viewport=$CANVAS_PROOF_VIEWPORT}" >> "$TRACE/harness.calls"
     printf '%s %s\n' "${0##*tests/}" "${PROOF_RUN_PREFIX-unset}" >> "$TRACE/proof.prefixes"
     [ -z "${PROOF_OUT:-}" ] || { mkdir -p "$PROOF_OUT" && echo '{}' > "$PROOF_OUT/stand-in-proof.json"; }
     [ -z "${BROWSER_OUT:-}" ] || { mkdir -p "$BROWSER_OUT" && echo '{}' > "$BROWSER_OUT/frame-facts.json"; }
@@ -396,6 +406,14 @@ case "$0" in
         echo "${run}_tailscale_state" >> "$TRACE/docker.volumes"
         echo "${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:$run sha256:standin" >> "$TRACE/docker.images"
         echo "$$" > "$TRACE/stalled.harness"; sleep 300 & wait ;;
+    esac
+    if [ "${RELEASE_BOOT_SKIP_BUILD-unset}" = "" ]; then
+      rm -f "$TRACE/release"
+      case "$0 $*" in *"${STUB_HARNESS_FAIL:-/nothing/}"*) echo "stand-in: the release did not build" >&2; exit 1 ;; esac
+      : > "$TRACE/release"
+    fi
+    case "$0:${RELEASE_BOOT_SKIP_BUILD:-}" in
+      *tests/release-boot/build.sh:1) [ -e "$TRACE/release" ] || { echo "stand-in: no sqlite release to reuse" >&2; exit 1; } ;;
     esac
     exit 0 ;;
 esac
@@ -550,6 +568,7 @@ CI_RUNS = {
     ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
     ("test.yml", "release-boot", "Boot the release against a fresh ${{ matrix.db }} database"): ["boot_sqlite", "boot_postgres"],
     ("test.yml", "locus-image", "The UTC date the upgrade layer refreshes on"): ["build_locus"],
+    ("test.yml", "app-image", "The UTC date the upgrade layer refreshes on"): ["build_app"],
     ("test.yml", "vocabulary-gate", "Retired names stay out and the storage layout is Arca's"): ["fossils"],
 }
 SETUP_ACTIONS = {
@@ -848,6 +867,141 @@ plant_shards dev-one-adapter '        if: matrix.shard == 1' "        if: matrix
 dev_refused dev-one-adapter "\"matrix.shard == 1 && matrix.db == 'sqlite'\""
 echo "ok: CI's shards are the whole split on both adapters, and the dev compile runs on one shard of each"
 
+# --- the browser shards the close runs ---------------------------------------------
+# browser_shards GATE WORKFLOW: the close runs each shard of test.yml's
+# browser and browser-tincture matrices once, and no other; and no two
+# shards run one proof at one viewport (a shard with no viewport runs its
+# proofs at every viewport they take).
+browser_shards() {
+  python3 -I - "$1" "$2" <<'PY'
+import re, sys, yaml
+gate, wf = sys.argv[1:]
+jobs = yaml.safe_load(open(wf))["jobs"]
+errors, rows, runs = [], {}, {}
+for job in ("browser", "browser-tincture"):
+    for e in jobs[job]["strategy"]["matrix"]["include"]:
+        if (job, e["shard"]) in rows:
+            errors.append(f"test.yml {job} lists shard {e['shard']} twice")
+        rows[(job, e["shard"])] = e
+for m in re.finditer(r"^[ \t]*run_job harness (\S+) test\.yml (browser|browser-tincture) shard=(\S+)", open(gate).read(), re.M):
+    runs[(m[2], m[3])] = runs.get((m[2], m[3]), 0) + 1
+for key in sorted(rows):
+    if runs.get(key, 0) != 1:
+        errors.append(f"the close runs test.yml {key[0]} shard {key[1]} {runs.get(key, 0)} times, not once")
+for key in sorted(set(runs) - set(rows)):
+    errors.append(f"the close runs test.yml {key[0]} shard {key[1]}, which its matrix does not list")
+where = {}
+for (job, shard), e in sorted(rows.items(), key=lambda kv: kv[0][1]):
+    for proof in e.get("proofs", []):
+        where.setdefault(proof, []).append((shard, e.get("viewport")))
+for proof, at in sorted(where.items()):
+    views = [v for _, v in at]
+    if len(at) > 1 and (None in views or len(set(views)) != len(views)):
+        errors.append(f"the {proof} proof runs at one viewport in more than one shard: {', '.join(s for s, _ in at)}")
+for e in errors:
+    print(e, file=sys.stderr)
+sys.exit(1 if errors else 0)
+PY
+}
+browser_shards "$gate" "$root/.github/workflows/test.yml" || fail "the close's browser shards are not test.yml's"
+# Planted: a shard i of approval at the desktop, which the close does not
+# run and shard e already holds, and the close's shard h line taken away,
+# each fail it with the reason.
+mkdir -p "$scratch/shards"
+python3 -I - "$root/.github/workflows/test.yml" "$scratch/shards/test.yml" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+anchor = "    steps: &browser-steps\n"
+assert s.count(anchor) == 1
+row = ("          - shard: i\n            title: approval proof, desktop again\n            proofs: [approval]\n"
+       "            build: release\n            viewport: desktop\n")
+open(sys.argv[2], "w").write(s.replace(anchor, row + anchor))
+PY
+! browser_shards "$gate" "$scratch/shards/test.yml" 2>"$scratch/shards/i.err" || fail 'a planted shard i passed the close'"'"'s shard check'
+for reason in 'the close runs test.yml browser shard i 0 times, not once' 'the approval proof runs at one viewport in more than one shard: e, f, i'; do
+  grep -qF "$reason" "$scratch/shards/i.err" || fail "the planted shard i failed without its reason ($reason): $(cat "$scratch/shards/i.err")"
+done
+grep -v 'run_job harness browser_h ' "$gate" > "$scratch/shards/gate.sh"
+! browser_shards "$scratch/shards/gate.sh" "$root/.github/workflows/test.yml" 2>"$scratch/shards/h.err" || fail 'a close without shard h passed the shard check'
+grep -qF 'the close runs test.yml browser shard h 0 times, not once' "$scratch/shards/h.err" ||
+  fail "a close without shard h failed without its reason: $(cat "$scratch/shards/h.err")"
+echo "ok: the close runs every browser shard of test.yml once, and no two shards run one proof at one viewport"
+
+# --- the app image's groups the close runs -------------------------------------------
+# app_groups GATE WORKFLOW: the close runs each group of test.yml's
+# app-image-suites and app-image-locus-suites matrices once, and no other;
+# each group's job needs the producer of each image its `images` name and
+# no other; each case a step of the jobs names (contains(matrix.cases,
+# ...)) is in exactly one group's cases, and each case a group lists is a
+# step's.
+app_groups() {
+  python3 -I - "$1" "$2" <<'PY'
+import re, sys, yaml
+gate, wf = sys.argv[1:]
+jobs = yaml.safe_load(open(wf))["jobs"]
+names = ("app-image-suites", "app-image-locus-suites")
+producers = {"app": "app-image", "locus": "locus-image"}
+rows, errors, steps, listed = [], [], set(), {}
+for name in names:
+    job = jobs[name]
+    needs = job.get("needs", [])
+    needs = sorted([needs] if isinstance(needs, str) else needs)
+    steps |= {k for st in job["steps"] for k in re.findall(r"contains\(matrix\.cases, '([a-z0-9-]+)'\)", str(st.get("if", "")))}
+    for e in job["strategy"]["matrix"]["include"]:
+        rows.append((name, e["group"]))
+        want = sorted(producers[i] for i in e.get("images", []))
+        if needs != want:
+            errors.append(f"group {e['group']} runs the images {', '.join(e.get('images', []))}, and its job {name} needs {', '.join(needs) or 'nothing'}")
+        for c in e.get("cases", []):
+            listed.setdefault(c, []).append(e["group"])
+errors += [f"test.yml lists group {g} twice" for g in sorted({g for _, g in rows if [r[1] for r in rows].count(g) > 1})]
+runs = re.findall(r"^[ \t]*run_job harness \S+ test\.yml (app-image-suites|app-image-locus-suites) group=(\S+)", open(gate).read(), re.M)
+for key in sorted(set(rows) | set(runs)):
+    if key not in rows:
+        errors.append(f"the close runs test.yml {key[0]} group {key[1]}, which its matrix does not list")
+    elif runs.count(key) != 1:
+        errors.append(f"the close runs test.yml {key[0]} group {key[1]} {runs.count(key)} times, not once")
+for c in sorted(steps):
+    if len(listed.get(c, [])) != 1:
+        errors.append(f"the case {c} is in {len(listed.get(c, []))} groups, not one: {', '.join(listed.get(c, [])) or 'none'}")
+for c in sorted(set(listed) - steps):
+    errors.append(f"group {', '.join(listed[c])} lists the case {c}, which no step runs")
+for e in errors:
+    print(e, file=sys.stderr)
+sys.exit(1 if errors else 0)
+PY
+}
+app_groups "$gate" "$root/.github/workflows/test.yml" || fail "the close's app image groups are not test.yml's"
+# Planted: a group d repeating group c's bind case, which the close does
+# not run, group a without its restore case, and the both group's job
+# without the Locus image's producer, each fail it with the reason.
+mkdir -p "$scratch/groups"
+python3 -I - "$root/.github/workflows/test.yml" "$scratch/groups" <<'PY'
+import sys
+s, out = open(sys.argv[1]).read(), sys.argv[2]
+row = "            cases: [bind, restore-identity]\n"
+assert s.count(row) == 1
+open(out + "/extra.yml", "w").write(s.replace(row, row + "          - group: d\n            title: bind again\n"
+                                              "            images: [app]\n            cases: [bind]\n"))
+row = "            cases: [interrupt, restore, restore-person, setup, scan]\n"
+assert s.count(row) == 1
+open(out + "/missing.yml", "w").write(s.replace(row, "            cases: [interrupt, restore-person, setup, scan]\n"))
+needs = "    needs: [locus-image, app-image]\n    strategy:\n      fail-fast: false\n      matrix:\n        include:\n          - group: both\n"
+assert s.count(needs) == 1
+open(out + "/producer.yml", "w").write(s.replace(needs, needs.replace("[locus-image, app-image]", "app-image")))
+PY
+! app_groups "$gate" "$scratch/groups/extra.yml" 2>"$scratch/groups/extra.err" || fail 'a planted group d passed the close'"'"'s group check'
+for reason in 'the close runs test.yml app-image-suites group d 0 times, not once' 'the case bind is in 2 groups, not one: c, d'; do
+  grep -qF "$reason" "$scratch/groups/extra.err" || fail "the planted group d failed without its reason ($reason): $(cat "$scratch/groups/extra.err")"
+done
+! app_groups "$gate" "$scratch/groups/missing.yml" 2>"$scratch/groups/missing.err" || fail 'a case in no group passed the close'"'"'s group check'
+grep -qF 'the case restore is in 0 groups, not one: none' "$scratch/groups/missing.err" ||
+  fail "a case in no group failed without its reason: $(cat "$scratch/groups/missing.err")"
+! app_groups "$gate" "$scratch/groups/producer.yml" 2>"$scratch/groups/producer.err" || fail 'a both job without the Locus producer passed the close'"'"'s group check'
+grep -qF 'group both runs the images locus, app, and its job app-image-locus-suites needs app-image' "$scratch/groups/producer.err" ||
+  fail "a both job without the Locus producer failed without its reason: $(cat "$scratch/groups/producer.err")"
+echo "ok: the close runs every group of the app image's suites once, each on the producers of its images alone, and each case runs in one group"
+
 # --- the image tags the close runs under the gate's names ------------------------
 # image_table GATE ROOT TABLE: every job the gate runs under
 # --image-namespace plans from ROOT's workflows (the planner refuses a job
@@ -941,8 +1095,8 @@ old = "        run: docker tag cyfr:push cyfr:compose-proof\n"
 assert s.count(old) == 1
 open(p, "w").write(s.replace(old, "        run: |\n          docker tag cyfr:push cyfr:compose-proof\n          docker tag cyfr:push cyfr:planted\n"))
 PY
-! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-newtag" test.yml locus-backends-image "$scratch/images/p1" "$scratch/images/t1" \
-  --image-namespace cyfr-gate-1 2>"$scratch/images-p1.err" || fail 'the planner ran a job giving a name the table does not hold'
+! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-newtag" test.yml app-image-suites "$scratch/images/p1" "$scratch/images/t1" \
+  group=b --image-namespace cyfr-gate-1 2>"$scratch/images-p1.err" || fail 'the planner ran a job giving a name the table does not hold'
 grep -qF 'gives an image the name cyfr:planted' "$scratch/images-p1.err" || fail "the planner refused cyfr:planted without its reason: $(cat "$scratch/images-p1.err")"
 plant_dir build
 python3 -I - "$scratch/images-build/.github/workflows/test.yml" <<'PY'
@@ -1546,11 +1700,16 @@ has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
   has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|compile --warnings-as-errors\$" "$ct/mix.calls" &&
   has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|test\$" "$ct/mix.calls" ||
   fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
-for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
+for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml app-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
-  'backends_image: test.yml locus-backends-image: 34 steps' 'browser_a: test.yml browser-tincture shard=a: 6 steps' \
-  'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 4 steps' \
-  'browser_d: test.yml browser shard=d: 6 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
+  'backends_image: test.yml locus-backends-image: 11 steps' 'app_both: test.yml app-image-locus-suites group=both: 11 steps' \
+  'app_a: test.yml app-image-suites group=a: 9 steps' 'app_b: test.yml app-image-suites group=b: 5 steps' \
+  'app_c: test.yml app-image-suites group=c: 5 steps' 'compose_checks: test.yml compose-proof-checks: 3 steps' \
+  'browser_a: test.yml browser-tincture shard=a: 6 steps' \
+  'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 3 steps' \
+  'browser_d: test.yml browser shard=d: 5 steps' 'browser_e: test.yml browser shard=e: 3 steps' \
+  'browser_f: test.yml browser shard=f: 3 steps' 'browser_g: test.yml browser shard=g: 3 steps' \
+  'browser_h: test.yml browser shard=h: 3 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
   grep -qxF "    harness.$job passed" "$scratch/close.out" || fail "the close did not report $job passed: $(cat "$scratch/close.out")"
 done
 today=$(date -u +%Y-%m-%d)
@@ -1568,34 +1727,34 @@ python3 tests/builder-image/lockfile.py NS/cyfr-locus:smoke|prefix=PREFIX
 python3 tests/locus-runtime-image/runners.py NS/cyfr-locus:runtime|prefix=PREFIX
 python3 -I tests/locus-runtime-image/namespace.py NS/cyfr-locus:runtime|prefix=PREFIX
 python3 tests/locus-runtime-image/canary.py NS/cyfr-locus:runtime|prefix=PREFIX
-python3 tests/locus-backends-image/e2e.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/isolation.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/refusals.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/residue.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/memory.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/kept_home.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/browser.py NS/cyfr-locus:backends|prefix=PREFIX
-python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_claude_code.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_openai_codex.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/egress.py NS/cyfr-locus:backends|prefix=PREFIX
-tests/compose-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=
-tests/compose-proof/predicates-test.sh |skip=unset browsers= join= db= case_image=
-tests/compose-proof/tailscale-standin/proof.sh |skip=unset browsers= join= db= case_image=
-tests/compose-proof/run.sh --case bind|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case modes|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case interrupt|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case restore-identity|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case shutdown|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case restore|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case restore-person|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+python3 tests/locus-backends-image/e2e.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push
+python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push
 tests/compose-proof/run.sh --case runtime --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update-refused --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update-fail --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update-interrupt --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case interrupt|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case restore|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case restore-person|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/setup-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof
 tests/setup-proof/run.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case modes|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case shutdown|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case bind|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case restore-identity|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=
+tests/compose-proof/predicates-test.sh |skip=unset browsers= join= db= case_image=
+tests/compose-proof/tailscale-standin/proof.sh |skip=unset browsers= join= db= case_image=
 tests/browser/run.sh |skip= browsers= join= db= case_image=
 tests/markdown-proof/run.sh |skip=unset browsers= join= db= case_image=
 tests/tincture-proof/run.sh NS/cyfr-locus:tincture-proof|skip=1 browsers=chromium join= db= case_image=
@@ -1603,19 +1762,23 @@ tests/hostile-frame-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/identity-proof/run.sh |skip= browsers= join= db= case_image=
 tests/join-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/pairing-proof/run.sh |skip= browsers= join= db= case_image=
-tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 tests/multi-home-smoke/run.sh |skip= browsers= join= db= case_image=
 tests/grant-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/share-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/share-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/share-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/share-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 tests/proxy-hsts/run.sh |skip=unset browsers= join= db= case_image=
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 WANT
-prefix=$(sed -n 's/.*|prefix=\(cyfr-gate-[0-9]*-[a-z]*-\)$/\1/p' "$ct/harness.calls" | sort -u)
+prefix=$(sed -n 's/.*|prefix=\(cyfr-gate-[0-9]*-[a-z]*-\)\( app=[^ |]*\)\{0,1\}$/\1/p' "$ct/harness.calls" | sort -u)
 [ "$prefix" = "$ns-harness-" ] || fail "the image suites ran under no one project prefix of the gate's: $(grep prefix= "$ct/harness.calls")"
 grep -v '^tests/release-boot/boot.sh ' "$ct/harness.calls" > "$scratch/close.got"
 diff <(sed -e "s/PREFIX/$prefix/" -e "s|NS/|$ns/|g" "$scratch/close.want") "$scratch/close.got" > "$scratch/close.diff" ||
@@ -1640,7 +1803,7 @@ for proof in grant share approval file-offer; do
   no_line "^tests/$proof-proof/run.sh \|skip= " "$ct/harness.calls" || fail "a shard opens with the $proof proof, which refuses to build the release"
 done
 # Each shard's records, kept as its upload step keeps them.
-for shard in a b c d; do
+for shard in a b c d e f g h; do
   [ -n "$(find "$scratch/close.log/artifacts/proof-records-$shard" -name '*.json' 2>/dev/null)" ] ||
     fail "shard $shard's records were not kept: $(find "$scratch/close.log/artifacts" 2>/dev/null | tr '\n' ' ')"
 done
@@ -2325,6 +2488,33 @@ dead "$stalled" || fail 'a killed leg'"'"'s proof outlived the next gate'"'"'s s
 same_store gone || fail "the gate after a killed leg left the host's images changed: $(cat "$scratch/gone.trace/docker.images")"
 gate_free gone
 echo 'ok: a harness leg killed with its gate is cleaned up by the next gate'
+
+# Shard d's build fails: the approval shards still run on the release
+# shard c built, as approval did when it ran in c, and the canvas shards,
+# which reuse d's, fail at their release step saying there is none to
+# reuse and run no proof.
+host_store dfail
+start_leg dfail harness STUB_HARNESS_FAIL=multi-home-smoke
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a harness leg whose shard d did not build its release exited $gate_rc"
+for v in desktop 720x720; do
+  has_line "^tests/approval-proof/run\.sh \|skip=1 .* viewport=$v\$" "$scratch/dfail.trace/harness.calls" ||
+    fail "the approval proof did not run at $v once shard d's build failed: $(cat "$scratch/dfail.trace/harness.calls")"
+done
+no_line '^tests/canvas-proof/run\.sh ' "$scratch/dfail.trace/harness.calls" || fail 'a canvas proof ran with no release to reuse'
+for shard in g h; do
+  has_line "^test\.yml browser shard=$shard: FAILED at 'Build the SQLite release'" "$scratch/dfail.log/harness.browser_$shard.result" ||
+    fail "shard $shard did not fail at its release step: $(cat "$scratch/dfail.log/harness.browser_$shard.result")"
+  grep -qF 'no sqlite release to reuse' "$scratch/dfail.log/harness.browser_${shard}_05.log" ||
+    fail "shard $shard's release step did not say there was no release to reuse: $(cat "$scratch/dfail.log/harness.browser_${shard}_05.log")"
+done
+for shard in e f; do
+  has_line "^test\.yml browser shard=$shard: 3 steps passed\$" "$scratch/dfail.log/harness.browser_$shard.result" ||
+    fail "shard $shard did not pass on shard c's release: $(cat "$scratch/dfail.log/harness.browser_$shard.result")"
+done
+same_store dfail || fail "the harness leg changed the host's images: $(cat "$scratch/dfail.trace/docker.images")"
+gate_free dfail
+echo "ok: with shard d's release unbuilt, approval runs at both viewports on shard c's, and the canvas shards fail saying there is no release to reuse"
 
 # trivy's archive that does not match its release's checksum is not
 # installed, and no scan runs a trivy the close did not install.

@@ -11,8 +11,11 @@ defmodule Compendium.AquaAgent do
 
   The format is deliberately portable — the shape Claude Code speaks for
   its subagents (`.claude/agents/*.md`): YAML frontmatter carrying the
-  metadata, the system prompt as the markdown body. Which file is the
-  soul and which is a crew member is the tree's to say
+  metadata, and on the soul alone its prompt as the markdown body. A crew
+  member has no prompt: CYFR briefs every member (`Aqua.Prompt`), the
+  job it is handed says what to do, and how a kind of job is done is a
+  scroll, so a crew file is its frontmatter and nothing else. Which file
+  is the soul and which is a crew member is the tree's to say
   (`Compendium.AquaPath`), never the frontmatter's; the wire `type` is
   `"soul"` or `"crew"` accordingly.
 
@@ -26,7 +29,6 @@ defmodule Compendium.AquaAgent do
       options:
         effort: high
       ---
-      You are the explorer …
 
   The keys: `title`; `description`, what the member is good at, which the
   soul reads when it hands a job; `avoid`, what to hand it never; the
@@ -49,9 +51,11 @@ defmodule Compendium.AquaAgent do
   wildcard: every action of a tool is listed by name). An absent list
   offers nothing. A crew member is offered the soul's (`under_soul/2`), narrowed
   only by the request that asks it, so a `tools` list in a crew file
-  refuses the file. A file that still holds the retired `tool_policy`
-  is refused, soul or crew (`:tool_policy_retired`), with the sentence
-  `Prima.AgentRef.tool_policy_retired/0` says.
+  refuses the file, and so does anything below a crew file's frontmatter
+  (`:crew_has_no_prompt`), with the sentence `prompt_refused/1` says:
+  nothing runs a prompt CYFR no longer shows. A file that still holds the
+  retired `tool_policy` is refused, soul or crew (`:tool_policy_retired`),
+  with the sentence `Prima.AgentRef.tool_policy_retired/0` says.
 
   The frontmatter grammar is restricted on purpose: string and boolean
   scalars, one list of strings (`tools`) and one flat map (`options`) —
@@ -82,7 +86,7 @@ defmodule Compendium.AquaAgent do
           options: %{String.t() => option_value()},
           mode: mode(),
           tools: [String.t()],
-          prompt: String.t()
+          prompt: String.t() | nil
         }
 
   @typedoc "What of its offered tools a member runs: reads alone, or all of them."
@@ -100,7 +104,8 @@ defmodule Compendium.AquaAgent do
   `tool_policy` in any file (`:tool_policy_retired`), a `mode` that is
   neither `read-only` nor `auto` (`{:mode_invalid, value}`), a `tools`
   list outside the grammar (`check_tools/1`), a `tools` list in a crew
-  member's file (`:crew_has_no_tools`), `options` that are not a flat map
+  member's file (`:crew_has_no_tools`), anything below a crew member's
+  frontmatter (`:crew_has_no_prompt`), `options` that are not a flat map
   of strings, integers and booleans (`:options_invalid`), or a brain
   named both as a catalyst and as a program (`:catalyst_and_program`,
   `check_brain/1`) refuse the whole file with its typed reason rather
@@ -108,7 +113,8 @@ defmodule Compendium.AquaAgent do
 
   A crew member parsed here is offered nothing; what it is offered is the
   soul's list (`resolve/3`, `under_soul/2`). The list is kept sorted and
-  without repeats, so a file's tools have one form.
+  without repeats, so a file's tools have one form. The soul's body is
+  its prompt; a crew member's `prompt` is nil.
   """
   @spec parse(String.t(), binary()) :: {:ok, t()} | {:error, term()}
   def parse(name, binary) when is_binary(name) and is_binary(binary) do
@@ -117,6 +123,7 @@ defmodule Compendium.AquaAgent do
          {:ok, mode} <- mode_of(meta),
          {:ok, tools} <- tools_of(name, meta),
          {:ok, options} <- options_of(meta["options"]),
+         {:ok, prompt} <- prompt_of(name, body),
          agent = %{
            name: name,
            title: string_or(meta["title"], name),
@@ -130,7 +137,7 @@ defmodule Compendium.AquaAgent do
            options: options,
            mode: mode,
            tools: tools,
-           prompt: body
+           prompt: prompt
          },
          :ok <- check_brain(agent) do
       {:ok, agent}
@@ -202,8 +209,8 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   Serialize an agent back to its file — the inverse of `parse/2`. A crew
-  member's file carries no tools, whatever the agent map holds, and a
-  member in `auto` names its mode, as the shipped files do.
+  member's file carries no tools and no body, whatever the agent map
+  holds, and a member in `auto` names its mode, as the shipped files do.
   """
   @spec serialize(t()) :: binary()
   def serialize(%{name: name} = agent) do
@@ -234,16 +241,29 @@ defmodule Compendium.AquaAgent do
         names -> ["tools:\n" | Enum.map(names, &"  - #{key(&1)}\n")]
       end
 
-    IO.iodata_to_binary([
-      "---\n",
-      fields,
-      options,
-      tools,
-      "---\n\n",
-      String.trim_trailing(agent.prompt || ""),
-      "\n"
-    ])
+    body =
+      if AquaPath.soul?(name),
+        do: ["\n", String.trim_trailing(agent.prompt || ""), "\n"],
+        else: []
+
+    IO.iodata_to_binary(["---\n", fields, options, tools, "---\n", body])
   end
+
+  @doc """
+  The sentence a person reads where a crew member's file is refused for
+  holding instructions below its frontmatter (`:crew_has_no_prompt`): on
+  the Aqua page in place of the member's card, and where the `aqua` tool
+  reads or edits that member. It names the file and says how to keep the
+  instructions: as a scroll, which any member is handed by name.
+  """
+  @spec prompt_refused(String.t()) :: String.t()
+  def prompt_refused(name) when is_binary(name),
+    do:
+      "#{name} can't take a job: aqua/crew/#{name}.md still holds instructions below its " <>
+        "header, and a crew member has none now. Keep what you want of them as a new " <>
+        "scroll under Scrolls on Aqua's page, which Aqua names in the jobs it hands out, " <>
+        "then in Files delete everything after the header's closing `---`. Nothing else " <>
+        "in the file needs to change."
 
   @doc """
   Split a frontmatter-markdown binary into `{:ok, meta, body}`. Shared by
@@ -409,6 +429,16 @@ defmodule Compendium.AquaAgent do
   # soul or crew: no reader of the old key remains to say what it meant.
   defp not_retired(meta) do
     if Map.has_key?(meta, "tool_policy"), do: {:error, :tool_policy_retired}, else: :ok
+  end
+
+  # The soul's body is its prompt. A crew file is its frontmatter alone:
+  # instructions left below it are refused, never run unseen.
+  defp prompt_of(name, body) do
+    cond do
+      AquaPath.soul?(name) -> {:ok, body}
+      String.trim(body) == "" -> {:ok, nil}
+      true -> {:error, :crew_has_no_prompt}
+    end
   end
 
   # A member's mode as written; a file without the line runs `auto`.

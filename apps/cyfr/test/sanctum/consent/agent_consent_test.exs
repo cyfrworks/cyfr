@@ -307,8 +307,11 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {_, head, _} = head!(ctx, "agent:local.explorer")
     assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, head.shape_digest}
 
-    write_agent!(ctx, "explorer", &%{&1 | prompt: &1.prompt <> "\n\nBe terse."})
+    # Only the soul has a prompt, and its words move no shape.
+    {_, soul_head, _} = head!(ctx, @soul)
+    write_agent!(ctx, "aqua", &%{&1 | prompt: &1.prompt <> "\n\nBe terse."})
     assert ShapeDerivation.live_digest(ctx, "agent:local.explorer") == {:ok, head.shape_digest}
+    assert ShapeDerivation.live_digest(ctx, @soul) == {:ok, soul_head.shape_digest}
 
     write_agent!(ctx, "explorer", &%{&1 | model: "another-model"})
     {:ok, retargeted} = ShapeDerivation.live_digest(ctx, "agent:local.explorer")
