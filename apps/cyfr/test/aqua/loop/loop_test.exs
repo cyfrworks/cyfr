@@ -72,7 +72,7 @@ defmodule Aqua.LoopTest do
 
     # The shipped catalysts the turns run on, in a seed of this test's own;
     # the suite's own carries none.
-    Cyfr.Test.SeedBundle.lay!(~w(claude files http openai openai-codex))
+    Cyfr.Test.SeedBundle.lay!(~w(claude files http openai))
 
     # The loops' work stops before their tree is removed and the seed tree restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()

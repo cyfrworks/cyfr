@@ -37,7 +37,7 @@ defmodule Aqua.Providers.StatusTest do
 
     # The shipped crew and the brains it and the soul run on, in a seed
     # of this test's own; the suite's own carries none.
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini openai-codex files http))
+    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)

@@ -56,7 +56,7 @@ defmodule Aqua.CrewTest do
 
     # The shipped brains of the soul and its crew, in a seed of this
     # test's own; the suite's own carries none.
-    Cyfr.Test.SeedBundle.lay!(~w(claude gemini openai-codex files http))
+    Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     # Filled now, through the explicit verb, as a person's athanor stands
@@ -91,6 +91,7 @@ defmodule Aqua.CrewTest do
     }
 
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
   defp drain(ctx), do: Crew.drain(ctx.athanor_id)
   defp refs_of(row), do: Aqua.Attachments.refs_of(row)
 
@@ -335,12 +336,14 @@ defmodule Aqua.CrewTest do
   # need sets one up, is said to be no brain's, never not installed.
   test "a member whose program is set up and not granted is refused for the grant alone",
        %{ctx: ctx, room: room} do
+    Arca.Test.UnitFixtures.login_catalyst!(ctx, "signin", "openai-codex")
+
     :ok =
       Arca.put(
         actor(ctx),
         Compendium.AquaPath.crew_file("coder"),
         "---\ntitle: coder\ndescription: Codes.\navoid: Planning.\n" <>
-          "catalyst_ref: catalyst:local.openai-codex\nmodel: default\n---\n"
+          "catalyst_ref: catalyst:local.signin\nmodel: default\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -358,7 +361,7 @@ defmodule Aqua.CrewTest do
 
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["coder"] == {:needs_grant, "catalyst:local.openai-codex:0.1.6"}
+    assert status["coder"] == {:needs_grant, "catalyst:local.signin:0.1.0"}
     assert status["openai-codex"] == {:program_unfit, "openai-codex"}
     assert status["claude-code"] == {:program_missing, "claude"}
 

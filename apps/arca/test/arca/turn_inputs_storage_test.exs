@@ -768,6 +768,47 @@ defmodule Arca.TurnInputsStorageTest do
            }
   end
 
+  # Codex sends a thread's total again unchanged whenever its rate limits
+  # update, and lowers a count only by resetting the thread's usage.
+  test "a total sent again unchanged counts nothing more, and one with any count below the " <>
+         "last is a reset, counted whole",
+       %{actor: actor, daily: daily, turn: turn, start: start} do
+    counts = fn input, output -> %{tokens(input) | "output_tokens" => output} end
+
+    at = fn input, output ->
+      %{
+        total(turn, "model-a", 0)
+        | "models" => [%{"model" => "model-a", "counts" => counts.(input, output)}]
+      }
+    end
+
+    usage = fn input, output, results ->
+      %{
+        "models" => %{"model-a" => counts.(input, output)},
+        "results" => results,
+        "partial" => 0,
+        "unknown" => 0
+      }
+    end
+
+    {:ok, _} = commit(actor, daily, turn, %{usage: [at.(500, 0)]})
+    {:ok, _} = commit(actor, daily, turn, %{usage: [at.(500, 0)]})
+    assert Jason.decode!(step(start.id).usage) == usage.(500, 0, 2)
+
+    {:ok, _} = commit(actor, daily, turn, %{usage: [at.(0, 0)]})
+    {:ok, _} = commit(actor, daily, turn, %{usage: [at.(9, 0)]})
+    assert Jason.decode!(step(start.id).usage) == usage.(509, 0, 4)
+
+    # One count below the last, the others above it, is a reset too.
+    {:ok, _} = commit(actor, daily, turn, %{usage: [at.(40, 10)]})
+    {:ok, _} = commit(actor, daily, turn, %{usage: [at.(45, 3)]})
+    assert Jason.decode!(step(start.id).usage) == usage.(585, 13, 6)
+
+    assert progress(daily)["baseline"] == %{
+             "total" => %{"thread" => "native-thread-1", "counts" => counts.(45, 3)}
+           }
+  end
+
   # From the first sign of a helper agent every total of Codex's session
   # says partial (`brain_wire.json`): it is still counted against the
   # thread's last one, and the step's usage says how many were partial.
