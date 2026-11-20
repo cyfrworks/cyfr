@@ -287,16 +287,19 @@ esac
 exit 0
 FAKE
 # python3 runs as itself but for an image suite (an argument naming one of
-# the images), which records `directory|arguments` in harness.calls; the
-# builder's first suite then leaves a container under the suites' project
-# prefix, as a suite stopped midway would.
+# the images), which records `directory|arguments` in harness.calls, and
+# for the two suites that also run the app image the CYFR_IMAGE they were
+# given; the builder's first suite then leaves a container under the
+# suites' project prefix, as a suite stopped midway would.
 REAL_PYTHON3=$(command -v python3) || fail 'no python3 on PATH'
 cat > "$scratch/bin/python3" <<'FAKE'
 #!/usr/bin/env bash
 for a in "$@"; do
   case "$a" in
     cyfr-locus:*|cyfr:*|cyfr-gate-*/cyfr*:*)
-      printf 'python3 %s|prefix=%s\n' "$*" "${PROOF_RUN_PREFIX:-}" >> "$TRACE/harness.calls"
+      app=
+      case "$*" in *tests/locus-backends-image/e2e.py*|*tests/locus-backends-image/pipe.py*) app=" app=${CYFR_IMAGE-unset}" ;; esac
+      printf 'python3 %s|prefix=%s%s\n' "$*" "${PROOF_RUN_PREFIX:-}" "$app" >> "$TRACE/harness.calls"
       case "$*" in *builder-smoke.py*) [ -z "${PROOF_RUN_PREFIX:-}" ] || echo "c0ffee ${PROOF_RUN_PREFIX}leftover-1" >> "$TRACE/docker.containers" ;; esac
       exit 0 ;;
   esac
@@ -565,6 +568,7 @@ CI_RUNS = {
     ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
     ("test.yml", "release-boot", "Boot the release against a fresh ${{ matrix.db }} database"): ["boot_sqlite", "boot_postgres"],
     ("test.yml", "locus-image", "The UTC date the upgrade layer refreshes on"): ["build_locus"],
+    ("test.yml", "app-image", "The UTC date the upgrade layer refreshes on"): ["build_app"],
     ("test.yml", "vocabulary-gate", "Retired names stay out and the storage layout is Arca's"): ["fossils"],
 }
 SETUP_ACTIONS = {
@@ -923,6 +927,81 @@ grep -qF 'the close runs test.yml browser shard h 0 times, not once' "$scratch/s
   fail "a close without shard h failed without its reason: $(cat "$scratch/shards/h.err")"
 echo "ok: the close runs every browser shard of test.yml once, and no two shards run one proof at one viewport"
 
+# --- the app image's groups the close runs -------------------------------------------
+# app_groups GATE WORKFLOW: the close runs each group of test.yml's
+# app-image-suites and app-image-locus-suites matrices once, and no other;
+# each group's job needs the producer of each image its `images` name and
+# no other; each case a step of the jobs names (contains(matrix.cases,
+# ...)) is in exactly one group's cases, and each case a group lists is a
+# step's.
+app_groups() {
+  python3 -I - "$1" "$2" <<'PY'
+import re, sys, yaml
+gate, wf = sys.argv[1:]
+jobs = yaml.safe_load(open(wf))["jobs"]
+names = ("app-image-suites", "app-image-locus-suites")
+producers = {"app": "app-image", "locus": "locus-image"}
+rows, errors, steps, listed = [], [], set(), {}
+for name in names:
+    job = jobs[name]
+    needs = job.get("needs", [])
+    needs = sorted([needs] if isinstance(needs, str) else needs)
+    steps |= {k for st in job["steps"] for k in re.findall(r"contains\(matrix\.cases, '([a-z0-9-]+)'\)", str(st.get("if", "")))}
+    for e in job["strategy"]["matrix"]["include"]:
+        rows.append((name, e["group"]))
+        want = sorted(producers[i] for i in e.get("images", []))
+        if needs != want:
+            errors.append(f"group {e['group']} runs the images {', '.join(e.get('images', []))}, and its job {name} needs {', '.join(needs) or 'nothing'}")
+        for c in e.get("cases", []):
+            listed.setdefault(c, []).append(e["group"])
+errors += [f"test.yml lists group {g} twice" for g in sorted({g for _, g in rows if [r[1] for r in rows].count(g) > 1})]
+runs = re.findall(r"^[ \t]*run_job harness \S+ test\.yml (app-image-suites|app-image-locus-suites) group=(\S+)", open(gate).read(), re.M)
+for key in sorted(set(rows) | set(runs)):
+    if key not in rows:
+        errors.append(f"the close runs test.yml {key[0]} group {key[1]}, which its matrix does not list")
+    elif runs.count(key) != 1:
+        errors.append(f"the close runs test.yml {key[0]} group {key[1]} {runs.count(key)} times, not once")
+for c in sorted(steps):
+    if len(listed.get(c, [])) != 1:
+        errors.append(f"the case {c} is in {len(listed.get(c, []))} groups, not one: {', '.join(listed.get(c, [])) or 'none'}")
+for c in sorted(set(listed) - steps):
+    errors.append(f"group {', '.join(listed[c])} lists the case {c}, which no step runs")
+for e in errors:
+    print(e, file=sys.stderr)
+sys.exit(1 if errors else 0)
+PY
+}
+app_groups "$gate" "$root/.github/workflows/test.yml" || fail "the close's app image groups are not test.yml's"
+# Planted: a group d repeating group c's bind case, which the close does
+# not run, group a without its restore case, and the both group's job
+# without the Locus image's producer, each fail it with the reason.
+mkdir -p "$scratch/groups"
+python3 -I - "$root/.github/workflows/test.yml" "$scratch/groups" <<'PY'
+import sys
+s, out = open(sys.argv[1]).read(), sys.argv[2]
+row = "            cases: [bind, restore-identity]\n"
+assert s.count(row) == 1
+open(out + "/extra.yml", "w").write(s.replace(row, row + "          - group: d\n            title: bind again\n"
+                                              "            images: [app]\n            cases: [bind]\n"))
+row = "            cases: [interrupt, restore, restore-person, setup, scan]\n"
+assert s.count(row) == 1
+open(out + "/missing.yml", "w").write(s.replace(row, "            cases: [interrupt, restore-person, setup, scan]\n"))
+needs = "    needs: [locus-image, app-image]\n    strategy:\n      fail-fast: false\n      matrix:\n        include:\n          - group: both\n"
+assert s.count(needs) == 1
+open(out + "/producer.yml", "w").write(s.replace(needs, needs.replace("[locus-image, app-image]", "app-image")))
+PY
+! app_groups "$gate" "$scratch/groups/extra.yml" 2>"$scratch/groups/extra.err" || fail 'a planted group d passed the close'"'"'s group check'
+for reason in 'the close runs test.yml app-image-suites group d 0 times, not once' 'the case bind is in 2 groups, not one: c, d'; do
+  grep -qF "$reason" "$scratch/groups/extra.err" || fail "the planted group d failed without its reason ($reason): $(cat "$scratch/groups/extra.err")"
+done
+! app_groups "$gate" "$scratch/groups/missing.yml" 2>"$scratch/groups/missing.err" || fail 'a case in no group passed the close'"'"'s group check'
+grep -qF 'the case restore is in 0 groups, not one: none' "$scratch/groups/missing.err" ||
+  fail "a case in no group failed without its reason: $(cat "$scratch/groups/missing.err")"
+! app_groups "$gate" "$scratch/groups/producer.yml" 2>"$scratch/groups/producer.err" || fail 'a both job without the Locus producer passed the close'"'"'s group check'
+grep -qF 'group both runs the images locus, app, and its job app-image-locus-suites needs app-image' "$scratch/groups/producer.err" ||
+  fail "a both job without the Locus producer failed without its reason: $(cat "$scratch/groups/producer.err")"
+echo "ok: the close runs every group of the app image's suites once, each on the producers of its images alone, and each case runs in one group"
+
 # --- the image tags the close runs under the gate's names ------------------------
 # image_table GATE ROOT TABLE: every job the gate runs under
 # --image-namespace plans from ROOT's workflows (the planner refuses a job
@@ -1016,8 +1095,8 @@ old = "        run: docker tag cyfr:push cyfr:compose-proof\n"
 assert s.count(old) == 1
 open(p, "w").write(s.replace(old, "        run: |\n          docker tag cyfr:push cyfr:compose-proof\n          docker tag cyfr:push cyfr:planted\n"))
 PY
-! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-newtag" test.yml locus-backends-image "$scratch/images/p1" "$scratch/images/t1" \
-  --image-namespace cyfr-gate-1 2>"$scratch/images-p1.err" || fail 'the planner ran a job giving a name the table does not hold'
+! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-newtag" test.yml app-image-suites "$scratch/images/p1" "$scratch/images/t1" \
+  group=b --image-namespace cyfr-gate-1 2>"$scratch/images-p1.err" || fail 'the planner ran a job giving a name the table does not hold'
 grep -qF 'gives an image the name cyfr:planted' "$scratch/images-p1.err" || fail "the planner refused cyfr:planted without its reason: $(cat "$scratch/images-p1.err")"
 plant_dir build
 python3 -I - "$scratch/images-build/.github/workflows/test.yml" <<'PY'
@@ -1621,9 +1700,12 @@ has_line '^locus_island=0$' "$scratch/close.log/islands.summary" &&
   has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|compile --warnings-as-errors\$" "$ct/mix.calls" &&
   has_line "\|$scratch/close\.log/[^/|]*cyfr-locus-island\.[^/|]*/apps/locus\|test\$" "$ct/mix.calls" ||
   fail "the close did not run test.yml's Locus step: $(grep -i locus "$scratch/close.log/islands.summary" "$ct/mix.calls" 2>&1 | head -5)"
-for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
+for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml app-image: 1 step' \
   'builder_image: test.yml builder-image: 9 steps' 'runtime_image: test.yml locus-runtime-image: 8 steps' \
-  'backends_image: test.yml locus-backends-image: 35 steps' 'browser_a: test.yml browser-tincture shard=a: 6 steps' \
+  'backends_image: test.yml locus-backends-image: 12 steps' 'app_both: test.yml app-image-locus-suites group=both: 11 steps' \
+  'app_a: test.yml app-image-suites group=a: 9 steps' 'app_b: test.yml app-image-suites group=b: 5 steps' \
+  'app_c: test.yml app-image-suites group=c: 5 steps' 'compose_checks: test.yml compose-proof-checks: 3 steps' \
+  'browser_a: test.yml browser-tincture shard=a: 6 steps' \
   'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 3 steps' \
   'browser_d: test.yml browser shard=d: 5 steps' 'browser_e: test.yml browser shard=e: 3 steps' \
   'browser_f: test.yml browser shard=f: 3 steps' 'browser_g: test.yml browser shard=g: 3 steps' \
@@ -1645,35 +1727,35 @@ python3 tests/builder-image/lockfile.py NS/cyfr-locus:smoke|prefix=PREFIX
 python3 tests/locus-runtime-image/runners.py NS/cyfr-locus:runtime|prefix=PREFIX
 python3 -I tests/locus-runtime-image/namespace.py NS/cyfr-locus:runtime|prefix=PREFIX
 python3 tests/locus-runtime-image/canary.py NS/cyfr-locus:runtime|prefix=PREFIX
-python3 tests/locus-backends-image/e2e.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/isolation.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/refusals.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/residue.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/memory.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/kept_home.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/browser.py NS/cyfr-locus:backends|prefix=PREFIX
-python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_claude_code.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/brain_openai_codex.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/openai_codex.py NS/cyfr-locus:backends|prefix=PREFIX
 python3 tests/locus-backends-image/egress.py NS/cyfr-locus:backends|prefix=PREFIX
-tests/compose-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=
-tests/compose-proof/predicates-test.sh |skip=unset browsers= join= db= case_image=
-tests/compose-proof/tailscale-standin/proof.sh |skip=unset browsers= join= db= case_image=
-tests/compose-proof/run.sh --case bind|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case modes|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case interrupt|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case restore-identity|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case shutdown|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case restore|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
-tests/compose-proof/run.sh --case restore-person|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+python3 tests/locus-backends-image/e2e.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push
+python3 tests/locus-backends-image/pipe.py NS/cyfr-locus:backends|prefix=PREFIX app=NS/cyfr:push
 tests/compose-proof/run.sh --case runtime --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update-refused --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update-fail --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/compose-proof/run.sh --case update-interrupt --locus-image NS/cyfr-locus:backends|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case interrupt|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case restore|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case restore-person|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
 tests/setup-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof
 tests/setup-proof/run.sh |skip=unset browsers= join= db= case_image=NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case modes|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case shutdown|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case bind|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/run.sh --case restore-identity|skip=unset browsers= join= db= case_image=compose NS/cyfr:compose-proof
+tests/compose-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=
+tests/compose-proof/predicates-test.sh |skip=unset browsers= join= db= case_image=
+tests/compose-proof/tailscale-standin/proof.sh |skip=unset browsers= join= db= case_image=
 tests/browser/run.sh |skip= browsers= join= db= case_image=
 tests/markdown-proof/run.sh |skip=unset browsers= join= db= case_image=
 tests/tincture-proof/run.sh NS/cyfr-locus:tincture-proof|skip=1 browsers=chromium join= db= case_image=
@@ -1697,7 +1779,7 @@ tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=deskt
 tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
 tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 WANT
-prefix=$(sed -n 's/.*|prefix=\(cyfr-gate-[0-9]*-[a-z]*-\)$/\1/p' "$ct/harness.calls" | sort -u)
+prefix=$(sed -n 's/.*|prefix=\(cyfr-gate-[0-9]*-[a-z]*-\)\( app=[^ |]*\)\{0,1\}$/\1/p' "$ct/harness.calls" | sort -u)
 [ "$prefix" = "$ns-harness-" ] || fail "the image suites ran under no one project prefix of the gate's: $(grep prefix= "$ct/harness.calls")"
 grep -v '^tests/release-boot/boot.sh ' "$ct/harness.calls" > "$scratch/close.got"
 diff <(sed -e "s/PREFIX/$prefix/" -e "s|NS/|$ns/|g" "$scratch/close.want") "$scratch/close.got" > "$scratch/close.diff" ||

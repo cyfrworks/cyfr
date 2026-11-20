@@ -91,9 +91,11 @@
 #             (scripts/lib/trivy-install.sh),
 #             both images built from the tree (Dockerfile.locus as
 #             test.yml's locus-image job builds it, Dockerfile as its
-#             locus-backends-image job does), every image tag those jobs
+#             app-image job does), every image tag those jobs
 #             name under the gate's own namespace, test.yml's
-#             builder-image, locus-runtime-image and locus-backends-image
+#             builder-image, locus-runtime-image, locus-backends-image,
+#             app-image-locus-suites, app-image-suites (each group) and
+#             compose-proof-checks
 #             jobs (every suite, every case of the Compose proof, the setup
 #             proof and each image's trivy scan), the browser jobs' eight
 #             shards on this host's pull of the Playwright image, and
@@ -162,6 +164,7 @@
 #   test.yml test: Install cargo-component
 #   test.yml s3-minio
 #   test.yml locus-image: Save the Locus image
+#   test.yml app-image: Save the app image
 #   test.yml tailscale-image-guard
 #   test.yml seed-guards
 #   test.yml config-seam
@@ -1114,11 +1117,14 @@ leg_boot() {
 # workflows' trivy-action steps pin (scripts/lib/trivy-install.sh) into a
 # tool directory of the gate's ahead on PATH, both images built from the
 # tree, then test.yml's image jobs (each suite, every case of the Compose
-# proof and the setup proof in the backends job, and each image's scan),
+# proof and the setup proof in the app image's groups and the Compose
+# proof's own checks, and each image's scan),
 # the browser jobs' eight shards and security.yml's repository scans, each
 # job as CI runs it, every image tag the jobs name under the gate's
 # namespace (--image-namespace). A job whose image did not build fails at
-# its first step that needs it. The image suites name every compose
+# its first step that needs it; no image is saved, moved or loaded, each
+# job's load being a check that the gate's build is there. The image
+# suites name every compose
 # project and container they start from the gate's prefix
 # (PROOF_RUN_PREFIX), and what a suite left is removed after its job.
 leg_harness() {
@@ -1135,7 +1141,7 @@ leg_harness() {
   export PATH="$tools:$PATH"
   run_job harness build_locus test.yml locus-image --only 'Build the Locus image once' --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
-  run_job harness build_app test.yml locus-backends-image --only 'Build the app image' --image-namespace "$ns" || status=1
+  run_job harness build_app test.yml app-image --only 'Build the app image' --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness builder_image test.yml builder-image --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
@@ -1144,6 +1150,21 @@ leg_harness() {
   [ -z "$REFUSED" ] || return 1
   harness_sweep || status=1
   run_job harness backends_image test.yml locus-backends-image --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  harness_sweep || status=1
+  run_job harness app_both test.yml app-image-locus-suites group=both --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  harness_sweep || status=1
+  run_job harness app_a test.yml app-image-suites group=a --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  harness_sweep || status=1
+  run_job harness app_b test.yml app-image-suites group=b --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  harness_sweep || status=1
+  run_job harness app_c test.yml app-image-suites group=c --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  harness_sweep || status=1
+  run_job harness compose_checks test.yml compose-proof-checks --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   harness_sweep || status=1
   run_job harness browser_a test.yml browser-tincture shard=a --image-namespace "$ns" || status=1
