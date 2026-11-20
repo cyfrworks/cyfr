@@ -404,6 +404,42 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         do: refute(has_element?(pane, ~s([id$="-m-msg_#{kind}"])))
   end
 
+  test "the menu shows the model a program's turn ran and its tokens, saying when they are " <>
+         "partial or unknown",
+       %{conn: conn, athanor: athanor, thread: thread} do
+    pane = open_pane(conn, athanor, thread)
+
+    told = fn usage ->
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: athanor.id,
+        thread_id: thread.id,
+        kind: :usage,
+        data: usage
+      })
+
+      menu = pane |> element(~s([id$="-menu"])) |> render()
+      menu |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+    end
+
+    assert told.(%{input: 0, output: 0, models: [], accounting: :unavailable}) =~
+             "Model default"
+
+    assert told.(%{input: 0, output: 0, models: [], accounting: :unavailable}) =~
+             "Tokens unknown"
+
+    menu = told.(%{input: 12, output: 3, models: ["claude-opus-5-5"], accounting: :partial})
+    assert menu =~ "claude-opus-5-5"
+    assert menu =~ "Tokens 12 in · 3 out, partial"
+
+    menu = told.(%{input: 20, output: 5, models: ["claude-opus-5-5"], accounting: :complete})
+    assert menu =~ "Tokens 20 in · 5 out"
+    refute menu =~ "partial"
+
+    # An API brain's turn tells its tokens alone.
+    assert told.(%{input: 7, output: 2}) =~ "Model default"
+    assert told.(%{input: 7, output: 2}) =~ "Tokens 7 in · 2 out"
+  end
+
   test "the line a stopped turn leaves is drawn as it lands, as the thread draws it on open",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     pane = open_pane(conn, athanor, thread)

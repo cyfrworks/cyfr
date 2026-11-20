@@ -73,6 +73,54 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "a turn on a program brain" do
+    test "tells the thread what the turn used as its start step stores it: the models it " <>
+           "ran, their tokens, and whether its accounting is partial or unavailable",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+      turn = accept!(ctx, thread, row, "count it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      unavailable = %{
+        "t" => "usage",
+        "gen" => 0,
+        "work" => turn.id,
+        "result" => "result-0",
+        "accounting" => "unavailable"
+      }
+
+      say(fake, row, unavailable)
+      assert told_usage() == %{input: 0, output: 0, models: [], accounting: :unavailable}
+
+      say(fake, row, usage(turn, "result-1"))
+      assert told_usage() == %{input: 10, output: 4, models: ["m"], accounting: :partial}
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "a turn whose every result was counted tells its accounting complete",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+      turn = accept!(ctx, thread, row, "count it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, usage(turn, "result-1"))
+      assert told_usage() == %{input: 10, output: 4, models: ["m"], accounting: :complete}
+      say(fake, row, usage(turn, "result-2"))
+      assert told_usage() == %{input: 20, output: 8, models: ["m"], accounting: :complete}
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "opens with the host's start, which asks nothing, and completes on the idle that answers its post",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "what is in notes.md?")
@@ -3224,6 +3272,12 @@ defmodule Aqua.ProgramTest do
     }
 
   defp accepted(input), do: %{"t" => "accepted", "id" => input.id}
+
+  # The usage the thread was told next.
+  defp told_usage do
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :usage, data: usage}, 10_000
+    usage
+  end
 
   # The next command written, taken by the driver.
   defp accept_next!(fake, row) do

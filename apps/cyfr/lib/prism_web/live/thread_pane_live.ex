@@ -1654,14 +1654,14 @@ defmodule PrismWeb.ThreadPaneLive do
           <%= cond do %>
             <% @models_loaded and @models_by_provider != %{} -> %>
               <.model_override
-                assistant={@assistant}
+                label={model_label(@assistant, @token_usage)}
                 models_by_provider={@models_by_provider}
                 model_override={@model_override}
                 class="min-w-0 max-w-[10rem] cursor-pointer truncate rounded-[7px] border border-border-default bg-surface-base px-1.5 py-0.5 font-mono text-xs text-text-primary focus:border-border-focus focus:outline-none"
               />
             <% @models_loaded -> %>
               <span class="truncate font-mono">
-                {(@assistant && @assistant["model"]) || "default"}
+                {model_label(@assistant, @token_usage)}
               </span>
             <% true -> %>
               <span>Reading the models…</span>
@@ -1693,7 +1693,7 @@ defmodule PrismWeb.ThreadPaneLive do
         <div class="aqua-panel-menu-row">
           <span>Tokens</span>
           <span class="font-mono">
-            {@token_usage.input} in · {@token_usage.output} out
+            {tokens(@token_usage)}
           </span>
         </div>
       </div>
@@ -2140,7 +2140,7 @@ defmodule PrismWeb.ThreadPaneLive do
     """
   end
 
-  attr :assistant, :any, required: true
+  attr :label, :string, required: true
   attr :models_by_provider, :map, required: true
   attr :model_override, :any, required: true
   attr :class, :string, required: true
@@ -2157,7 +2157,7 @@ defmodule PrismWeb.ThreadPaneLive do
       aria-label="Override model"
     >
       <option value="" selected={is_nil(@model_override)}>
-        {(@assistant && @assistant["model"]) || "default"}
+        {@label}
       </option>
       <%= for {provider, models} <- @models_by_provider, models != [] do %>
         <optgroup label={provider}>
@@ -2167,6 +2167,20 @@ defmodule PrismWeb.ThreadPaneLive do
     </select>
     """
   end
+
+  # The model the turn ran when its usage names it (a program's), else the
+  # assistant's own, else the default.
+  defp model_label(_assistant, %{models: [_ | _] = models}), do: Enum.join(models, ", ")
+  defp model_label(assistant, _usage), do: (assistant && assistant["model"]) || "default"
+
+  # The turn's tokens as they were told: unknown when the program could
+  # count none of them, and said to be partial when it counted only some.
+  defp tokens(%{accounting: :unavailable}), do: "unknown"
+
+  defp tokens(%{accounting: :partial} = usage),
+    do: "#{usage.input} in · #{usage.output} out, partial"
+
+  defp tokens(usage), do: "#{usage.input} in · #{usage.output} out"
 
   # The status line is drawn only while it says something.
   defp status?(assigns) do
