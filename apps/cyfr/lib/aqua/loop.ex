@@ -125,6 +125,10 @@ defmodule Aqua.Loop do
       steps: 0,
       usage: %{input: 0, output: 0},
       activity: [],
+      # The places in `activity` of a program brain's own tools still shown
+      # running (`own_activity/3`), settled when its native turn or its
+      # session ends (`settle_own/1`).
+      own: [],
       since: nil,
       active_ms: 0,
       observed: nil,
@@ -840,7 +844,7 @@ defmodule Aqua.Loop do
 
       {Aqua.Program, ^turn_id, :idle} ->
         Process.demonitor(monitor, [:flush])
-        {:halt, :completed, state}
+        {:halt, :completed, settle_own(state)}
 
       {Aqua.Program, ^turn_id, {:ended, {:failed, sentence}}} ->
         Process.demonitor(monitor, [:flush])
@@ -3138,7 +3142,7 @@ defmodule Aqua.Loop do
             end)
 
         :done ->
-          Enum.reduce(named, state.activity, &mark_done(&2, &1))
+          Enum.reduce(named, state.activity, &(&2 |> mark_done(&1, cyfr?(state)) |> elem(0)))
       end
 
     announce(state, :tool_activity, activity)
@@ -3147,8 +3151,9 @@ defmodule Aqua.Loop do
 
   # What a program brain's attendant tells of the open work while the
   # turn waits on it or on a call (`Aqua.Program`): its own tools as they
-  # start and end.
+  # start and end, and the session's end, after which none of them runs.
   defp native(%State{} = state, {:own, name, phase}), do: own_activity(state, name, phase)
+  defp native(%State{} = state, :session_ended), do: settle_own(state)
 
   # A program brain's own tool, by the name its attendant gives, running
   # from its start to its end: an entry of the same list, worded as a tool
@@ -3156,32 +3161,56 @@ defmodule Aqua.Loop do
   defp own_activity(%State{} = state, name, phase) do
     sentence = Aqua.Steps.sentence(nil, nil, nil)
 
-    activity =
+    {activity, own} =
       case phase do
         "start" ->
-          state.activity ++ [%{tool: name, sentence: sentence, status: :running, preview: nil}]
+          {state.activity ++ [%{tool: name, sentence: sentence, status: :running, preview: nil}],
+           state.own ++ [length(state.activity)]}
 
         "end" ->
-          mark_done(state.activity, {name, sentence})
+          {activity, place} = mark_done(state.activity, {name, sentence}, &(&1 in state.own))
+          {activity, List.delete(state.own, place)}
       end
 
     announce(state, :tool_activity, activity)
-    %{state | activity: activity}
+    %{state | activity: activity, own: own}
   end
 
-  # The newest running entry for `tool` is done; none running adds a done one.
-  defp mark_done(activity, {tool, sentence}) do
-    index =
+  # The program brain's native turn or its session ended: none of its own
+  # tools runs any more, and each still shown running is done.
+  defp settle_own(%State{own: []} = state), do: state
+
+  defp settle_own(%State{own: own} = state) do
+    activity =
+      Enum.reduce(own, state.activity, fn place, activity ->
+        List.update_at(activity, place, &%{&1 | status: :done})
+      end)
+
+    announce(state, :tool_activity, activity)
+    %{state | activity: activity, own: []}
+  end
+
+  # The places of the list that are CYFR's calls, not a program's own tools.
+  defp cyfr?(%State{own: own}), do: &(&1 not in own)
+
+  # The newest running entry for `tool` at a place `among?` takes is done;
+  # none running adds a done one. Answers the list and the place marked.
+  defp mark_done(activity, {tool, sentence}, among?) do
+    place =
       activity
       |> Enum.with_index()
       |> Enum.reverse()
       |> Enum.find_value(fn {entry, i} ->
-        entry.tool == tool and entry.status == :running and i
+        entry.tool == tool and entry.status == :running and among?.(i) and i
       end)
 
-    case index do
-      nil -> activity ++ [%{tool: tool, sentence: sentence, status: :done, preview: nil}]
-      i -> List.update_at(activity, i, &%{&1 | status: :done})
+    case place do
+      nil ->
+        {activity ++ [%{tool: tool, sentence: sentence, status: :done, preview: nil}],
+         length(activity)}
+
+      i ->
+        {List.update_at(activity, i, &%{&1 | status: :done}), i}
     end
   end
 

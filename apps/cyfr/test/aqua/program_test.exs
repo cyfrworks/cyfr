@@ -518,6 +518,7 @@ defmodule Aqua.ProgramTest do
       assert activity!() == [start_entry(:done), own_entry("Read", :running)]
       say(fake, row, said(turn, "msg_1", "mine"))
       say(fake, row, idle(turn, [input.id]))
+      assert activity!() == [start_entry(:done), own_entry("Read", :done)]
       assert :completed = Task.await(loop, 30_000)
       refute_received %Cyfr.Bus.ThreadEvent{kind: :delta}
       refute_received %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned}
@@ -634,6 +635,85 @@ defmodule Aqua.ProgramTest do
       assert activity!() == before ++ [waited.(:done), own_entry("Read", :running)]
       _answer = accept_next!(fake, row)
       say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    test "an own tool still shown running is done at the native turn's end",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+      say(fake, row, own(turn, "Bash", "start"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :running)]
+
+      say(fake, row, idle(turn, [input.id]))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :done)]
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "an own tool still shown running is done at the session's end, and the turn goes on",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      %{start: first, work: work} = started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+      say(fake, row, own(turn, "Bash", "start"))
+      assert activity!() == [start_entry(:done), own_entry("Bash", :running)]
+
+      Scripted.end_sessions(fake, row.id)
+      assert activity!() == [start_entry(:done), own_entry("Bash", :done)]
+
+      # The session resumes, and the turn completes as it would have.
+      opened!(fake, row, "boot-two")
+      assert sent() == Map.merge(first, %{"session" => @session, "pending" => [input.id]})
+      say(fake, row, started([input.id]))
+      assert sent() == work
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      _notice = sent()
+      [_post, noticed] = inputs(ctx, turn)
+      say(fake, row, accepted(noticed))
+      say(fake, row, idle(turn, [noticed.id]))
+      assert :completed = Task.await(loop, 30_000)
+      refute_received %Cyfr.Bus.ThreadEvent{kind: :tool_activity}
+    end
+
+    test "an own tool named as a CYFR call is kept apart from it in the list",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      watch!(ctx, thread)
+      turn = accept!(ctx, thread, row, "work in parallel")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert [activity!(), activity!()] == [[start_entry(:running)], [start_entry(:done)]]
+
+      opening = held_start!(fake, row, turn, "ask-1")
+      on_exit(fn -> send(opening, :go) end)
+      assert activity!() == [start_entry(:done), start_entry(:running)]
+      say(fake, row, own(turn, "program", "start"))
+      mine = own_entry("program", :running)
+      assert activity!() == [start_entry(:done), start_entry(:running), mine]
+
+      # The call's end marks the call done, not the program's tool of its name.
+      send(opening, :go)
+      assert activity!() == [start_entry(:done), start_entry(:done), mine]
+      _answer = accept_next!(fake, row)
+      say(fake, row, idle(turn, [input.id]))
+
+      assert activity!() ==
+               [start_entry(:done), start_entry(:done), own_entry("program", :done)]
+
       assert :completed = Task.await(loop, 30_000)
     end
 

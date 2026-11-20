@@ -37,7 +37,9 @@ defmodule Aqua.Program do
   row and withdrawn when no row will land, at its native turn's end or
   the session's. Its own tools of the open work, by the name it gives,
   are told to the turn's loop as they start and end, which shows them in
-  the one list of what runs (`Aqua.Loop`); nothing of them is stored.
+  the one list of what runs (`Aqua.Loop`); nothing of them is stored. The
+  session's end is told too, and the loop settles what still shows
+  running then, as it does at the native turn's `idle`.
 
   It writes a command when a row says one is owed, one at a time: a closed
   ask's result as its `answer`, then each post of the open turn that
@@ -285,7 +287,11 @@ defmodule Aqua.Program do
     do: {:noreply, batch(state, boot, lines)}
 
   def handle_info({Opus.Brain, ref, {:ended, reason}}, %{brain: {_pid, ref}} = state),
-    do: ended(withdraw(%{state | brain: nil, boot: nil, outstanding: nil}), reason)
+    do:
+      %{state | brain: nil, boot: nil, outstanding: nil}
+      |> withdraw()
+      |> session_ended()
+      |> ended(reason)
 
   def handle_info({Opus.Brain, _stale, _message}, state), do: {:noreply, state}
 
@@ -455,7 +461,19 @@ defmodule Aqua.Program do
 
   defp shut(%{brain: brain} = state) do
     Opus.Brain.close(brain)
-    withdraw(%{state | brain: nil, boot: nil, phase: :closed, outstanding: nil})
+
+    %{state | brain: nil, boot: nil, phase: :closed, outstanding: nil}
+    |> withdraw()
+    |> session_ended()
+  end
+
+  # The session ended: none of the open work's own tools runs any more,
+  # which the loop settles in its list (`Aqua.Loop`).
+  defp session_ended(%{work: work} = state) do
+    case open_turn(work) do
+      %{id: id} -> tell(state, {__MODULE__, id, {:native, :session_ended}})
+      nil -> state
+    end
   end
 
   # ---------------------------------------------------------------------------
