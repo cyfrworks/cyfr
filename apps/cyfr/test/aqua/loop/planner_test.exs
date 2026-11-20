@@ -137,7 +137,33 @@ defmodule Aqua.Loop.PlannerTest do
     assert Planner.pinned?(waiting)
     refute Planner.pinned?(answered)
     refute Planner.pinned?(row(2, "text", "b"))
-    assert Planner.readable(rows) == [summary, waiting, row(5, "text", "c")]
+    assert Planner.readable(rows) == [waiting, summary, row(5, "text", "c")]
+  end
+
+  test "the boundary follows the order the turn reads, and keeps no answer a post it summarizes " <>
+         "reads after" do
+    big = String.duplicate("x", 40_000)
+    person = &%{row(&1, "text", &2) | author: "usr_a", sent_by: "person"}
+
+    # The post (seq 2) was written while the first answer (seq 3) was, and
+    # reads after it (`Arca.TurnStorage.projection/2`). By seq the post
+    # would stand before that answer: a large one is the group that does
+    # not fit, and the answer is kept while the newest post, which the round
+    # must answer, or the answer's own later post, is summarized away.
+    rows = [row(1, "text", big), row(3, "text", "first", "s1"), person.(2, big)]
+    assert %{first_kept_seq: 2} = Planner.boundary(rows, 2_000)
+
+    rows =
+      [row(1, "text", "ask"), row(3, "text", "first", "s1"), person.(2, big)] ++
+        [row(4, "text", "second", "s2")]
+
+    assert %{first_kept_seq: 4, summarized_through_seq: 3} = Planner.boundary(rows, 2_000)
+
+    # The boundary falls on the answer the small post reads after: it is
+    # pulled back to the post's seq, or the summary would stand for the post
+    # the round must answer while the answer before it stays.
+    rows = [row(1, "text", big), row(3, "text", "first", "s1"), person.(2, "and also")]
+    assert %{first_kept_seq: 2, summarized_through_seq: 1} = Planner.boundary(rows, 2_000)
   end
 
   test "usable is the window less the output ceiling and the margin, never past the input ceiling" do
