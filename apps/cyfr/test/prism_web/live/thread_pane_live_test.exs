@@ -731,7 +731,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     html = render(pane)
 
     for drawn <- [
-          "is asking",
+          "You are asking…",
           "2 queued",
           "files.read",
           "send it again",
@@ -748,6 +748,33 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert has_element?(pane, ~s(button.min-h-6[phx-click="dismiss_restart"]))
     assert has_element?(pane, "a.min-h-6.text-xs[download]", "notes.md")
     assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
+  end
+
+  test "the person a running turn is for is named with the verb that agrees with them", %{
+    conn: conn,
+    user: user,
+    athanor: athanor,
+    thread: thread
+  } do
+    pane = open_pane(conn, athanor, thread)
+    other = "usr_" <> Ecto.UUID.generate()
+
+    starting = fn user_id ->
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: thread.athanor_id,
+        thread_id: thread.id,
+        kind: :turn_starting,
+        data: user_id
+      })
+
+      render(pane)
+    end
+
+    html = starting.(user.user_id)
+    assert html =~ "You are asking…"
+    refute html =~ "You is asking"
+
+    assert starting.(other) =~ "#{PrismWeb.People.label(other, nil)} is asking…"
   end
 
   test "a screenshot Aqua posted is drawn in place, opens large, and its address gives the picture",

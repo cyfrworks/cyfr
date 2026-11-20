@@ -1633,7 +1633,7 @@ defmodule PrismWeb.ThreadPaneLive do
             :if={@running and @turn_user}
             class="text-xs text-gray-500 truncate max-w-[12rem]"
           >
-            {label_for(@members, @turn_user, @context)} is asking…
+            {asking(@members, @turn_user, @context)}
           </span>
         </div>
       </header>
@@ -2533,6 +2533,11 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp label_for(_members, _user_id, _ctx), do: nil
+
+  # Who the running turn is for, with the verb that agrees with them: the
+  # person looking reads as "You".
+  defp asking(_members, user_id, %{user_id: user_id}), do: "You are asking…"
+  defp asking(members, user_id, ctx), do: "#{label_for(members, user_id, ctx)} is asking…"
 
   defp role_align("user"), do: "items-end"
   defp role_align(_), do: "items-start"
