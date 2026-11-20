@@ -440,7 +440,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert told.(%{input: 7, output: 2}) =~ "Tokens 7 in · 2 out"
   end
 
-  test "the line a stopped turn leaves is drawn as it lands, as the thread draws it on open",
+  test "the line a stopped turn leaves is drawn as it lands, as the thread draws it on open, " <>
+         "as the server's and never as the person's",
        %{conn: conn, athanor: athanor, here: here, thread: thread} do
     pane = open_pane(conn, athanor, thread)
 
@@ -461,7 +462,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     landed = ~s([id$="-m-#{stopped.id}"])
     Prima.Test.Wait.wait_until(fn -> has_element?(pane, landed, "stopped") end)
-    assert has_element?(open_pane(conn, athanor, thread), landed, "stopped")
+
+    for pane <- [pane, open_pane(conn, athanor, thread)] do
+      assert has_element?(pane, landed <> " .italic", "stopped")
+      refute has_element?(pane, landed <> " .bg-indigo-600")
+      refute has_element?(pane, landed <> " .items-end")
+    end
   end
 
   test "a nudge, the server's line to the thread's Aqua, is drawn as the server's as it lands",

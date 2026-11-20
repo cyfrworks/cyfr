@@ -2498,7 +2498,8 @@ defmodule PrismWeb.ThreadPaneLive do
   defp drawn?(row), do: Threads.post?(row) or row.kind in ["nudge", "turn_aborted"]
 
   defp role_of(%{kind: "error"}), do: "error"
-  defp role_of(%{kind: kind}) when kind in ["system", "nudge"], do: "system"
+  # The server's lines: a note, a nudge, and the line a stopped turn leaves.
+  defp role_of(%{kind: kind}) when kind in ["system", "nudge", "turn_aborted"], do: "system"
   defp role_of(%{author: @agent_author}), do: "assistant"
 
   # A post in the server's voice: a schedule's line, or a post of the
