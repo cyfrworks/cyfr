@@ -30,8 +30,9 @@ defmodule Aqua.AgentConfig do
   The athanor's agents, read once: the soul first, then the crew by name,
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
-  `"avoid"`, `"type"`, `"content"`, `"mode"`, `"tools"`, `"catalyst_ref"`,
-  `"program"`, `"model"`, `"options"`).
+  `"avoid"`, `"type"`, `"mode"`, `"tools"`, `"catalyst_ref"`,
+  `"program"`, `"model"`, `"options"`); the soul's prompt, which no
+  reader of the roster needs, is not in it.
 
   Fails as it reads: a tree that cannot be listed is
   `{:error, {:unavailable, _}}`, never an empty roster a turn would
@@ -92,7 +93,6 @@ defmodule Aqua.AgentConfig do
       "description" => agent.description,
       "avoid" => agent.avoid,
       "type" => Compendium.agent_type_of(agent),
-      "content" => agent.prompt,
       "mode" => agent.mode,
       "tools" => agent.tools,
       "catalyst_ref" => agent.catalyst_ref,

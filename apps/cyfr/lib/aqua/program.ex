@@ -536,39 +536,16 @@ defmodule Aqua.Program do
 
   # What the open turn has used, as its start step stores it once the
   # batch's usage is committed, told to the thread as the API path tells
-  # its own (`:usage`): the models the program ran and their tokens, and
-  # whether the accounting is partial or unavailable, which is unknown and
-  # never zero.
+  # its own (`:usage`, `Aqua.Tape.usage/2`): the models the program ran
+  # and their tokens, and whether the accounting is partial or
+  # unavailable, which is unknown and never zero.
   defp tell_usage(state, [], _open_turn), do: state
   defp tell_usage(state, _usage, nil), do: state
 
   defp tell_usage(%{work: work} = state, _usage, _open_turn) do
-    case Tape.step(work.guest, work.start) do
-      {:ok, %{usage: usage}} when is_binary(usage) ->
-        Tape.announce(work.guest, state.thread_id, :usage, shown_usage(Jason.decode!(usage)))
-
-      _unread ->
-        :ok
-    end
-
+    Tape.announce(work.guest, state.thread_id, :usage, Tape.usage(work.guest, state.thread_id))
     state
   end
-
-  defp shown_usage(usage) do
-    models = usage["models"] || %{}
-    sum = fn name -> models |> Map.values() |> Enum.map(&(&1[name] || 0)) |> Enum.sum() end
-
-    %{
-      input: sum.("input_tokens"),
-      output: sum.("output_tokens"),
-      models: models |> Map.keys() |> Enum.sort(),
-      accounting: accounting(usage, models)
-    }
-  end
-
-  defp accounting(_usage, models) when map_size(models) == 0, do: :unavailable
-  defp accounting(%{"partial" => 0, "unknown" => 0}, _models), do: :complete
-  defp accounting(_usage, _models), do: :partial
 
   defp batch(%{work: work} = state, boot, lines) do
     {last, _event} = List.last(lines)

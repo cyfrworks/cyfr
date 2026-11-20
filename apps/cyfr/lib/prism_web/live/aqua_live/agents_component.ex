@@ -4,8 +4,11 @@
 defmodule PrismWeb.AquaLive.AgentsComponent do
   @moduledoc """
   The soul and its crew. The soul has a prompt, a brain and the tools
-  every crew member is offered too; a crew member has a prompt, a brain,
-  what it is good at and what to avoid. Each of them has a mode,
+  every crew member is offered too; a crew member has a brain, what it
+  is good at and what to avoid, and no prompt: CYFR briefs it and the job
+  says what to do. A crew member whose file still holds a prompt is
+  refused, and the sentence that says what to change stands in place of
+  its card. Each of them has a mode,
   read-only or auto, which decides what of its offered tools it runs; the
   read-only choice is closed, with the reason beneath it, for a member
   whose brain CYFR cannot keep read-only (`Aqua.read_only_unheld/3`).
@@ -59,6 +62,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:soul, nil)
      |> assign(:agents_unread, nil)
      |> assign(:crew, [])
+     |> assign(:refused, [])
      |> assign(:tool_actions, nil)
      |> assign(:browser, nil)
      |> assign(:model_status, %{})
@@ -129,7 +133,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # A new crew member starts with a name and nothing else: it holds the
-  # soul's hands like every member, and its brain is picked on its card.
+  # soul's hands like every member, its brain is picked on its card, and
+  # it has no prompt to write.
   def handle_event("editor_create_member", _params, %{assigns: %{loading: true}} = socket) do
     {:noreply, put_flash(socket, :error, "Still loading — try again in a moment.")}
   end
@@ -139,8 +144,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       case call_aqua(socket.assigns.context, %{
              "action" => "create",
              "name" => name,
-             "title" => name,
-             "content" => "# #{name}\n\nYou are #{name}, a crew member of this athanor's Aqua."
+             "title" => name
            }) do
         {:ok, _created} ->
           send(self(), {:refresh, :agents})
@@ -306,9 +310,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # The editor opens on the prompt as it is now, with the digest `get`
-  # names for it, so a save over a prompt changed elsewhere since is
-  # refused as a conflict.
+  # The editor opens on the soul's prompt as it is now, with the digest
+  # `get` names for it, so a save over a prompt changed elsewhere since is
+  # refused as a conflict. Only the soul has a prompt.
   def handle_event("editor_edit_prompt", %{"name" => name}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case call_aqua(socket.assigns.context, %{"action" => "get", "name" => name}) do
@@ -576,17 +580,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     # missing soul's note, and no model can be installed or connected. A
     # soul whose file still holds the retired `tool_policy` is refused as
     # a conflict whose sentence says what to change, which stands there
-    # instead of a fault's words.
-    {listed, unread} =
+    # instead of a fault's words; so does each crew member's the list
+    # refused for holding a prompt, in place of its card.
+    {listed, refused, unread} =
       case call_aqua(ctx, %{"action" => "list", "detail" => true, "include_disabled" => true}) do
-        {:ok, %{guides: guides}} when is_list(guides) ->
-          {Enum.filter(guides, &(&1.type in types)), nil}
+        {:ok, %{guides: guides, refused: refused}} when is_list(guides) ->
+          {Enum.filter(guides, &(&1.type in types)), refused, nil}
 
         {:error, {:conflict, sentence}} when is_binary(sentence) ->
-          {[], sentence}
+          {[], [], sentence}
 
         _unread ->
-          {[], "Aqua and its crew members cannot be read right now — try again."}
+          {[], [], "Aqua and its crew members cannot be read right now — try again."}
       end
 
     # Each card reads its agent in the roster's string-keyed projection,
@@ -628,6 +633,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:agents_unread, unread)
     |> assign(:soul, soul)
     |> assign(:crew, crew)
+    |> assign(:refused, refused)
     |> assign(:model_status, status)
     |> assign_plans(ctx, agents, listed)
     |> load_brain_options(agents, status)
@@ -1102,7 +1108,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         />
       </div>
 
-      <!-- Prompt editor modal — shared by the soul and the crew -->
+      <div :if={@refused != []} class="space-y-3 border-l border-gray-800 pl-4 ml-2">
+        <div
+          :for={member <- @refused}
+          id={"aqua-refused-#{member.name}"}
+          data-test="crew-refused"
+          class="rounded-lg border border-amber-900/60 bg-gray-900/60 p-4 text-xs text-amber-300"
+        >
+          {member.reason}
+        </div>
+      </div>
+
+      <!-- Prompt editor modal — the soul's prompt -->
       <.modal
         id="prompt-editor"
         show={not is_nil(@editor_editing_prompt)}
@@ -1232,6 +1249,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </div>
         <div class="flex items-center gap-1 shrink-0">
           <button
+            :if={@is_soul}
             type="button"
             phx-click="editor_edit_prompt"
             phx-target={@myself}

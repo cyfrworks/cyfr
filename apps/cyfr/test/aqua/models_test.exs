@@ -225,7 +225,7 @@ defmodule Aqua.ModelsTest do
       Arca.put(
         Sanctum.Context.actor(ctx),
         Compendium.AquaPath.crew_file("harness"),
-        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n\nYou run the harness.\n"
+        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

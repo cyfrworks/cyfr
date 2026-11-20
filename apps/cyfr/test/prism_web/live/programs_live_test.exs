@@ -1223,8 +1223,7 @@ defmodule PrismWeb.ProgramsLiveTest do
         "title" => "Coder",
         "program" => "claude",
         "install" => install,
-        "model" => "opus",
-        "content" => "# Coder"
+        "model" => "opus"
       })
 
     {:ok, file} = Arca.get(ctx(athanor), Compendium.AquaPath.crew_file("coder"))

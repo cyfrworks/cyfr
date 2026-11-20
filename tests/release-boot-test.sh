@@ -318,6 +318,27 @@ reused "the release whose build wrote its digested copies and .gz"
 unbuilt
 pass "a build that writes digested copies and .gz into the ignored paths is recorded and reused"
 
+# tests/release-boot/build.sh in a checkout of the test's own, which holds
+# no release: told to reuse one, it fails saying so and runs no Mix, so a
+# shard of the commit gate's close never builds one of its own.
+co="$scratch/build-co"
+mkdir -p "$co/tests/release-boot" "$co/scripts/lib" "$scratch/build-bin"
+cp "$root/tests/release-boot/build.sh" "$root/tests/release-boot/release.sh" "$co/tests/release-boot/"
+cp "$root/scripts/lib/run-names.sh" "$co/scripts/lib/"
+git -C "$co" init -q
+git -C "$co" -c user.email=test@example.com -c user.name=test add -A
+git -C "$co" -c user.email=test@example.com -c user.name=test commit -q -m checkout
+printf '#!/bin/sh\necho "$*" >>"%s"\nexit 1\n' "$scratch/build-mix.calls" >"$scratch/build-bin/mix"
+chmod +x "$scratch/build-bin/mix"
+s=$(status_of env PATH="$scratch/build-bin:$PATH" RELEASE_BOOT_SKIP_BUILD=1 bash "$co/tests/release-boot/build.sh" sqlite)
+[ "$s" = 1 ] || { cat "$scratch/out" >&2; fail "build.sh with no release to reuse exited $s"; }
+has "no sqlite release to reuse at $co/_build/prod_release_boot_sqlite/rel/cyfr (RELEASE_BOOT_SKIP_BUILD=1)" \
+  "build.sh with no release to reuse did not say so"
+! grep -qF 'building the cyfr release' "$scratch/out" || fail "build.sh with no release to reuse started a build: $(cat "$scratch/out")"
+[ ! -e "$scratch/build-mix.calls" ] || fail "build.sh with no release to reuse ran mix: $(cat "$scratch/build-mix.calls")"
+[ ! -e "$co/_build" ] || fail "build.sh with no release to reuse made $co/_build"
+pass "build.sh told to reuse a release that is not there fails saying so, building nothing"
+
 # --- the readiness window ------------------------------------------------------
 
 # A release whose `start` holds a listener on the cell's port that accepts

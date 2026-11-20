@@ -807,17 +807,25 @@ defmodule Aqua.Loop do
   # turn waits on the attendant, which proposes the program's asks (the
   # next page round decides and runs them), says when the native turn
   # ended (the turn may complete) and when its job ended.
+  # A start that failed says why in the thread's own line, as a failure
+  # after the hand-over does: the start's result is a step's, which the
+  # thread never draws as a post.
   defp program_round(%State{} = state) do
     case start_step(state) do
       {:ok, %{dispatch_state: "closed", outcome: "ok"} = start} ->
         attended(state, start)
 
-      {:ok, %{dispatch_state: "closed", error: error}} ->
-        {:halt, {:failed, error || "the program did not start"}, state}
+      {:ok, %{dispatch_state: "closed", error: error}} when is_binary(error) ->
+        start_failed(state, error)
 
       _unstarted ->
-        {:halt, {:failed, "the program did not start"}, state}
+        start_failed(state, "#{program_title(state)} did not start.")
     end
+  end
+
+  defp start_failed(state, sentence) do
+    _ = system_row(state, sentence)
+    {:halt, {:failed, sentence}, state}
   end
 
   # The attendant is watched while the turn waits on it: one that ends

@@ -312,15 +312,19 @@ defmodule PrismWeb.ThreadPaneLive do
         # own turn assembly stays windowed separately.
         ctx = socket.assigns.context
 
+        # What the thread drew live is what it draws opened again: the
+        # newest rows it draws (`drawn_kinds/0`), however many of a turn's
+        # own rows stand between them. Its cards and results are posts
+        # too, read with them.
         rows =
-          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window) do
+          case Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, @window,
+                 kinds: drawn_kinds()
+               ) do
             rows when is_list(rows) -> Enum.map(rows, &files_kept(&1, ctx))
             {:error, _} -> []
           end
 
-        # What the thread drew live is what it draws opened again
-        # (`drawn?/1`); every row still names the pane's results.
-        {shown, requests} = rows |> Enum.filter(&drawn?/1) |> file_replies()
+        {shown, requests} = file_replies(rows)
 
         tell_host(
           socket,
@@ -2562,7 +2566,9 @@ defmodule PrismWeb.ThreadPaneLive do
   # (`Aqua.Nudge`), which is drawn as the server's and is no post, and the
   # line a stopped turn leaves (`turn_aborted`). What a turn writes for
   # itself, its calls, their results and its compaction, is none.
-  defp drawn?(row), do: Threads.post?(row) or row.kind in ["nudge", "turn_aborted"]
+  defp drawn?(row), do: row.kind in drawn_kinds()
+
+  defp drawn_kinds, do: Threads.post_kinds() ++ ["nudge", "turn_aborted"]
 
   defp role_of(%{kind: "error"}), do: "error"
   # The server's lines: a note, a nudge, and the line a stopped turn leaves.

@@ -1110,7 +1110,7 @@ defmodule Aqua.LoopTest do
         Sanctum.Context.actor(ctx),
         Compendium.AquaPath.crew_file(name),
         "---\ntitle: #{title}\ndescription: Reads and tidies.\ncatalyst_ref: #{@model}\n" <>
-          "model: claude-sonnet-5-5\nmode: #{mode}\n---\n\nYou are the #{title}.\n"
+          "model: claude-sonnet-5-5\nmode: #{mode}\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

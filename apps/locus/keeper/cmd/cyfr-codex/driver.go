@@ -335,7 +335,7 @@ func (d *driver) response(id string, m rpc) error {
 			return d.deliver(w)
 		}
 		d.waiting = nil
-		return d.c.Refuse(w.id, errorSentence("authentication"))
+		return d.c.Refuse(w.id, signedOutSentence)
 	case "steer":
 		if m.Error == nil {
 			d.waiting = nil

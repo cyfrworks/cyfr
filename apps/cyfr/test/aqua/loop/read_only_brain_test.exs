@@ -267,8 +267,7 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
         "name" => name,
         "title" => title,
         "catalyst_ref" => catalyst,
-        "model" => model,
-        "content" => "# #{title}"
+        "model" => model
       })
   end
 

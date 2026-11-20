@@ -95,7 +95,7 @@ var aquaGetCmd = &cobra.Command{
 		if flagJSON {
 			output.JSON(result)
 		} else {
-			fmt.Println(result["content"])
+			renderAquaAgent(result)
 		}
 		return nil
 	},
@@ -256,6 +256,20 @@ func renderAquaList(result map[string]any) {
 	}
 	for _, m := range scrolls {
 		printAquaRow(width, m)
+	}
+}
+
+// renderAquaAgent prints what get answered: the soul's prompt or a
+// guide's text, or, for a crew member, which has no prompt, its line and
+// what not to hand it.
+func renderAquaAgent(result map[string]any) {
+	if content, ok := result["content"]; ok {
+		fmt.Println(content)
+		return
+	}
+	printAquaRow(len(str(result["name"])), result)
+	if avoid := str(result["avoid"]); avoid != "" {
+		fmt.Printf("  Avoid: %s\n", avoid)
 	}
 }
 

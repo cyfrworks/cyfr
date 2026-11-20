@@ -1229,7 +1229,7 @@ defmodule Opus.ProgramsTest do
       Arca.put(
         actor,
         Compendium.AquaPath.crew_file("harness"),
-        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n\nYou run the harness.\n"
+        "---\ncatalyst_ref: #{ref}\nmodel: harness-model\n---\n"
       )
 
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -2346,7 +2346,7 @@ defmodule Opus.ProgramsTest do
         Arca.put(
           actor,
           Compendium.AquaPath.crew_file("coder"),
-          "---\nprogram: #{row.name}\nmodel: opus\n---\n\nYou code.\n"
+          "---\nprogram: #{row.name}\nmodel: opus\n---\n"
         )
 
       {:ok, _} = Compendium.AgentIndex.sync(ctx)
