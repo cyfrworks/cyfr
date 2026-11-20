@@ -2,37 +2,34 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// A stand-in for Codex's app-server, run as the `openai-codex` program's
-// command by openai_codex.py: it speaks the JSON-RPC lines Codex 0.167.0's `app-server`
-// was driven to write (seed/components/catalysts/local/openai-codex/0.1.6/README.md,
-// "Verified against 0.167.0") and keeps its threads in its HOME, the kept
-// folder, under ~/.codex as Codex does.
+// A stand-in for Codex's app-server, run as the `openai-codex` program by
+// Codex's brain driver in brain_openai_codex.py: it speaks the JSON-RPC
+// lines Codex's `app-server` writes (0.167.0 and 0.169.0) and keeps its
+// threads in its HOME, the kept folder, under ~/.codex as Codex does.
 //
 // - It refuses to start without the one argument a session takes,
 //   `app-server`, and answers nothing before `initialize`.
 // - `account/read` answers a ChatGPT account while ~/.codex/auth.json is
 //   in its folder, which its first start writes as a sign-in would, and
-//   `account: null` once a turn has removed it.
+//   `account: null` without it.
 // - `model/list` answers a listing; `thread/start` keeps the thread with
 //   its dynamic tools, policy and developer instructions in the folder;
 //   `thread/resume` reads it back, and refuses a thread the folder does
 //   not hold.
 // - `turn/start` is a turn, by the words of its last text item (a new
-//   thread's history rides before it): `hello` runs its own
+//   thread's context rides before it): `hello` runs its own
 //   command (a `commandExecution` item), asks to apply a patch
 //   (`item/fileChange/requestApproval`) and replies naming the turn's
 //   model and effort, the thread's tools, policy and instructions, and the
 //   approval's decision; `read` calls CYFR's `files` tool
 //   (`item/tool/call`), holds until the driver answers, and replies with
-//   the answer; `first message` replies with the thread's first message;
-//   `sign out` removes the sign-in. Each reply streams as
+//   the answer. Each reply streams as
 //   `item/agentMessage/delta`s, then the completed `agentMessage`, the
 //   thread's token usage sent again unchanged (as a rate-limit update sends
 //   it) and then grown by the reply's, and `turn/completed`.
 // - It writes a canary to its stderr and to its folder, which the driver
 //   must never pass on.
-// - For Codex's brain driver (brain_openai_codex.py) it also keeps each
-//   thread as Codex 0.169.0 keeps it in the folder: a rollout,
+// - It keeps each thread as Codex 0.169.0 keeps it in the folder: a rollout,
 //   `~/.codex/sessions/2026/11/18/rollout-<time>-<thread>.jsonl`, holding
 //   each user message a turn started or a steer added under its
 //   `clientUserMessageId` (shown as the item's `clientId`), and a shell
@@ -117,7 +114,6 @@ function reply(turnId, text) {
     notify('item/agentMessage/delta', { ...base, itemId, delta: piece });
   }
   notify('item/completed', { ...base, item: { type: 'agentMessage', id: itemId, text, phase: null } });
-  thread.history.push({ role: 'assistant', text });
   // The thread's total grows by each model call's usage, and is sent again
   // unchanged first, as a rate-limit update sends it.
   const last = { totalTokens: 12 + text.length, inputTokens: 12, cachedInputTokens: 5, cacheWriteInputTokens: 2, outputTokens: text.length, reasoningOutputTokens: 0 };
@@ -132,12 +128,9 @@ function reply(turnId, text) {
 
 async function turn(turnId, params) {
   const texts = params.input.filter((i) => i.type === 'text').map((i) => i.text);
-  const text = texts.join('');
-  // The words of the ask, its last text item: a new thread's history
+  // The words of the ask, its last text item: a new thread's context
   // rides in an item before it, and is read but never acted on.
   const words = texts[texts.length - 1] ?? '';
-  thread.history.push({ role: 'user', text });
-  save();
   notify('turn/started', { threadId: thread.id, turn: { id: turnId, items: [], status: 'inProgress', error: null } });
   userMessage(turnId, params.clientUserMessageId, words);
   const base = { threadId: thread.id, turnId };
@@ -147,7 +140,7 @@ async function turn(turnId, params) {
     notify('item/completed', { ...base, item: { ...command, status: 'completed', aggregatedOutput: 'FAKE-FOLDER-CANARY', exitCode: 0 } });
     const patch = await request('item/fileChange/requestApproval', { ...base, itemId: 'call_own_2', reason: 'write FAKE-FOLDER-CANARY' });
     const tools = thread.dynamicTools.map((t) => t.name).join(',');
-    reply(turnId, `Hello from the fake Codex: thread ${thread.id}, model ${params.model || thread.model || 'fake-sol'}, effort ${params.effort || 'unset'}, `
+    reply(turnId, `Hello from the fake Codex: thread ${thread.id}, model ${thread.model || 'fake-sol'}, effort ${params.effort || 'unset'}, `
       + `tools ${tools}, policy ${thread.approvalPolicy}/${thread.sandbox}, patch ${patch.result?.decision}, instructions "${thread.developerInstructions}".`);
   } else if (words.includes('read')) {
     const itemId = `msg_${crypto.randomUUID()}`;
@@ -163,11 +156,6 @@ async function turn(turnId, params) {
     const steer = await Promise.race([new Promise((resolve) => { steered = resolve; }), new Promise((resolve) => setTimeout(() => resolve(null), 20000))]);
     steered = null;
     reply(turnId, steer === null ? 'No steer came.' : `Read the steer: ${steer}`);
-  } else if (words.includes('first message')) {
-    reply(turnId, `Your first message was: ${thread.history[0].text}`);
-  } else if (words.includes('sign out')) {
-    fs.rmSync(auth, { force: true });
-    reply(turnId, 'Signed out.');
   } else {
     reply(turnId, 'ok');
   }
@@ -200,7 +188,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'thread/start': {
       const p = message.params;
       thread = { id: crypto.randomUUID(), model: p.model, dynamicTools: p.dynamicTools || [], approvalPolicy: p.approvalPolicy, sandbox: p.sandbox,
-        developerInstructions: p.developerInstructions || '', history: [],
+        developerInstructions: p.developerInstructions || '',
         total: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } };
       save();
       fs.writeFileSync(rollout(thread.id), JSON.stringify({ type: 'session_meta', payload: { id: thread.id } }) + '\n');

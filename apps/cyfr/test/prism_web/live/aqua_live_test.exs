@@ -1657,6 +1657,37 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # The shipped brains are API catalysts, so each program the shipped
+    # crew names is one row on the setup, its plan, and no catalyst's row
+    # reads the same name beside it.
+    test "with the shipped brains installed, the setup offers each as a brain and each program " <>
+           "the crew names once, as its plan",
+         %{conn: conn, ctx: ctx} do
+      shipped = Enum.map(Cyfr.Test.SeedBundle.model_chat_units(), & &1.name)
+      Cyfr.Test.SeedBundle.lay!(shipped)
+      :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+      {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
+      {view, _html} = mount_athanor(conn, "/aqua?setup=1")
+
+      ids = fn selector ->
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(selector)
+        |> Enum.flat_map(&LazyHTML.attribute(&1, "id"))
+      end
+
+      brains = for "aqua-setup-brain-" <> name <- ids.("#aqua-setup-brains > li"), do: name
+      plans = for "aqua-setup-plan-" <> name <- ids.(~s(li[id^="aqua-setup-plan-"])), do: name
+      assert Enum.sort(brains) == Enum.sort(shipped)
+      assert plans == ["claude-code", "openai-codex"]
+      assert brains -- plans == brains, "a plan's name is no brain's beside it"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # Each program the crew's files name is a plan on the setup, named by
     # the member that names it, in the words its catalyst's login need gave
     # it. Ticked, its install is the Programs page's form prefilled from
