@@ -292,11 +292,6 @@ jobs:
       # tree no longer has, so this compile is forced as the test job's is.
       - name: Compile with warnings as errors
         run: mix compile --force --warnings-as-errors
-      # The Boundary plants: each writes a forbidden edge into a copy of the
-      # tree and force-compiles it, so a declaration that stopped refusing
-      # an edge fails here, once, outside the partitions.
-      - name: Boundary plants
-        run: mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant
       # .credo.exs's checks: any finding fails.
       - name: Static analysis
         run: mix credo --strict
@@ -313,14 +308,6 @@ jobs:
       # that no longer matches it fails here.
       - name: The configuration guide is the roster's
         run: mix cyfr.gen.configuration_guide --check
-      # The source development stack: its compose override as compose
-      # resolves it over the shipped file, the Locus services built from
-      # the tree with every other setting the shipped ones', its ports,
-      # subnets and names apart from what the checks reserve, and
-      # scripts/dev-stack.sh at its command boundary; no part of the
-      # scaffold.
-      - name: The dev stack's compose override
-        run: bash tests/dev-stack/compose-test.sh
       # The tincture SDK is built from apps/cyfr/assets/js/sdk into
       # priv/static/sdk/cyfr.js and tracked, since a tincture's entry page
       # embeds it at compile time. A source edit without a rebuild fails
@@ -410,6 +397,63 @@ jobs:
       - name: The tag pipeline's image publication
         run: bash tests/ci-publish-test.sh
 
+  # Two of static's checks on runners of their own, each about as long as
+  # the rest of static together, so neither sets the run's length. Each
+  # needs only the compiled checkout, and waits on no other job.
+  #
+  # The Boundary plants: each writes a forbidden edge into a copy of the
+  # tree and force-compiles it, so a declaration that stopped refusing an
+  # edge fails here, once, outside the partitions. Every plant compiles
+  # into the one _build/boundary_plant, so they run in turn on one runner.
+  boundary-plants:
+    name: Boundary plants
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CYFR_DATABASE: sqlite
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cache deps and build
+        uses: ./.github/actions/setup-elixir
+        with:
+          cache-key-prefix: mix-boundary-plants
+      - name: Install dependencies
+        run: |
+          scripts/ci/retry.sh mix deps.get
+          scripts/fetch-prebuilt-binaries.sh
+      # Forced, as static's is: the cache keeps _build across commits.
+      - name: Compile with warnings as errors
+        run: mix compile --force --warnings-as-errors
+      - name: Boundary plants
+        run: mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant
+
+  # The source development stack: its compose override as compose
+  # resolves it over the shipped file, the Locus services built from the
+  # tree with every other setting the shipped ones', its ports, subnets
+  # and names apart from what the checks reserve, and scripts/dev-stack.sh
+  # at its command boundary; no part of the scaffold. Its stubbed mix runs
+  # the real task from this checkout's build, which the compile makes.
+  dev-stack:
+    name: The dev stack's compose override
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CYFR_DATABASE: sqlite
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cache deps and build
+        uses: ./.github/actions/setup-elixir
+        with:
+          cache-key-prefix: mix-dev-stack
+      - name: Install dependencies
+        run: |
+          scripts/ci/retry.sh mix deps.get
+          scripts/fetch-prebuilt-binaries.sh
+      - name: Compile with warnings as errors
+        run: mix compile --force --warnings-as-errors
+      - name: The dev stack's compose override
+        run: bash tests/dev-stack/compose-test.sh
+
   # Which harness self-test jobs this run needs: on a pull request, those
   # whose paths it changes; everywhere else, all three
   # (scripts/ci/self-test-scope.sh, which holds each job's paths). A job
@@ -476,23 +520,33 @@ jobs:
 
   # The partition runner against a stand-in Mix and a toy umbrella of its
   # own, and its environment helper's unit tests: Erlang and Elixir, and
-  # nothing of the checkout's build.
+  # nothing of the checkout's build. The runner's test runs one group of
+  # its cases a runner, each from a scratch directory of its own (its
+  # header names the groups; tests/ci-guards-test.sh holds this matrix
+  # equal to them).
   harness-tests-partitions:
-    name: Harness self-tests (partitions)
+    name: Harness self-tests (partitions, ${{ matrix.group }})
     needs: self-test-scope
     if: ${{ !cancelled() && (needs.self-test-scope.result != 'success' || needs.self-test-scope.outputs.partitions != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [report, rest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Elixir
         uses: ./.github/actions/setup-elixir
         with:
           build-cache: 'none'
-      - name: The partition runner and its environment helper
-        run: |
-          bash tests/test-partitioned-test.sh
-          elixir tests/test-partition-env-test.exs
+      - name: The partition runner's cases of this group
+        env:
+          GROUP: ${{ matrix.group }}
+        run: bash tests/test-partitioned-test.sh "$GROUP"
+      - name: The partition environment helper
+        if: matrix.group == 'report'
+        run: elixir tests/test-partition-env-test.exs
 
   # The commit gate's stand-in runs the real JavaScript suite, Python
   # checks, test WASM fixtures and the fixtures' Mix recipe, so the job has
@@ -886,7 +940,7 @@ jobs:
           overwrite: true
 
   cluster:
-    name: One cell on two members (Postgres and MinIO)
+    name: One cell on two members (Postgres and MinIO, cell ${{ matrix.cell }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # One cell runs on several members, and a cluster flag is not evidence
@@ -895,6 +949,17 @@ jobs:
     # object store, under every refusal CYFR_CLUSTER=on names. Every other
     # job in this workflow runs one node, so nothing else here can tell a
     # claim that holds from a claim that only looks like it does.
+    #
+    # The suite's files are divided between two cells, each a runner with
+    # its own database, object store and pair of members, its cases run
+    # one at a time: cell a runs the files scripts/ci/cluster-cell.sh
+    # lists, cell b every other file of the suite, so a new file runs in
+    # b. tests/ci-guards-test.sh holds the matrix to these two cells and
+    # these steps to that script's selection.
+    strategy:
+      fail-fast: false
+      matrix:
+        cell: [a, b]
     services:
       # Test-only ephemeral database, and deliberately not cyfr_test: a
       # cluster member holds no sandbox connection, so it must not share a
@@ -924,6 +989,14 @@ jobs:
         uses: ./.github/actions/setup-elixir
         with:
           cache-key-prefix: mix-cluster
+      # The cell's files (scripts/ci/cluster-cell.sh, which holds cell a's).
+      - name: The cell's files
+        id: cell
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          files=$(scripts/ci/cluster-cell.sh "$CELL")
+          echo "files=$files" >> "$GITHUB_OUTPUT"
       # CYFR_CLUSTER=on refuses local storage: two members would each hold
       # half of every athanor. The same image and credentials the s3-minio
       # job uses, pinned by digest; the PostgreSQL service images in this
@@ -965,7 +1038,9 @@ jobs:
       - name: Run the two-node suite
         env:
           MIX_BUILD_PATH: _build/test
-        run: scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster
+          CELL_FILES: ${{ steps.cell.outputs.files }}
+        # One word a file: the cell's files step refuses a name with a blank.
+        run: scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster $CELL_FILES
       - name: MinIO logs
         if: failure()
         run: docker logs minio
@@ -2338,9 +2413,17 @@ jobs:
             echo "$bad"
             exit 1
           fi
-      # The guard scripts' own cases, each in a scratch repository.
+      # The guard scripts' own cases, each in a scratch repository. Their
+      # reading of test.yml goes through PyYAML, which -I finds only among
+      # the system interpreter's packages.
       - name: The CI guard scripts' own cases
-        run: bash tests/ci-guards-test.sh
+        run: |
+          set -euo pipefail
+          if ! python3 -I -c 'import yaml' 2>/dev/null; then
+            scripts/ci/retry.sh sudo apt-get update
+            scripts/ci/retry.sh sudo apt-get install -y python3-yaml
+          fi
+          bash tests/ci-guards-test.sh
       # Require new version directories for seed changes; existing bundle
       # versions are immutable (scripts/ci/seed-guard.sh says what it
       # refuses).
