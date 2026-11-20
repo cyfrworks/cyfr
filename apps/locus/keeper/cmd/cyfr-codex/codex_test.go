@@ -20,7 +20,7 @@ import (
 // whatever Codex's were.
 func TestATurnsErrorIsTypedByItsInfoInTheDriversWords(t *testing.T) {
 	sentences := map[string]string{
-		"authentication":  "OpenAI Codex is not signed in to an account that can run this; sign in on the program's terminal.",
+		"authentication":  "The account or key OpenAI Codex used was refused; check its sign-in on the program's terminal, or a key in its settings.",
 		"rate_limited":    "OpenAI Codex reported a usage or rate limit; ask again later.",
 		"overloaded":      "OpenAI Codex reported its provider overloaded; ask again later.",
 		"invalid_request": "OpenAI Codex refused the request as invalid, or its context is full.",
