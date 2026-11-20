@@ -109,8 +109,10 @@ defmodule Aqua.Loop.ReadOnlyBrainTest do
       ran!(ctx, thread, turn, "read-only", @api, "what is in notes?", "three notes")
     end
 
+    # The shipped Claude Code names a program row, whose driver holds a
+    # read-only start ("the soul on a program row"); its catalyst's refusal
+    # is the made member's above.
     for {name, title, catalyst, program} <- [
-          {"claude-code", "Claude Code", @claude_code, "claude"},
           {"openai-codex", "OpenAI Codex", @openai_codex, "openai-codex"}
         ] do
       @tag member: {name, title, catalyst, program}

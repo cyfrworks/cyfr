@@ -1225,9 +1225,13 @@ defmodule Arca.ThreadStorage do
   # its row's whatever the row's epoch, and a removal holds the row's
   # owner at the epoch the row has then. A session with no stored row was
   # kept by an adapter catalyst, never by a driver, and its transcript is
-  # in that catalyst's home, which no driver reaches. A stored row that is
-  # gone or keeps no folder is left out: its home's retirement removes the
-  # session's transcript with it.
+  # in that catalyst's home, which no driver reaches; nothing removes it
+  # here. A database that kept one is recreated, and the sweep retires the
+  # homes no row holds any more (`Sanctum.Mount.orphaned_homes/1`); a
+  # development database that survives starts such a thread fresh and
+  # keeps that transcript until its row's removal or its folder's reset.
+  # A stored row that is gone or keeps no folder is left out: its home's
+  # retirement removes the session's transcript with it.
   defp session_rows(_actor, []), do: %{}
 
   # arca:db-raise-ok inside the caller's transaction

@@ -210,10 +210,11 @@ defmodule Aqua.CrewTest do
     assert roster |> Enum.map(& &1["name"]) |> Enum.sort() ==
              ~w(aqua claude-code explorer openai-codex planner)
 
-    # The harnesses' catalysts ship, with no program row bound to their
-    # needs, and the explorer's key is not bound: none is told of.
+    # Claude Code is a program brain whose row is not installed; Codex's
+    # catalyst ships with no program row bound to its need; and the
+    # explorer's key is not bound: none is told of.
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:needs_program, "catalyst:local.claude-code:0.1.8"}
+    assert status["claude-code"] == {:program_missing, "claude"}
     assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.6"}
     assert {:needs_key, _} = status["explorer"]
 
@@ -296,11 +297,11 @@ defmodule Aqua.CrewTest do
   end
 
   # Readiness holds at every way a job reaches a member, not only in the
-  # index: the shipped explorer has no key bound here, and the programs of
-  # claude-code and openai-codex are not set up.
+  # index: the shipped explorer has no key bound here, claude-code's
+  # program is not installed, and openai-codex's is not set up.
   @unready [
     {"explorer", :no_key, "no key bound"},
-    {"claude-code", :no_program, "program is not set up"},
+    {"claude-code", :program_missing, "program is not installed here"},
     {"openai-codex", :no_program, "program is not set up"}
   ]
 
@@ -318,30 +319,30 @@ defmodule Aqua.CrewTest do
     assert pending_records(ctx) == []
   end
 
-  # A harness whose program row is set up waits on the person's grant
-  # alone: its refusal asks for that, never for the program it has, while
-  # one whose program has no row still asks for its program.
+  # A harness catalyst whose program row is set up waits on the person's
+  # grant alone: its refusal asks for that, never for the program it has,
+  # while a program brain whose row is not installed asks for its install.
   test "a member whose program is set up and not granted is refused for the grant alone",
        %{ctx: ctx, room: room} do
     {:ok, _row} =
       Arca.McpServerStorage.insert(actor(ctx), %{
         cap: 0,
-        name: "claude",
+        name: "openai-codex",
         transport: "program",
         mark: "driven",
         url: nil,
         home: "kept",
-        config_json: Jason.encode!(%{"command" => "npx -y claude", "env" => %{}})
+        config_json: Jason.encode!(%{"command" => "npx -y codex", "env" => %{}})
       })
 
     {:ok, roster} = Aqua.AgentConfig.roster(ctx)
     status = Aqua.Models.model_status(ctx, roster)
-    assert status["claude-code"] == {:needs_grant, "catalyst:local.claude-code:0.1.8"}
-    assert status["openai-codex"] == {:needs_program, "catalyst:local.openai-codex:0.1.6"}
+    assert status["openai-codex"] == {:needs_grant, "catalyst:local.openai-codex:0.1.6"}
+    assert status["claude-code"] == {:program_missing, "claude"}
 
     for {member, reason, words} <- [
-          {"claude-code", :no_grant, "claude-code's brain needs only your grant"},
-          {"openai-codex", :no_program, "program is not set up"}
+          {"openai-codex", :no_grant, "openai-codex's brain needs only your grant"},
+          {"claude-code", :program_missing, "install it from its card on the Aqua page"}
         ] do
       assert {:error, {:crew_unready, ^member, ^reason} = refusal} =
                Runner.send_message(ctx, room.id, "@#{member} look into this")
@@ -349,7 +350,7 @@ defmodule Aqua.CrewTest do
       assert Aqua.Ops.render_refusal(refusal) =~ words
     end
 
-    refute Aqua.Ops.render_refusal({:crew_unready, "claude-code", :no_grant}) =~ "Programs page"
+    refute Aqua.Ops.render_refusal({:crew_unready, "openai-codex", :no_grant}) =~ "Programs page"
     assert rows(ctx, room.id) == []
   end
 
