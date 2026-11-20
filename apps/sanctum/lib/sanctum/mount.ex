@@ -40,9 +40,12 @@ defmodule Sanctum.Mount do
   share is never offered for it.
 
   `agents_mounting/2` and `orphaned_homes/1` are the reads the programs
-  controller makes of the same rows: the agents whose brain runs in a
-  home it resets or retires, a program brain that names the row among
-  them, and the homes a box holds that no kept row holds any more.
+  controller makes of the same rows: the agents whose catalyst runs in a
+  home it resets or retires through their consent, and the homes a box
+  holds that no kept row holds any more. A program brain names its row by
+  name, which a deleted row no longer answers and a replacement answers
+  again, so the threads a home's sessions lived in are found by the row
+  the threads store instead (`Arca.ThreadStorage.forget_sessions/3`).
   """
 
   alias Prima.Authority
@@ -181,13 +184,14 @@ defmodule Sanctum.Mount do
 
   @doc """
   The names of the agents of `athanor_id`, the soul's included, whose
-  brain runs in the kept home of the program row `row_id`: a brain that
-  is that program row (the `program` its index row names), or one whose
-  agent's head binds the row on its own edge to its brain (the catalyst
-  its index row names), or selects there a profile of that brain whose
-  own ingress binds it (`Arca.ConsentStorage.head_edges_binding/2`). An
-  edge to a hand is no brain's. `{:error, :unavailable}` when the store
-  cannot answer.
+  catalyst brain runs in the kept home of the program row `row_id`
+  through their consent: one whose agent's head binds the row on its own
+  edge to its brain (the catalyst its index row names), or selects there
+  a profile of that brain whose own ingress binds it
+  (`Arca.ConsentStorage.head_edges_binding/2`). An edge to a hand is no
+  brain's. A brain that is a program is not among them: its threads are
+  found by the row they store (`Arca.ThreadStorage.forget_sessions/3`).
+  `{:error, :unavailable}` when the store cannot answer.
   """
   @spec agents_mounting(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, :unavailable}
   def agents_mounting(athanor_id, row_id)
@@ -196,15 +200,13 @@ defmodule Sanctum.Mount do
 
     with {:ok, edges} <- Arca.ConsentStorage.head_edges_binding(actor, row_id),
          {:ok, agents} <- Arca.AgentStorage.list(actor) do
-      {:ok, for(%{name: name} = agent <- agents, runs_in?(agent, row_id, edges), do: name)}
+      {:ok, for(%{name: name} = agent <- agents, runs_in?(agent, edges), do: name)}
     else
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  defp runs_in?(%{program: row_id}, row_id, _edges), do: true
-
-  defp runs_in?(%{name: name, catalyst_ref: brain}, _row_id, edges) when is_binary(brain) do
+  defp runs_in?(%{name: name, catalyst_ref: brain}, edges) when is_binary(brain) do
     source = Prima.AgentRef.ref(name)
 
     case Prima.ComponentRef.to_name_ref(brain) do
@@ -213,7 +215,7 @@ defmodule Sanctum.Mount do
     end
   end
 
-  defp runs_in?(_agent, _row_id, _edges), do: false
+  defp runs_in?(_agent, _edges), do: false
 
   @doc """
   The grants that stand on the row `row` (`%{id, name}`) of `athanor_id`:

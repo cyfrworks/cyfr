@@ -1273,10 +1273,14 @@ defmodule Opus.ProgramsTest do
 
   # The session a brain's answer left on the thread (`Arca.TurnStorage`
   # keeps it there).
-  defp keep_session!(thread, session) do
+  # `session` kept on `thread`, stored with the program row `row_id` as a
+  # program brain's batch stores it, or with none, as a catalyst's is.
+  defp keep_session!(thread, session, row_id \\ nil) do
+    progress = if row_id, do: Jason.encode!(%{"row" => row_id, "epoch" => 1})
+
     {1, _} =
       Ecto.Query.from(t in Arca.Schemas.Thread, where: t.id == ^thread.id)
-      |> Arca.Repo.update_all(set: [brain_session: session])
+      |> Arca.Repo.update_all(set: [brain_session: session, brain_progress: progress])
   end
 
   describe "sessions" do
@@ -2325,9 +2329,12 @@ defmodule Opus.ProgramsTest do
       assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
     end
 
-    # A brain that is a program names the row itself, with no consent edge
-    # to it: its session lived in the home and goes with it.
-    test "a reset forgets the brain session of every thread whose agent's brain is the row",
+    # A brain that is a program names its row by name, with no consent
+    # edge to it: the threads its sessions lived in are the ones that store
+    # the row's id with their session, whatever the member's name answers
+    # now. Another thread of the same member, whose session is stored with
+    # another row, keeps it.
+    test "a reset forgets the brain session of every thread that stores the row with it",
          %{ctx: ctx, row: row} do
       root = Path.join(System.tmp_dir!(), "programs_coder_#{System.unique_integer([:positive])}")
       on_exit(fn -> File.rm_rf!(root) end)
@@ -2339,19 +2346,29 @@ defmodule Opus.ProgramsTest do
         Arca.put(
           actor,
           Compendium.AquaPath.crew_file("coder"),
-          "---\nprogram: #{row.id}\nmodel: claude-opus-5-5\n---\n\nYou code.\n"
+          "---\nprogram: #{row.name}\nmodel: opus\n---\n\nYou code.\n"
         )
 
       {:ok, _} = Compendium.AgentIndex.sync(ctx)
       {:ok, room} = Arca.Test.Days.thread(actor)
+      {:ok, later} = Arca.Test.Days.thread(actor)
       {:ok, coder} = Arca.ThreadStorage.crew_thread(actor, room.id, "coder")
+      {:ok, moved} = Arca.ThreadStorage.crew_thread(actor, later.id, "coder")
       {:ok, other} = Arca.ThreadStorage.crew_thread(actor, room.id, "elsewhere")
-      keep_session!(coder, "claude-session-1")
+      keep_session!(coder, "claude-session-1", row.id)
+      keep_session!(moved, "claude-session-2", "mcp_another")
       keep_session!(other, "other-session-1")
 
       assert :ok = Programs.home(ctx.athanor_id, row.id, :reset)
-      assert {:ok, %{brain_session: nil}} = Arca.ThreadStorage.get(actor, coder.id)
-      assert {:ok, %{brain_session: "other-session-1"}} = Arca.ThreadStorage.get(actor, other.id)
+
+      assert {:ok, %{brain_session: nil, brain_generation: 1}} =
+               Arca.ThreadStorage.get(actor, coder.id)
+
+      assert {:ok, %{brain_session: "claude-session-2", brain_generation: 0}} =
+               Arca.ThreadStorage.get(actor, moved.id)
+
+      assert {:ok, %{brain_session: "other-session-1", brain_generation: 0}} =
+               Arca.ThreadStorage.get(actor, other.id)
     end
 
     test "a retire that does not land is sent again on every tick until it does",

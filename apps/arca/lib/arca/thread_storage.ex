@@ -616,26 +616,50 @@ defmodule Arca.ThreadStorage do
 
   @doc """
   Forget the brain session (`brain_session`) of every thread of the
-  actor's athanor whose agent is one of `agents`, so each one's next
-  request opens a new session, and raise its `brain_generation` in the
-  same statement, so a turn begun before it keeps no session it answers
-  with afterwards (`Arca.TurnStorage.record_response/4`). A session a
-  program's transcript may back is owed its removal first, in the same
-  transaction (`Prima.OutboxRecord.brain_forget/1`). Answers those sessions, for the
+  actor's athanor that a reset or a retirement of the kept home of the
+  program row `row_id` reaches, so each one's next request opens a new
+  session, and raise its `brain_generation` in the same statement, so a
+  turn begun before it keeps no session it answers with afterwards
+  (`Arca.TurnStorage.record_response/4`) and a program's batch that would
+  keep one is refused (`Arca.TurnStorage.commit_brain/3`). The threads are
+  those whose agent is one of `agents`, the members whose catalyst runs in
+  the home through their consent (`Sanctum.Mount.agents_mounting/2`), and,
+  for a program brain, those the row's identity is stored on: a session
+  stored with the row (`brain_progress`'s `row`), and an open turn pinned
+  to the row (`turns.program`), whose first start may not have committed
+  a session yet. A program brain's configured name is never read: a row
+  deleted no longer answers it, and a replacement of the same name, whose
+  threads store its own id, is never reached. Each thread is read again
+  under its lock, so one whose session moved to another row meanwhile is
+  left as it is. A session a program's transcript may back is owed its
+  removal first, in the same transaction
+  (`Prima.OutboxRecord.brain_forget/1`). Answers those sessions, for the
   caller to close their holders after the commit.
   """
-  @spec forget_sessions(Prima.Actor.t(), [String.t()]) ::
+  @spec forget_sessions(Prima.Actor.t(), [String.t()], String.t() | nil) ::
           {:ok, [forgotten()]} | {:error, :no_athanor | :database_error}
-  def forget_sessions(%Prima.Actor{athanor_id: athanor_id} = actor, agents)
-      when is_binary(athanor_id) and athanor_id != "" and is_list(agents) do
+  def forget_sessions(actor, agents, row_id \\ nil)
+
+  def forget_sessions(%Prima.Actor{athanor_id: athanor_id} = actor, agents, row_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(agents) and
+             (is_binary(row_id) or is_nil(row_id)) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.forget_sessions", fn ->
       Repo.locking_transaction(fn ->
-        ids =
+        candidates =
           from(c in Thread, where: c.agent in ^agents, select: c.id)
           |> QueryHelpers.where_tenant(actor)
           |> Repo.all()
 
-        forgotten = owe_forgets_of!(actor, ids)
+        pinned = pinned_to(actor, row_id)
+        candidates = Enum.uniq(candidates ++ stored_with(actor, row_id) ++ pinned)
+
+        threads =
+          for %Thread{} = thread <- lock_threads!(actor, candidates),
+              thread.agent in agents or thread.id in pinned or stored_row(thread) == row_id,
+              do: thread
+
+        forgotten = owe_forgets!(actor, threads)
+        ids = Enum.map(threads, & &1.id)
 
         {_count, _} =
           from(c in Thread, where: c.id in ^ids)
@@ -647,7 +671,46 @@ defmodule Arca.ThreadStorage do
     end)
   end
 
-  def forget_sessions(%Prima.Actor{}, _agents), do: {:error, :no_athanor}
+  def forget_sessions(%Prima.Actor{}, _agents, _row_id), do: {:error, :no_athanor}
+
+  # The threads a program row's identity is stored on: a session kept with
+  # the row (`stored_row/1`), and an open turn pinned to it.
+  defp stored_with(_actor, nil), do: []
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp stored_with(actor, row_id) do
+    from(c in Thread, where: not is_nil(c.brain_progress))
+    |> QueryHelpers.where_tenant(actor)
+    |> Repo.all()
+    |> Enum.filter(&(stored_row(&1) == row_id))
+    |> Enum.map(& &1.id)
+  end
+
+  defp pinned_to(_actor, nil), do: []
+
+  # arca:db-raise-ok inside the caller's transaction
+  # arca:unscoped-ok the statement names the athanor.
+  defp pinned_to(%Prima.Actor{athanor_id: athanor_id}, row_id) do
+    open = Prima.TurnState.open_statuses()
+
+    from(t in Arca.Schemas.Turn,
+      where: t.athanor_id == ^athanor_id and t.program == ^row_id and t.status in ^open,
+      select: t.thread_id
+    )
+    |> Repo.all()
+    |> Enum.uniq()
+  end
+
+  # The program row a thread's brain session is stored with, as
+  # `session_rows/2` reads it, or nil.
+  defp stored_row(%Thread{brain_progress: progress}) when is_binary(progress) do
+    case Jason.decode!(progress) do
+      %{"row" => row_id} when is_binary(row_id) and row_id != "" -> row_id
+      _none -> nil
+    end
+  end
+
+  defp stored_row(%Thread{}), do: nil
 
   @doc """
   The requests still waiting on a crew member's reply, oldest first: of
@@ -1148,8 +1211,6 @@ defmodule Arca.ThreadStorage do
 
   def owe_forgets!(%Prima.Actor{}, _threads),
     do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.owe_forgets!/2")
-
-  defp owe_forgets_of!(_actor, []), do: []
 
   # arca:db-raise-ok inside the caller's transaction
   defp owe_forgets_of!(actor, ids), do: owe_forgets!(actor, lock_threads!(actor, Enum.uniq(ids)))

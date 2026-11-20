@@ -248,14 +248,17 @@ defmodule Opus.Programs do
   not be sent is answered with the reason and stays pending, sent again on
   every tick until it lands.
 
-  Whatever the box answered, the brain session kept on each thread of an
-  agent whose head binds the row (`Sanctum.Mount.agents_mounting/2`) is
-  forgotten, so its next
-  message starts a new session rather than resuming one the home no
-  longer holds; a session a program held there is owed its removal in the
-  same transaction (`Arca.ThreadStorage.forget_sessions/2`), and its
-  holder is closed once that commits (`Opus.Brain.forgotten/2`). A store
-  that cannot forget them turns an `:ok` into
+  Whatever the box answered, the brain session kept on each thread the
+  home reaches is forgotten, so its next message starts a new session
+  rather than resuming one the home no longer holds: a thread of an
+  agent whose catalyst's consent binds the row
+  (`Sanctum.Mount.agents_mounting/2`), and a thread that stores the row's
+  id, by its session or by an open turn pinned to it, never a thread
+  found by a program brain's name, which a replacement row may answer
+  (`Arca.ThreadStorage.forget_sessions/3`). A session a program held
+  there is owed its removal in the same transaction, and its holder is
+  closed once that commits (`Opus.Brain.forgotten/2`). A store that
+  cannot forget them turns an `:ok` into
   `{:error, {:unavailable, "Threads"}}`.
   """
   @spec home(String.t(), String.t(), :reset | :retire) :: :ok | {:error, term()}
@@ -271,7 +274,7 @@ defmodule Opus.Programs do
   defp forget_sessions(athanor_id, row_id) do
     with {:ok, agents} <- Sanctum.Mount.agents_mounting(athanor_id, row_id),
          {:ok, forgotten} <-
-           Arca.ThreadStorage.forget_sessions(Prima.Actor.in_athanor(athanor_id), agents) do
+           Arca.ThreadStorage.forget_sessions(Prima.Actor.in_athanor(athanor_id), agents, row_id) do
       Opus.Brain.forgotten(athanor_id, forgotten)
     end
   end
