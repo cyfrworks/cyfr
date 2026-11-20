@@ -272,8 +272,9 @@ Shard d also runs the shipped Caddyfile's HSTS check
 (`tests/proxy-hsts/`), which starts no release and no browser. The commit
 gate's close (`scripts/commit-gate.sh --close`) runs the eight shards one
 after another as the job runs them, each step read from the workflow, on
-this host's pull of the pinned image; the shards of one viewport reuse
-the release the shards before them built.
+this host's pull of the pinned image; a shard of one viewport reuses the
+release the shard before it built (approval's c's, the canvas proof's
+d's) and fails when there is none.
 
 In CI every proof writes its records under
 `$RUNNER_TEMP/proofs/<proof>`, or

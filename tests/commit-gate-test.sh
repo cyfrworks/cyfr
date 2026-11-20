@@ -350,7 +350,12 @@ chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scr
 # the Compose proof names after its run (a project's container, network
 # and volume, the stand-in's image and the run's directory), then records
 # its pid in $TRACE/stalled.harness and waits, so a stop that skips its own
-# cleanup leaves them.
+# cleanup leaves them. The release the browser proofs share stands in as
+# $TRACE/release, as release.sh keeps it: a proof that builds one (its
+# RELEASE_BOOT_SKIP_BUILD empty) clears it first and leaves one once its
+# build has passed, which it does not for a script whose path and
+# arguments hold STUB_HARNESS_FAIL; tests/release-boot/build.sh told to
+# reuse one fails without it.
 cat > "$scratch/stub.bash_env" <<'FAKE'
 # The prebuilt binary fetch and its test download from GitHub and compile
 # with the real Mix, so they stand in too: the fetch records in
@@ -398,6 +403,14 @@ case "$0" in
         echo "${run}_tailscale_state" >> "$TRACE/docker.volumes"
         echo "${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:$run sha256:standin" >> "$TRACE/docker.images"
         echo "$$" > "$TRACE/stalled.harness"; sleep 300 & wait ;;
+    esac
+    if [ "${RELEASE_BOOT_SKIP_BUILD-unset}" = "" ]; then
+      rm -f "$TRACE/release"
+      case "$0 $*" in *"${STUB_HARNESS_FAIL:-/nothing/}"*) echo "stand-in: the release did not build" >&2; exit 1 ;; esac
+      : > "$TRACE/release"
+    fi
+    case "$0:${RELEASE_BOOT_SKIP_BUILD:-}" in
+      *tests/release-boot/build.sh:1) [ -e "$TRACE/release" ] || { echo "stand-in: no sqlite release to reuse" >&2; exit 1; } ;;
     esac
     exit 0 ;;
 esac
@@ -849,6 +862,66 @@ dev_refused dev-absent "'matrix.shard == 5'"
 plant_shards dev-one-adapter '        if: matrix.shard == 1' "        if: matrix.shard == 1 && matrix.db == 'sqlite'"
 dev_refused dev-one-adapter "\"matrix.shard == 1 && matrix.db == 'sqlite'\""
 echo "ok: CI's shards are the whole split on both adapters, and the dev compile runs on one shard of each"
+
+# --- the browser shards the close runs ---------------------------------------------
+# browser_shards GATE WORKFLOW: the close runs each shard of test.yml's
+# browser and browser-tincture matrices once, and no other; and no two
+# shards run one proof at one viewport (a shard with no viewport runs its
+# proofs at every viewport they take).
+browser_shards() {
+  python3 -I - "$1" "$2" <<'PY'
+import re, sys, yaml
+gate, wf = sys.argv[1:]
+jobs = yaml.safe_load(open(wf))["jobs"]
+errors, rows, runs = [], {}, {}
+for job in ("browser", "browser-tincture"):
+    for e in jobs[job]["strategy"]["matrix"]["include"]:
+        if (job, e["shard"]) in rows:
+            errors.append(f"test.yml {job} lists shard {e['shard']} twice")
+        rows[(job, e["shard"])] = e
+for m in re.finditer(r"^[ \t]*run_job harness (\S+) test\.yml (browser|browser-tincture) shard=(\S+)", open(gate).read(), re.M):
+    runs[(m[2], m[3])] = runs.get((m[2], m[3]), 0) + 1
+for key in sorted(rows):
+    if runs.get(key, 0) != 1:
+        errors.append(f"the close runs test.yml {key[0]} shard {key[1]} {runs.get(key, 0)} times, not once")
+for key in sorted(set(runs) - set(rows)):
+    errors.append(f"the close runs test.yml {key[0]} shard {key[1]}, which its matrix does not list")
+where = {}
+for (job, shard), e in sorted(rows.items(), key=lambda kv: kv[0][1]):
+    for proof in e.get("proofs", []):
+        where.setdefault(proof, []).append((shard, e.get("viewport")))
+for proof, at in sorted(where.items()):
+    views = [v for _, v in at]
+    if len(at) > 1 and (None in views or len(set(views)) != len(views)):
+        errors.append(f"the {proof} proof runs at one viewport in more than one shard: {', '.join(s for s, _ in at)}")
+for e in errors:
+    print(e, file=sys.stderr)
+sys.exit(1 if errors else 0)
+PY
+}
+browser_shards "$gate" "$root/.github/workflows/test.yml" || fail "the close's browser shards are not test.yml's"
+# Planted: a shard i of approval at the desktop, which the close does not
+# run and shard e already holds, and the close's shard h line taken away,
+# each fail it with the reason.
+mkdir -p "$scratch/shards"
+python3 -I - "$root/.github/workflows/test.yml" "$scratch/shards/test.yml" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+anchor = "    steps: &browser-steps\n"
+assert s.count(anchor) == 1
+row = ("          - shard: i\n            title: approval proof, desktop again\n            proofs: [approval]\n"
+       "            build: release\n            viewport: desktop\n")
+open(sys.argv[2], "w").write(s.replace(anchor, row + anchor))
+PY
+! browser_shards "$gate" "$scratch/shards/test.yml" 2>"$scratch/shards/i.err" || fail 'a planted shard i passed the close'"'"'s shard check'
+for reason in 'the close runs test.yml browser shard i 0 times, not once' 'the approval proof runs at one viewport in more than one shard: e, f, i'; do
+  grep -qF "$reason" "$scratch/shards/i.err" || fail "the planted shard i failed without its reason ($reason): $(cat "$scratch/shards/i.err")"
+done
+grep -v 'run_job harness browser_h ' "$gate" > "$scratch/shards/gate.sh"
+! browser_shards "$scratch/shards/gate.sh" "$root/.github/workflows/test.yml" 2>"$scratch/shards/h.err" || fail 'a close without shard h passed the shard check'
+grep -qF 'the close runs test.yml browser shard h 0 times, not once' "$scratch/shards/h.err" ||
+  fail "a close without shard h failed without its reason: $(cat "$scratch/shards/h.err")"
+echo "ok: the close runs every browser shard of test.yml once, and no two shards run one proof at one viewport"
 
 # --- the image tags the close runs under the gate's names ------------------------
 # image_table GATE ROOT TABLE: every job the gate runs under
@@ -1610,15 +1683,15 @@ tests/join-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/pairing-proof/run.sh |skip= browsers= join= db= case_image=
 tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
 tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
+tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 tests/multi-home-smoke/run.sh |skip= browsers= join= db= case_image=
 tests/grant-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/share-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
 tests/share-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 tests/proxy-hsts/run.sh |skip=unset browsers= join= db= case_image=
-tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
-tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
-tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
-tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=720x720
 tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
 tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image= viewport=desktop
 tests/release-boot/build.sh sqlite|skip=1 browsers= join= db= case_image=
@@ -2334,6 +2407,33 @@ dead "$stalled" || fail 'a killed leg'"'"'s proof outlived the next gate'"'"'s s
 same_store gone || fail "the gate after a killed leg left the host's images changed: $(cat "$scratch/gone.trace/docker.images")"
 gate_free gone
 echo 'ok: a harness leg killed with its gate is cleaned up by the next gate'
+
+# Shard d's build fails: the approval shards still run on the release
+# shard c built, as approval did when it ran in c, and the canvas shards,
+# which reuse d's, fail at their release step saying there is none to
+# reuse and run no proof.
+host_store dfail
+start_leg dfail harness STUB_HARNESS_FAIL=multi-home-smoke
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a harness leg whose shard d did not build its release exited $gate_rc"
+for v in desktop 720x720; do
+  has_line "^tests/approval-proof/run\.sh \|skip=1 .* viewport=$v\$" "$scratch/dfail.trace/harness.calls" ||
+    fail "the approval proof did not run at $v once shard d's build failed: $(cat "$scratch/dfail.trace/harness.calls")"
+done
+no_line '^tests/canvas-proof/run\.sh ' "$scratch/dfail.trace/harness.calls" || fail 'a canvas proof ran with no release to reuse'
+for shard in g h; do
+  has_line "^test\.yml browser shard=$shard: FAILED at 'Build the SQLite release'" "$scratch/dfail.log/harness.browser_$shard.result" ||
+    fail "shard $shard did not fail at its release step: $(cat "$scratch/dfail.log/harness.browser_$shard.result")"
+  grep -qF 'no sqlite release to reuse' "$scratch/dfail.log/harness.browser_${shard}_05.log" ||
+    fail "shard $shard's release step did not say there was no release to reuse: $(cat "$scratch/dfail.log/harness.browser_${shard}_05.log")"
+done
+for shard in e f; do
+  has_line "^test\.yml browser shard=$shard: 3 steps passed\$" "$scratch/dfail.log/harness.browser_$shard.result" ||
+    fail "shard $shard did not pass on shard c's release: $(cat "$scratch/dfail.log/harness.browser_$shard.result")"
+done
+same_store dfail || fail "the harness leg changed the host's images: $(cat "$scratch/dfail.trace/docker.images")"
+gate_free dfail
+echo "ok: with shard d's release unbuilt, approval runs at both viewports on shard c's, and the canvas shards fail saying there is no release to reuse"
 
 # trivy's archive that does not match its release's checksum is not
 # installed, and no scan runs a trivy the close did not install.

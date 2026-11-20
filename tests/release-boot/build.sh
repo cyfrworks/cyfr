@@ -8,8 +8,10 @@
 #
 #   tests/release-boot/build.sh sqlite|postgres
 #
-# With RELEASE_BOOT_SKIP_BUILD=1 a release built from this tree is kept, and
-# one built from another is refused.
+# With RELEASE_BOOT_SKIP_BUILD=1 a release built from this tree is kept,
+# and one built from another, or none at all, is refused without a build:
+# the commit gate's close runs a shard of one viewport on the release the
+# shard before it built.
 set -euo pipefail
 case "${1:-}" in
   sqlite | postgres) ADAPTER=$1 ;;
@@ -22,4 +24,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-release-build-XXXXX
 trap 'rm -rf "$WORK"' EXIT
 # shellcheck source=release.sh
 source "$(cd "$(dirname "$0")" && pwd)/release.sh"
+if [ "${RELEASE_BOOT_SKIP_BUILD:-}" = 1 ] && [ ! -x "$REL/bin/cyfr" ]; then
+  fail "no $ADAPTER release to reuse at $REL (RELEASE_BOOT_SKIP_BUILD=1): build one first, as a run without RELEASE_BOOT_SKIP_BUILD=1 does"
+fi
 release_build

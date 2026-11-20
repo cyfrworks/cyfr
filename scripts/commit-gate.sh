@@ -1150,15 +1150,17 @@ leg_harness() {
   [ -z "$REFUSED" ] || return 1
   run_job harness browser_b test.yml browser shard=b --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
+  # A shard of one viewport builds its release on its runner; here it
+  # reuses the one the shard before it built from this tree, and fails
+  # when there is none: approval's after c, as when c ran it, and the
+  # canvas proof's after d.
   run_job harness browser_c test.yml browser shard=c --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
-  run_job harness browser_d test.yml browser shard=d --image-namespace "$ns" || status=1
-  [ -z "$REFUSED" ] || return 1
-  # A shard of one viewport builds its release on its runner; here it
-  # reuses the one the shards before it built from this tree.
   run_job harness browser_e test.yml browser shard=e --env RELEASE_BOOT_SKIP_BUILD=1 --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness browser_f test.yml browser shard=f --env RELEASE_BOOT_SKIP_BUILD=1 --image-namespace "$ns" || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_d test.yml browser shard=d --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness browser_g test.yml browser shard=g --env RELEASE_BOOT_SKIP_BUILD=1 --image-namespace "$ns" || status=1
   [ -z "$REFUSED" ] || return 1
